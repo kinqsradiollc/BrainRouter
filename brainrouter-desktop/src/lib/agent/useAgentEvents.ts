@@ -298,6 +298,16 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           setLastPlan({ items: e.items, explanation: e.explanation });
           push({ id: rid(), kind: 'status', text: 'Updated the plan', action: 'plan', ts: Date.now() });
           break;
+        case 'files-changed':
+          // FILES-LIVE — the host's debounced fs.watch fired. Re-pull the file
+          // tree (cache already invalidated host-side), the Changes list and the
+          // git counts so the right panel stays live without a manual Refresh.
+          // The stale-workspace guard above already dropped events for a
+          // background workspace, so this only repaints the foreground one.
+          q('q-list', 'list-files', { refresh: true });
+          q('q-files', 'changed-files');
+          q('q-git', 'git-info');
+          break;
         case 'compaction': push({ id: rid(), kind: 'status', text: `Compacted ${e.droppedMessages} → kept ${e.keptMessages}`, ts: Date.now() }); setEfficiency((s) => ({ ...s, compactions: s.compactions + 1, droppedMessages: s.droppedMessages + (e.droppedMessages || 0) })); q('q-ctx', 'context-usage'); break;
         case 'memory':
           // A briefing carries the recalled records — render a collapsible row

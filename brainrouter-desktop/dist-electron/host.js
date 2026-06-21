@@ -27,6 +27,7 @@ import { classifyForVerification } from '@kinqs/brainrouter-core/dist/agent/veri
 import { resolveWorkspaceGit } from '@kinqs/brainrouter-core/dist/git/workspaceGit.js';
 import { readWorkspaceEntry, isWorkspaceDirectory, listWorkspaceFiles, statWorkspaceEntry, writeWorkspaceEntry } from './fsRead.js';
 import { WorkspaceFileListCache } from './workspaceFileListCache.js';
+import { startWorkspaceWatcher } from './fileWatch.js';
 import { readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups } from '@kinqs/brainrouter-core/dist/session/sessionMetaStore.js';
 import { getSessionRuntime, setSessionRuntime, resolveSessionLlmConfig } from '@kinqs/brainrouter-core/dist/session/sessionRuntimeStore.js';
 import { getSessionMode, setSessionMode, resolveActiveMode } from '@kinqs/brainrouter-core/dist/session/sessionModeStore.js';
@@ -573,6 +574,14 @@ async function main() {
     const emitRecordEvent = (event) => {
         send({ seq: ++portSeq, ts: Date.now(), sessionKey: activeMemorySessionKey(), event });
     };
+    // FILES-LIVE — watch the workspace and push a debounced `files-changed` so the
+    // Files / Changes panel refreshes itself (no manual Refresh). Invalidate the
+    // file-list cache first so the next list-files rebuilds. Best-effort; degrades
+    // to the existing git poll where recursive fs.watch is unsupported (Linux).
+    const stopWorkspaceWatcher = startWorkspaceWatcher(workspaceRoot, () => {
+        fileListCache.invalidate(workspaceRoot);
+        send({ seq: ++portSeq, ts: Date.now(), sessionKey: activeMemorySessionKey(), event: { kind: 'files-changed' } });
+    });
     // DURABLE BACKGROUND TASKS (0.4.15 workflow gaps) — task lifecycle events ride
     // the same wire on the TASK's OWN sessionKey so they surface against the right
     // chat, and the renderer's global active-task state (sidebar dots, Tasks panel)
@@ -2902,7 +2911,7 @@ async function main() {
                 return { ok: false, what };
             },
         },
-        onShutdown: () => { void mcpClient.close?.(); process.exit(0); },
+        onShutdown: () => { stopWorkspaceWatcher(); void mcpClient.close?.(); process.exit(0); },
     });
     if (port)
         port.on('message', (e) => { void core.handle(e.data); });
