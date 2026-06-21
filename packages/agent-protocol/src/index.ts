@@ -120,7 +120,7 @@ const EVENT_KINDS = new Set<string>([
   'child-complete', 'plan-update', 'compaction', 'memory', 'requirement-event',
   'artifact-event', 'annotation-event', 'provenance', 'task-event', 'approval-decision',
   'interaction-request', 'turn-complete', 'turn-error', 'tokens-updated', 'usage-live', 'session-changed', 'query-result',
-  'notice',
+  'notice', 'files-changed',
 ]);
 
 /** Structural guard for a {@link BackgroundTaskEventView}. Pure. */
