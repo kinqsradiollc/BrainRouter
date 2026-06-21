@@ -650,6 +650,23 @@ them; hook scripts read them.
 | `BRAINROUTER_HOOK_TOOL` | Tool name (for `pre-tool` / `post-tool`). |
 | `BRAINROUTER_HOOK_PAYLOAD` | JSON payload for the event. |
 
+### Hook enforcement (`cli.hooks`)
+
+```json
+{ "cli": { "hooks": { "enabled": true, "enforceWhenSilent": true } } }
+```
+
+- **`enabled`** (default `true`) — master switch for ALL lifecycle hooks.
+- **`enforceWhenSilent`** (default `true`) — runs the *blocking* events
+  (`pre-tool`, `user-prompt-submit`) for **silent / unattended** agents too —
+  deep workers, headless, and background/cloud runs — so a `pre-tool` deny hook
+  (non-zero exit or `{"decision":"deny"}`) enforces policy regardless of who is
+  driving. Advisory events (`pre/post-turn`, `post-tool`, `pre-compact`) stay
+  interactive-only. Set `false` to restore the old interactive-only behaviour.
+
+A `pre-tool` deny is enforcement, not advice: it blocks the call before the
+model can run it — the deterministic, model-independent guardrail for autonomy.
+
 ---
 
 ## CLI chat-LLM config

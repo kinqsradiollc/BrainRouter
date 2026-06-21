@@ -452,6 +452,15 @@ export interface CliKnobs {
    * CLI). Read on demand by the `/track sync` command + desktop Sync panel.
    */
   track?: { githubRepo?: string; githubToken?: string };
+  /**
+   * Lifecycle shell hooks (0.4.16). `enabled` (default true) is the master
+   * switch. `enforceWhenSilent` (default true) runs the BLOCKING hook events
+   * (pre-tool, user-prompt-submit) for silent/unattended agents too — deep
+   * workers, headless, and cloud runs — so a deny hook enforces policy
+   * regardless of who is driving. Advisory events (post-tool, pre/post-turn)
+   * stay interactive-only.
+   */
+  hooks?: { enabled?: boolean; enforceWhenSilent?: boolean };
 }
 
 /**
@@ -720,6 +729,7 @@ export function selfHealConfig(parsed: Config): { config: Config; changed: boole
 export interface ResolvedCliKnobs {
   permissions: { allow: string[]; deny: string[] };
   automation: ResolvedAutomationKnobs;
+  hooks: { enabled: boolean; enforceWhenSilent: boolean };
   recallMode: 'always' | 'gated' | 'off';
   nextActionPlanner: 'on' | 'off';
   prefixMemoryAnchors: 'on' | 'off';
@@ -829,6 +839,10 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
         respectCapacity: sprintAutomation.respectCapacity ?? true,
         autopilot: sprintAutomation.autopilot ?? false,
       },
+    },
+    hooks: {
+      enabled: c.hooks?.enabled ?? true,
+      enforceWhenSilent: c.hooks?.enforceWhenSilent ?? true,
     },
     prefixMemoryAnchors: c.prefixMemoryAnchors ?? 'on',
     personaAnchor: c.personaAnchor ?? 'on',
