@@ -13,7 +13,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
+import { getConfigHome } from '../storage/store.js';
 
 export interface TrustEntry {
   /** Canonicalized workspace root (resolved, no trailing slash). */
@@ -26,13 +26,9 @@ interface TrustFile {
   trusted: TrustEntry[];
 }
 
-function brainrouterHome(): string {
-  return process.env.BRAINROUTER_HOME ?? path.join(os.homedir(), '.config', 'brainrouter');
-}
-
-/** Per-user trust list path. */
+/** Per-user trust list path (under the shared config home). */
 export function trustFilePath(): string {
-  return path.join(brainrouterHome(), 'trust.json');
+  return path.join(getConfigHome(), 'trust.json');
 }
 
 /** Canonicalize a workspace root so the same dir matches regardless of symlinks

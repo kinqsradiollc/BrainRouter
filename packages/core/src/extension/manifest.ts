@@ -5,8 +5,8 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { getConfigHome } from '../storage/store.js';
 
 export type ExtensionSource = 'builtin' | 'user' | 'workspace';
 
@@ -37,12 +37,8 @@ const SOURCE_RANK: Record<ExtensionSource, number> = { builtin: 0, user: 1, work
 // dist/extension/manifest.js → ../../extensions → brainrouter-cli/extensions.
 const BUILTIN_EXTENSIONS_DIR = fileURLToPath(new URL('../../extensions', import.meta.url));
 
-function home(): string {
-  return process.env.BRAINROUTER_HOME ?? path.join(os.homedir(), '.config', 'brainrouter');
-}
-
 export function userExtensionsDir(): string {
-  return path.join(home(), 'extensions');
+  return path.join(getConfigHome(), 'extensions');
 }
 
 export function workspaceExtensionsDir(workspaceRoot: string): string {

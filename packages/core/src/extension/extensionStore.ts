@@ -5,7 +5,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
+import { getConfigHome } from '../storage/store.js';
 
 interface ExtensionStateFile {
   /** Names explicitly DISABLED by the user (absence = enabled). */
@@ -13,8 +13,7 @@ interface ExtensionStateFile {
 }
 
 function storePath(): string {
-  const home = process.env.BRAINROUTER_HOME ?? path.join(os.homedir(), '.config', 'brainrouter');
-  return path.join(home, 'extensions.json');
+  return path.join(getConfigHome(), 'extensions.json');
 }
 
 function read(): ExtensionStateFile {

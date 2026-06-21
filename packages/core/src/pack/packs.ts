@@ -19,8 +19,8 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { getConfigHome } from '../storage/store.js';
 
 export type PackSource = 'builtin' | 'user' | 'workspace';
 
@@ -50,8 +50,7 @@ const SOURCE_RANK: Record<PackSource, number> = { builtin: 0, user: 1, workspace
 const BUILTIN_PACKS_DIR = fileURLToPath(new URL('../../packs', import.meta.url));
 
 export function userPacksDir(): string {
-  const home = process.env.BRAINROUTER_HOME ?? path.join(os.homedir(), '.config', 'brainrouter');
-  return path.join(home, 'packs');
+  return path.join(getConfigHome(), 'packs');
 }
 
 export function workspacePacksDir(workspaceRoot: string): string {
