@@ -1,6 +1,6 @@
 import type { RerankerServiceConfig } from "@kinqs/brainrouter-types";
 import { fetchWithExternalRetry } from "../util/retry.js";
-import { acquireRerankerSlot } from "../llm/llm-semaphore.js";
+import { acquireRerankerSlotOrNull } from "../llm/llm-semaphore.js";
 
 export interface RankedResult {
   index: number;
@@ -23,17 +23,44 @@ export function rerankerMaxDocChars(env: NodeJS.ProcessEnv = process.env): numbe
 }
 
 /**
- * Per-call reranker timeout. A cross-encoder rerank is a fast SCORING call
- * (sub-second on a GPU), NOT a token-generating completion — so it must NOT
- * inherit the generative local-endpoint floor (`BRAINROUTER_LOCAL_LLM_MIN_TIMEOUT_MS`,
- * up to 10 min). A reranker that hasn't answered in a few seconds is effectively
- * down: recall must fail over to RRF FAST rather than stall the whole
- * `memory_recall` reply (which then trips "client disconnected before reply").
- * Default 15s, clamp [1000, 120000]. Env: BRAINROUTER_RERANKER_TIMEOUT_MS.
+ * Per-call reranker timeout. A cross-encoder rerank must NOT inherit the
+ * generative local-endpoint floor (`BRAINROUTER_LOCAL_LLM_MIN_TIMEOUT_MS`, up to
+ * 10 min) — a reranker that hasn't answered should fail over to RRF, not stall
+ * the whole `memory_recall` reply ("client disconnected before reply").
+ *
+ * Default 25s (SPEC 01): on a CPU CrossEncoder under multi-agent load, each
+ * agent is a separate process hitting one shared single-worker server, so a
+ * single rerank can legitimately take 15-25s — the old 15s default aborted those
+ * mid-flight and dropped recall to RRF on every trip. 25s lets the slow-but-alive
+ * CPU call finish; the circuit breaker still bounds a genuinely-down server
+ * (≤3 slow trips → 30s cooldown), and parallel pile-up is shed by
+ * rerankerAcquireWaitMs (below) so raising this does NOT stall queued recalls.
+ * On GPU/Cohere, lower it (e.g. 10-15s) via env once p95 is measured.
+ * Clamp [1000, 120000]. Env: BRAINROUTER_RERANKER_TIMEOUT_MS.
  */
 export function rerankerTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
-  const def = 15_000;
+  const def = 25_000;
   const raw = env.BRAINROUTER_RERANKER_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === "") return def;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 1000 ? Math.min(n, 120_000) : def;
+}
+
+/**
+ * Max time a recall waits for the single reranker slot before shedding to RRF.
+ * The reranker slot is cap-1 (a CPU cross-encoder is single-worker), so under
+ * multi-agent parallel load concurrent recalls contend for it. Rather than queue
+ * unboundedly — which stalls the `memory_recall` reply until the slot frees
+ * (× the raised timeout above) and trips "client disconnected" — a recall that
+ * can't get the slot within this window skips the cross-encoder and uses RRF.
+ * This is load-shedding, NOT a reranker failure: it does NOT trip the breaker.
+ * It is the responsiveness↔quality knob; the real cure for CPU saturation is the
+ * GPU vLLM backend. Default 15s, clamp [1000, 120000].
+ * Env: BRAINROUTER_RERANKER_ACQUIRE_WAIT_MS.
+ */
+export function rerankerAcquireWaitMs(env: NodeJS.ProcessEnv = process.env): number {
+  const def = 15_000;
+  const raw = env.BRAINROUTER_RERANKER_ACQUIRE_WAIT_MS;
   if (raw === undefined || raw.trim() === "") return def;
   const n = Number.parseInt(raw, 10);
   return Number.isFinite(n) && n >= 1000 ? Math.min(n, 120_000) : def;
@@ -59,6 +86,7 @@ export class RerankerService {
   private readonly model: string;
   private readonly topN: number;
   private readonly timeoutMs: number;
+  private readonly acquireWaitMs: number;
   private readonly ready: boolean;
 
   // Circuit breaker — a flapping / overloaded reranker should be SKIPPED for a
@@ -77,6 +105,7 @@ export class RerankerService {
     this.topN = config.topN ?? 5;
     // Bounded, generative-floor-free timeout (see rerankerTimeoutMs).
     this.timeoutMs = Math.max(1000, config.timeoutMs ?? rerankerTimeoutMs());
+    this.acquireWaitMs = rerankerAcquireWaitMs();
     this.breakerThreshold = rerankerBreakerThreshold();
     this.breakerCooldownMs = rerankerBreakerCooldownMs();
 
@@ -164,7 +193,17 @@ export class RerankerService {
     // single-worker CPU backend, so concurrent recalls must NOT pile onto it —
     // the queued requests would each blow the per-call timeout. Acquire AFTER
     // the breaker check above so an open breaker still fast-fails (no queuing).
-    const release = await acquireRerankerSlot();
+    //
+    // Bounded wait (SPEC 01): under multi-agent parallel load this single slot is
+    // contended; rather than queue unboundedly (stalling the recall reply until a
+    // slot frees), give up after acquireWaitMs and shed to RRF. This is
+    // load-shedding, NOT a server failure: the throw happens BEFORE the try below,
+    // so recordFailure() is never called (the breaker must not open from
+    // shedding) and no network request is made. recall's catch routes it to RRF.
+    const release = await acquireRerankerSlotOrNull(this.acquireWaitMs);
+    if (!release) {
+      throw new Error("Reranker slot busy under parallel load; using RRF");
+    }
     try {
       const res = await fetchWithExternalRetry(this.endpoint, {
         method: "POST",
