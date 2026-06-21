@@ -348,6 +348,14 @@ export function installDevBridge(): void {
   // T7/T6 — mutable permission rules + MCP servers so the Settings editors work in preview.
   const devRules: { allow: string[]; deny: string[] } = { allow: ['run_command(git *)', 'run_command(npm test*)'], deny: ['run_command(rm -rf *)'] };
   const devCliKnobs: Record<string, unknown> = { autoCompactTokens: 80000, maxToolLoops: 60, recallMode: 'gated', contextCompaction: true, llmTimeoutMs: 120000, automation: { enabled: true, requirements: { enabled: true, autopilot: false }, sync: { enabled: true }, sprints: { enabled: true, autopilot: true } } };
+  const devExtensions = {
+    trusted: true,
+    items: [
+      { name: 'warehouse', version: '1.0.0', source: 'workspace' as const, description: 'Adds query_warehouse + run_migration tools', contributes: ['tools'], enabled: true, blocked: false },
+      { name: 'acme-gateway', version: '0.3.1', source: 'user' as const, description: 'Custom-streaming provider', contributes: ['providers'], enabled: true, blocked: false },
+      { name: 'prod-guard', version: '2.0.0', source: 'builtin' as const, description: 'Denies run_command against prod hosts', contributes: ['hooks'], enabled: false, blocked: false },
+    ],
+  };
   const devGithub: { repo: string | null; hasToken: boolean; tokenSource: string | null } = { repo: 'kinqsradiollc/BrainRouter', hasToken: true, tokenSource: 'config' };
   const devServers: Array<{ id: string; online: boolean; detail?: string }> = [{ id: 'brainrouter', online: true }, { id: 'github', online: false }];
 
@@ -777,6 +785,8 @@ export function installDevBridge(): void {
       return { files, insertions: files.reduce((s, f) => s + f.added, 0), deletions: files.reduce((s, f) => s + f.removed, 0) };
     },
     'plan-state': () => ({ items: devPlanState.items, explanation: devPlanState.explanation }),
+    'action:ext-set-enabled': (a) => { const it = devExtensions.items.find((e) => e.name === a.name); if (it) it.enabled = a.enabled === true; return { ok: true, name: String(a.name ?? '') }; },
+    'action:trust-workspace': (a) => { devExtensions.trusted = a.trusted === true; devExtensions.items.forEach((e) => { e.blocked = e.source === 'workspace' && !devExtensions.trusted; }); return { ok: true, trusted: devExtensions.trusted }; },
     'goal-state': () => ({ text: 'Implement a full-featured Notion clone with a block-based editor and hierarchical pages', status: 'active', budget: { maxIterations: 10, iterationsUsed: 3 }, startedAt: new Date(Date.now() - 18 * 60_000).toISOString(), updatedAt: new Date().toISOString() }),
     'action:goal-edit': (a) => ({ ok: true, goal: { text: String(a.text ?? ''), status: 'active', budget: { maxIterations: 10, iterationsUsed: 3 }, startedAt: new Date(Date.now() - 18 * 60_000).toISOString(), updatedAt: new Date().toISOString() } }),
     // TRACK mode — the mock board persists create/transition so the preview is interactive.
@@ -991,6 +1001,7 @@ export function installDevBridge(): void {
       ],
       workspaceRoot: '/Users/dev/BrainRouter', sandbox: 'off', prefs: effectivePrefs(),
       cliKnobs: { ...devCliKnobs },
+      extensions: { trusted: devExtensions.trusted, items: devExtensions.items.map((e) => ({ ...e })) },
       integrations: { github: { ...devGithub } },
       workspacePrefs: { ...prefs },
       sessionMode: { ...(sessionModes[activeSession] ?? {}) },

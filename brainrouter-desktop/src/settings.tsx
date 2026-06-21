@@ -33,6 +33,11 @@ export interface ConfigSnapshot {
   providerCatalog?: Array<{ id: string; label: string; endpoint: string; local: boolean }>;
   // §settings-completeness — the raw cli.* config block (current knob values).
   cliKnobs?: Record<string, unknown>;
+  // EXTENSIONS — discovered extensions + workspace trust state.
+  extensions?: {
+    trusted: boolean;
+    items: Array<{ name: string; version: string; source: 'builtin' | 'user' | 'workspace'; description: string; contributes: string[]; enabled: boolean; blocked: boolean }>;
+  };
 }
 
 /** Sub-agent roles that can be routed to their own provider/model. */
@@ -55,6 +60,7 @@ const NAV: Array<{ section: SettingsSection; icon: string; title: string; group:
   { section: 'memory', icon: 'brain', title: 'Memory', group: 'Settings' },
   { section: 'hooks', icon: 'link', title: 'Hooks', group: 'Settings' },
   { section: 'workflow-automation', icon: 'fork', title: 'Workflow automation', group: 'Settings' },
+  { section: 'extensions', icon: 'plug', title: 'Extensions', group: 'Settings' },
   { section: 'connectors', icon: 'bolt', title: 'Connectors', group: 'Settings' },
   { section: 'integrations', icon: 'branch', title: 'Integrations', group: 'Settings' },
   { section: 'advanced', icon: 'gear', title: 'Advanced', group: 'Settings' },
@@ -551,6 +557,34 @@ export function SettingsDialog(props: {
               </Row>
             </div>
             <Row title="Shared with the CLI" desc="Persists to cli.automation in config.json — the same knobs as `/config set automation…` in the terminal." />
+          </>
+        );
+      }
+      case 'extensions': {
+        const ext = snapshot?.extensions;
+        const trusted = ext?.trusted ?? false;
+        const items = ext?.items ?? [];
+        const setExtEnabled = (name: string, enabled: boolean): void => { props.onAction('a-ext', 'action:ext-set-enabled', { name, enabled }); setTimeout(refreshSnapshot, 120); };
+        const setTrust = (v: boolean): void => { props.onAction('a-trust', 'action:trust-workspace', { trusted: v }); setTimeout(refreshSnapshot, 120); };
+        return (
+          <>
+            <div className="set-h">Extensions</div>
+            <div className="set-desc" style={{ marginBottom: 8 }}>
+              Code-level extensions register agent tools, providers, and lifecycle hooks at runtime — no fork, no republish. They live at <code>~/.config/brainrouter/extensions/</code> (user) or <code>.brainrouter/extensions/</code> (workspace), each a folder with an <code>extension.json</code> + an entry module exporting <code>activate(host)</code>.
+            </div>
+            <Row title="Trust this workspace" desc="Workspace extensions run code from THIS repo — they only activate when the workspace is trusted. Built-in and user extensions are unaffected.">
+              <Toggle on={trusted} onChange={setTrust} />
+            </Row>
+            <div className="set-h2">Discovered</div>
+            {items.length === 0 ? (
+              <Row title="No extensions found" desc="Add one under ~/.config/brainrouter/extensions/<name>/ or <workspace>/.brainrouter/extensions/<name>/." />
+            ) : items.map((e) => (
+              <Row key={e.name}
+                title={`${e.name}  ·  v${e.version} · ${e.source}`}
+                desc={<>{e.description || '—'}{e.contributes.length ? <> · contributes: {e.contributes.join(', ')}</> : null}{e.blocked ? <> · <span style={{ color: 'rgb(214,156,60)' }}>blocked — workspace not trusted</span></> : null}</>}>
+                <Toggle on={e.enabled} onChange={(v) => setExtEnabled(e.name, v)} />
+              </Row>
+            ))}
           </>
         );
       }
