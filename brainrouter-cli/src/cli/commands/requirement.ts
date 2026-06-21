@@ -26,6 +26,7 @@ import {
   getRequirement,
   listRequirements,
   linkRequirement,
+  deleteRequirement,
   addClarifyingQuestion,
   answerClarifyingQuestion,
   openClarifyingQuestions,
@@ -72,11 +73,27 @@ export async function tryHandleRequirementCommand(ctx: CommandContext): Promise<
     console.log(chalk.bold('\nRequirements'));
     for (const r of records) {
       const session = r.sessionKey ? chalk.gray(` · ${r.sessionKey}`) : '';
+      const origin = originTag(r);
       console.log(
-        `  ${chalk.cyan(r.id)} [${statusColor(r.status)}] ${priorityLabel(r.priority)} ${r.title}${session}`,
+        `  ${chalk.cyan(r.id)} [${statusColor(r.status)}]${origin ? ` ${origin}` : ''} ${priorityLabel(r.priority)} ${r.title}${session}`,
       );
     }
     console.log();
+    return true;
+  }
+
+  if (sub === 'delete' || sub === 'remove' || sub === 'rm') {
+    const id = rest[0];
+    if (!id) {
+      console.log(chalk.red('\nUsage: /requirement delete <id>\n'));
+      return true;
+    }
+    const existing = getRequirement(agent.workspaceRoot, id);
+    if (!existing || !deleteRequirement(agent.workspaceRoot, id)) {
+      console.log(chalk.yellow(`\nNo requirement with id "${id}".\n`));
+      return true;
+    }
+    console.log(chalk.green(`\n✓ Deleted requirement ${chalk.cyan(id)} (${originLabel(existing)}).\n`));
     return true;
   }
 
@@ -346,6 +363,7 @@ function printRecord(r: RequirementRecord): void {
   if (r.description) console.log(`  Details:   ${r.description}`);
   console.log(`  Status:    ${statusColor(r.status)}`);
   console.log(`  Priority:  ${priorityLabel(r.priority)}`);
+  console.log(`  Origin:    ${originLabel(r)}`);
   if (r.sessionKey) console.log(`  Session:   ${chalk.gray(r.sessionKey)}`);
   console.log(`  Created:   ${chalk.gray(r.createdAt)}`);
   console.log(`  Updated:   ${chalk.gray(r.updatedAt)}`);
@@ -367,6 +385,15 @@ function printRecord(r: RequirementRecord): void {
   console.log(`    memory:    ${r.linkedMemoryIds.length ? chalk.gray(r.linkedMemoryIds.join(', ')) : chalk.gray('(none)')}`);
   if (r.sourceEventId) console.log(`    source:    ${chalk.gray(r.sourceEventId)}`);
   console.log();
+}
+
+/** Compact audit label shared by the list and detail renderers. */
+export function originLabel(r: Pick<RequirementRecord, 'origin'>): 'auto' | 'manual' {
+  return r.origin === 'auto' ? 'auto' : 'manual';
+}
+
+export function originTag(r: Pick<RequirementRecord, 'origin'>): string {
+  return r.origin === 'auto' ? chalk.cyan('[auto]') : '';
 }
 
 /**
@@ -449,6 +476,7 @@ function printUsage(): void {
   console.log(chalk.gray('  /requirement create <title>                 Create a draft anchored to this session'));
   console.log(chalk.gray('  /requirement list                           List this workspace\'s requirements'));
   console.log(chalk.gray('  /requirement show <id>                      Full record + criteria + Q&A + links'));
+  console.log(chalk.gray('  /requirement delete <id>                    Remove a requirement (including auto-created drafts)'));
   console.log(chalk.gray('  /requirement ask <id> <question…>           Add a clarifying question (draft → clarifying)'));
   console.log(chalk.gray('  /requirement answer <id> <index> <answer…>  Answer clarifying question #index (0-based)'));
   console.log(chalk.gray('  /requirement clarify <id>                   Show the Q&A (✓ answered / • open) + next-step hint'));

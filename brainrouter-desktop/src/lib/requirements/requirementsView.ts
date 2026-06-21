@@ -63,5 +63,17 @@ export function requirementSummary(r: RequirementRecord): string {
   return `${r.id} · ${r.status} · ${r.priority}`;
 }
 
+/** Visible source label. Legacy records are manual by default. */
+export function requirementOrigin(r: RequirementRecord): 'auto' | 'manual' {
+  return r.origin === 'auto' ? 'auto' : 'manual';
+}
+
+/** Compact durable audit metadata available without loading a transcript. */
+export function requirementProvenance(r: RequirementRecord): {
+  origin: 'auto' | 'manual'; sourceEventId?: string; memoryIds: string[];
+} {
+  return { origin: requirementOrigin(r), sourceEventId: r.sourceEventId, memoryIds: [...r.linkedMemoryIds] };
+}
+
 export const REQUIREMENT_STATUS_OPTIONS: RequirementStatus[] = ['draft', 'clarifying', 'ready', 'in-progress', 'done', 'archived'];
 export const REQUIREMENT_PRIORITY_OPTIONS: RequirementPriority[] = ['low', 'medium', 'high'];

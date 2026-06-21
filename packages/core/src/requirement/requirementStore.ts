@@ -49,6 +49,7 @@ export interface CreateRequirementInput {
   artifactIds?: string[];
   linkedMemoryIds?: string[];
   sourceEventId?: string;
+  origin?: 'manual' | 'auto';
 }
 
 /**
@@ -87,6 +88,7 @@ export function createRequirement(
   if (description) record.description = description;
   if (input.sessionKey) record.sessionKey = input.sessionKey;
   if (input.sourceEventId) record.sourceEventId = input.sourceEventId;
+  if (input.origin) record.origin = input.origin;
   all[id] = record;
   writeJsonFile(requirementsFile(workspaceRoot), all);
   return record;

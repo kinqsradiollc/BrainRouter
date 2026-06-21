@@ -80,7 +80,7 @@ import { TELEMETRY_EVENTS } from '@kinqs/brainrouter-core/dist/telemetry/contrac
 import { readPlanHistory, recordPlanDecision, linkPlanDecision } from '@kinqs/brainrouter-core/dist/task/planHistoryStore.js';
 import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
-import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
+import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement, deleteRequirement } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
 import { ensureProject, getProject, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
 import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/dist/track/githubSync.js';
 /**
@@ -1638,6 +1638,10 @@ async function main() {
                 if (change)
                     await captureRequirementNote(updated, change);
                 return getRequirement(workspaceRoot, updated.id) ?? updated;
+            },
+            'requirement-delete': (a) => {
+                const id = String(a.id ?? '');
+                return { ok: deleteRequirement(workspaceRoot, id) };
             },
             'requirement-seed-plan': async (a) => {
                 const id = String(a.id ?? '');
