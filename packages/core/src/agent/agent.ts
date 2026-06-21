@@ -28,9 +28,16 @@ import {
   getWorkItem as trackGetWorkItem,
   createWorkItem as trackCreateWorkItem,
   transitionWorkItem as trackTransitionWorkItem,
+  updateWorkItem as trackUpdateWorkItem,
   addComment as trackAddComment,
   linkWorkItem as trackLinkWorkItem,
+  createSprint as trackCreateSprint,
+  listSprints as trackListSprints,
+  setSprintState as trackSetSprintState,
+  updateSprint as trackUpdateSprint,
+  sprintVelocity as trackSprintVelocity,
 } from '../track/trackStore.js';
+import { parseTrackQuery } from '../track/query.js';
 import { createArtifact, updateArtifact, getArtifact, linkArtifact } from '../artifact/artifactStore.js';
 import { isArtifactKind, isArtifactFormat, isWorkItemType, isWorkItemPriority, type ArtifactKind, type ArtifactFormat, type ArtifactRecord } from '@kinqs/brainrouter-types';
 // Auto mode (fast + proceed) has no approval prompt, so the plan history would
@@ -3407,6 +3414,26 @@ export class Agent {
           const item = trackGetWorkItem(this.workspaceRoot, String(args.key ?? ''));
           return item ? JSON.stringify(item, null, 2) : `No work item "${args.key}".`;
         }
+        if (action === 'sprints') {
+          return JSON.stringify(trackListSprints(this.workspaceRoot), null, 2);
+        }
+        if (action === 'sprint-detail') {
+          const sprintId = String(args.sprintId ?? '');
+          const sprint = trackListSprints(this.workspaceRoot).find((candidate) => candidate.id === sprintId);
+          if (!sprint) return `No sprint "${sprintId}".`;
+          return JSON.stringify({ sprint, items: trackListWorkItems(this.workspaceRoot, { sprintId }) }, null, 2);
+        }
+        if (action === 'velocity') {
+          const sprintId = typeof args.sprintId === 'string' ? args.sprintId : undefined;
+          if (sprintId) {
+            const velocity = trackSprintVelocity(this.workspaceRoot, sprintId);
+            return velocity === undefined ? `No sprint "${sprintId}".` : JSON.stringify({ sprintId, velocity });
+          }
+          return JSON.stringify(trackListSprints(this.workspaceRoot).map((sprint) => ({
+            sprintId: sprint.id,
+            velocity: trackSprintVelocity(this.workspaceRoot, sprint.id) ?? 0,
+          })), null, 2);
+        }
         const items = trackListWorkItems(this.workspaceRoot, {
           status: typeof args.status === 'string' ? args.status : undefined,
           type: isWorkItemType(args.type) ? args.type : undefined,
@@ -3445,7 +3472,64 @@ export class Agent {
           });
           return item ? `Linked ${item.key}.` : `No work item "${args.key}".`;
         }
-        return `Unknown track_update action "${action}". Use create · transition · comment · link.`;
+        if (action === 'assign-sprint') {
+          const sprintId = String(args.sprintId ?? '');
+          const sprint = trackListSprints(this.workspaceRoot).find((candidate) => candidate.id === sprintId);
+          if (!sprint) return `No sprint "${sprintId}".`;
+          const item = trackUpdateWorkItem(this.workspaceRoot, String(args.key ?? ''), { sprintId }, 'agent');
+          return item ? `Assigned ${item.key} to ${sprint.name}.` : `No work item "${args.key}".`;
+        }
+        if (action === 'sprint-create') {
+          const name = String(args.name ?? '').trim();
+          if (!name) return 'sprint-create requires a name.';
+          const sprint = trackCreateSprint(this.workspaceRoot, {
+            name,
+            goal: typeof args.goal === 'string' ? args.goal : undefined,
+          });
+          return `Created ${sprint.name} (${sprint.id}).`;
+        }
+        if (action === 'batch-transition') {
+          const query = String(args.query ?? '').trim();
+          if (!query) return 'batch-transition requires a query.';
+          const parsed = parseTrackQuery(query);
+          if (!parsed.ok) return `Bad query: ${parsed.error}`;
+          const toStatus = String(args.toStatus ?? '');
+          const project = trackGetProject(this.workspaceRoot) ?? trackEnsureProject(this.workspaceRoot);
+          if (!project.workflowStates.some((state) => state.id === toStatus)) {
+            return `Unknown workflow state "${toStatus}". Valid: ${project.workflowStates.map((state) => state.id).join(', ')}`;
+          }
+          const items = trackListWorkItems(this.workspaceRoot, { query }).filter((item) => item.status !== toStatus);
+          for (const item of items) trackTransitionWorkItem(this.workspaceRoot, item.key, toStatus, 'agent');
+          return `Transitioned ${items.length} work item${items.length === 1 ? '' : 's'} to ${toStatus}.`;
+        }
+        if (action === 'sprint-start') {
+          const sprintId = String(args.sprintId ?? '');
+          const sprint = trackListSprints(this.workspaceRoot).find((candidate) => candidate.id === sprintId);
+          if (!sprint) return `No sprint "${sprintId}".`;
+          if (args.capacity !== undefined && (typeof args.capacity !== 'number' || !Number.isFinite(args.capacity) || args.capacity < 0)) {
+            return 'Sprint capacity must be a non-negative number.';
+          }
+          try {
+            trackSetSprintState(this.workspaceRoot, sprintId, 'active');
+          } catch (error) {
+            return (error as Error).message;
+          }
+          const updated = trackUpdateSprint(this.workspaceRoot, sprintId, {
+            startDate: sprint.startDate ?? new Date().toISOString(),
+            ...(typeof args.capacity === 'number' ? { capacity: args.capacity } : {}),
+          })!;
+          return `Started ${updated.name}.`;
+        }
+        if (action === 'sprint-complete') {
+          const sprintId = String(args.sprintId ?? '');
+          const sprint = trackListSprints(this.workspaceRoot).find((candidate) => candidate.id === sprintId);
+          if (!sprint) return `No sprint "${sprintId}".`;
+          const velocity = trackSprintVelocity(this.workspaceRoot, sprintId)!;
+          trackUpdateSprint(this.workspaceRoot, sprintId, { velocity });
+          trackSetSprintState(this.workspaceRoot, sprintId, 'completed');
+          return `Completed ${sprint.name} (velocity: ${velocity}).`;
+        }
+        return `Unknown track_update action "${action}". Use create · transition · comment · link · sprint-create · assign-sprint · batch-transition · sprint-start · sprint-complete.`;
       }
       case 'artifact_write': {
         // §AV-4 — in-band artifact authoring. With `id` it grows an EXISTING

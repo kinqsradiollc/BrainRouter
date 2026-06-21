@@ -372,12 +372,13 @@ export const LOCAL_TOOLS = [
   },
   {
     name: 'track_query',
-    description: 'Read the workspace project board (Track mode — one project per workspace). action: "list" (all work items, optionally filtered), "get" (one by key), or "board" (items grouped into their status columns). Read-only. Use it to see what work exists before creating or transitioning items.',
+    description: 'Read the workspace project board (Track mode — one project per workspace). action: "list" (all work items, optionally filtered), "get" (one by key), "board" (items grouped into status columns), "sprints", "sprint-detail", or "velocity". Read-only. Use it to see what work exists before creating or transitioning items.',
     inputSchema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['list', 'get', 'board'], description: 'list · get · board' },
+        action: { type: 'string', enum: ['list', 'get', 'board', 'sprints', 'sprint-detail', 'velocity'], description: 'list · get · board · sprints · sprint-detail · velocity' },
         key: { type: 'string', description: 'Work-item key (e.g. "BR-12") for action="get".' },
+        sprintId: { type: 'string', description: 'Sprint id for action="sprint-detail" or action="velocity".' },
         status: { type: 'string', description: 'Filter by workflow-state id (list).' },
         type: { type: 'string', enum: ['epic', 'story', 'task', 'bug', 'sub-task'], description: 'Filter by type (list).' },
         assignee: { type: 'string', description: 'Filter by assignee (list).' },
@@ -388,11 +389,11 @@ export const LOCAL_TOOLS = [
   },
   {
     name: 'track_update',
-    description: 'Create or change a work item on the project board (Track mode). action: "create" (needs `title`; optional `type`/`status`/`priority`), "transition" (needs `key` + `toStatus`), "comment" (needs `key` + `body`), or "link" (needs `key`; attach `codeLinks` / `linkedMemoryIds` / a `blocks` dependency). Writes workspace state (track.json) — no approval needed. Link items to the branches/commits/PRs you produce so the board stays connected to the code.',
+    description: 'Create or change project-board work (Track mode). action: "create", "transition", "comment", "link", "sprint-create", "assign-sprint", "batch-transition", "sprint-start", or "sprint-complete". Writes workspace state (track.json) — no approval needed. Link items to the branches/commits/PRs you produce so the board stays connected to the code.',
     inputSchema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['create', 'transition', 'comment', 'link'], description: 'create · transition · comment · link' },
+        action: { type: 'string', enum: ['create', 'transition', 'comment', 'link', 'sprint-create', 'assign-sprint', 'batch-transition', 'sprint-start', 'sprint-complete'], description: 'create · transition · comment · link · sprint-create · assign-sprint · batch-transition · sprint-start · sprint-complete' },
         key: { type: 'string', description: 'Work-item key (transition/comment/link).' },
         title: { type: 'string', description: 'Title (create).' },
         type: { type: 'string', enum: ['epic', 'story', 'task', 'bug', 'sub-task'], description: 'Item type (create).' },
@@ -402,7 +403,12 @@ export const LOCAL_TOOLS = [
         body: { type: 'string', description: 'Comment body (comment).' },
         codeLinks: { type: 'array', description: 'Code links to attach (link): [{ kind: "branch"|"commit"|"pull-request"|"file", ref }].', items: { type: 'object' } },
         linkedMemoryIds: { type: 'array', description: 'Memory record ids to link (link).', items: { type: 'string' } },
-        blocks: { type: 'string', description: 'Key of a work item this one blocks (link).' }
+        blocks: { type: 'string', description: 'Key of a work item this one blocks (link).' },
+        sprintId: { type: 'string', description: 'Sprint id (assign-sprint, sprint-start, sprint-complete).' },
+        name: { type: 'string', description: 'Sprint name (sprint-create).' },
+        goal: { type: 'string', description: 'Optional sprint goal (sprint-create).' },
+        query: { type: 'string', description: 'Track query selecting work items (batch-transition).' },
+        capacity: { type: 'number', description: 'Optional sprint capacity (sprint-start).' }
       },
       required: ['action']
     }

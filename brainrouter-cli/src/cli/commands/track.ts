@@ -16,6 +16,12 @@ import {
   getWorkItem,
   createWorkItem,
   transitionWorkItem,
+  updateWorkItem,
+  createSprint,
+  listSprints,
+  setSprintState,
+  updateSprint,
+  sprintVelocity,
   listAutomations,
   createAutomation,
   updateAutomation,
@@ -101,6 +107,8 @@ export async function tryHandleTrackCommand(ctx: CommandContext): Promise<boolea
     return true;
   }
 
+  if (sub === 'sprint' || sub === 'sprints') { handleSprints(ws, rest); return true; }
+
   if (sub === 'automations' || sub === 'auto') { handleAutomations(ws, rest); return true; }
 
   if (sub === 'members' || sub === 'member') { await handleMembers(ws, rest); return true; }
@@ -109,6 +117,74 @@ export async function tryHandleTrackCommand(ctx: CommandContext): Promise<boolea
 
   console.log(chalk.yellow(`\nUnknown subcommand "${sub}". Try /track help\n`));
   return true;
+}
+
+/** `/track sprint create|list|start|complete|assign|velocity`. */
+function handleSprints(ws: string, rest: string[]): void {
+  const op = (rest[0] ?? 'list').toLowerCase();
+  if (op === 'list' || op === 'ls') {
+    const sprints = listSprints(ws);
+    if (!sprints.length) { console.log(chalk.yellow('\nNo sprints yet. Create one with: /track sprint create <name>\n')); return; }
+    console.log(chalk.bold('\nSprints'));
+    for (const sprint of sprints) {
+      const velocity = sprint.velocity === undefined ? '' : ` · velocity ${sprint.velocity}`;
+      console.log(`  ${chalk.cyan(sprint.id.padEnd(12))} ${sprint.state.padEnd(9)} ${sprint.name}${velocity}`);
+    }
+    console.log('');
+    return;
+  }
+  if (op === 'create' || op === 'new') {
+    const name = rest.slice(1).join(' ').trim();
+    if (!name) { console.log(chalk.red('\nUsage: /track sprint create <name>\n')); return; }
+    const sprint = createSprint(ws, { name });
+    console.log(chalk.green(`\n✓ Created ${sprint.name} (${sprint.id})\n`));
+    return;
+  }
+  if (op === 'assign') {
+    const [key, sprintId] = rest.slice(1);
+    const sprint = listSprints(ws).find((candidate) => candidate.id === sprintId);
+    if (!key || !sprint) { console.log(chalk.red('\nUsage: /track sprint assign <work-item-key> <sprint-id>\n')); return; }
+    const item = updateWorkItem(ws, key, { sprintId }, 'user');
+    console.log(item ? chalk.green(`\n✓ Assigned ${item.key} to ${sprint.name}\n`) : chalk.yellow(`\nNo work item ${key}.\n`));
+    return;
+  }
+  if (op === 'start') {
+    const sprintId = rest[1];
+    const capacityIndex = rest.indexOf('--capacity');
+    const rawCapacity = capacityIndex >= 0 ? rest[capacityIndex + 1] : undefined;
+    const capacity = rawCapacity === undefined ? undefined : Number(rawCapacity);
+    const sprint = listSprints(ws).find((candidate) => candidate.id === sprintId);
+    if (!sprint) { console.log(chalk.red('\nUsage: /track sprint start <sprint-id> [--capacity <number>]\n')); return; }
+    if (capacity !== undefined && (!Number.isFinite(capacity) || capacity < 0)) { console.log(chalk.red('\nSprint capacity must be a non-negative number.\n')); return; }
+    try {
+      setSprintState(ws, sprintId, 'active');
+      updateSprint(ws, sprintId, { startDate: sprint.startDate ?? new Date().toISOString(), ...(capacity === undefined ? {} : { capacity }) });
+      console.log(chalk.green(`\n✓ Started ${sprint.name}\n`));
+    } catch (error) { console.log(chalk.red(`\n${(error as Error).message}\n`)); }
+    return;
+  }
+  if (op === 'complete') {
+    const sprintId = rest[1];
+    const sprint = listSprints(ws).find((candidate) => candidate.id === sprintId);
+    if (!sprint) { console.log(chalk.red('\nUsage: /track sprint complete <sprint-id>\n')); return; }
+    const velocity = sprintVelocity(ws, sprintId)!;
+    updateSprint(ws, sprintId, { velocity });
+    setSprintState(ws, sprintId, 'completed');
+    console.log(chalk.green(`\n✓ Completed ${sprint.name} (velocity: ${velocity})\n`));
+    return;
+  }
+  if (op === 'velocity') {
+    const sprintId = rest[1];
+    if (sprintId) {
+      const sprint = listSprints(ws).find((candidate) => candidate.id === sprintId);
+      if (!sprint) { console.log(chalk.yellow(`\nNo sprint ${sprintId}.\n`)); return; }
+      console.log(`\n${sprint.name}: velocity ${sprintVelocity(ws, sprintId) ?? 0}\n`);
+      return;
+    }
+    for (const sprint of listSprints(ws)) console.log(`${sprint.name}: velocity ${sprintVelocity(ws, sprint.id) ?? 0}`);
+    return;
+  }
+  console.log(chalk.yellow(`\nUnknown sprint command "${op}". Try: list · create · start · complete · assign · velocity\n`));
 }
 
 /** `/track sync github <import|export> [--dry-run] [--repo owner/name]`. */
@@ -325,6 +401,7 @@ function printUsage(): void {
   console.log(chalk.bold('\n/track — project board for this workspace'));
   console.log(chalk.gray('  /track board                                 Columns + items by status'));
   console.log(chalk.gray('  /track list [text | query]                   List; a query like "priority >= high AND type = bug"'));
+  console.log(chalk.gray('  /track sprint <list|create|start|complete|assign|velocity>  Manage sprints'));
   console.log(chalk.gray('  /track create <title> [--type --status --priority]   Create a work item'));
   console.log(chalk.gray('  /track move <key> <status-id>                Transition a work item'));
   console.log(chalk.gray('  /track show <key>                            Show one work item'));
