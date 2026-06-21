@@ -21,6 +21,8 @@ import { isChildSynthesisTool, resultHasChildOutput, looksLikeChildSynthesisPunt
 import { sanitizeModelArtifacts } from '../util/outputSanitize.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { formatPlan, readPlan, updatePlan, type PlanState } from '../task/taskStore.js';
+import { createRequirement, linkRequirement, listRequirements, updateRequirement } from '../requirement/requirementStore.js';
+import { detectRequirementShapedPrompt } from '../requirement/requirementDetector.js';
 import {
   ensureProject as trackEnsureProject,
   getProject as trackGetProject,
@@ -1233,6 +1235,7 @@ export class Agent {
 
     this.lastUserPrompt = prompt;
     this.lastTurnHitLoopLimit = false;
+    this.autoCaptureRequirement(prompt, callbacks);
     // Breadth-intent detection: when the user signals "do everything" / "in 1 go"
     // / "thoroughly" / "as much as possible", inject a fan-out hint so the
     // agent reaches for spawn_agents instead of a single sequential tool call.
@@ -4354,6 +4357,52 @@ export class Agent {
       role: 'system',
       content: appendVerbositySteering(parts.join('\n\n'), getCliKnobs().verbositySteeringLevel),
     };
+  }
+
+  /** Create one draft requirement from a high-confidence user implementation request. */
+  private autoCaptureRequirement(prompt: string, callbacks: RunTurnCallbacks): void {
+    const automation = getCliKnobs().automation;
+    if (this.silent || !automation.enabled || !automation.requirements.enabled) return;
+
+    const openRequirements = listRequirements(this.workspaceRoot)
+      .filter((record) => record.status !== 'done' && record.status !== 'archived')
+      .map(({ title, acceptanceCriteria, status }) => ({ title, acceptanceCriteria, status }));
+    const detection = detectRequirementShapedPrompt(prompt, {
+      autoCreateThreshold: automation.requirements.autoCreateThreshold,
+      lowActThreshold: automation.requirements.lowActThreshold,
+      openRequirements,
+    });
+    if (detection.candidate && detection.input) {
+      callbacks.onNotice?.({ level: 'info', message: `Requirement candidate detected: ${detection.input.title}` });
+      return;
+    }
+    if (!detection.detected || !detection.input) return;
+
+    const record = createRequirement(this.workspaceRoot, {
+      ...detection.input,
+      sessionKey: this.sessionKey,
+      origin: 'auto',
+    });
+    callbacks.onStatusUpdate(`Captured requirement: ${record.title}`);
+    const provenance = { actor: 'agent', reason: 'auto-detect' };
+    void emitAgentEvent(
+      { mcpClient: this.mcpClient, sessionKey: this.sessionKey },
+      {
+        kind: 'agent_output',
+        summary: `Requirement ${record.id}: ${record.title} [${record.status}] (auto-detect)`,
+        payload: {
+          requirementId: record.id,
+          title: record.title,
+          status: record.status,
+          acceptanceCriteria: record.acceptanceCriteria,
+          provenance,
+        },
+      },
+    ).then((memoryId) => {
+      if (!memoryId) return;
+      updateRequirement(this.workspaceRoot, record.id, { sourceEventId: memoryId });
+      linkRequirement(this.workspaceRoot, record.id, { memoryId });
+    }).catch(() => {});
   }
 
   private async injectRecallContext(prompt: string, mcpTools: any[], callbacks: RunTurnCallbacks): Promise<void> {

@@ -71,6 +71,36 @@ export interface LLMConfig {
  * credential vars like `OPENAI_API_KEY` for wizard pre-detection;
  * those are documented at their callsites.)
  */
+export interface AutomationKnobs {
+  enabled?: boolean;
+  requirements?: {
+    enabled?: boolean;
+    autoCreateThreshold?: number;
+    lowActThreshold?: number;
+  };
+  sync?: { enabled?: boolean };
+  sprints?: {
+    enabled?: boolean;
+    minItems?: number;
+    respectCapacity?: boolean;
+  };
+}
+
+export interface ResolvedAutomationKnobs {
+  enabled: boolean;
+  requirements: {
+    enabled: boolean;
+    autoCreateThreshold: number;
+    lowActThreshold: number;
+  };
+  sync: { enabled: boolean };
+  sprints: {
+    enabled: boolean;
+    minItems: number;
+    respectCapacity: boolean;
+  };
+}
+
 export interface CliKnobs {
   // ---- planning / orchestration -----------------------------------------
   /**
@@ -89,6 +119,8 @@ export interface CliKnobs {
    * `allow` (never overrides a mode-based deny).
    */
   permissions?: { allow?: string[]; deny?: string[] };
+  /** Default-off Requirement → Plan → Track automation controls. */
+  automation?: AutomationKnobs;
   // ---- memory / briefing -------------------------------------------------
   /** Default 'gated'. Recall trigger mode — see briefingTriggers.ts. */
   recallMode?: 'always' | 'gated' | 'off';
@@ -670,6 +702,7 @@ export function selfHealConfig(parsed: Config): { config: Config; changed: boole
  */
 export interface ResolvedCliKnobs {
   permissions: { allow: string[]; deny: string[] };
+  automation: ResolvedAutomationKnobs;
   recallMode: 'always' | 'gated' | 'off';
   nextActionPlanner: 'on' | 'off';
   prefixMemoryAnchors: 'on' | 'off';
@@ -747,12 +780,37 @@ export interface ResolvedCliKnobs {
   maxOutputTokens?: number;
 }
 
+function unitInterval(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? value : fallback;
+}
+
 export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
   const c = cfg?.cli ?? {};
+  const automation = c.automation ?? {};
+  const requirementsAutomation = automation.requirements ?? {};
+  const autoCreateThreshold = unitInterval(requirementsAutomation.autoCreateThreshold, 0.7);
+  const lowActThreshold = Math.min(unitInterval(requirementsAutomation.lowActThreshold, 0.4), autoCreateThreshold);
+  const sprintAutomation = automation.sprints ?? {};
   return {
     recallMode: c.recallMode ?? 'gated',
     nextActionPlanner: c.nextActionPlanner ?? 'on',
     permissions: { allow: c.permissions?.allow ?? [], deny: c.permissions?.deny ?? [] },
+    automation: {
+      enabled: automation.enabled ?? false,
+      requirements: {
+        enabled: requirementsAutomation.enabled ?? false,
+        autoCreateThreshold,
+        lowActThreshold,
+      },
+      sync: { enabled: automation.sync?.enabled ?? false },
+      sprints: {
+        enabled: sprintAutomation.enabled ?? false,
+        minItems: Number.isInteger(sprintAutomation.minItems) && sprintAutomation.minItems! > 0
+          ? sprintAutomation.minItems!
+          : 3,
+        respectCapacity: sprintAutomation.respectCapacity ?? true,
+      },
+    },
     prefixMemoryAnchors: c.prefixMemoryAnchors ?? 'on',
     personaAnchor: c.personaAnchor ?? 'on',
     briefingMaxCharsPerSource: c.briefingMaxCharsPerSource ?? 4_000,
