@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>UF-04 · Plan review &amp; approval · BrainRouter Mobile</title>
+<style>
+  :root{
+    --bg:hsl(240 6% 5%); --surface:hsl(240 5% 9%); --sidebar:hsl(240 7% 4%);
+    --raised:hsl(240 5% 13%); --input:hsl(240 6% 8%); --term:hsl(240 8% 3%);
+    --userb:hsl(240 5% 11%); --border:hsl(240 5% 15%); --border2:hsl(240 5% 21%);
+    --text:hsl(0 0% 96%); --dim:hsl(240 5% 72%); --faint:hsl(240 4% 50%);
+    --accent:hsl(245 80% 66%); --accent-soft:hsla(245 80% 66% / .16);
+    --brand:hsl(16 65% 58%); --ok:hsl(142 60% 45%); --warn:hsl(38 85% 48%); --err:hsl(0 72% 58%);
+    --r-sm:9px; --r-md:14px; --r-lg:20px;
+    --font:-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",Roboto,sans-serif;
+    --mono:"SF Mono","Cascadia Code","JetBrains Mono",Consolas,monospace;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:#0a0a0c;color:var(--text);font-family:var(--font);
+    display:flex;flex-direction:column;align-items:center;gap:14px;padding:24px 12px 60px;min-height:100vh}
+  .hd{max-width:430px;text-align:center}
+  .hd h1{font-size:15px;margin:0 0 4px;font-weight:650}
+  .hd p{font-size:12.5px;color:var(--dim);margin:0;line-height:1.5}
+  .hd a{color:var(--accent);text-decoration:none}
+  /* phone frame */
+  .phone{width:390px;max-width:94vw;height:790px;background:var(--bg);border-radius:42px;
+    border:1px solid var(--border2);box-shadow:0 0 0 10px #000,0 24px 70px rgba(0,0,0,.6);
+    position:relative;overflow:hidden;display:flex;flex-direction:column}
+  .notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:128px;height:26px;
+    background:#000;border-radius:0 0 16px 16px;z-index:40}
+  .statusbar{height:40px;flex:0 0 40px;display:flex;align-items:center;justify-content:space-between;
+    padding:0 22px;font-size:12px;font-weight:600;color:var(--text);z-index:5}
+  .statusbar .r{display:flex;gap:6px;align-items:center}
+  .screen{flex:1;overflow:hidden;position:relative;display:flex;flex-direction:column}
+  /* frames (steps) */
+  .frame{position:absolute;inset:0;display:none;flex-direction:column;overflow:hidden}
+  .frame.active{display:flex;animation:fade .28s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .body{flex:1;overflow-y:auto;padding:10px 12px 12px}
+  .body::-webkit-scrollbar{width:0}
+  /* top bar */
+  .topbar{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:6px 12px 10px;border-bottom:1px solid var(--border)}
+  .topbar .t{flex:1;min-width:0}
+  .topbar .t b{display:block;font-size:14.5px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .topbar .t span{font-size:11.5px;color:var(--faint)}
+  .ibtn{width:34px;height:34px;border-radius:10px;border:1px solid var(--border);background:var(--surface);
+    color:var(--dim);display:grid;place-items:center;font-size:15px;flex:0 0 auto}
+  .back{font-size:20px;color:var(--dim);width:30px}
+  /* ring */
+  .ring{width:30px;height:30px;border-radius:50%;background:
+    conic-gradient(var(--accent) 62%, var(--raised) 0);display:grid;place-items:center;flex:0 0 auto}
+  .ring i{width:22px;height:22px;border-radius:50%;background:var(--surface);display:grid;place-items:center;
+    font-size:9px;color:var(--dim);font-style:normal}
+  /* connection banner */
+  .conn{font-size:11px;color:var(--ok);display:flex;gap:5px;align-items:center}
+  .conn::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--ok)}
+  /* chat bubbles */
+  .bubble{max-width:84%;padding:9px 12px;border-radius:var(--r-md);font-size:13.5px;line-height:1.5;margin:8px 0}
+  .bubble.user{margin-left:auto;background:var(--userb);border:1px solid var(--border2);border-bottom-right-radius:5px}
+  .bubble.assistant{background:var(--surface);border:1px solid var(--border);border-bottom-left-radius:5px}
+  .bubble.assistant .caret{display:inline-block;width:7px;height:15px;background:var(--accent);
+    vertical-align:-2px;margin-left:2px;animation:blink 1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+  .reason{font-size:12px;color:var(--faint);font-style:italic;border-left:2px solid var(--border2);
+    padding:3px 0 3px 9px;margin:6px 0}
+  /* tool card */
+  .tool{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);
+    padding:9px 11px;margin:7px 0;display:flex;gap:9px;align-items:flex-start}
+  .tool .ic{width:24px;height:24px;border-radius:7px;background:var(--raised);display:grid;place-items:center;font-size:12px;flex:0 0 auto}
+  .tool .m{flex:1;min-width:0}
+  .tool .nm{font-size:12.5px;font-weight:600}
+  .tool .su{font-size:11.5px;color:var(--dim);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sdot{width:8px;height:8px;border-radius:50%;margin-top:6px;flex:0 0 auto}
+  .sdot.ok{background:var(--ok)} .sdot.fail{background:var(--err)} .sdot.run{background:var(--warn)}
+  /* working line */
+  .work{display:flex;align-items:center;gap:9px;color:var(--dim);font-size:12.5px;margin:10px 2px}
+  .spin{width:15px;height:15px;border:2px solid var(--border2);border-top-color:var(--accent);
+    border-radius:50%;animation:sp .7s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  /* changeset / summary bar */
+  .csum{display:flex;align-items:center;gap:10px;background:var(--accent-soft);border:1px solid var(--accent);
+    border-radius:var(--r-md);padding:9px 12px;margin:9px 0;font-size:12.5px}
+  .csum .add{color:var(--ok);font-weight:600} .csum .del{color:var(--err);font-weight:600}
+  /* needs-you banner */
+  .needs{display:flex;align-items:center;gap:10px;background:var(--warn);color:#1a1205;
+    border-radius:var(--r-md);padding:10px 12px;margin:9px 0;font-size:13px;font-weight:650;cursor:pointer}
+  .needs .go{margin-left:auto;font-size:18px}
+  /* composer */
+  .composer{flex:0 0 auto;border-top:1px solid var(--border);background:var(--sidebar);padding:8px 10px 12px}
+  .pills{display:flex;gap:6px;margin-bottom:8px;overflow-x:auto}
+  .pill{font-size:11px;color:var(--dim);background:var(--raised);border:1px solid var(--border);
+    border-radius:999px;padding:4px 10px;white-space:nowrap;display:flex;gap:4px;align-items:center}
+  .pill b{color:var(--text);font-weight:600}
+  .cbox{display:flex;align-items:flex-end;gap:8px;background:var(--input);border:1px solid var(--border2);
+    border-radius:var(--r-lg);padding:7px 7px 7px 13px}
+  .cbox .tx{flex:1;font-size:13.5px;color:var(--text);padding:5px 0;min-height:20px}
+  .cbox .tx.ph{color:var(--faint)}
+  .addbtn{width:32px;height:32px;border-radius:50%;background:var(--raised);color:var(--dim);display:grid;place-items:center;font-size:17px;flex:0 0 auto}
+  .send{width:34px;height:34px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-size:15px;flex:0 0 auto;border:none}
+  .send.stop{background:var(--err)}
+  /* sheet */
+  .sheet{position:absolute;inset:0;background:rgba(0,0,0,.55);display:none;align-items:flex-end;z-index:30}
+  .sheet.open{display:flex;animation:fade .2s ease}
+  .sheet-card{width:100%;background:var(--surface);border-radius:22px 22px 0 0;border-top:1px solid var(--border2);
+    padding:8px 16px 22px;animation:up .3s cubic-bezier(.2,.8,.2,1)}
+  @keyframes up{from{transform:translateY(100%)}to{transform:none}}
+  .handle{width:38px;height:4px;border-radius:2px;background:var(--border2);margin:6px auto 14px}
+  .sheet-card h3{font-size:15px;margin:0 0 4px} .sheet-card .sub{font-size:12px;color:var(--dim);margin:0 0 14px}
+  .codeblock{background:var(--term);border:1px solid var(--border);border-radius:var(--r-sm);
+    padding:10px 12px;font-family:var(--mono);font-size:12px;color:var(--dim);overflow-x:auto;white-space:pre;margin:10px 0}
+  .codeblock .cmd{color:var(--text)}
+  /* buttons */
+  .btn{display:block;width:100%;text-align:center;padding:13px;border-radius:var(--r-md);font-size:14px;
+    font-weight:650;border:1px solid var(--border2);background:var(--raised);color:var(--text);margin-top:9px;cursor:pointer}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .btn.danger{background:transparent;border-color:var(--err);color:var(--err)}
+  .btn.ghost{background:transparent}
+  .brow{display:flex;gap:9px} .brow .btn{flex:1}
+  .bio{font-size:11px;color:var(--faint);text-align:center;margin-top:12px;display:flex;gap:6px;justify-content:center;align-items:center}
+  /* tabbar */
+  .tabbar{flex:0 0 auto;display:flex;border-top:1px solid var(--border);background:var(--sidebar);padding:6px 0 18px}
+  .tab{flex:1;text-align:center;font-size:10px;color:var(--faint);display:flex;flex-direction:column;gap:3px;align-items:center}
+  .tab .ti{font-size:18px} .tab.on{color:var(--accent)}
+  /* caption + dots */
+  .cap{max-width:390px;width:94vw;text-align:center;min-height:34px}
+  .cap p{font-size:12.5px;color:var(--dim);margin:0;line-height:1.5}
+  .cap .step{color:var(--accent);font-weight:600}
+  .ctrls{display:flex;gap:8px;align-items:center;justify-content:center;margin-top:4px}
+  .ctrls button{background:var(--surface);border:1px solid var(--border2);color:var(--text);
+    border-radius:999px;padding:7px 16px;font-size:12.5px;font-weight:600;cursor:pointer}
+  .ctrls button:disabled{opacity:.4}
+  .dots{display:flex;gap:5px} .dt{width:6px;height:6px;border-radius:50%;background:var(--border2)} .dt.on{background:var(--accent)}
+  .tag{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.4px;color:var(--accent);
+    border:1px solid var(--accent);border-radius:5px;padding:1px 6px;margin-bottom:6px}
+</style>
+</head>
+<body>
+  <div class="hd">
+    <span class="tag">UF-04 · MVP</span>
+    <h1>Plan review &amp; approval</h1>
+    <p>Tap the highlighted control to advance the flow. Inline PlanCard → S-06 Plan → request changes → new version. Covers US-11 · <a href="index.html">← all prototypes</a></p>
+  </div>
+
+  <div class="phone">
+    <div class="notch"></div>
+    <div class="statusbar"><span>9:41</span><span class="r">●●● &nbsp;5G&nbsp; 🔋</span></div>
+    <div class="screen">
+
+      <!-- FRAME 1: Session with inline PlanCard (plan-update) -->
+      <div class="frame active" data-cap="<b class='step'>1.</b> In Plan mode the agent emits a <b>plan-update</b>, which renders as an inline PlanCard in the session. Tap it to open the full plan.">
+        <div class="topbar">
+          <span class="back">‹</span>
+          <div class="t"><b>Fix flaky auth test</b><span class="conn">Connected · plan mode</span></div>
+          <div class="ring"><i>58%</i></div>
+          <span class="ibtn">⋮</span>
+        </div>
+        <div class="body">
+          <div class="bubble user">Retry the flaky auth test and fix the root cause</div>
+          <div class="reason">Drafting an approach before touching code…</div>
+          <div class="bubble assistant">Here's my plan. Review it and approve, or tell me what to change.</div>
+          <!-- inline PlanCard -->
+          <div class="tool" data-next style="cursor:pointer;border-color:var(--accent);background:var(--accent-soft)">
+            <span class="ic" style="background:var(--accent);color:#fff">📋</span>
+            <div class="m"><div class="nm">Plan · 4 steps · awaiting approval</div>
+              <div class="su" style="font-family:var(--font);color:var(--dim)">Reproduce → localize → pin clock → verify · tap to review</div></div>
+            <span class="go" style="color:var(--accent);font-size:18px">›</span></div>
+        </div>
+        <div class="composer">
+          <div class="pills"><span class="pill">Mode <b>Plan</b></span><span class="pill">Model <b>Opus 4.8</b></span>
+            <span class="pill">Effort <b>Smart</b></span></div>
+          <div class="cbox"><span class="addbtn">+</span><div class="tx ph">Message…</div>
+            <button class="send">➤</button></div>
+        </div>
+      </div>
+
+      <!-- FRAME 2: S-06 Plan screen -->
+      <div class="frame" data-cap="<b class='step'>2.</b> The S-06 Plan screen: each item shows status and one-line acceptance. You can approve as-is — but here we'll push back. Tap <b>Request changes</b>.">
+        <div class="topbar">
+          <span class="back" data-next>‹</span>
+          <div class="t"><b>Plan · Fix flaky auth test</b><span class="conn">brainrouter · v1 · 4 steps</span></div>
+          <span class="ibtn">⋮</span>
+        </div>
+        <div class="body">
+          <div class="needs">📋 Plan ready for review — approve or request changes <span class="go">›</span></div>
+
+          <div class="tool"><span class="ic" style="color:var(--warn)">▸</span><div class="m">
+            <div class="nm">Reproduce the flaky failure</div>
+            <div class="su" style="font-family:var(--font);color:var(--faint);white-space:normal">Accept: test fails ≥3/10 runs locally</div></div>
+            <span class="sdot run"></span></div>
+
+          <div class="tool"><span class="ic" style="color:var(--faint)">○</span><div class="m">
+            <div class="nm">Localize the race in token refresh</div>
+            <div class="su" style="font-family:var(--font);color:var(--faint);white-space:normal">Accept: root cause named with a failing assertion</div></div>
+            <span class="sdot" style="background:var(--border2);margin-top:6px"></span></div>
+
+          <div class="tool"><span class="ic" style="color:var(--faint)">○</span><div class="m">
+            <div class="nm">Pin the clock &amp; await the refresh</div>
+            <div class="su" style="font-family:var(--font);color:var(--faint);white-space:normal">Accept: no real timers in the test path</div></div>
+            <span class="sdot" style="background:var(--border2);margin-top:6px"></span></div>
+
+          <div class="tool"><span class="ic" style="color:var(--faint)">○</span><div class="m">
+            <div class="nm">Verify 10/10 green &amp; summarize</div>
+            <div class="su" style="font-family:var(--font);color:var(--faint);white-space:normal">Accept: token.test.ts passes 10/10</div></div>
+            <span class="sdot" style="background:var(--border2);margin-top:6px"></span></div>
+
+          <div class="csum" style="cursor:default">🕘 Version history · v1 (initial draft)</div>
+        </div>
+        <div class="composer">
+          <div class="brow">
+            <button class="btn primary" style="margin-top:0">Approve plan</button>
+            <button class="btn" data-open="rc" style="margin-top:0">Request changes</button>
+          </div>
+        </div>
+        <!-- request-changes sheet -->
+        <div class="sheet" id="sheet-rc">
+          <div class="sheet-card">
+            <div class="handle"></div>
+            <h3>Request changes</h3>
+            <p class="sub">Tell the agent what to revise — this launches a revision task.</p>
+            <div class="cbox" style="align-items:flex-start"><div class="tx">Add a regression test for the expired-token path before the verify step.</div></div>
+            <button class="btn primary" data-next>Send feedback &amp; revise</button>
+            <button class="btn ghost" data-close>Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- FRAME 3: revision started -->
+      <div class="frame" data-cap="<b class='step'>3.</b> Your feedback posts as a plan decision and the agent starts a revision. The plan is locked while it reworks the steps.">
+        <div class="topbar">
+          <span class="back">‹</span>
+          <div class="t"><b>Plan · Fix flaky auth test</b><span class="conn">Revising · v1 → v2</span></div>
+          <span class="ibtn">⋮</span>
+        </div>
+        <div class="body">
+          <div class="csum">📝 Changes requested · “add a regression test for the expired-token path”</div>
+          <div class="bubble user">Add a regression test for the expired-token path before the verify step.</div>
+          <div class="bubble assistant">Good call — I'll fold an expired-token regression test into the plan.<span class="caret"></span></div>
+          <div class="work"><span class="spin"></span> Revising plan · 0:04 elapsed</div>
+        </div>
+        <div class="composer">
+          <div class="pills"><span class="pill">Mode <b>Plan</b></span><span class="pill">Model <b>Opus 4.8</b></span></div>
+          <div class="cbox"><span class="addbtn">+</span><div class="tx ph">Message…</div>
+            <button class="send stop" data-next title="Continue">■</button></div>
+        </div>
+      </div>
+
+      <!-- FRAME 4: new plan version shown -->
+      <div class="frame" data-cap="<b class='step'>4.</b> The new <b>v2</b> plan arrives with the extra regression-test step (5 items). Review again and approve when it's right — version history keeps the trail.">
+        <div class="topbar">
+          <span class="back">‹</span>
+          <div class="t"><b>Plan · Fix flaky auth test</b><span class="conn">brainrouter · v2 · 5 steps</span></div>
+          <span class="ibtn">⋮</span>
+        </div>
+        <div class="body">
+          <div class="csum" style="background:hsla(142 60% 45% / .14);border-color:var(--ok)">✓ Revised to v2 · added 1 step from your feedback</div>
+
+          <div class="tool"><span class="ic" style="color:var(--warn)">▸</span><div class="m">
+            <div class="nm">Reproduce the flaky failure</div>
+            <div class="su" style="font-family:var(--font);color:var(--faint);white-space:normal">Accept: test fails ≥3/10 runs locally</div></div>
+            <span class="sdot run"></span></div>
+
+          <div class="tool"><span class="ic" style="color:var(--faint)">○</span><div class="m">
+            <div class="nm">Localize the race in token refresh</div>
+            <div class="su" style="font-family:var(--font);color:var(--faint);white-space:normal">Accept: root cause named with a failing assertion</div></div>
+            <span class="sdot" style="background:var(--border2);margin-top:6px"></span></div>
+
+          <div class="tool" style="border-color:var(--accent)"><span class="ic" style="color:var(--accent)">＋</span><div class="m">
+            <div class="nm">Add expired-token regression test</div>
+            <div class="su" style="font-family:var(--font);color:var(--accent);white-space:normal">New · from your feedback · Accept: asserts refresh-on-expiry</div></div>
+            <span class="sdot" style="background:var(--border2);margin-top:6px"></span></div>
+
+          <div class="tool"><span class="ic" style="color:var(--faint)">○</span><div class="m">
+            <div class="nm">Pin the clock &amp; await the refresh</div>
+            <div class="su" style="font-family:var(--font);color:var(--faint);white-space:normal">Accept: no real timers in the test path</div></div>
+            <span class="sdot" style="background:var(--border2);margin-top:6px"></span></div>
+
+          <div class="tool"><span class="ic" style="color:var(--faint)">○</span><div class="m">
+            <div class="nm">Verify 10/10 green &amp; summarize</div>
+            <div class="su" style="font-family:var(--font);color:var(--faint);white-space:normal">Accept: token.test.ts passes 10/10</div></div>
+            <span class="sdot" style="background:var(--border2);margin-top:6px"></span></div>
+
+          <div class="csum" style="cursor:default">🕘 Version history · v2 · 1 revision recorded</div>
+        </div>
+        <div class="composer">
+          <div class="brow">
+            <button class="btn primary" data-restart style="margin-top:0">Approve plan</button>
+            <button class="btn" data-restart style="margin-top:0">Request changes</button>
+          </div>
+        </div>
+      </div>
+
+    </div><!--/screen-->
+  </div><!--/phone-->
+
+  <div class="cap" id="cap"></div>
+  <div class="ctrls">
+    <button id="prev">‹ Back</button>
+    <div class="dots" id="dots"></div>
+    <button id="restart">Restart ↺</button>
+  </div>
+
+<script>
+  const frames=[...document.querySelectorAll('.frame')];
+  const dots=document.getElementById('dots');
+  const cap=document.getElementById('cap');
+  let i=0;
+  frames.forEach(()=>{const d=document.createElement('span');d.className='dt';dots.appendChild(d)});
+  function show(n){
+    i=Math.max(0,Math.min(frames.length-1,n));
+    frames.forEach((f,x)=>f.classList.toggle('active',x===i));
+    [...dots.children].forEach((d,x)=>d.classList.toggle('on',x===i));
+    cap.innerHTML='<p>'+(frames[i].dataset.cap||'')+'</p>';
+    document.getElementById('prev').disabled=i===0;
+    // close any open sheets when changing frames
+    frames[i].querySelectorAll('.sheet').forEach(s=>s.classList.remove('open'));
+  }
+  document.body.addEventListener('click',e=>{
+    const adv=e.target.closest('[data-next]');
+    const op=e.target.closest('[data-open]');
+    const cl=e.target.closest('[data-close]');
+    const rs=e.target.closest('[data-restart]');
+    if(op){const s=document.getElementById('sheet-'+op.dataset.open);if(s){s.classList.add('open');return;}}
+    if(cl){const s=cl.closest('.sheet');if(s)s.classList.remove('open');return;}
+    if(rs){show(0);return;}
+    if(adv){show(i+1);return;}
+  });
+  document.getElementById('prev').onclick=()=>show(i-1);
+  document.getElementById('restart').onclick=()=>show(0);
+  show(0);
+</script>
+</body>
+</html>
