@@ -1803,7 +1803,8 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
 .task-row .task-elapsed { flex: none; font: 10px var(--mono); color: var(--text-faint); }
 
 /* DESK-6w — workflow run card (Claude /workflows style): phases → agents. */
-.wf-card { display: flex; flex-direction: column; gap: 14px; }
+.wf-card { display: flex; flex-direction: column; gap: 14px;
+  width: 100%; max-width: var(--content-w); margin: 0 auto; box-sizing: border-box; }
 .wf-head { display: flex; align-items: center; gap: 10px; position: sticky; top: 0; z-index: 2;
   padding: 4px 0 10px; border-bottom: 1px solid var(--border, var(--ov-08)); background: var(--bg, #0d0d0f); }
 .wf-title { font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
