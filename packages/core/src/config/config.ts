@@ -255,6 +255,17 @@ export interface CliKnobs {
    */
   sandboxUnavailable?: 'ask' | 'deny' | 'warn';
   /**
+   * CODEX-SANDBOX-UNATTENDED (0.4.15) — force the sandbox ON for silent /
+   * unattended agents (cloud workers, spawned children, non-interactive runs)
+   * even when `cli.sandbox` is `'off'`. When enforced, outbound network is
+   * denied and a missing sandboxer fails closed (`sandboxUnavailable: 'deny'`),
+   * regardless of the looser interactive settings. Default `true` — an
+   * operator must opt OUT explicitly to let unattended shells run unsandboxed.
+   * Mirrors `cli.hooks.enforceWhenSilent`: relaxed when a human is watching,
+   * strict when nobody is.
+   */
+  sandboxEnforceWhenSilent?: boolean;
+  /**
    * CODEX-EXEC-POLICY (0.4.7) — command prefixes the user pre-approves, so a
    * `run_command` whose every segment matches one auto-approves without a prompt
    * in any mode (e.g. `git status`, `npm test`). Prefixes match on a word
@@ -779,6 +790,7 @@ export interface ResolvedCliKnobs {
   sandboxWritePaths: string[];
   sandboxNetwork: boolean;
   sandboxUnavailable: 'ask' | 'deny' | 'warn';
+  sandboxEnforceWhenSilent: boolean;
   commandAllowlist: string[];
   childWorkspaceIsolation: 'off' | 'auto' | 'git-worktree';
   worktreeRoot: string;
@@ -899,6 +911,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     sandboxWritePaths: c.sandboxWritePaths ?? [],
     sandboxNetwork: c.sandboxNetwork ?? false,
     sandboxUnavailable: c.sandboxUnavailable ?? 'deny',
+    sandboxEnforceWhenSilent: c.sandboxEnforceWhenSilent ?? true,
     // CODEX-APPROVAL-GUARD — drop over-broad prefixes (bare `git`/`bash`/`sudo`/…)
     // so a too-permissive config.json entry can never auto-approve everything.
     commandAllowlist: sanitizeCommandAllowlist(c.commandAllowlist ?? []).allowed,

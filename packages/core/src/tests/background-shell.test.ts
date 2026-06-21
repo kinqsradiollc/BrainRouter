@@ -8,6 +8,7 @@ import {
   __resetBackgroundShells,
 } from '../exec/backgroundShell.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
+import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
 
 const until = async (pred: () => boolean, ms = 5000): Promise<void> => {
   const start = Date.now();
@@ -61,6 +62,12 @@ test('readBackgroundOutput: incremental offsets + complete flag', async () => {
 test('run_command background:true + task_output end-to-end through the executor', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     __resetBackgroundShells();
+    // Background runs are unsandboxed (v1), so they are refused while the
+    // sandbox is active — including the unattended-enforcement default. This
+    // test exercises the background capability itself, so opt out of
+    // enforcement the way an operator would (cli.sandboxEnforceWhenSilent:false).
+    _resetCliKnobsCache();
+    setCliKnobOverride({ sandboxEnforceWhenSilent: false });
     const { Agent } = await import('../agent/agent.js');
     // Silent agents need the parent fast-mode opt-in for safe shell commands.
     const { writePreferences } = await import('../session/preferencesStore.js');
@@ -84,5 +91,6 @@ test('run_command background:true + task_output end-to-end through the executor'
 
     const missing = JSON.parse(await runTool('task_output', { id: 'bgsh_missing' }));
     assert.equal(missing.found, false);
+    _resetCliKnobsCache();
   });
 });
