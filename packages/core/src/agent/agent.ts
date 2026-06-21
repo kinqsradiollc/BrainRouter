@@ -151,7 +151,7 @@ import { currentTier, detectNeedsHigh, nextTier, resolveTierLadder, stripNeedsHi
 import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PLACEHOLDER_KEY } from '../provider/providers/index.js';
 import { DEFAULT_EFFORT_VALUE_MAP } from '../provider/providers/definition.js';
 import type { ProviderDefinition } from '../provider/providers/definition.js';
-import { normalizeModelName, isReasoningModel, isNonReasoningChatModel, isAlwaysOnReasoner, modelSupportsXhighEffort } from '../provider/models/reasoning.js';
+import { normalizeModelName, isReasoningModel, isNonReasoningChatModel, isAlwaysOnReasoner, modelSupportsXhighEffort, isBinaryReasoningModel } from '../provider/models/reasoning.js';
 // 0.3.9 item 9 — prefix-pinned memory briefing policy.
 import {
   decideAnchorAction,
@@ -5371,6 +5371,11 @@ export function resolveWireEffort(config: LLMConfig, effort: EffortLevel | undef
   // allowlist; every other OpenAI-compatible provider sends for ANY model (the
   // server ignores it when N/A) so effort works for unlisted reasoning models.
   if ((def?.effortModelGate ?? 'any') === 'reasoning-only' && !isReasoningModel(model)) return null;
+  // Binary on/off model (advertises only `on`/`off` via /models): collapse any
+  // graded request to `on` — sending `low`/`high` would be rejected and the
+  // endpoint would fall back to `on` anyway (and warn). `medium` already
+  // returned null above, so it omits the field and the model uses its default.
+  if (isBinaryReasoningModel(model)) return 'on';
   const map = def?.effortValueMap ?? DEFAULT_EFFORT_VALUE_MAP;
   const mapped = map[effort];
   if (mapped === null) return null;             // explicit omit for this level

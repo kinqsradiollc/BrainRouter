@@ -25,7 +25,20 @@ export interface ModelReasoningCapabilities {
   effort?: true;
   /** The model advertises the `xhigh` effort tier. */
   xhigh?: true;
+  /**
+   * The advertised reasoning-effort VOCABULARY from live `/models` metadata
+   * (lowercased), e.g. `['on','off']` for a binary model or
+   * `['low','medium','high']` for a graded one. Drives binary on/off detection
+   * so a model that only accepts `on`/`off` is never sent a graded `high`/`low`
+   * value it would reject. Empty/absent = vocabulary unknown (fall back to the
+   * provider's effortValueMap).
+   */
+  efforts?: string[];
 }
+
+/** Graded effort literals — a model advertising any of these accepts the OpenAI
+ *  reasoning_effort param (vs a binary on/off toggle). */
+const GRANULAR_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'extra_high', 'extra-high']);
 
 const MODEL_REASONING_CAPABILITIES = new Map<string, ModelReasoningCapabilities>();
 
@@ -37,10 +50,16 @@ function keyForms(model: string | undefined | null): string[] {
 }
 
 export function registerModelReasoningCapabilities(model: string | undefined | null, capabilities: ModelReasoningCapabilities): void {
-  if (!capabilities.reasoning && !capabilities.effort && !capabilities.xhigh) return;
+  const hasSignal = capabilities.reasoning || capabilities.effort || capabilities.xhigh || !!capabilities.efforts?.length;
+  if (!hasSignal) return;
   for (const key of keyForms(model)) {
     const prev = MODEL_REASONING_CAPABILITIES.get(key) ?? {};
-    MODEL_REASONING_CAPABILITIES.set(key, { ...prev, ...capabilities });
+    const merged: ModelReasoningCapabilities = { ...prev, ...capabilities };
+    // Union the advertised vocabulary so a thinner source (e.g. a bare
+    // /v1/models row) never clobbers a richer one (LM Studio's native enrich).
+    const efforts = Array.from(new Set([...(prev.efforts ?? []), ...(capabilities.efforts ?? [])]));
+    if (efforts.length) merged.efforts = efforts;
+    MODEL_REASONING_CAPABILITIES.set(key, merged);
   }
 }
 
@@ -123,7 +142,54 @@ export function inferModelReasoningCapabilities(raw: unknown): ModelReasoningCap
     out.effort = true;
     out.xhigh = true;
   }
+  // Capture the advertised effort VOCABULARY (the literal allowed values) from
+  // whichever shape the endpoint exposes: a flat `supported_reasoning_efforts`
+  // array (generic OpenAI-compat / gateways) or LM Studio's nested
+  // `capabilities.reasoning.allowed_options`. A non-empty set means the model
+  // reasons; if it includes a graded literal it also accepts the effort param.
+  const efforts = collectEffortVocab(root, caps, metadata);
+  if (efforts.length) {
+    out.efforts = efforts;
+    out.reasoning = true;
+    if (efforts.some((e) => GRANULAR_EFFORTS.has(e))) out.effort = true;
+  }
   return out;
+}
+
+/** Pull lowercased allowed-effort literals from the common `/models` shapes. */
+function collectEffortVocab(
+  root: Record<string, unknown>,
+  caps: Record<string, unknown> | undefined,
+  metadata: Record<string, unknown> | undefined,
+): string[] {
+  const sources: unknown[] = [
+    root.supported_reasoning_efforts,
+    metadata?.supported_reasoning_efforts,
+    asRecord(caps?.reasoning)?.allowed_options,
+    asRecord(root.reasoning)?.allowed_options,
+    asRecord(metadata?.reasoning)?.allowed_options,
+  ];
+  const out = new Set<string>();
+  for (const src of sources) {
+    if (Array.isArray(src)) {
+      for (const v of src) if (typeof v === 'string' && v.trim()) out.add(v.trim().toLowerCase());
+    }
+  }
+  return Array.from(out);
+}
+
+/**
+ * True iff the model's advertised vocabulary is a binary on/off toggle with NO
+ * graded tier — i.e. it accepts `reasoning: 'on' | 'off'` but rejects a graded
+ * `reasoning_effort: 'low'|'high'`. `google/gemma-*-qat` on LM Studio is the
+ * canonical case. Capability-driven (from /models); no model names hardcoded.
+ */
+export function isBinaryReasoningModel(model: string | undefined): boolean {
+  const efforts = lookupModelReasoningCapabilities(model)?.efforts;
+  if (!efforts || efforts.length === 0) return false;
+  const hasToggle = efforts.some((v) => v === 'on' || v === 'off');
+  const hasGranular = efforts.some((v) => GRANULAR_EFFORTS.has(v));
+  return hasToggle && !hasGranular;
 }
 
 /** Test hook. */
