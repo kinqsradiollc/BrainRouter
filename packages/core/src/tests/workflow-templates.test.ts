@@ -78,6 +78,11 @@ test('BUILD-LOOP build: plan → implement → verify → review, 4 phases, vali
   assert.deepEqual(plan.phases[1].dependsOn, ['plan']);
   assert.deepEqual(plan.phases[2].inputFrom, ['implement']);
   assert.deepEqual(plan.phases[3].inputFrom, ['implement']);
+  // B1 — Verify + Review read the REAL git diff from the worktree (ground truth),
+  // not just the worker's prose; Verify short-circuits an offline sandbox.
+  assert.match(plan.phases[2].agents![0].prompt, /git diff HEAD/);
+  assert.match(plan.phases[2].agents![0].prompt, /BLOCKED-ENVIRONMENT/);
+  assert.match(plan.phases[3].fanOut!.agent.prompt, /git diff HEAD/);
 });
 
 test('BUILD-LOOP build: requires a task', () => {
