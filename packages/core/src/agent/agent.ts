@@ -21,8 +21,9 @@ import { isChildSynthesisTool, resultHasChildOutput, looksLikeChildSynthesisPunt
 import { sanitizeModelArtifacts } from '../util/outputSanitize.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { formatPlan, readPlan, updatePlan, type PlanState } from '../task/taskStore.js';
-import { createRequirement, linkRequirement, listRequirements, updateRequirement } from '../requirement/requirementStore.js';
+import { createRequirement, getRequirement, linkRequirement, listRequirements, updateRequirement } from '../requirement/requirementStore.js';
 import { detectRequirementShapedPrompt } from '../requirement/requirementDetector.js';
+import { syncRequirementPlanTrack } from '../requirement/planTrackSync.js';
 import {
   ensureProject as trackEnsureProject,
   getProject as trackGetProject,
@@ -1391,6 +1392,10 @@ export class Agent {
     // honest signal. Bounded so a model that won't update can't loop.
     let planSyncGuardFired = 0;
     const PLAN_SYNC_GUARD_MAX = 1;
+    // Requirement → Plan → Track synchronization is deterministic store work,
+    // not a prompt. It gets one turn-end pass after the model's plan guard.
+    let requirementPlanTrackSyncGuardFired = 0;
+    const REQUIREMENT_PLAN_TRACK_SYNC_GUARD_MAX = 1;
     // MAR-3 — child-synthesis guard. `childOutputDeliveredThisTurn` flips true once a
     // child/sub-agent's findings reach the parent this turn; the guard fires once if
     // the model then ends with a deferral instead of synthesizing them.
@@ -2197,6 +2202,20 @@ export class Agent {
             callbacks.onStatusUpdate(`Recovery: plan not advanced this turn — nudging to reconcile (${planSyncGuardFired}/${PLAN_SYNC_GUARD_MAX})`);
             continue;
           }
+        }
+
+        // Requirement/Track sync guardrail. Runs after the model-facing
+        // plan-sync correction so a ready requirement can be materialised into
+        // a plan and board without another LLM turn. Bounded and opt-in.
+        const automation = getCliKnobs().automation;
+        if (
+          requirementPlanTrackSyncGuardFired < REQUIREMENT_PLAN_TRACK_SYNC_GUARD_MAX
+          && this.lastTurnToolCalls > 0
+          && automation.enabled
+          && automation.sync.enabled
+        ) {
+          requirementPlanTrackSyncGuardFired += 1;
+          this.autoSynchronizeRequirementPlanTrack(callbacks);
         }
 
         // CC-P9.2 — task-tracking nudge. This turn did substantial multi-step
@@ -4403,6 +4422,38 @@ export class Agent {
       updateRequirement(this.workspaceRoot, record.id, { sourceEventId: memoryId });
       linkRequirement(this.workspaceRoot, record.id, { memoryId });
     }).catch(() => {});
+  }
+
+  /** Apply the bounded requirement → plan → Track reconciliation for this turn. */
+  private autoSynchronizeRequirementPlanTrack(callbacks: RunTurnCallbacks): void {
+    if (this.silent || this.agentDepth > 0) return;
+    const { actions } = syncRequirementPlanTrack(this.workspaceRoot, this.sessionKey);
+    if (actions.length === 0) return;
+
+    callbacks.onStatusUpdate(`Automation: synchronized ${actions.length} Requirement → Plan → Track action${actions.length === 1 ? '' : 's'}.`);
+    for (const action of actions) {
+      const requirement = getRequirement(this.workspaceRoot, action.requirementId);
+      const provenance = {
+        sourceEventId: requirement?.sourceEventId,
+        linkedMemoryIds: requirement?.linkedMemoryIds,
+        actor: 'agent',
+        reason: 'plan-track-sync',
+      };
+      void emitAgentEvent(
+        { mcpClient: this.mcpClient, sessionKey: this.sessionKey },
+        {
+          kind: 'agent_output',
+          summary: `Requirement automation ${action.kind}: ${action.title}`,
+          payload: { ...action, provenance },
+        },
+      ).then((memoryId) => {
+        if (!memoryId) return;
+        linkRequirement(this.workspaceRoot, action.requirementId, { memoryId });
+        if ('workItemId' in action) {
+          trackLinkWorkItem(this.workspaceRoot, action.workItemId, { linkedMemoryIds: [memoryId] });
+        }
+      }).catch(() => {});
+    }
   }
 
   private async injectRecallContext(prompt: string, mcpTools: any[], callbacks: RunTurnCallbacks): Promise<void> {
