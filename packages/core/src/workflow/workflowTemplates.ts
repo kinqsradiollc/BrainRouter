@@ -22,6 +22,14 @@ export interface TemplateResult {
 export const WORKFLOW_TEMPLATES = ['compare', 'review-wide', 'research', 'build'] as const;
 export type WorkflowTemplateName = (typeof WORKFLOW_TEMPLATES)[number];
 
+/** Distinct review lenses the single-slice `build` fans out over (parallel,
+ *  read-only) so one task gets multi-angle review instead of one generalist. */
+const BUILD_REVIEW_LENSES = [
+  'correctness & logic',
+  'security & input handling',
+  'regressions & missed requirements',
+];
+
 function stringArray(v: unknown): string[] {
   if (!Array.isArray(v)) return [];
   return v.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).map((x) => x.trim());
@@ -257,13 +265,20 @@ function buildTemplate(args: Record<string, unknown>): TemplateResult {
           dependsOn: ['implement'],
         },
         {
+          // Fan out the review across independent LENSES (read-only, so they
+          // run safely in parallel) → more thorough coverage than one reviewer,
+          // then role-rollup merges the lens findings.
           id: 'review',
           title: 'Review',
-          agents: [{
-            role: 'reviewer',
-            access: 'read',
-            prompt: `Task: ${task}\n\nThe worker's changes:\n\n{{input}}\n\nReview for correctness, regressions, and missed requirements. Findings-first, severity-ordered (blocker / major / minor / nit).`,
-          }],
+          fanOut: {
+            over: BUILD_REVIEW_LENSES,
+            agent: {
+              role: 'reviewer',
+              access: 'read',
+              prompt: `Task: ${task}\n\nThe worker's changes:\n\n{{input}}\n\nReview ONLY through the "{{target}}" lens — ignore issues outside it. Findings-first, severity-ordered (blocker / major / minor / nit); say "none for this lens" if clean.`,
+            },
+          },
+          synthesize: 'role-rollup',
           inputFrom: ['implement'],
           dependsOn: ['implement'],
         },
