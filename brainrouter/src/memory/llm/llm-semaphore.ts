@@ -15,10 +15,14 @@
  *   - Embedding       (acquireEmbeddingSlot) — the vector retriever's embedder.
  *       Cap: BRAINROUTER_EMBED_CONCURRENCY  (default 8).
  *   - Reranker        (acquireRerankerSlot)  — the cross-encoder rerank server.
- *       Cap: BRAINROUTER_RERANKER_MAX_CONCURRENT (default 1). A local bge-reranker
- *       is usually a SINGLE-WORKER CPU backend; firing concurrent recalls at it
- *       (briefing + pipeline, or rapid sessions) queue-stacks the server so each
- *       request blows the per-call timeout. Cap 1 = no client-side pile-up.
+ *       Cap: BRAINROUTER_RERANKER_MAX_CONCURRENT (default 8; 0/<1 = unbounded).
+ *       Recall now WAITS for the reranker with no per-call timeout (see
+ *       request-timeout.ts), so concurrent recalls no longer blow a deadline by
+ *       queue-stacking the server — the old cap-1 "single-worker CPU" guard is
+ *       obsolete and was the throughput ceiling under multi-agent load. The cap
+ *       still bounds simultaneous in-flight sockets to the rerank origin; raise it
+ *       (or set 0 = unbounded) for a scalable GPU/vLLM/Cohere backend, lower it to
+ *       1 to serialize against a strictly single-worker server.
  *
  * Coupling them under ONE cap=1 semaphore (the pre-0.4.15 behaviour) stalled the
  * recall query-embed behind a slow background generation, so `memory_recall`
@@ -38,7 +42,7 @@ function resolveGenerativeCap(): number {
 
 function resolveRerankerCap(): number {
   const raw = process.env.BRAINROUTER_RERANKER_MAX_CONCURRENT;
-  if (!raw) return 1; // single-worker CPU cross-encoder by default
+  if (!raw) return 8; // concurrent recalls are safe now that there's no per-call timeout
   const parsed = parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed < 1) return Number.POSITIVE_INFINITY;
   return parsed;

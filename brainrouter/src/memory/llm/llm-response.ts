@@ -5,15 +5,6 @@ export interface ResolveLLMTimeoutOptions {
   localMinimumMs?: number;
 }
 
-// Local backends (LM Studio / Ollama) can be slow, so the timeout floor is
-// generous. It is env-tunable (BRAINROUTER_LOCAL_LLM_MIN_TIMEOUT_MS) so an
-// operator whose background extraction queue is starved by a stuck 10-min call
-// holding an LLM semaphore slot can lower it; default unchanged at 10 min.
-const LOCAL_LLM_MIN_TIMEOUT_MS = (() => {
-  const v = parseInt(process.env.BRAINROUTER_LOCAL_LLM_MIN_TIMEOUT_MS || "", 10);
-  return Number.isFinite(v) && v > 0 ? v : 10 * 60 * 1000;
-})();
-
 function parsePositiveInt(value: string | undefined): number | undefined {
   if (!value) return undefined;
   const parsed = parseInt(value, 10);
@@ -29,6 +20,20 @@ export function isLocalEndpoint(endpoint: string): boolean {
   }
 }
 
+/**
+ * Resolve the timeout (ms) for a generative LLM call (extraction / synthesis /
+ * judge). Returns `0` for "no timeout — wait for the server", which is the
+ * DEFAULT: a local LLM or a saturated backend can legitimately take minutes, and
+ * aborting it mid-flight just drops the extraction / degrades recall. See
+ * request-timeout.ts for the full contract.
+ *
+ * Bounds are OPT-IN, in priority order:
+ *   1. An explicit per-task / global `*_TIMEOUT_MS` env (positive int) → that bound.
+ *   2. `BRAINROUTER_LOCAL_LLM_MIN_TIMEOUT_MS` (positive int) for a LOCAL endpoint →
+ *      a floor of `max(requestedMs, that)` — the legacy "local backends are slow"
+ *      backstop, now off unless the operator sets it.
+ *   3. Otherwise `0` (no timeout).
+ */
 export function resolveLLMTimeoutMs(options: ResolveLLMTimeoutOptions): number {
   const envVarNames = options.envVarNames ?? ["BRAINROUTER_LLM_TIMEOUT_MS"];
   for (const name of envVarNames) {
@@ -39,10 +44,15 @@ export function resolveLLMTimeoutMs(options: ResolveLLMTimeoutOptions): number {
   }
 
   if (isLocalEndpoint(options.endpoint)) {
-    return Math.max(options.requestedMs, options.localMinimumMs ?? LOCAL_LLM_MIN_TIMEOUT_MS);
+    const localFloor = options.localMinimumMs
+      ?? parsePositiveInt(process.env.BRAINROUTER_LOCAL_LLM_MIN_TIMEOUT_MS);
+    if (localFloor !== undefined && localFloor > 0) {
+      return Math.max(options.requestedMs, localFloor);
+    }
   }
 
-  return options.requestedMs;
+  // No bound configured → wait for the server.
+  return 0;
 }
 
 export function isExternalTimeoutError(error: unknown): boolean {
