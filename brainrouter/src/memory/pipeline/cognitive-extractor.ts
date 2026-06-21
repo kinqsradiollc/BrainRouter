@@ -126,8 +126,24 @@ export async function extractCognitiveMemories(params: {
     };
   }
 
-  const parsedScenes = parseExtractionResult(rawResult);
-  
+  const outcome = parseExtractionResult(rawResult);
+  if (outcome.parseFailed) {
+    // The body was non-empty but unusable: unparseable JSON, or a non-scene
+    // shape such as a bare `[sensory_...]` identifier list the model echoed
+    // back instead of producing scene objects. Report failure so the caller
+    // re-queues the sensory rows for the sweeper rather than marking them
+    // extracted and silently dropping them. Single warn — no scary stack dump.
+    console.warn(`[BrainRouter] Cognitive extraction body invalid, re-queued: ${outcome.reason}`);
+    return {
+      success: false,
+      extractedCount: 0,
+      records: [],
+      sceneNames: [],
+      errorMessage: outcome.reason ?? "Failed to parse extraction result.",
+    };
+  }
+  const parsedScenes = outcome.scenes;
+
   const records: CognitiveRecord[] = [];
   const sceneNames: string[] = [];
 
@@ -195,7 +211,25 @@ interface ParsedScene {
   }>;
 }
 
-function parseExtractionResult(raw: string): ParsedScene[] {
+// Outcome of parsing one extraction body. `parseFailed` distinguishes a body
+// the caller must RE-QUEUE (unparseable, or a non-scene shape like a bare
+// `[sensory_...]` identifier list) from a genuine empty result (`[]`, "nothing
+// notable") which should be accepted and marked extracted. Conflating the two
+// is what silently dropped sensory rows.
+interface ParseExtractionOutcome {
+  scenes: ParsedScene[];
+  parseFailed: boolean;
+  reason?: string;
+}
+
+// A scene must be a plain object. Reject arrays explicitly — `typeof [] ===
+// "object"`, so a bare list item like ["a","b"] would otherwise be mistaken
+// for an (empty) scene and silently accepted.
+function isSceneObject(item: unknown): item is Record<string, unknown> {
+  return !!item && typeof item === "object" && !Array.isArray(item);
+}
+
+function parseExtractionResult(raw: string): ParseExtractionOutcome {
   try {
     let cleaned = raw.trim();
     if (cleaned.startsWith("\`\`\`")) {
@@ -203,15 +237,26 @@ function parseExtractionResult(raw: string): ParsedScene[] {
     }
 
     const match = cleaned.match(/\[[\s\S]*\]/);
-    if (!match) return [];
+    if (!match) {
+      return { scenes: [], parseFailed: true, reason: "No JSON array found in extraction output." };
+    }
 
     const parsed = parseJsonWithEscapeRepair(match[0]);
-    if (!Array.isArray(parsed)) return [];
+    if (!Array.isArray(parsed)) {
+      return { scenes: [], parseFailed: true, reason: "Extraction output was not a JSON array." };
+    }
+    if (parsed.length === 0) {
+      // Genuine "nothing notable" — the model correctly returned an empty list.
+      // Accept it so trivial turns are marked extracted, not re-queued forever.
+      return { scenes: [], parseFailed: false };
+    }
 
     const scenes: ParsedScene[] = [];
+    let validSceneObjects = 0;
     for (const item of parsed) {
-      if (!item || typeof item !== "object") continue;
-      
+      if (!isSceneObject(item)) continue;
+      validSceneObjects += 1;
+
       const s = item as any;
       const memories = Array.isArray(s.memories) ? s.memories.map((m: any) => ({
         content: String(m.content || ""),
@@ -233,10 +278,20 @@ function parseExtractionResult(raw: string): ParsedScene[] {
       });
     }
 
-    return scenes;
+    if (validSceneObjects === 0) {
+      // Non-empty body that yielded zero scene objects — e.g. a bare identifier
+      // list like ["sensory_7d...", ...]. Re-queue rather than silently drop.
+      return {
+        scenes: [],
+        parseFailed: true,
+        reason: `Extraction output had ${parsed.length} item(s) but no valid scene objects (likely a bare identifier list).`,
+      };
+    }
+
+    return { scenes, parseFailed: false };
   } catch (err) {
-    console.error("[BrainRouter] Failed to parse extraction result", err);
-    return [];
+    const msg = err instanceof Error ? err.message : String(err);
+    return { scenes: [], parseFailed: true, reason: `Failed to JSON-parse extraction output: ${msg}` };
   }
 }
 

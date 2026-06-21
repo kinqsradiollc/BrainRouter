@@ -149,4 +149,57 @@ describe("cognitive extractor JSON escape repair", () => {
     expect(result.success).toBe(false);
     expect(result.errorMessage).toContain("non-JSON output");
   });
+
+  it("fails extraction when the LLM echoes back a bare unquoted identifier list (log3 repro)", async () => {
+    // Reproduces the log3.txt error: the model regurgitates the sensory record
+    // IDs as a bare bracketed list instead of producing scene objects. This is
+    // not valid JSON, so JSON.parse throws. The bug: parseExtractionResult
+    // swallowed the error and returned [], so extraction reported success and
+    // the caller marked the sensory rows extracted — silently dropping them.
+    const raw = "[sensory_7dd3512e-7b42-4723-811a-9319073aa0f2:new-mqmwl338_1781993163542_591c988a]";
+    const result = await extractCognitiveMemories({
+      messages: [makeMessage("capture this later")],
+      userId: "user_test",
+      sessionKey: "session_test",
+      sessionId: "session_test",
+      llmRunner: makeRunner(raw),
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.records).toEqual([]);
+  });
+
+  it("fails extraction when the LLM returns a valid JSON array of bare identifier strings", async () => {
+    // Variant of the same root cause where the echoed IDs happen to be quoted,
+    // so the payload parses as a real JSON array — but of strings, not scene
+    // objects. It must still be re-queued, not accepted as "nothing notable".
+    const raw = '["sensory_7dd3512e_abc", "sensory_e94ed39f_def"]';
+    const result = await extractCognitiveMemories({
+      messages: [makeMessage("capture this later")],
+      userId: "user_test",
+      sessionKey: "session_test",
+      sessionId: "session_test",
+      llmRunner: makeRunner(raw),
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.records).toEqual([]);
+  });
+
+  it("accepts a genuine empty array as 'nothing notable' (not a parse failure)", async () => {
+    // The complement of the bug fix: when the model correctly returns an empty
+    // array, that is a legitimate "nothing to extract" outcome. It must be
+    // accepted (success: true) so trivial turns are marked extracted rather
+    // than re-queued forever.
+    const result = await extractCognitiveMemories({
+      messages: [makeMessage("hi there")],
+      userId: "user_test",
+      sessionKey: "session_test",
+      sessionId: "session_test",
+      llmRunner: makeRunner("[]"),
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.records).toEqual([]);
+  });
 });

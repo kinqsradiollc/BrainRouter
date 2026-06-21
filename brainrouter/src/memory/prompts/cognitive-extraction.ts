@@ -62,6 +62,7 @@ artifact_reference, file_history, command_knowledge.
 - Extract filePaths, repoPaths, and commands when explicitly mentioned; otherwise use empty arrays.
 
 ### Output
+Respond with a JSON array of scene OBJECTS only. Each element MUST be an object with "scene_name" and "memories". NEVER respond with a bare list of identifiers, message IDs, or strings, and NEVER include prose, explanation, or markdown outside the JSON. Identifiers (message_ids, source_message_ids) appear ONLY as fields inside the objects below — never as top-level array elements. If there is nothing notable to extract, return exactly [].
 Return ONLY a valid JSON array matching this format exactly:
 [
   {
