@@ -5,6 +5,17 @@ import path from 'node:path';
 import { Agent } from '../agent/agent.js';
 import { assessMcpToolApproval } from '../agent/mcpApproval.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
+import { setCliKnobOverride } from '../config/config.js';
+
+// These tests exercise the silent-child EXEC + approval-inheritance semantics,
+// not the sandbox. Under the 0.4.15 unattended default (sandboxEnforceWhenSilent)
+// a silent child force-sandboxes run_command and fails closed where no sandboxer
+// exists (e.g. Linux CI without bwrap/firejail) — which would refuse the shell
+// commands these tests rely on. Opt out once at module scope (the interactive
+// posture they were written against); set synchronously before any async test
+// runs so there is no race, and contained to this file by per-file process
+// isolation. See sandbox-enforce.test.ts for the enforcement behavior itself.
+setCliKnobOverride({ sandboxEnforceWhenSilent: false });
 
 function stubLlmTool(toolName: string, args: Record<string, unknown>): () => void {
   const originalFetch = globalThis.fetch;
