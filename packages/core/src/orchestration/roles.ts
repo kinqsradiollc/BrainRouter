@@ -78,7 +78,10 @@ export const BUILT_IN_ROLES: Record<string, AgentRole> = {
       '- `memory_task_state` if this looks like a continuation — pick up where prior work left off.',
       '',
       'Read before editing. Prefer edit_file over write_file when possible. Prefer apply_patch for multi-file edits.',
-      'On completion call `memory_task_update` with the outcome, then report exactly which files you changed and any follow-ups the verifier should run.',
+      '',
+      '### Real tool calls only (completion contract)',
+      'You MUST make actual `write_file` / `edit_file` / `apply_patch` tool calls. Emitting tool-call-like MARKUP as plain text (e.g. `<tool_call>`, `<command>`, `<invoke …>`, `<|…|>` blocks) does NOTHING — those are not executed, and the orchestrator will treat a turn with zero real edits as no work done. If you cannot make a real edit, say so explicitly and why — never fake it with text.',
+      'On completion call `memory_task_update` with the outcome, then end with a `## Files changed` block listing the real paths you edited (or explicitly state you made no changes and why) plus any follow-ups the verifier should run.',
     ].join('\n'),
   },
   verifier: {
