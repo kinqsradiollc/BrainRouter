@@ -75,6 +75,9 @@ export function TrackView({ project, items, sprints, automations, members, sync,
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [composing, setComposing] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  // Drag-and-drop: the work-item key being dragged + the column under the cursor.
+  const [dragKey, setDragKey] = useState<string | null>(null);
+  const [overCol, setOverCol] = useState<string | null>(null);
 
   const states = project?.workflowStates ?? [];
   const selected = selectedKey ? items.find((w) => w.key === selectedKey) ?? null : null;
@@ -141,15 +144,17 @@ export function TrackView({ project, items, sprints, automations, members, sync,
           {states.map((s) => {
             const col = filtered.filter((w) => w.status === s.id).sort((a, b) => PRIORITY_RANK[b.priority] - PRIORITY_RANK[a.priority]);
             return (
-              <section className="track-col" key={s.id}>
+              <section className={`track-col${dragKey && overCol === s.id ? ' drag-over' : ''}`} key={s.id}
+                onDragOver={(e) => { if (dragKey) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (overCol !== s.id) setOverCol(s.id); } }}
+                onDrop={() => { if (dragKey) { const w = items.find((x) => x.key === dragKey); if (w && w.status !== s.id) ops.transition(dragKey, s.id); } setDragKey(null); setOverCol(null); }}>
                 <div className="track-col-head">
                   <span className={`track-cat track-cat-${s.category}`} /><span className="track-col-name">{s.name}</span><span className="track-col-count">{col.length}</span>
                   <button className="track-add" title={`New in ${s.name}`} onClick={() => { setComposing(s.id); setDraft(''); }}><Icon name="plus" size={12} /></button>
                 </div>
                 <div className="track-col-body">
                   {composing === s.id ? <Compose draft={draft} setDraft={setDraft} onAdd={() => submitNew(s.id)} onCancel={() => setComposing(null)} /> : null}
-                  {col.map((w) => <Card key={w.id} item={w} states={states} onTransition={ops.transition} onOpen={() => setSelectedKey(w.key)} />)}
-                  {col.length === 0 && composing !== s.id ? <div className="track-col-empty">—</div> : null}
+                  {col.map((w) => <Card key={w.id} item={w} onOpen={() => setSelectedKey(w.key)} onDragStart={() => setDragKey(w.key)} onDragEnd={() => { setDragKey(null); setOverCol(null); }} dragging={dragKey === w.key} />)}
+                  {col.length === 0 && composing !== s.id ? <div className="track-col-empty">{dragKey ? 'Drop here' : '—'}</div> : null}
                 </div>
               </section>
             );
@@ -203,20 +208,16 @@ function Compose({ draft, setDraft, onAdd, onCancel }: { draft: string; setDraft
   );
 }
 
-function Card({ item, states, onTransition, onOpen }: { item: WorkItem; states: TrackProject['workflowStates']; onTransition: (k: string, s: string) => void; onOpen: () => void }): React.ReactElement {
-  const [menu, setMenu] = useState(false);
+function Card({ item, onOpen, onDragStart, onDragEnd, dragging }: { item: WorkItem; onOpen: () => void; onDragStart: () => void; onDragEnd: () => void; dragging: boolean }): React.ReactElement {
   return (
-    <div className="track-card" onClick={onOpen}>
+    <div className={`track-card${dragging ? ' dragging' : ''}`} onClick={onOpen} draggable
+      onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', item.key); onDragStart(); }}
+      onDragEnd={onDragEnd}>
       <div className="track-card-top">
         <span className={`track-type track-type-${item.type}`}><Icon name={TYPE_ICON[item.type]} size={11} /></span>
         <span className="track-card-key mono">{item.key}</span>
         <span className={`track-pri pri-${item.priority}`} title={`Priority: ${item.priority}`} />
-        <button className="track-card-move" title="Move" onClick={(e) => { e.stopPropagation(); setMenu((m) => !m); }}><Icon name="chev-down" size={11} /></button>
-        {menu ? (
-          <div className="track-move-menu" onClick={(e) => e.stopPropagation()}>
-            {states.filter((s) => s.id !== item.status).map((s) => <button key={s.id} onClick={() => { onTransition(item.key, s.id); setMenu(false); }}>{s.name}</button>)}
-          </div>
-        ) : null}
+        <span className="track-card-grip" title="Drag to another column"><Icon name="dots" size={13} /></span>
       </div>
       <div className="track-card-title">{item.title}</div>
       {(item.assignee || item.labels.length) ? (
@@ -294,6 +295,8 @@ function SprintRow({ sprint, count, ops }: { sprint: Sprint; count: number; ops:
 }
 
 function SprintView({ items, sprints, states, ops, onOpen }: { items: WorkItem[]; sprints: Sprint[]; states: TrackProject['workflowStates']; ops: TrackOps; onOpen: (w: WorkItem) => void }): React.ReactElement {
+  const [dragKey, setDragKey] = useState<string | null>(null);
+  const [overCol, setOverCol] = useState<string | null>(null);
   const active = sprints.find((s) => s.state === 'active') ?? sprints[0];
   if (!active) return <div className="track-empty">No sprint yet — create one in Backlog.</div>;
   const sprintItems = items.filter((w) => w.sprintId === active.id);
@@ -311,11 +314,13 @@ function SprintView({ items, sprints, states, ops, onOpen }: { items: WorkItem[]
         {states.map((s) => {
           const col = sprintItems.filter((w) => w.status === s.id);
           return (
-            <section className="track-col" key={s.id}>
+            <section className={`track-col${dragKey && overCol === s.id ? ' drag-over' : ''}`} key={s.id}
+              onDragOver={(e) => { if (dragKey) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (overCol !== s.id) setOverCol(s.id); } }}
+              onDrop={() => { if (dragKey) { const w = items.find((x) => x.key === dragKey); if (w && w.status !== s.id) ops.transition(dragKey, s.id); } setDragKey(null); setOverCol(null); }}>
               <div className="track-col-head"><span className={`track-cat track-cat-${s.category}`} /><span className="track-col-name">{s.name}</span><span className="track-col-count">{col.length}</span></div>
               <div className="track-col-body">
-                {col.map((w) => <Card key={w.id} item={w} states={states} onTransition={ops.transition} onOpen={() => onOpen(w)} />)}
-                {col.length === 0 ? <div className="track-col-empty">—</div> : null}
+                {col.map((w) => <Card key={w.id} item={w} onOpen={() => onOpen(w)} onDragStart={() => setDragKey(w.key)} onDragEnd={() => { setDragKey(null); setOverCol(null); }} dragging={dragKey === w.key} />)}
+                {col.length === 0 ? <div className="track-col-empty">{dragKey ? 'Drop here' : '—'}</div> : null}
               </div>
             </section>
           );
@@ -629,8 +634,7 @@ function SyncView({ sync, ops }: { sync: { config: SyncConfig | null; result: Sy
         </div>
         {!configured ? (
           <p className="track-sync-help">
-            Set <code className="mono">cli.track.githubRepo</code> (e.g. <code className="mono">owner/name</code>) and a token in
-            <code className="mono"> cli.track.githubToken</code> — or export <code className="mono">GITHUB_TOKEN</code> — then reopen this tab.
+            Connect a repository in <b>Settings → Integrations → GitHub</b>, then reopen this tab.
           </p>
         ) : null}
       </div>

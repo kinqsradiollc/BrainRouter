@@ -21,6 +21,7 @@ export interface ConfigSnapshot {
   sessionMode?: Record<string, unknown>;
   modeScope?: 'session' | 'workspace';
   cli?: Record<string, unknown>;
+  integrations?: { github?: { repo: string | null; hasToken: boolean; tokenSource: string | null } };
   permissionRules?: { allow: string[]; deny: string[] };
   hooks?: Array<{ id: string; event: string; command: string; enabled: boolean; match?: string }>;
   servers?: Array<{ id: string; online: boolean; detail?: string; type?: 'stdio' | 'http'; url?: string | null; command?: string | null; hasKey?: boolean; envCount?: number; headerCount?: number }>;
@@ -54,6 +55,7 @@ const NAV: Array<{ section: SettingsSection; icon: string; title: string; group:
   { section: 'memory', icon: 'brain', title: 'Memory', group: 'Settings' },
   { section: 'hooks', icon: 'link', title: 'Hooks', group: 'Settings' },
   { section: 'connectors', icon: 'bolt', title: 'Connectors', group: 'Settings' },
+  { section: 'integrations', icon: 'branch', title: 'Integrations', group: 'Settings' },
   { section: 'advanced', icon: 'gear', title: 'Advanced', group: 'Settings' },
   { section: 'observability', icon: 'chart', title: 'Usage', group: 'Settings' },
   { section: 'appearance', icon: 'palette', title: 'Appearance', group: 'Desktop app' },
@@ -121,6 +123,40 @@ function CliConfigEditor({ cli, onSave }: { cli: Record<string, unknown>; onSave
       <div className="set-actions">
         <button className="btn" disabled={!dirty} onClick={() => setDraft({ ...cli })}>Reset</button>
         <button className="btn primary" disabled={!dirty} onClick={() => onSave(draft)}>Save changes</button>
+      </div>
+    </div>
+  );
+}
+
+/** GitHub integration for Track sync — repo + a write-only token (never read
+ * back; the host only reports whether one is set). Saves to config.json
+ * cli.track.* via action:set-track-github, replacing any need for a .env. */
+function GithubIntegration({ gh, onSave }: { gh: { repo: string | null; hasToken: boolean; tokenSource: string | null }; onSave: (args: { repo?: string; token?: string; clearToken?: boolean }) => void }): React.ReactElement {
+  const [repo, setRepo] = useState(gh.repo ?? '');
+  const [token, setToken] = useState('');
+  React.useEffect(() => { setRepo(gh.repo ?? ''); }, [gh.repo]);
+  const repoChanged = repo.trim() !== (gh.repo ?? '');
+  const dirty = repoChanged || token.trim() !== '';
+  const connected = !!(gh.repo && gh.hasToken);
+  return (
+    <div className="gh-int">
+      <div className={`gh-int-status${connected ? ' ok' : ''}`}>
+        <span className="gh-int-dot" />
+        {connected ? <>Connected to <b className="mono">{gh.repo}</b>{gh.tokenSource === 'env' ? ' · token via environment' : ''}</>
+          : gh.repo ? <>Repository set — add a token to connect</> : <>Not configured</>}
+      </div>
+      <Row title="Repository" desc="owner/name — the GitHub repo this workspace's Track board syncs issues + members with.">
+        <input className="ctl mono" style={{ minWidth: 220 }} value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="owner/name" spellCheck={false} autoCapitalize="off" />
+      </Row>
+      <Row title="Access token" desc={<>A fine-grained personal access token with <b>Issues</b> read/write. Stored only in your local <code>config.json</code>; sent to GitHub and nowhere else, and never displayed again.</>}>
+        <div className="gh-token-row">
+          <input className="ctl mono" style={{ minWidth: 220 }} type="password" value={token} onChange={(e) => setToken(e.target.value)} autoComplete="off" spellCheck={false}
+            placeholder={gh.hasToken ? '•••••••••••• (set)' : 'github_pat_… / ghp_…'} />
+          {gh.hasToken ? <button className="gh-token-clear" onClick={() => onSave({ clearToken: true })}>Remove</button> : null}
+        </div>
+      </Row>
+      <div className="gh-int-actions">
+        <button className="gh-int-save" disabled={!dirty} onClick={() => { onSave({ repo: repo.trim(), token: token.trim() || undefined }); setToken(''); }}>Save</button>
       </div>
     </div>
   );
@@ -257,6 +293,8 @@ export function SettingsDialog(props: {
   const kb = (key: string): boolean => Boolean(knobs[key]);
   const ks = (key: string, dflt: string): string => String(knobs[key] ?? dflt);
   const telemetryOn = (knobs.telemetry as { enabled?: boolean } | undefined)?.enabled !== false;
+  const github = (snapshot?.integrations as { github?: { repo: string | null; hasToken: boolean; tokenSource: string | null } } | undefined)?.github ?? { repo: null, hasToken: false, tokenSource: null };
+  const saveGithub = (args: { repo?: string; token?: string; clearToken?: boolean }): void => { props.onAction('a-gh', 'action:set-track-github', args); setTimeout(refreshSnapshot, 100); };
 
   const filteredCommands = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -548,6 +586,15 @@ export function SettingsDialog(props: {
                 setMcp({ id: '', type: 'stdio', command: '', url: '', apiKey: '', headers: '', env: '' });
               }}>Add server</button>
           </div>
+        </>
+      );
+      case 'integrations': return (
+        <>
+          <div className="set-h">Integrations</div>
+          <div className="set-desc" style={{ marginBottom: 10 }}>Connect external services. Secrets are stored locally in <code>config.json</code> — no <code>.env</code> needed.</div>
+          <div className="set-h2"><Icon name="branch" size={13} /> GitHub — Track sync</div>
+          <div className="set-desc" style={{ marginBottom: 6 }}>Two-way sync between this workspace's Track board and a GitHub repository's issues, and pull the repo's collaborators in as members. Used by the Track <b>Sync</b> and <b>Members</b> tabs.</div>
+          <GithubIntegration gh={github} onSave={saveGithub} />
         </>
       );
       case 'advanced': {
