@@ -774,6 +774,13 @@ export class Agent {
   /** POLICY-1 — audit trail of execution-policy decisions on mutating tools. */
   private policyAudit: Array<{ tool: string; action: ActionKind; decision: PolicyDecision; reason: string }> = [];
   private silent: boolean;
+  /**
+   * CODEX-SANDBOX-UNATTENDED — captured ONCE at construction so the
+   * silent-enforcement decision is stable for the whole session (knobs are
+   * load-time config; this also makes the policy immune to mid-turn knob-cache
+   * resets, which matters for the concurrent shared-process test runner).
+   */
+  private readonly sandboxEnforceWhenSilent: boolean;
   private enableRecall: boolean;
   private systemPromptOverride?: string;
   /**
@@ -838,6 +845,7 @@ export class Agent {
     this.roleOverlay = options.roleOverlay;
     this.accessMode = options.accessMode ?? 'shell';
     this.silent = options.silent ?? false;
+    this.sandboxEnforceWhenSilent = getCliKnobs().sandboxEnforceWhenSilent;
     // Children default to no recall (their seed context already covers the parent's recall).
     // Parents (non-silent) always recall.
     this.enableRecall = options.enableRecall ?? !this.silent;
@@ -3224,8 +3232,14 @@ export class Agent {
         // past it here), but detach instead of blocking the turn. v1 runs
         // unsandboxed, so it is refused while cli.sandbox=on.
         if (args.background === true) {
-          if (getCliKnobs().sandbox === 'on') {
-            return 'Background run_command is not supported with cli.sandbox=on (v1) — run it foreground or disable the sandbox.';
+          // CODEX-SANDBOX-UNATTENDED — background runs are unsandboxed (v1), so
+          // they are refused whenever the sandbox is active: either the user
+          // turned it on, or this is a silent/unattended agent where the
+          // sandbox is enforced regardless of the global knob.
+          const sandboxActive =
+            getCliKnobs().sandbox === 'on' || (this.silent && this.sandboxEnforceWhenSilent);
+          if (sandboxActive) {
+            return 'Background run_command is not supported while the sandbox is active (v1) — run it foreground or disable the sandbox.';
           }
           const bg = startBackgroundShell({ command: cmd, cwd: this.launchCwd, workspaceRoot: this.workspaceRoot });
           return JSON.stringify({
@@ -3235,15 +3249,17 @@ export class Agent {
             note: 'Detached. Poll with task_output({ id }) — pass back nextOffset as fromByte to read incrementally. The turn is NOT blocked.',
           });
         }
-        const sandboxConfig = resolveSandboxConfig(this.workspaceRoot, {
-          readPaths: prefs.sandboxReadPaths,
-          writePaths: prefs.sandboxWritePaths,
-        });
+        const sandboxConfig = resolveSandboxConfig(
+          this.workspaceRoot,
+          { readPaths: prefs.sandboxReadPaths, writePaths: prefs.sandboxWritePaths },
+          { silent: this.silent, enforceWhenSilent: this.sandboxEnforceWhenSilent },
+        );
         const result = await runShell(cmd, sandboxConfig, undefined, this.turnAbort?.signal);
+        const enforcedTag = sandboxConfig.enforcedUnattended ? ' (enforced: unattended)' : '';
         const sandboxBadge = result.sandboxed
-          ? `[sandboxed via ${result.sandboxTool}] `
+          ? `[sandboxed via ${result.sandboxTool}${enforcedTag}] `
           : sandboxConfig.enabled
-            ? `[sandbox requested but unavailable] `
+            ? `[sandbox requested but unavailable${enforcedTag}] `
             : '';
         const notice = result.notice ? `${result.notice}\n` : '';
         return `${notice}${sandboxBadge}Exit Code: ${result.exitCode}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`;

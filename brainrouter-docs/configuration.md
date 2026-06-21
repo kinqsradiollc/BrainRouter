@@ -565,6 +565,7 @@ the load-bearing ones:
 | `quiet` | `false` | Suppress recall tables, briefing dumps, tool-completion previews. |
 | `sandbox` | `off` | `on` wraps `run_command` (and the `!` shell escape) in the platform sandbox. |
 | `sandboxNetwork` | `false` | Allow outbound network from the sandbox. |
+| `sandboxEnforceWhenSilent` | `true` | Force the sandbox **on** for silent / unattended agents (cloud workers, spawned children, non-interactive runs) even when `sandbox: off`. When enforced, outbound network is denied and a missing sandboxer fails closed (`sandboxUnavailable: deny`), and `background: true` runs are refused (they would escape the sandbox). Set `false` to let unattended shells run with the same posture as interactive ones. Mirrors `cli.hooks.enforceWhenSilent`. |
 | `autoChainMaxFollowups` | `2` | Cap on auto-chained review/verify follow-ups per worker. |
 | `agentMcpToolBudget` | `40` | Cap on MCP tools shown to a child agent per turn (0 = no cap). |
 | `workspaceOverride` | _(auto)_ | Override the CLI workspace root. |
@@ -866,6 +867,27 @@ BRAINROUTER_SANDBOX_WRITE_PATHS=/tmp
 
 Sandboxing is an additional layer on top of the existing user-confirmation
 step. Confirmation guards intent; sandboxing guards blast radius.
+
+### Unattended enforcement
+
+Interactive sessions have a human who can notice and reject a risky shell call;
+silent / unattended agents (cloud workers, spawned children, non-interactive
+runs) do not. So when an agent runs silent, `cli.sandboxEnforceWhenSilent`
+(default **`true`**) forces the strictest posture regardless of the looser
+interactive `cli.sandbox*` settings:
+
+- the sandbox is **on** even when `cli.sandbox: off`;
+- outbound network is **denied** (overrides `sandboxNetwork: true`);
+- a missing sandboxer **fails closed** (overrides `sandboxUnavailable`);
+- `background: true` runs are **refused** — they execute unsandboxed and would
+  otherwise let a silent agent escape the enforced sandbox.
+
+Sandboxed `run_command` output is badged `(enforced: unattended)` when this
+applies. Set `cli.sandboxEnforceWhenSilent: false` to let unattended shells run
+with the same posture as interactive ones (e.g. to re-enable background runs in
+a trusted CI worker). The macOS profile resolves symlinked write roots (`/tmp`,
+`/var/folders/...` → `/private/...`) to their realpath so workspace writes are
+not silently denied.
 
 ---
 

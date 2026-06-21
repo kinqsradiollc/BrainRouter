@@ -207,9 +207,11 @@ export async function tryHandleGuardCommand(ctx: CommandContext): Promise<boolea
       const rest = args.slice(1).join(' ').trim();
       const prefs = readPreferences(agent.workspaceRoot);
       const showState = () => {
-        const enabled = getCliKnobs().sandbox === 'on';
+        const knobs = getCliKnobs();
+        const enabled = knobs.sandbox === 'on';
         console.log(chalk.bold('\nSandbox'));
         console.log(`  Engine:  ${enabled ? chalk.green('on') : chalk.gray('off')} ${chalk.gray('(cli.sandbox in config.json)')}`);
+        console.log(`  Unattended enforcement: ${knobs.sandboxEnforceWhenSilent ? chalk.green('on') : chalk.yellow('off')} ${chalk.gray('(cli.sandboxEnforceWhenSilent — forces sandbox + network-deny for silent/cloud agents)')}`);
         console.log(`  Platform: ${chalk.cyan(process.platform)} ${chalk.gray(process.platform === 'darwin' ? '(sandbox-exec)' : process.platform === 'linux' ? '(bwrap/firejail)' : '(unsupported — run_command runs unsandboxed)')}`);
         console.log(`  Workspace (always rw): ${chalk.blue(agent.workspaceRoot)}`);
         console.log(chalk.bold('  Read-only grants:'));
