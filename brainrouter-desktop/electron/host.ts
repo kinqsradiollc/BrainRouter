@@ -27,6 +27,7 @@ import { classifyForVerification } from '@kinqs/brainrouter-core/dist/agent/veri
 import { resolveWorkspaceGit } from '@kinqs/brainrouter-core/dist/git/workspaceGit.js';
 import { readWorkspaceEntry, isWorkspaceDirectory, listWorkspaceFiles, statWorkspaceEntry, writeWorkspaceEntry } from './fsRead.js';
 import { WorkspaceFileListCache, type WorkspaceFileListResult } from './workspaceFileListCache.js';
+import { startWorkspaceWatcher } from './fileWatch.js';
 import { readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups, type SessionMeta } from '@kinqs/brainrouter-core/dist/session/sessionMetaStore.js';
 import { getSessionRuntime, setSessionRuntime, resolveSessionLlmConfig } from '@kinqs/brainrouter-core/dist/session/sessionRuntimeStore.js';
 import { getSessionMode, setSessionMode, resolveActiveMode } from '@kinqs/brainrouter-core/dist/session/sessionModeStore.js';
@@ -53,12 +54,13 @@ import { listChapters } from '@kinqs/brainrouter-core/dist/session/chapterMarks.
 import { buildUsageBreakdown } from '@kinqs/brainrouter-core/dist/util/usageBreakdown.js';
 // DESK-5 — the command bridge dispatches REPL-only commands against the SAME
 // stores the terminal CLI uses. No parallel state: /goal here is /goal there.
-import { readGoal, setGoal, clearGoal, pauseGoal, resumeGoal, decideGoalContinuation, buildGoalContinuationPrompt, goalCorrectiveNotice, tickGoalIteration, usageLimitGoal, formatBudget } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
+import { readGoal, setGoal, clearGoal, pauseGoal, resumeGoal, editGoal, decideGoalContinuation, buildGoalContinuationPrompt, goalCorrectiveNotice, tickGoalIteration, usageLimitGoal, formatBudget } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
 // §goal-autonomy — the kickoff prompt builder (shared with the CLI's /goal).
 import { buildGoalKickoffPrompt } from '@kinqs/brainrouter-core/dist/goal/goalKickoff.js';
 import { PROVIDER_CATALOG } from '@kinqs/brainrouter-core/dist/provider/catalog.js';
 import { LOCAL_PLACEHOLDER_KEY } from '@kinqs/brainrouter-core/dist/provider/providers/index.js';
 import { inferModelReasoningCapabilities, registerModelReasoningCapabilities } from '@kinqs/brainrouter-core/dist/provider/models/reasoning.js';
+import { refreshLmStudioCache } from '@kinqs/brainrouter-core/dist/provider/providers/lmstudio.js';
 import { readPlan, formatPlan, seedPlanFromRequirement, updatePlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
 // DURABLE BACKGROUND TASKS (0.4.15 workflow gaps) — plan-revision + review work
 // runs as visible, file-backed tasks (shared with the CLI store) so progress +
@@ -85,9 +87,11 @@ import { TELEMETRY_EVENTS } from '@kinqs/brainrouter-core/dist/telemetry/contrac
 import { readPlanHistory, recordPlanDecision, linkPlanDecision, type PlanVerdict, type PlanDecision } from '@kinqs/brainrouter-core/dist/task/planHistoryStore.js';
 import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
-import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement, type RequirementPatch } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
+import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement, deleteRequirement, type RequirementPatch } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
+import { syncRequirementPlanTrack } from '@kinqs/brainrouter-core/dist/requirement/planTrackSync.js';
 import { ensureProject, getProject, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember, type CreateWorkItemInput, type UpdateWorkItemPatch, type AutomationPatch } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
 import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/dist/track/githubSync.js';
+import { scanGitCommitsForTrack } from '@kinqs/brainrouter-core/dist/track/commitScanner.js';
 import type { WorkItemType, SprintState, CodeLink, AutomationTrigger, AutomationAction, ProjectRole } from '@kinqs/brainrouter-types';
 
 /**
@@ -168,6 +172,11 @@ async function fetchEndpointModels(endpoint: string | undefined, apiKey: string)
       ids.push(id);
       registerModelReasoningCapabilities(id, inferModelReasoningCapabilities(row));
     }
+    // LM Studio's thin OpenAI-compat /v1/models omits reasoning vocab; its
+    // native /api/v1/models advertises it. Populate the cache (self-guards for
+    // non-LM-Studio endpoints) so binary on/off models are detected and never
+    // sent a graded `low`/`high` they would reject. Best-effort; never blocks.
+    await refreshLmStudioCache(chat).catch(() => 0);
     return [...new Set(ids)].sort();
   } catch {
     return [];
@@ -570,6 +579,15 @@ async function main(): Promise<void> {
   const emitRecordEvent = (event: AgentEvent): void => {
     send({ seq: ++portSeq, ts: Date.now(), sessionKey: activeMemorySessionKey(), event });
   };
+
+  // FILES-LIVE — watch the workspace and push a debounced `files-changed` so the
+  // Files / Changes panel refreshes itself (no manual Refresh). Invalidate the
+  // file-list cache first so the next list-files rebuilds. Best-effort; degrades
+  // to the existing git poll where recursive fs.watch is unsupported (Linux).
+  const stopWorkspaceWatcher = startWorkspaceWatcher(workspaceRoot, () => {
+    fileListCache.invalidate(workspaceRoot);
+    send({ seq: ++portSeq, ts: Date.now(), sessionKey: activeMemorySessionKey(), event: { kind: 'files-changed' } });
+  });
 
   // DURABLE BACKGROUND TASKS (0.4.15 workflow gaps) — task lifecycle events ride
   // the same wire on the TASK's OWN sessionKey so they surface against the right
@@ -1506,6 +1524,12 @@ async function main(): Promise<void> {
         const c = resolveGithubConfig();
         return { repo: c.repo ?? null, hasToken: !!c.token, tokenSource: c.tokenSource ?? null };
       },
+      // BR-123 commit scanner — link commits to items + advance todo→in-progress.
+      'track-scan-commits': () => {
+        ensureProject(workspaceRoot);
+        const r = scanGitCommitsForTrack(workspaceRoot, {});
+        return { ...r, items: listWorkItems(workspaceRoot) };
+      },
       'track-sync': async (a) => {
         const direction = a.direction === 'export' ? 'export' : 'import';
         const dryRun = a.dryRun !== false; // default to dry-run unless explicitly false
@@ -1548,6 +1572,10 @@ async function main(): Promise<void> {
         if (change) await captureRequirementNote(updated, change);
         return getRequirement(workspaceRoot, updated.id) ?? updated;
       },
+      'requirement-delete': (a) => {
+        const id = String(a.id ?? '');
+        return { ok: deleteRequirement(workspaceRoot, id) };
+      },
       'requirement-seed-plan': async (a) => {
         const id = String(a.id ?? '');
         const req = getRequirement(workspaceRoot, id);
@@ -1560,6 +1588,19 @@ async function main(): Promise<void> {
         }
         await captureRequirementNote(getRequirement(workspaceRoot, id) ?? req, 'plan seeded');
         return { ok: true, items: plan.items };
+      },
+      // The one-click gate: mark a (draft) requirement ready + run the
+      // Requirement → Plan → Track cascade immediately so a board appears now.
+      'requirement-promote': async (a) => {
+        const id = String(a.id ?? '');
+        const req = getRequirement(workspaceRoot, id);
+        if (!req) return { error: `No requirement "${id}".` };
+        if (req.acceptanceCriteria.length === 0) return { error: 'This requirement has no acceptance criteria yet — add some first.' };
+        updateRequirement(workspaceRoot, id, { status: 'ready' });
+        const { actions } = syncRequirementPlanTrack(workspaceRoot, activeAgent.sessionKey);
+        const created = actions.filter((x) => x.kind === 'work-item-created').length;
+        await captureRequirementNote(getRequirement(workspaceRoot, id) ?? req, 'promoted to plan + Track');
+        return { ok: true, created, requirements: listRequirements(workspaceRoot) };
       },
       // ANNOTATION-RECORDS (0.4.15) — durable feedback records anchored to a
       // plan / requirement / artifact / doc / message / diff / file / review
@@ -1958,6 +1999,21 @@ async function main(): Promise<void> {
         const p = readPlan(workspaceRoot, activeAgent.sessionKey);
         return { items: p.items, explanation: p.explanation };
       },
+      // GOAL-BANNER — the structured active goal for THIS session, so the chat
+      // can pin it with status + controls (vs the plain-text /goal command out).
+      'goal-state': () => readGoal(workspaceRoot, activeAgent.sessionKey) ?? null,
+      // Edit the active goal's text in place (no re-kickoff) for the banner's
+      // inline editor. Returns the updated goal so the banner refreshes.
+      'action:goal-edit': (args) => {
+        const text = typeof args.text === 'string' ? args.text.trim() : '';
+        if (!text) return { ok: false, error: 'Goal text cannot be empty.' };
+        try {
+          const g = editGoal(workspaceRoot, activeAgent.sessionKey, { text });
+          return g ? { ok: true, goal: g } : { ok: false, error: 'No active goal to edit.' };
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      },
       // §goal-autonomy — the desktop's goal loop driver. The renderer calls this
       // after each turn completes; it applies the SAME decision the CLI Ink loop
       // uses (`decideGoalContinuation`) for the active session + ticks the
@@ -2218,6 +2274,12 @@ async function main(): Promise<void> {
               // the returned startTurn; the goal-continuation query keeps it going).
               const g = setGoal(workspaceRoot, rest, sk, { force: true });
               goalStrikes.delete(sk);
+              // Seed a visible starter plan so the Plan panel populates the
+              // instant the goal is set (instead of waiting on the model to call
+              // update_plan). The kickoff prompt tells the agent to replace it.
+              try {
+                updatePlan(workspaceRoot, { plan: [{ step: g.text.slice(0, 200), status: 'in_progress' }], explanation: 'Goal kickoff — the agent will break this down via update_plan.' }, sk);
+              } catch { /* plan seed is best-effort */ }
               return { lines: [`Goal set: ${g.text}`, `status: ${g.status} — working on it…`], startTurn: buildGoalKickoffPrompt(g, 'start') };
             }
             const g = readGoal(workspaceRoot, sk);
@@ -2614,7 +2676,7 @@ async function main(): Promise<void> {
         return { ok: false, what };
       },
     },
-    onShutdown: () => { void mcpClient.close?.(); process.exit(0); },
+    onShutdown: () => { stopWorkspaceWatcher(); void mcpClient.close?.(); process.exit(0); },
   });
 
   if (port) port.on('message', (e) => { void core.handle(e.data); });

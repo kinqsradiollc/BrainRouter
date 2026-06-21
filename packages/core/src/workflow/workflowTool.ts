@@ -82,17 +82,29 @@ export function defaultPhaseRunner(
         // (no auto-merge) so the synthesis gate + finalize own the merge decision.
         agents: wave.map((a) => ({
           role: a.role, prompt: a.prompt, access: a.access, label: a.label,
+          // BUILD-LOOP — phases never run as parallel writers on a SHARED tree:
+          // a single-worktree build writes sequentially into one shared worktree,
+          // and a fan-out build holds each slice worker in its OWN worktree. So the
+          // MAS-P3 ownership gate (which exists to stop concurrent writers clobbering
+          // a shared workspace) has nothing to guard here — declare the opt-out
+          // explicitly, otherwise every write/shell phase is rejected at spawn time.
+          allowOverlap: true,
           ...(opts?.workspaceRootOverride ? { workspaceRootOverride: opts.workspaceRootOverride } : {}),
           ...(opts?.holdWorktree ? { holdWorktree: true } : {}),
         })),
       };
       let ids: string[] = [];
+      let spawnError: string | undefined;
       try {
         const parsed = JSON.parse(await dispatch('spawn_agents', spawnArgs, ctx)) as {
           agents?: Array<{ id?: string }>;
         };
         ids = (parsed.agents ?? []).map((x) => x.id).filter((id): id is string => Boolean(id));
-      } catch {
+      } catch (err) {
+        // Preserve the real reason (e.g. an ownership-gate rejection) instead of
+        // collapsing every spawn failure to a generic "no child id" — a swallowed
+        // cause here is how a spawn-gate regression stays invisible.
+        spawnError = err instanceof Error ? err.message : String(err);
         ids = [];
       }
       if (ids.length === 0) {
@@ -101,7 +113,7 @@ export function defaultPhaseRunner(
             id: `${phase.id}-spawn-fail-${idx + j}`,
             role: a.role ?? 'worker',
             status: 'failed',
-            error: 'spawn_agents returned no child id',
+            error: spawnError ?? 'spawn_agents returned no child id',
             label: a.label,
           })),
         );
@@ -125,6 +137,8 @@ export function defaultPhaseRunner(
             status: String(a.status ?? 'completed'),
             finalOutput: typeof a.finalOutput === 'string' ? a.finalOutput : undefined,
             error: typeof a.error === 'string' ? a.error : undefined,
+            // MAS-READMANIFEST — forward the child's read files to the phase engine.
+            filesRead: Array.isArray(a.filesRead) ? a.filesRead.filter((f): f is string => typeof f === 'string') : undefined,
           });
         }
       } catch {

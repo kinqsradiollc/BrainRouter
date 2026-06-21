@@ -567,9 +567,64 @@ the load-bearing ones:
 | `quiet` | `false` | Suppress recall tables, briefing dumps, tool-completion previews. |
 | `sandbox` | `off` | `on` wraps `run_command` (and the `!` shell escape) in the platform sandbox. |
 | `sandboxNetwork` | `false` | Allow outbound network from the sandbox. |
+| `sandboxEnforceWhenSilent` | `true` | Force the sandbox **on** for silent / unattended agents (cloud workers, spawned children, non-interactive runs) even when `sandbox: off`. When enforced, outbound network is denied and a missing sandboxer fails closed (`sandboxUnavailable: deny`), and `background: true` runs are refused (they would escape the sandbox). Set `false` to let unattended shells run with the same posture as interactive ones. Mirrors `cli.hooks.enforceWhenSilent`. |
 | `autoChainMaxFollowups` | `2` | Cap on auto-chained review/verify follow-ups per worker. |
 | `agentMcpToolBudget` | `40` | Cap on MCP tools shown to a child agent per turn (0 = no cap). |
 | `workspaceOverride` | _(auto)_ | Override the CLI workspace root. |
+
+### Requirement to Track automation
+
+Automation is disabled by default. Enable the global switch and only the stages
+you have dogfooded for the workspace:
+
+```json
+{
+  "cli": {
+    "automation": {
+      "enabled": true,
+      "requirements": { "enabled": true, "autoCreateThreshold": 0.7, "lowActThreshold": 0.4, "autopilot": false },
+      "sync": { "enabled": true },
+      "sprints": { "enabled": false, "minItems": 3, "respectCapacity": true, "autopilot": false }
+    }
+  }
+}
+```
+
+Autonomy is **tiered** — the deeper a stage's blast radius, the more it defers
+to you:
+
+- `requirements` captures high-confidence implementation requests as `auto`
+  drafts. With `autopilot: false` (default) a draft is **proposed** — the agent
+  surfaces a one-click promote and the plan/Track cascade only fires once the
+  requirement is `ready` (run `/requirement promote <id>`, or click **Plan &
+  track** in the Requirements panel). With `autopilot: true`, a confident
+  detection that has concrete acceptance criteria is created `ready` directly, so
+  the cascade runs unattended.
+- `sync` reconciles a ready requirement, its session plan, Track items, and
+  code-link progress. A completed goal reconciles its anchored requirement when
+  the global switch is enabled.
+- `sprints` with `autopilot: false` (default) only **suggests** ("N ready items —
+  start a sprint?" / "this sprint is all done — complete it?") and never touches
+  the board — a human makes the irreversible call. With `autopilot: true` it
+  auto-creates a future sprint, assigns ready items, and completes a done one
+  (it still never auto-*starts* a sprint).
+
+Disable the global switch to stop every automatic stage immediately.
+
+### Commit scanner — code → Track without a tool call
+
+```json
+{ "cli": { "track": { "commitScanner": { "enabled": false, "scanDepth": 50 } } } }
+```
+
+`/track commits [--depth N] [--since <when>]` parses `<KEY>-<n>` references (e.g.
+`BR-123`) out of recent commit messages and **links each commit to its work
+item** (deduped by sha) while **advancing `todo` → `in-progress`** — the same
+code-signal transition the agent gets from `track_update link`, but driven by the
+git history so the board stays in sync even when the agent forgets to link.
+Done items still get the commit linked (provenance) but are never moved back. In
+the desktop, **Track → Sync → Scan commits** does the same. Idempotent — re-runs
+are a no-op.
 
 ### Sandboxing — shell env
 
@@ -612,6 +667,23 @@ them; hook scripts read them.
 | `BRAINROUTER_HOOK_EVENT` | Event name (`pre-tool`, `pre-turn`, …). |
 | `BRAINROUTER_HOOK_TOOL` | Tool name (for `pre-tool` / `post-tool`). |
 | `BRAINROUTER_HOOK_PAYLOAD` | JSON payload for the event. |
+
+### Hook enforcement (`cli.hooks`)
+
+```json
+{ "cli": { "hooks": { "enabled": true, "enforceWhenSilent": true } } }
+```
+
+- **`enabled`** (default `true`) — master switch for ALL lifecycle hooks.
+- **`enforceWhenSilent`** (default `true`) — runs the *blocking* events
+  (`pre-tool`, `user-prompt-submit`) for **silent / unattended** agents too —
+  deep workers, headless, and background/cloud runs — so a `pre-tool` deny hook
+  (non-zero exit or `{"decision":"deny"}`) enforces policy regardless of who is
+  driving. Advisory events (`pre/post-turn`, `post-tool`, `pre-compact`) stay
+  interactive-only. Set `false` to restore the old interactive-only behaviour.
+
+A `pre-tool` deny is enforcement, not advice: it blocks the call before the
+model can run it — the deterministic, model-independent guardrail for autonomy.
 
 ---
 
@@ -797,6 +869,27 @@ BRAINROUTER_SANDBOX_WRITE_PATHS=/tmp
 
 Sandboxing is an additional layer on top of the existing user-confirmation
 step. Confirmation guards intent; sandboxing guards blast radius.
+
+### Unattended enforcement
+
+Interactive sessions have a human who can notice and reject a risky shell call;
+silent / unattended agents (cloud workers, spawned children, non-interactive
+runs) do not. So when an agent runs silent, `cli.sandboxEnforceWhenSilent`
+(default **`true`**) forces the strictest posture regardless of the looser
+interactive `cli.sandbox*` settings:
+
+- the sandbox is **on** even when `cli.sandbox: off`;
+- outbound network is **denied** (overrides `sandboxNetwork: true`);
+- a missing sandboxer **fails closed** (overrides `sandboxUnavailable`);
+- `background: true` runs are **refused** — they execute unsandboxed and would
+  otherwise let a silent agent escape the enforced sandbox.
+
+Sandboxed `run_command` output is badged `(enforced: unattended)` when this
+applies. Set `cli.sandboxEnforceWhenSilent: false` to let unattended shells run
+with the same posture as interactive ones (e.g. to re-enable background runs in
+a trusted CI worker). The macOS profile resolves symlinked write roots (`/tmp`,
+`/var/folders/...` → `/private/...`) to their realpath so workspace writes are
+not silently denied.
 
 ---
 

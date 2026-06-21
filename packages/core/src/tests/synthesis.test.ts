@@ -54,3 +54,34 @@ test('a role with no output contract reports contractStatus none + preview', () 
   assert.equal(entry.contractStatus, 'none');
   assert.equal(entry.preview, 'hello world');
 });
+
+// MAS-SANITIZE (B5) — a child that leaked tool-call-shaped markup as TEXT (the
+// NotionApp2 minimax worker) must NOT propagate that into the parent's prompt.
+import { sanitizeForHandoff } from '../orchestration/synthesis.js';
+
+test('sanitizeForHandoff strips reasoning blocks and tool-call-shaped markup', () => {
+  const dirty = 'Before <think>secret chain of thought</think> after ' +
+    '<tool_call>{"name":"run_command"}</tool_call> <command>rm -rf /</command> ' +
+    '<|tool|>junk<|/tool|> <invoke name="x">y</invoke>';
+  const clean = sanitizeForHandoff(dirty);
+  for (const bad of ['<think>', 'chain of thought', '<tool_call', '<command', '<|tool|>', '<invoke']) {
+    assert.ok(!clean.includes(bad), `must strip ${bad}`);
+  }
+  assert.match(clean, /Before/);
+  assert.match(clean, /after/);
+});
+
+test('sanitizeForHandoff keeps ordinary prose intact', () => {
+  assert.equal(sanitizeForHandoff('Changed src/a.ts and added a test.'), 'Changed src/a.ts and added a test.');
+  assert.equal(sanitizeForHandoff(undefined), '');
+});
+
+test('renderSynthesis does not forward leaked tool-call markup from an unparsed child', () => {
+  const r = synthesizeChildren([
+    { id: 'w1', role: 'worker', status: 'completed', finalOutput: 'Did the thing <tool_call>fake</tool_call> <|garbage|>' },
+  ]);
+  const out = renderSynthesis(r);
+  assert.ok(!out.includes('<tool_call>'), 'rendered synthesis must not carry tool-call markup');
+  assert.ok(!out.includes('<|garbage|>'));
+  assert.match(out, /Did the thing/);
+});

@@ -57,6 +57,7 @@ import { GIT_VISIBLE_POLL_MS, gitPollRefreshDue, gitRefreshDue } from './lib/git
 import { TopbarRight } from './components/TopbarRight.js';
 import { Sidebar } from './components/Sidebar.js';
 import { ChatThread } from './components/ChatThread.js';
+import type { GoalRecord } from './components/GoalBanner.js';
 import { ViewsRail } from './components/ViewsRail.js';
 import { EnvironmentPanel } from './components/EnvironmentPanel.js';
 import { TerminalDock } from './components/TerminalDock.js';
@@ -135,6 +136,7 @@ export function App(): React.ReactElement {
   // host `track-*` queries. Mutations re-fetch the item list.
   const [track, setTrack] = useState<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; automations: AutomationRule[]; members: ProjectMember[]; sync: { config: SyncConfig | null; result: SyncResult | null } }>({ project: null, items: [], sprints: [], automations: [], members: [], sync: { config: null, result: null } });
   const [lastPlan, setLastPlan] = useState<{ items: PlanItem[]; explanation?: string } | null>(null);
+  const [goalState, setGoalState] = useState<GoalRecord | null>(null);
   const [planHistory, setPlanHistory] = useState<PlanDecisionView[]>([]);
   const [searchHits, setSearchHits] = useState<SearchHit[] | null>(null);
 
@@ -278,6 +280,7 @@ export function App(): React.ReactElement {
       // A real run can create/modify items — refresh the board shortly after.
       if (!dryRun) window.setTimeout(() => { q('q-track-items', 'track-items'); }, 600);
     },
+    scanCommits: () => q('q-track-scan', 'track-scan-commits'),
   };
 
   // T4 — git/diff/review STATE + the Changes-tab git action (runGit). Every symbol
@@ -608,7 +611,7 @@ export function App(): React.ReactElement {
 
   useAgentEvents({
     setRows, setRunning, setStopping, setTurnStart, setStatusLine, setReasoningTail, setLiveText, setToolLog,
-    setLiveChildren, setFinishedTasks, setLastPlan, setPlanHistory, setTokens, setLiveTurn, setEfficiency, setTrack, setInteraction, setPicked, setViewKey,
+    setLiveChildren, setFinishedTasks, setLastPlan, setGoalState, setPlanHistory, setTokens, setLiveTurn, setEfficiency, setTrack, setInteraction, setPicked, setViewKey,
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
     setDraft, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
@@ -1021,7 +1024,9 @@ export function App(): React.ReactElement {
           onSetStatus={(id, status) => { q('q-req-update', 'requirement-update', { id, status }); refresh(); }}
           onSetPriority={(id, priority) => { q('q-req-update', 'requirement-update', { id, priority }); refresh(); }}
           onAddCriterion={(id, text) => { q('q-req-update', 'requirement-update', { id, criterion: text }); refresh(); }}
-          onSeedPlan={(id) => { q('q-req-seed', 'requirement-seed-plan', { id }); refresh(); setToast('Seeded this session\'s plan from the requirement — it shows in Plan on the next turn.'); }} />;
+          onDelete={(id) => { q('q-req-delete', 'requirement-delete', { id }); refresh(); setToast('Requirement deleted.'); }}
+          onSeedPlan={(id) => { q('q-req-seed', 'requirement-seed-plan', { id }); refresh(); setToast('Seeded this session\'s plan from the requirement — it shows in Plan on the next turn.'); }}
+          onPromote={(id) => { q('q-req-promote', 'requirement-promote', { id }); refresh(); setTimeout(() => q('q-track-items', 'track-items'), 250); setToast('Promoted to ready — planned + tracked on the board.'); }} />;
       }
       case 'annotations': {
         // ANNOTATION-RECORDS — status set re-fetches the list; export round-trips
@@ -1094,6 +1099,11 @@ export function App(): React.ReactElement {
             renderRow={renderRow} homeStats={homeStats} statsTab={statsTab} setStatsTab={setStatsTab}
             statsRange={statsRange} setStatsRange={setStatsRange} snapshot={snapshot} sessions={sessions}
             resumeSession={resumeSession} forkParent={forkParent} transcriptEls={transcriptEls} liveText={liveText}
+            goal={goalState}
+            onGoalResume={() => runBridge('goal', 'resume')}
+            onGoalPause={() => runBridge('goal', 'pause')}
+            onGoalClear={() => runBridge('goal', 'clear')}
+            onGoalEdit={(text) => { q('a-goal-edit', 'action:goal-edit', { text }); }}
             running={running} turnStart={turnStart} reasoningTail={reasoningTail} statusLine={statusLine}
             interaction={interaction} answerInteraction={answerInteraction} q={q} chatEnd={chatEnd} atBottom={atBottom}
             hasConversation={hasConversation} changedFiles={changedFiles} ensurePanel={ensurePanel}
@@ -1155,7 +1165,7 @@ export function App(): React.ReactElement {
             region re-covers the buttons and swallows every click — the
             browser preview ignores app-region, which is why it only broke
             in the real Electron shell. */}
-        <TopbarRight homeMode={homeMode} envRoom={envRoom} envOpen={envOpen} setEnvOpen={setEnvOpen} q={q}
+        <TopbarRight mode={mode} homeMode={homeMode} envRoom={envRoom} envOpen={envOpen} setEnvOpen={setEnvOpen} q={q}
           termDockOpen={termDockOpen} setTermDockOpen={setTermDockOpen} sidePanelOpen={sidePanelOpen}
           setSidePanelOpen={setSidePanelOpen} sideFullScreen={sideFullScreen} setSideFullScreen={setSideFullScreen}
           sideTabs={sideTabs} activeSideTab={activeSideTab} ensurePanel={ensurePanel} openBottomDock={openBottomDock}

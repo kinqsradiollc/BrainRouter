@@ -107,6 +107,9 @@ export type AgentEvent =
   // transient status line) — e.g. the provider truncated the reply at its token
   // cap. Rendered as a durable status row, mirroring the CLI.
   | { kind: 'notice'; level: 'info' | 'warn'; message: string }
+  // The workspace filesystem changed (debounced host fs.watch) — the renderer
+  // re-runs its file/changes/git queries so the Files panel stays live.
+  | { kind: 'files-changed' }
   | { kind: 'query-result'; id: string; ok: boolean; result?: unknown; error?: string };
 
 export type AgentEventMessage = EventEnvelope & { event: AgentEvent };
@@ -117,7 +120,7 @@ const EVENT_KINDS = new Set<string>([
   'child-complete', 'plan-update', 'compaction', 'memory', 'requirement-event',
   'artifact-event', 'annotation-event', 'provenance', 'task-event', 'approval-decision',
   'interaction-request', 'turn-complete', 'turn-error', 'tokens-updated', 'usage-live', 'session-changed', 'query-result',
-  'notice',
+  'notice', 'files-changed',
 ]);
 
 /** Structural guard for a {@link BackgroundTaskEventView}. Pure. */

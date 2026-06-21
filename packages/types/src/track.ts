@@ -263,6 +263,8 @@ export interface Sprint {
   endDate?: string;
   /** Capacity in story points or hours (project's unit). */
   capacity?: number;
+  /** Completed story points captured when the sprint is closed. */
+  velocity?: number;
   createdAt: string;
   updatedAt: string;
 }

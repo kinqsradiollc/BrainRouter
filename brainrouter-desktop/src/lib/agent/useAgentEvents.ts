@@ -61,6 +61,7 @@ export interface AgentEventsCtx {
   setLiveChildren: React.Dispatch<React.SetStateAction<Record<string, { childId: string; role: string; tool?: string; startedAt: number }>>>;
   setFinishedTasks: React.Dispatch<React.SetStateAction<Array<{ id: string; label: string; status: string }>>>;
   setLastPlan: React.Dispatch<React.SetStateAction<{ items: PlanItem[]; explanation?: string } | null>>;
+  setGoalState: React.Dispatch<React.SetStateAction<import('../../components/GoalBanner.js').GoalRecord | null>>;
   setPlanHistory: React.Dispatch<React.SetStateAction<PlanDecisionView[]>>;
   setTokens: React.Dispatch<React.SetStateAction<{ promptTokens: number; completionTokens: number; turns: number; cachedTokens?: number } | null>>;
   // LIVE per-call usage for the in-flight turn (cleared at turn-start/end) so the
@@ -180,7 +181,7 @@ export function getStableRowId(sessionKey: string, r: { id?: string | number; ki
 export function useAgentEvents(ctx: AgentEventsCtx): void {
   const {
     setRows, setRunning, setStopping, setTurnStart, setStatusLine, setReasoningTail, setLiveText, setToolLog,
-    setLiveChildren, setFinishedTasks, setLastPlan, setPlanHistory, setTokens, setLiveTurn, setEfficiency, setTrack, setInteraction, setPicked, setViewKey,
+    setLiveChildren, setFinishedTasks, setLastPlan, setGoalState, setPlanHistory, setTokens, setLiveTurn, setEfficiency, setTrack, setInteraction, setPicked, setViewKey,
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
     setDraft, planFeedbackRef, goalContPendingRef, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
@@ -298,6 +299,16 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           setLastPlan({ items: e.items, explanation: e.explanation });
           push({ id: rid(), kind: 'status', text: 'Updated the plan', action: 'plan', ts: Date.now() });
           break;
+        case 'files-changed':
+          // FILES-LIVE — the host's debounced fs.watch fired. Re-pull the file
+          // tree (cache already invalidated host-side), the Changes list and the
+          // git counts so the right panel stays live without a manual Refresh.
+          // The stale-workspace guard above already dropped events for a
+          // background workspace, so this only repaints the foreground one.
+          q('q-list', 'list-files', { refresh: true });
+          q('q-files', 'changed-files');
+          q('q-git', 'git-info');
+          break;
         case 'compaction': push({ id: rid(), kind: 'status', text: `Compacted ${e.droppedMessages} → kept ${e.keptMessages}`, ts: Date.now() }); setEfficiency((s) => ({ ...s, compactions: s.compactions + 1, droppedMessages: s.droppedMessages + (e.droppedMessages || 0) })); q('q-ctx', 'context-usage'); break;
         case 'memory':
           // A briefing carries the recalled records — render a collapsible row
@@ -406,6 +417,16 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
               if (e.sessionKey !== want) window.brainrouter.send({ kind: 'resume-session', sessionKey: want });
             }
           }
+          // The effort / mode chip reads its value from the config snapshot,
+          // which is SESSION-aware on the host (resolveActiveMode). It's fetched
+          // at boot / Settings-open / mode-mutations but NOT on session switch,
+          // so the chip used to show the PREVIOUS session's effort while the
+          // agent (which resolves fresh per turn) sent this session's. Refetch
+          // it on every switch so the chip matches what actually gets sent.
+          q('q-snapshot', 'config-snapshot');
+          // GOAL-BANNER — pull THIS session's active goal so the pinned banner
+          // reflects the chat we just landed on (each session has its own goal).
+          q('q-goal', 'goal-state');
           // Stability fix — refresh tier by whether the WORKSPACE changed: a
           // project/workspace switch needs the FULL git/workspace refresh so
           // branches + git state reload (they were cleared on switch); a same-
@@ -577,6 +598,12 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       case 'q-track-sync':
         if (result && typeof result === 'object' && !(result as { error?: string }).error) setTrack((t) => ({ ...t, sync: { ...t.sync, result: result as SyncResult } }));
         return;
+      case 'q-track-scan': {
+        const r = result as { scanned?: number; linked?: unknown[]; transitioned?: unknown[]; items?: WorkItem[] } | null;
+        if (Array.isArray(r?.items)) setTrack((t) => ({ ...t, items: r!.items! }));
+        if (r) setToast(`Scanned ${r.scanned ?? 0} commit(s) — ${r.linked?.length ?? 0} linked, ${r.transitioned?.length ?? 0} advanced.`);
+        return;
+      }
       case 'q-turn-changeset': {
         // End-of-turn changeset → append a card right after the final answer.
         const r = result as { files?: ChangesetFile[]; insertions?: number; deletions?: number } | null;
@@ -904,6 +931,19 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           goalContPendingRef.current = null; // a fresh kickoff cancels any stale pending continuation
           window.brainrouter.send({ kind: 'start-turn', prompt: r.startTurn, hidden: true });
         }
+        // A /goal command (set/resume/pause/clear) just changed the goal — refresh
+        // the pinned banner so its text/status/controls reflect the new state.
+        if (pendingCmdRef.current.startsWith('/goal')) q('q-goal', 'goal-state');
+        return;
+      }
+      case 'q-goal':
+        // GOAL-BANNER — the structured active goal for the pinned banner (null = none).
+        setGoalState((result ?? null) as import('../../components/GoalBanner.js').GoalRecord | null);
+        return;
+      case 'a-goal-edit': {
+        const r = result as { ok?: boolean; goal?: unknown; error?: string } | null;
+        if (r && r.ok && r.goal) setGoalState(r.goal as import('../../components/GoalBanner.js').GoalRecord);
+        else if (r && r.error) setToast(r.error);
         return;
       }
       case 'q-goalcont': {

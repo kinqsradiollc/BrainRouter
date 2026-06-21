@@ -41,9 +41,29 @@ export interface SynthesisRollup {
   byRole: Record<string, SynthEntry[]>;
 }
 
+/**
+ * MAS-SANITIZE (B5) — strip content that must NEVER become a downstream prompt:
+ * model reasoning blocks and tool-call-shaped markup that a weak model (e.g.
+ * minimax-class) emitted as TEXT instead of a real tool call. In the NotionApp2
+ * run, 24 such `<tool_call>`/`<command>` wrappers from the worker were forwarded
+ * verbatim into the verifier + reviewer prompts, corrupting them. Pure.
+ */
+export function sanitizeForHandoff(text: string | undefined): string {
+  if (!text) return "";
+  return text
+    // reasoning / thinking blocks — never forward chain-of-thought
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, "")
+    // tool-call-shaped markup emitted as TEXT (minimax & various weak models)
+    .replace(/<\/?(?:tool_call|invoke|function_calls?|parameter|command(?:line)?|run_command|antml:[a-z_]+)[^>]*>/gi, "")
+    .replace(/<\|[^|]*\|>/g, "") // minimax-style <|...|> sentinels
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function previewOf(text: string | undefined, max = 280): string | undefined {
-  if (!text) return undefined;
-  const t = text.trim();
+  const t = sanitizeForHandoff(text);
+  if (!t) return undefined;
   return t.length > max ? `${t.slice(0, max)}…` : t;
 }
 
@@ -88,7 +108,7 @@ export function renderSynthesis(rollup: SynthesisRollup): string {
       lines.push(`- **${e.id}** — ${e.status}${e.error ? ` (error: ${e.error})` : ""}`);
       if (e.contractStatus === "parsed") {
         for (const [field, value] of Object.entries(e.fields)) {
-          lines.push(`  - _${field}_: ${value.replace(/\n+/g, " ").slice(0, 200)}`);
+          lines.push(`  - _${field}_: ${sanitizeForHandoff(value).replace(/\n+/g, " ").slice(0, 200)}`);
         }
       } else if (e.missing.length > 0) {
         lines.push(`  - _(contract unparsed — missing: ${e.missing.join(", ")})_`);

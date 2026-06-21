@@ -26,11 +26,13 @@ import {
   getRequirement,
   listRequirements,
   linkRequirement,
+  deleteRequirement,
   addClarifyingQuestion,
   answerClarifyingQuestion,
   openClarifyingQuestions,
 } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
 import { seedPlanFromRequirement, formatPlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
+import { syncRequirementPlanTrack } from '@kinqs/brainrouter-core/dist/requirement/planTrackSync.js';
 import { emitAgentEvent } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 import type { CommandContext } from './_context.js';
 
@@ -72,11 +74,27 @@ export async function tryHandleRequirementCommand(ctx: CommandContext): Promise<
     console.log(chalk.bold('\nRequirements'));
     for (const r of records) {
       const session = r.sessionKey ? chalk.gray(` · ${r.sessionKey}`) : '';
+      const origin = originTag(r);
       console.log(
-        `  ${chalk.cyan(r.id)} [${statusColor(r.status)}] ${priorityLabel(r.priority)} ${r.title}${session}`,
+        `  ${chalk.cyan(r.id)} [${statusColor(r.status)}]${origin ? ` ${origin}` : ''} ${priorityLabel(r.priority)} ${r.title}${session}`,
       );
     }
     console.log();
+    return true;
+  }
+
+  if (sub === 'delete' || sub === 'remove' || sub === 'rm') {
+    const id = rest[0];
+    if (!id) {
+      console.log(chalk.red('\nUsage: /requirement delete <id>\n'));
+      return true;
+    }
+    const existing = getRequirement(agent.workspaceRoot, id);
+    if (!existing || !deleteRequirement(agent.workspaceRoot, id)) {
+      console.log(chalk.yellow(`\nNo requirement with id "${id}".\n`));
+      return true;
+    }
+    console.log(chalk.green(`\n✓ Deleted requirement ${chalk.cyan(id)} (${originLabel(existing)}).\n`));
     return true;
   }
 
@@ -235,6 +253,35 @@ export async function tryHandleRequirementCommand(ctx: CommandContext): Promise<
     return true;
   }
 
+  if (sub === 'promote' || sub === 'ready') {
+    // The one-click gate: mark a draft requirement `ready` and run the
+    // Requirement → Plan → Track cascade immediately (no waiting for a turn).
+    const id = rest[0];
+    if (!id) { console.log(chalk.red('\nUsage: /requirement promote <id>   (mark ready + plan + Track it)\n')); return true; }
+    const r = getRequirement(agent.workspaceRoot, id);
+    if (!r) { console.log(chalk.yellow(`\nNo requirement with id "${id}".\n`)); return true; }
+    if (r.acceptanceCriteria.length === 0) {
+      console.log(chalk.yellow(`\nRequirement "${id}" has no acceptance criteria yet — add some first: /requirement update ${id} --criteria "<text>"\n`));
+      return true;
+    }
+    updateRequirement(agent.workspaceRoot, id, { status: 'ready' });
+    const { actions } = syncRequirementPlanTrack(agent.workspaceRoot, agent.sessionKey);
+    const created = actions.filter((a) => a.kind === 'work-item-created');
+    const seeded = actions.some((a) => a.kind === 'plan-seeded');
+    const updated = getRequirement(agent.workspaceRoot, id) ?? r;
+    console.log(chalk.green(`\n✓ Promoted ${chalk.cyan(r.id)} [${statusColor(updated.status)}] — ${seeded ? 'plan seeded · ' : ''}${created.length} Track item(s) created`));
+    for (const a of created) {
+      const wi = a as Extract<typeof a, { workItemKey: string }>;
+      console.log(`  ${chalk.green('+')} ${chalk.cyan(wi.workItemKey)} ${wi.title}`);
+    }
+    if (created.length === 0 && !seeded) {
+      console.log(chalk.gray('  (No items created — promote from the session that captured it, or run /requirement seed-plan ' + id + ')'));
+    }
+    console.log('');
+    await captureRequirementNote(ctx, updated, 'promoted to plan + Track');
+    return true;
+  }
+
   console.log(chalk.red(`\nUnknown /requirement subcommand "${sub}".`));
   printUsage();
   return true;
@@ -346,6 +393,7 @@ function printRecord(r: RequirementRecord): void {
   if (r.description) console.log(`  Details:   ${r.description}`);
   console.log(`  Status:    ${statusColor(r.status)}`);
   console.log(`  Priority:  ${priorityLabel(r.priority)}`);
+  console.log(`  Origin:    ${originLabel(r)}`);
   if (r.sessionKey) console.log(`  Session:   ${chalk.gray(r.sessionKey)}`);
   console.log(`  Created:   ${chalk.gray(r.createdAt)}`);
   console.log(`  Updated:   ${chalk.gray(r.updatedAt)}`);
@@ -367,6 +415,15 @@ function printRecord(r: RequirementRecord): void {
   console.log(`    memory:    ${r.linkedMemoryIds.length ? chalk.gray(r.linkedMemoryIds.join(', ')) : chalk.gray('(none)')}`);
   if (r.sourceEventId) console.log(`    source:    ${chalk.gray(r.sourceEventId)}`);
   console.log();
+}
+
+/** Compact audit label shared by the list and detail renderers. */
+export function originLabel(r: Pick<RequirementRecord, 'origin'>): 'auto' | 'manual' {
+  return r.origin === 'auto' ? 'auto' : 'manual';
+}
+
+export function originTag(r: Pick<RequirementRecord, 'origin'>): string {
+  return r.origin === 'auto' ? chalk.cyan('[auto]') : '';
 }
 
 /**
@@ -449,6 +506,7 @@ function printUsage(): void {
   console.log(chalk.gray('  /requirement create <title>                 Create a draft anchored to this session'));
   console.log(chalk.gray('  /requirement list                           List this workspace\'s requirements'));
   console.log(chalk.gray('  /requirement show <id>                      Full record + criteria + Q&A + links'));
+  console.log(chalk.gray('  /requirement delete <id>                    Remove a requirement (including auto-created drafts)'));
   console.log(chalk.gray('  /requirement ask <id> <question…>           Add a clarifying question (draft → clarifying)'));
   console.log(chalk.gray('  /requirement answer <id> <index> <answer…>  Answer clarifying question #index (0-based)'));
   console.log(chalk.gray('  /requirement clarify <id>                   Show the Q&A (✓ answered / • open) + next-step hint'));
@@ -456,5 +514,6 @@ function printUsage(): void {
   console.log(chalk.gray('  /requirement update <id> --priority <p>     Change priority (low|medium|high)'));
   console.log(chalk.gray('  /requirement update <id> --criteria "<c>"   Append an acceptance criterion'));
   console.log(chalk.gray('  /requirement seed-plan <id>                 Seed this session\'s plan from the acceptance criteria'));
+  console.log(chalk.gray('  /requirement promote <id>                   Mark ready + plan + Track it in one step (the auto-draft gate)'));
   console.log();
 }

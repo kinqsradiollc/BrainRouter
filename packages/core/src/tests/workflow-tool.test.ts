@@ -76,6 +76,42 @@ test('WF-TOOL defaultPhaseRunner records failed children when spawn returns no i
   assert.equal(results.every((r) => r.status === 'failed'), true);
 });
 
+test('WF-TOOL defaultPhaseRunner declares allowOverlap so write/shell phases clear the ownership gate', async () => {
+  // Regression: the MAS-P3 ownership gate rejects write/shell spawns that declare
+  // no ownership and no allowOverlap. Build phases (worker=write, verifier=shell)
+  // carry no ownership, so the runner must opt them out — otherwise every
+  // implement/verify phase spawn-fails at the gate.
+  let spawnedAgents: any[] = [];
+  const dispatch: OrchestrationDispatch = async (name, args: any) => {
+    if (name === 'spawn_agents') {
+      spawnedAgents = args.agents;
+      return JSON.stringify({ agents: args.agents.map((_: unknown, i: number) => ({ id: `c${i}` })) });
+    }
+    if (name === 'wait_agents') {
+      return JSON.stringify({ agents: args.ids.map((id: string) => ({ id, status: 'completed' })) });
+    }
+    return '{}';
+  };
+  const runner = defaultPhaseRunner(ctx('/tmp/none'), dispatch, 4);
+  await runner([{ prompt: 'edit', access: 'write' }, { prompt: 'test', access: 'shell' }], { id: 'implement', title: 'Implement' } as any);
+  assert.equal(spawnedAgents.length, 2);
+  assert.equal(spawnedAgents.every((a) => a.allowOverlap === true), true);
+});
+
+test('WF-TOOL defaultPhaseRunner surfaces the real spawn error instead of a generic message', async () => {
+  // A throwing spawn (e.g. the ownership gate) must keep its cause so a spawn-gate
+  // regression is self-diagnosing rather than collapsing to "no child id".
+  const dispatch: OrchestrationDispatch = async (name) => {
+    if (name === 'spawn_agents') throw new Error('spawn_agents: agents[0] (worker) — must declare an "ownership" glob');
+    return '{}';
+  };
+  const runner = defaultPhaseRunner(ctx('/tmp/none'), dispatch, 4);
+  const results = await runner([{ prompt: 'x', access: 'write' }], { id: 'implement', title: 'Implement' } as any);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].status, 'failed');
+  assert.match(results[0].error ?? '', /ownership/);
+});
+
 // ── runWorkflow handler (fake runner + real persistence) ─────────────────────
 
 test('WF-TOOL runWorkflow executes a plan, persists phases, returns a summary', async () => {

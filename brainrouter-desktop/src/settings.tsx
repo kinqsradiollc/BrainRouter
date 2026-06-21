@@ -54,6 +54,7 @@ const NAV: Array<{ section: SettingsSection; icon: string; title: string; group:
   { section: 'permissions', icon: 'shield', title: 'Permissions', group: 'Settings' },
   { section: 'memory', icon: 'brain', title: 'Memory', group: 'Settings' },
   { section: 'hooks', icon: 'link', title: 'Hooks', group: 'Settings' },
+  { section: 'workflow-automation', icon: 'fork', title: 'Workflow automation', group: 'Settings' },
   { section: 'connectors', icon: 'bolt', title: 'Connectors', group: 'Settings' },
   { section: 'integrations', icon: 'branch', title: 'Integrations', group: 'Settings' },
   { section: 'advanced', icon: 'gear', title: 'Advanced', group: 'Settings' },
@@ -511,6 +512,48 @@ export function SettingsDialog(props: {
           </div>
         </>
       );
+      case 'workflow-automation': {
+        const auto = (knobs.automation ?? {}) as {
+          enabled?: boolean;
+          requirements?: { enabled?: boolean; autopilot?: boolean };
+          sync?: { enabled?: boolean };
+          sprints?: { enabled?: boolean; autopilot?: boolean };
+        };
+        const master = !!auto.enabled;
+        const writeAuto = (next: typeof auto): void => setKnob('automation', next);
+        const tierOf = (s?: { enabled?: boolean; autopilot?: boolean }): string =>
+          !s?.enabled ? 'off' : s.autopilot ? 'autopilot' : 'propose';
+        const TIERS = ['off', 'propose', 'autopilot'];
+        return (
+          <>
+            <div className="set-h">Workflow automation</div>
+            <div className="set-desc" style={{ marginBottom: 8 }}>
+              Let agents drive the Requirement → Plan → Track → Sprint pipeline straight from the
+              conversation. Every stage is <b>off by default</b> and runs only in your interactive
+              session — never for background workers. (Distinct from the Track <i>Automation</i> tab,
+              which is trigger → action rules.)
+            </div>
+            <Row title="Enable automation" desc="Master switch (cli.automation.enabled). Off → nothing fires, whatever the stages below say.">
+              <Toggle on={master} onChange={(v) => writeAuto({ ...auto, enabled: v })} />
+            </Row>
+            <div style={{ opacity: master ? 1 : 0.45, pointerEvents: master ? 'auto' : 'none' }}>
+              <div className="set-h2">Stages</div>
+              <Row title="Detect requirements" desc="Capture requirements the agent spots in chat. Propose = save as draft + one-click promote; Autopilot = auto-create ready and run the cascade (cli.automation.requirements).">
+                <Select value={tierOf(auto.requirements)} options={TIERS}
+                  onChange={(v) => writeAuto({ ...auto, requirements: { ...auto.requirements, enabled: v !== 'off', autopilot: v === 'autopilot' } })} />
+              </Row>
+              <Row title="Sync plan → Track" desc="Turn a ready requirement's plan into Track items and advance them from code/PR links (cli.automation.sync).">
+                <Toggle on={!!auto.sync?.enabled} onChange={(v) => writeAuto({ ...auto, sync: { ...auto.sync, enabled: v } })} />
+              </Row>
+              <Row title="Reconcile sprints" desc="Propose = suggest sprint create/complete (you make the commitment); Autopilot = auto-create/assign/complete — never auto-starts (cli.automation.sprints).">
+                <Select value={tierOf(auto.sprints)} options={TIERS}
+                  onChange={(v) => writeAuto({ ...auto, sprints: { ...auto.sprints, enabled: v !== 'off', autopilot: v === 'autopilot' } })} />
+              </Row>
+            </div>
+            <Row title="Shared with the CLI" desc="Persists to cli.automation in config.json — the same knobs as `/config set automation…` in the terminal." />
+          </>
+        );
+      }
       case 'memory': return (
         <>
           <div className="set-h">Memory</div>

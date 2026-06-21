@@ -31,7 +31,8 @@ test('reasoning metadata: LM Studio capability object is a positive reasoning hi
       reasoning: { allowed_options: ['on', 'off'], default: 'off' },
     },
   });
-  assert.deepEqual(caps, { reasoning: true });
+  // The advertised on/off vocabulary is now captured (drives binary detection).
+  assert.deepEqual(caps, { reasoning: true, efforts: ['on', 'off'] });
 });
 
 test('reasoning metadata does not override known non-reasoning chat variants', () => {

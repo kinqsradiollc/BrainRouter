@@ -34,6 +34,9 @@ export type RequirementStatus =
 
 export type RequirementPriority = "low" | "medium" | "high";
 
+/** Whether a person or the automatic workflow originated this record. */
+export type RequirementOrigin = "manual" | "auto";
+
 /** One clarifying exchange: a question, optionally answered. */
 export interface ClarifyingQA {
   question: string;
@@ -62,6 +65,8 @@ export interface RequirementRecord {
   linkedMemoryIds: string[];
   /** Agent-protocol / orchestration event id this record originated from, if any. */
   sourceEventId?: string;
+  /** Automatic records are visibly distinguishable and reversible. */
+  origin?: RequirementOrigin;
   /** ISO-8601 creation timestamp. */
   createdAt: string;
   /** ISO-8601 timestamp; bumped on every mutation. */
@@ -128,6 +133,7 @@ export function isRequirementRecord(x: unknown): x is RequirementRecord {
     isStringArray(r.artifactIds) &&
     isStringArray(r.linkedMemoryIds) &&
     (r.sourceEventId === undefined || typeof r.sourceEventId === "string") &&
+    (r.origin === undefined || r.origin === "manual" || r.origin === "auto") &&
     typeof r.createdAt === "string" &&
     typeof r.updatedAt === "string"
   );

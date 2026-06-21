@@ -21,6 +21,9 @@ export interface ChildSessionRecord {
   pid: number;
   finalOutput?: string;
   error?: string;
+  /** MAS-READMANIFEST (B2) — files this child read, forwarded so a downstream
+   *  phase reads deltas instead of re-mapping the tree cold. */
+  filesRead?: string[];
   /** Agent tier from the definition (reasoning | worker). Undefined for legacy records. */
   tier?: Tier;
   /** Nesting depth in the spawn chain; 0 = direct child of the chat root. */

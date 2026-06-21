@@ -42,6 +42,12 @@ export interface SandboxConfig {
   allowNetwork: boolean;
   /** CODEX-SANDBOX-FAILCLOSED — behavior when the sandboxer is missing. */
   unavailableMode: SandboxUnavailableMode;
+  /**
+   * CODEX-SANDBOX-UNATTENDED — true when the sandbox was forced on for a
+   * silent / unattended agent (rather than the user's `cli.sandbox` setting).
+   * Surfaced so the agent can badge the run as "(enforced: unattended)".
+   */
+  enforcedUnattended?: boolean;
 }
 
 /**
@@ -95,16 +101,28 @@ export function detectSandboxDenial(stderr: string): boolean {
 export function resolveSandboxConfig(
   workspaceRoot: string,
   persistedExtras?: { readPaths?: string[]; writePaths?: string[] },
+  opts?: { silent?: boolean; enforceWhenSilent?: boolean },
 ): SandboxConfig {
   const knobs = getCliKnobs();
-  const enabled = knobs.sandbox === 'on';
   const cfgReads = knobs.sandboxReadPaths;
   const cfgWrites = knobs.sandboxWritePaths;
   const readPaths = Array.from(new Set([...(persistedExtras?.readPaths ?? []), ...cfgReads]));
   const writePaths = Array.from(new Set([...(persistedExtras?.writePaths ?? []), ...cfgWrites]));
-  const allowNetwork = knobs.sandboxNetwork;
-  const unavailableMode = knobs.sandboxUnavailable;
-  return { enabled, workspaceRoot, readPaths, writePaths, allowNetwork, unavailableMode };
+
+  // CODEX-SANDBOX-UNATTENDED — when an agent runs silent/unattended (cloud
+  // worker, spawned child, non-interactive), there is no human to approve or
+  // notice a risky shell call. Unless explicitly opted out, force the sandbox
+  // on with the strictest posture (network denied, missing-sandboxer fails
+  // closed) regardless of the looser interactive `cli.sandbox*` settings.
+  // Callers may pass an already-resolved `enforceWhenSilent` (e.g. the agent
+  // captures it at construction) so the decision is stable across the turn;
+  // otherwise fall back to the live knob.
+  const enforceWhenSilent = opts?.enforceWhenSilent ?? knobs.sandboxEnforceWhenSilent;
+  const enforcedUnattended = !!opts?.silent && enforceWhenSilent;
+  const enabled = knobs.sandbox === 'on' || enforcedUnattended;
+  const allowNetwork = enforcedUnattended ? false : knobs.sandboxNetwork;
+  const unavailableMode: SandboxUnavailableMode = enforcedUnattended ? 'deny' : knobs.sandboxUnavailable;
+  return { enabled, workspaceRoot, readPaths, writePaths, allowNetwork, unavailableMode, enforcedUnattended };
 }
 
 export interface SandboxRunResult {
@@ -258,6 +276,14 @@ function binaryAvailable(name: string): Promise<boolean> {
  * normal build/test command needs.
  */
 function writeMacSandboxProfile(config: SandboxConfig): string {
+  // sandbox-exec `subpath` matches the kernel-RESOLVED path. On macOS `/tmp`,
+  // `/var`, and `/var/folders/...` temp dirs are symlinks into `/private/...`,
+  // so a profile that allows the raw path silently denies every write under it.
+  // Resolve each write root to its realpath (falling back to the raw path when
+  // it doesn't exist yet) so the allow actually takes effect.
+  const writeRoots = Array.from(
+    new Set([config.workspaceRoot, '/tmp', os.tmpdir(), ...config.writePaths].map(realpathOrSelf)),
+  );
   const lines: string[] = [
     '(version 1)',
     '(deny default)',
@@ -267,11 +293,8 @@ function writeMacSandboxProfile(config: SandboxConfig): string {
     '(allow mach-lookup)',
     '(allow ipc-posix-shm)',
     '(allow file-read*)', // permissive on reads — sandboxing writes is the priority
-    `(allow file-write* (subpath "${escapeSb(config.workspaceRoot)}"))`,
-    '(allow file-write* (subpath "/tmp"))',
-    `(allow file-write* (subpath "${escapeSb(os.tmpdir())}"))`,
   ];
-  for (const p of config.writePaths) {
+  for (const p of writeRoots) {
     lines.push(`(allow file-write* (subpath "${escapeSb(p)}"))`);
   }
   if (config.allowNetwork) {
@@ -285,6 +308,17 @@ function writeMacSandboxProfile(config: SandboxConfig): string {
 
 function escapeSb(p: string): string {
   return p.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/** Resolve symlinks (e.g. macOS /var → /private/var) so sandbox `subpath`
+ * rules match the kernel-resolved path; fall back to the raw path if the
+ * target doesn't exist yet. */
+function realpathOrSelf(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
 }
 
 function buildBwrapArgs(config: SandboxConfig, command: string): string[] {

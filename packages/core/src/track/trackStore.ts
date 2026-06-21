@@ -262,6 +262,18 @@ export function listWorkItems(workspaceRoot: string, filter: WorkItemFilter = {}
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
 
+/** Return every work item carrying this exact persisted code-link reference. */
+export function findWorkItemsByCodeLink(
+  workspaceRoot: string,
+  link: Pick<CodeLink, 'kind' | 'ref'>,
+): WorkItem[] {
+  const ref = link.ref?.trim();
+  if (!ref) return [];
+  return listWorkItems(workspaceRoot).filter((item) =>
+    item.codeLinks.some((candidate) => candidate.kind === link.kind && candidate.ref.trim() === ref),
+  );
+}
+
 /** Fields a caller may patch. Status changes recompute the category. */
 export type UpdateWorkItemPatch = Partial<
   Pick<
@@ -416,10 +428,36 @@ export function listSprints(workspaceRoot: string): Sprint[] {
   return Object.values(readTrack(workspaceRoot).sprints).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
 
+export type UpdateSprintPatch = Partial<Pick<Sprint, 'name' | 'goal' | 'startDate' | 'endDate' | 'capacity' | 'velocity'>>;
+
+/** Update mutable sprint fields without changing its lifecycle state. */
+export function updateSprint(workspaceRoot: string, id: string, patch: UpdateSprintPatch): Sprint | undefined {
+  const store = readTrack(workspaceRoot);
+  const sprint = store.sprints[id];
+  if (!sprint) return undefined;
+  Object.assign(sprint, patch);
+  sprint.updatedAt = nowIso();
+  writeTrack(workspaceRoot, store);
+  return sprint;
+}
+
+/** Sum completed story points for a sprint. Items without estimates contribute zero. */
+export function sprintVelocity(workspaceRoot: string, sprintId: string): number | undefined {
+  const store = readTrack(workspaceRoot);
+  if (!store.sprints[sprintId]) return undefined;
+  return Object.values(store.workItems)
+    .filter((item) => item.sprintId === sprintId && item.statusCategory === 'done')
+    .reduce((total, item) => total + (item.storyPoints ?? 0), 0);
+}
+
 export function setSprintState(workspaceRoot: string, id: string, state: SprintState): Sprint | undefined {
   const store = readTrack(workspaceRoot);
   const sprint = store.sprints[id];
   if (!sprint) return undefined;
+  if (state === 'active') {
+    const active = Object.values(store.sprints).find((candidate) => candidate.id !== id && candidate.state === 'active');
+    if (active) throw new Error(`Sprint "${active.name}" is already active.`);
+  }
   sprint.state = state;
   sprint.updatedAt = nowIso();
   writeTrack(workspaceRoot, store);

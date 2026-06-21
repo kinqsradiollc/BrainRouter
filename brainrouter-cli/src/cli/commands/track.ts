@@ -16,6 +16,12 @@ import {
   getWorkItem,
   createWorkItem,
   transitionWorkItem,
+  updateWorkItem,
+  createSprint,
+  listSprints,
+  setSprintState,
+  updateSprint,
+  sprintVelocity,
   listAutomations,
   createAutomation,
   updateAutomation,
@@ -27,6 +33,7 @@ import {
 } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
 import { parseTrackQuery } from '@kinqs/brainrouter-core/dist/track/query.js';
 import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/dist/track/githubSync.js';
+import { scanGitCommitsForTrack } from '@kinqs/brainrouter-core/dist/track/commitScanner.js';
 import { emitAgentEvent } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 import type { CommandContext } from './_context.js';
 
@@ -52,7 +59,7 @@ export async function tryHandleTrackCommand(ctx: CommandContext): Promise<boolea
     const items = listWorkItems(ws, arg ? (isQuery ? { query: arg } : { text: arg }) : {});
     if (!items.length) { console.log(chalk.yellow(`\n${arg ? 'No matching work items.' : 'No work items yet. Create one with: /track create <title>'}\n`)); return true; }
     console.log(chalk.bold('\nWork items'));
-    for (const w of items) console.log(`  ${chalk.cyan(w.key.padEnd(7))} ${typeMark(w.type)} ${statusTag(w)} ${w.title}`);
+    for (const w of items) console.log(`  ${chalk.cyan(w.key.padEnd(7))} ${typeMark(w.type)} ${statusTag(w)}${autoTag(w)} ${w.title}`);
     console.log('');
     return true;
   }
@@ -64,7 +71,7 @@ export async function tryHandleTrackCommand(ctx: CommandContext): Promise<boolea
     for (const s of project.workflowStates) {
       const col = items.filter((w) => w.status === s.id);
       console.log(`\n${chalk.cyan(s.name)} ${chalk.gray(`(${col.length})`)}`);
-      for (const w of col) console.log(`  ${chalk.gray(w.key.padEnd(7))} ${typeMark(w.type)} ${w.title}`);
+      for (const w of col) console.log(`  ${chalk.gray(w.key.padEnd(7))} ${typeMark(w.type)}${autoTag(w)} ${w.title}`);
     }
     console.log('');
     return true;
@@ -101,14 +108,86 @@ export async function tryHandleTrackCommand(ctx: CommandContext): Promise<boolea
     return true;
   }
 
+  if (sub === 'sprint' || sub === 'sprints') { handleSprints(ws, rest); return true; }
+
   if (sub === 'automations' || sub === 'auto') { handleAutomations(ws, rest); return true; }
 
   if (sub === 'members' || sub === 'member') { await handleMembers(ws, rest); return true; }
 
   if (sub === 'sync') { await handleSync(ws, rest); return true; }
 
+  if (sub === 'commits' || sub === 'scan') { handleCommits(ws, rest); return true; }
+
   console.log(chalk.yellow(`\nUnknown subcommand "${sub}". Try /track help\n`));
   return true;
+}
+
+/** `/track sprint create|list|start|complete|assign|velocity`. */
+function handleSprints(ws: string, rest: string[]): void {
+  const op = (rest[0] ?? 'list').toLowerCase();
+  if (op === 'list' || op === 'ls') {
+    const sprints = listSprints(ws);
+    if (!sprints.length) { console.log(chalk.yellow('\nNo sprints yet. Create one with: /track sprint create <name>\n')); return; }
+    console.log(chalk.bold('\nSprints'));
+    for (const sprint of sprints) {
+      const velocity = sprint.velocity === undefined ? '' : ` · velocity ${sprint.velocity}`;
+      console.log(`  ${chalk.cyan(sprint.id.padEnd(12))} ${sprint.state.padEnd(9)} ${sprint.name}${velocity}`);
+    }
+    console.log('');
+    return;
+  }
+  if (op === 'create' || op === 'new') {
+    const name = rest.slice(1).join(' ').trim();
+    if (!name) { console.log(chalk.red('\nUsage: /track sprint create <name>\n')); return; }
+    const sprint = createSprint(ws, { name });
+    console.log(chalk.green(`\n✓ Created ${sprint.name} (${sprint.id})\n`));
+    return;
+  }
+  if (op === 'assign') {
+    const [key, sprintId] = rest.slice(1);
+    const sprint = listSprints(ws).find((candidate) => candidate.id === sprintId);
+    if (!key || !sprint) { console.log(chalk.red('\nUsage: /track sprint assign <work-item-key> <sprint-id>\n')); return; }
+    const item = updateWorkItem(ws, key, { sprintId }, 'user');
+    console.log(item ? chalk.green(`\n✓ Assigned ${item.key} to ${sprint.name}\n`) : chalk.yellow(`\nNo work item ${key}.\n`));
+    return;
+  }
+  if (op === 'start') {
+    const sprintId = rest[1];
+    const capacityIndex = rest.indexOf('--capacity');
+    const rawCapacity = capacityIndex >= 0 ? rest[capacityIndex + 1] : undefined;
+    const capacity = rawCapacity === undefined ? undefined : Number(rawCapacity);
+    const sprint = listSprints(ws).find((candidate) => candidate.id === sprintId);
+    if (!sprint) { console.log(chalk.red('\nUsage: /track sprint start <sprint-id> [--capacity <number>]\n')); return; }
+    if (capacity !== undefined && (!Number.isFinite(capacity) || capacity < 0)) { console.log(chalk.red('\nSprint capacity must be a non-negative number.\n')); return; }
+    try {
+      setSprintState(ws, sprintId, 'active');
+      updateSprint(ws, sprintId, { startDate: sprint.startDate ?? new Date().toISOString(), ...(capacity === undefined ? {} : { capacity }) });
+      console.log(chalk.green(`\n✓ Started ${sprint.name}\n`));
+    } catch (error) { console.log(chalk.red(`\n${(error as Error).message}\n`)); }
+    return;
+  }
+  if (op === 'complete') {
+    const sprintId = rest[1];
+    const sprint = listSprints(ws).find((candidate) => candidate.id === sprintId);
+    if (!sprint) { console.log(chalk.red('\nUsage: /track sprint complete <sprint-id>\n')); return; }
+    const velocity = sprintVelocity(ws, sprintId)!;
+    updateSprint(ws, sprintId, { velocity });
+    setSprintState(ws, sprintId, 'completed');
+    console.log(chalk.green(`\n✓ Completed ${sprint.name} (velocity: ${velocity})\n`));
+    return;
+  }
+  if (op === 'velocity') {
+    const sprintId = rest[1];
+    if (sprintId) {
+      const sprint = listSprints(ws).find((candidate) => candidate.id === sprintId);
+      if (!sprint) { console.log(chalk.yellow(`\nNo sprint ${sprintId}.\n`)); return; }
+      console.log(`\n${sprint.name}: velocity ${sprintVelocity(ws, sprintId) ?? 0}\n`);
+      return;
+    }
+    for (const sprint of listSprints(ws)) console.log(`${sprint.name}: velocity ${sprintVelocity(ws, sprint.id) ?? 0}`);
+    return;
+  }
+  console.log(chalk.yellow(`\nUnknown sprint command "${op}". Try: list · create · start · complete · assign · velocity\n`));
 }
 
 /** `/track sync github <import|export> [--dry-run] [--repo owner/name]`. */
@@ -219,6 +298,21 @@ function roleColor(role: ProjectRole): (s: string) => string {
   return role === 'owner' ? chalk.magenta : role === 'admin' ? chalk.cyan : role === 'member' ? chalk.green : chalk.gray;
 }
 
+/** `/track commits [--depth N] [--since <when>]` — link commits to items by BR-123 ref. */
+function handleCommits(ws: string, rest: string[]): void {
+  ensureProject(ws);
+  const depthIdx = rest.indexOf('--depth');
+  const sinceIdx = rest.indexOf('--since');
+  const maxCount = depthIdx >= 0 ? Number(rest[depthIdx + 1]) : undefined;
+  const since = sinceIdx >= 0 ? rest[sinceIdx + 1] : undefined;
+  const result = scanGitCommitsForTrack(ws, { maxCount: Number.isFinite(maxCount) ? maxCount : undefined, since });
+  if (result.scanned === 0) { console.log(chalk.yellow('\nNo commits found (is this a git repo?).\n')); return; }
+  console.log(chalk.green(`\n✓ Scanned ${result.scanned} commit(s) — ${result.linked.length} link(s), ${result.transitioned.length} transition(s)`));
+  for (const l of result.linked.slice(0, 20)) console.log(`  ${chalk.cyan(l.workItemKey.padEnd(8))} ← ${chalk.gray(l.sha.slice(0, 8))}`);
+  for (const t of result.transitioned.slice(0, 20)) console.log(`  ${chalk.cyan(t.key.padEnd(8))} ${chalk.gray(t.from)} → ${chalk.green(t.to)}`);
+  console.log('');
+}
+
 /** `/track automations [list|add|rm|on|off]` — manage trigger→action rules. */
 function handleAutomations(ws: string, rest: string[]): void {
   ensureProject(ws);
@@ -297,6 +391,12 @@ function statusTag(w: WorkItem): string {
   return c(`[${w.status}]`);
 }
 
+/** Auto-created work items record their actor in the immutable first activity. */
+export function autoTag(w: Pick<WorkItem, 'activity'>): string {
+  const actor = w.activity[0]?.actor;
+  return actor === 'agent' || actor === 'auto' ? ` ${chalk.cyan('[auto]')}` : '';
+}
+
 interface ParsedCreate { title: string; type?: WorkItemType; status?: string; priority?: import('@kinqs/brainrouter-types').WorkItemPriority }
 function parseCreate(tokens: string[]): ParsedCreate {
   const out: ParsedCreate = { title: '' };
@@ -325,12 +425,14 @@ function printUsage(): void {
   console.log(chalk.bold('\n/track — project board for this workspace'));
   console.log(chalk.gray('  /track board                                 Columns + items by status'));
   console.log(chalk.gray('  /track list [text | query]                   List; a query like "priority >= high AND type = bug"'));
+  console.log(chalk.gray('  /track sprint <list|create|start|complete|assign|velocity>  Manage sprints'));
   console.log(chalk.gray('  /track create <title> [--type --status --priority]   Create a work item'));
   console.log(chalk.gray('  /track move <key> <status-id>                Transition a work item'));
   console.log(chalk.gray('  /track show <key>                            Show one work item'));
   console.log(chalk.gray('  /track automations [list|add|rm|on|off]      Trigger→action rules (e.g. bugs → high priority)'));
   console.log(chalk.gray('  /track members [list|add|role|rm]            Project members + roles (owner·admin·member·viewer)'));
-  console.log(chalk.gray('  /track sync github import|export [--dry-run]  Two-way sync with GitHub Issues\n'));
+  console.log(chalk.gray('  /track sync github import|export [--dry-run]  Two-way sync with GitHub Issues'));
+  console.log(chalk.gray('  /track commits [--depth N] [--since <when>]   Link commits to items by BR-123 ref + advance todo→in-progress\n'));
 }
 
 async function captureTrackNote(ctx: CommandContext, item: WorkItem, change: string): Promise<void> {

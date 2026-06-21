@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import type { RequirementRecord } from '@kinqs/brainrouter-types';
 import {
   sortRequirements, activeRequirementCount, priorityClass, linkCounts, requirementSummary,
+  requirementOrigin, requirementProvenance,
 } from './requirementsView.js';
 
 const rec = (over: Partial<RequirementRecord>): RequirementRecord => ({
@@ -66,4 +67,13 @@ test('linkCounts totals tasks + artifacts + memory', () => {
 
 test('requirementSummary is a compact id · status · priority line', () => {
   assert.equal(requirementSummary(rec({ id: 'req_x', status: 'ready', priority: 'high' })), 'req_x · ready · high');
+});
+
+test('requirement provenance marks auto records and preserves trace ids', () => {
+  const auto = rec({ origin: 'auto', sourceEventId: 'mem_source', linkedMemoryIds: ['mem_1', 'mem_2'] });
+  assert.equal(requirementOrigin(auto), 'auto');
+  assert.deepEqual(requirementProvenance(auto), {
+    origin: 'auto', sourceEventId: 'mem_source', memoryIds: ['mem_1', 'mem_2'],
+  });
+  assert.equal(requirementOrigin(rec({})), 'manual');
 });

@@ -21,18 +21,30 @@ import { isChildSynthesisTool, resultHasChildOutput, looksLikeChildSynthesisPunt
 import { sanitizeModelArtifacts } from '../util/outputSanitize.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { formatPlan, readPlan, updatePlan, type PlanState } from '../task/taskStore.js';
+import { createRequirement, getRequirement, linkRequirement, listRequirements, updateRequirement } from '../requirement/requirementStore.js';
+import { detectRequirementShapedPrompt } from '../requirement/requirementDetector.js';
+import { syncRequirementPlanTrack } from '../requirement/planTrackSync.js';
+import { reconcileSessionSprints } from '../track/sprintAutomation.js';
 import {
   ensureProject as trackEnsureProject,
   getProject as trackGetProject,
   listWorkItems as trackListWorkItems,
+  findWorkItemsByCodeLink as trackFindWorkItemsByCodeLink,
   getWorkItem as trackGetWorkItem,
   createWorkItem as trackCreateWorkItem,
   transitionWorkItem as trackTransitionWorkItem,
+  updateWorkItem as trackUpdateWorkItem,
   addComment as trackAddComment,
   linkWorkItem as trackLinkWorkItem,
+  createSprint as trackCreateSprint,
+  listSprints as trackListSprints,
+  setSprintState as trackSetSprintState,
+  updateSprint as trackUpdateSprint,
+  sprintVelocity as trackSprintVelocity,
 } from '../track/trackStore.js';
+import { parseTrackQuery } from '../track/query.js';
 import { createArtifact, updateArtifact, getArtifact, linkArtifact } from '../artifact/artifactStore.js';
-import { isArtifactKind, isArtifactFormat, isWorkItemType, isWorkItemPriority, type ArtifactKind, type ArtifactFormat, type ArtifactRecord } from '@kinqs/brainrouter-types';
+import { isArtifactKind, isArtifactFormat, isCodeLinkKind, isWorkItemType, isWorkItemPriority, type ArtifactKind, type ArtifactFormat, type ArtifactRecord } from '@kinqs/brainrouter-types';
 // Auto mode (fast + proceed) has no approval prompt, so the plan history would
 // otherwise never record that a plan was acted on. When the agent establishes a
 // new plan version under auto mode we record an `actor: 'auto'` approval so the
@@ -139,7 +151,8 @@ import { currentTier, detectNeedsHigh, nextTier, resolveTierLadder, stripNeedsHi
 import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PLACEHOLDER_KEY } from '../provider/providers/index.js';
 import { DEFAULT_EFFORT_VALUE_MAP } from '../provider/providers/definition.js';
 import type { ProviderDefinition } from '../provider/providers/definition.js';
-import { normalizeModelName, isReasoningModel, isNonReasoningChatModel, isAlwaysOnReasoner, modelSupportsXhighEffort } from '../provider/models/reasoning.js';
+import { normalizeModelName, isReasoningModel, isNonReasoningChatModel, isAlwaysOnReasoner, modelSupportsXhighEffort, isBinaryReasoningModel } from '../provider/models/reasoning.js';
+import { isSequenceGuardExempt } from './repeatGuard.js';
 // 0.3.9 item 9 — prefix-pinned memory briefing policy.
 import {
   decideAnchorAction,
@@ -721,6 +734,12 @@ export class Agent {
   // file it hasn't seen (Claude Code's read-before-edit contract). Reset by
   // loadHistory / fork / bootstrapSession (see clearSessionState).
   private filesReadThisSession = new Set<string>();
+  /** MAS-READMANIFEST (B2) — the files this agent has read this session, so the
+   *  phase orchestrator can forward a "already mapped" manifest to later phases
+   *  (a child reads deltas, not the whole tree cold). */
+  public get filesRead(): string[] {
+    return [...this.filesReadThisSession];
+  }
   // CC-P9.2 — once-per-session task-tracking reminder latch.
   private taskTrackingNudged = false;
   // CC-P6.5 — per-turn verification gate: did the workspace get mutated, and
@@ -762,6 +781,13 @@ export class Agent {
   /** POLICY-1 — audit trail of execution-policy decisions on mutating tools. */
   private policyAudit: Array<{ tool: string; action: ActionKind; decision: PolicyDecision; reason: string }> = [];
   private silent: boolean;
+  /**
+   * CODEX-SANDBOX-UNATTENDED — captured ONCE at construction so the
+   * silent-enforcement decision is stable for the whole session (knobs are
+   * load-time config; this also makes the policy immune to mid-turn knob-cache
+   * resets, which matters for the concurrent shared-process test runner).
+   */
+  private readonly sandboxEnforceWhenSilent: boolean;
   private enableRecall: boolean;
   private systemPromptOverride?: string;
   /**
@@ -826,6 +852,7 @@ export class Agent {
     this.roleOverlay = options.roleOverlay;
     this.accessMode = options.accessMode ?? 'shell';
     this.silent = options.silent ?? false;
+    this.sandboxEnforceWhenSilent = getCliKnobs().sandboxEnforceWhenSilent;
     // Children default to no recall (their seed context already covers the parent's recall).
     // Parents (non-silent) always recall.
     this.enableRecall = options.enableRecall ?? !this.silent;
@@ -1208,11 +1235,11 @@ export class Agent {
     await this.injectRecallContext(prompt, mcpTools, callbacks);
 
     // Lifecycle: pre-turn hook (informational; failures don't abort the turn).
-    if (!this.silent) runHooks(this.workspaceRoot, 'pre-turn', { payload: { prompt } });
+    if (this.hookAdvisoryActive()) runHooks(this.workspaceRoot, 'pre-turn', { payload: { prompt } });
     // CC-P4.2 — user-prompt-submit gate: a hook returning {"decision":"deny"}
     // (or a non-zero exit) blocks the turn before any LLM call; the reason is
-    // returned to the user verbatim.
-    if (!this.silent) {
+    // returned to the user verbatim. BLOCKING — runs for unattended agents too.
+    if (this.hookEnforceActive()) {
       const submitResults = runHooks(this.workspaceRoot, 'user-prompt-submit', { payload: { prompt } });
       for (const r of submitResults) {
         const d = parseHookDecision(r.stdout);
@@ -1226,6 +1253,10 @@ export class Agent {
 
     this.lastUserPrompt = prompt;
     this.lastTurnHitLoopLimit = false;
+    // Automation is best-effort: a store/detector throw must NEVER escape the
+    // turn and break the user's reply (the brief's hard rule). Each automation
+    // seam is guarded the same way memory capture is.
+    try { this.autoCaptureRequirement(prompt, callbacks); } catch { /* best-effort */ }
     // Breadth-intent detection: when the user signals "do everything" / "in 1 go"
     // / "thoroughly" / "as much as possible", inject a fan-out hint so the
     // agent reaches for spawn_agents instead of a single sequential tool call.
@@ -1381,6 +1412,12 @@ export class Agent {
     // honest signal. Bounded so a model that won't update can't loop.
     let planSyncGuardFired = 0;
     const PLAN_SYNC_GUARD_MAX = 1;
+    // Requirement → Plan → Track synchronization is deterministic store work,
+    // not a prompt. It gets one turn-end pass after the model's plan guard.
+    let requirementPlanTrackSyncGuardFired = 0;
+    const REQUIREMENT_PLAN_TRACK_SYNC_GUARD_MAX = 1;
+    let sprintAutomationGuardFired = 0;
+    const SPRINT_AUTOMATION_GUARD_MAX = 1;
     // MAR-3 — child-synthesis guard. `childOutputDeliveredThisTurn` flips true once a
     // child/sub-agent's findings reach the parent this turn; the guard fires once if
     // the model then ends with a deferral instead of synthesizing them.
@@ -1399,13 +1436,17 @@ export class Agent {
     // args over and over, the result is by definition the same. Track recent
     // signatures so we can interrupt the loop with corrective feedback.
     const recentToolSignatures: string[] = [];
-    const REPEAT_GUARD_LIMIT = 3;
+    const REPEAT_GUARD_LIMIT = Math.max(2, getCliKnobs().repeatLoopLimit);
     // This class of failure is a "doom loop": the same tool
     // pattern repeats even if the arguments keep changing. Keep BrainRouter's
     // threshold higher than a strict identical-input approval guard so
     // normal multi-file exploration still works, but stop 20+ Read(...) spins.
+    // Mutation tools (write/edit/apply_patch) are EXEMPT — repeating them with
+    // different files is real work, not a loop (the identical-args guard below
+    // still catches writing the SAME file over and over).
     const recentToolSequences: string[] = [];
     const TOOL_SEQUENCE_GUARD_LIMIT = Math.max(3, getCliKnobs().repeatToolSequenceLimit);
+    const sequenceGuardExempt = new Set(getCliKnobs().repeatSequenceExemptTools);
     const spawnedChildIdsThisTurn = new Set<string>();
     const waitedChildIdsThisTurn = new Set<string>();
     const buildOrchestrationContext = (): OrchestrationContext => ({
@@ -2189,6 +2230,30 @@ export class Agent {
           }
         }
 
+        // Requirement/Track sync guardrail. Runs after the model-facing
+        // plan-sync correction so a ready requirement can be materialised into
+        // a plan and board without another LLM turn. Bounded and opt-in.
+        const automation = getCliKnobs().automation;
+        if (
+          requirementPlanTrackSyncGuardFired < REQUIREMENT_PLAN_TRACK_SYNC_GUARD_MAX
+          && this.lastTurnToolCalls > 0
+          && automation.enabled
+          && automation.sync.enabled
+        ) {
+          requirementPlanTrackSyncGuardFired += 1;
+          try { this.autoSynchronizeRequirementPlanTrack(callbacks); } catch { /* best-effort — never break the reply */ }
+        }
+
+        if (
+          sprintAutomationGuardFired < SPRINT_AUTOMATION_GUARD_MAX
+          && this.lastTurnToolCalls > 0
+          && automation.enabled
+          && automation.sprints.enabled
+        ) {
+          sprintAutomationGuardFired += 1;
+          try { this.autoSynchronizeSprints(callbacks); } catch { /* best-effort — never break the reply */ }
+        }
+
         // CC-P9.2 — task-tracking nudge. This turn did substantial multi-step
         // tool work but no plan is being kept. Inject one per-session reminder
         // to use update_plan (distinct from plan-sync, which needs an existing
@@ -2272,7 +2337,11 @@ export class Agent {
       const previousSequenceRepeats = recentToolSequences.filter((s) => s === sequenceSignature).length;
       recentToolSequences.push(sequenceSignature);
       if (recentToolSequences.length > TOOL_SEQUENCE_GUARD_LIMIT * 2) recentToolSequences.shift();
-      if (previousSequenceRepeats >= TOOL_SEQUENCE_GUARD_LIMIT) {
+      // A sequence made entirely of mutation tools (write/edit/apply_patch) is
+      // productive repetition (different files each call), not a stalled loop —
+      // skip the name-only sequence guard for it. The identical-args guard below
+      // still catches re-writing the SAME file with the SAME content.
+      if (previousSequenceRepeats >= TOOL_SEQUENCE_GUARD_LIMIT && !isSequenceGuardExempt(normalizedNames, sequenceGuardExempt)) {
         const sequenceLabel = normalizedNames.join(' → ');
         const resultText = [
           `Repeat-loop guard tripped: the same tool sequence (${sequenceLabel}) has repeated ${previousSequenceRepeats + 1} times in this turn.`,
@@ -2390,10 +2459,11 @@ export class Agent {
         // legitimate revisits separated by other tool calls.
         if (recentToolSignatures.length > 12) recentToolSignatures.shift();
 
-        // Lifecycle: pre-tool hook. Non-zero exit blocks the tool call.
+        // Lifecycle: pre-tool hook. Non-zero exit (or {decision:deny}) blocks the
+        // call — BLOCKING, so it runs for unattended agents too (enforcement).
         let blockedByHook: string | undefined;
         const hookifyWarnings: string[] = [];
-        if (!this.silent) {
+        if (this.hookEnforceActive()) {
           const preResults = runHooks(this.workspaceRoot, 'pre-tool', { tool: name, payload: args });
           const denial = preResults.find((r) => r.exitCode !== 0);
           if (denial) {
@@ -2492,9 +2562,22 @@ export class Agent {
           // 0.4.x-4 (`/context`) — count each tool that actually dispatches.
           this.toolCallCounts.set(name, (this.toolCallCounts.get(name) ?? 0) + 1);
           if (isOrchestrationToolName(name)) {
-            // WF-COST-GATE — a workflow launch always confirms (token cost);
-            // plain spawns stay governed by /delegation-policy (auto = silent).
-            if (name === 'run_workflow' && !(await this.confirmRunWorkflowLaunch(args))) {
+            // WF-NO-NEST — a silent/child agent (itself a spawned worker, incl.
+            // a workflow PHASE agent) must never launch its own workflow. That
+            // recursion is what produced the "lots of workflows" runaway: a
+            // build worker called run_workflow → a nested install/verify
+            // workflow → token blow-up, with no human to approve it. Phase work
+            // is done DIRECTLY (or via plain spawn_agents, depth-capped); only a
+            // top-level, user-facing agent may launch a workflow.
+            if (name === 'run_workflow' && this.silent) {
+              isError = true;
+              resultText =
+                'run_workflow is not available to a spawned/child agent — nested workflows are blocked ' +
+                '(they recurse and run unattended). Do this work directly with the regular tools ' +
+                '(read_file, write_file, edit_file, run_command), or use spawn_agents for genuinely ' +
+                'independent sub-tasks.';
+              summary = 'nested run_workflow blocked';
+            } else if (name === 'run_workflow' && !(await this.confirmRunWorkflowLaunch(args))) {
               isError = true;
               resultText =
                 'run_workflow declined — the workflow launch was not approved (workflows fan out ' +
@@ -2511,6 +2594,15 @@ export class Agent {
           } else if (isLocal) {
             resultText = await this.executeLocalTool(name, args);
             summary = getToolSummary(name, args, resultText);
+            if (name === 'track_update') {
+              // Best-effort — a throw here must not fail the tool result.
+              let automationCount = 0;
+              try { automationCount = this.applyTrackCodeSignalAutomation(args, callbacks); } catch { /* best-effort */ }
+              if (automationCount > 0) {
+                summary = `${summary} | automation advanced ${automationCount} Track item${automationCount === 1 ? '' : 's'}`;
+              }
+            }
+            if (name === 'goal_complete') { try { this.autoReconcileGoalCompletion(callbacks); } catch { /* best-effort */ } }
             // Plan-ticker: surface update_plan changes to the REPL so the user
             // sees the live ✓/⏳/☐ checklist instead of having to run /plan.
             if (name === 'update_plan' && Array.isArray(args.plan) && callbacks.onPlanUpdate) {
@@ -2636,7 +2728,7 @@ export class Agent {
           local: isLocal,
           session_key: this.sessionKey,
         }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
-        if (!this.silent) {
+        if (this.hookAdvisoryActive()) {
           runHooks(this.workspaceRoot, 'post-tool', {
             tool: name,
             payload: { args, ok: !isError, summary, resultPreview: resultText.slice(0, 1000) },
@@ -2830,7 +2922,7 @@ export class Agent {
     this.lastAnswer = finalAnswer;
 
     await this.captureTurn(prompt, finalAnswer, callbacks);
-    if (!this.silent) {
+    if (this.hookAdvisoryActive()) {
       runHooks(this.workspaceRoot, 'post-turn', {
         payload: { prompt, answerPreview: finalAnswer.slice(0, 1000), tokens: this.lastTurnUsage },
       });
@@ -3168,8 +3260,14 @@ export class Agent {
         // past it here), but detach instead of blocking the turn. v1 runs
         // unsandboxed, so it is refused while cli.sandbox=on.
         if (args.background === true) {
-          if (getCliKnobs().sandbox === 'on') {
-            return 'Background run_command is not supported with cli.sandbox=on (v1) — run it foreground or disable the sandbox.';
+          // CODEX-SANDBOX-UNATTENDED — background runs are unsandboxed (v1), so
+          // they are refused whenever the sandbox is active: either the user
+          // turned it on, or this is a silent/unattended agent where the
+          // sandbox is enforced regardless of the global knob.
+          const sandboxActive =
+            getCliKnobs().sandbox === 'on' || (this.silent && this.sandboxEnforceWhenSilent);
+          if (sandboxActive) {
+            return 'Background run_command is not supported while the sandbox is active (v1) — run it foreground or disable the sandbox.';
           }
           const bg = startBackgroundShell({ command: cmd, cwd: this.launchCwd, workspaceRoot: this.workspaceRoot });
           return JSON.stringify({
@@ -3179,15 +3277,17 @@ export class Agent {
             note: 'Detached. Poll with task_output({ id }) — pass back nextOffset as fromByte to read incrementally. The turn is NOT blocked.',
           });
         }
-        const sandboxConfig = resolveSandboxConfig(this.workspaceRoot, {
-          readPaths: prefs.sandboxReadPaths,
-          writePaths: prefs.sandboxWritePaths,
-        });
+        const sandboxConfig = resolveSandboxConfig(
+          this.workspaceRoot,
+          { readPaths: prefs.sandboxReadPaths, writePaths: prefs.sandboxWritePaths },
+          { silent: this.silent, enforceWhenSilent: this.sandboxEnforceWhenSilent },
+        );
         const result = await runShell(cmd, sandboxConfig, undefined, this.turnAbort?.signal);
+        const enforcedTag = sandboxConfig.enforcedUnattended ? ' (enforced: unattended)' : '';
         const sandboxBadge = result.sandboxed
-          ? `[sandboxed via ${result.sandboxTool}] `
+          ? `[sandboxed via ${result.sandboxTool}${enforcedTag}] `
           : sandboxConfig.enabled
-            ? `[sandbox requested but unavailable] `
+            ? `[sandbox requested but unavailable${enforcedTag}] `
             : '';
         const notice = result.notice ? `${result.notice}\n` : '';
         return `${notice}${sandboxBadge}Exit Code: ${result.exitCode}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`;
@@ -3407,6 +3507,26 @@ export class Agent {
           const item = trackGetWorkItem(this.workspaceRoot, String(args.key ?? ''));
           return item ? JSON.stringify(item, null, 2) : `No work item "${args.key}".`;
         }
+        if (action === 'sprints') {
+          return JSON.stringify(trackListSprints(this.workspaceRoot), null, 2);
+        }
+        if (action === 'sprint-detail') {
+          const sprintId = String(args.sprintId ?? '');
+          const sprint = trackListSprints(this.workspaceRoot).find((candidate) => candidate.id === sprintId);
+          if (!sprint) return `No sprint "${sprintId}".`;
+          return JSON.stringify({ sprint, items: trackListWorkItems(this.workspaceRoot, { sprintId }) }, null, 2);
+        }
+        if (action === 'velocity') {
+          const sprintId = typeof args.sprintId === 'string' ? args.sprintId : undefined;
+          if (sprintId) {
+            const velocity = trackSprintVelocity(this.workspaceRoot, sprintId);
+            return velocity === undefined ? `No sprint "${sprintId}".` : JSON.stringify({ sprintId, velocity });
+          }
+          return JSON.stringify(trackListSprints(this.workspaceRoot).map((sprint) => ({
+            sprintId: sprint.id,
+            velocity: trackSprintVelocity(this.workspaceRoot, sprint.id) ?? 0,
+          })), null, 2);
+        }
         const items = trackListWorkItems(this.workspaceRoot, {
           status: typeof args.status === 'string' ? args.status : undefined,
           type: isWorkItemType(args.type) ? args.type : undefined,
@@ -3445,7 +3565,64 @@ export class Agent {
           });
           return item ? `Linked ${item.key}.` : `No work item "${args.key}".`;
         }
-        return `Unknown track_update action "${action}". Use create · transition · comment · link.`;
+        if (action === 'assign-sprint') {
+          const sprintId = String(args.sprintId ?? '');
+          const sprint = trackListSprints(this.workspaceRoot).find((candidate) => candidate.id === sprintId);
+          if (!sprint) return `No sprint "${sprintId}".`;
+          const item = trackUpdateWorkItem(this.workspaceRoot, String(args.key ?? ''), { sprintId }, 'agent');
+          return item ? `Assigned ${item.key} to ${sprint.name}.` : `No work item "${args.key}".`;
+        }
+        if (action === 'sprint-create') {
+          const name = String(args.name ?? '').trim();
+          if (!name) return 'sprint-create requires a name.';
+          const sprint = trackCreateSprint(this.workspaceRoot, {
+            name,
+            goal: typeof args.goal === 'string' ? args.goal : undefined,
+          });
+          return `Created ${sprint.name} (${sprint.id}).`;
+        }
+        if (action === 'batch-transition') {
+          const query = String(args.query ?? '').trim();
+          if (!query) return 'batch-transition requires a query.';
+          const parsed = parseTrackQuery(query);
+          if (!parsed.ok) return `Bad query: ${parsed.error}`;
+          const toStatus = String(args.toStatus ?? '');
+          const project = trackGetProject(this.workspaceRoot) ?? trackEnsureProject(this.workspaceRoot);
+          if (!project.workflowStates.some((state) => state.id === toStatus)) {
+            return `Unknown workflow state "${toStatus}". Valid: ${project.workflowStates.map((state) => state.id).join(', ')}`;
+          }
+          const items = trackListWorkItems(this.workspaceRoot, { query }).filter((item) => item.status !== toStatus);
+          for (const item of items) trackTransitionWorkItem(this.workspaceRoot, item.key, toStatus, 'agent');
+          return `Transitioned ${items.length} work item${items.length === 1 ? '' : 's'} to ${toStatus}.`;
+        }
+        if (action === 'sprint-start') {
+          const sprintId = String(args.sprintId ?? '');
+          const sprint = trackListSprints(this.workspaceRoot).find((candidate) => candidate.id === sprintId);
+          if (!sprint) return `No sprint "${sprintId}".`;
+          if (args.capacity !== undefined && (typeof args.capacity !== 'number' || !Number.isFinite(args.capacity) || args.capacity < 0)) {
+            return 'Sprint capacity must be a non-negative number.';
+          }
+          try {
+            trackSetSprintState(this.workspaceRoot, sprintId, 'active');
+          } catch (error) {
+            return (error as Error).message;
+          }
+          const updated = trackUpdateSprint(this.workspaceRoot, sprintId, {
+            startDate: sprint.startDate ?? new Date().toISOString(),
+            ...(typeof args.capacity === 'number' ? { capacity: args.capacity } : {}),
+          })!;
+          return `Started ${updated.name}.`;
+        }
+        if (action === 'sprint-complete') {
+          const sprintId = String(args.sprintId ?? '');
+          const sprint = trackListSprints(this.workspaceRoot).find((candidate) => candidate.id === sprintId);
+          if (!sprint) return `No sprint "${sprintId}".`;
+          const velocity = trackSprintVelocity(this.workspaceRoot, sprintId)!;
+          trackUpdateSprint(this.workspaceRoot, sprintId, { velocity });
+          trackSetSprintState(this.workspaceRoot, sprintId, 'completed');
+          return `Completed ${sprint.name} (velocity: ${velocity}).`;
+        }
+        return `Unknown track_update action "${action}". Use create · transition · comment · link · sprint-create · assign-sprint · batch-transition · sprint-start · sprint-complete.`;
       }
       case 'artifact_write': {
         // §AV-4 — in-band artifact authoring. With `id` it grows an EXISTING
@@ -3681,7 +3858,7 @@ export class Agent {
   public async compactHistory(): Promise<{ summary: string; estimatedTokens: number; durationMs: number; replacedMessages: number } | null> {
     if (this.chatHistory.length < 4) return null;
     // CC-P4.2 — advisory pre-compact hook (notify/log; cannot block).
-    if (!this.silent) { try { runHooks(this.workspaceRoot, 'pre-compact', { payload: { messages: this.chatHistory.length } }); } catch { /* advisory */ } }
+    if (this.hookAdvisoryActive()) { try { runHooks(this.workspaceRoot, 'pre-compact', { payload: { messages: this.chatHistory.length } }); } catch { /* advisory */ } }
     const before = this.chatHistory.length;
     const userMessages = this.chatHistory.filter((m) => m.role === 'user');
     const lastUserMessage = userMessages.length > 0 ? String(userMessages[userMessages.length - 1].content ?? '') : undefined;
@@ -4270,6 +4447,307 @@ export class Agent {
       role: 'system',
       content: appendVerbositySteering(parts.join('\n\n'), getCliKnobs().verbositySteeringLevel),
     };
+  }
+
+  /** Create one draft requirement from a high-confidence user implementation request. */
+  /**
+   * BLOCKING hook events (pre-tool, user-prompt-submit) run for silent /
+   * unattended agents too when `cli.hooks.enforceWhenSilent` (default on), so a
+   * deny hook enforces policy on deep workers, headless, and cloud runs — not
+   * just the interactive session. Cheap when no hooks are defined (no exec).
+   */
+  private hookEnforceActive(): boolean {
+    const h = getCliKnobs().hooks;
+    return h.enabled && (!this.silent || h.enforceWhenSilent);
+  }
+
+  /** ADVISORY hook events (pre/post-turn, post-tool, pre-compact) stay interactive-only. */
+  private hookAdvisoryActive(): boolean {
+    return getCliKnobs().hooks.enabled && !this.silent;
+  }
+
+  private autoCaptureRequirement(prompt: string, callbacks: RunTurnCallbacks): void {
+    const automation = getCliKnobs().automation;
+    if (this.silent || !automation.enabled || !automation.requirements.enabled) return;
+
+    const openRequirements = listRequirements(this.workspaceRoot)
+      .filter((record) => record.status !== 'done' && record.status !== 'archived')
+      .map(({ title, acceptanceCriteria, status }) => ({ title, acceptanceCriteria, status }));
+    const detection = detectRequirementShapedPrompt(prompt, {
+      autoCreateThreshold: automation.requirements.autoCreateThreshold,
+      lowActThreshold: automation.requirements.lowActThreshold,
+      openRequirements,
+    });
+    if (detection.candidate && detection.input) {
+      callbacks.onNotice?.({ level: 'info', message: `Requirement candidate detected: ${detection.input.title}` });
+      return;
+    }
+    if (!detection.detected || !detection.input) return;
+
+    // Tiered autonomy. Default ("propose"): capture as `draft` and surface a
+    // one-click promote — the plan/Track cascade only runs once it's `ready`.
+    // Autopilot (opt-in): a confident detection with concrete criteria is
+    // created `ready` so the cascade runs unattended.
+    const autopilot = automation.requirements.autopilot
+      && detection.input.acceptanceCriteria.length >= 1
+      && detection.confidence >= automation.requirements.autoCreateThreshold;
+    const record = createRequirement(this.workspaceRoot, {
+      ...detection.input,
+      status: autopilot ? 'ready' : 'draft',
+      sessionKey: this.sessionKey,
+      origin: 'auto',
+    });
+    if (autopilot) {
+      callbacks.onStatusUpdate(`Captured requirement ${record.id} (ready — planning + tracking it).`);
+    } else {
+      callbacks.onStatusUpdate(`Captured requirement ${record.id} as draft — promote with /requirement promote ${record.id} (or "Plan & track" in the Requirements panel) to plan + Track it.`);
+      callbacks.onNotice?.({ level: 'info', message: `Requirement draft "${record.title}" — promote it to plan + Track (/requirement promote ${record.id}).` });
+    }
+    const provenance = { actor: 'agent', reason: autopilot ? 'auto-detect:autopilot' : 'auto-detect:draft' };
+    void emitAgentEvent(
+      { mcpClient: this.mcpClient, sessionKey: this.sessionKey },
+      {
+        kind: 'agent_output',
+        summary: `Requirement ${record.id}: ${record.title} [${record.status}] (auto-detect)`,
+        payload: {
+          requirementId: record.id,
+          title: record.title,
+          status: record.status,
+          acceptanceCriteria: record.acceptanceCriteria,
+          provenance,
+        },
+      },
+    ).then((memoryId) => {
+      if (!memoryId) return;
+      updateRequirement(this.workspaceRoot, record.id, { sourceEventId: memoryId });
+      linkRequirement(this.workspaceRoot, record.id, { memoryId });
+    }).catch(() => {});
+  }
+
+  /** Apply the bounded requirement → plan → Track reconciliation for this turn. */
+  private autoSynchronizeRequirementPlanTrack(callbacks: RunTurnCallbacks): void {
+    if (this.silent || this.agentDepth > 0) return;
+    const { actions } = syncRequirementPlanTrack(this.workspaceRoot, this.sessionKey);
+    if (actions.length === 0) return;
+
+    callbacks.onStatusUpdate(`Automation: synchronized ${actions.length} Requirement → Plan → Track action${actions.length === 1 ? '' : 's'}.`);
+    for (const action of actions) {
+      const requirement = getRequirement(this.workspaceRoot, action.requirementId);
+      const provenance = {
+        sourceEventId: requirement?.sourceEventId,
+        linkedMemoryIds: requirement?.linkedMemoryIds,
+        actor: 'agent',
+        reason: 'plan-track-sync',
+      };
+      void emitAgentEvent(
+        { mcpClient: this.mcpClient, sessionKey: this.sessionKey },
+        {
+          kind: 'agent_output',
+          summary: `Requirement automation ${action.kind}: ${action.title}`,
+          payload: { ...action, provenance },
+        },
+      ).then((memoryId) => {
+        if (!memoryId) return;
+        linkRequirement(this.workspaceRoot, action.requirementId, { memoryId });
+        if ('workItemId' in action) {
+          trackLinkWorkItem(this.workspaceRoot, action.workItemId, { linkedMemoryIds: [memoryId] });
+        }
+      }).catch(() => {});
+    }
+  }
+
+  /**
+   * Sprint lifecycle automation. Default ("propose"): only SUGGEST create /
+   * complete via a one-line notice — a human makes the irreversible org call.
+   * Autopilot (opt-in, cli.automation.sprints.autopilot): auto-create a future
+   * sprint + assign ready items + complete a done one (never auto-START).
+   */
+  private autoSynchronizeSprints(callbacks: RunTurnCallbacks): void {
+    if (this.silent || this.agentDepth > 0) return;
+    const options = getCliKnobs().automation.sprints;
+    const actions = reconcileSessionSprints(this.workspaceRoot, {
+      sessionKey: this.sessionKey,
+      minItems: options.minItems,
+      respectCapacity: options.respectCapacity,
+      propose: !options.autopilot,
+    });
+    if (actions.length === 0) return;
+
+    for (const action of actions) {
+      // Propose-only suggestions mutate nothing — just nudge the human.
+      if (action.kind === 'sprint-suggested') {
+        callbacks.onNotice?.({ level: 'info', message: `${action.count} ready work item${action.count === 1 ? '' : 's'} aren't in a sprint — start one with /track sprint create.` });
+        continue;
+      }
+      if (action.kind === 'sprint-complete-suggested') {
+        callbacks.onNotice?.({ level: 'info', message: `Sprint "${action.sprintName}" is all done — complete it with /track sprint complete ${action.sprintId}.` });
+        continue;
+      }
+      callbacks.onStatusUpdate(`Automation: sprint ${action.kind}.`);
+      const workItems = 'workItemId' in action
+        ? [trackGetWorkItem(this.workspaceRoot, action.workItemId)].filter(Boolean)
+        : action.kind === 'sprint-completed'
+          ? trackListWorkItems(this.workspaceRoot, { sprintId: action.sprintId })
+          : [];
+      const requirementIds = new Set<string>();
+      for (const item of workItems) if (item?.requirementId) requirementIds.add(item.requirementId);
+      const firstRequirement = [...requirementIds]
+        .map((id) => getRequirement(this.workspaceRoot, id))
+        .find(Boolean);
+      const provenance = {
+        sourceEventId: firstRequirement?.sourceEventId,
+        linkedMemoryIds: firstRequirement?.linkedMemoryIds,
+        actor: 'agent',
+        reason: 'sprint-automation',
+      };
+      const actionLabel = action.kind === 'work-item-assigned'
+        ? action.workItemKey
+        : action.sprintName;
+      void emitAgentEvent(
+        { mcpClient: this.mcpClient, sessionKey: this.sessionKey },
+        {
+          kind: 'agent_output',
+          summary: `Sprint automation ${action.kind}: ${actionLabel}`,
+          payload: { ...action, provenance },
+        },
+      ).then((memoryId) => {
+        if (!memoryId) return;
+        for (const item of workItems) {
+          if (item) trackLinkWorkItem(this.workspaceRoot, item.id, { linkedMemoryIds: [memoryId] });
+        }
+        for (const requirementId of requirementIds) {
+          linkRequirement(this.workspaceRoot, requirementId, { memoryId });
+        }
+      }).catch(() => {});
+    }
+  }
+
+  /** Mark the requirement anchored to a successfully completed goal as fulfilled. */
+  private autoReconcileGoalCompletion(callbacks: RunTurnCallbacks): void {
+    if (this.silent || this.agentDepth > 0) return;
+    const automation = getCliKnobs().automation;
+    if (!automation.enabled) return;
+    if (readGoal(this.workspaceRoot, this.sessionKey)?.status !== 'complete') return;
+    const requirementId = readPlan(this.workspaceRoot, this.sessionKey).requirementId;
+    if (!requirementId) return;
+    const requirement = getRequirement(this.workspaceRoot, requirementId);
+    if (!requirement || requirement.status === 'done') return;
+
+    const completed = updateRequirement(this.workspaceRoot, requirement.id, { status: 'done' });
+    if (!completed) return;
+    callbacks.onStatusUpdate(`Automation: marked requirement ${completed.id} done from the completed goal.`);
+    const provenance = {
+      sourceEventId: completed.sourceEventId,
+      linkedMemoryIds: completed.linkedMemoryIds,
+      actor: 'agent',
+      reason: 'goal-complete-reconcile',
+    };
+    void emitAgentEvent(
+      { mcpClient: this.mcpClient, sessionKey: this.sessionKey },
+      {
+        kind: 'agent_output',
+        summary: `Requirement completed from goal: ${completed.title}`,
+        payload: { requirementId: completed.id, status: completed.status, provenance },
+      },
+    ).then((memoryId) => {
+      if (memoryId) linkRequirement(this.workspaceRoot, completed.id, { memoryId });
+    }).catch(() => {});
+  }
+
+  /** Apply opt-in code-link transitions after a successful Track tool mutation. */
+  private applyTrackCodeSignalAutomation(args: Record<string, any>, callbacks: RunTurnCallbacks): number {
+    if (this.silent || this.agentDepth > 0) return 0;
+    const automation = getCliKnobs().automation;
+    if (!automation.enabled || !automation.sync.enabled) return 0;
+
+    const action = String(args.action ?? '');
+    if (action === 'transition') {
+      const item = trackGetWorkItem(this.workspaceRoot, String(args.key ?? ''));
+      if (item?.statusCategory === 'done' && String(args.toStatus ?? '') === item.status) {
+        this.autoLinkDoneTrackItem(item, callbacks);
+      }
+      return 0;
+    }
+    if (action !== 'link' || !Array.isArray(args.codeLinks)) return 0;
+
+    const project = trackGetProject(this.workspaceRoot) ?? trackEnsureProject(this.workspaceRoot);
+    const inProgress = project.workflowStates.find((state) => state.id === 'in-progress')
+      ?? project.workflowStates.find((state) => state.category === 'in-progress');
+    const review = project.workflowStates.find((state) => state.id === 'in-review') ?? inProgress;
+    if (!inProgress || !review) return 0;
+
+    let advanced = 0;
+    for (const codeLink of args.codeLinks) {
+      if (!codeLink || !isCodeLinkKind(codeLink.kind) || typeof codeLink.ref !== 'string' || !codeLink.ref.trim()) continue;
+      const target = codeLink.kind === 'pull-request' ? review : inProgress;
+      for (const item of trackFindWorkItemsByCodeLink(this.workspaceRoot, { kind: codeLink.kind, ref: codeLink.ref })) {
+        if (item.statusCategory === 'done' || item.status === target.id) continue;
+        if (codeLink.kind !== 'pull-request' && item.statusCategory !== 'todo') continue;
+        const moved = trackTransitionWorkItem(this.workspaceRoot, item.id, target.id, 'agent');
+        if (!moved) continue;
+        advanced += 1;
+        this.captureTrackAutomationEvent({
+          action: 'code-link-progress',
+          item: moved,
+          requirementId: moved.requirementId,
+          codeLink: { kind: codeLink.kind, ref: codeLink.ref },
+          fromStatus: item.status,
+          toStatus: moved.status,
+        });
+      }
+    }
+    if (advanced > 0) callbacks.onStatusUpdate(`Automation: advanced ${advanced} Track item${advanced === 1 ? '' : 's'} from linked code evidence.`);
+    return advanced;
+  }
+
+  /** Back-link a completed Track item once, retaining the requirement lifecycle for Phase 5. */
+  private autoLinkDoneTrackItem(item: ReturnType<typeof trackGetWorkItem>, callbacks: RunTurnCallbacks): void {
+    if (!item?.requirementId) return;
+    const requirement = getRequirement(this.workspaceRoot, item.requirementId);
+    if (!requirement || requirement.taskIds.includes(item.id)) return;
+    linkRequirement(this.workspaceRoot, requirement.id, { taskId: item.id });
+    callbacks.onStatusUpdate(`Automation: linked completed ${item.key} to requirement ${requirement.id}.`);
+    this.captureTrackAutomationEvent({ action: 'requirement-fulfilled', item, requirementId: requirement.id });
+  }
+
+  private captureTrackAutomationEvent(input: {
+    action: 'code-link-progress' | 'requirement-fulfilled';
+    item: NonNullable<ReturnType<typeof trackGetWorkItem>>;
+    requirementId?: string;
+    codeLink?: { kind: string; ref: string };
+    fromStatus?: string;
+    toStatus?: string;
+  }): void {
+    const requirement = input.requirementId
+      ? getRequirement(this.workspaceRoot, input.requirementId)
+      : undefined;
+    const provenance = {
+      sourceEventId: requirement?.sourceEventId,
+      linkedMemoryIds: requirement?.linkedMemoryIds,
+      actor: 'agent',
+      reason: input.action,
+    };
+    void emitAgentEvent(
+      { mcpClient: this.mcpClient, sessionKey: this.sessionKey },
+      {
+        kind: 'agent_output',
+        summary: `Track automation ${input.action}: ${input.item.key}`,
+        payload: {
+          action: input.action,
+          workItemId: input.item.id,
+          workItemKey: input.item.key,
+          requirementId: input.requirementId,
+          codeLink: input.codeLink,
+          fromStatus: input.fromStatus,
+          toStatus: input.toStatus,
+          provenance,
+        },
+      },
+    ).then((memoryId) => {
+      if (!memoryId) return;
+      trackLinkWorkItem(this.workspaceRoot, input.item.id, { linkedMemoryIds: [memoryId] });
+      if (input.requirementId) linkRequirement(this.workspaceRoot, input.requirementId, { memoryId });
+    }).catch(() => {});
   }
 
   private async injectRecallContext(prompt: string, mcpTools: any[], callbacks: RunTurnCallbacks): Promise<void> {
@@ -4921,6 +5399,11 @@ export function resolveWireEffort(config: LLMConfig, effort: EffortLevel | undef
   // allowlist; every other OpenAI-compatible provider sends for ANY model (the
   // server ignores it when N/A) so effort works for unlisted reasoning models.
   if ((def?.effortModelGate ?? 'any') === 'reasoning-only' && !isReasoningModel(model)) return null;
+  // Binary on/off model (advertises only `on`/`off` via /models): collapse any
+  // graded request to `on` — sending `low`/`high` would be rejected and the
+  // endpoint would fall back to `on` anyway (and warn). `medium` already
+  // returned null above, so it omits the field and the model uses its default.
+  if (isBinaryReasoningModel(model)) return 'on';
   const map = def?.effortValueMap ?? DEFAULT_EFFORT_VALUE_MAP;
   const mapped = map[effort];
   if (mapped === null) return null;             // explicit omit for this level

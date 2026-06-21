@@ -25,6 +25,8 @@ const PATHS: Record<string, React.ReactNode> = {
   gear: <><circle cx="8" cy="8" r="2.2" /><path d="M8 1.8v2M8 12.2v2M1.8 8h2M12.2 8h2M3.6 3.6l1.4 1.4M11 11l1.4 1.4M12.4 3.6 11 5M5 11l-1.4 1.4" /></>,
   'arrow-up': <path d="M8 13V3m0 0L3.5 7.5M8 3l4.5 4.5" />,
   stop: <rect x="4" y="4" width="8" height="8" rx="1" />,
+  play: <path d="M4.5 3.5v9l8-4.5-8-4.5Z" />,
+  pause: <><rect x="4" y="3.5" width="2.6" height="9" rx="0.6" /><rect x="9.4" y="3.5" width="2.6" height="9" rx="0.6" /></>,
   copy: <path d="M5.5 5.5h8v8h-8v-8Zm-3-3h8v3h-5a1 1 0 0 0-1 1v4h-2v-8Z" />,
   branch: <><circle cx="4.5" cy="3.5" r="1.8" /><circle cx="4.5" cy="12.5" r="1.8" /><circle cx="11.5" cy="6" r="1.8" /><path d="M4.5 5.3v5.4M11.5 7.8c0 2.5-3 2.5-5 3.3" /></>,
   close: <path d="m3.5 3.5 9 9m0-9-9 9" />,

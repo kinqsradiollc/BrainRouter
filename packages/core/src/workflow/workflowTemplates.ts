@@ -22,6 +22,14 @@ export interface TemplateResult {
 export const WORKFLOW_TEMPLATES = ['compare', 'review-wide', 'research', 'build'] as const;
 export type WorkflowTemplateName = (typeof WORKFLOW_TEMPLATES)[number];
 
+/** Distinct review lenses the single-slice `build` fans out over (parallel,
+ *  read-only) so one task gets multi-angle review instead of one generalist. */
+const BUILD_REVIEW_LENSES = [
+  'correctness & logic',
+  'security & input handling',
+  'regressions & missed requirements',
+];
+
 function stringArray(v: unknown): string[] {
   if (!Array.isArray(v)) return [];
   return v.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).map((x) => x.trim());
@@ -210,7 +218,7 @@ function buildTemplate(args: Record<string, unknown>): TemplateResult {
             agents: [{
               role: 'reviewer',
               access: 'read',
-              prompt: `Task: ${task}\n\nThe parallel slices each implemented part of it:\n\n{{input}}\n\nReview the COMBINED change-set for cross-slice problems a per-slice review can't see: two slices editing the same file, inconsistent contracts/naming between slices, duplicated work, or gaps between slices. Findings-first, severity-ordered (blocker / major / minor / nit). Say "blocker" if any slice must NOT merge as-is.`,
+              prompt: `Task: ${task}\n\nThe parallel slices each implemented part of it. Review the COMBINED change-set — run \`git diff HEAD\` to see the actual merged edits (the per-slice prose below is for intent only). Look for cross-slice problems a per-slice review can't see: two slices editing the same file, inconsistent contracts/naming between slices, duplicated work, or gaps between slices. Findings-first, severity-ordered (blocker / major / minor / nit). Say "blocker" if any slice must NOT merge as-is.\n\nPer-slice self-reports (cross-reference only):\n\n{{input}}`,
             }],
             inputFrom: ['implement'],
             dependsOn: ['implement'],
@@ -251,19 +259,32 @@ function buildTemplate(args: Record<string, unknown>): TemplateResult {
           agents: [{
             role: 'verifier',
             access: 'shell',
-            prompt: `Task: ${task}\n\nWhat the worker implemented:\n\n{{input}}\n\nRun the project's build + the smallest useful test/typecheck set. Report a clear PASS/FAIL with evidence (commands, exit codes, trimmed failing output).`,
+            // MAS-GROUNDTRUTH (B1): inspect the REAL change-set, not the worker's
+            // self-report. The worker's edits are in this worktree, so `git diff`
+            // is ground truth — the prose may be incomplete or (for weak models)
+            // corrupted. If installs fail with a network/ENOTFOUND error the
+            // sandbox is OFFLINE — do NOT retry installs; verify what runs offline.
+            prompt: `Task: ${task}\n\nThe worker's changes are in your current worktree. Run \`git diff HEAD\` (and \`git status\`) to see the EXACT change-set — do NOT rely on the prose summary below. Then run the smallest useful build + typecheck/test set and report a clear PASS / FAIL / BLOCKED-ENVIRONMENT with evidence (commands, exit codes, trimmed failing output). If a dependency install fails with a network error (ENOTFOUND / offline), report BLOCKED-ENVIRONMENT immediately and verify only what runs without network — never retry the install.\n\nWorker's self-report (cross-reference only, may be incomplete):\n\n{{input}}`,
           }],
           inputFrom: ['implement'],
           dependsOn: ['implement'],
         },
         {
+          // Fan out the review across independent LENSES (read-only, so they
+          // run safely in parallel) → more thorough coverage than one reviewer,
+          // then role-rollup merges the lens findings.
           id: 'review',
           title: 'Review',
-          agents: [{
-            role: 'reviewer',
-            access: 'read',
-            prompt: `Task: ${task}\n\nThe worker's changes:\n\n{{input}}\n\nReview for correctness, regressions, and missed requirements. Findings-first, severity-ordered (blocker / major / minor / nit).`,
-          }],
+          fanOut: {
+            over: BUILD_REVIEW_LENSES,
+            agent: {
+              role: 'reviewer',
+              access: 'read',
+              // B1: review the REAL diff from the worktree, not the worker's prose.
+              prompt: `Task: ${task}\n\nThe worker's changes are in your current worktree — run \`git diff HEAD\` to review the EXACT change-set (the prose self-report below may be incomplete or corrupted; use it only for intent). Review ONLY through the "{{target}}" lens — ignore issues outside it. Findings-first, severity-ordered (blocker / major / minor / nit); say "none for this lens" if clean.\n\nWorker's self-report (cross-reference only):\n\n{{input}}`,
+            },
+          },
+          synthesize: 'role-rollup',
           inputFrom: ['implement'],
           dependsOn: ['implement'],
         },

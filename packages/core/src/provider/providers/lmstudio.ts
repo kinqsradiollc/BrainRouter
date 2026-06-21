@@ -1,4 +1,5 @@
 import type { ProviderDefinition } from './definition.js';
+import { registerModelReasoningCapabilities } from '../models/reasoning.js';
 
 /** Best-effort tracing, LAZILY imported so the provider layer keeps NO static
  *  dependency on the telemetry/config layer. That matters because `tracing`
@@ -265,6 +266,13 @@ export async function refreshLmStudioCache(endpoint: string | undefined | null):
       // Don't clobber an earlier model that happens to have the same
       // tail; first writer wins.
       if (!fresh.has(stripped)) fresh.set(stripped, m);
+    }
+    // Bridge LM Studio's native reasoning vocabulary into the central
+    // capability map so resolveWireEffort can detect a binary on/off model and
+    // avoid sending a graded `low`/`high` it would reject. LM Studio's thin
+    // OpenAI-compat `/v1/models` doesn't expose this; its native `/api/v1` does.
+    if (m.reasoning?.allowedOptions?.length) {
+      registerModelReasoningCapabilities(m.key, { reasoning: true, efforts: m.reasoning.allowedOptions });
     }
   }
   cache = fresh;

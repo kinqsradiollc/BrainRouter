@@ -120,7 +120,7 @@ export function installDevBridge(): void {
     id: string; title: string; description?: string; status: string; priority: string;
     acceptanceCriteria: string[]; clarifyingQuestions: Array<{ question: string; answer?: string }>;
     workspaceRoot: string; sessionKey?: string; taskIds: string[]; artifactIds: string[];
-    linkedMemoryIds: string[]; createdAt: string; updatedAt: string;
+    linkedMemoryIds: string[]; sourceEventId?: string; origin?: 'manual' | 'auto'; createdAt: string; updatedAt: string;
   };
   let reqSeq = 3;
   const nowIso = (offsetMs = 0) => new Date(Date.now() - offsetMs).toISOString();
@@ -131,7 +131,7 @@ export function installDevBridge(): void {
       acceptanceCriteria: ['MemBench recovers to ≥ 0.58 across all 6 splits', 'Reranker never hard-drops a top-retriever candidate'],
       clarifyingQuestions: [{ question: 'Which split regressed first?', answer: 'MemBench, then LoCoMo.' }, { question: 'Keep the LLM judge stage?' }],
       workspaceRoot: '/Users/dev/BrainRouter', sessionKey: 'dev:fix-recall-blend',
-      taskIds: ['task_1', 'task_2'], artifactIds: ['art_9'], linkedMemoryIds: ['mem_blend'],
+      taskIds: ['task_1', 'task_2'], artifactIds: ['art_9'], linkedMemoryIds: ['mem_blend'], origin: 'auto', sourceEventId: 'mem_auto_blend',
       createdAt: nowIso(3 * 86400_000), updatedAt: nowIso(3600_000),
     },
     {
@@ -347,7 +347,7 @@ export function installDevBridge(): void {
   };
   // T7/T6 — mutable permission rules + MCP servers so the Settings editors work in preview.
   const devRules: { allow: string[]; deny: string[] } = { allow: ['run_command(git *)', 'run_command(npm test*)'], deny: ['run_command(rm -rf *)'] };
-  const devCliKnobs: Record<string, unknown> = { autoCompactTokens: 80000, maxToolLoops: 60, recallMode: 'gated', contextCompaction: true, llmTimeoutMs: 120000 };
+  const devCliKnobs: Record<string, unknown> = { autoCompactTokens: 80000, maxToolLoops: 60, recallMode: 'gated', contextCompaction: true, llmTimeoutMs: 120000, automation: { enabled: true, requirements: { enabled: true, autopilot: false }, sync: { enabled: true }, sprints: { enabled: true, autopilot: true } } };
   const devGithub: { repo: string | null; hasToken: boolean; tokenSource: string | null } = { repo: 'kinqsradiollc/BrainRouter', hasToken: true, tokenSource: 'config' };
   const devServers: Array<{ id: string; online: boolean; detail?: string }> = [{ id: 'brainrouter', online: true }, { id: 'github', online: false }];
 
@@ -447,12 +447,24 @@ export function installDevBridge(): void {
       r.updatedAt = new Date().toISOString();
       return r;
     },
+    'requirement-delete': (a) => {
+      const index = devRequirements.findIndex((r) => r.id === a.id);
+      if (index >= 0) devRequirements.splice(index, 1);
+      return { ok: index >= 0 };
+    },
     'requirement-seed-plan': (a) => {
       const r = devRequirements.find((x) => x.id === a.id);
       if (!r) return { error: `No requirement "${String(a.id)}".` };
       if (r.acceptanceCriteria.length === 0) return { error: 'No acceptance criteria to seed a plan from.' };
       if (['draft', 'clarifying', 'ready'].includes(r.status)) r.status = 'in-progress';
       return { ok: true, items: r.acceptanceCriteria.map((c) => ({ step: c, status: 'pending', acceptance: c })) };
+    },
+    'requirement-promote': (a) => {
+      const r = devRequirements.find((x) => x.id === a.id);
+      if (!r) return { error: `No requirement "${String(a.id)}".` };
+      if (r.acceptanceCriteria.length === 0) return { error: 'No acceptance criteria yet.' };
+      r.status = 'in-progress';
+      return { ok: true, created: r.acceptanceCriteria.length, requirements: [...devRequirements] };
     },
     // ANNOTATION-RECORDS — mock the annotationStore + annotationExport wrappers
     // (mutate in-memory). Filtering ANDs status + targetKind, mirroring the host.
@@ -765,6 +777,8 @@ export function installDevBridge(): void {
       return { files, insertions: files.reduce((s, f) => s + f.added, 0), deletions: files.reduce((s, f) => s + f.removed, 0) };
     },
     'plan-state': () => ({ items: devPlanState.items, explanation: devPlanState.explanation }),
+    'goal-state': () => ({ text: 'Implement a full-featured Notion clone with a block-based editor and hierarchical pages', status: 'active', budget: { maxIterations: 10, iterationsUsed: 3 }, startedAt: new Date(Date.now() - 18 * 60_000).toISOString(), updatedAt: new Date().toISOString() }),
+    'action:goal-edit': (a) => ({ ok: true, goal: { text: String(a.text ?? ''), status: 'active', budget: { maxIterations: 10, iterationsUsed: 3 }, startedAt: new Date(Date.now() - 18 * 60_000).toISOString(), updatedAt: new Date().toISOString() } }),
     // TRACK mode — the mock board persists create/transition so the preview is interactive.
     'track-project': () => devTrack.project,
     'track-items': () => [...devTrack.items],
@@ -855,6 +869,7 @@ export function installDevBridge(): void {
       return [...members];
     },
     'track-sync-config': () => ({ repo: 'kinqsradiollc/BrainRouter', hasToken: true, tokenSource: 'env' }),
+    'track-scan-commits': () => ({ scanned: 12, linked: [{ sha: 'abc1234', key: 'BR-3', workItemKey: 'BR-3' }], transitioned: [{ key: 'BR-3', from: 'todo', to: 'in-progress' }], items: [...devTrack.items] }),
     'track-sync-members': (a) => {
       const members = devTrack.project.members as Record<string, unknown>[];
       const incoming = [

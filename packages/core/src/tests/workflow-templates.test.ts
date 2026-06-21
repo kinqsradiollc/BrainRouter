@@ -68,11 +68,21 @@ test('BUILD-LOOP build: plan → implement → verify → review, 4 phases, vali
   assert.equal(plan.phases[1].agents?.[0].access, 'write');
   assert.equal(plan.phases[2].agents?.[0].role, 'verifier');
   assert.equal(plan.phases[2].agents?.[0].access, 'shell');
-  assert.equal(plan.phases[3].agents?.[0].role, 'reviewer');
+  // Review FANS OUT across read-only lenses (parallel) → role-rollup merge.
+  assert.equal(plan.phases[3].fanOut?.agent.role, 'reviewer');
+  assert.equal(plan.phases[3].fanOut?.agent.access, 'read');
+  assert.ok((plan.phases[3].fanOut?.over.length ?? 0) >= 3, 'review fans out over ≥3 lenses');
+  assert.equal(plan.phases[3].synthesize, 'role-rollup');
+  assert.match(plan.phases[3].fanOut!.agent.prompt, /\{\{target\}\}/);
   // Implement follows Plan; Verify + Review both consume the worker's output.
   assert.deepEqual(plan.phases[1].dependsOn, ['plan']);
   assert.deepEqual(plan.phases[2].inputFrom, ['implement']);
   assert.deepEqual(plan.phases[3].inputFrom, ['implement']);
+  // B1 — Verify + Review read the REAL git diff from the worktree (ground truth),
+  // not just the worker's prose; Verify short-circuits an offline sandbox.
+  assert.match(plan.phases[2].agents![0].prompt, /git diff HEAD/);
+  assert.match(plan.phases[2].agents![0].prompt, /BLOCKED-ENVIRONMENT/);
+  assert.match(plan.phases[3].fanOut!.agent.prompt, /git diff HEAD/);
 });
 
 test('BUILD-LOOP build: requires a task', () => {

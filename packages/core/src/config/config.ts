@@ -71,6 +71,53 @@ export interface LLMConfig {
  * credential vars like `OPENAI_API_KEY` for wizard pre-detection;
  * those are documented at their callsites.)
  */
+export interface AutomationKnobs {
+  enabled?: boolean;
+  requirements?: {
+    enabled?: boolean;
+    autoCreateThreshold?: number;
+    lowActThreshold?: number;
+    /**
+     * Tiered autonomy. Default false ("propose"): an auto-detected requirement
+     * is captured as `draft` and the agent surfaces a one-click promote — the
+     * plan/Track cascade only fires once the requirement is `ready`. When true
+     * ("autopilot"): a confident detection with concrete acceptance criteria is
+     * created `ready` directly, so the full cascade runs unattended.
+     */
+    autopilot?: boolean;
+  };
+  sync?: { enabled?: boolean };
+  sprints?: {
+    enabled?: boolean;
+    minItems?: number;
+    respectCapacity?: boolean;
+    /**
+     * Default false ("propose"): sprint automation only SUGGESTS (create /
+     * complete) — a human makes the irreversible org commitment. When true
+     * ("autopilot"): it auto-creates a future sprint, assigns ready items, and
+     * auto-completes a done sprint (it still never auto-STARTS a sprint).
+     */
+    autopilot?: boolean;
+  };
+}
+
+export interface ResolvedAutomationKnobs {
+  enabled: boolean;
+  requirements: {
+    enabled: boolean;
+    autoCreateThreshold: number;
+    lowActThreshold: number;
+    autopilot: boolean;
+  };
+  sync: { enabled: boolean };
+  sprints: {
+    enabled: boolean;
+    minItems: number;
+    respectCapacity: boolean;
+    autopilot: boolean;
+  };
+}
+
 export interface CliKnobs {
   // ---- planning / orchestration -----------------------------------------
   /**
@@ -89,6 +136,8 @@ export interface CliKnobs {
    * `allow` (never overrides a mode-based deny).
    */
   permissions?: { allow?: string[]; deny?: string[] };
+  /** Default-off Requirement → Plan → Track automation controls. */
+  automation?: AutomationKnobs;
   // ---- memory / briefing -------------------------------------------------
   /** Default 'gated'. Recall trigger mode — see briefingTriggers.ts. */
   recallMode?: 'always' | 'gated' | 'off';
@@ -138,8 +187,19 @@ export interface CliKnobs {
   stormThreshold?: number;
   /** Hard cap on inner-loop iterations per user turn. Default 60. */
   maxToolLoops?: number;
-  /** Threshold for the repeat-sequence guard. Default 8. */
+  /** Threshold for the repeat-SEQUENCE guard (tool-name pattern repeats,
+   *  ignoring args). Default 12. */
   repeatToolSequenceLimit?: number;
+  /**
+   * Tools EXEMPT from the repeat-sequence guard — repeating these with DIFFERENT
+   * args is productive work, not a loop (writing 10 different files). The
+   * identical-args loop guard (`repeatLoopLimit`) + storm breaker still catch
+   * the pathological same-args case. Default: the mutation tools.
+   */
+  repeatSequenceExemptTools?: string[];
+  /** Threshold for the identical-(name,args) repeat-LOOP guard — the real
+   *  doom-loop catcher. Default 3. */
+  repeatLoopLimit?: number;
   /** Default true. Set false to force-serialize every tool dispatch. */
   parallelSafeToolCalls?: boolean;
 
@@ -205,6 +265,17 @@ export interface CliKnobs {
    * notice (the pre-0.4.7 behavior — opt back in explicitly).
    */
   sandboxUnavailable?: 'ask' | 'deny' | 'warn';
+  /**
+   * CODEX-SANDBOX-UNATTENDED (0.4.15) — force the sandbox ON for silent /
+   * unattended agents (cloud workers, spawned children, non-interactive runs)
+   * even when `cli.sandbox` is `'off'`. When enforced, outbound network is
+   * denied and a missing sandboxer fails closed (`sandboxUnavailable: 'deny'`),
+   * regardless of the looser interactive settings. Default `true` — an
+   * operator must opt OUT explicitly to let unattended shells run unsandboxed.
+   * Mirrors `cli.hooks.enforceWhenSilent`: relaxed when a human is watching,
+   * strict when nobody is.
+   */
+  sandboxEnforceWhenSilent?: boolean;
   /**
    * CODEX-EXEC-POLICY (0.4.7) — command prefixes the user pre-approves, so a
    * `run_command` whose every segment matches one auto-approves without a prompt
@@ -402,7 +473,26 @@ export interface CliKnobs {
    * the standard `GITHUB_TOKEN` / `GH_TOKEN` env when omitted, like the gh
    * CLI). Read on demand by the `/track sync` command + desktop Sync panel.
    */
-  track?: { githubRepo?: string; githubToken?: string };
+  track?: {
+    githubRepo?: string;
+    githubToken?: string;
+    /**
+     * BR-123 commit scanner (0.4.16). `enabled` (default false): on `/track sync
+     * --commits`, parse `<KEY>-<n>` from recent commit messages and link each
+     * commit to its work item + advance todo → in-progress. `scanDepth` caps the
+     * history walked (default 50).
+     */
+    commitScanner?: { enabled?: boolean; scanDepth?: number };
+  };
+  /**
+   * Lifecycle shell hooks (0.4.16). `enabled` (default true) is the master
+   * switch. `enforceWhenSilent` (default true) runs the BLOCKING hook events
+   * (pre-tool, user-prompt-submit) for silent/unattended agents too — deep
+   * workers, headless, and cloud runs — so a deny hook enforces policy
+   * regardless of who is driving. Advisory events (post-tool, pre/post-turn)
+   * stay interactive-only.
+   */
+  hooks?: { enabled?: boolean; enforceWhenSilent?: boolean };
 }
 
 /**
@@ -670,6 +760,8 @@ export function selfHealConfig(parsed: Config): { config: Config; changed: boole
  */
 export interface ResolvedCliKnobs {
   permissions: { allow: string[]; deny: string[] };
+  automation: ResolvedAutomationKnobs;
+  hooks: { enabled: boolean; enforceWhenSilent: boolean };
   recallMode: 'always' | 'gated' | 'off';
   nextActionPlanner: 'on' | 'off';
   prefixMemoryAnchors: 'on' | 'off';
@@ -691,6 +783,8 @@ export interface ResolvedCliKnobs {
   stormThreshold: number;
   maxToolLoops: number;
   repeatToolSequenceLimit: number;
+  repeatSequenceExemptTools: string[];
+  repeatLoopLimit: number;
   parallelSafeToolCalls: boolean;
   altScreen: boolean;
   hideCursor: boolean;
@@ -709,6 +803,7 @@ export interface ResolvedCliKnobs {
   sandboxWritePaths: string[];
   sandboxNetwork: boolean;
   sandboxUnavailable: 'ask' | 'deny' | 'warn';
+  sandboxEnforceWhenSilent: boolean;
   commandAllowlist: string[];
   childWorkspaceIsolation: 'off' | 'auto' | 'git-worktree';
   worktreeRoot: string;
@@ -747,12 +842,43 @@ export interface ResolvedCliKnobs {
   maxOutputTokens?: number;
 }
 
+function unitInterval(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? value : fallback;
+}
+
 export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
   const c = cfg?.cli ?? {};
+  const automation = c.automation ?? {};
+  const requirementsAutomation = automation.requirements ?? {};
+  const autoCreateThreshold = unitInterval(requirementsAutomation.autoCreateThreshold, 0.7);
+  const lowActThreshold = Math.min(unitInterval(requirementsAutomation.lowActThreshold, 0.4), autoCreateThreshold);
+  const sprintAutomation = automation.sprints ?? {};
   return {
     recallMode: c.recallMode ?? 'gated',
     nextActionPlanner: c.nextActionPlanner ?? 'on',
     permissions: { allow: c.permissions?.allow ?? [], deny: c.permissions?.deny ?? [] },
+    automation: {
+      enabled: automation.enabled ?? false,
+      requirements: {
+        enabled: requirementsAutomation.enabled ?? false,
+        autoCreateThreshold,
+        lowActThreshold,
+        autopilot: requirementsAutomation.autopilot ?? false,
+      },
+      sync: { enabled: automation.sync?.enabled ?? false },
+      sprints: {
+        enabled: sprintAutomation.enabled ?? false,
+        minItems: Number.isInteger(sprintAutomation.minItems) && sprintAutomation.minItems! > 0
+          ? sprintAutomation.minItems!
+          : 3,
+        respectCapacity: sprintAutomation.respectCapacity ?? true,
+        autopilot: sprintAutomation.autopilot ?? false,
+      },
+    },
+    hooks: {
+      enabled: c.hooks?.enabled ?? true,
+      enforceWhenSilent: c.hooks?.enforceWhenSilent ?? true,
+    },
     prefixMemoryAnchors: c.prefixMemoryAnchors ?? 'on',
     personaAnchor: c.personaAnchor ?? 'on',
     briefingMaxCharsPerSource: c.briefingMaxCharsPerSource ?? 4_000,
@@ -779,7 +905,11 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     stormWindow: c.stormWindow ?? 6,
     stormThreshold: c.stormThreshold ?? 4,
     maxToolLoops: c.maxToolLoops ?? 60,
-    repeatToolSequenceLimit: c.repeatToolSequenceLimit ?? 8,
+    repeatToolSequenceLimit: c.repeatToolSequenceLimit ?? 12,
+    repeatSequenceExemptTools: Array.isArray(c.repeatSequenceExemptTools)
+      ? c.repeatSequenceExemptTools
+      : ['write_file', 'edit_file', 'apply_patch'],
+    repeatLoopLimit: c.repeatLoopLimit ?? 3,
     parallelSafeToolCalls: c.parallelSafeToolCalls ?? true,
     altScreen: c.altScreen ?? false,
     hideCursor: c.hideCursor ?? true,
@@ -798,6 +928,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     sandboxWritePaths: c.sandboxWritePaths ?? [],
     sandboxNetwork: c.sandboxNetwork ?? false,
     sandboxUnavailable: c.sandboxUnavailable ?? 'deny',
+    sandboxEnforceWhenSilent: c.sandboxEnforceWhenSilent ?? true,
     // CODEX-APPROVAL-GUARD — drop over-broad prefixes (bare `git`/`bash`/`sudo`/…)
     // so a too-permissive config.json entry can never auto-approve everything.
     commandAllowlist: sanitizeCommandAllowlist(c.commandAllowlist ?? []).allowed,

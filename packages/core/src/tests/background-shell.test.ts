@@ -8,6 +8,7 @@ import {
   __resetBackgroundShells,
 } from '../exec/backgroundShell.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
+import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
 
 const until = async (pred: () => boolean, ms = 5000): Promise<void> => {
   const start = Date.now();
@@ -66,6 +67,13 @@ test('run_command background:true + task_output end-to-end through the executor'
     const { writePreferences } = await import('../session/preferencesStore.js');
     writePreferences(workspace, { executionMode: 'fast' });
     const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [{ text: '{}' }] }), close: async () => {} };
+    // Background runs are unsandboxed (v1), so they are refused while the
+    // sandbox is active — including the unattended-enforcement default. This
+    // test exercises the background capability itself, so opt out of enforcement
+    // the way an operator would (cli.sandboxEnforceWhenSilent:false). Set it
+    // synchronously right before construction — the Agent captures the knob in
+    // its constructor, so a concurrent test cannot race the override away.
+    setCliKnobOverride({ sandboxEnforceWhenSilent: false });
     const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
       workspaceRoot: workspace, launchCwd: workspace, silent: true, accessMode: 'shell',
     });
@@ -84,5 +92,6 @@ test('run_command background:true + task_output end-to-end through the executor'
 
     const missing = JSON.parse(await runTool('task_output', { id: 'bgsh_missing' }));
     assert.equal(missing.found, false);
+    _resetCliKnobsCache();
   });
 });
