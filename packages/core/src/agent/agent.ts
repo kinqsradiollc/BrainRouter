@@ -152,6 +152,7 @@ import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PL
 import { DEFAULT_EFFORT_VALUE_MAP } from '../provider/providers/definition.js';
 import type { ProviderDefinition } from '../provider/providers/definition.js';
 import { normalizeModelName, isReasoningModel, isNonReasoningChatModel, isAlwaysOnReasoner, modelSupportsXhighEffort, isBinaryReasoningModel } from '../provider/models/reasoning.js';
+import { isSequenceGuardExempt } from './repeatGuard.js';
 // 0.3.9 item 9 — prefix-pinned memory briefing policy.
 import {
   decideAnchorAction,
@@ -1429,13 +1430,17 @@ export class Agent {
     // args over and over, the result is by definition the same. Track recent
     // signatures so we can interrupt the loop with corrective feedback.
     const recentToolSignatures: string[] = [];
-    const REPEAT_GUARD_LIMIT = 3;
+    const REPEAT_GUARD_LIMIT = Math.max(2, getCliKnobs().repeatLoopLimit);
     // This class of failure is a "doom loop": the same tool
     // pattern repeats even if the arguments keep changing. Keep BrainRouter's
     // threshold higher than a strict identical-input approval guard so
     // normal multi-file exploration still works, but stop 20+ Read(...) spins.
+    // Mutation tools (write/edit/apply_patch) are EXEMPT — repeating them with
+    // different files is real work, not a loop (the identical-args guard below
+    // still catches writing the SAME file over and over).
     const recentToolSequences: string[] = [];
     const TOOL_SEQUENCE_GUARD_LIMIT = Math.max(3, getCliKnobs().repeatToolSequenceLimit);
+    const sequenceGuardExempt = new Set(getCliKnobs().repeatSequenceExemptTools);
     const spawnedChildIdsThisTurn = new Set<string>();
     const waitedChildIdsThisTurn = new Set<string>();
     const buildOrchestrationContext = (): OrchestrationContext => ({
@@ -2326,7 +2331,11 @@ export class Agent {
       const previousSequenceRepeats = recentToolSequences.filter((s) => s === sequenceSignature).length;
       recentToolSequences.push(sequenceSignature);
       if (recentToolSequences.length > TOOL_SEQUENCE_GUARD_LIMIT * 2) recentToolSequences.shift();
-      if (previousSequenceRepeats >= TOOL_SEQUENCE_GUARD_LIMIT) {
+      // A sequence made entirely of mutation tools (write/edit/apply_patch) is
+      // productive repetition (different files each call), not a stalled loop —
+      // skip the name-only sequence guard for it. The identical-args guard below
+      // still catches re-writing the SAME file with the SAME content.
+      if (previousSequenceRepeats >= TOOL_SEQUENCE_GUARD_LIMIT && !isSequenceGuardExempt(normalizedNames, sequenceGuardExempt)) {
         const sequenceLabel = normalizedNames.join(' → ');
         const resultText = [
           `Repeat-loop guard tripped: the same tool sequence (${sequenceLabel}) has repeated ${previousSequenceRepeats + 1} times in this turn.`,

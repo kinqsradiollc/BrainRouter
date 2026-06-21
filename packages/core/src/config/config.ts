@@ -187,8 +187,19 @@ export interface CliKnobs {
   stormThreshold?: number;
   /** Hard cap on inner-loop iterations per user turn. Default 60. */
   maxToolLoops?: number;
-  /** Threshold for the repeat-sequence guard. Default 8. */
+  /** Threshold for the repeat-SEQUENCE guard (tool-name pattern repeats,
+   *  ignoring args). Default 12. */
   repeatToolSequenceLimit?: number;
+  /**
+   * Tools EXEMPT from the repeat-sequence guard — repeating these with DIFFERENT
+   * args is productive work, not a loop (writing 10 different files). The
+   * identical-args loop guard (`repeatLoopLimit`) + storm breaker still catch
+   * the pathological same-args case. Default: the mutation tools.
+   */
+  repeatSequenceExemptTools?: string[];
+  /** Threshold for the identical-(name,args) repeat-LOOP guard — the real
+   *  doom-loop catcher. Default 3. */
+  repeatLoopLimit?: number;
   /** Default true. Set false to force-serialize every tool dispatch. */
   parallelSafeToolCalls?: boolean;
 
@@ -772,6 +783,8 @@ export interface ResolvedCliKnobs {
   stormThreshold: number;
   maxToolLoops: number;
   repeatToolSequenceLimit: number;
+  repeatSequenceExemptTools: string[];
+  repeatLoopLimit: number;
   parallelSafeToolCalls: boolean;
   altScreen: boolean;
   hideCursor: boolean;
@@ -892,7 +905,11 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     stormWindow: c.stormWindow ?? 6,
     stormThreshold: c.stormThreshold ?? 4,
     maxToolLoops: c.maxToolLoops ?? 60,
-    repeatToolSequenceLimit: c.repeatToolSequenceLimit ?? 8,
+    repeatToolSequenceLimit: c.repeatToolSequenceLimit ?? 12,
+    repeatSequenceExemptTools: Array.isArray(c.repeatSequenceExemptTools)
+      ? c.repeatSequenceExemptTools
+      : ['write_file', 'edit_file', 'apply_patch'],
+    repeatLoopLimit: c.repeatLoopLimit ?? 3,
     parallelSafeToolCalls: c.parallelSafeToolCalls ?? true,
     altScreen: c.altScreen ?? false,
     hideCursor: c.hideCursor ?? true,
