@@ -979,6 +979,9 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
         status: 'completed',
         completedAt,
         finalOutput: storedOutput,
+        // MAS-READMANIFEST — capture the files this child read so the phase
+        // engine can forward an "already mapped" manifest to later phases.
+        filesRead: childAgent.filesRead,
         usage: { ...childAgent.sessionUsage, offloadedChars, wallClockMs },
       });
       // MAS-P2-M6: fire-and-forget feedback record. Skipped silently
@@ -1402,6 +1405,7 @@ function summarize(record: ChildSessionRecord, includeOutput = false): Record<st
   if (includeOutput) {
     if (record.finalOutput) base.finalOutput = record.finalOutput;
     if (record.error) base.error = record.error;
+    if (record.filesRead?.length) base.filesRead = record.filesRead; // MAS-READMANIFEST
     if (record.worktreeDiff) base.worktreeDiff = record.worktreeDiff;
     // MAS-P3-P3.2: when the role has an output contract, surface the parsed
     // fields (or the unparsed/missing signal) so `wait_agent --json` /
