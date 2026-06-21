@@ -347,7 +347,7 @@ export function installDevBridge(): void {
   };
   // T7/T6 — mutable permission rules + MCP servers so the Settings editors work in preview.
   const devRules: { allow: string[]; deny: string[] } = { allow: ['run_command(git *)', 'run_command(npm test*)'], deny: ['run_command(rm -rf *)'] };
-  const devCliKnobs: Record<string, unknown> = { autoCompactTokens: 80000, maxToolLoops: 60, recallMode: 'gated', contextCompaction: true, llmTimeoutMs: 120000 };
+  const devCliKnobs: Record<string, unknown> = { autoCompactTokens: 80000, maxToolLoops: 60, recallMode: 'gated', contextCompaction: true, llmTimeoutMs: 120000, automation: { enabled: true, requirements: { enabled: true, autopilot: false }, sync: { enabled: true }, sprints: { enabled: true, autopilot: true } } };
   const devGithub: { repo: string | null; hasToken: boolean; tokenSource: string | null } = { repo: 'kinqsradiollc/BrainRouter', hasToken: true, tokenSource: 'config' };
   const devServers: Array<{ id: string; online: boolean; detail?: string }> = [{ id: 'brainrouter', online: true }, { id: 'github', online: false }];
 

@@ -1,10 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  applyAutomationKnob,
   buildScrubbedConfigJson,
   listKnownConfigKeys,
   parseConfigArgs,
+  readAutomationKnob,
 } from '../cli/commands/config.js';
+
+const emptyConfig = (): any => ({ activeServer: '', servers: {} });
 
 test('parseConfigArgs: no args → home panel', () => {
   assert.deepEqual(parseConfigArgs([]), { mode: 'home' });
@@ -42,6 +46,57 @@ test('listKnownConfigKeys exposes the keys /config can get/set directly', () => 
   for (const required of ['theme', 'statusline', 'effort', 'mode', 'review-policy', 'quiet', 'personality', 'editor', 'model', 'provider']) {
     assert.ok(keys.includes(required), `/config should support ${required}`);
   }
+});
+
+test('listKnownConfigKeys exposes the workflow-automation keys', () => {
+  const keys = listKnownConfigKeys();
+  for (const required of ['automation', 'automation.requirements', 'automation.sync', 'automation.sprints']) {
+    assert.ok(keys.includes(required), `/config should support ${required}`);
+  }
+});
+
+test('applyAutomationKnob: master toggle on/off, rejects garbage', () => {
+  const cfg = emptyConfig();
+  assert.deepEqual(applyAutomationKnob(cfg, 'automation', 'on').ok, true);
+  assert.equal(cfg.cli.automation.enabled, true);
+  assert.deepEqual(applyAutomationKnob(cfg, 'automation', 'off').ok, true);
+  assert.equal(cfg.cli.automation.enabled, false);
+  const bad = applyAutomationKnob(cfg, 'automation', 'maybe');
+  assert.equal(bad.ok, false);
+});
+
+test('applyAutomationKnob: requirements tier maps off/propose/autopilot', () => {
+  const cfg = emptyConfig();
+  applyAutomationKnob(cfg, 'automation.requirements', 'autopilot');
+  assert.deepEqual(cfg.cli.automation.requirements, { enabled: true, autopilot: true });
+  applyAutomationKnob(cfg, 'automation.requirements', 'propose');
+  assert.deepEqual(cfg.cli.automation.requirements, { enabled: true, autopilot: false });
+  applyAutomationKnob(cfg, 'automation.requirements', 'on'); // alias for propose
+  assert.equal(cfg.cli.automation.requirements.autopilot, false);
+  applyAutomationKnob(cfg, 'automation.requirements', 'off');
+  assert.equal(cfg.cli.automation.requirements.enabled, false);
+  assert.equal(applyAutomationKnob(cfg, 'automation.requirements', 'turbo').ok, false);
+});
+
+test('applyAutomationKnob: sync boolean + sprints tier', () => {
+  const cfg = emptyConfig();
+  applyAutomationKnob(cfg, 'automation.sync', 'on');
+  assert.equal(cfg.cli.automation.sync.enabled, true);
+  applyAutomationKnob(cfg, 'automation.sprints', 'autopilot');
+  assert.deepEqual(cfg.cli.automation.sprints, { enabled: true, autopilot: true });
+  assert.equal(applyAutomationKnob(cfg, 'automation.sprints', 'nope').ok, false);
+});
+
+test('readAutomationKnob reflects the applied state', () => {
+  const cfg = emptyConfig();
+  assert.equal(readAutomationKnob(cfg, 'automation'), 'off');
+  assert.equal(readAutomationKnob(cfg, 'automation.requirements'), 'off');
+  applyAutomationKnob(cfg, 'automation', 'on');
+  applyAutomationKnob(cfg, 'automation.requirements', 'autopilot');
+  applyAutomationKnob(cfg, 'automation.sprints', 'propose');
+  assert.equal(readAutomationKnob(cfg, 'automation'), 'on');
+  assert.equal(readAutomationKnob(cfg, 'automation.requirements'), 'autopilot');
+  assert.equal(readAutomationKnob(cfg, 'automation.sprints'), 'propose');
 });
 
 test('buildScrubbedConfigJson masks LLM and MCP API keys', () => {
