@@ -9,7 +9,7 @@ const TMP_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'br-extload-home-'));
 process.env.BRAINROUTER_HOME = TMP_HOME;
 
 const { loadExtensions } = await import('../extension/loader.js');
-const { trustWorkspace } = await import('../trust/trust.js');
+const { trustWorkspace } = await import('../workspace/workspaceTrust.js');
 const { setExtensionEnabled } = await import('../extension/extensionStore.js');
 
 /** Create a workspace-tier extension whose index.js body is `body`. */

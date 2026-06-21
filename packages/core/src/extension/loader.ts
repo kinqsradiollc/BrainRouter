@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { listExtensions, type ExtensionInfo } from './manifest.js';
 import { isExtensionEnabled } from './extensionStore.js';
-import { isWorkspaceTrusted } from '../trust/trust.js';
+import { isWorkspaceTrusted } from '../workspace/workspaceTrust.js';
 import { createExtensionHost, type ExtensionActivate } from './host.js';
 import { resetExtensionContributions } from './registry.js';
 import { refreshProviderCatalog } from '../provider/catalog.js';

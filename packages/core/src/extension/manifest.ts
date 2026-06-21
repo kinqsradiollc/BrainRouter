@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getConfigHome } from '../storage/store.js';
+import { getBrainrouterHome } from '../storage/store.js';
 
 export type ExtensionSource = 'builtin' | 'user' | 'workspace';
 
@@ -38,7 +38,7 @@ const SOURCE_RANK: Record<ExtensionSource, number> = { builtin: 0, user: 1, work
 const BUILTIN_EXTENSIONS_DIR = fileURLToPath(new URL('../../extensions', import.meta.url));
 
 export function userExtensionsDir(): string {
-  return path.join(getConfigHome(), 'extensions');
+  return path.join(getBrainrouterHome(), 'extensions');
 }
 
 export function workspaceExtensionsDir(workspaceRoot: string): string {

@@ -1,11 +1,11 @@
 /**
  * EXTENSION-STORE (0.4.15) — per-user enable/disable state for extensions,
- * stored at `~/.config/brainrouter/extensions.json` (honoring BRAINROUTER_HOME).
+ * stored at `~/.brainrouter/extensions.json` (in the global home).
  * Default is ENABLED: an extension is active unless explicitly disabled here.
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { getConfigHome } from '../storage/store.js';
+import { getBrainrouterHome } from '../storage/store.js';
 
 interface ExtensionStateFile {
   /** Names explicitly DISABLED by the user (absence = enabled). */
@@ -13,7 +13,7 @@ interface ExtensionStateFile {
 }
 
 function storePath(): string {
-  return path.join(getConfigHome(), 'extensions.json');
+  return path.join(getBrainrouterHome(), 'extensions.json');
 }
 
 function read(): ExtensionStateFile {

@@ -65,7 +65,7 @@ import { loadExtensions } from '@kinqs/brainrouter-core/dist/extension/loader.js
 import { listExtensions } from '@kinqs/brainrouter-core/dist/extension/manifest.js';
 import { isExtensionEnabled, setExtensionEnabled } from '@kinqs/brainrouter-core/dist/extension/extensionStore.js';
 import { extensionContributionSummary } from '@kinqs/brainrouter-core/dist/extension/registry.js';
-import { isWorkspaceTrusted, trustWorkspace, revokeWorkspace } from '@kinqs/brainrouter-core/dist/trust/trust.js';
+import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace } from '@kinqs/brainrouter-core/dist/workspace/workspaceTrust.js';
 import { readPlan, formatPlan, seedPlanFromRequirement, updatePlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
 // DURABLE BACKGROUND TASKS (0.4.15 workflow gaps) — plan-revision + review work
 // runs as visible, file-backed tasks (shared with the CLI store) so progress +
@@ -2454,7 +2454,7 @@ async function main(): Promise<void> {
       // extensions activate or deactivate immediately.
       'action:trust-workspace': async (args) => {
         if (args.trusted === true) trustWorkspace(workspaceRoot);
-        else revokeWorkspace(workspaceRoot);
+        else untrustWorkspace(workspaceRoot);
         await loadExtensions(workspaceRoot).catch(() => undefined);
         return { ok: true, trusted: isWorkspaceTrusted(workspaceRoot) };
       },

@@ -27,18 +27,6 @@ export function getBrainrouterHome(): string {
 }
 
 /**
- * User-global CONFIG home — where `config.json`, `providers.json`, `packs/`,
- * `extensions/`, and `trust.json` live. Defaults to `~/.config/brainrouter`.
- * Honors the same `BRAINROUTER_HOME` bootstrap override as {@link getBrainrouterHome}
- * (tests + custom installs redirect both). This is the single source for the
- * config home — callers must not re-derive the `BRAINROUTER_HOME ?? ~/.config`
- * pattern inline. (Distinct from the STATE home above, which holds workspaces/db.)
- */
-export function getConfigHome(): string {
-  return process.env.BRAINROUTER_HOME?.trim() || path.join(os.homedir(), '.config', 'brainrouter');
-}
-
-/**
  * Per-workspace state root inside the global home. Encodes the absolute
  * workspace path with a readable prefix + short hash so two workspaces with
  * the same basename never collide.

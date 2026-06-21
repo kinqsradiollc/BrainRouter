@@ -4,7 +4,7 @@
  */
 import chalk from 'chalk';
 import type { CommandContext } from './_context.js';
-import { isWorkspaceTrusted, trustWorkspace, revokeWorkspace, listTrusted } from '@kinqs/brainrouter-core/dist/trust/trust.js';
+import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace, listTrustedWorkspaces } from '@kinqs/brainrouter-core/dist/workspace/workspaceTrust.js';
 import { listExtensions } from '@kinqs/brainrouter-core/dist/extension/manifest.js';
 import { isExtensionEnabled, setExtensionEnabled } from '@kinqs/brainrouter-core/dist/extension/extensionStore.js';
 import { loadExtensions } from '@kinqs/brainrouter-core/dist/extension/loader.js';
@@ -24,8 +24,9 @@ export async function tryHandleExtensionCommand(ctx: CommandContext): Promise<bo
       return true;
     }
     if (sub === 'off' || sub === 'revoke') {
-      const ok = revokeWorkspace(ws);
-      console.log(ok ? chalk.yellow(`\n✓ Revoked trust for this workspace.\n`) : chalk.gray(`\nThis workspace wasn't trusted.\n`));
+      const was = isWorkspaceTrusted(ws);
+      untrustWorkspace(ws);
+      console.log(was ? chalk.yellow(`\n✓ Revoked trust for this workspace.\n`) : chalk.gray(`\nThis workspace wasn't trusted.\n`));
       return true;
     }
     const trusted = isWorkspaceTrusted(ws);
@@ -33,10 +34,10 @@ export async function tryHandleExtensionCommand(ctx: CommandContext): Promise<bo
     console.log(`  This workspace: ${trusted ? chalk.green('trusted') : chalk.yellow('NOT trusted')} ${chalk.gray(ws)}`);
     console.log(chalk.gray(`  Trust gates in-workspace code (extensions, pack hooks). Untrusted workspace code never auto-loads.`));
     console.log(chalk.gray(`  Toggle: /trust on  |  /trust off`));
-    const all = listTrusted();
+    const all = listTrustedWorkspaces();
     if (all.length) {
       console.log(chalk.bold(`\n  Trusted workspaces:`));
-      for (const t of all.slice(0, 20)) console.log(chalk.gray(`    ${t.workspaceRoot}`));
+      for (const t of all.slice(0, 20)) console.log(chalk.gray(`    ${t}`));
     }
     console.log();
     return true;
@@ -66,7 +67,7 @@ export async function tryHandleExtensionCommand(ctx: CommandContext): Promise<bo
     console.log(chalk.bold(`\nExtensions`));
     if (exts.length === 0) {
       console.log(chalk.gray(`  (none discovered)`));
-      console.log(chalk.gray(`  Add one at ~/.config/brainrouter/extensions/<name>/ or .brainrouter/extensions/<name>/ with an extension.json + index.js exporting activate(host).\n`));
+      console.log(chalk.gray(`  Add one at ~/.brainrouter/extensions/<name>/ or .brainrouter/extensions/<name>/ with an extension.json + index.js exporting activate(host).\n`));
       return true;
     }
     for (const e of exts) {
