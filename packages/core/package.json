@@ -21,7 +21,8 @@
     "prepack": "npm run build && find dist -name '*.test.*' -delete"
   },
   "dependencies": {
-    "@kinqs/brainrouter-types": "^0.4.15"
+    "@kinqs/brainrouter-types": "^0.4.15",
+    "@modelcontextprotocol/sdk": "^1.11.0"
   },
   "devDependencies": {
     "typescript": "^5.5.4",
