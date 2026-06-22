@@ -157,6 +157,13 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .chip:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15); }
 .chip.dim { color: var(--text-dim); }
 .chip.dim:hover { border-color: var(--border-strong); }
+/* WS12 — provider gallery: clickable cards that pre-fill the add-provider form. */
+.provider-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin: 6px 0 14px; }
+.provider-card { text-align: left; display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; background: var(--raised); border: 1px solid var(--border); border-radius: var(--r-md, 8px); cursor: pointer; transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s; }
+.provider-card:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15); }
+.provider-card .pc-name { font-weight: 600; font-size: 13px; color: var(--text); }
+.provider-card .pc-host { color: var(--text-dim); font-size: 11px; word-break: break-all; }
+.provider-card .pc-meta { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
 .icon-btn { background: transparent; border: 0; color: var(--text-faint); font-size: 13px; cursor: pointer; border-radius: 6px; padding: 4px 7px; line-height: 1; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
 .icon-btn:hover { background: var(--ov-08); color: var(--text); transform: translateY(-1px); }
 .dim { color: var(--text-dim); }
