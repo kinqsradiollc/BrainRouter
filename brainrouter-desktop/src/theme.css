@@ -3758,6 +3758,14 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .atlas-detail-deps { display: flex; gap: 12px; padding-top: 6px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-faint); }
 .atlas-detail .dim { color: var(--text-faint); }
 
+/* Guided-tour stepper — floats bottom-centre, spotlights the step's nodes. */
+.atlas-tour { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); width: min(420px, 78%); display: flex; flex-direction: column; gap: 7px; padding: 12px 14px; border-radius: var(--r-md, 10px); background: var(--raised); border: 1px solid var(--border-strong); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.48); }
+.atlas-tour-top { display: flex; align-items: center; justify-content: space-between; }
+.atlas-tour-progress { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; color: var(--accent); }
+.atlas-tour-title { font-size: 14px; font-weight: 650; color: var(--text); }
+.atlas-tour-desc { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+.atlas-tour-nav { display: flex; gap: 8px; justify-content: flex-end; margin-top: 2px; }
+
 /* React Flow re-skin — kill the light-theme defaults so controls + minimap
  * read as part of the dark surface. */
 .atlas-canvas .react-flow__attribution { display: none; }
