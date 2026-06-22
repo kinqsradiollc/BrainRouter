@@ -236,14 +236,17 @@ export async function enrichAtlasGraph(graph: AtlasGraph, llm: AtlasLlmCaller, o
     }
     onProgress?.({ phase: "layers", done: 1, total: 1 });
   }
-  enriched.layers = layers;
+  // Keep the deterministic (build-time) layers if the LLM produced none — never
+  // regress to "no layers" just because enrichment was flaky.
+  const effectiveLayers = layers.length ? layers : graph.layers;
+  enriched.layers = effectiveLayers;
 
   // --- 3. guided tour (single call over the layers) ---
   let tour: AtlasTourStep[] = [];
-  if (layers.length) {
+  if (effectiveLayers.length) {
     onProgress?.({ phase: "tour", done: 0, total: 1 });
     try {
-      const raw = await llm({ system: SYSTEM, user: tourPrompt(enriched, layers), signal });
+      const raw = await llm({ system: SYSTEM, user: tourPrompt(enriched, effectiveLayers), signal });
       const rows = extractAtlasJsonArray(raw) as Array<{ title?: string; description?: string; files?: string[] }>;
       tour = rows
         .filter((r) => r && typeof r.title === "string")
@@ -262,5 +265,5 @@ export async function enrichAtlasGraph(graph: AtlasGraph, llm: AtlasLlmCaller, o
   }
   enriched.tour = tour;
 
-  return { graph: enriched, summarized, layers: layers.length, tourSteps: tour.length, batchesFailed };
+  return { graph: enriched, summarized, layers: effectiveLayers.length, tourSteps: tour.length, batchesFailed };
 }
