@@ -261,6 +261,52 @@ function ComboInput({ value, options, onChange, placeholder, disabled, style }: 
   );
 }
 
+/** WS10 — cross-session usage tally for the contributions heatmap. Shape mirrors
+ *  the host `usage-history` query ({ days, total }). */
+export interface UsageHistory {
+  days: Array<{ day: string; promptTokens: number; completionTokens: number; calls: number; turns: number }>;
+  total: { promptTokens: number; completionTokens: number; calls: number; turns: number };
+}
+
+/** GitHub-contributions-style grid: one square per UTC day, columns are weeks
+ *  (aligned on weekday), brightness scales with that day's token volume. Themed
+ *  via the accent var + opacity so it tracks any palette. */
+function UsageHeatmap({ hist }: { hist: UsageHistory }): JSX.Element {
+  const days = hist.days;
+  if (!days.length) return <pre className="usage-pre">No usage recorded yet.</pre>;
+  const tok = (d: { promptTokens: number; completionTokens: number }) => d.promptTokens + d.completionTokens;
+  const max = Math.max(1, ...days.map(tok));
+  const level = (n: number) => (n <= 0 ? 0 : n >= max * 0.75 ? 4 : n >= max * 0.5 ? 3 : n >= max * 0.25 ? 2 : 1);
+  const weekday = (s: string) => new Date(`${s}T00:00:00Z`).getUTCDay(); // 0=Sun
+  const cols: Array<Array<(typeof days)[number] | null>> = [];
+  let cur: Array<(typeof days)[number] | null> = [];
+  for (let i = 0; i < weekday(days[0].day); i++) cur.push(null); // pad first column to its weekday
+  for (const d of days) {
+    cur.push(d);
+    if (cur.length === 7) { cols.push(cur); cur = []; }
+  }
+  if (cur.length) { while (cur.length < 7) cur.push(null); cols.push(cur); }
+  return (
+    <div className="usage-heatmap" style={{ display: 'flex', gap: 3, overflowX: 'auto', padding: '4px 0' }}>
+      {cols.map((col, ci) => (
+        <div key={ci} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          {col.map((d, ri) =>
+            d ? (
+              <div
+                key={ri}
+                title={`${d.day}: ${tok(d).toLocaleString()} tokens · ${d.turns} turns · ${d.calls} req`}
+                style={{ width: 11, height: 11, borderRadius: 2, background: 'var(--accent)', opacity: level(tok(d)) === 0 ? 0.07 : 0.2 + 0.2 * level(tok(d)) }}
+              />
+            ) : (
+              <div key={ri} style={{ width: 11, height: 11 }} />
+            ),
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function SettingsDialog(props: {
   open: boolean;
   section: SettingsSection;
@@ -268,6 +314,7 @@ export function SettingsDialog(props: {
   onClose: () => void;
   snapshot: ConfigSnapshot | null;
   usageLines: string[];
+  usageHistory: UsageHistory | null; // WS10 — cross-session contributions heatmap
   tokens: { promptTokens: number; completionTokens: number; turns: number } | null;
   commands: DeskCommand[];
   catalog: CommandsCatalog | null;
@@ -770,6 +817,19 @@ export function SettingsDialog(props: {
           <Row title="This session" desc={props.tokens ? `${props.tokens.turns} turns` : 'No turns yet.'}>
             <span className="dim">{props.tokens ? `${props.tokens.promptTokens.toLocaleString()} in · ${props.tokens.completionTokens.toLocaleString()} out` : '—'}</span>
           </Row>
+          <div className="set-h2">Across all sessions (last year)</div>
+          {props.usageHistory ? (
+            <>
+              <Row
+                title="Lifetime activity"
+                desc={`${props.usageHistory.total.turns.toLocaleString()} turns · ${props.usageHistory.total.calls.toLocaleString()} requests · ${(props.usageHistory.total.promptTokens + props.usageHistory.total.completionTokens).toLocaleString()} tokens`}
+              />
+              <UsageHeatmap hist={props.usageHistory} />
+              <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>Each square is a UTC day; brighter = more tokens. This tally is durable and survives session delete.</div>
+            </>
+          ) : (
+            <pre className="usage-pre">Loading cross-session usage…</pre>
+          )}
           <div className="set-h2">Per-actor breakdown (/usage)</div>
           <pre className="usage-pre">{props.usageLines.length ? props.usageLines.join('\n') : 'Run a turn first — the breakdown shows parent vs child spend, cache hit rate, and offload savings.'}</pre>
           <Row title="Workspace" desc={<code>{snapshot?.workspaceRoot ?? '—'}</code>} />

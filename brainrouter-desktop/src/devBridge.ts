@@ -1033,6 +1033,29 @@ export function installDevBridge(): void {
       'TOTAL       68,735 in · 3,927 out',
       'offload: 31% of parent context avoided via child agents',
     ],
+    // WS10 — a year of synthetic daily usage so the contributions heatmap renders
+    // in browser-only dev (busier weekdays, ~20% idle days, a gentle wave).
+    'usage-history': () => {
+      const days: Array<{ day: string; promptTokens: number; completionTokens: number; calls: number; turns: number }> = [];
+      const total = { promptTokens: 0, completionTokens: 0, calls: 0, turns: 0 };
+      const now = Date.now();
+      for (let i = 364; i >= 0; i--) {
+        const t = now - i * 86_400_000;
+        const wd = new Date(t).getUTCDay();
+        const weekendDamp = wd === 0 || wd === 6 ? 0.2 : 1;
+        const wave = (Math.sin(i * 0.7) + 1) / 2; // 0..1
+        const turns = (i * 37) % 5 === 0 ? 0 : Math.round(weekendDamp * wave * 8);
+        const promptTokens = turns * (1200 + ((i * 53) % 900));
+        const completionTokens = turns * (300 + ((i * 29) % 400));
+        const calls = turns * (1 + ((i * 17) % 3));
+        days.push({ day: new Date(t).toISOString().slice(0, 10), promptTokens, completionTokens, calls, turns });
+        total.promptTokens += promptTokens;
+        total.completionTokens += completionTokens;
+        total.calls += calls;
+        total.turns += turns;
+      }
+      return { days, total };
+    },
     'search-transcript': (a) => [
       { index: 3, role: 'assistant', snippet: `…the reranker ${String(a.q ?? 'blend')} replaces the retriever order — fix is a weighted blend…` },
       { index: 7, role: 'user', snippet: `…can you re-run the sweep after the ${String(a.q ?? 'blend')} change…` },
