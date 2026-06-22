@@ -3916,3 +3916,8 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .atlas-assess-btn:hover:not(:disabled) { border-color: var(--accent); }
 .atlas-assess-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; width: 100%; }
 .atlas-assess-btn:disabled { opacity: 0.6; cursor: default; }
+
+/* ===== ATLAS-15 — test-coverage flag ===== */
+.atlas-untested { color: var(--err); }
+.atlas-detail-untested { display: flex; align-items: center; gap: 7px; padding: 5px 9px; border-radius: 7px; font-size: 11px; color: var(--err); background: color-mix(in srgb, var(--err) 12%, transparent); }
+.atlas-detail-untested .atlas-detail-change-dot { background: var(--err); }

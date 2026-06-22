@@ -23,6 +23,7 @@ const DEV_FILES: Array<[string, 'code' | 'config' | 'docs' | 'infra', 'simple' |
   ['src/payment/payment.ts', 'code', 'moderate'], ['src/payment/validate.ts', 'code', 'simple'],
   ['src/ui/App.tsx', 'code', 'moderate'], ['src/ui/ProductList.tsx', 'code', 'moderate'], ['src/ui/CartView.tsx', 'code', 'simple'],
   ['src/shared/types.ts', 'code', 'simple'], ['src/shared/http.ts', 'code', 'simple'],
+  ['src/cart/cartStore.test.ts', 'code', 'simple'],
   ['package.json', 'config', 'simple', 'json'], ['tsconfig.json', 'config', 'simple', 'json'], ['Dockerfile', 'infra', 'simple', 'docker'],
   ['README.md', 'docs', 'simple', 'markdown'],
 ];
@@ -36,6 +37,7 @@ const DEV_IMPORTS: Array<[string, string]> = [
   ['src/payment/payment.ts', 'src/payment/validate.ts'], ['src/payment/payment.ts', 'src/shared/http.ts'],
   ['src/ui/App.tsx', 'src/ui/ProductList.tsx'], ['src/ui/App.tsx', 'src/ui/CartView.tsx'], ['src/ui/App.tsx', 'src/shared/http.ts'],
   ['src/cart/cartStore.ts', 'src/shared/types.ts'], ['src/catalog/search.ts', 'src/shared/types.ts'],
+  ['src/cart/cartStore.test.ts', 'src/cart/cartStore.ts'],
 ];
 function devAtlasGraph(): AtlasGraph {
   const nodes = DEV_FILES.map(([p, c, cx, lang]) => devFile(p, c, cx, lang));

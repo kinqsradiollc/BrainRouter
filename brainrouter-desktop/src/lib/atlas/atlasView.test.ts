@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { AtlasGraph } from '@kinqs/brainrouter-types';
-import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize, atlasNodeFacts, atlasSearchMatches, atlasGrouping, atlasGroupedLayout, atlasOverviewModel, atlasDomainModel, atlasChangeKind, atlasChangeMap, atlasNodeChanges, atlasImpact, atlasImpactOf } from './atlasView.js';
+import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize, atlasNodeFacts, atlasSearchMatches, atlasGrouping, atlasGroupedLayout, atlasOverviewModel, atlasDomainModel, atlasChangeKind, atlasChangeMap, atlasNodeChanges, atlasImpact, atlasImpactOf, atlasUncoveredFiles, isTestFile } from './atlasView.js';
 
 function fixture(): AtlasGraph {
   return {
@@ -243,6 +243,23 @@ test('atlasImpact: transitive dependents (blast radius) + dependencies + byLayer
   // changeset impact excludes the changed set itself
   const set = atlasImpactOf(g, ['file:src/db/store.ts']);
   assert.deepEqual(set.dependents.sort(), ['file:src/api/routes.ts', 'file:src/api/server.ts']);
+});
+
+test('isTestFile + atlasUncoveredFiles flag code files with no test', () => {
+  assert.equal(isTestFile('src/x.test.ts'), true);
+  assert.equal(isTestFile('src/__tests__/x.ts'), true);
+  assert.equal(isTestFile('src/x.spec.tsx'), true);
+  assert.equal(isTestFile('src/x.ts'), false);
+
+  const g = layered();
+  // add a test that imports store.ts → store covered; server/routes uncovered
+  g.nodes.push({ id: 'file:src/db/store.test.ts', type: 'file', name: 'store.test.ts', filePath: 'src/db/store.test.ts', category: 'code' });
+  g.edges.push({ source: 'file:src/db/store.test.ts', target: 'file:src/db/store.ts', type: 'imports' });
+  const un = atlasUncoveredFiles(g);
+  assert.equal(un.has('file:src/db/store.ts'), false); // imported by a test
+  assert.equal(un.has('file:src/api/server.ts'), true); // no test
+  assert.equal(un.has('file:src/api/routes.ts'), true);
+  assert.equal(un.has('file:src/db/store.test.ts'), false); // the test itself isn't "uncovered"
 });
 
 test('atlasChangeKind maps git porcelain codes', () => {
