@@ -18,7 +18,7 @@ export interface ExportAndMenuDialogsProps {
   openExternal: (what: string) => void;
   togglePin: (s: SessionRow, root?: string) => void;
   toggleComplete: (s: SessionRow, root?: string) => void;
-  startRename: (s: SessionRow) => void;
+  startRename: (s: SessionRow, root?: string) => void;
   forkSessionAction: (key: string, upToTs?: number, root?: string) => void;
   moveToGroup: (key: string, group: string | null, root?: string) => void;
   sessionGroups: string[];
@@ -73,7 +73,7 @@ export function ExportAndMenuDialogs(p: ExportAndMenuDialogsProps): React.ReactE
               ) : null}
               <button className="ctx-item" onClick={() => togglePin(s, root)}><Icon name="pin" size={13} /><span>{s.pinned ? 'Unpin' : 'Pin'}</span><span className="ctx-key">P</span></button>
               <button className="ctx-item" onClick={() => toggleComplete(s, root)}><Icon name="check-circle" size={13} /><span>{s.status === 'completed' ? 'Mark as active' : 'Mark as completed'}</span><span className="ctx-key">U</span></button>
-              {!root ? <button className="ctx-item" onClick={() => startRename(s)}><Icon name="edit" size={13} /><span>Rename</span><span className="ctx-key">R</span></button> : null}
+              <button className="ctx-item" onClick={() => startRename(s, root)}><Icon name="edit" size={13} /><span>Rename</span><span className="ctx-key">R</span></button>
               <button className="ctx-item" onClick={() => forkSessionAction(s.sessionKey, undefined, root)}><Icon name="fork" size={13} /><span>Fork</span><span className="ctx-key">F</span></button>
               <div className="ctx-sub">
                 <button className="ctx-item"><Icon name="folder" size={13} /><span>Move to group</span><span className="ctx-key"><Icon name="chev-right" size={10} /></span></button>

@@ -30,6 +30,10 @@ export interface SessionState {
   setLiveChildren: React.Dispatch<React.SetStateAction<Record<string, { childId: string; role: string; tool?: string; startedAt: number }>>>;
   renamingKey: string | null;
   setRenamingKey: React.Dispatch<React.SetStateAction<string | null>>;
+  /** WS-UX — workspace root of the session being renamed (for cross-workspace
+   *  inline rename of a parked-project chat); null = active workspace. */
+  renamingRoot: string | null;
+  setRenamingRoot: React.Dispatch<React.SetStateAction<string | null>>;
   renameDraft: string;
   setRenameDraft: React.Dispatch<React.SetStateAction<string>>;
   showArchived: boolean;
@@ -109,6 +113,7 @@ export function useSessionState(): SessionState {
   // DESK-6m — per-chat ⋮ context menu + its sub-flows.
   const [sessionMenu, setSessionMenu] = useState<{ key: string; x: number; y: number; row?: SessionRow; root?: string } | null>(null);
   const [renamingKey, setRenamingKey] = useState<string | null>(null);
+  const [renamingRoot, setRenamingRoot] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [showArchived, setShowArchived] = useState(false);
   const [sessionGroups, setSessionGroups] = useState<string[]>([]);
@@ -166,7 +171,7 @@ export function useSessionState(): SessionState {
     viewKey, setViewKey, running, setRunning, stopping, setStopping,
     runningSessions, setRunningSessions, runningSessionsRef,
     sessions, setSessions, sessionsRef, pendingSessionsRef,
-    liveChildren, setLiveChildren, renamingKey, setRenamingKey, renameDraft, setRenameDraft,
+    liveChildren, setLiveChildren, renamingKey, setRenamingKey, renamingRoot, setRenamingRoot, renameDraft, setRenameDraft,
     showArchived, setShowArchived, sessionGroups, setSessionGroups,
     finishedTasks, setFinishedTasks, taskView, setTaskView, workflowView, setWorkflowView,
     sessionMenu, setSessionMenu, sessionKeyRef, cardOpenRef, errorsBySession, lastPromptRef, planFeedbackRef, goalContPendingRef, turnFailsRef,

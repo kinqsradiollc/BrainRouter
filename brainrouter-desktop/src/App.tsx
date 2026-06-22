@@ -75,7 +75,7 @@ export function App(): React.ReactElement {
     viewKey, setViewKey, running, setRunning, stopping, setStopping,
     runningSessions, setRunningSessions, runningSessionsRef,
     sessions, setSessions, sessionsRef, pendingSessionsRef,
-    liveChildren, setLiveChildren, renamingKey, setRenamingKey, renameDraft, setRenameDraft,
+    liveChildren, setLiveChildren, renamingKey, setRenamingKey, renamingRoot, setRenamingRoot, renameDraft, setRenameDraft,
     showArchived, setShowArchived, sessionGroups, setSessionGroups,
     finishedTasks, setFinishedTasks, taskView, setTaskView, workflowView, setWorkflowView,
     sessionMenu, setSessionMenu, sessionKeyRef, cardOpenRef, errorsBySession, lastPromptRef, planFeedbackRef, goalContPendingRef, turnFailsRef,
@@ -344,7 +344,7 @@ export function App(): React.ReactElement {
     closeSessionMenu, setMeta, togglePin, toggleComplete, toggleArchive, moveToGroup,
     startRename, commitRename, forkSessionAction, deleteSessionAction, openExternal, openSessionMenu,
   } = useSessionActions({
-    q, running, stopping, interaction, renamingKey, renameDraft, workspaces, info, projSessions, recentsOpenByRoot,
+    q, running, stopping, interaction, renamingKey, renamingRoot, renameDraft, workspaces, info, projSessions, recentsOpenByRoot,
     runningSessionsRef, sessionKeyRef, activeWsRef, pendingWorkspaceRef, pendingResumeRef, pendingSessionsRef, sessionsRef,
     workspaceGenRef, expandedProjectsRef,
     liveBuf, chatRef, atBottomRef, errorsBySession, cachedSessionRowsRef,
@@ -352,7 +352,7 @@ export function App(): React.ReactElement {
     setSessions, setSearchHits, setViewKey, setTaskView, setWorkflowView, setWorkspaces, setExpandedProjects, setTrustAsk,
     setHostUp, setGitInfo, setPrInfo, setBranches, setChangedFiles, setAllFiles, setFileView, setDiffView,
     setTokens, setContextUsage, setGateBlock, setLastPlan, setPlanHistory, setFleet, setLiveChildren, setRecentTasks, setFinishedTasks, setCommitSubjects, setToast,
-    setProjSessions, setSettings, setSessionMenu, setRenamingKey, setRenameDraft, setDashBusy, setGlobalBoards,
+    setProjSessions, setSettings, setSessionMenu, setRenamingKey, setRenamingRoot, setRenameDraft, setDashBusy, setGlobalBoards,
     pendingGitRef, ensurePanel, resetTermDock, editor, ci,
   });
 
@@ -1083,6 +1083,7 @@ export function App(): React.ReactElement {
         projectRoots={projectRoots} activeReviewBadge={activeReviewBadge} prInfo={prInfo}
         recentsOpen={recentsOpen} setRecentsOpen={setRecentsOpen} visibleProjectSessions={visibleProjectSessions}
         renderSessionNode={renderSessionNode} openSessionMenu={openSessionMenu} hiddenProjectSessions={hiddenProjectSessions} ungroupedSessions={ungroupedSessions}
+        renamingKey={renamingKey} renameDraft={renameDraft} setRenameDraft={setRenameDraft} setRenamingKey={setRenamingKey} commitRename={commitRename}
         setVisibleCount={setVisibleCount} groupedSessions={groupedSessions} archivedCount={archivedCount}
         setShowArchived={setShowArchived} showArchived={showArchived}
         expandedProjects={expandedProjects} projSessions={projSessions} runningWs={runningWorkspaces} runningSessions={runningSessions} workspaceRunCount={workspaceRunCount}

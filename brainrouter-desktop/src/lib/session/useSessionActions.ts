@@ -33,6 +33,7 @@ export interface SessionActionsCtx {
   stopping: boolean;
   interaction: InteractionRequest | null;
   renamingKey: string | null;
+  renamingRoot: string | null;
   renameDraft: string;
   workspaces: { current: string | null; recents: string[] };
   info: { sessionKey?: string; model?: string; workspaceRoot?: string; username?: string };
@@ -91,6 +92,7 @@ export interface SessionActionsCtx {
   setSettings: React.Dispatch<React.SetStateAction<{ open: boolean; section: SettingsSection }>>;
   setSessionMenu: React.Dispatch<React.SetStateAction<{ key: string; x: number; y: number; row?: SessionRow; root?: string } | null>>;
   setRenamingKey: React.Dispatch<React.SetStateAction<string | null>>;
+  setRenamingRoot: React.Dispatch<React.SetStateAction<string | null>>;
   setRenameDraft: React.Dispatch<React.SetStateAction<string>>;
   setDashBusy: React.Dispatch<React.SetStateAction<boolean>>;
   setGlobalBoards: React.Dispatch<React.SetStateAction<WorkspaceDash[] | null>>;
@@ -131,7 +133,7 @@ export interface SessionActions {
   toggleComplete: (s: SessionRow, root?: string) => void;
   toggleArchive: (s: SessionRow, root?: string) => void;
   moveToGroup: (key: string, group: string | null, root?: string) => void;
-  startRename: (s: SessionRow) => void;
+  startRename: (s: SessionRow, root?: string) => void;
   commitRename: () => void;
   forkSessionAction: (key: string, upToTs?: number, root?: string) => void;
   deleteSessionAction: (key: string, root?: string) => void;
@@ -141,7 +143,7 @@ export interface SessionActions {
 
 export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
   const {
-    q, running, stopping, interaction, renamingKey, renameDraft, workspaces, info, projSessions, recentsOpenByRoot,
+    q, running, stopping, interaction, renamingKey, renamingRoot, renameDraft, workspaces, info, projSessions, recentsOpenByRoot,
     runningSessionsRef, sessionKeyRef, activeWsRef, pendingWorkspaceRef, pendingResumeRef, pendingSessionsRef, sessionsRef,
     workspaceGenRef, expandedProjectsRef,
     liveBuf, chatRef, atBottomRef, errorsBySession, cachedSessionRowsRef,
@@ -149,7 +151,7 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
     setSessions, setSearchHits, setViewKey, setTaskView, setWorkflowView, setWorkspaces, setExpandedProjects, setTrustAsk,
     setHostUp, setGitInfo, setPrInfo, setBranches, setChangedFiles, setAllFiles, setFileView, setDiffView,
     setTokens, setContextUsage, setGateBlock, setLastPlan, setPlanHistory, setFleet, setLiveChildren, setRecentTasks, setFinishedTasks, setCommitSubjects, setToast,
-    setProjSessions, setSettings, setSessionMenu, setRenamingKey, setRenameDraft, setDashBusy, setGlobalBoards,
+    setProjSessions, setSettings, setSessionMenu, setRenamingKey, setRenamingRoot, setRenameDraft, setDashBusy, setGlobalBoards,
     pendingGitRef, ensurePanel, resetTermDock, editor, ci,
   } = ctx;
 
@@ -479,8 +481,8 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
   const toggleComplete = (s: SessionRow, root?: string): void => setMeta(s.sessionKey, { status: s.status === 'completed' ? 'active' : 'completed' }, root);
   const toggleArchive = (s: SessionRow, root?: string): void => setMeta(s.sessionKey, { archived: !s.archived }, root);
   const moveToGroup = (key: string, group: string | null, root?: string): void => setMeta(key, { group }, root);
-  const startRename = (s: SessionRow): void => { setRenamingKey(s.sessionKey); setRenameDraft(s.firstUserMessage || ''); closeSessionMenu(); };
-  const commitRename = (): void => { if (renamingKey) q('q-session-meta', 'action:session-meta', { sessionKey: renamingKey, patch: { title: renameDraft.trim() } }); setRenamingKey(null); };
+  const startRename = (s: SessionRow, root?: string): void => { setRenamingKey(s.sessionKey); setRenamingRoot(root ?? null); setRenameDraft(s.firstUserMessage || ''); closeSessionMenu(); };
+  const commitRename = (): void => { if (renamingKey) q('q-session-meta', 'action:session-meta', { sessionKey: renamingKey, patch: { title: renameDraft.trim() }, ...(renamingRoot ? { root: renamingRoot } : {}) }); setRenamingKey(null); setRenamingRoot(null); };
   // DESK-6v — upToTs (a message's epoch-ms ts) branches the fork at that message;
   // omitted (the ⋮ menu) forks the whole conversation.
   const forkSessionAction = (key: string, upToTs?: number, root?: string): void => { q('q-session-fork', 'action:session-fork', { sessionKey: key, ...(upToTs != null ? { upToTs } : {}), ...(root ? { root } : {}) }); closeSessionMenu(); };
