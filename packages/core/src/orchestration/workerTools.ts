@@ -30,6 +30,7 @@ import {
   type WorkerMeta,
 } from '../worker/workerStore.js';
 import { enqueueCompletion } from '../session/completionInbox.js';
+import { registerInterruptibleAgent, unregisterInterruptibleAgent } from './tools.js';
 
 /** In-process worker runs, keyed by worker id. */
 const runningWorkers = new Map<string, Promise<void>>();
@@ -89,6 +90,9 @@ export function spawnWorkerThread(
   });
 
   appendWorkerTranscript(input.workspaceRoot, worker.id, { ts: ts(), role: 'system', event: 'spawn', goal: input.goal });
+  // WS6 — register the worker's live handle so a parent Stop interrupts it too
+  // (workers used to keep running through a Stop). Unregistered in the finally.
+  registerInterruptibleAgent(worker.id, childAgent, input.parentSessionKey);
 
   const promise = (async () => {
     try {
@@ -137,6 +141,7 @@ export function spawnWorkerThread(
       }
     } finally {
       runningWorkers.delete(worker.id);
+      unregisterInterruptibleAgent(worker.id); // WS6 — no longer interruptible
     }
   })();
 

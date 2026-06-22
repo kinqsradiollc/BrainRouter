@@ -205,3 +205,29 @@ test('executePhasePlan forwards a read-manifest into the next phase prompt', asy
   assert.match(implPrompt, /src\/a\.ts — read by plan\(architect\)/);
   assert.match(implPrompt, /src\/b\.ts/);
 });
+
+test('WS6: executePhasePlan halts on an aborted signal — no further phases dispatched', async () => {
+  const { plan } = normalizePhasePlan({
+    phases: [
+      { id: 'p1', agents: [{ role: 'worker', prompt: 'do p1' }] },
+      { id: 'p2', agents: [{ role: 'worker', prompt: 'do p2' }], dependsOn: ['p1'] },
+    ],
+  });
+  assert.ok(plan);
+  const ac = new AbortController();
+  ac.abort(); // a user Stop before the run dispatches anything
+  const { runner, calls } = recordingRunner({});
+  const result = await executePhasePlan(plan!, runner, { signal: ac.signal });
+  assert.equal(calls.length, 0, 'no phase is dispatched once the signal is aborted');
+  assert.equal(result.status, 'failed', 'an interrupted run is not reported as completed');
+});
+
+test('WS6: executePhasePlan runs normally when the signal is not aborted', async () => {
+  const { plan } = normalizePhasePlan({ phases: [{ id: 'p1', agents: [{ role: 'worker', prompt: 'do p1' }] }] });
+  assert.ok(plan);
+  const ac = new AbortController(); // never aborted
+  const { runner, calls } = recordingRunner({});
+  const result = await executePhasePlan(plan!, runner, { signal: ac.signal });
+  assert.equal(calls.length, 1, 'phase dispatched normally with a live signal');
+  assert.equal(result.status, 'completed');
+});

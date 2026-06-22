@@ -17,6 +17,7 @@ import { normalizePhasePlan, type PhasePlan } from '../orchestration/phasePlan.j
 import { buildTemplatePlan } from './workflowTemplates.js';
 import {
   executePhasePlan,
+  type ExecuteHooks,
   type PhaseRunner,
   type PhaseChildResult,
   type PhaseStatus,
@@ -238,7 +239,8 @@ export async function runWorkflow(
       },
     );
 
-  const hooks = makeRunHooks(ws, slug);
+  const hooks: ExecuteHooks = makeRunHooks(ws, slug);
+  hooks.signal = ctx.interruptSignal; // WS6 — a user Stop halts further phase dispatch
 
   // WF-BG — background mode: kick the run off DETACHED so a long fan-out doesn't
   // block the REPL turn. The durable ledger (visible via /workflows + the bg
@@ -370,7 +372,7 @@ export async function resumeWorkflow(slug: string, ctx: OrchestrationContext, de
     getCliKnobs().maxConcurrentChildren ?? 8,
     buildLoop ? { workspaceRootOverride: buildLoop.workspaceRoot } : isFanOutBuild ? { holdWorktree: true } : undefined,
   );
-  const execution = await executePhasePlan(plan, runner, makeRunHooks(ws, slug), { completed, priorOutputs });
+  const execution = await executePhasePlan(plan, runner, { ...makeRunHooks(ws, slug), signal: ctx.interruptSignal }, { completed, priorOutputs });
   const buildMerge = buildLoop ? finalizeBuildLoop(ws, slug, buildLoop, execution) : undefined;
   const fanOutMerge = isFanOutBuild ? finalizeFanOutBuild(ws, collectFanOutSlices(ws, execution), reviewPhaseOutput(execution)) : undefined;
   return JSON.stringify(

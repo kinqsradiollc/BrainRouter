@@ -94,6 +94,10 @@ export interface PhasePlanExecution {
 export interface ExecuteHooks {
   onPhaseStart?: (phase: WorkflowPhase, index: number, total: number) => void;
   onPhaseComplete?: (execution: PhaseExecution) => void;
+  /** WS6 — when this aborts (a user Stop), executePhasePlan stops dispatching
+   *  further phases. In-flight phases' children/workers are interrupted via the
+   *  agent registry; this halts the loop so no NEW phase starts. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -155,9 +159,14 @@ export async function executePhasePlan(
   // MAS-READMANIFEST — file path → set of "phaseId(role)" that read it, accrued
   // across phases and injected into each subsequent phase's prompts.
   const filesMapped = new Map<string, Set<string>>();
+  let aborted = false; // WS6 — set when a Stop halts the run mid-plan
 
   for (let i = 0; i < order.length; i++) {
     const phase = order[i];
+    // WS6 — a user Stop aborts the signal; halt before dispatching the next
+    // phase. The in-flight phase (if any) already returned because its
+    // children/workers were interrupted via the agent registry.
+    if (hooks.signal?.aborted) { aborted = true; break; }
     // WF-RESUME — a phase already completed in a prior run is recorded as done
     // (with its persisted output) and NOT re-spawned.
     if (resume?.completed.has(phase.id)) {
@@ -225,8 +234,8 @@ export async function executePhasePlan(
     hooks.onPhaseComplete?.(execution);
   }
 
-  const status: PhaseStatus = executions.some((p) => p.status === 'failed')
-    ? 'failed'
+  const status: PhaseStatus = aborted || executions.some((p) => p.status === 'failed')
+    ? 'failed' // WS6 — an interrupted run is not "completed"
     : executions.some((p) => p.status === 'partial')
       ? 'partial'
       : 'completed';
