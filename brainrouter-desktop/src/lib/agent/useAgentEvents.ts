@@ -546,6 +546,15 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       setToast(`✗ ${error}`);
       return;
     }
+    // WS8 — rewind result: an in-app warning (top-right toast) when blocked
+    // because code was generated after the point, or a confirmation when it
+    // truncated. The agent's history is rewound host-side for the next turn.
+    if (id === 'a-rewind') {
+      const r = result as { ok?: boolean; reason?: string } | undefined;
+      if (r && r.ok === false) setToast(`⚠ ${r.reason ?? 'Rewind blocked.'}`);
+      else if (r && r.ok) setToast('Rewound to here — your next message continues from this point.');
+      return;
+    }
     if (id === 'q-attach' || id.startsWith('q-attach:')) {
       const uploadId = id.startsWith('q-attach:') ? id.slice('q-attach:'.length) : '';
       const r = result as { ok?: boolean; attachment?: { name: string; id: string; kind: string }; contextMarkdown?: string; error?: string } | null;

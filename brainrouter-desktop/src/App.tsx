@@ -856,6 +856,7 @@ export function App(): React.ReactElement {
         for (const k of Object.keys(errorsBySession.current)) errorsBySession.current[k] = errorsBySession.current[k].filter((er) => er.id !== id);
       }}
       onFork={(ts) => forkSessionAction(sessionKeyRef.current ?? '', ts)}
+      onRewind={(ts) => q('a-rewind', 'action:rewind-to', { ts })}
     />
   );
   // Memoized on [rows, inlineDiffs, running] ONLY — NOT liveText/nowTick — so the
