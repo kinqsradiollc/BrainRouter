@@ -12,7 +12,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "typecheck:domain": "tsc -p tsconfig.domain.json --noEmit",
     "test": "jest",
-    "test:domain": "tsx --test \"src/domain/**/*.test.ts\""
+    "test:domain": "node scripts/test-domain.mjs"
   },
   "dependencies": {
     "@gorhom/bottom-sheet": "^5.0.6",
