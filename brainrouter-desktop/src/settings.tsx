@@ -351,7 +351,17 @@ export function SettingsDialog(props: {
   const [roleDraft, setRoleDraft] = useState<Record<string, { provider: string; model: string }>>({});
   // WS10 — usage heatmap range selector (week / month / year). Re-fetches usage-history.
   const [usageDays, setUsageDays] = useState(365);
+  // WS12 — provider configure modal + delete confirmation.
+  const [provModalOpen, setProvModalOpen] = useState(false);
+  const [confirmDeleteProvider, setConfirmDeleteProvider] = useState<string | null>(null);
   const refreshSnapshot = (): void => props.onAction('q-snapshot', 'config-snapshot');
+  /** WS12 — open the configure modal: edit an existing provider, prefill from a
+   *  catalog id, or a blank custom provider. */
+  const openProviderModal = (init?: { name?: string; provider?: string; endpoint?: string | null; model?: string; editing?: string }): void => {
+    setEditingProvider(init?.editing ?? null);
+    setProvDraft({ name: init?.name ?? '', provider: init?.provider ?? 'openai', endpoint: init?.endpoint ?? '', apiKey: '', model: init?.model ?? '' });
+    setProvModalOpen(true);
+  };
   const prefs = (snapshot?.prefs ?? {}) as Record<string, unknown>;
   const ps = (key: string, dflt: string): string => String(prefs[key] ?? dflt);
   const pb = (key: string, dflt: boolean): boolean => Boolean(prefs[key] ?? dflt);
@@ -439,7 +449,7 @@ export function SettingsDialog(props: {
             </Row>
 
             <div className="set-h2">Provider gallery</div>
-            <div className="set-desc" style={{ marginBottom: 6 }}>Pick a provider to start configuring it — its endpoint pre-fills into the form below; then add your key and model. These are the OpenAI-compatible providers BrainRouter ships with.</div>
+            <div className="set-desc" style={{ marginBottom: 6 }}>Pick a provider to configure it — a dialog opens with its endpoint pre-filled and a live model picker; just add your key. These are the OpenAI-compatible providers BrainRouter ships with.</div>
             <div className="provider-gallery">
               {providerCatalog.length === 0 ? <div className="empty">No providers in the catalog.</div> : null}
               {providerCatalog.map((c) => {
@@ -448,7 +458,7 @@ export function SettingsDialog(props: {
                 const isCustom = c.id === 'openai-compatible';
                 return (
                   <button key={c.id} type="button" className="provider-card" title={`Configure a ${c.label} provider`}
-                    onClick={() => { setEditingProvider(null); setProvDraft({ name: isCustom ? '' : c.id, provider: isCustom ? '' : c.id, endpoint: isCustom ? '' : c.endpoint, apiKey: '', model: '' }); }}>
+                    onClick={() => openProviderModal({ name: isCustom ? '' : c.id, provider: isCustom ? '' : c.id, endpoint: isCustom ? '' : c.endpoint })}>
                     <span className="pc-name">{c.label}</span>
                     <span className="pc-host">{host}</span>
                     <span className="pc-meta">
@@ -461,57 +471,84 @@ export function SettingsDialog(props: {
             </div>
 
             <div className="set-h2">Providers</div>
-            <div className="set-desc" style={{ marginBottom: 6 }}>Your named OpenAI-compatible providers. <b>Use as default</b> makes one the default above (the main model picks straight from it — no re-entering the endpoint or key); any provider can also be routed to a sub-agent role below. Keys are write-only — never echoed back.</div>
-            {(snapshot?.providers ?? []).length === 0 ? <div className="empty">None yet — add one below, then “Use as default” or route a sub-agent to it.</div> : null}
-            {(snapshot?.providers ?? []).map((p) => (
-              <Row key={p.name} title={p.name} desc={<>{p.provider} · {p.model}{p.endpoint ? ` · ${p.endpoint.replace(/^https?:\/\//, '')}` : ''}{p.hasKey ? ' · key set' : ' · no key'}</>}>
-                <button className="btn" title="Make this the default — the main model picks from it"
-                  onClick={() => { props.onAction('a-setdefault', 'action:set-default-provider', { name: p.name }); setTimeout(refreshSnapshot, 80); }}>Use as default</button>
-                <button className="btn" title="Edit this provider" onClick={() => {
-                  setEditingProvider(p.name);
-                  setProvDraft({ name: p.name, provider: p.provider, endpoint: p.endpoint ?? '', apiKey: '', model: p.model });
-                }}>Edit</button>
-                <button className="btn" title="Remove this provider" onClick={() => { props.onAction('a-rmprov', 'action:remove-provider', { name: p.name }); refreshSnapshot(); }}>Remove</button>
-              </Row>
-            ))}
-            <div className="mcp-add">
-              <div className="mcp-add-row">
-                <input className="ctl" placeholder="name (e.g. groq)" disabled={!!editingProvider} value={provDraft.name} onChange={(e) => setProvDraft((d) => ({ ...d, name: e.target.value }))} />
-                <ChoiceControl value={providerCatalog.some((c) => c.id === provDraft.provider) ? provDraft.provider : '__custom__'}
-                  options={[...providerCatalog.map((c) => ({ value: c.id, label: c.label, detail: c.local ? 'local' : undefined })), { value: '__custom__', label: 'Custom...' }]}
-                  onChange={(id) => {
-                    if (id === '__custom__') setProvDraft((d) => ({ ...d, provider: '', endpoint: '' }));
-                    else setProvDraft((d) => ({ ...d, provider: id, endpoint: providerCatalog.find((c) => c.id === id)?.endpoint ?? d.endpoint }));
-                  }} />
+            <div className="set-desc" style={{ marginBottom: 6 }}><b>Use as default</b> makes one the default above (the main model picks straight from it). <b>Configure</b> opens a dialog with a live model picker; keys are write-only — never echoed back.</div>
+            {savedProviders.length === 0 ? <div className="empty">None yet — pick one from the gallery above, or add a custom provider.</div> : null}
+            {savedProviders.length ? (
+              <div className="provider-gallery">
+                {[...savedProviders].sort((a, b) => (a.name === defaultProvider ? -1 : b.name === defaultProvider ? 1 : 0)).map((p) => (
+                  <div key={p.name} className="provider-card" style={{ cursor: 'default' }}>
+                    <span className="pc-name">{p.name}{p.name === defaultProvider ? <span className="badge native" style={{ marginLeft: 6 }}>default</span> : null}</span>
+                    <span className="pc-host">{p.provider} · {p.model}{p.endpoint ? ` · ${p.endpoint.replace(/^https?:\/\//, '')}` : ''} · {p.hasKey ? 'key set' : 'no key'}</span>
+                    <span className="pc-meta" style={{ gap: 4, flexWrap: 'wrap' }}>
+                      {p.name !== defaultProvider ? <button className="btn" title="Make this the default" onClick={() => { props.onAction('a-setdefault', 'action:set-default-provider', { name: p.name }); setTimeout(refreshSnapshot, 80); }}>Use as default</button> : null}
+                      <button className="btn" onClick={() => openProviderModal({ editing: p.name, name: p.name, provider: p.provider, endpoint: p.endpoint ?? '', model: p.model })}>Configure</button>
+                      <button className="btn" title="Remove this provider" onClick={() => setConfirmDeleteProvider(p.name)}>Remove</button>
+                    </span>
+                  </div>
+                ))}
               </div>
-              {providerCatalog.some((c) => c.id === provDraft.provider) ? null : (
-                <input className="ctl" placeholder="provider id (openai, groq, …)" value={provDraft.provider} onChange={(e) => setProvDraft((d) => ({ ...d, provider: e.target.value }))} />
-              )}
-              <input className="ctl" placeholder="endpoint, e.g. https://api.groq.com/openai/v1"
-                value={provDraft.endpoint || providerCatalog.find((c) => c.id === provDraft.provider)?.endpoint || ''}
-                onChange={(e) => setProvDraft((d) => ({ ...d, endpoint: e.target.value }))} />
-              <div className="mcp-add-row">
-                {/* WS12 — model picker driven by the endpoint's live GET /models
-                    (never a hardcoded list); free-text fallback for an offline
-                    endpoint or a model the list doesn't include. */}
-                <input className="ctl" placeholder="default model" list="ws12-provider-models" value={provDraft.model} onChange={(e) => setProvDraft((d) => ({ ...d, model: e.target.value }))} />
-                <datalist id="ws12-provider-models">
-                  {(editingProvider ? (props.providerModels[editingProvider] ?? []) : props.endpointModels).map((m) => <option key={m} value={m} />)}
-                </datalist>
-                <input className="ctl" type="password" placeholder="API key" value={provDraft.apiKey} onChange={(e) => setProvDraft((d) => ({ ...d, apiKey: e.target.value }))} />
+            ) : null}
+            <button className="btn" style={{ marginTop: 8 }} onClick={() => openProviderModal()}>+ Add custom provider</button>
+
+            {provModalOpen ? (
+              <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) setProvModalOpen(false); }}>
+                <div className="dialog" style={{ width: 480 }}>
+                  <div className="dialog-title">{editingProvider ? `Configure ${editingProvider}` : 'Add a provider'}</div>
+                  <div className="mcp-add">
+                    <div className="mcp-add-row">
+                      <input className="ctl" placeholder="name (e.g. groq)" disabled={!!editingProvider} value={provDraft.name} onChange={(e) => setProvDraft((d) => ({ ...d, name: e.target.value }))} />
+                      <ChoiceControl value={providerCatalog.some((c) => c.id === provDraft.provider) ? provDraft.provider : '__custom__'}
+                        options={[...providerCatalog.map((c) => ({ value: c.id, label: c.label, detail: c.local ? 'local' : undefined })), { value: '__custom__', label: 'Custom...' }]}
+                        onChange={(id) => {
+                          if (id === '__custom__') setProvDraft((d) => ({ ...d, provider: '', endpoint: '' }));
+                          else setProvDraft((d) => ({ ...d, provider: id, endpoint: providerCatalog.find((c) => c.id === id)?.endpoint ?? d.endpoint }));
+                        }} />
+                    </div>
+                    {providerCatalog.some((c) => c.id === provDraft.provider) ? null : (
+                      <input className="ctl" placeholder="provider id (openai, groq, …)" value={provDraft.provider} onChange={(e) => setProvDraft((d) => ({ ...d, provider: e.target.value }))} />
+                    )}
+                    <input className="ctl" placeholder="endpoint, e.g. https://api.groq.com/openai/v1"
+                      value={provDraft.endpoint || providerCatalog.find((c) => c.id === provDraft.provider)?.endpoint || ''}
+                      onChange={(e) => setProvDraft((d) => ({ ...d, endpoint: e.target.value }))} />
+                    <div className="mcp-add-row">
+                      {/* WS12 — model picker driven by the endpoint's live GET /models
+                          (never a hardcoded list); free-text fallback for an offline
+                          endpoint or a model the list doesn't include. */}
+                      <input className="ctl" placeholder="default model" list="ws12-provider-models" value={provDraft.model} onChange={(e) => setProvDraft((d) => ({ ...d, model: e.target.value }))} />
+                      <datalist id="ws12-provider-models">
+                        {(editingProvider ? (props.providerModels[editingProvider] ?? []) : props.endpointModels).map((m) => <option key={m} value={m} />)}
+                      </datalist>
+                      <input className="ctl" type="password" placeholder={editingProvider ? 'API key (blank = keep current)' : 'API key'} value={provDraft.apiKey} onChange={(e) => setProvDraft((d) => ({ ...d, apiKey: e.target.value }))} />
+                    </div>
+                    <div className="set-actions">
+                      <button className="btn" onClick={() => setProvModalOpen(false)}>Cancel</button>
+                      <button className="btn primary" disabled={!provDraft.name.trim() || !provDraft.model.trim()}
+                        onClick={() => {
+                          const catalogEndpoint = providerCatalog.find((c) => c.id === provDraft.provider)?.endpoint ?? '';
+                          props.onAction('a-setprov', 'action:set-provider', { name: (editingProvider ?? provDraft.name).trim(), provider: provDraft.provider.trim(), endpoint: (provDraft.endpoint || catalogEndpoint).trim(), model: provDraft.model.trim(), apiKey: provDraft.apiKey.trim() });
+                          setProvModalOpen(false);
+                          setEditingProvider(null);
+                          setProvDraft({ name: '', provider: 'openai', endpoint: '', apiKey: '', model: '' });
+                          setTimeout(refreshSnapshot, 80);
+                        }}>{editingProvider ? 'Save provider' : 'Add provider'}</button>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div className="set-actions">
-                {editingProvider ? <button className="btn" onClick={() => { setEditingProvider(null); setProvDraft({ name: '', provider: 'openai', endpoint: '', apiKey: '', model: '' }); }}>Cancel</button> : null}
-                <button className="btn primary" disabled={!provDraft.name.trim() || !provDraft.model.trim()}
-                onClick={() => {
-                  const catalogEndpoint = providerCatalog.find((c) => c.id === provDraft.provider)?.endpoint ?? '';
-                  props.onAction('a-setprov', 'action:set-provider', { name: (editingProvider ?? provDraft.name).trim(), provider: provDraft.provider.trim(), endpoint: (provDraft.endpoint || catalogEndpoint).trim(), model: provDraft.model.trim(), apiKey: provDraft.apiKey.trim() });
-                  setEditingProvider(null);
-                  setProvDraft({ name: '', provider: 'openai', endpoint: '', apiKey: '', model: '' });
-                  refreshSnapshot();
-                }}>{editingProvider ? 'Save provider' : 'Add provider'}</button>
+            ) : null}
+
+            {confirmDeleteProvider ? (
+              <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) setConfirmDeleteProvider(null); }}>
+                <div className="dialog dangerous" style={{ width: 380 }}>
+                  <div className="dialog-title">Remove “{confirmDeleteProvider}”?</div>
+                  <div className="set-desc" style={{ marginBottom: 12 }}>Deletes the saved provider and its stored key. Sub-agents routed to it fall back to the main default provider.</div>
+                  <div className="set-actions">
+                    <button className="btn" onClick={() => setConfirmDeleteProvider(null)}>Cancel</button>
+                    <button className="btn primary" onClick={() => { props.onAction('a-rmprov', 'action:remove-provider', { name: confirmDeleteProvider }); setConfirmDeleteProvider(null); setTimeout(refreshSnapshot, 80); }}>Remove</button>
+                  </div>
+                </div>
               </div>
-            </div>
+            ) : null}
 
             <div className="set-h2">Sub-agent models</div>
             <div className="set-desc" style={{ marginBottom: 6 }}>Optional routing for spawned agents. Leave roles unset to follow the main default provider. The fallback row only applies to sub-agents without a role-specific override.</div>
