@@ -4,26 +4,8 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>UF-07 · Run review → triage a finding · BrainRouter Mobile</title>
+<link rel="stylesheet" href="global.css" />
 <style>
-  :root{
-    /* surfaces (Memory Instrument — dark primary) */
-    --base:#0B0D0F; --raised:#14171A; --overlay:#1E2227;
-    --border:rgba(255,255,255,0.08); --border-strong:rgba(255,255,255,0.14);
-    /* text */
-    --text:#ECEFF2; --text-2:#9BA3AC; --muted:#5E6670;
-    /* Signal — the single accent */
-    --accent:#34C28E; --accent-press:#28A87C; --accent-wash:rgba(52,194,142,0.14); --accent-text:#06140E;
-    /* Recall Heat — DATA ONLY (legend/graph), never chrome */
-    --heat-hot:#E0A063; --heat-warm:#C98F6E; --heat-cool:#6B7480; --heat-cold:#3C434B;
-    /* semantic */
-    --danger:#E5675F; --warn:#D9A441;
-    /* shape */
-    --r-chip:4px; --r-control:6px; --r-card:10px; --r-panel:12px;
-    --font:'Geist',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
-    --mono:'Geist Mono',ui-monospace,'SF Mono','Cascadia Code',Consolas,monospace;
-    --ease:cubic-bezier(.2,.8,.2,1);
-    --inset:inset 0 1px 0 rgba(255,255,255,.05);
-  }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   body{margin:0;background:#050506;color:var(--text);font-family:var(--font);font-feature-settings:"cv11";
     display:flex;flex-direction:column;align-items:center;gap:14px;padding:24px 12px 60px;min-height:100vh}
