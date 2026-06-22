@@ -1,11 +1,12 @@
 /**
  * ATLAS (0.4.16) — `/atlas` slash command.
  *
- * Builds (or shows) the codebase knowledge graph for the active workspace. The
- * build is deterministic here (scan + symbol extraction + base graph); LLM
- * enrichment (summaries, semantic edges, layers, tour) is layered on by a later
- * slice. The graph persists per-workspace via the core atlasStore, so the
- * desktop Atlas panel renders the same artifact.
+ * Builds, shows, or enriches the codebase knowledge graph for the active
+ * workspace. `build` is deterministic (scan + symbol extraction + base graph);
+ * `enrich` layers LLM understanding on top (per-file summaries + tags,
+ * architectural layers, a guided tour) using the configured model. The graph
+ * persists per-workspace via the core atlasStore, so the desktop Atlas panel
+ * renders the same artifact.
  */
 import chalk from "chalk";
 import {
@@ -15,11 +16,14 @@ import {
   atlasGraphStats,
   validateAtlasGraph,
   atlasGraphFile,
+  enrichAtlasGraph,
+  type AtlasLlmCaller,
 } from "@kinqs/brainrouter-core/dist/atlas/index.js";
+import { callOpenAI } from "@kinqs/brainrouter-core/dist/agent/agent.js";
 import type { CommandContext } from "./_context.js";
 
 export async function tryHandleAtlasCommand(ctx: CommandContext): Promise<boolean> {
-  const { command, args, agent } = ctx;
+  const { command, args, agent, config } = ctx;
   if (command !== "/atlas" && command !== "/map") return false;
 
   const sub = (args[0] ?? "").toLowerCase();
@@ -64,6 +68,73 @@ export async function tryHandleAtlasCommand(ctx: CommandContext): Promise<boolea
     return true;
   }
 
+  // "enrich" → layer LLM understanding on top of the base graph
+  if (sub === "enrich") {
+    let graph = readAtlasGraph(root);
+    if (!graph) {
+      console.log(chalk.dim("\nNo atlas yet — building the base graph first…"));
+      try {
+        graph = buildBaseGraph(root);
+        saveAtlasGraph(root, graph);
+      } catch (e) {
+        console.log(chalk.red(`\nAtlas build failed: ${e instanceof Error ? e.message : String(e)}\n`));
+        return true;
+      }
+    }
+
+    const llm = config.llm;
+    if (!llm || (!llm.apiKey && (llm.provider ?? "openai") === "openai")) {
+      console.log(chalk.yellow("\nNo model configured — set a provider/model (and API key) before enriching.\n"));
+      return true;
+    }
+
+    const caller: AtlasLlmCaller = async ({ system, user, signal }) => {
+      const resp = await callOpenAI(
+        llm,
+        [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        [],
+        { effort: "low", signal },
+      );
+      return (resp?.content as string) ?? "";
+    };
+
+    console.log(chalk.dim(`\nEnriching atlas with ${llm.model} — summaries, layers, and a guided tour…`));
+    const started = Date.now();
+    let lastPhase = "";
+    let res;
+    try {
+      res = await enrichAtlasGraph(graph, caller, {
+        onProgress: ({ phase, done, total }) => {
+          if (phase !== lastPhase) {
+            if (lastPhase) process.stdout.write("\n");
+            lastPhase = phase;
+          }
+          process.stdout.write(`\r  ${phase}: ${done}/${total}   `);
+        },
+      });
+    } catch (e) {
+      console.log(chalk.red(`\nAtlas enrichment failed: ${e instanceof Error ? e.message : String(e)}\n`));
+      return true;
+    }
+    if (lastPhase) process.stdout.write("\n");
+
+    saveAtlasGraph(root, res.graph);
+    console.log(
+      chalk.green(
+        `\n✓ Enriched in ${((Date.now() - started) / 1000).toFixed(1)}s — ` +
+          `${res.summarized} summaries · ${res.layers} layers · ${res.tourSteps} tour steps`,
+      ),
+    );
+    if (res.batchesFailed) {
+      console.log(chalk.dim(`  (${res.batchesFailed} batch${res.batchesFailed === 1 ? "" : "es"} skipped — unparseable model output)`));
+    }
+    printSummary(res.graph, atlasGraphFile(root));
+    return true;
+  }
+
   console.log(chalk.red(`\nUnknown atlas subcommand: ${sub}`));
   printUsage();
   return true;
@@ -87,6 +158,7 @@ function printSummary(graph: ReturnType<typeof readAtlasGraph> & object, file: s
 function printUsage(): void {
   console.log(chalk.bold("\nAtlas — codebase knowledge graph"));
   console.log("  /atlas            Build (or rebuild) the atlas for this workspace");
+  console.log("  /atlas enrich     Add LLM summaries, layers, and a guided tour");
   console.log("  /atlas show       Show the current atlas summary");
   console.log(chalk.dim("\n  Explore it visually in the desktop app's Atlas panel.\n"));
 }
