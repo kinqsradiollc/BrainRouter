@@ -25,11 +25,13 @@ export interface AtlasPanelProps {
   onEnrich?: () => void;
   /** Selecting a node bubbles up (detail panel + code view wire in later slices). */
   onSelectNode?: (nodeId: string, filePath?: string) => void;
+  /** Open a file in the editor (double-click a node, or click the path in the detail card). */
+  onOpenFile?: (path: string) => void;
   /** Called once on open to lazily load the stored graph if not already present. */
   onLoad?: () => void;
 }
 
-export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnrich, onSelectNode, onLoad }: AtlasPanelProps): React.ReactElement {
+export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnrich, onSelectNode, onOpenFile, onLoad }: AtlasPanelProps): React.ReactElement {
   const [selected, setSelected] = useState<string | null>(null);
   const [tourStep, setTourStep] = useState<number | null>(null); // null = not touring
   const [query, setQuery] = useState("");
@@ -194,6 +196,10 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
             setSelected(n.id);
             onSelectNode?.(n.id, graph.nodes.find((gn) => gn.id === n.id)?.filePath);
           }}
+          onNodeDoubleClick={(_e, n) => {
+            const fp = graph.nodes.find((gn) => gn.id === n.id)?.filePath;
+            if (fp) onOpenFile?.(fp);
+          }}
           onPaneClick={() => setSelected(null)}
         >
           <Background color="var(--border)" gap={22} size={1} />
@@ -206,7 +212,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
             style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
           />
         </ReactFlow>
-        {selected ? <AtlasDetail graph={graph} nodeId={selected} onClose={() => setSelected(null)} /> : null}
+        {selected ? <AtlasDetail graph={graph} nodeId={selected} onClose={() => setSelected(null)} onOpenFile={onOpenFile} /> : null}
         {tourStep != null && graph.tour[tourStep] ? (
           <div className="atlas-tour">
             <div className="atlas-tour-top">
