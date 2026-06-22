@@ -257,6 +257,18 @@ export function childAgentsFor(parentSessionKey: string): Agent[] {
   return out;
 }
 
+/** WS6 — register a live agent handle (a child OR a worker) so a parent Stop
+ *  cascades into it via childAgentsFor → requestInterrupt. Workers previously
+ *  weren't registered, so a Stop left them running. */
+export function registerInterruptibleAgent(id: string, agent: Agent, parentSessionKey: string): void {
+  runningChildAgents.set(id, { agent, parentSessionKey });
+}
+
+/** WS6 — drop a handle once it finishes; it's no longer interruptible. */
+export function unregisterInterruptibleAgent(id: string): void {
+  runningChildAgents.delete(id);
+}
+
 function isInside(parent: string, candidate: string): boolean {
   const relative = path.relative(parent, candidate);
   return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
