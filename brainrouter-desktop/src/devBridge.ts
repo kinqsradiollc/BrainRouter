@@ -366,6 +366,7 @@ export function installDevBridge(): void {
     { id: 'filesystem', online: true, identity: 'third-party', type: 'stdio', command: 'npx -y @modelcontextprotocol/server-filesystem .' },
   ];
   let devActiveServer = 'brainrouter';
+  let devShellAlive = true; // WS2 2.4 — a background dev-server shell the Stop control can kill
 
   // T5 — a tiny in-memory FS so the editor (open/edit/save/stale-write) is
   // exercisable in the browser preview without a real host.
@@ -653,7 +654,10 @@ export function installDevBridge(): void {
       { kind: 'agent', id: 'agent-3f2a', label: 'explorer·3f2a — survey recall pipeline', role: 'explorer', startedAt: new Date(Date.now() - 95_000).toISOString(), worktree: false, parentSessionKey: 'dev:fix-recall-blend' },
       { kind: 'worker', id: 'wkr-91', label: 'wkr-91 · vitest suite', role: 'worker', startedAt: new Date(Date.now() - 14 * 60_000).toISOString(), worktree: true, parentSessionKey: 'dev:fix-recall-blend' },
       { kind: 'workflow', id: 'wf-build', label: 'build · Implement (2/4)', startedAt: new Date(Date.now() - 31 * 60_000).toISOString(), parentSessionKey: 'dev:grid-tui' },
+      // WS2 2.4 — a background shell (dev server) with a Stop control; killing it drops it from the fleet.
+      ...(devShellAlive ? [{ kind: 'shell', id: 'bgsh_devsrv', label: 'npm run dev — http://localhost:5173', startedAt: new Date(Date.now() - 4 * 60_000).toISOString(), parentSessionKey: 'dev:fix-recall-blend' }] : []),
     ],
+    'action:kill-bgshell': (a) => { if (String(a.id ?? '') === 'bgsh_devsrv') devShellAlive = false; return { ok: true }; },
     // §3 — durable task list (scoped). Mirrors the host's tasks-list shape.
     'tasks-list': () => [
       { id: 'btask_a1', kind: 'plan-revision', status: 'running', title: 'Revise plan — requested changes', phase: 'writing-plan', sessionKey: 'dev:fix-recall-blend', createdAt: new Date(Date.now() - 22_000).toISOString(), startedAt: new Date(Date.now() - 22_000).toISOString(), updatedAt: new Date().toISOString(), progress: [], linkedMemoryIds: [] },
