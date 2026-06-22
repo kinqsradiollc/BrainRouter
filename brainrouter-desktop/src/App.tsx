@@ -1082,7 +1082,7 @@ export function App(): React.ReactElement {
         recentsSort={recentsSort} setRecentsSort={setRecentsSort} workspaces={workspaces} info={info}
         projectRoots={projectRoots} activeReviewBadge={activeReviewBadge} prInfo={prInfo}
         recentsOpen={recentsOpen} setRecentsOpen={setRecentsOpen} visibleProjectSessions={visibleProjectSessions}
-        renderSessionNode={renderSessionNode} hiddenProjectSessions={hiddenProjectSessions} ungroupedSessions={ungroupedSessions}
+        renderSessionNode={renderSessionNode} openSessionMenu={openSessionMenu} hiddenProjectSessions={hiddenProjectSessions} ungroupedSessions={ungroupedSessions}
         setVisibleCount={setVisibleCount} groupedSessions={groupedSessions} archivedCount={archivedCount}
         setShowArchived={setShowArchived} showArchived={showArchived}
         expandedProjects={expandedProjects} projSessions={projSessions} runningWs={runningWorkspaces} runningSessions={runningSessions} workspaceRunCount={workspaceRunCount}

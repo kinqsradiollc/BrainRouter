@@ -2079,7 +2079,7 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
    No fixed width (inline, drag the left grip); slides in/out. */
 /* overflow stays VISIBLE so the "+" dropdown and the left resize grip are
    never clipped; inner bodies own their scrolling */
-.views-rail { position: relative; flex: none; min-width: 320px; border-left: 1px solid var(--ov-08); background: var(--sidebar); padding: 8px 10px 12px; display: flex; flex-direction: column; gap: 2px; animation: sideIn .18s ease-out; container-type: inline-size; container-name: sidepanel; }
+.views-rail { position: relative; flex: none; min-width: 240px; border-left: 1px solid var(--ov-08); background: var(--sidebar); padding: 8px 10px 12px; display: flex; flex-direction: column; gap: 2px; animation: sideIn .18s ease-out; container-type: inline-size; container-name: sidepanel; }
 .views-rail.closing { animation: sideOut .16s ease-in forwards; pointer-events: none; }
 .views-rail.fullscreen { position: absolute; inset: 0; z-index: 50; width: auto; min-width: 0; border-left: 0; border-radius: 0; padding: 8px clamp(12px, 2.2vw, 32px) 12px; box-shadow: -20px 0 60px rgba(0,0,0,0.34); }
 .views-rail.fullscreen .col-grip { display: none; }
@@ -2710,7 +2710,10 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
   color: var(--accent) !important;
   transform: translateY(-2px) !important;
 }
-.side-chooser .side-launcher span {
+/* Title span only — scope to the direct-child title, NOT the meta or the
+   live-dot/badge spans nested inside it (the old `span` selector stretched the
+   live-dot into a 108px bar on rows like Background tasks). */
+.side-chooser .side-launcher > span:not(.launcher-meta) {
   width: 100% !important;
   overflow: hidden !important;
   text-overflow: ellipsis !important;

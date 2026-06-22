@@ -2728,31 +2728,36 @@ async function main(): Promise<void> {
       // Move to group / Archive / Delete / Fork / Open). All write the shared
       // CLI stores, so the terminal sees the same titles/pins/groups.
       'action:session-meta': (args) => {
+        // WS-UX — optional `root` lets the sidebar edit a session in a NON-active
+        // workspace (parked project) without switching to it. Defaults to active.
+        const root = typeof args.root === 'string' && args.root ? args.root : workspaceRoot;
         const sessionKey = typeof args.sessionKey === 'string' ? args.sessionKey : '';
         if (!sessionKey) throw new Error('session-meta: missing sessionKey');
         const patch = (args.patch ?? {}) as Partial<SessionMeta>;
-        const meta = setSessionMeta(workspaceRoot, sessionKey, patch);
-        return { ok: true, sessionKey, meta, groups: listSessionGroups(workspaceRoot) };
+        const meta = setSessionMeta(root, sessionKey, patch);
+        return { ok: true, sessionKey, meta, groups: listSessionGroups(root) };
       },
       'action:session-delete': (args) => {
+        const root = typeof args.root === 'string' && args.root ? args.root : workspaceRoot;
         const sessionKey = typeof args.sessionKey === 'string' ? args.sessionKey : '';
         if (!sessionKey) throw new Error('session-delete: missing sessionKey');
-        const removed = deleteSession(workspaceRoot, sessionKey);
-        removeSessionMeta(workspaceRoot, sessionKey);
+        const removed = deleteSession(root, sessionKey);
+        removeSessionMeta(root, sessionKey);
         return { ok: removed, sessionKey };
       },
       'action:session-fork': (args) => {
+        const root = typeof args.root === 'string' && args.root ? args.root : workspaceRoot;
         const sessionKey = typeof args.sessionKey === 'string' ? args.sessionKey : '';
         if (!sessionKey) throw new Error('session-fork: missing sessionKey');
         // DESK-6v — upToTs (epoch ms) branches from a specific message; absent = whole-conversation fork.
         const upToTs = typeof args.upToTs === 'number' ? args.upToTs : undefined;
-        const newKey = forkSession(workspaceRoot, sessionKey, upToTs);
+        const newKey = forkSession(root, sessionKey, upToTs);
         if (newKey) {
           // Record the lineage + carry the title forward with a "(fork)" suffix so
           // it's recognizable. forkedFrom drives the sidebar fork icon and the
           // "Forked from conversation" back-link in the renderer.
-          const src = getSessionMeta(workspaceRoot, sessionKey);
-          setSessionMeta(workspaceRoot, newKey, { forkedFrom: sessionKey, ...(src.title ? { title: `${src.title} (fork)` } : {}) });
+          const src = getSessionMeta(root, sessionKey);
+          setSessionMeta(root, newKey, { forkedFrom: sessionKey, ...(src.title ? { title: `${src.title} (fork)` } : {}) });
         }
         return { ok: !!newKey, newKey };
       },
