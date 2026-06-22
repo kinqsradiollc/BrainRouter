@@ -196,6 +196,19 @@ test('atlasGroupedLayout: child positions relative to packed group boxes', () =>
   assert.ok(boxes.every((b) => b.width > 0 && b.height > 0));
 });
 
+test('atlasGroupedLayout packs large graphs roughly square (no tall column)', () => {
+  // 16 groups of 6 files each — without the aspect fix this stacked vertically.
+  const groups = Array.from({ length: 16 }, (_, g) => ({
+    id: `group:g${g}`, label: `g${g}`, nodeIds: Array.from({ length: 6 }, (_, i) => `file:g${g}/f${i}.ts`),
+  }));
+  const out = atlasGroupedLayout(groups); // no explicit maxRowWidth → dynamic
+  const right = Math.max(...out.groups.map((b) => b.x + b.width));
+  const bottom = Math.max(...out.groups.map((b) => b.y + b.height));
+  // should be wider-than-or-near-square, never a tall sliver
+  assert.ok(right >= bottom * 0.6, `expected roughly square, got ${right}x${bottom}`);
+  assert.ok(out.groups.length === 16);
+});
+
 test('atlasOverviewModel: layer cards + inter-layer edges', () => {
   const m = atlasOverviewModel(layered());
   assert.deepEqual(m.cards.map((c) => c.name), ['API', 'Data']);

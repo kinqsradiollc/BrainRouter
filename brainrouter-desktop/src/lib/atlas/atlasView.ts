@@ -308,7 +308,7 @@ export function atlasGroupedLayout(groups: AtlasGroup[], opts: GroupedLayoutOpts
   const pad = opts.pad ?? 16;
   const titleH = opts.titleH ?? 34;
   const groupGap = opts.groupGap ?? 40;
-  const maxRowWidth = opts.maxRowWidth ?? 1700;
+  const explicitRowWidth = opts.maxRowWidth;
   const maxCols = opts.maxCols ?? 6;
 
   const positions = new Map<string, { x: number; y: number }>();
@@ -328,6 +328,13 @@ export function atlasGroupedLayout(groups: AtlasGroup[], opts: GroupedLayoutOpts
     });
     return { g, width, height };
   });
+
+  // Wrap width: an explicit value wins; otherwise aim for a roughly-square
+  // overall layout so large/unenriched graphs don't stack into a tall column
+  // (but never narrower than the widest single group).
+  const totalArea = sized.reduce((s, x) => s + x.width * x.height, 0);
+  const widest = sized.reduce((m, x) => Math.max(m, x.width), 0);
+  const maxRowWidth = explicitRowWidth ?? Math.max(widest, Math.ceil(Math.sqrt(totalArea) * 1.6));
 
   const boxes: AtlasGroupBox[] = [];
   let cx = 0;
