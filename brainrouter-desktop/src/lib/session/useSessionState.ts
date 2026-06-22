@@ -43,7 +43,7 @@ export interface SessionState {
   workflowView: WorkflowDetail | null;
   setWorkflowView: React.Dispatch<React.SetStateAction<WorkflowDetail | null>>;
   sessionMenu: { key: string; x: number; y: number } | null;
-  setSessionMenu: React.Dispatch<React.SetStateAction<{ key: string; x: number; y: number } | null>>;
+  setSessionMenu: React.Dispatch<React.SetStateAction<{ key: string; x: number; y: number; row?: SessionRow; root?: string } | null>>;
   sessionKeyRef: React.MutableRefObject<string | undefined>;
   cardOpenRef: React.MutableRefObject<boolean>;
   errorsBySession: React.MutableRefObject<Record<string, Array<{ id: number; text: string; detail?: string; ts: number }>>>;
@@ -107,7 +107,7 @@ export function useSessionState(): SessionState {
   // here keyed by childId; upsert on child-tool-start/end, drop on complete.
   const [liveChildren, setLiveChildren] = useState<Record<string, { childId: string; role: string; tool?: string; startedAt: number }>>({});
   // DESK-6m — per-chat ⋮ context menu + its sub-flows.
-  const [sessionMenu, setSessionMenu] = useState<{ key: string; x: number; y: number } | null>(null);
+  const [sessionMenu, setSessionMenu] = useState<{ key: string; x: number; y: number; row?: SessionRow; root?: string } | null>(null);
   const [renamingKey, setRenamingKey] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [showArchived, setShowArchived] = useState(false);
