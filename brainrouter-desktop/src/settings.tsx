@@ -349,6 +349,8 @@ export function SettingsDialog(props: {
   const [provDraft, setProvDraft] = useState<{ name: string; provider: string; endpoint: string; apiKey: string; model: string }>({ name: '', provider: 'openai', endpoint: '', apiKey: '', model: '' });
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
   const [roleDraft, setRoleDraft] = useState<Record<string, { provider: string; model: string }>>({});
+  // WS10 — usage heatmap range selector (week / month / year). Re-fetches usage-history.
+  const [usageDays, setUsageDays] = useState(365);
   const refreshSnapshot = (): void => props.onAction('q-snapshot', 'config-snapshot');
   const prefs = (snapshot?.prefs ?? {}) as Record<string, unknown>;
   const ps = (key: string, dflt: string): string => String(prefs[key] ?? dflt);
@@ -855,11 +857,23 @@ export function SettingsDialog(props: {
           <Row title="This session" desc={props.tokens ? `${props.tokens.turns} turns` : 'No turns yet.'}>
             <span className="dim">{props.tokens ? `${props.tokens.promptTokens.toLocaleString()} in · ${props.tokens.completionTokens.toLocaleString()} out` : '—'}</span>
           </Row>
-          <div className="set-h2">Across all sessions (last year)</div>
+          <div className="set-h2" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span>Across all sessions ({usageDays === 7 ? 'last week' : usageDays === 30 ? 'last 30 days' : 'last year'})</span>
+            <span style={{ display: 'flex', gap: 4 }}>
+              {[{ label: 'Week', days: 7 }, { label: 'Month', days: 30 }, { label: 'Year', days: 365 }].map((r) => (
+                <button
+                  key={r.days}
+                  className={`chip${usageDays === r.days ? '' : ' dim'}`}
+                  aria-pressed={usageDays === r.days}
+                  onClick={() => { setUsageDays(r.days); props.onAction('q-usage-hist', 'usage-history', { days: r.days }); }}
+                >{r.label}</button>
+              ))}
+            </span>
+          </div>
           {props.usageHistory ? (
             <>
               <Row
-                title="Lifetime activity"
+                title="Activity in range"
                 desc={`${props.usageHistory.total.turns.toLocaleString()} turns · ${props.usageHistory.total.calls.toLocaleString()} requests · ${(props.usageHistory.total.promptTokens + props.usageHistory.total.completionTokens).toLocaleString()} tokens`}
               />
               <UsageHeatmap hist={props.usageHistory} />

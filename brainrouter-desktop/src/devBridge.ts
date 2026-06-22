@@ -1042,13 +1042,15 @@ export function installDevBridge(): void {
       'TOTAL       68,735 in · 3,927 out',
       'offload: 31% of parent context avoided via child agents',
     ],
-    // WS10 — a year of synthetic daily usage so the contributions heatmap renders
-    // in browser-only dev (busier weekdays, ~20% idle days, a gentle wave).
-    'usage-history': () => {
+    // WS10 — synthetic daily usage so the contributions heatmap renders in
+    // browser-only dev (busier weekdays, ~20% idle days, a gentle wave). Honours
+    // the `days` arg so the week/month/year range selector actually changes it.
+    'usage-history': (a) => {
+      const span = typeof a.days === 'number' && a.days > 0 ? Math.floor(a.days) : 365;
       const days: Array<{ day: string; promptTokens: number; completionTokens: number; calls: number; turns: number }> = [];
       const total = { promptTokens: 0, completionTokens: 0, calls: 0, turns: 0 };
       const now = Date.now();
-      for (let i = 364; i >= 0; i--) {
+      for (let i = span - 1; i >= 0; i--) {
         const t = now - i * 86_400_000;
         const wd = new Date(t).getUTCDay();
         const weekendDamp = wd === 0 || wd === 6 ? 0.2 : 1;
