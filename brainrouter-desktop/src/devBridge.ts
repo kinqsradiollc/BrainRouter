@@ -539,6 +539,18 @@ export function installDevBridge(): void {
         enrichResult: { summarized: g.nodes.filter((n) => n.summary).length, layers: g.layers.length, tourSteps: g.tour.length, batchesFailed: 0 },
       };
     },
+    'atlas-explain-change': (a) => {
+      const path = String((a as { path?: string }).path ?? '');
+      return {
+        path,
+        assessment: {
+          summary: `This change to ${path.split('/').pop()} adjusts its core logic and updates the call sites it touches.`,
+          risk: path.includes('payment') || path.includes('checkout') ? 'high' : path.includes('search') ? 'medium' : 'low',
+          checklist: ['Confirm the public API/signature is unchanged or all callers updated', 'Check error handling on the new path', 'Verify there is test coverage for this change'],
+          concerns: path.includes('payment') ? ['Touches payment logic — validate amounts and currency handling', 'No test changes detected alongside this edit'] : [],
+        },
+      };
+    },
     'requirement-list': () => [...devRequirements].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     'requirement-create': (a) => {
       const id = `req_dev${++reqSeq}`;

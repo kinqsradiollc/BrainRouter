@@ -24,11 +24,17 @@ export interface AtlasDetailProps {
   impactActive?: boolean;
   /** Toggle the blast-radius highlight for this node. */
   onShowImpact?: (nodeId: string) => void;
+  /** ATLAS-14 — LLM assessment of this file's uncommitted change, if fetched. */
+  assessment?: { summary: string; risk: "low" | "medium" | "high"; checklist: string[]; concerns: string[] };
+  /** True while the assessment is being fetched. */
+  assessing?: boolean;
+  /** Request an LLM assessment of this change. */
+  onAssess?: () => void;
 }
 
 const CHANGE_LABEL: Record<string, string> = { added: "Added", modified: "Modified", untracked: "New (untracked)", deleted: "Deleted" };
 
-export function AtlasDetail({ graph, nodeId, onClose, onOpenFile, changeKind, impactActive, onShowImpact }: AtlasDetailProps): React.ReactElement | null {
+export function AtlasDetail({ graph, nodeId, onClose, onOpenFile, changeKind, impactActive, onShowImpact, assessment, assessing, onAssess }: AtlasDetailProps): React.ReactElement | null {
   const facts = atlasNodeFacts(graph, nodeId);
   if (!facts) return null;
   const { node, symbols, layer, importsOut, importsIn } = facts;
@@ -68,6 +74,37 @@ export function AtlasDetail({ graph, nodeId, onClose, onOpenFile, changeKind, im
         <div className={`atlas-detail-change chg-${changeKind}`}>
           <span className="atlas-detail-change-dot" />
           {CHANGE_LABEL[changeKind] ?? changeKind} · uncommitted — review before commit
+        </div>
+      ) : null}
+
+      {changeKind && onAssess ? (
+        <div className="atlas-assess">
+          {assessment ? (
+            <>
+              <div className="atlas-assess-head">
+                <span className="atlas-assess-title">AI assessment</span>
+                <span className={`atlas-assess-risk risk-${assessment.risk}`}>{assessment.risk} risk</span>
+              </div>
+              {assessment.summary ? <div className="atlas-assess-summary">{assessment.summary}</div> : null}
+              {assessment.concerns.length ? (
+                <div className="atlas-assess-block">
+                  <div className="atlas-assess-label warn">Concerns</div>
+                  <ul className="atlas-assess-list">{assessment.concerns.map((c, i) => <li key={i}>{c}</li>)}</ul>
+                </div>
+              ) : null}
+              {assessment.checklist.length ? (
+                <div className="atlas-assess-block">
+                  <div className="atlas-assess-label">Review checklist</div>
+                  <ul className="atlas-assess-list check">{assessment.checklist.map((c, i) => <li key={i}>{c}</li>)}</ul>
+                </div>
+              ) : null}
+              <button className="atlas-assess-btn" disabled={assessing} onClick={onAssess}>{assessing ? "Re-assessing…" : "Re-assess"}</button>
+            </>
+          ) : (
+            <button className="atlas-assess-btn primary" disabled={assessing} onClick={onAssess}>
+              <Icon name="diff" size={11} />{assessing ? "Assessing change…" : "Assess this change"}
+            </button>
+          )}
         </div>
       ) : null}
 

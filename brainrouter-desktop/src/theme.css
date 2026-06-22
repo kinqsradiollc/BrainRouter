@@ -3895,3 +3895,24 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .atlas-impact-btn.on { background: color-mix(in srgb, var(--accent) 16%, transparent); border-color: var(--accent); color: var(--accent); }
 .atlas-impact-layers { display: flex; flex-wrap: wrap; gap: 4px; }
 .atlas-impact-chip { font-size: 10px; padding: 1px 7px; border-radius: 6px; background: color-mix(in srgb, var(--warn) 12%, transparent); color: var(--warn); }
+
+/* ===== ATLAS-14 — AI change assessment in the detail card ===== */
+.atlas-assess { display: flex; flex-direction: column; gap: 7px; padding: 9px 10px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); }
+.atlas-assess-head { display: flex; align-items: center; justify-content: space-between; }
+.atlas-assess-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); }
+.atlas-assess-risk { font-size: 10px; font-weight: 700; padding: 1px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.03em; }
+.atlas-assess-risk.risk-low { color: var(--ok); background: color-mix(in srgb, var(--ok) 15%, transparent); }
+.atlas-assess-risk.risk-medium { color: var(--warn); background: color-mix(in srgb, var(--warn) 15%, transparent); }
+.atlas-assess-risk.risk-high { color: var(--err); background: color-mix(in srgb, var(--err) 16%, transparent); }
+.atlas-assess-summary { font-size: 11.5px; color: var(--text); line-height: 1.5; }
+.atlas-assess-block { display: flex; flex-direction: column; gap: 3px; }
+.atlas-assess-label { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-faint); }
+.atlas-assess-label.warn { color: var(--warn); }
+.atlas-assess-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.atlas-assess-list li { position: relative; padding-left: 14px; font-size: 11px; color: var(--text-dim); line-height: 1.4; }
+.atlas-assess-list li::before { content: "•"; position: absolute; left: 3px; color: var(--text-faint); }
+.atlas-assess-list.check li::before { content: "☐"; color: var(--accent); }
+.atlas-assess-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; align-self: flex-start; padding: 5px 11px; border-radius: var(--r-sm); background: var(--raised); border: 1px solid var(--border-strong); color: var(--text); font-size: 11.5px; font-weight: 550; cursor: pointer; }
+.atlas-assess-btn:hover:not(:disabled) { border-color: var(--accent); }
+.atlas-assess-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; width: 100%; }
+.atlas-assess-btn:disabled { opacity: 0.6; cursor: default; }

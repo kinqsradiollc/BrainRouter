@@ -95,7 +95,7 @@ import { readPlanHistory, recordPlanDecision, linkPlanDecision, type PlanVerdict
 import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
 import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement, deleteRequirement, type RequirementPatch } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
-import { buildBaseGraph, saveAtlasGraph, readAtlasGraph, atlasGraphStats, enrichAtlasGraph, type AtlasLlmCaller } from '@kinqs/brainrouter-core/dist/atlas/index.js';
+import { buildBaseGraph, saveAtlasGraph, readAtlasGraph, atlasGraphStats, enrichAtlasGraph, extractAtlasJson, type AtlasLlmCaller } from '@kinqs/brainrouter-core/dist/atlas/index.js';
 import { callOpenAI } from '@kinqs/brainrouter-core/dist/agent/agent.js';
 import { syncRequirementPlanTrack } from '@kinqs/brainrouter-core/dist/requirement/planTrackSync.js';
 import { ensureProject, getProject, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember, type CreateWorkItemInput, type UpdateWorkItemPatch, type AutomationPatch } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
@@ -1594,6 +1594,49 @@ async function main(): Promise<void> {
           graph: res.graph,
           stats: atlasGraphStats(res.graph),
           enrichResult: { summarized: res.summarized, layers: res.layers, tourSteps: res.tourSteps, batchesFailed: res.batchesFailed },
+        };
+      },
+      // `atlas-explain-change` reviews ONE uncommitted file with the model:
+      // returns a plain-English summary, a risk level, a review checklist, and
+      // concerns — so an engineer can understand an AI edit before committing.
+      'atlas-explain-change': async (a) => {
+        const path = String(a.path ?? '');
+        if (!path) return { error: 'No file path given.' };
+        const llm = llmForSession(activeAgent.sessionKey);
+        if (!llm || (!llm.apiKey && (llm.provider ?? 'openai') === 'openai')) {
+          return { error: 'No model configured — set a provider/model (and API key) in Settings.' };
+        }
+        // Working-tree diff vs HEAD; fall back to file content for untracked files.
+        let diff = await git(['diff', '--no-color', 'HEAD', '--', path], workspaceRoot).catch(() => '');
+        if (!diff.trim()) {
+          let content = '';
+          try { content = (await import('node:fs')).readFileSync(`${workspaceRoot}/${path}`, 'utf8'); } catch { content = ''; }
+          diff = content ? `NEW/UNTRACKED FILE ${path}:\n${content.slice(0, 16000)}` : '';
+        }
+        if (!diff.trim()) return { error: 'No diff available for this file.' };
+        const system = 'You are a senior engineer reviewing an AI-generated code change before commit. Be specific and terse. Answer ONLY with JSON, no prose, no fences.';
+        const user = [
+          `File: ${path}`,
+          'Review this change and return EXACTLY this JSON shape:',
+          '{"summary":"1-2 sentences on what changed and why","risk":"low|medium|high","checklist":["what a reviewer should verify", "..."],"concerns":["specific risks/bugs/omissions, [] if none"]}',
+          '',
+          'Diff (truncated):',
+          diff.slice(0, 16000),
+        ].join('\n');
+        let raw = '';
+        try {
+          const resp = await callOpenAI(llm, [{ role: 'system', content: system }, { role: 'user', content: user }], [], { effort: 'low' });
+          raw = (resp?.content as string) ?? '';
+        } catch (e) {
+          return { path, error: `Model call failed: ${e instanceof Error ? e.message : String(e)}` };
+        }
+        const parsed = extractAtlasJson(raw) as { summary?: string; risk?: string; checklist?: unknown; concerns?: unknown } | null;
+        if (!parsed || typeof parsed !== 'object') return { path, error: 'Could not parse the model response.' };
+        const arr = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x) => typeof x === 'string').slice(0, 8) : []);
+        const risk = ['low', 'medium', 'high'].includes(String(parsed.risk)) ? String(parsed.risk) : 'medium';
+        return {
+          path,
+          assessment: { summary: typeof parsed.summary === 'string' ? parsed.summary : '', risk, checklist: arr(parsed.checklist), concerns: arr(parsed.concerns) },
         };
       },
       'requirement-list': () => listRequirements(workspaceRoot),
