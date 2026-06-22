@@ -103,11 +103,25 @@ function KnobValue({ value, onChange }: { value: unknown; onChange: (v: unknown)
 /** §control-consistency — a PROPER editor for the raw `cli.*` config block: each
  *  knob is a typed row (toggle / number / text) with add + remove, instead of a
  *  hand-edited JSON blob. Saves the whole block via the existing set-cli-json. */
+// WS11 — knobs that have a dedicated structured editor elsewhere (Permissions,
+// Workflow automation, Models, Integrations). Never shown as raw JSON here.
+const DEDICATED_KNOBS = new Set(['permissions', 'automation', 'track', 'providers', 'agentModels']);
+// WS11 — internal/safety knobs (loop & storm guards, sandbox internals, scheduler
+// ticks, offload tuning): non-obvious to hand-edit and rarely needed, so hidden
+// from the default list. Still settable via `/config` or the raw disclosure.
+const INTERNAL_KNOBS = new Set([
+  'stormWindow', 'repeatToolSequenceLimit', 'repeatSequenceExemptTools', 'repeatLoopLimit',
+  'offloadMaxEntries', 'offloadRetentionMs', 'scheduleTickMs',
+  'sandboxReadPaths', 'sandboxWritePaths', 'sandboxNetwork', 'sandboxUnavailable', 'sandboxEnforceWhenSilent',
+]);
+
 function CliConfigEditor({ cli, onSave }: { cli: Record<string, unknown>; onSave: (next: Record<string, unknown>) => void }): React.ReactElement {
   const [draft, setDraft] = useState<Record<string, unknown>>(() => ({ ...cli }));
   React.useEffect(() => setDraft({ ...cli }), [cli]);
   const [newKey, setNewKey] = useState('');
-  const keys = Object.keys(draft).sort();
+  // WS11 — hide dedicated-editor + internal knobs from the raw list. They stay in
+  // `draft` so saving never drops them; they're just not hand-edited as raw JSON here.
+  const keys = Object.keys(draft).filter((k) => !DEDICATED_KNOBS.has(k) && !INTERNAL_KNOBS.has(k)).sort();
   const dirty = JSON.stringify(draft) !== JSON.stringify(cli);
   const setVal = (k: string, v: unknown): void => setDraft((d) => ({ ...d, [k]: v }));
   const remove = (k: string): void => setDraft((d) => { const n = { ...d }; delete n[k]; return n; });
@@ -724,12 +738,18 @@ export function SettingsDialog(props: {
               <Toggle on={ks('updateCheck', 'true') !== 'false' && knobs.updateCheck !== false} onChange={(v) => setKnob('updateCheck', v)} />
             </Row>
 
-            <div className="set-h2">Raw cli.* config</div>
-            <div className="set-desc" style={{ marginBottom: 8 }}>Every <code>cli</code> knob from <code>~/.config/brainrouter/config.json</code> — the catch-all for knobs without a dedicated control above.</div>
-            <CliConfigEditor
-              cli={(snapshot?.cli ?? {}) as Record<string, unknown>}
-              onSave={(next) => { props.onAction('a-cli-json', 'action:set-cli-json', { json: JSON.stringify(next) }); setTimeout(refreshSnapshot, 80); }}
-            />
+            {/* WS11 — the raw knob editor is collapsed behind a Developer
+                disclosure: most users never need it, and the JSON-valued knobs
+                (permissions, automation) + internal safety knobs are handled by
+                their own panels and hidden from this list. */}
+            <details className="set-dev-raw">
+              <summary className="set-h2" style={{ cursor: 'pointer' }}>Developer — raw <code>cli.*</code> config</summary>
+              <div className="set-desc" style={{ marginBottom: 8 }}>Advanced: edit any remaining <code>cli</code> knob directly. Permissions, workflow automation, models and integrations have their own panels above and aren't shown here; internal safety knobs are hidden. Only change these if you know what they do.</div>
+              <CliConfigEditor
+                cli={(snapshot?.cli ?? {}) as Record<string, unknown>}
+                onSave={(next) => { props.onAction('a-cli-json', 'action:set-cli-json', { json: JSON.stringify(next) }); setTimeout(refreshSnapshot, 80); }}
+              />
+            </details>
           </>
         );
       }
