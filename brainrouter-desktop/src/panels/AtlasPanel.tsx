@@ -12,6 +12,7 @@ import { ReactFlow, Background, Controls, MiniMap, type Edge, type Node } from "
 import "@xyflow/react/dist/style.css";
 import type { AtlasGraph, AtlasNodeType } from "@kinqs/brainrouter-types";
 import { atlasLayout, atlasNodeColor, atlasViewModel } from "../lib/atlas/atlasView.js";
+import { AtlasDetail } from "./AtlasDetail.js";
 import { Icon } from "../icons.js";
 
 export interface AtlasPanelProps {
@@ -132,16 +133,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
             style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
           />
         </ReactFlow>
-        {selected ? (() => {
-          const node = graph.nodes.find((gn) => gn.id === selected);
-          const name = node?.filePath ?? selected.replace(/^[a-z]+:/, "");
-          return (
-            <div className="atlas-selected" title={node?.summary ?? name}>
-              <span className="atlas-selected-name">{name}</span>
-              {node?.summary ? <span className="atlas-selected-sum">{node.summary}</span> : null}
-            </div>
-          );
-        })() : null}
+        {selected ? <AtlasDetail graph={graph} nodeId={selected} onClose={() => setSelected(null)} /> : null}
       </div>
     </div>
   );
