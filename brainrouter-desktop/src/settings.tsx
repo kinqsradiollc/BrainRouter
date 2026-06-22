@@ -686,31 +686,46 @@ export function SettingsDialog(props: {
           ))}
         </>
       );
-      case 'connectors': return (
+      case 'connectors': {
+        // WS9 — group the flat pool into Brains (BrainRouter memory servers, only
+        // one active at a time) and Tools (third-party MCP) so the single-active-
+        // brain model reads at a glance. One row renderer, shared by both groups.
+        const allServers = snapshot?.servers ?? [];
+        const brains = allServers.filter((s) => s.identity === 'brainrouter');
+        const tools = allServers.filter((s) => s.identity !== 'brainrouter');
+        const renderServer = (s: NonNullable<ConfigSnapshot['servers']>[number]) => {
+          const isBrain = s.identity === 'brainrouter';
+          const isActiveBrain = isBrain && snapshot?.activeServer === s.id;
+          const meta = [
+            s.type ?? 'unknown',
+            s.type === 'http' ? (s.url ?? '') : (s.command ?? ''),
+            s.hasKey ? 'key set' : '',
+            s.headerCount ? `${s.headerCount} headers` : '',
+            s.envCount ? `${s.envCount} env` : '',
+          ].filter(Boolean).join(' · ');
+          return (
+            <Row key={s.id} title={s.id} desc={<><span className={`dot ${s.online ? 'on' : 'off'}`} />{s.online ? 'online' : 'offline'}{isActiveBrain ? ' · active brain' : ''}{meta ? ` — ${meta}` : ''}</>}>
+              {isBrain && !isActiveBrain ? <button className="btn" title="Make this the active BrainRouter brain (only one is active at a time)" onClick={() => { props.onAction('a-setactive', 'action:set-active-server', { id: s.id }); setTimeout(refreshSnapshot, 120); }}>Use as active</button> : null}
+              <button className="btn" onClick={() => props.onAction('a-reconnect', 'action:reconnect-mcp', { id: s.id })}>Reconnect</button>
+              <button className="btn" title="Remove this server" onClick={() => props.onAction('a-rmmcp', 'action:remove-mcp', { id: s.id })}>Remove</button>
+            </Row>
+          );
+        };
+        return (
         <>
           <div className="set-h">MCP</div>
-          <div className="set-desc" style={{ marginBottom: 6 }}>MCP servers from config.json — the same pool the CLI connects. The BrainRouter <b>brain</b> plus any third-party <b>tool</b> servers. Only ONE brain is active at a time (others can stay configured); all auto-reconnect in the background.</div>
-          {(snapshot?.servers ?? []).length === 0 ? <div className="empty">No MCP servers configured (offline mode — local tools only).</div> : null}
-          {(snapshot?.servers ?? []).map((s) => {
-            // WS9 — brain vs tool, and which brain is the single active one.
-            const isBrain = s.identity === 'brainrouter';
-            const isActiveBrain = isBrain && snapshot?.activeServer === s.id;
-            const kind = isBrain ? 'brain' : s.identity === 'third-party' ? 'tool' : '';
-            const meta = [
-              s.type ?? 'unknown',
-              s.type === 'http' ? (s.url ?? '') : (s.command ?? ''),
-              s.hasKey ? 'key set' : '',
-              s.headerCount ? `${s.headerCount} headers` : '',
-              s.envCount ? `${s.envCount} env` : '',
-            ].filter(Boolean).join(' · ');
-            return (
-              <Row key={s.id} title={s.id} desc={<><span className={`dot ${s.online ? 'on' : 'off'}`} />{s.online ? 'online' : 'offline'}{kind ? ` · ${kind}` : ''}{isActiveBrain ? ' · active brain' : ''}{meta ? ` — ${meta}` : ''}</>}>
-                {isBrain && !isActiveBrain ? <button className="btn" title="Make this the active BrainRouter brain (only one is active at a time)" onClick={() => { props.onAction('a-setactive', 'action:set-active-server', { id: s.id }); setTimeout(refreshSnapshot, 120); }}>Use as active</button> : null}
-                <button className="btn" onClick={() => props.onAction('a-reconnect', 'action:reconnect-mcp', { id: s.id })}>Reconnect</button>
-                <button className="btn" title="Remove this server" onClick={() => props.onAction('a-rmmcp', 'action:remove-mcp', { id: s.id })}>Remove</button>
-              </Row>
-            );
-          })}
+          <div className="set-desc" style={{ marginBottom: 6 }}>MCP servers from config.json — the same pool the CLI connects. All auto-reconnect in the background.</div>
+          {allServers.length === 0 ? <div className="empty">No MCP servers configured (offline mode — local tools only).</div> : null}
+
+          {allServers.length ? <div className="set-h2"><Icon name="brain" size={13} /> Brains</div> : null}
+          {allServers.length ? <div className="set-desc" style={{ marginBottom: 6 }}>BrainRouter memory servers. Only ONE is active at a time — others stay configured and keep reconnecting.</div> : null}
+          {brains.length ? brains.map(renderServer) : allServers.length ? <Row title="No brain configured" desc="Add a BrainRouter MCP server below to enable memory recall." /> : null}
+
+          {allServers.length ? <div className="set-h2"><Icon name="bolt" size={13} /> Tools</div> : null}
+          {allServers.length ? <div className="set-desc" style={{ marginBottom: 6 }}>Third-party MCP tool servers (filesystem, web, etc.).</div> : null}
+          {tools.length ? tools.map(renderServer) : allServers.length ? <Row title="No tool servers" desc="Add MCP tool servers below." /> : null}
+
+          <div className="set-h2">Add a server</div>
           <div className="mcp-add">
             <div className="mcp-add-row">
               <input className="ctl" placeholder="name (e.g. my-tools)" value={mcp.id} onChange={(e) => setMcp((m) => ({ ...m, id: e.target.value }))} />
@@ -736,7 +751,8 @@ export function SettingsDialog(props: {
               }}>Add server</button>
           </div>
         </>
-      );
+        );
+      }
       case 'integrations': return (
         <>
           <div className="set-h">Integrations</div>

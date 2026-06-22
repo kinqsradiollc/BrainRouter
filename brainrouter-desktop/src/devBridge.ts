@@ -357,7 +357,15 @@ export function installDevBridge(): void {
     ],
   };
   const devGithub: { repo: string | null; hasToken: boolean; tokenSource: string | null } = { repo: 'kinqsradiollc/BrainRouter', hasToken: true, tokenSource: 'config' };
-  const devServers: Array<{ id: string; online: boolean; detail?: string }> = [{ id: 'brainrouter', online: true }, { id: 'github', online: false }];
+  // WS9 — carry identity/type so the grouped MCP layout (Brains vs Tools) and the
+  // single-active-brain affordance render in browser-only dev.
+  const devServers: Array<{ id: string; online: boolean; detail?: string; identity?: 'brainrouter' | 'third-party'; type?: 'stdio' | 'http'; url?: string | null; command?: string | null }> = [
+    { id: 'brainrouter', online: true, identity: 'brainrouter', type: 'stdio', command: 'npx -y @kinqs/brainrouter-mcp' },
+    { id: 'brainrouter-staging', online: false, identity: 'brainrouter', type: 'http', url: 'https://staging.brain.example/mcp' },
+    { id: 'github', online: false, identity: 'third-party', type: 'http', url: 'https://api.githubcopilot.com/mcp' },
+    { id: 'filesystem', online: true, identity: 'third-party', type: 'stdio', command: 'npx -y @modelcontextprotocol/server-filesystem .' },
+  ];
+  let devActiveServer = 'brainrouter';
 
   // T5 — a tiny in-memory FS so the editor (open/edit/save/stale-write) is
   // exercisable in the browser preview without a real host.
@@ -1012,6 +1020,7 @@ export function installDevBridge(): void {
         { id: 'h2', event: 'user-prompt-submit', command: './hooks/inject-ticket.sh', enabled: false },
       ],
       servers: devServers.map((s) => ({ ...s })),
+      activeServer: devActiveServer, // WS9 — the single active brain
       // §multi-provider — named providers + per-sub-agent-role routing.
       providers: [
         { name: 'groq', provider: 'groq', model: 'llama-3.3-70b', endpoint: 'https://api.groq.com/openai/v1', hasKey: true },
@@ -1091,6 +1100,7 @@ export function installDevBridge(): void {
     'action:set-hook': () => ({ ok: true }),
     'action:set-access': (a) => ({ ok: true, mode: a.mode }),
     'action:reconnect-mcp': () => ({ ok: true }),
+    'action:set-active-server': (a) => { const id = String(a.id ?? ''); if (devServers.some((s) => s.id === id && s.identity === 'brainrouter')) devActiveServer = id; return { ok: true, id }; },
     'search-content': (a) => [
       { file: 'src/memory/recall.ts', line: 42, snippet: `const blended = 0.6 * rerank + 0.4 * rrf; // ${String(a.q ?? '')}` },
       { file: 'src/agent/agent.ts', line: 1240, snippet: 'private interruptRequested = false;' },
@@ -1125,7 +1135,7 @@ export function installDevBridge(): void {
       if (op === 'add') { if (r && !list.includes(r)) list.push(r); } else { const i = list.indexOf(r); if (i >= 0) list.splice(i, 1); }
       return { ok: true, permissions: { allow: [...devRules.allow], deny: [...devRules.deny] } };
     },
-    'action:add-mcp': (a) => { const id = String(a.id ?? '').trim(); if (!id || devServers.some((s) => s.id === id)) return { ok: false, error: 'invalid or duplicate id' }; devServers.push({ id, online: true, detail: `${a.type ?? 'stdio'}` }); return { ok: true, id }; },
+    'action:add-mcp': (a) => { const id = String(a.id ?? '').trim(); if (!id || devServers.some((s) => s.id === id)) return { ok: false, error: 'invalid or duplicate id' }; const http = a.type === 'http'; devServers.push({ id, online: true, identity: 'third-party', type: http ? 'http' : 'stdio', url: http ? String(a.url ?? '') : null, command: http ? null : String(a.command ?? ''), detail: `${a.type ?? 'stdio'}` }); return { ok: true, id }; },
     'action:remove-mcp': (a) => { const i = devServers.findIndex((s) => s.id === a.id); if (i >= 0) devServers.splice(i, 1); return { ok: i >= 0, id: a.id }; },
     'action:term-exec': (a) => ({ out: `$ ${String(a.cmd ?? '')}\n(demo) command executed in the workspace`, code: 0 }),
     'command:dispatch': (a) => {
