@@ -41,7 +41,9 @@ export function GoalBanner({ goal, onResume, onPause, onClear, onEdit }: GoalBan
   const [draft, setDraft] = useState(goal.text);
 
   const resumable = goal.status === 'paused' || goal.status === 'blocked' || goal.status === 'usage_limited';
-  const iters = `${goal.budget.iterationsUsed}/${Number.isFinite(goal.budget.maxIterations) ? goal.budget.maxIterations : '∞'}`;
+  // WS7 — goal budgets/iterations are intentionally NOT surfaced in the UI
+  // (the budget still governs auto-continuation under the hood). Show only the
+  // goal text + status + lifecycle controls.
 
   const commitEdit = (): void => {
     const next = draft.trim();
@@ -73,8 +75,6 @@ export function GoalBanner({ goal, onResume, onPause, onClear, onEdit }: GoalBan
           {goal.text}
         </button>
       )}
-
-      <span className="goal-iters" title="Iterations used / budget">{iters}</span>
 
       <div className="goal-actions">
         <button className="goal-act" title="Edit goal" onClick={() => { setDraft(goal.text); setEditing(true); }}>

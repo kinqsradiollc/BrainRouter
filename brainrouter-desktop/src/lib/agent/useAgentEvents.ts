@@ -953,7 +953,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
         if (r.action === 'continue' && typeof r.followUp === 'string') {
           const followUp = r.followUp;
           goalContPendingRef.current = followUp;
-          setRows((rows) => [...rows, { id: rid(), kind: 'status', text: `🎯 Goal — continuing (iteration ${r.iteration ?? '?'}/${r.cap ?? '∞'})… send a message to steer, or /goal pause.`, ts: Date.now() }]);
+          setRows((rows) => [...rows, { id: rid(), kind: 'status', text: `🎯 Goal — continuing… send a message to steer, or pause the goal.`, ts: Date.now() }]);
           // Brief delay so a fast user message can preempt the auto-continuation.
           setTimeout(() => {
             if (goalContPendingRef.current !== followUp) return;          // canceled by user input
