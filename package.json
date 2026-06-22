@@ -13,6 +13,7 @@
   "scripts": {
     "build": "npm run build:packages && npm run build:apps",
     "build:packages": "npm run build -w @kinqs/brainrouter-types && npm run build -w @kinqs/brainrouter-core && npm run build -w @kinqs/brainrouter-sdk && npm run build -w @kinqs/brainrouter-hooks",
+    "build:packages:dashboard": "npm run build -w @kinqs/brainrouter-types && npm run build -w @kinqs/brainrouter-sdk && npm run build -w @kinqs/brainrouter-hooks",
     "build:apps": "npm run build -w @kinqs/brainrouter-mcp-server && npm run build -w @kinqs/brainrouter-cli && npm run build -w dashboard",
     "bench:memory:dry-run": "npm run bench:memory:dry-run -w brainrouter-benchmark --",
     "bench:memory:retrieval": "npm run bench:memory:retrieval -w brainrouter-benchmark --",
