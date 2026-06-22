@@ -2485,6 +2485,13 @@ async function main() {
                             // the returned startTurn; the goal-continuation query keeps it going).
                             const g = setGoal(workspaceRoot, rest, sk, { force: true });
                             goalStrikes.delete(sk);
+                            // WS4 — record the goal text as the canonical (untagged) first user
+                            // entry immediately, so the session lists in the sidebar and titles
+                            // by the goal even before the (hidden, name:'goal') kickoff turn runs.
+                            try {
+                                appendTranscriptEntry(workspaceRoot, sk, { role: 'user', content: g.text });
+                            }
+                            catch { /* listing is best-effort */ }
                             // Seed a visible starter plan so the Plan panel populates the
                             // instant the goal is set (instead of waiting on the model to call
                             // update_plan). The kickoff prompt tells the agent to replace it.
