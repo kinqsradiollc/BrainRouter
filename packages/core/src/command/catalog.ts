@@ -40,7 +40,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/status', desc: 'Connection status, LLM config, DB stats' },
       { cmd: '/workspace', desc: 'Active workspace and session identity' },
       { cmd: '/where', desc: 'Single-screen view of workspace, workflow, goal, plan, recall, children' },
-      { cmd: '/atlas', desc: 'Build a codebase knowledge graph (files, symbols, layers); explore it in the desktop Atlas panel' },
+      { cmd: '/atlas', desc: 'Build/enrich a codebase knowledge graph (files, symbols, summaries, layers, tour); explore it in the desktop Atlas panel' },
       { cmd: '/doctor', desc: 'Config, connection, memory extraction health' },
       { cmd: '/policy [name]', desc: 'Show or apply a policy profile (readonly / workspace / trusted)' },
       { cmd: '/config [key] [value]', desc: 'Settings panel; `/config theme dark` to set; `/config raw` for JSON dump' },
