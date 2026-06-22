@@ -1,6 +1,6 @@
 {
   "name": "@kinqs/brainrouter-core",
-  "version": "0.4.14",
+  "version": "0.4.15",
   "description": "BrainRouter's headless engine — config, durable stores, runtime, orchestration, telemetry, and the agent — shared verbatim by the CLI and the Desktop app so neither reaches into the other's build output.",
   "type": "module",
   "main": "dist/index.js",
@@ -21,7 +21,7 @@
     "prepack": "npm run build && find dist -name '*.test.*' -delete"
   },
   "dependencies": {
-    "@kinqs/brainrouter-types": "^0.4.14"
+    "@kinqs/brainrouter-types": "^0.4.15"
   },
   "devDependencies": {
     "typescript": "^5.5.4",

@@ -8,12 +8,16 @@ design specs in [`brainrouter-docs/specs/`](brainrouter-docs/specs/).
 
 ## Shipped
 
-Latest published: **0.4.14** (2026-06-10) — benchmark-driven recall overhaul + the
-grid TUI (live fleet sidebar, scroll mode) + model-spawned background workers with
-a completion inbox that reports results back into the conversation.
+Latest published: **0.4.15** (2026-06-22) — the requirement-first workflow + the
+unified workspace (Chat · Track · Code) with a code-aware Jira-class board, a
+desktop UI pass, and a closing UX & reliability program (child auto-resume,
+destructive-command guard, MCP auto-reconnect + brain/tools split, provider
+gallery with live `/models`, cross-session usage heatmap, cross-workspace
+session menu).
 
 | Version | Theme | Date |
 |---|---|---|
+| 0.4.15 | Requirement-first workflow · unified workspace (Chat·Track·Code) · desktop UX & reliability pass | 2026-06-22 |
 | 0.4.14 | Memory accuracy (2 rounds) · grid TUI + fleet sidebar · workers that report back | 2026-06-10 |
 | 0.4.13 | Sub-agent result delivery (resume + synthesis guard) · REPL polish | 2026-06-07 |
 | 0.4.12 | The Build Loop · multi-agent reconnect + parent-wait timeouts · `/queue` · accuracy fixes | 2026-06-05 |
