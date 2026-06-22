@@ -3874,3 +3874,14 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .atlas-detail-change.chg-untracked .atlas-detail-change-dot { background: var(--accent); }
 .atlas-detail-change.chg-deleted { background: color-mix(in srgb, var(--err) 13%, transparent); color: var(--err); }
 .atlas-detail-change.chg-deleted .atlas-detail-change-dot { background: var(--err); }
+
+/* ===== ATLAS-12 — Domain deep-dive capability cards ===== */
+.atlas-dcard { box-sizing: border-box; display: flex; flex-direction: column; gap: 7px; padding: 12px 14px; border-radius: 12px; background: var(--raised); border: 1px solid var(--border-strong); cursor: pointer; transition: transform 0.12s, box-shadow 0.12s, border-color 0.12s; }
+.atlas-dcard:hover { transform: translateY(-2px); border-color: var(--accent); box-shadow: 0 8px 22px rgba(0,0,0,0.34); }
+.atlas-dcard-title { font-size: 15px; font-weight: 650; color: var(--text); letter-spacing: -0.01em; }
+.atlas-dcard-desc { font-size: 11.5px; color: var(--text-dim); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.atlas-dcard-section { display: flex; flex-direction: column; gap: 4px; }
+.atlas-dcard-label { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); }
+.atlas-dcard-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.atlas-dcard-chip { font-size: 10px; padding: 1px 7px; border-radius: 6px; background: var(--surface); border: 1px solid var(--border); color: var(--text-dim); font-family: var(--mono, ui-monospace, monospace); }
+.atlas-dcard-foot { font-size: 11px; color: var(--text-faint); margin-top: 2px; }

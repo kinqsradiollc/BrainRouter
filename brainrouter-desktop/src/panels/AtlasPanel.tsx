@@ -13,7 +13,7 @@ import { ReactFlow, Background, Controls, MiniMap, type Edge, type Node, type Re
 import "@xyflow/react/dist/style.css";
 import type { AtlasFileCategory, AtlasGraph, AtlasNode, AtlasNodeType } from "@kinqs/brainrouter-types";
 import {
-  atlasGrouping, atlasGroupedLayout, atlasOverviewModel, atlasNodeColor, atlasSearchMatches,
+  atlasGrouping, atlasGroupedLayout, atlasOverviewModel, atlasDomainModel, atlasNodeColor, atlasSearchMatches,
   atlasChangeMap, atlasNodeChanges, ATLAS_FILE_CATEGORIES, ATLAS_CATEGORY_COLORS,
   type AtlasChangeKind,
 } from "../lib/atlas/atlasView.js";
@@ -21,7 +21,7 @@ import { ATLAS_NODE_TYPES } from "./AtlasNodes.js";
 import { AtlasDetail } from "./AtlasDetail.js";
 import { Icon } from "../icons.js";
 
-type Mode = "overview" | "structural";
+type Mode = "overview" | "structural" | "domain";
 
 export interface AtlasPanelProps {
   graph: AtlasGraph | null;
@@ -108,6 +108,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
 
   // ---- model per mode ----
   const overview = useMemo(() => (graph && effMode === "overview" ? atlasOverviewModel(graph) : null), [graph, effMode]);
+  const domain = useMemo(() => (graph && effMode === "domain" ? atlasDomainModel(graph) : null), [graph, effMode]);
 
   const structural = useMemo(() => {
     if (!graph || effMode !== "structural") return null;
@@ -138,6 +139,22 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
       const edges: Edge[] = overview.edges.map((e, i) => ({
         id: `oe${i}`, source: e.source, target: e.target,
         style: { stroke: "var(--border-strong)", strokeWidth: 1 }, label: e.weight > 1 ? String(e.weight) : undefined,
+      }));
+      return { rfNodes: nodes, rfEdges: edges };
+    }
+    if (effMode === "domain" && domain) {
+      const cardW = 264;
+      const cardH = 168;
+      const cols = Math.max(1, Math.min(4, Math.ceil(Math.sqrt(domain.cards.length))));
+      const nodes: Node[] = domain.cards.map((c, i) => ({
+        id: c.id, type: "atlasDomain",
+        position: { x: (i % cols) * (cardW + 48), y: Math.floor(i / cols) * (cardH + 48) },
+        data: { name: c.name, description: c.description, entities: c.entities, flows: c.flows },
+        style: { width: cardW },
+      }));
+      const edges: Edge[] = domain.edges.map((e, i) => ({
+        id: `de${i}`, source: e.source, target: e.target, animated: true,
+        style: { stroke: "var(--border-strong)", strokeWidth: 1, strokeDasharray: "4 4" },
       }));
       return { rfNodes: nodes, rfEdges: edges };
     }
@@ -172,7 +189,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
       return { rfNodes: [...groupNodes, ...fileNodes], rfEdges: edges };
     }
     return { rfNodes: [], rfEdges: [] };
-  }, [graph, effMode, overview, structural, spotlight, selected, byId, showDiff, nodeChanges]);
+  }, [graph, effMode, overview, domain, structural, spotlight, selected, byId, showDiff, nodeChanges]);
 
   // fit to spotlight when searching/touring
   useEffect(() => {
@@ -228,6 +245,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
           <div className="atlas-modes">
             <button className={`atlas-mode${effMode === "overview" ? " on" : ""}`} onClick={() => { setMode("overview"); setDrill(null); }}>Overview</button>
             <button className={`atlas-mode${effMode === "structural" ? " on" : ""}`} onClick={() => setMode("structural")}>Structural</button>
+            <button className={`atlas-mode${effMode === "domain" ? " on" : ""}`} onClick={() => { setMode("domain"); setDrill(null); }}>Domain</button>
           </div>
         ) : null}
         <span className="atlas-proj">{graph.project.name}</span>
@@ -257,7 +275,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
 
       <div className="atlas-breadcrumb">
         <button className="atlas-crumb" onClick={() => { setMode(hasLayers ? "overview" : "structural"); setDrill(null); }}>{graph.project.name}</button>
-        {drillName ? <><span className="atlas-crumb-sep">›</span><span className="atlas-crumb cur">{drillName}</span><span className="atlas-crumb-esc">Esc to go back</span></> : <span className="atlas-crumb-mode">{effMode === "overview" ? "Overview" : "Structural"}</span>}
+        {drillName ? <><span className="atlas-crumb-sep">›</span><span className="atlas-crumb cur">{drillName}</span><span className="atlas-crumb-esc">Esc to go back</span></> : <span className="atlas-crumb-mode">{effMode === "overview" ? "Overview" : effMode === "domain" ? "Domain" : "Structural"}</span>}
       </div>
 
       {showDiff && changedCount ? (
@@ -282,7 +300,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
           proOptions={{ hideAttribution: true }}
           onInit={(inst) => { rfRef.current = inst; }}
           onNodeClick={(_e, n) => {
-            if (n.type === "atlasLayer") { setDrill(n.id); setMode("structural"); return; }
+            if (n.type === "atlasLayer" || n.type === "atlasDomain") { setDrill(n.id); setMode("structural"); return; }
             if (n.type === "atlasFile") {
               setSelected(n.id);
               onSelectNode?.(n.id, byId.get(n.id)?.filePath);

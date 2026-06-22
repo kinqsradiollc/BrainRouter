@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { AtlasGraph } from '@kinqs/brainrouter-types';
-import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize, atlasNodeFacts, atlasSearchMatches, atlasGrouping, atlasGroupedLayout, atlasOverviewModel, atlasChangeKind, atlasChangeMap, atlasNodeChanges } from './atlasView.js';
+import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize, atlasNodeFacts, atlasSearchMatches, atlasGrouping, atlasGroupedLayout, atlasOverviewModel, atlasDomainModel, atlasChangeKind, atlasChangeMap, atlasNodeChanges } from './atlasView.js';
 
 function fixture(): AtlasGraph {
   return {
@@ -205,6 +205,26 @@ test('atlasOverviewModel: layer cards + inter-layer edges', () => {
   // routes.ts (API) imports store.ts (Data) → one inter-layer edge
   assert.equal(m.edges.length, 1);
   assert.equal(m.edges[0].weight, 1);
+});
+
+test('atlasDomainModel: capability cards with entities + flow counts', () => {
+  const g = layered();
+  // a class in the API layer → an entity; a tour step touching the API layer → a flow
+  g.nodes.push({ id: 'class:src/api/server.ts:Server', type: 'class', name: 'Server', filePath: 'src/api/server.ts', lineRange: [1, 9] });
+  g.tour = [
+    { order: 1, title: 'boot', description: '', nodeIds: ['file:src/api/server.ts'] },
+    { order: 2, title: 'data', description: '', nodeIds: ['file:src/db/store.ts'] },
+  ];
+  const m = atlasDomainModel(g);
+  const api = m.cards.find((c) => c.name === 'API')!;
+  assert.deepEqual(api.entities, ['Server']);
+  assert.equal(api.flows, 1);
+  assert.equal(api.fileCount, 2);
+  const data = m.cards.find((c) => c.name === 'Data')!;
+  assert.deepEqual(data.entities, []);
+  assert.equal(data.flows, 1);
+  // inter-layer edge preserved
+  assert.equal(m.edges.length, 1);
 });
 
 test('atlasChangeKind maps git porcelain codes', () => {

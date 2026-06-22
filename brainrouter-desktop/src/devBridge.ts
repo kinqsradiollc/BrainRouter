@@ -41,11 +41,20 @@ function devAtlasGraph(): AtlasGraph {
   const nodes = DEV_FILES.map(([p, c, cx, lang]) => devFile(p, c, cx, lang));
   const id = (p: string): string => nodes.find((n) => n.filePath === p)!.id;
   const edges: AtlasGraph['edges'] = DEV_IMPORTS.map(([a, b]) => ({ source: id(a), target: id(b), type: 'imports', weight: 0.9 }));
-  // a couple of symbols for the detail card
-  nodes.push({ id: 'class:src/cart/cartStore.ts:CartStore', type: 'class', name: 'CartStore', filePath: 'src/cart/cartStore.ts', lineRange: [8, 74] } as AtlasGraph['nodes'][number]);
-  nodes.push({ id: 'function:src/checkout/orchestrator.ts:placeOrder', type: 'function', name: 'placeOrder', filePath: 'src/checkout/orchestrator.ts', lineRange: [12, 58] } as AtlasGraph['nodes'][number]);
-  edges.push({ source: id('src/cart/cartStore.ts'), target: 'class:src/cart/cartStore.ts:CartStore', type: 'contains' as const, weight: 1 });
-  edges.push({ source: id('src/checkout/orchestrator.ts'), target: 'function:src/checkout/orchestrator.ts:placeOrder', type: 'contains' as const, weight: 1 });
+  // entity (class) + function symbols for the detail card and domain entities
+  const sym: Array<[string, string, 'class' | 'function', string, [number, number]]> = [
+    ['class:src/cart/cartStore.ts:CartStore', 'CartStore', 'class', 'src/cart/cartStore.ts', [8, 74]],
+    ['class:src/catalog/catalog.ts:Product', 'Product', 'class', 'src/catalog/catalog.ts', [3, 22]],
+    ['class:src/catalog/search.ts:SearchIndex', 'SearchIndex', 'class', 'src/catalog/search.ts', [5, 48]],
+    ['class:src/payment/payment.ts:Charge', 'Charge', 'class', 'src/payment/payment.ts', [4, 30]],
+    ['class:src/gateway/server.ts:Server', 'Server', 'class', 'src/gateway/server.ts', [6, 40]],
+    ['class:src/shared/types.ts:Order', 'Order', 'class', 'src/shared/types.ts', [1, 18]],
+    ['function:src/checkout/orchestrator.ts:placeOrder', 'placeOrder', 'function', 'src/checkout/orchestrator.ts', [12, 58]],
+  ];
+  for (const [sid, name, type, filePath, lineRange] of sym) {
+    nodes.push({ id: sid, type, name, filePath, lineRange } as AtlasGraph['nodes'][number]);
+    edges.push({ source: id(filePath), target: sid, type: 'contains' as const, weight: 1 });
+  }
   return {
     schemaVersion: 1, kind: 'codebase',
     project: { name: 'commerce-demo', languages: ['typescript', 'json'], frameworks: ['React'], description: 'A small commerce app for the Atlas panel.', analyzedAt: '2026-06-22T00:00:00Z', totalFiles: DEV_FILES.length },
