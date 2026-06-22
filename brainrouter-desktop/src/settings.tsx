@@ -420,7 +420,13 @@ export function SettingsDialog(props: {
                 value={provDraft.endpoint || providerCatalog.find((c) => c.id === provDraft.provider)?.endpoint || ''}
                 onChange={(e) => setProvDraft((d) => ({ ...d, endpoint: e.target.value }))} />
               <div className="mcp-add-row">
-                <input className="ctl" placeholder="default model" value={provDraft.model} onChange={(e) => setProvDraft((d) => ({ ...d, model: e.target.value }))} />
+                {/* WS12 — model picker driven by the endpoint's live GET /models
+                    (never a hardcoded list); free-text fallback for an offline
+                    endpoint or a model the list doesn't include. */}
+                <input className="ctl" placeholder="default model" list="ws12-provider-models" value={provDraft.model} onChange={(e) => setProvDraft((d) => ({ ...d, model: e.target.value }))} />
+                <datalist id="ws12-provider-models">
+                  {(editingProvider ? (props.providerModels[editingProvider] ?? []) : props.endpointModels).map((m) => <option key={m} value={m} />)}
+                </datalist>
                 <input className="ctl" type="password" placeholder="API key" value={provDraft.apiKey} onChange={(e) => setProvDraft((d) => ({ ...d, apiKey: e.target.value }))} />
               </div>
               <div className="set-actions">
