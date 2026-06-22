@@ -23,6 +23,7 @@ import { loadConfig, saveConfig, getCliKnobs } from '@kinqs/brainrouter-core/dis
 import { setProvider, removeProvider, setAgentModel } from '@kinqs/brainrouter-core/dist/provider/agentModels.js';
 import { McpClientPool } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
 import { listTranscripts, loadTranscript, readTranscriptTail, transcriptExists, transcriptSizeBytes, deleteSession, forkSession, appendTranscriptEntry, rewindTranscript } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
+import { readUsageHistory, totalUsage } from '@kinqs/brainrouter-core/dist/usage/usageHistoryStore.js';
 import { classifyForVerification } from '@kinqs/brainrouter-core/dist/agent/verificationGate.js';
 import { resolveWorkspaceGit } from '@kinqs/brainrouter-core/dist/git/workspaceGit.js';
 import { readWorkspaceEntry, isWorkspaceDirectory, listWorkspaceFiles, statWorkspaceEntry, writeWorkspaceEntry } from './fsRead.js';
@@ -2135,6 +2136,13 @@ async function main() {
                 };
             },
             'usage-breakdown': () => buildUsageBreakdown({ parent: activeAgent.sessionUsage, children: [], offload: undefined }),
+            // WS10 — persistent cross-session usage history (day-bucketed), for the
+            // contributions-style heatmap + range totals in the Usage panel.
+            'usage-history': (a) => {
+                const days = typeof a.days === 'number' && a.days > 0 ? Math.floor(a.days) : 30;
+                const records = readUsageHistory(days, Date.now());
+                return { days: records, total: totalUsage(records) };
+            },
             // DESK-5r — context fill for the composer ring. `used` is the agent's
             // authoritative last prompt_tokens (the live context size, updated after
             // every LLM call within a turn). The ring fills toward the AUTO-COMPACT

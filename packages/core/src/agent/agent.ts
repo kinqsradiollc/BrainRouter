@@ -95,6 +95,8 @@ import { resolveSandboxConfig, runShell } from '../exec/sandbox.js';
 import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../exec/dangerousCommand.js';
 import { evaluateDestructiveCommand } from '../exec/destructiveCommandGuard.js';
 import { gitHeadSha } from '../git/workspaceGit.js';
+import { recordDailyUsage } from '../usage/usageHistoryStore.js';
+import { isTelemetryEnabled } from '../telemetry/telemetry.js';
 import { readPreferences, resolveEffort, type EffortLevel } from '../session/preferencesStore.js';
 import { resolveActiveMode } from '../session/sessionModeStore.js';
 import { resolveEffortForTurn } from './effortRouting.js';
@@ -2980,6 +2982,17 @@ export class Agent {
       b.calls += this.lastTurnUsage.calls;
       b.turns += 1;
       this.usageBySkill.set(skillKey, b);
+    }
+    // WS10 — record this turn into the persistent cross-session usage history
+    // (TOP-LEVEL agent only, so children don't double-count; survives session
+    // delete). Gated on the local telemetry toggle; best-effort, never fatal.
+    if (!this.silent && isTelemetryEnabled()) {
+      try {
+        recordDailyUsage(
+          { promptTokens: this.lastTurnUsage.promptTokens, completionTokens: this.lastTurnUsage.completionTokens, calls: this.lastTurnUsage.calls },
+          Date.now(),
+        );
+      } catch { /* observability only */ }
     }
 
     // 0.3.9 item 12 — turn-end tool-result auto-shrink. Any `role: tool`
