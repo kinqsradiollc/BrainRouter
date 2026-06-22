@@ -41,6 +41,7 @@ import { getLatestReview, saveReview, updateReviewFinding } from '@kinqs/brainro
 import { getStateDir } from '@kinqs/brainrouter-core/dist/storage/store.js';
 import { buildRecap } from '@kinqs/brainrouter-core/dist/session/sessionRecap.js';
 import { collectRunningTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
+import { killBackgroundShell } from '@kinqs/brainrouter-core/dist/exec/backgroundShell.js';
 import { contextWindowFor } from '@kinqs/brainrouter-core/dist/context/contextWindow.js';
 // DESK-4c — the command/settings surfaces reuse the CLI's own modules so the
 // desktop never drifts from the terminal: same catalog, same preferences
@@ -2617,6 +2618,9 @@ async function main(): Promise<void> {
         if (sess) { try { sess.proc.kill(); } catch { /* already gone */ } terms.delete(String(args.id)); }
         return { ok: true };
       },
+      // WS2 2.4 / WS6 6.3 — stop a background shell (e.g. a dev server an agent
+      // started) from the Background-tasks panel. Kills the whole process group.
+      'action:kill-bgshell': (args) => ({ ok: killBackgroundShell(String(args.id ?? '')) }),
       // Actions — host-side mutations the Settings dialog / palette trigger.
       // They ride the query channel (free-form names, result routing by id).
       'action:clear': () => { activeAgent.clearHistory(); return { ok: true }; },

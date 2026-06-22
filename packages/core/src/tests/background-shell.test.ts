@@ -5,6 +5,8 @@ import {
   startBackgroundShell,
   getBackgroundShell,
   readBackgroundOutput,
+  killBackgroundShell,
+  killAllBackgroundShells,
   __resetBackgroundShells,
 } from '../exec/backgroundShell.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
@@ -56,6 +58,34 @@ test('readBackgroundOutput: incremental offsets + complete flag', async () => {
     assert.ok(!r2.chunk.includes('first'), 'offset read returns only NEW output');
     assert.equal(r2.complete, true);
     assert.equal(readBackgroundOutput('bgsh_nope', 0), null);
+  });
+});
+
+test('WS2/WS6 killBackgroundShell: terminates a long-running shell + is idempotent', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    __resetBackgroundShells();
+    const run = startBackgroundShell({ command: 'sleep 30', cwd: workspace, workspaceRoot: workspace });
+    assert.equal(run.status, 'running');
+    assert.equal(killBackgroundShell(run.id), true, 'a running shell is killed');
+    const after = getBackgroundShell(run.id)!;
+    assert.notEqual(after.status, 'running', 'status flips off running immediately');
+    assert.ok(after.endedAt, 'endedAt stamped');
+    assert.equal(killBackgroundShell(run.id), false, 'idempotent: already-ended is a no-op');
+    assert.equal(killBackgroundShell('bgsh_nope'), false, 'unknown id is a no-op');
+    // the OS actually reaped it — the child `exit` handler runs
+    await until(() => getBackgroundShell(run.id)?.status !== 'running');
+  });
+});
+
+test('WS6 killAllBackgroundShells: stops every running shell (workflow Stop-all)', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    __resetBackgroundShells();
+    const a = startBackgroundShell({ command: 'sleep 30', cwd: workspace, workspaceRoot: workspace });
+    const b = startBackgroundShell({ command: 'sleep 30', cwd: workspace, workspaceRoot: workspace });
+    assert.equal(killAllBackgroundShells(), 2, 'both running shells signalled');
+    assert.notEqual(getBackgroundShell(a.id)!.status, 'running');
+    assert.notEqual(getBackgroundShell(b.id)!.status, 'running');
+    assert.equal(killAllBackgroundShells(), 0, 'nothing left to kill');
   });
 });
 
