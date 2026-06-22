@@ -241,6 +241,7 @@ program
     // comment); the banner's per-server row is the success signal.
     const mcpClient = new McpClientPool();
     const statuses = await mcpClient.connectAll(targetServers, llm, { timeoutMs: 5_000 });
+    mcpClient.startReconnectSupervisor(); // WS9 — auto-reconnect dropped MCP servers in the background
     // Register live server ids for Ink tool-name display so multi-word
     // server names (e.g. `my_server`) don't get mis-stripped by the
     // single-underscore prefix regex.
@@ -441,6 +442,7 @@ program
 
     const mcpClient = new McpClientPool();
     const statuses = await mcpClient.connectAll(targetServers, llm, { timeoutMs: 5_000 });
+    mcpClient.startReconnectSupervisor(); // WS9 — auto-reconnect dropped MCP servers in the background
     // Register live server ids for Ink tool-name display so multi-word
     // server names (e.g. `my_server`) don't get mis-stripped by the
     // single-underscore prefix regex.

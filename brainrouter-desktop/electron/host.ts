@@ -486,6 +486,7 @@ async function main(): Promise<void> {
   const mcpClient = new McpClientPool();
   try {
     await mcpClient.connectAll(config.servers ?? {}, llm, { timeoutMs: 5_000 });
+    mcpClient.startReconnectSupervisor(); // WS9 — auto-reconnect dropped MCP servers in the background
   } catch { /* offline-mode: local tools only, same as the CLI */ }
 
   // DESK-3 — the approval/choice port: agent asks become interaction-request
