@@ -1,0 +1,35 @@
+{
+  // Standalone, RN-free typecheck of the PURE layer (domain logic, the
+  // transport seam interface + MockTransport, the Storage interface, and the
+  // re-exported protocol). These have no React Native / Expo dependency and so
+  // can be verified with the repo's pinned tsc without installing native deps.
+  // The full RN app is typechecked by tsconfig.json once deps are installed.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    // Node types are needed only by the verification HARNESS: the ported unit
+    // tests use the `node:test`/`node:assert` runner (run via `tsx --test`,
+    // exactly as the desktop runs them), and MockTransport uses the global
+    // timer functions (React Native provides these at runtime). The ported pure
+    // source files themselves reference no Node APIs.
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "forceConsistentCasingInFileNames": true,
+    "allowImportingTsExtensions": false
+  },
+  "include": [
+    "src/types.ts",
+    "src/panels/index.ts",
+    "src/domain/**/*.ts",
+    "src/transport/protocol.ts",
+    "src/transport/BrainRouterTransport.ts",
+    "src/transport/MockTransport.ts",
+    "src/storage/Storage.ts",
+    "src/theme/tokens.ts"
+  ]
+}

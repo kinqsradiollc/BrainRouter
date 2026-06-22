@@ -1,0 +1,25 @@
+# Expo / RN
+node_modules/
+.expo/
+dist/
+web-build/
+*.log
+
+# Native
+ios/
+android/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# Env
+.env*.local
+
+# macOS
+.DS_Store
