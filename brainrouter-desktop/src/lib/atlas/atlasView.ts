@@ -7,7 +7,7 @@
  * tsx and the panel stays thin.
  */
 import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY, type SimulationNodeDatum } from "d3-force";
-import type { AtlasEdge, AtlasGraph, AtlasNode, AtlasNodeType } from "@kinqs/brainrouter-types";
+import type { AtlasComplexity, AtlasEdge, AtlasFileCategory, AtlasGraph, AtlasNode, AtlasNodeType } from "@kinqs/brainrouter-types";
 
 /** Node types shown in the structural map (symbols — function/class — are detail, hidden here). */
 const FILE_LEVEL: ReadonlySet<AtlasNodeType> = new Set<AtlasNodeType>([
@@ -202,4 +202,195 @@ export function atlasNodeFacts(graph: AtlasGraph, nodeId: string): AtlasNodeFact
   const importsIn = graph.edges.filter((e) => e.type === "imports" && e.target === nodeId).map((e) => pathOf(e.source));
 
   return { node, symbols, layer, importsOut, importsIn };
+}
+
+// ---------------------------------------------------------------------------
+// Grouped structural view (ATLAS-10) — files clustered into containers, the way
+// the eye actually parses a codebase: by architectural layer when the graph is
+// enriched, else by directory. Plus a layer-card Overview and category filters.
+// ---------------------------------------------------------------------------
+
+/** File-level node types rendered as boxes (symbols stay in the detail card). */
+const GROUPABLE: ReadonlySet<AtlasNodeType> = new Set<AtlasNodeType>([
+  "file", "config", "document", "resource", "schema", "service", "endpoint", "pipeline", "module",
+]);
+
+/** The file categories shown as filter pills, in display order. */
+export const ATLAS_FILE_CATEGORIES: readonly AtlasFileCategory[] = ["code", "config", "docs", "infra", "data", "markup", "script"];
+
+export const ATLAS_CATEGORY_COLORS: Record<AtlasFileCategory, string> = {
+  code: "var(--accent, #4c8dff)",
+  config: "#2dd4bf",
+  docs: "#38bdf8",
+  infra: "#a78bfa",
+  data: "#34d399",
+  markup: "#fbbf24",
+  script: "#fb923c",
+};
+
+export interface AtlasGroup {
+  id: string;
+  label: string;
+  nodeIds: string[];
+}
+
+function dirOf(path: string): string {
+  const i = path.lastIndexOf("/");
+  return i < 0 ? "" : path.slice(0, i);
+}
+
+/**
+ * Group file-level nodes — by enrichment layer when present, else by parent
+ * directory. `scope`, if given, restricts to those node ids (drill-in).
+ */
+export function atlasGrouping(graph: AtlasGraph, scope?: ReadonlySet<string>): AtlasGroup[] {
+  const files = graph.nodes.filter((n) => GROUPABLE.has(n.type) && (!scope || scope.has(n.id)));
+  if (graph.layers.length) {
+    const fileIds = new Set(files.map((n) => n.id));
+    const groups: AtlasGroup[] = [];
+    const claimed = new Set<string>();
+    for (const layer of graph.layers) {
+      const ids = layer.nodeIds.filter((id) => fileIds.has(id) && !claimed.has(id));
+      ids.forEach((id) => claimed.add(id));
+      if (ids.length) groups.push({ id: layer.id, label: layer.name, nodeIds: ids });
+    }
+    const orphans = files.filter((n) => !claimed.has(n.id)).map((n) => n.id);
+    if (orphans.length) groups.push({ id: "group:other", label: "Other", nodeIds: orphans });
+    return groups;
+  }
+  const byDir = new Map<string, string[]>();
+  for (const n of files) {
+    const dir = dirOf(n.filePath ?? n.name);
+    (byDir.get(dir) ?? byDir.set(dir, []).get(dir)!).push(n.id);
+  }
+  return [...byDir.entries()]
+    .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+    .map(([dir, ids]) => ({ id: `group:${dir || "root"}`, label: dir || "(root)", nodeIds: ids }));
+}
+
+export interface AtlasGroupBox {
+  id: string;
+  label: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  count: number;
+}
+
+export interface AtlasGroupedLayout {
+  groups: AtlasGroupBox[];
+  /** node id → position RELATIVE to its parent group (React Flow child coords). */
+  positions: Map<string, { x: number; y: number }>;
+  /** node id → group id. */
+  groupOf: Map<string, string>;
+}
+
+export interface GroupedLayoutOpts {
+  nodeW?: number;
+  nodeH?: number;
+  gap?: number;
+  pad?: number;
+  titleH?: number;
+  groupGap?: number;
+  maxRowWidth?: number;
+  maxCols?: number;
+}
+
+/**
+ * Tidy, deterministic grid-pack: each group lays its nodes in a grid; group
+ * boxes flow left-to-right and wrap. No physics — clusters read as clean cards.
+ */
+export function atlasGroupedLayout(groups: AtlasGroup[], opts: GroupedLayoutOpts = {}): AtlasGroupedLayout {
+  const nodeW = opts.nodeW ?? 152;
+  const nodeH = opts.nodeH ?? 34;
+  const gap = opts.gap ?? 14;
+  const pad = opts.pad ?? 16;
+  const titleH = opts.titleH ?? 34;
+  const groupGap = opts.groupGap ?? 40;
+  const maxRowWidth = opts.maxRowWidth ?? 1700;
+  const maxCols = opts.maxCols ?? 6;
+
+  const positions = new Map<string, { x: number; y: number }>();
+  const groupOf = new Map<string, string>();
+
+  const sized = groups.map((g) => {
+    const n = Math.max(1, g.nodeIds.length);
+    const cols = Math.max(1, Math.min(maxCols, Math.ceil(Math.sqrt(n))));
+    const rows = Math.ceil(n / cols);
+    const width = cols * nodeW + (cols - 1) * gap + pad * 2;
+    const height = titleH + rows * nodeH + (rows - 1) * gap + pad * 2;
+    g.nodeIds.forEach((id, i) => {
+      const r = Math.floor(i / cols);
+      const c = i % cols;
+      positions.set(id, { x: pad + c * (nodeW + gap), y: titleH + pad + r * (nodeH + gap) });
+      groupOf.set(id, g.id);
+    });
+    return { g, width, height };
+  });
+
+  const boxes: AtlasGroupBox[] = [];
+  let cx = 0;
+  let cy = 0;
+  let rowH = 0;
+  for (const { g, width, height } of sized) {
+    if (cx > 0 && cx + width > maxRowWidth) {
+      cx = 0;
+      cy += rowH + groupGap;
+      rowH = 0;
+    }
+    boxes.push({ id: g.id, label: g.label, x: cx, y: cy, width, height, count: g.nodeIds.length });
+    cx += width + groupGap;
+    rowH = Math.max(rowH, height);
+  }
+  return { groups: boxes, positions, groupOf };
+}
+
+export interface AtlasOverviewCard {
+  id: string;
+  name: string;
+  description?: string;
+  fileCount: number;
+  complexity: AtlasComplexity;
+  nodeIds: string[];
+}
+
+export interface AtlasOverviewModel {
+  cards: AtlasOverviewCard[];
+  edges: Array<{ source: string; target: string; weight: number }>;
+}
+
+function aggregateComplexity(nodes: AtlasNode[]): AtlasComplexity {
+  const c = { simple: 0, moderate: 0, complex: 0 };
+  for (const n of nodes) c[n.complexity ?? "simple"]++;
+  if (c.complex > 0 && c.complex >= c.moderate && c.complex >= c.simple) return "complex";
+  if (c.moderate > 0 && c.moderate >= c.simple) return "moderate";
+  return "simple";
+}
+
+/** Layer cards + inter-layer import edges, for the Overview mode. */
+export function atlasOverviewModel(graph: AtlasGraph): AtlasOverviewModel {
+  const byId = new Map(graph.nodes.map((n) => [n.id, n] as const));
+  const layerOf = new Map<string, string>();
+  for (const l of graph.layers) for (const id of l.nodeIds) if (!layerOf.has(id)) layerOf.set(id, l.id);
+
+  const cards: AtlasOverviewCard[] = graph.layers.map((l) => {
+    const nodes = l.nodeIds.map((id) => byId.get(id)).filter((n): n is AtlasNode => !!n && GROUPABLE.has(n.type));
+    return { id: l.id, name: l.name, description: l.description, fileCount: nodes.length, complexity: aggregateComplexity(nodes), nodeIds: l.nodeIds };
+  });
+
+  const counts = new Map<string, number>();
+  for (const e of graph.edges) {
+    if (e.type !== "imports") continue;
+    const a = layerOf.get(e.source);
+    const b = layerOf.get(e.target);
+    if (!a || !b || a === b) continue;
+    const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const edges = [...counts.entries()].map(([k, weight]) => {
+    const [source, target] = k.split("|");
+    return { source, target, weight };
+  });
+  return { cards, edges };
 }
