@@ -9,3 +9,4 @@ export { scanWorkspace, type ScanResult, type ScannedFile, type ScanOptions } fr
 export { extractSymbols, type FileSymbols, type ExtractedSymbol, type ExtractedImport } from "./extract.js";
 export { buildBaseGraph, type BuildOptions } from "./buildGraph.js";
 export { validateAtlasGraph, type AtlasValidation } from "./validate.js";
+export { atlasGraphFile, saveAtlasGraph, readAtlasGraph, atlasGraphStats } from "./atlasStore.js";

@@ -28,6 +28,7 @@ import { tryHandleRequirementCommand } from './commands/requirement.js';
 import { tryHandleTrackCommand } from './commands/track.js';
 import { tryHandleAnnotationCommand } from './commands/annotation.js';
 import { tryHandleArtifactCommand } from './commands/artifact.js';
+import { tryHandleAtlasCommand } from './commands/atlas.js';
 import { tryHandleAttachmentCommand } from './commands/attachment.js';
 import { loadCustomCommands, findCustomCommand, expandCommandBody } from '../runtime/customCommands.js';
 
@@ -139,6 +140,7 @@ export async function handleSlashCommand(
   if (await tryHandleTrackCommand(cmdCtx)) return;
   if (await tryHandleAnnotationCommand(cmdCtx)) return;
   if (await tryHandleArtifactCommand(cmdCtx)) return;
+  if (await tryHandleAtlasCommand(cmdCtx)) return;
   if (await tryHandleAttachmentCommand(cmdCtx)) return;
   if (await tryHandleScheduleCommand(cmdCtx)) return;
   if (await tryHandleReleaseNotesCommand(cmdCtx)) return;
