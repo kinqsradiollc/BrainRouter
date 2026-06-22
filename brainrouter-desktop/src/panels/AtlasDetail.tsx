@@ -16,13 +16,16 @@ export interface AtlasDetailProps {
   graph: AtlasGraph;
   nodeId: string;
   onClose: () => void;
+  /** Open this node's file in the editor. */
+  onOpenFile?: (path: string) => void;
 }
 
-export function AtlasDetail({ graph, nodeId, onClose }: AtlasDetailProps): React.ReactElement | null {
+export function AtlasDetail({ graph, nodeId, onClose, onOpenFile }: AtlasDetailProps): React.ReactElement | null {
   const facts = atlasNodeFacts(graph, nodeId);
   if (!facts) return null;
   const { node, symbols, layer, importsOut, importsIn } = facts;
   const color = atlasNodeColor(node.type);
+  const canOpen = !!(onOpenFile && node.filePath);
 
   return (
     <div className="atlas-detail">
@@ -34,7 +37,16 @@ export function AtlasDetail({ graph, nodeId, onClose }: AtlasDetailProps): React
         </button>
       </div>
 
-      {node.filePath ? <div className="atlas-detail-path">{node.filePath}</div> : null}
+      {node.filePath ? (
+        canOpen ? (
+          <button className="atlas-detail-path atlas-detail-path-open" title="Open in editor" onClick={() => onOpenFile!(node.filePath as string)}>
+            <Icon name="code" size={11} />
+            <span>{node.filePath}</span>
+          </button>
+        ) : (
+          <div className="atlas-detail-path">{node.filePath}</div>
+        )
+      ) : null}
 
       <div className="atlas-detail-meta">
         <span className="atlas-meta-pill atlas-meta-type" style={{ borderColor: color, color }}>{node.type}</span>

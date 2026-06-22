@@ -1026,7 +1026,8 @@ export function App(): React.ReactElement {
         return <AtlasPanel graph={atlasGraph} building={atlasBuilding} enriching={atlasEnriching}
           onLoad={() => q('q-atlas', 'atlas-graph')}
           onBuild={() => { setAtlasBuilding(true); q('q-atlas-build', 'atlas-build'); }}
-          onEnrich={() => { setAtlasEnriching(true); q('q-atlas-enrich', 'atlas-enrich'); }} />;
+          onEnrich={() => { setAtlasEnriching(true); q('q-atlas-enrich', 'atlas-enrich'); }}
+          onOpenFile={openFile} />;
       case 'requirements': {
         const refresh = () => setTimeout(() => q('q-req', 'requirement-list'), 150);
         return <RequirementsPanel requirements={requirements}

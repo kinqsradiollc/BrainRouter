@@ -3741,6 +3741,9 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .atlas-detail-x { background: transparent; border: 0; padding: 2px; border-radius: 5px; color: var(--text-faint); cursor: pointer; display: inline-flex; }
 .atlas-detail-x:hover { color: var(--text); background: var(--surface); }
 .atlas-detail-path { font-family: var(--mono, ui-monospace, monospace); font-size: 10.5px; color: var(--text-faint); word-break: break-all; line-height: 1.35; }
+.atlas-detail-path-open { display: flex; align-items: center; gap: 5px; padding: 0; background: transparent; border: 0; text-align: left; cursor: pointer; }
+.atlas-detail-path-open > .ic { flex: none; }
+.atlas-detail-path-open:hover, .atlas-detail-path-open:hover > .ic { color: var(--accent); }
 .atlas-detail-meta { display: flex; flex-wrap: wrap; gap: 4px; }
 .atlas-meta-pill { font-size: 10px; padding: 1px 6px; border-radius: 6px; background: var(--surface); border: 1px solid var(--border); color: var(--text-dim); }
 .atlas-meta-pill.atlas-meta-type { background: transparent; text-transform: capitalize; }
