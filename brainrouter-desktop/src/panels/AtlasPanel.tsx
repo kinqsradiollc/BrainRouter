@@ -14,7 +14,8 @@ import "@xyflow/react/dist/style.css";
 import type { AtlasFileCategory, AtlasGraph, AtlasNode, AtlasNodeType } from "@kinqs/brainrouter-types";
 import {
   atlasGrouping, atlasGroupedLayout, atlasOverviewModel, atlasNodeColor, atlasSearchMatches,
-  ATLAS_FILE_CATEGORIES, ATLAS_CATEGORY_COLORS,
+  atlasChangeMap, atlasNodeChanges, ATLAS_FILE_CATEGORIES, ATLAS_CATEGORY_COLORS,
+  type AtlasChangeKind,
 } from "../lib/atlas/atlasView.js";
 import { ATLAS_NODE_TYPES } from "./AtlasNodes.js";
 import { AtlasDetail } from "./AtlasDetail.js";
@@ -31,6 +32,8 @@ export interface AtlasPanelProps {
   onSelectNode?: (nodeId: string, filePath?: string) => void;
   onOpenFile?: (path: string) => void;
   onLoad?: () => void;
+  /** Working-tree changes (path + git porcelain status) for the Review overlay. */
+  changedFiles?: ReadonlyArray<{ path: string; status: string }>;
 }
 
 function fileColor(n: AtlasNode): string {
@@ -38,13 +41,14 @@ function fileColor(n: AtlasNode): string {
   return atlasNodeColor(n.type);
 }
 
-export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnrich, onSelectNode, onOpenFile, onLoad }: AtlasPanelProps): React.ReactElement {
+export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnrich, onSelectNode, onOpenFile, onLoad, changedFiles }: AtlasPanelProps): React.ReactElement {
   const [selected, setSelected] = useState<string | null>(null);
   const [tourStep, setTourStep] = useState<number | null>(null);
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<Mode>("overview");
   const [drill, setDrill] = useState<string | null>(null); // layer id drilled into (structural)
   const [disabledCats, setDisabledCats] = useState<ReadonlySet<AtlasFileCategory>>(new Set());
+  const [showDiff, setShowDiff] = useState(false); // Review overlay (ATLAS-11)
   const rfRef = useRef<ReactFlowInstance | null>(null);
 
   useEffect(() => {
@@ -53,6 +57,14 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
   }, []);
 
   const byId = useMemo(() => new Map((graph?.nodes ?? []).map((n) => [n.id, n] as const)), [graph]);
+
+  // Review overlay: node id → git change kind (added/modified/untracked/…).
+  const nodeChanges = useMemo<Map<string, AtlasChangeKind>>(
+    () => (graph && changedFiles?.length ? atlasNodeChanges(graph, atlasChangeMap(changedFiles)) : new Map()),
+    [graph, changedFiles],
+  );
+  const changedCount = nodeChanges.size;
+
   const hasLayers = !!graph && graph.layers.length > 0;
   const effMode: Mode = hasLayers ? mode : "structural";
 
@@ -90,7 +102,9 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
     return out;
   }, [graph, query, tourStep, byId]);
 
-  const spotlight = useMemo(() => tourIds ?? searchIds, [tourIds, searchIds]);
+  // Review overlay spotlights the changed nodes (tour/search take precedence).
+  const diffIds = useMemo(() => (showDiff && changedCount ? new Set(nodeChanges.keys()) : null), [showDiff, changedCount, nodeChanges]);
+  const spotlight = useMemo(() => tourIds ?? searchIds ?? diffIds, [tourIds, searchIds, diffIds]);
 
   // ---- model per mode ----
   const overview = useMemo(() => (graph && effMode === "overview" ? atlasOverviewModel(graph) : null), [graph, effMode]);
@@ -115,7 +129,10 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
         id: c.id,
         type: "atlasLayer",
         position: { x: (i % cols) * (cardW + 44), y: Math.floor(i / cols) * (cardH + 44) },
-        data: { name: c.name, description: c.description, fileCount: c.fileCount, complexity: c.complexity },
+        data: {
+          name: c.name, description: c.description, fileCount: c.fileCount, complexity: c.complexity,
+          changed: showDiff ? c.nodeIds.filter((id) => nodeChanges.has(id)).length : 0,
+        },
         style: { width: cardW },
       }));
       const edges: Edge[] = overview.edges.map((e, i) => ({
@@ -126,9 +143,14 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
     }
     if (effMode === "structural" && structural) {
       const { layout, visible } = structural;
+      const changedPerGroup = new Map<string, number>();
+      if (showDiff) for (const id of nodeChanges.keys()) {
+        const g = layout.groupOf.get(id);
+        if (g) changedPerGroup.set(g, (changedPerGroup.get(g) ?? 0) + 1);
+      }
       const groupNodes: Node[] = layout.groups.map((b) => ({
         id: b.id, type: "atlasGroup", position: { x: b.x, y: b.y },
-        data: { label: b.label, count: b.count },
+        data: { label: b.label, count: b.count, changed: changedPerGroup.get(b.id) ?? 0 },
         style: { width: b.width, height: b.height }, selectable: false, draggable: false, zIndex: 0,
       }));
       const fileNodes: Node[] = [];
@@ -137,7 +159,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
         if (!n) continue;
         fileNodes.push({
           id, type: "atlasFile", parentId: layout.groupOf.get(id), extent: "parent", position: pos,
-          data: { label: n.name, color: fileColor(n), dim: spotlight ? !spotlight.has(id) : false, hot: !!spotlight?.has(id), selected: selected === id },
+          data: { label: n.name, color: fileColor(n), dim: spotlight ? !spotlight.has(id) : false, hot: !!spotlight?.has(id), selected: selected === id, change: showDiff ? nodeChanges.get(id) : undefined },
         });
       }
       const edges: Edge[] = [];
@@ -150,7 +172,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
       return { rfNodes: [...groupNodes, ...fileNodes], rfEdges: edges };
     }
     return { rfNodes: [], rfEdges: [] };
-  }, [graph, effMode, overview, structural, spotlight, selected, byId]);
+  }, [graph, effMode, overview, structural, spotlight, selected, byId, showDiff, nodeChanges]);
 
   // fit to spotlight when searching/touring
   useEffect(() => {
@@ -225,6 +247,9 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
           {query.trim() ? <span className="atlas-search-count">{searchIds?.size ?? 0}</span> : null}
         </label>
         <span className="atlas-spacer" />
+        <button className={`btn atlas-review-btn${showDiff ? " primary" : ""}`} disabled={busy} onClick={() => setShowDiff((v) => !v)} title="Highlight uncommitted changes — review AI edits before commit">
+          <Icon name="diff" size={12} />{showDiff ? "Reviewing" : "Review"}{changedCount ? <span className="atlas-review-badge">{changedCount}</span> : null}
+        </button>
         {graph.tour.length ? <button className="btn" disabled={busy} onClick={() => { setSelected(null); setTourStep(tourStep == null ? 0 : null); }} title="Walk a guided tour">{tourStep == null ? "Tour" : "Exit tour"}</button> : null}
         {onEnrich ? <button className="btn" disabled={busy} onClick={onEnrich} title="Add LLM summaries, layers, and a guided tour">{enriching ? "Enriching…" : enrichedCount ? "Re-enrich" : "Enrich"}</button> : null}
         <button className="btn" disabled={busy} onClick={onBuild} title="Rebuild from the current code">{building ? "Building…" : "Rebuild"}</button>
@@ -234,6 +259,17 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
         <button className="atlas-crumb" onClick={() => { setMode(hasLayers ? "overview" : "structural"); setDrill(null); }}>{graph.project.name}</button>
         {drillName ? <><span className="atlas-crumb-sep">›</span><span className="atlas-crumb cur">{drillName}</span><span className="atlas-crumb-esc">Esc to go back</span></> : <span className="atlas-crumb-mode">{effMode === "overview" ? "Overview" : "Structural"}</span>}
       </div>
+
+      {showDiff && changedCount ? (
+        <div className="atlas-review-banner">
+          <span><strong>{changedCount}</strong> changed file{changedCount === 1 ? "" : "s"} — review before commit</span>
+          <span className="atlas-review-legend">
+            <span className="lg added">added</span>
+            <span className="lg modified">modified</span>
+            <span className="lg untracked">new</span>
+          </span>
+        </div>
+      ) : null}
 
       <div className="atlas-canvas">
         <ReactFlow
@@ -267,7 +303,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
           }} maskColor="rgba(0,0,0,0.55)" style={{ background: "var(--surface)", border: "1px solid var(--border)" }} />
         </ReactFlow>
 
-        {selected ? <AtlasDetail graph={graph} nodeId={selected} onClose={() => setSelected(null)} onOpenFile={onOpenFile} /> : null}
+        {selected ? <AtlasDetail graph={graph} nodeId={selected} onClose={() => setSelected(null)} onOpenFile={onOpenFile} changeKind={nodeChanges.get(selected)} /> : null}
 
         {tourStep != null && graph.tour[tourStep] ? (
           <div className="atlas-tour">
