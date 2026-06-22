@@ -22,7 +22,7 @@ import { loadConfig, saveConfig, getCliKnobs } from '@kinqs/brainrouter-core/dis
 // 0.4.15 — named providers + per-sub-agent model routing (pure transforms).
 import { setProvider, removeProvider, setAgentModel } from '@kinqs/brainrouter-core/dist/provider/agentModels.js';
 import { McpClientPool } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
-import { listTranscripts, loadTranscript, readTranscriptTail, transcriptExists, transcriptSizeBytes, deleteSession, forkSession, appendTranscriptEntry } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
+import { listTranscripts, loadTranscript, readTranscriptTail, transcriptExists, transcriptSizeBytes, deleteSession, forkSession, appendTranscriptEntry, rewindTranscript } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
 import { classifyForVerification } from '@kinqs/brainrouter-core/dist/agent/verificationGate.js';
 import { resolveWorkspaceGit } from '@kinqs/brainrouter-core/dist/git/workspaceGit.js';
 import { readWorkspaceEntry, isWorkspaceDirectory, listWorkspaceFiles, statWorkspaceEntry, writeWorkspaceEntry } from './fsRead.js';
@@ -2830,6 +2830,29 @@ async function main() {
             // Actions — host-side mutations the Settings dialog / palette trigger.
             // They ride the query channel (free-form names, result routing by id).
             'action:clear': () => { activeAgent.clearHistory(); return { ok: true }; },
+            // WS8 — rewind the conversation to the message at (epoch) `ts`. Blocked when
+            // code was generated after that point (rewindTranscript → canRewindTo); the
+            // renderer surfaces the reason as an in-app warning. On success the
+            // transcript is truncated and the agent's history reloaded from that point.
+            'action:rewind-to': (args) => {
+                const ts = typeof args.ts === 'number' ? args.ts : NaN;
+                if (!Number.isFinite(ts))
+                    return { ok: false, reason: 'Invalid rewind point.' };
+                const entries = loadTranscript(workspaceRoot, activeAgent.sessionKey);
+                let index = -1;
+                for (let i = 0; i < entries.length; i++) {
+                    const et = Date.parse(entries[i].timestamp);
+                    if (Number.isFinite(et) && et <= ts)
+                        index = i;
+                }
+                if (index < 0)
+                    return { ok: false, reason: 'Could not find that point in the transcript.' };
+                const r = rewindTranscript(workspaceRoot, activeAgent.sessionKey, index);
+                if (!r.ok)
+                    return { ok: false, reason: r.reason };
+                activeAgent.loadHistory(r.kept);
+                return { ok: true, kept: r.kept.length };
+            },
             'action:compact': async () => activeAgent.compactHistory(),
             'action:set-pref': (args) => {
                 const key = typeof args.key === 'string' ? args.key : '';
