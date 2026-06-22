@@ -17,14 +17,18 @@ import { Icon } from "../icons.js";
 export interface AtlasPanelProps {
   graph: AtlasGraph | null;
   building: boolean;
+  /** True while LLM enrichment is running. */
+  enriching?: boolean;
   onBuild: () => void;
+  /** Run LLM enrichment (summaries, layers, tour) over the current graph. */
+  onEnrich?: () => void;
   /** Selecting a node bubbles up (detail panel + code view wire in later slices). */
   onSelectNode?: (nodeId: string, filePath?: string) => void;
   /** Called once on open to lazily load the stored graph if not already present. */
   onLoad?: () => void;
 }
 
-export function AtlasPanel({ graph, building, onBuild, onSelectNode, onLoad }: AtlasPanelProps): React.ReactElement {
+export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnrich, onSelectNode, onLoad }: AtlasPanelProps): React.ReactElement {
   const [selected, setSelected] = useState<string | null>(null);
 
   useEffect(() => {
@@ -81,13 +85,25 @@ export function AtlasPanel({ graph, building, onBuild, onSelectNode, onLoad }: A
   }
 
   const v = view!;
+  const enrichedCount = graph.nodes.filter((n) => n.summary).length;
+  const busy = building || enriching;
   return (
     <div className="atlas-panel">
       <div className="atlas-toolbar">
         <span className="atlas-proj">{graph.project.name}</span>
         <span className="atlas-count">{v.shown}{v.total > v.shown ? ` of ${v.total}` : ""} files</span>
+        {enrichedCount ? (
+          <span className="atlas-count atlas-enriched" title={`${enrichedCount} files summarised`}>
+            · {graph.layers.length} layers · {graph.tour.length} tour
+          </span>
+        ) : null}
         <span className="atlas-spacer" />
-        <button className="btn" disabled={building} onClick={onBuild} title="Rebuild the atlas from the current code">
+        {onEnrich ? (
+          <button className="btn" disabled={busy} onClick={onEnrich} title="Add LLM summaries, architectural layers, and a guided tour">
+            {enriching ? "Enriching…" : enrichedCount ? "Re-enrich" : "Enrich"}
+          </button>
+        ) : null}
+        <button className="btn" disabled={busy} onClick={onBuild} title="Rebuild the atlas from the current code">
           {building ? "Building…" : "Rebuild"}
         </button>
       </div>
@@ -116,7 +132,16 @@ export function AtlasPanel({ graph, building, onBuild, onSelectNode, onLoad }: A
             style={{ background: "var(--surface)", border: "1px solid var(--border)" }}
           />
         </ReactFlow>
-        {selected ? <div className="atlas-selected" title={selected}>{selected.replace(/^[a-z]+:/, "")}</div> : null}
+        {selected ? (() => {
+          const node = graph.nodes.find((gn) => gn.id === selected);
+          const name = node?.filePath ?? selected.replace(/^[a-z]+:/, "");
+          return (
+            <div className="atlas-selected" title={node?.summary ?? name}>
+              <span className="atlas-selected-name">{name}</span>
+              {node?.summary ? <span className="atlas-selected-sum">{node.summary}</span> : null}
+            </div>
+          );
+        })() : null}
       </div>
     </div>
   );

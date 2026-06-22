@@ -95,7 +95,8 @@ import { readPlanHistory, recordPlanDecision, linkPlanDecision, type PlanVerdict
 import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
 import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement, deleteRequirement, type RequirementPatch } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
-import { buildBaseGraph, saveAtlasGraph, readAtlasGraph, atlasGraphStats } from '@kinqs/brainrouter-core/dist/atlas/index.js';
+import { buildBaseGraph, saveAtlasGraph, readAtlasGraph, atlasGraphStats, enrichAtlasGraph, type AtlasLlmCaller } from '@kinqs/brainrouter-core/dist/atlas/index.js';
+import { callOpenAI } from '@kinqs/brainrouter-core/dist/agent/agent.js';
 import { syncRequirementPlanTrack } from '@kinqs/brainrouter-core/dist/requirement/planTrackSync.js';
 import { ensureProject, getProject, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember, type CreateWorkItemInput, type UpdateWorkItemPatch, type AutomationPatch } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
 import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/dist/track/githubSync.js';
@@ -1561,6 +1562,39 @@ async function main(): Promise<void> {
         const graph = buildBaseGraph(workspaceRoot);
         saveAtlasGraph(workspaceRoot, graph);
         return { graph, stats: atlasGraphStats(graph) };
+      },
+      // `atlas-enrich` layers LLM understanding (summaries, tags, layers, tour)
+      // onto the base graph using the active session's model. Builds the base
+      // graph first if none exists. Best-effort — degrades, never throws.
+      'atlas-enrich': async () => {
+        let graph = readAtlasGraph(workspaceRoot);
+        if (!graph) {
+          graph = buildBaseGraph(workspaceRoot);
+          saveAtlasGraph(workspaceRoot, graph);
+        }
+        const llm = llmForSession(activeAgent.sessionKey);
+        if (!llm || (!llm.apiKey && (llm.provider ?? 'openai') === 'openai')) {
+          return { error: 'No model configured — set a provider/model (and API key) in Settings before enriching the atlas.' };
+        }
+        const caller: AtlasLlmCaller = async ({ system, user, signal }) => {
+          const resp = await callOpenAI(
+            llm,
+            [
+              { role: 'system', content: system },
+              { role: 'user', content: user },
+            ],
+            [],
+            { effort: 'low', signal },
+          );
+          return (resp?.content as string) ?? '';
+        };
+        const res = await enrichAtlasGraph(graph, caller);
+        saveAtlasGraph(workspaceRoot, res.graph);
+        return {
+          graph: res.graph,
+          stats: atlasGraphStats(res.graph),
+          enrichResult: { summarized: res.summarized, layers: res.layers, tourSteps: res.tourSteps, batchesFailed: res.batchesFailed },
+        };
       },
       'requirement-list': () => listRequirements(workspaceRoot),
       'requirement-create': async (a) => {
