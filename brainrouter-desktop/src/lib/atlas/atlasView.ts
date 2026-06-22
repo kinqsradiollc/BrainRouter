@@ -156,6 +156,30 @@ export interface AtlasNodeFacts {
 }
 
 /**
+ * Rank node ids matching a search query (name > path > summary > tags),
+ * case-insensitive. Empty query → no matches. Pure + tested.
+ */
+export function atlasSearchMatches(graph: AtlasGraph, query: string): string[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const scored: Array<{ id: string; score: number }> = [];
+  for (const n of graph.nodes) {
+    const name = n.name.toLowerCase();
+    const path = (n.filePath ?? "").toLowerCase();
+    let score = 0;
+    if (name === q) score = 100;
+    else if (name.startsWith(q)) score = 80;
+    else if (name.includes(q)) score = 60;
+    else if (path.includes(q)) score = 40;
+    else if ((n.summary ?? "").toLowerCase().includes(q)) score = 20;
+    else if ((n.tags ?? []).some((t) => t.toLowerCase().includes(q))) score = 15;
+    if (score > 0) scored.push({ id: n.id, score });
+  }
+  scored.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+  return scored.map((s) => s.id);
+}
+
+/**
  * Everything the detail panel shows for one node: its symbols, its layer, and
  * its import neighbours — derived from the graph's edges/layers. Pure + tested.
  */
