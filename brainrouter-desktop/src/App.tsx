@@ -1083,7 +1083,7 @@ export function App(): React.ReactElement {
         renderSessionNode={renderSessionNode} hiddenProjectSessions={hiddenProjectSessions} ungroupedSessions={ungroupedSessions}
         setVisibleCount={setVisibleCount} groupedSessions={groupedSessions} archivedCount={archivedCount}
         setShowArchived={setShowArchived} showArchived={showArchived}
-        expandedProjects={expandedProjects} projSessions={projSessions} runningWs={runningWorkspaces} workspaceRunCount={workspaceRunCount}
+        expandedProjects={expandedProjects} projSessions={projSessions} runningWs={runningWorkspaces} runningSessions={runningSessions} workspaceRunCount={workspaceRunCount}
         openProject={openProject} toggleProject={toggleProject} reorderProject={reorderProject} addProject={addProject}
         mode={mode} setMode={setMode} />
 

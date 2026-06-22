@@ -52,6 +52,9 @@ export interface SidebarProps {
   expandedProjects: string[];
   projSessions: ProjectSessionsByRoot;
   runningWs: Set<string>;
+  /** WS3 — sessionKeys with a turn in flight, ACROSS all workspaces, so a parked
+   *  project's chat shows a live spinner instead of a stale dot. */
+  runningSessions: string[];
   /** Fix 4 / §3 — count of ACTIVE background tasks per workspace (durable + live),
    *  so a non-active workspace shows how much is running, not just a dot. */
   workspaceRunCount?: Map<string, number>;
@@ -70,7 +73,7 @@ export function Sidebar(p: SidebarProps): React.ReactElement | null {
     recentsSort, setRecentsSort, workspaces, info, projectRoots, activeReviewBadge, prInfo,
     recentsOpen, setRecentsOpen, visibleProjectSessions, renderSessionNode, hiddenProjectSessions,
     ungroupedSessions, setVisibleCount, groupedSessions, archivedCount, setShowArchived, showArchived,
-    expandedProjects, projSessions, runningWs, workspaceRunCount, openProject, toggleProject, reorderProject, addProject,
+    expandedProjects, projSessions, runningWs, runningSessions, workspaceRunCount, openProject, toggleProject, reorderProject, addProject,
   } = p;
   const [projectSearchOpen, setProjectSearchOpen] = useState(false);
   const [projectQuery, setProjectQuery] = useState('');
@@ -256,7 +259,7 @@ export function Sidebar(p: SidebarProps): React.ReactElement | null {
                       : visibleRows.map((s) => (
                         <button key={s.sessionKey} className="project-session" title={`${s.sessionKey} — opens ${w.split('/').pop()}`}
                           onClick={() => openProject(w, s.sessionKey)}>
-                          <SessionStatus s={s} />
+                          <SessionStatus s={s} working={runningSessions.includes(s.sessionKey)} />
                           <span className="session-title">{s.firstUserMessage || s.sessionKey}</span>
                           {s.modifiedAt ? <span className="session-age">{fmtAge(s.modifiedAt)}</span> : null}
                         </button>
