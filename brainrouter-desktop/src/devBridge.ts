@@ -857,11 +857,11 @@ export function installDevBridge(): void {
       return { sessions: 23, turns: 412, activeDays: 64, currentStreak: 3, longestStreak: 11, model: 'claude-opus-4-8', perDay };
     },
     'changed-files': () => [
-      { status: 'M', path: 'src/memory/recall.ts' },
-      { status: 'M', path: 'src/agent/agent.ts' },
-      { status: 'M', path: 'src/cli/ink/ChatApp.tsx' },
-      { status: 'A', path: 'src/state/completionInbox.ts' },
-      { status: '??', path: 'notes/scratch.md' },
+      { status: 'M', path: 'src/checkout/orchestrator.ts' },
+      { status: 'M', path: 'src/payment/payment.ts' },
+      { status: 'A', path: 'src/payment/validate.ts' },
+      { status: 'M', path: 'src/cart/cartStore.ts' },
+      { status: '??', path: 'src/catalog/search.ts' },
     ],
     'list-files': () => ({
       files: [

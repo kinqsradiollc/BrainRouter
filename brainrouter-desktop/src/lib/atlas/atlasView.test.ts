@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { AtlasGraph } from '@kinqs/brainrouter-types';
-import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize, atlasNodeFacts, atlasSearchMatches, atlasGrouping, atlasGroupedLayout, atlasOverviewModel } from './atlasView.js';
+import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize, atlasNodeFacts, atlasSearchMatches, atlasGrouping, atlasGroupedLayout, atlasOverviewModel, atlasChangeKind, atlasChangeMap, atlasNodeChanges } from './atlasView.js';
 
 function fixture(): AtlasGraph {
   return {
@@ -205,4 +205,32 @@ test('atlasOverviewModel: layer cards + inter-layer edges', () => {
   // routes.ts (API) imports store.ts (Data) → one inter-layer edge
   assert.equal(m.edges.length, 1);
   assert.equal(m.edges[0].weight, 1);
+});
+
+test('atlasChangeKind maps git porcelain codes', () => {
+  assert.equal(atlasChangeKind('??'), 'untracked');
+  assert.equal(atlasChangeKind('A'), 'added');
+  assert.equal(atlasChangeKind('AM'), 'added');
+  assert.equal(atlasChangeKind('M'), 'modified');
+  assert.equal(atlasChangeKind(' M'), 'modified');
+  assert.equal(atlasChangeKind('R'), 'modified');
+  assert.equal(atlasChangeKind('D'), 'deleted');
+  assert.equal(atlasChangeKind(''), null);
+});
+
+test('atlasNodeChanges maps changes to file-level nodes only (not symbols)', () => {
+  const g = layered();
+  // add a symbol sharing a changed file's path — must NOT be counted
+  g.nodes.push({ id: 'class:src/db/store.ts:Store', type: 'class', name: 'Store', filePath: 'src/db/store.ts', lineRange: [1, 9] });
+  const map = atlasChangeMap([
+    { path: 'src/db/store.ts', status: 'M' },
+    { path: 'src/api/server.ts', status: '??' },
+    { path: 'does/not/exist.ts', status: 'A' },
+  ]);
+  const nc = atlasNodeChanges(g, map);
+  assert.equal(nc.get('file:src/db/store.ts'), 'modified');
+  assert.equal(nc.get('file:src/api/server.ts'), 'untracked');
+  assert.equal(nc.has('class:src/db/store.ts:Store'), false); // symbol excluded
+  assert.equal(nc.has('does/not/exist.ts'), false);
+  assert.equal(nc.size, 2);
 });

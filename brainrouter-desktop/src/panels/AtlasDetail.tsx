@@ -18,9 +18,13 @@ export interface AtlasDetailProps {
   onClose: () => void;
   /** Open this node's file in the editor. */
   onOpenFile?: (path: string) => void;
+  /** Review overlay: this node's git change kind, if any. */
+  changeKind?: "added" | "modified" | "untracked" | "deleted";
 }
 
-export function AtlasDetail({ graph, nodeId, onClose, onOpenFile }: AtlasDetailProps): React.ReactElement | null {
+const CHANGE_LABEL: Record<string, string> = { added: "Added", modified: "Modified", untracked: "New (untracked)", deleted: "Deleted" };
+
+export function AtlasDetail({ graph, nodeId, onClose, onOpenFile, changeKind }: AtlasDetailProps): React.ReactElement | null {
   const facts = atlasNodeFacts(graph, nodeId);
   if (!facts) return null;
   const { node, symbols, layer, importsOut, importsIn } = facts;
@@ -54,6 +58,13 @@ export function AtlasDetail({ graph, nodeId, onClose, onOpenFile }: AtlasDetailP
         {node.complexity ? <span className={`atlas-meta-pill cx-${node.complexity}`}>{node.complexity}</span> : null}
         {layer ? <span className="atlas-meta-pill">{layer.name}</span> : null}
       </div>
+
+      {changeKind ? (
+        <div className={`atlas-detail-change chg-${changeKind}`}>
+          <span className="atlas-detail-change-dot" />
+          {CHANGE_LABEL[changeKind] ?? changeKind} · uncommitted — review before commit
+        </div>
+      ) : null}
 
       {node.summary
         ? <div className="atlas-detail-summary">{node.summary}</div>
