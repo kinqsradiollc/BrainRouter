@@ -8,9 +8,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspens
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import {
   DiffPanel, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
-  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, TasksPanel, TerminalPanel, ToolsPanel, ContextPanel, PANEL_DEFS, type PanelId, type SearchHit, type ReviewFindingView,
+  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, AtlasPanel, TasksPanel, TerminalPanel, ToolsPanel, ContextPanel, PANEL_DEFS, type PanelId, type SearchHit, type ReviewFindingView,
 } from './panels/index.js';
-import type { RequirementRecord, AnnotationRecord, ArtifactRecord, TrackProject, WorkItem, WorkItemType, Sprint, SprintState, AutomationRule, AutomationTrigger, AutomationAction, ProjectMember, ProjectRole } from '@kinqs/brainrouter-types';
+import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph, TrackProject, WorkItem, WorkItemType, Sprint, SprintState, AutomationRule, AutomationTrigger, AutomationAction, ProjectMember, ProjectRole } from '@kinqs/brainrouter-types';
 import { TrackView, type SyncConfig, type SyncResult } from './track/TrackView.js';
 import type { ScheduleRecordView } from './lib/schedule/scheduleView.js';
 import { SESSION_BASE } from './lib/session/sessionPagination.js';
@@ -197,6 +197,8 @@ export function App(): React.ReactElement {
   const [schedules, setSchedules] = useState<ScheduleRecordView[]>([]);
   // REQUIREMENT-RECORDS — this workspace's Requirement Records, from the CLI store.
   const [requirements, setRequirements] = useState<RequirementRecord[]>([]);
+  const [atlasGraph, setAtlasGraph] = useState<AtlasGraph | null>(null); // ATLAS-5 — codebase knowledge graph
+  const [atlasBuilding, setAtlasBuilding] = useState(false);
   // ANNOTATION-RECORDS — this workspace's durable feedback records, from the CLI store.
   const [annotations, setAnnotations] = useState<AnnotationRecord[]>([]);
   // ARTIFACT-RECORDS — this workspace's durable Artifact Records, from the CLI store.
@@ -617,7 +619,7 @@ export function App(): React.ReactElement {
     setDraft, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
     setBranches, setModelsLoading, setEndpointModels, setProviderModels, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
-    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
+    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
     setAtBottom,
@@ -1019,6 +1021,10 @@ export function App(): React.ReactElement {
           onOpenFile={(f) => openFile(f.file)}
           onOpenDiff={(f) => { setDiffTarget({ path: f.file, line: f.line }); ensurePanel('diff'); q('q-diff', 'file-diff', { path: f.file }); }} />;
       }
+      case 'atlas':
+        return <AtlasPanel graph={atlasGraph} building={atlasBuilding}
+          onLoad={() => q('q-atlas', 'atlas-graph')}
+          onBuild={() => { setAtlasBuilding(true); q('q-atlas-build', 'atlas-build'); }} />;
       case 'requirements': {
         const refresh = () => setTimeout(() => q('q-req', 'requirement-list'), 150);
         return <RequirementsPanel requirements={requirements}

@@ -153,6 +153,7 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
               badge: artifacts.filter((a) => a.status === 'draft').length ? String(artifacts.filter((a) => a.status === 'draft').length) : '' },
             { id: 'ci' as PanelId, title: 'CI / Checks', hint: '', icon: 'check-circle',
               badge: ci.checks.length ? String(ci.checks.length) : '' },
+            { id: 'atlas' as PanelId, title: 'Atlas', hint: '', icon: 'atlas', badge: '' },
             { id: 'context' as PanelId, title: 'Context', hint: '', icon: 'layout-right', badge: '' },
           ] as Array<{ id: PanelId; title: string; hint: string; icon: string; badge: string; live?: boolean }>).map((l) => (
             <button key={l.id} className="side-launcher" onClick={() => openSideView(l.id)}>

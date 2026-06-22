@@ -19,6 +19,7 @@ export { ReviewPanel } from './ReviewPanel.js';
 export { RequirementsPanel } from './RequirementsPanel.js';
 export { AnnotationsPanel } from './AnnotationsPanel.js';
 export { ArtifactsPanel } from './ArtifactsPanel.js';
+export { AtlasPanel, type AtlasPanelProps } from './AtlasPanel.js';
 export { SearchPanel, type SearchHit } from './SearchPanel.js';
 export { PlanPanel } from './PlanPanel.js';
 export { ContextPanel } from './ContextPanel.js';

@@ -3707,3 +3707,38 @@ select.ctl option { background: var(--surface); color: var(--text); }
  * ring which renders as a broken arc at that size on the side-launchers). */
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; animation: liveDotPulse 1.6s ease-out infinite; }
 @keyframes liveDotPulse { 0% { box-shadow: 0 0 0 0 hsla(212, 100%, 65%, 0.45); } 70% { box-shadow: 0 0 0 5px hsla(212, 100%, 65%, 0); } 100% { box-shadow: 0 0 0 0 hsla(212, 100%, 65%, 0); } }
+
+/* =====================================================================
+ * ATLAS — codebase knowledge graph panel (0.4.16). The graph canvas is a
+ * React Flow surface re-skinned to the Graphite theme tokens (no white
+ * controls / minimap). Layout mirrors the other panels: a thin toolbar over
+ * a flex-fill canvas; an empty state that offers a one-click build.
+ * ===================================================================== */
+.atlas-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; }
+.atlas-toolbar { display: flex; align-items: center; gap: 10px; padding: 2px 2px 8px; border-bottom: 1px solid var(--border); }
+.atlas-proj { font-size: 13px; font-weight: 600; color: var(--text); }
+.atlas-count { font-size: 11.5px; color: var(--text-faint); }
+.atlas-spacer { flex: 1; }
+.atlas-canvas { position: relative; flex: 1; min-height: 0; border: 1px solid var(--border); border-radius: var(--r-md, 10px); overflow: hidden; background: var(--surface); }
+
+/* Empty / build state — centered prompt with the atlas glyph. */
+.atlas-empty { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; text-align: center; padding: 24px 18px; }
+.atlas-empty > .ic { color: var(--text-faint); margin-bottom: 2px; }
+.atlas-empty-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.atlas-empty-desc { font-size: 12px; color: var(--text-faint); line-height: 1.5; max-width: 320px; margin-bottom: 4px; }
+
+/* Selected-node chip (full detail panel lands in a later slice). */
+.atlas-selected { position: absolute; left: 10px; bottom: 10px; max-width: 70%; padding: 5px 10px; border-radius: var(--r-sm); background: var(--raised); border: 1px solid var(--border-strong); color: var(--text); font-size: 11.5px; font-family: var(--mono, ui-monospace, monospace); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3); }
+
+/* React Flow re-skin — kill the light-theme defaults so controls + minimap
+ * read as part of the dark surface. */
+.atlas-canvas .react-flow__attribution { display: none; }
+.atlas-canvas .react-flow__controls { box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3); border-radius: var(--r-sm); overflow: hidden; }
+.atlas-canvas .react-flow__controls-button { background: var(--raised); border-bottom: 1px solid var(--border); width: 24px; height: 24px; }
+.atlas-canvas .react-flow__controls-button:hover { background: var(--surface); }
+.atlas-canvas .react-flow__controls-button svg { fill: var(--text-dim); }
+.atlas-canvas .react-flow__controls-button:hover svg { fill: var(--accent); }
+.atlas-canvas .react-flow__minimap { border-radius: var(--r-sm); }
+.atlas-canvas .react-flow__node { cursor: pointer; }
+.atlas-canvas .react-flow__node:hover { filter: brightness(1.18); }
+.atlas-canvas .react-flow__edge-path { stroke: var(--border-strong); }
