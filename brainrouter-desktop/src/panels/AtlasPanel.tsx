@@ -174,9 +174,16 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
         data: { name: c.name, description: c.description, entities: c.entities, flows: c.flows },
         style: { width: cardW },
       }));
+      // Relationship edges between capabilities, weighted + labelled by how many
+      // imports cross the boundary, so the domain reads as a flow map.
+      const maxW = Math.max(1, ...domain.edges.map((e) => e.weight));
       const edges: Edge[] = domain.edges.map((e, i) => ({
         id: `de${i}`, source: e.source, target: e.target, animated: true,
-        style: { stroke: "var(--border-strong)", strokeWidth: 1, strokeDasharray: "4 4" },
+        label: `${e.weight}`,
+        labelStyle: { fill: "var(--text-dim)", fontSize: 9 },
+        labelBgStyle: { fill: "var(--surface)" },
+        labelBgPadding: [3, 1] as [number, number],
+        style: { stroke: "var(--accent)", strokeOpacity: 0.45 + 0.45 * (e.weight / maxW), strokeWidth: 1 + 1.5 * (e.weight / maxW) },
       }));
       return { rfNodes: nodes, rfEdges: edges };
     }

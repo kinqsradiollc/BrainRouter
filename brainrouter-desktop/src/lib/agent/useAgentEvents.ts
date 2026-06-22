@@ -451,8 +451,16 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           // branches + git state reload (they were cleared on switch); a same-
           // workspace session change (new chat / switch chat) only needs the
           // light refresh (git is identical across chats in one workspace).
-          if (workspaceChanged(wsMsg.workspaceRoot, prevWs)) refreshSidebar();
-          else refreshSession();
+          if (workspaceChanged(wsMsg.workspaceRoot, prevWs)) {
+            // ATLAS-18 — the Atlas is per-workspace. Drop the previous project's
+            // graph and load the NEW workspace's STORED graph (q-atlas reads, never
+            // regenerates), so its prior enrichment is preserved until the user
+            // explicitly Rebuilds/Enriches. Clear transient + path-keyed state too.
+            setAtlasGraph(null); setAtlasBuilding(false); setAtlasEnriching(false);
+            setAtlasAssessing(null); setAtlasAssessments({});
+            q('q-atlas', 'atlas-graph');
+            refreshSidebar();
+          } else refreshSession();
           break;
         // DESK-5v — turn lifecycle is tracked PER SESSION so a background turn
         // keeps its spinner and lands its result/error in the right chat.
