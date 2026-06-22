@@ -28,6 +28,8 @@ import {
   type AgentEventMessage,
   type InteractionResponse,
 } from '@kinqs/brainrouter-agent-protocol';
+import { subscribeCompletions, pendingCompletionCount, peekCompletions } from '@kinqs/brainrouter-core/dist/session/completionInbox.js';
+import { buildChildResumePrompt } from '@kinqs/brainrouter-core/dist/util/childResume.js';
 
 /**
  * The slice of the CLI Agent the host needs — structural, so tests can fake
@@ -233,8 +235,35 @@ export function createHostCore(input: {
       if (sk !== activeKey && input.spawnAgent) pool.delete(sk);
       // Single-agent path: a switch was deferred until this turn ended.
       if (pendingSwitch) { const fn = pendingSwitch; pendingSwitch = null; fn(); }
+      // WS1 — a detached child/worker may have finished mid-turn; fold its result
+      // in now (idle) instead of waiting for the user's next prompt.
+      maybeScheduleResume();
     }
   }
+
+  // WS1 — auto-resume the active session when detached background work (a
+  // fire-and-forget delegate_agent child or a worker) finishes while the session
+  // is IDLE, so the user no longer has to send a second prompt to fold the result
+  // in. The resumed turn drains the completion inbox at its top (the normal path),
+  // so this only needs to TRIGGER a turn. Debounced so a quick user message
+  // preempts it; scoped to the on-screen session (a background session still
+  // delivers its result the moment the user switches back to it).
+  let resumeTimer: ReturnType<typeof setTimeout> | null = null;
+  function cancelResume(): void { if (resumeTimer) { clearTimeout(resumeTimer); resumeTimer = null; } }
+  function maybeScheduleResume(): void {
+    const rt = pool.get(activeKey);
+    if (!rt || rt.running || resumeTimer) return;
+    if (pendingCompletionCount(activeKey) === 0) return;
+    resumeTimer = setTimeout(() => {
+      resumeTimer = null;
+      const r = pool.get(activeKey);
+      if (!r || r.running || pendingCompletionCount(activeKey) === 0) return;
+      const ids = peekCompletions(activeKey).map((c) => c.id);
+      emit({ kind: 'status', text: '🎯 Background work finished — continuing…' });
+      void startTurn(buildChildResumePrompt(ids), true);
+    }, 1500);
+  }
+  const unsubscribeCompletions = subscribeCompletions((parentKey) => { if (parentKey === activeKey) maybeScheduleResume(); });
 
   /**
    * Acquire a runtime to host `targetKey`. Reuses the currently-viewed agent
@@ -336,9 +365,11 @@ export function createHostCore(input: {
     const cmd = message as AgentCommand;
     switch (cmd.kind) {
       case 'start-turn':
+        cancelResume(); // a real user prompt preempts any queued auto-resume
         await startTurn(cmd.prompt, cmd.hidden);
         return;
       case 'interrupt': {
+        cancelResume(); // user stopped — never auto-resume on top of a stop
         // DESK-2 — cooperative stop of the VIEWED session's turn: flag its agent
         // (it unwinds at the next LLM/tool boundary) AND dismiss pending
         // approvals so a turn blocked on a dialog fails closed instead of hanging.
@@ -396,6 +427,8 @@ export function createHostCore(input: {
         return;
       }
       case 'shutdown':
+        cancelResume();
+        unsubscribeCompletions();
         broker.dismissAll();
         input.onShutdown?.();
         return;
