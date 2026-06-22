@@ -1,0 +1,69 @@
+/*
+  BrainRouter Mobile — global theme tokens · "The Memory Instrument"
+  ------------------------------------------------------------------
+  SINGLE SOURCE OF TRUTH for the prototype color palette + theme tokens.
+  Matches docs/design/DESIGN-expo.md and docs/design/themes/brainrouter.md.
+  Every prototype links this file: <link rel="stylesheet" href="global.css" />
+  To re-theme the whole prototype set, edit ONLY this file.
+*/
+
+:root{
+  /* surfaces (dark — primary) */
+  --base:#0B0D0F;            /* Void      — page canvas (never #000) */
+  --raised:#14171A;          /* Substrate — panels, cards, tab bar */
+  --overlay:#1E2227;         /* Lifted    — sheets, menus, active rows */
+  --border:rgba(255,255,255,0.08);        /* Filament */
+  --border-strong:rgba(255,255,255,0.14); /* Filament-Strong (focus/hover) */
+
+  /* text (never pure white) */
+  --text:#ECEFF2;            /* Frost — primary */
+  --text-2:#9BA3AC;          /* Mist  — secondary, labels */
+  --muted:#5E6670;           /* Ash   — metadata, placeholders, disabled */
+
+  /* Signal — THE single chromatic accent */
+  --accent:#34C28E;
+  --accent-press:#28A87C;
+  --accent-wash:rgba(52,194,142,0.14);    /* active-row tint, selected halo */
+  --accent-text:#06140E;                  /* text/icon on a Signal fill */
+
+  /* Recall Heat — DATA ENCODING ONLY (graph/timeline legend), never chrome */
+  --heat-hot:#E0A063;        /* Ember  — recalled now */
+  --heat-warm:#C98F6E;       /* Coal   — recently active */
+  --heat-cool:#6B7480;       /* Slate  — dormant */
+  --heat-cold:#3C434B;       /* Cinder — archival / decayed */
+
+  /* semantic state */
+  --danger:#E5675F;          /* Rose  — contradiction, destructive, error */
+  --warn:#D9A441;            /* Amber — stale-vs-code, caution */
+
+  /* shape */
+  --r-chip:4px; --r-control:6px; --r-card:10px; --r-panel:12px;
+
+  /* type + motion */
+  --font:'Geist',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  --mono:'Geist Mono',ui-monospace,'SF Mono','Cascadia Code',Consolas,monospace;
+  --ease:cubic-bezier(.2,.8,.2,1);
+  --inset:inset 0 1px 0 rgba(255,255,255,.05);  /* pressable top-highlight */
+}
+
+/* Light mirror (per DESIGN-expo.md) — opt in with <html data-theme="light"> */
+:root[data-theme="light"]{
+  --base:#FAFAFA; --raised:#FFFFFF; --overlay:#F3F4F6;
+  --border:rgba(16,19,22,0.10); --border-strong:rgba(16,19,22,0.18);
+  --text:#16191C; --text-2:#4B535B; --muted:#8A929B;
+  --accent:#1E9E73; --accent-press:#17855F; --accent-wash:rgba(30,158,115,0.12); --accent-text:#FFFFFF;
+  --inset:inset 0 1px 0 rgba(255,255,255,0.6);
+}
+
+/*
+  ── Alternative palette ───────────────────────────────────────────────
+  To match the desktop app's CURRENT shipped theme (brainrouter-desktop/
+  src/theme.css — indigo graphite) instead of the Memory Instrument design
+  system, replace the dark :root accents/surfaces above with:
+    --base:hsl(240 6% 5%); --raised:hsl(240 5% 9%); --overlay:hsl(240 5% 13%);
+    --text:hsl(0 0% 96%); --text-2:hsl(240 5% 72%); --muted:hsl(240 4% 50%);
+    --accent:hsl(245 80% 66%); --accent-press:hsl(245 80% 60%);
+    --accent-wash:hsla(245 80% 66% / .14); --accent-text:#fff;
+    --danger:hsl(0 72% 58%); --warn:hsl(38 85% 48%);
+  (Nothing else needs to change — every prototype reads these vars.)
+*/
