@@ -436,6 +436,28 @@ export function SettingsDialog(props: {
                 onChange={(name) => { props.onAction('a-setdefault', 'action:set-default-provider', { name }); setTimeout(refreshSnapshot, 80); }} />
             </Row>
 
+            <div className="set-h2">Provider gallery</div>
+            <div className="set-desc" style={{ marginBottom: 6 }}>Pick a provider to start configuring it — its endpoint pre-fills into the form below; then add your key and model. These are the OpenAI-compatible providers BrainRouter ships with.</div>
+            <div className="provider-gallery">
+              {providerCatalog.length === 0 ? <div className="empty">No providers in the catalog.</div> : null}
+              {providerCatalog.map((c) => {
+                const configured = savedProviders.filter((p) => p.provider === c.id).length;
+                const host = c.endpoint.replace(/^https?:\/\//, '').replace(/\/.*$/, '') || 'custom endpoint';
+                const isCustom = c.id === 'openai-compatible';
+                return (
+                  <button key={c.id} type="button" className="provider-card" title={`Configure a ${c.label} provider`}
+                    onClick={() => { setEditingProvider(null); setProvDraft({ name: isCustom ? '' : c.id, provider: isCustom ? '' : c.id, endpoint: isCustom ? '' : c.endpoint, apiKey: '', model: '' }); }}>
+                    <span className="pc-name">{c.label}</span>
+                    <span className="pc-host">{host}</span>
+                    <span className="pc-meta">
+                      <span className={`badge ${c.local ? 'native' : 'panel'}`}>{c.local ? 'local' : 'cloud'}</span>
+                      {configured ? <span className="dim" style={{ fontSize: 11 }}>✓ {configured} configured</span> : <span className="dim" style={{ fontSize: 11 }}>set up →</span>}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
             <div className="set-h2">Providers</div>
             <div className="set-desc" style={{ marginBottom: 6 }}>Your named OpenAI-compatible providers. <b>Use as default</b> makes one the default above (the main model picks straight from it — no re-entering the endpoint or key); any provider can also be routed to a sub-agent role below. Keys are write-only — never echoed back.</div>
             {(snapshot?.providers ?? []).length === 0 ? <div className="empty">None yet — add one below, then “Use as default” or route a sub-agent to it.</div> : null}
