@@ -21,7 +21,7 @@ import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type Comm
 import { tagQueryId } from './lib/workspace/workspaceEvents.js';
 import { duplicateTitleKeys } from './lib/session/sessionDisplay.js';
 import { CommandPalette } from './palette.js';
-import { SettingsDialog, type ConfigSnapshot } from './settings.js';
+import { SettingsDialog, type ConfigSnapshot, type UsageHistory } from './settings.js';
 import { installDevBridge } from './devBridge.js';
 import { Icon } from './icons.js';
 import type { AttachmentUpload, PlanItem, ToolItem, ChatRow, SessionRow, FleetRow, PopId } from './types.js';
@@ -144,6 +144,7 @@ export function App(): React.ReactElement {
   const [catalog, setCatalog] = useState<CommandsCatalog | null>(null);
   const [snapshot, setSnapshot] = useState<ConfigSnapshot | null>(null);
   const [usageLines, setUsageLines] = useState<string[]>([]);
+  const [usageHistory, setUsageHistory] = useState<UsageHistory | null>(null); // WS10 — cross-session heatmap
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settings, setSettings] = useState<{ open: boolean; section: SettingsSection }>({ open: false, section: 'general' });
   const [infoDialog, setInfoDialog] = useState<{ title: string; body: string } | null>(null);
@@ -615,7 +616,7 @@ export function App(): React.ReactElement {
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
     setDraft, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
-    setBranches, setModelsLoading, setEndpointModels, setProviderModels, setCatalog, setSnapshot, setUsageLines,
+    setBranches, setModelsLoading, setEndpointModels, setProviderModels, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
     setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
@@ -1190,6 +1191,7 @@ export function App(): React.ReactElement {
         onClose={() => setSettings((st) => ({ ...st, open: false }))}
         snapshot={snapshot}
         usageLines={usageLines}
+        usageHistory={usageHistory}
         tokens={tokens}
         commands={commands}
         catalog={catalog}

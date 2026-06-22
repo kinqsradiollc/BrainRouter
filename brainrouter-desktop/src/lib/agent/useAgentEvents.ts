@@ -22,7 +22,7 @@ import type { ScheduleRecordView } from '../schedule/scheduleView.js';
 import type { PlanDecisionView } from '../plan/planReviewView.js';
 import type { RequirementRecord, AnnotationRecord, ArtifactRecord } from '@kinqs/brainrouter-types';
 import type { CommandsCatalog } from '../commands/commands.js';
-import type { ConfigSnapshot } from '../../settings.js';
+import type { ConfigSnapshot, UsageHistory } from '../../settings.js';
 import { parseWorktreeList, type WorktreeEntry } from '../worktree/worktreeParser.js';
 import { mergeOptimistic, dropPending } from '../session/sessionOrder.js';
 import { normalizeProjectSessionsResult, withCachedProjectSessions, type ProjectSessionsByRoot } from '../session/projectSessionsView.js';
@@ -104,6 +104,7 @@ export interface AgentEventsCtx {
   setCatalog: React.Dispatch<React.SetStateAction<CommandsCatalog | null>>;
   setSnapshot: React.Dispatch<React.SetStateAction<ConfigSnapshot | null>>;
   setUsageLines: React.Dispatch<React.SetStateAction<string[]>>;
+  setUsageHistory: React.Dispatch<React.SetStateAction<UsageHistory | null>>;
   setSearchHits: React.Dispatch<React.SetStateAction<SearchHit[] | null>>;
   setSchedules: React.Dispatch<React.SetStateAction<ScheduleRecordView[]>>;
   setRequirements: React.Dispatch<React.SetStateAction<RequirementRecord[]>>;
@@ -185,7 +186,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
     setDraft, planFeedbackRef, goalContPendingRef, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
-    setBranches, setModelsLoading, setEndpointModels, setProviderModels, setCatalog, setSnapshot, setUsageLines,
+    setBranches, setModelsLoading, setEndpointModels, setProviderModels, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
     setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
@@ -730,6 +731,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       case 'q-catalog': if (result && typeof result === 'object') setCatalog(result as CommandsCatalog); return;
       case 'q-snapshot': if (result && typeof result === 'object') setSnapshot(result as ConfigSnapshot); return;
       case 'q-usage': if (Array.isArray(result)) setUsageLines(result as string[]); return;
+      case 'q-usage-hist': if (result && typeof result === 'object') setUsageHistory(result as UsageHistory); return;
       case 'q-search': if (Array.isArray(result)) setSearchHits(result as SearchHit[]); return;
       case 'q-schedule': if (Array.isArray(result)) setSchedules(result as ScheduleRecordView[]); return;
       // REQUIREMENT-RECORDS — the list populates the slice; create/update/seed use
