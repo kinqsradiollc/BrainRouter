@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { AtlasGraph } from '@kinqs/brainrouter-types';
-import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize, atlasNodeFacts, atlasSearchMatches } from './atlasView.js';
+import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize, atlasNodeFacts, atlasSearchMatches, atlasGrouping, atlasGroupedLayout, atlasOverviewModel } from './atlasView.js';
 
 function fixture(): AtlasGraph {
   return {
@@ -137,4 +137,72 @@ test('atlasSearchMatches ranks by name, path, summary, tags', () => {
 
   // no match
   assert.deepEqual(atlasSearchMatches(g, 'zzzznope'), []);
+});
+
+function layered(): AtlasGraph {
+  return {
+    schemaVersion: 1, kind: 'codebase',
+    project: { name: 'x', languages: ['typescript'], analyzedAt: '2026-06-22T00:00:00Z' },
+    nodes: [
+      { id: 'file:src/api/server.ts', type: 'file', name: 'server.ts', filePath: 'src/api/server.ts', category: 'code', complexity: 'complex' },
+      { id: 'file:src/api/routes.ts', type: 'file', name: 'routes.ts', filePath: 'src/api/routes.ts', category: 'code', complexity: 'moderate' },
+      { id: 'file:src/db/store.ts', type: 'file', name: 'store.ts', filePath: 'src/db/store.ts', category: 'code', complexity: 'simple' },
+      { id: 'config:package.json', type: 'config', name: 'package.json', filePath: 'package.json', category: 'config', complexity: 'simple' },
+    ],
+    edges: [
+      { source: 'file:src/api/routes.ts', target: 'file:src/db/store.ts', type: 'imports' },
+      { source: 'file:src/api/server.ts', target: 'file:src/api/routes.ts', type: 'imports' },
+    ],
+    layers: [
+      { id: 'layer:api', name: 'API', nodeIds: ['file:src/api/server.ts', 'file:src/api/routes.ts'] },
+      { id: 'layer:data', name: 'Data', nodeIds: ['file:src/db/store.ts'] },
+    ],
+    tour: [],
+  };
+}
+
+test('atlasGrouping: by layer (with Other for orphans) and by directory fallback', () => {
+  const g = layered();
+  const byLayer = atlasGrouping(g);
+  assert.deepEqual(byLayer.map((x) => x.label), ['API', 'Data', 'Other']); // package.json is unlayered → Other
+  assert.deepEqual(byLayer.find((x) => x.label === 'Other')!.nodeIds, ['config:package.json']);
+
+  // no layers → group by directory, largest first
+  const g2 = { ...g, layers: [] };
+  const byDir = atlasGrouping(g2);
+  assert.ok(byDir.some((x) => x.label === 'src/api' && x.nodeIds.length === 2));
+  assert.ok(byDir.some((x) => x.label === 'src/db'));
+});
+
+test('atlasGrouping: scope restricts membership', () => {
+  const g = layered();
+  const groups = atlasGrouping(g, new Set(['file:src/db/store.ts']));
+  assert.equal(groups.length, 1);
+  assert.deepEqual(groups[0].nodeIds, ['file:src/db/store.ts']);
+});
+
+test('atlasGroupedLayout: child positions relative to packed group boxes', () => {
+  const groups = atlasGrouping(layered());
+  const out = atlasGroupedLayout(groups, { maxRowWidth: 99999 });
+  // every node mapped to a group + a relative position
+  for (const g of groups) for (const id of g.nodeIds) {
+    assert.ok(out.positions.has(id), `pos ${id}`);
+    assert.equal(out.groupOf.get(id), g.id);
+  }
+  // boxes are sized and laid out left-to-right (single row here), non-overlapping x
+  const boxes = out.groups;
+  assert.equal(boxes.length, groups.length);
+  for (let i = 1; i < boxes.length; i++) assert.ok(boxes[i].x >= boxes[i - 1].x + boxes[i - 1].width, 'no x overlap');
+  assert.ok(boxes.every((b) => b.width > 0 && b.height > 0));
+});
+
+test('atlasOverviewModel: layer cards + inter-layer edges', () => {
+  const m = atlasOverviewModel(layered());
+  assert.deepEqual(m.cards.map((c) => c.name), ['API', 'Data']);
+  const api = m.cards.find((c) => c.name === 'API')!;
+  assert.equal(api.fileCount, 2);
+  assert.equal(api.complexity, 'complex'); // server.ts is complex
+  // routes.ts (API) imports store.ts (Data) → one inter-layer edge
+  assert.equal(m.edges.length, 1);
+  assert.equal(m.edges[0].weight, 1);
 });

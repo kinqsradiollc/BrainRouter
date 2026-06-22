@@ -9,66 +9,80 @@
 import type { AgentCommand, AgentEvent, AgentEventMessage } from '@kinqs/brainrouter-agent-protocol';
 import type { AtlasGraph } from '@kinqs/brainrouter-types';
 
-/** A tiny synthetic codebase graph for browser-only dev of the Atlas panel. */
+/** A representative synthetic codebase (small commerce app) for browser-only dev. */
+function devFile(path: string, category: 'code' | 'config' | 'docs' | 'infra', complexity: 'simple' | 'moderate' | 'complex', lang = 'typescript') {
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  const type = category === 'config' ? 'config' : category === 'docs' ? 'document' : category === 'infra' ? 'resource' : 'file';
+  return { id: `${type}:${path}`, type, name, filePath: path, language: lang, category, complexity } as AtlasGraph['nodes'][number];
+}
+const DEV_FILES: Array<[string, 'code' | 'config' | 'docs' | 'infra', 'simple' | 'moderate' | 'complex', string?]> = [
+  ['src/gateway/server.ts', 'code', 'moderate'], ['src/gateway/routes.ts', 'code', 'moderate'], ['src/gateway/middleware.ts', 'code', 'simple'],
+  ['src/cart/cart.ts', 'code', 'moderate'], ['src/cart/cartStore.ts', 'code', 'complex'],
+  ['src/catalog/catalog.ts', 'code', 'moderate'], ['src/catalog/search.ts', 'code', 'complex'],
+  ['src/checkout/checkout.ts', 'code', 'complex'], ['src/checkout/orchestrator.ts', 'code', 'complex'],
+  ['src/payment/payment.ts', 'code', 'moderate'], ['src/payment/validate.ts', 'code', 'simple'],
+  ['src/ui/App.tsx', 'code', 'moderate'], ['src/ui/ProductList.tsx', 'code', 'moderate'], ['src/ui/CartView.tsx', 'code', 'simple'],
+  ['src/shared/types.ts', 'code', 'simple'], ['src/shared/http.ts', 'code', 'simple'],
+  ['package.json', 'config', 'simple', 'json'], ['tsconfig.json', 'config', 'simple', 'json'], ['Dockerfile', 'infra', 'simple', 'docker'],
+  ['README.md', 'docs', 'simple', 'markdown'],
+];
+const DEV_IMPORTS: Array<[string, string]> = [
+  ['src/gateway/server.ts', 'src/gateway/routes.ts'], ['src/gateway/server.ts', 'src/gateway/middleware.ts'],
+  ['src/gateway/routes.ts', 'src/cart/cart.ts'], ['src/gateway/routes.ts', 'src/catalog/catalog.ts'], ['src/gateway/routes.ts', 'src/checkout/checkout.ts'],
+  ['src/cart/cart.ts', 'src/cart/cartStore.ts'], ['src/cart/cart.ts', 'src/shared/types.ts'],
+  ['src/catalog/catalog.ts', 'src/catalog/search.ts'], ['src/catalog/catalog.ts', 'src/shared/types.ts'],
+  ['src/checkout/checkout.ts', 'src/checkout/orchestrator.ts'], ['src/checkout/orchestrator.ts', 'src/cart/cart.ts'],
+  ['src/checkout/orchestrator.ts', 'src/catalog/catalog.ts'], ['src/checkout/orchestrator.ts', 'src/payment/payment.ts'],
+  ['src/payment/payment.ts', 'src/payment/validate.ts'], ['src/payment/payment.ts', 'src/shared/http.ts'],
+  ['src/ui/App.tsx', 'src/ui/ProductList.tsx'], ['src/ui/App.tsx', 'src/ui/CartView.tsx'], ['src/ui/App.tsx', 'src/shared/http.ts'],
+  ['src/cart/cartStore.ts', 'src/shared/types.ts'], ['src/catalog/search.ts', 'src/shared/types.ts'],
+];
 function devAtlasGraph(): AtlasGraph {
+  const nodes = DEV_FILES.map(([p, c, cx, lang]) => devFile(p, c, cx, lang));
+  const id = (p: string): string => nodes.find((n) => n.filePath === p)!.id;
+  const edges: AtlasGraph['edges'] = DEV_IMPORTS.map(([a, b]) => ({ source: id(a), target: id(b), type: 'imports', weight: 0.9 }));
+  // a couple of symbols for the detail card
+  nodes.push({ id: 'class:src/cart/cartStore.ts:CartStore', type: 'class', name: 'CartStore', filePath: 'src/cart/cartStore.ts', lineRange: [8, 74] } as AtlasGraph['nodes'][number]);
+  nodes.push({ id: 'function:src/checkout/orchestrator.ts:placeOrder', type: 'function', name: 'placeOrder', filePath: 'src/checkout/orchestrator.ts', lineRange: [12, 58] } as AtlasGraph['nodes'][number]);
+  edges.push({ source: id('src/cart/cartStore.ts'), target: 'class:src/cart/cartStore.ts:CartStore', type: 'contains' as const, weight: 1 });
+  edges.push({ source: id('src/checkout/orchestrator.ts'), target: 'function:src/checkout/orchestrator.ts:placeOrder', type: 'contains' as const, weight: 1 });
   return {
-    schemaVersion: 1,
-    kind: 'codebase',
-    project: { name: 'demo-app', languages: ['typescript', 'css'], frameworks: ['React'], description: 'A small demo app for the Atlas panel.', analyzedAt: '2026-06-22T00:00:00Z', totalFiles: 7 },
-    nodes: [
-      { id: 'file:src/index.ts', type: 'file', name: 'index.ts', filePath: 'src/index.ts', language: 'typescript', category: 'code', complexity: 'simple' },
-      { id: 'file:src/app.ts', type: 'file', name: 'app.ts', filePath: 'src/app.ts', language: 'typescript', category: 'code', complexity: 'moderate' },
-      { id: 'file:src/api.ts', type: 'file', name: 'api.ts', filePath: 'src/api.ts', language: 'typescript', category: 'code', complexity: 'moderate' },
-      { id: 'file:src/db.ts', type: 'file', name: 'db.ts', filePath: 'src/db.ts', language: 'typescript', category: 'code', complexity: 'complex' },
-      { id: 'file:src/util.ts', type: 'file', name: 'util.ts', filePath: 'src/util.ts', language: 'typescript', category: 'code', complexity: 'simple' },
-      { id: 'file:src/ui.tsx', type: 'file', name: 'ui.tsx', filePath: 'src/ui.tsx', language: 'typescript', category: 'code', complexity: 'moderate' },
-      { id: 'config:package.json', type: 'config', name: 'package.json', filePath: 'package.json', language: 'json', category: 'config', complexity: 'simple' },
-      { id: 'document:README.md', type: 'document', name: 'README.md', filePath: 'README.md', language: 'markdown', category: 'docs', complexity: 'simple' },
-      { id: 'function:src/app.ts:main', type: 'function', name: 'main', filePath: 'src/app.ts', lineRange: [3, 20] },
-      { id: 'class:src/db.ts:Store', type: 'class', name: 'Store', filePath: 'src/db.ts', lineRange: [5, 60] },
-    ],
-    edges: [
-      { source: 'file:src/index.ts', target: 'file:src/app.ts', type: 'imports', weight: 0.9 },
-      { source: 'file:src/app.ts', target: 'file:src/api.ts', type: 'imports', weight: 0.9 },
-      { source: 'file:src/app.ts', target: 'file:src/ui.tsx', type: 'imports', weight: 0.9 },
-      { source: 'file:src/app.ts', target: 'file:src/util.ts', type: 'imports', weight: 0.9 },
-      { source: 'file:src/api.ts', target: 'file:src/db.ts', type: 'imports', weight: 0.9 },
-      { source: 'file:src/api.ts', target: 'file:src/util.ts', type: 'imports', weight: 0.9 },
-      { source: 'file:src/db.ts', target: 'file:src/util.ts', type: 'imports', weight: 0.9 },
-      { source: 'file:src/app.ts', target: 'function:src/app.ts:main', type: 'contains', weight: 1 },
-      { source: 'file:src/db.ts', target: 'class:src/db.ts:Store', type: 'contains', weight: 1 },
-    ],
-    layers: [],
-    tour: [],
+    schemaVersion: 1, kind: 'codebase',
+    project: { name: 'commerce-demo', languages: ['typescript', 'json'], frameworks: ['React'], description: 'A small commerce app for the Atlas panel.', analyzedAt: '2026-06-22T00:00:00Z', totalFiles: DEV_FILES.length },
+    nodes, edges, layers: [], tour: [],
   };
 }
 
 /** The dev graph with LLM enrichment applied — summaries, tags, layers, tour. */
 function devAtlasEnriched(): AtlasGraph {
   const g = devAtlasGraph();
-  const sum: Record<string, { summary: string; tags: string[] }> = {
-    'file:src/index.ts': { summary: 'Process entry point; boots the app.', tags: ['entry'] },
-    'file:src/app.ts': { summary: 'Wires the app together and runs the main loop.', tags: ['core', 'async'] },
-    'file:src/api.ts': { summary: 'HTTP API surface and request handlers.', tags: ['api'] },
-    'file:src/db.ts': { summary: 'Persistence layer over the data store.', tags: ['data'] },
-    'file:src/util.ts': { summary: 'Shared helper utilities.', tags: ['util'] },
-    'file:src/ui.tsx': { summary: 'React UI components.', tags: ['ui'] },
-    'config:package.json': { summary: 'Package manifest and scripts.', tags: ['config'] },
-    'document:README.md': { summary: 'Project overview and setup.', tags: ['docs'] },
+  const sum: Record<string, string> = {
+    'src/gateway/server.ts': 'HTTP gateway entry — boots the server and mounts routes.',
+    'src/gateway/routes.ts': 'Maps HTTP routes to the cart, catalog, and checkout services.',
+    'src/cart/cartStore.ts': 'In-memory cart persistence with add/remove/total.',
+    'src/catalog/search.ts': 'Product search and filtering over the catalog.',
+    'src/checkout/orchestrator.ts': 'Coordinates cart, catalog, and payment to place an order.',
+    'src/payment/payment.ts': 'Simulated card payment processing and validation.',
+    'src/ui/App.tsx': 'Root React component wiring the storefront UI.',
+    'src/shared/types.ts': 'Shared domain types used across services.',
   };
-  g.nodes = g.nodes.map((n) => (sum[n.id] ? { ...n, summary: sum[n.id].summary, tags: sum[n.id].tags } : n));
+  g.nodes = g.nodes.map((n) => (n.filePath && sum[n.filePath] ? { ...n, summary: sum[n.filePath], tags: [n.category ?? 'code'] } : n));
+  const L = (p: string): string => `file:${p}`;
   g.layers = [
-    { id: 'layer:entry', name: 'Entry', description: 'Process boot.', nodeIds: ['file:src/index.ts', 'file:src/app.ts'] },
-    { id: 'layer:api', name: 'API', description: 'Request handling.', nodeIds: ['file:src/api.ts'] },
-    { id: 'layer:data', name: 'Data', description: 'Persistence.', nodeIds: ['file:src/db.ts'] },
-    { id: 'layer:ui', name: 'UI', description: 'Presentation.', nodeIds: ['file:src/ui.tsx'] },
-    { id: 'layer:config', name: 'Config & Docs', description: 'Manifest and docs.', nodeIds: ['config:package.json', 'document:README.md'] },
+    { id: 'layer:gateway', name: 'API Gateway', description: 'Inbound HTTP surface and routing.', nodeIds: ['file:src/gateway/server.ts', 'file:src/gateway/routes.ts', 'file:src/gateway/middleware.ts'] },
+    { id: 'layer:cart', name: 'Cart', description: 'Shopping cart state and operations.', nodeIds: [L('src/cart/cart.ts'), L('src/cart/cartStore.ts')] },
+    { id: 'layer:catalog', name: 'Catalog', description: 'Product listing and search.', nodeIds: [L('src/catalog/catalog.ts'), L('src/catalog/search.ts')] },
+    { id: 'layer:checkout', name: 'Checkout & Payment', description: 'Order orchestration and payment.', nodeIds: [L('src/checkout/checkout.ts'), L('src/checkout/orchestrator.ts'), L('src/payment/payment.ts'), L('src/payment/validate.ts')] },
+    { id: 'layer:ui', name: 'Storefront UI', description: 'React storefront components.', nodeIds: [L('src/ui/App.tsx'), L('src/ui/ProductList.tsx'), L('src/ui/CartView.tsx')] },
+    { id: 'layer:shared', name: 'Shared', description: 'Cross-cutting types and helpers.', nodeIds: [L('src/shared/types.ts'), L('src/shared/http.ts')] },
+    { id: 'layer:config', name: 'Config & Docs', description: 'Build config and documentation.', nodeIds: ['config:package.json', 'config:tsconfig.json', 'resource:Dockerfile', 'document:README.md'] },
   ];
   g.tour = [
-    { order: 1, title: 'Start at the entry', description: 'Read index.ts, then app.ts to see how the app boots.', nodeIds: ['file:src/index.ts', 'file:src/app.ts'] },
-    { order: 2, title: 'The API surface', description: 'See how requests are handled in api.ts.', nodeIds: ['file:src/api.ts'] },
-    { order: 3, title: 'Where data lives', description: 'db.ts is the persistence layer.', nodeIds: ['file:src/db.ts'] },
-    { order: 4, title: 'The UI', description: 'ui.tsx renders the front end.', nodeIds: ['file:src/ui.tsx'] },
+    { order: 1, title: 'Start at the gateway', description: 'server.ts boots the app and mounts routes.ts.', nodeIds: ['file:src/gateway/server.ts', 'file:src/gateway/routes.ts'] },
+    { order: 2, title: 'Browse the catalog', description: 'catalog.ts + search.ts power product discovery.', nodeIds: [L('src/catalog/catalog.ts'), L('src/catalog/search.ts')] },
+    { order: 3, title: 'The cart', description: 'cartStore.ts holds cart state.', nodeIds: [L('src/cart/cartStore.ts')] },
+    { order: 4, title: 'Checkout flow', description: 'orchestrator.ts coordinates cart, catalog, and payment.', nodeIds: [L('src/checkout/orchestrator.ts'), L('src/payment/payment.ts')] },
+    { order: 5, title: 'The storefront', description: 'App.tsx renders the UI.', nodeIds: [L('src/ui/App.tsx')] },
   ];
   return g;
 }
@@ -506,8 +520,8 @@ export function installDevBridge(): void {
     // REQUIREMENT-RECORDS — mock the requirementStore wrappers (mutate in-memory).
     // ATLAS — a small synthetic codebase graph so the Atlas panel renders in
     // browser-only dev (real builds come from the host's deterministic builder).
-    'atlas-graph': () => devAtlasGraph(),
-    'atlas-build': () => { const g = devAtlasGraph(); return { graph: g, stats: { files: 7, functions: 5, classes: 2, nodes: g.nodes.length, edges: g.edges.length, layers: 0, enriched: false } }; },
+    'atlas-graph': () => devAtlasEnriched(),
+    'atlas-build': () => { const g = devAtlasGraph(); return { graph: g, stats: { files: 20, functions: 1, classes: 1, nodes: g.nodes.length, edges: g.edges.length, layers: 0, enriched: false } }; },
     'atlas-enrich': () => {
       const g = devAtlasEnriched();
       return {
