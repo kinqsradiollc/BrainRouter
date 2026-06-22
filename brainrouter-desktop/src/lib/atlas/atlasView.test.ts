@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { AtlasGraph } from '@kinqs/brainrouter-types';
-import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize } from './atlasView.js';
+import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize, atlasNodeFacts } from './atlasView.js';
 
 function fixture(): AtlasGraph {
   return {
@@ -89,4 +89,27 @@ test('atlasNodeSize grows with degree but stays bounded', () => {
   assert.equal(atlasNodeSize(0), 14);
   assert.equal(atlasNodeSize(3), 20);
   assert.equal(atlasNodeSize(1000), 40); // capped
+});
+
+test('atlasNodeFacts: symbols, imports in/out, and layer membership', () => {
+  const g = fixture();
+  g.layers = [{ id: 'layer:core', name: 'Core', nodeIds: ['file:a.ts', 'file:b.ts'] }];
+
+  const a = atlasNodeFacts(g, 'file:a.ts')!;
+  assert.equal(a.node.name, 'a.ts');
+  assert.deepEqual(a.symbols.map((s) => s.name), ['foo']);
+  assert.equal(a.symbols[0].type, 'function');
+  // a.ts imports b.ts and c.ts; nothing imports a.ts
+  assert.deepEqual(a.importsOut.sort(), ['b.ts', 'c.ts']);
+  assert.deepEqual(a.importsIn, []);
+  assert.equal(a.layer?.name, 'Core');
+
+  // c.ts is imported by a and b, imports nothing, no layer, no symbols
+  const c = atlasNodeFacts(g, 'file:c.ts')!;
+  assert.deepEqual(c.importsIn.sort(), ['a.ts', 'b.ts']);
+  assert.deepEqual(c.importsOut, []);
+  assert.equal(c.layer, undefined);
+  assert.equal(c.symbols.length, 0);
+
+  assert.equal(atlasNodeFacts(g, 'file:nope.ts'), null);
 });
