@@ -1,5 +1,22 @@
 import { McpClientWrapper, resolveIdentityFromConfig } from './mcpClient.js';
 import type { LLMConfig, ServerConfig } from '../config/config.js';
+import { reconnectBackoffMs } from './reconnect.js';
+
+/** WS9 — pure: which pool servers are due for a background auto-reconnect now? A
+ *  server is due when it isn't connected/connecting and its per-server backoff
+ *  window has elapsed. Returns the serverIds to retry this tick. */
+export function dueForReconnect(
+  statuses: ReadonlyArray<{ serverId: string; status: string }>,
+  nextAt: ReadonlyMap<string, number>,
+  now: number,
+): string[] {
+  const due: string[] = [];
+  for (const s of statuses) {
+    if (s.status === 'connected' || s.status === 'connecting') continue;
+    if (now >= (nextAt.get(s.serverId) ?? 0)) due.push(s.serverId);
+  }
+  return due;
+}
 
 /**
  * 0.3.7 — Multi-MCP support. Wraps a `Map<serverId, McpClientWrapper>`
@@ -124,6 +141,40 @@ export class McpClientPool {
   private prefixIds = new Map<string, string>();
   /** Reverse: prefixId → serverId (needed to dispatch `mcp_brainrouter_X` back to the real key). */
   private prefixToServerId = new Map<string, string>();
+  // WS9 — background auto-reconnect supervisor state.
+  private reconnectTimer?: ReturnType<typeof setInterval>;
+  private reconnectAttempts = new Map<string, number>();
+  private reconnectNextAt = new Map<string, number>();
+
+  /** WS9 — start a background supervisor that auto-reconnects any dropped server
+   *  (brain or tool) with per-server exponential backoff, so a transient outage
+   *  self-heals without a manual reconnect or waiting for the next tool call. */
+  startReconnectSupervisor(intervalMs = 15_000): void {
+    if (this.reconnectTimer) return;
+    this.reconnectTimer = setInterval(() => { void this.sweepReconnect(); }, Math.max(5_000, intervalMs));
+    this.reconnectTimer.unref?.();
+  }
+
+  /** WS9 — stop the supervisor (called on close()). */
+  stopReconnectSupervisor(): void {
+    if (this.reconnectTimer) { clearInterval(this.reconnectTimer); this.reconnectTimer = undefined; }
+  }
+
+  private async sweepReconnect(): Promise<void> {
+    const now = Date.now();
+    for (const s of this.getStatuses()) {
+      if (s.status === 'connected' || s.status === 'connecting') {
+        this.reconnectAttempts.delete(s.serverId);
+        this.reconnectNextAt.delete(s.serverId);
+      }
+    }
+    for (const serverId of dueForReconnect(this.getStatuses(), this.reconnectNextAt, now)) {
+      const attempt = (this.reconnectAttempts.get(serverId) ?? 0) + 1;
+      this.reconnectAttempts.set(serverId, attempt);
+      this.reconnectNextAt.set(serverId, now + reconnectBackoffMs(attempt));
+      try { await this.reconnectOne(serverId); } catch { /* still down — retried after backoff */ }
+    }
+  }
 
   private getPrefixId(serverId: string): string {
     return this.prefixIds.get(serverId) ?? serverId;
@@ -491,6 +542,7 @@ export class McpClientPool {
     for (const wrapper of this.clients.values()) {
       try { await wrapper.close(); } catch { /* ignore */ }
     }
+    this.stopReconnectSupervisor(); // WS9 — stop background reconnects on close
     this.clients.clear();
     this.toolToServer.clear();
     this.prefixedToServer.clear();
