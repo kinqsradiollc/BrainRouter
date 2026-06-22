@@ -15,7 +15,7 @@ import type { AtlasFileCategory, AtlasGraph, AtlasNode, AtlasNodeType } from "@k
 import {
   atlasGrouping, atlasGroupedLayout, atlasOverviewModel, atlasDomainModel, atlasNodeColor, atlasSearchMatches,
   atlasChangeMap, atlasNodeChanges, atlasImpact, atlasImpactOf, ATLAS_FILE_CATEGORIES, ATLAS_CATEGORY_COLORS,
-  type AtlasChangeKind,
+  type AtlasChangeKind, type AtlasChangeAssessment,
 } from "../lib/atlas/atlasView.js";
 import { ATLAS_NODE_TYPES } from "./AtlasNodes.js";
 import { AtlasDetail } from "./AtlasDetail.js";
@@ -34,6 +34,12 @@ export interface AtlasPanelProps {
   onLoad?: () => void;
   /** Working-tree changes (path + git porcelain status) for the Review overlay. */
   changedFiles?: ReadonlyArray<{ path: string; status: string }>;
+  /** AI change assessments by file path (ATLAS-14). */
+  assessments?: Record<string, AtlasChangeAssessment>;
+  /** File path currently being assessed (spinner). */
+  assessing?: string | null;
+  /** Request an LLM assessment of a changed file. */
+  onAssess?: (path: string) => void;
 }
 
 function fileColor(n: AtlasNode): string {
@@ -41,7 +47,7 @@ function fileColor(n: AtlasNode): string {
   return atlasNodeColor(n.type);
 }
 
-export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnrich, onSelectNode, onOpenFile, onLoad, changedFiles }: AtlasPanelProps): React.ReactElement {
+export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnrich, onSelectNode, onOpenFile, onLoad, changedFiles, assessments, assessing, onAssess }: AtlasPanelProps): React.ReactElement {
   const [selected, setSelected] = useState<string | null>(null);
   const [tourStep, setTourStep] = useState<number | null>(null);
   const [query, setQuery] = useState("");
@@ -332,7 +338,22 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
           }} maskColor="rgba(0,0,0,0.55)" style={{ background: "var(--surface)", border: "1px solid var(--border)" }} />
         </ReactFlow>
 
-        {selected ? <AtlasDetail graph={graph} nodeId={selected} onClose={() => { setSelected(null); setImpactNode(null); }} onOpenFile={onOpenFile} changeKind={nodeChanges.get(selected)} impactActive={impactNode === selected} onShowImpact={(id) => setImpactNode((cur) => (cur === id ? null : id))} /> : null}
+        {selected ? (() => {
+          const selPath = byId.get(selected)?.filePath;
+          return (
+            <AtlasDetail
+              graph={graph} nodeId={selected}
+              onClose={() => { setSelected(null); setImpactNode(null); }}
+              onOpenFile={onOpenFile}
+              changeKind={nodeChanges.get(selected)}
+              impactActive={impactNode === selected}
+              onShowImpact={(id) => setImpactNode((cur) => (cur === id ? null : id))}
+              assessment={selPath ? assessments?.[selPath] : undefined}
+              assessing={!!selPath && assessing === selPath}
+              onAssess={onAssess && selPath ? () => onAssess(selPath) : undefined}
+            />
+          );
+        })() : null}
 
         {tourStep != null && graph.tour[tourStep] ? (
           <div className="atlas-tour">

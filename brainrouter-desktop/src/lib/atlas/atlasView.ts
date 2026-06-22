@@ -402,6 +402,14 @@ export function atlasOverviewModel(graph: AtlasGraph): AtlasOverviewModel {
 
 export type AtlasChangeKind = "added" | "modified" | "untracked" | "deleted";
 
+/** LLM assessment of one uncommitted change (ATLAS-14). */
+export interface AtlasChangeAssessment {
+  summary: string;
+  risk: "low" | "medium" | "high";
+  checklist: string[];
+  concerns: string[];
+}
+
 /** Map a git porcelain status code (e.g. "M", "A", "??", "AM") to a change kind. */
 export function atlasChangeKind(status: string): AtlasChangeKind | null {
   const s = (status ?? "").trim();

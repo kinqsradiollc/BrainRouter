@@ -113,6 +113,8 @@ export interface AgentEventsCtx {
   setAtlasGraph: React.Dispatch<React.SetStateAction<AtlasGraph | null>>;
   setAtlasBuilding: React.Dispatch<React.SetStateAction<boolean>>;
   setAtlasEnriching: React.Dispatch<React.SetStateAction<boolean>>;
+  setAtlasAssessing: React.Dispatch<React.SetStateAction<string | null>>;
+  setAtlasAssessments: React.Dispatch<React.SetStateAction<Record<string, import('../atlas/atlasView.js').AtlasChangeAssessment>>>;
   setWorktrees: React.Dispatch<React.SetStateAction<WorktreeEntry[]>>;
   setWorktreeDiffs: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   setReviewRunningByWs: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
@@ -190,7 +192,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
     setDraft, planFeedbackRef, goalContPendingRef, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
     setBranches, setModelsLoading, setEndpointModels, setProviderModels, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
-    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
+    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
     setAtBottom,
@@ -750,6 +752,13 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
         if (r?.graph) setAtlasGraph(r.graph);
         const er = r?.enrichResult;
         if (er) setToast(`✓ Atlas enriched — ${er.summarized} summaries · ${er.layers} layers · ${er.tourSteps} tour`);
+        return;
+      }
+      case 'q-atlas-explain': {
+        const r = result as { path?: string; error?: string; assessment?: import('../atlas/atlasView.js').AtlasChangeAssessment } | null;
+        setAtlasAssessing(null);
+        if (r?.error) { setToast(`⚠ ${r.error}`); return; }
+        if (r?.path && r.assessment) setAtlasAssessments((prev) => ({ ...prev, [r.path as string]: r.assessment! }));
         return;
       }
       case 'q-req-create': case 'q-req-update': case 'q-req-seed': {
