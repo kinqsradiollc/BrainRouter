@@ -16,9 +16,10 @@ import { listWorkers } from '../worker/workerStore.js';
 import { listSessions } from '../orchestration/orchestrator.js';
 import { listRuns, summarizePhases, formatActivePhase } from '../workflow/workflowRun.js';
 import { currentPhase, listBackgroundTasks } from './backgroundTaskStore.js';
+import { listBackgroundShells, type BgShellRun } from '../exec/backgroundShell.js';
 import type { BackgroundTaskRecord } from '@kinqs/brainrouter-types';
 
-export type BackgroundTaskKind = 'agent' | 'worker' | 'workflow';
+export type BackgroundTaskKind = 'agent' | 'worker' | 'workflow' | 'shell';
 
 export interface BackgroundTask {
   kind: BackgroundTaskKind;
@@ -61,6 +62,14 @@ function workflowLabel(r: ReturnType<typeof listRuns>[number]): string {
   return r.slug;
 }
 
+/** WS2 — map an agent-launched background shell (`run_command({background:true})`
+ *  — dev servers, long test runs) into a fleet task. Returns null unless it is
+ *  currently running. Pure, so it's unit-testable without spawning a process. */
+export function shellRunToTask(sh: BgShellRun): BackgroundTask | null {
+  if (sh.status !== 'running') return null;
+  return { kind: 'shell', id: sh.id, label: sh.command, startedAt: new Date(sh.startedAt).toISOString() };
+}
+
 /** Read the live state stores and return everything currently running. */
 export function collectRunningTasks(workspaceRoot: string): BackgroundTask[] {
   const tasks: BackgroundTask[] = [];
@@ -91,6 +100,15 @@ export function collectRunningTasks(workspaceRoot: string): BackgroundTask[] {
       // done/total count between phases.
       const label = workflowLabel(r);
       tasks.push({ kind: 'workflow', id: r.slug, label, startedAt: r.startedAt });
+    }
+  } catch { /* skip */ }
+  // WS2 — agent-launched background shells (dev servers, long-running scripts)
+  // were tracked only in an in-process registry the fleet never read. Surface
+  // the running ones so they appear in the Background-tasks panel.
+  try {
+    for (const sh of listBackgroundShells()) {
+      const t = shellRunToTask(sh);
+      if (t) tasks.push(t);
     }
   } catch { /* skip */ }
   return tasks;
@@ -219,6 +237,7 @@ export const GLYPH: Record<BackgroundTaskKind, string> = {
   workflow: '⟳',
   worker: '◆',
   agent: '◐',
+  shell: '▶',
 };
 
 /**
@@ -226,19 +245,20 @@ export const GLYPH: Record<BackgroundTaskKind, string> = {
  * Pure — the sidebar renders each group as its own labeled section.
  */
 export function groupTasksByKind(tasks: BackgroundTask[]): Record<BackgroundTaskKind, BackgroundTask[]> {
-  const groups: Record<BackgroundTaskKind, BackgroundTask[]> = { agent: [], worker: [], workflow: [] };
+  const groups: Record<BackgroundTaskKind, BackgroundTask[]> = { agent: [], worker: [], workflow: [], shell: [] };
   for (const t of tasks) groups[t.kind].push(t);
   return groups;
 }
 
 /** Counts per kind, for the panel header. Pure. */
 export function summarizeTasks(tasks: BackgroundTask[]): string {
-  const by: Record<BackgroundTaskKind, number> = { agent: 0, worker: 0, workflow: 0 };
+  const by: Record<BackgroundTaskKind, number> = { agent: 0, worker: 0, workflow: 0, shell: 0 };
   for (const t of tasks) by[t.kind]++;
   const parts: string[] = [];
   if (by.workflow) parts.push(`${by.workflow} workflow${by.workflow === 1 ? '' : 's'}`);
   if (by.worker) parts.push(`${by.worker} worker${by.worker === 1 ? '' : 's'}`);
   if (by.agent) parts.push(`${by.agent} agent${by.agent === 1 ? '' : 's'}`);
+  if (by.shell) parts.push(`${by.shell} shell${by.shell === 1 ? '' : 's'}`);
   return parts.join(' · ');
 }
 
