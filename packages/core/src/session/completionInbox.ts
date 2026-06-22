@@ -34,12 +34,26 @@ export interface AgentCompletion {
 
 const inbox = new Map<string, AgentCompletion[]>();
 
+/** WS1 — listeners notified whenever a completion is enqueued, so a host can
+ *  auto-resume an IDLE parent session the moment background work finishes
+ *  (instead of waiting for the user to send a second prompt to drain the inbox). */
+type CompletionListener = (parentSessionKey: string) => void;
+const listeners = new Set<CompletionListener>();
+
+/** Subscribe to completion-enqueue events; returns an unsubscribe fn. A throwing
+ *  listener never breaks `enqueueCompletion`. */
+export function subscribeCompletions(listener: CompletionListener): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
 /** Record a finished detached actor for its parent session to pick up next turn. */
 export function enqueueCompletion(parentSessionKey: string | null | undefined, item: AgentCompletion): void {
   if (!parentSessionKey) return;
   const list = inbox.get(parentSessionKey);
   if (list) list.push(item);
   else inbox.set(parentSessionKey, [item]);
+  for (const l of listeners) { try { l(parentSessionKey); } catch { /* a listener must never break enqueue */ } }
 }
 
 /** Non-destructive view of a session's pending completions. */
@@ -112,7 +126,8 @@ export function formatCompletionFeedback(items: AgentCompletion[]): string {
   ].join('\n');
 }
 
-/** Test hook — clear every queue. */
+/** Test hook — clear every queue and listener. */
 export function __resetCompletionInbox(): void {
   inbox.clear();
+  listeners.clear();
 }
