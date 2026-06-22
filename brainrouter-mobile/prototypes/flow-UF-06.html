@@ -74,7 +74,7 @@
   .spin{width:14px;height:14px;border:2px solid var(--border-strong);border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite}
   @keyframes sp{to{transform:rotate(360deg)}}
   /* changeset summary */
-  .csum{display:flex;align-items:center;gap:9px;background:var(--accent-wash);border:1px solid rgba(52,194,142,.4);
+  .csum{display:flex;align-items:center;gap:9px;background:var(--accent-wash);border:1px solid var(--accent-line);
     border-radius:var(--r-card);padding:9px 12px;margin:9px 0;font-size:12.5px}
   .csum .ic{color:var(--accent)}
   .csum .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
@@ -358,7 +358,7 @@
           <span class="ibtn"><svg class="ic s18"><use href="#i-dots"/></svg></span>
         </div>
         <div class="body">
-          <div class="csum" style="background:var(--accent-wash);border-color:rgba(52,194,142,.4)"><svg class="ic s18"><use href="#i-check-circle"/></svg> Review clean · gate released · pushed</div>
+          <div class="csum" style="background:var(--accent-wash);border-color:var(--accent-line)"><svg class="ic s18"><use href="#i-check-circle"/></svg> Review clean · gate released · pushed</div>
           <div class="tool"><svg class="ic s18"><use href="#i-shield"/></svg><div class="m"><div class="nm">Review gate</div>
             <div class="su">passed · 0 open findings</div></div><span class="dot ok"></span></div>
           <div class="tool"><svg class="ic s18"><use href="#i-commit"/></svg><div class="m"><div class="nm">commit a1f9c2e</div>

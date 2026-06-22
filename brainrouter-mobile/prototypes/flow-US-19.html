@@ -74,7 +74,7 @@
   .spin{width:14px;height:14px;border:2px solid var(--border-strong);border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite}
   @keyframes sp{to{transform:rotate(360deg)}}
   /* changeset summary */
-  .csum{display:flex;align-items:center;gap:9px;background:var(--accent-wash);border:1px solid rgba(52,194,142,.4);
+  .csum{display:flex;align-items:center;gap:9px;background:var(--accent-wash);border:1px solid var(--accent-line);
     border-radius:var(--r-card);padding:9px 12px;margin:9px 0;font-size:12.5px}
   .csum .ic{color:var(--accent)}
   .csum .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
@@ -276,7 +276,7 @@
           <div class="work" style="color:var(--accent)"><svg class="ic s18"><use href="#i-check-circle"/></svg> Pushed to origin/main · branch in sync</div>
           <div class="tool"><svg class="ic s18"><use href="#i-merge"/></svg><div class="m"><div class="nm">push → origin/main</div>
             <div class="su">a1f9c2e · 1 commit · up to date</div></div><span class="dot ok"></span></div>
-          <div class="csum" style="background:var(--accent-wash);border-color:rgba(52,194,142,.4)"><svg class="ic s18"><use href="#i-check-circle"/></svg> All changes shipped · working tree clean</div>
+          <div class="csum" style="background:var(--accent-wash);border-color:var(--accent-line)"><svg class="ic s18"><use href="#i-check-circle"/></svg> All changes shipped · working tree clean</div>
         </div>
         <div class="composer">
           <div class="pills"><span class="pill"><svg class="ic s14"><use href="#i-branch"/></svg><b>main</b></span><span class="pill">synced</span></div>
