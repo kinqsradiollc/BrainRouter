@@ -3885,3 +3885,13 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .atlas-dcard-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .atlas-dcard-chip { font-size: 10px; padding: 1px 7px; border-radius: 6px; background: var(--surface); border: 1px solid var(--border); color: var(--text-dim); font-family: var(--mono, ui-monospace, monospace); }
 .atlas-dcard-foot { font-size: 11px; color: var(--text-faint); margin-top: 2px; }
+
+/* ===== ATLAS-13 — Impact / blast-radius in the detail card ===== */
+.atlas-detail-impact { display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px solid var(--border); }
+.atlas-detail-impact .atlas-detail-deps { padding-top: 0; border-top: 0; }
+.atlas-impact-reach { color: var(--warn); }
+.atlas-impact-btn { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; padding: 4px 9px; border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--border-strong); color: var(--text-dim); font-size: 11px; cursor: pointer; }
+.atlas-impact-btn:hover { border-color: var(--accent); color: var(--text); }
+.atlas-impact-btn.on { background: color-mix(in srgb, var(--accent) 16%, transparent); border-color: var(--accent); color: var(--accent); }
+.atlas-impact-layers { display: flex; flex-wrap: wrap; gap: 4px; }
+.atlas-impact-chip { font-size: 10px; padding: 1px 7px; border-radius: 6px; background: color-mix(in srgb, var(--warn) 12%, transparent); color: var(--warn); }

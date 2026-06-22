@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { AtlasGraph } from '@kinqs/brainrouter-types';
-import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize, atlasNodeFacts, atlasSearchMatches, atlasGrouping, atlasGroupedLayout, atlasOverviewModel, atlasDomainModel, atlasChangeKind, atlasChangeMap, atlasNodeChanges } from './atlasView.js';
+import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize, atlasNodeFacts, atlasSearchMatches, atlasGrouping, atlasGroupedLayout, atlasOverviewModel, atlasDomainModel, atlasChangeKind, atlasChangeMap, atlasNodeChanges, atlasImpact, atlasImpactOf } from './atlasView.js';
 
 function fixture(): AtlasGraph {
   return {
@@ -225,6 +225,24 @@ test('atlasDomainModel: capability cards with entities + flow counts', () => {
   assert.equal(data.flows, 1);
   // inter-layer edge preserved
   assert.equal(m.edges.length, 1);
+});
+
+test('atlasImpact: transitive dependents (blast radius) + dependencies + byLayer', () => {
+  // server.ts imports routes.ts imports store.ts
+  const g = layered();
+  const onStore = atlasImpact(g, 'file:src/db/store.ts');
+  assert.deepEqual(onStore.directDependents.sort(), ['file:src/api/routes.ts']);
+  assert.deepEqual(onStore.dependents.sort(), ['file:src/api/routes.ts', 'file:src/api/server.ts']); // transitive
+  assert.deepEqual(onStore.dependencies, []);
+  assert.deepEqual(onStore.byLayer, [{ layer: 'API', count: 2 }]); // both dependents are in API
+
+  const onServer = atlasImpact(g, 'file:src/api/server.ts');
+  assert.deepEqual(onServer.dependents, []); // nothing imports the entry
+  assert.deepEqual(onServer.dependencies.sort(), ['file:src/api/routes.ts', 'file:src/db/store.ts']);
+
+  // changeset impact excludes the changed set itself
+  const set = atlasImpactOf(g, ['file:src/db/store.ts']);
+  assert.deepEqual(set.dependents.sort(), ['file:src/api/routes.ts', 'file:src/api/server.ts']);
 });
 
 test('atlasChangeKind maps git porcelain codes', () => {

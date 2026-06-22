@@ -14,7 +14,7 @@ import "@xyflow/react/dist/style.css";
 import type { AtlasFileCategory, AtlasGraph, AtlasNode, AtlasNodeType } from "@kinqs/brainrouter-types";
 import {
   atlasGrouping, atlasGroupedLayout, atlasOverviewModel, atlasDomainModel, atlasNodeColor, atlasSearchMatches,
-  atlasChangeMap, atlasNodeChanges, ATLAS_FILE_CATEGORIES, ATLAS_CATEGORY_COLORS,
+  atlasChangeMap, atlasNodeChanges, atlasImpact, atlasImpactOf, ATLAS_FILE_CATEGORIES, ATLAS_CATEGORY_COLORS,
   type AtlasChangeKind,
 } from "../lib/atlas/atlasView.js";
 import { ATLAS_NODE_TYPES } from "./AtlasNodes.js";
@@ -49,6 +49,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
   const [drill, setDrill] = useState<string | null>(null); // layer id drilled into (structural)
   const [disabledCats, setDisabledCats] = useState<ReadonlySet<AtlasFileCategory>>(new Set());
   const [showDiff, setShowDiff] = useState(false); // Review overlay (ATLAS-11)
+  const [impactNode, setImpactNode] = useState<string | null>(null); // blast-radius highlight (ATLAS-13)
   const rfRef = useRef<ReactFlowInstance | null>(null);
 
   useEffect(() => {
@@ -104,7 +105,13 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
 
   // Review overlay spotlights the changed nodes (tour/search take precedence).
   const diffIds = useMemo(() => (showDiff && changedCount ? new Set(nodeChanges.keys()) : null), [showDiff, changedCount, nodeChanges]);
-  const spotlight = useMemo(() => tourIds ?? searchIds ?? diffIds, [tourIds, searchIds, diffIds]);
+  // Blast radius: the node + everything that (transitively) imports it.
+  const impactIds = useMemo(() => {
+    if (!impactNode || !graph) return null;
+    return new Set<string>([impactNode, ...atlasImpact(graph, impactNode).dependents]);
+  }, [impactNode, graph]);
+  // Precedence: impact highlight > tour > search > review overlay.
+  const spotlight = useMemo(() => impactIds ?? tourIds ?? searchIds ?? diffIds, [impactIds, tourIds, searchIds, diffIds]);
 
   // ---- model per mode ----
   const overview = useMemo(() => (graph && effMode === "overview" ? atlasOverviewModel(graph) : null), [graph, effMode]);
@@ -208,12 +215,13 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== "Escape") return;
-      if (drill) { setDrill(null); setMode("overview"); }
+      if (impactNode) setImpactNode(null);
+      else if (drill) { setDrill(null); setMode("overview"); }
       else if (selected) setSelected(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [drill, selected]);
+  }, [drill, selected, impactNode]);
 
   if (!graph) {
     return (
@@ -278,16 +286,19 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
         {drillName ? <><span className="atlas-crumb-sep">›</span><span className="atlas-crumb cur">{drillName}</span><span className="atlas-crumb-esc">Esc to go back</span></> : <span className="atlas-crumb-mode">{effMode === "overview" ? "Overview" : effMode === "domain" ? "Domain" : "Structural"}</span>}
       </div>
 
-      {showDiff && changedCount ? (
-        <div className="atlas-review-banner">
-          <span><strong>{changedCount}</strong> changed file{changedCount === 1 ? "" : "s"} — review before commit</span>
-          <span className="atlas-review-legend">
-            <span className="lg added">added</span>
-            <span className="lg modified">modified</span>
-            <span className="lg untracked">new</span>
-          </span>
-        </div>
-      ) : null}
+      {showDiff && changedCount ? (() => {
+        const reach = atlasImpactOf(graph, nodeChanges.keys()).dependents.length;
+        return (
+          <div className="atlas-review-banner">
+            <span><strong>{changedCount}</strong> changed file{changedCount === 1 ? "" : "s"}{reach ? <> · affects <strong>{reach}</strong> downstream</> : null} — review before commit</span>
+            <span className="atlas-review-legend">
+              <span className="lg added">added</span>
+              <span className="lg modified">modified</span>
+              <span className="lg untracked">new</span>
+            </span>
+          </div>
+        );
+      })() : null}
 
       <div className="atlas-canvas">
         <ReactFlow
@@ -310,7 +321,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
             const fp = byId.get(n.id)?.filePath;
             if (n.type === "atlasFile" && fp) onOpenFile?.(fp);
           }}
-          onPaneClick={() => setSelected(null)}
+          onPaneClick={() => { setSelected(null); setImpactNode(null); }}
         >
           <Background color="var(--border)" gap={24} size={1} />
           <Controls showInteractive={false} />
@@ -321,7 +332,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
           }} maskColor="rgba(0,0,0,0.55)" style={{ background: "var(--surface)", border: "1px solid var(--border)" }} />
         </ReactFlow>
 
-        {selected ? <AtlasDetail graph={graph} nodeId={selected} onClose={() => setSelected(null)} onOpenFile={onOpenFile} changeKind={nodeChanges.get(selected)} /> : null}
+        {selected ? <AtlasDetail graph={graph} nodeId={selected} onClose={() => { setSelected(null); setImpactNode(null); }} onOpenFile={onOpenFile} changeKind={nodeChanges.get(selected)} impactActive={impactNode === selected} onShowImpact={(id) => setImpactNode((cur) => (cur === id ? null : id))} /> : null}
 
         {tourStep != null && graph.tour[tourStep] ? (
           <div className="atlas-tour">
