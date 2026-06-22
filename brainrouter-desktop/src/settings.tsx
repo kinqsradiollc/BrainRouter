@@ -448,47 +448,42 @@ export function SettingsDialog(props: {
                 onChange={(name) => { props.onAction('a-setdefault', 'action:set-default-provider', { name }); setTimeout(refreshSnapshot, 80); }} />
             </Row>
 
-            <div className="set-h2">Provider gallery</div>
-            <div className="set-desc" style={{ marginBottom: 6 }}>Pick a provider to configure it — a dialog opens with its endpoint pre-filled and a live model picker; just add your key. These are the OpenAI-compatible providers BrainRouter ships with.</div>
+            <div className="set-h2">Set up a provider</div>
+            <div className="set-desc" style={{ marginBottom: 8 }}>Click one — a dialog opens with the endpoint pre-filled and a live model picker; just add your key.</div>
             <div className="provider-gallery">
               {providerCatalog.length === 0 ? <div className="empty">No providers in the catalog.</div> : null}
               {providerCatalog.map((c) => {
-                const configured = savedProviders.filter((p) => p.provider === c.id).length;
+                const configured = savedProviders.some((p) => p.provider === c.id);
                 const host = c.endpoint.replace(/^https?:\/\//, '').replace(/\/.*$/, '') || 'custom endpoint';
                 const isCustom = c.id === 'openai-compatible';
                 return (
-                  <button key={c.id} type="button" className="provider-card" title={`Configure a ${c.label} provider`}
+                  <button key={c.id} type="button" className="provider-card" title={`Set up ${c.label}`}
                     onClick={() => openProviderModal({ name: isCustom ? '' : c.id, provider: isCustom ? '' : c.id, endpoint: isCustom ? '' : c.endpoint })}>
-                    <span className="pc-name">{c.label}</span>
+                    <span className="pc-name">{c.label}{configured ? <span className="pc-tag ok" title="Already configured">✓</span> : null}</span>
                     <span className="pc-host">{host}</span>
-                    <span className="pc-meta">
-                      <span className={`badge ${c.local ? 'native' : 'panel'}`}>{c.local ? 'local' : 'cloud'}</span>
-                      {configured ? <span className="dim" style={{ fontSize: 11 }}>✓ {configured} configured</span> : <span className="dim" style={{ fontSize: 11 }}>set up →</span>}
-                    </span>
                   </button>
                 );
               })}
             </div>
 
-            <div className="set-h2">Providers</div>
-            <div className="set-desc" style={{ marginBottom: 6 }}><b>Use as default</b> makes one the default above (the main model picks straight from it). <b>Configure</b> opens a dialog with a live model picker; keys are write-only — never echoed back.</div>
-            {savedProviders.length === 0 ? <div className="empty">None yet — pick one from the gallery above, or add a custom provider.</div> : null}
+            <div className="set-h2">Your providers</div>
+            {savedProviders.length === 0 ? <div className="empty">None yet — pick one above, or add a custom provider.</div> : null}
             {savedProviders.length ? (
               <div className="provider-gallery">
                 {[...savedProviders].sort((a, b) => (a.name === defaultProvider ? -1 : b.name === defaultProvider ? 1 : 0)).map((p) => (
-                  <div key={p.name} className="provider-card" style={{ cursor: 'default' }}>
-                    <span className="pc-name">{p.name}{p.name === defaultProvider ? <span className="badge native" style={{ marginLeft: 6 }}>default</span> : null}</span>
-                    <span className="pc-host">{p.provider} · {p.model}{p.endpoint ? ` · ${p.endpoint.replace(/^https?:\/\//, '')}` : ''} · {p.hasKey ? 'key set' : 'no key'}</span>
-                    <span className="pc-meta" style={{ gap: 4, flexWrap: 'wrap' }}>
-                      {p.name !== defaultProvider ? <button className="btn" title="Make this the default" onClick={() => { props.onAction('a-setdefault', 'action:set-default-provider', { name: p.name }); setTimeout(refreshSnapshot, 80); }}>Use as default</button> : null}
+                  <div key={p.name} className="provider-card saved">
+                    <span className="pc-name">{p.name}{p.name === defaultProvider ? <span className="pc-tag default">Default</span> : null}</span>
+                    <span className="pc-host">{p.model}</span>
+                    <span className="pc-actions">
+                      {p.name !== defaultProvider ? <button className="btn" title="Make this the default model" onClick={() => { props.onAction('a-setdefault', 'action:set-default-provider', { name: p.name }); setTimeout(refreshSnapshot, 80); }}>Set default</button> : null}
                       <button className="btn" onClick={() => openProviderModal({ editing: p.name, name: p.name, provider: p.provider, endpoint: p.endpoint ?? '', model: p.model })}>Configure</button>
-                      <button className="btn" title="Remove this provider" onClick={() => setConfirmDeleteProvider(p.name)}>Remove</button>
+                      <button className="btn danger" title="Remove this provider" onClick={() => setConfirmDeleteProvider(p.name)}>Remove</button>
                     </span>
                   </div>
                 ))}
               </div>
             ) : null}
-            <button className="btn" style={{ marginTop: 8 }} onClick={() => openProviderModal()}>+ Add custom provider</button>
+            <button className="btn" style={{ marginTop: 4 }} onClick={() => openProviderModal()}>+ Add custom provider</button>
 
             {provModalOpen ? (
               <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) setProvModalOpen(false); }}>
@@ -778,13 +773,21 @@ export function SettingsDialog(props: {
           <div className="set-desc" style={{ marginBottom: 6 }}>MCP servers from config.json — the same pool the CLI connects. All auto-reconnect in the background.</div>
           {allServers.length === 0 ? <div className="empty">No MCP servers configured (offline mode — local tools only).</div> : null}
 
-          {allServers.length ? <div className="set-h2"><Icon name="brain" size={13} /> Brains</div> : null}
-          {allServers.length ? <div className="set-desc" style={{ marginBottom: 6 }}>BrainRouter memory servers. Only ONE is active at a time — others stay configured and keep reconnecting.</div> : null}
-          {brains.length ? brains.map(renderServer) : allServers.length ? <Row title="No brain configured" desc="Add a BrainRouter MCP server below to enable memory recall." /> : null}
+          {allServers.length ? (
+            <div className="mcp-group brains">
+              <div className="set-h2" style={{ marginTop: 0 }}><Icon name="brain" size={13} /> Brains</div>
+              <div className="set-desc" style={{ marginBottom: 8 }}>BrainRouter memory servers — the identity-bearing brain. Only ONE is active at a time; others stay configured and keep reconnecting.</div>
+              {brains.length ? brains.map(renderServer) : <Row title="No brain configured" desc="Add a BrainRouter MCP server below to enable memory recall." />}
+            </div>
+          ) : null}
 
-          {allServers.length ? <div className="set-h2"><Icon name="bolt" size={13} /> Tools</div> : null}
-          {allServers.length ? <div className="set-desc" style={{ marginBottom: 6 }}>Third-party MCP tool servers (filesystem, web, etc.).</div> : null}
-          {tools.length ? tools.map(renderServer) : allServers.length ? <Row title="No tool servers" desc="Add MCP tool servers below." /> : null}
+          {allServers.length ? (
+            <div className="mcp-group tools">
+              <div className="set-h2" style={{ marginTop: 0 }}><Icon name="bolt" size={13} /> Tools</div>
+              <div className="set-desc" style={{ marginBottom: 8 }}>Third-party MCP tool servers (filesystem, web, etc.) — kept separate from the brain.</div>
+              {tools.length ? tools.map(renderServer) : <Row title="No tool servers" desc="Add MCP tool servers below." />}
+            </div>
+          ) : null}
 
           <div className="set-h2">Add a server</div>
           <div className="mcp-add">
@@ -919,8 +922,6 @@ export function SettingsDialog(props: {
           ) : (
             <pre className="usage-pre">Loading cross-session usage…</pre>
           )}
-          <div className="set-h2">Per-actor breakdown (/usage)</div>
-          <pre className="usage-pre">{props.usageLines.length ? props.usageLines.join('\n') : 'Run a turn first — the breakdown shows parent vs child spend, cache hit rate, and offload savings.'}</pre>
           <Row title="Workspace" desc={<code>{snapshot?.workspaceRoot ?? '—'}</code>} />
           <Row title="Local telemetry" desc="Privacy-conscious local-only task/latency log — no network (cli.telemetry.enabled).">
             <Toggle on={telemetryOn} onChange={(v) => setKnob('telemetry', { enabled: v })} />
