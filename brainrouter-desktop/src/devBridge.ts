@@ -43,6 +43,36 @@ function devAtlasGraph(): AtlasGraph {
   };
 }
 
+/** The dev graph with LLM enrichment applied — summaries, tags, layers, tour. */
+function devAtlasEnriched(): AtlasGraph {
+  const g = devAtlasGraph();
+  const sum: Record<string, { summary: string; tags: string[] }> = {
+    'file:src/index.ts': { summary: 'Process entry point; boots the app.', tags: ['entry'] },
+    'file:src/app.ts': { summary: 'Wires the app together and runs the main loop.', tags: ['core', 'async'] },
+    'file:src/api.ts': { summary: 'HTTP API surface and request handlers.', tags: ['api'] },
+    'file:src/db.ts': { summary: 'Persistence layer over the data store.', tags: ['data'] },
+    'file:src/util.ts': { summary: 'Shared helper utilities.', tags: ['util'] },
+    'file:src/ui.tsx': { summary: 'React UI components.', tags: ['ui'] },
+    'config:package.json': { summary: 'Package manifest and scripts.', tags: ['config'] },
+    'document:README.md': { summary: 'Project overview and setup.', tags: ['docs'] },
+  };
+  g.nodes = g.nodes.map((n) => (sum[n.id] ? { ...n, summary: sum[n.id].summary, tags: sum[n.id].tags } : n));
+  g.layers = [
+    { id: 'layer:entry', name: 'Entry', description: 'Process boot.', nodeIds: ['file:src/index.ts', 'file:src/app.ts'] },
+    { id: 'layer:api', name: 'API', description: 'Request handling.', nodeIds: ['file:src/api.ts'] },
+    { id: 'layer:data', name: 'Data', description: 'Persistence.', nodeIds: ['file:src/db.ts'] },
+    { id: 'layer:ui', name: 'UI', description: 'Presentation.', nodeIds: ['file:src/ui.tsx'] },
+    { id: 'layer:config', name: 'Config & Docs', description: 'Manifest and docs.', nodeIds: ['config:package.json', 'document:README.md'] },
+  ];
+  g.tour = [
+    { order: 1, title: 'Start at the entry', description: 'Read index.ts, then app.ts to see how the app boots.', nodeIds: ['file:src/index.ts', 'file:src/app.ts'] },
+    { order: 2, title: 'The API surface', description: 'See how requests are handled in api.ts.', nodeIds: ['file:src/api.ts'] },
+    { order: 3, title: 'Where data lives', description: 'db.ts is the persistence layer.', nodeIds: ['file:src/db.ts'] },
+    { order: 4, title: 'The UI', description: 'ui.tsx renders the front end.', nodeIds: ['file:src/ui.tsx'] },
+  ];
+  return g;
+}
+
 export function installDevBridge(): void {
   if (typeof window === 'undefined' || (window as { brainrouter?: unknown }).brainrouter) return;
 
@@ -478,6 +508,14 @@ export function installDevBridge(): void {
     // browser-only dev (real builds come from the host's deterministic builder).
     'atlas-graph': () => devAtlasGraph(),
     'atlas-build': () => { const g = devAtlasGraph(); return { graph: g, stats: { files: 7, functions: 5, classes: 2, nodes: g.nodes.length, edges: g.edges.length, layers: 0, enriched: false } }; },
+    'atlas-enrich': () => {
+      const g = devAtlasEnriched();
+      return {
+        graph: g,
+        stats: { files: 7, functions: 5, classes: 2, nodes: g.nodes.length, edges: g.edges.length, layers: g.layers.length, enriched: true },
+        enrichResult: { summarized: g.nodes.filter((n) => n.summary).length, layers: g.layers.length, tourSteps: g.tour.length, batchesFailed: 0 },
+      };
+    },
     'requirement-list': () => [...devRequirements].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     'requirement-create': (a) => {
       const id = `req_dev${++reqSeq}`;

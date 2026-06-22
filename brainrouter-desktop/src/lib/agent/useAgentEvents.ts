@@ -112,6 +112,7 @@ export interface AgentEventsCtx {
   setArtifacts: React.Dispatch<React.SetStateAction<ArtifactRecord[]>>;
   setAtlasGraph: React.Dispatch<React.SetStateAction<AtlasGraph | null>>;
   setAtlasBuilding: React.Dispatch<React.SetStateAction<boolean>>;
+  setAtlasEnriching: React.Dispatch<React.SetStateAction<boolean>>;
   setWorktrees: React.Dispatch<React.SetStateAction<WorktreeEntry[]>>;
   setWorktreeDiffs: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   setReviewRunningByWs: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
@@ -189,7 +190,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
     setDraft, planFeedbackRef, goalContPendingRef, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
     setBranches, setModelsLoading, setEndpointModels, setProviderModels, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
-    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
+    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
     setAtBottom,
@@ -742,6 +743,15 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       case 'q-req': if (Array.isArray(result)) setRequirements(result as RequirementRecord[]); return;
       case 'q-atlas': setAtlasGraph(result && typeof result === 'object' && Array.isArray((result as { nodes?: unknown }).nodes) ? (result as AtlasGraph) : null); return;
       case 'q-atlas-build': { const g = (result as { graph?: AtlasGraph } | null)?.graph ?? null; if (g) setAtlasGraph(g); setAtlasBuilding(false); return; }
+      case 'q-atlas-enrich': {
+        const r = result as { graph?: AtlasGraph; error?: string; enrichResult?: { summarized: number; layers: number; tourSteps: number; batchesFailed: number } } | null;
+        setAtlasEnriching(false);
+        if (r?.error) { setToast(`⚠ ${r.error}`); return; }
+        if (r?.graph) setAtlasGraph(r.graph);
+        const er = r?.enrichResult;
+        if (er) setToast(`✓ Atlas enriched — ${er.summarized} summaries · ${er.layers} layers · ${er.tourSteps} tour`);
+        return;
+      }
       case 'q-req-create': case 'q-req-update': case 'q-req-seed': {
         const r = result as { error?: string } | null;
         if (r && typeof r === 'object' && typeof r.error === 'string') setToast(`✗ ${r.error}`);

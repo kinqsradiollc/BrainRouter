@@ -199,6 +199,7 @@ export function App(): React.ReactElement {
   const [requirements, setRequirements] = useState<RequirementRecord[]>([]);
   const [atlasGraph, setAtlasGraph] = useState<AtlasGraph | null>(null); // ATLAS-5 — codebase knowledge graph
   const [atlasBuilding, setAtlasBuilding] = useState(false);
+  const [atlasEnriching, setAtlasEnriching] = useState(false); // ATLAS-4b — LLM enrichment in flight
   // ANNOTATION-RECORDS — this workspace's durable feedback records, from the CLI store.
   const [annotations, setAnnotations] = useState<AnnotationRecord[]>([]);
   // ARTIFACT-RECORDS — this workspace's durable Artifact Records, from the CLI store.
@@ -619,7 +620,7 @@ export function App(): React.ReactElement {
     setDraft, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
     setBranches, setModelsLoading, setEndpointModels, setProviderModels, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
-    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
+    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
     setAtBottom,
@@ -1022,9 +1023,10 @@ export function App(): React.ReactElement {
           onOpenDiff={(f) => { setDiffTarget({ path: f.file, line: f.line }); ensurePanel('diff'); q('q-diff', 'file-diff', { path: f.file }); }} />;
       }
       case 'atlas':
-        return <AtlasPanel graph={atlasGraph} building={atlasBuilding}
+        return <AtlasPanel graph={atlasGraph} building={atlasBuilding} enriching={atlasEnriching}
           onLoad={() => q('q-atlas', 'atlas-graph')}
-          onBuild={() => { setAtlasBuilding(true); q('q-atlas-build', 'atlas-build'); }} />;
+          onBuild={() => { setAtlasBuilding(true); q('q-atlas-build', 'atlas-build'); }}
+          onEnrich={() => { setAtlasEnriching(true); q('q-atlas-enrich', 'atlas-enrich'); }} />;
       case 'requirements': {
         const refresh = () => setTimeout(() => q('q-req', 'requirement-list'), 150);
         return <RequirementsPanel requirements={requirements}

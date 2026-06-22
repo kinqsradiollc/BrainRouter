@@ -3718,6 +3718,7 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .atlas-toolbar { display: flex; align-items: center; gap: 10px; padding: 2px 2px 8px; border-bottom: 1px solid var(--border); }
 .atlas-proj { font-size: 13px; font-weight: 600; color: var(--text); }
 .atlas-count { font-size: 11.5px; color: var(--text-faint); }
+.atlas-count.atlas-enriched { color: var(--accent); }
 .atlas-spacer { flex: 1; }
 .atlas-canvas { position: relative; flex: 1; min-height: 0; border: 1px solid var(--border); border-radius: var(--r-md, 10px); overflow: hidden; background: var(--surface); }
 
@@ -3727,8 +3728,11 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .atlas-empty-title { font-size: 13px; font-weight: 600; color: var(--text); }
 .atlas-empty-desc { font-size: 12px; color: var(--text-faint); line-height: 1.5; max-width: 320px; margin-bottom: 4px; }
 
-/* Selected-node chip (full detail panel lands in a later slice). */
-.atlas-selected { position: absolute; left: 10px; bottom: 10px; max-width: 70%; padding: 5px 10px; border-radius: var(--r-sm); background: var(--raised); border: 1px solid var(--border-strong); color: var(--text); font-size: 11.5px; font-family: var(--mono, ui-monospace, monospace); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3); }
+/* Selected-node chip (full detail panel lands in a later slice). Shows the
+ * file path and, once enriched, the node's one-line summary. */
+.atlas-selected { position: absolute; left: 10px; bottom: 10px; max-width: 78%; display: flex; flex-direction: column; gap: 2px; padding: 6px 10px; border-radius: var(--r-sm); background: var(--raised); border: 1px solid var(--border-strong); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3); }
+.atlas-selected-name { font-size: 11.5px; color: var(--text); font-family: var(--mono, ui-monospace, monospace); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.atlas-selected-sum { font-size: 11px; color: var(--text-dim); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
 /* React Flow re-skin — kill the light-theme defaults so controls + minimap
  * read as part of the dark surface. */
