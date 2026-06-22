@@ -1,7 +1,7 @@
 {
   "name": "@kinqs/brainrouter-agent-protocol",
-  "version": "0.4.14",
-  "description": "Typed agent event/command protocol for BrainRouter \u2014 the one vocabulary spoken by the CLI's headless mode and the Desktop app's agent host.",
+  "version": "0.4.15",
+  "description": "Typed agent event/command protocol for BrainRouter — the one vocabulary spoken by the CLI's headless mode and the Desktop app's agent host.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
