@@ -67,6 +67,13 @@ test('ATLAS-2 buildBaseGraph: nodes, contains + imports edges, validates clean',
     // imports edge: index.ts → util.ts (resolved relative import)
     assert.ok(g.edges.some((e) => e.source === 'file:src/index.ts' && e.target === 'file:src/util.ts' && e.type === 'imports'));
 
+    // ATLAS-17: deterministic layers derived from directory structure (no LLM)
+    assert.ok(g.layers.length >= 2, 'should derive layers from the directory structure');
+    const srcLayer = g.layers.find((l) => l.name === 'src');
+    assert.ok(srcLayer, 'a "src" layer should exist');
+    assert.ok(srcLayer!.nodeIds.includes('file:src/index.ts') && srcLayer!.nodeIds.includes('file:src/util.ts'));
+    assert.ok(g.layers.some((l) => l.name === '(root)'), 'root-level files form a "(root)" layer');
+
     const v = validateAtlasGraph(g);
     assert.ok(v.ok, `graph should validate: ${v.errors.join('; ')}`);
     assert.equal(v.errors.length, 0);

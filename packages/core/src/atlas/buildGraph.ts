@@ -18,6 +18,8 @@ import {
   type AtlasEdge,
   type AtlasFileCategory,
   type AtlasGraph,
+  type AtlasLayer,
+  type AtlasNode,
   type AtlasNodeType,
 } from "@kinqs/brainrouter-types";
 import { gitHeadSha } from "../git/workspaceGit.js";
@@ -40,6 +42,42 @@ function fileNodeType(category: AtlasFileCategory): AtlasNodeType {
     case "data": return "schema";
     default: return "file";
   }
+}
+
+/** File-level node types that belong to a layer. */
+const LAYER_LEVEL: ReadonlySet<AtlasNodeType> = new Set<AtlasNodeType>(["file", "config", "document", "resource", "schema"]);
+const WRAP_DIRS = /\/(src|lib|source|app|dist|build|tests?|__tests__|spec)$/;
+
+/**
+ * The architectural "layer" a file belongs to — derived from its path so the
+ * graph is legible WITHOUT an LLM. Uses the package/top-two directory, collapsing
+ * a wrapper level (…/src). Monorepo: `packages/core`, `brainrouter-desktop`;
+ * app: `src/cart`, `src/catalog`.
+ */
+function layerKeyFor(filePath: string): string {
+  const dir = path.posix.dirname(filePath);
+  if (dir === "." || dir === "") return "(root)";
+  const parts = dir.split("/").filter(Boolean);
+  let key = parts.slice(0, 2).join("/");
+  key = key.replace(WRAP_DIRS, "");
+  return key || parts[0];
+}
+
+/** Group file-level nodes into deterministic layers by package/directory. */
+function deriveLayers(nodes: AtlasNode[]): AtlasLayer[] {
+  const byKey = new Map<string, string[]>();
+  for (const n of nodes) {
+    if (!n.filePath || !LAYER_LEVEL.has(n.type)) continue;
+    const key = layerKeyFor(n.filePath);
+    (byKey.get(key) ?? byKey.set(key, []).get(key)!).push(n.id);
+  }
+  return [...byKey.entries()]
+    .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+    .map(([key, ids]) => ({
+      id: `layer:${key.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "root"}`,
+      name: key,
+      nodeIds: ids,
+    }));
 }
 
 /** Resolve a RELATIVE import specifier to a known file path, or undefined. */
@@ -129,5 +167,9 @@ export function buildBaseGraph(root: string, opts: BuildOptions = {}): AtlasGrap
   // Drop edges whose endpoints aren't real nodes (defensive; resolveRelativeImport
   // only yields known files, so this is belt-and-braces).
   graph.edges = graph.edges.filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target));
+
+  // Deterministic layers from the directory/package structure, so Overview /
+  // Domain views work immediately — LLM enrichment refines them, isn't required.
+  graph.layers = deriveLayers(graph.nodes);
   return graph;
 }
