@@ -91,8 +91,35 @@ export function AtlasLayerCard({ data }: NodeProps): React.ReactElement {
   );
 }
 
+interface DomainData {
+  name: string;
+  description?: string;
+  entities: string[];
+  flows: number;
+}
+
+export function AtlasDomainCard({ data }: NodeProps): React.ReactElement {
+  const d = data as unknown as DomainData;
+  return (
+    <div className="atlas-dcard">
+      <Handle type="target" position={Position.Top} className="atlas-handle" isConnectable={false} />
+      <div className="atlas-dcard-title">{d.name}</div>
+      {d.description ? <div className="atlas-dcard-desc">{d.description}</div> : null}
+      {d.entities.length ? (
+        <div className="atlas-dcard-section">
+          <div className="atlas-dcard-label">Entities</div>
+          <div className="atlas-dcard-chips">{d.entities.map((e) => <span key={e} className="atlas-dcard-chip">{e}</span>)}</div>
+        </div>
+      ) : null}
+      <div className="atlas-dcard-foot">{d.flows} flow{d.flows === 1 ? "" : "s"}</div>
+      <Handle type="source" position={Position.Bottom} className="atlas-handle" isConnectable={false} />
+    </div>
+  );
+}
+
 export const ATLAS_NODE_TYPES = {
   atlasFile: AtlasFileNode,
   atlasGroup: AtlasGroupNode,
   atlasLayer: AtlasLayerCard,
+  atlasDomain: AtlasDomainCard,
 };
