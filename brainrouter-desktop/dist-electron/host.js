@@ -2099,6 +2099,7 @@ async function main() {
                         return {
                             id,
                             online: s?.status === 'connected',
+                            identity: s?.identity ?? 'unknown', // WS9 — brainrouter | third-party | unknown (brain-vs-tools grouping)
                             detail: s && s.identity !== 'unknown' ? s.identity : undefined,
                             type: cfg.type,
                             url: cfg.type === 'http' ? cfg.url ?? null : null,
@@ -2108,6 +2109,7 @@ async function main() {
                             headerCount: Object.keys(cfg.headers ?? {}).length,
                         };
                     }),
+                    activeServer: fresh.activeServer ?? null, // WS9 — which brainrouter server is the ACTIVE brain (only one)
                     // §multi-provider — named providers (API KEYS MASKED, never sent to the
                     // renderer) + the per-sub-agent-role model routing.
                     providers: providerEntries.map(([name, p]) => ({ name, provider: p.provider, model: p.model, endpoint: p.endpoint ?? null, hasKey: !!p.apiKey })),
@@ -2885,6 +2887,22 @@ async function main() {
                 const id = typeof args.id === 'string' ? args.id : '';
                 await mcpClient.reconnectOne(id);
                 return { ok: true };
+            },
+            // WS9 — choose which BrainRouter brain is ACTIVE (only one at a time; the
+            // user can keep several configured). selectMcpServerIds already enforces
+            // single-active at connect time; this persists the choice + reconnects.
+            'action:set-active-server': async (args) => {
+                const id = typeof args.id === 'string' ? args.id : '';
+                if (!id)
+                    return { ok: false, error: 'No server id.' };
+                const fresh = loadConfig();
+                fresh.activeServer = id;
+                saveConfig(fresh);
+                try {
+                    await mcpClient.reconnectOne(id);
+                }
+                catch { /* offline brains surface in status */ }
+                return { ok: true, activeServer: id };
             },
             // T6 — add an MCP server: write the profile to config.json (shared with the
             // CLI) and connect it now. type 'stdio' needs a command; 'http' needs a url.

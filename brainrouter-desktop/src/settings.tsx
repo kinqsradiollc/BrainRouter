@@ -24,7 +24,8 @@ export interface ConfigSnapshot {
   integrations?: { github?: { repo: string | null; hasToken: boolean; tokenSource: string | null } };
   permissionRules?: { allow: string[]; deny: string[] };
   hooks?: Array<{ id: string; event: string; command: string; enabled: boolean; match?: string }>;
-  servers?: Array<{ id: string; online: boolean; detail?: string; type?: 'stdio' | 'http'; url?: string | null; command?: string | null; hasKey?: boolean; envCount?: number; headerCount?: number }>;
+  servers?: Array<{ id: string; online: boolean; identity?: string; detail?: string; type?: 'stdio' | 'http'; url?: string | null; command?: string | null; hasKey?: boolean; envCount?: number; headerCount?: number }>;
+  activeServer?: string | null; // WS9 — the active BrainRouter brain (only one)
   // §multi-provider — named OpenAI-compatible providers (keys masked) + per-role routing.
   providers?: Array<{ name: string; provider: string; model: string; endpoint: string | null; hasKey: boolean }>;
   defaultProviderName?: string | null;
@@ -61,7 +62,7 @@ const NAV: Array<{ section: SettingsSection; icon: string; title: string; group:
   { section: 'hooks', icon: 'link', title: 'Hooks', group: 'Settings' },
   { section: 'workflow-automation', icon: 'fork', title: 'Workflow automation', group: 'Settings' },
   { section: 'extensions', icon: 'plug', title: 'Extensions', group: 'Settings' },
-  { section: 'connectors', icon: 'bolt', title: 'Connectors', group: 'Settings' },
+  { section: 'connectors', icon: 'bolt', title: 'MCP', group: 'Settings' },
   { section: 'integrations', icon: 'branch', title: 'Integrations', group: 'Settings' },
   { section: 'advanced', icon: 'gear', title: 'Advanced', group: 'Settings' },
   { section: 'observability', icon: 'chart', title: 'Usage', group: 'Settings' },
@@ -634,20 +635,24 @@ export function SettingsDialog(props: {
       );
       case 'connectors': return (
         <>
-          <div className="set-h">Connectors (MCP)</div>
-          <div className="set-desc" style={{ marginBottom: 6 }}>Server profiles from config.json — the same pool the CLI connects. Sign in once, both heads use it.</div>
+          <div className="set-h">MCP</div>
+          <div className="set-desc" style={{ marginBottom: 6 }}>MCP servers from config.json — the same pool the CLI connects. The BrainRouter <b>brain</b> plus any third-party <b>tool</b> servers. Only ONE brain is active at a time (others can stay configured); all auto-reconnect in the background.</div>
           {(snapshot?.servers ?? []).length === 0 ? <div className="empty">No MCP servers configured (offline mode — local tools only).</div> : null}
           {(snapshot?.servers ?? []).map((s) => {
+            // WS9 — brain vs tool, and which brain is the single active one.
+            const isBrain = s.identity === 'brainrouter';
+            const isActiveBrain = isBrain && snapshot?.activeServer === s.id;
+            const kind = isBrain ? 'brain' : s.identity === 'third-party' ? 'tool' : '';
             const meta = [
               s.type ?? 'unknown',
               s.type === 'http' ? (s.url ?? '') : (s.command ?? ''),
               s.hasKey ? 'key set' : '',
               s.headerCount ? `${s.headerCount} headers` : '',
               s.envCount ? `${s.envCount} env` : '',
-              s.detail ?? '',
             ].filter(Boolean).join(' · ');
             return (
-              <Row key={s.id} title={s.id} desc={<><span className={`dot ${s.online ? 'on' : 'off'}`} />{s.online ? 'online' : 'offline'}{meta ? ` — ${meta}` : ''}</>}>
+              <Row key={s.id} title={s.id} desc={<><span className={`dot ${s.online ? 'on' : 'off'}`} />{s.online ? 'online' : 'offline'}{kind ? ` · ${kind}` : ''}{isActiveBrain ? ' · active brain' : ''}{meta ? ` — ${meta}` : ''}</>}>
+                {isBrain && !isActiveBrain ? <button className="btn" title="Make this the active BrainRouter brain (only one is active at a time)" onClick={() => { props.onAction('a-setactive', 'action:set-active-server', { id: s.id }); setTimeout(refreshSnapshot, 120); }}>Use as active</button> : null}
                 <button className="btn" onClick={() => props.onAction('a-reconnect', 'action:reconnect-mcp', { id: s.id })}>Reconnect</button>
                 <button className="btn" title="Remove this server" onClick={() => props.onAction('a-rmmcp', 'action:remove-mcp', { id: s.id })}>Remove</button>
               </Row>
@@ -655,7 +660,7 @@ export function SettingsDialog(props: {
           })}
           <div className="mcp-add">
             <div className="mcp-add-row">
-              <input className="ctl" placeholder="server id" value={mcp.id} onChange={(e) => setMcp((m) => ({ ...m, id: e.target.value }))} />
+              <input className="ctl" placeholder="name (e.g. my-tools)" value={mcp.id} onChange={(e) => setMcp((m) => ({ ...m, id: e.target.value }))} />
               <ChoiceControl value={mcp.type} options={[{ value: 'stdio', label: 'stdio' }, { value: 'http', label: 'http' }]} onChange={(v) => setMcp((m) => ({ ...m, type: v as 'stdio' | 'http' }))} />
             </div>
             {mcp.type === 'stdio'
