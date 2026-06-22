@@ -14,7 +14,7 @@ import "@xyflow/react/dist/style.css";
 import type { AtlasFileCategory, AtlasGraph, AtlasNode, AtlasNodeType } from "@kinqs/brainrouter-types";
 import {
   atlasGrouping, atlasGroupedLayout, atlasOverviewModel, atlasDomainModel, atlasNodeColor, atlasSearchMatches,
-  atlasChangeMap, atlasNodeChanges, atlasImpact, atlasImpactOf, ATLAS_FILE_CATEGORIES, ATLAS_CATEGORY_COLORS,
+  atlasChangeMap, atlasNodeChanges, atlasImpact, atlasImpactOf, atlasUncoveredFiles, ATLAS_FILE_CATEGORIES, ATLAS_CATEGORY_COLORS,
   type AtlasChangeKind, type AtlasChangeAssessment,
 } from "../lib/atlas/atlasView.js";
 import { ATLAS_NODE_TYPES } from "./AtlasNodes.js";
@@ -71,6 +71,15 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
     [graph, changedFiles],
   );
   const changedCount = nodeChanges.size;
+
+  // Files with no test covering them (ATLAS-15) — flagged in Review.
+  const uncovered = useMemo(() => (graph ? atlasUncoveredFiles(graph) : new Set<string>()), [graph]);
+  const untestedChanged = useMemo(() => {
+    if (!showDiff) return 0;
+    let n = 0;
+    for (const id of nodeChanges.keys()) if (uncovered.has(id)) n++;
+    return n;
+  }, [showDiff, nodeChanges, uncovered]);
 
   const hasLayers = !!graph && graph.layers.length > 0;
   const effMode: Mode = hasLayers ? mode : "structural";
@@ -296,7 +305,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
         const reach = atlasImpactOf(graph, nodeChanges.keys()).dependents.length;
         return (
           <div className="atlas-review-banner">
-            <span><strong>{changedCount}</strong> changed file{changedCount === 1 ? "" : "s"}{reach ? <> · affects <strong>{reach}</strong> downstream</> : null} — review before commit</span>
+            <span><strong>{changedCount}</strong> changed file{changedCount === 1 ? "" : "s"}{reach ? <> · affects <strong>{reach}</strong> downstream</> : null}{untestedChanged ? <> · <strong className="atlas-untested">{untestedChanged} untested</strong></> : null} — review before commit</span>
             <span className="atlas-review-legend">
               <span className="lg added">added</span>
               <span className="lg modified">modified</span>
@@ -351,6 +360,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
               assessment={selPath ? assessments?.[selPath] : undefined}
               assessing={!!selPath && assessing === selPath}
               onAssess={onAssess && selPath ? () => onAssess(selPath) : undefined}
+              untested={uncovered.has(selected)}
             />
           );
         })() : null}

@@ -30,11 +30,13 @@ export interface AtlasDetailProps {
   assessing?: boolean;
   /** Request an LLM assessment of this change. */
   onAssess?: () => void;
+  /** ATLAS-15 — true when no test covers this file. */
+  untested?: boolean;
 }
 
 const CHANGE_LABEL: Record<string, string> = { added: "Added", modified: "Modified", untracked: "New (untracked)", deleted: "Deleted" };
 
-export function AtlasDetail({ graph, nodeId, onClose, onOpenFile, changeKind, impactActive, onShowImpact, assessment, assessing, onAssess }: AtlasDetailProps): React.ReactElement | null {
+export function AtlasDetail({ graph, nodeId, onClose, onOpenFile, changeKind, impactActive, onShowImpact, assessment, assessing, onAssess, untested }: AtlasDetailProps): React.ReactElement | null {
   const facts = atlasNodeFacts(graph, nodeId);
   if (!facts) return null;
   const { node, symbols, layer, importsOut, importsIn } = facts;
@@ -74,6 +76,12 @@ export function AtlasDetail({ graph, nodeId, onClose, onOpenFile, changeKind, im
         <div className={`atlas-detail-change chg-${changeKind}`}>
           <span className="atlas-detail-change-dot" />
           {CHANGE_LABEL[changeKind] ?? changeKind} · uncommitted — review before commit
+        </div>
+      ) : null}
+
+      {untested && node.filePath ? (
+        <div className="atlas-detail-untested" title="No test file imports this or shares its name">
+          <span className="atlas-detail-change-dot" /> No test covers this file
         </div>
       ) : null}
 
