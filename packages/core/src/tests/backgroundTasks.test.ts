@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { collectDashboardTasks, collectRunningTasks, formatBackgroundTasks, groupTasksByKind, summarizeTasks, type BackgroundTask } from '../background/backgroundTasks.js';
+import { collectDashboardTasks, collectRunningTasks, formatBackgroundTasks, groupTasksByKind, summarizeTasks, shellRunToTask, type BackgroundTask } from '../background/backgroundTasks.js';
 import { createSession, updateSession } from '../orchestration/orchestrator.js';
 import { createWorker } from '../worker/workerStore.js';
 import { createBackgroundTask, updateBackgroundTask } from '../background/backgroundTaskStore.js';
@@ -50,9 +50,9 @@ test('groupTasksByKind: splits into agent / worker / workflow, preserving order'
   assert.deepEqual(groups.workflow.map((t) => t.id), ['migrate']);
 });
 
-test('groupTasksByKind: empty input yields three empty buckets', () => {
+test('groupTasksByKind: empty input yields one empty bucket per kind', () => {
   const groups = groupTasksByKind([]);
-  assert.deepEqual(groups, { agent: [], worker: [], workflow: [] });
+  assert.deepEqual(groups, { agent: [], worker: [], workflow: [], shell: [] });
 });
 
 // Sidebar data contract: a sub-agent spawned by the orchestrator must surface
@@ -118,4 +118,18 @@ test('collectDashboardTasks includes recent failed durable tasks and stale child
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('WS2: shellRunToTask surfaces a RUNNING background shell as a fleet task', () => {
+  const task = shellRunToTask({ id: 'bg-1', command: 'npm run dev', pid: 1234, status: 'running', exitCode: null, logPath: '/tmp/bg-1.log', startedAt: 1_700_000_000_000 });
+  assert.ok(task, 'a running shell maps to a task');
+  assert.equal(task?.kind, 'shell');
+  assert.equal(task?.id, 'bg-1');
+  assert.equal(task?.label, 'npm run dev');
+  assert.equal(typeof task?.startedAt, 'string', 'startedAt normalized to ISO');
+});
+
+test('WS2: a finished/failed background shell is NOT surfaced', () => {
+  assert.equal(shellRunToTask({ id: 'b', command: 'echo hi', pid: 1, status: 'done', exitCode: 0, logPath: '/tmp/b.log', startedAt: 1 }), null);
+  assert.equal(shellRunToTask({ id: 'c', command: 'false', pid: 1, status: 'failed', exitCode: 1, logPath: '/tmp/c.log', startedAt: 1 }), null);
 });
