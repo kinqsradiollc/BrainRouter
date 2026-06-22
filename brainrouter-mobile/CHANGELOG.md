@@ -6,9 +6,41 @@ All notable changes to the **mobile** app. Format: [Keep a Changelog](https://ke
 
 ---
 
-## [Unreleased] — Phase 2 planning complete
+## [Unreleased]
 
-Planning & design artifacts produced (no app code yet): investigation summary, UI spec, user stories, user flows, UX enhancements, technical doc, workflows, roadmap, and HTML prototypes. Awaiting approval to begin Phase 3.
+### Milestone 0 — Foundations (engineering pre-req, no user-facing release)
+
+The skeleton everything else builds on (roadmap.md M0; technical-doc.md §4). All
+work is under `brainrouter-mobile/`; the RN deps are declared but not installed
+(to avoid reconciling the shared monorepo `node_modules`), so the **pure layer**
+is verified with the repo's pinned `tsc` + `tsx`.
+
+- **Expo scaffold** (managed, TypeScript strict, SDK 52): `package.json`,
+  `app.json`, `eas.json`, `babel.config.js`, `metro.config.js` (monorepo-aware),
+  `index.ts` entry, `jest.config.js` (RN tests) + a standalone `tsconfig.domain.json`
+  for the pure-layer typecheck. §4 folder structure under `src/`.
+- **Theme** (`theme/tokens.ts` + `ThemeProvider`): tokens ported 1:1 from
+  `prototypes/global.css` — dark + light palettes, the desktop indigo/purple
+  accent `hsl(245 80% 66%)`, radius/spacing/type scales, and a runtime
+  theme/accent override.
+- **Transport seam** (§6): `transport/protocol.ts` re-exports
+  `@kinqs/brainrouter-agent-protocol` verbatim; `BrainRouterTransport` interface
+  (send/onEvent/query + Layer-1 promise methods + status); `MockTransport`
+  mirroring `devBridge.ts`'s core loop (streaming echo turn + tool group +
+  approval gate on "approve", plus a representative query/Layer-1 dataset).
+- **Storage seam**: `Storage` interface + `InMemoryStorage` (pure) and a native
+  MMKV + SecureStore implementation (`nativeStorage.ts`).
+- **Navigation shell**: root native-stack (Connect | App) → bottom tabs
+  (Chats · Activity · Review · Settings), each a native stack; token-mapped
+  React Navigation theme + deep-link config; `TransportProvider` context.
+  Screens: S-02 (sessions list, live from the transport), S-03 (event-stream
+  proof), S-14 (theme/accent controls); S-01/07/10/11 placeholders.
+- **Ported `domain/**` verbatim** (logic byte-identical; only import specifiers
+  adjusted for the new layout): all `*View.ts` view-models, the JQL parser
+  (`parse/query`), RBAC (`permissions`), diff/think/slash/worktree parsers,
+  command core, model capabilities, CI formatting, session/workspace logic, and
+  `format.ts` (minus the DOM `download()`, per §6). **All ported unit tests came
+  with them: 178 pass / 0 fail across 27 files** (`tsx --test`, verbatim).
 
 ---
 
