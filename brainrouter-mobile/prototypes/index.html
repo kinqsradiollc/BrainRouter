@@ -6,65 +6,58 @@
 <title>BrainRouter Mobile — Prototype Gallery</title>
 <style>
   :root{
-    --bg:hsl(240 6% 5%); --surface:hsl(240 5% 9%); --raised:hsl(240 5% 13%);
-    --border:hsl(240 5% 15%); --border2:hsl(240 5% 21%);
-    --text:hsl(0 0% 96%); --dim:hsl(240 5% 72%); --faint:hsl(240 4% 50%);
-    --accent:hsl(245 80% 66%); --accent-soft:hsla(245 80% 66% / .14);
-    --brand:hsl(16 65% 58%); --ok:hsl(142 60% 45%);
-    --r-md:14px; --font:-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",Roboto,sans-serif;
+    --base:#0B0D0F; --raised:#14171A; --overlay:#1E2227;
+    --border:rgba(255,255,255,0.08); --border-strong:rgba(255,255,255,0.14);
+    --text:#ECEFF2; --text-2:#9BA3AC; --muted:#5E6670;
+    --accent:#34C28E; --accent-wash:rgba(52,194,142,0.14);
+    --warn:#D9A441; --r-card:10px;
+    --font:'Geist',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+    --mono:'Geist Mono',ui-monospace,'SF Mono','Cascadia Code',Consolas,monospace;
   }
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);padding:40px 20px 80px}
+  body{margin:0;background:var(--base);color:var(--text);font-family:var(--font);padding:40px 20px 80px}
   .wrap{max-width:1000px;margin:0 auto}
-  header{margin-bottom:8px}
-  h1{font-size:26px;margin:0 0 6px;font-weight:700}
-  h1 .b{color:var(--brand)}
-  .lede{color:var(--dim);font-size:14px;line-height:1.6;max-width:760px;margin:0 0 6px}
-  .note{color:var(--faint);font-size:12.5px;line-height:1.6;max-width:760px;margin:8px 0 0;
-    border-left:2px solid var(--border2);padding-left:12px}
-  .note a{color:var(--accent);text-decoration:none}
-  h2{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--faint);
-    margin:36px 0 14px;border-bottom:1px solid var(--border);padding-bottom:8px}
-  h2 .c{color:var(--accent);margin-left:8px;letter-spacing:0;text-transform:none;font-size:12px}
+  h1{font-size:26px;margin:0 0 6px;font-weight:600;letter-spacing:-.02em}
+  .lede{color:var(--text-2);font-size:14px;line-height:1.6;max-width:760px;margin:0 0 6px}
+  .note{color:var(--muted);font-size:12.5px;line-height:1.6;max-width:760px;margin:8px 0 0;border-left:2px solid var(--border-strong);padding-left:12px}
+  .note a,.lede a{color:var(--accent);text-decoration:none}
+  h2{font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin:36px 0 14px;border-bottom:1px solid var(--border);padding-bottom:8px;font-family:var(--mono)}
+  h2 .c{color:var(--accent);margin-left:8px;letter-spacing:0}
   .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
-  a.card{display:block;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);
-    padding:14px 15px;text-decoration:none;color:var(--text);transition:.15s;position:relative}
-  a.card:hover{border-color:var(--accent);background:var(--raised);transform:translateY(-2px)}
-  .id{font-family:ui-monospace,monospace;font-size:11px;font-weight:700;color:var(--accent);letter-spacing:.5px}
-  .card.star .id{color:var(--brand)}
-  .ti{font-size:14px;font-weight:600;margin:5px 0 4px;line-height:1.35}
-  .ds{font-size:12px;color:var(--dim);line-height:1.45}
-  .mtag{position:absolute;top:12px;right:12px;font-size:9px;font-weight:700;letter-spacing:.5px;
-    color:var(--faint);border:1px solid var(--border2);border-radius:5px;padding:1px 5px}
-  .mtag.mvp{color:var(--ok);border-color:var(--ok)}
-  .star-badge{display:inline-block;font-size:9px;font-weight:700;color:var(--brand);border:1px solid var(--brand);
-    border-radius:5px;padding:1px 5px;margin-left:6px;vertical-align:1px}
-  footer{margin-top:48px;color:var(--faint);font-size:12px;line-height:1.7}
+  a.card{display:block;background:var(--raised);border:1px solid var(--border);border-radius:var(--r-card);padding:14px 15px;text-decoration:none;color:var(--text);transition:.15s cubic-bezier(.2,.8,.2,1);position:relative;box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
+  a.card:hover{border-color:var(--accent);background:var(--overlay);transform:translateY(-2px)}
+  .id{font-family:var(--mono);font-size:11px;font-weight:500;color:var(--accent);letter-spacing:.5px}
+  .ti{font-size:14px;font-weight:500;margin:5px 0 4px;line-height:1.35;letter-spacing:-.01em}
+  .ds{font-size:12px;color:var(--text-2);line-height:1.45}
+  .mtag{position:absolute;top:12px;right:12px;font-family:var(--mono);font-size:9px;font-weight:500;letter-spacing:.5px;color:var(--muted);border:1px solid var(--border-strong);border-radius:4px;padding:1px 5px}
+  .mtag.mvp{color:var(--accent);border-color:rgba(52,194,142,.4)}
+  .star-badge{display:inline-block;font-family:var(--mono);font-size:9px;font-weight:500;color:var(--accent);border:1px solid rgba(52,194,142,.4);border-radius:4px;padding:1px 5px;margin-left:6px;vertical-align:1px}
+  footer{margin-top:48px;color:var(--muted);font-size:12px;line-height:1.7}
+  footer code{font-family:var(--mono);color:var(--text-2)}
   .docs{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
-  .docs a{font-size:12px;color:var(--accent);text-decoration:none;background:var(--surface);
-    border:1px solid var(--border);border-radius:8px;padding:6px 11px}
+  .docs a{font-size:12px;color:var(--accent);text-decoration:none;background:var(--raised);border:1px solid var(--border);border-radius:6px;padding:6px 11px}
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1>Brain<span class="b">Router</span> Mobile — Prototype Gallery</h1>
-    <p class="lede">Clickable, standalone HTML prototypes of the React Native (Expo) port of the BrainRouter desktop app.
+    <h1>BrainRouter Mobile — Prototype Gallery</h1>
+    <p class="lede">Clickable, standalone prototypes of the React Native (Expo) port of the BrainRouter desktop app.
       <b>User flows</b> are multi-screen click-throughs (tap the highlighted control to advance); <b>user stories</b>
       show a feature's key screen + state. Every screen maps to real desktop functionality — nothing here is invented.</p>
-    <p class="note">Scope: <b>MVP-first, parity over time</b>. The mobile app is a <b>thin client to a remote host</b> running the
-      agent runtime — see <a href="../docs/technical-doc.md">technical-doc.md</a> and <a href="../docs/investigation-summary.md">investigation-summary.md</a>.</p>
+    <p class="note">Design language: <a href="../../docs/design/DESIGN-expo.md">DESIGN-expo.md</a> — "The Memory Instrument" (near-monochrome, one <b>Signal</b> accent, mono for data).
+      Icons are the <b>real desktop set</b> (<code>brainrouter-desktop/src/icons.tsx</code>, DESK-4k). The app is a <b>thin client to a remote host</b> — see <a href="../docs/technical-doc.md">technical-doc.md</a>.</p>
     <div class="docs">
       <a href="../docs/ui-spec.md">UI Spec</a><a href="../docs/user-stories.md">User Stories</a>
       <a href="../docs/user-flows.md">User Flows</a><a href="../docs/ux-enhancements.md">UX Enhancements</a>
       <a href="../docs/technical-doc.md">Technical Doc</a><a href="../docs/workflows.md">Workflows</a>
-      <a href="../docs/roadmap.md">Roadmap</a><a href="../CHANGELOG.md">Changelog</a>
+      <a href="../docs/roadmap.md">Roadmap</a><a href="../../docs/design/DESIGN-expo.md">DESIGN-expo</a>
     </div>
   </header>
 
   <h2>User Flows <span class="c">multi-screen click-throughs</span></h2>
   <div class="grid">
-    <a class="card star" href="flow-UF-03.html"><div class="mtag mvp">MVP</div><span class="id">UF-03</span><span class="star-badge">★ START HERE</span><div class="ti">Core loop — send → work → approve</div><div class="ds">The heart of the app: send a turn, watch it stream, approve a tool, see the changeset.</div></a>
+    <a class="card" href="flow-UF-03.html"><div class="mtag mvp">MVP</div><span class="id">UF-03</span><span class="star-badge"><svg width="9" height="9" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px"><path d="M8 1.5 9.3 6 14 8l-4.7 2L8 14.5 6.7 10 2 8l4.7-2L8 1.5Z"/></svg> START HERE</span><div class="ti">Core loop — send → work → approve</div><div class="ds">The heart of the app: send a turn, watch it stream, approve a tool, see the changeset.</div></a>
     <a class="card" href="flow-UF-01.html"><div class="mtag mvp">MVP</div><span class="id">UF-01</span><div class="ti">First-run pairing → projects</div><div class="ds">Connect to a host with URL/token or QR, then land on your projects.</div></a>
     <a class="card" href="flow-UF-02.html"><div class="mtag mvp">MVP</div><span class="id">UF-02</span><div class="ti">Resume a session & manage it</div><div class="ds">Open a session; long-press for pin/rename/fork/archive/export.</div></a>
     <a class="card" href="flow-UF-04.html"><div class="mtag mvp">MVP</div><span class="id">UF-04</span><div class="ti">Plan review & approval</div><div class="ds">Read the agent's plan; approve or request changes.</div></a>
@@ -122,7 +115,7 @@
   </div>
 
   <footer>
-    47 prototypes · 14 flows + 33 stories · one shared design system (tokens mirror <code>brainrouter-desktop/src/theme.css</code>).<br/>
+    47 prototypes · 14 flows + 33 stories · "Memory Instrument" design system (<code>docs/design/DESIGN-expo.md</code>), real desktop icons (<code>DESK-4k</code>).<br/>
     Future-milestone surfaces (Annotations, Artifacts, Schedules, Worktrees, Track board, in-app Editor, Terminal) are sequenced in the roadmap and intentionally not yet prototyped.
   </footer>
 </div>
