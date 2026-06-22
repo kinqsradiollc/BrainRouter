@@ -11,7 +11,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ReactFlow, Background, Controls, MiniMap, type Edge, type Node, type ReactFlowInstance } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type { AtlasGraph, AtlasNodeType } from "@kinqs/brainrouter-types";
-import { atlasLayout, atlasNodeColor, atlasViewModel } from "../lib/atlas/atlasView.js";
+import { atlasLayout, atlasNodeColor, atlasSearchMatches, atlasViewModel } from "../lib/atlas/atlasView.js";
 import { AtlasDetail } from "./AtlasDetail.js";
 import { Icon } from "../icons.js";
 
@@ -32,6 +32,7 @@ export interface AtlasPanelProps {
 export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnrich, onSelectNode, onLoad }: AtlasPanelProps): React.ReactElement {
   const [selected, setSelected] = useState<string | null>(null);
   const [tourStep, setTourStep] = useState<number | null>(null); // null = not touring
+  const [query, setQuery] = useState("");
   const rfRef = useRef<ReactFlowInstance | null>(null);
 
   useEffect(() => {
@@ -81,25 +82,49 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
     return { nodes, edges, shown: vm.shown, total: vm.total, types };
   }, [graph]);
 
-  // While touring, spotlight the step's nodes and dim the rest.
+  // Search matches, mapped to the rendered (file-level) nodes that should light
+  // up — a matched symbol spotlights its containing file. Tour overrides search.
+  const searchIds = useMemo(() => {
+    if (tourStep != null || !graph || !query.trim()) return null;
+    const renderedIds = new Set((view?.nodes ?? []).map((n) => n.id));
+    const fileIdByPath = new Map(
+      graph.nodes.filter((n) => renderedIds.has(n.id) && n.filePath).map((n) => [n.filePath as string, n.id] as const),
+    );
+    const byId = new Map(graph.nodes.map((n) => [n.id, n] as const));
+    const out = new Set<string>();
+    for (const id of atlasSearchMatches(graph, query)) {
+      if (renderedIds.has(id)) out.add(id);
+      else {
+        const fp = byId.get(id)?.filePath;
+        const fid = fp ? fileIdByPath.get(fp) : undefined;
+        if (fid) out.add(fid);
+      }
+    }
+    return out;
+  }, [graph, query, tourStep, view]);
+
+  // Whatever set is currently spotlit (tour step, else search). null = show all.
+  const spotlightIds = useMemo(() => tourIds ?? searchIds, [tourIds, searchIds]);
+
+  // Spotlight the tour-step / search-match nodes and dim the rest.
   const displayNodes = useMemo(() => {
     const base = view?.nodes ?? [];
-    if (!tourIds) return base;
+    if (!spotlightIds) return base;
     return base.map((n) => ({
       ...n,
       style: {
         ...n.style,
-        opacity: tourIds.has(n.id) ? 1 : 0.16,
-        boxShadow: tourIds.has(n.id) ? "0 0 0 3px var(--accent)" : undefined,
+        opacity: spotlightIds.has(n.id) ? 1 : 0.16,
+        boxShadow: spotlightIds.has(n.id) ? "0 0 0 3px var(--accent)" : undefined,
       },
     }));
-  }, [view, tourIds]);
+  }, [view, spotlightIds]);
 
-  // Pan/zoom to the current step's nodes when the step changes.
+  // Pan/zoom to fit the spotlit nodes whenever that set changes.
   useEffect(() => {
-    if (tourStep == null || !tourIds || !rfRef.current || tourIds.size === 0) return;
-    rfRef.current.fitView({ nodes: [...tourIds].map((id) => ({ id })), duration: 500, padding: 0.45 });
-  }, [tourStep, tourIds]);
+    if (!rfRef.current || !spotlightIds || spotlightIds.size === 0) return;
+    rfRef.current.fitView({ nodes: [...spotlightIds].map((id) => ({ id })), duration: 450, padding: 0.45 });
+  }, [spotlightIds]);
 
   if (!graph) {
     return (
@@ -126,6 +151,19 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
           <span className="atlas-count atlas-enriched" title={`${enrichedCount} files summarised`}>
             · {graph.layers.length} layers · {graph.tour.length} tour
           </span>
+        ) : null}
+        {tourStep == null ? (
+          <label className="atlas-search">
+            <Icon name="search" size={12} />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Escape") setQuery(""); }}
+              placeholder="Search files…"
+              spellCheck={false}
+            />
+            {query.trim() ? <span className="atlas-search-count">{searchIds?.size ?? 0}</span> : null}
+          </label>
         ) : null}
         <span className="atlas-spacer" />
         {graph.tour.length ? (

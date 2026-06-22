@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { AtlasGraph } from '@kinqs/brainrouter-types';
-import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize, atlasNodeFacts } from './atlasView.js';
+import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize, atlasNodeFacts, atlasSearchMatches } from './atlasView.js';
 
 function fixture(): AtlasGraph {
   return {
@@ -112,4 +112,29 @@ test('atlasNodeFacts: symbols, imports in/out, and layer membership', () => {
   assert.equal(c.symbols.length, 0);
 
   assert.equal(atlasNodeFacts(g, 'file:nope.ts'), null);
+});
+
+test('atlasSearchMatches ranks by name, path, summary, tags', () => {
+  const g = fixture();
+  g.nodes[0].summary = 'the main router'; // file:a.ts
+  g.nodes[0].tags = ['entrypoint'];
+
+  assert.deepEqual(atlasSearchMatches(g, ''), []);
+  assert.deepEqual(atlasSearchMatches(g, '   '), []);
+
+  // exact symbol-name match
+  assert.deepEqual(atlasSearchMatches(g, 'foo'), ['function:a.ts:foo']);
+
+  // name-exact ranks above path-substring
+  const ats = atlasSearchMatches(g, 'a.ts');
+  assert.equal(ats[0], 'file:a.ts');
+  assert.ok(ats.includes('function:a.ts:foo'));
+
+  // summary + tag + config name substring
+  assert.ok(atlasSearchMatches(g, 'router').includes('file:a.ts'));
+  assert.ok(atlasSearchMatches(g, 'entrypoint').includes('file:a.ts'));
+  assert.ok(atlasSearchMatches(g, 'package').includes('config:pkg'));
+
+  // no match
+  assert.deepEqual(atlasSearchMatches(g, 'zzzznope'), []);
 });
