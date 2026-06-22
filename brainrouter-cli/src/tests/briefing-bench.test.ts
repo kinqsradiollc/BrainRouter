@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decideMemoryBriefing } from '../memory/briefingTriggers.js';
-import { compactToolOutput } from '../prompt/toolCompaction.js';
-import { buildMemoryBriefing } from '../memory/briefing.js';
+import { decideMemoryBriefing } from '@kinqs/brainrouter-core/dist/memory/briefingTriggers.js';
+import { compactToolOutput } from '@kinqs/brainrouter-core/dist/prompt/toolCompaction.js';
+import { buildMemoryBriefing } from '@kinqs/brainrouter-core/dist/memory/briefing.js';
 
 /**
  * Stub MCP client. Each scenario configures which tools "exist" via the
@@ -242,14 +242,14 @@ test('briefing bench: persona tool absent → skippedSources records the gap', a
 });
 
 test('briefing bench: cli.personaAnchor=off suppresses persona from default plan', async () => {
-  const { buildDefaultSourcePlan, describeSourcePlan } = await import('../memory/briefing.js');
+  const { buildDefaultSourcePlan, describeSourcePlan } = await import('@kinqs/brainrouter-core/dist/memory/briefing.js');
   const plan = buildDefaultSourcePlan('start this task', false, { personaAnchorConfig: 'off' });
   assert.equal(plan.includeCoreIdentity, false);
   assert.ok(!describeSourcePlan(plan).includes('memory_persona'));
 });
 
 test('briefing bench: personaAnchorPreference=false overrides config=on', async () => {
-  const { buildDefaultSourcePlan } = await import('../memory/briefing.js');
+  const { buildDefaultSourcePlan } = await import('@kinqs/brainrouter-core/dist/memory/briefing.js');
   const plan = buildDefaultSourcePlan('start this task', false, {
     personaAnchorConfig: 'on',
     personaAnchorPreference: false,

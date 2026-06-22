@@ -1,5 +1,8 @@
 import readline from 'node:readline';
 import { getAmbientChat } from './ink/ambientChat.js';
+// §ADR-003 — NoTTYError now lives in core (the headless engine throws it too),
+// so the CLI and core share ONE class and instanceof checks stay valid.
+import { NoTTYError, type InteractivePrompter } from '@kinqs/brainrouter-core/dist/agent/prompter.js';
 
 /**
  * Shared bridge between the REPL's readline interface and modules outside
@@ -66,12 +69,9 @@ export function askYesNo(question: string, defaultValue = false): Promise<boolea
  * itself — silently picking option 1 for the agent in CI / piped runs would
  * make a load-bearing decision the user never saw.
  */
-export class NoTTYError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'NoTTYError';
-  }
-}
+// Re-exported from core (single source of truth) so existing
+// `import { NoTTYError } from '.../cliPrompt.js'` sites keep working.
+export { NoTTYError };
 
 /**
  * Surfaced when the user pressed Esc / q / Ctrl+C inside the picker.
@@ -553,3 +553,8 @@ export function safePrintAbovePrompt(msg: string): void {
   console.log(msg);
   try { (activeReadline as any)._refreshLine?.(); } catch { activeReadline.prompt(true); }
 }
+
+// §ADR-003 — the TTY-backed prompter the CLI injects into the Agent, so the
+// headless engine can ask the user through this port instead of importing the
+// CLI's readline/ink layer directly.
+export const cliPrompter: InteractivePrompter = { getActiveReadline, askYesNo, askChoice };

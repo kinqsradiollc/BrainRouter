@@ -4,6 +4,7 @@ import path from "node:path";
 import { memoryEngine } from "../../memory/engine.js";
 import { hashPassword, signJwt, verifyJwt, verifyPassword } from "../auth/crypto.js";
 import { JWT_SECRET, requireJwt, type AuthedRequest } from "../middleware/auth.js";
+import { sendError } from "../../contracts/http.js";
 
 // Short-lived access token (default 1h) + long-lived refresh token (default 30d).
 // The client silently mints a fresh access token from the refresh token, so the
@@ -49,23 +50,23 @@ authRouter.post("/signin", async (req, res) => {
   const email = String(req.body?.email ?? "").trim();
   const password = String(req.body?.password ?? "");
   if (!email || !password) {
-    res.status(400).json({ error: "email and password are required" });
+    sendError(res, 400, "email and password are required");
     return;
   }
 
   const user = memoryEngine.getUserByEmail(email);
   if (!user || !user.passwordHash) {
-    res.status(401).json({ error: "Invalid email or password" });
+    sendError(res, 401, "Invalid email or password");
     return;
   }
   if (user.status === "disabled") {
-    res.status(403).json({ error: "Account disabled" });
+    sendError(res, 403, "Account disabled");
     return;
   }
 
   const ok = await verifyPassword(password, user.passwordHash);
   if (!ok) {
-    res.status(401).json({ error: "Invalid email or password" });
+    sendError(res, 401, "Invalid email or password");
     return;
   }
 
@@ -79,23 +80,23 @@ authRouter.post("/signup", async (req, res) => {
   const displayName = String(req.body?.displayName ?? "").trim();
 
   if (!email || !password) {
-    res.status(400).json({ error: "email and password are required" });
+    sendError(res, 400, "email and password are required");
     return;
   }
   if (email.length > 254) {
-    res.status(400).json({ error: "Email too long" });
+    sendError(res, 400, "Email too long");
     return;
   }
   if (password.length < 8) {
-    res.status(400).json({ error: "Password must be at least 8 characters" });
+    sendError(res, 400, "Password must be at least 8 characters");
     return;
   }
   if (displayName.length > 100) {
-    res.status(400).json({ error: "Display name too long" });
+    sendError(res, 400, "Display name too long");
     return;
   }
   if (memoryEngine.getUserByEmail(email)) {
-    res.status(409).json({ error: "Email already registered" });
+    sendError(res, 409, "Email already registered");
     return;
   }
 
@@ -109,31 +110,31 @@ authRouter.post("/signup", async (req, res) => {
     memoryEngine.updatePassword(created.userId, passwordHash);
     const user = memoryEngine.getUserById(created.userId);
     if (!user) {
-      res.status(500).json({ error: "Failed to load user after signup" });
+      sendError(res, 500, "Failed to load user after signup");
       return;
     }
 
     const jwt = createJwt(user);
     res.status(201).json({ jwt, refreshToken: createRefreshToken(user.userId), userId: user.userId, isAdmin: user.isAdmin, displayName: user.displayName });
   } catch (error: any) {
-    res.status(400).json({ error: error?.message ?? "Failed to create user" });
+    sendError(res, 400, error?.message ?? "Failed to create user");
   }
 });
 
 authRouter.post("/refresh", (req, res) => {
   const refreshToken = String(req.body?.refreshToken ?? "");
   if (!refreshToken) {
-    res.status(400).json({ error: "refreshToken is required" });
+    sendError(res, 400, "refreshToken is required");
     return;
   }
   const payload = verifyJwt(refreshToken, JWT_SECRET);
   if (!payload || payload.type !== "refresh" || typeof payload.userId !== "string") {
-    res.status(401).json({ error: "Invalid or expired refresh token" });
+    sendError(res, 401, "Invalid or expired refresh token");
     return;
   }
   const user = memoryEngine.getUserById(payload.userId);
   if (!user || user.status === "disabled") {
-    res.status(401).json({ error: "Account not found or disabled" });
+    sendError(res, 401, "Account not found or disabled");
     return;
   }
   // Rotate: hand back a fresh access token AND a fresh refresh token.
@@ -149,7 +150,7 @@ authRouter.post("/signout", (_req, res) => {
 authRouter.get("/me", requireJwt, (req: AuthedRequest, res) => {
   const user = memoryEngine.getUserById(req.userId!);
   if (!user) {
-    res.status(404).json({ error: "User not found" });
+    sendError(res, 404, "User not found");
     return;
   }
   res.json({
@@ -168,11 +169,11 @@ authRouter.get("/me", requireJwt, (req: AuthedRequest, res) => {
 authRouter.put("/me", requireJwt, (req: AuthedRequest, res) => {
   const displayName = String(req.body?.displayName ?? "").trim();
   if (!displayName) {
-    res.status(400).json({ error: "displayName required" });
+    sendError(res, 400, "displayName required");
     return;
   }
   if (displayName.length > 100) {
-    res.status(400).json({ error: "Display name too long" });
+    sendError(res, 400, "Display name too long");
     return;
   }
   memoryEngine.updateUserDisplayName(req.userId!, displayName);

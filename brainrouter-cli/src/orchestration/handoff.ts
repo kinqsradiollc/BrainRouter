@@ -14,7 +14,7 @@
  * unit-test without a live brain.
  */
 
-import type { ParentExecutionContextSnapshot } from "./parentContext.js";
+import type { ParentExecutionContextSnapshot } from "@kinqs/brainrouter-core/dist/orchestration/parentContext.js";
 
 export interface HandoffPacket {
   /** The goal/task text being handed off. */

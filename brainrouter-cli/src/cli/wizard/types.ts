@@ -20,7 +20,7 @@
  */
 
 import type { ThemeMode } from '../theme.js';
-import type { ProviderEntry } from './providers.js';
+import type { ProviderEntry } from '@kinqs/brainrouter-core/dist/provider/catalog.js';
 
 export type Step =
   | 'welcome'

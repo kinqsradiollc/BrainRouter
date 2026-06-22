@@ -7,9 +7,9 @@ import {
   resolveDelegationPolicy,
   evaluateDelegationGate,
   isDelegationPolicy,
-} from '../orchestration/delegationPolicy.js';
+} from '@kinqs/brainrouter-core/dist/orchestration/delegationPolicy.js';
 import { tryHandleOrchestrationCommand } from '../cli/commands/orchestration.js';
-import { readPreferences } from '../state/preferencesStore.js';
+import { readPreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
 
 test('isDelegationPolicy validates the enum', () => {
   for (const p of ['auto', 'ask-before-spawn', 'ask-before-write-child', 'no-children']) {

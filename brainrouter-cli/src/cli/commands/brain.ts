@@ -17,7 +17,7 @@
  */
 
 import chalk from 'chalk';
-import { callMcpTool } from '../../runtime/mcpUtils.js';
+import { callMcpTool } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
 import type { CommandContext } from './_context.js';
 
 interface BrainAgentStatusRow {

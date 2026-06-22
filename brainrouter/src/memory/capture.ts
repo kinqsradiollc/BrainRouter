@@ -13,7 +13,7 @@ import { runAsJob, recordInlineJob } from "./scheduler/runner.js";
 import { resolveDedupMode, contentHash, isDuplicate, type DedupCandidate } from "./pipeline/apply-dedup.js";
 import type { EmbeddingService } from "./store/embedding.js";
 import { NeuralSparkEngine } from "./pipeline/neural-spark.js";
-import { redactSensitiveMemoryText } from "./redaction.js";
+import { redactSensitiveMemoryText } from "./util/redaction.js";
 import { ingestSource, type SourceIngestStore } from "./source/ingest.js";
 import { attributeRecordToChunks, readProvenanceConfig, type AttributableChunk } from "./source/attribution.js";
 import crypto from "node:crypto";
@@ -55,6 +55,16 @@ export class MemoryCapturePipeline {
     private embeddingService: EmbeddingService,
     private extractEveryNTurns: number = 3
   ) {}
+
+  /**
+   * MEM-NONBLOCK — per-(userId,sessionKey) in-flight guard. Cognitive extraction
+   * is dispatched in the BACKGROUND (capture replies immediately), so two rapid
+   * captures for the same session must not both pull the same unextracted
+   * sensory window and double-extract. While an extraction is running for a key,
+   * later captures skip the trigger (the in-flight run, the every-N threshold,
+   * and the extraction sweeper all re-cover the backlog).
+   */
+  private readonly extractionInFlight = new Set<string>();
 
   public async captureTurn(params: {
     userId: string;
@@ -103,11 +113,33 @@ export class MemoryCapturePipeline {
     let cognitiveExtractionError: string | undefined;
 
     if (unextractedCount >= this.extractEveryNTurns) {
-      const result = await this.extractPendingSensory({ userId, sessionKey, sessionId, activeSkill, skillHints });
-      cognitiveExtractionTriggered = result.triggered;
-      cognitiveExtractedCount = result.extractedCount;
-      cognitiveExtractionStatus = result.status;
-      cognitiveExtractionError = result.errorMessage;
+      // MEM-NONBLOCK — extraction is a slow, network-bound LLM chain (extract →
+      // dedup → per-record graph/contradiction/focus) that the caller never
+      // consumes. Running it inline blocked the MCP reply for up to the LLM
+      // timeout (2 min cloud / 10 min local), so a client that disconnected
+      // sooner caused "Dropped MCP response (client disconnected before reply)".
+      // The sensory rows the caller cares about are already written above, so
+      // dispatch extraction in the BACKGROUND (guarded against concurrent
+      // double-extraction) and reply immediately. Set BRAINROUTER_INLINE_EXTRACTION=on
+      // to restore the old blocking behaviour for debugging.
+      cognitiveExtractionTriggered = true;
+      const inflightKey = `${userId}${sessionKey}`;
+      if (process.env.BRAINROUTER_INLINE_EXTRACTION === "on") {
+        const result = await this.extractPendingSensory({ userId, sessionKey, sessionId, activeSkill, skillHints });
+        cognitiveExtractedCount = result.extractedCount;
+        cognitiveExtractionStatus = result.status;
+        cognitiveExtractionError = result.errorMessage;
+      } else if (!this.extractionInFlight.has(inflightKey)) {
+        this.extractionInFlight.add(inflightKey);
+        void this.extractPendingSensory({ userId, sessionKey, sessionId, activeSkill, skillHints })
+          .catch((err: unknown) => console.error("[BrainRouter] background extraction failed:", err instanceof Error ? err.message : err))
+          .finally(() => this.extractionInFlight.delete(inflightKey));
+        cognitiveExtractionStatus = "deferred";
+      } else {
+        // An extraction for this session is already running — the in-flight run
+        // (and the extraction sweeper) will pick up this window's records too.
+        cognitiveExtractionStatus = "deferred";
+      }
     }
 
     return {

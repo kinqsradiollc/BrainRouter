@@ -9,10 +9,15 @@ import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
 import { spinner as makeSpinner } from '../spinner.js';
 import { marked } from 'marked';
-import { listTranscripts, loadTranscript } from '../../state/sessionStore.js';
+import { listTranscripts, loadTranscript } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
+import { exportTranscriptMarkdown, exportTranscriptJson, exportFileName, type ExportFormat } from '@kinqs/brainrouter-core/dist/session/transcriptExport.js';
+import { searchTranscript, formatMatches } from '@kinqs/brainrouter-core/dist/session/transcriptSearch.js';
+import { readPlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
+import { buildRecap } from '@kinqs/brainrouter-core/dist/session/sessionRecap.js';
+import { listChapters, formatChapters } from '@kinqs/brainrouter-core/dist/session/chapterMarks.js';
 import { buildRewindTimeline, truncateAtTurn } from '../../runtime/rewindTimeline.js';
-import { planRestore, readFileMutations } from '../../state/fileSnapshotStore.js';
-import { readGoal, resumeGoal } from '../../state/goalStore.js';
+import { planRestore, readFileMutations } from '@kinqs/brainrouter-core/dist/storage/fileSnapshotStore.js';
+import { readGoal, resumeGoal } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
 import { askYesNo } from '../cliPrompt.js';
 import { buildGoalKickoffPrompt } from './_helpers.js';
 import type { CommandContext } from './_context.js';
@@ -41,6 +46,92 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
         console.log(chalk.gray('\nResume one with: /resume <sessionKey>'));
       }
       console.log();
+      return true;
+    }
+    case '/find':
+    {
+      // CC-P1.4 — search the current session transcript.
+      // Usage: /find <query>  (case-insensitive; quotes not required)
+      const query = args.join(' ').trim();
+      if (!query) {
+        console.log(chalk.red('\nUsage: /find <query> — search this session\'s transcript.\n'));
+        return true;
+      }
+      const entries = loadTranscript(agent.workspaceRoot, agent.sessionKey);
+      if (entries.length === 0) {
+        console.log(chalk.yellow('\nNothing to search — this session has no transcript yet.\n'));
+        return true;
+      }
+      const matches = searchTranscript(entries, query);
+      console.log(chalk.bold(`\nMatches for "${query}" (${matches.length}${matches.length === 50 ? '+' : ''} of ${entries.length} entries):\n`));
+      for (const line of formatMatches(matches, query)) {
+        // Highlight the query inside the snippet for scanability.
+        const re = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'ig');
+        console.log(line.replace(re, (m) => chalk.bgYellow.black(m)));
+      }
+      console.log(chalk.gray('\nTip: /transcript <#> shows an entry in full; /export-chat saves the whole session.\n'));
+      return true;
+    }
+    case '/chapters':
+    {
+      // CC-P12.3 — table of contents from mark_chapter markers.
+      const entries = loadTranscript(agent.workspaceRoot, agent.sessionKey);
+      const marks = listChapters(entries);
+      console.log(chalk.bold(`\nChapters (${marks.length}):\n`));
+      for (const line of formatChapters(marks)) console.log(line);
+      console.log(chalk.gray('\nTip: /transcript shows entries around an [#index]; mark_chapter is the agent-side tool.\n'));
+      return true;
+    }
+    case '/recap':
+    {
+      // CC-P2.4 — instant "where was I?" summary (no LLM call).
+      const entries = loadTranscript(agent.workspaceRoot, agent.sessionKey);
+      if (entries.length === 0) {
+        console.log(chalk.yellow('\nNothing to recap — this session has no transcript yet.\n'));
+        return true;
+      }
+      let plan = null;
+      try { plan = readPlan(agent.workspaceRoot, agent.sessionKey); } catch { plan = null; }
+      const goal = readGoal(agent.workspaceRoot, agent.sessionKey);
+      const lines = buildRecap({
+        entries,
+        plan,
+        goalText: goal?.text ?? null,
+        goalStatus: goal?.status ?? null,
+        sessionKey: agent.sessionKey,
+      });
+      console.log('');
+      for (const l of lines) console.log(l ? `  ${l}` : '');
+      console.log('');
+      return true;
+    }
+    case '/export-chat':
+    {
+      // CC-P1.6 — write the current session transcript to a shareable file.
+      // Usage: /export-chat [md|json] [path]  (`/export` is taken by memory dump)
+      const fmtArg = (args[0] ?? 'md').toLowerCase();
+      const format: ExportFormat = fmtArg === 'json' ? 'json' : 'md';
+      const entries = loadTranscript(agent.workspaceRoot, agent.sessionKey);
+      if (entries.length === 0) {
+        console.log(chalk.yellow('\nNothing to export — this session has no transcript yet.\n'));
+        return true;
+      }
+      const exportedAt = new Date().toISOString();
+      const meta = { sessionKey: agent.sessionKey, exportedAt };
+      const body = format === 'json'
+        ? exportTranscriptJson(entries, meta)
+        : exportTranscriptMarkdown(entries, meta);
+      const explicitPath = args.slice(format === fmtArg ? 1 : 0).join(' ').trim();
+      const outPath = explicitPath
+        ? path.resolve(agent.launchCwd ?? process.cwd(), explicitPath)
+        : path.resolve(agent.launchCwd ?? process.cwd(), exportFileName(agent.sessionKey, format, exportedAt));
+      try {
+        fs.mkdirSync(path.dirname(outPath), { recursive: true });
+        fs.writeFileSync(outPath, body, 'utf-8');
+        console.log(chalk.green(`\n✓ Exported ${entries.length} entries to ${chalk.cyan(outPath)}\n`));
+      } catch (err: any) {
+        console.log(chalk.red(`\nExport failed: ${err?.message ?? err}\n`));
+      }
       return true;
     }
     case '/resume':

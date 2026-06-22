@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { LOCAL_TOOLS } from '../agent/agent.js';
+import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/dist/agent/agent.js';
 import {
   askChoice,
   CancelledChoiceError,
@@ -12,7 +12,7 @@ import {
   renderPicker,
   setActiveReadline,
 } from '../cli/cliPrompt.js';
-import { ARTIFACT, createWorkflow, getWorkflowDir } from '../state/workflowArtifacts.js';
+import { ARTIFACT, createWorkflow, getWorkflowDir } from '@kinqs/brainrouter-core/dist/workflow/workflowArtifacts.js';
 import { withTempWorkspace } from './_helpers.js';
 
 // --- askChoice / ask_user_choice -----------------------------------------
@@ -256,11 +256,16 @@ test('LOCAL_TOOLS registers ask_user_choice with the expected schema shape', () 
   assert.ok(optionItem.properties.label, 'each option needs a label');
   assert.ok(optionItem.properties.description, 'each option needs a description');
   assert.ok(props.multiSelect, 'multiSelect should be exposed');
-  // header is required so the agent always provides a chip-style label,
-  // matching the AskUserQuestion shape we're modelling on.
-  assert.ok((tool!.inputSchema as any).required.includes('question'));
-  assert.ok((tool!.inputSchema as any).required.includes('header'));
-  assert.ok((tool!.inputSchema as any).required.includes('options'));
+  // PARITY-Q: the tool now accepts EITHER the single-question fields OR a
+  // batched `questions[]` array (asked in turn, answers returned together),
+  // so the single-form fields are no longer top-level `required` — the
+  // handler enforces "single OR batched, each well-formed" (covered by the
+  // agent-runtime/approval tests). The batched shape mirrors the single one.
+  assert.ok(props.questions, 'schema should expose the batched `questions` array');
+  assert.equal(props.questions.maxItems, 4, 'batched questions cap at 4');
+  const qItem = props.questions.items.properties;
+  assert.ok(qItem.question && qItem.header && qItem.options, 'each batched question needs question/header/options');
+  assert.deepEqual(props.questions.items.required, ['question', 'header', 'options']);
 });
 
 // --- /grill-me clarifying-questions slash command ------------------------

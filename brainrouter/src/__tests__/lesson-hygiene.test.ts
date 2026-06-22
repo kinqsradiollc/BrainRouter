@@ -6,7 +6,7 @@ import {
   normalizeSupersedes,
   normalizeLessonText,
   DEFAULT_STALENESS,
-} from "../memory/lessonHygiene.js";
+} from "../memory/lessons/lessonHygiene.js";
 
 describe("LESSON-HYGIENE deriveConflictKey", () => {
   it("strips leading stance words so polarity flips collide on the subject", () => {

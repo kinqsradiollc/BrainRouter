@@ -3,6 +3,7 @@ import type { LLMRunner, ContextualFocusRecord } from "@kinqs/brainrouter-types"
 import { FOCUS_SCENE_SYSTEM_PROMPT, formatFocusScenePrompt } from "../prompts/focus-scene.js";
 import { FOCUS_SCENE_CLUSTER_SYSTEM_PROMPT, formatFocusSceneClusterPrompt } from "../prompts/focus-scene-cluster.js";
 import { MAX_FOCUS_SCENES } from "../scheduler.js";
+import { extractJsonValue } from "../util/llm-json.js";
 import crypto from "node:crypto";
 
 async function canonicalizeFocusNames(params: {
@@ -22,10 +23,8 @@ async function canonicalizeFocusNames(params: {
       timeoutMs: 45_000,
     });
 
-    const jsonMatch = rawCluster.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) return;
-
-    const clusters = JSON.parse(jsonMatch[0]);
+    // Robust parse: tolerant of role-token leaks / prose / fences (see llm-json.ts).
+    const clusters = extractJsonValue(rawCluster, { kind: "array" });
     if (!Array.isArray(clusters)) return;
 
     for (const cluster of clusters) {

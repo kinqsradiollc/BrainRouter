@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectTaskIntent, getMemoryTypeConfig, TYPE_CONFIGS } from "../memory/memory-type-config.js";
+import { detectTaskIntent, getMemoryTypeConfig, TYPE_CONFIGS } from "../memory/config/memory-type-config.js";
 import {
   capPriority,
   normalizePriority,

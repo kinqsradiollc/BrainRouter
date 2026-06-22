@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseNextActionPlan, nextActionDirective } from '../prompt/nextAction.js';
+import { parseNextActionPlan, nextActionDirective } from '@kinqs/brainrouter-core/dist/prompt/nextAction.js';
 
 const VALID_PHASE_PLAN = {
   title: 'compare',

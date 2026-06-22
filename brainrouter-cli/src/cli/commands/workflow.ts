@@ -11,16 +11,21 @@ import { exec } from 'node:child_process';
 import chalk from 'chalk';
 import { spinner as makeSpinner } from '../spinner.js';
 import { marked } from 'marked';
-import { LOCAL_TOOLS } from '../../agent/agent.js';
-import { callMcpTool } from '../../runtime/mcpUtils.js';
-import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
-import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, listWorkflows, readArtifact, setCurrentWorkflow, slugify, updateWorkflowStatus, workflowExists } from '../../state/workflowArtifacts.js';
-import { readRun, summarizeRun, formatRunGlyphs, formatDuration, stepGlyph, reconcileStaleRuns, summarizePhases, formatPhaseGlyphs } from '../../state/workflowRun.js';
+import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import { callMcpTool } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
+import { listSessions, reconcileStale } from '@kinqs/brainrouter-core/dist/orchestration/orchestrator.js';
+import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, listWorkflows, readArtifact, setCurrentWorkflow, slugify, updateWorkflowStatus, workflowExists } from '@kinqs/brainrouter-core/dist/workflow/workflowArtifacts.js';
+import { readRun, summarizeRun, formatRunGlyphs, formatDuration, stepGlyph, reconcileStaleRuns, summarizePhases, formatPhaseGlyphs } from '@kinqs/brainrouter-core/dist/workflow/workflowRun.js';
 import { buildWorkflowRunKickoff, parseTemplateArgs, renderPhaseTimelineLines } from './workflowLaunch.js';
-import { clearGoal, completeGoal, editGoal, formatBudget, GoalConflictError, type GoalStatus, GoalTooLongError, GOAL_TEXT_MAX_CHARS, pauseGoal, readGoal, resumeGoal, setGoal, setGoalBudget, setGoalTokenBudget, type Goal } from '../../state/goalStore.js';
+import { clearGoal, completeGoal, editGoal, formatBudget, GoalConflictError, type GoalStatus, GoalTooLongError, GOAL_TEXT_MAX_CHARS, pauseGoal, readGoal, resumeGoal, setGoal, setGoalBudget, setGoalTokenBudget, type Goal } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
 import { askYesNo } from '../cliPrompt.js';
-import { DEFAULT_REVIEW_ROSTER, DEFAULT_REVIEW_THRESHOLD } from '../../orchestration/reviewSynthesis.js';
-import { formatPlan, readPlan, updatePlan } from '../../state/taskStore.js';
+import { DEFAULT_REVIEW_ROSTER, DEFAULT_REVIEW_THRESHOLD } from '@kinqs/brainrouter-core/dist/review/reviewSynthesis.js';
+import { hashDiff, reviewGate } from '@kinqs/brainrouter-core/dist/review/reviewModel.js';
+import { getLatestReview } from '@kinqs/brainrouter-core/dist/review/reviewStore.js';
+import { formatPlan, readPlan, updatePlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
+import { appendTranscriptEntry } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
+import { recordPlanDecision, readPlanHistory, diffSnapshots, linkPlanDecision, type PlanDecision } from '@kinqs/brainrouter-core/dist/task/planHistoryStore.js';
+import { emitAgentEvent } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 import { getLoopState, parseInterval, startLoop, stopLoop } from '../../runtime/loopRunner.js';
 import type { CommandContext } from './_context.js';
 import { SLASH_TO_SKILL } from '../../prompt/skillRunner.js';
@@ -220,13 +225,62 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         }
         return true;
       }
+      // §7 — plan approval/review: record a durable decision that snapshots the
+      // plan (the decision list is the version history), and return requested-
+      // change feedback to the session. Reusable decisions flow into memory.
+      if (args[0] === 'approve') {
+        const cur = readPlan(agent.workspaceRoot, agent.sessionKey);
+        if (cur.items.length === 0) { console.log(chalk.yellow('\nNo plan to approve — create one first.\n')); return true; }
+        const decision = recordPlanDecision(agent.workspaceRoot, agent.sessionKey, {
+          verdict: 'approved', planSnapshot: cur.items, explanation: cur.explanation, requirementId: cur.requirementId,
+        });
+        console.log(chalk.green(`\n✓ Plan approved — decision ${chalk.cyan(decision.id)} snapshotted ${cur.items.length} item${cur.items.length === 1 ? '' : 's'}.\n`));
+        await capturePlanDecision(ctx, decision);
+        return true;
+      }
+      if (args[0] === 'request-changes') {
+        const feedback = args.slice(1).join(' ').trim();
+        if (!feedback) { console.log(chalk.red('\nUsage: /plan request-changes <feedback…>\n')); return true; }
+        const cur = readPlan(agent.workspaceRoot, agent.sessionKey);
+        const decision = recordPlanDecision(agent.workspaceRoot, agent.sessionKey, {
+          verdict: 'changes-requested', feedback, planSnapshot: cur.items, explanation: cur.explanation, requirementId: cur.requirementId,
+        });
+        console.log(chalk.yellow(`\n↩ Changes requested — decision ${chalk.cyan(decision.id)}.`));
+        console.log(chalk.gray('  Feedback (returns to this session):'));
+        console.log(`  ${feedback}\n`);
+        await capturePlanDecision(ctx, decision);
+        return true;
+      }
+      if (args[0] === 'history') {
+        const decisions = readPlanHistory(agent.workspaceRoot, agent.sessionKey);
+        if (decisions.length === 0) { console.log(chalk.yellow('\nNo plan decisions yet. Use /plan approve or /plan request-changes.\n')); return true; }
+        console.log(chalk.bold('\nPlan history') + chalk.gray(` (${decisions.length})`));
+        decisions.forEach((d, i) => {
+          const verdict = d.verdict === 'approved' ? chalk.green('approved')
+            : d.verdict === 'revised' ? chalk.cyan('revised')
+            : chalk.yellow('changes-requested');
+          const actor = d.actor === 'auto' ? chalk.gray(' (auto)') : '';
+          console.log(`  ${chalk.cyan(d.id)} ${verdict}${actor} · ${d.planSnapshot.length} item${d.planSnapshot.length === 1 ? '' : 's'} · ${d.createdAt}`);
+          if (d.feedback) console.log(chalk.gray(`      “${d.feedback}”`));
+          if (i > 0) {
+            const diff = diffSnapshots(decisions[i - 1].planSnapshot, d.planSnapshot);
+            const parts: string[] = [];
+            if (diff.added.length) parts.push(chalk.green(`+${diff.added.length}`));
+            if (diff.removed.length) parts.push(chalk.red(`-${diff.removed.length}`));
+            if (diff.changed.length) parts.push(chalk.gray(`~${diff.changed.length} status`));
+            if (parts.length) console.log(chalk.gray(`      vs prev: `) + parts.join(' '));
+          }
+        });
+        console.log();
+        return true;
+      }
       const state = readPlan(agent.workspaceRoot, agent.sessionKey);
       console.log(chalk.bold('\nPlan:'));
       console.log(chalk.gray(formatPlan(state)));
       if (state.updatedAt) {
         console.log(chalk.gray(`Updated: ${state.updatedAt}`));
       }
-      console.log(chalk.gray('\nSubcommands: /plan | /plan clear\n'));
+      console.log(chalk.gray('\nSubcommands: /plan | /plan clear | /plan approve | /plan request-changes <text> | /plan history\n'));
       return true;
     }
     case '/diff':
@@ -289,6 +343,23 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       } catch (err: any) {
         spinner.fail(chalk.red(`Failed to read git status: ${err.message}`));
         return true;
+      }
+      // Review gate (shared with the desktop): block the commit when the local
+      // AI review is missing/stale or has unresolved critical/high findings,
+      // unless `--force`. The review store is shared, so a review run in the
+      // desktop gates the CLI commit and vice versa.
+      {
+        const { force } = parseForceFlag(args);
+        const gate = reviewGate(getLatestReview(agent.workspaceRoot), hashDiff(diffOut));
+        if (gate.blocked && !force) {
+          console.log(chalk.yellow(`\n⚠ Review gate — ${gate.reason}`));
+          for (const f of gate.blockingFindings.slice(0, 8)) {
+            console.log(chalk.gray(`  • [${f.severity}] ${f.file}${f.line ? `:${f.line}` : ''} — ${f.summary}`));
+          }
+          console.log(chalk.gray('  Run a local review and resolve/dismiss the findings (desktop Review panel), then retry — or `/commit --force` to bypass.\n'));
+          return true;
+        }
+        if (force && gate.blocked) console.log(chalk.gray('  (review gate bypassed with --force)\n'));
       }
       console.log(chalk.bold('\nGit changes detected:'));
       console.log(chalk.gray(statusOut));
@@ -906,7 +977,7 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       await agent.ensureInitialized();
       const ws = agent.workspaceRoot;
       const sk = agent.sessionKey;
-      const showStatus = (g: import('../../state/goalStore.js').Goal | null) => {
+      const showStatus = (g: import('@kinqs/brainrouter-core/dist/goal/goalStore.js').Goal | null) => {
         if (!g) {
           console.log(chalk.yellow('\nNo active goal. Set one with: /goal <outcome statement>\n'));
           console.log(chalk.gray('Outcome-first format works best:'));
@@ -1009,7 +1080,7 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
           return true;
         }
         try {
-          let g: import('../../state/goalStore.js').Goal | null;
+          let g: import('@kinqs/brainrouter-core/dist/goal/goalStore.js').Goal | null;
           if (field === 'text') {
             g = editGoal(ws, sk, { text: value });
           } else if (field === 'status') {
@@ -1075,7 +1146,7 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
           cleanedText = arg.replace(budgetMatch[0], '').replace(/\s{2,}/g, ' ').trim();
         }
       }
-      let goal: import('../../state/goalStore.js').Goal;
+      let goal: import('@kinqs/brainrouter-core/dist/goal/goalStore.js').Goal;
       try {
         goal = setGoal(ws, cleanedText, sk, parsedBudget !== undefined ? { maxIterations: parsedBudget } : undefined);
       } catch (err: any) {
@@ -1110,6 +1181,13 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         }
       }
       agent.refreshSystemPrompt();
+      // WS4 — record the goal text as the canonical (untagged) first user entry
+      // RIGHT NOW, before the kickoff turn fires. The sidebar lists a session
+      // only when its transcript exists, and titles it from the first untagged
+      // user message — so this both makes the goal session appear immediately
+      // and titles it by the goal (the kickoff prompt records after this, so it
+      // never wins the title). Best-effort: never block /goal on a transcript write.
+      try { appendTranscriptEntry(ws, sk, { role: 'user', content: goal.text }); } catch { /* listing is best-effort */ }
       console.log(chalk.green(`\n✓ Goal set: ${chalk.cyan(goal.text)}`));
 
       // Reconcile stale plan items from prior workflows. The plan store is
@@ -1123,19 +1201,22 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
       try {
         const existingPlan = readPlan(ws, sk);
         const orphans = existingPlan.items.filter((i) => i.status !== 'completed');
+        // Drop stale orphan items AND seed a visible starter item for the new
+        // goal in one write, so `/plan` shows the goal immediately (the agent
+        // replaces it via update_plan) rather than going momentarily empty.
+        updatePlan(
+          ws,
+          { plan: [{ step: goal.text.slice(0, 200), status: 'in_progress' }], explanation: `Goal kickoff — the agent will break this down via update_plan.` },
+          sk,
+        );
         if (orphans.length > 0) {
-          updatePlan(
-            ws,
-            { plan: [], explanation: `auto-cleared on new /goal: ${goal.text.slice(0, 80)}` },
-            sk,
-          );
           console.log(chalk.yellow(`⚠️  Cleared ${orphans.length} stale plan item${orphans.length === 1 ? '' : 's'} from prior work:`));
           for (const it of orphans.slice(0, 5)) {
             const mark = it.status === 'in_progress' ? '⏳' : '☐';
             console.log(chalk.gray(`     ${mark} ${it.step.slice(0, 100)}`));
           }
           if (orphans.length > 5) console.log(chalk.gray(`     …and ${orphans.length - 5} more.`));
-          console.log(chalk.gray(`   The agent can rebuild a new plan for this goal via update_plan.`));
+          console.log(chalk.gray(`   Seeded a fresh plan for this goal — the agent will refine it via update_plan.`));
         }
       } catch {
         // Plan reconciliation is best-effort — never fatal to the /goal flow.
@@ -1278,4 +1359,31 @@ export function normalizeSkillsList(payload: any): SkillListItem[] | undefined {
       if (typeof item.description === 'string') normalized.description = item.description;
       return normalized;
     });
+}
+
+/**
+ * §7 — capture a plan review decision into BrainRouter memory (best-effort) and
+ * link the returned memory id back onto the decision. A brain miss must never
+ * break the command.
+ */
+async function capturePlanDecision(ctx: CommandContext, decision: PlanDecision): Promise<void> {
+  try {
+    const memoryId = await emitAgentEvent(
+      { mcpClient: ctx.mcpClient, sessionKey: ctx.agent.sessionKey },
+      {
+        kind: 'agent_output',
+        summary: `Plan ${decision.verdict} (${decision.id}) — ${decision.planSnapshot.length} item(s)${decision.feedback ? `: ${decision.feedback}` : ''}`,
+        payload: {
+          planDecisionId: decision.id,
+          verdict: decision.verdict,
+          feedback: decision.feedback,
+          requirementId: decision.requirementId,
+          itemCount: decision.planSnapshot.length,
+        },
+      },
+    );
+    if (memoryId) linkPlanDecision(ctx.agent.workspaceRoot, ctx.agent.sessionKey, decision.id, memoryId);
+  } catch {
+    // advisory — never break the command
+  }
 }

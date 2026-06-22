@@ -2,6 +2,7 @@ import { Router } from "express";
 import { memoryEngine } from "../../memory/engine.js";
 import { requireAnyAuth, type AuthedRequest } from "../middleware/auth.js";
 import { decodeCursor, pageItems, PaginationQuerySchema } from "../pagination.js";
+import { sendError } from "../../contracts/http.js";
 
 export const scenesRouter = Router();
 scenesRouter.use(requireAnyAuth);
@@ -20,7 +21,7 @@ scenesRouter.get("/", (req: AuthedRequest, res) => {
     }));
     res.json({ scenes: page.items, nextCursor: page.nextCursor, limit: pagination.limit, hasMore: Boolean(page.nextCursor) });
   } catch (error) {
-    res.status(400).json({ error: error instanceof Error ? error.message : "Invalid pagination parameters" });
+    sendError(res, 400, error instanceof Error ? error.message : "Invalid pagination parameters");
   }
 });
 
@@ -28,13 +29,13 @@ scenesRouter.delete("/:id", (req: AuthedRequest, res) => {
   try {
     const sceneId = req.params.id;
     if (!sceneId) {
-      res.status(400).json({ error: "Scene ID required" });
+      sendError(res, 400, "Scene ID required");
       return;
     }
     const targetId = typeof sceneId === "string" ? sceneId : sceneId[0];
     memoryEngine.store.deleteContextualFocus(req.userId!, [targetId]);
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : "Failed to delete scene" });
+    sendError(res, 500, error instanceof Error ? error.message : "Failed to delete scene");
   }
 });

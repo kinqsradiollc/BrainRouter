@@ -1,9 +1,9 @@
 import { execSync } from 'node:child_process';
-import { formatBudget, readGoal } from '../state/goalStore.js';
-import { readPlan } from '../state/taskStore.js';
-import { getCurrentWorkflow } from '../state/workflowArtifacts.js';
-import { readPreferences, resolveEffort } from '../state/preferencesStore.js';
-import { activeRun, formatActivePhase } from '../state/workflowRun.js';
+import { formatBudget, readGoal } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
+import { readPlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
+import { getCurrentWorkflow } from '@kinqs/brainrouter-core/dist/workflow/workflowArtifacts.js';
+import { resolveActiveMode } from '@kinqs/brainrouter-core/dist/session/sessionModeStore.js';
+import { activeRun, formatActivePhase } from '@kinqs/brainrouter-core/dist/workflow/workflowRun.js';
 import { costUsd } from '../runtime/pricing.js';
 
 /**
@@ -119,8 +119,10 @@ export function renderSegment(name: SegmentName, inputs: SegmentInputs): string 
     case 'exec': {
       // Show `fast` only — `planning` is the default, and surfacing it would
       // add chrome on every prompt for users who never touched /mode.
+      // Resolve the ACTIVE SESSION's mode so the statusline tracks this
+      // chat's stance, not just the workspace default.
       try {
-        const { executionMode } = readPreferences(inputs.workspaceRoot);
+        const { executionMode } = resolveActiveMode(inputs.workspaceRoot, inputs.sessionKey);
         return executionMode === 'fast' ? 'fast' : undefined;
       } catch {
         return undefined;
@@ -129,11 +131,11 @@ export function renderSegment(name: SegmentName, inputs: SegmentInputs): string 
     case 'effort': {
       // Mirror the `exec` "show only when non-default" rule. `medium` is the
       // default and would just add chrome on every prompt for users who never
-      // touched /effort.
+      // touched /effort. Resolve the active session's effort.
       try {
-        const resolved = resolveEffort(inputs.workspaceRoot);
-        if (resolved.effort === 'medium') return undefined;
-        return `effort:${resolved.effort}`;
+        const { effort } = resolveActiveMode(inputs.workspaceRoot, inputs.sessionKey);
+        if (effort === 'medium') return undefined;
+        return `effort:${effort}`;
       } catch {
         return undefined;
       }

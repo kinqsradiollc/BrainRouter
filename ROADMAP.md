@@ -8,12 +8,16 @@ design specs in [`brainrouter-docs/specs/`](brainrouter-docs/specs/).
 
 ## Shipped
 
-Latest published: **0.4.14** (2026-06-10) — benchmark-driven recall overhaul + the
-grid TUI (live fleet sidebar, scroll mode) + model-spawned background workers with
-a completion inbox that reports results back into the conversation.
+Latest published: **0.4.15** (2026-06-22) — the requirement-first workflow + the
+unified workspace (Chat · Track · Code) with a code-aware Jira-class board, a
+desktop UI pass, and a closing UX & reliability program (child auto-resume,
+destructive-command guard, MCP auto-reconnect + brain/tools split, provider
+gallery with live `/models`, cross-session usage heatmap, cross-workspace
+session menu).
 
 | Version | Theme | Date |
 |---|---|---|
+| 0.4.15 | Requirement-first workflow · unified workspace (Chat·Track·Code) · desktop UX & reliability pass | 2026-06-22 |
 | 0.4.14 | Memory accuracy (2 rounds) · grid TUI + fleet sidebar · workers that report back | 2026-06-10 |
 | 0.4.13 | Sub-agent result delivery (resume + synthesis guard) · REPL polish | 2026-06-07 |
 | 0.4.12 | The Build Loop · multi-agent reconnect + parent-wait timeouts · `/queue` · accuracy fixes | 2026-06-05 |
@@ -62,16 +66,66 @@ and a scrollback overhaul (accurate height packing, scroll mode, live turn timer
 
 ---
 
-## 0.4.15 — CLI ergonomics & coding-agent parity (next)
+## 0.4.15 — The Agent Behind the Glass · plan [`brainrouter-roadmap/0.4.15.md`](brainrouter-roadmap/0.4.15.md)
 
-Gap-driven program; chat ergonomics first (current pain), then session lifecycle,
-safety, extensibility. Keeps the 0.4.14 grid/sidebar UI.
+A **complete reverse-engineering of the strongest reference coding agent** —
+decomposed into twelve subsystems, each mapped against what BrainRouter has and
+rebuilt as testable contracts. Keeps the 0.4.14 UI. Threads: **A** chat ergonomics
+· **B** prompt OS + turn-engine contracts (deliverable guard, batching, autonomy/
+assessment rules, denied-tool semantics, verification gate) · **C** per-tool
+contracts (read-before-edit, unique-match edits) · **D** context OS (stable cached
+prefix, reminder channel, structured compaction) · **E** first-class task tracker
+· **F** programmable workflows (scripted stages, schema-validated child outputs,
+budgets, resume) · **G** background runtime (bg shell + output polling, wait-until,
+cron agents, recurring loop) · **H** session lifecycle (resume, rewind, branch,
+chapters) · **I** plan mode + declarative permissions + hook gates · **J**
+interaction layer (structured multi-choice questions, side-task chips, skill
+auto-trigger, md commands) · **K** headless stream-json surface · **L** the
+agent-behavior benchmark that gates it all. · **M** BrainRouter Desktop — native macOS/Windows app (Electron + React over the unchanged agent runtime; chat, approvals, fleet sidebar, sessions as real UI; signed installers + auto-update; ships as alpha beside the TUI).
 
-- [ ] Chat ergonomics — line-level smooth scrolling, mouse-wheel scroll + scroll-speed knob, collapsible tool results, transcript search, Esc-to-interrupt, `/copy`·`/export`, `Ctrl+R` history search.
-- [ ] Session lifecycle — `--continue`/`--resume` + `/resume` picker, `/rewind` turn restore (with optional file restore), `/branch` forks, `/rename`·`/recap`.
-- [ ] Safety — plan permission mode (read-only until an approved plan), declarative `cli.permissions` allow/ask/deny rules + "always allow" persistence, network domain rules.
-- [ ] Extensibility — markdown slash commands, hook-event breadth (pre/post tool-use gates, prompt-submit, stop, pre-compact), background shell tasks, `!`/`#` composer prefixes.
-- [ ] Polish — `/doctor`, `/usage` category breakdown, vim/emacs composer modes + keybindings, image paste, model fallback chain.
+---
+
+## Delivered in 0.4.15 — The unified workspace: **Chat · Track · Code**
+
+One app, three modes over the *same* workspace + the *same* memory, so planning,
+coordination, and implementation never leave the building. A mode switcher (top
+of the **left sidebar**) flips the surface; the project, the memory, and the agent
+are shared across all three. **Shipped in 0.4.15.**
+
+- **Chat** — conversational/assistant mode: ask, explore, design, and draft
+  without the full coding-agent loop. Lightweight and **read-only** (the agent is
+  pinned to look-only access — no writes or shell); promotes a thread into a Code
+  turn or a Track item when it's ready.
+- **Track** — a first-party, **Jira-class project-management surface**, fully
+  in-app so everything stays in one place. **Each workspace is a project** with its
+  own management. Target scope (everything an engineering team needs):
+  - **Work items** — issues / stories / bugs / tasks / sub-tasks, **epics**, and
+    custom types; configurable workflow states + transitions; priority, labels,
+    components, assignees, watchers, estimates, due dates, comments, attachments,
+    activity history.
+  - **Planning** — **backlog**, **sprints/iterations** (start/complete, capacity,
+    burndown), **boards** (kanban + scrum, swimlanes, WIP limits), and **roadmap**
+    (epics over time, dependencies).
+  - **Views & query** — board / list / table / timeline, saved filters, and a
+    JQL-style query language; reports (velocity, cumulative flow, cycle/lead time).
+  - **Automation & process** — rules/triggers, templates, required fields/gates,
+    SLAs; per-project configuration and permissions.
+  - **Code-aware (the differentiator)** — the agent **reads and writes the tracker
+    as a first-class tool**: items link to branches / commits / PRs / review
+    findings / artifacts; status moves with the work; the existing requirement →
+    plan → task → review → verify flow maps onto Track items; everything captures
+    into BrainRouter memory with full provenance. Each project's board is queryable
+    by the agent so it can pick up, update, and close work itself.
+- **Code** — today's agentic coding mode (the desktop + TUI), unchanged.
+
+Shared substrate: one memory pipeline, one workspace/session model, one provider
+config; Track items, Chat threads, and Code turns all reference the same
+provenance-tracked records. **Delivered** across the full stack: data model +
+per-workspace store (`packages/types/track.ts` + `packages/core/src/track/`), the
+`track_query`/`track_update` agent tools, the `/track` CLI, and the desktop Track
+surface (nine views — Board · List · Backlog · Sprint · Roadmap · Reports ·
+Automation · Members · Sync) with a JQL-style query language, automation rules,
+per-project roles/permissions, and two-way GitHub Issues sync.
 
 ---
 

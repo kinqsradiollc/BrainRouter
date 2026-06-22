@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { extractChatCompletionText, resolveLLMTimeoutMs, isExternalTimeoutError } from "../memory/llm-response.js";
+import { extractChatCompletionText, resolveLLMTimeoutMs, isExternalTimeoutError } from "../memory/llm/llm-response.js";
 
 describe("LLM response helpers", () => {
   afterEach(() => {
     delete process.env.BRAINROUTER_LLM_TIMEOUT_MS;
     delete process.env.BRAINROUTER_EXTRACTION_TIMEOUT_MS;
+    delete process.env.BRAINROUTER_LOCAL_LLM_MIN_TIMEOUT_MS;
   });
 
   it("uses reasoning_content when local backends return empty message content", () => {
@@ -21,18 +22,31 @@ describe("LLM response helpers", () => {
     expect(text).toBe("[{\"scene_name\":\"Local model\",\"memories\":[]}]");
   });
 
-  it("keeps cloud timeouts unchanged unless configured", () => {
+  it("returns 0 (no timeout — wait for the server) for a cloud endpoint unless configured", () => {
     expect(resolveLLMTimeoutMs({
       endpoint: "https://api.openai.com/v1/chat/completions",
       requestedMs: 120_000,
-    })).toBe(120_000);
+    })).toBe(0);
   });
 
-  it("extends local endpoint timeouts unless explicitly configured", () => {
+  it("returns 0 for a local endpoint unless a local floor is configured", () => {
     expect(resolveLLMTimeoutMs({
       endpoint: "http://localhost:1234/v1/chat/completions",
       requestedMs: 120_000,
-    })).toBe(600_000);
+    })).toBe(0);
+  });
+
+  it("re-imposes a local floor when BRAINROUTER_LOCAL_LLM_MIN_TIMEOUT_MS is set (opt-in)", () => {
+    process.env.BRAINROUTER_LOCAL_LLM_MIN_TIMEOUT_MS = "600000";
+    expect(resolveLLMTimeoutMs({
+      endpoint: "http://localhost:1234/v1/chat/completions",
+      requestedMs: 120_000,
+    })).toBe(600_000); // max(requestedMs, floor)
+    // The floor does NOT apply to a cloud endpoint.
+    expect(resolveLLMTimeoutMs({
+      endpoint: "https://api.openai.com/v1/chat/completions",
+      requestedMs: 120_000,
+    })).toBe(0);
   });
 
   it("honors task-specific timeout overrides", () => {

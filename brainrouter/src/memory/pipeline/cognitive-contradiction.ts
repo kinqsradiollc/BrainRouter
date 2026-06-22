@@ -1,6 +1,7 @@
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
 import type { LLMRunner, CognitiveRecord, CognitiveFtsResult } from "@kinqs/brainrouter-types";
 import { COGNITIVE_CONTRADICTION_PROMPT } from "../prompts/cognitive-contradiction.js";
+import { extractJsonValue } from "../util/llm-json.js";
 import crypto from "node:crypto";
 
 export async function detectContradictions(params: {
@@ -10,8 +11,13 @@ export async function detectContradictions(params: {
 }) {
   const { newRecord, store, llmRunner } = params;
 
-  // 1. Search for potentially related memories
-  const candidates = store.searchCognitiveFts(newRecord.userId, newRecord.content, 5);
+  // 1. Search for potentially related memories. Each candidate costs ONE serial
+  // LLM call, so a high fan-out (×5 per record × N records per capture) was a
+  // major contributor to the background contradiction-check timeouts. Cap it
+  // (default 3, tunable) to bound the per-record LLM load.
+  const _parsedMaxCand = parseInt(process.env.BRAINROUTER_CONTRADICTION_MAX_CANDIDATES || "", 10);
+  const maxCandidates = isNaN(_parsedMaxCand) || _parsedMaxCand < 1 ? 3 : _parsedMaxCand;
+  const candidates = store.searchCognitiveFts(newRecord.userId, newRecord.content, maxCandidates);
   
   const evaluations: Array<{
     candidate: CognitiveFtsResult;
@@ -39,10 +45,9 @@ export async function detectContradictions(params: {
         timeoutMs: contradictionTimeoutMs
       });
 
-      const jsonMatch = response.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) continue;
-
-      const data = JSON.parse(jsonMatch[0]);
+      // Robust parse: tolerant of role-token leaks / prose / fences (see llm-json.ts).
+      const data: any = extractJsonValue(response, { kind: "object" });
+      if (!data) continue;
       if (data.isContradiction && data.confidence > 0.7) {
         evaluations.push({
           candidate,

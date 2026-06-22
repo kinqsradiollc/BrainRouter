@@ -8,7 +8,7 @@ import {
   normalizeSupersedes,
   DEFAULT_STALENESS,
   type StalenessThresholds,
-} from "../lessonHygiene.js";
+} from "./lessonHygiene.js";
 
 /**
  * REFAC-ENGINE-SPLIT (0.4.6) — the lesson-domain engine operations, extracted

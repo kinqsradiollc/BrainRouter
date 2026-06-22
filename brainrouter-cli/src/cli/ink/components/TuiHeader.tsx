@@ -1,7 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import type { Theme } from '../../theme.js';
-import { VERSION } from '../../../version.js';
+import { VERSION } from '@kinqs/brainrouter-core/dist/version.js';
 
 interface TuiHeaderProps {
   cols: number;

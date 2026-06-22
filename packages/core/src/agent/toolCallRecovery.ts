@@ -1,0 +1,378 @@
+// Strict tool-call recovery helpers (0.3.8-I4 / roadmap §8).
+//
+// Detect tool_calls that never received a paired tool_result and inject
+//   synthetic placeholders so strict OpenAI-compatible validators don't
+//   reject the next request.
+//
+// These helpers are intentionally pure (no agent.ts imports) so they can be
+// unit-tested in isolation and reused if another runtime grows similar needs.
+
+export interface ToolCallLike {
+  id: string;
+  type?: string;
+  function: { name: string; arguments: string | object };
+}
+
+export interface ToolResultMessage {
+  role: 'tool';
+  tool_call_id: string;
+  name: string;
+  content: string;
+  isError?: boolean;
+}
+
+/**
+ * Drop duplicate tool_call ids inside a single assistant response. Keeps the
+ * LAST occurrence (closest to the model's final intent). Calls without a
+ * string id are passed through unchanged — the orphan safety net will catch
+ * them later.
+ *
+ * `onDuplicate` is invoked once per dropped duplicate so callers can log a
+ * warning without coupling this module to a logger.
+ */
+export function dedupeToolCalls<T extends ToolCallLike>(
+  calls: T[] | undefined | null,
+  onDuplicate?: (id: string, droppedIndex: number) => void,
+): T[] {
+  if (!Array.isArray(calls) || calls.length === 0) return [];
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (let i = calls.length - 1; i >= 0; i--) {
+    const c = calls[i];
+    const id = c?.id;
+    if (typeof id !== 'string' || id === '') {
+      out.push(c);
+      continue;
+    }
+    if (seen.has(id)) {
+      onDuplicate?.(id, i);
+      continue;
+    }
+    seen.add(id);
+    out.push(c);
+  }
+  return out.reverse();
+}
+
+export interface ParsedArguments {
+  args: Record<string, any>;
+  /** Defined iff the LLM emitted malformed JSON; ready-to-use error string for a tool_result envelope. */
+  error?: string;
+  rawArguments: string;
+}
+
+/**
+ * Try-parse `tool_call.function.arguments`. On parse failure return a
+ * structured error string instead of throwing, so the caller can attach a
+ * synthetic tool_result that the next model turn can read.
+ */
+export function parseArgumentsOrError(call: ToolCallLike): ParsedArguments {
+  const raw = call?.function?.arguments;
+  if (raw == null) return { args: {}, rawArguments: '' };
+  if (typeof raw !== 'string') {
+    // Provider already parsed it for us.
+    return {
+      args: (raw && typeof raw === 'object') ? (raw as Record<string, any>) : {},
+      rawArguments: (() => { try { return JSON.stringify(raw); } catch { return String(raw); } })(),
+    };
+  }
+  if (raw.trim() === '') return { args: {}, rawArguments: raw };
+  try {
+    const parsed = JSON.parse(raw);
+    return {
+      args: (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {},
+      rawArguments: raw,
+    };
+  } catch (e: any) {
+    const msg = e?.message ?? String(e);
+    // Keep the raw arguments visible — the model often needs to see exactly
+    // what it produced to self-correct (e.g. trailing comma, missing quote).
+    const previewedRaw = raw.length > 400 ? `${raw.slice(0, 400)}…[truncated ${raw.length - 400} chars]` : raw;
+    return {
+      args: {},
+      error: `Tool argument JSON was malformed: ${msg}. Raw arguments emitted by the model: ${previewedRaw}. Re-issue the tool call with valid JSON arguments.`,
+      rawArguments: raw,
+    };
+  }
+}
+
+/**
+ * For every tool_call in `calls` that has no matching tool_result in
+ * `results`, build a synthetic tool message so the next LLM request stays
+ * well-formed (OpenAI strictly requires tool_call ↔ tool_result pairing).
+ *
+ * IMPORTANT: the synthetic `content` MUST start with `ERROR:` and be a plain
+ * string. The agent runtime's R1 child-drain guardrail tracks spawned
+ * children by `parseJsonObject(resultText)` on tool results — if the
+ * synthetic envelope parses as JSON with an `id` field, the guardrail would
+ * incorrectly think a child agent was spawned and try to wait on it.
+ */
+export function synthesizeOrphanResults<T extends ToolCallLike>(
+  calls: T[] | undefined | null,
+  results: ToolResultMessage[],
+): ToolResultMessage[] {
+  if (!Array.isArray(calls) || calls.length === 0) return [];
+  const have = new Set(results.map((r) => r.tool_call_id));
+  const synthetic: ToolResultMessage[] = [];
+  for (const c of calls) {
+    const id = c?.id;
+    if (typeof id !== 'string' || id === '') continue;
+    if (have.has(id)) continue;
+    synthetic.push({
+      role: 'tool',
+      tool_call_id: id,
+      name: c?.function?.name ?? 'unknown',
+      content: 'ERROR: tool call orphaned by model; no execution recorded. Re-issue the tool call if you still need this work done.',
+      isError: true,
+    });
+  }
+  return synthetic;
+}
+
+/** A chat message as it lives in the agent's history / on the wire. */
+export interface ChatMessageLike {
+  role: string;
+  content?: unknown;
+  name?: string;
+  tool_call_id?: string;
+  tool_calls?: ToolCallLike[];
+  [key: string]: unknown;
+}
+
+/**
+ * Enforce the strict `assistant.tool_calls` ↔ `tool` (result) pairing that
+ * OpenAI-compatible validators require — the zen/opencode gateway rejects a
+ * malformed sequence with `400 ... tool call result does not follow tool call
+ * (2013)`. Returns a well-formed COPY of `messages`:
+ *
+ *  - Every assistant message that carries `tool_calls` is immediately followed
+ *    by one `tool` result per call id. Missing results are filled with a
+ *    synthetic `ERROR:` placeholder (`synthesizeOrphanResults`); duplicate-id
+ *    calls within the one message are de-duped (`dedupeToolCalls`).
+ *  - A `tool` message that does NOT match a call on the immediately-preceding
+ *    assistant message is an ORPHAN result and is dropped — it would otherwise
+ *    be a "result does not follow call" on its own.
+ *  - A `tool_call` with no usable string `id` can never be paired, so it is
+ *    stripped from the assistant message; if that empties `tool_calls`, the
+ *    field is removed and the assistant becomes a plain message.
+ *
+ * This is the repair that was missing on session resume: `loadHistory` replays
+ * a transcript verbatim, so a prior turn that died after emitting `tool_calls`
+ * but before its results were persisted would brick EVERY subsequent turn.
+ *
+ * Pure + idempotent: a already-well-formed array passes through unchanged.
+ */
+export function sanitizeToolCallPairing<T extends ChatMessageLike>(
+  messages: T[] | undefined | null,
+): T[] {
+  if (!Array.isArray(messages) || messages.length === 0) return [];
+  const out: T[] = [];
+  let i = 0;
+  while (i < messages.length) {
+    const m = messages[i];
+    const rawCalls = Array.isArray(m?.tool_calls) ? m.tool_calls : null;
+    if (m?.role === 'assistant' && rawCalls && rawCalls.length > 0) {
+      // De-dupe, then keep only calls that have a usable string id.
+      const calls = dedupeToolCalls(rawCalls).filter(
+        (c) => typeof c?.id === 'string' && c.id !== '',
+      );
+      const callIds = new Set(calls.map((c) => c.id));
+      // Consume the run of `tool` messages that immediately follow, keeping the
+      // first result for each matching call id and dropping the rest (orphans
+      // / duplicates).
+      const matched: T[] = [];
+      const claimed = new Set<string>();
+      let j = i + 1;
+      while (j < messages.length && messages[j]?.role === 'tool') {
+        const r = messages[j];
+        const id = typeof r?.tool_call_id === 'string' ? r.tool_call_id : '';
+        if (id && callIds.has(id) && !claimed.has(id)) {
+          claimed.add(id);
+          matched.push(r);
+        }
+        j++;
+      }
+      if (calls.length === 0) {
+        // Every call was id-less → strip tool_calls; following results are orphans.
+        const { tool_calls: _dropped, ...rest } = m as ChatMessageLike;
+        out.push(rest as T);
+      } else {
+        out.push(calls.length === rawCalls.length ? m : ({ ...m, tool_calls: calls } as T));
+        out.push(...matched);
+        const have: ToolResultMessage[] = matched.map((r) => ({
+          role: 'tool',
+          tool_call_id: String((r as ChatMessageLike).tool_call_id ?? ''),
+          name: String((r as ChatMessageLike).name ?? 'unknown'),
+          content: '',
+        }));
+        out.push(...(synthesizeOrphanResults(calls, have) as unknown as T[]));
+      }
+      i = j;
+    } else if (m?.role === 'tool') {
+      // A tool result not preceded by an assistant-with-tool_calls → orphan.
+      i++;
+    } else {
+      out.push(m);
+      i++;
+    }
+  }
+  return out;
+}
+
+/**
+ * Detect "stalled preamble" responses — short content that announces an
+ * action ("I'll start by…", "Let me…", "Now I'll…") but isn't followed by
+ * any tool_calls in the same assistant message. Smaller / weaker models
+ * (Gemma 2B, free-tier OS) hit this often: they write the preamble but
+ * then forget to emit the actual
+ * tool_calls before yielding the turn, leaving the user staring at "I'll
+ * start by exploring…" with no follow-through.
+ *
+ * Used by the runtime preamble guardrail in `agent.ts` — when the loop is
+ * about to exit with no tool_calls AND `looksLikeStalledPreamble(content)`
+ * is true AND the turn already had ≥1 tool call earlier, we inject a
+ * corrective system message and continue one more iteration. Bounded by a
+ * counter so a model that ONLY emits preambles can't loop forever.
+ *
+ * Conservative on purpose: long content (>400 chars) is assumed to have
+ * substance, and the regex anchors on the START of the trimmed content so
+ * legitimate replies that contain "I'll" mid-sentence aren't false-positive.
+ */
+/**
+ * Strip a leading acknowledgement / filler so the preamble detector isn't
+ * defeated by it. Real-world models open with "Absolutely — I'll run…",
+ * "Sure, let me…", "Got it! Now I'll…" — the ack hides the preamble starter
+ * from a `^`-anchored test. We peel one short ack token + its separator.
+ */
+export function stripLeadingAck(s: string): string {
+  return s.replace(
+    /^(?:absolutely|sure|ok|okay|alright|all right|got it|of course|certainly|great|gotcha|understood|sounds good|will do|on it|yep|yes|right|perfect|cool)\b[\s,!.:—–-]*/i,
+    '',
+  ).trimStart();
+}
+
+export function looksLikeStalledPreamble(content: string | null | undefined): boolean {
+  if (typeof content !== 'string') return false;
+  const trimmed = stripLeadingAck(content.trim());
+  if (trimmed.length === 0) return false;
+  if (trimmed.length > 400) return false;
+
+  // Common preamble starters observed in the wild:
+  // "Let me fetch the URL…", "Now, I will search…", "OK! Now let's…",
+  // "I need to update several files here…". Anchored at start of string —
+  // a sentence that begins this way and is short is overwhelmingly a
+  // preamble, not a complete answer.
+  const preambleStarters = [
+    /^I['’]?ll\b/i,
+    /^I will\b/i,
+    /^I['’]?m going to\b/i,
+    /^I['’]?m about to\b/i,
+    /^Let me\b/i,
+    /^Let['’]?s\b/i,
+    /^Now,?\s+I['’]?ll\b/i,
+    /^Now,?\s+I will\b/i,
+    /^Now,?\s+let['’]?s\b/i,
+    /^Next,?\s+I['’]?ll\b/i,
+    /^Next,?\s+I will\b/i,
+    /^First,?\s+I['’]?ll\b/i,
+    /^First,?\s+I will\b/i,
+    /^Starting\b/i,
+    /^Starting by\b/i,
+    /^Standby\b/i,
+    /^Stand by\b/i,
+    /^OK[!,.]?\s+(?:Now|Let)/i,
+    // Additional preamble forms commonly emitted by open-source models.
+    // Anchored at start of
+    // string so legitimate mid-sentence uses don't false-positive.
+    /^Looking at\b/i,
+    /^Checking\b/i,
+    /^Reading\b/i,
+    /^Searching\b/i,
+    /^Investigating\b/i,
+    /^Exploring\b/i,
+    /^Examining\b/i,
+    /^Going to\b/i,
+    /^About to\b/i,
+    /^Will (?:read|check|search|run|look|explore|investigate|examine|grep|find)\b/i,
+  ];
+  return preambleStarters.some((re) => re.test(trimmed));
+}
+
+/**
+ * Higher-precision variant: the message both (a) opens with a future-action
+ * intent AND (b) names tool-like WORK (run / search / spawn / audit …). This
+ * is the "I'll run the deep sweep now" / "Let me check the codebase" shape —
+ * it promised to DO something that requires tool calls, then emitted none.
+ *
+ * Used to fire the preamble guard even on a turn with ZERO prior tool calls
+ * (a turn that opens with a promise and never acts). Kept narrow — a prose
+ * answer like "I'll explain how X works" has no tool-action verb, so it does
+ * NOT match and legitimate prose answers are never force-looped.
+ */
+export function looksLikeDeferredToolPromise(content: string | null | undefined): boolean {
+  if (typeof content !== 'string') return false;
+  const trimmed = stripLeadingAck(content.trim());
+  if (trimmed.length === 0 || trimmed.length > 500) return false;
+  // A future-intent opener IMMEDIATELY followed (allowing light filler) by a
+  // tool-action verb. Adjacency is the point: the verb must be the PROMISED
+  // ACTION, not a tool-ish word buried later in a prose answer — so
+  // "I'll summarize: the function reads the config" or "Let me clarify — the
+  // test passes" do NOT match (their opener verb is summarize/clarify), while
+  // "I'll run the sweep" / "Let me check the repo" / "Now I will grep …" do.
+  const opener =
+    "(?:I['’]?ll|I will|I['’]?m going to|I['’]?m about to|Let me|Let['’]?s|Now,?\\s+(?:I['’]?ll|I will|let['’]?s)|Next,?\\s+I['’]?ll|First,?\\s+I['’]?ll|Going to|About to|Will)";
+  const filler = "(?:just |now |quickly |also |then |go ahead and |start by |begin by |proceed to )*";
+  // Verb stems so -ing/-ed forms match too (explor→exploring, trac→tracing;
+  // the e-dropping verbs investigat/examin/analyz/diagnos/delegat are stemmed
+  // the same way). run/check/search/etc. need no stemming.
+  const toolVerb =
+    "(?:run|check|search|look|explor|investigat|examin|scan|spawn|delegat|inspect|audit|build|test|grep|find|read|fetch|analyz|review|sweep|verif|lint|diagnos|kick off|fire off|dig into|trac)";
+  return new RegExp(`^${opener}\\s+${filler}${toolVerb}`, 'i').test(trimmed);
+}
+
+/**
+ * Lenient companion to `looksLikeDeferredToolPromise`, used ONLY to ARM the
+ * promise-then-ask tracker (not to fire a guard directly). Unlike the strict
+ * variant it is NOT anchored to the start of the message and has NO length cap,
+ * so a LONG message that buries its promise at the end —
+ *   "Perfect, you were right. I found them… I'll proceed by locating the exact
+ *    repo roots for all 4 and then run a strict file/line comparison."
+ * — still arms the tracker. The terminal guard then fires only if NO tools ran
+ * after the promise (the model announced work and stalled / pivoted to asking).
+ *
+ * Kept FIRST-PERSON + FUTURE-INTENT so it doesn't match advice to the user
+ * ("you could run the tests") or a delivered answer ("the comparison shows…").
+ * The intent opener must sit within ~60 chars of an action verb.
+ */
+export function mentionsImminentToolWork(content: string | null | undefined): boolean {
+  if (typeof content !== 'string') return false;
+  const trimmed = content.trim();
+  if (trimmed.length === 0) return false;
+  // Note: verb stems are kept narrow to avoid matching common non-verbs that
+  // merely START with the stem (e.g. an earlier "diff" stem wrongly matched
+  // "differences"). "compar" already covers comparison tasks.
+  const re =
+    /(?:\bI['’]?ll\b|\bI will\b|\bI['’]?m going to\b|\bI['’]?m about to\b|\bnext,?\s+I['’]?ll\b|\bthen\s+I['’]?ll\b|\bI['’]?ll proceed\b|\bI['’]?ll now\b|\blet me\b)[^.?!]{0,60}?\b(?:scan|run|search|explor|locat|compar|enumerat|grep|investigat|examin|build|audit|analyz|inspect|fetch|sweep|verif|kick off|fire off|dig into)/i;
+  return re.test(trimmed);
+}
+
+/**
+ * Use the caller's existing `normalizeToolName` to surface a "did you mean"
+ * suggestion when the LLM emits a tool name that doesn't exist as-is but
+ * normalizes to a real registered tool. Tolerates the single-underscore
+ * `mcp_<server>_<tool>` prefix (R5 convention) since `normalizeToolName`
+ * matches by flattened form.
+ */
+export function suggestSimilarToolName(
+  raw: string,
+  candidates: string[],
+  normalize: (raw: string, candidates: string[]) => string,
+): string | undefined {
+  const trimmed = (raw ?? '').trim();
+  if (!trimmed || candidates.includes(trimmed)) return undefined;
+  const suggestion = normalize(trimmed, candidates);
+  if (suggestion && suggestion !== trimmed && candidates.includes(suggestion)) {
+    return suggestion;
+  }
+  return undefined;
+}

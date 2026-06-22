@@ -8,23 +8,25 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import chalk from 'chalk';
 import { spinner as makeSpinner } from '../spinner.js';
-import { LOCAL_TOOLS } from '../../agent/agent.js';
-import { callMcpTool, hasMcpTool } from '../../runtime/mcpUtils.js';
-import { listSessions, reconcileStale } from '../../orchestration/orchestrator.js';
-import { readPreferences, resolveEffort, writePreferences, normalizeEffort } from '../../state/preferencesStore.js';
-import { readPlan } from '../../state/taskStore.js';
+import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import { callMcpTool, hasMcpTool } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
+import { listSessions, reconcileStale } from '@kinqs/brainrouter-core/dist/orchestration/orchestrator.js';
+import { readPreferences, resolveEffort, writePreferences, normalizeEffort } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
+import { getSessionMode, resolveActiveMode, setSessionMode } from '@kinqs/brainrouter-core/dist/session/sessionModeStore.js';
+import { setSessionRuntime } from '@kinqs/brainrouter-core/dist/session/sessionRuntimeStore.js';
+import { readPlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
 // initAgentMd usage moved to commands/init.ts (0.3.7 wizard). The
 // legacy /config + /init switch cases here are gone — the dispatcher
 // in repl.ts routes them to the new handlers first. getConfigPath
 // stays in scope because /doctor still surfaces the path.
-import { getConfigPath, saveConfig, setCliKnobOverride, getCliKnobs } from '../../config/config.js';
+import { getConfigPath, saveConfig, setCliKnobOverride, getCliKnobs } from '@kinqs/brainrouter-core/dist/config/config.js';
 import { getPolicyProfile, profileNames } from '../../runtime/exec/policyProfiles.js';
 import { describeActiveServer } from './serverStatus.js';
 import { copyToClipboard } from '../../runtime/clipboard.js';
 import type { CommandContext } from './_context.js';
 import { completeWorkspacePath, renderHelp } from '../repl.js';
-import { PROVIDER_CATALOG, findProvider } from '../wizard/providers.js';
-import { loadApiKeyPrefixesConfig } from '../../runtime/configLoader.js';
+import { PROVIDER_CATALOG, findProvider } from '@kinqs/brainrouter-core/dist/provider/catalog.js';
+import { loadApiKeyPrefixesConfig } from '@kinqs/brainrouter-core/dist/config/configLoader.js';
 import { selectModel } from '../wizard/modelsApi.js';
 import { buildTheme } from '../theme.js';
 import { listFilesystemSkills } from '../../prompt/skillCatalog.js';
@@ -46,7 +48,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         // can tell whether they're 5% or 95% through it. Source +
         // override path live in runtime/contextWindow.ts. Unknown
         // models render "?" rather than a guess.
-        const { formatContextWindow } = await import('../../runtime/contextWindow.js');
+        const { formatContextWindow } = await import('@kinqs/brainrouter-core/dist/context/contextWindow.js');
         const ctxLabel = formatContextWindow(llm.model);
         console.log(`  LLM Provider:  ${chalk.green(llm.provider)}`);
         console.log(`  LLM Model:     ${chalk.cyan(llm.model)}${ctxLabel !== '?' ? chalk.gray(` (${ctxLabel} ctx)`) : ''}`);
@@ -59,7 +61,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         // doesn't carry — currently-loaded? trained for tool use?
         // reasoning modes? format + quantisation. This is the "is my
         // model actually appropriate for the agent loop?" check.
-        const { lookupLmStudioModel } = await import('../../runtime/lmStudioApi.js');
+        const { lookupLmStudioModel } = await import('@kinqs/brainrouter-core/dist/provider/providers/lmstudio.js');
         const lm = lookupLmStudioModel(llm.model);
         if (lm) {
           const loadedBadge = lm.loaded ? chalk.green('● loaded') : chalk.gray('○ not loaded');
@@ -282,9 +284,12 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
       // memory. No-arg opens the picker (0.3.7).
       if (newModel) {
         agent.setModel(newModel);
-        if (!sessionOnly && config.llm) {
+        if (sessionOnly) {
+          setSessionRuntime(agent.workspaceRoot, agent.sessionKey, { model: newModel });
+        } else if (config.llm) {
           config.llm.model = newModel;
           saveConfig(config);
+          setSessionRuntime(agent.workspaceRoot, agent.sessionKey, { model: '' });
         }
         const scope = sessionOnly ? chalk.gray(' (this session only — not saved)') : '';
         console.log(chalk.green(`\n✓ Model switched: ${chalk.gray(previous)} → ${chalk.cyan(newModel)}${scope}\n`));
@@ -329,15 +334,19 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         ));
       }
       agent.setModel(result.model);
-      if (config.llm) {
+      if (sessionOnly) {
+        setSessionRuntime(agent.workspaceRoot, agent.sessionKey, { model: result.model });
+      } else if (config.llm) {
         config.llm.model = result.model;
         saveConfig(config);
+        setSessionRuntime(agent.workspaceRoot, agent.sessionKey, { model: '' });
       }
       const sourceTag =
         result.source === 'live' ? `live · ${result.liveCount} models` :
         result.source === 'fallback' ? `offline · static catalog (${result.liveError ?? 'unknown'})` :
         'static catalog';
       console.log(chalk.green(`\n✓ Model switched: ${chalk.gray(previous)} → ${chalk.cyan(result.model)}`));
+      if (sessionOnly) console.log(chalk.gray('  Scope: this session only — not saved to config.json.'));
       console.log(chalk.gray(`  Source: ${sourceTag}\n`));
       return true;
     }
@@ -471,15 +480,27 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
     }
     case '/effort':
     {
+      // Per-session reasoning depth: session override > cli.effort config >
+      // workspace preference > default. With a session active the toggle
+      // writes the per-chat override so each chat keeps its own depth;
+      // without one it falls back to the workspace preference (unchanged).
+      const sessionKey = agent.sessionKey;
       const arg = (args[0] ?? '').toLowerCase();
       const valid: ReadonlyArray<string> = ['low', 'medium', 'high', 'xhigh', 'max'];
       if (!arg) {
         const resolved = resolveEffort(agent.workspaceRoot);
+        const sessionOverride = sessionKey ? getSessionMode(agent.workspaceRoot, sessionKey).effort : undefined;
+        const activeEffort = resolveActiveMode(agent.workspaceRoot, sessionKey).effort;
+        // The config knob still wins this process even over a session
+        // override; reflect that in both the value and the source tag.
+        const showEffort = resolved.source === 'config' ? resolved.effort : activeEffort;
+        const effectiveSource: typeof resolved.source =
+          resolved.source === 'config' ? 'config' : sessionOverride ? 'preference' : resolved.source;
         const sourceTag =
-          resolved.source === 'config' ? chalk.gray(' (cli.effort in config.json)') :
-          resolved.source === 'preference' ? chalk.gray(' (preference)') :
+          effectiveSource === 'config' ? chalk.gray(' (cli.effort in config.json)') :
+          effectiveSource === 'preference' ? chalk.gray(sessionOverride ? ' (session)' : ' (preference)') :
           chalk.gray(' (default)');
-        console.log(chalk.bold(`\nReasoning depth: ${chalk.cyan(resolved.effort)}${sourceTag}`));
+        console.log(chalk.bold(`\nReasoning depth: ${chalk.cyan(showEffort)}${sourceTag}`));
         console.log(chalk.gray('  low     — terse, one-paragraph answers; minimal ceremony.'));
         console.log(chalk.gray('  medium  — current default; no overlay, no provider reasoning slot. (default)'));
         console.log(chalk.gray('  high    — step-by-step reasoning; audits evidence before each tool call.'));
@@ -498,15 +519,19 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         console.log(chalk.red(`\nUnknown level "${arg}". Choose: ${valid.join(' | ')}  (max == xhigh)\n`));
         return true;
       }
-      writePreferences(agent.workspaceRoot, { effort: canonical });
+      if (sessionKey) {
+        setSessionMode(agent.workspaceRoot, sessionKey, { effort: canonical });
+      } else {
+        writePreferences(agent.workspaceRoot, { effort: canonical });
+      }
       agent.refreshSystemPrompt();
       const after = resolveEffort(agent.workspaceRoot);
       // Show the alias the user typed alongside the canonical value so `max` isn't silently rewritten.
       const shown = arg === 'max' ? `${canonical} (max)` : canonical;
       // Surface a friendly nudge when `cli.effort` in `config.json` is still
-      // explicitly set and would shadow the workspace preference next boot.
+      // explicitly set and would shadow the preference/override next boot.
       if (after.source === 'config' && after.effort !== canonical) {
-        console.log(chalk.yellow(`\n✓ Preference saved as ${shown}, but cli.effort=${after.effort} in config.json still wins this process.\n`));
+        console.log(chalk.yellow(`\n✓ ${sessionKey ? 'Session' : 'Preference'} saved as ${shown}, but cli.effort=${after.effort} in config.json still wins this process.\n`));
       } else {
         console.log(chalk.green(`\n✓ Reasoning depth → ${shown}. Applies on the next turn.\n`));
       }
@@ -514,7 +539,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
     }
     case '/tier':
     {
-      const { resolveTierLadder, currentTier } = await import('../../runtime/tierLadder.js');
+      const { resolveTierLadder, currentTier } = await import('@kinqs/brainrouter-core/dist/provider/tierLadder.js');
       const arg = (args[0] ?? '').toLowerCase();
       const prefs = readPreferences(agent.workspaceRoot);
       const provider = (agent.getLlmConfig?.()?.provider ?? 'openai').toLowerCase();

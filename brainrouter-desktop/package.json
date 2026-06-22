@@ -1,0 +1,44 @@
+{
+  "name": "brainrouter-desktop",
+  "version": "0.4.15",
+  "private": true,
+  "description": "BrainRouter Desktop — native macOS/Windows shell (Electron + React) over the shared @kinqs/brainrouter-core agent runtime (the same engine the CLI uses).",
+  "type": "module",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "build": "npm run build:electron && vite build",
+    "build:electron": "rm -rf dist-electron && tsc -p tsconfig.electron.json",
+    "build:deps": "npm --prefix ../packages/types run build && npm --prefix ../packages/core run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build:deps && npm run typecheck && npm run build:electron && node --test \"dist-electron/**/*.test.js\" && tsx --test \"src/**/*.test.ts\" \"scripts/**/*.test.ts\"",
+    "dev": "vite",
+    "start": "npm run build:deps && npm run build && electron .",
+    "start:fast": "electron .",
+    "electron": "electron .",
+    "reset:desktop": "node scripts/reset-desktop.mjs"
+  },
+  "dependencies": {
+    "@kinqs/brainrouter-agent-protocol": "^0.4.15",
+    "@kinqs/brainrouter-core": "^0.4.15",
+    "@monaco-editor/react": "^4.7.0",
+    "@types/react-syntax-highlighter": "^15.5.13",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "monaco-editor": "^0.55.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "react-syntax-highlighter": "^16.1.1",
+    "remark-gfm": "^4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "electron": "^33.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.6"
+  }
+}

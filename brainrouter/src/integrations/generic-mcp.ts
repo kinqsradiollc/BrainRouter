@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { redactSensitiveMemoryText } from "../memory/redaction.js";
+import { redactSensitiveMemoryText } from "../memory/util/redaction.js";
 import { resetWorkingMemory } from "../memory/working/offload.js";
 import type { MemoryEngine } from "../memory/engine.js";
 

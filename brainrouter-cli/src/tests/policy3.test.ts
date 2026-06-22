@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { externalDirectoryDecision, egressDecision, hostOf } from '../runtime/exec/execPolicy.js';
-import { isPathWithinRoots } from '../runtime/exec/pathPolicy.js';
+import { externalDirectoryDecision, egressDecision, hostOf } from '@kinqs/brainrouter-core/dist/exec/execPolicy.js';
+import { isPathWithinRoots } from '@kinqs/brainrouter-core/dist/exec/pathPolicy.js';
 import { getPolicyProfile, profileNames, POLICY_PROFILES } from '../runtime/exec/policyProfiles.js';
 
 test('POLICY-3 externalDirectoryDecision: in-workspace allowed; outside follows the mode', () => {

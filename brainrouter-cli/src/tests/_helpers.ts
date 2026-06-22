@@ -13,8 +13,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Agent } from '../agent/agent.js';
-import { _resetCliKnobsCache } from '../config/config.js';
+import { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import { _resetCliKnobsCache } from '@kinqs/brainrouter-core/dist/config/config.js';
 
 /**
  * Construct an Agent without touching MCP or the LLM. Only safe for tests

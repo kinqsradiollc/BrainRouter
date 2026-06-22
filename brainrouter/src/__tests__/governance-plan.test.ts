@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { planGovernance, planStorageGovernance } from "../memory/governance-plan.js";
+import { planGovernance, planStorageGovernance } from "../memory/governance/governance-plan.js";
 import type { MemoryListItem } from "@kinqs/brainrouter-types";
 
 const NOW = Date.parse("2026-05-30T00:00:00Z");

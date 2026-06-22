@@ -1,19 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { callMcpTool, childSessionKey, extractToolText, safeJsonParse } from '../runtime/mcpUtils.js';
-import { createSession, getSession, listSessions, updateSession } from '../orchestration/orchestrator.js';
-import { executeOrchestrationTool } from '../orchestration/tools.js';
+import { callMcpTool, childSessionKey, extractToolText, safeJsonParse } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
+import { createSession, getSession, listSessions, updateSession } from '@kinqs/brainrouter-core/dist/orchestration/orchestrator.js';
+import { executeOrchestrationTool } from '@kinqs/brainrouter-core/dist/orchestration/tools.js';
 import { normalizeSkillsList } from '../cli/commands/workflow.js';
 import { withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 
 test('McpClientWrapper.isConnected is false before connect', async () => {
-  const { McpClientWrapper } = await import('../runtime/mcpClient.js');
+  const { McpClientWrapper } = await import('@kinqs/brainrouter-core/dist/mcp/mcpClient.js');
   const wrapper = new McpClientWrapper();
   assert.equal(wrapper.isConnected(), false);
 });
 
 test('resolveIdentityFromConfig: explicit identity wins over heuristics (10a)', async () => {
-  const { resolveIdentityFromConfig } = await import('../runtime/mcpClient.js');
+  const { resolveIdentityFromConfig } = await import('@kinqs/brainrouter-core/dist/mcp/mcpClient.js');
   assert.equal(
     resolveIdentityFromConfig({ type: 'http', url: 'https://example.com', identity: 'third-party' }, 'brainrouter-cloud'),
     'third-party',
@@ -27,7 +27,7 @@ test('resolveIdentityFromConfig: explicit identity wins over heuristics (10a)', 
 });
 
 test('resolveIdentityFromConfig: name prefix and URL host detect BrainRouter (10a)', async () => {
-  const { resolveIdentityFromConfig } = await import('../runtime/mcpClient.js');
+  const { resolveIdentityFromConfig } = await import('@kinqs/brainrouter-core/dist/mcp/mcpClient.js');
   // Name prefix.
   assert.equal(
     resolveIdentityFromConfig({ type: 'http', url: 'https://example.com' }, 'brainrouter-cloud'),
@@ -70,20 +70,20 @@ test('resolveIdentityFromConfig: name prefix and URL host detect BrainRouter (10
 });
 
 test('McpClientWrapper.getIdentity returns "unknown" before listTools (10a)', async () => {
-  const { McpClientWrapper } = await import('../runtime/mcpClient.js');
+  const { McpClientWrapper } = await import('@kinqs/brainrouter-core/dist/mcp/mcpClient.js');
   const wrapper = new McpClientWrapper();
   assert.equal(wrapper.getIdentity(), 'unknown');
 });
 
 test('McpClientWrapper.listTools returns empty list when disconnected (offline mode)', async () => {
-  const { McpClientWrapper } = await import('../runtime/mcpClient.js');
+  const { McpClientWrapper } = await import('@kinqs/brainrouter-core/dist/mcp/mcpClient.js');
   const wrapper = new McpClientWrapper();
   const res = await wrapper.listTools();
   assert.deepEqual(res, { tools: [] });
 });
 
 test('McpClientWrapper.callTool returns an error envelope when disconnected (offline mode)', async () => {
-  const { McpClientWrapper } = await import('../runtime/mcpClient.js');
+  const { McpClientWrapper } = await import('@kinqs/brainrouter-core/dist/mcp/mcpClient.js');
   const wrapper = new McpClientWrapper();
   const res = await wrapper.callTool('memory_recall', { query: 'anything' });
   const env = res as { isError: boolean; content: Array<{ type: string; text: string }> };
@@ -275,7 +275,7 @@ test('orchestration: spawn_agent wait=true remains backward-compatible', async (
 });
 
 test('orchestration: extractChildPreview prefers a Headline/Summary section over head-of-output', async () => {
-  const { extractChildPreview } = await import('../orchestration/tools.js');
+  const { extractChildPreview } = await import('@kinqs/brainrouter-core/dist/orchestration/tools.js');
   // When the child wrote a Headline block, the preview returns THAT,
   // not the framing intro the head-slice would have captured.
   const withHeadline =
@@ -298,7 +298,7 @@ test('orchestration: extractChildPreview prefers a Headline/Summary section over
 });
 
 test('orchestration: clampAccess prevents a child from exceeding the parent\'s access mode', async () => {
-  const { clampAccess } = await import('../orchestration/tools.js');
+  const { clampAccess } = await import('@kinqs/brainrouter-core/dist/orchestration/tools.js');
   // Same level: no clamp.
   assert.equal(clampAccess('shell', 'shell'), 'shell');
   assert.equal(clampAccess('write', 'write'), 'write');
@@ -315,7 +315,7 @@ test('orchestration: clampAccess prevents a child from exceeding the parent\'s a
 });
 
 test('breadthHint: realistic broad prompts trigger fan-out; narrow ones do not', async () => {
-  const { shouldSuggestFanOut } = await import('../prompt/breadthHint.js');
+  const { shouldSuggestFanOut } = await import('@kinqs/brainrouter-core/dist/prompt/breadthHint.js');
   // Prompts that obviously want fan-out — the original calibration missed
   // several of these (they all scored 1.5, just under the old 1.8 threshold).
   const broad = [
@@ -344,7 +344,7 @@ test('breadthHint: realistic broad prompts trigger fan-out; narrow ones do not',
 });
 
 test('breadthHint: multi-target comparisons trigger fan-out (the live "why no spawn?" miss)', async () => {
-  const { shouldSuggestFanOut } = await import('../prompt/breadthHint.js');
+  const { shouldSuggestFanOut } = await import('@kinqs/brainrouter-core/dist/prompt/breadthHint.js');
   // The exact prompt that scored 0 and never fanned out — an inherently
   // parallel "compare N codebases" task (one explorer per target).
   const comparisons = [
@@ -363,7 +363,7 @@ test('breadthHint: multi-target comparisons trigger fan-out (the live "why no sp
 });
 
 test('breadthHint: analytical "pros and cons / against those" comparisons fan out, without false-firing on "guard against"', async () => {
-  const { shouldSuggestFanOut } = await import('../prompt/breadthHint.js');
+  const { shouldSuggestFanOut } = await import('@kinqs/brainrouter-core/dist/prompt/breadthHint.js');
   // The exact live miss + relational-comparison shapes (one child per peer).
   for (const p of [
     'what are our pros and cons of brainrouter against those in the peer set',
@@ -380,7 +380,7 @@ test('breadthHint: analytical "pros and cons / against those" comparisons fan ou
 });
 
 test('breadthHint: explicit no-fan-out hints in the prompt veto suggestion even at high score', async () => {
-  const { shouldSuggestFanOut, detectFanOutVeto } = await import('../prompt/breadthHint.js');
+  const { shouldSuggestFanOut, detectFanOutVeto } = await import('@kinqs/brainrouter-core/dist/prompt/breadthHint.js');
   // These prompts ALL score high on breadth (verb-object-broad, every,
   // etc.) but the user explicitly opted out. We must honor that.
   const vetoed = [
@@ -403,7 +403,7 @@ test('breadthHint: explicit no-fan-out hints in the prompt veto suggestion even 
 });
 
 test('detectBreadthIntent flags "do everything in 1 go" / "as much as I could" / parallel hints', async () => {
-  const { detectBreadthIntent, shouldSuggestFanOut } = await import('../prompt/breadthHint.js');
+  const { detectBreadthIntent, shouldSuggestFanOut } = await import('@kinqs/brainrouter-core/dist/prompt/breadthHint.js');
 
   const cases: Array<{ prompt: string; expectFanOut: boolean; expectSignal?: string }> = [
     { prompt: 'test all the MCP tools in 1 go, as much as you could', expectFanOut: true, expectSignal: 'one-shot' },
@@ -425,7 +425,7 @@ test('detectBreadthIntent flags "do everything in 1 go" / "as much as I could" /
 });
 
 test('inferRoleFromTask routes verbs to the right child role', async () => {
-  const { inferRoleFromTask } = await import('../orchestration/tools.js');
+  const { inferRoleFromTask } = await import('@kinqs/brainrouter-core/dist/orchestration/tools.js');
   assert.equal(inferRoleFromTask('investigate the auth middleware'), 'explorer');
   assert.equal(inferRoleFromTask('Map the MCP package layout'), 'explorer');
   assert.equal(inferRoleFromTask('Design the data model for the chat feature'), 'architect');
@@ -438,7 +438,7 @@ test('inferRoleFromTask routes verbs to the right child role', async () => {
 });
 
 test('explainUnknownToolName: skill-shaped names get the skill correction; others get the generic hint', async () => {
-  const { explainUnknownToolName } = await import('../agent/agent.js');
+  const { explainUnknownToolName } = await import('@kinqs/brainrouter-core/dist/agent/agent.js');
   assert.match(explainUnknownToolName('incremental-implementation'), /tried to invoke a SKILL/);
   assert.match(explainUnknownToolName('spec-driven-skill'), /load its instructions/);
   assert.match(explainUnknownToolName('code-structure-cleanup'), /tried to invoke a SKILL/);

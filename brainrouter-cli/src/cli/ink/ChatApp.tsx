@@ -7,14 +7,14 @@ import { SlashPalettePanel } from './SlashPalettePanel.js';
 import { FooterStatus } from './FooterStatus.js';
 import { ScrollbackRow } from './ScrollbackRow.js';
 export { ScrollbackRow } from './ScrollbackRow.js';
-import { type BackgroundTask, formatBackgroundTasks, summarizeTasks } from '../../runtime/backgroundTasks.js';
+import { type BackgroundTask, formatBackgroundTasks, summarizeTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
 import { useTerminalSize } from './useTerminalSize.js';
 import { getFileIndex, matchFiles, extractAtToken, applyAtCompletion } from './fileIndex.js';
-import { appendHistory, historyPrev, historyNext, LIVE } from '../../runtime/inputHistory.js';
+import { appendHistory, historyPrev, historyNext, searchHistory, LIVE } from '../../runtime/inputHistory.js';
 import { flagSuggestions, applyFlagCompletion } from '../../runtime/slashFlags.js';
 // 0.3.9 — show the model's max prompt-context window in the footer next
 // to the model name (e.g. `gpt-4o-mini · 128k ctx · session-…`).
-import { formatContextWindow } from '../../runtime/contextWindow.js';
+import { formatContextWindow } from '@kinqs/brainrouter-core/dist/context/contextWindow.js';
 import { TuiRouterProvider, useTuiRouter, type TuiRoute } from './TuiRouter.js';
 import { GridWorkspace } from './layouts/GridWorkspace.js';
 import { renderMarkdown } from './markdownRender.js';
@@ -23,7 +23,7 @@ import { WelcomeView } from './views/WelcomeView.js';
 import type { BannerInputs } from '../banner.js';
 import { resolveTheme } from '../theme.js';
 import { TuiHeader } from './components/TuiHeader.js';
-import { VERSION } from '../../version.js';
+import { VERSION } from '@kinqs/brainrouter-core/dist/version.js';
 
 /**
  * Ink-based chat REPL — replaces the readline-based `startREPL` shell.
@@ -315,8 +315,17 @@ function ChatAppContent({
 
   const [scrollback, setScrollback] = useState<ScrollbackEntry[]>(() => seedScrollback(workspaceRoot, initialOfflineWarning, initialHint));
   const nextIdRef = useRef(scrollback.length);
+  // CC-P1.1 — scroll position in VISUAL LINES from the bottom of history
+  // (0 = stuck to the latest output). Line-granular so w/s glide smoothly.
   const [scrollOffset, setScrollOffset] = useState(0);
+  const viewportBudgetRef = useRef(20); // page-step size for PageUp/PageDown
+  const scrollMaxRef = useRef(0); // top clamp (totalLines - budget)
+  const mainWidthRef = useRef(80); // width for push-time height estimates
   const [scrollMode, setScrollMode] = useState(false);
+  // CC-P1.7 — Ctrl+R reverse history search: null = off; query + skip cycle.
+  const [histSearch, setHistSearch] = useState<{ query: string; skip: number } | null>(null);
+  // CC-P1.3 — Ctrl+O: expand/collapse tool previews + reasoning blocks globally.
+  const [verboseTranscript, setVerboseTranscript] = useState(false);
   const [composerValue, setComposerValue] = useState('');
   // INPUT-ERGO — remount key for the composer TextInput. ink-text-input only
   // initializes its internal cursor at the END of `value` on MOUNT; an external
@@ -421,20 +430,30 @@ function ChatAppContent({
     const liveReasoningHeight = liveReasoning ? 8 : 0;
     const liveAssistantHeight = liveAssistant ? estimateTextHeight(liveAssistant, mainWidth) + 2 : 0;
     const budget = Math.max(5, maxHeight - liveReasoningHeight - liveAssistantHeight);
-    return packVisibleScrollback(scrollback, {
+    const packed = packVisibleLines(scrollback, {
       budget,
-      scrollOffset,
-      estimateHeight: (e) => estimateEntryHeight(e, mainWidth),
+      lineOffset: scrollOffset,
+      estimateHeight: (e) => estimateEntryHeight(e, mainWidth, verboseTranscript),
     });
-  }, [scrollback, rows, liveReasoning, liveAssistant, mainWidth, scrollOffset]);
+    // Refs for the scroll keys: page size + the top clamp (g / PageUp), and
+    // the width used by push-time line-anchoring estimates.
+    viewportBudgetRef.current = budget;
+    scrollMaxRef.current = Math.max(0, packed.totalLines - budget);
+    mainWidthRef.current = mainWidth;
+    return packed;
+  }, [scrollback, rows, liveReasoning, liveAssistant, mainWidth, scrollOffset, verboseTranscript]);
 
   const pushFns = useMemo<PushScrollback>(() => {
     const push = (entry: any) => {
       // Stick to the bottom ONLY when already at the bottom. If the user has
-      // scrolled up to read history, keep their viewport anchored as new entries
-      // arrive (bump the offset by the one we're adding) instead of yanking them
-      // back down — that yank-on-every-push was why scrolling "did nothing".
-      setScrollOffset((prev) => (prev > 0 ? prev + 1 : 0));
+      // scrolled up to read history, keep their viewport LINE-anchored: bump
+      // the line offset by the new entry's estimated height so the content
+      // they're reading doesn't shift (the old yank-on-every-push bug).
+      setScrollOffset((prev) => {
+        if (prev <= 0) return 0;
+        const h = Math.max(1, estimateEntryHeight({ id: -1, timestamp: new Date(), ...entry } as ScrollbackEntry, mainWidthRef.current));
+        return prev + h;
+      });
       setScrollback((s) => {
         const id = ++nextIdRef.current;
         return [...s, { id, timestamp: new Date(), ...entry } as ScrollbackEntry];
@@ -746,16 +765,48 @@ function ChatAppContent({
     // (focus=false), so plain keys scroll instead of typing into the prompt:
     //   w / k / ↑ = up · s / j / ↓ = down · g / G = top / bottom · Esc / i / Enter = type
     // This is the only way to scroll with letter keys without them being typed.
+    // CC-P1.7 — reverse history search owns the keyboard while active. The
+    // composer is defocused (focus prop below), so plain chars build the query
+    // instead of typing into the prompt; Ctrl+R cycles older matches; Enter
+    // accepts the match into the composer; Esc cancels.
+    if (histSearch !== null) {
+      const match = searchHistory(histEntries, histSearch.query, histSearch.skip);
+      if (key.return) {
+        if (match) setComposerProgrammatic(match.value);
+        setHistSearch(null);
+      } else if (key.escape) {
+        setHistSearch(null);
+      } else if (key.ctrl && (input === 'r' || input === 'R')) {
+        setHistSearch((h) => h ? { ...h, skip: h.skip + 1 } : h);
+      } else if (key.backspace || key.delete) {
+        setHistSearch((h) => h ? { query: h.query.slice(0, -1), skip: 0 } : h);
+      } else if (input && input.length === 1 && !key.ctrl && !key.meta) {
+        setHistSearch((h) => h ? { query: h.query + input, skip: 0 } : h);
+      }
+      return;
+    }
+    if (key.ctrl && (input === 'r' || input === 'R')) {
+      setHistSearch({ query: '', skip: 0 });
+      return;
+    }
+    // CC-P1.3 — Ctrl+O toggles the verbose transcript (full tool previews).
+    if (key.ctrl && (input === 'o' || input === 'O')) {
+      setVerboseTranscript((v) => !v);
+      return;
+    }
     if (scrollMode) {
-      const top = Math.max(0, scrollback.length - 1);
+      // CC-P1.1 — LINE-granular: w/s move one visual line (holding glides
+      // smoothly); PageUp/Dn move a viewport page; g/G jump top/bottom.
+      const top = scrollMaxRef.current;
+      const page = Math.max(3, viewportBudgetRef.current - 2);
       if (input === 'w' || input === 'k' || key.upArrow) {
-        setScrollOffset((p) => Math.min(top, p + 1)); // fine, 1 at a time (holding glides)
+        setScrollOffset((p) => Math.min(top, p + 1));
       } else if (input === 's' || input === 'j' || key.downArrow) {
         setScrollOffset((p) => Math.max(0, p - 1));
       } else if (key.pageUp) {
-        setScrollOffset((p) => Math.min(top, p + 8)); // page jump
+        setScrollOffset((p) => Math.min(top, p + page));
       } else if (key.pageDown) {
-        setScrollOffset((p) => Math.max(0, p - 8));
+        setScrollOffset((p) => Math.max(0, p - page));
       } else if (input === 'g') {
         setScrollOffset(top);
       } else if (input === 'G') {
@@ -958,14 +1009,26 @@ function ChatAppContent({
             ) : activeRoute === 'session' ? (
               <Box flexDirection="column" flexGrow={1} justifyContent="flex-end" overflow="hidden">
                 <Box flexDirection="column">
-                  {visibleScrollback.hiddenAbove > 0 || visibleScrollback.hiddenBelow > 0 ? (
+                  {visibleScrollback.hiddenLinesAbove > 0 || visibleScrollback.hiddenLinesBelow > 0 ? (
                     <Text color="gray" dimColor wrap="truncate">
-                      {`  ⋯ ${visibleScrollback.hiddenAbove} earlier message${visibleScrollback.hiddenAbove === 1 ? '' : 's'} above · press Esc to scroll (w/s · j/k · ↑/↓)${visibleScrollback.hiddenBelow > 0 ? ` · ${visibleScrollback.hiddenBelow} below` : ''}`}
+                      {`  ⋯ ${visibleScrollback.hiddenLinesAbove} line${visibleScrollback.hiddenLinesAbove === 1 ? '' : 's'} above · Esc to scroll (w/s · j/k · ↑/↓ · g/G)${visibleScrollback.hiddenLinesBelow > 0 ? ` · ${visibleScrollback.hiddenLinesBelow} below` : ''}`}
                     </Text>
                   ) : null}
-                  {visibleScrollback.entries.map((entry) => (
-                    <ScrollbackRow key={entry.id} entry={entry} accentColor={accentColor} cols={mainWidth} />
-                  ))}
+                  {visibleScrollback.slices.map((slice) => {
+                    const row = <ScrollbackRow key={slice.entry.id} entry={slice.entry} accentColor={accentColor} cols={mainWidth} verbose={verboseTranscript} />;
+                    if (slice.clipTop === 0 && slice.clipBottom === 0) return row;
+                    // Boundary entry: show only its visible rows. Fixed-height
+                    // overflow:hidden wrapper; a negative top margin slides the
+                    // content up by clipTop so the window lands mid-entry.
+                    const visibleRows = Math.max(1, slice.height - slice.clipTop - slice.clipBottom);
+                    return (
+                      <Box key={slice.entry.id} height={visibleRows} overflow="hidden" flexDirection="column">
+                        <Box flexDirection="column" flexShrink={0} marginTop={-slice.clipTop}>
+                          {row}
+                        </Box>
+                      </Box>
+                    );
+                  })}
                   {liveReasoning ? (
                     <Box flexDirection="column" marginTop={1}>
                       <Text color="magenta" italic dimColor>
@@ -1046,6 +1109,17 @@ function ChatAppContent({
           {/* Global Composer (TextInput) and dividers */}
           <Box flexDirection="column" marginTop={1} flexShrink={0}>
             <Text color={accentColor} dimColor>{'─'.repeat(Math.max(10, cols - 2))}</Text>
+            {histSearch !== null ? (() => {
+              const m = searchHistory(histEntries, histSearch.query, histSearch.skip);
+              return (
+                <Box>
+                  <Text color="cyan" bold>{` (reverse-i-search) `}</Text>
+                  <Text color="yellow">{`'${histSearch.query}'`}</Text>
+                  <Text color="gray">{': '}</Text>
+                  <Text wrap="truncate-end">{m ? m.value : histSearch.query ? '(no match)' : 'type to search · Ctrl+R next · Enter accept · Esc cancel'}</Text>
+                </Box>
+              );
+            })() : null}
             <Box>
               <Text color={scrollMode ? 'cyan' : accentColor} bold={scrollMode}>{scrollMode ? ' ⊟ ' : ' ❯ '}</Text>
               <TextInput
@@ -1053,7 +1127,7 @@ function ChatAppContent({
                 value={composerValue}
                 onChange={onComposerChange}
                 onSubmit={onComposerSubmit}
-                focus={!scrollMode}
+                focus={!scrollMode && histSearch === null}
                 placeholder={scrollMode ? 'SCROLL — w/s · j/k · ↑/↓ scroll · g/G top·bottom · Esc or i to type' : (phase === 'turn-running' ? '' : 'type a prompt or / for commands')}
               />
             </Box>
@@ -1189,7 +1263,7 @@ function renderMarkdownCached(text: string, width: number): string {
   return rendered;
 }
 
-export function estimateEntryHeight(entry: ScrollbackEntry, cols: number): number {
+export function estimateEntryHeight(entry: ScrollbackEntry, cols: number, verbose = false): number {
   switch (entry.kind) {
     case 'raw':
     case 'user':
@@ -1208,8 +1282,8 @@ export function estimateEntryHeight(entry: ScrollbackEntry, cols: number): numbe
       let h = 1;
       if (entry.preview) {
         const lines = entry.preview.split('\n').length;
-        h += Math.min(8, lines);
-        if (lines > 8) h += 1;
+        h += verbose ? lines : Math.min(8, lines);
+        if (!verbose && lines > 8) h += 1;
       }
       return h + 1;
     }
@@ -1223,7 +1297,7 @@ export function estimateEntryHeight(entry: ScrollbackEntry, cols: number): numbe
     }
     case 'reasoning': {
       const rawLines = entry.text ? entry.text.split('\n') : [];
-      const shown = rawLines.slice(0, 10).join('\n');
+      const shown = rawLines.slice(0, verbose ? rawLines.length : 10).join('\n');
       const visible = estimateTextHeight(shown, Math.max(1, cols - 3)); // wraps inside a bordered column
       const hiddenExtra = rawLines.length > 10 ? 1 : 0;
       return 1 + visible + hiddenExtra + 1;
@@ -1241,34 +1315,56 @@ export function estimateEntryHeight(entry: ScrollbackEntry, cols: number): numbe
 }
 
 
+export interface VisibleSlice<T> {
+  entry: T;
+  /** Estimated full height of the entry in terminal rows (≥1). */
+  height: number;
+  /** Rows clipped off the TOP of the entry (scrolled past the window top). */
+  clipTop: number;
+  /** Rows clipped off the BOTTOM (scrolled below the window bottom). */
+  clipBottom: number;
+}
+
 /**
- * Choose which scrollback entries to render and how many are hidden above/below.
- * Packs newest-first until the height `budget` is exhausted, always keeping at
- * least the newest entry (the overflow:hidden box clips it if it alone is taller
- * than the budget). This GUARANTEES the rendered scrollback fits its allocated
- * height — it can never spill onto the composer/footer rows (the overlap bug).
- * `scrollOffset` slides the window toward older history (PageUp). Pure → tested.
+ * CC-P1.1 — LINE-level scrollback window. The window position (`lineOffset`)
+ * counts VISUAL LINES from the bottom of history, so scrolling moves one line
+ * at a time instead of jumping whole entries. Boundary entries are returned
+ * with `clipTop`/`clipBottom` so the renderer can show just their visible rows
+ * (fixed-height overflow:hidden wrappers). The packed window NEVER exceeds
+ * `budget` rows, so it cannot spill onto the composer/footer chrome.
+ * `lineOffset` is clamped internally; `totalLines` lets callers clamp keys.
+ * Pure → tested.
  */
-export function packVisibleScrollback<T>(
+export function packVisibleLines<T>(
   entries: T[],
-  opts: { budget: number; scrollOffset: number; estimateHeight: (entry: T) => number },
-): { entries: T[]; hiddenAbove: number; hiddenBelow: number } {
-  const endIdx = Math.max(0, entries.length - Math.max(0, opts.scrollOffset));
-  let sliceStart = endIdx;
-  let currentHeight = 0;
-  // Fill the available height newest-first, INCLUDING the entry that crosses the
-  // budget (the box clips its top via overflow:hidden + flex-end). Bailing out
-  // before that entry is what left a tall response off-screen with the rest of
-  // the pane blank — the "responses gone, massive free space" bug.
-  for (let i = endIdx - 1; i >= 0; i--) {
-    currentHeight += opts.estimateHeight(entries[i]);
-    sliceStart = i;
-    if (currentHeight >= opts.budget) break;
+  opts: { budget: number; lineOffset: number; estimateHeight: (entry: T) => number },
+): { slices: Array<VisibleSlice<T>>; hiddenLinesAbove: number; hiddenLinesBelow: number; totalLines: number } {
+  const budget = Math.max(1, opts.budget);
+  const heights = entries.map((e) => Math.max(1, opts.estimateHeight(e)));
+  const totalLines = heights.reduce((n, h) => n + h, 0);
+  const maxOffset = Math.max(0, totalLines - budget);
+  const offset = Math.min(Math.max(0, opts.lineOffset), maxOffset);
+
+  const slices: Array<VisibleSlice<T>> = [];
+  let toSkip = offset; // lines below the window (scrolled past)
+  let remaining = Math.min(budget, totalLines - offset);
+  for (let i = entries.length - 1; i >= 0 && remaining > 0; i--) {
+    const h = heights[i];
+    if (toSkip >= h) { toSkip -= h; continue; } // entirely below the window
+    const clipBottom = toSkip;
+    toSkip = 0;
+    const availableOfEntry = h - clipBottom;
+    const used = Math.min(availableOfEntry, remaining);
+    const clipTop = availableOfEntry - used;
+    slices.unshift({ entry: entries[i], height: h, clipTop, clipBottom });
+    remaining -= used;
   }
+  const visible = Math.min(budget, totalLines - offset);
   return {
-    entries: entries.slice(sliceStart, endIdx),
-    hiddenAbove: sliceStart,
-    hiddenBelow: entries.length - endIdx,
+    slices,
+    hiddenLinesAbove: Math.max(0, totalLines - offset - visible),
+    hiddenLinesBelow: offset,
+    totalLines,
   };
 }
 

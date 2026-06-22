@@ -594,9 +594,12 @@ export interface RecallResult {
  * Outcome of the cognitive extraction step for a single capture call. Lets
  * the CLI distinguish "the LLM said nothing notable here" (ok, zero records)
  * from "the LLM call itself failed" (failed) from "extraction wasn't tried
- * this turn" (skipped — below the every-N-turns threshold).
+ * this turn" (skipped — below the every-N-turns threshold) from "extraction was
+ * dispatched to run in the BACKGROUND so capture could reply immediately"
+ * (deferred — the records will be extracted by the background runner; treat it
+ * as success, not a warning).
  */
-export type CognitiveExtractionStatus = "ok" | "failed" | "skipped";
+export type CognitiveExtractionStatus = "ok" | "failed" | "skipped" | "deferred";
 
 export interface CaptureResult {
   /** Number of Sensory messages recorded. */

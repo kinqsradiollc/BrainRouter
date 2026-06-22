@@ -6,8 +6,8 @@ import {
   formatHandoffForModel,
   ResultCache,
   RESULT_HANDOFF_THRESHOLD_CHARS,
-} from "../runtime/resultHandoff.js";
-import { extractFromResult, runExtractResult } from "../runtime/tools/extractResult.js";
+} from "@kinqs/brainrouter-core/dist/util/resultHandoff.js";
+import { extractFromResult, runExtractResult } from "@kinqs/brainrouter-core/dist/tool/extractResult.js";
 
 test("shouldHandoff: at/above threshold only", () => {
   assert.equal(shouldHandoff("x".repeat(RESULT_HANDOFF_THRESHOLD_CHARS)), true);

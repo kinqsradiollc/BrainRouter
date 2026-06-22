@@ -1,6 +1,7 @@
 import type { RerankerServiceConfig } from "@kinqs/brainrouter-types";
-import { fetchWithExternalRetry } from "../retry.js";
-import { resolveLLMTimeoutMs } from "../llm-response.js";
+import { fetchWithExternalRetry } from "../util/retry.js";
+import { acquireRerankerSlot, acquireRerankerSlotOrNull } from "../llm/llm-semaphore.js";
+import { normalizeRequestTimeoutMs, parseRequestTimeoutMs, requestTimeoutSignal } from "../util/request-timeout.js";
 
 export interface RankedResult {
   index: number;
@@ -22,25 +23,83 @@ export function rerankerMaxDocChars(env: NodeJS.ProcessEnv = process.env): numbe
   return Number.isFinite(n) && n >= 100 ? Math.min(n, 8000) : def;
 }
 
+/**
+ * Per-call reranker timeout. DEFAULT 0 = no timeout: a rerank WAITS for the
+ * server however long it takes (a CPU CrossEncoder under multi-agent load can
+ * legitimately take minutes), and only a genuine failure falls over to RRF.
+ * Aborting a slow-but-alive rerank silently degrades every recall to RRF.
+ *
+ * A bound is OPT-IN: set BRAINROUTER_RERANKER_TIMEOUT_MS to a positive integer
+ * (≥1000) as a backstop against a server that accepts the socket but never
+ * answers. `0` / empty / junk → no timeout. See request-timeout.ts for the
+ * trade-off the operator accepts by leaving it off.
+ */
+export function rerankerTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  return parseRequestTimeoutMs(env.BRAINROUTER_RERANKER_TIMEOUT_MS);
+}
+
+/**
+ * Max time a recall waits for a reranker slot before shedding to RRF. DEFAULT 0
+ * = wait indefinitely: under parallel load a recall QUEUES for the slot rather
+ * than dropping the cross-encoder — no request is lost, it just waits its turn.
+ *
+ * Shedding is OPT-IN: set BRAINROUTER_RERANKER_ACQUIRE_WAIT_MS to a positive
+ * integer to bound the wait, after which the recall skips the cross-encoder and
+ * uses RRF (responsiveness↔quality knob for a saturated single-worker backend).
+ * Shedding is NOT a reranker failure and never trips the breaker.
+ */
+export function rerankerAcquireWaitMs(env: NodeJS.ProcessEnv = process.env): number {
+  return parseRequestTimeoutMs(env.BRAINROUTER_RERANKER_ACQUIRE_WAIT_MS);
+}
+
+/**
+ * Consecutive failures before the reranker circuit opens. DEFAULT 0 = breaker
+ * DISABLED: every recall attempts the cross-encoder and surfaces its own failure
+ * (falling back to RRF for that call only), instead of pre-emptively skipping the
+ * server for a cooldown. Enable outage-dampening by setting
+ * BRAINROUTER_RERANKER_BREAKER_THRESHOLD to a positive integer.
+ */
+export function rerankerBreakerThreshold(env: NodeJS.ProcessEnv = process.env): number {
+  const def = 0;
+  const n = Number.parseInt(env.BRAINROUTER_RERANKER_BREAKER_THRESHOLD ?? "", 10);
+  return Number.isFinite(n) && n >= 1 ? n : def;
+}
+
+/** How long the reranker circuit stays open (skipped) once tripped. Default 30s. */
+export function rerankerBreakerCooldownMs(env: NodeJS.ProcessEnv = process.env): number {
+  const def = 30_000;
+  const n = Number.parseInt(env.BRAINROUTER_RERANKER_BREAKER_COOLDOWN_MS ?? "", 10);
+  return Number.isFinite(n) && n >= 1000 ? n : def;
+}
+
 export class RerankerService {
   private readonly endpoint: string;
   private readonly apiKey: string;
   private readonly model: string;
   private readonly topN: number;
   private readonly timeoutMs: number;
+  private readonly acquireWaitMs: number;
   private readonly ready: boolean;
+
+  // Circuit breaker — a flapping / overloaded reranker should be SKIPPED for a
+  // cooldown, not retried (and timed-out) on every single recall. `isAvailable()`
+  // reflects the breaker so recall silently uses RRF while it's open; no
+  // per-recall network wait and no log spam.
+  private consecutiveFailures = 0;
+  private breakerOpenUntil = 0;
+  private readonly breakerThreshold: number;
+  private readonly breakerCooldownMs: number;
 
   constructor(config: RerankerServiceConfig) {
     this.endpoint = config.endpoint ?? "https://api.cohere.com/v1/rerank";
     this.apiKey = config.apiKey ?? "";
     this.model = config.model ?? "rerank-english-v3.0";
     this.topN = config.topN ?? 5;
-    this.timeoutMs = Math.max(1000, config.timeoutMs ?? resolveLLMTimeoutMs({
-      endpoint: this.endpoint,
-      requestedMs: 60_000,
-      envVarNames: ["BRAINROUTER_RERANKER_TIMEOUT_MS", "BRAINROUTER_LLM_TIMEOUT_MS"],
-      localMinimumMs: 120_000,
-    }));
+    // 0 = no timeout: wait for the server (see rerankerTimeoutMs / request-timeout.ts).
+    this.timeoutMs = normalizeRequestTimeoutMs(config.timeoutMs ?? rerankerTimeoutMs());
+    this.acquireWaitMs = rerankerAcquireWaitMs();
+    this.breakerThreshold = rerankerBreakerThreshold();
+    this.breakerCooldownMs = rerankerBreakerCooldownMs();
 
     // Graceful fallback: If no API key is provided, disable the reranker service.
     this.ready = !!this.apiKey;
@@ -53,8 +112,38 @@ export class RerankerService {
     return this.ready;
   }
 
+  /**
+   * True when the reranker is configured AND (the breaker is disabled OR closed).
+   * Recall checks THIS (not `isReady`) so a tripped breaker is skipped during the
+   * cooldown. With the breaker disabled (default) this is just `isReady`.
+   */
+  isAvailable(): boolean {
+    if (!this.ready) return false;
+    if (this.breakerThreshold < 1) return true; // breaker disabled — always attempt
+    return Date.now() >= this.breakerOpenUntil;
+  }
+
   getTopN(): number {
     return this.topN;
+  }
+
+  private recordSuccess(): void {
+    if (this.consecutiveFailures > 0 || this.breakerOpenUntil > 0) {
+      console.error("[BrainRouter] Reranker recovered; circuit closed.");
+    }
+    this.consecutiveFailures = 0;
+    this.breakerOpenUntil = 0;
+  }
+
+  private recordFailure(): void {
+    this.consecutiveFailures++;
+    if (this.breakerThreshold >= 1 && this.consecutiveFailures >= this.breakerThreshold && Date.now() >= this.breakerOpenUntil) {
+      this.breakerOpenUntil = Date.now() + this.breakerCooldownMs;
+      console.error(
+        `[BrainRouter] Reranker circuit opened after ${this.consecutiveFailures} consecutive failures; ` +
+        `skipping rerank for ${Math.round(this.breakerCooldownMs / 1000)}s (using RRF).`,
+      );
+    }
   }
 
   /**
@@ -68,6 +157,11 @@ export class RerankerService {
   }): Promise<RankedResult[]> {
     if (!this.ready) {
       throw new Error("RerankerService is not ready (missing API key)");
+    }
+    // Defense-in-depth: recall checks isAvailable(), but a direct caller during
+    // an open breaker fails fast (no network wait) so we don't pay the timeout.
+    if (Date.now() < this.breakerOpenUntil) {
+      throw new Error("Reranker circuit open (cooling down after repeated failures); using RRF");
     }
 
     if (params.documents.length === 0) {
@@ -85,53 +179,77 @@ export class RerankerService {
     const safeDocuments = params.documents.map(doc =>
       doc.length > maxDocChars ? doc.substring(0, maxDocChars) + "..." : doc
     );
-    const safeQuery = params.query.length > 200 
-      ? params.query.substring(0, 200) + "..." 
+    const safeQuery = params.query.length > 200
+      ? params.query.substring(0, 200) + "..."
       : params.query;
 
-    const res = await fetchWithExternalRetry(this.endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({
-        query: safeQuery,
-        documents: safeDocuments,
-        model: this.model,
-        top_n: requestTopN,
-      }),
-      signal: AbortSignal.timeout(this.timeoutMs),
-    }, {
-      label: "Reranker API",
-    });
-
-    if (!res.ok) {
-      const err = await res.text().catch(() => "(no body)");
-      throw new Error(`Reranker API failed: HTTP ${res.status} ${res.statusText} - ${err}`);
+    // Bound concurrency (BRAINROUTER_RERANKER_MAX_CONCURRENT, default 8): cap how
+    // many rerank requests hit the backend at once. Acquire AFTER the breaker
+    // check above so an open breaker (when enabled) still fast-fails (no queuing).
+    //
+    // Slot acquisition. DEFAULT (acquireWaitMs === 0): QUEUE for the slot
+    // indefinitely so no recall is dropped under parallel load — it just waits its
+    // turn. OPT-IN shedding (acquireWaitMs > 0): give up after the wait and shed to
+    // RRF. Either way the throw/await happens BEFORE the try below, so a shed never
+    // calls recordFailure() (the breaker must not open from shedding) and makes no
+    // network request. recall's catch routes a shed to RRF.
+    const release = this.acquireWaitMs > 0
+      ? await acquireRerankerSlotOrNull(this.acquireWaitMs)
+      : await acquireRerankerSlot();
+    if (!release) {
+      throw new Error("Reranker slot busy under parallel load; using RRF");
     }
+    try {
+      const res = await fetchWithExternalRetry(this.endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          query: safeQuery,
+          documents: safeDocuments,
+          model: this.model,
+          top_n: requestTopN,
+        }),
+        signal: requestTimeoutSignal(this.timeoutMs),
+      }, {
+        label: "Reranker API",
+      });
 
-    const data = await res.json() as any;
-    
-    // Example vLLM response:
-    // {
-    //   'id': 'score-940bec41fb803c3f', 
-    //   'model': 'BAAI/bge-reranker-v2-m3', 
-    //   'results': [
-    //      {'index': 0, 'document': {'text': '...'}, 'relevance_score': 0.997682}, 
-    //      {'index': 1, 'document': {'text': '...'}, 'relevance_score': 0.000016}
-    //   ]
-    // }
+      if (!res.ok) {
+        const err = await res.text().catch(() => "(no body)");
+        throw new Error(`Reranker API failed: HTTP ${res.status} ${res.statusText} - ${err}`);
+      }
 
-    if (!data.results || !Array.isArray(data.results)) {
-      throw new Error("Invalid reranker response format: missing 'results' array");
+      const data = await res.json() as any;
+
+      // Example vLLM response:
+      // {
+      //   'id': 'score-940bec41fb803c3f',
+      //   'model': 'BAAI/bge-reranker-v2-m3',
+      //   'results': [
+      //      {'index': 0, 'document': {'text': '...'}, 'relevance_score': 0.997682},
+      //      {'index': 1, 'document': {'text': '...'}, 'relevance_score': 0.000016}
+      //   ]
+      // }
+
+      if (!data.results || !Array.isArray(data.results)) {
+        throw new Error("Invalid reranker response format: missing 'results' array");
+      }
+
+      const rankedResults: RankedResult[] = data.results.map((r: any) => ({
+        index: r.index,
+        relevanceScore: r.relevance_score
+      }));
+
+      this.recordSuccess();
+      return rankedResults;
+    } catch (e) {
+      this.recordFailure();
+      throw e;
+    } finally {
+      release();
     }
-
-    const rankedResults: RankedResult[] = data.results.map((r: any) => ({
-      index: r.index,
-      relevanceScore: r.relevance_score
-    }));
-
-    return rankedResults;
   }
 }

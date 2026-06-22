@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
 import { MemoryEngine } from "../memory/engine.js";
-import { buildReflectPrompt, parseReflectResponse, NO_INSIGHT_SENTINEL } from "../memory/reflect.js";
+import { buildReflectPrompt, parseReflectResponse, NO_INSIGHT_SENTINEL } from "../memory/util/reflect.js";
 
 function fresh(label: string): { engine: MemoryEngine; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), `brainrouter-mem32b-${label}-`));

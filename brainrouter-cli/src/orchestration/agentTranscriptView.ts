@@ -22,7 +22,8 @@ export function entryKind(e: TranscriptEntryLike): EntryKind {
   if (e.isError) return 'error';
   if (e.tool_calls != null) return 'tool-call';
   if (e.role === 'tool') return 'tool-result';
-  if (e.role === 'user') return 'user';
+  // role:'user' WITH a name is an injected system/guard message, not a user turn.
+  if (e.role === 'user') return e.name ? 'system' : 'user';
   if (e.role === 'assistant') return 'assistant';
   return 'system';
 }

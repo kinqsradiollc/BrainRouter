@@ -1,7 +1,9 @@
 import type { RelevanceJudgeServiceConfig, RelevanceVerdict } from "@kinqs/brainrouter-types";
-import { fetchWithExternalRetry } from "../retry.js";
-import { acquireLLMSlot } from "../llm-semaphore.js";
-import { extractChatCompletionText, resolveLLMTimeoutMs } from "../llm-response.js";
+import { fetchWithExternalRetry } from "../util/retry.js";
+import { acquireLLMSlot } from "../llm/llm-semaphore.js";
+import { extractChatCompletionText, resolveLLMTimeoutMs } from "../llm/llm-response.js";
+import { normalizeRequestTimeoutMs, requestTimeoutSignal } from "../util/request-timeout.js";
+import { extractJsonValue } from "../util/llm-json.js";
 
 export interface JudgeCandidate {
   /** Stable id used for logging — typically the memory's record_id. */
@@ -57,11 +59,12 @@ export class RelevanceJudgeService {
     this.apiKey = config.apiKey ?? "";
     this.model = config.model ?? "gpt-4o-mini";
     this.maxCandidates = Math.max(1, config.maxCandidates ?? 10);
-    this.timeoutMs = Math.max(1000, config.timeoutMs ?? resolveLLMTimeoutMs({
+    // 0 = no timeout: wait for the judge LLM (see request-timeout.ts). A bound is
+    // opt-in via BRAINROUTER_RELEVANCE_JUDGE_TIMEOUT_MS / BRAINROUTER_LLM_TIMEOUT_MS.
+    this.timeoutMs = normalizeRequestTimeoutMs(config.timeoutMs ?? resolveLLMTimeoutMs({
       endpoint: this.endpoint,
-      requestedMs: 15_000,
+      requestedMs: 0,
       envVarNames: ["BRAINROUTER_RELEVANCE_JUDGE_TIMEOUT_MS", "BRAINROUTER_LLM_TIMEOUT_MS"],
-      localMinimumMs: 120_000,
     }));
 
     this.ready = this.enabled && !!this.apiKey;
@@ -142,7 +145,7 @@ export class RelevanceJudgeService {
         ],
         temperature: 0,
       }),
-      signal: AbortSignal.timeout(this.timeoutMs),
+      signal: requestTimeoutSignal(this.timeoutMs),
     }, {
       label: "Relevance Judge API",
     });
@@ -209,17 +212,11 @@ export class RelevanceJudgeService {
     let text = raw.trim();
     text = text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
 
-    let parsed: any;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      const objMatch = text.match(/\{[\s\S]*\}/);
-      const arrMatch = text.match(/\[[\s\S]*\]/);
-      const candidate = objMatch?.[0] ?? arrMatch?.[0];
-      if (!candidate) {
-        throw new Error(`Relevance Judge produced non-JSON output: ${text.slice(0, 200)}`);
-      }
-      parsed = JSON.parse(candidate);
+    // Robust parse: balanced-span scan + repair, tolerant of role-token leaks,
+    // prose, and trailing commas (see llm-json.ts). `text` is already de-fenced.
+    const parsed: any = extractJsonValue(text, { kind: "any" });
+    if (parsed === null) {
+      throw new Error(`Relevance Judge produced non-JSON output: ${text.slice(0, 200)}`);
     }
 
     const list: any[] = Array.isArray(parsed)

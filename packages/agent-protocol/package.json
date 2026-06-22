@@ -1,0 +1,40 @@
+{
+  "name": "@kinqs/brainrouter-agent-protocol",
+  "version": "0.4.15",
+  "description": "Typed agent event/command protocol for BrainRouter — the one vocabulary spoken by the CLI's headless mode and the Desktop app's agent host.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "test": "npm run build && node --test \"dist/**/*.test.js\"",
+    "prepack": "npm run build && find dist -name '*.test.*' -delete"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "@types/node": "^22.5.0"
+  },
+  "keywords": [
+    "brainrouter",
+    "agent",
+    "protocol"
+  ],
+  "license": "MIT",
+  "author": "BrainRouter contributors",
+  "homepage": "https://github.com/kinqsradiollc/BrainRouter#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kinqsradiollc/BrainRouter.git",
+    "directory": "packages/agent-protocol"
+  },
+  "bugs": {
+    "url": "https://github.com/kinqsradiollc/BrainRouter/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false
+}

@@ -5,8 +5,8 @@ import os from 'node:os';
 import { WizardApp } from './WizardApp.js';
 import type { WizardState, WizardDraft } from '../wizard/types.js';
 import type { McpPick } from '../wizard/types.js';
-import { writePreferences } from '../../state/preferencesStore.js';
-import { loadOrInitConfig, saveConfig, type Config } from '../../config/config.js';
+import { writePreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
+import { loadOrInitConfig, saveConfig, type Config } from '@kinqs/brainrouter-core/dist/config/config.js';
 import { initAgentMd } from '../../prompt/initAgentMd.js';
 import { NoTTYError } from '../cliPrompt.js';
 import { resetStdinForReadline } from './stdinHandoff.js';
@@ -103,7 +103,7 @@ function commitWizardDraft(draft: WizardDraft, workspaceRoot: string): Config {
     config.llm = {
       provider: draft.provider.id,
       apiKey: draft.apiKey ?? '',
-      model: draft.model ?? draft.provider.defaultModel,
+      model: draft.model ?? '',
       endpoint: draft.customEndpoint ?? draft.provider.endpoint,
     };
   }

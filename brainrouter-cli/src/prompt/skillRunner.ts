@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { McpClient } from '../runtime/mcpUtils.js';
+import type { McpClient } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
 import { skillSearchRoots } from './skillCatalog.js';
 
 export interface SkillResolution {

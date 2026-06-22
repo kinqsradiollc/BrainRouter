@@ -1,0 +1,409 @@
+/**
+ * DESK-3b/4a/5d — Electron main: ONE window whose host process is swapped
+ * in place when the user switches projects (Codex-style — no window per
+ * workspace), a native folder picker that only PICKS (the renderer runs the
+ * trust gate before anything opens), and a persisted recent-workspaces list.
+ * Security posture unchanged: contextIsolation on, typed preload only,
+ * senderFrame + shape validation on every inbound command.
+ */
+import { app, BrowserWindow, dialog, ipcMain, utilityProcess } from 'electron';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { isAgentCommand } from '@kinqs/brainrouter-agent-protocol';
+import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace, listTrustedWorkspaces } from '@kinqs/brainrouter-core/dist/workspace/workspaceTrust.js';
+import { listTranscripts } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
+import { getStateDir } from '@kinqs/brainrouter-core/dist/storage/store.js';
+// T1 — global dashboard disk reads (no live host needed): running tasks + last
+// review gate per recent workspace.
+import { collectDashboardTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
+import { pidAlive, reconcileStaleBackgroundTasks } from '@kinqs/brainrouter-core/dist/background/backgroundReconcile.js';
+import { reconcileBackgroundTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTaskStore.js';
+import { recordTelemetry } from '@kinqs/brainrouter-core/dist/telemetry/telemetry.js';
+import { TELEMETRY_EVENTS } from '@kinqs/brainrouter-core/dist/telemetry/contracts.js';
+import { getLatestReview } from '@kinqs/brainrouter-core/dist/review/reviewStore.js';
+import { reviewGate } from '@kinqs/brainrouter-core/dist/review/reviewModel.js';
+import { emptyPool, planActivate, applyActivate, setRunning, removeEntry, } from './hostPoolPolicy.js';
+import { isAllowedNavigation, allowedOriginFor } from './windowSecurity.js';
+import { addOpened, noteActivity, reorderWorkspace } from './recents.js';
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+function reconcileWorkspaceBackground(workspaceRoot) {
+    try {
+        reconcileStaleBackgroundTasks(workspaceRoot, pidAlive);
+    }
+    catch { /* best-effort */ }
+    try {
+        reconcileBackgroundTasks(workspaceRoot, pidAlive);
+    }
+    catch { /* best-effort */ }
+}
+const wins = new Map(); // webContents.id → WinPool
+const recentsPath = () => path.join(app.getPath('userData'), 'recent-workspaces.json');
+const WORKSPACE_SESSIONS_CACHE_MS = 30_000;
+const workspaceSessionsCache = new Map();
+function readRecents() {
+    try {
+        return JSON.parse(fs.readFileSync(recentsPath(), 'utf-8'));
+    }
+    catch {
+        return [];
+    }
+}
+function writeRecents(next) {
+    try {
+        fs.mkdirSync(path.dirname(recentsPath()), { recursive: true });
+        fs.writeFileSync(recentsPath(), JSON.stringify(next, null, 2));
+    }
+    catch { /* best-effort */ }
+}
+function transcriptPathForSummary(root, s) {
+    return s.sessionDir
+        ? path.join(s.sessionDir, s.fileName)
+        : path.join(getStateDir(root), 'transcripts', s.fileName);
+}
+function lastTranscriptRole(filePath) {
+    try {
+        const fd = fs.openSync(filePath, 'r');
+        const size = fs.fstatSync(fd).size;
+        const len = Math.min(size, 16_384);
+        const buf = Buffer.alloc(len);
+        fs.readSync(fd, buf, 0, len, size - len);
+        fs.closeSync(fd);
+        const lines = buf.toString('utf-8').split('\n').filter((l) => l.trim());
+        for (let i = lines.length - 1; i >= 0; i--) {
+            try {
+                const e = JSON.parse(lines[i]);
+                if (e.role === 'assistant')
+                    return 'assistant';
+                if (e.role === 'user' && !e.name)
+                    return 'user';
+            }
+            catch { /* the tail window may start mid-line */ }
+        }
+    }
+    catch { /* unreadable */ }
+    return undefined;
+}
+function readWorkspaceSessions(root, limit) {
+    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(120, Math.floor(limit))) : 80;
+    if (!root || !fs.existsSync(root))
+        return { rows: [], error: 'Workspace is not available.' };
+    const now = Date.now();
+    const cached = workspaceSessionsCache.get(root);
+    if (cached && now - cached.at < WORKSPACE_SESSIONS_CACHE_MS && cached.limit >= safeLimit) {
+        return { rows: cached.rows.slice(0, safeLimit), truncated: cached.rows.length >= safeLimit };
+    }
+    try {
+        const summaries = listTranscripts(root, { limit: safeLimit });
+        const rows = summaries.map((s) => ({ ...s, lastRole: lastTranscriptRole(transcriptPathForSummary(root, s)) }));
+        workspaceSessionsCache.set(root, { at: now, limit: safeLimit, rows });
+        return { rows, truncated: rows.length >= safeLimit };
+    }
+    catch (err) {
+        return { rows: [], error: err instanceof Error ? err.message : String(err) };
+    }
+}
+/** Membership without promotion — opening/switching/viewing a project must not
+ *  move it. Manual drag/drop is the only ordering operation. */
+function markWorkspaceOpened(workspaceRoot) {
+    writeRecents(addOpened(readRecents(), workspaceRoot));
+}
+/** Record real activity without changing user-controlled project order. */
+function markWorkspaceActivity(workspaceRoot, reason) {
+    workspaceSessionsCache.delete(workspaceRoot);
+    const next = noteActivity(readRecents(), workspaceRoot);
+    writeRecents(next);
+    for (const wp of wins.values()) {
+        if (!wp.win.isDestroyed())
+            wp.win.webContents.send('recents-changed', { recents: next, reason, workspaceRoot });
+    }
+}
+function markWorkspaceReordered(dragged, target) {
+    const next = reorderWorkspace(readRecents(), dragged, target);
+    writeRecents(next);
+    for (const wp of wins.values()) {
+        if (!wp.win.isDestroyed())
+            wp.win.webContents.send('recents-changed', { recents: next, reason: 'manual-reorder', workspaceRoot: dragged });
+    }
+    return next;
+}
+/** Fork an agent host for a workspace, pool it, and pipe its events into the
+ *  window. Tags every event with the owning workspaceRoot (so the renderer
+ *  keeps surfaces straight with multiple hosts live) and tracks turn-running
+ *  state so a busy workspace is never reaped. */
+function spawnHost(wp, workspaceRoot) {
+    const host = utilityProcess.fork(path.join(__dirname, 'host.js'), [], {
+        env: { ...process.env, BRAINROUTER_DESKTOP_WORKSPACE: workspaceRoot },
+        serviceName: `brainrouter-agent-host:${path.basename(workspaceRoot)}`,
+    });
+    host.on('message', (msg) => {
+        if (wp.win.isDestroyed())
+            return;
+        if (msg && typeof msg === 'object') {
+            const ev = msg.event;
+            const kind = ev?.kind;
+            // Track work-in-flight so the pool never reaps a running workspace.
+            if (kind === 'turn-start') {
+                wp.pool = setRunning(wp.pool, workspaceRoot, true);
+                markWorkspaceActivity(workspaceRoot, 'user-message');
+            }
+            else if (kind === 'turn-complete' || kind === 'turn-error') {
+                wp.pool = setRunning(wp.pool, workspaceRoot, false);
+                markWorkspaceActivity(workspaceRoot, 'agent-response');
+            }
+            // Real background work (a child/worker produced output) is activity too.
+            else if (kind === 'child-tool-end' || kind === 'child-complete')
+                markWorkspaceActivity(workspaceRoot, 'background-task');
+            // Remember each workspace's last-viewed session so we can re-announce it
+            // when the user switches back to a parked (reused) host.
+            else if (kind === 'session-changed' && typeof ev?.sessionKey === 'string')
+                wp.lastSession.set(workspaceRoot, ev.sessionKey);
+        }
+        const tagged = (msg && typeof msg === 'object') ? { ...msg, workspaceRoot } : msg;
+        wp.win.webContents.send('agent-event', tagged);
+    });
+    host.on('exit', (code) => {
+        wp.hosts.delete(workspaceRoot);
+        wp.pool = removeEntry(wp.pool, workspaceRoot);
+        if (wp.retiring.delete(workspaceRoot))
+            return; // intentional reap/shutdown — not an error
+        reconcileWorkspaceBackground(workspaceRoot);
+        if (!wp.win.isDestroyed())
+            wp.win.webContents.send('agent-event', {
+                seq: -1, ts: Date.now(), sessionKey: wp.lastSession.get(workspaceRoot) ?? 'host', workspaceRoot,
+                event: { kind: 'turn-error', message: `Agent host exited (code ${code ?? 'unknown'}).` },
+            });
+    });
+    wp.hosts.set(workspaceRoot, host);
+    return host;
+}
+/** Gracefully retire a pooled host (idle reap, window close). Leaves the exit
+ *  listener attached but flags the root as retiring, so its exit is silent. */
+function retireHost(wp, workspaceRoot) {
+    const host = wp.hosts.get(workspaceRoot);
+    if (!host)
+        return;
+    wp.retiring.add(workspaceRoot);
+    wp.hosts.delete(workspaceRoot);
+    wp.lastSession.delete(workspaceRoot);
+    try {
+        host.postMessage({ kind: 'shutdown' });
+    }
+    catch { /* already gone */ }
+    setTimeout(() => { try {
+        host.kill();
+    }
+    catch { /* already exited */ } }, 1_500);
+}
+/**
+ * Make `workspaceRoot` the active workspace in this window. Spawns a host if
+ * none exists yet; otherwise REUSES the parked one (its background work is
+ * intact). Idle, non-active, non-running hosts past their TTL are reaped. A
+ * spawned host announces itself with a boot `session-changed`; a reused host is
+ * nudged to re-announce its last session — so the renderer's reset contract is
+ * identical to the old swap model, but running work never dies on a switch.
+ */
+function activateWorkspace(wp, workspaceRoot) {
+    const now = Date.now();
+    const plan = planActivate(wp.pool, workspaceRoot, now);
+    for (const root of plan.reap)
+        retireHost(wp, root);
+    const wasActive = wp.pool.activeRoot;
+    wp.pool = applyActivate(wp.pool, plan, now);
+    if (plan.mode === 'spawn') {
+        spawnHost(wp, workspaceRoot); // boots → emits session-changed (renderer resets)
+    }
+    else if (wasActive !== workspaceRoot) {
+        // Reuse: the parked host won't re-announce on its own. Nudge it to re-emit
+        // its current session-changed (idempotent for a pooled session — does NOT
+        // disturb a running turn) so the renderer re-renders this workspace.
+        const host = wp.hosts.get(workspaceRoot);
+        const last = wp.lastSession.get(workspaceRoot);
+        if (host && last) {
+            try {
+                host.postMessage({ kind: 'resume-session', sessionKey: last });
+            }
+            catch { /* gone */ }
+        }
+    }
+    wp.win.setTitle(`BrainRouter — ${path.basename(workspaceRoot)}`);
+    // Activating/switching is membership only; it must not change the user's
+    // project order.
+    markWorkspaceOpened(workspaceRoot);
+    // §6 — workspace-refresh telemetry (local-first, best-effort, never throws).
+    try {
+        recordTelemetry({ name: TELEMETRY_EVENTS.workspace_refresh, workspaceRoot, props: { mode: plan.mode } });
+    }
+    catch { /* advisory */ }
+}
+function openWorkspaceWindow(workspaceRoot) {
+    // Focus an existing window that already hosts this workspace (active OR parked).
+    for (const wp of wins.values()) {
+        if (wp.pool.activeRoot === workspaceRoot || wp.hosts.has(workspaceRoot)) {
+            wp.win.focus();
+            return;
+        }
+    }
+    const win = new BrowserWindow({
+        width: 1280, height: 840, minWidth: 900, minHeight: 600,
+        title: `BrainRouter — ${path.basename(workspaceRoot)}`,
+        backgroundColor: '#262624',
+        titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.cjs'),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: false,
+        },
+    });
+    const wp = { win, hosts: new Map(), lastSession: new Map(), pool: emptyPool(), retiring: new Set() };
+    wins.set(win.webContents.id, wp);
+    // SEC: deny all renderer-initiated window.open (target=_blank, window.open, etc.).
+    // The renderer has no legitimate need to spawn a second BrowserWindow.
+    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    // SEC: block top-level navigation away from the app's own origin (phishing,
+    // data:/javascript: payloads). Allowed: the packaged file:// load and, in dev,
+    // the Vite dev origin. Policy is a pure, unit-tested helper.
+    const devUrl = process.env.VITE_DEV_SERVER_URL;
+    const allowedOrigin = allowedOriginFor(devUrl);
+    win.webContents.on('will-navigate', (event, url) => {
+        if (!isAllowedNavigation(url, allowedOrigin))
+            event.preventDefault();
+    });
+    win.on('closed', () => {
+        for (const [id, w] of wins) {
+            if (w.win !== win)
+                continue;
+            for (const [root, host] of w.hosts) {
+                w.retiring.add(root);
+                try {
+                    host.postMessage({ kind: 'shutdown' });
+                }
+                catch { /* gone */ }
+            }
+            wins.delete(id);
+        }
+    });
+    activateWorkspace(wp, workspaceRoot); // spawns the first host
+    if (devUrl)
+        void win.loadURL(devUrl);
+    else
+        void win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
+}
+// DESK-5o — overlay scrollbars: thin, auto-hiding, and (crucially) reserving
+// ZERO layout width, so a scrollable column never carves a hard 8px strip
+// between it and its neighbor. This is what makes Codex/native apps look
+// clean; classic Chromium scrollbars reserve space and draw a hard divider.
+app.commandLine.appendSwitch('enable-features', 'OverlayScrollbar');
+app.whenReady().then(() => {
+    // T1 — the folder the app launched in is implicitly trusted (the user chose
+    // it); every OTHER workspace must be trusted before main will open it.
+    const launchRoot = process.env.BRAINROUTER_DESKTOP_WORKSPACE || readRecents()[0] || process.cwd();
+    trustWorkspace(launchRoot);
+    openWorkspaceWindow(launchRoot);
+    ipcMain.on('agent-command', (event, raw) => {
+        const wp = wins.get(event.sender.id);
+        if (!wp || event.senderFrame !== wp.win.webContents.mainFrame)
+            return;
+        if (!isAgentCommand(raw))
+            return;
+        // Route to the ACTIVE workspace's host; background hosts keep running untouched.
+        const host = wp.pool.activeRoot ? wp.hosts.get(wp.pool.activeRoot) : undefined;
+        host?.postMessage(raw);
+    });
+    // Workspace management — main-process concerns, separate channel from the
+    // agent protocol. invoke/handle so the renderer gets results back.
+    // DESK-5d — `add` only PICKS a folder; the renderer shows the trust dialog
+    // first and then calls `open`, which swaps the host inside this window.
+    ipcMain.handle('workspace:add', async (event) => {
+        const wp = wins.get(event.sender.id);
+        const res = await dialog.showOpenDialog(wp?.win ?? BrowserWindow.getFocusedWindow(), {
+            title: 'Add project folder', properties: ['openDirectory', 'createDirectory'],
+        });
+        if (res.canceled || res.filePaths.length === 0)
+            return { opened: false };
+        return { opened: false, workspaceRoot: res.filePaths[0] };
+    });
+    ipcMain.handle('workspace:recents', (event) => {
+        const wp = wins.get(event.sender.id);
+        return { current: wp?.pool.activeRoot ?? null, recents: readRecents() };
+    });
+    ipcMain.handle('workspace:sessions', (_event, root, rawLimit) => {
+        const limit = typeof rawLimit === 'number' ? rawLimit : Number(rawLimit ?? 80);
+        return readWorkspaceSessions(typeof root === 'string' ? root : '', limit);
+    });
+    ipcMain.handle('workspace:open', (event, workspaceRoot) => {
+        if (typeof workspaceRoot !== 'string' || !fs.existsSync(workspaceRoot))
+            return { opened: false };
+        // T1 — main ENFORCES trust (defense-in-depth): even if the renderer gate is
+        // bypassed, an untrusted workspace is never opened. The renderer asks, then
+        // calls workspace:trust, then retries open.
+        if (!isWorkspaceTrusted(workspaceRoot))
+            return { opened: false, needsTrust: true };
+        const wp = wins.get(event.sender.id);
+        if (wp)
+            activateWorkspace(wp, workspaceRoot); // park the old host, don't kill running work
+        else
+            openWorkspaceWindow(workspaceRoot);
+        return { opened: true };
+    });
+    // T1 — trust persistence lives in the shared CLI store (not renderer
+    // localStorage), so CLI + desktop agree and it survives reinstalls.
+    ipcMain.handle('workspace:isTrusted', (_e, root) => ({ trusted: typeof root === 'string' && isWorkspaceTrusted(root) }));
+    ipcMain.handle('workspace:trust', (_e, root) => { if (typeof root === 'string')
+        trustWorkspace(root); return { trusted: true }; });
+    ipcMain.handle('workspace:untrust', (_e, root) => { if (typeof root === 'string')
+        untrustWorkspace(root); return { trusted: false }; });
+    ipcMain.handle('workspace:trustedList', () => ({ trusted: listTrustedWorkspaces() }));
+    // T1 — cross-workspace dashboard. The per-workspace host can't see other
+    // workspaces, so main disk-reads each recent root's running tasks + last
+    // review gate (pure file reads; no live host needed). The review gate is the
+    // LAST run's verdict (no per-workspace git diff — that would be too costly to
+    // poll), so it reflects the workspace as of its last review.
+    ipcMain.handle('dashboard:global', () => {
+        const roots = readRecents();
+        const workspaces = roots.map((workspaceRoot) => {
+            let tasks = [];
+            // §3/fix 4 — include active work AND recent terminal/stale outcomes so
+            // Dashboard is a real workspace operations view, not only a running list.
+            try {
+                reconcileWorkspaceBackground(workspaceRoot);
+                tasks = collectDashboardTasks(workspaceRoot);
+            }
+            catch { /* unreadable workspace */ }
+            let gate = null;
+            try {
+                const run = getLatestReview(workspaceRoot);
+                if (run) {
+                    const g = reviewGate(run, run.diffHash);
+                    gate = { status: g.status, blocked: g.blocked, reason: g.reason };
+                }
+            }
+            catch { /* no review */ }
+            return { workspaceRoot, tasks: tasks.map((t) => ({ ...t, workspaceRoot })), reviewGate: gate };
+        });
+        return { workspaces };
+    });
+    // Wave 1/4 — the renderer reports real activity that main can't see on the
+    // agent-event stream (commit / push / create-pr). Activity refreshes project
+    // state and membership; explicit drag/drop is the only order change.
+    ipcMain.handle('workspace:activity', (_e, root, reason) => {
+        if (typeof root === 'string' && typeof reason === 'string')
+            markWorkspaceActivity(root, reason);
+        return { ok: true };
+    });
+    ipcMain.handle('workspace:reorder', (_e, dragged, target) => {
+        if (typeof dragged !== 'string' || typeof target !== 'string')
+            return { recents: readRecents() };
+        return { recents: markWorkspaceReordered(dragged, target) };
+    });
+    app.on('activate', () => {
+        if (BrowserWindow.getAllWindows().length === 0) {
+            openWorkspaceWindow(readRecents()[0] || process.cwd());
+        }
+    });
+});
+app.on('window-all-closed', () => {
+    if (process.platform !== 'darwin')
+        app.quit();
+});

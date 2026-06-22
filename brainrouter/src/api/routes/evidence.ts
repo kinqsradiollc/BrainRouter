@@ -2,6 +2,7 @@ import { Router } from "express";
 import { memoryEngine } from "../../memory/engine.js";
 import { requireAnyAuth, scopedUserId, errorStatus, type AuthedRequest } from "../middleware/auth.js";
 import { decodeCursor, pageItems, PaginationQuerySchema } from "../pagination.js";
+import { sendError } from "../../contracts/http.js";
 
 export const evidenceRouter = Router();
 evidenceRouter.use(requireAnyAuth);
@@ -35,7 +36,7 @@ evidenceRouter.get("/", async (req: AuthedRequest, res) => {
     }));
     res.json({ evidence: page.items, nextCursor: page.nextCursor, limit: pagination.limit, hasMore: Boolean(page.nextCursor) });
   } catch (error) {
-    res.status(errorStatus(error, 400)).json({ error: error instanceof Error ? error.message : "Invalid evidence parameters" });
+    sendError(res, errorStatus(error, 400), error instanceof Error ? error.message : "Invalid evidence parameters");
   }
 });
 
@@ -49,6 +50,6 @@ evidenceRouter.get("/:recordId", async (req: AuthedRequest, res) => {
     const evidence = memoryEngine.getEvidence(req.userId!, recordId);
     res.json({ evidence, total: evidence.length });
   } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : "Failed to fetch evidence" });
+    sendError(res, 500, error instanceof Error ? error.message : "Failed to fetch evidence");
   }
 });

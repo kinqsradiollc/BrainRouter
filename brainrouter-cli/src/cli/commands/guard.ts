@@ -7,10 +7,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { exec } from 'node:child_process';
 import chalk from 'chalk';
-import { applyYoloOff, applyYoloOn, readPreferences, writePreferences } from '../../state/preferencesStore.js';
-import { addHook, readHooks, removeHook, setHookEnabled, type HookEvent } from '../../state/hooksStore.js';
-import { createHookifyRule, deleteHookifyRule, listHookifyRules, toggleHookifyRule } from '../../state/hookifyStore.js';
-import { saveConfig, getCliKnobs } from '../../config/config.js';
+import { applyYoloOff, applyYoloOn, readPreferences, writePreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
+import { resolveActiveMode, setSessionMode } from '@kinqs/brainrouter-core/dist/session/sessionModeStore.js';
+import { addHook, readHooks, removeHook, setHookEnabled, type HookEvent } from '@kinqs/brainrouter-core/dist/hooks/hooksStore.js';
+import { createHookifyRule, deleteHookifyRule, listHookifyRules, toggleHookifyRule } from '@kinqs/brainrouter-core/dist/hooks/hookifyStore.js';
+import { saveConfig, getCliKnobs } from '@kinqs/brainrouter-core/dist/config/config.js';
 import type { CommandContext } from './_context.js';
 
 
@@ -86,10 +87,15 @@ export async function tryHandleGuardCommand(ctx: CommandContext): Promise<boolea
     }
     case '/mode':
     {
-      const prefs = readPreferences(agent.workspaceRoot);
+      // Show + toggle the ACTIVE SESSION's mode (session override > workspace
+      // pref). With a session active the toggle writes to the per-chat
+      // override so switching sessions restores each chat's own mode; without
+      // one it falls back to workspace prefs (behaviour unchanged).
+      const sessionKey = agent.sessionKey;
+      const active = resolveActiveMode(agent.workspaceRoot, sessionKey);
       const arg = (args[0] ?? '').toLowerCase();
       if (!arg) {
-        console.log(chalk.bold(`\nExecution mode: ${chalk.cyan(prefs.executionMode)}`));
+        console.log(chalk.bold(`\nExecution mode: ${chalk.cyan(active.executionMode)}`));
         console.log(chalk.gray('  planning  — run_command asks before executing; agent leans toward clarify-before-act. (default)'));
         console.log(chalk.gray('  fast      — run_command auto-approves safe commands (dangerous ones still ask); agent jumps to implementation.'));
         console.log(chalk.gray('  Toggle with: /mode planning  |  /mode fast\n'));
@@ -99,7 +105,11 @@ export async function tryHandleGuardCommand(ctx: CommandContext): Promise<boolea
         console.log(chalk.red(`\nUnknown mode "${arg}". Choose: planning | fast\n`));
         return true;
       }
-      writePreferences(agent.workspaceRoot, { executionMode: arg as 'planning' | 'fast' });
+      if (sessionKey) {
+        setSessionMode(agent.workspaceRoot, sessionKey, { executionMode: arg as 'planning' | 'fast' });
+      } else {
+        writePreferences(agent.workspaceRoot, { executionMode: arg as 'planning' | 'fast' });
+      }
       agent.refreshSystemPrompt();
       ctx.repl.refreshPromptForMode();
       if (arg === 'fast') {
@@ -113,10 +123,13 @@ export async function tryHandleGuardCommand(ctx: CommandContext): Promise<boolea
     }
     case '/review-policy':
     {
-      const prefs = readPreferences(agent.workspaceRoot);
+      // Per-session review policy: session override > workspace pref. See
+      // /mode above for the session-vs-workspace write rationale.
+      const sessionKey = agent.sessionKey;
+      const active = resolveActiveMode(agent.workspaceRoot, sessionKey);
       const arg = (args[0] ?? '').toLowerCase();
       if (!arg) {
-        console.log(chalk.bold(`\nReview policy: ${chalk.cyan(prefs.reviewPolicy)}`));
+        console.log(chalk.bold(`\nReview policy: ${chalk.cyan(active.reviewPolicy)}`));
         console.log(chalk.gray('  request  — at workflow/multi-file gates, agent surfaces the plan and waits for /approve. (default)'));
         console.log(chalk.gray('  proceed  — agent applies the plan and reports after; use /approve manually for explicit gates.'));
         console.log(chalk.gray('  Toggle with: /review-policy request  |  /review-policy proceed\n'));
@@ -126,7 +139,11 @@ export async function tryHandleGuardCommand(ctx: CommandContext): Promise<boolea
         console.log(chalk.red(`\nUnknown policy "${arg}". Choose: request | proceed\n`));
         return true;
       }
-      writePreferences(agent.workspaceRoot, { reviewPolicy: arg as 'request' | 'proceed' });
+      if (sessionKey) {
+        setSessionMode(agent.workspaceRoot, sessionKey, { reviewPolicy: arg as 'request' | 'proceed' });
+      } else {
+        writePreferences(agent.workspaceRoot, { reviewPolicy: arg as 'request' | 'proceed' });
+      }
       agent.refreshSystemPrompt();
       if (arg === 'proceed') {
         console.log(chalk.yellow(`\n✓ /review-policy proceed — agent will apply plans without halting for prose approval.`));
@@ -141,20 +158,28 @@ export async function tryHandleGuardCommand(ctx: CommandContext): Promise<boolea
       // /yolo is a one-release alias for `/mode fast` + `/review-policy proceed`.
       // We keep it because the muscle memory is established; new docs point to
       // the two split commands for finer control.
+      // Yolo is the two-axis shorthand; route it through the same
+      // session-vs-workspace split as /mode and /review-policy so it flips
+      // the ACTIVE SESSION when one is active.
+      const sessionKey = agent.sessionKey;
       const arg = (args[0] ?? '').toLowerCase();
       if (!arg) {
-        const prefs = readPreferences(agent.workspaceRoot);
-        const yoloOn = prefs.executionMode === 'fast' && prefs.reviewPolicy === 'proceed';
+        const active = resolveActiveMode(agent.workspaceRoot, sessionKey);
+        const yoloOn = active.executionMode === 'fast' && active.reviewPolicy === 'proceed';
         console.log(chalk.bold(`\nYolo (alias): ${yoloOn ? chalk.red('ON') : chalk.green('off')}`));
         console.log(chalk.gray('  Shorthand for `/mode fast` + `/review-policy proceed` — flip both axes at once.'));
-        console.log(chalk.gray(`  Current state: mode=${prefs.executionMode}, review-policy=${prefs.reviewPolicy}`));
+        console.log(chalk.gray(`  Current state: mode=${active.executionMode}, review-policy=${active.reviewPolicy}`));
         console.log(chalk.gray('  Use /mode and /review-policy directly for finer control.'));
         console.log(chalk.gray('  Toggle with: /yolo on  |  /yolo off\n'));
         return true;
       }
       const next = arg === 'on' || arg === 'true' || arg === '1';
       if (next) {
-        applyYoloOn(agent.workspaceRoot);
+        if (sessionKey) {
+          setSessionMode(agent.workspaceRoot, sessionKey, { executionMode: 'fast', reviewPolicy: 'proceed' });
+        } else {
+          applyYoloOn(agent.workspaceRoot);
+        }
         agent.refreshSystemPrompt();
         ctx.repl.refreshPromptForMode();
         console.log(chalk.red('\n⚠  /yolo ON — shorthand for `/mode fast` + `/review-policy proceed`.'));
@@ -162,7 +187,14 @@ export async function tryHandleGuardCommand(ctx: CommandContext): Promise<boolea
         console.log(chalk.gray('   Agent will apply multi-file plans without the prose "ready?" pause.'));
         console.log(chalk.gray('   Use /mode and /review-policy for finer control next time.\n'));
       } else {
-        applyYoloOff(agent.workspaceRoot);
+        if (sessionKey) {
+          // Mirror `applyYoloOff`: explicitly pin the conservative stance on
+          // the session override so `/yolo off` reliably disables even when
+          // the workspace pref itself is fast/proceed.
+          setSessionMode(agent.workspaceRoot, sessionKey, { executionMode: 'planning', reviewPolicy: 'request' });
+        } else {
+          applyYoloOff(agent.workspaceRoot);
+        }
         agent.refreshSystemPrompt();
         ctx.repl.refreshPromptForMode();
         console.log(chalk.green('\n✓ /yolo off — restored /mode planning + /review-policy request.\n'));
@@ -175,9 +207,11 @@ export async function tryHandleGuardCommand(ctx: CommandContext): Promise<boolea
       const rest = args.slice(1).join(' ').trim();
       const prefs = readPreferences(agent.workspaceRoot);
       const showState = () => {
-        const enabled = getCliKnobs().sandbox === 'on';
+        const knobs = getCliKnobs();
+        const enabled = knobs.sandbox === 'on';
         console.log(chalk.bold('\nSandbox'));
         console.log(`  Engine:  ${enabled ? chalk.green('on') : chalk.gray('off')} ${chalk.gray('(cli.sandbox in config.json)')}`);
+        console.log(`  Unattended enforcement: ${knobs.sandboxEnforceWhenSilent ? chalk.green('on') : chalk.yellow('off')} ${chalk.gray('(cli.sandboxEnforceWhenSilent — forces sandbox + network-deny for silent/cloud agents)')}`);
         console.log(`  Platform: ${chalk.cyan(process.platform)} ${chalk.gray(process.platform === 'darwin' ? '(sandbox-exec)' : process.platform === 'linux' ? '(bwrap/firejail)' : '(unsupported — run_command runs unsandboxed)')}`);
         console.log(`  Workspace (always rw): ${chalk.blue(agent.workspaceRoot)}`);
         console.log(chalk.bold('  Read-only grants:'));
@@ -251,7 +285,7 @@ export async function tryHandleGuardCommand(ctx: CommandContext): Promise<boolea
         console.log(chalk.gray(`\nNo credentials were set on profile "${profile}".\n`));
         return true;
       }
-      const { saveConfig } = await import('../../config/config.js');
+      const { saveConfig } = await import('@kinqs/brainrouter-core/dist/config/config.js');
       saveConfig(config);
       console.log(chalk.green(`\n✓ Cleared ${removed.join(', ')} from profile "${profile}".`));
       console.log(chalk.gray('  Re-attach with /login.\n'));

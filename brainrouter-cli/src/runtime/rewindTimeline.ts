@@ -1,4 +1,4 @@
-import type { TranscriptEntry } from '../state/sessionStore.js';
+import type { TranscriptEntry } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
 
 /**
  * 0.4.x-3 — `/rewind` timeline model (pure, unit-tested).
@@ -44,7 +44,9 @@ export function previewText(content: unknown, max = 72): string {
  */
 export function buildRewindTimeline(entries: TranscriptEntry[], max = 20): RewindTurn[] {
   const userIdx: number[] = [];
-  entries.forEach((e, i) => { if (e.role === 'user') userIdx.push(i); });
+  // Only REAL user turns are rewind points — skip injected system/guard messages
+  // (role:'user' WITH a name) so /rewind never targets a guardrail note.
+  entries.forEach((e, i) => { if (e.role === 'user' && !e.name) userIdx.push(i); });
 
   const turns: RewindTurn[] = userIdx.map((ui, k) => ({
     turnNumber: 0, // assigned after windowing

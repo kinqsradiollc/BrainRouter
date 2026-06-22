@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { memoryEngine } from "../../memory/engine.js";
 import { requireAnyAuth, type AuthedRequest } from "../middleware/auth.js";
+import { sendError } from "../../contracts/http.js";
 
 export const graphRouter = Router();
 graphRouter.use(requireAnyAuth);
@@ -8,7 +9,7 @@ graphRouter.use(requireAnyAuth);
 graphRouter.get("/", (req: AuthedRequest, res) => {
   const entity = typeof req.query.entity === "string" ? req.query.entity.trim() : "";
   if (!entity) {
-    res.status(400).json({ error: "entity query param is required" });
+    sendError(res, 400, "entity query param is required");
     return;
   }
   const hops = Number(req.query.hops ?? 2);
@@ -28,7 +29,7 @@ graphRouter.get("/analytics", (req: AuthedRequest, res) => {
     const result = memoryEngine.graphAnalytics(req.userId!, { topN: Number.isFinite(topN) ? topN : 10, from, to });
     res.json(result);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, err.message);
   }
 });
 
@@ -37,6 +38,6 @@ graphRouter.get("/connections", (req: AuthedRequest, res) => {
     const result = memoryEngine.store.getAllConnections(req.userId!);
     res.json(result);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, err.message);
   }
 });

@@ -90,8 +90,8 @@ import fs from 'node:fs';
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
-import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath, getCliKnobs, setCliKnobOverride, hydrateConfigDefaultsOnDisk } from './config/config.js';
-import { redactText } from './state/sessionStore.js';
+import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath, getCliKnobs, setCliKnobOverride, hydrateConfigDefaultsOnDisk, type LLMConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { redactText } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
 
 if (getCliKnobs().debugExit) {
   process.on('beforeExit', (code) => {
@@ -101,17 +101,22 @@ if (getCliKnobs().debugExit) {
     process.stderr.write(`[brainrouter:debug] exit code=${code}\n`);
   });
 }
-import { McpClientWrapper } from './runtime/mcpClient.js';
-import { McpClientPool, selectMcpServerIds } from './runtime/mcpPool.js';
+import { McpClientWrapper } from '@kinqs/brainrouter-core/dist/mcp/mcpClient.js';
+import { McpClientPool, selectMcpServerIds } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
 import { formatJsonlEvent, memoryRunEvent, isOffloadTool, type RunEvent } from './runtime/jsonlEvents.js';
 import { costUsd } from './runtime/pricing.js';
-import { VERSION } from './version.js';
+import { VERSION } from '@kinqs/brainrouter-core/dist/version.js';
+import { loadExtensions } from '@kinqs/brainrouter-core/dist/extension/loader.js';
 import { setKnownMcpServerIds } from './cli/ink/toolFormat.js';
-import type { ServerConfig } from './config/config.js';
-import { Agent } from './agent/agent.js';
+import type { ServerConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import { cliPrompter } from './cli/cliPrompt.js';
 import { runChat } from './cli/ink/runChat.js';
-import { applyWorkspaceRoot, findWorkspaceRoot } from './config/workspace.js';
+import { applyWorkspaceRoot, findWorkspaceRoot } from '@kinqs/brainrouter-core/dist/workspace/workspace.js';
 import { runWizard, isOnboarded } from './cli/ink/runWizard.js';
+import { resolveSessionLlmConfig } from '@kinqs/brainrouter-core/dist/session/sessionRuntimeStore.js';
+
+const DEFAULT_LLM: LLMConfig = { provider: 'openai', model: 'gpt-4o-mini', apiKey: '' };
 
 // The CLI deliberately does NOT load any `.env` file. Source of truth for
 // runtime config is `~/.config/brainrouter/config.json` (LLM creds, MCP
@@ -138,6 +143,8 @@ program
   .option('-w, --workspace <path>', 'Workspace root for files, commands, memory session, and MCP --root')
   .option('--strict-mcp', 'Exit if the MCP server is unreachable (default: continue in offline mode with local tools only)')
   .option('--quiet', 'Suppress recall tables, briefing dumps, and tool-completion previews (model prose only). Toggle in-session with /quiet.')
+  .option('--continue', 'Resume the most recent session in this workspace')
+  .option('--resume <sessionKey>', 'Resume a specific session (exact key or unique prefix)')
   .action(async (options) => {
     if (options.workspace) {
       setCliKnobOverride({ workspaceOverride: options.workspace });
@@ -223,11 +230,7 @@ program
       config.servers[id] = cloned;
     }
 
-    const llm = config.llm || {
-      provider: 'openai',
-      model: 'gpt-4o-mini',
-      apiKey: ''
-    };
+    const llm: LLMConfig = { ...(config.llm ?? DEFAULT_LLM) };
 
     if (options.model) {
       llm.model = options.model;
@@ -238,6 +241,7 @@ program
     // comment); the banner's per-server row is the success signal.
     const mcpClient = new McpClientPool();
     const statuses = await mcpClient.connectAll(targetServers, llm, { timeoutMs: 5_000 });
+    mcpClient.startReconnectSupervisor(); // WS9 — auto-reconnect dropped MCP servers in the background
     // Register live server ids for Ink tool-name display so multi-word
     // server names (e.g. `my_server`) don't get mis-stripped by the
     // single-underscore prefix regex.
@@ -260,10 +264,36 @@ program
       console.error(chalk.yellow(`⚠ ${failures.length} of ${statuses.length} MCP servers offline: ${failed}. Other servers connected; use /mcp to inspect.`));
     }
 
+    // EXTENSIONS — discover + activate code-level extensions (tools/providers/
+    // hooks) before the first turn. Workspace-tier extensions only load in a
+    // trusted workspace; best-effort, never blocks boot.
+    await loadExtensions(workspace.workspaceRoot, { version: VERSION }).catch(() => undefined);
     const agent = new Agent(mcpClient, llm, {
       workspaceRoot: workspace.workspaceRoot,
       launchCwd: workspace.launchCwd,
+      prompter: cliPrompter,
     });
+    // CC-P2.1 — `--continue` / `--resume <key>`: load a persisted session's
+    // transcript into this launch before the REPL starts. Errors print and
+    // fall through to a fresh session (never abort the launch).
+    if (options.continue || options.resume) {
+      const { listTranscripts, loadTranscript } = await import('@kinqs/brainrouter-core/dist/session/sessionStore.js');
+      const { pickResumeSession } = await import('./state/resumePicker.js');
+      const pick = pickResumeSession(listTranscripts(workspace.workspaceRoot), {
+        continueLatest: !!options.continue,
+        resumeKey: typeof options.resume === 'string' ? options.resume : undefined,
+      });
+      if (pick.ok) {
+        const entries = loadTranscript(workspace.workspaceRoot, pick.sessionKey);
+        agent.sessionKey = pick.sessionKey;
+        if (!options.model) agent.setLLMConfig(resolveSessionLlmConfig(llm, workspace.workspaceRoot, pick.sessionKey));
+        agent.resetSessionCounters();
+        const loaded = agent.loadHistory(entries);
+        console.log(chalk.green(`Resumed session ${pick.sessionKey} (${loaded} prior messages).`));
+      } else {
+        console.log(chalk.yellow(pick.error + ' Starting a fresh session.'));
+      }
+    }
     // Federation Stage 2 (FED-S2-T2/T3): claim a row in the brain's
     // active_sessions registry + heartbeat every 30s. Resolves to null
     // (no-op) when the brain pre-dates Stage 2 — older brains keep
@@ -322,9 +352,24 @@ program
   .option('--format <fmt>', 'Output format: text (default) | json | jsonl (stable per-event stream for CI)')
   .option('--session <key>', 'Resume a specific sessionKey')
   .option('--timeout <ms>', 'LLM request timeout in ms')
+  .option('--max-tool-loops <n>', 'Hard cap on tool iterations for this run (CI guard)')
+  .option('--disallowed-tools <names>', 'Comma-separated tool names denied for this run (any tool, local or MCP)')
   .option('--strict-mcp', 'Exit if the MCP server is unreachable (default: continue in offline mode with local tools only)')
   .action(async (promptParts: string[], options) => {
     if (options.workspace) setCliKnobOverride({ workspaceOverride: options.workspace });
+    // CC-P13.2 — headless automation guards.
+    if (options.maxToolLoops) {
+      const n = Number(options.maxToolLoops);
+      if (Number.isFinite(n) && n > 0) setCliKnobOverride({ maxToolLoops: Math.floor(n) });
+    }
+    if (options.disallowedTools) {
+      const { parseToolList } = await import('@kinqs/brainrouter-core/dist/exec/permissionRules.js');
+      const denied = parseToolList(String(options.disallowedTools));
+      if (denied.length > 0) {
+        const current = getCliKnobs().permissions;
+        setCliKnobOverride({ permissions: { allow: current.allow, deny: [...current.deny, ...denied] } });
+      }
+    }
     if (options.timeout) {
       const ms = Number(options.timeout);
       if (Number.isFinite(ms) && ms > 0) setCliKnobOverride({ llmTimeoutMs: ms });
@@ -391,11 +436,13 @@ program
       targetServers[id] = cloned;
     }
 
-    const llm = config.llm ?? { provider: 'openai', model: 'gpt-4o-mini', apiKey: '' };
+    let llm: LLMConfig = { ...(config.llm ?? DEFAULT_LLM) };
     if (options.model) llm.model = options.model;
+    else if (options.session) llm = resolveSessionLlmConfig(llm, workspace.workspaceRoot, options.session);
 
     const mcpClient = new McpClientPool();
     const statuses = await mcpClient.connectAll(targetServers, llm, { timeoutMs: 5_000 });
+    mcpClient.startReconnectSupervisor(); // WS9 — auto-reconnect dropped MCP servers in the background
     // Register live server ids for Ink tool-name display so multi-word
     // server names (e.g. `my_server`) don't get mis-stripped by the
     // single-underscore prefix regex.
@@ -421,6 +468,7 @@ program
       workspaceRoot: workspace.workspaceRoot,
       launchCwd: workspace.launchCwd,
       sessionKey: options.session,
+      prompter: cliPrompter,
     });
 
     // CLI-7 — output format: text (default) | json (single line) | jsonl (per-event stream).
@@ -731,7 +779,7 @@ program
     const workspace = findWorkspaceRoot();
     applyWorkspaceRoot(workspace.workspaceRoot);
     // Reconcile + list happens locally — no MCP needed.
-    const { reconcileStale, listSessions } = await import('./orchestration/orchestrator.js');
+    const { reconcileStale, listSessions } = await import('@kinqs/brainrouter-core/dist/orchestration/orchestrator.js');
     reconcileStale(workspace.workspaceRoot);
     const sessions = listSessions(workspace.workspaceRoot);
     if (options.json) {

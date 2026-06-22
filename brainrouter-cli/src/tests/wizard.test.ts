@@ -13,8 +13,14 @@ import {
   maskApiKey,
   PROVIDER_CATALOG,
   validateApiKey,
-} from '../cli/wizard/providers.js';
+} from '@kinqs/brainrouter-core/dist/provider/catalog.js';
 import { initPickerState, reducePicker } from '../cli/cliPrompt.js';
+import {
+  findProviderByEndpoint,
+  isLoopbackEndpoint,
+  normalizeProviderEndpoint,
+  LOCAL_PLACEHOLDER_KEY,
+} from '@kinqs/brainrouter-core/dist/provider/providers/index.js';
 
 // --- Step ordering -----------------------------------------------------
 
@@ -96,14 +102,14 @@ test('reduceWizard commit only fires on the done step', () => {
 
 // --- Provider catalog --------------------------------------------------
 
-test('PROVIDER_CATALOG is slimmed to openai + lmstudio + ollama only', () => {
+test('PROVIDER_CATALOG = the picker-visible built-in providers (code modules)', () => {
   const ids = PROVIDER_CATALOG.map((p) => p.id);
-  assert.deepEqual(ids.sort(), ['lmstudio', 'ollama', 'openai']);
-  // OpenAI doubles as the OpenAI-compatible custom-endpoint flow; per-vendor
-  // entries (deepseek, openrouter, anthropic-via-gateway, gemini) were
-  // removed in 0.3.9 in favour of the editable base URL prompt.
+  // Built-in providers now live as code modules under provider/providers/.
+  assert.deepEqual(ids.sort(), ['lmstudio', 'ollama', 'openai', 'openai-compatible', 'opencode']);
+  // deepseek is DEFINED (for its tier ladder) but pickerVisible:false → hidden;
+  // legacy per-vendor entries stay gone from the picker.
   for (const removed of ['deepseek', 'openrouter', 'anthropic-via-gateway', 'gemini']) {
-    assert.ok(!ids.includes(removed), `${removed} should be gone from PROVIDER_CATALOG`);
+    assert.ok(!ids.includes(removed), `${removed} should not be in the picker`);
   }
   assert.ok(PROVIDER_CATALOG.some((p) => p.local), 'at least one local provider (LM Studio / Ollama)');
 });
@@ -127,6 +133,43 @@ test('detectProviderFromEnv picks the first catalog entry whose envKey is set', 
   // Removed-provider env vars no longer match.
   const stale = detectProviderFromEnv({ DEEPSEEK_API_KEY: 'dsk-fake' } as any);
   assert.equal(stale, undefined, 'DEEPSEEK_API_KEY should no longer pre-select anything');
+});
+
+// --- Endpoint-based provider resolution --------------------------------
+
+test('normalizeProviderEndpoint collapses /v1, /chat/completions, trailing slash + case', () => {
+  assert.equal(normalizeProviderEndpoint('https://api.deepseek.com'), 'https://api.deepseek.com');
+  assert.equal(normalizeProviderEndpoint('https://api.deepseek.com/v1'), 'https://api.deepseek.com');
+  assert.equal(normalizeProviderEndpoint('https://api.deepseek.com/v1/chat/completions'), 'https://api.deepseek.com');
+  assert.equal(normalizeProviderEndpoint('https://API.DeepSeek.com/v1/'), 'https://api.deepseek.com');
+  assert.equal(normalizeProviderEndpoint(undefined), '');
+});
+
+test('findProviderByEndpoint matches CLOUD providers by endpoint, never local ones', () => {
+  // Cloud: both DeepSeek base-URL forms resolve to the hidden deepseek definition.
+  assert.equal(findProviderByEndpoint('https://api.deepseek.com/v1')?.id, 'deepseek');
+  assert.equal(findProviderByEndpoint('https://api.deepseek.com')?.id, 'deepseek');
+  assert.equal(findProviderByEndpoint('https://api.openai.com/v1')?.id, 'openai');
+  assert.equal(findProviderByEndpoint('https://opencode.ai/zen/v1')?.id, 'opencode');
+  // Local endpoints are ambiguous (any OpenAI-compatible server) → never inferred.
+  assert.equal(findProviderByEndpoint('http://localhost:1234/v1'), undefined);
+  assert.equal(findProviderByEndpoint('http://localhost:11434/v1'), undefined);
+  // Empty endpoint (the generic openai-compatible) never matches.
+  assert.equal(findProviderByEndpoint(''), undefined);
+  assert.equal(findProviderByEndpoint('https://unknown.example.com/v1'), undefined);
+});
+
+test('isLoopbackEndpoint accepts the local-server host forms, rejects cloud', () => {
+  for (const e of ['http://localhost:1234/v1', 'http://127.0.0.1:11434/v1', 'http://0.0.0.0:8080', 'http://[::1]:1234/v1']) {
+    assert.equal(isLoopbackEndpoint(e), true, e);
+  }
+  for (const e of ['https://api.openai.com/v1', 'https://api.deepseek.com', undefined as any]) {
+    assert.equal(isLoopbackEndpoint(e), false, String(e));
+  }
+});
+
+test('LOCAL_PLACEHOLDER_KEY is the single shared local bearer value', () => {
+  assert.equal(LOCAL_PLACEHOLDER_KEY, 'local');
 });
 
 // --- API key validation tier -------------------------------------------

@@ -17,7 +17,7 @@ function formatTime(date: Date | string): string {
  * (props in, JSX out); ScrollbackEntry is a type-only import from ChatApp so
  * there's no runtime cycle. No behavior change.
  */
-export const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentColor, cols }: { entry: ScrollbackEntry; accentColor: string; cols: number }) {
+export const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentColor, cols, verbose = false }: { entry: ScrollbackEntry; accentColor: string; cols: number; verbose?: boolean }) {
   switch (entry.kind) {
     case 'raw':
       return <Text wrap={entry.noWrap ? 'truncate' : 'wrap'}>{entry.text}</Text>;
@@ -84,7 +84,7 @@ export const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentCo
       // The header DOT is green on success and red on failure so the user
       // can scan a long turn at a glance. Duration appended in dim if set.
       const dotColor = entry.ok ? 'green' : 'red';
-      const previewLines = entry.preview ? splitForPreview(entry.preview) : null;
+      const previewLines = entry.preview ? splitForPreview(entry.preview, verbose) : null;
       const isDiff = entry.preview ? looksLikeDiff(entry.preview) : false;
       const toolTime = entry.timestamp ? `[${formatTime(entry.timestamp)}] ` : '';
       return (
@@ -207,7 +207,7 @@ export const ScrollbackRow = React.memo(function ScrollbackRow({ entry, accentCo
     }
     case 'reasoning': {
       const lines = entry.text.split('\n');
-      const maxLines = 10;
+      const maxLines = verbose ? Number.POSITIVE_INFINITY : 10; // CC-P1.3 Ctrl+O
       const visibleLines = lines.slice(0, maxLines);
       const hiddenLinesCount = lines.length - maxLines;
       const reasoningTime = entry.timestamp ? ` · ${formatTime(entry.timestamp)}` : '';
@@ -308,9 +308,9 @@ function ToolPreviewLine({ line, isFirst, isDiff }: { line: string; isFirst: boo
 const TOOL_PREVIEW_MAX_LINES = 8;
 
 /** Split preview into the visible head + the count of hidden tail lines. */
-function splitForPreview(preview: string): { visible: string[]; hidden: number } {
+function splitForPreview(preview: string, verbose = false): { visible: string[]; hidden: number } {
   const lines = preview.split('\n');
-  if (lines.length <= TOOL_PREVIEW_MAX_LINES) return { visible: lines, hidden: 0 };
+  if (verbose || lines.length <= TOOL_PREVIEW_MAX_LINES) return { visible: lines, hidden: 0 };
   return { visible: lines.slice(0, TOOL_PREVIEW_MAX_LINES), hidden: lines.length - TOOL_PREVIEW_MAX_LINES };
 }
 
