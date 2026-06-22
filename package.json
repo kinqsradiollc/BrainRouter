@@ -42,7 +42,8 @@
     "typescript": "^6.0.3"
   },
   "dependencies": {
-    "@kinqs/brainrouter-mcp-server": "^0.4.13",
+    "@kinqs/brainrouter-mcp-server": "^0.4.15",
+    "@modelcontextprotocol/sdk": "^1.11.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"
   }
