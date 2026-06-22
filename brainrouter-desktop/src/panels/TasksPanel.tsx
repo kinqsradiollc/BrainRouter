@@ -51,7 +51,9 @@ export function TasksPanel({ fleet, recent = [], onOpen, onKill }: {
         const content = (
           <>
             <span className="task-kind">{f.kind}</span>
-            <span className="file-name">{f.label}</span>
+            {/* only render the (flex:1) name when there's a label — otherwise an
+                empty name stretches and orphans the kind badge from the status. */}
+            {f.label ? <span className="file-name">{f.label}</span> : null}
             {durable && f.status && f.status !== 'running' ? <span className={`task-status st-${f.status}`}>{f.status}</span> : null}
             {durable && f.phase && (!f.status || f.status === 'running') ? <span className="task-phase">{f.phase}</span> : null}
             {el ? <span className="task-elapsed">{el}</span> : null}
@@ -81,7 +83,7 @@ export function TasksPanel({ fleet, recent = [], onOpen, onKill }: {
           {finishedDurable.map((f) => (
             <button key={f.id} className="task-row clickable" onClick={() => onOpen?.(f.id)} title="Open this task's result">
               <span className="task-kind">{f.kind}</span>
-              <span className="file-name">{f.label}</span>
+              {f.label ? <span className="file-name">{f.label}</span> : null}
               {f.status ? <span className={`task-status st-${f.status}`}>{f.status}</span> : null}
               <span className="task-open">→</span>
             </button>

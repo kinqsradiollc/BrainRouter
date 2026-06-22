@@ -900,7 +900,11 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .okdot, .faildot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .okdot { background: var(--ok); } .faildot { background: var(--err); }
 .task-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 9px; background: var(--raised); border: 1px solid var(--border); margin-bottom: 6px; font-size: 12.5px; color: var(--text-dim); transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
-.task-kind { flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); background: var(--accent-soft); border-radius: 5px; padding: 2px 7px; }
+/* shrinkable + ellipsis so a long kind (VERIFICATION, PLAN-REVISION) gives up
+   width before the task name does, instead of squeezing the name to nothing. */
+.task-kind { flex: 0 1 auto; min-width: 44px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); background: var(--accent-soft); border-radius: 5px; padding: 2px 7px; }
+/* the name keeps a floor so it always shows a few chars (with ellipsis) */
+.task-row .file-name { min-width: 44px; }
 
 .plan-item { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px; border-radius: 8px; color: var(--text-dim); font-size: 12.5px; margin-bottom: 4px; background: var(--raised); border: 1px solid transparent; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
 .plan-item:hover { background: var(--ov-04); border-color: var(--border); transform: translateY(-1px); box-shadow: 0 4px 10px rgba(0, 0, 0, 0.12); }
@@ -1772,7 +1776,9 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
   display: flex;
   align-items: center;
   border-radius: 8px;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  /* scope the transition — `all` animates EVERY property when a 2–5s poll
+     re-renders the row, which read as a flicker on the hovered ⋮ row. */
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
 }
 .session-wrap.active {
   background: linear-gradient(90deg, var(--accent-soft) 0%, transparent 100%);
@@ -1789,8 +1795,8 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
 .session-menu-btn svg { display: block; }
 .session-wrap:hover .session-menu-btn, .session-wrap.menu-open .session-menu-btn { opacity: 1; }
 .session-wrap:hover .session-age, .session-wrap.menu-open .session-age { opacity: 0; } /* the ⋮ takes the age's slot */
-.session-menu-btn:hover { color: var(--text); background: var(--ov-06); }
-.session-wrap.menu-open .session-menu-btn { color: var(--text); background: var(--ov-06); }
+.session-menu-btn:hover { color: var(--text); background: transparent; } /* just brighten the glyph — no box to pop in/out */
+.session-wrap.menu-open .session-menu-btn { color: var(--text); background: var(--ov-08); } /* subtle box only while the menu is actually open */
 .st-pin { color: var(--accent, #6ea8fe); display: inline-flex; align-items: center; justify-content: center; }
 .session-done { color: var(--ok, #5bd6a0); display: inline-flex; margin-left: 4px; }
 .session-wrap.completed .session-title { color: var(--text-dim); }
@@ -1869,7 +1875,10 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
 .task-row-main .file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-stop { flex: none; font-size: 11px; padding: 3px 9px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--danger, #f85149); cursor: pointer; transition: all 0.15s ease; }
 .task-stop:hover { background: rgba(248, 81, 73, 0.12); border-color: var(--danger, #f85149); }
-.task-row .task-open { margin-left: auto; opacity: 0.5; }
+/* no margin-left:auto — it would consume the free space and squeeze the
+   flex:1 name to 0 (the task title vanished); the name's flex-grow pushes
+   the arrow to the right instead, so the title actually shows. */
+.task-row .task-open { opacity: 0.5; }
 .task-row.clickable:hover .task-open { opacity: 1; }
 /* §3 — durable task status / phase / elapsed chips in the Background panel */
 .task-row .task-status { flex: none; font-size: 10px; border-radius: 5px; padding: 1px 6px; text-transform: capitalize; }
@@ -2666,7 +2675,9 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
   grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)) !important;
   align-content: start !important;
   gap: 12px !important;
-  padding: 16px 14px !important;
+  /* top clearance so the first row (Plan) isn't hidden under the floating
+     .topbar-right control cluster (absolute, ~50px tall at the top). */
+  padding: 46px 14px 16px !important;
 }
 .side-chooser-actions {
   grid-column: 1 / -1;
