@@ -1101,7 +1101,9 @@ export function App(): React.ReactElement {
             resumeSession={resumeSession} forkParent={forkParent} transcriptEls={transcriptEls} liveText={liveText}
             goal={goalState}
             onGoalResume={() => runBridge('goal', 'resume')}
-            onGoalPause={() => runBridge('goal', 'pause')}
+            // WS7 — pausing the goal also interrupts the in-flight turn, so the
+            // pause button and the chat Stop button converge on the same state.
+            onGoalPause={() => { runBridge('goal', 'pause'); window.brainrouter.send({ kind: 'interrupt' }); }}
             onGoalClear={() => runBridge('goal', 'clear')}
             onGoalEdit={(text) => { q('a-goal-edit', 'action:goal-edit', { text }); }}
             running={running} turnStart={turnStart} reasoningTail={reasoningTail} statusLine={statusLine}
@@ -1115,7 +1117,10 @@ export function App(): React.ReactElement {
                 </div>
               ) : null}
               <Composer
-                draft={draft} setDraft={setDraft} running={running} stopping={stopping} submit={submit} requestStop={requestStop}
+                draft={draft} setDraft={setDraft} running={running} stopping={stopping} submit={submit}
+                // WS7 — the chat Stop button also pauses an active goal, so an
+                // interrupt doesn't leave the goal "active" and silently auto-resume.
+                requestStop={() => { requestStop(); if (goalState?.status === 'active') runBridge('goal', 'pause'); }}
                 slashActive={slashActive} slashMatches={slashMatches} commands={commands} slashSel={slashSel} setSlashSel={setSlashSel}
                 setSlashDismissed={setSlashDismissed} onRunSlash={runSlash} pop={pop} setPop={setPop} q={q}
                 modeLabel={modeLabel} execMode={execMode} effort={effort} info={info} branches={branches}
