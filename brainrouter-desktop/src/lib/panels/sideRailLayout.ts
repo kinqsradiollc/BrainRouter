@@ -1,4 +1,6 @@
-export const SIDE_RAIL_MIN = 320;
+// Min matches the left sidebar's floor (~220) so the two panels feel consistent
+// when shrunk; a touch wider keeps the panel labels + badges comfortable.
+export const SIDE_RAIL_MIN = 240;
 export const SIDE_RAIL_MAX = 760;
 
 export function clampSideRailWidth(width: number): number {
