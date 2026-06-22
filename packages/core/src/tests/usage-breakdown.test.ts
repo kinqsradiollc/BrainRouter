@@ -17,6 +17,16 @@ test('buildUsageBreakdown: parent line with cache hit-rate + totals + child shar
   assert.match(text, /offload {5}42,000 chars/);
 });
 
+test('WS0 0.5 buildUsageBreakdown: cache-savings line shows cached/full-price token counts', () => {
+  const text = buildUsageBreakdown({ parent: PARENT, children: [] }).join('\n');
+  assert.match(text, /cache {7}40,000 tokens served from cache · 10,000 full-price \(80\.0% hit\)/);
+});
+
+test('WS0 0.5 buildUsageBreakdown: no cache line when the provider reported no cache stats', () => {
+  const text = buildUsageBreakdown({ parent: { ...PARENT, cachedTokens: 0, missedTokens: 0 }, children: [] }).join('\n');
+  assert.ok(!text.includes('served from cache'), 'no cache-savings line when nothing is cacheable');
+});
+
 test('buildUsageBreakdown: children sorted by total spend; >10 rolled up', () => {
   const children: ActorUsage[] = Array.from({ length: 12 }, (_, i) => ({
     id: `a${i}`, role: 'worker', promptTokens: (i + 1) * 100, completionTokens: 0, calls: 1,
