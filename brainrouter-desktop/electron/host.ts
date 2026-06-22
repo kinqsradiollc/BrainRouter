@@ -1983,7 +1983,7 @@ async function main(): Promise<void> {
           },
         };
       },
-      'usage-breakdown': () => buildUsageBreakdown({ parent: activeAgent.sessionUsage, children: [], offload: undefined }),
+      'usage-breakdown': () => buildUsageBreakdown({ parent: activeAgent.sessionUsage, children: [], offload: undefined, prefixStability: activeAgent.getPrefixStability() }),
       // WS10 — persistent cross-session usage history (day-bucketed), for the
       // contributions-style heatmap + range totals in the Usage panel.
       'usage-history': (a) => {

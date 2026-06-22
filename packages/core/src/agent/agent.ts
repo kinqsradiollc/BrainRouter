@@ -108,7 +108,7 @@ import { startSpan, traceEvent } from '../telemetry/tracing.js';
 // 0.3.9 item 8 — cache-first context regions. The helper here lets us
 // fingerprint the cache-stable slice of every outbound chat request
 // without rewriting the legacy runTurn message plumbing.
-import { computePrefixFingerprint, computePrefixComponents, type PrefixComponents } from '../context/contextRegions.js';
+import { computePrefixFingerprint, computePrefixComponents, accumulatePrefixStability, newPrefixStabilityTally, prefixStabilityRatio, type PrefixComponents, type PrefixStabilityTally } from '../context/contextRegions.js';
 import { decideExecutionPolicy, resolveToolPolicy, externalDirectoryDecision, egressDecision, type ActionKind, type PolicyDecision } from '../exec/execPolicy.js';
 import { isPathWithinRoots } from '../exec/pathPolicy.js';
 import { runPostEditCheck } from '../util/postEditCheck.js';
@@ -1666,6 +1666,12 @@ export class Agent {
       const OFFLINE_MAX_WAITS = 120; // generous: keep waiting for the network to return
       const llmEndpoint = this.llmConfig?.endpoint ?? '';
       const invokeLlmResilient = async (): Promise<Awaited<ReturnType<typeof invokeLlm>>> => {
+        // WS0 — record cache-stable-prefix stability once per logical LLM call
+        // (here, BEFORE the retry loop, so transient-failure retries don't
+        // double-count). The prefix slice is unaffected by invokeLlm's
+        // per-attempt sanitize, so deriving it from chatHistory + allTools is
+        // equivalent to the sanitized request.
+        this.recordPrefixStability(this.chatHistory, allTools);
         let attempt = 0;
         let offlineWaits = 0;
         for (;;) {
@@ -4001,6 +4007,44 @@ export class Agent {
   }
 
   /**
+   * WS0 — record one logical LLM call's cache-stable prefix into the session
+   * stability tally and emit drift telemetry. Called once per call (in
+   * `invokeLlmResilient`, before the retry loop, so retries don't double-count).
+   * The prefix slice (system message + pinned anchors + tool list) is what the
+   * provider prefix-caches; the per-attempt tool-call-pairing sanitize only
+   * touches the append region, so deriving it from `this.chatHistory` here is
+   * equivalent to the sanitized request. Pure observability — wrapped so a
+   * tally/telemetry failure can never break a turn.
+   */
+  private recordPrefixStability(messages: readonly unknown[], tools: readonly unknown[]): void {
+    try {
+      const curr = computePrefixComponents(messages as any, tools as any);
+      const drift = accumulatePrefixStability(this.prefixStability, this.prevPrefixComponents, curr);
+      this.prevPrefixComponents = curr;
+      this.lastTurnUsage.lastPrefixFingerprint = computePrefixFingerprint(messages as any, tools as any);
+      traceEvent('llm_call.prefix_drift', {
+        model: this.llmConfig.model,
+        changed: drift.changed,
+        labels: drift.labels,
+        stableCalls: this.prefixStability.stableCalls,
+        bustCalls: this.prefixStability.bustCalls,
+      });
+    } catch {
+      /* observability only — never let prefix accounting break a turn */
+    }
+  }
+
+  /** WS0 — session prefix-cache stability summary (for `/tokens` + the usage view). */
+  public getPrefixStability(): { stableCalls: number; bustCalls: number; ratio: number; lastLabels: string[] } {
+    return {
+      stableCalls: this.prefixStability.stableCalls,
+      bustCalls: this.prefixStability.bustCalls,
+      ratio: prefixStabilityRatio(this.prefixStability),
+      lastLabels: this.prefixStability.lastLabels,
+    };
+  }
+
+  /**
    * CLI-4 — `/bg`: run a prompt as a DETACHED background worker. Reuses the
    * proven worker-thread infra (a separate in-process Agent + on-disk
    * transcript/status), so there's no concurrency hazard with the foreground
@@ -4259,6 +4303,13 @@ export class Agent {
     /** Last call's `prefixFingerprint` (item 8). Lets `/tokens` show whether the prefix was stable. */
     lastPrefixFingerprint?: string;
   } = { promptTokens: 0, completionTokens: 0, calls: 0, cachedTokens: 0, missedTokens: 0 };
+
+  /** WS0 — running prefix-cache stability tally (cache-stable-prefix hits vs
+   *  busts) across the whole session. This is the measurable signal any future
+   *  prefix-ordering change is judged against: reorder, then watch the ratio. */
+  public prefixStability: PrefixStabilityTally = newPrefixStabilityTally();
+  /** WS0 — previous LLM call's prefix components, for call-over-call drift detection. */
+  private prevPrefixComponents: PrefixComponents | null = null;
 
   /** Cumulative token usage across the WHOLE CLI session (all turns). */
   public sessionUsage: {
