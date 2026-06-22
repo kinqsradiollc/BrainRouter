@@ -48,6 +48,18 @@ export function findGitRoot(dir: string): string | null {
   return root ? realpath(root) : null;
 }
 
+/** Current HEAD commit sha for `dir`, or undefined when not resolvable (no repo,
+ *  empty history, git missing). Used by the destructive-command guard to decide
+ *  whether a `git commit --amend` targets a commit the agent authored this session. */
+export function gitHeadSha(dir: string): string | undefined {
+  const result = spawnSync('git', ['-C', dir, 'rev-parse', 'HEAD'], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15_000,
+  });
+  if (result.status !== 0) return undefined;
+  const sha = (result.stdout ?? '').trim();
+  return sha || undefined;
+}
+
 /** Resolve how a selected workspace folder relates to its owning git repo. */
 export function resolveWorkspaceGit(selectedRoot: string): WorkspaceGitInfo {
   const workspaceRoot = realpath(selectedRoot);

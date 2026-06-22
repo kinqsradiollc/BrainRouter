@@ -93,6 +93,8 @@ import { runHooks, parseHookDecision } from '../hooks/hooksStore.js';
 import { extensionHookHandlers } from '../extension/registry.js';
 import { resolveSandboxConfig, runShell } from '../exec/sandbox.js';
 import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../exec/dangerousCommand.js';
+import { evaluateDestructiveCommand } from '../exec/destructiveCommandGuard.js';
+import { gitHeadSha } from '../git/workspaceGit.js';
 import { readPreferences, resolveEffort, type EffortLevel } from '../session/preferencesStore.js';
 import { resolveActiveMode } from '../session/sessionModeStore.js';
 import { resolveEffortForTurn } from './effortRouting.js';
@@ -735,6 +737,11 @@ export class Agent {
   // file it hasn't seen (Claude Code's read-before-edit contract). Reset by
   // loadHistory / fork / bootstrapSession (see clearSessionState).
   private filesReadThisSession = new Set<string>();
+  // WS5 — commits the agent itself created THIS session (process-lifetime, NOT
+  // reset per turn). The destructive-command guard allows `git commit --amend`
+  // only when HEAD is in this set; a resumed session starts empty, so amending a
+  // pre-existing commit is blocked (fail-safe).
+  private agentAuthoredCommits = new Set<string>();
   /** MAS-READMANIFEST (B2) — the files this agent has read this session, so the
    *  phase orchestrator can forward a "already mapped" manifest to later phases
    *  (a child reads deltas, not the whole tree cold). */
@@ -3163,6 +3170,29 @@ export class Agent {
         if (shellPolicy.decision === 'deny') {
           return `Command execution denied: ${shellPolicy.reason}.`;
         }
+        // WS5 — destructive-command guard: BLOCK git/IaC actions the user didn't
+        // ask for (reset --hard / checkout -- / clean -f / stash drop, an --amend
+        // of a commit we didn't author this session, or an IaC destroy without the
+        // stack named). Attended users can override via a confirm; silent/headless
+        // agents are refused outright (they can't answer a prompt).
+        let destructiveOverride = false;
+        {
+          const verdict = evaluateDestructiveCommand(cmd, {
+            userIntent: this.lastUserPrompt,
+            headSha: gitHeadSha(this.workspaceRoot),
+            agentAuthoredCommits: this.agentAuthoredCommits,
+          });
+          if (verdict.decision === 'block') {
+            if (this.silent || (!this.interactionPort && !this.prompter)) {
+              return `Command blocked (${verdict.rule}): ${verdict.reason}`;
+            }
+            const approved = this.interactionPort
+              ? await this.interactionPort.confirm({ title: 'Run destructive command?', detail: `${cmd}\n\n${verdict.reason}`, dangerous: true, tool: 'run_command' })
+              : await this.prompter.askYesNo(`${verdict.reason}\nRun it anyway? (y/N) `, false);
+            if (!approved) return `Command blocked (${verdict.rule}): ${verdict.reason}`;
+            destructiveOverride = true; // user explicitly authorized — skip the redundant approval below
+          }
+        }
         // Approval gating routes through the pure resolver in
         // runtime/dangerousCommand.ts. Three outcomes:
         //   • auto-approve: fast mode + safe command (or silent child whose
@@ -3199,7 +3229,9 @@ export class Agent {
         // "type a goal, walk away". Dangerous commands still ask.
         const goalForApproval = readGoal(this.workspaceRoot, this.sessionKey);
         const goalIsActive = !!(goalForApproval?.text && goalForApproval.status === 'active');
-        const approval = resolveRunCommandApproval(activeMode, cmd, { silent: this.silent, goalActive: goalIsActive, allowlist: getCliKnobs().commandAllowlist });
+        const approval = destructiveOverride
+          ? ('auto-approve' as const) // user already authorized the destructive command above — don't double-prompt
+          : resolveRunCommandApproval(activeMode, cmd, { silent: this.silent, goalActive: goalIsActive, allowlist: getCliKnobs().commandAllowlist });
         let parentApproved = false;
         if (approval === 'deny-silent') {
           const dangerous = isDangerousCommand(cmd);
@@ -3299,6 +3331,13 @@ export class Agent {
           { silent: this.silent, enforceWhenSilent: this.sandboxEnforceWhenSilent },
         );
         const result = await runShell(cmd, sandboxConfig, undefined, this.turnAbort?.signal);
+        // WS5 — remember commits WE authored this session, so a later
+        // `git commit --amend` of one of them is allowed (vs. amending a
+        // pre-existing/user commit, which the guard blocks).
+        if (result.exitCode === 0 && /\bgit\b[^|;&]*\bcommit\b/i.test(cmd)) {
+          const head = gitHeadSha(this.workspaceRoot);
+          if (head) this.agentAuthoredCommits.add(head);
+        }
         const enforcedTag = sandboxConfig.enforcedUnattended ? ' (enforced: unattended)' : '';
         const sandboxBadge = result.sandboxed
           ? `[sandboxed via ${result.sandboxTool}${enforcedTag}] `
