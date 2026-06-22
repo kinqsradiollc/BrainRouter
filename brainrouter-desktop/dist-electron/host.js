@@ -90,6 +90,7 @@ import { readPlanHistory, recordPlanDecision, linkPlanDecision } from '@kinqs/br
 import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
 import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement, deleteRequirement } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
+import { buildBaseGraph, saveAtlasGraph, readAtlasGraph, atlasGraphStats } from '@kinqs/brainrouter-core/dist/atlas/index.js';
 import { syncRequirementPlanTrack } from '@kinqs/brainrouter-core/dist/requirement/planTrackSync.js';
 import { ensureProject, getProject, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
 import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/dist/track/githubSync.js';
@@ -1636,6 +1637,15 @@ async function main() {
             },
             // links). Thin wrappers over the CLI's requirementStore (already unit-tested)
             // so the desktop panel and the terminal CLI share the same requirements.json.
+            // ATLAS — the codebase knowledge graph. `atlas-graph` loads the stored
+            // artifact (or null); `atlas-build` runs the deterministic builder, saves,
+            // and returns the fresh graph so the panel renders without a second fetch.
+            'atlas-graph': () => readAtlasGraph(workspaceRoot),
+            'atlas-build': () => {
+                const graph = buildBaseGraph(workspaceRoot);
+                saveAtlasGraph(workspaceRoot, graph);
+                return { graph, stats: atlasGraphStats(graph) };
+            },
             'requirement-list': () => listRequirements(workspaceRoot),
             'requirement-create': async (a) => {
                 const created = createRequirement(workspaceRoot, { title: String(a.title ?? ''), sessionKey: activeAgent.sessionKey });

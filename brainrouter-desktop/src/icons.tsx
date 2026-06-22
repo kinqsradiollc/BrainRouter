@@ -29,6 +29,7 @@ const PATHS: Record<string, React.ReactNode> = {
   pause: <><rect x="4" y="3.5" width="2.6" height="9" rx="0.6" /><rect x="9.4" y="3.5" width="2.6" height="9" rx="0.6" /></>,
   copy: <path d="M5.5 5.5h8v8h-8v-8Zm-3-3h8v3h-5a1 1 0 0 0-1 1v4h-2v-8Z" />,
   branch: <><circle cx="4.5" cy="3.5" r="1.8" /><circle cx="4.5" cy="12.5" r="1.8" /><circle cx="11.5" cy="6" r="1.8" /><path d="M4.5 5.3v5.4M11.5 7.8c0 2.5-3 2.5-5 3.3" /></>,
+  atlas: <><circle cx="8" cy="8" r="1.7" /><circle cx="3" cy="4" r="1.4" /><circle cx="13" cy="4.5" r="1.4" /><circle cx="4.5" cy="13" r="1.4" /><path d="M6.6 7 4 5M9.5 7.2 11.8 5.4M7.3 9.4 5.3 11.8" /></>,
   close: <path d="m3.5 3.5 9 9m0-9-9 9" />,
   'chev-down': <path d="m3.5 6 4.5 4.5L12.5 6" />,
   'chev-right': <path d="m6 3.5 4.5 4.5L6 12.5" />,

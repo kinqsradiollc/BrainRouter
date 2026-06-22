@@ -7,6 +7,41 @@
  * when the prompt mentions "approve". No-op when the real bridge exists.
  */
 import type { AgentCommand, AgentEvent, AgentEventMessage } from '@kinqs/brainrouter-agent-protocol';
+import type { AtlasGraph } from '@kinqs/brainrouter-types';
+
+/** A tiny synthetic codebase graph for browser-only dev of the Atlas panel. */
+function devAtlasGraph(): AtlasGraph {
+  return {
+    schemaVersion: 1,
+    kind: 'codebase',
+    project: { name: 'demo-app', languages: ['typescript', 'css'], frameworks: ['React'], description: 'A small demo app for the Atlas panel.', analyzedAt: '2026-06-22T00:00:00Z', totalFiles: 7 },
+    nodes: [
+      { id: 'file:src/index.ts', type: 'file', name: 'index.ts', filePath: 'src/index.ts', language: 'typescript', category: 'code', complexity: 'simple' },
+      { id: 'file:src/app.ts', type: 'file', name: 'app.ts', filePath: 'src/app.ts', language: 'typescript', category: 'code', complexity: 'moderate' },
+      { id: 'file:src/api.ts', type: 'file', name: 'api.ts', filePath: 'src/api.ts', language: 'typescript', category: 'code', complexity: 'moderate' },
+      { id: 'file:src/db.ts', type: 'file', name: 'db.ts', filePath: 'src/db.ts', language: 'typescript', category: 'code', complexity: 'complex' },
+      { id: 'file:src/util.ts', type: 'file', name: 'util.ts', filePath: 'src/util.ts', language: 'typescript', category: 'code', complexity: 'simple' },
+      { id: 'file:src/ui.tsx', type: 'file', name: 'ui.tsx', filePath: 'src/ui.tsx', language: 'typescript', category: 'code', complexity: 'moderate' },
+      { id: 'config:package.json', type: 'config', name: 'package.json', filePath: 'package.json', language: 'json', category: 'config', complexity: 'simple' },
+      { id: 'document:README.md', type: 'document', name: 'README.md', filePath: 'README.md', language: 'markdown', category: 'docs', complexity: 'simple' },
+      { id: 'function:src/app.ts:main', type: 'function', name: 'main', filePath: 'src/app.ts', lineRange: [3, 20] },
+      { id: 'class:src/db.ts:Store', type: 'class', name: 'Store', filePath: 'src/db.ts', lineRange: [5, 60] },
+    ],
+    edges: [
+      { source: 'file:src/index.ts', target: 'file:src/app.ts', type: 'imports', weight: 0.9 },
+      { source: 'file:src/app.ts', target: 'file:src/api.ts', type: 'imports', weight: 0.9 },
+      { source: 'file:src/app.ts', target: 'file:src/ui.tsx', type: 'imports', weight: 0.9 },
+      { source: 'file:src/app.ts', target: 'file:src/util.ts', type: 'imports', weight: 0.9 },
+      { source: 'file:src/api.ts', target: 'file:src/db.ts', type: 'imports', weight: 0.9 },
+      { source: 'file:src/api.ts', target: 'file:src/util.ts', type: 'imports', weight: 0.9 },
+      { source: 'file:src/db.ts', target: 'file:src/util.ts', type: 'imports', weight: 0.9 },
+      { source: 'file:src/app.ts', target: 'function:src/app.ts:main', type: 'contains', weight: 1 },
+      { source: 'file:src/db.ts', target: 'class:src/db.ts:Store', type: 'contains', weight: 1 },
+    ],
+    layers: [],
+    tour: [],
+  };
+}
 
 export function installDevBridge(): void {
   if (typeof window === 'undefined' || (window as { brainrouter?: unknown }).brainrouter) return;
@@ -439,6 +474,10 @@ export function installDevBridge(): void {
     'worktree-create': (a) => { const name = String(a.name ?? ''); const p = `/Users/dev/BrainRouter/.worktrees/${name}`; devWorktrees.push({ path: p, branch: name, detached: false }); return { ok: true, path: p }; },
     'worktree-remove': (a) => { const i = devWorktrees.findIndex((w) => w.path === a.path); if (i >= 0) devWorktrees.splice(i, 1); return { ok: i >= 0 }; },
     // REQUIREMENT-RECORDS — mock the requirementStore wrappers (mutate in-memory).
+    // ATLAS — a small synthetic codebase graph so the Atlas panel renders in
+    // browser-only dev (real builds come from the host's deterministic builder).
+    'atlas-graph': () => devAtlasGraph(),
+    'atlas-build': () => { const g = devAtlasGraph(); return { graph: g, stats: { files: 7, functions: 5, classes: 2, nodes: g.nodes.length, edges: g.edges.length, layers: 0, enriched: false } }; },
     'requirement-list': () => [...devRequirements].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     'requirement-create': (a) => {
       const id = `req_dev${++reqSeq}`;

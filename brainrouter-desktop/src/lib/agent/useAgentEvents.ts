@@ -20,7 +20,7 @@ import type { SyncConfig, SyncResult } from '../../track/TrackView.js';
 import type { SearchHit, ReviewFindingView, GrepHit } from '../../panels/index.js';
 import type { ScheduleRecordView } from '../schedule/scheduleView.js';
 import type { PlanDecisionView } from '../plan/planReviewView.js';
-import type { RequirementRecord, AnnotationRecord, ArtifactRecord } from '@kinqs/brainrouter-types';
+import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph } from '@kinqs/brainrouter-types';
 import type { CommandsCatalog } from '../commands/commands.js';
 import type { ConfigSnapshot, UsageHistory } from '../../settings.js';
 import { parseWorktreeList, type WorktreeEntry } from '../worktree/worktreeParser.js';
@@ -110,6 +110,8 @@ export interface AgentEventsCtx {
   setRequirements: React.Dispatch<React.SetStateAction<RequirementRecord[]>>;
   setAnnotations: React.Dispatch<React.SetStateAction<AnnotationRecord[]>>;
   setArtifacts: React.Dispatch<React.SetStateAction<ArtifactRecord[]>>;
+  setAtlasGraph: React.Dispatch<React.SetStateAction<AtlasGraph | null>>;
+  setAtlasBuilding: React.Dispatch<React.SetStateAction<boolean>>;
   setWorktrees: React.Dispatch<React.SetStateAction<WorktreeEntry[]>>;
   setWorktreeDiffs: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   setReviewRunningByWs: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
@@ -187,7 +189,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
     setDraft, planFeedbackRef, goalContPendingRef, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
     setBranches, setModelsLoading, setEndpointModels, setProviderModels, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
-    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
+    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
     setAtBottom,
@@ -738,6 +740,8 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       // their own ids (q-req-create/q-req-update/q-req-seed) and just trigger a
       // refresh via q-req, except seed/error which surfaces a toast.
       case 'q-req': if (Array.isArray(result)) setRequirements(result as RequirementRecord[]); return;
+      case 'q-atlas': setAtlasGraph(result && typeof result === 'object' && Array.isArray((result as { nodes?: unknown }).nodes) ? (result as AtlasGraph) : null); return;
+      case 'q-atlas-build': { const g = (result as { graph?: AtlasGraph } | null)?.graph ?? null; if (g) setAtlasGraph(g); setAtlasBuilding(false); return; }
       case 'q-req-create': case 'q-req-update': case 'q-req-seed': {
         const r = result as { error?: string } | null;
         if (r && typeof r === 'object' && typeof r.error === 'string') setToast(`✗ ${r.error}`);
