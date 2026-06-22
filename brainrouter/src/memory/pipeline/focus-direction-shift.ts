@@ -1,5 +1,6 @@
 import type { CognitiveRecord, ContextualFocusRecord, LLMRunner } from "@kinqs/brainrouter-types";
 import { FOCUS_DIRECTION_SHIFT_SYSTEM_PROMPT, formatFocusDirectionShiftPrompt } from "../prompts/focus-direction-shift.js";
+import { extractJsonValue } from "../util/llm-json.js";
 
 export async function detectFocusShift(params: {
   activeScene: ContextualFocusRecord;
@@ -22,11 +23,11 @@ export async function detectFocusShift(params: {
       timeoutMs: 30_000,
     });
 
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
+    // Robust parse: tolerant of role-token leaks / prose / fences (see llm-json.ts).
+    const parsed: any = extractJsonValue(response, { kind: "object" });
+    if (!parsed) {
       throw new Error("No JSON object found in LLM response");
     }
-    const parsed = JSON.parse(jsonMatch[0]);
     return {
       shift: Boolean(parsed.shift),
       confidence: Number(parsed.confidence) || 0,

@@ -1,6 +1,7 @@
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
 import type { LLMRunner, CognitiveRecord, GraphNode, GraphEdge } from "@kinqs/brainrouter-types";
 import { GRAPH_EXTRACTION_SYSTEM_PROMPT, formatGraphExtractionPrompt } from "../prompts/graph-extraction.js";
+import { extractJsonValue } from "../util/llm-json.js";
 import crypto from "node:crypto";
 
 /**
@@ -33,10 +34,9 @@ export async function buildGraphFromCognitive(params: {
       timeoutMs
     });
 
-    const jsonMatch = rawExtraction.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return;
-
-    const data = JSON.parse(jsonMatch[0]);
+    // Robust parse: tolerates leaked role tokens, prose, fences, trailing commas
+    // and bad backslash escapes (see llm-json.ts) instead of a greedy regex.
+    const data: any = extractJsonValue(rawExtraction, { kind: "object" });
     if (!data || !Array.isArray(data.entities)) return;
 
     const entityMap = new Map<string, string>(); // name -> node.id

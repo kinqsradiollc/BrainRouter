@@ -3,6 +3,7 @@ import { fetchWithExternalRetry } from "../util/retry.js";
 import { acquireLLMSlot } from "../llm/llm-semaphore.js";
 import { extractChatCompletionText, resolveLLMTimeoutMs } from "../llm/llm-response.js";
 import { normalizeRequestTimeoutMs, requestTimeoutSignal } from "../util/request-timeout.js";
+import { extractJsonValue } from "../util/llm-json.js";
 
 export interface JudgeCandidate {
   /** Stable id used for logging — typically the memory's record_id. */
@@ -211,17 +212,11 @@ export class RelevanceJudgeService {
     let text = raw.trim();
     text = text.replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
 
-    let parsed: any;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      const objMatch = text.match(/\{[\s\S]*\}/);
-      const arrMatch = text.match(/\[[\s\S]*\]/);
-      const candidate = objMatch?.[0] ?? arrMatch?.[0];
-      if (!candidate) {
-        throw new Error(`Relevance Judge produced non-JSON output: ${text.slice(0, 200)}`);
-      }
-      parsed = JSON.parse(candidate);
+    // Robust parse: balanced-span scan + repair, tolerant of role-token leaks,
+    // prose, and trailing commas (see llm-json.ts). `text` is already de-fenced.
+    const parsed: any = extractJsonValue(text, { kind: "any" });
+    if (parsed === null) {
+      throw new Error(`Relevance Judge produced non-JSON output: ${text.slice(0, 200)}`);
     }
 
     const list: any[] = Array.isArray(parsed)

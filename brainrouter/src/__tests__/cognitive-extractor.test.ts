@@ -150,6 +150,19 @@ describe("cognitive extractor JSON escape repair", () => {
     expect(result.errorMessage).toContain("non-JSON output");
   });
 
+  it("survives a leaked [user role] chat-template token before the real array (the field bug)", async () => {
+    // Reproduces: "Cognitive extraction body invalid … Unexpected token 'u',
+    // \"[user role]\"…". The free model leaks a role marker; the old greedy
+    // /\[[\s\S]*\]/ matched from THAT bracket and JSON.parse died on `[u`.
+    const raw = `[user role] Sure — here is the extraction:\n[{"scene_name":"Auth flow","memories":[${memory("reranker recall fell back to RRF")}]}]`;
+    await expect(extractContents(raw)).resolves.toEqual(["reranker recall fell back to RRF"]);
+  });
+
+  it("survives prose + a ```json fence around the array", async () => {
+    const raw = "Here you go:\n```json\n[{\"scene_name\":\"S\",\"memories\":[" + memory("fenced + prose still parses") + "]}]\n```\nLet me know if you need more.";
+    await expect(extractContents(raw)).resolves.toEqual(["fenced + prose still parses"]);
+  });
+
   it("fails extraction (re-queue) when the model returns a bare identifier list", async () => {
     // The headline bug: the model echoes the input sensory IDs as a bare array
     // (`["sensory_7d...", ...]`). It parses to a JSON array but yields zero scene
@@ -178,7 +191,9 @@ describe("cognitive extractor JSON escape repair", () => {
     });
 
     expect(result.success).toBe(false);
-    expect(result.errorMessage).toContain("Failed to JSON-parse");
+    // The robust extractor (llm-json.ts) returns null for array-like-but-unparseable
+    // input, so it re-queues with this reason instead of throwing mid-parse.
+    expect(result.errorMessage).toContain("No parseable JSON array");
   });
 
   it("fails extraction (re-queue) when array items are not scene objects", async () => {

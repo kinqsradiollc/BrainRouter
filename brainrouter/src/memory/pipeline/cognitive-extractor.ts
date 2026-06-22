@@ -2,6 +2,7 @@ import { EXTRACT_MEMORIES_SYSTEM_PROMPT, formatExtractionPrompt } from "../promp
 import { getMemoryTypeConfig } from "../config/memory-type-config.js";
 import type { SensoryRecord, CognitiveRecord, LLMRunner, MemorySourceKind, MemoryType, MemoryVerificationStatus } from "@kinqs/brainrouter-types";
 import { isExternalTimeoutError } from "../llm/llm-response.js";
+import { extractJsonValue } from "../util/llm-json.js";
 import crypto from "node:crypto";
 
 const ALLOWED_MEMORY_TYPES = new Set<MemoryType>([
@@ -243,12 +244,14 @@ function parseExtractionResult(raw: string): ParseExtractionOutcome {
       cleaned = cleaned.replace(/^\`\`\`(?:json)?\s*\n?/, "").replace(/\n?\`\`\`\s*$/, "");
     }
 
-    const match = cleaned.match(/\[[\s\S]*\]/);
-    if (!match) {
-      return { scenes: [], parseFailed: true, reason: "No JSON array found in extraction output." };
+    // Robust extraction: tolerates leaked role tokens (`[user role]`), prose,
+    // fences, trailing commas, and bad backslash escapes — see llm-json.ts.
+    const parsed = extractJsonValue(cleaned, { kind: "array" });
+    if (parsed === null) {
+      // Covers both "no array at all" and "array-like but unparseable" — the
+      // robust extractor returns null for either (see llm-json.ts).
+      return { scenes: [], parseFailed: true, reason: "No parseable JSON array found in extraction output." };
     }
-
-    const parsed = parseJsonWithEscapeRepair(match[0]);
     if (!Array.isArray(parsed)) {
       return { scenes: [], parseFailed: true, reason: "Extraction output was not a JSON array." };
     }
@@ -300,89 +303,6 @@ function parseExtractionResult(raw: string): ParseExtractionOutcome {
     const msg = err instanceof Error ? err.message : String(err);
     return { scenes: [], parseFailed: true, reason: `Failed to JSON-parse extraction output: ${msg}` };
   }
-}
-
-// LLMs frequently emit JSON where string values contain backslashes that
-// aren't valid JSON escapes — Windows paths (\users), regex literals,
-// LaTeX (\section), or shell snippets. JSON.parse rejects the entire
-// payload on the first bad escape, so we'd drop an otherwise-good batch
-// of memories over one stray backslash. Once the first parse has failed,
-// preserve ambiguous backslashes literally; otherwise valid JSON escapes
-// like \b, \f, \n, \r, \t, or \uXXXX can silently corrupt paths.
-function parseJsonWithEscapeRepair(raw: string): unknown {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    try {
-      return JSON.parse(stripTrailingCommas(raw));
-    } catch (err) {
-      if (!(err instanceof SyntaxError)) throw err;
-      const escaped = escapeAmbiguousBackslashesInJsonStrings(raw);
-      try {
-        return JSON.parse(stripTrailingCommas(escaped));
-      } catch {
-        return JSON.parse(escapeAmbiguousBackslashesInJsonStrings(stripTrailingCommas(escaped)));
-      }
-    }
-  }
-}
-
-function escapeAmbiguousBackslashesInJsonStrings(input: string): string {
-  let out = "";
-  let inString = false;
-  let escape = false;
-
-  for (let i = 0; i < input.length; i++) {
-    const ch = input[i];
-    if (!inString) {
-      out += ch;
-      if (ch === '"') inString = true;
-      continue;
-    }
-
-    if (escape) {
-      out += ['"', "\\", "/"].includes(ch) ? ch : `\\${ch}`;
-      escape = false;
-      continue;
-    }
-
-    if (ch === "\\") {
-      out += "\\";
-      escape = true;
-      continue;
-    }
-
-    out += ch;
-    if (ch === '"') inString = false;
-  }
-
-  return out;
-}
-
-// Strip trailing commas before `]` or `}` while respecting string literals.
-// LLMs often emit `["a", "b",]` which JSON.parse rejects.
-function stripTrailingCommas(input: string): string {
-  let out = "";
-  let inString = false;
-  let escape = false;
-  for (let i = 0; i < input.length; i++) {
-    const ch = input[i];
-    if (inString) {
-      out += ch;
-      if (escape) { escape = false; continue; }
-      if (ch === "\\") { escape = true; continue; }
-      if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') { inString = true; out += ch; continue; }
-    if (ch === ",") {
-      let j = i + 1;
-      while (j < input.length && /\s/.test(input[j])) j++;
-      if (input[j] === "]" || input[j] === "}") continue;
-    }
-    out += ch;
-  }
-  return out;
 }
 
 function parseMemoryType(value: unknown): MemoryType {
