@@ -1,0 +1,35 @@
+# Optional local-dev Postgres for the BrainRouter brain (memory store).
+#
+# This is NOT vendored into the project — it just PULLS the official pgvector
+# image. You can ignore this file entirely and point BRAINROUTER_DATABASE_URL at
+# any Postgres 14+ that has the `vector` extension available (managed RDS, Neon,
+# Supabase, your own cluster, …). It exists so a contributor can get a
+# scale-mode brain locally with one command.
+#
+#   cd deploy/postgres && docker compose up -d
+#   # → postgres://postgres:postgres@localhost:5432/brainrouter   (pgvector ready)
+#
+# pgvector is the Postgres equivalent of the current sqlite-vec vector search.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: brainrouter-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres} # default for now — set a real secret before any shared/hosted deploy
+      POSTGRES_DB: ${POSTGRES_DB:-brainrouter}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - brainrouter-pg:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-brainrouter}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  brainrouter-pg:
+    name: brainrouter-pg
