@@ -232,6 +232,19 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       // a background project's turn events are exactly what that drop discards,
       // and they're what powers the sidebar's "running elsewhere" dot.
       setRunningWs((s) => nextRunningWorkspaces(s, msg.event?.kind, wsMsg.workspaceRoot));
+      // WS3 — per-SESSION running state must also update for EVERY workspace, not
+      // just the active one: a session running in a PARKED workspace otherwise
+      // shows a stale spinner (its turn-lifecycle events are exactly what the
+      // stale-drop below discards). Mirror the per-workspace capture above and do
+      // it BEFORE the drop, keyed by the event's OWNING session.
+      {
+        const owning = msg.sessionKey;
+        const k = msg.event?.kind;
+        if (owning) {
+          if (k === 'turn-start') setSessionRunning(owning, true);
+          else if (k === 'turn-complete' || k === 'turn-error') setSessionRunning(owning, false);
+        }
+      }
       const pendingWorkspace = pendingWorkspaceRef.current;
       if (pendingWorkspace && msg.event?.kind === 'query-result') {
         const queryEvent = msg.event as { id?: string; ok?: boolean; result?: unknown; error?: string };
