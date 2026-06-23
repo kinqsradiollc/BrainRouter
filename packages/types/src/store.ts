@@ -99,6 +99,8 @@ export interface OperationLogFilters {
 export interface IMemoryStore {
   init(): Promise<void>;
   initVec(dimensions: number): Promise<void>;
+  /** Close the underlying connection pool. Idempotent; the store must not be used after. */
+  close(): Promise<void>;
   reembedStaleRecords(embedder: (text: string) => Promise<Float32Array>): Promise<number>;
   getSqliteVersion(): Promise<string>;
   upsertSensory(record: SensoryRecord): Promise<void>;

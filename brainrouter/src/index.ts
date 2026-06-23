@@ -38,7 +38,7 @@ import { Registry } from './registry.js';
 import { resolveRegistryConfig } from './resolver.js';
 import { buildMcpServer } from './transport/mcpServer.js';
 
-import { memoryEngine } from './memory/engine.js';
+import { memoryEngine, closeMemoryEngine } from './memory/engine.js';
 import path from 'node:path';
 import { decideMcpAcceptPromotion } from './api/mcpAcceptHeader.js';
 import { usersRouter } from './api/routes/users.js';
@@ -309,6 +309,10 @@ if (USE_HTTP) {
     shuttingDown = true;
     const hardExit = setTimeout(() => process.exit(0), 700);
     hardExit.unref();
+    // Stop the engine's sweepers/job-runner and close the pg pool so the event
+    // loop drains cleanly (best-effort; the hard deadline above still guarantees
+    // exit if the pool is slow to close).
+    void closeMemoryEngine().catch(() => undefined);
     try { httpServer.closeAllConnections?.(); } catch { /* older Node */ }
     httpServer.close(() => process.exit(0));
   };
