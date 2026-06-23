@@ -40,18 +40,18 @@ export class UnknownBrainAgentError extends Error {
  *
  * Throws `UnknownBrainAgentError` for ids not in the registry.
  */
-export function enqueueAgentJob(
+export async function enqueueAgentJob(
   store: IMemoryStore,
   agentId: string,
   input: unknown,
   options?: { priority?: number; now?: string; idGenerator?: () => string },
-): EnqueueAgentJobResult {
+): Promise<EnqueueAgentJobResult> {
   const agent = findBrainAgentById(agentId);
   if (!agent) throw new UnknownBrainAgentError(agentId);
 
   const key = agent.idempotencyKey(input);
   if (key) {
-    const inFlight = store.listMemoryJobs({ kind: agentId, status: ["pending", "running"] });
+    const inFlight = await store.listMemoryJobs({ kind: agentId, status: ["pending", "running"] });
     for (const job of inFlight) {
       if (agent.idempotencyKey(job.input) === key) {
         return { job, deduped: true };
@@ -59,7 +59,7 @@ export function enqueueAgentJob(
     }
   }
 
-  const job = store.enqueueMemoryJob(
+  const job = await store.enqueueMemoryJob(
     {
       kind: agentId,
       input,
@@ -76,24 +76,24 @@ export function enqueueAgentJob(
  * attempts/maxAttempts decision (re-arm vs. terminal `failed`) to the
  * store; this wrapper just supplies the computed `backoffMs`.
  */
-export function failAgentJob(
+export async function failAgentJob(
   store: IMemoryStore,
   jobId: string,
   error: string,
   options?: { now?: string; random?: () => number },
-): MemoryJobRecord | null {
-  const current = store.getMemoryJob(jobId);
+): Promise<MemoryJobRecord | null> {
+  const current = await store.getMemoryJob(jobId);
   if (!current) return null;
   const backoffMs = backoffDelayMs(current.attempts + 1, options?.random);
   return store.failMemoryJob(jobId, error, { now: options?.now, backoffMs });
 }
 
 /** Re-arm a failed/cancelled job (delegates to the store). */
-export function retryAgentJob(
+export async function retryAgentJob(
   store: IMemoryStore,
   jobId: string,
   options?: { now?: string },
-): { status: MemoryJobStatus } | null {
-  const job = store.retryMemoryJob(jobId, options);
+): Promise<{ status: MemoryJobStatus } | null> {
+  const job = await store.retryMemoryJob(jobId, options);
   return job ? { status: job.status } : null;
 }

@@ -50,7 +50,7 @@ export async function buildGraphFromCognitive(params: {
       if (!entityName) continue;
 
       // Check if node already exists to get its ID, otherwise create a new one
-      const existingNode = store.getGraphNodeByEntity(record.userId, entityName);
+      const existingNode = await store.getGraphNodeByEntity(record.userId, entityName);
       const nodeId = existingNode?.id ?? `gn_${crypto.randomBytes(6).toString("hex")}`;
       entityMap.set(entityName.toLowerCase(), nodeId);
 
@@ -65,7 +65,7 @@ export async function buildGraphFromCognitive(params: {
         createdTime: record.createdTime || new Date().toISOString()
       };
 
-      store.upsertGraphNode(node);
+      await store.upsertGraphNode(node);
     }
 
     // 2. Process and upsert edges
@@ -98,7 +98,7 @@ export async function buildGraphFromCognitive(params: {
           createdTime: record.createdTime || new Date().toISOString()
         };
 
-        store.upsertGraphEdge(edge);
+        await store.upsertGraphEdge(edge);
       }
     }
   } catch (err) {

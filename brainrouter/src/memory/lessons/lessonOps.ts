@@ -18,19 +18,19 @@ import {
  * wrappers delegating here. No behavior change.
  */
 
-export function recordLesson(
+export async function recordLesson(
   engine: MemoryEngine,
   userId: string,
   text: string,
   opts?: { sessionKey?: string; activeSkill?: string; evidence?: string; priority?: number; kind?: string; supersedes?: string | string[] },
-): { recordId: string; reinforced: boolean; confidence: number; corroborations: number; supersededIds: string[] } {
+): Promise<{ recordId: string; reinforced: boolean; confidence: number; corroborations: number; supersededIds: string[] }> {
   const normalized = (text ?? "").trim().toLowerCase().replace(/\s+/g, " ");
   const fingerprint = createHash("sha1").update(normalized).digest("hex");
   const store = engine.store as typeof engine.store & {
-    findLessonByFingerprint?: (u: string, f: string) => CognitiveRecord | null;
+    findLessonByFingerprint?: (u: string, f: string) => Promise<CognitiveRecord | null>;
   };
 
-  const existing = typeof store.findLessonByFingerprint === "function" ? store.findLessonByFingerprint(userId, fingerprint) : null;
+  const existing = typeof store.findLessonByFingerprint === "function" ? await store.findLessonByFingerprint(userId, fingerprint) : null;
   if (existing) {
     const confidence = Math.min(0.99, existing.confidence + (1 - existing.confidence) * 0.25);
     // The corroboration counter lives in metadata (authoritative); a fresh
@@ -46,7 +46,7 @@ export function recordLesson(
       updatedTime: nowIso,
       metadata: { ...(existing.metadata ?? {}), fingerprint, corroborations },
     };
-    engine.store.upsertCognitive(updated, { skipAudit: true });
+    await engine.store.upsertCognitive(updated, { skipAudit: true });
     return { recordId: existing.id, reinforced: true, confidence, corroborations, supersededIds: [] };
   }
 
@@ -54,7 +54,7 @@ export function recordLesson(
   // fingerprint so `findLessonConflicts` can locate same-subject lessons
   // without an LLM (see lessonHygiene.deriveConflictKey).
   const conflictKey = deriveConflictKey(text);
-  const record = engine.upsertEngineeringMemory({
+  const record = await engine.upsertEngineeringMemory({
     userId,
     sessionKey: opts?.sessionKey,
     type: "lesson",
@@ -76,8 +76,8 @@ export function recordLesson(
       // `invalidateCognitiveRecord` is an UPDATE that silently no-ops on an
       // unknown id, so confirm the record exists first — otherwise we'd
       // report a bogus id as "superseded".
-      if (!engine.store.getMemoryById(userId, oldId)) continue;
-      engine.store.invalidateCognitiveRecord(userId, oldId, record.id);
+      if (!(await engine.store.getMemoryById(userId, oldId))) continue;
+      await engine.store.invalidateCognitiveRecord(userId, oldId, record.id);
       supersededIds.push(oldId);
     } catch {
       /* unknown id — skip, don't fail the record */
@@ -86,25 +86,25 @@ export function recordLesson(
   return { recordId: record.id, reinforced: false, confidence: record.confidence, corroborations: 1, supersededIds };
 }
 
-export function findLessonConflicts(engine: MemoryEngine, userId: string, text: string): CognitiveRecord[] {
+export async function findLessonConflicts(engine: MemoryEngine, userId: string, text: string): Promise<CognitiveRecord[]> {
   const key = deriveConflictKey(text);
   if (!key) return [];
   const store = engine.store as typeof engine.store & {
-    findLessonsByConflictKey?: (u: string, k: string) => CognitiveRecord[];
+    findLessonsByConflictKey?: (u: string, k: string) => Promise<CognitiveRecord[]>;
   };
-  const candidates = typeof store.findLessonsByConflictKey === "function" ? store.findLessonsByConflictKey(userId, key) : [];
+  const candidates = typeof store.findLessonsByConflictKey === "function" ? await store.findLessonsByConflictKey(userId, key) : [];
   return candidates.filter((c) => lessonsConflict(c.content, text));
 }
 
-export function sweepStaleLessons(
+export async function sweepStaleLessons(
   engine: MemoryEngine,
   userId: string,
   opts?: { apply?: boolean; thresholds?: Partial<StalenessThresholds>; nowMs?: number; limit?: number },
-): { candidates: Array<{ recordId: string; reason: string; lastCitedAt: string | null; confidence: number }>; archived: number } {
+): Promise<{ candidates: Array<{ recordId: string; reason: string; lastCitedAt: string | null; confidence: number }>; archived: number }> {
   const store = engine.store as typeof engine.store & {
-    listLessonsForHygiene?: (u: string, limit: number) => CognitiveRecord[];
+    listLessonsForHygiene?: (u: string, limit: number) => Promise<CognitiveRecord[]>;
   };
-  const lessons = typeof store.listLessonsForHygiene === "function" ? store.listLessonsForHygiene(userId, opts?.limit ?? 1000) : [];
+  const lessons = typeof store.listLessonsForHygiene === "function" ? await store.listLessonsForHygiene(userId, opts?.limit ?? 1000) : [];
   const thresholds: StalenessThresholds = { ...DEFAULT_STALENESS, ...(opts?.thresholds ?? {}) };
   const nowMs = opts?.nowMs ?? Date.now();
   const candidates = lessons
@@ -119,7 +119,7 @@ export function sweepStaleLessons(
   if (opts?.apply) {
     for (const c of candidates) {
       try {
-        engine.store.updateCognitiveConfidence(userId, c.recordId, c.confidence, "archived");
+        await engine.store.updateCognitiveConfidence(userId, c.recordId, c.confidence, "archived");
         archived++;
       } catch {
         /* best-effort */

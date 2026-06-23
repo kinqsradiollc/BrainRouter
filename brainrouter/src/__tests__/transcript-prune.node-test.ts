@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
 import { MemoryEngine } from "../memory/engine.js";
+import type { IMemoryStore } from "@kinqs/brainrouter-types";
 
 /**
  * 0.4.3 — provenance-safe transcript retention (memory_prune_sources).
@@ -72,15 +73,15 @@ test("prune: a no-op when nothing qualifies", () => {
   }
 });
 
-test("engine.pruneTranscriptSources: days → cutoff + capability passthrough", () => {
+test("engine.pruneTranscriptSources: days → cutoff + capability passthrough", async () => {
   const { store, cleanup } = fresh("engine");
   try {
-    const engine = new MemoryEngine(store);
+    const engine = new MemoryEngine(store as unknown as IMemoryStore);
     const sixtyDaysAgo = new Date(Date.now() - 60 * 86_400_000).toISOString();
     const doc = store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "transcript", uri: null, hash: "h1", title: "t", createdAt: sixtyDaysAgo });
     store.addSourceChunks(doc.id, [{ content: "old turn", tokenCount: 2 }]);
     // olderThanDays=30 → a 60-day-old transcript is pruned.
-    const res = engine.pruneTranscriptSources("u1", 30);
+    const res = await engine.pruneTranscriptSources("u1", 30);
     assert.equal(res.prunedDocs, 1);
     assert.equal(store.getSourceDocuments("u1").length, 0);
   } finally {

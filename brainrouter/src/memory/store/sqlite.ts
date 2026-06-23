@@ -28,7 +28,10 @@ export interface SqliteMemoryStoreOptions {
   compressionStore?: SqliteCompressionStoreOptions;
 }
 
-export class SqliteMemoryStore implements IMemoryStore {
+// ADR-007 Phase 2 (transitional): SqliteMemoryStore stays SYNCHRONOUS. It no
+// longer declares `implements IMemoryStore` (now async) — the engine wraps it in
+// `asyncify(...)` to satisfy the async store contract. Removed entirely in Step 2.
+export class SqliteMemoryStore {
   private db: DatabaseSync;
   // ADR-004 Phase 3 — extracted capability sub-stores (composed over `this.db`).
   private readonly sourceStore: SqliteSourceStore;

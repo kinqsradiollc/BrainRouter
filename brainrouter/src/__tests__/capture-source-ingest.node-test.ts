@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
+import { asyncify } from "../memory/store/asyncify.js";
 import { MemoryCapturePipeline } from "../memory/capture.js";
 import { redactSensitiveMemoryText } from "../memory/util/redaction.js";
 import { contentHash } from "../memory/pipeline/apply-dedup.js";
@@ -17,7 +18,7 @@ function freshPipeline(label: string): { store: SqliteMemoryStore; pipe: MemoryC
   store.init();
   const llmStub = (async () => "") as any;
   const embStub = { isReady: () => false, embed: async () => [] } as any;
-  const pipe = new MemoryCapturePipeline(store, llmStub, embStub, 99);
+  const pipe = new MemoryCapturePipeline(asyncify(store), llmStub, embStub, 99);
   return { store, pipe, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -78,7 +79,7 @@ test("MEM-NONBLOCK captureTurn returns immediately (deferred) and does NOT block
   // process alive or write to the (closed) db.
   const hangingLlm = { run: () => new Promise<string>(() => { /* never resolves */ }) } as any;
   const embStub = { isReady: () => false, embed: async () => [] } as any;
-  const pipe = new MemoryCapturePipeline(store, hangingLlm, embStub, 1);
+  const pipe = new MemoryCapturePipeline(asyncify(store), hangingLlm, embStub, 1);
   try {
     const result = await Promise.race([
       pipe.captureTurn({ userId: "u1", sessionKey: "s1", messages: [{ role: "user", content: BIG, timestamp: TS }] }),

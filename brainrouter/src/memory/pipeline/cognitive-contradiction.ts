@@ -17,7 +17,7 @@ export async function detectContradictions(params: {
   // (default 3, tunable) to bound the per-record LLM load.
   const _parsedMaxCand = parseInt(process.env.BRAINROUTER_CONTRADICTION_MAX_CANDIDATES || "", 10);
   const maxCandidates = isNaN(_parsedMaxCand) || _parsedMaxCand < 1 ? 3 : _parsedMaxCand;
-  const candidates = store.searchCognitiveFts(newRecord.userId, newRecord.content, maxCandidates);
+  const candidates = await store.searchCognitiveFts(newRecord.userId, newRecord.content, maxCandidates);
   
   const evaluations: Array<{
     candidate: CognitiveFtsResult;
@@ -67,11 +67,11 @@ export async function detectContradictions(params: {
   for (const ev of evaluations) {
     if (hasTemporalUpdate) {
       console.error(`[BrainRouter] TEMPORAL UPDATE DETECTED (transition): Superseding memory ${ev.candidate.record_id} with new memory ${newRecord.id}`);
-      store.invalidateCognitiveRecord(newRecord.userId, ev.candidate.record_id, newRecord.id);
+      await store.invalidateCognitiveRecord(newRecord.userId, ev.candidate.record_id, newRecord.id);
     } else {
       console.error(`[BrainRouter] CONTRADICTION DETECTED: ${newRecord.id} vs ${ev.candidate.record_id}`);
       
-      store.upsertContradiction({
+      await store.upsertContradiction({
         id: `conflict_${crypto.randomBytes(4).toString("hex")}`,
         userId: newRecord.userId,
         recordIdA: ev.candidate.record_id,

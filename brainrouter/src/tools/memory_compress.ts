@@ -35,7 +35,7 @@ export async function handleMemoryCompress(args: unknown, options?: { defaultUse
   try {
     const params = schema.parse(args ?? {});
     const userId = params.userId ?? options?.defaultUserId ?? "default";
-    const result = compress(params.content, {
+    const result = await compress(params.content, {
       userId,
       store: memoryEngine.store as unknown as CompressionStore,
       strategy: params.strategy,

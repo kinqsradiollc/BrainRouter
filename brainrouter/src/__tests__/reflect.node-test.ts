@@ -5,13 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
 import { MemoryEngine } from "../memory/engine.js";
+import type { IMemoryStore } from "@kinqs/brainrouter-types";
 import { buildReflectPrompt, parseReflectResponse, NO_INSIGHT_SENTINEL } from "../memory/util/reflect.js";
 
 function fresh(label: string): { engine: MemoryEngine; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), `brainrouter-mem32b-${label}-`));
   const store = new SqliteMemoryStore(join(dir, "memory.db"));
   store.init();
-  return { engine: new MemoryEngine(store), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return { engine: new MemoryEngine(store as unknown as IMemoryStore), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 test("MEM-32b parseReflectResponse: bullets extracted; <no-insight/> + empty → none", () => {

@@ -19,6 +19,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
+import type { IMemoryStore } from "@kinqs/brainrouter-types";
 import {
   enqueueAgentJob,
   failAgentJob,
@@ -32,10 +33,10 @@ function freshDb(label: string): { store: SqliteMemoryStore; cleanup: () => void
   return { store, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-test("enqueueAgentJob stamps the agent maxAttempts", () => {
+test("enqueueAgentJob stamps the agent maxAttempts", async () => {
   const { store, cleanup } = freshDb("max");
   try {
-    const { job, deduped } = enqueueAgentJob(store, "cognitive_extractor", { sensoryIds: ["s1"] });
+    const { job, deduped } = await enqueueAgentJob(store as unknown as IMemoryStore, "cognitive_extractor", { sensoryIds: ["s1"] });
     assert.equal(deduped, false);
     assert.equal(job.kind, "cognitive_extractor");
     assert.equal(job.maxAttempts, 3); // from the registry definition
@@ -44,20 +45,20 @@ test("enqueueAgentJob stamps the agent maxAttempts", () => {
   }
 });
 
-test("enqueueAgentJob dedupes a second enqueue with the same idempotency key", () => {
+test("enqueueAgentJob dedupes a second enqueue with the same idempotency key", async () => {
   const { store, cleanup } = freshDb("dedup");
   try {
-    const first = enqueueAgentJob(store, "cognitive_extractor", { sensoryIds: ["a", "b"] });
+    const first = await enqueueAgentJob(store as unknown as IMemoryStore, "cognitive_extractor", { sensoryIds: ["a", "b"] });
     assert.equal(first.deduped, false);
 
     // Same ids, different order → same key → dedup to the existing job.
-    const second = enqueueAgentJob(store, "cognitive_extractor", { sensoryIds: ["b", "a"] });
+    const second = await enqueueAgentJob(store as unknown as IMemoryStore, "cognitive_extractor", { sensoryIds: ["b", "a"] });
     assert.equal(second.deduped, true);
     assert.equal(second.job.id, first.job.id);
     assert.equal(store.listMemoryJobs({ kind: "cognitive_extractor" }).length, 1);
 
     // A different input → different key → a new job.
-    const third = enqueueAgentJob(store, "cognitive_extractor", { sensoryIds: ["c"] });
+    const third = await enqueueAgentJob(store as unknown as IMemoryStore, "cognitive_extractor", { sensoryIds: ["c"] });
     assert.equal(third.deduped, false);
     assert.notEqual(third.job.id, first.job.id);
     assert.equal(store.listMemoryJobs({ kind: "cognitive_extractor" }).length, 2);
@@ -66,15 +67,15 @@ test("enqueueAgentJob dedupes a second enqueue with the same idempotency key", (
   }
 });
 
-test("dedup only holds while the prior job is pending/running", () => {
+test("dedup only holds while the prior job is pending/running", async () => {
   const { store, cleanup } = freshDb("inflight");
   try {
-    const first = enqueueAgentJob(store, "cognitive_extractor", { sensoryIds: ["a"] });
+    const first = await enqueueAgentJob(store as unknown as IMemoryStore, "cognitive_extractor", { sensoryIds: ["a"] });
     // Drive it to done.
     store.claimNextMemoryJob();
     store.completeMemoryJob(first.job.id, {});
     // Same key, but the prior job is terminal → a fresh job is enqueued.
-    const again = enqueueAgentJob(store, "cognitive_extractor", { sensoryIds: ["a"] });
+    const again = await enqueueAgentJob(store as unknown as IMemoryStore, "cognitive_extractor", { sensoryIds: ["a"] });
     assert.equal(again.deduped, false);
     assert.notEqual(again.job.id, first.job.id);
   } finally {
@@ -82,11 +83,11 @@ test("dedup only holds while the prior job is pending/running", () => {
   }
 });
 
-test("agents with an empty idempotency key never dedupe", () => {
+test("agents with an empty idempotency key never dedupe", async () => {
   const { store, cleanup } = freshDb("nodedup");
   try {
-    enqueueAgentJob(store, "relevance_judge", { query: "x", candidateIds: ["c1"] });
-    const second = enqueueAgentJob(store, "relevance_judge", { query: "x", candidateIds: ["c1"] });
+    await enqueueAgentJob(store as unknown as IMemoryStore, "relevance_judge", { query: "x", candidateIds: ["c1"] });
+    const second = await enqueueAgentJob(store as unknown as IMemoryStore, "relevance_judge", { query: "x", candidateIds: ["c1"] });
     assert.equal(second.deduped, false);
     assert.equal(store.listMemoryJobs({ kind: "relevance_judge" }).length, 2);
   } finally {
@@ -94,22 +95,22 @@ test("agents with an empty idempotency key never dedupe", () => {
   }
 });
 
-test("enqueueAgentJob throws UnknownBrainAgentError for unknown ids", () => {
+test("enqueueAgentJob throws UnknownBrainAgentError for unknown ids", async () => {
   const { store, cleanup } = freshDb("unknown");
   try {
-    assert.throws(() => enqueueAgentJob(store, "ghost_agent", {}), UnknownBrainAgentError);
+    await assert.rejects(() => enqueueAgentJob(store as unknown as IMemoryStore, "ghost_agent", {}), UnknownBrainAgentError);
   } finally {
     cleanup();
   }
 });
 
-test("failAgentJob re-arms with a future runAfter (backoff applied)", () => {
+test("failAgentJob re-arms with a future runAfter (backoff applied)", async () => {
   const { store, cleanup } = freshDb("backoff");
   try {
-    const { job } = enqueueAgentJob(store, "cognitive_extractor", { sensoryIds: ["s1"] });
+    const { job } = await enqueueAgentJob(store as unknown as IMemoryStore, "cognitive_extractor", { sensoryIds: ["s1"] });
     store.claimNextMemoryJob();
     const now = new Date().toISOString();
-    const failed = failAgentJob(store, job.id, "boom", { now, random: () => 0.5 });
+    const failed = await failAgentJob(store as unknown as IMemoryStore, job.id, "boom", { now, random: () => 0.5 });
     assert.ok(failed);
     assert.equal(failed!.status, "pending"); // attempts 1 < maxAttempts 3 → re-armed
     assert.equal(failed!.attempts, 1);

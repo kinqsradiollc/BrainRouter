@@ -19,6 +19,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
+import { asyncify } from "../memory/store/asyncify.js";
 import { MemoryJobRunner } from "../memory/scheduler/runner.js";
 import { enqueueAgentJob } from "../memory/scheduler/jobs.js";
 import { getJobExecutor } from "../memory/scheduler/executors.js";
@@ -30,13 +31,13 @@ function freshDb(label: string): { store: SqliteMemoryStore; cleanup: () => void
   return { store, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-const ctx = (store: SqliteMemoryStore) => ({ store, llmRunner: { run: async () => "" } as any });
+const ctx = (store: SqliteMemoryStore) => ({ store: asyncify(store), llmRunner: { run: async () => "" } as any });
 
 test("runner drains a job through its executor to done with output", async () => {
   const { store, cleanup } = freshDb("done");
   try {
-    const { job } = enqueueAgentJob(store, "identity_distiller", { userId: "u1" });
-    const runner = new MemoryJobRunner(store, ctx(store), {
+    const { job } = await enqueueAgentJob(asyncify(store), "identity_distiller", { userId: "u1" });
+    const runner = new MemoryJobRunner(asyncify(store), ctx(store), {
       resolveExecutor: () => async (input: any) => ({ ranFor: input.userId }),
     });
     await runner.tick();
@@ -51,8 +52,8 @@ test("runner drains a job through its executor to done with output", async () =>
 test("runner cancels a job whose kind has no executor, with a clear reason", async () => {
   const { store, cleanup } = freshDb("noexec");
   try {
-    const { job } = enqueueAgentJob(store, "cognitive_extractor", { userId: "u1", sensoryIds: ["s1"] });
-    const runner = new MemoryJobRunner(store, ctx(store), { resolveExecutor: () => undefined });
+    const { job } = await enqueueAgentJob(asyncify(store), "cognitive_extractor", { userId: "u1", sensoryIds: ["s1"] });
+    const runner = new MemoryJobRunner(asyncify(store), ctx(store), { resolveExecutor: () => undefined });
     await runner.tick();
     const after = store.getMemoryJob(job.id)!;
     assert.equal(after.status, "cancelled");
@@ -67,7 +68,7 @@ test("runner records a throwing executor as terminal failed (maxAttempts 1)", as
   try {
     // Enqueue raw with maxAttempts:1 so the first failure is terminal.
     const job = store.enqueueMemoryJob({ kind: "identity_distiller", input: { userId: "u1" }, maxAttempts: 1 });
-    const runner = new MemoryJobRunner(store, ctx(store), {
+    const runner = new MemoryJobRunner(asyncify(store), ctx(store), {
       resolveExecutor: () => async () => {
         throw new Error("executor boom");
       },
@@ -86,7 +87,7 @@ test("runner re-arms a throwing executor while attempts remain (maxAttempts 2)",
   const { store, cleanup } = freshDb("rearm");
   try {
     const job = store.enqueueMemoryJob({ kind: "identity_distiller", input: { userId: "u1" }, maxAttempts: 2 });
-    const runner = new MemoryJobRunner(store, ctx(store), {
+    const runner = new MemoryJobRunner(asyncify(store), ctx(store), {
       resolveExecutor: () => async () => {
         throw new Error("transient");
       },
@@ -104,8 +105,8 @@ test("runner re-arms a throwing executor while attempts remain (maxAttempts 2)",
 test("maxPerTick bounds the drain", async () => {
   const { store, cleanup } = freshDb("bound");
   try {
-    for (let i = 0; i < 5; i++) enqueueAgentJob(store, "identity_distiller", { userId: `u${i}` });
-    const runner = new MemoryJobRunner(store, ctx(store), {
+    for (let i = 0; i < 5; i++) await enqueueAgentJob(asyncify(store), "identity_distiller", { userId: `u${i}` });
+    const runner = new MemoryJobRunner(asyncify(store), ctx(store), {
       maxPerTick: 2,
       resolveExecutor: () => async () => ({ ok: true }),
     });

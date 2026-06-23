@@ -41,7 +41,7 @@ test("MEM-3 store: empty link is a no-op; unknown record → []", () => {
   } finally { cleanup(); }
 });
 
-test("MEM-3 engine.getRecordProvenance: excerpts (truncated >280) + empty when unlinked", () => {
+test("MEM-3 engine.getRecordProvenance: excerpts (truncated >280) + empty when unlinked", async () => {
   const { store, cleanup } = fresh("engine");
   try {
     const doc = store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/a.ts", hash: "h-eng", title: "a.ts" });
@@ -50,14 +50,14 @@ test("MEM-3 engine.getRecordProvenance: excerpts (truncated >280) + empty when u
     store.linkRecordSources("u1", "recE", [c.id]);
 
     const engine = new MemoryEngine(store);
-    const prov = engine.getRecordProvenance("u1", "recE");
+    const prov = await engine.getRecordProvenance("u1", "recE");
     assert.equal(prov.length, 1);
     assert.equal(prov[0].filePath, "src/a.ts");
     assert.equal(prov[0].symbol, "fnA");
     assert.equal(prov[0].startLine, 1);
     assert.equal(prov[0].excerpt.length, 281, "280 chars + a single ellipsis");
     assert.ok(prov[0].excerpt.endsWith("…"));
-    assert.deepEqual(engine.getRecordProvenance("u1", "unlinked"), [], "no links → no provenance");
-    assert.deepEqual(engine.getRecordProvenance("other", "recE"), [], "another user sees no provenance");
+    assert.deepEqual(await engine.getRecordProvenance("u1", "unlinked"), [], "no links → no provenance");
+    assert.deepEqual(await engine.getRecordProvenance("other", "recE"), [], "another user sees no provenance");
   } finally { cleanup(); }
 });

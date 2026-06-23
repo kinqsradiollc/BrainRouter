@@ -20,23 +20,23 @@ const STORE: RecordRefsStore = {
 };
 
 describe("gatherRecordRefs", () => {
-  it("returns the record's source chunk ids + covering tree node (fresh)", () => {
-    expect(gatherRecordRefs(STORE, "u1", "r_linked")).toEqual({
+  it("returns the record's source chunk ids + covering tree node (fresh)", async () => {
+    expect(await gatherRecordRefs(STORE, "u1", "r_linked")).toEqual({
       sourceChunkIds: ["chunk_a", "chunk_b", "chunk_c"],
       treeNodeId: "tree_x",
       staleVsCode: false,
     });
   });
 
-  it("flags staleVsCode when the record's provenance document changed", () => {
-    expect(gatherRecordRefs(STORE, "u1", "r_stale")).toEqual({
+  it("flags staleVsCode when the record's provenance document changed", async () => {
+    expect(await gatherRecordRefs(STORE, "u1", "r_stale")).toEqual({
       sourceChunkIds: ["chunk_a", "chunk_b", "chunk_c"],
       treeNodeId: "tree_x",
       staleVsCode: true,
     });
   });
 
-  it("never queries staleness for a record with no code provenance", () => {
+  it("never queries staleness for a record with no code provenance", async () => {
     let staleLookups = 0;
     const s: RecordRefsStore = {
       getRecordSourceChunks: () => [],
@@ -45,15 +45,15 @@ describe("gatherRecordRefs", () => {
         return true;
       },
     };
-    expect(gatherRecordRefs(s, "u1", "r").staleVsCode).toBe(false);
+    expect((await gatherRecordRefs(s, "u1", "r")).staleVsCode).toBe(false);
     expect(staleLookups).toBe(0);
   });
 
-  it("returns empty refs for a record with no linked provenance", () => {
-    expect(gatherRecordRefs(STORE, "u1", "r_unlinked")).toEqual({ sourceChunkIds: [], treeNodeId: null, staleVsCode: false });
+  it("returns empty refs for a record with no linked provenance", async () => {
+    expect(await gatherRecordRefs(STORE, "u1", "r_unlinked")).toEqual({ sourceChunkIds: [], treeNodeId: null, staleVsCode: false });
   });
 
-  it("does not look up a tree node when there are no source chunks", () => {
+  it("does not look up a tree node when there are no source chunks", async () => {
     let treeLookups = 0;
     const s: RecordRefsStore = {
       getRecordSourceChunks: () => [],
@@ -62,31 +62,31 @@ describe("gatherRecordRefs", () => {
         return "tree_x";
       },
     };
-    expect(gatherRecordRefs(s, "u1", "r").treeNodeId).toBeNull();
+    expect((await gatherRecordRefs(s, "u1", "r")).treeNodeId).toBeNull();
     expect(treeLookups).toBe(0);
   });
 
-  it("degrades gracefully when the store lacks the capabilities", () => {
-    expect(gatherRecordRefs({}, "u1", "r")).toEqual({ sourceChunkIds: [], treeNodeId: null, staleVsCode: false });
+  it("degrades gracefully when the store lacks the capabilities", async () => {
+    expect(await gatherRecordRefs({}, "u1", "r")).toEqual({ sourceChunkIds: [], treeNodeId: null, staleVsCode: false });
   });
 
-  it("swallows a throwing store method", () => {
+  it("swallows a throwing store method", async () => {
     const s: RecordRefsStore = {
       getRecordSourceChunks: () => {
         throw new Error("boom");
       },
     };
-    expect(gatherRecordRefs(s, "u1", "r")).toEqual({ sourceChunkIds: [], treeNodeId: null, staleVsCode: false });
+    expect(await gatherRecordRefs(s, "u1", "r")).toEqual({ sourceChunkIds: [], treeNodeId: null, staleVsCode: false });
   });
 
-  it("swallows a throwing staleness check (fails fresh)", () => {
+  it("swallows a throwing staleness check (fails fresh)", async () => {
     const s: RecordRefsStore = {
       getRecordSourceChunks: () => [{ id: "chunk_a" }],
       isRecordSourceStale: () => {
         throw new Error("boom");
       },
     };
-    expect(gatherRecordRefs(s, "u1", "r").staleVsCode).toBe(false);
+    expect((await gatherRecordRefs(s, "u1", "r")).staleVsCode).toBe(false);
   });
 });
 

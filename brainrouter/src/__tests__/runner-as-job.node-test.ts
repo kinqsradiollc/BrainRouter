@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
 import { runAsJob } from "../memory/scheduler/runner.js";
+import type { IMemoryStore } from "@kinqs/brainrouter-types";
 
 function freshDb(label: string): { store: SqliteMemoryStore; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), `brainrouter-runner-${label}-`));
@@ -30,7 +31,7 @@ test("runAsJob records a done row and returns the stage result", async () => {
   const { store, cleanup } = freshDb("ok");
   try {
     const { result, job } = await runAsJob(
-      store,
+      store as unknown as IMemoryStore,
       "cognitive_extractor",
       { userId: "u1", sensoryIds: ["s1"] },
       async () => ({ records: [1, 2, 3] }),
@@ -54,7 +55,7 @@ test("runAsJob records a terminal failed row and re-throws", async () => {
   try {
     await assert.rejects(
       () =>
-        runAsJob(store, "graph_extractor", { userId: "u1", recordIds: ["r1"] }, async () => {
+        runAsJob(store as unknown as IMemoryStore, "graph_extractor", { userId: "u1", recordIds: ["r1"] }, async () => {
           throw new Error("graph boom");
         }),
       /graph boom/,
@@ -73,7 +74,7 @@ test("runAsJob creates the row synchronously (visible before fn resolves)", asyn
   const { store, cleanup } = freshDb("sync");
   try {
     let seenWhilePending = -1;
-    const promise = runAsJob(store, "memory_deduper", { userId: "u1", recordIds: ["r1"] }, async () => {
+    const promise = runAsJob(store as unknown as IMemoryStore, "memory_deduper", { userId: "u1", recordIds: ["r1"] }, async () => {
       // By the time fn runs, the row already exists in 'running'.
       seenWhilePending = store.listMemoryJobs({ kind: "memory_deduper", status: "running" }).length;
       return { unique: 1, dropped: 0 };

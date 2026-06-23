@@ -8,13 +8,13 @@ import { sendError } from "../../contracts/http.js";
 export const usersRouter = Router();
 usersRouter.use(requireJwt, requireAdmin);
 
-usersRouter.get("/", (req, res) => {
+usersRouter.get("/", async (req, res) => {
   try {
     const pagination = PaginationQuerySchema.parse(req.query);
-    const users = memoryEngine.listUsers({
+    const users = (await memoryEngine.listUsers({
       cursor: decodeCursor<{ createdAt: string; userId: string }>(pagination.cursor),
       limit: pagination.limit + 1,
-    }).map((u) => ({
+    })).map((u) => ({
       userId: u.userId,
       displayName: u.displayName,
       email: u.email,

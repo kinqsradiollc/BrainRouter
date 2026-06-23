@@ -18,9 +18,9 @@ describe("recall compression configuration", () => {
     });
   });
 
-  it("leaves the off-state recalled-memory bytes exactly unchanged", () => {
+  it("leaves the off-state recalled-memory bytes exactly unchanged", async () => {
     const store = { storeCompressionEntry: vi.fn() };
-    const result = applyRecallCompression(memories, {
+    const result = await applyRecallCompression(memories, {
       userId: "u1",
       query: "incident",
       store,
@@ -33,9 +33,9 @@ describe("recall compression configuration", () => {
     expect(store.storeCompressionEntry).not.toHaveBeenCalled();
   });
 
-  it("does not compress content below the configured threshold", () => {
+  it("does not compress content below the configured threshold", async () => {
     const store = { storeCompressionEntry: vi.fn() };
-    const result = applyRecallCompression(memories, {
+    const result = await applyRecallCompression(memories, {
       userId: "u1",
       query: "incident",
       store,
@@ -47,7 +47,7 @@ describe("recall compression configuration", () => {
     expect(store.storeCompressionEntry).not.toHaveBeenCalled();
   });
 
-  it("forces the marked lossy branch even when a lossless table would be smaller", () => {
+  it("forces the marked lossy branch even when a lossless table would be smaller", async () => {
     // Compact homogeneous rows are exactly where the lossless CSV fold would win
     // and be skipped (hash-less, unmarked). Recall must instead take the lossy,
     // CCR-backed branch so the original is offloaded and a marker is emitted.
@@ -57,7 +57,7 @@ describe("recall compression configuration", () => {
       { content: JSON.stringify(Array.from({ length: 30 }, (_, k) => ({ k }))), score: 0.9, type: "fact", recordId: "rj" },
     ];
 
-    const result = applyRecallCompression(jsonArrayMemory, {
+    const result = await applyRecallCompression(jsonArrayMemory, {
       userId: "u1",
       query: "metrics",
       store,

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
 import { MemoryEngine } from "../memory/engine.js";
+import { asyncify } from "../memory/store/asyncify.js";
 
 /**
  * 0.4.3 (MEM-9) — benchmark_eval self-retrieval harness, end to end on a real
@@ -31,7 +32,7 @@ function fresh(label: string) {
   process.env.BRAINROUTER_JOB_RUNNER = "off";
   const store = new SqliteMemoryStore(join(dir, "memory.db"));
   store.init();
-  const engine = new MemoryEngine(store);
+  const engine = new MemoryEngine(asyncify(store));
   return {
     store, dir, engine,
     cleanup: () => {

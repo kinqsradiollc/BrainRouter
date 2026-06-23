@@ -15,22 +15,22 @@ export type TreeWalkResult = ReturnType<typeof treeWalk>;
 
 /** The hierarchical memory-tree contract, bound to one engine. */
 export interface IMemoryTreeService {
-  appendLeaf(userId: string, kind: MemoryTreeKind, summaryMd: string, sourceChunkIds?: string[], heatScore?: number): MemoryTreeNode | null;
-  summarizeBucket(userId: string, childIds: string[], kind: MemoryTreeKind): MemoryTreeNode | null;
-  rollupGlobal(userId: string): MemoryTreeNode | null;
+  appendLeaf(userId: string, kind: MemoryTreeKind, summaryMd: string, sourceChunkIds?: string[], heatScore?: number): Promise<MemoryTreeNode | null>;
+  summarizeBucket(userId: string, childIds: string[], kind: MemoryTreeKind): Promise<MemoryTreeNode | null>;
+  rollupGlobal(userId: string): Promise<MemoryTreeNode | null>;
   walk(userId: string, nodeId?: string, kind?: MemoryTreeKind): TreeWalkResult;
 }
 
 /** {@link IMemoryTreeService} backed by the in-process tree ops — delegates only. */
 export class MemoryTreeService implements IMemoryTreeService {
   constructor(private readonly engine: MemoryEngine) {}
-  appendLeaf(userId: string, kind: MemoryTreeKind, summaryMd: string, sourceChunkIds?: string[], heatScore?: number): MemoryTreeNode | null {
+  appendLeaf(userId: string, kind: MemoryTreeKind, summaryMd: string, sourceChunkIds?: string[], heatScore?: number): Promise<MemoryTreeNode | null> {
     return appendTreeLeaf(this.engine, userId, kind, summaryMd, sourceChunkIds ?? [], heatScore ?? 0);
   }
-  summarizeBucket(userId: string, childIds: string[], kind: MemoryTreeKind): MemoryTreeNode | null {
+  summarizeBucket(userId: string, childIds: string[], kind: MemoryTreeKind): Promise<MemoryTreeNode | null> {
     return summarizeBucket(this.engine, userId, childIds, kind);
   }
-  rollupGlobal(userId: string): MemoryTreeNode | null {
+  rollupGlobal(userId: string): Promise<MemoryTreeNode | null> {
     return rollupGlobalTree(this.engine, userId);
   }
   walk(userId: string, nodeId?: string, kind?: MemoryTreeKind): TreeWalkResult {

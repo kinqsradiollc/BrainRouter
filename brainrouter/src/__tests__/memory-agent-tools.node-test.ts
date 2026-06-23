@@ -80,12 +80,12 @@ test("memory_job_retry re-arms a non-running job; errors on a missing job", asyn
   // retry contract covers both `failed` and `cancelled`.
   const queued = parse(await handleMemoryAgentRun({ agentId: "memory_deduper", input: { recordIds: ["r1"] } }));
   const store = memoryEngine.store;
-  const cancelled = store.cancelMemoryJob(queued.jobId)!;
+  const cancelled = (await store.cancelMemoryJob(queued.jobId))!;
   assert.equal(cancelled.status, "cancelled");
 
   const retried = parse(await handleMemoryJobRetry({ jobId: queued.jobId }));
   assert.equal(retried.status, "pending");
-  assert.equal(store.getMemoryJob(queued.jobId)!.attempts, 0);
+  assert.equal((await store.getMemoryJob(queued.jobId))!.attempts, 0);
 
   const missing = await handleMemoryJobRetry({ jobId: "no-such-job" });
   assert.equal(missing.isError, true);

@@ -20,7 +20,9 @@ export interface CompressionStore {
     toolName?: string | null;
     queryContext?: string | null;
     compressionStrategy?: string | null;
-  }): { hash: string };
+    // Backed by either a synchronous store (direct injection / unit tests) or
+    // the asyncified one — accept both and `await` (a no-op on a non-Promise).
+  }): { hash: string } | Promise<{ hash: string }>;
 }
 
 export interface CompressOptions {
@@ -55,7 +57,7 @@ export function detectKind(content: string): ContentKind {
   return "text";
 }
 
-export function compress(content: string, options: CompressOptions): CompressResult {
+export function compress(content: string, options: CompressOptions): Promise<CompressResult> {
   const kind = options.strategy && options.strategy !== "auto" ? options.strategy : detectKind(content);
   if (kind === "json") return compressJson(content, options);
   if (kind === "log") return compressLines(content, options, kind, "log-lines", selectLogLines);
@@ -82,7 +84,7 @@ export function decodeLosslessTable(encoded: string): Array<Record<string, unkno
   });
 }
 
-function compressJson(content: string, options: CompressOptions): CompressResult {
+async function compressJson(content: string, options: CompressOptions): Promise<CompressResult> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(content);
@@ -125,13 +127,14 @@ function compressJson(content: string, options: CompressOptions): CompressResult
   return persistLossy(content, compressedBase, "json", "smart-crush", finalDroppedItems, "rows", options, originalTokens, parsed.length, selected.length, true);
 }
 
-function compressLines(
+
+async function compressLines(
   content: string,
   options: CompressOptions,
   kind: ContentKind,
   strategy: string,
   select: (lines: string[]) => string[],
-): CompressResult {
+): Promise<CompressResult> {
   const lines = content.split("\n");
   const selected = select(lines);
   const compressedBase = selected.join("\n");
@@ -140,7 +143,7 @@ function compressLines(
   return persistLossy(content, compressedBase, kind, strategy, droppedItems, "lines", options, estimateTokens(content), lines.length, selected.length, false);
 }
 
-function persistLossy(
+async function persistLossy(
   originalContent: string,
   compressedBase: string,
   kind: ContentKind,
@@ -152,8 +155,8 @@ function persistLossy(
   originalItemCount: number,
   compressedItemCount: number,
   jsonMarker: boolean,
-): CompressResult {
-  const entry = options.store.storeCompressionEntry({
+): Promise<CompressResult> {
+  const entry = await options.store.storeCompressionEntry({
     userId: options.userId,
     originalContent,
     compressedContent: compressedBase,

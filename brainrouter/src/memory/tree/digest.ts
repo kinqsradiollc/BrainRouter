@@ -16,9 +16,11 @@ const TREE_DIGEST_SYSTEM =
 
 /** Minimal tree surface the digest needs (capability-detected on the store). */
 interface TreeDigestStore {
-  getTreeNode(id: string): { id: string; userId: string; summaryMd: string } | null;
-  getTreeChildren(parentId: string): Array<{ summaryMd: string }>;
-  updateTreeNodeSummary(id: string, summaryMd: string): void;
+  // Backed by either a synchronous store (direct injection / unit tests) or the
+  // asyncified one — accept both and `await` (a no-op on a non-Promise).
+  getTreeNode(id: string): ({ id: string; userId: string; summaryMd: string } | null) | Promise<{ id: string; userId: string; summaryMd: string } | null>;
+  getTreeChildren(parentId: string): Array<{ summaryMd: string }> | Promise<Array<{ summaryMd: string }>>;
+  updateTreeNodeSummary(id: string, summaryMd: string): void | Promise<void>;
 }
 
 /**
@@ -45,9 +47,9 @@ export async function digestTreeNodes(params: {
   const summarized: string[] = [];
   let skipped = 0;
   for (const nodeId of params.nodeIds) {
-    const node = store.getTreeNode(nodeId);
+    const node = await store.getTreeNode(nodeId);
     if (!node || node.userId !== params.userId) { skipped++; continue; } // ownership (MEM-14)
-    const children = store.getTreeChildren(nodeId);
+    const children = await store.getTreeChildren(nodeId);
     if (children.length === 0) { skipped++; continue; }
 
     const childText = children
@@ -62,7 +64,7 @@ export async function digestTreeNodes(params: {
       });
       const clean = redactSensitiveMemoryText((out ?? "").trim());
       if (clean) {
-        store.updateTreeNodeSummary(nodeId, clean);
+        await store.updateTreeNodeSummary(nodeId, clean);
         summarized.push(nodeId);
       } else {
         skipped++; // empty LLM output → keep the deterministic summary

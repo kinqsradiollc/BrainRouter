@@ -81,7 +81,7 @@ export function decayPotential(params: {
  * The existing potential is decayed up to `now`, then the spike is applied and
  * capped. The result is persisted so activation survives process restarts.
  */
-export function spikeSkill(params: {
+export async function spikeSkill(params: {
   userId: string;
   skillName: string;
   store: IMemoryStore;
@@ -94,8 +94,8 @@ export function spikeSkill(params: {
   const config = getActivationConfig(params.config);
   const now = params.now ?? new Date();
   const nowIso = now.toISOString();
-  const existing = params.store
-    .getSkillActivations(params.userId)
+  const existing = (await params.store
+    .getSkillActivations(params.userId))
     .find((record) => record.skillName === skillName);
   const decayed = existing
     ? decayPotential({
@@ -108,7 +108,7 @@ export function spikeSkill(params: {
     : 0;
   const potential = Math.min(config.maxPotential, decayed + config.spikeAmount);
   const activation = { skillName, potential, lastDecayTime: nowIso };
-  params.store.upsertSkillActivations(params.userId, [activation]);
+  await params.store.upsertSkillActivations(params.userId, [activation]);
   return activation;
 }
 
@@ -116,14 +116,14 @@ export function spikeSkill(params: {
  * Detect which skills qualify for pre-warming based on persistent activation potential.
  * Returns an array of skill names and their hints, sorted by potential.
  */
-export function detectPrewarmSkills(params: {
+export async function detectPrewarmSkills(params: {
   userId: string;
   store: IMemoryStore;
   threshold?: number;
   excludeSkill?: string;
   now?: Date;
   config?: Partial<SkillActivationConfig>;
-}): PrewarmResult[] {
+}): Promise<PrewarmResult[]> {
   const {
     userId,
     store,
@@ -132,7 +132,7 @@ export function detectPrewarmSkills(params: {
 
   const config = getActivationConfig({ ...params.config, threshold: params.threshold });
   const now = params.now ?? new Date();
-  const activations = store.getSkillActivations(userId);
+  const activations = await store.getSkillActivations(userId);
   if (activations.length === 0) return [];
 
   const decayedActivations = activations.map((activation) => ({
@@ -152,7 +152,7 @@ export function detectPrewarmSkills(params: {
     if (activation.skillName === excludeSkill) continue;
     if (activation.potential < config.threshold) continue;
 
-    const hints = store.getSkillHints(activation.skillName);
+    const hints = await store.getSkillHints(activation.skillName);
     if (!hints) continue; // No hints registered — nothing useful to inject
 
     results.push({ skillName: activation.skillName, potential: activation.potential, hints });

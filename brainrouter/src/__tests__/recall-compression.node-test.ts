@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MemoryRecallPipeline } from "../memory/recall.js";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
+import { asyncify } from "../memory/store/asyncify.js";
 
 function record(id: string, userId: string, content: string) {
   const now = "2026-06-20T00:00:00.000Z";
@@ -54,7 +55,7 @@ test("enabled recall compression stores under the caller and leaves the prepend 
     const store = new SqliteMemoryStore(join(dir, "memory.db"));
     store.init();
     const recall = new MemoryRecallPipeline(
-      store,
+      asyncify(store),
       { isReady: () => false } as any,
       { isAvailable: () => false } as any,
     );

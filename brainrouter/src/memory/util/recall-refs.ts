@@ -13,10 +13,13 @@
  */
 
 export interface RecordRefsStore {
-  getRecordSourceChunks?(userId: string, recordId: string): { id: string }[];
-  getTreeNodeIdByChunkId?(userId: string, chunkId: string): string | null;
+  // Capability-detected on the concrete store; backed by either a synchronous
+  // store (direct injection / unit fakes) or the asyncified one — accept both
+  // and `await` (awaiting a non-Promise is a no-op).
+  getRecordSourceChunks?(userId: string, recordId: string): { id: string }[] | Promise<{ id: string }[]>;
+  getTreeNodeIdByChunkId?(userId: string, chunkId: string): (string | null) | Promise<string | null>;
   /** MEM-ACCURACY — true when the record's source code changed since capture. */
-  isRecordSourceStale?(userId: string, recordId: string): boolean;
+  isRecordSourceStale?(userId: string, recordId: string): boolean | Promise<boolean>;
 }
 
 export interface RecordRefs {
@@ -28,11 +31,11 @@ export interface RecordRefs {
 
 /** Gather a record's source-chunk ids + covering tree node. Best-effort: a
  * store missing either capability (or a throwing one) just yields fewer refs. */
-export function gatherRecordRefs(store: RecordRefsStore, userId: string, recordId: string): RecordRefs {
+export async function gatherRecordRefs(store: RecordRefsStore, userId: string, recordId: string): Promise<RecordRefs> {
   let sourceChunkIds: string[] = [];
   if (typeof store.getRecordSourceChunks === "function") {
     try {
-      sourceChunkIds = store.getRecordSourceChunks(userId, recordId).map((c) => c.id);
+      sourceChunkIds = (await store.getRecordSourceChunks(userId, recordId)).map((c) => c.id);
     } catch {
       sourceChunkIds = [];
     }
@@ -40,7 +43,7 @@ export function gatherRecordRefs(store: RecordRefsStore, userId: string, recordI
   let treeNodeId: string | null = null;
   if (sourceChunkIds.length > 0 && typeof store.getTreeNodeIdByChunkId === "function") {
     try {
-      treeNodeId = store.getTreeNodeIdByChunkId(userId, sourceChunkIds[0]);
+      treeNodeId = await store.getTreeNodeIdByChunkId(userId, sourceChunkIds[0]);
     } catch {
       treeNodeId = null;
     }
@@ -49,7 +52,7 @@ export function gatherRecordRefs(store: RecordRefsStore, userId: string, recordI
   let staleVsCode = false;
   if (sourceChunkIds.length > 0 && typeof store.isRecordSourceStale === "function") {
     try {
-      staleVsCode = store.isRecordSourceStale(userId, recordId);
+      staleVsCode = await store.isRecordSourceStale(userId, recordId);
     } catch {
       staleVsCode = false;
     }

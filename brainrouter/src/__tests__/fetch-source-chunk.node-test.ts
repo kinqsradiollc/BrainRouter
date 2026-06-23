@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
 import { MemoryEngine } from "../memory/engine.js";
+import { asyncify } from "../memory/store/asyncify.js";
 
 function fresh(label: string): { store: SqliteMemoryStore; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), `brainrouter-mem8-${label}-`));
@@ -23,37 +24,37 @@ function seed(store: SqliteMemoryStore) {
   return { doc, chunks };
 }
 
-test("MEM-8 fetchSourceChunk: full chunk + parent document, no neighbors by default", () => {
+test("MEM-8 fetchSourceChunk: full chunk + parent document, no neighbors by default", async () => {
   const { store, cleanup } = fresh("basic");
   try {
     const { chunks } = seed(store);
-    const engine = new MemoryEngine(store);
-    const r = engine.fetchSourceChunk("u1", chunks[1].id);
+    const engine = new MemoryEngine(asyncify(store));
+    const r = await engine.fetchSourceChunk("u1", chunks[1].id);
     assert.ok(r);
     assert.equal(r!.chunk.content, "BBB");
     assert.equal(r!.document?.uri, "src/a.ts");
     assert.equal(r!.document?.kind, "file");
     assert.deepEqual(r!.neighbors, []);
     // user-scoped: another user cannot fetch u1's chunk (cross-tenant guard)
-    assert.equal(engine.fetchSourceChunk("other", chunks[1].id), null);
+    assert.equal(await engine.fetchSourceChunk("other", chunks[1].id), null);
   } finally { cleanup(); }
 });
 
-test("MEM-8 fetchSourceChunk: ±N neighbours from the same document, excluding self", () => {
+test("MEM-8 fetchSourceChunk: ±N neighbours from the same document, excluding self", async () => {
   const { store, cleanup } = fresh("neighbors");
   try {
     const { chunks } = seed(store);
-    const engine = new MemoryEngine(store);
-    const r = engine.fetchSourceChunk("u1", chunks[1].id, 1);
+    const engine = new MemoryEngine(asyncify(store));
+    const r = await engine.fetchSourceChunk("u1", chunks[1].id, 1);
     assert.ok(r);
     assert.deepEqual(r!.neighbors.map((c) => c.content), ["AAA", "CCC"]);
   } finally { cleanup(); }
 });
 
-test("MEM-8 fetchSourceChunk: unknown id → null", () => {
+test("MEM-8 fetchSourceChunk: unknown id → null", async () => {
   const { store, cleanup } = fresh("missing");
   try {
-    const engine = new MemoryEngine(store);
-    assert.equal(engine.fetchSourceChunk("u1", "does-not-exist"), null);
+    const engine = new MemoryEngine(asyncify(store));
+    assert.equal(await engine.fetchSourceChunk("u1", "does-not-exist"), null);
   } finally { cleanup(); }
 });

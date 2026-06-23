@@ -21,18 +21,18 @@ export type RestoreResult = ReturnType<typeof restoreBlackboardItem>;
 
 /** The candidate-staging blackboard contract, bound to one engine. */
 export interface IBlackboardService {
-  stage(userId: string, items: BlackboardItemInput[]): BlackboardItem[];
+  stage(userId: string, items: BlackboardItemInput[]): Promise<BlackboardItem[]>;
   reconcile(userId: string): ReconcileResult;
   commit(userId: string, itemId: string): CommitResult;
-  reject(userId: string, itemId: string): boolean;
+  reject(userId: string, itemId: string): Promise<boolean>;
   restore(userId: string, itemId: string): RestoreResult;
-  review(userId: string, status?: BlackboardStatus): BlackboardItem[];
+  review(userId: string, status?: BlackboardStatus): Promise<BlackboardItem[]>;
 }
 
 /** {@link IBlackboardService} backed by the in-process blackboard ops — delegates only. */
 export class BlackboardService implements IBlackboardService {
   constructor(private readonly engine: MemoryEngine) {}
-  stage(userId: string, items: BlackboardItemInput[]): BlackboardItem[] {
+  stage(userId: string, items: BlackboardItemInput[]): Promise<BlackboardItem[]> {
     return stageBlackboardCandidates(this.engine, userId, items);
   }
   reconcile(userId: string): ReconcileResult {
@@ -41,13 +41,13 @@ export class BlackboardService implements IBlackboardService {
   commit(userId: string, itemId: string): CommitResult {
     return commitBlackboardItem(this.engine, userId, itemId);
   }
-  reject(userId: string, itemId: string): boolean {
+  reject(userId: string, itemId: string): Promise<boolean> {
     return rejectBlackboardItem(this.engine, userId, itemId);
   }
   restore(userId: string, itemId: string): RestoreResult {
     return restoreBlackboardItem(this.engine, userId, itemId);
   }
-  review(userId: string, status?: BlackboardStatus): BlackboardItem[] {
+  review(userId: string, status?: BlackboardStatus): Promise<BlackboardItem[]> {
     return reviewBlackboard(this.engine, userId, status);
   }
 }

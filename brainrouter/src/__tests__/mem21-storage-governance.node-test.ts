@@ -29,7 +29,7 @@ function fresh(label: string) {
   };
 }
 
-test("MEM-21 getStorageGovernanceStats + plan: only orphaned chunks are reclaimable", () => {
+test("MEM-21 getStorageGovernanceStats + plan: only orphaned chunks are reclaimable", async () => {
   const { store, engine, cleanup } = fresh("orphan");
   try {
     const doc = store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "transcript", uri: null, hash: "h1", title: "t" });
@@ -39,7 +39,7 @@ test("MEM-21 getStorageGovernanceStats + plan: only orphaned chunks are reclaima
       { content: "gamma", tokenCount: 1 },
     ]);
     // One cognitive record cites the first chunk → that chunk is NOT reclaimable.
-    const rec = engine.upsertEngineeringMemory({ userId: "u1", type: "codebase_fact", content: "a fact" });
+    const rec = await engine.upsertEngineeringMemory({ userId: "u1", type: "codebase_fact", content: "a fact" });
     store.linkRecordSources("u1", rec.id, [chunks[0].id]);
     store.appendTreeNode("u1", { kind: "topic", summaryMd: "a topic summary", sourceChunkIds: [chunks[0].id] });
 
@@ -50,7 +50,7 @@ test("MEM-21 getStorageGovernanceStats + plan: only orphaned chunks are reclaima
     assert.equal(stats.treeNodes.count, 1);
     assert.ok(stats.treeNodes.chars > 0);
 
-    const plan = engine.governanceStoragePlan("u1");
+    const plan = await engine.governanceStoragePlan("u1");
     const chunkClass = plan.classes.find((c) => c.class === "source_chunks")!;
     assert.equal(chunkClass.count, 3);
     // reclaimable = orphan chars only (the cited chunk's chars are excluded).

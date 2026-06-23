@@ -439,15 +439,15 @@ export class MemoryRecallPipeline {
     const selection = { ...readRecallSelection(), ...params.selectionOverride };
 
     // 1. FTS5 BM25 search (Top-K, env: BRAINROUTER_RECALL_FTS_LIMIT)
-    const ftsResultsRaw = this.store.searchCognitiveFts(userId, query, limits.ftsLimit);
-    const filePathResultsRaw = this.expandWithFilePathMatches(userId, query);
+    const ftsResultsRaw = await this.store.searchCognitiveFts(userId, query, limits.ftsLimit);
+    const filePathResultsRaw = await this.expandWithFilePathMatches(userId, query);
 
     // 2. Vector search (Top-K, env: BRAINROUTER_RECALL_VEC_LIMIT)
     let vecResultsRaw: VectorSearchResult[] = [];
     if (this.embeddingService.isReady()) {
       try {
         const queryVec = await this.embeddingService.embed(query);
-        vecResultsRaw = this.store.searchCognitiveVec(userId, queryVec, limits.vecLimit);
+        vecResultsRaw = await this.store.searchCognitiveVec(userId, queryVec, limits.vecLimit);
       } catch (e) {
         console.error("[BrainRouter] Vector search skipped during recall:", (e as Error).message);
       }
@@ -466,7 +466,7 @@ export class MemoryRecallPipeline {
       for (const r of vecResultsRaw) candidateIds.add(r.record_id);
       for (const r of filePathResultsRaw) candidateIds.add(r.record_id);
       if (candidateIds.size > 0) {
-        workspaceTagLookup = this.store.getWorkspaceTagsByRecordIds(userId, [...candidateIds]);
+        workspaceTagLookup = await this.store.getWorkspaceTagsByRecordIds(userId, [...candidateIds]);
       }
     }
     // AUG-A1 — same pre-fetch for the project tag when scope:'project'.
@@ -477,7 +477,7 @@ export class MemoryRecallPipeline {
       for (const r of vecResultsRaw) candidateIds.add(r.record_id);
       for (const r of filePathResultsRaw) candidateIds.add(r.record_id);
       if (candidateIds.size > 0) {
-        projectTagLookup = this.store.getProjectTagsByRecordIds(userId, [...candidateIds]);
+        projectTagLookup = await this.store.getProjectTagsByRecordIds(userId, [...candidateIds]);
       }
     }
 
@@ -509,7 +509,7 @@ export class MemoryRecallPipeline {
       };
 
       if (!params.explain) {
-        this.writeRecallOp(userId, sessionKey, query, emptyStrategy, 0, durationMs, recallExplanation);
+        void this.writeRecallOp(userId, sessionKey, query, emptyStrategy, 0, durationMs, recallExplanation);
       }
 
       return { recallStrategy: emptyStrategy, recallExplanation };
@@ -553,8 +553,8 @@ export class MemoryRecallPipeline {
 
     // B7 (MEM-CHURN) — one churn lookup for the whole candidate set; records with
     // no code anchor or zero churn are absent → their decay stays unchanged.
-    const churnByRecord = (this.store as Partial<{ getRecordsMaxChurn(userId: string, recordIds: string[]): Map<string, number> }>)
-      .getRecordsMaxChurn?.(userId, Array.from(rrfMap.keys())) ?? new Map<string, number>();
+    const churnByRecord = (await (this.store as Partial<{ getRecordsMaxChurn(userId: string, recordIds: string[]): Promise<Map<string, number>> }>)
+      .getRecordsMaxChurn?.(userId, Array.from(rrfMap.keys()))) ?? new Map<string, number>();
 
     const scoredResults = Array.from(rrfMap.values()).map(({ record, rrfScore }) => {
       // AUG-A3 — weighting / boosting helpers from the modular `reranker/`.
@@ -598,7 +598,7 @@ export class MemoryRecallPipeline {
     }));
 
     const sparkEngine = new NeuralSparkEngine(this.store);
-    const propagatedNodes = sparkEngine.propagateSparks(userId, initialNodes);
+    const propagatedNodes = await sparkEngine.propagateSparks(userId, initialNodes);
 
     const propagatedMap = new Map(propagatedNodes.map(n => [n.id, n]));
     const existingIds = new Set(scoredResults.map(r => r.record.record_id));
@@ -659,7 +659,7 @@ export class MemoryRecallPipeline {
     // Pull in connected memories that were excited above the firing threshold
     for (const propNode of propagatedNodes) {
       if (propNode.fired && !existingIds.has(propNode.id)) {
-        const record = this.store.getMemoryById(userId, propNode.id);
+        const record = await this.store.getMemoryById(userId, propNode.id);
         if (record) {
           pushNode(propNode, {
             type: record.type,
@@ -823,10 +823,12 @@ export class MemoryRecallPipeline {
     // MEM-17 — gather expansion refs (source chunks + covering tree node) once
     // per recalled record; reused for both the briefing hint and the result objects.
     const refsByRecord = new Map(
-      topResults.map(({ record }) => [
-        record.record_id,
-        gatherRecordRefs(this.store as RecordRefsStore, userId, record.record_id),
-      ]),
+      await Promise.all(
+        topResults.map(async ({ record }): Promise<[string, Awaited<ReturnType<typeof gatherRecordRefs>>]> => [
+          record.record_id,
+          await gatherRecordRefs(this.store as RecordRefsStore, userId, record.record_id),
+        ]),
+      ),
     );
 
     // MEM-ACCURACY (0.4.7) — within the selected set, sink records whose source
@@ -876,7 +878,7 @@ export class MemoryRecallPipeline {
         ...(refs && refs.staleVsCode ? { staleVsCode: true } : {}),
       };
     });
-    const recallCompression = applyRecallCompression(recalledCognitiveMemories, {
+    const recallCompression = await applyRecallCompression(recalledCognitiveMemories, {
       userId,
       query,
       store: this.store as unknown as import("./compression/router.js").CompressionStore,
@@ -884,7 +886,7 @@ export class MemoryRecallPipeline {
     });
 
     // Build appendSystemContext with Contextual Focus Navigation + tools guide
-    const topScenes = this.store.getTopContextualFocus(userId, 3);
+    const topScenes = await this.store.getTopContextualFocus(userId, 3);
     let appendSystemContext = "";
 
     if (topScenes.length > 0) {
@@ -907,7 +909,7 @@ export class MemoryRecallPipeline {
     }
 
     // Graph context expansion (2-hop BFS from matched entities)
-    const graphContext = expandRecallWithGraph({
+    const graphContext = await expandRecallWithGraph({
       topCognitiveResults: topResults.map(r => r.record),
       query,
       userId,
@@ -921,7 +923,7 @@ export class MemoryRecallPipeline {
 
     if (process.env.BRAINROUTER_PREWARM_ENABLED === "true") {
       try {
-        const prewarmResults = detectPrewarmSkills({
+        const prewarmResults = await detectPrewarmSkills({
           userId,
           store: this.store,
           excludeSkill: activeSkill,
@@ -972,7 +974,7 @@ export class MemoryRecallPipeline {
     };
 
     if (!params.explain) {
-      this.writeRecallOp(userId, sessionKey, query, recallStrategy, topResults.length, durationMs, recallExplanation);
+      void this.writeRecallOp(userId, sessionKey, query, recallStrategy, topResults.length, durationMs, recallExplanation);
     }
 
     return {
@@ -994,7 +996,7 @@ export class MemoryRecallPipeline {
     return this.recall({ ...params, explain: true });
   }
 
-  private writeRecallOp(
+  private async writeRecallOp(
     userId: string,
     sessionKey: string,
     query: string,
@@ -1004,7 +1006,7 @@ export class MemoryRecallPipeline {
     explanation?: RecallExplanation
   ) {
     try {
-      this.store.insertOperation({
+      await this.store.insertOperation({
         id: randomUUID(),
         userId,
         recordId: null,
@@ -1032,13 +1034,13 @@ export class MemoryRecallPipeline {
     }
   }
 
-  private expandWithFilePathMatches(userId: string, query: string): CognitiveFtsResult[] {
+  private async expandWithFilePathMatches(userId: string, query: string): Promise<CognitiveFtsResult[]> {
     const filePaths = extractFilePathHints(query);
     if (filePaths.length === 0) return [];
 
     const records = new Map<string, CognitiveRecord>();
     for (const filePath of filePaths) {
-      for (const record of this.store.getMemoriesByFilePath(userId, filePath, 10)) {
+      for (const record of await this.store.getMemoriesByFilePath(userId, filePath, 10)) {
         records.set(record.id, record);
       }
     }
