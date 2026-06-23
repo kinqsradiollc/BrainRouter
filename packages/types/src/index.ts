@@ -6,6 +6,8 @@ export * from "./attachment.js";
 export * from "./requirement.js";
 export * from "./atlas.js";
 export * from "./atlas-ops.js";
+export * from "./atlas-json.js";
+export * from "./atlas-enrich.js";
 export * from "./track.js";
 export * from "./task.js";
 export * from "./store.js";
