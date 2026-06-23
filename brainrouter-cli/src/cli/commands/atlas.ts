@@ -88,16 +88,23 @@ export async function tryHandleAtlasCommand(ctx: CommandContext): Promise<boolea
       return true;
     }
 
-    const caller: AtlasLlmCaller = async ({ system, user, signal }) => {
+    const caller: AtlasLlmCaller = async ({ system, user, signal, tool }) => {
+      // STRUCTURED OUTPUT — when enrich asks for a tool, force that function so
+      // the result is the schema-shaped tool-call arguments (consistent across
+      // models), and read them back. The prompt still carries the JSON
+      // instruction, so a model that answers in content still parses.
+      const tools = tool ? [{ name: tool.name, description: tool.description ?? "", inputSchema: tool.parameters }] : [];
       const resp = await callOpenAI(
         llm,
         [
           { role: "system", content: system },
           { role: "user", content: user },
         ],
-        [],
-        { effort: "low", signal },
+        tools,
+        { effort: "low", signal, ...(tool ? { tool_choice: { type: "function" as const, function: { name: tool.name } } } : {}) },
       );
+      const args = (resp as { tool_calls?: Array<{ function?: { arguments?: string } }> })?.tool_calls?.[0]?.function?.arguments;
+      if (typeof args === "string" && args.trim()) return args;
       return (resp?.content as string) ?? "";
     };
 

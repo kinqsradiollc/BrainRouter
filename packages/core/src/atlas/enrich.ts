@@ -26,7 +26,42 @@ import { isAtlasComplexity } from "@kinqs/brainrouter-types";
 import { extractAtlasJsonArray } from "./jsonExtract.js";
 
 /** Inject the actual model call. Returns the assistant's raw text. */
-export type AtlasLlmCaller = (req: { system: string; user: string; signal?: AbortSignal }) => Promise<string>;
+/**
+ * Inject the actual model call. Returns the assistant's raw text — OR, when
+ * `tool` is supplied, the JSON `arguments` of a forced function call so the
+ * output shape is fixed by the schema rather than a "return ONLY JSON" prompt
+ * (consistent across model versions). The adapter should force `tool_choice` to
+ * the tool and return its `arguments`; the prompt still carries the JSON
+ * instruction as the fallback for tool-less backends. Either way the result is
+ * parsed by `extractAtlasJsonArray`, which unwraps the `{wrapper:[…]}` a
+ * function call must use.
+ */
+export type AtlasLlmCaller = (req: {
+  system: string;
+  user: string;
+  signal?: AbortSignal;
+  tool?: { name: string; description?: string; parameters: Record<string, unknown> };
+}) => Promise<string>;
+
+/**
+ * A loose "emit an array" tool for the enrichment passes: it forces the model to
+ * return its result as a function call wrapping the array in `prop` (function
+ * parameters must be an object), WITHOUT constraining each item's fields — the
+ * prompt still defines those. `extractAtlasJsonArray` unwraps the single-array
+ * property on the way back.
+ */
+function arrayTool(name: string, prop: string, description: string): { name: string; description: string; parameters: Record<string, unknown> } {
+  return {
+    name,
+    description,
+    parameters: {
+      type: "object",
+      properties: { [prop]: { type: "array", items: { type: "object" } } },
+      required: [prop],
+      additionalProperties: false,
+    },
+  };
+}
 
 export interface EnrichOptions {
   /** Cap how many file-level nodes are summarised (default 200). */
@@ -213,7 +248,7 @@ export async function enrichAtlasGraph(graph: AtlasGraph, llm: AtlasLlmCaller, o
   const batchResults = await mapPool(batches, concurrency, async (batch) => {
     let rows: SummaryRow[];
     try {
-      const raw = await llm({ system: SYSTEM, user: summaryPrompt(graph, batch, symbols), signal });
+      const raw = await llm({ system: SYSTEM, user: summaryPrompt(graph, batch, symbols), signal, tool: arrayTool("emit_file_summaries", "summaries", "Return one summary object per file, shaped exactly as the prompt describes.") });
       rows = extractAtlasJsonArray(raw) as SummaryRow[];
     } catch {
       rows = [];
@@ -252,7 +287,7 @@ export async function enrichAtlasGraph(graph: AtlasGraph, llm: AtlasLlmCaller, o
   if (summarizedFileNodes.length) {
     onProgress?.({ phase: "layers", done: 0, total: 1 });
     try {
-      const raw = await llm({ system: SYSTEM, user: layersPrompt(enriched, summarizedFileNodes), signal });
+      const raw = await llm({ system: SYSTEM, user: layersPrompt(enriched, summarizedFileNodes), signal, tool: arrayTool("emit_layers", "layers", "Return one architectural-layer object per layer, shaped exactly as the prompt describes.") });
       const rows = extractAtlasJsonArray(raw) as Array<{ name?: string; description?: string; files?: string[] }>;
       const seen = new Set<string>();
       layers = rows
@@ -282,7 +317,7 @@ export async function enrichAtlasGraph(graph: AtlasGraph, llm: AtlasLlmCaller, o
   if (effectiveLayers.length) {
     onProgress?.({ phase: "tour", done: 0, total: 1 });
     try {
-      const raw = await llm({ system: SYSTEM, user: tourPrompt(enriched, effectiveLayers), signal });
+      const raw = await llm({ system: SYSTEM, user: tourPrompt(enriched, effectiveLayers), signal, tool: arrayTool("emit_tour", "steps", "Return the ordered guided-tour steps, each shaped exactly as the prompt describes.") });
       const rows = extractAtlasJsonArray(raw) as Array<{ title?: string; description?: string; files?: string[] }>;
       tour = rows
         .filter((r) => r && typeof r.title === "string")
@@ -307,7 +342,7 @@ export async function enrichAtlasGraph(graph: AtlasGraph, llm: AtlasLlmCaller, o
   if (pairs.length) {
     onProgress?.({ phase: "relationships", done: 0, total: 1 });
     try {
-      const raw = await llm({ system: SYSTEM, user: relationshipsPrompt(effectiveLayers, pairs), signal });
+      const raw = await llm({ system: SYSTEM, user: relationshipsPrompt(effectiveLayers, pairs), signal, tool: arrayTool("emit_layer_relationships", "relationships", "Return one labelled relationship per directed layer dependency, shaped exactly as the prompt describes.") });
       const rows = extractAtlasJsonArray(raw) as Array<{ source?: string; target?: string; label?: string }>;
       const idByName = new Map(effectiveLayers.map((l) => [l.name, l.id] as const));
       const validPair = new Set(pairs.map((p) => `${p.source} ${p.target}`));
