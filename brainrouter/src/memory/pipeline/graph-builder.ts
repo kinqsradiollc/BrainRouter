@@ -31,7 +31,23 @@ export async function buildGraphFromCognitive(params: {
       prompt: formatGraphExtractionPrompt(record.content),
       systemPrompt: GRAPH_EXTRACTION_SYSTEM_PROMPT,
       taskId: `graph-extraction-${record.id}`,
-      timeoutMs
+      timeoutMs,
+      // STRUCTURED OUTPUT — force the {entities, relations} graph through a
+      // schema'd tool call (consistent across models; see modelRunner.ts). Loose
+      // item schemas — the prompt still defines each entity/relation's fields.
+      tool: {
+        name: "emit_graph",
+        description: "Return the entities and relations extracted from the memory, shaped exactly as the prompt describes.",
+        parameters: {
+          type: "object",
+          properties: {
+            entities: { type: "array", items: { type: "object" } },
+            relations: { type: "array", items: { type: "object" } },
+          },
+          required: ["entities"],
+          additionalProperties: true,
+        },
+      },
     });
 
     // Robust parse: tolerates leaked role tokens, prose, fences, trailing commas

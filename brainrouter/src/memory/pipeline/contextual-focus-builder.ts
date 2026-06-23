@@ -21,6 +21,18 @@ async function canonicalizeFocusNames(params: {
       systemPrompt: FOCUS_SCENE_CLUSTER_SYSTEM_PROMPT,
       taskId: "focus-scene-clustering",
       timeoutMs: 45_000,
+      // STRUCTURED OUTPUT — wrap the cluster array in a tool schema (function
+      // params must be an object); the JSON chokepoint unwraps it. See modelRunner.ts.
+      tool: {
+        name: "emit_scene_clusters",
+        description: "Return the focus-scene clusters as described in the prompt. Use [] when nothing clusters.",
+        parameters: {
+          type: "object",
+          properties: { clusters: { type: "array", items: { type: "object" } } },
+          required: ["clusters"],
+          additionalProperties: false,
+        },
+      },
     });
 
     // Robust parse: tolerant of role-token leaks / prose / fences (see llm-json.ts).
