@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { AtlasGraph } from '@kinqs/brainrouter-types';
-import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize, atlasNodeFacts, atlasSearchMatches, atlasGrouping, atlasGroupedLayout, atlasOverviewModel, atlasDomainModel, atlasServiceModel, isServicePortPath, serviceModuleLabel, atlasChangeKind, atlasChangeMap, atlasNodeChanges, atlasImpact, atlasImpactOf, atlasUncoveredFiles, isTestFile } from './atlasView.js';
+import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize, atlasNodeFacts, atlasSearchMatches, atlasGrouping, atlasGroupedLayout, atlasOverviewModel, ATLAS_OVERVIEW_OTHER_ID, atlasDomainModel, atlasServiceModel, isServicePortPath, serviceModuleLabel, atlasChangeKind, atlasChangeMap, atlasNodeChanges, atlasImpact, atlasImpactOf, atlasUncoveredFiles, isTestFile } from './atlasView.js';
 
 function fixture(): AtlasGraph {
   return {
@@ -331,6 +331,42 @@ test('isServicePortPath / serviceModuleLabel', () => {
   assert.equal(isServicePortPath('src/exec/execPolicy.ts'), false);
   assert.equal(serviceModuleLabel('packages/core/src/exec/service.ts'), 'exec');
   assert.equal(serviceModuleLabel('src/memory/tree/service.ts'), 'memory/tree');
+});
+
+function manyLayerFixture(n: number): AtlasGraph {
+  const nodes: AtlasGraph['nodes'] = [];
+  const layers: AtlasGraph['layers'] = [];
+  for (let i = 0; i < n; i++) {
+    // layer i gets (i+1) files, so sizes are distinct and sortable
+    const ids: string[] = [];
+    for (let f = 0; f <= i; f++) {
+      const id = `file:L${i}_${f}.ts`;
+      nodes.push({ id, type: 'file', name: `L${i}_${f}.ts`, filePath: `L${i}_${f}.ts` });
+      ids.push(id);
+    }
+    layers.push({ id: `layer:${i}`, name: `Layer ${i}`, nodeIds: ids });
+  }
+  return {
+    schemaVersion: 1, kind: 'codebase',
+    project: { name: 'x', languages: ['typescript'], analyzedAt: '2026-06-22T00:00:00Z' },
+    nodes, edges: [], layers, tour: [],
+  };
+}
+
+test('atlasOverviewModel: default keeps all layers; limit folds the rest into "Other"', () => {
+  const g = manyLayerFixture(20);
+  assert.equal(atlasOverviewModel(g).cards.length, 20); // default: no rollup
+
+  const m = atlasOverviewModel(g, 5);
+  assert.equal(m.cards.length, 5);
+  const other = m.cards[m.cards.length - 1];
+  assert.equal(other.id, ATLAS_OVERVIEW_OTHER_ID);
+  // the 4 biggest layers (19,18,17,16 files) are kept; the other 16 fold in.
+  assert.equal(m.cards.slice(0, 4).map((c) => c.fileCount).join(','), '20,19,18,17');
+  const totalFiles = manyLayerFixture(20).layers.reduce((s, l) => s + l.nodeIds.length, 0);
+  const shownFiles = m.cards.reduce((s, c) => s + c.fileCount, 0);
+  assert.equal(shownFiles, totalFiles); // nothing lost in the rollup
+  assert.equal(other.description, '16 smaller layers');
 });
 
 test('atlasServiceModel builds module cards + cross-module edges', () => {

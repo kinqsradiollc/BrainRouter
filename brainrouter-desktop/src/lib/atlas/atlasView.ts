@@ -375,13 +375,23 @@ function aggregateComplexity(nodes: AtlasNode[]): AtlasComplexity {
   return "simple";
 }
 
-/** Layer cards + inter-layer import edges, for the Overview mode. */
-export function atlasOverviewModel(graph: AtlasGraph): AtlasOverviewModel {
+/** Synthetic id for the rolled-up "Other" Overview card. */
+export const ATLAS_OVERVIEW_OTHER_ID = "layer:__other";
+
+/**
+ * Layer cards + inter-layer import edges, for the Overview mode.
+ *
+ * `limit` (default `Infinity` — no rollup, preserving prior behaviour and the
+ * Domain mode's edge usage) caps the card count for very large repos: the
+ * `limit - 1` biggest layers are kept and the rest fold into a single "Other"
+ * card, with their edges remapped onto it (self-loops dropped, weights summed).
+ */
+export function atlasOverviewModel(graph: AtlasGraph, limit = Infinity): AtlasOverviewModel {
   const byId = new Map(graph.nodes.map((n) => [n.id, n] as const));
   const layerOf = new Map<string, string>();
   for (const l of graph.layers) for (const id of l.nodeIds) if (!layerOf.has(id)) layerOf.set(id, l.id);
 
-  const cards: AtlasOverviewCard[] = graph.layers.map((l) => {
+  let cards: AtlasOverviewCard[] = graph.layers.map((l) => {
     const nodes = l.nodeIds.map((id) => byId.get(id)).filter((n): n is AtlasNode => !!n && GROUPABLE.has(n.type));
     return { id: l.id, name: l.name, description: l.description, fileCount: nodes.length, complexity: aggregateComplexity(nodes), nodeIds: l.nodeIds };
   });
@@ -395,10 +405,42 @@ export function atlasOverviewModel(graph: AtlasGraph): AtlasOverviewModel {
     const key = a < b ? `${a}|${b}` : `${b}|${a}`;
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
-  const edges = [...counts.entries()].map(([k, weight]) => {
+  let edges = [...counts.entries()].map(([k, weight]) => {
     const [source, target] = k.split("|");
     return { source, target, weight };
   });
+
+  if (Number.isFinite(limit) && cards.length > limit) {
+    const sorted = [...cards].sort((a, b) => b.fileCount - a.fileCount || a.name.localeCompare(b.name));
+    const keep = sorted.slice(0, Math.max(1, limit - 1));
+    const fold = sorted.slice(Math.max(1, limit - 1));
+    const keepIds = new Set(keep.map((c) => c.id));
+    const otherNodeIds = fold.flatMap((c) => c.nodeIds);
+    const other: AtlasOverviewCard = {
+      id: ATLAS_OVERVIEW_OTHER_ID,
+      name: "Other",
+      description: `${fold.length} smaller layers`,
+      fileCount: fold.reduce((s, c) => s + c.fileCount, 0),
+      complexity: aggregateComplexity(otherNodeIds.map((id) => byId.get(id)).filter((n): n is AtlasNode => !!n)),
+      nodeIds: otherNodeIds,
+    };
+    cards = [...keep, other];
+
+    const map = (id: string): string => (keepIds.has(id) ? id : ATLAS_OVERVIEW_OTHER_ID);
+    const merged = new Map<string, number>();
+    for (const e of edges) {
+      const s = map(e.source);
+      const t = map(e.target);
+      if (s === t) continue;
+      const key = s < t ? `${s}|${t}` : `${t}|${s}`;
+      merged.set(key, (merged.get(key) ?? 0) + e.weight);
+    }
+    edges = [...merged.entries()].map(([k, weight]) => {
+      const [source, target] = k.split("|");
+      return { source, target, weight };
+    });
+  }
+
   return { cards, edges };
 }
 
