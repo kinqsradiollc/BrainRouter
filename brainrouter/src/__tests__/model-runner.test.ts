@@ -18,6 +18,13 @@ function errorResponse(status: number, body: string): Response {
   return new Response(body, { status, statusText: body });
 }
 
+function toolResponse(name: string, args: string): Response {
+  return new Response(
+    JSON.stringify({ choices: [{ message: { tool_calls: [{ type: "function", function: { name, arguments: args } }] } }] }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+}
+
 function bodyOf(call: unknown[]): any {
   const init = call[1] as RequestInit;
   return JSON.parse(init.body as string);
@@ -137,6 +144,70 @@ describe("ModelLLMRunner request body options", () => {
 
     expect(bodyOf(fetchMock.mock.calls[0]).response_format).toEqual({ type: "json_object" });
     expect(bodyOf(fetchMock.mock.calls[1]).response_format).toBeUndefined();
+  });
+});
+
+describe("ModelLLMRunner structured output (forced tool)", () => {
+  const tool = {
+    name: "emit",
+    parameters: { type: "object", properties: { scenes: { type: "array", items: { type: "object" } } }, required: ["scenes"] },
+  };
+
+  beforeEach(() => {
+    resetCognitiveBreakerForTests();
+    resetSemaphoreForTests();
+    vi.stubEnv("BRAINROUTER_LLM_API_KEY", "test-key");
+    vi.stubEnv("BRAINROUTER_LLM_ENDPOINT", "https://example.test/v1/chat/completions");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    resetCognitiveBreakerForTests();
+  });
+
+  it("sends tools + forced tool_choice and returns the tool-call arguments", async () => {
+    const args = '{"scenes":[{"scene_name":"x","memories":[]}]}';
+    const fetchMock = vi.fn().mockResolvedValue(toolResponse("emit", args));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new ModelLLMRunner().run({ prompt: "hi", taskId: "cognitive-extraction", tool });
+
+    expect(result).toBe(args); // raw tool-call arguments, not message.content
+    const body = bodyOf(fetchMock.mock.calls[0]);
+    expect(body.tools?.[0]?.function?.name).toBe("emit");
+    expect(body.tool_choice).toEqual({ type: "function", function: { name: "emit" } });
+  });
+
+  it("falls back to message content when the model ignores tool_choice", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse("[]"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new ModelLLMRunner().run({ prompt: "hi", taskId: "t", tool });
+    expect(result).toBe("[]");
+  });
+
+  it("drops tools and retries when the backend 400s on tool_choice", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(errorResponse(400, "tool_choice is not supported"))
+      .mockResolvedValueOnce(okResponse("[]"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new ModelLLMRunner().run({ prompt: "hi", taskId: "t", tool });
+
+    expect(result).toBe("[]");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(bodyOf(fetchMock.mock.calls[0]).tools).toBeDefined();    // first attempt forced the tool
+    expect(bodyOf(fetchMock.mock.calls[1]).tools).toBeUndefined();  // retry dropped it
+    expect(bodyOf(fetchMock.mock.calls[1]).tool_choice).toBeUndefined();
+  });
+
+  it("sends no tools when none is requested (unchanged default)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse("plain"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new ModelLLMRunner().run({ prompt: "hi", taskId: "t" });
+    expect(result).toBe("plain");
+    expect(bodyOf(fetchMock.mock.calls[0]).tools).toBeUndefined();
   });
 });
 
