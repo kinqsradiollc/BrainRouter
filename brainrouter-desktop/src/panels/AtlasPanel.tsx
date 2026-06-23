@@ -135,7 +135,9 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
   const spotlight = useMemo(() => impactIds ?? tourIds ?? searchIds ?? diffIds, [impactIds, tourIds, searchIds, diffIds]);
 
   // ---- model per mode ----
-  const overview = useMemo(() => (graph && effMode === "overview" ? atlasOverviewModel(graph) : null), [graph, effMode]);
+  // Overview caps to the biggest layers + an "Other" rollup so very large repos
+  // stay legible. Domain keeps the full set (atlasOverviewModel's default).
+  const overview = useMemo(() => (graph && effMode === "overview" ? atlasOverviewModel(graph, 14) : null), [graph, effMode]);
   const domain = useMemo(() => (graph && effMode === "domain" ? atlasDomainModel(graph) : null), [graph, effMode]);
 
   const structural = useMemo(() => {
