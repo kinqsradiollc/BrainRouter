@@ -1,6 +1,7 @@
 import { z } from "zod";
-import { isAtlasGraph, atlasSearchMatches, atlasImpact, type AtlasGraph } from "@kinqs/brainrouter-types";
+import { isAtlasGraph, atlasSearchMatches, atlasImpact, enrichAtlasGraph, type AtlasGraph, type AtlasLlmCaller } from "@kinqs/brainrouter-types";
 import { memoryEngine } from "../memory/engine.js";
+import { ModelLLMRunner } from "../memory/llm/modelRunner.js";
 
 /**
  * REMOTE-BRAIN Phase 3 (ADR-005) — Atlas-as-service: store & serve.
@@ -199,5 +200,69 @@ export async function handleAtlasImpact(args: unknown, options?: { defaultUserId
     return toolResult({ found: true, workspaceTag: params.workspaceTag, nodeId: params.nodeId, impact: atlasImpact(graph, params.nodeId) });
   } catch (err) {
     return toolError("atlas_impact", err);
+  }
+}
+
+// ---- atlas_enrich (Phase 3c: enrich the stored graph server-side) --------
+
+export const atlasEnrichToolSchema = {
+  name: "atlas_enrich",
+  description:
+    "Enrich a stored Atlas graph server-side with the brain's configured LLM — file summaries, architectural layers, a guided tour, and layer-relationship labels — then store the enriched graph back. Best-effort (a missing/failing LLM degrades to fewer artifacts, never an error). Tenant-scoped. Returns {found, workspaceTag, enriched?}.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      userId: { type: "string" },
+      workspaceTag: { type: "string" },
+      maxFiles: { type: "number", description: "Cap file-level nodes summarised (default 200)." },
+      batchSize: { type: "number", description: "Files per summary LLM call (default 12)." },
+      concurrency: { type: "number", description: "Concurrent summary batches (default 3)." },
+    },
+    required: ["workspaceTag"],
+  },
+} as const;
+
+const enrichSchema = z.object({
+  userId: z.string().optional(),
+  workspaceTag: WORKSPACE_TAG,
+  maxFiles: z.number().int().min(1).max(5000).optional(),
+  batchSize: z.number().int().min(1).max(64).optional(),
+  concurrency: z.number().int().min(1).max(8).optional(),
+});
+
+export async function handleAtlasEnrich(args: unknown, options?: { defaultUserId?: string }) {
+  try {
+    const params = enrichSchema.parse(args ?? {});
+    const userId = params.userId ?? options?.defaultUserId ?? "default";
+    const graph = await memoryEngine.store.getAtlasGraph(userId, params.workspaceTag);
+    if (!graph) return toolResult({ found: false, workspaceTag: params.workspaceTag });
+
+    // Adapt the brain's LLM runner to the AtlasLlmCaller port — forwarding the
+    // structured-output `tool` so enrichment uses the same forced-tool-call
+    // harness as the memory passes (consistent across models).
+    const runner = new ModelLLMRunner();
+    const caller: AtlasLlmCaller = async ({ system, user, tool }) =>
+      runner.run({ prompt: user, systemPrompt: system, taskId: "atlas-enrich", tool });
+
+    const res = await enrichAtlasGraph(graph, caller, {
+      ...(params.maxFiles ? { maxFiles: params.maxFiles } : {}),
+      ...(params.batchSize ? { batchSize: params.batchSize } : {}),
+      ...(params.concurrency ? { concurrency: params.concurrency } : {}),
+    });
+    await memoryEngine.store.putAtlasGraph(userId, params.workspaceTag, res.graph);
+
+    return toolResult({
+      found: true,
+      workspaceTag: params.workspaceTag,
+      enriched: {
+        summarized: res.summarized,
+        layers: res.layers,
+        tourSteps: res.tourSteps,
+        relationships: res.relationships,
+        batchesFailed: res.batchesFailed,
+      },
+    });
+  } catch (err) {
+    return toolError("atlas_enrich", err);
   }
 }
