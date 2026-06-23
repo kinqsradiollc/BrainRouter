@@ -1,0 +1,24 @@
+# Keep the brain image build context small (deploy/brain/Dockerfile builds from
+# the repo root). Source + manifests + lockfile are copied explicitly; everything
+# heavy/derived is excluded.
+**/node_modules
+**/dist
+**/dist-electron
+**/.next
+**/.vite
+**/build
+**/out
+**/release
+**/coverage
+.git
+.github
+**/*.log
+**/.DS_Store
+# Local/dev-only state that must never enter an image
+**/.env
+**/.env.*
+!**/.env.example
+AWSPrep
+openSrc
+Tasks.md
+walkthrough.md
