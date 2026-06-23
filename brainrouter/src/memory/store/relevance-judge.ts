@@ -124,27 +124,42 @@ export class RelevanceJudgeService {
       "Include one verdict per candidate. Keep each reason under 120 chars.",
     ].join("\n");
 
+    // STRUCTURED OUTPUT — force the verdicts through a schema'd tool call so the
+    // shape is consistent across model versions instead of trusting the prompt's
+    // "respond with strict JSON". Loose item schema; the prompt still describes
+    // each verdict's fields. Backends that reject `tools` 400 → we drop them and
+    // retry (below); the prompt's JSON instruction is the fallback either way.
+    // `response_format` is still omitted (same per-provider 400 concerns).
+    const body: Record<string, unknown> = {
+      model: this.model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      temperature: 0,
+      tools: [{
+        type: "function",
+        function: {
+          name: "report_relevance",
+          description: "Return one relevance verdict per candidate, as described in the prompt.",
+          parameters: {
+            type: "object",
+            properties: { verdicts: { type: "array", items: { type: "object" } } },
+            required: ["verdicts"],
+            additionalProperties: false,
+          },
+        },
+      }],
+      tool_choice: { type: "function", function: { name: "report_relevance" } },
+    };
+
     const doFetch = () => fetchWithExternalRetry(this.endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${this.apiKey}`,
       },
-      // Deliberately omitting `response_format` — OpenAI accepts
-      // `{type:"json_object"}`, but LM Studio / llama.cpp-style backends
-      // reject anything except `json_schema` or `text` with a 400, and
-      // Ollama / vLLM each have their own quirks. The system prompt is
-      // explicit about strict-JSON output and the parser below strips
-      // code fences + tolerates surrounding prose, so dropping the hint
-      // is cheaper than per-provider branching.
-      body: JSON.stringify({
-        model: this.model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        temperature: 0,
-      }),
+      body: JSON.stringify(body),
       signal: requestTimeoutSignal(this.timeoutMs),
     }, {
       label: "Relevance Judge API",
@@ -169,6 +184,16 @@ export class RelevanceJudgeService {
               `Relevance Judge API failed after LM Studio reload retry: HTTP ${res.status} ${res.statusText} - ${retryBody}`,
             );
           }
+        } else if (body.tools) {
+          // Backend likely rejects `tools`/`tool_choice` → drop them and retry as
+          // a plain completion (the prompt still asks for the JSON shape).
+          delete body.tools;
+          delete body.tool_choice;
+          res = await doFetch();
+          if (!res.ok) {
+            const retryBody = await res.text().catch(() => "(no body)");
+            throw new Error(`Relevance Judge API failed after dropping tool_choice: HTTP ${res.status} ${res.statusText} - ${retryBody}`);
+          }
         } else {
           throw new Error(`Relevance Judge API failed: HTTP ${res.status} ${res.statusText} - ${errorBody}`);
         }
@@ -181,7 +206,10 @@ export class RelevanceJudgeService {
         const errMsg = typeof data.error === "string" ? data.error : (data.error.message ?? JSON.stringify(data.error).slice(0, 400));
         throw new Error(`Relevance Judge endpoint returned an error envelope: ${errMsg}`);
       }
-      const content = extractChatCompletionText(data);
+      // Prefer the forced tool-call's arguments (schema-shaped); fall back to
+      // message content when the model answered inline or tools were dropped.
+      const toolArgs = data?.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
+      const content = (typeof toolArgs === "string" && toolArgs.trim()) ? toolArgs : extractChatCompletionText(data);
       if (typeof content !== "string") {
         throw new Error(`Relevance Judge returned no usable content. Response: ${JSON.stringify(data).slice(0, 400)}`);
       }
