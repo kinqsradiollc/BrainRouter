@@ -71,6 +71,8 @@ export class MemoryEngine {
   private sweeperTimer?: NodeJS.Timeout;
   private activeSessionSweeperTimer?: NodeJS.Timeout;
   private sessionInboxSweeperTimer?: NodeJS.Timeout;
+  /** Set by close() so it (and store.close()) run at most once. */
+  private closed = false;
   private jobRunner?: MemoryJobRunner;
   /**
    * Reentrancy guard: setInterval doesn't wait for the previous callback to
@@ -219,6 +221,26 @@ export class MemoryEngine {
    */
   public async init(): Promise<void> {
     await this.ready;
+  }
+
+  /**
+   * Stop all background work (sweepers + job runner) and close the store's
+   * connection pool. Idempotent and safe to call before `ready` settles: it
+   * first awaits the in-flight init (catching any failure) so we never end the
+   * pool mid-`#initialize`. After `close()` the engine must not be reused —
+   * callers go through `getMemoryEngine()` / the `memoryEngine` proxy, which
+   * lazily reconstructs a fresh instance on next use.
+   */
+  public async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    await this.ready.catch(() => { /* let init settle; don't close the pool mid-migration */ });
+    if (this.sweeperTimer) { clearInterval(this.sweeperTimer); this.sweeperTimer = undefined; }
+    if (this.activeSessionSweeperTimer) { clearInterval(this.activeSessionSweeperTimer); this.activeSessionSweeperTimer = undefined; }
+    if (this.sessionInboxSweeperTimer) { clearInterval(this.sessionInboxSweeperTimer); this.sessionInboxSweeperTimer = undefined; }
+    this.jobRunner?.stop();
+    this.jobRunner = undefined;
+    await this.store.close();
   }
 
   /**
@@ -1898,5 +1920,45 @@ export class MemoryEngine {
   }
 }
 
-// Singleton export
-export const memoryEngine = new MemoryEngine();
+// ── Lazy singleton export ───────────────────────────────────────────────────
+// Constructing a MemoryEngine opens a Postgres pool and runs `#initialize`
+// (migrations + vec init + seed-admin). Doing that EAGERLY at import time meant
+// merely importing this module (or any brain tool that re-exports it) started a
+// stray pool + background work — wasteful, and the source of teardown races in
+// tests. Construction is now deferred to first use: tools call methods on the
+// `memoryEngine` proxy, which builds the instance on first property access;
+// code paths that never touch it (most tests, which use scratch engines) never
+// open a pool. The proxy keeps the `import { memoryEngine }` call-sites (60+)
+// unchanged. Vitest suites factory-mock this module, so they never see the proxy.
+let _memoryEngine: MemoryEngine | undefined;
+
+/** Get the process-wide memory engine, constructing it on first call. */
+export function getMemoryEngine(): MemoryEngine {
+  return (_memoryEngine ??= new MemoryEngine());
+}
+
+/**
+ * Close + drop the process-wide singleton (graceful shutdown / test teardown).
+ * No-op when it was never constructed, so tests that don't use it pay nothing.
+ * The next `getMemoryEngine()` / proxy access builds a fresh instance.
+ */
+export async function closeMemoryEngine(): Promise<void> {
+  const e = _memoryEngine;
+  if (!e) return;
+  _memoryEngine = undefined;
+  await e.close();
+}
+
+export const memoryEngine: MemoryEngine = new Proxy({} as MemoryEngine, {
+  get(_t, prop) {
+    const e = getMemoryEngine();
+    const value = Reflect.get(e, prop, e);
+    return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(e) : value;
+  },
+  set(_t, prop, value) {
+    return Reflect.set(getMemoryEngine(), prop, value as never);
+  },
+  has(_t, prop) {
+    return prop in getMemoryEngine();
+  },
+});
