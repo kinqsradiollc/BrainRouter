@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { isAtlasGraph, type AtlasGraph } from "@kinqs/brainrouter-types";
+import { isAtlasGraph, atlasSearchMatches, atlasImpact, type AtlasGraph } from "@kinqs/brainrouter-types";
 import { memoryEngine } from "../memory/engine.js";
 
 /**
@@ -120,5 +120,84 @@ export async function handleAtlasList(args: unknown, options?: { defaultUserId?:
     return toolResult({ workspaces });
   } catch (err) {
     return toolError("atlas_list", err);
+  }
+}
+
+// ---- atlas_query (Phase 3b: server-side query over the stored graph) -----
+
+export const atlasQueryToolSchema = {
+  name: "atlas_query",
+  description:
+    "Search a stored Atlas graph's nodes by free text (name/path/summary/tags), ranked best-first. Tenant-scoped. Returns {found, workspaceTag, matches:[{id,type,name,filePath?}]}.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      userId: { type: "string" },
+      workspaceTag: { type: "string" },
+      query: { type: "string", description: "Free-text query." },
+      limit: { type: "number", description: "Max matches (default 30, max 200)." },
+    },
+    required: ["workspaceTag", "query"],
+  },
+} as const;
+
+const querySchema = z.object({
+  userId: z.string().optional(),
+  workspaceTag: WORKSPACE_TAG,
+  query: z.string().min(1),
+  limit: z.number().int().min(1).max(200).optional(),
+});
+
+export async function handleAtlasQuery(args: unknown, options?: { defaultUserId?: string }) {
+  try {
+    const params = querySchema.parse(args ?? {});
+    const userId = params.userId ?? options?.defaultUserId ?? "default";
+    const graph = await memoryEngine.store.getAtlasGraph(userId, params.workspaceTag);
+    if (!graph) return toolResult({ found: false, workspaceTag: params.workspaceTag });
+    const byId = new Map(graph.nodes.map((n) => [n.id, n] as const));
+    const matches = atlasSearchMatches(graph, params.query)
+      .slice(0, params.limit ?? 30)
+      .map((id) => {
+        const n = byId.get(id)!;
+        return { id: n.id, type: n.type, name: n.name, filePath: n.filePath };
+      });
+    return toolResult({ found: true, workspaceTag: params.workspaceTag, matches });
+  } catch (err) {
+    return toolError("atlas_query", err);
+  }
+}
+
+// ---- atlas_impact (Phase 3b: blast radius over the stored graph) ---------
+
+export const atlasImpactToolSchema = {
+  name: "atlas_impact",
+  description:
+    "Blast radius of a node in a stored Atlas graph: its transitive dependents (who breaks if it changes), its dependencies, and dependents grouped by layer. Tenant-scoped. Returns {found, workspaceTag, nodeId, impact?}.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      userId: { type: "string" },
+      workspaceTag: { type: "string" },
+      nodeId: { type: "string", description: "Atlas node id, e.g. file:src/x.ts." },
+    },
+    required: ["workspaceTag", "nodeId"],
+  },
+} as const;
+
+const impactSchema = z.object({
+  userId: z.string().optional(),
+  workspaceTag: WORKSPACE_TAG,
+  nodeId: z.string().min(1),
+});
+
+export async function handleAtlasImpact(args: unknown, options?: { defaultUserId?: string }) {
+  try {
+    const params = impactSchema.parse(args ?? {});
+    const userId = params.userId ?? options?.defaultUserId ?? "default";
+    const graph = await memoryEngine.store.getAtlasGraph(userId, params.workspaceTag);
+    if (!graph) return toolResult({ found: false, workspaceTag: params.workspaceTag, nodeId: params.nodeId });
+    return toolResult({ found: true, workspaceTag: params.workspaceTag, nodeId: params.nodeId, impact: atlasImpact(graph, params.nodeId) });
+  } catch (err) {
+    return toolError("atlas_impact", err);
   }
 }
