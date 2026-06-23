@@ -2471,10 +2471,13 @@ export class PostgresMemoryStore implements IMemoryStore {
 
   public async getTreeNodeIdByChunkId(userId: string, chunkId: string): Promise<string | null> {
     const needle = `%"${chunkId.replace(/[\\%_]/g, (c) => "\\" + c)}"%`;
+    // `seq DESC` is the faithful analogue of SQLite's `rowid DESC` tiebreak: on
+    // a created_at tie (same-millisecond appends) it deterministically returns
+    // the newest covering node rather than an arbitrary heap-ordered row.
     const row = await this.one<{ id: string }>(
       `SELECT id FROM memory_tree_nodes
         WHERE user_id = $1 AND source_chunk_ids_json LIKE $2 ESCAPE '\\'
-        ORDER BY created_at DESC LIMIT 1`,
+        ORDER BY created_at DESC, seq DESC LIMIT 1`,
       [userId, needle],
     );
     return row?.id ?? null;
