@@ -17,6 +17,7 @@ import type {
   AtlasComplexity,
   AtlasGraph,
   AtlasLayer,
+  AtlasLayerEdge,
   AtlasNode,
   AtlasNodeType,
   AtlasTourStep,
@@ -36,7 +37,7 @@ export interface EnrichOptions {
   concurrency?: number;
   signal?: AbortSignal;
   /** Progress callback for a CLI spinner / desktop status. */
-  onProgress?: (p: { phase: "summaries" | "layers" | "tour"; done: number; total: number }) => void;
+  onProgress?: (p: { phase: "summaries" | "layers" | "tour" | "relationships"; done: number; total: number }) => void;
 }
 
 export interface EnrichResult {
@@ -48,6 +49,8 @@ export interface EnrichResult {
   layers: number;
   /** Tour steps produced. */
   tourSteps: number;
+  /** Semantic layer→layer relationship labels produced (Domain edges). */
+  relationships: number;
   /** Summary batches whose LLM output could not be parsed (skipped). */
   batchesFailed: number;
 }
@@ -149,6 +152,39 @@ function tourPrompt(graph: AtlasGraph, layers: AtlasLayer[]): string {
     "",
     'Return ONLY a JSON array, in order, exactly:',
     '[{"title":"...","description":"what to look at and why","files":["<exact path>", "..."]}]',
+  ].join("\n");
+}
+
+/** Directed layer→layer import pairs (heaviest first), input to the relationship pass. */
+function computeLayerImportPairs(graph: AtlasGraph, layers: AtlasLayer[], limit = 14): Array<{ source: string; target: string; weight: number }> {
+  const layerOf = new Map<string, string>();
+  for (const l of layers) for (const id of l.nodeIds) if (!layerOf.has(id)) layerOf.set(id, l.id);
+  const counts = new Map<string, number>();
+  for (const e of graph.edges) {
+    if (e.type !== "imports") continue;
+    const a = layerOf.get(e.source);
+    const b = layerOf.get(e.target);
+    if (!a || !b || a === b) continue;
+    const key = `${a} ${b}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([k, weight]) => { const [source, target] = k.split(" "); return { source, target, weight }; })
+    .sort((x, y) => y.weight - x.weight || x.source.localeCompare(y.source))
+    .slice(0, limit);
+}
+
+function relationshipsPrompt(layers: AtlasLayer[], pairs: Array<{ source: string; target: string; weight: number }>): string {
+  const nameById = new Map(layers.map((l) => [l.id, l.name] as const));
+  const lines = pairs.map((p) => `- ${nameById.get(p.source)} -> ${nameById.get(p.target)} (${p.weight} imports)`);
+  return [
+    "For each directed dependency between architectural layers below, give a SHORT relationship verb phrase (2-4 words, lowercase) describing how the SOURCE uses the TARGET — e.g. \"calls\", \"reads from\", \"renders\", \"persists to\", \"validates with\", \"routes to\".",
+    "",
+    "Dependencies (source -> target):",
+    ...lines,
+    "",
+    "Return ONLY a JSON array, one per dependency, exactly:",
+    '[{"source":"<source layer name>","target":"<target layer name>","label":"<verb phrase>"}]',
   ].join("\n");
 }
 
@@ -265,5 +301,37 @@ export async function enrichAtlasGraph(graph: AtlasGraph, llm: AtlasLlmCaller, o
   }
   enriched.tour = tour;
 
-  return { graph: enriched, summarized, layers: effectiveLayers.length, tourSteps: tour.length, batchesFailed };
+  // --- 4. semantic layer relationships (Domain edge labels) ---
+  let layerEdges: AtlasLayerEdge[] = [];
+  const pairs = computeLayerImportPairs(enriched, effectiveLayers);
+  if (pairs.length) {
+    onProgress?.({ phase: "relationships", done: 0, total: 1 });
+    try {
+      const raw = await llm({ system: SYSTEM, user: relationshipsPrompt(effectiveLayers, pairs), signal });
+      const rows = extractAtlasJsonArray(raw) as Array<{ source?: string; target?: string; label?: string }>;
+      const idByName = new Map(effectiveLayers.map((l) => [l.name, l.id] as const));
+      const validPair = new Set(pairs.map((p) => `${p.source} ${p.target}`));
+      const seen = new Set<string>();
+      layerEdges = rows
+        .map((r): AtlasLayerEdge | null => {
+          if (!r || typeof r.source !== "string" || typeof r.target !== "string" || typeof r.label !== "string") return null;
+          const source = idByName.get(r.source);
+          const target = idByName.get(r.target);
+          const label = r.label.trim();
+          if (!source || !target || !label) return null;
+          const key = `${source} ${target}`;
+          // Only label real, deduped cross-layer dependencies the graph actually has.
+          if (!validPair.has(key) || seen.has(key)) return null;
+          seen.add(key);
+          return { source, target, label: label.slice(0, 40) };
+        })
+        .filter((e): e is AtlasLayerEdge => e !== null);
+    } catch {
+      layerEdges = [];
+    }
+    onProgress?.({ phase: "relationships", done: 1, total: 1 });
+  }
+  if (layerEdges.length) enriched.layerEdges = layerEdges;
+
+  return { graph: enriched, summarized, layers: effectiveLayers.length, tourSteps: tour.length, relationships: layerEdges.length, batchesFailed };
 }

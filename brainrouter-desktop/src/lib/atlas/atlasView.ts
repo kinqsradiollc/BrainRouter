@@ -512,7 +512,8 @@ export interface AtlasDomainCard {
 
 export interface AtlasDomainModel {
   cards: AtlasDomainCard[];
-  edges: Array<{ source: string; target: string; weight: number }>;
+  /** `label` = the LLM relationship verb (from graph.layerEdges) when enriched. */
+  edges: Array<{ source: string; target: string; weight: number; label?: string }>;
 }
 
 /** Capability cards (from layers) enriched with entities + flow counts + edges. */
@@ -552,7 +553,19 @@ export function atlasDomainModel(graph: AtlasGraph): AtlasDomainModel {
     fileCount: l.nodeIds.filter((id) => byId.has(id) && GROUPABLE.has(byId.get(id)!.type)).length,
   }));
 
-  return { cards, edges: atlasOverviewModel(graph).edges };
+  // Attach semantic relationship labels (from the enrichment relationship pass)
+  // to the (undirected) overview edges — match either direction.
+  const labelByPair = new Map<string, string>();
+  for (const le of graph.layerEdges ?? []) {
+    labelByPair.set(`${le.source}|${le.target}`, le.label);
+    if (!labelByPair.has(`${le.target}|${le.source}`)) labelByPair.set(`${le.target}|${le.source}`, le.label);
+  }
+  const edges = atlasOverviewModel(graph).edges.map((e) => {
+    const label = labelByPair.get(`${e.source}|${e.target}`);
+    return label ? { ...e, label } : e;
+  });
+
+  return { cards, edges };
 }
 
 // ---------------------------------------------------------------------------
@@ -743,11 +756,11 @@ export function atlasServiceModel(graph: AtlasGraph): AtlasServiceModel {
     const a = fileModule.get(e.source);
     const b = fileModule.get(e.target);
     if (!a || !b || a === b) continue;
-    const key = `${a} ${b}`;
+    const key = `${a} ${b}`;
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   const edges = [...counts.entries()].map(([k, weight]) => {
-    const [source, target] = k.split(" ");
+    const [source, target] = k.split(" ");
     return { source, target, weight };
   });
 

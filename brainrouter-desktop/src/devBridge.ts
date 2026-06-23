@@ -104,6 +104,20 @@ function devAtlasEnriched(): AtlasGraph {
     { order: 4, title: 'Checkout flow', description: 'orchestrator.ts coordinates cart, catalog, and payment.', nodeIds: [L('src/checkout/orchestrator.ts'), L('src/payment/payment.ts')] },
     { order: 5, title: 'The storefront', description: 'App.tsx renders the UI.', nodeIds: [L('src/ui/App.tsx')] },
   ];
+  // Semantic layer relationships (LLM relationship pass) — labels the Domain
+  // view shows on its inter-layer edges. Only pairs with a real cross-layer
+  // import edge above are labelled.
+  g.layerEdges = [
+    { source: 'layer:gateway', target: 'layer:cart', label: 'routes to' },
+    { source: 'layer:gateway', target: 'layer:catalog', label: 'routes to' },
+    { source: 'layer:gateway', target: 'layer:checkout', label: 'routes to' },
+    { source: 'layer:checkout', target: 'layer:cart', label: 'reads cart from' },
+    { source: 'layer:checkout', target: 'layer:catalog', label: 'looks up in' },
+    { source: 'layer:checkout', target: 'layer:shared', label: 'uses' },
+    { source: 'layer:cart', target: 'layer:shared', label: 'uses' },
+    { source: 'layer:catalog', target: 'layer:shared', label: 'uses' },
+    { source: 'layer:ui', target: 'layer:shared', label: 'calls' },
+  ];
   return g;
 }
 
@@ -547,7 +561,7 @@ export function installDevBridge(): void {
       return {
         graph: g,
         stats: { files: 7, functions: 5, classes: 2, nodes: g.nodes.length, edges: g.edges.length, layers: g.layers.length, enriched: true },
-        enrichResult: { summarized: g.nodes.filter((n) => n.summary).length, layers: g.layers.length, tourSteps: g.tour.length, batchesFailed: 0 },
+        enrichResult: { summarized: g.nodes.filter((n) => n.summary).length, layers: g.layers.length, tourSteps: g.tour.length, relationships: g.layerEdges?.length ?? 0, batchesFailed: 0 },
       };
     },
     'atlas-explain-change': (a) => {

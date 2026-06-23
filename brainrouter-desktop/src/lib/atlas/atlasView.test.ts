@@ -238,6 +238,25 @@ test('atlasDomainModel: capability cards with entities + flow counts', () => {
   assert.equal(data.flows, 1);
   // inter-layer edge preserved
   assert.equal(m.edges.length, 1);
+  // no enrichment → no semantic label on the edge
+  assert.equal(m.edges[0].label, undefined);
+});
+
+test('atlasDomainModel: attaches LLM relationship labels from layerEdges (either direction)', () => {
+  const g = layered();
+  // enrichment produced a directed label API -> Data; the overview edge is
+  // undirected, so the label must attach regardless of orientation.
+  g.layerEdges = [{ source: 'layer:api', target: 'layer:data', label: 'persists to' }];
+  const m = atlasDomainModel(g);
+  assert.equal(m.edges.length, 1);
+  assert.equal(m.edges[0].label, 'persists to');
+
+  // a layerEdge for a pair with no structural overview edge does not invent one
+  const g2 = layered();
+  g2.layerEdges = [{ source: 'layer:api', target: 'layer:nonexistent', label: 'ghost' }];
+  const m2 = atlasDomainModel(g2);
+  assert.equal(m2.edges.length, 1);
+  assert.equal(m2.edges[0].label, undefined);
 });
 
 test('atlasImpact: transitive dependents (blast radius) + dependencies + byLayer', () => {

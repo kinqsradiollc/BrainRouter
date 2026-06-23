@@ -182,12 +182,13 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
         data: { name: c.name, description: c.description, entities: c.entities, flows: c.flows },
         style: { width: cardW },
       }));
-      // Relationship edges between capabilities, weighted + labelled by how many
-      // imports cross the boundary, so the domain reads as a flow map.
+      // Relationship edges between capabilities: labelled with the LLM relationship
+      // verb when the graph is enriched (e.g. "calls", "reads from"), else the
+      // import count. Width/opacity track how many imports cross the boundary.
       const maxW = Math.max(1, ...domain.edges.map((e) => e.weight));
       const edges: Edge[] = domain.edges.map((e, i) => ({
         id: `de${i}`, source: e.source, target: e.target, animated: true,
-        label: `${e.weight}`,
+        label: e.label ?? `${e.weight}`,
         labelStyle: { fill: "var(--text-dim)", fontSize: 9 },
         labelBgStyle: { fill: "var(--surface)" },
         labelBgPadding: [3, 1] as [number, number],
@@ -313,7 +314,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
           </div>
         ) : null}
         <span className="atlas-proj">{graph.project.name}</span>
-        {enrichedCount ? <span className="atlas-count atlas-enriched" title={`${enrichedCount} files summarised`}>· {graph.layers.length} layers · {graph.tour.length} tour</span> : null}
+        {enrichedCount ? <span className="atlas-count atlas-enriched" title={`${enrichedCount} files summarised`}>· {graph.layers.length} layers · {graph.tour.length} tour{graph.layerEdges?.length ? ` · ${graph.layerEdges.length} links` : ""}</span> : null}
         {effMode === "structural" && presentCats.length ? (
           <div className="atlas-cats">
             {presentCats.map((c) => (

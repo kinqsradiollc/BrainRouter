@@ -42,6 +42,8 @@ function baseGraph(): AtlasGraph {
     edges: [
       { source: 'file:src/app.ts', target: 'function:src/app.ts:main', type: 'contains' },
       { source: 'file:src/db.ts', target: 'class:src/db.ts:Store', type: 'contains' },
+      // cross-layer import (Entry → Data) so the relationship pass has a pair
+      { source: 'file:src/app.ts', target: 'file:src/db.ts', type: 'imports' },
     ],
     layers: [],
     tour: [],
@@ -51,6 +53,16 @@ function baseGraph(): AtlasGraph {
 // A stub LLM that branches on the prompt and exercises the JSON extractor
 // (fenced output for summaries, prose-wrapped for layers, bare for tour).
 const goodLlm: AtlasLlmCaller = async ({ user }) => {
+  // NB: branch order matters — check the most specific marker first. The
+  // relationships prompt also contains the words "architectural layers", so it
+  // must be matched before the layers branch.
+  if (user.includes('relationship verb phrase')) {
+    return JSON.stringify([
+      { source: 'Entry', target: 'Data', label: 'reads from' },
+      // a bogus pair the graph doesn't have — must be dropped
+      { source: 'Data', target: 'Config', label: 'ignores' },
+    ]);
+  }
   if (user.includes('one object per file')) {
     return '```json\n' + JSON.stringify([
       { path: 'src/app.ts', summary: 'Application entry point.', tags: ['entry', 'async'], complexity: 'moderate' },
@@ -102,6 +114,14 @@ test('ATLAS-4 enrichAtlasGraph merges summaries/tags/complexity, layers, tour', 
   assert.equal(res.graph.tour[0].order, 1);
   assert.equal(res.graph.tour[1].order, 2);
   assert.deepEqual(res.graph.tour[0].nodeIds, ['file:src/app.ts']);
+});
+
+test('ATLAS enrichAtlasGraph: relationship pass labels real cross-layer edges, drops bogus ones', async () => {
+  const res = await enrichAtlasGraph(baseGraph(), goodLlm);
+  assert.equal(res.relationships, 1);
+  assert.deepEqual(res.graph.layerEdges, [{ source: 'layer:entry', target: 'layer:data', label: 'reads from' }]);
+  // the Data→Config label is dropped (no such import edge in the graph)
+  assert.ok(!(res.graph.layerEdges ?? []).some((e) => e.label === 'ignores'));
 });
 
 test('ATLAS-4 enrichAtlasGraph respects maxFiles', async () => {
