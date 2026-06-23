@@ -246,6 +246,15 @@ export interface CliKnobs {
   // ---- MCP plumbing -----------------------------------------------------
   /** MCP call timeout in ms. Default 60000. */
   mcpTimeoutMs?: number;
+  /**
+   * REMOTE-BRAIN (Workstream A, ADR-005) — point the active BrainRouter brain at
+   * a remote Streamable-HTTP endpoint instead of the embedded/stdio default.
+   * When set, the active `brainrouter` profile is rewritten to
+   * `{ type: 'http', url: brainUrl }` at connect time (its `apiKey`/`headers`
+   * are preserved; the brain's HTTP transport requires a Bearer API key). Unset
+   * (the default) keeps the embedded brain — no behaviour change.
+   */
+  brainUrl?: string | null;
 
   // ---- approval / sandbox / spawn --------------------------------------
   /** Sandbox engine. Default 'off'. */
@@ -798,6 +807,8 @@ export interface ResolvedCliKnobs {
   effort: 'low' | 'medium' | 'high' | 'xhigh';
   fallbackModel: string | null;
   mcpTimeoutMs: number;
+  /** REMOTE-BRAIN — remote brain HTTP endpoint, or null for the embedded default. */
+  brainUrl: string | null;
   sandbox: 'off' | 'on';
   sandboxReadPaths: string[];
   sandboxWritePaths: string[];
@@ -923,6 +934,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     effort: c.effort ?? 'medium',
     fallbackModel: c.fallbackModel ?? null,
     mcpTimeoutMs: c.mcpTimeoutMs ?? 60_000,
+    brainUrl: c.brainUrl ?? null,
     sandbox: c.sandbox ?? 'off',
     sandboxReadPaths: c.sandboxReadPaths ?? [],
     sandboxWritePaths: c.sandboxWritePaths ?? [],

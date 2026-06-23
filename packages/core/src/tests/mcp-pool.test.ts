@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { McpClientPool, selectMcpServerIds } from '../mcp/mcpPool.js';
+import { McpClientPool, selectMcpServerIds, applyBrainUrlOverride } from '../mcp/mcpPool.js';
 
 // These tests exercise the Pool's public API in isolation — connection
 // state, name routing, collision detection, status surfaces — without
@@ -229,4 +229,57 @@ test('selectMcpServerIds: falls back to the first BrainRouter profile when activ
     selectMcpServerIds(servers, 'github').sort(),
     ['github', 'localBrain'].sort(),
   );
+});
+
+// --- REMOTE-BRAIN: applyBrainUrlOverride (Workstream A) -------------------
+
+test('applyBrainUrlOverride: no-op when brainUrl is unset', () => {
+  const servers: any = { localBrain: { type: 'stdio', command: 'brainrouter-mcp', apiKey: 'br_x' } };
+  const out = applyBrainUrlOverride(servers, 'localBrain', null);
+  assert.equal(out.servers, servers); // same ref — untouched
+  assert.equal(out.activeServer, 'localBrain');
+  assert.equal(applyBrainUrlOverride(servers, 'localBrain', undefined).servers, servers);
+  assert.equal(applyBrainUrlOverride(servers, 'localBrain', '').servers, servers);
+});
+
+test('applyBrainUrlOverride: rewrites the active brain to http, preserves apiKey, drops stdio fields', () => {
+  const servers: any = {
+    localBrain: { type: 'stdio', command: 'brainrouter-mcp', args: ['--root', '/x'], env: { A: '1' }, apiKey: 'br_secret' },
+    github: { type: 'http', url: 'https://github.example/mcp', identity: 'third-party' },
+  };
+  const out = applyBrainUrlOverride(servers, 'localBrain', 'https://brain.example/mcp');
+  assert.equal(out.activeServer, 'localBrain');
+  const brain = out.servers.localBrain;
+  assert.equal(brain.type, 'http');
+  assert.equal(brain.url, 'https://brain.example/mcp');
+  assert.equal(brain.identity, 'brainrouter');
+  assert.equal(brain.apiKey, 'br_secret'); // bearer key preserved
+  assert.equal(brain.command, undefined); // stdio-only fields dropped
+  assert.equal(brain.args, undefined);
+  assert.equal(brain.env, undefined);
+  // input not mutated; third-party server untouched
+  assert.equal((servers.localBrain as any).type, 'stdio');
+  assert.equal(out.servers.github, servers.github);
+});
+
+test('applyBrainUrlOverride: targets the active brain among several profiles', () => {
+  const servers: any = {
+    localBrain: { type: 'stdio', command: 'brainrouter-mcp' },
+    cloudBrain: { type: 'http', url: 'https://old.example/mcp', identity: 'brainrouter', apiKey: 'br_c' },
+  };
+  const out = applyBrainUrlOverride(servers, 'cloudBrain', 'https://new.example/mcp');
+  assert.equal(out.activeServer, 'cloudBrain');
+  assert.equal(out.servers.cloudBrain.url, 'https://new.example/mcp');
+  assert.equal(out.servers.cloudBrain.apiKey, 'br_c');
+  assert.equal(out.servers.localBrain.type, 'stdio'); // the non-active brain is left alone
+});
+
+test('applyBrainUrlOverride: synthesizes a brain profile when none exists', () => {
+  const out = applyBrainUrlOverride({}, '', 'https://brain.example/mcp', 'br_fallback');
+  assert.equal(out.activeServer, 'brainrouter');
+  const brain = out.servers.brainrouter;
+  assert.equal(brain.type, 'http');
+  assert.equal(brain.url, 'https://brain.example/mcp');
+  assert.equal(brain.identity, 'brainrouter');
+  assert.equal(brain.apiKey, 'br_fallback'); // caller-supplied key used when no profile to inherit from
 });
