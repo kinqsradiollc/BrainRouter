@@ -77,6 +77,7 @@ import { memoryReindexSourceToolSchema, handleMemoryReindexSource } from '../too
 import { memoryRecordLessonToolSchema, handleMemoryRecordLesson } from '../tools/memory_record_lesson.js';
 import { memoryCreateRequirementToolSchema, handleMemoryCreateRequirement } from '../tools/memory_create_requirement.js';
 import { memoryCaptureArtifactToolSchema, handleMemoryCaptureArtifact } from '../tools/memory_capture_artifact.js';
+import { atlasPutToolSchema, handleAtlasPut, atlasGetToolSchema, handleAtlasGet, atlasListToolSchema, handleAtlasList } from '../tools/atlas_graph.js';
 import { memoryCaptureAnnotationToolSchema, handleMemoryCaptureAnnotation } from '../tools/memory_capture_annotation.js';
 import { memoryExtractSkillToolSchema, handleMemoryExtractSkill } from '../tools/memory_extract_skill.js';
 import { memoryGraphAnalyticsToolSchema, handleMemoryGraphAnalytics } from '../tools/memory_graph_analytics.js';
@@ -274,6 +275,9 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       memoryCompressToolSchema,
       memoryRetrieveToolSchema,
       memoryStatsToolSchema,
+      atlasPutToolSchema,
+      atlasGetToolSchema,
+      atlasListToolSchema,
     ],
   }));
 
@@ -376,6 +380,12 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           return await handleMemoryCreateRequirement(request.params.arguments, { defaultUserId });
         case 'memory_capture_artifact':
           return await handleMemoryCaptureArtifact(request.params.arguments, { defaultUserId });
+        case 'atlas_put':
+          return await handleAtlasPut(request.params.arguments, { defaultUserId });
+        case 'atlas_get':
+          return await handleAtlasGet(request.params.arguments, { defaultUserId });
+        case 'atlas_list':
+          return await handleAtlasList(request.params.arguments, { defaultUserId });
         case 'memory_capture_annotation':
           return await handleMemoryCaptureAnnotation(request.params.arguments, { defaultUserId });
         case 'memory_extract_skill':

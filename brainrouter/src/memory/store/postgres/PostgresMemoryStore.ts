@@ -80,6 +80,8 @@ import type {
   MemoryTreeKind,
   VaultExportEntry,
   VaultExportInput,
+  AtlasGraph,
+  AtlasWorkspaceSummary,
   IMemoryStore,
 } from "@kinqs/brainrouter-types";
 import { createPgPool } from "./connection.js";
@@ -1574,6 +1576,46 @@ export class PostgresMemoryStore implements IMemoryStore {
       cognitiveCountAtGeneration: asNumber(row.cognitive_count_at_generation),
       createdTime: row.created_time, updatedTime: row.updated_time,
     };
+  }
+
+  // ── Atlas graph persistence (REMOTE-BRAIN Phase 3) ──────────────────────
+
+  public async putAtlasGraph(userId: string, workspaceTag: string, graph: AtlasGraph): Promise<void> {
+    const nodeCount = Array.isArray(graph?.nodes) ? graph.nodes.length : 0;
+    await this.run(
+      `INSERT INTO atlas_graphs (user_id, workspace_tag, graph_json, node_count, updated_at)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (user_id, workspace_tag) DO UPDATE SET
+         graph_json=EXCLUDED.graph_json,
+         node_count=EXCLUDED.node_count,
+         updated_at=EXCLUDED.updated_at`,
+      [userId, workspaceTag, JSON.stringify(graph), nodeCount, new Date().toISOString()],
+    );
+  }
+
+  public async getAtlasGraph(userId: string, workspaceTag: string): Promise<AtlasGraph | null> {
+    const row = await this.one<{ graph_json: string }>(
+      "SELECT graph_json FROM atlas_graphs WHERE user_id = $1 AND workspace_tag = $2",
+      [userId, workspaceTag],
+    );
+    if (!row) return null;
+    try {
+      return JSON.parse(row.graph_json) as AtlasGraph;
+    } catch {
+      return null; // corrupt row — treat as absent rather than throwing
+    }
+  }
+
+  public async listAtlasWorkspaces(userId: string): Promise<AtlasWorkspaceSummary[]> {
+    const rows = await this.rows<{ workspace_tag: string; node_count: unknown; updated_at: string }>(
+      "SELECT workspace_tag, node_count, updated_at FROM atlas_graphs WHERE user_id = $1 ORDER BY updated_at DESC",
+      [userId],
+    );
+    return rows.map((r) => ({
+      workspaceTag: r.workspace_tag,
+      nodeCount: asNumber(r.node_count),
+      updatedAt: r.updated_at,
+    }));
   }
 
   public async getIdentityAndInstructionCognitives(userId: string, limit = 100): Promise<any[]> {
