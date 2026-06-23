@@ -1,24 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { SqliteMemoryStore } from "../memory/store/sqlite.js";
-import { MemoryEngine } from "../memory/engine.js";
-import { asyncify } from "../memory/store/asyncify.js";
-
-function fresh(label: string): { store: SqliteMemoryStore; engine: MemoryEngine; cleanup: () => void } {
-  const dir = mkdtempSync(join(tmpdir(), `brainrouter-bb-${label}-`));
-  const store = new SqliteMemoryStore(join(dir, "memory.db"));
-  store.init();
-  return { store, engine: new MemoryEngine(asyncify(store)), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
-}
+import { createTestEngine } from "./helpers/pgTestStore.js";
 
 test("MEM-4 stage → reconcile → commit → cognitive record + provenance link", async () => {
-  const { store, engine, cleanup } = fresh("commit");
+  const { store, engine, cleanup } = await createTestEngine();
   try {
-    const doc = store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "transcript", uri: null, hash: "hbb", title: "t" });
-    const [chunk] = store.addSourceChunks(doc.id, [{ content: "source text", tokenCount: 2 }]);
+    const doc = await store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "transcript", uri: null, hash: "hbb", title: "t" });
+    const [chunk] = await store.addSourceChunks(doc.id, [{ content: "source text", tokenCount: 2 }]);
 
     const staged = await engine.stageBlackboardCandidates("u1", [
       { sourceChunkId: chunk.id, score: 0.9, candidate: { content: "Important fact A", type: "codebase_fact" } },
@@ -40,13 +28,13 @@ test("MEM-4 stage → reconcile → commit → cognitive record + provenance lin
 
     const committed = await engine.reviewBlackboard("u1", "committed");
     assert.equal(committed[0].committedRecordId, result.recordId);
-    assert.ok(store.getMemoryById("u1", result.recordId!), "cognitive record was created");
-    assert.equal(store.getRecordSourceChunks("u1", result.recordId!)[0]?.id, chunk.id, "provenance linked on commit");
-  } finally { cleanup(); }
+    assert.ok(await store.getMemoryById("u1", result.recordId!), "cognitive record was created");
+    assert.equal((await store.getRecordSourceChunks("u1", result.recordId!))[0]?.id, chunk.id, "provenance linked on commit");
+  } finally { await cleanup(); }
 });
 
 test("MEM-4 commit refuses a non-reconciled item; reject works", async () => {
-  const { engine, cleanup } = fresh("guard");
+  const { engine, cleanup } = await createTestEngine();
   try {
     const [staged] = await engine.stageBlackboardCandidates("u1", [{ score: 0.9, candidate: { content: "x fact", type: "codebase_fact" } }]);
     const blocked = await engine.commitBlackboardItem("u1", staged.id);
@@ -55,11 +43,11 @@ test("MEM-4 commit refuses a non-reconciled item; reject works", async () => {
     assert.equal(await engine.rejectBlackboardItem("u1", staged.id), true);
     assert.equal((await engine.reviewBlackboard("u1", "rejected")).length, 1);
     assert.equal((await engine.reviewBlackboard("u1", "pending")).length, 0);
-  } finally { cleanup(); }
+  } finally { await cleanup(); }
 });
 
 test("BLACKBOARD-REVIEW-UX restore: a rejected item returns to pending for re-review", async () => {
-  const { engine, cleanup } = fresh("restore");
+  const { engine, cleanup } = await createTestEngine();
   try {
     const [staged] = await engine.stageBlackboardCandidates("u1", [{ score: 0.9, candidate: { content: "restorable fact", type: "codebase_fact" } }]);
     assert.equal(await engine.rejectBlackboardItem("u1", staged.id), true);
@@ -70,11 +58,11 @@ test("BLACKBOARD-REVIEW-UX restore: a rejected item returns to pending for re-re
     assert.equal(res.status, "pending");
     assert.equal((await engine.reviewBlackboard("u1", "rejected")).length, 0);
     assert.equal((await engine.reviewBlackboard("u1", "pending")).length, 1, "restored item is pending again");
-  } finally { cleanup(); }
+  } finally { await cleanup(); }
 });
 
 test("BLACKBOARD-REVIEW-UX restore: only rejected/duplicate are restorable; pending + unknown are no-ops", async () => {
-  const { engine, cleanup } = fresh("restore-guard");
+  const { engine, cleanup } = await createTestEngine();
   try {
     const [staged] = await engine.stageBlackboardCandidates("u1", [{ score: 0.9, candidate: { content: "pending fact", type: "codebase_fact" } }]);
     // A pending item is not "dropped" — restore should refuse and explain.
@@ -86,5 +74,5 @@ test("BLACKBOARD-REVIEW-UX restore: only rejected/duplicate are restorable; pend
     // Wrong user can't restore another user's item.
     await engine.rejectBlackboardItem("u1", staged.id);
     assert.equal((await engine.restoreBlackboardItem("other-user", staged.id)).restored, false);
-  } finally { cleanup(); }
+  } finally { await cleanup(); }
 });

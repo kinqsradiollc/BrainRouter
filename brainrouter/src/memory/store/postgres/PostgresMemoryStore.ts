@@ -94,19 +94,18 @@ import {
   operationRowToRecord,
   toVectorLiteral,
   ftsHasTerms,
+  orTsQuery,
   tsRankToScore,
   asNumber,
   pg,
-} from "./converters.js";
-import { extractIntraFileCallEdges } from "../../recall/code-retrieval.js";
-import { expandImportRecord, readImportChunkChars } from "../../pipeline/chunk-import.js";
-import { mapWithConcurrency, readEmbedConcurrency } from "../../util/concurrency.js";
-import {
   type CompressionEntryInput,
   type CompressionEntryMetadata,
   type CompressionRetrieval,
   type CompressionStats,
-} from "../sqlite/compressStore.js";
+} from "./converters.js";
+import { extractIntraFileCallEdges } from "../../recall/code-retrieval.js";
+import { expandImportRecord, readImportChunkChars } from "../../pipeline/chunk-import.js";
+import { mapWithConcurrency, readEmbedConcurrency } from "../../util/concurrency.js";
 
 const MIGRATIONS_DIR = fileURLToPath(new URL("./migrations", import.meta.url));
 
@@ -2265,19 +2264,28 @@ export class PostgresMemoryStore implements IMemoryStore {
     opts?: { excludeChunkId?: string; excludeDocumentId?: string; filePathLike?: string[] },
   ): Promise<Array<SourceChunk & { ftsRank: number }>> {
     if (!ftsHasTerms(query)) return [];
+    // Code search seeds from a chunk's identifier bag, where ANY shared token is
+    // a useful neighbour — match with OR semantics (FTS5 parity), not the AND of
+    // `plainto_tsquery`. Without this a camelCase seed (`parseConfig`, stored as
+    // the single lexeme `parseconfig`) never matches a split `parse & config`
+    // query. `orTsQuery` restricts tokens to `[\p{L}\p{N}_]`, so the body is a
+    // safe `to_tsquery` input. `english` config keeps consistency with the
+    // generated `content_tsv` column (migration 002) so the GIN index applies.
+    const tsq = orTsQuery(query);
+    if (!tsq) return [];
     const cap = Math.max(1, Math.min(200, limit));
     const fetch = Math.min(200, cap * 4);
     // Generated content_tsv covers content + symbol (migration 002). Rank with
     // ts_rank; the SQLite path uses FTS5 `rank` ascending — here higher ts_rank
     // is better, and the code reranker (MEM-26/27) refines either way.
     const rows = await this.rows<any>(
-      `SELECT sc.*, ts_rank(sc.content_tsv, plainto_tsquery('english', $2)) AS fts_rank
+      `SELECT sc.*, ts_rank(sc.content_tsv, to_tsquery('english', $2)) AS fts_rank
          FROM source_chunks sc
          JOIN source_documents d ON d.id = sc.document_id
-        WHERE sc.user_id = $1 AND sc.content_tsv @@ plainto_tsquery('english', $2) AND COALESCE(d.stale, 0) = 0
+        WHERE sc.user_id = $1 AND sc.content_tsv @@ to_tsquery('english', $2) AND COALESCE(d.stale, 0) = 0
         ORDER BY fts_rank DESC
         LIMIT $3`,
-      [userId, query, fetch],
+      [userId, tsq, fetch],
     );
     const exts = opts?.filePathLike;
     const out: Array<SourceChunk & { ftsRank: number }> = [];

@@ -1,20 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { SqliteMemoryStore } from "../memory/store/sqlite.js";
-import { MemoryEngine } from "../memory/engine.js";
-
-function fresh(label: string): { store: SqliteMemoryStore; engine: MemoryEngine; cleanup: () => void } {
-  const dir = mkdtempSync(join(tmpdir(), `brainrouter-tree-${label}-`));
-  const store = new SqliteMemoryStore(join(dir, "memory.db"));
-  store.init();
-  return { store, engine: new MemoryEngine(store), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
-}
+import { createTestEngine } from "./helpers/pgTestStore.js";
 
 test("MEM-5 append leaves → summarize bucket → walk roots and drill", async () => {
-  const { engine, cleanup } = fresh("walk");
+  const { engine, cleanup } = await createTestEngine();
   try {
     const a = (await engine.appendTreeLeaf("u1", "source", "Leaf about auth", ["c1", "c2"], 1))!;
     const b = (await engine.appendTreeLeaf("u1", "source", "Leaf about routing", ["c2", "c3"], 2))!;
@@ -36,15 +25,15 @@ test("MEM-5 append leaves → summarize bucket → walk roots and drill", async 
     const drill = await engine.treeWalk("u1", parent.id);
     assert.equal(drill.children.length, 2);
     assert.deepEqual(drill.children.map((c) => c.id).sort(), [a.id, b.id].sort());
-  } finally { cleanup(); }
+  } finally { await cleanup(); }
 });
 
 test("MEM-5 summarizing seals the children", async () => {
-  const { store, engine, cleanup } = fresh("seal");
+  const { store, engine, cleanup } = await createTestEngine();
   try {
     const leaf = (await engine.appendTreeLeaf("u1", "source", "x", []))!;
-    assert.equal(store.getTreeNode(leaf.id)!.sealedAt, null);
+    assert.equal((await store.getTreeNode(leaf.id))!.sealedAt, null);
     await engine.summarizeBucket("u1", [leaf.id], "topic");
-    assert.ok(store.getTreeNode(leaf.id)!.sealedAt, "child sealed after roll-up");
-  } finally { cleanup(); }
+    assert.ok((await store.getTreeNode(leaf.id))!.sealedAt, "child sealed after roll-up");
+  } finally { await cleanup(); }
 });

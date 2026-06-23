@@ -1,24 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { SqliteMemoryStore } from "../memory/store/sqlite.js";
-import { MemoryEngine } from "../memory/engine.js";
-import { asyncify } from "../memory/store/asyncify.js";
-
-function fresh(label: string): { engine: MemoryEngine; store: SqliteMemoryStore; cleanup: () => void } {
-  const dir = mkdtempSync(join(tmpdir(), `brainrouter-mem30-${label}-`));
-  const store = new SqliteMemoryStore(join(dir, "memory.db"));
-  store.init();
-  return { engine: new MemoryEngine(asyncify(store)), store, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
-}
+import { createTestEngine } from "./helpers/pgTestStore.js";
 
 const V1 = "export function parseConfig(raw){ return JSON.parse(raw); }";
 const V2 = "export function parseConfig(raw){ const t = raw.trim(); return JSON.parse(t); } // changed";
 
 test("MEM-30 reindexCodeSource: first index, no-op on unchanged, re-index + stale on drift", async () => {
-  const { engine, cleanup } = fresh("drift");
+  const { engine, cleanup } = await createTestEngine();
   try {
     const first = await engine.reindexCodeSource("u1", { filePath: "src/cfg.ts", content: V1 });
     assert.equal(first.status, "reindexed");
@@ -35,15 +23,15 @@ test("MEM-30 reindexCodeSource: first index, no-op on unchanged, re-index + stal
     assert.equal(drift.status, "reindexed");
     assert.equal(drift.staleMarked, 1, "the prior document was staled");
     assert.notEqual(drift.documentId, first.documentId);
-  } finally { cleanup(); }
+  } finally { await cleanup(); }
 });
 
 test("MEM-30: stale chunks are excluded from find_related", async () => {
-  const { engine, store, cleanup } = fresh("exclude");
+  const { engine, store, cleanup } = await createTestEngine();
   try {
     // Seed a separate file that references parseConfig (so find_related has a query).
-    const caller = store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/use.ts", hash: "huse", title: "use.ts" });
-    const callerChunks = store.addSourceChunks(caller.id, [
+    const caller = await store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/use.ts", hash: "huse", title: "use.ts" });
+    const callerChunks = await store.addSourceChunks(caller.id, [
       { content: "import { parseConfig } from './cfg'; const v = parseConfig(text);", tokenCount: 10, filePath: "src/use.ts", symbol: "useIt", startLine: 1, endLine: 2 },
     ]);
     // Index cfg.ts v1 (defines parseConfig) — should be findable.
@@ -58,16 +46,16 @@ test("MEM-30: stale chunks are excluded from find_related", async () => {
     // The fresh v2 cfg.ts may still match (it still defines parseConfig) — but
     // no stale v1 chunk should appear. Assert every cfg hit is from the live doc.
     for (const h of cfgHits) {
-      const doc = (store as any).getSourceDocument(h.chunk.documentId);
+      const doc = await store.getSourceDocument(h.chunk.documentId);
       assert.ok(doc, "hit's document exists");
     }
     // Stronger: the v1 content (with no `.trim()`) must not be returned.
     assert.ok(!after.related.some((r) => r.chunk.content === V1), "stale v1 chunk excluded");
-  } finally { cleanup(); }
+  } finally { await cleanup(); }
 });
 
 test("MEM-30: reverting to a prior version revives the document (no duplicate)", async () => {
-  const { engine, cleanup } = fresh("revert");
+  const { engine, cleanup } = await createTestEngine();
   try {
     const v1 = await engine.reindexCodeSource("u1", { filePath: "src/x.ts", content: V1 });
     await engine.reindexCodeSource("u1", { filePath: "src/x.ts", content: V2 }); // drift
@@ -75,5 +63,5 @@ test("MEM-30: reverting to a prior version revives the document (no duplicate)",
     assert.equal(back.status, "reindexed");
     assert.equal(back.documentId, v1.documentId, "revived the original document, did not duplicate");
     assert.equal(back.chunks, 0, "no re-chunk needed on revive");
-  } finally { cleanup(); }
+  } finally { await cleanup(); }
 });

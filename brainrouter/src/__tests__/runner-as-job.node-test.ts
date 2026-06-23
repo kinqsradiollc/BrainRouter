@@ -1,7 +1,7 @@
 /**
  * BRAIN-P1-T3 (0.4.1) — `runAsJob` observability wrapper contract.
  *
- * Real store (node:sqlite) → runs under `node --test`.
+ * Real store (Postgres pgvector) → runs under `node --test`.
  *
  * Covers:
  *   - success path: a done job row with the summarized output, and the
@@ -13,22 +13,12 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { SqliteMemoryStore } from "../memory/store/sqlite.js";
 import { runAsJob } from "../memory/scheduler/runner.js";
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
-
-function freshDb(label: string): { store: SqliteMemoryStore; cleanup: () => void } {
-  const dir = mkdtempSync(join(tmpdir(), `brainrouter-runner-${label}-`));
-  const store = new SqliteMemoryStore(join(dir, "memory.db"));
-  store.init();
-  return { store, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
-}
+import { createTestStore } from "./helpers/pgTestStore.js";
 
 test("runAsJob records a done row and returns the stage result", async () => {
-  const { store, cleanup } = freshDb("ok");
+  const { store, cleanup } = await createTestStore();
   try {
     const { result, job } = await runAsJob(
       store as unknown as IMemoryStore,
@@ -42,16 +32,16 @@ test("runAsJob records a done row and returns the stage result", async () => {
     assert.deepEqual(job.output, { records: 3 });
     assert.equal(job.kind, "cognitive_extractor");
     // Exactly one job row, terminal done.
-    const all = store.listMemoryJobs({ kind: "cognitive_extractor" });
+    const all = await store.listMemoryJobs({ kind: "cognitive_extractor" });
     assert.equal(all.length, 1);
     assert.equal(all[0].status, "done");
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
 test("runAsJob records a terminal failed row and re-throws", async () => {
-  const { store, cleanup } = freshDb("fail");
+  const { store, cleanup } = await createTestStore();
   try {
     await assert.rejects(
       () =>
@@ -60,28 +50,28 @@ test("runAsJob records a terminal failed row and re-throws", async () => {
         }),
       /graph boom/,
     );
-    const all = store.listMemoryJobs({ kind: "graph_extractor" });
+    const all = await store.listMemoryJobs({ kind: "graph_extractor" });
     assert.equal(all.length, 1);
     assert.equal(all[0].status, "failed"); // not re-armed to pending — no runner yet
     assert.equal(all[0].error, "graph boom");
     assert.equal(all[0].attempts, 1);
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
 test("runAsJob creates the row synchronously (visible before fn resolves)", async () => {
-  const { store, cleanup } = freshDb("sync");
+  const { store, cleanup } = await createTestStore();
   try {
     let seenWhilePending = -1;
     const promise = runAsJob(store as unknown as IMemoryStore, "memory_deduper", { userId: "u1", recordIds: ["r1"] }, async () => {
       // By the time fn runs, the row already exists in 'running'.
-      seenWhilePending = store.listMemoryJobs({ kind: "memory_deduper", status: "running" }).length;
+      seenWhilePending = (await store.listMemoryJobs({ kind: "memory_deduper", status: "running" })).length;
       return { unique: 1, dropped: 0 };
     });
     await promise;
     assert.equal(seenWhilePending, 1);
   } finally {
-    cleanup();
+    await cleanup();
   }
 });

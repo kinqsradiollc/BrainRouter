@@ -3,28 +3,24 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SqliteMemoryStore } from "../memory/store/sqlite.js";
-import { MemoryEngine } from "../memory/engine.js";
+import { createTestEngine } from "./helpers/pgTestStore.js";
 import { offloadWorkingPayload, getWorkingMemoryDir } from "../memory/working/offload.js";
 import { readWorkingSteps } from "../memory/working/step-log.js";
 
 const SECRET = "the api key is sk-abcdef1234567890zzzz, do not leak it anywhere";
 
 test("MEM-13 blackboard candidate content is redacted at the staging boundary", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "br-mem13-bb-"));
+  const { engine, store, cleanup } = await createTestEngine();
   try {
-    const store = new SqliteMemoryStore(join(dir, "m.db"));
-    store.init();
-    const engine = new MemoryEngine(store);
     const [staged] = await engine.stageBlackboardCandidates("u1", [
       { candidate: { content: SECRET, type: "codebase_fact" }, score: 0.9 },
     ]);
     assert.ok(staged.candidate.content.includes("[REDACTED]"));
     assert.ok(!staged.candidate.content.includes("sk-abcdef"));
     // persisted redacted too
-    assert.ok(!store.getBlackboardItem(staged.id)!.candidate.content.includes("sk-abcdef"));
+    assert.ok(!(await store.getBlackboardItem(staged.id))!.candidate.content.includes("sk-abcdef"));
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    await cleanup();
   }
 });
 

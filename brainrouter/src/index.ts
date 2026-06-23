@@ -93,6 +93,12 @@ const config = resolveRegistryConfig();
 const registry = new Registry(config);
 registry.build();
 
+// ADR-007 Phase 2 (step 3) — the memory engine runs on Postgres, whose init
+// (migrations + vector table + seed-admin) is genuinely async. Await it BEFORE
+// the first store-using call (skill-hint scan, auth lookups, app.listen / stdio
+// connect) so we never serve against an un-migrated database.
+await memoryEngine.ready;
+
 // Auto-scan skills dirs for memory_hints on startup
 const skillsDirsToScan = [
   path.join(config.globalRoot, 'skills'),

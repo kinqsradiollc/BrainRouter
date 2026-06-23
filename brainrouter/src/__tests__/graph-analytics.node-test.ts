@@ -1,12 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { pageRank, articulationPoints, shortestPath, namespaceOverview, type GraphEdgeLite } from "../memory/graph/graph-analytics.js";
-import { SqliteMemoryStore } from "../memory/store/sqlite.js";
-import { MemoryEngine } from "../memory/engine.js";
-import { asyncify } from "../memory/store/asyncify.js";
+import { createTestEngine } from "./helpers/pgTestStore.js";
 
 test("DASH-1 pageRank: a hub accruing in-links outranks leaves; scores ~sum to 1", () => {
   const nodes = ["a", "b", "c", "hub"];
@@ -50,19 +45,16 @@ test("DASH-1 namespaceOverview: counts by entity type", () => {
 });
 
 test("DASH-1 engine.graphAnalytics: end-to-end over the store (centrality + bridges + namespaces + path)", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "brainrouter-dash1-"));
-  const store = new SqliteMemoryStore(join(dir, "memory.db"));
-  store.init();
+  const { engine, store, cleanup } = await createTestEngine();
   try {
     const now = "2026-05-31T00:00:00.000Z";
     const mk = (id: string, entity: string, type: string) =>
       store.upsertGraphNode({ id, userId: "u1", entity, entityType: type, skillTag: "", confidence: 0.9, sourceRecordId: "r", createdTime: now });
     const link = (id: string, from: string, to: string) =>
       store.upsertGraphEdge({ id, userId: "u1", fromNodeId: from, toNodeId: to, relation: "rel", skillTag: "", confidence: 0.9, sourceRecordId: "r", createdTime: now });
-    mk("n1", "Auth", "module"); mk("n2", "DB", "module"); mk("n3", "Router", "module"); mk("n4", "User", "entity");
-    link("e1", "n1", "n3"); link("e2", "n2", "n3"); link("e3", "n4", "n3");
+    await mk("n1", "Auth", "module"); await mk("n2", "DB", "module"); await mk("n3", "Router", "module"); await mk("n4", "User", "entity");
+    await link("e1", "n1", "n3"); await link("e2", "n2", "n3"); await link("e3", "n4", "n3");
 
-    const engine = new MemoryEngine(asyncify(store));
     const a = await engine.graphAnalytics("u1", { from: "Auth", to: "DB" });
     assert.equal(a.nodeCount, 4);
     assert.equal(a.edgeCount, 3);
@@ -72,6 +64,6 @@ test("DASH-1 engine.graphAnalytics: end-to-end over the store (centrality + brid
     assert.deepEqual(a.namespaces, { module: 3, entity: 1 });
     assert.ok(a.path?.found && a.path.entities.includes("Router"), "Auth→DB routes through Router");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    await cleanup();
   }
 });

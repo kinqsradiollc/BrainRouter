@@ -1,18 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { SqliteMemoryStore } from "../memory/store/sqlite.js";
-import { MemoryEngine } from "../memory/engine.js";
+import { createTestEngine } from "./helpers/pgTestStore.js";
 import { churnAdjustedHalfLife, CHURN_HALF_LIFE_SCALE } from "../memory/reranker/penalties.js";
-
-function fresh(label: string): { engine: MemoryEngine; store: SqliteMemoryStore; cleanup: () => void } {
-  const dir = mkdtempSync(join(tmpdir(), `brainrouter-churn-${label}-`));
-  const store = new SqliteMemoryStore(join(dir, "memory.db"));
-  store.init();
-  return { engine: new MemoryEngine(store), store, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
-}
 
 test("B7 churnAdjustedHalfLife: null-safe + monotone shortening", () => {
   // No churn → unchanged (so existing data + every non-code memory score as before).
@@ -32,7 +21,7 @@ test("B7 churnAdjustedHalfLife: null-safe + monotone shortening", () => {
 });
 
 test("B7 churn data-flow: reindex stores churn; getRecordsMaxChurn surfaces it per anchored record", async () => {
-  const { engine, store, cleanup } = fresh("flow");
+  const { engine, store, cleanup } = await createTestEngine();
   try {
     // Index a file WITH a captured churn signal.
     const r = await engine.reindexCodeSource("u1", {
@@ -45,17 +34,17 @@ test("B7 churn data-flow: reindex stores churn; getRecordsMaxChurn surfaces it p
     assert.ok(r.documentId);
 
     // Anchor a memory to that hot file's document.
-    const chunks = store.addSourceChunks(r.documentId!, [
+    const chunks = await store.addSourceChunks(r.documentId!, [
       { content: "x", tokenCount: 2, filePath: "src/hot.ts", symbol: "x", startLine: 1, endLine: 1 },
     ]);
     const rec = await engine.recordLesson("u1", "Lesson anchored to a hot file.");
-    store.linkRecordSources("u1", rec.recordId, [chunks[0].id]);
+    await store.linkRecordSources("u1", rec.recordId, [chunks[0].id]);
 
-    const churn = store.getRecordsMaxChurn("u1", [rec.recordId]);
+    const churn = await store.getRecordsMaxChurn("u1", [rec.recordId]);
     assert.equal(churn.get(rec.recordId), 40, "max churn surfaced for the anchored record");
 
     // A record with no code anchor is absent → its decay stays unchanged.
     const plain = await engine.recordLesson("u1", "Lesson with no code anchor at all.");
-    assert.equal(store.getRecordsMaxChurn("u1", [plain.recordId]).has(plain.recordId), false);
-  } finally { cleanup(); }
+    assert.equal((await store.getRecordsMaxChurn("u1", [plain.recordId])).has(plain.recordId), false);
+  } finally { await cleanup(); }
 });

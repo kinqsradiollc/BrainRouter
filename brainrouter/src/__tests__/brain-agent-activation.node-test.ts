@@ -1,11 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { SqliteMemoryStore } from "../memory/store/sqlite.js";
-import { asyncify } from "../memory/store/asyncify.js";
-import { MemoryEngine } from "../memory/engine.js";
+import { createTestEngine } from "./helpers/pgTestStore.js";
+import type { PostgresMemoryStore } from "../memory/store/postgres/PostgresMemoryStore.js";
 import { recordInlineJob } from "../memory/scheduler/runner.js";
 import { readTreePolicy } from "../memory/tree/policy.js";
 
@@ -29,21 +25,18 @@ function snapshotEnv(keys: string[]): () => void {
   };
 }
 
-function fresh(label: string) {
-  const dir = mkdtempSync(join(tmpdir(), `brainrouter-activate-${label}-`));
-  // Hermetic: don't inherit a dev .env that disables autobuild or starts a timer.
-  const restoreEnv = snapshotEnv(["BRAINROUTER_JOB_RUNNER", "BRAINROUTER_TREE_AUTOBUILD"]);
-  process.env.BRAINROUTER_JOB_RUNNER = "off";
+async function fresh() {
+  // Hermetic: don't inherit a dev .env that disables autobuild. (createTestEngine
+  // handles BRAINROUTER_JOB_RUNNER; BRAINROUTER_TREE_AUTOBUILD is still ours.)
+  const restoreEnv = snapshotEnv(["BRAINROUTER_TREE_AUTOBUILD"]);
   process.env.BRAINROUTER_TREE_AUTOBUILD = "on";
-  const store = new SqliteMemoryStore(join(dir, "memory.db"));
-  store.init();
-  const engine = new MemoryEngine(asyncify(store));
+  const { store, engine, cleanup: cleanupEngine } = await createTestEngine();
   return {
     store,
     engine,
-    cleanup: () => {
+    cleanup: async () => {
+      await cleanupEngine();
       restoreEnv();
-      rmSync(dir, { recursive: true, force: true });
     },
   };
 }
@@ -82,29 +75,29 @@ function makeRecord(overrides: Partial<Record<string, unknown>> & { id: string; 
 }
 
 // Jobs for a specific user (the engine also seeds an `admin` user, so filter).
-const jobsOfUser = (store: SqliteMemoryStore, kind: string, userId: string) =>
-  store.listMemoryJobs({ kind } as any).filter((j: any) => j.input?.userId === userId);
+const jobsOfUser = async (store: PostgresMemoryStore, kind: string, userId: string) =>
+  (await store.listMemoryJobs({ kind } as any)).filter((j: any) => j.input?.userId === userId);
 
 test("tree_sealer fires on a settled bucket below sealThreshold, then tree_digest can chain", async () => {
-  const { store, engine, cleanup } = fresh("seal");
+  const { store, engine, cleanup } = await fresh();
   try {
-    store.createUser("u1", "br_k1", "U1", false);
+    await store.createUser("u1", "br_k1", "U1", false);
     // Two mature scenes (3 records each) — well under sealThreshold (6) but at
     // the idleSealFloor (2). Without the settled-seal rule these never seal.
     for (const scene of ["Scene Alpha", "Scene Beta"]) {
       for (let i = 0; i < 3; i++) {
-        store.upsertCognitive(makeRecord({ id: `${scene}-${i}`, sceneName: scene }) as any);
+        await store.upsertCognitive(makeRecord({ id: `${scene}-${i}`, sceneName: scene }) as any);
       }
     }
 
     // Pass 0: autobuild leafs both scenes (leafed > 0 → not yet settled, no seal).
     await engine.enqueueScheduledMaintenance(true);
-    assert.equal(jobsOfUser(store, "tree_sealer", "u1").length, 0, "no seal while the bucket is still growing");
-    assert.equal((store as any).getUnsealedSceneLeaves("u1", 50).length, 2, "both scenes leafed");
+    assert.equal((await jobsOfUser(store, "tree_sealer", "u1")).length, 0, "no seal while the bucket is still growing");
+    assert.equal((await (store as any).getUnsealedSceneLeaves("u1", 50)).length, 2, "both scenes leafed");
 
     // Pass 1: no new leaf this pass (settled) + unsealed >= idleSealFloor → seal.
     await engine.enqueueScheduledMaintenance(true);
-    const sealJobs = jobsOfUser(store, "tree_sealer", "u1");
+    const sealJobs = await jobsOfUser(store, "tree_sealer", "u1");
     assert.equal(sealJobs.length, 1, "settled bucket enqueues exactly one tree_sealer");
     assert.ok(
       Array.isArray((sealJobs[0] as any).input?.childIds) && (sealJobs[0] as any).input.childIds.length === 2,
@@ -113,52 +106,52 @@ test("tree_sealer fires on a settled bucket below sealThreshold, then tree_diges
 
     // Pass 2: same bucket still pending (runner off) → idempotency dedupes.
     await engine.enqueueScheduledMaintenance(true);
-    assert.equal(jobsOfUser(store, "tree_sealer", "u1").length, 1, "re-enqueue of the same bucket is deduped");
+    assert.equal((await jobsOfUser(store, "tree_sealer", "u1")).length, 1, "re-enqueue of the same bucket is deduped");
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
 test("benchmark_eval is auto-scheduled by maintenance (early pass) and disabled by BRAINROUTER_BENCH_SCHEDULE=off", async () => {
-  const { store, engine, cleanup } = fresh("bench");
+  const { store, engine, cleanup } = await fresh();
   try {
-    store.createUser("u1", "br_k1", "U1", false);
+    await store.createUser("u1", "br_k1", "U1", false);
     await engine.enqueueScheduledMaintenance(true); // pass 0
     await engine.enqueueScheduledMaintenance(true); // pass 1
-    assert.equal(jobsOfUser(store, "benchmark_eval", "u1").length, 0, "no benchmark before the early pass");
+    assert.equal((await jobsOfUser(store, "benchmark_eval", "u1")).length, 0, "no benchmark before the early pass");
     await engine.enqueueScheduledMaintenance(true); // pass 2 — early visibility trigger
-    assert.equal(jobsOfUser(store, "benchmark_eval", "u1").length, 1, "benchmark_eval enqueued on the early pass");
+    assert.equal((await jobsOfUser(store, "benchmark_eval", "u1")).length, 1, "benchmark_eval enqueued on the early pass");
   } finally {
-    cleanup();
+    await cleanup();
   }
 
-  const off = fresh("bench-off");
+  const off = await fresh();
   const restoreBench = snapshotEnv(["BRAINROUTER_BENCH_SCHEDULE"]);
   try {
     process.env.BRAINROUTER_BENCH_SCHEDULE = "off";
-    off.store.createUser("u1", "br_k1", "U1", false);
+    await off.store.createUser("u1", "br_k1", "U1", false);
     for (let i = 0; i < 4; i++) await off.engine.enqueueScheduledMaintenance(true);
-    assert.equal(jobsOfUser(off.store, "benchmark_eval", "u1").length, 0, "off-gate suppresses the schedule");
+    assert.equal((await jobsOfUser(off.store, "benchmark_eval", "u1")).length, 0, "off-gate suppresses the schedule");
   } finally {
     restoreBench();
-    off.cleanup();
+    await off.cleanup();
   }
 });
 
 test("recordInlineJob leaves a done audit row for inline work", async () => {
-  const { store, cleanup } = fresh("inline");
+  const { store, cleanup } = await fresh();
   try {
-    await recordInlineJob(asyncify(store), "source_chunker", { userId: "u1", documentIds: ["d1"] }, { chunksWritten: 3 });
-    await recordInlineJob(asyncify(store), "blackboard_reconciler", { userId: "u1" }, { reconciled: 2, rejected: 1 });
-    const chunker = store.listMemoryJobs({ kind: "source_chunker" } as any);
-    const recon = store.listMemoryJobs({ kind: "blackboard_reconciler" } as any);
+    await recordInlineJob(store, "source_chunker", { userId: "u1", documentIds: ["d1"] }, { chunksWritten: 3 });
+    await recordInlineJob(store, "blackboard_reconciler", { userId: "u1" }, { reconciled: 2, rejected: 1 });
+    const chunker = await store.listMemoryJobs({ kind: "source_chunker" } as any);
+    const recon = await store.listMemoryJobs({ kind: "blackboard_reconciler" } as any);
     assert.equal(chunker.length, 1);
     assert.equal((chunker[0] as any).status, "done", "source_chunker recorded as done");
     assert.equal((chunker[0] as any).output?.chunksWritten, 3, "summary persisted on the job output");
     assert.equal(recon.length, 1);
     assert.equal((recon[0] as any).status, "done", "blackboard_reconciler recorded as done");
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
