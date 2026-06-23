@@ -21,6 +21,23 @@ export async function detectFocusShift(params: {
       systemPrompt: FOCUS_DIRECTION_SHIFT_SYSTEM_PROMPT,
       taskId: "focus-direction-shift",
       timeoutMs: 30_000,
+      // STRUCTURED OUTPUT — force the shift decision through a schema'd tool call
+      // (consistent across models; see modelRunner.ts). The prompt still
+      // describes the semantics of each field.
+      tool: {
+        name: "report_direction_shift",
+        description: "Report whether the conversation's direction shifted, per the prompt.",
+        parameters: {
+          type: "object",
+          properties: {
+            shift: { type: "boolean" },
+            confidence: { type: "number", description: "0..1" },
+            reason: { type: "string" },
+          },
+          required: ["shift"],
+          additionalProperties: true,
+        },
+      },
     });
 
     // Robust parse: tolerant of role-token leaks / prose / fences (see llm-json.ts).

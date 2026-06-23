@@ -42,7 +42,25 @@ export async function detectContradictions(params: {
       const response = await llmRunner.run({
         prompt,
         taskId: `contradiction-check-${newRecord.id}-${candidate.record_id}`,
-        timeoutMs: contradictionTimeoutMs
+        timeoutMs: contradictionTimeoutMs,
+        // STRUCTURED OUTPUT — force the verdict through a schema'd tool call so it
+        // parses consistently across models (see modelRunner.ts). Loose: the
+        // prompt still describes the fields; this just fixes the wrapper shape.
+        tool: {
+          name: "report_contradiction",
+          description: "Report whether the new memory contradicts the candidate, per the prompt's rules.",
+          parameters: {
+            type: "object",
+            properties: {
+              isContradiction: { type: "boolean" },
+              confidence: { type: "number", description: "0..1" },
+              kind: { type: "string", enum: ["temporal_update", "genuine_conflict"] },
+              reason: { type: "string" },
+            },
+            required: ["isContradiction"],
+            additionalProperties: true,
+          },
+        },
       });
 
       // Robust parse: tolerant of role-token leaks / prose / fences (see llm-json.ts).
