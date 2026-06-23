@@ -462,7 +462,7 @@ export interface ChatCompletionPayload {
       parameters: Record<string, any>;
     };
   }>;
-  tool_choice?: 'auto';
+  tool_choice?: 'auto' | { type: 'function'; function: { name: string } };
   /**
    * OpenAI Chat Completions reasoning slot — accepted by gpt-5 / o-series.
    * Only set when the user has chosen a non-default `/effort` AND the
@@ -5559,6 +5559,12 @@ export interface BuildPayloadOptions {
   effort?: EffortLevel;
   /** DESK-6 — abort the in-flight request the instant the user presses Stop. */
   signal?: AbortSignal;
+  /**
+   * Tool-choice override. Default (when `tools` are present) is `'auto'`; pass a
+   * specific function to FORCE structured output (the model must call it), e.g.
+   * `{ type: 'function', function: { name: 'emit_layers' } }`.
+   */
+  tool_choice?: 'auto' | { type: 'function'; function: { name: string } };
 }
 
 export function buildChatCompletionPayload(
@@ -5605,7 +5611,8 @@ export function buildChatCompletionPayload(
         parameters: t.inputSchema || { type: 'object', properties: {} }
       }
     }));
-    body.tool_choice = 'auto';
+    // Default 'auto'; callers can force a specific function (structured output).
+    body.tool_choice = options.tool_choice ?? 'auto';
   }
 
   // Forward reasoning_effort PROVIDER-AWARELY (see resolveWireEffort): only for

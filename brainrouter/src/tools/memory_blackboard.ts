@@ -86,7 +86,7 @@ export async function handleMemoryBlackboardReview(args: any, options?: { defaul
 
     switch (params.action) {
       case "stage": {
-        const staged = memoryEngine.stageBlackboardCandidates(userId, (params.items ?? []).map((i) => ({
+        const staged = await memoryEngine.stageBlackboardCandidates(userId, (params.items ?? []).map((i) => ({
           sourceChunkId: i.sourceChunkId ?? null,
           score: i.score,
           candidate: i.candidate as any,
@@ -94,21 +94,21 @@ export async function handleMemoryBlackboardReview(args: any, options?: { defaul
         return toolResult({ staged: staged.length, items: staged });
       }
       case "reconcile":
-        return toolResult(memoryEngine.reconcilePendingBlackboard(userId));
+        return toolResult(await memoryEngine.reconcilePendingBlackboard(userId));
       case "commit": {
         if (!params.itemId) throw new Error("itemId is required for commit");
-        return toolResult(memoryEngine.commitBlackboardItem(userId, params.itemId));
+        return toolResult(await memoryEngine.commitBlackboardItem(userId, params.itemId));
       }
       case "reject": {
         if (!params.itemId) throw new Error("itemId is required for reject");
-        return toolResult({ rejected: memoryEngine.rejectBlackboardItem(userId, params.itemId) });
+        return toolResult({ rejected: await memoryEngine.rejectBlackboardItem(userId, params.itemId) });
       }
       case "restore": {
         if (!params.itemId) throw new Error("itemId is required for restore");
-        return toolResult(memoryEngine.restoreBlackboardItem(userId, params.itemId));
+        return toolResult(await memoryEngine.restoreBlackboardItem(userId, params.itemId));
       }
       default:
-        return toolResult({ items: memoryEngine.reviewBlackboard(userId, params.status) });
+        return toolResult({ items: await memoryEngine.reviewBlackboard(userId, params.status) });
     }
   } catch (err) {
     return toolError("memory_blackboard_review", err);

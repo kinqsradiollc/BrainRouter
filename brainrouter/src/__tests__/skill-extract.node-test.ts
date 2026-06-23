@@ -1,18 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { SqliteMemoryStore } from "../memory/store/sqlite.js";
-import { MemoryEngine } from "../memory/engine.js";
+import { createTestEngine } from "./helpers/pgTestStore.js";
 import { buildSkillExtractionPrompt, parseSkillResponse, NO_SKILL_SENTINEL } from "../memory/skills/skill-extract.js";
-
-function fresh(label: string): { engine: MemoryEngine; cleanup: () => void } {
-  const dir = mkdtempSync(join(tmpdir(), `brainrouter-mem33-${label}-`));
-  const store = new SqliteMemoryStore(join(dir, "memory.db"));
-  store.init();
-  return { engine: new MemoryEngine(store), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
-}
 
 test("MEM-33 parseSkillResponse: gate on <no-skill/>, empty, single-line; accept a real SOP", () => {
   assert.equal(parseSkillResponse(NO_SKILL_SENTINEL).skill, null);
@@ -33,7 +22,7 @@ test("MEM-33 buildSkillExtractionPrompt: includes the summary + the no-skill ins
 });
 
 test("MEM-33 extractSkillFromSession: <no-skill/> stores nothing; a real SOP is stored as a reinforcing lesson", async () => {
-  const { engine, cleanup } = fresh("extract");
+  const { engine, cleanup } = await createTestEngine();
   try {
     const summary = "Investigated a flaky test, found a race in the worker pool, added a barrier, and verified 100 runs green.";
     // Exploratory → no skill.
@@ -53,16 +42,16 @@ test("MEM-33 extractSkillFromSession: <no-skill/> stores nothing; a real SOP is 
     assert.equal(again.extracted, true);
     assert.equal(again.reinforced, true);
     assert.equal(again.recordId, got.recordId);
-  } finally { cleanup(); }
+  } finally { await cleanup(); }
 });
 
 test("MEM-33 extractSkillFromSession: LLM failure is best-effort (stores nothing, no throw)", async () => {
-  const { engine, cleanup } = fresh("llmfail");
+  const { engine, cleanup } = await createTestEngine();
   try {
     const r = await engine.extractSkillFromSession("u1", {
       sessionSummary: "a long enough summary of a session that did several things and verified them",
       llm: async () => { throw new Error("LLM down"); },
     });
     assert.equal(r.extracted, false);
-  } finally { cleanup(); }
+  } finally { await cleanup(); }
 });

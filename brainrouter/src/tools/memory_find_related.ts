@@ -76,7 +76,7 @@ export async function handleMemoryFindRelated(args: any, options?: { defaultUser
   try {
     const params = schema.parse(args ?? {});
     const userId = params.userId ?? options?.defaultUserId ?? "default";
-    const result = memoryEngine.findRelatedChunks(
+    const result = await memoryEngine.findRelatedChunks(
       userId,
       { chunkId: params.chunkId, filePath: params.file, line: params.line },
       { limit: params.limit, sameLanguage: params.sameLanguage, maxPerFile: params.maxPerFile, includeEdges: params.includeEdges },

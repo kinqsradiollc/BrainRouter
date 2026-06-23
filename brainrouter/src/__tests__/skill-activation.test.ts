@@ -51,18 +51,18 @@ describe("skill activation potential routing", () => {
     expect(store.getSkillActivations("user-2")).toEqual([]);
   });
 
-  it("spikes a skill and caps potential at the configured maximum", () => {
+  it("spikes a skill and caps potential at the configured maximum", async () => {
     const store = createStore();
     const now = new Date("2026-05-20T00:00:00.000Z");
 
-    spikeSkill({
+    await spikeSkill({
       userId: "user-1",
       skillName: "incremental-implementation",
       store,
       now,
       config: { spikeAmount: 1, maxPotential: 2, minTurnDecay: 0, halfLifeMinutes: 10 },
     });
-    spikeSkill({
+    await spikeSkill({
       userId: "user-1",
       skillName: "incremental-implementation",
       store,
@@ -96,7 +96,7 @@ describe("skill activation potential routing", () => {
     })).toBeCloseTo(3.8, 5);
   });
 
-  it("returns thresholded prewarm hints sorted by decayed potential without writing decay state", () => {
+  it("returns thresholded prewarm hints sorted by decayed potential without writing decay state", async () => {
     const store = createStore();
     const now = new Date("2026-05-20T00:10:00.000Z");
     store.upsertSkillHints("testing-skill", "Test carefully", "testing/SKILL.md");
@@ -108,7 +108,7 @@ describe("skill activation potential routing", () => {
     ]);
     const writeCountBeforeDetect = store.activationWriteCount;
 
-    const results = detectPrewarmSkills({
+    const results = await detectPrewarmSkills({
       userId: "user-1",
       store,
       now,

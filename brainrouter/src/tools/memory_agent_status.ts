@@ -38,7 +38,7 @@ export async function handleMemoryAgentStatus(args: any, _options?: { defaultUse
       };
     }
 
-    const agents: BrainAgentStatus[] = buildBrainAgentStatuses(memoryEngine.store, params.agentId);
+    const agents: BrainAgentStatus[] = await buildBrainAgentStatuses(memoryEngine.store, params.agentId);
     return { content: [{ type: "text", text: JSON.stringify({ agents }, null, 2) }] };
   } catch (err: any) {
     return { isError: true, content: [{ type: "text", text: `memory_agent_status failed: ${err.message}` }] };

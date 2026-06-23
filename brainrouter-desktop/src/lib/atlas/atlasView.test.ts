@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { AtlasGraph } from '@kinqs/brainrouter-types';
-import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize, atlasNodeFacts, atlasSearchMatches, atlasGrouping, atlasGroupedLayout, atlasOverviewModel, atlasDomainModel, atlasChangeKind, atlasChangeMap, atlasNodeChanges, atlasImpact, atlasImpactOf, atlasUncoveredFiles, isTestFile } from './atlasView.js';
+import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize, atlasNodeFacts, atlasSearchMatches, atlasGrouping, atlasGroupedLayout, atlasOverviewModel, ATLAS_OVERVIEW_OTHER_ID, atlasDomainModel, atlasServiceModel, isServicePortPath, serviceModuleLabel, atlasChangeKind, atlasChangeMap, atlasNodeChanges, atlasImpact, atlasImpactOf, atlasUncoveredFiles, isTestFile } from './atlasView.js';
 
 function fixture(): AtlasGraph {
   return {
@@ -238,6 +238,25 @@ test('atlasDomainModel: capability cards with entities + flow counts', () => {
   assert.equal(data.flows, 1);
   // inter-layer edge preserved
   assert.equal(m.edges.length, 1);
+  // no enrichment → no semantic label on the edge
+  assert.equal(m.edges[0].label, undefined);
+});
+
+test('atlasDomainModel: attaches LLM relationship labels from layerEdges (either direction)', () => {
+  const g = layered();
+  // enrichment produced a directed label API -> Data; the overview edge is
+  // undirected, so the label must attach regardless of orientation.
+  g.layerEdges = [{ source: 'layer:api', target: 'layer:data', label: 'persists to' }];
+  const m = atlasDomainModel(g);
+  assert.equal(m.edges.length, 1);
+  assert.equal(m.edges[0].label, 'persists to');
+
+  // a layerEdge for a pair with no structural overview edge does not invent one
+  const g2 = layered();
+  g2.layerEdges = [{ source: 'layer:api', target: 'layer:nonexistent', label: 'ghost' }];
+  const m2 = atlasDomainModel(g2);
+  assert.equal(m2.edges.length, 1);
+  assert.equal(m2.edges[0].label, undefined);
 });
 
 test('atlasImpact: transitive dependents (blast radius) + dependencies + byLayer', () => {
@@ -301,4 +320,87 @@ test('atlasNodeChanges maps changes to file-level nodes only (not symbols)', () 
   assert.equal(nc.has('class:src/db/store.ts:Store'), false); // symbol excluded
   assert.equal(nc.has('does/not/exist.ts'), false);
   assert.equal(nc.size, 2);
+});
+
+function serviceFixture(): AtlasGraph {
+  return {
+    schemaVersion: 1, kind: 'codebase',
+    project: { name: 'x', languages: ['typescript'], analyzedAt: '2026-06-22T00:00:00Z' },
+    nodes: [
+      { id: 'file:src/exec/service.ts', type: 'file', name: 'service.ts', filePath: 'src/exec/service.ts' },
+      { id: 'file:src/exec/execPolicy.ts', type: 'file', name: 'execPolicy.ts', filePath: 'src/exec/execPolicy.ts' },
+      { id: 'file:src/provider/gateway.ts', type: 'file', name: 'gateway.ts', filePath: 'src/provider/gateway.ts' },
+      { id: 'file:src/loose.ts', type: 'file', name: 'loose.ts', filePath: 'src/loose.ts' },
+      // a symbol sharing the port's path must not be double-counted
+      { id: 'function:src/exec/service.ts:createExecService', type: 'function', name: 'createExecService', filePath: 'src/exec/service.ts', lineRange: [1, 3] },
+    ],
+    edges: [
+      // cross-module import: exec → provider
+      { source: 'file:src/exec/service.ts', target: 'file:src/provider/gateway.ts', type: 'imports' },
+      // same-module import: no cross edge
+      { source: 'file:src/exec/service.ts', target: 'file:src/exec/execPolicy.ts', type: 'imports' },
+    ],
+    layers: [], tour: [],
+  };
+}
+
+test('isServicePortPath / serviceModuleLabel', () => {
+  assert.equal(isServicePortPath('src/exec/service.ts'), true);
+  assert.equal(isServicePortPath('src/provider/gateway.ts'), true);
+  assert.equal(isServicePortPath('src/exec/execPolicy.ts'), false);
+  assert.equal(serviceModuleLabel('packages/core/src/exec/service.ts'), 'exec');
+  assert.equal(serviceModuleLabel('src/memory/tree/service.ts'), 'memory/tree');
+});
+
+function manyLayerFixture(n: number): AtlasGraph {
+  const nodes: AtlasGraph['nodes'] = [];
+  const layers: AtlasGraph['layers'] = [];
+  for (let i = 0; i < n; i++) {
+    // layer i gets (i+1) files, so sizes are distinct and sortable
+    const ids: string[] = [];
+    for (let f = 0; f <= i; f++) {
+      const id = `file:L${i}_${f}.ts`;
+      nodes.push({ id, type: 'file', name: `L${i}_${f}.ts`, filePath: `L${i}_${f}.ts` });
+      ids.push(id);
+    }
+    layers.push({ id: `layer:${i}`, name: `Layer ${i}`, nodeIds: ids });
+  }
+  return {
+    schemaVersion: 1, kind: 'codebase',
+    project: { name: 'x', languages: ['typescript'], analyzedAt: '2026-06-22T00:00:00Z' },
+    nodes, edges: [], layers, tour: [],
+  };
+}
+
+test('atlasOverviewModel: default keeps all layers; limit folds the rest into "Other"', () => {
+  const g = manyLayerFixture(20);
+  assert.equal(atlasOverviewModel(g).cards.length, 20); // default: no rollup
+
+  const m = atlasOverviewModel(g, 5);
+  assert.equal(m.cards.length, 5);
+  const other = m.cards[m.cards.length - 1];
+  assert.equal(other.id, ATLAS_OVERVIEW_OTHER_ID);
+  // the 4 biggest layers (19,18,17,16 files) are kept; the other 16 fold in.
+  assert.equal(m.cards.slice(0, 4).map((c) => c.fileCount).join(','), '20,19,18,17');
+  const totalFiles = manyLayerFixture(20).layers.reduce((s, l) => s + l.nodeIds.length, 0);
+  const shownFiles = m.cards.reduce((s, c) => s + c.fileCount, 0);
+  assert.equal(shownFiles, totalFiles); // nothing lost in the rollup
+  assert.equal(other.description, '16 smaller layers');
+});
+
+test('atlasServiceModel builds module cards + cross-module edges', () => {
+  const m = atlasServiceModel(serviceFixture());
+  const modules = m.cards.map((c) => c.module).sort();
+  assert.deepEqual(modules, ['exec', 'provider']);
+
+  const exec = m.cards.find((c) => c.module === 'exec')!;
+  assert.equal(exec.portNodeId, 'file:src/exec/service.ts');
+  assert.equal(exec.fileCount, 2); // service.ts + execPolicy.ts, NOT the symbol
+  assert.ok(exec.nodeIds.includes('file:src/exec/execPolicy.ts'));
+  assert.ok(!exec.nodeIds.some((id) => id.startsWith('function:')));
+
+  // one directed edge: exec → provider (same-module import excluded)
+  assert.equal(m.edges.length, 1);
+  assert.equal(m.edges[0].source, exec.id);
+  assert.equal(m.edges[0].weight, 1);
 });

@@ -1,10 +1,29 @@
+/**
+ * MEM-14 — every new 0.4.3 table carries user_id + workspace_tag.
+ *
+ * This is a DB-free static check: SQLite is gone, so rather than booting a
+ * store we read the Postgres schema migration directly and assert each table's
+ * CREATE TABLE block declares both `user_id` and `workspace_tag` columns. That
+ * keeps the RBAC scoping invariant enforced at the schema source of truth.
+ */
+
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { SqliteMemoryStore } from "../memory/store/sqlite.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+const SCHEMA_PATH = join(
+  __dirname,
+  "..",
+  "memory",
+  "store",
+  "postgres",
+  "migrations",
+  "002_schema.sql",
+);
 
 const NEW_TABLES = [
   "source_documents",
@@ -15,44 +34,33 @@ const NEW_TABLES = [
   "vault_exports",
 ];
 
-test("MEM-14 every new 0.4.3 table carries user_id + workspace_tag", () => {
-  const dir = mkdtempSync(join(tmpdir(), "brainrouter-rbac-"));
-  const dbPath = join(dir, "m.db");
-  try {
-    const store = new SqliteMemoryStore(dbPath);
-    store.init();
-    const raw = new DatabaseSync(dbPath);
-    try {
-      for (const t of NEW_TABLES) {
-        const cols = (raw.prepare(`PRAGMA table_info(${t})`).all() as Array<{ name: string }>).map((c) => c.name);
-        assert.ok(cols.includes("user_id"), `${t} should carry user_id`);
-        assert.ok(cols.includes("workspace_tag"), `${t} should carry workspace_tag`);
-      }
-    } finally {
-      raw.close();
-    }
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+/**
+ * Extract the body of a `CREATE TABLE [IF NOT EXISTS] <name> ( ... );` block
+ * from the schema SQL. Returns the text between the outermost parens.
+ */
+function createTableBody(sql: string, table: string): string {
+  const re = new RegExp(
+    `CREATE TABLE(?:\\s+IF NOT EXISTS)?\\s+${table}\\s*\\(`,
+    "i",
+  );
+  const m = re.exec(sql);
+  assert.ok(m, `schema must declare CREATE TABLE ${table}`);
+  const start = m.index + m[0].length;
+  // Walk to the matching close paren (handles nested parens in column defs).
+  let depth = 1;
+  let i = start;
+  for (; i < sql.length && depth > 0; i++) {
+    if (sql[i] === "(") depth++;
+    else if (sql[i] === ")") depth--;
   }
-});
+  return sql.slice(start, i - 1);
+}
 
-test("MEM-14 source_chunks denormalize the parent doc's scope", () => {
-  const dir = mkdtempSync(join(tmpdir(), "brainrouter-rbac2-"));
-  const dbPath = join(dir, "m.db");
-  try {
-    const store = new SqliteMemoryStore(dbPath);
-    store.init();
-    const doc = store.createSourceDocument({ userId: "u1", workspaceTag: "ws16", kind: "transcript", uri: null, hash: "h", title: "t" });
-    store.addSourceChunks(doc.id, [{ content: "x", tokenCount: 1 }]);
-    const raw = new DatabaseSync(dbPath);
-    try {
-      const row = raw.prepare("SELECT user_id, workspace_tag FROM source_chunks LIMIT 1").get() as { user_id: string; workspace_tag: string };
-      assert.equal(row.user_id, "u1");
-      assert.equal(row.workspace_tag, "ws16");
-    } finally {
-      raw.close();
-    }
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+test("MEM-14 every new 0.4.3 table carries user_id + workspace_tag", () => {
+  const schema = readFileSync(SCHEMA_PATH, "utf8");
+  for (const t of NEW_TABLES) {
+    const body = createTableBody(schema, t);
+    assert.match(body, /\buser_id\b/, `${t} should carry user_id`);
+    assert.match(body, /\bworkspace_tag\b/, `${t} should carry workspace_tag`);
   }
 });

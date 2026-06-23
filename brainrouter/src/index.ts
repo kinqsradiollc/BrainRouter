@@ -38,7 +38,7 @@ import { Registry } from './registry.js';
 import { resolveRegistryConfig } from './resolver.js';
 import { buildMcpServer } from './transport/mcpServer.js';
 
-import { memoryEngine } from './memory/engine.js';
+import { memoryEngine, closeMemoryEngine } from './memory/engine.js';
 import path from 'node:path';
 import { decideMcpAcceptPromotion } from './api/mcpAcceptHeader.js';
 import { usersRouter } from './api/routes/users.js';
@@ -92,6 +92,12 @@ const PORT = parseInt(parseFlag('--port') ?? '3747', 10);
 const config = resolveRegistryConfig();
 const registry = new Registry(config);
 registry.build();
+
+// ADR-007 Phase 2 (step 3) — the memory engine runs on Postgres, whose init
+// (migrations + vector table + seed-admin) is genuinely async. Await it BEFORE
+// the first store-using call (skill-hint scan, auth lookups, app.listen / stdio
+// connect) so we never serve against an un-migrated database.
+await memoryEngine.ready;
 
 // Auto-scan skills dirs for memory_hints on startup
 const skillsDirsToScan = [
@@ -210,7 +216,7 @@ if (USE_HTTP) {
       res.status(401).json({ error: 'API key required. Set Authorization: Bearer <your_api_key>' });
       return;
     }
-    const user = memoryEngine.getUserByApiKey(bearerKey);
+    const user = await memoryEngine.getUserByApiKey(bearerKey);
     if (!user) {
       res.status(403).json({ error: 'Invalid API key' });
       return;
@@ -303,6 +309,10 @@ if (USE_HTTP) {
     shuttingDown = true;
     const hardExit = setTimeout(() => process.exit(0), 700);
     hardExit.unref();
+    // Stop the engine's sweepers/job-runner and close the pg pool so the event
+    // loop drains cleanly (best-effort; the hard deadline above still guarantees
+    // exit if the pool is slow to close).
+    void closeMemoryEngine().catch(() => undefined);
     try { httpServer.closeAllConnections?.(); } catch { /* older Node */ }
     httpServer.close(() => process.exit(0));
   };
@@ -344,7 +354,7 @@ if (USE_HTTP) {
     process.exit(1);
   }
 
-  const user = memoryEngine.getUserByApiKey(stdioApiKey);
+  const user = await memoryEngine.getUserByApiKey(stdioApiKey);
   if (!user) {
     console.error("[BrainRouter] FATAL: The provided BRAINROUTER_API_KEY is invalid. Connection aborted.");
     process.exit(1);

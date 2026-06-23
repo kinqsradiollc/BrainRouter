@@ -89,7 +89,7 @@ export async function handleSessionSend(args: any, options?: { defaultUserId?: s
   try {
     const params = sessionSendSchema.parse(args ?? {});
     const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
-    const rows = memoryEngine.store.sendSessionMessage({
+    const rows = await memoryEngine.store.sendSessionMessage({
       userId: effectiveUserId,
       fromSessionKey: params.from,
       toSessionKey: params.to,
@@ -136,7 +136,7 @@ export async function handleSessionInboxRead(args: any, options?: { defaultUserI
   try {
     const params = sessionInboxReadSchema.parse(args ?? {});
     const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
-    const messages = memoryEngine.store.readSessionInbox({
+    const messages = await memoryEngine.store.readSessionInbox({
       userId: effectiveUserId,
       toSessionKey: params.sessionKey,
       includeDelivered: params.includeDelivered,
@@ -145,7 +145,7 @@ export async function handleSessionInboxRead(args: any, options?: { defaultUserI
     if (!params.peek && messages.length > 0) {
       const ids = messages.filter((m) => m.deliveredAt === null).map((m) => m.id);
       if (ids.length > 0) {
-        memoryEngine.store.ackSessionInbox(
+        await memoryEngine.store.ackSessionInbox(
           effectiveUserId,
           params.sessionKey,
           ids,
@@ -186,7 +186,7 @@ export async function handleSessionInboxAck(args: any, options?: { defaultUserId
   try {
     const params = sessionInboxAckSchema.parse(args ?? {});
     const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
-    const acked = memoryEngine.store.ackSessionInbox(
+    const acked = await memoryEngine.store.ackSessionInbox(
       effectiveUserId,
       params.sessionKey,
       params.ids,

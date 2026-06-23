@@ -31,7 +31,23 @@ export async function buildGraphFromCognitive(params: {
       prompt: formatGraphExtractionPrompt(record.content),
       systemPrompt: GRAPH_EXTRACTION_SYSTEM_PROMPT,
       taskId: `graph-extraction-${record.id}`,
-      timeoutMs
+      timeoutMs,
+      // STRUCTURED OUTPUT — force the {entities, relations} graph through a
+      // schema'd tool call (consistent across models; see modelRunner.ts). Loose
+      // item schemas — the prompt still defines each entity/relation's fields.
+      tool: {
+        name: "emit_graph",
+        description: "Return the entities and relations extracted from the memory, shaped exactly as the prompt describes.",
+        parameters: {
+          type: "object",
+          properties: {
+            entities: { type: "array", items: { type: "object" } },
+            relations: { type: "array", items: { type: "object" } },
+          },
+          required: ["entities"],
+          additionalProperties: true,
+        },
+      },
     });
 
     // Robust parse: tolerates leaked role tokens, prose, fences, trailing commas
@@ -50,7 +66,7 @@ export async function buildGraphFromCognitive(params: {
       if (!entityName) continue;
 
       // Check if node already exists to get its ID, otherwise create a new one
-      const existingNode = store.getGraphNodeByEntity(record.userId, entityName);
+      const existingNode = await store.getGraphNodeByEntity(record.userId, entityName);
       const nodeId = existingNode?.id ?? `gn_${crypto.randomBytes(6).toString("hex")}`;
       entityMap.set(entityName.toLowerCase(), nodeId);
 
@@ -65,7 +81,7 @@ export async function buildGraphFromCognitive(params: {
         createdTime: record.createdTime || new Date().toISOString()
       };
 
-      store.upsertGraphNode(node);
+      await store.upsertGraphNode(node);
     }
 
     // 2. Process and upsert edges
@@ -98,7 +114,7 @@ export async function buildGraphFromCognitive(params: {
           createdTime: record.createdTime || new Date().toISOString()
         };
 
-        store.upsertGraphEdge(edge);
+        await store.upsertGraphEdge(edge);
       }
     }
   } catch (err) {

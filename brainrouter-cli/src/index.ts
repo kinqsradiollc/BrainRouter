@@ -90,7 +90,7 @@ import fs from 'node:fs';
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
-import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath, getCliKnobs, setCliKnobOverride, hydrateConfigDefaultsOnDisk, type LLMConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath, getCliKnobs, setCliKnobOverride, hydrateConfigDefaultsOnDisk, resolveCliKnobs, type LLMConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
 import { redactText } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
 
 if (getCliKnobs().debugExit) {
@@ -102,7 +102,7 @@ if (getCliKnobs().debugExit) {
   });
 }
 import { McpClientWrapper } from '@kinqs/brainrouter-core/dist/mcp/mcpClient.js';
-import { McpClientPool, selectMcpServerIds } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
+import { McpClientPool, selectMcpServerIds, applyBrainUrlOverride, probeBrainHealth, embeddedBrainId } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
 import { formatJsonlEvent, memoryRunEvent, isOffloadTool, type RunEvent } from './runtime/jsonlEvents.js';
 import { costUsd } from './runtime/pricing.js';
 import { VERSION } from '@kinqs/brainrouter-core/dist/version.js';
@@ -191,6 +191,29 @@ program
     const config = loadConfig();
     if (addedKnobs > 0) {
       console.error(`[BrainRouter] config.json updated — added ${addedKnobs} default setting${addedKnobs === 1 ? '' : 's'} you can now edit (run /debug-config to see them).`);
+    }
+
+    // REMOTE-BRAIN (Workstream A) — if `cli.brainUrl` is set, point the active
+    // brain at the remote HTTP endpoint (embedded/stdio stays default when unset).
+    // Phase 2: probe the remote's /health first and gracefully fall back to a
+    // configured embedded brain when it's unreachable, so a momentary remote
+    // outage never strands a user who also has a local brain.
+    const brainUrl = resolveCliKnobs(config).brainUrl;
+    if (brainUrl) {
+      const health = await probeBrainHealth(brainUrl, { timeoutMs: 3_000 });
+      const embedded = embeddedBrainId(config.servers);
+      if (health.ok || !embedded) {
+        const overridden = applyBrainUrlOverride(config.servers, config.activeServer, brainUrl);
+        config.servers = overridden.servers;
+        config.activeServer = overridden.activeServer;
+        if (health.ok) {
+          console.error(`[BrainRouter] remote brain: ${config.activeServer} → ${brainUrl} (cli.brainUrl)`);
+        } else {
+          console.error(`[BrainRouter] remote brain ${brainUrl} unreachable (${health.error ?? `HTTP ${health.status}`}); no embedded fallback — connecting anyway, will retry in background.`);
+        }
+      } else {
+        console.error(`[BrainRouter] remote brain ${brainUrl} unreachable (${health.error ?? `HTTP ${health.status}`}); falling back to embedded brain "${embedded}".`);
+      }
     }
 
     // 0.3.7 — multi-MCP support. Third-party MCPs are additive and all

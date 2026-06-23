@@ -9,10 +9,10 @@ import { sendError } from "../../contracts/http.js";
 export const contradictionsRouter = Router();
 contradictionsRouter.use(requireAnyAuth);
 
-contradictionsRouter.get("/", (req: AuthedRequest, res) => {
+contradictionsRouter.get("/", async (req: AuthedRequest, res) => {
   try {
     const pagination = PaginationQuerySchema.parse(req.query);
-    const contradictions = memoryEngine.getPendingContradictions(req.userId!, {
+    const contradictions = await memoryEngine.getPendingContradictions(req.userId!, {
       cursor: decodeCursor<{ confidence: number; id: string }>(pagination.cursor),
       limit: pagination.limit + 1,
     });

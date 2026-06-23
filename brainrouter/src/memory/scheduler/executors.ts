@@ -30,11 +30,11 @@ import { enqueueAgentJob } from "./jobs.js";
  * structurally satisfies it; the runner injects the live engine into the ctx.
  */
 export interface JobEngineOps {
-  exportVault(userId: string, baseDir?: string): { dir: string; written: number; unchanged: number; total: number };
-  reconcilePendingBlackboard(userId: string): { reconciled: number; duplicate: number; rejected: number; items: Array<{ id: string; status: string }> };
-  commitBlackboardItem(userId: string, itemId: string): { committed: boolean; recordId?: string; reason?: string };
-  summarizeBucket(userId: string, childIds: string[], kind: string): { id: string } | null;
-  rechunkSources(userId: string, documentIds: string[]): { rechunked: number; skipped: number; chunksWritten: number };
+  exportVault(userId: string, baseDir?: string): Promise<{ dir: string; written: number; unchanged: number; total: number }>;
+  reconcilePendingBlackboard(userId: string): Promise<{ reconciled: number; duplicate: number; rejected: number; items: Array<{ id: string; status: string }> }>;
+  commitBlackboardItem(userId: string, itemId: string): Promise<{ committed: boolean; recordId?: string; reason?: string }>;
+  summarizeBucket(userId: string, childIds: string[], kind: string): Promise<{ id: string } | null>;
+  rechunkSources(userId: string, documentIds: string[]): Promise<{ rechunked: number; skipped: number; chunksWritten: number }>;
   runRetrievalBenchmark(userId: string, opts?: { sampleSize?: number; baseDir?: string }): Promise<{ summaryPath: string | null; statsByMode: Record<string, unknown>; sampled: number; passed: boolean }>;
 }
 
@@ -78,19 +78,19 @@ const EXECUTORS: Record<string, JobExecutor> = {
   // ── 0.4.3 (MEM-10) — depth-pipeline executors. Thin glue onto existing,
   // capability-detected engine operations; each is idempotent / safe to re-run.
   vault_exporter: async (input, ctx) => {
-    const r = requireEngine(ctx).exportVault(userIdOf(input));
+    const r = await requireEngine(ctx).exportVault(userIdOf(input));
     return { written: r.written, unchanged: r.unchanged, total: r.total };
   },
   blackboard_reconciler: async (input, ctx) => {
     const engine = requireEngine(ctx);
     const userId = userIdOf(input);
-    const rec = engine.reconcilePendingBlackboard(userId);
+    const rec = await engine.reconcilePendingBlackboard(userId);
     // Reconcile scores/dedups the pending candidates; commit the ones it
     // accepted so they actually land as cognitive records (the full
     // stage → reconcile → commit pipeline). Duplicates/rejects are left as-is.
     let committed = 0;
     for (const item of rec.items) {
-      if (item.status === "reconciled" && engine.commitBlackboardItem(userId, item.id).committed) committed++;
+      if (item.status === "reconciled" && (await engine.commitBlackboardItem(userId, item.id)).committed) committed++;
     }
     return { reconciled: rec.reconciled, duplicate: rec.duplicate, rejected: rec.rejected, committed };
   },
@@ -98,13 +98,13 @@ const EXECUTORS: Record<string, JobExecutor> = {
     const childIds: string[] = Array.isArray(input?.childIds) ? input.childIds.map(String) : [];
     if (childIds.length === 0) return { parentId: null, reason: "no childIds supplied" };
     const kind = typeof input?.kind === "string" ? input.kind : "topic";
-    const parent = requireEngine(ctx).summarizeBucket(userIdOf(input), childIds, kind);
+    const parent = await requireEngine(ctx).summarizeBucket(userIdOf(input), childIds, kind);
     // Auto-chain: refine the freshly-sealed parent's deterministic summary with
     // an LLM digest. No-ops gracefully if no LLM is configured (tree_digest
     // keeps the deterministic summary). Best-effort — a failed enqueue must not
     // fail the seal.
     if (parent?.id && ctx.store) {
-      try { enqueueAgentJob(ctx.store, "tree_digest", { userId: userIdOf(input), nodeIds: [parent.id] }); } catch { /* seal still succeeded */ }
+      try { await enqueueAgentJob(ctx.store, "tree_digest", { userId: userIdOf(input), nodeIds: [parent.id] }); } catch { /* seal still succeeded */ }
     }
     return { parentId: parent?.id ?? null, sealed: parent ? childIds.length : 0 };
   },

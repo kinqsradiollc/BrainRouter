@@ -25,6 +25,24 @@ jobs:
   build-and-test:
     name: Build & Test (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
+    # ADR-007 Phase 2 — Postgres + pgvector service so the PostgresMemoryStore
+    # tests run for real in CI. Default creds match the store tests' fallback
+    # URL (postgres://postgres:postgres@localhost:5432/postgres); each test
+    # creates + drops its own scratch database.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     strategy:
       fail-fast: false
       matrix:
@@ -69,7 +87,9 @@ jobs:
         # has no test script and is skipped.
         run: npm run test
         env:
-          # Hide the `ExperimentalWarning: SQLite is an experimental
-          # feature` noise from the CI log. Mirrors the planned 0.3.6
-          # CLI shell redesign (see ROADMAP).
           NODE_NO_WARNINGS: '1'
+          # ADR-007 Phase 2 — the brain now requires Postgres (SQLite removed).
+          # Point at the pgvector service container; the brain's tests create +
+          # drop their own scratch databases off this admin connection.
+          BRAINROUTER_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+          BRAINROUTER_TEST_PG_ADMIN_URL: postgres://postgres:postgres@localhost:5432/postgres

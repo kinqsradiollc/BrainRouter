@@ -30,9 +30,9 @@ const MIN_SOURCE_CHARS = 120;
  * and is runtime-detected, like the source-ingest capability.
  */
 interface ProvenanceStore {
-  getSourceDocumentByHash(userId: string, hash: string): { id: string } | null;
-  getSourceChunksByDocument(documentId: string): { id: string; content: string }[];
-  linkRecordSources(userId: string, recordId: string, chunkIds: string[]): void;
+  getSourceDocumentByHash(userId: string, hash: string): Promise<{ id: string } | null>;
+  getSourceChunksByDocument(documentId: string): Promise<{ id: string; content: string }[]>;
+  linkRecordSources(userId: string, recordId: string, chunkIds: string[]): Promise<void>;
 }
 
 /**
@@ -41,11 +41,11 @@ interface ProvenanceStore {
  * detected, like the source/provenance capabilities above.
  */
 interface BlackboardAdmissionStore {
-  stageBlackboardItems(userId: string, items: BlackboardItemInput[]): BlackboardItem[];
+  stageBlackboardItems(userId: string, items: BlackboardItemInput[]): Promise<BlackboardItem[]>;
   updateBlackboardItem(
     id: string,
     patch: { status?: BlackboardItem["status"]; conflictIds?: string[]; committedRecordId?: string | null },
-  ): void;
+  ): Promise<void>;
 }
 
 export class MemoryCapturePipeline {
@@ -94,7 +94,7 @@ export class MemoryCapturePipeline {
         skillTag: activeSkill || "",
       };
       
-      this.store.upsertSensory(record);
+      await this.store.upsertSensory(record);
       sensoryRecords.push(record);
     }
 
@@ -102,10 +102,10 @@ export class MemoryCapturePipeline {
     // message as a source document + chunks so the raw content stays
     // retrievable and citable (record→chunk provenance lands in MEM-3).
     // Best-effort + idempotent; never blocks the rest of the turn.
-    this.ingestTurnSources(userId, sessionKey, messages);
+    await this.ingestTurnSources(userId, sessionKey, messages);
 
     // 2. Decide if we should trigger Cognitive extraction
-    const unextractedCount = this.store.getUnextractedSensoryCount(userId, sessionKey);
+    const unextractedCount = await this.store.getUnextractedSensoryCount(userId, sessionKey);
 
     let cognitiveExtractionTriggered = false;
     let cognitiveExtractedCount = 0;
@@ -173,18 +173,18 @@ export class MemoryCapturePipeline {
    * the turn. Idempotent via createSourceDocument's (user, hash) dedup, so
    * re-capturing identical content reuses the existing doc + chunks.
    */
-  private ingestTurnSources(
+  private async ingestTurnSources(
     userId: string,
     sessionKey: string,
     messages: { role: string; content: string; timestamp: number }[],
-  ): void {
+  ): Promise<void> {
     const sourceStore = this.asSourceStore();
     if (!sourceStore) return;
     for (const msg of messages) {
       const text = redactSensitiveMemoryText(msg.content ?? "");
       if (text.trim().length < MIN_SOURCE_CHARS) continue;
       try {
-        const { document, chunks, created } = ingestSource(
+        const { document, chunks, created } = await ingestSource(
           sourceStore,
           {
             userId,
@@ -202,7 +202,7 @@ export class MemoryCapturePipeline {
         // observable source_chunker job when real chunks were written so the
         // agent shows activity instead of "idle · never". Skip idempotent reuse.
         if (created && chunks.length > 0) {
-          recordInlineJob(
+          await recordInlineJob(
             this.store,
             "source_chunker",
             { userId, documentIds: [document.id], source: "capture-ingest" },
@@ -234,11 +234,11 @@ export class MemoryCapturePipeline {
    * batch-level "link every record to every chunk" linking, which over-attributed
    * evidence. Deterministic, zero-LLM-cost; best-effort + non-fatal.
    */
-  private linkRecordProvenance(
+  private async linkRecordProvenance(
     userId: string,
     windowSensory: SensoryRecord[],
     records: { id: string; content: string }[],
-  ): void {
+  ): Promise<void> {
     const store = this.asProvenanceStore();
     if (!store || records.length === 0) return;
     try {
@@ -248,9 +248,9 @@ export class MemoryCapturePipeline {
       for (const s of windowSensory) {
         const text = s.messageText ?? "";
         if (text.trim().length < MIN_SOURCE_CHARS) continue;
-        const doc = store.getSourceDocumentByHash(userId, contentHash(text));
+        const doc = await store.getSourceDocumentByHash(userId, contentHash(text));
         if (!doc) continue;
-        for (const c of store.getSourceChunksByDocument(doc.id)) {
+        for (const c of await store.getSourceChunksByDocument(doc.id)) {
           if (seen.has(c.id)) continue;
           seen.add(c.id);
           chunks.push({ id: c.id, content: c.content });
@@ -260,7 +260,7 @@ export class MemoryCapturePipeline {
       const config = readProvenanceConfig();
       for (const r of records) {
         const chunkIds = attributeRecordToChunks(r.content, chunks, config);
-        if (chunkIds.length > 0) store.linkRecordSources(userId, r.id, chunkIds);
+        if (chunkIds.length > 0) await store.linkRecordSources(userId, r.id, chunkIds);
       }
     } catch (err: any) {
       console.error("[BrainRouter] MEM-15 provenance link failed:", err?.message ?? err);
@@ -295,16 +295,16 @@ export class MemoryCapturePipeline {
    * blackboard problem. (Cross-active dedup already ran in `deduplicateMemories`;
    * per-record contradiction-vs-active still runs post-commit.)
    */
-  private admitViaBlackboard(
+  private async admitViaBlackboard(
     userId: string,
     records: CognitiveRecord[],
-  ): { survivors: CognitiveRecord[]; markCommitted: (recordId: string) => void } {
-    const passthrough = { survivors: records, markCommitted: () => {} };
+  ): Promise<{ survivors: CognitiveRecord[]; markCommitted: (recordId: string) => Promise<void> }> {
+    const passthrough = { survivors: records, markCommitted: async () => {} };
     if (!this.blackboardAdmissionEnabled() || records.length === 0) return passthrough;
     const store = this.asBlackboardStore();
     if (!store) return passthrough;
     try {
-      const staged = store.stageBlackboardItems(
+      const staged = await store.stageBlackboardItems(
         userId,
         records.map((r) => ({
           sourceChunkId: null, // precise provenance is linked post-commit (MEM-15)
@@ -327,7 +327,7 @@ export class MemoryCapturePipeline {
         const item = staged[i];
         const decision = item ? decisionById.get(item.id) : undefined;
         if (!item || !decision) { survivors.push(records[i]); continue; } // safety: keep
-        store.updateBlackboardItem(item.id, { status: decision.status, conflictIds: decision.conflictIds });
+        await store.updateBlackboardItem(item.id, { status: decision.status, conflictIds: decision.conflictIds });
         if (decision.status === "reconciled") {
           itemIdByRecordId.set(records[i].id, item.id);
           survivors.push(records[i]);
@@ -337,7 +337,7 @@ export class MemoryCapturePipeline {
       // MEM-10b — admission (stage → reconcile → admit) runs inline here, not via
       // the blackboard_reconciler job queue; record an observable job so the
       // agent reflects the reconciliation it actually performed each capture.
-      recordInlineJob(
+      await recordInlineJob(
         this.store,
         "blackboard_reconciler",
         { userId, source: "capture-admission" },
@@ -351,9 +351,9 @@ export class MemoryCapturePipeline {
       );
       return {
         survivors,
-        markCommitted: (recordId: string) => {
+        markCommitted: async (recordId: string) => {
           const itemId = itemIdByRecordId.get(recordId);
-          if (itemId) store.updateBlackboardItem(itemId, { status: "committed", committedRecordId: recordId });
+          if (itemId) await store.updateBlackboardItem(itemId, { status: "committed", committedRecordId: recordId });
         },
       };
     } catch (err: any) {
@@ -380,11 +380,13 @@ export class MemoryCapturePipeline {
     skillHints?: string;
   }): Promise<{ triggered: boolean; extractedCount: number; status: CognitiveExtractionStatus; errorMessage?: string }> {
     const { userId, sessionKey, sessionId = "", activeSkill, skillHints } = params;
-    const recentSensory = this.store.getRecentSensoryMessages(userId, sessionKey, 20);
+    const recentSensory = await this.store.getRecentSensoryMessages(userId, sessionKey, 20);
     if (recentSensory.length === 0) {
       return { triggered: false, extractedCount: 0, status: "skipped" };
     }
 
+    const existingSceneNames = (await this.store.getTopContextualFocus(userId, 20)).map(s => s.sceneName);
+    const resolvedSkillHints = skillHints ?? (activeSkill ? (await this.store.getSkillHints(activeSkill)) ?? undefined : undefined);
     const { result: extractionResult } = await runAsJob(
       this.store,
       "cognitive_extractor",
@@ -397,14 +399,14 @@ export class MemoryCapturePipeline {
           sessionId,
           llmRunner: this.llmRunner,
           activeSkill,
-          existingSceneNames: this.store.getTopContextualFocus(userId, 20).map(s => s.sceneName),
-          skillHints: skillHints ?? (activeSkill ? this.store.getSkillHints(activeSkill) ?? undefined : undefined)
+          existingSceneNames,
+          skillHints: resolvedSkillHints
         }),
       { summarize: (r) => ({ success: r.success, records: r.records?.length ?? 0 }) },
     );
 
     if (!extractionResult.success) {
-      this.store.recordExtractionFailure(userId, extractionResult.errorMessage ?? "Cognitive extraction failed");
+      await this.store.recordExtractionFailure(userId, extractionResult.errorMessage ?? "Cognitive extraction failed");
       return {
         triggered: true,
         extractedCount: 0,
@@ -413,8 +415,8 @@ export class MemoryCapturePipeline {
       };
     }
 
-    this.store.markSensoryExtracted(userId, sessionKey, recentSensory.map((record) => record.id));
-    this.store.resetExtractionFailures(userId);
+    await this.store.markSensoryExtracted(userId, sessionKey, recentSensory.map((record) => record.id));
+    await this.store.resetExtractionFailures(userId);
 
     if (extractionResult.records.length === 0) {
       // LLM returned an empty list — legitimate "nothing notable" outcome
@@ -465,13 +467,13 @@ export class MemoryCapturePipeline {
     // MEM-16 — blackboard-default admission: stage + reconcile the batch; only
     // the survivors proceed to commit. Reassigning uniqueRecords routes all
     // downstream steps (connections, provenance, focus, count) through the gate.
-    const admission = this.admitViaBlackboard(userId, uniqueRecords);
+    const admission = await this.admitViaBlackboard(userId, uniqueRecords);
     uniqueRecords = admission.survivors;
 
     // Write to store
     for (const record of uniqueRecords) {
-      this.store.upsertCognitive(record);
-      admission.markCommitted(record.id); // MEM-16 — stamp the blackboard item committed
+      await this.store.upsertCognitive(record);
+      await admission.markCommitted(record.id); // MEM-16 — stamp the blackboard item committed
 
       // Non-blocking background embedding (Slice A)
       if (this.embeddingService.isReady()) {
@@ -522,24 +524,24 @@ export class MemoryCapturePipeline {
       // 1. Connect with other records extracted in this same batch/turn
       for (let j = i + 1; j < uniqueRecords.length; j++) {
         const recB = uniqueRecords[j];
-        this.store.upsertConnection(userId, recA.id, recB.id, 0.5);
-        this.store.upsertConnection(userId, recB.id, recA.id, 0.5);
+        await this.store.upsertConnection(userId, recA.id, recB.id, 0.5);
+        await this.store.upsertConnection(userId, recB.id, recA.id, 0.5);
       }
 
       // 2. Connect with existing active records sharing the same focus scene name
       if (recA.sceneName) {
-        const matchingRecords = this.store.getCognitivesByFocus(userId, recA.sceneName, 10);
+        const matchingRecords = await this.store.getCognitivesByFocus(userId, recA.sceneName, 10);
         for (const match of matchingRecords) {
           if (match.record_id !== recA.id) {
-            this.store.upsertConnection(userId, recA.id, match.record_id, 0.5);
-            this.store.upsertConnection(userId, match.record_id, recA.id, 0.5);
+            await this.store.upsertConnection(userId, recA.id, match.record_id, 0.5);
+            await this.store.upsertConnection(userId, match.record_id, recA.id, 0.5);
           }
         }
       }
     }
 
     // MEM-15 — link each record to the source chunk(s) it actually derives from.
-    this.linkRecordProvenance(userId, recentSensory, uniqueRecords);
+    await this.linkRecordProvenance(userId, recentSensory, uniqueRecords);
 
     const cognitiveExtractedCount = uniqueRecords.length;
     if (cognitiveExtractedCount === 0) {
@@ -549,10 +551,10 @@ export class MemoryCapturePipeline {
     }
 
     // Update scheduler counters
-    this.store.incrementSchedulerCognitiveCount(userId, cognitiveExtractedCount);
+    await this.store.incrementSchedulerCognitiveCount(userId, cognitiveExtractedCount);
 
     // Check if Focus distillation should fire
-    const topScenes = this.store.getTopContextualFocus(userId, 1);
+    const topScenes = await this.store.getTopContextualFocus(userId, 1);
     if (topScenes.length > 0) {
       runAsJob(
         this.store,
@@ -565,24 +567,24 @@ export class MemoryCapturePipeline {
             llmRunner: this.llmRunner,
           }),
         { summarize: (r) => ({ shift: r.shift, confidence: r.confidence }) },
-      ).then(({ result: shiftResult }) => {
+      ).then(async ({ result: shiftResult }) => {
         if (shiftResult.shift && shiftResult.confidence >= 0.75) {
           console.error(`[BrainRouter] Focus shift detected (confidence=${shiftResult.confidence.toFixed(2)}): ${shiftResult.reason}. Triggering focus distillation.`);
-          this.store.resetSchedulerFocusCount(userId);
+          await this.store.resetSchedulerFocusCount(userId);
           try {
             const sparkEngine = new NeuralSparkEngine(this.store);
-            sparkEngine.decayAndPrune(userId);
+            await sparkEngine.decayAndPrune(userId);
           } catch (err: any) {
             console.error("[BrainRouter] LTD decay and prune failed:", err.message);
           }
           this.distillFocusAsJob(userId);
         } else {
-          const countState = this.store.getSchedulerState(userId);
+          const countState = await this.store.getSchedulerState(userId);
           if (shouldRunFocusDistill(countState)) {
-            this.store.resetSchedulerFocusCount(userId);
+            await this.store.resetSchedulerFocusCount(userId);
             try {
               const sparkEngine = new NeuralSparkEngine(this.store);
-              sparkEngine.decayAndPrune(userId);
+              await sparkEngine.decayAndPrune(userId);
             } catch (err: any) {
               console.error("[BrainRouter] LTD decay and prune failed:", err.message);
             }
@@ -591,12 +593,12 @@ export class MemoryCapturePipeline {
         }
       }).catch(err => console.error("[BrainRouter] Background focus shift detection failed:", err.message));
     } else {
-      const countState = this.store.getSchedulerState(userId);
+      const countState = await this.store.getSchedulerState(userId);
       if (shouldRunFocusDistill(countState)) {
-        this.store.resetSchedulerFocusCount(userId);
+        await this.store.resetSchedulerFocusCount(userId);
         try {
           const sparkEngine = new NeuralSparkEngine(this.store);
-          sparkEngine.decayAndPrune(userId);
+          await sparkEngine.decayAndPrune(userId);
         } catch (err: any) {
           console.error("[BrainRouter] LTD decay and prune failed:", err.message);
         }
@@ -605,9 +607,9 @@ export class MemoryCapturePipeline {
     }
 
     // Check if Core Identity distillation should fire
-    const identityState = this.store.getSchedulerState(userId);
+    const identityState = await this.store.getSchedulerState(userId);
     if (shouldRunIdentityDistill(identityState)) {
-      this.store.resetSchedulerIdentityCount(userId);
+      await this.store.resetSchedulerIdentityCount(userId);
       this.distillIdentityAsJob(userId);
     }
 

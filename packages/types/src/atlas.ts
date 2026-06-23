@@ -160,6 +160,23 @@ export interface AtlasGraph {
   edges: AtlasEdge[];
   layers: AtlasLayer[];
   tour: AtlasTourStep[];
+  /**
+   * ATLAS — semantic relationships between layers, produced by the enrichment
+   * LLM relationship pass. Each entry labels a directed layer→layer dependency
+   * with a short verb (e.g. "calls", "reads from", "renders"), which the Domain
+   * view shows on its edges. Optional + additive: absent on un-enriched graphs.
+   */
+  layerEdges?: AtlasLayerEdge[];
+}
+
+/** A labelled relationship between two layers, for the Domain view. */
+export interface AtlasLayerEdge {
+  /** Source layer id. */
+  source: string;
+  /** Target layer id. */
+  target: string;
+  /** Short relationship verb, e.g. "calls", "depends on", "reads from". */
+  label: string;
 }
 
 const ATLAS_NODE_TYPES: readonly AtlasNodeType[] = [

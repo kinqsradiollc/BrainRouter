@@ -27,7 +27,7 @@ export async function handleMemoryJobRetry(args: any, _options?: { defaultUserId
   const params = z.object({ userId: z.string().optional(), jobId: z.string() }).parse(args ?? {});
 
   try {
-    const result = retryAgentJob(memoryEngine.store, params.jobId);
+    const result = await retryAgentJob(memoryEngine.store, params.jobId);
     if (!result) {
       return { isError: true, content: [{ type: "text", text: `No such job: ${params.jobId}` }] };
     }

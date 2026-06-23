@@ -26,7 +26,7 @@ evidenceRouter.get("/", async (req: AuthedRequest, res) => {
       recordId: typeof req.query.recordId === "string" && req.query.recordId.trim() ? req.query.recordId.trim() : undefined,
       kind: typeof req.query.kind === "string" && req.query.kind !== "all" ? req.query.kind : undefined,
     };
-    const evidence = memoryEngine.listEvidence(userId, filters, {
+    const evidence = await memoryEngine.listEvidence(userId, filters, {
       cursor: decodeCursor<{ observedAt: string; id: string }>(pagination.cursor),
       limit: pagination.limit + 1,
     });
@@ -47,7 +47,7 @@ evidenceRouter.get("/", async (req: AuthedRequest, res) => {
 evidenceRouter.get("/:recordId", async (req: AuthedRequest, res) => {
   try {
     const recordId = String(req.params.recordId);
-    const evidence = memoryEngine.getEvidence(req.userId!, recordId);
+    const evidence = await memoryEngine.getEvidence(req.userId!, recordId);
     res.json({ evidence, total: evidence.length });
   } catch (error) {
     sendError(res, 500, error instanceof Error ? error.message : "Failed to fetch evidence");

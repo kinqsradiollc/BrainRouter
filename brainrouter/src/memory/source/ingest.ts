@@ -11,26 +11,28 @@ import { chunkSource, type ChunkOptions } from "./chunker.js";
  * this is what makes re-capture / vault re-sync safe.
  */
 export interface SourceIngestStore {
+  // Backed by either a synchronous store (direct injection / unit fakes) or the
+  // asyncified one — accept both and `await` (a no-op on a non-Promise).
   createSourceDocument(
     input: Omit<SourceDocument, "id" | "createdAt"> & { id?: string; createdAt?: string },
-  ): SourceDocument;
-  getSourceChunksByDocument(documentId: string): SourceChunk[];
-  addSourceChunks(documentId: string, chunks: ReturnType<typeof chunkSource>): SourceChunk[];
+  ): SourceDocument | Promise<SourceDocument>;
+  getSourceChunksByDocument(documentId: string): SourceChunk[] | Promise<SourceChunk[]>;
+  addSourceChunks(documentId: string, chunks: ReturnType<typeof chunkSource>): SourceChunk[] | Promise<SourceChunk[]>;
 }
 
-export function ingestSource(
+export async function ingestSource(
   store: SourceIngestStore,
   doc: Omit<SourceDocument, "id" | "createdAt"> & { id?: string; createdAt?: string },
   text: string,
   opts?: ChunkOptions,
-): { document: SourceDocument; chunks: SourceChunk[]; created: boolean } {
-  const document = store.createSourceDocument(doc);
+): Promise<{ document: SourceDocument; chunks: SourceChunk[]; created: boolean }> {
+  const document = await store.createSourceDocument(doc);
   // Idempotent: if this document already has chunks (re-ingest of identical
   // content via the user+hash dedup), reuse them — don't double-chunk.
   // `created` tells callers whether real chunking work happened this call (so
   // observability can avoid recording a no-op job on idempotent re-ingest).
-  const existing = store.getSourceChunksByDocument(document.id);
+  const existing = await store.getSourceChunksByDocument(document.id);
   if (existing.length > 0) return { document, chunks: existing, created: false };
-  const chunks = store.addSourceChunks(document.id, chunkSource(text, opts));
+  const chunks = await store.addSourceChunks(document.id, chunkSource(text, opts));
   return { document, chunks, created: true };
 }

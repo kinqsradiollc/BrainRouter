@@ -23,7 +23,7 @@ export class NeuralSparkEngine {
    * Propagates potentials from fired nodes to their neighbors.
    * Runs a 2-hop BFS.
    */
-  public propagateSparks(userId: string, initialNodes: SparkNode[]): SparkNode[] {
+  public async propagateSparks(userId: string, initialNodes: SparkNode[]): Promise<SparkNode[]> {
     // Disabled: hand the seed nodes back untouched so recall ranks on the
     // pre-spark scores — no neighbors pulled in, no firing boost.
     if (!this.enabled) return initialNodes;
@@ -53,7 +53,7 @@ export class NeuralSparkEngine {
         const sourceNode = activeNodes.get(sourceId)!;
 
         // Retrieve connections (dendritic spines) from store
-        const connections = this.store.getConnectionsForSource(userId, sourceId);
+        const connections = await this.store.getConnectionsForSource(userId, sourceId);
 
         for (const conn of connections) {
           let target = activeNodes.get(conn.targetId);
@@ -85,7 +85,7 @@ export class NeuralSparkEngine {
   /**
    * Hebbian Spine updates (LTP) for cited pairs
    */
-  public strengthenSpines(userId: string, citedIds: string[]): void {
+  public async strengthenSpines(userId: string, citedIds: string[]): Promise<void> {
     if (!this.enabled) return;
     if (citedIds.length < 2) return;
 
@@ -96,15 +96,15 @@ export class NeuralSparkEngine {
       }
     }
 
-    this.store.strengthenConnectionsBatch(userId, pairs, this.ltpStep);
+    await this.store.strengthenConnectionsBatch(userId, pairs, this.ltpStep);
   }
 
   /**
    * Synaptic decay & pruning (LTD)
    */
-  public decayAndPrune(userId: string): void {
+  public async decayAndPrune(userId: string): Promise<void> {
     if (!this.enabled) return;
-    this.store.decayConnections(userId, this.decayFactor);
-    this.store.pruneConnections(userId, this.pruneThreshold);
+    await this.store.decayConnections(userId, this.decayFactor);
+    await this.store.pruneConnections(userId, this.pruneThreshold);
   }
 }

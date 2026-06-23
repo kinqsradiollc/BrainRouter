@@ -334,8 +334,10 @@ locking, no merge attempt, no CRDT machinery.
 and the dominant update pattern is "mark superseded" (one record
 replacing another) rather than "edit in place". For the few in-place
 update paths (`memory_update`, `memory_evidence_add`), the
-last-write-wins semantics match SQLite's natural ordering and don't
-require any client-side coordination.
+last-write-wins semantics are the store's natural ordering and don't
+require any client-side coordination. (The store is Postgres + pgvector
+since ADR-007; SQLite has been removed. The engine opens its pool and
+runs migrations lazily on first use, and closes it on shutdown.)
 
 **Cost.** The losing write's content is lost. We accept this for
 0.4.0 — the cost of building a real merge layer (CRDTs, vector

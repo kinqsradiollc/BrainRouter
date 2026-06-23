@@ -7,10 +7,10 @@ import { sendError } from "../../contracts/http.js";
 export const scenesRouter = Router();
 scenesRouter.use(requireAnyAuth);
 
-scenesRouter.get("/", (req: AuthedRequest, res) => {
+scenesRouter.get("/", async (req: AuthedRequest, res) => {
   try {
     const pagination = PaginationQuerySchema.parse(req.query);
-    const scenes = memoryEngine.getTopScenes(
+    const scenes = await memoryEngine.getTopScenes(
       req.userId!,
       pagination.limit + 1,
       decodeCursor<{ heatScore: number; id: string }>(pagination.cursor),

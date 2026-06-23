@@ -16,8 +16,8 @@ export interface AtlasDetailProps {
   graph: AtlasGraph;
   nodeId: string;
   onClose: () => void;
-  /** Open this node's file in the editor. */
-  onOpenFile?: (path: string) => void;
+  /** Open this node's file in the editor, optionally at a specific line. */
+  onOpenFile?: (path: string, line?: number) => void;
   /** Review overlay: this node's git change kind, if any. */
   changeKind?: "added" | "modified" | "untracked" | "deleted";
   /** Whether this node's blast radius is currently highlighted. */
@@ -128,13 +128,17 @@ export function AtlasDetail({ graph, nodeId, onClose, onOpenFile, changeKind, im
         <div className="atlas-detail-section">
           <div className="atlas-detail-label">Symbols · {symbols.length}</div>
           <ul className="atlas-detail-syms">
-            {symbols.slice(0, 40).map((s) => (
-              <li key={s.id}>
-                <span className={`atlas-sym-kind ${s.type}`}>{s.type === "class" ? "cls" : "fn"}</span>
-                <span className="atlas-sym-name">{s.name}</span>
-                {s.lineRange ? <span className="atlas-sym-line">:{s.lineRange[0]}</span> : null}
-              </li>
-            ))}
+            {symbols.slice(0, 40).map((s) => {
+              const line = s.lineRange?.[0];
+              const jump = canOpen && line ? () => onOpenFile!(node.filePath as string, line) : undefined;
+              return (
+                <li key={s.id} className={jump ? "atlas-sym jump" : "atlas-sym"} onClick={jump} title={jump ? `Open ${node.name}:${line}` : undefined}>
+                  <span className={`atlas-sym-kind ${s.type}`}>{s.type === "class" ? "cls" : "fn"}</span>
+                  <span className="atlas-sym-name">{s.name}</span>
+                  {line ? <span className="atlas-sym-line">:{line}</span> : null}
+                </li>
+              );
+            })}
             {symbols.length > 40 ? <li className="dim">+{symbols.length - 40} more</li> : null}
           </ul>
         </div>

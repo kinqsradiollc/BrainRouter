@@ -8,7 +8,7 @@ import { sendError } from "../../contracts/http.js";
 export const memoriesRouter = Router();
 memoriesRouter.use(requireAnyAuth);
 
-memoriesRouter.get("/", (req: AuthedRequest, res) => {
+memoriesRouter.get("/", async (req: AuthedRequest, res) => {
   try {
     const pagination = PaginationQuerySchema.parse(req.query);
     const archived = req.query.archived;
@@ -19,7 +19,7 @@ memoriesRouter.get("/", (req: AuthedRequest, res) => {
       skill: typeof req.query.skill === "string" ? req.query.skill : undefined,
       archived: typeof archived === "string" ? archived === "true" : undefined,
     };
-    const memories = memoryEngine.listMemories(req.userId!, filters, {
+    const memories = await memoryEngine.listMemories(req.userId!, filters, {
       cursor: decodeCursor<{ createdTime: string; recordId: string }>(pagination.cursor),
       limit: pagination.limit + 1,
     });

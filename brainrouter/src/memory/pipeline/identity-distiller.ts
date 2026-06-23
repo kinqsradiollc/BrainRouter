@@ -15,7 +15,7 @@ export async function distillCoreIdentity(params: {
   const { userId, store, llmRunner } = params;
 
   // Cross-session: fetch all persona + instruction cognitives for this user
-  const memories = store.getIdentityAndInstructionCognitives(userId, 100);
+  const memories = await store.getIdentityAndInstructionCognitives(userId, 100);
 
   if (memories.length === 0) {
     console.error(`[BrainRouter] Core Identity distillation skipped for "${userId}" — no persona/instruction memories yet.`);
@@ -36,7 +36,7 @@ export async function distillCoreIdentity(params: {
   }
 
   const now = new Date().toISOString();
-  const existing = store.getCoreIdentity(userId);
+  const existing = await store.getCoreIdentity(userId);
 
   const record: CoreIdentityRecord = {
     userId,
@@ -46,7 +46,7 @@ export async function distillCoreIdentity(params: {
     updatedTime: now,
   };
 
-  store.upsertCoreIdentity(record);
+  await store.upsertCoreIdentity(record);
   console.error(`[BrainRouter] Core Identity updated for "${userId}" (${memories.length} cognitive records).`);
 
   return { success: true, personaMd: personaMd.trim() };

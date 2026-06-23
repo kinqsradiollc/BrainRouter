@@ -121,7 +121,7 @@ export interface SessionActions {
   addProject: () => void;
   toggleProject: (root: string) => void;
   openSettings: (section: SettingsSection) => void;
-  openFile: (path: string) => void;
+  openFile: (path: string, line?: number) => void;
   closeEditorTab: (path: string) => void;
   openUrl: (url: string) => void;
   openCiPanel: () => void;
@@ -193,9 +193,9 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
 
   // T5 — opening a file now lands in the editable Monaco editor. The legacy
   // read-only viewer only remains for compatibility with old/internal state.
-  function openFile(path: string): void {
+  function openFile(path: string, line?: number): void {
     ensurePanel('editor');
-    editor.open(path);
+    editor.open(path, line);
   }
   /** Close an editor tab, confirming first if it has unsaved changes. */
   function closeEditorTab(path: string): void {

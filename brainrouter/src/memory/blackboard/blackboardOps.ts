@@ -12,10 +12,10 @@ import { redactSensitiveMemoryText } from "../util/redaction.js";
 
 /** The store cast to its blackboard surface, or null when unavailable. */
 function bbStore(engine: MemoryEngine): {
-  stageBlackboardItems(userId: string, items: BlackboardItemInput[]): BlackboardItem[];
-  getBlackboardItem(id: string): BlackboardItem | null;
-  getBlackboardItems(userId: string, status?: BlackboardStatus): BlackboardItem[];
-  updateBlackboardItem(id: string, patch: { status?: BlackboardStatus; score?: number; conflictIds?: string[]; committedRecordId?: string | null }): void;
+  stageBlackboardItems(userId: string, items: BlackboardItemInput[]): Promise<BlackboardItem[]>;
+  getBlackboardItem(id: string): Promise<BlackboardItem | null>;
+  getBlackboardItems(userId: string, status?: BlackboardStatus): Promise<BlackboardItem[]>;
+  updateBlackboardItem(id: string, patch: { status?: BlackboardStatus; score?: number; conflictIds?: string[]; committedRecordId?: string | null }): Promise<void>;
 } | null {
   const s = engine.store as any;
   return typeof s.stageBlackboardItems === "function" &&
@@ -25,7 +25,7 @@ function bbStore(engine: MemoryEngine): {
     : null;
 }
 
-export function stageBlackboardCandidates(engine: MemoryEngine, userId: string, items: BlackboardItemInput[]): BlackboardItem[] {
+export async function stageBlackboardCandidates(engine: MemoryEngine, userId: string, items: BlackboardItemInput[]): Promise<BlackboardItem[]> {
   const store = bbStore(engine);
   if (!store) return [];
   // MEM-13 — redact candidate content at the staging boundary, before it
@@ -37,24 +37,24 @@ export function stageBlackboardCandidates(engine: MemoryEngine, userId: string, 
   return store.stageBlackboardItems(userId, redacted);
 }
 
-export function reconcilePendingBlackboard(engine: MemoryEngine, userId: string): { reconciled: number; duplicate: number; rejected: number; items: BlackboardItem[] } {
+export async function reconcilePendingBlackboard(engine: MemoryEngine, userId: string): Promise<{ reconciled: number; duplicate: number; rejected: number; items: BlackboardItem[] }> {
   const store = bbStore(engine);
   if (!store) return { reconciled: 0, duplicate: 0, rejected: 0, items: [] };
-  const decisions = reconcileBlackboard(store.getBlackboardItems(userId, "pending"));
-  for (const d of decisions) store.updateBlackboardItem(d.id, { status: d.status, score: d.score, conflictIds: d.conflictIds });
+  const decisions = reconcileBlackboard(await store.getBlackboardItems(userId, "pending"));
+  for (const d of decisions) await store.updateBlackboardItem(d.id, { status: d.status, score: d.score, conflictIds: d.conflictIds });
   const count = (st: string) => decisions.filter((d) => d.status === st).length;
-  return { reconciled: count("reconciled"), duplicate: count("duplicate"), rejected: count("rejected"), items: store.getBlackboardItems(userId) };
+  return { reconciled: count("reconciled"), duplicate: count("duplicate"), rejected: count("rejected"), items: await store.getBlackboardItems(userId) };
 }
 
-export function commitBlackboardItem(engine: MemoryEngine, userId: string, itemId: string): { committed: boolean; recordId?: string; reason?: string } {
+export async function commitBlackboardItem(engine: MemoryEngine, userId: string, itemId: string): Promise<{ committed: boolean; recordId?: string; reason?: string }> {
   const store = bbStore(engine);
   if (!store) return { committed: false, reason: "blackboard unavailable" };
-  const item = store.getBlackboardItem(itemId);
+  const item = await store.getBlackboardItem(itemId);
   if (!item || item.userId !== userId) return { committed: false, reason: "not found" };
   if (item.status === "committed") return { committed: true, recordId: item.committedRecordId ?? undefined };
   if (item.status !== "reconciled") return { committed: false, reason: `status is "${item.status}"; reconcile before committing` };
 
-  const record = engine.upsertEngineeringMemory({
+  const record = await engine.upsertEngineeringMemory({
     userId,
     type: item.candidate.type,
     content: item.candidate.content,
@@ -62,36 +62,36 @@ export function commitBlackboardItem(engine: MemoryEngine, userId: string, itemI
     confidence: item.candidate.confidence,
     metadata: { committedFromBlackboard: item.id, sourceChunkId: item.sourceChunkId },
   });
-  store.updateBlackboardItem(item.id, { status: "committed", committedRecordId: record.id });
+  await store.updateBlackboardItem(item.id, { status: "committed", committedRecordId: record.id });
   if (item.sourceChunkId) {
-    const linker = engine.store as Partial<{ linkRecordSources(u: string, r: string, ids: string[]): void }>;
-    try { linker.linkRecordSources?.(userId, record.id, [item.sourceChunkId]); } catch { /* best-effort */ }
+    const linker = engine.store as Partial<{ linkRecordSources(u: string, r: string, ids: string[]): Promise<void> }>;
+    try { await linker.linkRecordSources?.(userId, record.id, [item.sourceChunkId]); } catch { /* best-effort */ }
   }
   return { committed: true, recordId: record.id };
 }
 
-export function rejectBlackboardItem(engine: MemoryEngine, userId: string, itemId: string): boolean {
+export async function rejectBlackboardItem(engine: MemoryEngine, userId: string, itemId: string): Promise<boolean> {
   const store = bbStore(engine);
   if (!store) return false;
-  const item = store.getBlackboardItem(itemId);
+  const item = await store.getBlackboardItem(itemId);
   if (!item || item.userId !== userId) return false;
-  store.updateBlackboardItem(itemId, { status: "rejected" });
+  await store.updateBlackboardItem(itemId, { status: "rejected" });
   return true;
 }
 
-export function restoreBlackboardItem(engine: MemoryEngine, userId: string, itemId: string): { restored: boolean; reason?: string; status?: BlackboardStatus } {
+export async function restoreBlackboardItem(engine: MemoryEngine, userId: string, itemId: string): Promise<{ restored: boolean; reason?: string; status?: BlackboardStatus }> {
   const store = bbStore(engine);
   if (!store) return { restored: false, reason: "blackboard store unavailable" };
-  const item = store.getBlackboardItem(itemId);
+  const item = await store.getBlackboardItem(itemId);
   if (!item || item.userId !== userId) return { restored: false, reason: "no such item" };
   if (item.status !== "rejected" && item.status !== "duplicate") {
     return { restored: false, reason: `status is "${item.status}"; only rejected/duplicate items can be restored`, status: item.status };
   }
-  store.updateBlackboardItem(itemId, { status: "pending", score: 0, conflictIds: [] });
+  await store.updateBlackboardItem(itemId, { status: "pending", score: 0, conflictIds: [] });
   return { restored: true, status: "pending" };
 }
 
-export function reviewBlackboard(engine: MemoryEngine, userId: string, status?: BlackboardStatus): BlackboardItem[] {
+export async function reviewBlackboard(engine: MemoryEngine, userId: string, status?: BlackboardStatus): Promise<BlackboardItem[]> {
   const store = bbStore(engine);
   return store ? store.getBlackboardItems(userId, status) : [];
 }

@@ -45,7 +45,7 @@ export async function handleMemoryContradictions(args: unknown, options?: { defa
   }
 
   // Handle 'list' action
-  const results = memoryEngine.getPendingContradictions(effectiveUserId);
+  const results = await memoryEngine.getPendingContradictions(effectiveUserId);
   
   return {
     content: [

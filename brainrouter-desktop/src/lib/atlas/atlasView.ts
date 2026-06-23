@@ -8,6 +8,10 @@
  */
 import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY, type SimulationNodeDatum } from "d3-force";
 import type { AtlasComplexity, AtlasEdge, AtlasFileCategory, AtlasGraph, AtlasNode, AtlasNodeType } from "@kinqs/brainrouter-types";
+// Pure query + impact ops moved to the shared `types` package (REMOTE-BRAIN
+// Phase 3b) so the brain can reuse them server-side. Re-exported here so the
+// panel + existing tests keep importing them from atlasView unchanged.
+export { atlasSearchMatches, atlasImpact, atlasImpactOf, type AtlasImpact } from "@kinqs/brainrouter-types";
 
 /** Node types shown in the structural map (symbols — function/class — are detail, hidden here). */
 const FILE_LEVEL: ReadonlySet<AtlasNodeType> = new Set<AtlasNodeType>([
@@ -159,26 +163,6 @@ export interface AtlasNodeFacts {
  * Rank node ids matching a search query (name > path > summary > tags),
  * case-insensitive. Empty query → no matches. Pure + tested.
  */
-export function atlasSearchMatches(graph: AtlasGraph, query: string): string[] {
-  const q = query.trim().toLowerCase();
-  if (!q) return [];
-  const scored: Array<{ id: string; score: number }> = [];
-  for (const n of graph.nodes) {
-    const name = n.name.toLowerCase();
-    const path = (n.filePath ?? "").toLowerCase();
-    let score = 0;
-    if (name === q) score = 100;
-    else if (name.startsWith(q)) score = 80;
-    else if (name.includes(q)) score = 60;
-    else if (path.includes(q)) score = 40;
-    else if ((n.summary ?? "").toLowerCase().includes(q)) score = 20;
-    else if ((n.tags ?? []).some((t) => t.toLowerCase().includes(q))) score = 15;
-    if (score > 0) scored.push({ id: n.id, score });
-  }
-  scored.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
-  return scored.map((s) => s.id);
-}
-
 /**
  * Everything the detail panel shows for one node: its symbols, its layer, and
  * its import neighbours — derived from the graph's edges/layers. Pure + tested.
@@ -375,13 +359,23 @@ function aggregateComplexity(nodes: AtlasNode[]): AtlasComplexity {
   return "simple";
 }
 
-/** Layer cards + inter-layer import edges, for the Overview mode. */
-export function atlasOverviewModel(graph: AtlasGraph): AtlasOverviewModel {
+/** Synthetic id for the rolled-up "Other" Overview card. */
+export const ATLAS_OVERVIEW_OTHER_ID = "layer:__other";
+
+/**
+ * Layer cards + inter-layer import edges, for the Overview mode.
+ *
+ * `limit` (default `Infinity` — no rollup, preserving prior behaviour and the
+ * Domain mode's edge usage) caps the card count for very large repos: the
+ * `limit - 1` biggest layers are kept and the rest fold into a single "Other"
+ * card, with their edges remapped onto it (self-loops dropped, weights summed).
+ */
+export function atlasOverviewModel(graph: AtlasGraph, limit = Infinity): AtlasOverviewModel {
   const byId = new Map(graph.nodes.map((n) => [n.id, n] as const));
   const layerOf = new Map<string, string>();
   for (const l of graph.layers) for (const id of l.nodeIds) if (!layerOf.has(id)) layerOf.set(id, l.id);
 
-  const cards: AtlasOverviewCard[] = graph.layers.map((l) => {
+  let cards: AtlasOverviewCard[] = graph.layers.map((l) => {
     const nodes = l.nodeIds.map((id) => byId.get(id)).filter((n): n is AtlasNode => !!n && GROUPABLE.has(n.type));
     return { id: l.id, name: l.name, description: l.description, fileCount: nodes.length, complexity: aggregateComplexity(nodes), nodeIds: l.nodeIds };
   });
@@ -395,10 +389,42 @@ export function atlasOverviewModel(graph: AtlasGraph): AtlasOverviewModel {
     const key = a < b ? `${a}|${b}` : `${b}|${a}`;
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
-  const edges = [...counts.entries()].map(([k, weight]) => {
+  let edges = [...counts.entries()].map(([k, weight]) => {
     const [source, target] = k.split("|");
     return { source, target, weight };
   });
+
+  if (Number.isFinite(limit) && cards.length > limit) {
+    const sorted = [...cards].sort((a, b) => b.fileCount - a.fileCount || a.name.localeCompare(b.name));
+    const keep = sorted.slice(0, Math.max(1, limit - 1));
+    const fold = sorted.slice(Math.max(1, limit - 1));
+    const keepIds = new Set(keep.map((c) => c.id));
+    const otherNodeIds = fold.flatMap((c) => c.nodeIds);
+    const other: AtlasOverviewCard = {
+      id: ATLAS_OVERVIEW_OTHER_ID,
+      name: "Other",
+      description: `${fold.length} smaller layers`,
+      fileCount: fold.reduce((s, c) => s + c.fileCount, 0),
+      complexity: aggregateComplexity(otherNodeIds.map((id) => byId.get(id)).filter((n): n is AtlasNode => !!n)),
+      nodeIds: otherNodeIds,
+    };
+    cards = [...keep, other];
+
+    const map = (id: string): string => (keepIds.has(id) ? id : ATLAS_OVERVIEW_OTHER_ID);
+    const merged = new Map<string, number>();
+    for (const e of edges) {
+      const s = map(e.source);
+      const t = map(e.target);
+      if (s === t) continue;
+      const key = s < t ? `${s}|${t}` : `${t}|${s}`;
+      merged.set(key, (merged.get(key) ?? 0) + e.weight);
+    }
+    edges = [...merged.entries()].map(([k, weight]) => {
+      const [source, target] = k.split("|");
+      return { source, target, weight };
+    });
+  }
+
   return { cards, edges };
 }
 
@@ -470,7 +496,8 @@ export interface AtlasDomainCard {
 
 export interface AtlasDomainModel {
   cards: AtlasDomainCard[];
-  edges: Array<{ source: string; target: string; weight: number }>;
+  /** `label` = the LLM relationship verb (from graph.layerEdges) when enriched. */
+  edges: Array<{ source: string; target: string; weight: number; label?: string }>;
 }
 
 /** Capability cards (from layers) enriched with entities + flow counts + edges. */
@@ -510,7 +537,19 @@ export function atlasDomainModel(graph: AtlasGraph): AtlasDomainModel {
     fileCount: l.nodeIds.filter((id) => byId.has(id) && GROUPABLE.has(byId.get(id)!.type)).length,
   }));
 
-  return { cards, edges: atlasOverviewModel(graph).edges };
+  // Attach semantic relationship labels (from the enrichment relationship pass)
+  // to the (undirected) overview edges — match either direction.
+  const labelByPair = new Map<string, string>();
+  for (const le of graph.layerEdges ?? []) {
+    labelByPair.set(`${le.source}|${le.target}`, le.label);
+    if (!labelByPair.has(`${le.target}|${le.source}`)) labelByPair.set(`${le.target}|${le.source}`, le.label);
+  }
+  const edges = atlasOverviewModel(graph).edges.map((e) => {
+    const label = labelByPair.get(`${e.source}|${e.target}`);
+    return label ? { ...e, label } : e;
+  });
+
+  return { cards, edges };
 }
 
 // ---------------------------------------------------------------------------
@@ -520,62 +559,8 @@ export function atlasDomainModel(graph: AtlasGraph): AtlasDomainModel {
 // downstream reach of an AI edit before you commit it.
 // ---------------------------------------------------------------------------
 
-export interface AtlasImpact {
-  /** Files that import this node directly. */
-  directDependents: string[];
-  /** Files that import this node directly or transitively (the blast radius). */
-  dependents: string[];
-  /** Files this node imports, directly or transitively. */
-  dependencies: string[];
-  /** Dependents grouped by layer name (largest first). */
-  byLayer: Array<{ layer: string; count: number }>;
-}
-
-function importAdjacency(graph: AtlasGraph): { fwd: Map<string, Set<string>>; rev: Map<string, Set<string>> } {
-  const fwd = new Map<string, Set<string>>(); // importer → imported
-  const rev = new Map<string, Set<string>>(); // imported → importers
-  for (const e of graph.edges) {
-    if (e.type !== "imports") continue;
-    (fwd.get(e.source) ?? fwd.set(e.source, new Set()).get(e.source)!).add(e.target);
-    (rev.get(e.target) ?? rev.set(e.target, new Set()).get(e.target)!).add(e.source);
-  }
-  return { fwd, rev };
-}
-
-function reach(start: Iterable<string>, adj: Map<string, Set<string>>, exclude: ReadonlySet<string>): string[] {
-  const out = new Set<string>();
-  const stack = [...start];
-  while (stack.length) {
-    const cur = stack.pop()!;
-    for (const next of adj.get(cur) ?? []) {
-      if (out.has(next) || exclude.has(next)) continue;
-      out.add(next);
-      stack.push(next);
-    }
-  }
-  return [...out];
-}
-
-/** Blast radius of a single node: who depends on it (transitively) and what it depends on. */
-export function atlasImpact(graph: AtlasGraph, nodeId: string): AtlasImpact {
-  const { fwd, rev } = importAdjacency(graph);
-  const self = new Set([nodeId]);
-  const dependents = reach(self, rev, self);
-  const dependencies = reach(self, fwd, self);
-
-  const byId = new Map(graph.nodes.map((n) => [n.id, n] as const));
-  const layerOfNode = new Map<string, string>();
-  for (const l of graph.layers) for (const id of l.nodeIds) if (!layerOfNode.has(id)) layerOfNode.set(id, l.name);
-
-  const counts = new Map<string, number>();
-  for (const id of dependents) {
-    const layer = layerOfNode.get(id) ?? (byId.get(id)?.filePath ? "(unlayered)" : "");
-    if (layer) counts.set(layer, (counts.get(layer) ?? 0) + 1);
-  }
-  const byLayer = [...counts.entries()].map(([layer, count]) => ({ layer, count })).sort((a, b) => b.count - a.count);
-
-  return { directDependents: [...(rev.get(nodeId) ?? [])], dependents, dependencies, byLayer };
-}
+// `AtlasImpact`, `atlasImpact` + `atlasImpactOf` now live in the shared `types`
+// package (re-exported at the top of this file) so the brain reuses them.
 
 // ---------------------------------------------------------------------------
 // Test coverage (ATLAS-15) — does anything test this file? A deterministic
@@ -620,17 +605,97 @@ export function atlasUncoveredFiles(graph: AtlasGraph): Set<string> {
   return uncovered;
 }
 
-/** Combined blast radius of a set of changed nodes (dependents outside the set). */
-export function atlasImpactOf(graph: AtlasGraph, nodeIds: Iterable<string>): { dependents: string[]; byLayer: Array<{ layer: string; count: number }> } {
-  const { rev } = importAdjacency(graph);
-  const seed = new Set(nodeIds);
-  const dependents = reach(seed, rev, seed);
-  const layerOfNode = new Map<string, string>();
-  for (const l of graph.layers) for (const id of l.nodeIds) if (!layerOfNode.has(id)) layerOfNode.set(id, l.name);
-  const counts = new Map<string, number>();
-  for (const id of dependents) {
-    const layer = layerOfNode.get(id) ?? "(unlayered)";
-    counts.set(layer, (counts.get(layer) ?? 0) + 1);
-  }
-  return { dependents, byLayer: [...counts.entries()].map(([layer, count]) => ({ layer, count })).sort((a, b) => b.count - a.count) };
+// ---------------------------------------------------------------------------
+// Service map (ADR-008, Wave 3) — read the codebase as the decomposed service
+// architecture: each module that exposes a typed PORT (`<module>/service.ts`, or
+// the provider `gateway.ts`) becomes a service card, wired by the imports that
+// cross module boundaries. Deterministic + build-time — no enrichment needed —
+// so the multi-service decomposition self-documents in Atlas.
+// ---------------------------------------------------------------------------
+
+/** A service-port facade file: `service.ts`, or the provider `gateway.ts`. */
+const SERVICE_FILE_RE = /(?:^|\/)(?:service|gateway)\.ts$/;
+
+/** True when a path is a service-port facade (not a `*-service.test.ts`). */
+export function isServicePortPath(path: string): boolean {
+  return SERVICE_FILE_RE.test(path);
 }
+
+/** Readable module label: the directory after the package's `src/`, minus the filename. */
+export function serviceModuleLabel(path: string): string {
+  return path.replace(/^(?:.*\/)?src\//, "").replace(/\/(?:service|gateway)\.ts$/, "");
+}
+
+export interface AtlasServiceCard {
+  /** `service:<dir>` — the port file's directory. */
+  id: string;
+  /** Readable module name, e.g. `"exec"`, `"memory/tree"`. */
+  module: string;
+  /** Workspace-relative path to the port file. */
+  portPath: string;
+  /** The port file's node id (for selection / detail). */
+  portNodeId: string;
+  /** File-level nodes that make up the module (same directory as the port). */
+  nodeIds: string[];
+  fileCount: number;
+}
+
+export interface AtlasServiceModel {
+  cards: AtlasServiceCard[];
+  /** Directed module→module import edges (source imports target), weighted. */
+  edges: Array<{ source: string; target: string; weight: number }>;
+}
+
+/**
+ * Service cards (one per module exposing a port) + the directed import edges
+ * between them. A file belongs to the module of the port file in its directory.
+ * Pure + deterministic; file-level nodes only (a symbol sharing the port's path
+ * is never double-counted).
+ */
+export function atlasServiceModel(graph: AtlasGraph): AtlasServiceModel {
+  const ports = graph.nodes.filter(
+    (n) => GROUPABLE.has(n.type) && n.filePath && isServicePortPath(n.filePath),
+  );
+
+  const cards: AtlasServiceCard[] = [];
+  const seenDir = new Set<string>();
+  const fileModule = new Map<string, string>(); // file node id → card id
+
+  for (const port of ports) {
+    const dir = dirOf(port.filePath!);
+    if (seenDir.has(dir)) continue; // one card per module dir (first port wins)
+    seenDir.add(dir);
+    const id = `service:${dir}`;
+    const members = graph.nodes.filter(
+      (n) => GROUPABLE.has(n.type) && n.filePath && dirOf(n.filePath) === dir,
+    );
+    members.forEach((m) => fileModule.set(m.id, id));
+    cards.push({
+      id,
+      module: serviceModuleLabel(port.filePath!),
+      portPath: port.filePath!,
+      portNodeId: port.id,
+      nodeIds: members.map((m) => m.id),
+      fileCount: members.length,
+    });
+  }
+
+  const counts = new Map<string, number>();
+  for (const e of graph.edges) {
+    if (e.type !== "imports") continue;
+    const a = fileModule.get(e.source);
+    const b = fileModule.get(e.target);
+    if (!a || !b || a === b) continue;
+    const key = `${a} ${b}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const edges = [...counts.entries()].map(([k, weight]) => {
+    const [source, target] = k.split(" ");
+    return { source, target, weight };
+  });
+
+  cards.sort((a, b) => a.module.localeCompare(b.module));
+  return { cards, edges };
+}
+
+// `atlasImpactOf` moved to the shared `types` package (re-exported above).

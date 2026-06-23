@@ -24,6 +24,9 @@ const DEV_FILES: Array<[string, 'code' | 'config' | 'docs' | 'infra', 'simple' |
   ['src/ui/App.tsx', 'code', 'moderate'], ['src/ui/ProductList.tsx', 'code', 'moderate'], ['src/ui/CartView.tsx', 'code', 'simple'],
   ['src/shared/types.ts', 'code', 'simple'], ['src/shared/http.ts', 'code', 'simple'],
   ['src/cart/cartStore.test.ts', 'code', 'simple'],
+  // Typed service ports (Wave 3) — each module's facade over its internals.
+  ['src/cart/service.ts', 'code', 'simple'], ['src/catalog/service.ts', 'code', 'simple'],
+  ['src/payment/service.ts', 'code', 'simple'], ['src/checkout/service.ts', 'code', 'moderate'],
   ['package.json', 'config', 'simple', 'json'], ['tsconfig.json', 'config', 'simple', 'json'], ['Dockerfile', 'infra', 'simple', 'docker'],
   ['README.md', 'docs', 'simple', 'markdown'],
 ];
@@ -38,6 +41,12 @@ const DEV_IMPORTS: Array<[string, string]> = [
   ['src/ui/App.tsx', 'src/ui/ProductList.tsx'], ['src/ui/App.tsx', 'src/ui/CartView.tsx'], ['src/ui/App.tsx', 'src/shared/http.ts'],
   ['src/cart/cartStore.ts', 'src/shared/types.ts'], ['src/catalog/search.ts', 'src/shared/types.ts'],
   ['src/cart/cartStore.test.ts', 'src/cart/cartStore.ts'],
+  // Service ports delegate to their module internals…
+  ['src/cart/service.ts', 'src/cart/cartStore.ts'], ['src/catalog/service.ts', 'src/catalog/catalog.ts'],
+  ['src/payment/service.ts', 'src/payment/payment.ts'],
+  // …and checkout's port composes the cart/catalog/payment services (cross-module).
+  ['src/checkout/service.ts', 'src/cart/service.ts'], ['src/checkout/service.ts', 'src/catalog/service.ts'],
+  ['src/checkout/service.ts', 'src/payment/service.ts'],
 ];
 function devAtlasGraph(): AtlasGraph {
   const nodes = DEV_FILES.map(([p, c, cx, lang]) => devFile(p, c, cx, lang));
@@ -94,6 +103,20 @@ function devAtlasEnriched(): AtlasGraph {
     { order: 3, title: 'The cart', description: 'cartStore.ts holds cart state.', nodeIds: [L('src/cart/cartStore.ts')] },
     { order: 4, title: 'Checkout flow', description: 'orchestrator.ts coordinates cart, catalog, and payment.', nodeIds: [L('src/checkout/orchestrator.ts'), L('src/payment/payment.ts')] },
     { order: 5, title: 'The storefront', description: 'App.tsx renders the UI.', nodeIds: [L('src/ui/App.tsx')] },
+  ];
+  // Semantic layer relationships (LLM relationship pass) — labels the Domain
+  // view shows on its inter-layer edges. Only pairs with a real cross-layer
+  // import edge above are labelled.
+  g.layerEdges = [
+    { source: 'layer:gateway', target: 'layer:cart', label: 'routes to' },
+    { source: 'layer:gateway', target: 'layer:catalog', label: 'routes to' },
+    { source: 'layer:gateway', target: 'layer:checkout', label: 'routes to' },
+    { source: 'layer:checkout', target: 'layer:cart', label: 'reads cart from' },
+    { source: 'layer:checkout', target: 'layer:catalog', label: 'looks up in' },
+    { source: 'layer:checkout', target: 'layer:shared', label: 'uses' },
+    { source: 'layer:cart', target: 'layer:shared', label: 'uses' },
+    { source: 'layer:catalog', target: 'layer:shared', label: 'uses' },
+    { source: 'layer:ui', target: 'layer:shared', label: 'calls' },
   ];
   return g;
 }
@@ -538,7 +561,7 @@ export function installDevBridge(): void {
       return {
         graph: g,
         stats: { files: 7, functions: 5, classes: 2, nodes: g.nodes.length, edges: g.edges.length, layers: g.layers.length, enriched: true },
-        enrichResult: { summarized: g.nodes.filter((n) => n.summary).length, layers: g.layers.length, tourSteps: g.tour.length, batchesFailed: 0 },
+        enrichResult: { summarized: g.nodes.filter((n) => n.summary).length, layers: g.layers.length, tourSteps: g.tour.length, relationships: g.layerEdges?.length ?? 0, batchesFailed: 0 },
       };
     },
     'atlas-explain-change': (a) => {

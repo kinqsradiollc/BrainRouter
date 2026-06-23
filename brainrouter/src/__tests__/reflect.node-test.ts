@@ -1,18 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { SqliteMemoryStore } from "../memory/store/sqlite.js";
-import { MemoryEngine } from "../memory/engine.js";
+import { createTestEngine } from "./helpers/pgTestStore.js";
 import { buildReflectPrompt, parseReflectResponse, NO_INSIGHT_SENTINEL } from "../memory/util/reflect.js";
-
-function fresh(label: string): { engine: MemoryEngine; cleanup: () => void } {
-  const dir = mkdtempSync(join(tmpdir(), `brainrouter-mem32b-${label}-`));
-  const store = new SqliteMemoryStore(join(dir, "memory.db"));
-  store.init();
-  return { engine: new MemoryEngine(store), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
-}
 
 test("MEM-32b parseReflectResponse: bullets extracted; <no-insight/> + empty → none", () => {
   assert.deepEqual(parseReflectResponse(NO_INSIGHT_SENTINEL), []);
@@ -34,14 +23,14 @@ test("MEM-32b buildReflectPrompt: numbers the memories + asks for cross-cutting 
 });
 
 test("MEM-32b engine.reflect: too few memories → no-op; insights recorded as lessons", async () => {
-  const { engine, cleanup } = fresh("engine");
+  const { engine, cleanup } = await createTestEngine();
   try {
     // < 3 memories → no-op
     const none = await engine.reflect("u1", { llm: async () => "- something" });
     assert.equal(none.reflected, 0);
 
     // seed >=3 memories
-    for (let i = 0; i < 4; i++) engine.upsertEngineeringMemory({ userId: "u1", type: "codebase_fact", content: `fact ${i} about the cache layer` });
+    for (let i = 0; i < 4; i++) await engine.upsertEngineeringMemory({ userId: "u1", type: "codebase_fact", content: `fact ${i} about the cache layer` });
     const got = await engine.reflect("u1", { llm: async () => "- The cache layer is a recurring source of subtle bugs" });
     assert.equal(got.reflected, 1);
     assert.match(got.insights[0], /cache layer/);
@@ -53,5 +42,5 @@ test("MEM-32b engine.reflect: too few memories → no-op; insights recorded as l
     // LLM failure is best-effort
     const failed = await engine.reflect("u1", { llm: async () => { throw new Error("LLM down"); } });
     assert.equal(failed.reflected, 0);
-  } finally { cleanup(); }
+  } finally { await cleanup(); }
 });
