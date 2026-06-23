@@ -925,7 +925,7 @@ export function App(): React.ReactElement {
       case 'editor': return (
         <Suspense fallback={<div className="row status"><span className="spinner" /> Loading editor…</div>}>
           <EditorPanel
-            tabs={editor.tabs} activePath={editor.activePath} conflictPaths={editor.conflictPaths} saving={editor.saving}
+            tabs={editor.tabs} activePath={editor.activePath} conflictPaths={editor.conflictPaths} saving={editor.saving} revealLine={editor.revealLine}
             onSelect={editor.select} onChange={editor.change} onSave={editor.save} onSaveAll={editor.saveAll}
             onRevert={editor.revert} onClose={closeEditorTab} onReorder={editor.reorder}
             onAnnotateSelection={(path, body, anchor) => {

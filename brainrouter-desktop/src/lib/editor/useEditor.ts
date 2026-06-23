@@ -18,7 +18,10 @@ export interface EditorApi {
   conflictPaths: string[];
   saving: boolean;
   anyDirty: boolean;
-  open: (path: string) => void;
+  /** When set, the editor should reveal this line of `path`. `seq` bumps on every
+   *  request so the same path+line re-triggers a reveal (e.g. re-clicking a symbol). */
+  revealLine: { path: string; line: number; seq: number } | null;
+  open: (path: string, line?: number) => void;
   select: (path: string) => void;
   change: (path: string, content: string) => void;
   save: (path: string) => void;
@@ -33,6 +36,8 @@ export function useEditor(opts?: { workspaceRoot?: string | null; onSaved?: (pat
   const [activePath, setActivePath] = useState<string | null>(null);
   const [conflictPaths, setConflictPaths] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [revealLine, setRevealLine] = useState<{ path: string; line: number; seq: number } | null>(null);
+  const revealSeq = useRef(0);
 
   const tabsRef = useRef(tabs); tabsRef.current = tabs;
   const optsRef = useRef(opts); optsRef.current = opts;
@@ -75,7 +80,11 @@ export function useEditor(opts?: { workspaceRoot?: string | null; onSaved?: (pat
     return off;
   }, []);
 
-  const open = (path: string): void => {
+  const open = (path: string, line?: number): void => {
+    if (typeof line === 'number' && line > 0) {
+      revealSeq.current += 1;
+      setRevealLine({ path, line, seq: revealSeq.current });
+    }
     const existing = findTab(tabsRef.current, path);
     if (existing) { setActivePath(path); if (!isDirty(existing)) sendRead(path); return; }
     sendRead(path);
@@ -104,5 +113,5 @@ export function useEditor(opts?: { workspaceRoot?: string | null; onSaved?: (pat
     setTabs((ts) => reorderTabs(ts, draggedPath, targetPath));
   };
 
-  return { tabs, activePath, conflictPaths, saving, anyDirty: anyDirty(tabs), open, select, change, save, saveAll, revert, close, reorder };
+  return { tabs, activePath, conflictPaths, saving, anyDirty: anyDirty(tabs), revealLine, open, select, change, save, saveAll, revert, close, reorder };
 }
