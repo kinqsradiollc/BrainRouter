@@ -125,15 +125,32 @@ test('ATLAS enrichAtlasGraph: relationship pass labels real cross-layer edges, d
 });
 
 test('ATLAS-4 enrichAtlasGraph respects maxFiles', async () => {
-  let summaryCalls = 0;
-  const counting: AtlasLlmCaller = async ({ user }) => {
-    if (user.includes('one object per file')) { summaryCalls++; return '[]'; }
+  // Count BATCHES = forced-tool summary calls; the empty→prompt-only fallback
+  // (which has no `tool`) doesn't count, so this stays a batch-count assertion.
+  let summaryBatches = 0;
+  const counting: AtlasLlmCaller = async ({ user, tool }) => {
+    if (user.includes('one object per file') && tool) summaryBatches++;
     return '[]';
   };
   const res = await enrichAtlasGraph(baseGraph(), counting, { maxFiles: 1, batchSize: 10 });
   // only 1 file-level node summarised → exactly one batch
-  assert.equal(summaryCalls, 1);
+  assert.equal(summaryBatches, 1);
   assert.equal(res.summarized, 0); // stub returned no rows
+});
+
+test('ATLAS enrichAtlasGraph: falls back to a prompt-only call when the forced tool yields nothing', async () => {
+  // Simulates a model that accepts `tools` but returns an EMPTY tool call;
+  // callArray must retry once WITHOUT the tool and use that result.
+  const flaky: AtlasLlmCaller = async ({ user, tool }) => {
+    if (user.includes('one object per file')) {
+      if (tool) return '[]'; // forced tool call → empty (the failure mode)
+      return JSON.stringify([{ path: 'src/app.ts', summary: 'Entry point.', complexity: 'simple' }]); // prompt-only → good
+    }
+    return '[]';
+  };
+  const res = await enrichAtlasGraph(baseGraph(), flaky, { batchSize: 10 });
+  assert.equal(res.summarized, 1); // recovered via the prompt-only fallback
+  assert.equal(res.graph.nodes.find((n) => n.id === 'file:src/app.ts')?.summary, 'Entry point.');
 });
 
 test('ATLAS-4 enrichAtlasGraph degrades gracefully on unparseable output', async () => {
