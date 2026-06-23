@@ -95,7 +95,7 @@ import { readPlanHistory, recordPlanDecision, linkPlanDecision, type PlanVerdict
 import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
 import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement, deleteRequirement, type RequirementPatch } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
-import { buildBaseGraph, saveAtlasGraph, readAtlasGraph, atlasGraphStats, enrichAtlasGraph, extractAtlasJson, type AtlasLlmCaller } from '@kinqs/brainrouter-core/dist/atlas/index.js';
+import { buildBaseGraph, saveAtlasGraph, readAtlasGraph, atlasGraphStats, atlasWorkspaceTag, enrichAtlasGraph, extractAtlasJson, type AtlasLlmCaller } from '@kinqs/brainrouter-core/dist/atlas/index.js';
 import { callOpenAI } from '@kinqs/brainrouter-core/dist/agent/agent.js';
 import { syncRequirementPlanTrack } from '@kinqs/brainrouter-core/dist/requirement/planTrackSync.js';
 import { ensureProject, getProject, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember, type CreateWorkItemInput, type UpdateWorkItemPatch, type AutomationPatch } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
@@ -492,6 +492,20 @@ async function main(): Promise<void> {
     await mcpClient.connectAll(config.servers ?? {}, llm, { timeoutMs: 5_000 });
     mcpClient.startReconnectSupervisor(); // WS9 — auto-reconnect dropped MCP servers in the background
   } catch { /* offline-mode: local tools only, same as the CLI */ }
+
+  // REMOTE-BRAIN Phase 3d — call a brain Atlas tool via the MCP pool, parsing its
+  // JSON text result. Best-effort: null on any failure so the local artifact path
+  // always remains the fallback.
+  const callBrainAtlas = async (tool: string, args: Record<string, unknown>): Promise<any | null> => {
+    try {
+      const res = await mcpClient.callTool(tool, args);
+      if (!res || res.isError) return null;
+      const text = res?.content?.[0]?.text;
+      return typeof text === 'string' && text.trim() ? JSON.parse(text) : null;
+    } catch {
+      return null;
+    }
+  };
 
   // DESK-3 — the approval/choice port: agent asks become interaction-request
   // events; the renderer's dialogs answer them. Shares the hostCore broker so
@@ -1557,10 +1571,24 @@ async function main(): Promise<void> {
       // ATLAS — the codebase knowledge graph. `atlas-graph` loads the stored
       // artifact (or null); `atlas-build` runs the deterministic builder, saves,
       // and returns the fresh graph so the panel renders without a second fetch.
-      'atlas-graph': () => readAtlasGraph(workspaceRoot),
-      'atlas-build': () => {
+      // REMOTE-BRAIN Phase 3d — with a remote brain configured (cli.brainUrl),
+      // the brain is the source of truth: pull the stored graph (caching it
+      // locally) and fall back to the local artifact when absent/unreachable.
+      'atlas-graph': async () => {
+        if (getCliKnobs().brainUrl) {
+          const remote = await callBrainAtlas('atlas_get', { workspaceTag: atlasWorkspaceTag(workspaceRoot) });
+          if (remote?.found && remote.graph) {
+            saveAtlasGraph(workspaceRoot, remote.graph);
+            return remote.graph;
+          }
+        }
+        return readAtlasGraph(workspaceRoot);
+      },
+      'atlas-build': async () => {
         const graph = buildBaseGraph(workspaceRoot);
         saveAtlasGraph(workspaceRoot, graph);
+        // Sync the fresh build up so other clients / the dashboard can serve it.
+        if (getCliKnobs().brainUrl) await callBrainAtlas('atlas_put', { workspaceTag: atlasWorkspaceTag(workspaceRoot), graph });
         return { graph, stats: atlasGraphStats(graph) };
       },
       // `atlas-enrich` layers LLM understanding (summaries, tags, layers, tour)
@@ -1576,20 +1604,27 @@ async function main(): Promise<void> {
         if (!llm || (!llm.apiKey && (llm.provider ?? 'openai') === 'openai')) {
           return { error: 'No model configured — set a provider/model (and API key) in Settings before enriching the atlas.' };
         }
-        const caller: AtlasLlmCaller = async ({ system, user, signal }) => {
+        const caller: AtlasLlmCaller = async ({ system, user, signal, tool }) => {
+          // STRUCTURED OUTPUT — forward the enrich tool as a forced tool_choice so
+          // output is schema-shaped + consistent across models (mirrors the CLI
+          // adapter); fall back to message content when the model answers inline.
+          const tools = tool ? [{ name: tool.name, description: tool.description ?? '', inputSchema: tool.parameters }] : [];
           const resp = await callOpenAI(
             llm,
             [
               { role: 'system', content: system },
               { role: 'user', content: user },
             ],
-            [],
-            { effort: 'low', signal },
+            tools,
+            { effort: 'low', signal, ...(tool ? { tool_choice: { type: 'function' as const, function: { name: tool.name } } } : {}) },
           );
+          const argsText = (resp as { tool_calls?: Array<{ function?: { arguments?: string } }> })?.tool_calls?.[0]?.function?.arguments;
+          if (typeof argsText === 'string' && argsText.trim()) return argsText;
           return (resp?.content as string) ?? '';
         };
         const res = await enrichAtlasGraph(graph, caller);
         saveAtlasGraph(workspaceRoot, res.graph);
+        if (getCliKnobs().brainUrl) await callBrainAtlas('atlas_put', { workspaceTag: atlasWorkspaceTag(workspaceRoot), graph: res.graph });
         return {
           graph: res.graph,
           stats: atlasGraphStats(res.graph),
