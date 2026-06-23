@@ -91,6 +91,56 @@ export function selectMcpServerIds(
 }
 
 /**
+ * REMOTE-BRAIN (Workstream A, ADR-005) — rewrite the active BrainRouter profile
+ * to talk to a remote Streamable-HTTP brain at `brainUrl`.
+ *
+ * The brain already speaks HTTP (`--http`, Bearer auth); this is the ergonomic
+ * client side of `cli.brainUrl`: a single knob flips the active brain from
+ * embedded/stdio to remote without hand-editing `servers.*`. Returns a NEW
+ * servers map (input untouched) plus the id of the brain that was pointed
+ * remote, so the caller can keep `activeServer` in sync.
+ *
+ * Rules:
+ *  - `brainUrl` falsy → no-op (embedded stays the default).
+ *  - An existing brain profile keeps its `apiKey`/`headers` (the bearer key the
+ *    HTTP transport requires) and just swaps transport to `http` + `url`; the
+ *    stdio-only fields (`command`/`args`/`env`) are dropped.
+ *  - No brain profile yet → one is synthesized under `brainrouter` so a fresh
+ *    install can reach a remote brain from the knob alone (the user still adds
+ *    an `apiKey`).
+ */
+export function applyBrainUrlOverride(
+  servers: Record<string, ServerConfig>,
+  activeServer: string | undefined,
+  brainUrl: string | null | undefined,
+  apiKey?: string,
+): { servers: Record<string, ServerConfig>; activeServer: string } {
+  const fallbackActive = activeServer ?? '';
+  if (!brainUrl) return { servers, activeServer: fallbackActive };
+
+  const ids = Object.keys(servers);
+  const brainrouterIds = ids.filter((id) => resolveIdentityFromConfig(servers[id], id) === 'brainrouter');
+  const targetId = (activeServer && brainrouterIds.includes(activeServer))
+    ? activeServer
+    : brainrouterIds[0] ?? 'brainrouter';
+
+  const prev = servers[targetId];
+  const next: ServerConfig = {
+    ...(prev ?? {}),
+    type: 'http',
+    url: brainUrl,
+    identity: 'brainrouter',
+    // stdio-only fields are meaningless over HTTP — drop them.
+    command: undefined,
+    args: undefined,
+    env: undefined,
+    apiKey: prev?.apiKey ?? apiKey,
+  };
+
+  return { servers: { ...servers, [targetId]: next }, activeServer: targetId };
+}
+
+/**
  * 0.3.8-R5 — Single-underscore `mcp_<server>_<tool>` is the canonical
  * tool-name shape across the CLI. Any legacy double-underscore
  * `mcp__<server>__<tool>` form that arrives at the pool boundary
