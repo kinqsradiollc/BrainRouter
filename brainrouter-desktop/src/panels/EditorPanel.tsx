@@ -49,11 +49,13 @@ function setQuietDragImage(e: React.DragEvent<HTMLElement>): void {
   e.dataTransfer.setDragImage(canvas, 0, 0);
 }
 
-export function EditorPanel({ tabs, activePath, conflictPaths, saving, onSelect, onChange, onSave, onSaveAll, onRevert, onClose, onReorder, onAnnotateSelection }: {
+export function EditorPanel({ tabs, activePath, conflictPaths, saving, revealLine, onSelect, onChange, onSave, onSaveAll, onRevert, onClose, onReorder, onAnnotateSelection }: {
   tabs: EditorTab[];
   activePath: string | null;
   conflictPaths?: string[];
   saving?: boolean;
+  /** Reveal+focus a line in the tab at `path` (e.g. Atlas symbol line-jump). */
+  revealLine?: { path: string; line: number; seq: number } | null;
   onSelect: (path: string) => void;
   onChange: (path: string, content: string) => void;
   onSave: (path: string) => void;
@@ -75,6 +77,17 @@ export function EditorPanel({ tabs, activePath, conflictPaths, saving, onSelect,
   const saveRef = useRef(onSave);
   saveRef.current = onSave;
   const editorRefs = useRef<Record<EditorPaneId, Parameters<OnMount>[0] | null>>({ primary: null, secondary: null });
+  // Symbol line-jump: apply the latest reveal request once, whether the editor is
+  // already mounted (effect below) or mounts after the file loads (mountPane).
+  const revealLineRef = useRef(revealLine);
+  revealLineRef.current = revealLine;
+  const lastRevealSeq = useRef(0);
+  const applyReveal = (ed: Parameters<OnMount>[0], line: number, seq: number): void => {
+    lastRevealSeq.current = seq;
+    ed.revealLineInCenter(line);
+    ed.setPosition({ lineNumber: line, column: 1 });
+    ed.focus();
+  };
   const [draggedTab, setDraggedTab] = useState<string | null>(null);
   const [dropTab, setDropTab] = useState<string | null>(null);
   const lastDropTab = useRef<string | null>(null);
@@ -97,6 +110,15 @@ export function EditorPanel({ tabs, activePath, conflictPaths, saving, onSelect,
     if (secondaryPath && !tabs.some((t) => t.path === secondaryPath)) setSecondaryPath(null);
   }, [secondaryPath, tabs]);
 
+  // Reveal the requested line in whichever pane holds the file (if its editor is
+  // already mounted; otherwise mountPane applies it once Monaco is ready).
+  useEffect(() => {
+    if (!revealLine || revealLine.seq === lastRevealSeq.current) return;
+    const pane: EditorPaneId | null = revealLine.path === activePath ? 'primary' : revealLine.path === secondaryPath ? 'secondary' : null;
+    const ed = pane ? editorRefs.current[pane] : null;
+    if (ed) applyReveal(ed, revealLine.line, revealLine.seq);
+  }, [revealLine, activePath, secondaryPath, tabs.length]);
+
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       editorRefs.current.primary?.layout();
@@ -111,6 +133,11 @@ export function EditorPanel({ tabs, activePath, conflictPaths, saving, onSelect,
 
   const mountPane = (pane: EditorPaneId, path: string): OnMount => (editor, monaco) => {
     editorRefs.current[pane] = editor;
+    // A reveal queued before this editor mounted (newly-opened file) applies now.
+    const pending = revealLineRef.current;
+    if (pending && pending.path === path && pending.seq !== lastRevealSeq.current) {
+      applyReveal(editor, pending.line, pending.seq);
+    }
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       saveRef.current(path);
     });

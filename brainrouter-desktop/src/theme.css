@@ -3763,6 +3763,9 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .atlas-sym-kind.function { color: #5fae74; }
 .atlas-sym-name { min-width: 0; font-family: var(--mono, ui-monospace, monospace); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .atlas-sym-line { color: var(--text-faint); font-size: 10px; }
+.atlas-detail-syms li.jump { cursor: pointer; border-radius: 5px; margin: 0 -4px; padding: 1px 4px; transition: background 0.1s, color 0.1s; }
+.atlas-detail-syms li.jump:hover { background: var(--surface); color: var(--text); }
+.atlas-detail-syms li.jump:hover .atlas-sym-line { color: var(--accent); }
 .atlas-detail-deps { display: flex; gap: 12px; padding-top: 6px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-faint); }
 .atlas-detail .dim { color: var(--text-faint); }
 

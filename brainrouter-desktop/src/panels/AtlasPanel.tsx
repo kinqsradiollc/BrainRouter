@@ -30,7 +30,7 @@ export interface AtlasPanelProps {
   onBuild: () => void;
   onEnrich?: () => void;
   onSelectNode?: (nodeId: string, filePath?: string) => void;
-  onOpenFile?: (path: string) => void;
+  onOpenFile?: (path: string, line?: number) => void;
   onLoad?: () => void;
   /** Working-tree changes (path + git porcelain status) for the Review overlay. */
   changedFiles?: ReadonlyArray<{ path: string; status: string }>;
