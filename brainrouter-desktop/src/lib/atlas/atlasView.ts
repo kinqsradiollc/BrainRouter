@@ -11,7 +11,10 @@ import type { AtlasComplexity, AtlasEdge, AtlasFileCategory, AtlasGraph, AtlasNo
 // Pure query + impact ops moved to the shared `types` package (REMOTE-BRAIN
 // Phase 3b) so the brain can reuse them server-side. Re-exported here so the
 // panel + existing tests keep importing them from atlasView unchanged.
-export { atlasSearchMatches, atlasImpact, atlasImpactOf, type AtlasImpact } from "@kinqs/brainrouter-types";
+// Import from the atlas-ops SUBPATH, not the package barrel: the barrel's
+// `export *` pulls `memory.js`, whose top-level `node:crypto` import breaks the
+// browser (vite) bundle. atlas-ops only depends on the pure `atlas.js` types.
+export { atlasSearchMatches, atlasImpact, atlasImpactOf, type AtlasImpact } from "@kinqs/brainrouter-types/dist/atlas-ops.js";
 
 /** Node types shown in the structural map (symbols — function/class — are detail, hidden here). */
 const FILE_LEVEL: ReadonlySet<AtlasNodeType> = new Set<AtlasNodeType>([
