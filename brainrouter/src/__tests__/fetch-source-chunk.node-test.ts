@@ -1,22 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { SqliteMemoryStore } from "../memory/store/sqlite.js";
-import { MemoryEngine } from "../memory/engine.js";
-import { asyncify } from "../memory/store/asyncify.js";
+import { createTestEngine } from "./helpers/pgTestStore.js";
+import type { PostgresMemoryStore } from "../memory/store/postgres/PostgresMemoryStore.js";
 
-function fresh(label: string): { store: SqliteMemoryStore; cleanup: () => void } {
-  const dir = mkdtempSync(join(tmpdir(), `brainrouter-mem8-${label}-`));
-  const store = new SqliteMemoryStore(join(dir, "memory.db"));
-  store.init();
-  return { store, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
-}
-
-function seed(store: SqliteMemoryStore) {
-  const doc = store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/a.ts", hash: "h8", title: "a.ts" });
-  const chunks = store.addSourceChunks(doc.id, [
+async function seed(store: PostgresMemoryStore) {
+  const doc = await store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/a.ts", hash: "h8", title: "a.ts" });
+  const chunks = await store.addSourceChunks(doc.id, [
     { content: "AAA", tokenCount: 1 },
     { content: "BBB", tokenCount: 1 },
     { content: "CCC", tokenCount: 1 },
@@ -25,10 +14,9 @@ function seed(store: SqliteMemoryStore) {
 }
 
 test("MEM-8 fetchSourceChunk: full chunk + parent document, no neighbors by default", async () => {
-  const { store, cleanup } = fresh("basic");
+  const { engine, store, cleanup } = await createTestEngine();
   try {
-    const { chunks } = seed(store);
-    const engine = new MemoryEngine(asyncify(store));
+    const { chunks } = await seed(store);
     const r = await engine.fetchSourceChunk("u1", chunks[1].id);
     assert.ok(r);
     assert.equal(r!.chunk.content, "BBB");
@@ -37,24 +25,22 @@ test("MEM-8 fetchSourceChunk: full chunk + parent document, no neighbors by defa
     assert.deepEqual(r!.neighbors, []);
     // user-scoped: another user cannot fetch u1's chunk (cross-tenant guard)
     assert.equal(await engine.fetchSourceChunk("other", chunks[1].id), null);
-  } finally { cleanup(); }
+  } finally { await cleanup(); }
 });
 
 test("MEM-8 fetchSourceChunk: ±N neighbours from the same document, excluding self", async () => {
-  const { store, cleanup } = fresh("neighbors");
+  const { engine, store, cleanup } = await createTestEngine();
   try {
-    const { chunks } = seed(store);
-    const engine = new MemoryEngine(asyncify(store));
+    const { chunks } = await seed(store);
     const r = await engine.fetchSourceChunk("u1", chunks[1].id, 1);
     assert.ok(r);
     assert.deepEqual(r!.neighbors.map((c) => c.content), ["AAA", "CCC"]);
-  } finally { cleanup(); }
+  } finally { await cleanup(); }
 });
 
 test("MEM-8 fetchSourceChunk: unknown id → null", async () => {
-  const { store, cleanup } = fresh("missing");
+  const { engine, cleanup } = await createTestEngine();
   try {
-    const engine = new MemoryEngine(asyncify(store));
     assert.equal(await engine.fetchSourceChunk("u1", "does-not-exist"), null);
-  } finally { cleanup(); }
+  } finally { await cleanup(); }
 });

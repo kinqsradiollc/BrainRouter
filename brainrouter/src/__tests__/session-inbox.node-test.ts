@@ -22,31 +22,22 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { SqliteMemoryStore } from "../memory/store/sqlite.js";
-
-function freshDb(label: string): { store: SqliteMemoryStore; cleanup: () => void } {
-  const dir = mkdtempSync(join(tmpdir(), `brainrouter-inbox-${label}-`));
-  const store = new SqliteMemoryStore(join(dir, "memory.db"));
-  store.init();
-  return { store, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
-}
+import { createTestStore } from "./helpers/pgTestStore.js";
+import type { PostgresMemoryStore } from "../memory/store/postgres/PostgresMemoryStore.js";
 
 function iso(offsetMs = 0): string {
   return new Date(Date.now() + offsetMs).toISOString();
 }
 
-function registerSession(
-  store: SqliteMemoryStore,
+async function registerSession(
+  store: PostgresMemoryStore,
   userId: string,
   sessionKey: string,
   clientKind: string,
   heartbeatOffsetMs = 0,
-): void {
+): Promise<void> {
   const heartbeat = iso(heartbeatOffsetMs);
-  store.registerActiveSession({
+  await store.registerActiveSession({
     sessionKey,
     userId,
     clientKind,
@@ -57,11 +48,11 @@ function registerSession(
   });
 }
 
-test("sendSessionMessage: point-to-point writes exactly one row at the literal sessionKey", () => {
-  const { store, cleanup } = freshDb("p2p");
+test("sendSessionMessage: point-to-point writes exactly one row at the literal sessionKey", async () => {
+  const { store, cleanup } = await createTestStore();
   try {
-    registerSession(store, "u1", "sk-recip", "claude-code");
-    const rows = store.sendSessionMessage({
+    await registerSession(store, "u1", "sk-recip", "claude-code");
+    const rows = await store.sendSessionMessage({
       userId: "u1",
       fromSessionKey: "sk-sender",
       toSessionKey: "sk-recip",
@@ -73,20 +64,20 @@ test("sendSessionMessage: point-to-point writes exactly one row at the literal s
     assert.equal(rows[0].fromSessionKey, "sk-sender");
     assert.deepEqual(rows[0].payload, { text: "hi" });
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
-test("sendSessionMessage: clientKind:* broadcasts only to active peers of that kind", () => {
-  const { store, cleanup } = freshDb("kind-broadcast");
+test("sendSessionMessage: clientKind:* broadcasts only to active peers of that kind", async () => {
+  const { store, cleanup } = await createTestStore();
   try {
-    registerSession(store, "u1", "sk-bc-1", "brainrouter-cli");
-    registerSession(store, "u1", "sk-bc-2", "brainrouter-cli");
-    registerSession(store, "u1", "sk-cc-1", "claude-code");
+    await registerSession(store, "u1", "sk-bc-1", "brainrouter-cli");
+    await registerSession(store, "u1", "sk-bc-2", "brainrouter-cli");
+    await registerSession(store, "u1", "sk-cc-1", "claude-code");
     // Other-user peer — must not receive the broadcast.
-    registerSession(store, "u2", "sk-foreign", "brainrouter-cli");
+    await registerSession(store, "u2", "sk-foreign", "brainrouter-cli");
 
-    const rows = store.sendSessionMessage({
+    const rows = await store.sendSessionMessage({
       userId: "u1",
       fromSessionKey: "sk-sender",
       toSessionKey: "brainrouter-cli:*",
@@ -96,19 +87,19 @@ test("sendSessionMessage: clientKind:* broadcasts only to active peers of that k
     const recipients = rows.map((r) => r.toSessionKey).sort();
     assert.deepEqual(recipients, ["sk-bc-1", "sk-bc-2"]);
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
-test("sendSessionMessage: * broadcasts to every active peer under the user", () => {
-  const { store, cleanup } = freshDb("full-broadcast");
+test("sendSessionMessage: * broadcasts to every active peer under the user", async () => {
+  const { store, cleanup } = await createTestStore();
   try {
-    registerSession(store, "u1", "sk-a", "brainrouter-cli");
-    registerSession(store, "u1", "sk-b", "claude-code");
-    registerSession(store, "u1", "sk-c", "codex");
-    registerSession(store, "u2", "sk-foreign", "brainrouter-cli");
+    await registerSession(store, "u1", "sk-a", "brainrouter-cli");
+    await registerSession(store, "u1", "sk-b", "claude-code");
+    await registerSession(store, "u1", "sk-c", "codex");
+    await registerSession(store, "u2", "sk-foreign", "brainrouter-cli");
 
-    const rows = store.sendSessionMessage({
+    const rows = await store.sendSessionMessage({
       userId: "u1",
       fromSessionKey: "sk-sender",
       toSessionKey: "*",
@@ -118,17 +109,17 @@ test("sendSessionMessage: * broadcasts to every active peer under the user", () 
     const recipients = rows.map((r) => r.toSessionKey).sort();
     assert.deepEqual(recipients, ["sk-a", "sk-b", "sk-c"]);
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
-test("sendSessionMessage: broadcast skips stale (last-heartbeat > 2 min) peers", () => {
-  const { store, cleanup } = freshDb("broadcast-stale");
+test("sendSessionMessage: broadcast skips stale (last-heartbeat > 2 min) peers", async () => {
+  const { store, cleanup } = await createTestStore();
   try {
-    registerSession(store, "u1", "sk-fresh", "brainrouter-cli", -30_000); // 30 s ago
-    registerSession(store, "u1", "sk-stale", "brainrouter-cli", -5 * 60_000); // 5 min ago
+    await registerSession(store, "u1", "sk-fresh", "brainrouter-cli", -30_000); // 30 s ago
+    await registerSession(store, "u1", "sk-stale", "brainrouter-cli", -5 * 60_000); // 5 min ago
 
-    const rows = store.sendSessionMessage({
+    const rows = await store.sendSessionMessage({
       userId: "u1",
       fromSessionKey: "sk-sender",
       toSessionKey: "*",
@@ -137,16 +128,16 @@ test("sendSessionMessage: broadcast skips stale (last-heartbeat > 2 min) peers",
     });
     assert.deepEqual(rows.map((r) => r.toSessionKey), ["sk-fresh"]);
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
-test("readSessionInbox: returns chronological order, scoped to recipient + user, excludes delivered by default", () => {
-  const { store, cleanup } = freshDb("read-order");
+test("readSessionInbox: returns chronological order, scoped to recipient + user, excludes delivered by default", async () => {
+  const { store, cleanup } = await createTestStore();
   try {
-    registerSession(store, "u1", "sk-recip", "brainrouter-cli");
+    await registerSession(store, "u1", "sk-recip", "brainrouter-cli");
     // Insert three messages with explicit timestamps so order is deterministic.
-    store.sendSessionMessage(
+    await store.sendSessionMessage(
       {
         userId: "u1",
         fromSessionKey: "from",
@@ -156,7 +147,7 @@ test("readSessionInbox: returns chronological order, scoped to recipient + user,
       },
       { idGenerator: () => "m1", now: "2026-05-28T10:00:00.000Z" },
     );
-    store.sendSessionMessage(
+    await store.sendSessionMessage(
       {
         userId: "u1",
         fromSessionKey: "from",
@@ -166,7 +157,7 @@ test("readSessionInbox: returns chronological order, scoped to recipient + user,
       },
       { idGenerator: () => "m2", now: "2026-05-28T10:00:01.000Z" },
     );
-    store.sendSessionMessage(
+    await store.sendSessionMessage(
       {
         userId: "u1",
         fromSessionKey: "from",
@@ -178,25 +169,25 @@ test("readSessionInbox: returns chronological order, scoped to recipient + user,
     );
 
     // Cross-user isolation: another user reading "sk-recip" sees nothing.
-    const foreign = store.readSessionInbox({ userId: "u2", toSessionKey: "sk-recip" });
+    const foreign = await store.readSessionInbox({ userId: "u2", toSessionKey: "sk-recip" });
     assert.equal(foreign.length, 0);
 
-    const page = store.readSessionInbox({ userId: "u1", toSessionKey: "sk-recip" });
+    const page = await store.readSessionInbox({ userId: "u1", toSessionKey: "sk-recip" });
     assert.deepEqual(
       page.map((m) => m.id),
       ["m1", "m2", "m3"],
     );
 
     // Ack the middle one; default read now skips it.
-    store.ackSessionInbox("u1", "sk-recip", ["m2"], iso());
-    const undelivered = store.readSessionInbox({ userId: "u1", toSessionKey: "sk-recip" });
+    await store.ackSessionInbox("u1", "sk-recip", ["m2"], iso());
+    const undelivered = await store.readSessionInbox({ userId: "u1", toSessionKey: "sk-recip" });
     assert.deepEqual(
       undelivered.map((m) => m.id),
       ["m1", "m3"],
     );
 
     // includeDelivered: true surfaces the acked one again.
-    const all = store.readSessionInbox({
+    const all = await store.readSessionInbox({
       userId: "u1",
       toSessionKey: "sk-recip",
       includeDelivered: true,
@@ -206,15 +197,15 @@ test("readSessionInbox: returns chronological order, scoped to recipient + user,
       ["m1", "m2", "m3"],
     );
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
-test("ackSessionInbox: idempotent across repeated calls", () => {
-  const { store, cleanup } = freshDb("ack-idempotent");
+test("ackSessionInbox: idempotent across repeated calls", async () => {
+  const { store, cleanup } = await createTestStore();
   try {
-    registerSession(store, "u1", "sk-r", "brainrouter-cli");
-    store.sendSessionMessage(
+    await registerSession(store, "u1", "sk-r", "brainrouter-cli");
+    await store.sendSessionMessage(
       {
         userId: "u1",
         fromSessionKey: "from",
@@ -225,48 +216,48 @@ test("ackSessionInbox: idempotent across repeated calls", () => {
       { idGenerator: () => "m1" },
     );
 
-    assert.equal(store.ackSessionInbox("u1", "sk-r", ["m1"], iso()), 1);
+    assert.equal(await store.ackSessionInbox("u1", "sk-r", ["m1"], iso()), 1);
     // Second call: row is already delivered, returns 0 (idempotent).
-    assert.equal(store.ackSessionInbox("u1", "sk-r", ["m1"], iso()), 0);
+    assert.equal(await store.ackSessionInbox("u1", "sk-r", ["m1"], iso()), 0);
     // Cross-user ack: returns 0, never touches the actual row.
-    assert.equal(store.ackSessionInbox("u2", "sk-r", ["m1"], iso()), 0);
+    assert.equal(await store.ackSessionInbox("u2", "sk-r", ["m1"], iso()), 0);
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
-test("sweepSessionInbox: deletes ONLY delivered rows older than threshold", () => {
-  const { store, cleanup } = freshDb("sweep");
+test("sweepSessionInbox: deletes ONLY delivered rows older than threshold", async () => {
+  const { store, cleanup } = await createTestStore();
   try {
-    registerSession(store, "u1", "sk-r", "brainrouter-cli");
+    await registerSession(store, "u1", "sk-r", "brainrouter-cli");
 
     // Two old undelivered + two old delivered rows. Sweeper drops only
     // the delivered ones; undelivered must survive forever (no recipient
     // has read them yet).
-    store.sendSessionMessage(
+    await store.sendSessionMessage(
       { userId: "u1", fromSessionKey: "f", toSessionKey: "sk-r", kind: "text", payload: {} },
       { idGenerator: () => "old-undelivered-1", now: "2020-01-01T00:00:00Z" },
     );
-    store.sendSessionMessage(
+    await store.sendSessionMessage(
       { userId: "u1", fromSessionKey: "f", toSessionKey: "sk-r", kind: "text", payload: {} },
       { idGenerator: () => "old-undelivered-2", now: "2020-01-01T00:00:00Z" },
     );
-    store.sendSessionMessage(
+    await store.sendSessionMessage(
       { userId: "u1", fromSessionKey: "f", toSessionKey: "sk-r", kind: "text", payload: {} },
       { idGenerator: () => "old-delivered-1", now: "2020-01-01T00:00:00Z" },
     );
-    store.sendSessionMessage(
+    await store.sendSessionMessage(
       { userId: "u1", fromSessionKey: "f", toSessionKey: "sk-r", kind: "text", payload: {} },
       { idGenerator: () => "old-delivered-2", now: "2020-01-01T00:00:00Z" },
     );
-    store.ackSessionInbox("u1", "sk-r", ["old-delivered-1", "old-delivered-2"], "2020-01-01T00:00:01Z");
+    await store.ackSessionInbox("u1", "sk-r", ["old-delivered-1", "old-delivered-2"], "2020-01-01T00:00:01Z");
 
     // Sweep "anything delivered older than 1 hour". Both delivered rows
     // qualify; both undelivered rows must remain.
-    const removed = store.sweepSessionInbox(60 * 60_000);
+    const removed = await store.sweepSessionInbox(60 * 60_000);
     assert.equal(removed, 2);
 
-    const remaining = store.readSessionInbox({
+    const remaining = await store.readSessionInbox({
       userId: "u1",
       toSessionKey: "sk-r",
       includeDelivered: true,
@@ -276,6 +267,6 @@ test("sweepSessionInbox: deletes ONLY delivered rows older than threshold", () =
       ["old-undelivered-1", "old-undelivered-2"],
     );
   } finally {
-    cleanup();
+    await cleanup();
   }
 });

@@ -1,53 +1,43 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { SqliteMemoryStore } from "../memory/store/sqlite.js";
+import { createTestStore } from "./helpers/pgTestStore.js";
 import { MemoryEngine } from "../memory/engine.js";
 
-function fresh(label: string): { store: SqliteMemoryStore; cleanup: () => void } {
-  const dir = mkdtempSync(join(tmpdir(), `brainrouter-mem3-${label}-`));
-  const store = new SqliteMemoryStore(join(dir, "memory.db"));
-  store.init();
-  return { store, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
-}
-
-test("MEM-3 store: link + fetch record→chunks (ordered, idempotent)", () => {
-  const { store, cleanup } = fresh("store");
+test("MEM-3 store: link + fetch record→chunks (ordered, idempotent)", async () => {
+  const { store, cleanup } = await createTestStore();
   try {
-    const doc = store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "transcript", uri: null, hash: "h-mem3", title: "t" });
-    const chunks = store.addSourceChunks(doc.id, [
+    const doc = await store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "transcript", uri: null, hash: "h-mem3", title: "t" });
+    const chunks = await store.addSourceChunks(doc.id, [
       { content: "first chunk content", tokenCount: 4 },
       { content: "second chunk content", tokenCount: 4 },
     ]);
     const ids = chunks.map((c) => c.id);
-    store.linkRecordSources("u1", "rec1", ids);
-    store.linkRecordSources("u1", "rec1", ids); // re-extraction must not duplicate
-    const got = store.getRecordSourceChunks("u1", "rec1");
+    await store.linkRecordSources("u1", "rec1", ids);
+    await store.linkRecordSources("u1", "rec1", ids); // re-extraction must not duplicate
+    const got = await store.getRecordSourceChunks("u1", "rec1");
     assert.deepEqual(got.map((c) => c.content), ["first chunk content", "second chunk content"]);
     assert.equal(got.length, 2, "idempotent — no duplicate links");
     // user-scoped: another user must NOT see u1's provenance (cross-tenant guard)
-    assert.deepEqual(store.getRecordSourceChunks("other", "rec1"), []);
-  } finally { cleanup(); }
+    assert.deepEqual(await store.getRecordSourceChunks("other", "rec1"), []);
+  } finally { await cleanup(); }
 });
 
-test("MEM-3 store: empty link is a no-op; unknown record → []", () => {
-  const { store, cleanup } = fresh("empty");
+test("MEM-3 store: empty link is a no-op; unknown record → []", async () => {
+  const { store, cleanup } = await createTestStore();
   try {
-    store.linkRecordSources("u1", "recX", []);
-    assert.deepEqual(store.getRecordSourceChunks("u1", "recX"), []);
-    assert.deepEqual(store.getRecordSourceChunks("u1", "nope"), []);
-  } finally { cleanup(); }
+    await store.linkRecordSources("u1", "recX", []);
+    assert.deepEqual(await store.getRecordSourceChunks("u1", "recX"), []);
+    assert.deepEqual(await store.getRecordSourceChunks("u1", "nope"), []);
+  } finally { await cleanup(); }
 });
 
 test("MEM-3 engine.getRecordProvenance: excerpts (truncated >280) + empty when unlinked", async () => {
-  const { store, cleanup } = fresh("engine");
+  const { store, cleanup } = await createTestStore();
   try {
-    const doc = store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/a.ts", hash: "h-eng", title: "a.ts" });
+    const doc = await store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/a.ts", hash: "h-eng", title: "a.ts" });
     const long = "x".repeat(400);
-    const [c] = store.addSourceChunks(doc.id, [{ content: long, tokenCount: 100, filePath: "src/a.ts", symbol: "fnA", startLine: 1, endLine: 40 }]);
-    store.linkRecordSources("u1", "recE", [c.id]);
+    const [c] = await store.addSourceChunks(doc.id, [{ content: long, tokenCount: 100, filePath: "src/a.ts", symbol: "fnA", startLine: 1, endLine: 40 }]);
+    await store.linkRecordSources("u1", "recE", [c.id]);
 
     const engine = new MemoryEngine(store);
     const prov = await engine.getRecordProvenance("u1", "recE");
@@ -59,5 +49,5 @@ test("MEM-3 engine.getRecordProvenance: excerpts (truncated >280) + empty when u
     assert.ok(prov[0].excerpt.endsWith("…"));
     assert.deepEqual(await engine.getRecordProvenance("u1", "unlinked"), [], "no links → no provenance");
     assert.deepEqual(await engine.getRecordProvenance("other", "recE"), [], "another user sees no provenance");
-  } finally { cleanup(); }
+  } finally { await cleanup(); }
 });

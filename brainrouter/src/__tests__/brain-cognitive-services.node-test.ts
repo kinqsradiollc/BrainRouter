@@ -1,27 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { SqliteMemoryStore } from "../memory/store/sqlite.js";
-import { MemoryEngine } from "../memory/engine.js";
-import { asyncify } from "../memory/store/asyncify.js";
 import { createMemoryTreeService, MemoryTreeService } from "../memory/tree/service.js";
 import { createLessonsService, LessonsService } from "../memory/lessons/service.js";
 import { createBlackboardService, BlackboardService } from "../memory/blackboard/service.js";
 import { treeWalk } from "../memory/tree/treeOps.js";
 import { findLessonConflicts } from "../memory/lessons/lessonOps.js";
 import { reviewBlackboard } from "../memory/blackboard/blackboardOps.js";
-
-function fresh(): { engine: MemoryEngine; cleanup: () => void } {
-  const dir = mkdtempSync(join(tmpdir(), "br-cognitive-"));
-  const store = new SqliteMemoryStore(join(dir, "memory.db"));
-  store.init();
-  return { engine: new MemoryEngine(asyncify(store)), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
-}
+import { createTestEngine } from "./helpers/pgTestStore.js";
 
 test("brain cognitive ports (tree/lessons/blackboard) delegate to their engine-bound modules", async () => {
-  const { engine, cleanup } = fresh();
+  const { engine, cleanup } = await createTestEngine();
   const u = "u1";
   try {
     const tree = createMemoryTreeService(engine);
@@ -48,6 +36,6 @@ test("brain cognitive ports (tree/lessons/blackboard) delegate to their engine-b
     assert.deepEqual(await bb.review(u), await reviewBlackboard(engine, u));
     assert.equal(typeof (await bb.reconcile(u)).reconciled, "number");
   } finally {
-    cleanup();
+    await cleanup();
   }
 });

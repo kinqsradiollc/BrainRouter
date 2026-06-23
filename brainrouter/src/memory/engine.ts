@@ -1,5 +1,5 @@
-import { SqliteMemoryStore } from "./store/sqlite.js";
-import { asyncify } from "./store/asyncify.js";
+import { PostgresMemoryStore } from "./store/postgres/PostgresMemoryStore.js";
+import { pgUrlFromEnv } from "./store/postgres/connection.js";
 import type { StalenessThresholds } from "./lessons/lessonHygiene.js";
 // REFAC-ENGINE-SPLIT (0.4.6) — lesson-domain ops live in lessons/lessonOps.ts;
 // the engine methods below are thin wrappers delegating to them.
@@ -47,11 +47,19 @@ import { hashPassword } from "../api/auth/crypto.js";
 import { getMemoryTypeConfig } from "./config/memory-type-config.js";
 import { redactSensitiveMemoryText } from "./util/redaction.js";
 
-// Configure default path
-const defaultDbPath = process.env.BRAINROUTER_MEMORY_DB || path.join(os.homedir(), ".brainrouter", "memory.db");
-
 export class MemoryEngine {
   public readonly store: IMemoryStore;
+  /**
+   * ADR-007 Phase 2 (step 3) — the awaited init lifecycle. The constructor can't
+   * be async, so it kicks off `#initialize()` and stashes the promise here.
+   * Callers (production startup, tests) MUST `await engine.ready` (or
+   * `engine.init()`) before the first store-using call: with Postgres the store
+   * is genuinely async, so migrations / `initVec` / seed-admin are not done when
+   * the constructor returns. Pipelines created in the constructor only *touch*
+   * the store on use, which is always after readiness, so they're safe to build
+   * eagerly.
+   */
+  public readonly ready: Promise<void>;
   private capturePipeline: MemoryCapturePipeline;
   private recallPipeline: MemoryRecallPipeline;
   /** MEM-19 — kept to query reranker/judge readiness when picking benchmark modes. */
@@ -79,28 +87,24 @@ export class MemoryEngine {
     process.env.BRAINROUTER_PERSONA_CACHE_TTL_MS ?? String(60 * 60 * 1000), 10
   );
   
-  constructor(storeOrDbPath: IMemoryStore | SqliteMemoryStore | string = defaultDbPath) {
-    if (typeof storeOrDbPath === "string") {
-      const dir = path.dirname(storeOrDbPath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      // ADR-007 Phase 2 (transitional): SqliteMemoryStore is synchronous; wrap it
-      // so it satisfies the now-async IMemoryStore. Step 2 swaps in PostgresMemoryStore.
-      this.store = asyncify(new SqliteMemoryStore(storeOrDbPath));
-    } else if (storeOrDbPath instanceof SqliteMemoryStore) {
-      // A test injected a raw sync store — wrap it too, so tests need no change here.
-      this.store = asyncify(storeOrDbPath);
+  constructor(store?: IMemoryStore) {
+    // ADR-007 Phase 2 (step 3) — Postgres is the only memory store. A test (or
+    // an embedder) may inject an IMemoryStore; otherwise we build a
+    // PostgresMemoryStore from BRAINROUTER_DATABASE_URL / DATABASE_URL. SQLite is
+    // gone, so a connection string is REQUIRED when no store is injected.
+    if (store) {
+      this.store = store;
     } else {
-      this.store = storeOrDbPath;
+      const url = pgUrlFromEnv();
+      if (!url) {
+        throw new Error(
+          "[BrainRouter] BRAINROUTER_DATABASE_URL (or DATABASE_URL) is required: " +
+            "the memory engine runs on Postgres (SQLite has been removed). " +
+            "Set a Postgres connection string, e.g. postgres://user:pass@host:5432/brainrouter",
+        );
+      }
+      this.store = new PostgresMemoryStore(url);
     }
-    // SQLite's init runs synchronously inside the asyncify shim, so the store is
-    // ready here despite init() now returning a Promise. Step 2 (real async pg)
-    // moves init to an awaited lifecycle.
-    void this.store.init();
-    this.ensureSeedAdminUser().catch((err) => {
-      console.error("[BrainRouter] Failed to seed admin user:", err instanceof Error ? err.message : err);
-    });
 
     this.extractionRunner = new ModelLLMRunner(
       process.env.BRAINROUTER_EXTRACTION_MODEL
@@ -154,26 +158,60 @@ export class MemoryEngine {
         : undefined,
     });
 
-    this.store.initVec(embeddingService.getDimensions());
-    if (embeddingService.isReady()) {
-      void this.store.reembedStaleRecords((text) => embeddingService.embed(text)).then((count) => {
-        if (count > 0) {
-          console.error(`[BrainRouter] Re-embedded ${count} stale cognitive vector records.`);
-        }
-      }).catch((err) => {
-        console.error("[BrainRouter] Failed to re-embed stale cognitive vector records:", err instanceof Error ? err.message : err);
-      });
-    }
-    
     this.capturePipeline = new MemoryCapturePipeline(this.store, this.extractionRunner, embeddingService, 1);
     this.recallPipeline = new MemoryRecallPipeline(this.store, embeddingService, rerankerService, relevanceJudge);
     this.rerankerService = rerankerService; // MEM-19 — readiness drives benchmark mode selection
     this.embeddingService = embeddingService; // MEM-VEC — embed-on-import reuse
     this.relevanceJudge = relevanceJudge;
+
+    // ADR-007 Phase 2 (step 3) — single awaited init chain. With Postgres the
+    // store is genuinely async, so migrations + vec init + seed-admin must be
+    // awaited before the first store-using call. Callers `await engine.ready`
+    // (or `engine.init()`); the stale-vector reembed is kicked off in the
+    // background after readiness so it never blocks startup.
+    this.ready = this.#initialize();
+
     this.startExtractionSweeper();
     this.startActiveSessionSweeper();
     this.startSessionInboxSweeper();
     this.startJobRunner();
+  }
+
+  /**
+   * Run the store lifecycle to completion: migrations (`init`) → vector table
+   * (`initVec`) → seed-admin. Then kick off the stale-vector reembed in the
+   * background (best-effort; never part of the awaited readiness so startup
+   * isn't gated on the embedding endpoint). Resolves once the store is ready to
+   * serve.
+   */
+  async #initialize(): Promise<void> {
+    await this.store.init();
+    await this.store.initVec(this.embeddingService.getDimensions());
+    await this.ensureSeedAdminUser().catch((err) => {
+      console.error("[BrainRouter] Failed to seed admin user:", err instanceof Error ? err.message : err);
+    });
+
+    if (this.embeddingService.isReady()) {
+      void this.store
+        .reembedStaleRecords((text) => this.embeddingService.embed(text))
+        .then((count) => {
+          if (count > 0) {
+            console.error(`[BrainRouter] Re-embedded ${count} stale cognitive vector records.`);
+          }
+        })
+        .catch((err) => {
+          console.error("[BrainRouter] Failed to re-embed stale cognitive vector records:", err instanceof Error ? err.message : err);
+        });
+    }
+  }
+
+  /**
+   * Await the engine's init lifecycle. Production startup and tests should call
+   * this (or `await engine.ready`) before the first store-using call. Idempotent
+   * — it just awaits the shared `ready` promise.
+   */
+  public async init(): Promise<void> {
+    await this.ready;
   }
 
   /**
