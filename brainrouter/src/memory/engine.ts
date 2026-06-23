@@ -170,6 +170,13 @@ export class MemoryEngine {
     // (or `engine.init()`); the stale-vector reembed is kicked off in the
     // background after readiness so it never blocks startup.
     this.ready = this.#initialize();
+    // Observe the background init promise so a LATE rejection — e.g. the pool
+    // being closed during process / test-suite teardown while `#initialize` is
+    // still inside `initVec` ("Cannot use a pool after calling end on the pool")
+    // — never escapes as an unhandledRejection that crashes an unrelated test.
+    // Callers that explicitly `await engine.ready` (the server bootstrap) still
+    // receive and handle the real error; this only defuses the unobserved path.
+    void this.ready.catch(() => { /* observed: real awaiters of `ready` still see it */ });
 
     this.startExtractionSweeper();
     this.startActiveSessionSweeper();
