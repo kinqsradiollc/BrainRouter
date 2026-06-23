@@ -13,7 +13,7 @@ import { ReactFlow, Background, Controls, MiniMap, type Edge, type Node, type Re
 import "@xyflow/react/dist/style.css";
 import type { AtlasFileCategory, AtlasGraph, AtlasNode, AtlasNodeType } from "@kinqs/brainrouter-types";
 import {
-  atlasGrouping, atlasGroupedLayout, atlasOverviewModel, atlasDomainModel, atlasNodeColor, atlasSearchMatches,
+  atlasGrouping, atlasGroupedLayout, atlasOverviewModel, atlasDomainModel, atlasServiceModel, atlasNodeColor, atlasSearchMatches,
   atlasChangeMap, atlasNodeChanges, atlasImpact, atlasImpactOf, atlasUncoveredFiles, ATLAS_FILE_CATEGORIES, ATLAS_CATEGORY_COLORS,
   type AtlasChangeKind, type AtlasChangeAssessment,
 } from "../lib/atlas/atlasView.js";
@@ -21,7 +21,7 @@ import { ATLAS_NODE_TYPES } from "./AtlasNodes.js";
 import { AtlasDetail } from "./AtlasDetail.js";
 import { Icon } from "../icons.js";
 
-type Mode = "overview" | "structural" | "domain";
+type Mode = "overview" | "structural" | "domain" | "services";
 
 export interface AtlasPanelProps {
   graph: AtlasGraph | null;
@@ -81,8 +81,14 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
     return n;
   }, [showDiff, nodeChanges, uncovered]);
 
+  // Service map (Wave 3) — computed always (cheap) so the toolbar can offer the
+  // mode whenever the codebase exposes typed service ports, layers or not.
+  const serviceModel = useMemo(() => (graph ? atlasServiceModel(graph) : null), [graph]);
+  const hasServices = !!serviceModel && serviceModel.cards.length > 0;
+
   const hasLayers = !!graph && graph.layers.length > 0;
-  const effMode: Mode = hasLayers ? mode : "structural";
+  const effMode: Mode =
+    mode === "services" ? (hasServices ? "services" : "structural") : hasLayers ? mode : "structural";
 
   // Categories actually present (for the filter pills).
   const presentCats = useMemo(() => {
@@ -187,6 +193,29 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
       }));
       return { rfNodes: nodes, rfEdges: edges };
     }
+    if (effMode === "services" && serviceModel) {
+      const cardW = 230;
+      const cardH = 132;
+      const cols = Math.max(1, Math.min(5, Math.ceil(Math.sqrt(serviceModel.cards.length))));
+      const outC = new Map<string, number>();
+      const inC = new Map<string, number>();
+      for (const e of serviceModel.edges) {
+        outC.set(e.source, (outC.get(e.source) ?? 0) + 1);
+        inC.set(e.target, (inC.get(e.target) ?? 0) + 1);
+      }
+      const nodes: Node[] = serviceModel.cards.map((c, i) => ({
+        id: c.id, type: "atlasService",
+        position: { x: (i % cols) * (cardW + 40), y: Math.floor(i / cols) * (cardH + 40) },
+        data: { module: c.module, portPath: c.portPath, portNodeId: c.portNodeId, fileCount: c.fileCount, dependsOn: outC.get(c.id) ?? 0, dependedOnBy: inC.get(c.id) ?? 0 },
+        style: { width: cardW },
+      }));
+      const maxW = Math.max(1, ...serviceModel.edges.map((e) => e.weight));
+      const edges: Edge[] = serviceModel.edges.map((e, i) => ({
+        id: `sve${i}`, source: e.source, target: e.target, animated: true,
+        style: { stroke: "var(--accent)", strokeOpacity: 0.4 + 0.5 * (e.weight / maxW), strokeWidth: 1 + 1.5 * (e.weight / maxW) },
+      }));
+      return { rfNodes: nodes, rfEdges: edges };
+    }
     if (effMode === "structural" && structural) {
       const { layout, visible } = structural;
       const changedPerGroup = new Map<string, number>();
@@ -218,7 +247,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
       return { rfNodes: [...groupNodes, ...fileNodes], rfEdges: edges };
     }
     return { rfNodes: [], rfEdges: [] };
-  }, [graph, effMode, overview, domain, structural, spotlight, selected, byId, showDiff, nodeChanges]);
+  }, [graph, effMode, overview, domain, structural, serviceModel, spotlight, selected, byId, showDiff, nodeChanges]);
 
   // fit to spotlight when searching/touring
   useEffect(() => {
@@ -226,11 +255,13 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
     rfRef.current.fitView({ nodes: [...spotlight].map((id) => ({ id })), duration: 450, padding: 0.45 });
   }, [spotlight]);
 
-  // re-fit when the mode/drill/filter changes the whole layout
+  // re-fit when the mode/drill/filter changes the whole layout. A short timeout
+  // (not a single rAF) lets React Flow mount the new nodes first, so card modes
+  // like Services reliably centre instead of fitting an empty/half-laid graph.
   useEffect(() => {
     if (!rfRef.current) return;
-    const raf = requestAnimationFrame(() => rfRef.current?.fitView({ duration: 300, padding: 0.18 }));
-    return () => cancelAnimationFrame(raf);
+    const t = setTimeout(() => rfRef.current?.fitView({ duration: 300, padding: 0.2 }), 90);
+    return () => clearTimeout(t);
   }, [effMode, drill, disabledCats]);
 
   // Esc: leave drill → overview, else clear selection
@@ -271,11 +302,12 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
   return (
     <div className="atlas-panel">
       <div className="atlas-toolbar">
-        {hasLayers ? (
+        {hasLayers || hasServices ? (
           <div className="atlas-modes">
-            <button className={`atlas-mode${effMode === "overview" ? " on" : ""}`} onClick={() => { setMode("overview"); setDrill(null); }}>Overview</button>
-            <button className={`atlas-mode${effMode === "structural" ? " on" : ""}`} onClick={() => setMode("structural")}>Structural</button>
-            <button className={`atlas-mode${effMode === "domain" ? " on" : ""}`} onClick={() => { setMode("domain"); setDrill(null); }}>Domain</button>
+            {hasLayers ? <button className={`atlas-mode${effMode === "overview" ? " on" : ""}`} onClick={() => { setMode("overview"); setDrill(null); }}>Overview</button> : null}
+            {hasLayers ? <button className={`atlas-mode${effMode === "structural" ? " on" : ""}`} onClick={() => setMode("structural")}>Structural</button> : null}
+            {hasLayers ? <button className={`atlas-mode${effMode === "domain" ? " on" : ""}`} onClick={() => { setMode("domain"); setDrill(null); }}>Domain</button> : null}
+            {hasServices ? <button className={`atlas-mode${effMode === "services" ? " on" : ""}`} onClick={() => { setMode("services"); setDrill(null); }} title="The decomposed service architecture — every module's typed port, wired by cross-module imports">Services</button> : null}
           </div>
         ) : null}
         <span className="atlas-proj">{graph.project.name}</span>
@@ -305,7 +337,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
 
       <div className="atlas-breadcrumb">
         <button className="atlas-crumb" onClick={() => { setMode(hasLayers ? "overview" : "structural"); setDrill(null); }}>{graph.project.name}</button>
-        {drillName ? <><span className="atlas-crumb-sep">›</span><span className="atlas-crumb cur">{drillName}</span><span className="atlas-crumb-esc">Esc to go back</span></> : <span className="atlas-crumb-mode">{effMode === "overview" ? "Overview" : effMode === "domain" ? "Domain" : "Structural"}</span>}
+        {drillName ? <><span className="atlas-crumb-sep">›</span><span className="atlas-crumb cur">{drillName}</span><span className="atlas-crumb-esc">Esc to go back</span></> : <span className="atlas-crumb-mode">{effMode === "overview" ? "Overview" : effMode === "domain" ? "Domain" : effMode === "services" ? "Services" : "Structural"}</span>}
       </div>
 
       {showDiff && changedCount ? (() => {
@@ -334,6 +366,11 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
           onInit={(inst) => { rfRef.current = inst; }}
           onNodeClick={(_e, n) => {
             if (n.type === "atlasLayer" || n.type === "atlasDomain") { setDrill(n.id); setMode("structural"); return; }
+            if (n.type === "atlasService") {
+              const portId = (n.data as { portNodeId?: string })?.portNodeId;
+              if (portId) { setSelected(portId); onSelectNode?.(portId, byId.get(portId)?.filePath); }
+              return;
+            }
             if (n.type === "atlasFile") {
               setSelected(n.id);
               onSelectNode?.(n.id, byId.get(n.id)?.filePath);

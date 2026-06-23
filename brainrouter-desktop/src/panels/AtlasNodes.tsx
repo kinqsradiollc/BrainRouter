@@ -117,9 +117,42 @@ export function AtlasDomainCard({ data }: NodeProps): React.ReactElement {
   );
 }
 
+interface ServiceData {
+  module: string;
+  portPath: string;
+  fileCount: number;
+  /** module→module import counts in/out, for the foot line. */
+  dependsOn?: number;
+  dependedOnBy?: number;
+}
+
+export function AtlasServiceCard({ data }: NodeProps): React.ReactElement {
+  const d = data as unknown as ServiceData;
+  const portFile = d.portPath.slice(d.portPath.lastIndexOf("/") + 1);
+  return (
+    <div className="atlas-scard">
+      <Handle type="target" position={Position.Top} className="atlas-handle" isConnectable={false} />
+      <div className="atlas-scard-top">
+        <span className="atlas-scard-tag">SERVICE</span>
+        <span className="atlas-scard-port" title={d.portPath}>{portFile}</span>
+      </div>
+      <div className="atlas-scard-title" title={d.module}>{d.module}</div>
+      <div className="atlas-scard-foot">
+        <span>{d.fileCount} file{d.fileCount === 1 ? "" : "s"}</span>
+        <span className="atlas-scard-deps">
+          {d.dependsOn ? <span title={`imports ${d.dependsOn} service(s)`}>→{d.dependsOn}</span> : null}
+          {d.dependedOnBy ? <span title={`used by ${d.dependedOnBy} service(s)`}>←{d.dependedOnBy}</span> : null}
+        </span>
+      </div>
+      <Handle type="source" position={Position.Bottom} className="atlas-handle" isConnectable={false} />
+    </div>
+  );
+}
+
 export const ATLAS_NODE_TYPES = {
   atlasFile: AtlasFileNode,
   atlasGroup: AtlasGroupNode,
   atlasLayer: AtlasLayerCard,
   atlasDomain: AtlasDomainCard,
+  atlasService: AtlasServiceCard,
 };
