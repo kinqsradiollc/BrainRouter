@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { atlasImpact, atlasSearchMatches, type AtlasGraph } from "@kinqs/brainrouter-types";
+import { atlasImpact, atlasSearchMatches, enrichAtlasGraph, type AtlasGraph, type AtlasLlmCaller } from "@kinqs/brainrouter-types";
 import { createTestStore } from "./helpers/pgTestStore.js";
 
 /**
@@ -104,6 +104,42 @@ test("REMOTE-BRAIN atlas store: query + impact run over the stored graph", async
     assert.deepEqual(impact.dependents.sort(), ["file:src/api/routes.ts", "file:src/api/server.ts"]);
     assert.deepEqual(impact.directDependents, ["file:src/api/routes.ts"]);
     assert.deepEqual(impact.byLayer, [{ layer: "API", count: 2 }]);
+  } finally {
+    await cleanup();
+  }
+});
+
+// Phase 3c — the store→enrich→store path the atlas_enrich tool implements:
+// load a stored graph, run enrichAtlasGraph (shared from types) with a stub LLM,
+// store the enriched graph back.
+test("REMOTE-BRAIN atlas store: enrich a stored graph server-side and persist it", async () => {
+  const { store, cleanup } = await createTestStore();
+  try {
+    const g: AtlasGraph = {
+      schemaVersion: 1,
+      kind: "codebase",
+      project: { name: "demo", languages: ["typescript"], analyzedAt: "2026-06-23T00:00:00Z" },
+      nodes: [{ id: "file:a.ts", type: "file", name: "a.ts", filePath: "a.ts" }],
+      edges: [],
+      layers: [],
+      tour: [],
+    };
+    await store.putAtlasGraph("u1", "ws", g);
+
+    // Stub the LLM (the tool uses the real ModelLLMRunner; here we prove the
+    // load→enrich→store wiring without an LLM endpoint).
+    const stub: AtlasLlmCaller = async ({ user }) => {
+      if (user.includes("one object per file")) return JSON.stringify([{ path: "a.ts", summary: "entry", complexity: "simple" }]);
+      if (user.includes("architectural layers")) return JSON.stringify([{ name: "Core", files: ["a.ts"] }]);
+      return "[]";
+    };
+    const loaded = (await store.getAtlasGraph("u1", "ws"))!;
+    const res = await enrichAtlasGraph(loaded, stub);
+    await store.putAtlasGraph("u1", "ws", res.graph);
+
+    const back = (await store.getAtlasGraph("u1", "ws"))!;
+    assert.equal(back.nodes.find((n) => n.id === "file:a.ts")?.summary, "entry"); // enrichment persisted
+    assert.equal(res.layers, 1);
   } finally {
     await cleanup();
   }

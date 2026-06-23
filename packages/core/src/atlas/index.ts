@@ -9,6 +9,6 @@ export { scanWorkspace, type ScanResult, type ScannedFile, type ScanOptions } fr
 export { extractSymbols, type FileSymbols, type ExtractedSymbol, type ExtractedImport } from "./extract.js";
 export { buildBaseGraph, type BuildOptions } from "./buildGraph.js";
 export { validateAtlasGraph, type AtlasValidation } from "./validate.js";
-export { atlasGraphFile, saveAtlasGraph, readAtlasGraph, atlasGraphStats } from "./atlasStore.js";
+export { atlasGraphFile, saveAtlasGraph, readAtlasGraph, atlasGraphStats, atlasWorkspaceTag } from "./atlasStore.js";
 export { enrichAtlasGraph, type AtlasLlmCaller, type EnrichOptions, type EnrichResult } from "./enrich.js";
 export { extractAtlasJson, extractAtlasJsonArray } from "./jsonExtract.js";

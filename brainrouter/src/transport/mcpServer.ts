@@ -12,6 +12,7 @@ import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } fr
 import { z } from 'zod';
 import { Registry } from '../registry.js';
 import { isClientDisconnectError } from '../transport-errors.js';
+import { recordToolCall } from '../observability/metrics.js';
 import { VERSION } from '../version.js';
 import { memoryEngine } from '../memory/engine.js';
 
@@ -77,7 +78,7 @@ import { memoryReindexSourceToolSchema, handleMemoryReindexSource } from '../too
 import { memoryRecordLessonToolSchema, handleMemoryRecordLesson } from '../tools/memory_record_lesson.js';
 import { memoryCreateRequirementToolSchema, handleMemoryCreateRequirement } from '../tools/memory_create_requirement.js';
 import { memoryCaptureArtifactToolSchema, handleMemoryCaptureArtifact } from '../tools/memory_capture_artifact.js';
-import { atlasPutToolSchema, handleAtlasPut, atlasGetToolSchema, handleAtlasGet, atlasListToolSchema, handleAtlasList, atlasQueryToolSchema, handleAtlasQuery, atlasImpactToolSchema, handleAtlasImpact } from '../tools/atlas_graph.js';
+import { atlasPutToolSchema, handleAtlasPut, atlasGetToolSchema, handleAtlasGet, atlasListToolSchema, handleAtlasList, atlasQueryToolSchema, handleAtlasQuery, atlasImpactToolSchema, handleAtlasImpact, atlasEnrichToolSchema, handleAtlasEnrich } from '../tools/atlas_graph.js';
 import { memoryCaptureAnnotationToolSchema, handleMemoryCaptureAnnotation } from '../tools/memory_capture_annotation.js';
 import { memoryExtractSkillToolSchema, handleMemoryExtractSkill } from '../tools/memory_extract_skill.js';
 import { memoryGraphAnalyticsToolSchema, handleMemoryGraphAnalytics } from '../tools/memory_graph_analytics.js';
@@ -280,11 +281,13 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       atlasListToolSchema,
       atlasQueryToolSchema,
       atlasImpactToolSchema,
+      atlasEnrichToolSchema,
     ],
   }));
 
   // ── Tool dispatcher ────────────────────────────────────────────────────────
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const __startedAt = Date.now();
     try {
       // AUTHZ (IDOR fix) — the HTTP /mcp transport authenticates per-user and
       // builds this server with that user's id as `defaultUserId`. A
@@ -300,6 +303,10 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       if (callArgs && typeof callArgs === 'object' && 'userId' in callArgs) {
         (callArgs as Record<string, unknown>).userId = defaultUserId;
       }
+      // OBSERVABILITY (Phase 4) — time + count the dispatch. The switch is wrapped
+      // in an IIFE so each case's `return` flows to one metrics recording point.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const __result: any = await (async () => {
       switch (request.params.name) {
         case 'list_skills':   return await listSkills(registry, listSkillsSchema.parse(request.params.arguments));
         case 'get_skill':     return await getSkill(registry, getSkillSchema.parse(request.params.arguments));
@@ -392,6 +399,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           return await handleAtlasQuery(request.params.arguments, { defaultUserId });
         case 'atlas_impact':
           return await handleAtlasImpact(request.params.arguments, { defaultUserId });
+        case 'atlas_enrich':
+          return await handleAtlasEnrich(request.params.arguments, { defaultUserId });
         case 'memory_capture_annotation':
           return await handleMemoryCaptureAnnotation(request.params.arguments, { defaultUserId });
         case 'memory_extract_skill':
@@ -421,7 +430,11 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         default:
           throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
       }
+      })();
+      recordToolCall(request.params.name, !(__result && __result.isError), Date.now() - __startedAt);
+      return __result;
     } catch (error) {
+      recordToolCall(request.params.name, false, Date.now() - __startedAt);
       if (error instanceof z.ZodError) {
         throw new McpError(ErrorCode.InvalidParams, `Invalid arguments: ${error.errors.map(e => e.message).join(', ')}`);
       }
