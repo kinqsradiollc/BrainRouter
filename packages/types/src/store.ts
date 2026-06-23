@@ -34,6 +34,17 @@ import type {
   UserRecord,
   VectorSearchResult,
 } from "./memory.js";
+import type { AtlasGraph } from "./atlas.js";
+
+/** A tenant's stored Atlas workspace summary (REMOTE-BRAIN Phase 3). */
+export interface AtlasWorkspaceSummary {
+  /** Workspace identifier the graph was stored under (e.g. a path hash or name). */
+  workspaceTag: string;
+  /** Node count at store time (cheap list metadata, no graph parse). */
+  nodeCount: number;
+  /** ISO-8601 timestamp of the last upsert. */
+  updatedAt: string;
+}
 
 export interface CursorPaginationOptions<TCursor = Record<string, unknown>> {
   cursor?: TCursor;
@@ -333,4 +344,16 @@ export interface IMemoryStore {
   decayConnections(userId: string, decayFactor: number): Promise<void>;
   pruneConnections(userId: string, threshold: number): Promise<void>;
   getAllConnections(userId: string): Promise<Array<{ sourceId: string; targetId: string; weight: number; lastActivatedAt: string }>>;
+
+  // ── Atlas graph persistence (REMOTE-BRAIN Phase 3) ──────────────────────
+  // The brain stores a client-built Atlas graph per (tenant, workspace) so a
+  // remote/cloud brain — or the dashboard as a remote client — can serve it
+  // back. `build` stays client-side (it scans the filesystem); this is the
+  // store-and-serve half. All methods are tenant-scoped by `userId`.
+  /** Upsert a workspace's Atlas graph for a tenant (keyed by user + workspaceTag). */
+  putAtlasGraph(userId: string, workspaceTag: string, graph: AtlasGraph): Promise<void>;
+  /** Fetch a tenant's stored Atlas graph for a workspace, or null when absent. */
+  getAtlasGraph(userId: string, workspaceTag: string): Promise<AtlasGraph | null>;
+  /** List a tenant's stored Atlas workspaces, most-recently-updated first. */
+  listAtlasWorkspaces(userId: string): Promise<AtlasWorkspaceSummary[]>;
 }
