@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { AtlasGraph } from '@kinqs/brainrouter-types';
-import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize, atlasNodeFacts, atlasSearchMatches, atlasGrouping, atlasGroupedLayout, atlasOverviewModel, atlasDomainModel, atlasChangeKind, atlasChangeMap, atlasNodeChanges, atlasImpact, atlasImpactOf, atlasUncoveredFiles, isTestFile } from './atlasView.js';
+import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize, atlasNodeFacts, atlasSearchMatches, atlasGrouping, atlasGroupedLayout, atlasOverviewModel, atlasDomainModel, atlasServiceModel, isServicePortPath, serviceModuleLabel, atlasChangeKind, atlasChangeMap, atlasNodeChanges, atlasImpact, atlasImpactOf, atlasUncoveredFiles, isTestFile } from './atlasView.js';
 
 function fixture(): AtlasGraph {
   return {
@@ -301,4 +301,51 @@ test('atlasNodeChanges maps changes to file-level nodes only (not symbols)', () 
   assert.equal(nc.has('class:src/db/store.ts:Store'), false); // symbol excluded
   assert.equal(nc.has('does/not/exist.ts'), false);
   assert.equal(nc.size, 2);
+});
+
+function serviceFixture(): AtlasGraph {
+  return {
+    schemaVersion: 1, kind: 'codebase',
+    project: { name: 'x', languages: ['typescript'], analyzedAt: '2026-06-22T00:00:00Z' },
+    nodes: [
+      { id: 'file:src/exec/service.ts', type: 'file', name: 'service.ts', filePath: 'src/exec/service.ts' },
+      { id: 'file:src/exec/execPolicy.ts', type: 'file', name: 'execPolicy.ts', filePath: 'src/exec/execPolicy.ts' },
+      { id: 'file:src/provider/gateway.ts', type: 'file', name: 'gateway.ts', filePath: 'src/provider/gateway.ts' },
+      { id: 'file:src/loose.ts', type: 'file', name: 'loose.ts', filePath: 'src/loose.ts' },
+      // a symbol sharing the port's path must not be double-counted
+      { id: 'function:src/exec/service.ts:createExecService', type: 'function', name: 'createExecService', filePath: 'src/exec/service.ts', lineRange: [1, 3] },
+    ],
+    edges: [
+      // cross-module import: exec → provider
+      { source: 'file:src/exec/service.ts', target: 'file:src/provider/gateway.ts', type: 'imports' },
+      // same-module import: no cross edge
+      { source: 'file:src/exec/service.ts', target: 'file:src/exec/execPolicy.ts', type: 'imports' },
+    ],
+    layers: [], tour: [],
+  };
+}
+
+test('isServicePortPath / serviceModuleLabel', () => {
+  assert.equal(isServicePortPath('src/exec/service.ts'), true);
+  assert.equal(isServicePortPath('src/provider/gateway.ts'), true);
+  assert.equal(isServicePortPath('src/exec/execPolicy.ts'), false);
+  assert.equal(serviceModuleLabel('packages/core/src/exec/service.ts'), 'exec');
+  assert.equal(serviceModuleLabel('src/memory/tree/service.ts'), 'memory/tree');
+});
+
+test('atlasServiceModel builds module cards + cross-module edges', () => {
+  const m = atlasServiceModel(serviceFixture());
+  const modules = m.cards.map((c) => c.module).sort();
+  assert.deepEqual(modules, ['exec', 'provider']);
+
+  const exec = m.cards.find((c) => c.module === 'exec')!;
+  assert.equal(exec.portNodeId, 'file:src/exec/service.ts');
+  assert.equal(exec.fileCount, 2); // service.ts + execPolicy.ts, NOT the symbol
+  assert.ok(exec.nodeIds.includes('file:src/exec/execPolicy.ts'));
+  assert.ok(!exec.nodeIds.some((id) => id.startsWith('function:')));
+
+  // one directed edge: exec → provider (same-module import excluded)
+  assert.equal(m.edges.length, 1);
+  assert.equal(m.edges[0].source, exec.id);
+  assert.equal(m.edges[0].weight, 1);
 });
