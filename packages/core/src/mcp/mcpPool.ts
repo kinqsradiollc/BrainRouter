@@ -141,6 +141,72 @@ export function applyBrainUrlOverride(
 }
 
 /**
+ * REMOTE-BRAIN (Workstream A, Phase 2) — the brain serves an unauthenticated
+ * `GET /health` beside `/mcp` on the same origin. Derive that health URL from a
+ * brain MCP URL: prefer swapping a trailing `/mcp` so a path-mounted brain
+ * (`https://host/brainrouter/mcp`) probes `…/brainrouter/health` rather than the
+ * host root; otherwise resolve `/health` against the origin.
+ */
+export function brainHealthUrl(mcpUrl: string): string {
+  if (/\/mcp\/?$/.test(mcpUrl)) return mcpUrl.replace(/\/mcp\/?$/, "/health");
+  return new URL("/health", mcpUrl).toString();
+}
+
+/** Result of a {@link probeBrainHealth} call. `ok` ⇒ the remote answered 2xx. */
+export interface BrainHealth {
+  ok: boolean;
+  status?: number;
+  error?: string;
+}
+
+/**
+ * REMOTE-BRAIN (Workstream A, Phase 2) — probe a remote brain's `GET /health`
+ * with a short timeout so the client can decide remote-vs-embedded before
+ * committing to a transport. Never throws: a network error / timeout / missing
+ * `fetch` returns `{ ok: false, error }`. `fetchImpl` is injectable for tests.
+ */
+export async function probeBrainHealth(
+  mcpUrl: string,
+  opts?: { fetchImpl?: typeof fetch; timeoutMs?: number; apiKey?: string },
+): Promise<BrainHealth> {
+  const f = opts?.fetchImpl ?? (globalThis as { fetch?: typeof fetch }).fetch;
+  if (typeof f !== "function") return { ok: false, error: "fetch unavailable" };
+
+  let url: string;
+  try {
+    url = brainHealthUrl(mcpUrl);
+  } catch {
+    return { ok: false, error: `invalid brainUrl: ${mcpUrl}` };
+  }
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), Math.max(250, opts?.timeoutMs ?? 3_000));
+  try {
+    const headers: Record<string, string> = {};
+    if (opts?.apiKey) headers.Authorization = `Bearer ${opts.apiKey}`;
+    const res = await f(url, { method: "GET", signal: ctrl.signal, headers });
+    return { ok: res.ok, status: res.status };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * REMOTE-BRAIN (Workstream A, Phase 2) — the embedded fallback target: the first
+ * configured stdio BrainRouter profile, or null when none exists. Used to decide
+ * whether to fall back to the embedded brain when a remote is unreachable.
+ */
+export function embeddedBrainId(servers: Record<string, ServerConfig>): string | null {
+  for (const id of Object.keys(servers)) {
+    const s = servers[id];
+    if (s?.type === "stdio" && resolveIdentityFromConfig(s, id) === "brainrouter") return id;
+  }
+  return null;
+}
+
+/**
  * 0.3.8-R5 — Single-underscore `mcp_<server>_<tool>` is the canonical
  * tool-name shape across the CLI. Any legacy double-underscore
  * `mcp__<server>__<tool>` form that arrives at the pool boundary
