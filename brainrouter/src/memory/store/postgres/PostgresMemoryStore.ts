@@ -125,6 +125,25 @@ function readPositiveInteger(value: string | undefined, fallback: number): numbe
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
+
+/**
+ * Build the `cognitive_vec` ANN index DDL from env (see initVec for the knobs).
+ * Returns null when the index is disabled (`BRAINROUTER_PGVECTOR_INDEX=none`).
+ * Default preserves the prior behaviour: ivfflat, lists=100, cosine ops.
+ */
+export function vecIndexDdl(): string | null {
+  const kind = (process.env.BRAINROUTER_PGVECTOR_INDEX ?? "ivfflat").trim().toLowerCase();
+  if (kind === "none") return null;
+  const head = "CREATE INDEX IF NOT EXISTS idx_cognitive_vec_cos ON cognitive_vec USING";
+  if (kind === "hnsw") {
+    const m = readPositiveInteger(process.env.BRAINROUTER_PGVECTOR_HNSW_M, 16);
+    const efc = readPositiveInteger(process.env.BRAINROUTER_PGVECTOR_HNSW_EF_CONSTRUCTION, 64);
+    return `${head} hnsw (embedding vector_cosine_ops) WITH (m = ${m}, ef_construction = ${efc})`;
+  }
+  // ivfflat (default, and the fallback for any unknown value).
+  const lists = readPositiveInteger(process.env.BRAINROUTER_PGVECTOR_LISTS, 100);
+  return `${head} ivfflat (embedding vector_cosine_ops) WITH (lists = ${lists})`;
+}
 function hashContent(content: string): string {
   return createHash("sha256").update(content).digest("hex").slice(0, 24);
 }
@@ -263,16 +282,23 @@ export class PostgresMemoryStore implements IMemoryStore {
          embedding vector(${dimensions})
        )`,
     );
-    // Cosine ANN index. ivfflat needs a non-empty table to build well but is
-    // valid empty; `IF NOT EXISTS` keeps it idempotent across boots.
-    try {
-      await this.pool.query(
-        `CREATE INDEX IF NOT EXISTS idx_cognitive_vec_cos
-           ON cognitive_vec USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)`,
-      );
-    } catch {
-      // Some pgvector builds prefer hnsw / reject ivfflat params; the table still
-      // works with a sequential scan, so index creation is best-effort.
+    // Cosine ANN index — tunable via env (defaults preserve the prior behaviour:
+    // ivfflat, lists=100). `IF NOT EXISTS` keeps it idempotent across boots.
+    //   BRAINROUTER_PGVECTOR_INDEX            ivfflat (default) | hnsw | none
+    //   BRAINROUTER_PGVECTOR_LISTS            ivfflat clusters (default 100; ~sqrt(rows))
+    //   BRAINROUTER_PGVECTOR_HNSW_M           hnsw graph degree (default 16)
+    //   BRAINROUTER_PGVECTOR_HNSW_EF_CONSTRUCTION  hnsw build breadth (default 64)
+    // An existing index is NOT rebuilt on a knob change (IF NOT EXISTS); drop
+    // `idx_cognitive_vec_cos` manually to re-tune. Build is best-effort: a build
+    // that the server rejects leaves the table searchable via a sequential scan.
+    const indexDdl = vecIndexDdl();
+    if (indexDdl) {
+      try {
+        await this.pool.query(indexDdl);
+      } catch {
+        // Some pgvector builds reject specific params / index types; the table
+        // still works with a sequential scan, so index creation is best-effort.
+      }
     }
 
     this.vecDimensions = dimensions;
