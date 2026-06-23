@@ -11,6 +11,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
+import { asyncify } from "../memory/store/asyncify.js";
 import { buildBrainAgentStatuses } from "../memory/agents/status.js";
 import { listBrainAgents } from "../memory/agents/registry.js";
 
@@ -21,10 +22,10 @@ function freshDb(label: string) {
   return { store, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-test("returns every registry agent, idle when no jobs have run", () => {
+test("returns every registry agent, idle when no jobs have run", async () => {
   const { store, cleanup } = freshDb("idle");
   try {
-    const statuses = buildBrainAgentStatuses(store);
+    const statuses = await buildBrainAgentStatuses(asyncify(store));
     assert.equal(statuses.length, listBrainAgents().length);
     const extractor = statuses.find((s) => s.id === "cognitive_extractor")!;
     assert.equal(extractor.lastJobStatus, "idle");
@@ -35,16 +36,16 @@ test("returns every registry agent, idle when no jobs have run", () => {
   }
 });
 
-test("reflects a pending job and supports an agentId filter", () => {
+test("reflects a pending job and supports an agentId filter", async () => {
   const { store, cleanup } = freshDb("pending");
   try {
     store.enqueueMemoryJob({ kind: "cognitive_extractor", input: { sensoryIds: ["s1"] } });
-    const all = buildBrainAgentStatuses(store);
+    const all = await buildBrainAgentStatuses(asyncify(store));
     const extractor = all.find((s) => s.id === "cognitive_extractor")!;
     assert.equal(extractor.lastJobStatus, "pending");
     assert.equal(extractor.pendingJobs, 1);
 
-    const filtered = buildBrainAgentStatuses(store, "cognitive_extractor");
+    const filtered = await buildBrainAgentStatuses(asyncify(store), "cognitive_extractor");
     assert.equal(filtered.length, 1);
     assert.equal(filtered[0].id, "cognitive_extractor");
   } finally {

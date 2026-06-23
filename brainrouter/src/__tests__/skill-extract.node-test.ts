@@ -5,13 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
 import { MemoryEngine } from "../memory/engine.js";
+import type { IMemoryStore } from "@kinqs/brainrouter-types";
 import { buildSkillExtractionPrompt, parseSkillResponse, NO_SKILL_SENTINEL } from "../memory/skills/skill-extract.js";
 
 function fresh(label: string): { engine: MemoryEngine; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), `brainrouter-mem33-${label}-`));
   const store = new SqliteMemoryStore(join(dir, "memory.db"));
   store.init();
-  return { engine: new MemoryEngine(store), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return { engine: new MemoryEngine(store as unknown as IMemoryStore), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 test("MEM-33 parseSkillResponse: gate on <no-skill/>, empty, single-line; accept a real SOP", () => {

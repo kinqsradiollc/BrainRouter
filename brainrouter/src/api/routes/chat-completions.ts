@@ -167,7 +167,7 @@ async function fetchBriefing(
   //    what makes "what did we talk about last time?" / "remind me about the
   //    previous bug" actually work; FTS alone misses them.
   try {
-    const recent: any[] = memoryEngine.store.listMemories(userId, { archived: false }, { limit: 8 }) ?? [];
+    const recent: any[] = (await memoryEngine.store.listMemories(userId, { archived: false }, { limit: 8 })) ?? [];
     const deduped = recent.filter((r) => !recalledIds.has((r.recordId ?? "").toString()));
     if (deduped.length > 0) {
       const lines: string[] = ["### Most recent memories (chronological, may or may not match the question)"];
@@ -187,20 +187,20 @@ async function fetchBriefing(
 }
 
 /** Lightweight per-user memory counts for the chat status badge. */
-export function getMemoryStatusForUser(userId: string): {
+export async function getMemoryStatusForUser(userId: string): Promise<{
   cognitive: number;
   scenes: number;
   hasPersona: boolean;
-} {
+}> {
   let cognitive = 0;
   let scenes = 0;
   let hasPersona = false;
   try {
-    const stats = memoryEngine.store?.getMemoryStats?.(userId);
+    const stats = await memoryEngine.store?.getMemoryStats?.(userId);
     if (stats && typeof stats.total === "number") cognitive = stats.total;
   } catch { /* ignore */ }
   try {
-    const list = memoryEngine.getTopScenes(userId, 50) as any[];
+    const list = (await memoryEngine.getTopScenes(userId, 50)) as any[];
     if (Array.isArray(list)) scenes = list.length;
   } catch { /* ignore */ }
   try {
@@ -638,9 +638,9 @@ chatCompletionsRouter.post("/distill", async (req: AuthedRequest, res: Response)
 // already knows about them (cognitive records + scenes + whether persona is
 // distilled). Returning 0/0/false is the honest signal that the LLM truly has
 // no cross-session context to draw on yet.
-chatCompletionsRouter.get("/memory-status", (req: AuthedRequest, res: Response) => {
+chatCompletionsRouter.get("/memory-status", async (req: AuthedRequest, res: Response) => {
   const userId = req.userId!;
-  res.json(getMemoryStatusForUser(userId));
+  res.json(await getMemoryStatusForUser(userId));
 });
 
 // Minimal /v1/models so OpenAI SDK clients that list models don't 404.

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
 import { MemoryEngine } from "../memory/engine.js";
+import type { IMemoryStore } from "@kinqs/brainrouter-types";
 
 /**
  * 0.4.3 (MEM-10) — scene-tree autobuild (the tree_sealer auto-trigger source).
@@ -35,7 +36,7 @@ function fresh(label: string) {
   for (const k of TREE_ENV) delete process.env[k];
   const store = new SqliteMemoryStore(join(dir, "memory.db"));
   store.init();
-  const engine = new MemoryEngine(store);
+  const engine = new MemoryEngine(store as unknown as IMemoryStore);
   return {
     store, engine,
     cleanup: () => {
@@ -48,35 +49,35 @@ function fresh(label: string) {
 }
 
 /** Seed `scenes` mature scenes (3 records each) + one trivial scene (1 record). */
-function seedScenes(engine: MemoryEngine, store: SqliteMemoryStore, userId: string, scenes: number) {
+async function seedScenes(engine: MemoryEngine, store: SqliteMemoryStore, userId: string, scenes: number) {
   // The maintenance pass iterates registered users (store.listUsers), so the
   // record owner must exist as a user — in production records always do.
   store.createUser(userId, `br_${userId}`, userId, false);
   for (let s = 0; s < scenes; s++) {
     for (let r = 0; r < 3; r++) {
-      engine.upsertEngineeringMemory({ userId, type: "codebase_fact", content: `scene ${s} record ${r}: a fact about topic ${s}`, activeSkill: `scene${s}` });
+      await engine.upsertEngineeringMemory({ userId, type: "codebase_fact", content: `scene ${s} record ${r}: a fact about topic ${s}`, activeSkill: `scene${s}` });
     }
   }
-  engine.upsertEngineeringMemory({ userId, type: "codebase_fact", content: "a lone trivial fact", activeSkill: "trivialScene" });
+  await engine.upsertEngineeringMemory({ userId, type: "codebase_fact", content: "a lone trivial fact", activeSkill: "trivialScene" });
 }
 
-test("autobuildSceneTree: leafs mature scenes (capped/pass), idempotent, skips trivial, yields a sealable bucket", () => {
+test("autobuildSceneTree: leafs mature scenes (capped/pass), idempotent, skips trivial, yields a sealable bucket", async () => {
   const { store, engine, cleanup } = fresh("build");
   try {
-    seedScenes(engine, store, "u1", 6); // 6 mature scenes + 1 trivial
+    await seedScenes(engine, store, "u1", 6); // 6 mature scenes + 1 trivial
 
     // Pass 1: capped at TREE_LEAF_PER_PASS (5); not enough leaves yet to seal.
-    const p1 = engine.autobuildSceneTree("u1");
+    const p1 = await engine.autobuildSceneTree("u1");
     assert.equal(p1.leafed, 5, "first pass leafs up to the per-pass cap");
     assert.equal(p1.sealableBucket, null, "5 leaves < seal threshold");
 
     // Pass 2: leafs the 6th mature scene (trivial scene is < 3 records → skipped).
-    const p2 = engine.autobuildSceneTree("u1");
+    const p2 = await engine.autobuildSceneTree("u1");
     assert.equal(p2.leafed, 1, "second pass leafs the remaining mature scene");
     assert.ok(p2.sealableBucket && p2.sealableBucket.length === 6, "6 unsealed leaves → sealable bucket");
 
     // Idempotent: a third pass re-leafs nothing.
-    assert.equal(engine.autobuildSceneTree("u1").leafed, 0, "no re-leafing already-leafed scenes");
+    assert.equal((await engine.autobuildSceneTree("u1")).leafed, 0, "no re-leafing already-leafed scenes");
 
     const leafKeys = (store as unknown as { getSceneLeafKeys(u: string): string[] }).getSceneLeafKeys("u1");
     assert.equal(leafKeys.length, 6, "exactly one leaf per mature scene");
@@ -86,13 +87,13 @@ test("autobuildSceneTree: leafs mature scenes (capped/pass), idempotent, skips t
   }
 });
 
-test("maintenance enqueues tree_sealer once a scene-leaf bucket is full", () => {
+test("maintenance enqueues tree_sealer once a scene-leaf bucket is full", async () => {
   const { store, engine, cleanup } = fresh("maint");
   try {
-    seedScenes(engine, store, "u1", 6);
+    await seedScenes(engine, store, "u1", 6);
     // Two forced maintenance passes leaf all 6 (5 + 1) and then enqueue tree_sealer.
-    engine.enqueueScheduledMaintenance(true);
-    const r2 = engine.enqueueScheduledMaintenance(true);
+    await engine.enqueueScheduledMaintenance(true);
+    const r2 = await engine.enqueueScheduledMaintenance(true);
     assert.ok(r2.enqueued.tree_sealer >= 1, "tree_sealer enqueued when the bucket fills");
 
     const jobs = store.listMemoryJobs({ kind: "tree_sealer", status: ["pending", "running"] }) as Array<{ input?: { childIds?: string[]; kind?: string } }>;
@@ -104,13 +105,13 @@ test("maintenance enqueues tree_sealer once a scene-leaf bucket is full", () => 
   }
 });
 
-test("autobuildSceneTree is a no-op when BRAINROUTER_TREE_AUTOBUILD=off", () => {
+test("autobuildSceneTree is a no-op when BRAINROUTER_TREE_AUTOBUILD=off", async () => {
   const { store, engine, cleanup } = fresh("gate");
   const prev = process.env.BRAINROUTER_TREE_AUTOBUILD;
   process.env.BRAINROUTER_TREE_AUTOBUILD = "off";
   try {
-    seedScenes(engine, store, "u1", 6);
-    assert.deepEqual(engine.autobuildSceneTree("u1"), { leafed: 0, sealableBucket: null });
+    await seedScenes(engine, store, "u1", 6);
+    assert.deepEqual(await engine.autobuildSceneTree("u1"), { leafed: 0, sealableBucket: null });
   } finally {
     if (prev === undefined) delete process.env.BRAINROUTER_TREE_AUTOBUILD;
     else process.env.BRAINROUTER_TREE_AUTOBUILD = prev;
@@ -118,15 +119,15 @@ test("autobuildSceneTree is a no-op when BRAINROUTER_TREE_AUTOBUILD=off", () => 
   }
 });
 
-test("BRAIN-P4-T5 rollupGlobalTree digests accumulated global roots into one rollup", () => {
+test("BRAIN-P4-T5 rollupGlobalTree digests accumulated global roots into one rollup", async () => {
   const { store, engine, cleanup } = fresh("rollup");
   try {
-    engine.appendTreeLeaf("u1", "global", "global digest A");
-    engine.appendTreeLeaf("u1", "global", "global digest B");
-    assert.equal(engine.rollupGlobalTree("u1"), null, "2 global roots < threshold (3) → no rollup");
+    await engine.appendTreeLeaf("u1", "global", "global digest A");
+    await engine.appendTreeLeaf("u1", "global", "global digest B");
+    assert.equal(await engine.rollupGlobalTree("u1"), null, "2 global roots < threshold (3) → no rollup");
 
-    engine.appendTreeLeaf("u1", "global", "global digest C");
-    const rollup = engine.rollupGlobalTree("u1");
+    await engine.appendTreeLeaf("u1", "global", "global digest C");
+    const rollup = await engine.rollupGlobalTree("u1");
     assert.ok(rollup, "3 global roots → rollup created");
     assert.equal(rollup!.kind, "global");
 
@@ -135,7 +136,7 @@ test("BRAIN-P4-T5 rollupGlobalTree digests accumulated global roots into one rol
     assert.ok(children.every((c) => c.sealedAt), "digested roots are sealed");
 
     // Only the (unsealed) rollup remains as a global root → below threshold again.
-    assert.equal(engine.rollupGlobalTree("u1"), null);
+    assert.equal(await engine.rollupGlobalTree("u1"), null);
   } finally {
     cleanup();
   }

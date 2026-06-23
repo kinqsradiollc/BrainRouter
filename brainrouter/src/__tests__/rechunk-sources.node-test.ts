@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
 import { MemoryEngine } from "../memory/engine.js";
+import type { IMemoryStore } from "@kinqs/brainrouter-types";
 
 /**
  * 0.4.3 (MEM-10) — source_chunker re-chunk job. Provenance-safe: re-chunking
@@ -49,10 +50,10 @@ test("store: isSourceDocumentReferenced + replaceSourceChunks", () => {
   }
 });
 
-test("engine.rechunkSources: re-chunks unreferenced; SKIPS referenced + foreign-user docs", () => {
+test("engine.rechunkSources: re-chunks unreferenced; SKIPS referenced + foreign-user docs", async () => {
   const { store, cleanup } = fresh("engine");
   try {
-    const engine = new MemoryEngine(store);
+    const engine = new MemoryEngine(store as unknown as IMemoryStore);
 
     // Unreferenced doc → re-chunked (new chunk ids).
     const free = makeDoc(store, "u1", "h-free");
@@ -60,7 +61,7 @@ test("engine.rechunkSources: re-chunks unreferenced; SKIPS referenced + foreign-
     const ref = makeDoc(store, "u1", "h-ref");
     store.linkRecordSources("u1", "recRef", [ref.chunkIds[0]]);
 
-    const res = engine.rechunkSources("u1", [free.doc.id, ref.doc.id]);
+    const res = await engine.rechunkSources("u1", [free.doc.id, ref.doc.id]);
     assert.equal(res.rechunked, 1, "only the unreferenced doc is re-chunked");
     assert.equal(res.skipped, 1, "the referenced doc is skipped");
     assert.ok(res.chunksWritten >= 1);
@@ -74,7 +75,7 @@ test("engine.rechunkSources: re-chunks unreferenced; SKIPS referenced + foreign-
     assert.equal(store.getRecordSourceChunks("u1", "recRef").length, 1, "live provenance intact");
 
     // Foreign user can't re-chunk u1's doc.
-    const foreign = engine.rechunkSources("other", [free.doc.id]);
+    const foreign = await engine.rechunkSources("other", [free.doc.id]);
     assert.equal(foreign.rechunked, 0);
     assert.equal(foreign.skipped, 1);
   } finally {

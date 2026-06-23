@@ -12,7 +12,7 @@ interface CompressionReader {
     userId: string,
     hash: string,
     query?: string,
-  ): { kind: "full" | "subset"; originalContent?: string; results?: unknown[] } | null;
+  ): Promise<{ kind: "full" | "subset"; originalContent?: string; results?: unknown[] } | null>;
 }
 
 export const memoryRetrieveToolSchema = {
@@ -41,7 +41,7 @@ export async function handleMemoryRetrieve(args: unknown, options?: { defaultUse
     });
   }
   const userId = params.userId ?? options?.defaultUserId ?? "default";
-  const result = (memoryEngine.store as unknown as CompressionReader).retrieveCompressionEntry(userId, params.hash, params.query);
+  const result = await (memoryEngine.store as unknown as CompressionReader).retrieveCompressionEntry(userId, params.hash, params.query);
   if (!result) {
     return toolResult({
       error: "Compression reference was not found or has expired.",

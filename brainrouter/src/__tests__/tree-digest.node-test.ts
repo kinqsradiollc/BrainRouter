@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
 import { digestTreeNodes } from "../memory/tree/digest.js";
 import { getJobExecutor } from "../memory/scheduler/executors.js";
+import type { IMemoryStore } from "@kinqs/brainrouter-types";
 
 /**
  * 0.4.3 (MEM-10) — tree_digest: LLM re-summary of memory-tree parents, and the
@@ -35,7 +36,7 @@ test("digestTreeNodes: replaces the parent summary with the LLM output", async (
     const r = await digestTreeNodes({
       userId: "u1",
       nodeIds: [parent.id],
-      store,
+      store: store as unknown as IMemoryStore,
       llmRunner: { run: async () => "Auth and recall: a route leaks the API key; recall fuses FTS + vector." },
     });
     assert.deepEqual(r.summarized, [parent.id]);
@@ -54,7 +55,7 @@ test("digestTreeNodes: LLM failure keeps the deterministic summary (graceful)", 
     const r = await digestTreeNodes({
       userId: "u1",
       nodeIds: [parent.id],
-      store,
+      store: store as unknown as IMemoryStore,
       llmRunner: { run: async () => { throw Object.assign(new Error("LLM not configured"), { code: "LLM_NOT_CONFIGURED" }); } },
     });
     assert.deepEqual(r.summarized, []);
@@ -72,9 +73,9 @@ test("digestTreeNodes: skips foreign-user nodes + childless nodes", async () => 
     const childless = store.appendTreeNode("u1", { kind: "global", level: 1, summaryMd: "no children" });
     const runner = { run: async () => "should not be applied" };
     // foreign user
-    assert.equal((await digestTreeNodes({ userId: "other", nodeIds: [parent.id], store, llmRunner: runner })).skipped, 1);
+    assert.equal((await digestTreeNodes({ userId: "other", nodeIds: [parent.id], store: store as unknown as IMemoryStore, llmRunner: runner })).skipped, 1);
     // childless parent
-    assert.equal((await digestTreeNodes({ userId: "u1", nodeIds: [childless.id], store, llmRunner: runner })).skipped, 1);
+    assert.equal((await digestTreeNodes({ userId: "u1", nodeIds: [childless.id], store: store as unknown as IMemoryStore, llmRunner: runner })).skipped, 1);
   } finally {
     cleanup();
   }

@@ -13,38 +13,38 @@ function fresh(label: string): { store: SqliteMemoryStore; engine: MemoryEngine;
   return { store, engine: new MemoryEngine(store), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-test("MEM-5 append leaves → summarize bucket → walk roots and drill", () => {
+test("MEM-5 append leaves → summarize bucket → walk roots and drill", async () => {
   const { engine, cleanup } = fresh("walk");
   try {
-    const a = engine.appendTreeLeaf("u1", "source", "Leaf about auth", ["c1", "c2"], 1)!;
-    const b = engine.appendTreeLeaf("u1", "source", "Leaf about routing", ["c2", "c3"], 2)!;
+    const a = (await engine.appendTreeLeaf("u1", "source", "Leaf about auth", ["c1", "c2"], 1))!;
+    const b = (await engine.appendTreeLeaf("u1", "source", "Leaf about routing", ["c2", "c3"], 2))!;
     assert.equal(a.level, 0);
 
     // before sealing, both leaves are roots (no parent)
-    assert.equal(engine.treeWalk("u1", undefined, "source").roots!.length, 2);
+    assert.equal((await engine.treeWalk("u1", undefined, "source")).roots!.length, 2);
 
-    const parent = engine.summarizeBucket("u1", [a.id, b.id], "topic")!;
+    const parent = (await engine.summarizeBucket("u1", [a.id, b.id], "topic"))!;
     assert.equal(parent.level, 1, "parent one level above leaves");
     assert.deepEqual(parent.sourceChunkIds, ["c1", "c2", "c3"], "aggregated + de-duped chunk ids");
     assert.equal(parent.heatScore, 3, "heat summed");
     assert.match(parent.summaryMd, /Leaf about auth/);
 
     // now the only "topic" root is the parent; drilling it returns the two leaves
-    const roots = engine.treeWalk("u1", undefined, "topic").roots!;
+    const roots = (await engine.treeWalk("u1", undefined, "topic")).roots!;
     assert.equal(roots.length, 1);
     assert.equal(roots[0].id, parent.id);
-    const drill = engine.treeWalk("u1", parent.id);
+    const drill = await engine.treeWalk("u1", parent.id);
     assert.equal(drill.children.length, 2);
     assert.deepEqual(drill.children.map((c) => c.id).sort(), [a.id, b.id].sort());
   } finally { cleanup(); }
 });
 
-test("MEM-5 summarizing seals the children", () => {
+test("MEM-5 summarizing seals the children", async () => {
   const { store, engine, cleanup } = fresh("seal");
   try {
-    const leaf = engine.appendTreeLeaf("u1", "source", "x", [])!;
+    const leaf = (await engine.appendTreeLeaf("u1", "source", "x", []))!;
     assert.equal(store.getTreeNode(leaf.id)!.sealedAt, null);
-    engine.summarizeBucket("u1", [leaf.id], "topic");
+    await engine.summarizeBucket("u1", [leaf.id], "topic");
     assert.ok(store.getTreeNode(leaf.id)!.sealedAt, "child sealed after roll-up");
   } finally { cleanup(); }
 });

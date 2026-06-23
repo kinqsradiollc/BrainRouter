@@ -13,7 +13,7 @@ function freshDb(label: string): { store: SqliteMemoryStore; cleanup: () => void
   return { store, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-test("JSON crushing preserves anchors, errors, anomalies, and the target token ratio", () => {
+test("JSON crushing preserves anchors, errors, anomalies, and the target token ratio", async () => {
   const { store, cleanup } = freshDb("json");
   try {
     const rows = Array.from({ length: 200 }, (_, index) => ({
@@ -21,7 +21,7 @@ test("JSON crushing preserves anchors, errors, anomalies, and the target token r
       metric: index === 113 ? 99_999 : index % 11,
       message: index === 91 ? "ERROR connection failed" : `normal record ${index} with repeated payload`,
     }));
-    const result = compress(JSON.stringify(rows), {
+    const result = await compress(JSON.stringify(rows), {
       userId: "u1",
       store,
       targetKeep: 0.2,
@@ -45,11 +45,11 @@ test("JSON crushing preserves anchors, errors, anomalies, and the target token r
   }
 });
 
-test("homogeneous JSON rows use the smaller lossless table path", () => {
+test("homogeneous JSON rows use the smaller lossless table path", async () => {
   const { store, cleanup } = freshDb("lossless");
   try {
     const rows = Array.from({ length: 64 }, (_, index) => ({ id: index, state: index % 2 === 0 ? "ready" : "idle", active: index % 2 === 0 }));
-    const result = compress(JSON.stringify(rows), { userId: "u1", store, preferLossless: true, targetKeep: 0.95 });
+    const result = await compress(JSON.stringify(rows), { userId: "u1", store, preferLossless: true, targetKeep: 0.95 });
 
     assert.equal(result.kind, "json");
     assert.equal(result.strategy, "lossless-table");

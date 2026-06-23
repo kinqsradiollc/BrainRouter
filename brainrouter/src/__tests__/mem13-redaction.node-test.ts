@@ -10,13 +10,13 @@ import { readWorkingSteps } from "../memory/working/step-log.js";
 
 const SECRET = "the api key is sk-abcdef1234567890zzzz, do not leak it anywhere";
 
-test("MEM-13 blackboard candidate content is redacted at the staging boundary", () => {
+test("MEM-13 blackboard candidate content is redacted at the staging boundary", async () => {
   const dir = mkdtempSync(join(tmpdir(), "br-mem13-bb-"));
   try {
     const store = new SqliteMemoryStore(join(dir, "m.db"));
     store.init();
     const engine = new MemoryEngine(store);
-    const [staged] = engine.stageBlackboardCandidates("u1", [
+    const [staged] = await engine.stageBlackboardCandidates("u1", [
       { candidate: { content: SECRET, type: "codebase_fact" }, score: 0.9 },
     ]);
     assert.ok(staged.candidate.content.includes("[REDACTED]"));

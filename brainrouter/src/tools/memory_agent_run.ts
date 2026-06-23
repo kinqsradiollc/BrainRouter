@@ -42,7 +42,7 @@ export async function handleMemoryAgentRun(args: any, options?: { defaultUserId?
   const input = { userId: effectiveUserId, ...params.input };
 
   try {
-    const { job, deduped } = enqueueAgentJob(memoryEngine.store, params.agentId, input, {
+    const { job, deduped } = await enqueueAgentJob(memoryEngine.store, params.agentId, input, {
       priority: params.priority,
     });
     return {

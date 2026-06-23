@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
+import { asyncify } from "../memory/store/asyncify.js";
 import { MemoryEngine } from "../memory/engine.js";
 import { MemoryCapturePipeline } from "../memory/capture.js";
 import { redactSensitiveMemoryText } from "../memory/util/redaction.js";
@@ -54,7 +55,7 @@ function fresh(label: string) {
 function stubPipeline(store: SqliteMemoryStore): MemoryCapturePipeline {
   const llm = { run: async () => "" } as any;
   const embed = { isReady: () => false, embed: async () => [] } as any;
-  return new MemoryCapturePipeline(store, llm, embed, 999);
+  return new MemoryCapturePipeline(asyncify(store), llm, embed, 999);
 }
 
 test("MEM-23 transcript (sensory) messageText is redacted at capture", async () => {
@@ -93,12 +94,12 @@ test("MEM-23 source chunks are redacted at ingest", async () => {
   }
 });
 
-test("MEM-23 vault export render redacts record markdown", () => {
+test("MEM-23 vault export render redacts record markdown", async () => {
   const { engine, cleanup } = fresh("vault");
   const out = mkdtempSync(join(tmpdir(), "br-mem23-vaultout-"));
   try {
-    const rec = engine.upsertEngineeringMemory({ userId: "u1", type: "codebase_fact", content: SECRET_MSG });
-    const res = engine.exportVault("u1", out);
+    const rec = await engine.upsertEngineeringMemory({ userId: "u1", type: "codebase_fact", content: SECRET_MSG });
+    const res = await engine.exportVault("u1", out);
     assert.ok(res.written >= 1, "at least one vault file written");
     const md = readFileSync(join(out, `records/${rec.id}.md`), "utf8");
     assert.ok(!leaks(md), "no secret in the exported markdown");

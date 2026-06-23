@@ -20,7 +20,7 @@ export type SweepStaleResult = ReturnType<typeof sweepStaleLessons>;
 /** The lessons store contract, bound to one engine. */
 export interface ILessonsService {
   record(userId: string, text: string, opts?: RecordLessonOptions): RecordLessonResult;
-  findConflicts(userId: string, text: string): CognitiveRecord[];
+  findConflicts(userId: string, text: string): Promise<CognitiveRecord[]>;
   sweepStale(userId: string, opts?: SweepStaleOptions): SweepStaleResult;
 }
 
@@ -30,7 +30,7 @@ export class LessonsService implements ILessonsService {
   record(userId: string, text: string, opts?: RecordLessonOptions): RecordLessonResult {
     return recordLesson(this.engine, userId, text, opts);
   }
-  findConflicts(userId: string, text: string): CognitiveRecord[] {
+  findConflicts(userId: string, text: string): Promise<CognitiveRecord[]> {
     return findLessonConflicts(this.engine, userId, text);
   }
   sweepStale(userId: string, opts?: SweepStaleOptions): SweepStaleResult {

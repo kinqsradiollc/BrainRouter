@@ -13,26 +13,26 @@ function fresh(label: string): { store: SqliteMemoryStore; engine: MemoryEngine;
   return { store, engine: new MemoryEngine(store), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-test("LESSON-HYGIENE recordLesson stores a conflictKey and findLessonConflicts surfaces same-subject lessons", () => {
+test("LESSON-HYGIENE recordLesson stores a conflictKey and findLessonConflicts surfaces same-subject lessons", async () => {
   const { engine, cleanup } = fresh("conflict");
   try {
-    engine.recordLesson("u1", "Always use pnpm");
+    await engine.recordLesson("u1", "Always use pnpm");
     // A reversed-polarity rule about the SAME subject is a conflict candidate.
-    const conflicts = engine.findLessonConflicts("u1", "Never use pnpm");
+    const conflicts = await engine.findLessonConflicts("u1", "Never use pnpm");
     assert.equal(conflicts.length, 1);
     assert.match(conflicts[0].content, /Always use pnpm/);
     // A rule about a DIFFERENT subject is not flagged (no semantic guessing).
-    assert.equal(engine.findLessonConflicts("u1", "Run tests before push").length, 0);
+    assert.equal((await engine.findLessonConflicts("u1", "Run tests before push")).length, 0);
   } finally {
     cleanup();
   }
 });
 
-test("LESSON-HYGIENE explicit supersedes invalidates the prior lesson and points superseded_by at the new one", () => {
+test("LESSON-HYGIENE explicit supersedes invalidates the prior lesson and points superseded_by at the new one", async () => {
   const { store, engine, cleanup } = fresh("supersede");
   try {
-    const first = engine.recordLesson("u1", "Deploy from the staging branch");
-    const second = engine.recordLesson("u1", "Deploy from the release branch", { supersedes: first.recordId });
+    const first = await engine.recordLesson("u1", "Deploy from the staging branch");
+    const second = await engine.recordLesson("u1", "Deploy from the release branch", { supersedes: first.recordId });
 
     assert.deepEqual(second.supersededIds, [first.recordId]);
 
@@ -46,10 +46,10 @@ test("LESSON-HYGIENE explicit supersedes invalidates the prior lesson and points
   }
 });
 
-test("LESSON-HYGIENE supersedes is best-effort: an unknown id is skipped, not fatal", () => {
+test("LESSON-HYGIENE supersedes is best-effort: an unknown id is skipped, not fatal", async () => {
   const { engine, cleanup } = fresh("supersede-unknown");
   try {
-    const res = engine.recordLesson("u1", "Cache the build artifacts", { supersedes: ["does-not-exist"] });
+    const res = await engine.recordLesson("u1", "Cache the build artifacts", { supersedes: ["does-not-exist"] });
     assert.ok(res.recordId);
     assert.deepEqual(res.supersededIds, [], "unknown id is not reported as superseded");
   } finally {
@@ -57,18 +57,18 @@ test("LESSON-HYGIENE supersedes is best-effort: an unknown id is skipped, not fa
   }
 });
 
-test("LESSON-HYGIENE sweepStaleLessons is conservative and read-only by default; apply archives candidates", () => {
+test("LESSON-HYGIENE sweepStaleLessons is conservative and read-only by default; apply archives candidates", async () => {
   const { store, engine, cleanup } = fresh("stale");
   try {
-    const weak = engine.recordLesson("u1", "Temporary workaround for the flaky test");
-    const strong = engine.recordLesson("u1", "Run the migration before seeding");
+    const weak = await engine.recordLesson("u1", "Temporary workaround for the flaky test");
+    const strong = await engine.recordLesson("u1", "Run the migration before seeding");
     // Make the strong lesson trusted + corroborated so it is never a candidate.
-    engine.recordLesson("u1", "Run the migration before seeding"); // reinforce → conf up, corroborations=2
+    await engine.recordLesson("u1", "Run the migration before seeding"); // reinforce → conf up, corroborations=2
 
     // `now` far in the future so the default 120-day window is exceeded.
     const farFuture = Date.parse("2027-01-01T00:00:00.000Z");
 
-    const dryRun = engine.sweepStaleLessons("u1", { nowMs: farFuture });
+    const dryRun = await engine.sweepStaleLessons("u1", { nowMs: farFuture });
     const ids = dryRun.candidates.map((c) => c.recordId);
     assert.ok(ids.includes(weak.recordId), "weak/old lesson is a candidate");
     assert.ok(!ids.includes(strong.recordId), "corroborated lesson is protected");
@@ -77,7 +77,7 @@ test("LESSON-HYGIENE sweepStaleLessons is conservative and read-only by default;
     // Still live before apply.
     assert.equal(store.getMemoryById("u1", weak.recordId)!.archived, false);
 
-    const applied = engine.sweepStaleLessons("u1", { nowMs: farFuture, apply: true });
+    const applied = await engine.sweepStaleLessons("u1", { nowMs: farFuture, apply: true });
     assert.ok(applied.archived >= 1);
     assert.equal(store.getMemoryById("u1", weak.recordId)!.archived, true, "candidate archived after apply");
   } finally {

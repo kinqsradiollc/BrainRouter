@@ -89,7 +89,7 @@ export async function handleMemoryCaptureArtifact(args: any, options?: { default
     const params = schema.parse(args ?? {});
     const userId = params.userId ?? options?.defaultUserId ?? "default";
     const prov = provenance(params);
-    const record = memoryEngine.upsertEngineeringMemory({
+    const record = await memoryEngine.upsertEngineeringMemory({
       userId,
       sessionKey: params.sessionKey,
       type: "artifact_reference",

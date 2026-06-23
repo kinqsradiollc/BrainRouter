@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
+import { asyncify } from "../memory/store/asyncify.js";
 import { MemoryEngine } from "../memory/engine.js";
 import { recordInlineJob } from "../memory/scheduler/runner.js";
 import { readTreePolicy } from "../memory/tree/policy.js";
@@ -36,7 +37,7 @@ function fresh(label: string) {
   process.env.BRAINROUTER_TREE_AUTOBUILD = "on";
   const store = new SqliteMemoryStore(join(dir, "memory.db"));
   store.init();
-  const engine = new MemoryEngine(store);
+  const engine = new MemoryEngine(asyncify(store));
   return {
     store,
     engine,
@@ -84,7 +85,7 @@ function makeRecord(overrides: Partial<Record<string, unknown>> & { id: string; 
 const jobsOfUser = (store: SqliteMemoryStore, kind: string, userId: string) =>
   store.listMemoryJobs({ kind } as any).filter((j: any) => j.input?.userId === userId);
 
-test("tree_sealer fires on a settled bucket below sealThreshold, then tree_digest can chain", () => {
+test("tree_sealer fires on a settled bucket below sealThreshold, then tree_digest can chain", async () => {
   const { store, engine, cleanup } = fresh("seal");
   try {
     store.createUser("u1", "br_k1", "U1", false);
@@ -97,12 +98,12 @@ test("tree_sealer fires on a settled bucket below sealThreshold, then tree_diges
     }
 
     // Pass 0: autobuild leafs both scenes (leafed > 0 → not yet settled, no seal).
-    engine.enqueueScheduledMaintenance(true);
+    await engine.enqueueScheduledMaintenance(true);
     assert.equal(jobsOfUser(store, "tree_sealer", "u1").length, 0, "no seal while the bucket is still growing");
     assert.equal((store as any).getUnsealedSceneLeaves("u1", 50).length, 2, "both scenes leafed");
 
     // Pass 1: no new leaf this pass (settled) + unsealed >= idleSealFloor → seal.
-    engine.enqueueScheduledMaintenance(true);
+    await engine.enqueueScheduledMaintenance(true);
     const sealJobs = jobsOfUser(store, "tree_sealer", "u1");
     assert.equal(sealJobs.length, 1, "settled bucket enqueues exactly one tree_sealer");
     assert.ok(
@@ -111,21 +112,21 @@ test("tree_sealer fires on a settled bucket below sealThreshold, then tree_diges
     );
 
     // Pass 2: same bucket still pending (runner off) → idempotency dedupes.
-    engine.enqueueScheduledMaintenance(true);
+    await engine.enqueueScheduledMaintenance(true);
     assert.equal(jobsOfUser(store, "tree_sealer", "u1").length, 1, "re-enqueue of the same bucket is deduped");
   } finally {
     cleanup();
   }
 });
 
-test("benchmark_eval is auto-scheduled by maintenance (early pass) and disabled by BRAINROUTER_BENCH_SCHEDULE=off", () => {
+test("benchmark_eval is auto-scheduled by maintenance (early pass) and disabled by BRAINROUTER_BENCH_SCHEDULE=off", async () => {
   const { store, engine, cleanup } = fresh("bench");
   try {
     store.createUser("u1", "br_k1", "U1", false);
-    engine.enqueueScheduledMaintenance(true); // pass 0
-    engine.enqueueScheduledMaintenance(true); // pass 1
+    await engine.enqueueScheduledMaintenance(true); // pass 0
+    await engine.enqueueScheduledMaintenance(true); // pass 1
     assert.equal(jobsOfUser(store, "benchmark_eval", "u1").length, 0, "no benchmark before the early pass");
-    engine.enqueueScheduledMaintenance(true); // pass 2 — early visibility trigger
+    await engine.enqueueScheduledMaintenance(true); // pass 2 — early visibility trigger
     assert.equal(jobsOfUser(store, "benchmark_eval", "u1").length, 1, "benchmark_eval enqueued on the early pass");
   } finally {
     cleanup();
@@ -136,7 +137,7 @@ test("benchmark_eval is auto-scheduled by maintenance (early pass) and disabled 
   try {
     process.env.BRAINROUTER_BENCH_SCHEDULE = "off";
     off.store.createUser("u1", "br_k1", "U1", false);
-    for (let i = 0; i < 4; i++) off.engine.enqueueScheduledMaintenance(true);
+    for (let i = 0; i < 4; i++) await off.engine.enqueueScheduledMaintenance(true);
     assert.equal(jobsOfUser(off.store, "benchmark_eval", "u1").length, 0, "off-gate suppresses the schedule");
   } finally {
     restoreBench();
@@ -144,11 +145,11 @@ test("benchmark_eval is auto-scheduled by maintenance (early pass) and disabled 
   }
 });
 
-test("recordInlineJob leaves a done audit row for inline work", () => {
+test("recordInlineJob leaves a done audit row for inline work", async () => {
   const { store, cleanup } = fresh("inline");
   try {
-    recordInlineJob(store, "source_chunker", { userId: "u1", documentIds: ["d1"] }, { chunksWritten: 3 });
-    recordInlineJob(store, "blackboard_reconciler", { userId: "u1" }, { reconciled: 2, rejected: 1 });
+    await recordInlineJob(asyncify(store), "source_chunker", { userId: "u1", documentIds: ["d1"] }, { chunksWritten: 3 });
+    await recordInlineJob(asyncify(store), "blackboard_reconciler", { userId: "u1" }, { reconciled: 2, rejected: 1 });
     const chunker = store.listMemoryJobs({ kind: "source_chunker" } as any);
     const recon = store.listMemoryJobs({ kind: "blackboard_reconciler" } as any);
     assert.equal(chunker.length, 1);

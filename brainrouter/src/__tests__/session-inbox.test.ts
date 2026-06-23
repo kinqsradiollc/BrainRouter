@@ -27,7 +27,7 @@ describe("session_send tool", () => {
   });
 
   it("returns delivered count + ids on successful send", async () => {
-    vi.mocked(memoryEngine.store.sendSessionMessage).mockReturnValue([
+    vi.mocked(memoryEngine.store.sendSessionMessage).mockResolvedValue([
       {
         id: "msg-1",
         userId: "u1",
@@ -64,7 +64,7 @@ describe("session_send tool", () => {
   });
 
   it("returns delivered:0 when broadcast resolves to zero peers", async () => {
-    vi.mocked(memoryEngine.store.sendSessionMessage).mockReturnValue([]);
+    vi.mocked(memoryEngine.store.sendSessionMessage).mockResolvedValue([]);
     const res = parseToolText<{ delivered: number; ids: string[] }>(
       await handleSessionSend(
         { from: "from", to: "*", kind: "text", payload: { text: "hi" } },
@@ -95,7 +95,7 @@ describe("session_inbox_read tool", () => {
   });
 
   it("auto-acks undelivered messages on non-peek read", async () => {
-    vi.mocked(memoryEngine.store.readSessionInbox).mockReturnValue([
+    vi.mocked(memoryEngine.store.readSessionInbox).mockResolvedValue([
       {
         id: "m1",
         userId: "u1",
@@ -117,7 +117,7 @@ describe("session_inbox_read tool", () => {
         deliveredAt: null,
       },
     ]);
-    vi.mocked(memoryEngine.store.ackSessionInbox).mockReturnValue(2);
+    vi.mocked(memoryEngine.store.ackSessionInbox).mockResolvedValue(2);
 
     const res = parseToolText<{ messages: any[] }>(
       await handleSessionInboxRead({ sessionKey: "to" }, { defaultUserId: "u1" }),
@@ -132,7 +132,7 @@ describe("session_inbox_read tool", () => {
   });
 
   it("does NOT ack when peek:true", async () => {
-    vi.mocked(memoryEngine.store.readSessionInbox).mockReturnValue([
+    vi.mocked(memoryEngine.store.readSessionInbox).mockResolvedValue([
       {
         id: "m1",
         userId: "u1",
@@ -149,7 +149,7 @@ describe("session_inbox_read tool", () => {
   });
 
   it("skips ack when the page contained no undelivered messages", async () => {
-    vi.mocked(memoryEngine.store.readSessionInbox).mockReturnValue([
+    vi.mocked(memoryEngine.store.readSessionInbox).mockResolvedValue([
       {
         id: "m1",
         userId: "u1",
@@ -183,7 +183,7 @@ describe("session_inbox_ack tool", () => {
   });
 
   it("returns the count acked", async () => {
-    vi.mocked(memoryEngine.store.ackSessionInbox).mockReturnValue(2);
+    vi.mocked(memoryEngine.store.ackSessionInbox).mockResolvedValue(2);
     const res = parseToolText<{ acked: number }>(
       await handleSessionInboxAck(
         { sessionKey: "to", ids: ["m1", "m2"] },
@@ -194,7 +194,7 @@ describe("session_inbox_ack tool", () => {
   });
 
   it("accepts an empty ids array and returns acked:0", async () => {
-    vi.mocked(memoryEngine.store.ackSessionInbox).mockReturnValue(0);
+    vi.mocked(memoryEngine.store.ackSessionInbox).mockResolvedValue(0);
     const res = parseToolText<{ acked: number }>(
       await handleSessionInboxAck({ sessionKey: "to", ids: [] }, { defaultUserId: "u1" }),
     );

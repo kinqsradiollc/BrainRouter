@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { pageRank, articulationPoints, shortestPath, namespaceOverview, type GraphEdgeLite } from "../memory/graph/graph-analytics.js";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
 import { MemoryEngine } from "../memory/engine.js";
+import { asyncify } from "../memory/store/asyncify.js";
 
 test("DASH-1 pageRank: a hub accruing in-links outranks leaves; scores ~sum to 1", () => {
   const nodes = ["a", "b", "c", "hub"];
@@ -48,7 +49,7 @@ test("DASH-1 namespaceOverview: counts by entity type", () => {
   );
 });
 
-test("DASH-1 engine.graphAnalytics: end-to-end over the store (centrality + bridges + namespaces + path)", () => {
+test("DASH-1 engine.graphAnalytics: end-to-end over the store (centrality + bridges + namespaces + path)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "brainrouter-dash1-"));
   const store = new SqliteMemoryStore(join(dir, "memory.db"));
   store.init();
@@ -61,8 +62,8 @@ test("DASH-1 engine.graphAnalytics: end-to-end over the store (centrality + brid
     mk("n1", "Auth", "module"); mk("n2", "DB", "module"); mk("n3", "Router", "module"); mk("n4", "User", "entity");
     link("e1", "n1", "n3"); link("e2", "n2", "n3"); link("e3", "n4", "n3");
 
-    const engine = new MemoryEngine(store);
-    const a = engine.graphAnalytics("u1", { from: "Auth", to: "DB" });
+    const engine = new MemoryEngine(asyncify(store));
+    const a = await engine.graphAnalytics("u1", { from: "Auth", to: "DB" });
     assert.equal(a.nodeCount, 4);
     assert.equal(a.edgeCount, 3);
     assert.ok(a.topCentral.length > 0);

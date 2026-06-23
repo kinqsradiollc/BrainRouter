@@ -210,7 +210,7 @@ if (USE_HTTP) {
       res.status(401).json({ error: 'API key required. Set Authorization: Bearer <your_api_key>' });
       return;
     }
-    const user = memoryEngine.getUserByApiKey(bearerKey);
+    const user = await memoryEngine.getUserByApiKey(bearerKey);
     if (!user) {
       res.status(403).json({ error: 'Invalid API key' });
       return;
@@ -344,7 +344,7 @@ if (USE_HTTP) {
     process.exit(1);
   }
 
-  const user = memoryEngine.getUserByApiKey(stdioApiKey);
+  const user = await memoryEngine.getUserByApiKey(stdioApiKey);
   if (!user) {
     console.error("[BrainRouter] FATAL: The provided BRAINROUTER_API_KEY is invalid. Connection aborted.");
     process.exit(1);

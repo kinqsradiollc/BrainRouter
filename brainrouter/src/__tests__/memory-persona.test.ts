@@ -42,7 +42,7 @@ describe("memory_persona tool", () => {
   });
 
   it("returns null persona with a reason when no Core Identity exists", async () => {
-    vi.mocked(memoryEngine.getPersona).mockReturnValue(null);
+    vi.mocked(memoryEngine.getPersona).mockResolvedValue(null);
     const res = parseToolText<any>(await handleMemoryPersona({}));
     expect(res.personaMd).toBeNull();
     expect(res.hash).toBe("");
@@ -50,7 +50,7 @@ describe("memory_persona tool", () => {
   });
 
   it("falls back to defaultUserId when userId is omitted", async () => {
-    vi.mocked(memoryEngine.getPersona).mockReturnValue(null);
+    vi.mocked(memoryEngine.getPersona).mockResolvedValue(null);
     await handleMemoryPersona({}, { defaultUserId: "fallback-user" });
     expect(memoryEngine.getPersona).toHaveBeenCalledWith("fallback-user");
   });

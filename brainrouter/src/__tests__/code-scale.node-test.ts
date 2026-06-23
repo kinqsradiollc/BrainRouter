@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteMemoryStore } from "../memory/store/sqlite.js";
 import { MemoryEngine } from "../memory/engine.js";
+import { asyncify } from "../memory/store/asyncify.js";
 
 /**
  * CODE-SCALE (0.4.5) — end-to-end repo-scale find_related retrieval benchmark
@@ -17,7 +18,7 @@ function fresh() {
   process.env.BRAINROUTER_JOB_RUNNER = "off";
   const store = new SqliteMemoryStore(join(dir, "memory.db"));
   store.init();
-  const engine = new MemoryEngine(store);
+  const engine = new MemoryEngine(asyncify(store));
   return {
     engine, dir,
     cleanup: () => {
@@ -28,10 +29,10 @@ function fresh() {
   };
 }
 
-test("code-scale: find_related surfaces in-cluster files at repo scale", () => {
+test("code-scale: find_related surfaces in-cluster files at repo scale", async () => {
   const { engine, dir, cleanup } = fresh();
   try {
-    const r = engine.runCodeScaleBenchmark({ baseDir: dir, k: 10, clusters: 6, perCluster: 5 });
+    const r = await engine.runCodeScaleBenchmark({ baseDir: dir, k: 10, clusters: 6, perCluster: 5 });
 
     assert.equal(r.queries, 6, "one query per cluster");
     // The fixture wires each cluster as an import chain + shared lexical prefix,
@@ -58,12 +59,12 @@ test("code-scale: find_related surfaces in-cluster files at repo scale", () => {
   }
 });
 
-test("code-scale: bench writes into an isolated user, not real memory", () => {
+test("code-scale: bench writes into an isolated user, not real memory", async () => {
   const { engine, dir, cleanup } = fresh();
   try {
-    engine.runCodeScaleBenchmark({ baseDir: dir, clusters: 2, perCluster: 3 });
+    await engine.runCodeScaleBenchmark({ baseDir: dir, clusters: 2, perCluster: 3 });
     // The default real users see nothing from the bench.
-    const real = engine.findRelatedChunks("default", { filePath: "src/auth/auth_mod0.ts", line: 5 });
+    const real = await engine.findRelatedChunks("default", { filePath: "src/auth/auth_mod0.ts", line: 5 });
     assert.equal(real.found, false, "bench fixture is not visible to the default user");
   } finally {
     cleanup();

@@ -77,11 +77,11 @@ export async function handleSessionDelegateTask(args: any, options?: { defaultUs
       return toolError("session_delegate_task", new Error("payload.goal is required"));
     }
 
-    const sessions = memoryEngine.store.listActiveSessions({ userId, clientKind: params.agentKind });
+    const sessions = await memoryEngine.store.listActiveSessions({ userId, clientKind: params.agentKind });
     const peer = resolveDelegationPeer(sessions, params.agentKind, params.from);
 
     if (peer) {
-      const rows = memoryEngine.store.sendSessionMessage({
+      const rows = await memoryEngine.store.sendSessionMessage({
         userId,
         fromSessionKey: params.from,
         toSessionKey: peer,
@@ -91,7 +91,7 @@ export async function handleSessionDelegateTask(args: any, options?: { defaultUs
       return toolResult({ routed: true, to: peer, deliveredIds: rows.map((r) => r.id) });
     }
 
-    const pending = memoryEngine.store.enqueuePendingDelegation({
+    const pending = await memoryEngine.store.enqueuePendingDelegation({
       userId,
       fromSessionKey: params.from,
       toAgentKind: params.agentKind.trim().toLowerCase(),

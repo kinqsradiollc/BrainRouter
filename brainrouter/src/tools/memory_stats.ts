@@ -5,7 +5,7 @@ function toolResult(payload: unknown) {
 }
 
 interface CompressionStatsReader {
-  getCompressionStats(userId: string): {
+  getCompressionStats(userId: string): Promise<{
     compressions: number;
     retrievals: number;
     totalTokensSaved: number;
@@ -13,7 +13,7 @@ interface CompressionStatsReader {
     estimatedCostSavedUsd: number;
     recentEvents: unknown[];
     store: { entries: number; maxEntries: number };
-  };
+  }>;
 }
 
 export const memoryStatsToolSchema = {
@@ -29,7 +29,7 @@ export async function handleMemoryStats(args: unknown, options?: { defaultUserId
   const userId = typeof args === "object" && args && "userId" in args && typeof (args as { userId?: unknown }).userId === "string"
     ? (args as { userId: string }).userId
     : options?.defaultUserId ?? "default";
-  const stats = (memoryEngine.store as unknown as CompressionStatsReader).getCompressionStats(userId);
+  const stats = await (memoryEngine.store as unknown as CompressionStatsReader).getCompressionStats(userId);
   return toolResult({
     compressions: stats.compressions,
     retrievals: stats.retrievals,

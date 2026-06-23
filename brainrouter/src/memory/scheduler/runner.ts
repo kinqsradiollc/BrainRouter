@@ -53,20 +53,20 @@ export async function runAsJob<T>(
   fn: () => Promise<T>,
   options?: RunAsJobOptions<T>,
 ): Promise<RunAsJobResult<T>> {
-  const job = store.enqueueMemoryJob({
+  const job = await store.enqueueMemoryJob({
     kind: agentId,
     input,
     maxAttempts: 1,
     priority: options?.priority,
   });
-  store.startMemoryJob(job.id);
+  await store.startMemoryJob(job.id);
   try {
     const result = await fn();
     const summary = options?.summarize ? options.summarize(result) : { ok: true };
-    const done = store.completeMemoryJob(job.id, summary);
+    const done = await store.completeMemoryJob(job.id, summary);
     return { result, job: done ?? job };
   } catch (err: any) {
-    store.failMemoryJob(job.id, err?.message ?? String(err));
+    await store.failMemoryJob(job.id, err?.message ?? String(err));
     throw err;
   }
 }
@@ -79,16 +79,16 @@ export async function runAsJob<T>(
  * status panel instead of "idle · never". Best-effort: any failure is logged and
  * swallowed so observability can never break the path it instruments.
  */
-export function recordInlineJob(
+export async function recordInlineJob(
   store: IMemoryStore,
   agentId: string,
   input: unknown,
   summary?: unknown,
-): void {
+): Promise<void> {
   try {
-    const job = store.enqueueMemoryJob({ kind: agentId, input, maxAttempts: 1 });
-    store.startMemoryJob(job.id);
-    store.completeMemoryJob(job.id, summary ?? { ok: true });
+    const job = await store.enqueueMemoryJob({ kind: agentId, input, maxAttempts: 1 });
+    await store.startMemoryJob(job.id);
+    await store.completeMemoryJob(job.id, summary ?? { ok: true });
   } catch (err: any) {
     console.error(`[BrainRouter] recordInlineJob(${agentId}) failed:`, err?.message ?? err);
   }
@@ -182,9 +182,9 @@ export class MemoryJobRunner {
           console.error("[BrainRouter] job runner onTick failed:", err?.message ?? err);
         }
       }
-      this.store.sweepStuckMemoryJobs(this.stuckMs);
+      await this.store.sweepStuckMemoryJobs(this.stuckMs);
       for (let i = 0; i < this.maxPerTick; i++) {
-        const job = this.store.claimNextMemoryJob();
+        const job = await this.store.claimNextMemoryJob();
         if (!job) break;
         await this.runOne(job);
       }
@@ -200,18 +200,18 @@ export class MemoryJobRunner {
     if (!executor) {
       // Extraction-family stages run inline during capture; there's no
       // on-demand executor. Cancel with a clear reason rather than loop.
-      this.store.cancelMemoryJob(job.id, {
+      await this.store.cancelMemoryJob(job.id, {
         reason: `no on-demand executor for '${job.kind}' (runs inline during capture)`,
       });
       return;
     }
     try {
       const output = await executor(job.input, this.ctx);
-      this.store.completeMemoryJob(job.id, output ?? { ok: true });
+      await this.store.completeMemoryJob(job.id, output ?? { ok: true });
     } catch (err: any) {
       // failAgentJob applies backoff and re-arms while attempts remain,
       // else marks terminal failed.
-      failAgentJob(this.store, job.id, err?.message ?? String(err));
+      await failAgentJob(this.store, job.id, err?.message ?? String(err));
     }
   }
 }
