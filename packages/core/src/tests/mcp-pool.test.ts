@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { McpClientPool, selectMcpServerIds, applyBrainUrlOverride } from '../mcp/mcpPool.js';
+import { McpClientPool, selectMcpServerIds, applyBrainUrlOverride, brainHealthUrl, probeBrainHealth, embeddedBrainId } from '../mcp/mcpPool.js';
 
 // These tests exercise the Pool's public API in isolation — connection
 // state, name routing, collision detection, status surfaces — without
@@ -282,4 +282,50 @@ test('applyBrainUrlOverride: synthesizes a brain profile when none exists', () =
   assert.equal(brain.url, 'https://brain.example/mcp');
   assert.equal(brain.identity, 'brainrouter');
   assert.equal(brain.apiKey, 'br_fallback'); // caller-supplied key used when no profile to inherit from
+});
+
+// --- REMOTE-BRAIN Phase 2: health probe + embedded fallback ---------------
+
+test('brainHealthUrl: swaps a trailing /mcp, else resolves /health at the origin', () => {
+  assert.equal(brainHealthUrl('https://brain.example/mcp'), 'https://brain.example/health');
+  assert.equal(brainHealthUrl('https://brain.example/mcp/'), 'https://brain.example/health');
+  // path-mounted brain keeps the prefix
+  assert.equal(brainHealthUrl('https://host/brainrouter/mcp'), 'https://host/brainrouter/health');
+  // non-/mcp URL → origin /health
+  assert.equal(brainHealthUrl('https://brain.example/'), 'https://brain.example/health');
+});
+
+test('probeBrainHealth: ok on 2xx, not-ok on non-2xx, swallows network errors', async () => {
+  const okFetch = (async () => ({ ok: true, status: 200 })) as unknown as typeof fetch;
+  assert.deepEqual(await probeBrainHealth('https://b/mcp', { fetchImpl: okFetch }), { ok: true, status: 200 });
+
+  const downFetch = (async () => ({ ok: false, status: 503 })) as unknown as typeof fetch;
+  assert.deepEqual(await probeBrainHealth('https://b/mcp', { fetchImpl: downFetch }), { ok: false, status: 503 });
+
+  const throwFetch = (async () => { throw new Error('ECONNREFUSED'); }) as unknown as typeof fetch;
+  const r = await probeBrainHealth('https://b/mcp', { fetchImpl: throwFetch });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, 'ECONNREFUSED');
+});
+
+test('probeBrainHealth: sends Bearer apiKey when provided + hits the derived health url', async () => {
+  let seenUrl = '', seenAuth: string | undefined;
+  const spyFetch = (async (url: string, init: any) => {
+    seenUrl = url; seenAuth = init?.headers?.Authorization; return { ok: true, status: 200 };
+  }) as unknown as typeof fetch;
+  await probeBrainHealth('https://b/mcp', { fetchImpl: spyFetch, apiKey: 'br_k' });
+  assert.equal(seenUrl, 'https://b/health');
+  assert.equal(seenAuth, 'Bearer br_k');
+});
+
+test('embeddedBrainId: first stdio brainrouter profile, ignoring http + third-party', () => {
+  assert.equal(embeddedBrainId({
+    cloud: { type: 'http', url: 'https://b/mcp', identity: 'brainrouter' } as any,
+    local: { type: 'stdio', command: 'brainrouter-mcp' } as any,
+  }), 'local');
+  // only an http brain → no embedded fallback
+  assert.equal(embeddedBrainId({ cloud: { type: 'http', url: 'https://b/mcp', identity: 'brainrouter' } as any }), null);
+  // a stdio third-party MCP is not a brain
+  assert.equal(embeddedBrainId({ tool: { type: 'stdio', command: 'x', identity: 'third-party' } as any }), null);
+  assert.equal(embeddedBrainId({}), null);
 });
