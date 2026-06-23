@@ -16,21 +16,76 @@ import {
   atlasGraphStats,
   validateAtlasGraph,
   atlasGraphFile,
+  atlasWorkspaceTag,
   enrichAtlasGraph,
   type AtlasLlmCaller,
 } from "@kinqs/brainrouter-core/dist/atlas/index.js";
 import { callOpenAI } from "@kinqs/brainrouter-core/dist/agent/agent.js";
+import { resolveCliKnobs } from "@kinqs/brainrouter-core/dist/config/config.js";
+import type { AtlasGraph } from "@kinqs/brainrouter-types";
 import type { CommandContext } from "./_context.js";
+import type { McpClientPool } from "@kinqs/brainrouter-core/dist/mcp/mcpPool.js";
+
+/** Call a brain Atlas tool through the MCP pool, parsing its JSON text result. Null on any failure. */
+async function callBrainAtlas(mcpClient: McpClientPool, tool: string, args: Record<string, unknown>): Promise<any | null> {
+  try {
+    const res = await mcpClient.callTool(tool, args);
+    if (!res || res.isError) return null;
+    const text = res?.content?.[0]?.text;
+    return typeof text === "string" && text.trim() ? JSON.parse(text) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Push the workspace's Atlas graph to the connected brain (REMOTE-BRAIN Phase 3d). */
+async function pushAtlasToBrain(mcpClient: McpClientPool, root: string, graph: AtlasGraph): Promise<{ ok: boolean; nodeCount?: number }> {
+  const out = await callBrainAtlas(mcpClient, "atlas_put", { workspaceTag: atlasWorkspaceTag(root), graph });
+  return out?.ok ? { ok: true, nodeCount: out.nodeCount } : { ok: false };
+}
+
+/** Fetch the workspace's Atlas graph from the connected brain, or null when absent. */
+async function pullAtlasFromBrain(mcpClient: McpClientPool, root: string): Promise<AtlasGraph | null> {
+  const out = await callBrainAtlas(mcpClient, "atlas_get", { workspaceTag: atlasWorkspaceTag(root) });
+  return out?.found && out.graph ? (out.graph as AtlasGraph) : null;
+}
 
 export async function tryHandleAtlasCommand(ctx: CommandContext): Promise<boolean> {
-  const { command, args, agent, config } = ctx;
+  const { command, args, agent, config, mcpClient } = ctx;
   if (command !== "/atlas" && command !== "/map") return false;
 
   const sub = (args[0] ?? "").toLowerCase();
   const root = agent.workspaceRoot;
+  const remoteBrain = !!resolveCliKnobs(config).brainUrl;
 
   if (sub === "help") {
     printUsage();
+    return true;
+  }
+
+  // REMOTE-BRAIN Phase 3d — sync the workspace's Atlas with the connected brain.
+  if (sub === "push") {
+    const graph = readAtlasGraph(root);
+    if (!graph) {
+      console.log(chalk.yellow("\nNo atlas to push — build one first with: /atlas\n"));
+      return true;
+    }
+    const res = await pushAtlasToBrain(mcpClient, root, graph);
+    console.log(res.ok
+      ? chalk.green(`\n✓ Pushed atlas to the brain (${res.nodeCount ?? graph.nodes.length} nodes, tag ${atlasWorkspaceTag(root)}).\n`)
+      : chalk.red("\nPush failed — is a BrainRouter brain connected (and atlas tools available)?\n"));
+    return true;
+  }
+
+  if (sub === "pull") {
+    const graph = await pullAtlasFromBrain(mcpClient, root);
+    if (!graph) {
+      console.log(chalk.yellow("\nNo atlas on the brain for this workspace yet (push one with: /atlas push).\n"));
+      return true;
+    }
+    saveAtlasGraph(root, graph);
+    console.log(chalk.green(`\n✓ Pulled atlas from the brain → saved locally.`));
+    printSummary(graph, atlasGraphFile(root));
     return true;
   }
 
@@ -65,6 +120,12 @@ export async function tryHandleAtlasCommand(ctx: CommandContext): Promise<boolea
     printSummary(graph, atlasGraphFile(root));
     if (v.warnings.length) console.log(chalk.dim(`  (${v.warnings.length} advisory warning${v.warnings.length === 1 ? "" : "s"})`));
     console.log(chalk.dim("  Open the Atlas panel in the desktop app to explore it visually.\n"));
+    // REMOTE-BRAIN Phase 3d — with a remote brain configured, sync the fresh
+    // build up so other clients (and the dashboard) can serve it. Best-effort.
+    if (remoteBrain) {
+      const res = await pushAtlasToBrain(mcpClient, root, graph);
+      console.log(res.ok ? chalk.dim("  ↑ synced to the remote brain.\n") : chalk.dim("  (remote brain sync skipped — not reachable)\n"));
+    }
     return true;
   }
 
@@ -139,6 +200,11 @@ export async function tryHandleAtlasCommand(ctx: CommandContext): Promise<boolea
       console.log(chalk.dim(`  (${res.batchesFailed} batch${res.batchesFailed === 1 ? "" : "es"} skipped — unparseable model output)`));
     }
     printSummary(res.graph, atlasGraphFile(root));
+    // REMOTE-BRAIN Phase 3d — sync the enriched graph to the remote brain.
+    if (remoteBrain) {
+      const pushed = await pushAtlasToBrain(mcpClient, root, res.graph);
+      console.log(pushed.ok ? chalk.dim("  ↑ synced to the remote brain.\n") : chalk.dim("  (remote brain sync skipped — not reachable)\n"));
+    }
     return true;
   }
 
@@ -167,5 +233,8 @@ function printUsage(): void {
   console.log("  /atlas            Build (or rebuild) the atlas for this workspace");
   console.log("  /atlas enrich     Add LLM summaries, layers, and a guided tour");
   console.log("  /atlas show       Show the current atlas summary");
-  console.log(chalk.dim("\n  Explore it visually in the desktop app's Atlas panel.\n"));
+  console.log("  /atlas push       Upload this workspace's atlas to the connected brain");
+  console.log("  /atlas pull       Download this workspace's atlas from the brain");
+  console.log(chalk.dim("\n  With a remote brain (cli.brainUrl), build/enrich auto-sync up."));
+  console.log(chalk.dim("  Explore it visually in the desktop app's Atlas panel.\n"));
 }
