@@ -12,7 +12,7 @@
  * which is the backend server's existing deployment contract.
  */
 
-import type { LLMRunner, LLMRunParams } from "@kinqs/brainrouter-types";
+import type { LLMRunner, LLMRunParams, LLMToolSchema } from "@kinqs/brainrouter-types";
 import { fetchWithExternalRetry, ExternalApiError } from "../util/retry.js";
 import { acquireLLMSlot } from "./llm-semaphore.js";
 import { extractChatCompletionText, resolveLLMTimeoutMs, isExternalTimeoutError } from "./llm-response.js";
@@ -47,7 +47,7 @@ export class ModelLLMRunner implements LLMRunner {
     this.modelOverride = modelOverride?.trim() || undefined;
   }
 
-  async run({ prompt, systemPrompt, timeoutMs = 120_000, taskId }: LLMRunParams): Promise<string> {
+  async run({ prompt, systemPrompt, timeoutMs = 120_000, taskId, tool }: LLMRunParams): Promise<string> {
     const endpoint = process.env.BRAINROUTER_LLM_ENDPOINT ?? "https://api.openai.com/v1/chat/completions";
     const apiKey = process.env.BRAINROUTER_LLM_API_KEY;
 
@@ -93,7 +93,7 @@ export class ModelLLMRunner implements LLMRunner {
     try {
       let result: string;
       try {
-        result = await this.runOnce({ endpoint, apiKey, model, messages, effectiveTimeoutMs, taskId });
+        result = await this.runOnce({ endpoint, apiKey, model, messages, effectiveTimeoutMs, taskId, tool });
       } catch (err) {
         // On a provider/transport failure, retry ONCE against a stable fallback
         // model before giving up. No-op (rethrow) when no fallback is configured,
@@ -115,6 +115,7 @@ export class ModelLLMRunner implements LLMRunner {
           messages,
           effectiveTimeoutMs,
           taskId,
+          tool,
         });
       }
       recordCognitiveSuccess();
@@ -137,13 +138,23 @@ export class ModelLLMRunner implements LLMRunner {
     messages: { role: string; content: string }[];
     effectiveTimeoutMs: number;
     taskId: string;
+    tool?: LLMToolSchema;
   }): Promise<string> {
-    const { endpoint, apiKey, model, messages, effectiveTimeoutMs, taskId } = args;
+    const { endpoint, apiKey, model, messages, effectiveTimeoutMs, taskId, tool } = args;
 
     const body: Record<string, unknown> = { model, messages };
     const maxTokens = parsePositiveInt(process.env.BRAINROUTER_LLM_MAX_TOKENS);
     if (maxTokens) {
       body.max_tokens = maxTokens;
+    }
+    // STRUCTURED OUTPUT — force the model to return its result as a function call
+    // whose schema fixes the shape, instead of relying on a "respond in JSON"
+    // prompt that drifts across model versions. Backends that don't support
+    // tool-calling 400 here and we transparently retry without it (below), so
+    // the prompt's JSON instruction remains the compatibility fallback.
+    if (tool) {
+      body.tools = [{ type: "function", function: { name: tool.name, description: tool.description ?? "", parameters: tool.parameters } }];
+      body.tool_choice = { type: "function", function: { name: tool.name } };
     }
     // Opt-in JSON mode, extraction only. OFF by default: some OpenAI-compatible
     // proxies (incl. the free nemotron endpoint) 400 on an unknown
@@ -195,6 +206,18 @@ export class ModelLLMRunner implements LLMRunner {
               `Original error: ${errorBody}. Retry error: ${retryBody}`,
             );
           }
+        } else if (tool && body.tools) {
+          // The 400 most likely means this backend rejects `tools`/`tool_choice`
+          // (some OpenAI-compatible proxies do). Drop the forced tool and retry
+          // once as a plain completion — the prompt still carries the JSON
+          // instruction, so the caller's JSON chokepoint handles the content.
+          delete body.tools;
+          delete body.tool_choice;
+          res = await doFetch();
+          if (!res.ok) {
+            const retryBody = await res.text();
+            throw new Error(`[BrainRouter:${taskId}] LLM Error (${model}) after dropping tool_choice: ${res.status} ${res.statusText} - ${retryBody}`);
+          }
         } else {
           throw new Error(`[BrainRouter:${taskId}] LLM Error (${model}): ${res.status} ${res.statusText} - ${errorBody}`);
         }
@@ -225,6 +248,14 @@ export class ModelLLMRunner implements LLMRunner {
       // local OpenAI-compatible backends return an empty message.content with
       // useful output in reasoning_content.
       const choice = data.choices[0];
+      // STRUCTURED OUTPUT — when we forced a tool, the result is the tool-call's
+      // JSON `arguments` (schema-shaped, consistent across models). Prefer it.
+      // If the model ignored tool_choice and replied in content instead, fall
+      // through to the normal content extraction below.
+      if (tool) {
+        const toolArgs = choice?.message?.tool_calls?.[0]?.function?.arguments;
+        if (typeof toolArgs === "string" && toolArgs.trim()) return toolArgs;
+      }
       const content = extractChatCompletionText(data);
       if (typeof content !== "string") {
         throw new Error(
