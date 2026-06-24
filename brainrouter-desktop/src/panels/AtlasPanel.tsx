@@ -178,7 +178,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
         style: { width: cardW },
       }));
       const edges: Edge[] = overview.edges.map((e, i) => ({
-        id: `oe${i}`, source: e.source, target: e.target,
+        id: `oe${i}`, source: e.source, target: e.target, type: "smoothstep",
         style: { stroke: "var(--border-strong)", strokeWidth: 1 }, label: e.weight > 1 ? String(e.weight) : undefined,
       }));
       return { rfNodes: nodes, rfEdges: edges };
@@ -199,7 +199,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
       // import count. Width/opacity track how many imports cross the boundary.
       const maxW = Math.max(1, ...domain.edges.map((e) => e.weight));
       const edges: Edge[] = domain.edges.map((e, i) => ({
-        id: `de${i}`, source: e.source, target: e.target, animated: true,
+        id: `de${i}`, source: e.source, target: e.target, type: "smoothstep", animated: true,
         label: e.label ?? `${e.weight}`,
         labelStyle: { fill: "var(--text-dim)", fontSize: 9 },
         labelBgStyle: { fill: "var(--surface)" },
@@ -227,7 +227,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
       }));
       const maxW = Math.max(1, ...serviceModel.edges.map((e) => e.weight));
       const edges: Edge[] = serviceModel.edges.map((e, i) => ({
-        id: `sve${i}`, source: e.source, target: e.target, animated: true,
+        id: `sve${i}`, source: e.source, target: e.target, type: "smoothstep", animated: true,
         style: { stroke: "var(--accent)", strokeOpacity: 0.4 + 0.5 * (e.weight / maxW), strokeWidth: 1 + 1.5 * (e.weight / maxW) },
       }));
       return { rfNodes: nodes, rfEdges: edges };
@@ -271,27 +271,35 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
   // cheap restyle ON TOP of the base layout (no re-layout on hover), composing
   // node `style.opacity` + edge style without touching the node components.
   const { rfNodes, rfEdges } = useMemo<{ rfNodes: Node[]; rfEdges: Edge[] }>(() => {
-    if (!hoverNode) return base;
-    const connected = new Set<string>([hoverNode]);
-    for (const e of base.rfEdges) {
-      if (e.source === hoverNode) connected.add(e.target);
-      if (e.target === hoverNode) connected.add(e.source);
+    // Pulse the tour step's nodes (CSS keyframe) so the eye follows the walk.
+    const pulse = tourStep != null ? tourIds : null;
+    if (!hoverNode && (!pulse || pulse.size === 0)) return base;
+
+    const connected = new Set<string>();
+    if (hoverNode) {
+      connected.add(hoverNode);
+      for (const e of base.rfEdges) {
+        if (e.source === hoverNode) connected.add(e.target);
+        if (e.target === hoverNode) connected.add(e.source);
+      }
     }
     const rfNodes = base.rfNodes.map((n) => {
-      if (n.id === hoverNode) return { ...n, style: { ...n.style, boxShadow: "0 0 0 1.5px var(--accent), 0 0 22px rgba(124,147,255,0.5)", borderRadius: 10 } };
-      if (n.type === "atlasGroup" || connected.has(n.id)) return n;
-      return { ...n, style: { ...n.style, opacity: 0.3 } };
+      let nn: Node = n;
+      if (pulse?.has(n.id)) nn = { ...nn, className: [nn.className, "atlas-tour-pulse"].filter(Boolean).join(" ") };
+      if (hoverNode) {
+        if (n.id === hoverNode) nn = { ...nn, style: { ...nn.style, boxShadow: "0 0 0 1.5px var(--accent), 0 0 22px rgba(124,147,255,0.5)", borderRadius: 10 } };
+        else if (!(n.type === "atlasGroup" || connected.has(n.id))) nn = { ...nn, style: { ...nn.style, opacity: 0.3 } };
+      }
+      return nn;
     });
-    const rfEdges = base.rfEdges.map((e) => {
-      const on = e.source === hoverNode || e.target === hoverNode;
-      return {
-        ...e,
-        animated: on,
-        style: { ...e.style, opacity: on ? 1 : 0.1, strokeWidth: on ? Math.max(2, Number(e.style?.strokeWidth ?? 1) + 1) : (e.style?.strokeWidth ?? 1) },
-      };
-    });
+    const rfEdges = hoverNode
+      ? base.rfEdges.map((e) => {
+          const on = e.source === hoverNode || e.target === hoverNode;
+          return { ...e, animated: on, style: { ...e.style, opacity: on ? 1 : 0.1, strokeWidth: on ? Math.max(2, Number(e.style?.strokeWidth ?? 1) + 1) : (e.style?.strokeWidth ?? 1) } };
+        })
+      : base.rfEdges;
     return { rfNodes, rfEdges };
-  }, [base, hoverNode]);
+  }, [base, hoverNode, tourStep, tourIds]);
 
   // fit to an INTENTIONAL focus (impact click / tour / search) only — never the
   // passive Review highlight (see focusIds). Guard on rendered nodes so we don't
@@ -312,7 +320,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
     if (!rfRef.current || rfNodes.length === 0) return;
     const t = setTimeout(() => rfRef.current?.fitView({ duration: 300, padding: 0.2 }), 90);
     return () => clearTimeout(t);
-  }, [effMode, drill, disabledCats, graph, rfNodes.length]);
+  }, [effMode, drill, disabledCats, graph, rfNodes.length, showInsights]);
 
   // Esc: leave drill → overview, else clear selection
   useEffect(() => {
@@ -406,6 +414,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
       })() : null}
 
       <div className="atlas-canvas">
+        <div className="atlas-rf">
         <ReactFlow
           nodes={rfNodes}
           edges={rfEdges}
@@ -449,9 +458,10 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
             // Compact: the default 200×150 swallowed the narrow side panel.
             style={{ width: 124, height: 86, background: "var(--surface)", border: "1px solid var(--border)" }} />
         </ReactFlow>
+        </div>
 
         {showInsights && stats ? (
-          <div className="atlas-insights" style={{ position: "absolute", top: 0, right: 0, bottom: 0, width: "min(310px, 88%)", overflowY: "auto", background: "var(--surface)", borderLeft: "1px solid var(--border)", padding: "12px 14px", zIndex: 6, boxShadow: "-10px 0 28px rgba(0,0,0,0.38)" }}>
+          <div className="atlas-insights">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
               <strong style={{ fontSize: 13 }}>Deep Dive</strong>
               <button className="atlas-detail-x" onClick={() => setShowInsights(false)} aria-label="Close insights" title="Close"><Icon name="close" size={11} /></button>
