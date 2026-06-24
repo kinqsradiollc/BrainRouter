@@ -56,6 +56,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
   const [disabledCats, setDisabledCats] = useState<ReadonlySet<AtlasFileCategory>>(new Set());
   const [showDiff, setShowDiff] = useState(false); // Review overlay (ATLAS-11)
   const [impactNode, setImpactNode] = useState<string | null>(null); // blast-radius highlight (ATLAS-13)
+  const [hoverNode, setHoverNode] = useState<string | null>(null); // hover-to-highlight connections
   const rfRef = useRef<ReactFlowInstance | null>(null);
 
   useEffect(() => {
@@ -155,7 +156,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
   }, [graph, effMode, scope, disabledCats]);
 
   // ---- React Flow nodes/edges ----
-  const { rfNodes, rfEdges } = useMemo<{ rfNodes: Node[]; rfEdges: Edge[] }>(() => {
+  const base = useMemo<{ rfNodes: Node[]; rfEdges: Edge[] }>(() => {
     if (!graph) return { rfNodes: [], rfEdges: [] };
     if (effMode === "overview" && overview) {
       const cardW = 268;
@@ -257,6 +258,32 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
     return { rfNodes: [], rfEdges: [] };
   }, [graph, effMode, overview, domain, structural, serviceModel, spotlight, selected, byId, showDiff, nodeChanges]);
 
+  // HOVER HIGHLIGHT — hovering a node lights up its direct connections (edges
+  // brighten + animate, the node and its neighbours stay full opacity) and fades
+  // everything else, so you can see "what links to what" at a glance. This is a
+  // cheap restyle ON TOP of the base layout (no re-layout on hover), composing
+  // node `style.opacity` + edge style without touching the node components.
+  const { rfNodes, rfEdges } = useMemo<{ rfNodes: Node[]; rfEdges: Edge[] }>(() => {
+    if (!hoverNode) return base;
+    const connected = new Set<string>([hoverNode]);
+    for (const e of base.rfEdges) {
+      if (e.source === hoverNode) connected.add(e.target);
+      if (e.target === hoverNode) connected.add(e.source);
+    }
+    const rfNodes = base.rfNodes.map((n) =>
+      n.type === "atlasGroup" || connected.has(n.id) ? n : { ...n, style: { ...n.style, opacity: 0.3 } },
+    );
+    const rfEdges = base.rfEdges.map((e) => {
+      const on = e.source === hoverNode || e.target === hoverNode;
+      return {
+        ...e,
+        animated: on,
+        style: { ...e.style, opacity: on ? 1 : 0.1, strokeWidth: on ? Math.max(2, Number(e.style?.strokeWidth ?? 1) + 1) : (e.style?.strokeWidth ?? 1) },
+      };
+    });
+    return { rfNodes, rfEdges };
+  }, [base, hoverNode]);
+
   // fit to an INTENTIONAL focus (impact click / tour / search) only — never the
   // passive Review highlight (see focusIds). Guard on rendered nodes so we don't
   // try to fit ids that aren't in the current mode's node set.
@@ -264,7 +291,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
     if (!rfRef.current || !focusIds || focusIds.size === 0) return;
     const present = [...focusIds].filter((id) => rfNodes.some((n) => n.id === id));
     if (present.length === 0) return;
-    rfRef.current.fitView({ nodes: present.map((id) => ({ id })), duration: 450, padding: 0.45 });
+    rfRef.current.fitView({ nodes: present.map((id) => ({ id })), duration: 600, padding: 0.5, maxZoom: 1.2 });
   }, [focusIds, rfNodes]);
 
   // re-fit when the mode/drill/filter changes the whole layout — AND when the
@@ -324,8 +351,8 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
             {hasServices ? <button className={`atlas-mode${effMode === "services" ? " on" : ""}`} onClick={() => { setMode("services"); setDrill(null); }} title="The decomposed service architecture — every module's typed port, wired by cross-module imports">Services</button> : null}
           </div>
         ) : null}
-        <span className="atlas-proj">{graph.project.name}</span>
-        {enrichedCount ? <span className="atlas-count atlas-enriched" title={`${enrichedCount} files summarised`}>· {graph.layers.length} layers · {graph.tour.length} tour{graph.layerEdges?.length ? ` · ${graph.layerEdges.length} links` : ""}</span> : null}
+        {/* Project name lives in the breadcrumb below — not duplicated here. */}
+        {enrichedCount ? <span className="atlas-count atlas-enriched" title={`${enrichedCount} files summarised`}>{graph.layers.length} layers · {graph.tour.length} tour{graph.layerEdges?.length ? ` · ${graph.layerEdges.length} links` : ""}</span> : null}
         {effMode === "structural" && presentCats.length ? (
           <div className="atlas-cats">
             {presentCats.map((c) => (
@@ -398,6 +425,8 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
             const fp = byId.get(n.id)?.filePath;
             if (n.type === "atlasFile" && fp) onOpenFile?.(fp);
           }}
+          onNodeMouseEnter={(_e, n) => { if (n.type !== "atlasGroup") setHoverNode(n.id); }}
+          onNodeMouseLeave={() => setHoverNode(null)}
           onPaneClick={() => { setSelected(null); setImpactNode(null); }}
         >
           <Background color="var(--border)" gap={24} size={1} />
