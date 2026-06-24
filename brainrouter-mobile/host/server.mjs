@@ -15,14 +15,21 @@
  * `host/wire.integration.test.mjs`, a scripted stub standing in for the Node-only
  * desktop runtime. When run directly this file boots the real desktop `main`.
  *
- * Run on the machine with the workspace (needs `ws` + the built desktop/core dist):
+ * Run on the machine with the workspace (needs `ws` + the built desktop/core dist).
+ * Point it at a LOCAL model with the BRAINROUTER_LLM_* env — no config file needed:
  *   cd brainrouter-mobile/host && npm install
- *   BRAINROUTER_DESKTOP_WORKSPACE=/abs/path/to/repo BRAINROUTER_HOST_PORT=3747 npm start
+ *   BRAINROUTER_DESKTOP_WORKSPACE=/abs/path/to/repo \
+ *   BRAINROUTER_LLM_ENDPOINT=http://localhost:9000/v1 \
+ *   BRAINROUTER_LLM_MODEL=Qwen3.5-9B-Q4_K_M.gguf \
+ *   node server.mjs
+ * (Or, with a real ~/.config/brainrouter/config.json on this machine, just `npm start`.)
  *
  * Then pair the app to  ws://<this-machine-LAN-ip>:3747 .
  */
 import { WebSocketServer } from 'ws';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const RING_CAP = 2000;
 
@@ -112,9 +119,42 @@ export async function startHostServer({ port = 0, main, ringCap = RING_CAP, exit
   };
 }
 
+/**
+ * Build an LLMConfig from env so the host can target a LOCAL OpenAI-compatible
+ * model (llama.cpp / LM Studio / Ollama) without editing ~/.config/brainrouter.
+ * Returns null when not set (→ fall back to the user's real config). `endpoint`
+ * is the OpenAI base URL ending in /v1 (the agent POSTs to {endpoint}/chat/completions).
+ */
+export function llmFromEnv(env = process.env) {
+  const endpoint = env.BRAINROUTER_LLM_ENDPOINT;
+  const model = env.BRAINROUTER_LLM_MODEL;
+  if (!endpoint || !model) return null;
+  return {
+    provider: env.BRAINROUTER_LLM_PROVIDER || 'lmstudio',
+    model,
+    endpoint,
+    apiKey: env.BRAINROUTER_LLM_API_KEY || 'sk-local',
+  };
+}
+
 // ── Run directly: boot the real desktop agent host over a WS on $BRAINROUTER_HOST_PORT.
 const isEntry = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isEntry) {
+  // Optional local-model override: write a minimal config into a host-local home
+  // and redirect HOME/USERPROFILE there, so loadConfig() finds the model WITHOUT
+  // touching the user's real ~/.config/brainrouter/config.json.
+  const llm = llmFromEnv();
+  if (llm) {
+    const home = path.join(path.dirname(fileURLToPath(import.meta.url)), '.host-home');
+    fs.mkdirSync(path.join(home, '.config', 'brainrouter'), { recursive: true });
+    fs.writeFileSync(
+      path.join(home, '.config', 'brainrouter', 'config.json'),
+      JSON.stringify({ activeServer: '', servers: {}, llm }, null, 2),
+    );
+    process.env.USERPROFILE = home;
+    process.env.HOME = home;
+    console.log(`[brainrouter-host] LLM override → ${llm.model} @ ${llm.endpoint}`);
+  }
   process.env.BRAINROUTER_HOST_EMBEDDED = '1'; // tell host.ts not to self-boot on import
   const { main } = await import('../../brainrouter-desktop/dist-electron/host.js');
   const { port } = await startHostServer({

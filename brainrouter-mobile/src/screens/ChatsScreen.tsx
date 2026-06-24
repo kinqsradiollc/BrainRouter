@@ -14,6 +14,7 @@ import { useTransport, useConnectionStatus } from '../state/TransportProvider';
 import { Icon } from '../components/Icon';
 import { MONO } from '../theme/fonts';
 import type { ChatsStackParamList } from '../navigation/types';
+import { newSessionKey } from '../domain/session/newSessionKey';
 
 type Props = NativeStackScreenProps<ChatsStackParamList, 'Chats'>;
 
@@ -57,10 +58,22 @@ export function ChatsScreen({ navigation }: Props): React.JSX.Element {
 
   return (
     <Screen title="Chats" subtitle={subtitle}>
+      <Pressable
+        accessibilityLabel="New chat"
+        onPress={() => navigation.navigate('Session', { sessionKey: newSessionKey() })}
+        style={({ pressed }) => [
+          styles.newChat,
+          { backgroundColor: pressed ? theme.colors.accentPress : theme.colors.accent, borderRadius: theme.radius.card },
+        ]}
+      >
+        <Icon name="plus" size={18} color={theme.colors.accentText} />
+        <Text style={[styles.newChatText, { color: theme.colors.accentText }]}>New chat</Text>
+      </Pressable>
+      <View style={{ height: theme.spacing.md }} />
       {rows === null ? (
         <EmptyState title="Loading sessions…" />
       ) : rows.length === 0 ? (
-        <EmptyState title="No sessions yet" detail="Start a chat to see it here." />
+        <EmptyState title="No sessions yet" detail="Tap “New chat” above to start one." />
       ) : (
         <View style={{ gap: theme.spacing.sm }}>
           {rows.map((row) => {
@@ -97,6 +110,8 @@ export function ChatsScreen({ navigation }: Props): React.JSX.Element {
 }
 
 const styles = StyleSheet.create({
+  newChat: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 13 },
+  newChatText: { fontSize: 14, fontWeight: '600' },
   row: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderWidth: StyleSheet.hairlineWidth },
   dot: { width: 8, height: 8, borderRadius: 4 },
   body: { flex: 1, minWidth: 0 },
