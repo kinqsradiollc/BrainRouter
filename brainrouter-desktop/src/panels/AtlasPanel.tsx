@@ -14,7 +14,7 @@ import "@xyflow/react/dist/style.css";
 import type { AtlasFileCategory, AtlasGraph, AtlasNode, AtlasNodeType } from "@kinqs/brainrouter-types";
 import {
   atlasGrouping, atlasGroupedLayout, atlasOverviewModel, atlasDomainModel, atlasServiceModel, atlasNodeColor, atlasSearchMatches,
-  atlasChangeMap, atlasNodeChanges, atlasImpact, atlasImpactOf, atlasUncoveredFiles, ATLAS_FILE_CATEGORIES, ATLAS_CATEGORY_COLORS,
+  atlasChangeMap, atlasNodeChanges, atlasImpact, atlasImpactOf, atlasUncoveredFiles, atlasProjectStats, ATLAS_FILE_CATEGORIES, ATLAS_CATEGORY_COLORS,
   type AtlasChangeKind, type AtlasChangeAssessment,
 } from "../lib/atlas/atlasView.js";
 import { ATLAS_NODE_TYPES } from "./AtlasNodes.js";
@@ -58,6 +58,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
   const [showDiff, setShowDiff] = useState(false); // Review overlay (ATLAS-11)
   const [impactNode, setImpactNode] = useState<string | null>(null); // blast-radius highlight (ATLAS-13)
   const [hoverNode, setHoverNode] = useState<string | null>(null); // hover-to-highlight connections
+  const [showInsights, setShowInsights] = useState(false); // Deep Dive stats overlay
   const rfRef = useRef<ReactFlowInstance | null>(null);
 
   useEffect(() => {
@@ -140,6 +141,8 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
   // pan/zoom, or toggling Review while in Domain/Overview keeps yanking the view
   // to the changed files.
   const focusIds = useMemo(() => impactIds ?? tourIds ?? searchIds ?? null, [impactIds, tourIds, searchIds]);
+  // Deep Dive — whole-graph stats for the insights overlay.
+  const stats = useMemo(() => (graph ? atlasProjectStats(graph) : null), [graph]);
 
   // ---- model per mode ----
   // Overview caps to the biggest layers + an "Other" rollup so very large repos
@@ -274,9 +277,11 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
       if (e.source === hoverNode) connected.add(e.target);
       if (e.target === hoverNode) connected.add(e.source);
     }
-    const rfNodes = base.rfNodes.map((n) =>
-      n.type === "atlasGroup" || connected.has(n.id) ? n : { ...n, style: { ...n.style, opacity: 0.3 } },
-    );
+    const rfNodes = base.rfNodes.map((n) => {
+      if (n.id === hoverNode) return { ...n, style: { ...n.style, boxShadow: "0 0 0 1.5px var(--accent), 0 0 22px rgba(124,147,255,0.5)", borderRadius: 10 } };
+      if (n.type === "atlasGroup" || connected.has(n.id)) return n;
+      return { ...n, style: { ...n.style, opacity: 0.3 } };
+    });
     const rfEdges = base.rfEdges.map((e) => {
       const on = e.source === hoverNode || e.target === hoverNode;
       return {
@@ -375,6 +380,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
         <button className={`btn atlas-review-btn${showDiff ? " primary" : ""}`} disabled={busy} onClick={() => setShowDiff((v) => !v)} title="Highlight uncommitted changes — review AI edits before commit">
           <Icon name="diff" size={12} />{showDiff ? "Reviewing" : "Review"}{changedCount ? <span className="atlas-review-badge">{changedCount}</span> : null}
         </button>
+        <button className={`btn${showInsights ? " primary" : ""}`} disabled={busy} onClick={() => setShowInsights((v) => !v)} title="Project insights — counts, languages, frameworks, hotspots">Deep Dive</button>
         {graph.tour.length ? <button className="btn" disabled={busy} onClick={() => { setSelected(null); setTourStep(tourStep == null ? 0 : null); }} title="Walk a guided tour">{tourStep == null ? "Tour" : "Exit tour"}</button> : null}
         {onEnrich ? <button className="btn" disabled={busy} onClick={onEnrich} title="Add LLM summaries, layers, and a guided tour">{enriching ? "Enriching…" : enrichedCount ? "Re-enrich" : "Enrich"}</button> : null}
         <button className="btn" disabled={busy} onClick={onBuild} title="Rebuild from the current code">{building ? "Building…" : "Rebuild"}</button>
@@ -443,6 +449,64 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
             // Compact: the default 200×150 swallowed the narrow side panel.
             style={{ width: 124, height: 86, background: "var(--surface)", border: "1px solid var(--border)" }} />
         </ReactFlow>
+
+        {showInsights && stats ? (
+          <div className="atlas-insights" style={{ position: "absolute", top: 0, right: 0, bottom: 0, width: "min(310px, 88%)", overflowY: "auto", background: "var(--surface)", borderLeft: "1px solid var(--border)", padding: "12px 14px", zIndex: 6, boxShadow: "-10px 0 28px rgba(0,0,0,0.38)" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <strong style={{ fontSize: 13 }}>Deep Dive</strong>
+              <button className="atlas-detail-x" onClick={() => setShowInsights(false)} aria-label="Close insights" title="Close"><Icon name="close" size={11} /></button>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 14 }}>
+              {([["Nodes", stats.nodes], ["Edges", stats.edges], ["Layers", stats.layers], ["Files", stats.files]] as Array<[string, number]>).map(([k, v]) => (
+                <div key={k} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--border)", borderRadius: 6, padding: "7px 9px" }}>
+                  <div style={{ fontSize: 17, fontWeight: 600 }}>{v}</div>
+                  <div style={{ fontSize: 10, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: 0.4 }}>{k}</div>
+                </div>
+              ))}
+            </div>
+            {([
+              { title: "File types", items: stats.byCategory.map((c) => ({ key: c.key, count: c.count, color: ATLAS_CATEGORY_COLORS[c.key as AtlasFileCategory] })) },
+              { title: "Languages", items: stats.languages.map((l) => ({ key: l.key, count: l.count, color: "var(--accent)" })) },
+              { title: "Complexity", items: stats.byComplexity.map((c) => ({ key: c.key, count: c.count, color: "var(--text-dim)" })) },
+            ] as Array<{ title: string; items: Array<{ key: string; count: number; color?: string }> }>).filter((s) => s.items.length).map((sec) => {
+              const max = Math.max(1, ...sec.items.map((i) => i.count));
+              return (
+                <div key={sec.title} style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 10, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>{sec.title}</div>
+                  {sec.items.map((it) => (
+                    <div key={it.key} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: 2, background: it.color ?? "var(--accent)", flex: "0 0 auto" }} />
+                      <span style={{ fontSize: 11, flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.key}</span>
+                      <span style={{ position: "relative", width: 56, height: 4, borderRadius: 2, background: "rgba(255,255,255,0.06)" }}>
+                        <span style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${(it.count / max) * 100}%`, borderRadius: 2, background: it.color ?? "var(--accent)", opacity: 0.7 }} />
+                      </span>
+                      <span style={{ fontSize: 10, color: "var(--text-dim)", width: 26, textAlign: "right" }}>{it.count}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+            {stats.frameworks.length ? (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 10, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>Frameworks</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                  {stats.frameworks.map((f) => <span key={f} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 10, background: "rgba(255,255,255,0.05)", border: "1px solid var(--border)" }}>{f}</span>)}
+                </div>
+              </div>
+            ) : null}
+            {stats.topConnected.length ? (
+              <div>
+                <div style={{ fontSize: 10, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>Most connected</div>
+                {stats.topConnected.map((t) => (
+                  <button key={t.id} onClick={() => { setSelected(t.id); onSelectNode?.(t.id, byId.get(t.id)?.filePath); }} style={{ display: "flex", justifyContent: "space-between", width: "100%", gap: 6, background: "none", border: "none", color: "inherit", padding: "3px 0", cursor: "pointer", textAlign: "left" }} title={t.name}>
+                    <span style={{ fontSize: 11, flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.name}</span>
+                    <span style={{ fontSize: 10, color: "var(--text-dim)" }}>{t.degree} links</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         {selected ? (() => {
           const selPath = byId.get(selected)?.filePath;

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { AtlasGraph } from '@kinqs/brainrouter-types';
-import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize, atlasNodeFacts, atlasSearchMatches, atlasGrouping, atlasGroupedLayout, atlasOverviewModel, ATLAS_OVERVIEW_OTHER_ID, atlasDomainModel, atlasServiceModel, isServicePortPath, serviceModuleLabel, atlasChangeKind, atlasChangeMap, atlasNodeChanges, atlasImpact, atlasImpactOf, atlasUncoveredFiles, isTestFile } from './atlasView.js';
+import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize, atlasNodeFacts, atlasSearchMatches, atlasGrouping, atlasGroupedLayout, atlasOverviewModel, ATLAS_OVERVIEW_OTHER_ID, atlasDomainModel, atlasServiceModel, isServicePortPath, serviceModuleLabel, atlasChangeKind, atlasChangeMap, atlasNodeChanges, atlasImpact, atlasImpactOf, atlasUncoveredFiles, atlasProjectStats, isTestFile } from './atlasView.js';
 
 function fixture(): AtlasGraph {
   return {
@@ -403,4 +403,24 @@ test('atlasServiceModel builds module cards + cross-module edges', () => {
   assert.equal(m.edges.length, 1);
   assert.equal(m.edges[0].source, exec.id);
   assert.equal(m.edges[0].weight, 1);
+});
+
+test('atlasProjectStats: aggregates counts, languages, frameworks, hotspots', () => {
+  const g = layered();
+  g.project.frameworks = ['Express'];
+  // give files languages + a class for type variety
+  g.nodes = g.nodes.map((n) => (n.type === 'file' ? { ...n, language: 'typescript' } : n));
+  g.nodes.push({ id: 'class:src/db/store.ts:Store', type: 'class', name: 'Store', filePath: 'src/db/store.ts', lineRange: [1, 9] });
+
+  const s = atlasProjectStats(g);
+  assert.equal(s.nodes, g.nodes.length);
+  assert.equal(s.edges, g.edges.length);
+  assert.equal(s.layers, 2);
+  assert.equal(s.files, 3); // server.ts, routes.ts, store.ts (config is not type 'file')
+  assert.deepEqual(s.frameworks, ['Express']);
+  assert.equal(s.languages.find((l) => l.key === 'typescript')?.count, 3);
+  assert.ok(s.byType.find((t) => t.key === 'class')); // class counted
+  // store.ts is imported by routes.ts (+ routes by server) → most-connected list non-empty
+  assert.ok(s.topConnected.length > 0);
+  assert.ok(s.topConnected.every((t) => typeof t.degree === 'number'));
 });
