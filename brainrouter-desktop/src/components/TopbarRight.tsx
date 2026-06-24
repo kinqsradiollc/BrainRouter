@@ -23,6 +23,8 @@ export interface TopbarRightProps {
   termDockOpen: boolean;
   setTermDockOpen: Dispatch<SetStateAction<boolean>>;
   sidePanelOpen: boolean;
+  /** Width of the open side rail — lets the pill dodge left of it (see below). */
+  sideWidth: number;
   setSidePanelOpen: Dispatch<SetStateAction<boolean>>;
   sideFullScreen: boolean;
   setSideFullScreen: Dispatch<SetStateAction<boolean>>;
@@ -38,16 +40,23 @@ export interface TopbarRightProps {
 export function TopbarRight(p: TopbarRightProps): React.ReactElement {
   const {
     mode, homeMode, envRoom, envOpen, setEnvOpen, q, termDockOpen, setTermDockOpen,
-    sidePanelOpen, setSidePanelOpen, sideFullScreen, setSideFullScreen,
+    sidePanelOpen, sideWidth, setSidePanelOpen, sideFullScreen, setSideFullScreen,
     sideTabs, activeSideTab, ensurePanel, openBottomDock, pop, setPop, openSettings,
   } = p;
   // The Environment / terminal / side-panel toggles only make sense in the Code
   // workbench. Chat and Track have no such panels, so the cluster there is just
   // export + settings (keeping the controls relevant to the current surface).
   const isCode = mode === 'code';
+  // The pill is absolute, pinned to the window's right edge. When the side rail
+  // is open (and not full-screen), pin it to the LEFT of the rail instead so it
+  // floats over the chat — otherwise it overlays the rail's tab strip (covering
+  // tabs in a narrow rail, butting against them in a wide one). Full-screen keeps
+  // it at the edge over the wide rail, where the tab strip reserves room in CSS.
+  const offRail = isCode && sidePanelOpen && !sideFullScreen;
+  const showEnv = isCode && !homeMode && envRoom;
   return (
-    <span className="topbar-right">
-      {isCode && !homeMode && envRoom ? (
+    <span className="topbar-right" style={offRail ? { right: sideWidth + 12 } : undefined}>
+      {showEnv ? (
         <button type="button" className={`app-switcher${envOpen ? ' active' : ''}`} title="Environment" onClick={() => {
           if (!envOpen) { q('q-gitlog', 'git-log'); q('q-git', 'git-info'); q('q-branches', 'git-branches'); }
           setEnvOpen((o) => !o);
@@ -56,6 +65,9 @@ export function TopbarRight(p: TopbarRightProps): React.ReactElement {
           <Icon name="chev-down" size={11} />
         </button>
       ) : null}
+      {/* Environment is a workbench toggle, not a window/layout control — divide
+          it off from the layout cluster so the group reads cleanly. */}
+      {showEnv ? <span className="topbar-div" aria-hidden="true" /> : null}
       {isCode && sidePanelOpen ? (
         <>
           <span className="pop-wrap">
