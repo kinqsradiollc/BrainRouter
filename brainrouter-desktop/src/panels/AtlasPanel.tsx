@@ -133,6 +133,11 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
   }, [impactNode, graph]);
   // Precedence: impact highlight > tour > search > review overlay.
   const spotlight = useMemo(() => impactIds ?? tourIds ?? searchIds ?? diffIds, [impactIds, tourIds, searchIds, diffIds]);
+  // Only INTENTIONAL focus (impact click / tour / search) should auto-zoom the
+  // canvas. The Review overlay (diffIds) is a passive highlight — it must NOT
+  // pan/zoom, or toggling Review while in Domain/Overview keeps yanking the view
+  // to the changed files.
+  const focusIds = useMemo(() => impactIds ?? tourIds ?? searchIds ?? null, [impactIds, tourIds, searchIds]);
 
   // ---- model per mode ----
   // Overview caps to the biggest layers + an "Other" rollup so very large repos
@@ -252,20 +257,26 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
     return { rfNodes: [], rfEdges: [] };
   }, [graph, effMode, overview, domain, structural, serviceModel, spotlight, selected, byId, showDiff, nodeChanges]);
 
-  // fit to spotlight when searching/touring
+  // fit to an INTENTIONAL focus (impact click / tour / search) only — never the
+  // passive Review highlight (see focusIds). Guard on rendered nodes so we don't
+  // try to fit ids that aren't in the current mode's node set.
   useEffect(() => {
-    if (!rfRef.current || !spotlight || spotlight.size === 0) return;
-    rfRef.current.fitView({ nodes: [...spotlight].map((id) => ({ id })), duration: 450, padding: 0.45 });
-  }, [spotlight]);
+    if (!rfRef.current || !focusIds || focusIds.size === 0) return;
+    const present = [...focusIds].filter((id) => rfNodes.some((n) => n.id === id));
+    if (present.length === 0) return;
+    rfRef.current.fitView({ nodes: present.map((id) => ({ id })), duration: 450, padding: 0.45 });
+  }, [focusIds, rfNodes]);
 
-  // re-fit when the mode/drill/filter changes the whole layout. A short timeout
-  // (not a single rAF) lets React Flow mount the new nodes first, so card modes
-  // like Services reliably centre instead of fitting an empty/half-laid graph.
+  // re-fit when the mode/drill/filter changes the whole layout — AND when the
+  // graph itself first loads (cold app open) or is rebuilt/enriched. Without the
+  // `graph`/node-count dep the canvas stayed blank on open until you toggled a
+  // mode (the `fitView` prop only fits the initial, often-empty, node set). A
+  // short timeout lets React Flow mount the new nodes before we centre them.
   useEffect(() => {
-    if (!rfRef.current) return;
+    if (!rfRef.current || rfNodes.length === 0) return;
     const t = setTimeout(() => rfRef.current?.fitView({ duration: 300, padding: 0.2 }), 90);
     return () => clearTimeout(t);
-  }, [effMode, drill, disabledCats]);
+  }, [effMode, drill, disabledCats, graph, rfNodes.length]);
 
   // Esc: leave drill → overview, else clear selection
   useEffect(() => {
@@ -365,6 +376,10 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
           fitView
           minZoom={0.04}
           maxZoom={2.5}
+          // PERF (large codebases) — only mount nodes/edges currently in the
+          // viewport; off-screen ones are skipped, so a structural map with
+          // thousands of file nodes stays responsive when panning/zooming.
+          onlyRenderVisibleElements
           proOptions={{ hideAttribution: true }}
           onInit={(inst) => { rfRef.current = inst; }}
           onNodeClick={(_e, n) => {
@@ -391,7 +406,9 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
             if (n.type === "atlasGroup") return "transparent";
             const gn = byId.get(n.id);
             return gn ? fileColor(gn) : "var(--accent)";
-          }} maskColor="rgba(0,0,0,0.55)" style={{ background: "var(--surface)", border: "1px solid var(--border)" }} />
+          }} maskColor="rgba(0,0,0,0.55)"
+            // Compact: the default 200×150 swallowed the narrow side panel.
+            style={{ width: 124, height: 86, background: "var(--surface)", border: "1px solid var(--border)" }} />
         </ReactFlow>
 
         {selected ? (() => {
