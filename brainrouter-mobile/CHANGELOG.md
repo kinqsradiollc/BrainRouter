@@ -8,6 +8,43 @@ All notable changes to the **mobile** app. Format: [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+### Reasoning-model display fixes (verified live against a local Qwen 3.5-9B)
+
+Tested the wired turn loop end-to-end against a local llama.cpp model and fixed two
+display issues the transcript reducer had with reasoning models (TDD — 6 new cases in
+`transcript.test.ts`, all green):
+
+- **Inline `<think>…</think>` no longer pollutes the answer bubble.** The reducer now
+  accumulates the raw assistant stream and re-derives the leading reasoning block each
+  delta via the existing (tested) `parseThink`, routing chain-of-thought to a `reasoning`
+  row and keeping the answer clean — live, as it streams. Leading-only by design, so a
+  `<think>` that appears mid-answer (e.g. literal text/code) is left untouched. Stable row
+  ids; empty/whitespace `<think>` blocks and the placeholder row are dropped at turn end.
+- **The benign first-turn `turn-error: "No transcript found"` is suppressed** (the recall
+  step finds no prior transcript on a brand-new session) — it no longer renders as a red
+  error notice in the chat.
+
+`host/qwen-turn.mjs` drives the real host + real model the way the Session screen does and
+confirms both: answer `think-tags=STRIPPED`, reasoning captured in its own row, no notice.
+
+### Real-host API — verified against the live runtime (no mock)
+
+- **Added `host/api.integration.test.mjs` (`npm run test:api`, 27 tests):** boots the
+  REAL desktop agent host headless (no Electron) on this repo and drives it with the
+  REAL `RemoteTransport` over a loopback WebSocket, asserting **every query the screens
+  make** returns real, correctly-shaped data (git status, worktrees, files, file bytes,
+  review gate, context usage, shell output, the Layer-1 methods) and that `start-turn`
+  drives the live core. Boot recipe: redirect `HOME` to a throwaway test-home with a
+  minimal config so the shared `loadConfig` doesn't hard-exit; `host/smoke-real.mjs` is
+  the matching manual smoke.
+- **Fixed shape mismatches the mock had hidden** (would have silently broken on a real
+  host): `changed-files` is a bare `Array<{status,path}>` with no per-file counts —
+  `ChangesScreen` now reads the array and takes the aggregate `+/-` from `git-info`;
+  `context-usage` exposes `pct` (no `max`) — the Session ring uses it directly.
+  `MockTransport` was realigned to the real shapes so mock and host stay interchangeable.
+- Confirmed pairing swaps **every** screen to the live transport (App → reactive
+  `connectionStore` → `TransportProvider`; `ConnectScreen.connect()`) — no permanent mock.
+
 ### Milestone 0 — Foundations (engineering pre-req, no user-facing release)
 
 The skeleton everything else builds on (roadmap.md M0; technical-doc.md §4). All

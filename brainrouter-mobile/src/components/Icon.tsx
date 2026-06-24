@@ -1,0 +1,153 @@
+/**
+ * Icon — the app's single icon component. Renders the **Lucide** icon set
+ * (lucide-react-native) for crisp, consistent, professionally-drawn line icons
+ * (smoother than the hand-rolled desktop DESK-4k paths). The `name` keys are
+ * kept STABLE across the whole app, so swapping the underlying set never touches
+ * a screen. Unknown names fall back to a circle rather than crashing.
+ *
+ * Requires: `npx expo install lucide-react-native` (built on react-native-svg).
+ */
+import React from 'react';
+import {
+  Folder,
+  FolderOpen,
+  File,
+  Terminal,
+  GitCompare,
+  ListTodo,
+  ClipboardList,
+  Search,
+  PanelLeft,
+  PanelRight,
+  PanelBottom,
+  LayoutGrid,
+  Globe,
+  ClipboardCheck,
+  Settings,
+  ArrowUp,
+  Square,
+  Play,
+  Pause,
+  Copy,
+  GitBranch,
+  X,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  Plus,
+  RefreshCw,
+  Command,
+  ArrowUpDown,
+  Upload,
+  Monitor,
+  Brain,
+  Link,
+  BarChart3,
+  Palette,
+  Shield,
+  Eye,
+  Zap,
+  TriangleAlert,
+  Sparkles,
+  MessageSquarePlus,
+  Clock,
+  Plug,
+  ArrowLeft,
+  ArrowRight,
+  Ellipsis,
+  FolderPlus,
+  Smartphone,
+  GitCommitHorizontal,
+  GitMerge,
+  CircleCheck,
+  Code,
+  Mic,
+  Pencil,
+  MessageSquare,
+  Maximize2,
+  Pin,
+  Archive,
+  Trash2,
+  GitFork,
+  ExternalLink,
+  Circle,
+} from 'lucide-react-native';
+
+const LUCIDE = {
+  folder: Folder,
+  'folder-open': FolderOpen,
+  file: File,
+  terminal: Terminal,
+  diff: GitCompare,
+  tasks: ListTodo,
+  plan: ClipboardList,
+  search: Search,
+  layout: PanelLeft,
+  'layout-right': PanelRight,
+  'layout-bottom': PanelBottom,
+  'sidebar-right': PanelRight,
+  panels: LayoutGrid,
+  globe: Globe,
+  review: ClipboardCheck,
+  gear: Settings,
+  'arrow-up': ArrowUp,
+  stop: Square,
+  play: Play,
+  pause: Pause,
+  copy: Copy,
+  branch: GitBranch,
+  close: X,
+  'chev-down': ChevronDown,
+  'chev-right': ChevronRight,
+  'chev-up': ChevronUp,
+  plus: Plus,
+  refresh: RefreshCw,
+  command: Command,
+  sort: ArrowUpDown,
+  export: Upload,
+  monitor: Monitor,
+  brain: Brain,
+  link: Link,
+  chart: BarChart3,
+  palette: Palette,
+  shield: Shield,
+  eye: Eye,
+  bolt: Zap,
+  warn: TriangleAlert,
+  spark: Sparkles,
+  'new-chat': MessageSquarePlus,
+  clock: Clock,
+  plug: Plug,
+  'arrow-left': ArrowLeft,
+  'arrow-right': ArrowRight,
+  dots: Ellipsis,
+  'folder-plus': FolderPlus,
+  phone: Smartphone,
+  commit: GitCommitHorizontal,
+  merge: GitMerge,
+  'check-circle': CircleCheck,
+  code: Code,
+  mic: Mic,
+  edit: Pencil,
+  bubble: MessageSquare,
+  expand: Maximize2,
+  pin: Pin,
+  archive: Archive,
+  trash: Trash2,
+  fork: GitFork,
+  external: ExternalLink,
+};
+
+export type IconName = keyof typeof LUCIDE;
+
+export interface IconProps {
+  name: IconName;
+  size?: number;
+  color?: string;
+  strokeWidth?: number;
+}
+
+export function Icon({ name, size = 16, color = '#ECEFF2', strokeWidth = 2 }: IconProps): React.JSX.Element {
+  const Glyph = LUCIDE[name] ?? Circle;
+  return <Glyph size={size} color={color} strokeWidth={strokeWidth} />;
+}

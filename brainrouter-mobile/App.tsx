@@ -22,7 +22,7 @@ import { ThemeProvider, useTheme } from './src/theme/ThemeProvider';
 import { TransportProvider } from './src/state/TransportProvider';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { linking } from './src/navigation/linking';
-import { MockTransport } from './src/transport/MockTransport';
+import { useConnectionStore } from './src/state/connectionStore';
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, staleTime: 30_000 } },
@@ -56,7 +56,7 @@ function NavigatedApp(): React.JSX.Element {
 }
 
 export default function App(): React.JSX.Element {
-  const transport = useMemo(() => new MockTransport(), []);
+  const transport = useConnectionStore((s) => s.transport);
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>

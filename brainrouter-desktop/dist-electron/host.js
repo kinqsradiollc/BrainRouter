@@ -570,7 +570,7 @@ function sessionRows(root, limit) {
         return { ...s, lastRole: lastTranscriptRole(file) };
     });
 }
-async function main() {
+export async function main(transport) {
     const workspaceRoot = process.env.BRAINROUTER_DESKTOP_WORKSPACE || process.cwd();
     // DESK-6w (T4) — resolve how this workspace relates to its owning git repo
     // once (repo name, owning git root, subdir-vs-root). Workspace-scoped status/
@@ -614,9 +614,13 @@ async function main() {
     // utilityProcess gives us process.parentPort; plain `node host.js` (dev
     // smoke) falls back to a console sink so the bootstrap is runnable solo.
     const port = process.parentPort;
-    const send = port
-        ? (msg) => port.postMessage(msg)
-        : (msg) => console.log(JSON.stringify(msg));
+    // Transport seam: an injected transport (the mobile WS adapter) wins; else the
+    // Electron parentPort; else a console sink (dev smoke).
+    const send = transport
+        ? transport.send
+        : port
+            ? (msg) => port.postMessage(msg)
+            : (msg) => console.log(JSON.stringify(msg));
     const computerUseBridge = createComputerUseBridge(port);
     // Identical boot recipe to `brainrouter chat` (index.ts): config → llm →
     // pool.connectAll(profiles) → Agent. Offline MCP does not block (same
@@ -1783,6 +1787,51 @@ async function main() {
         setSessionModel: (sessionKey, model) => { setSessionRuntime(workspaceRoot, sessionKey, { model }); },
         clearSessionModel: (sessionKey) => { setSessionRuntime(workspaceRoot, sessionKey, { model: '' }); },
         queries: {
+            // ── Mobile-app query surface (brainrouter-mobile / RemoteTransport) ──
+            // This host serves ONE workspace (the paired one), so the workspace-mgmt
+            // methods return that single-workspace reality (no multi-workspace recents
+            // to track). The three TODO entries degrade gracefully until their shapes
+            // are wired against real output (see docs/host-server.md).
+            'workspace-recents': () => ({ current: workspaceRoot, recents: [workspaceRoot] }),
+            'open-workspace': () => ({ opened: true }),
+            'is-workspace-trusted': () => ({ trusted: true }),
+            'trust-workspace': () => ({ trusted: true }),
+            'untrust-workspace': () => ({ trusted: false }),
+            'trusted-workspaces': () => ({ trusted: [workspaceRoot] }),
+            'mark-activity': () => ({ ok: true }),
+            'reorder-workspace': () => ({ recents: [workspaceRoot] }),
+            'global-dashboard': () => ({ workspaces: [{ workspaceRoot, tasks: [], reviewGate: null }] }),
+            'worktrees': async () => ({ porcelain: await git(['worktree', 'list', '--porcelain'], workspaceRoot), current: workspaceRoot }),
+            'search': (a) => {
+                // Single-session search over the recent transcript window (mirrors the
+                // desktop 'search-transcript'), mapped to the mobile hit shape.
+                const q = typeof a.q === 'string' ? a.q : '';
+                return searchTranscript(readTranscriptTail(workspaceRoot, activeAgent.sessionKey, 5000), q, { limit: 50 })
+                    .map((m) => ({ sessionKey: activeAgent.sessionKey, title: m.role ?? 'match', snippet: m.snippet ?? '' }));
+            },
+            'ci-checks': async () => new Promise((resolve) => {
+                // `gh pr checks` already emits the CheckRow shape the mobile ciFormat expects.
+                execFile('gh', ['pr', 'checks', '--json', 'name,state,bucket,link,workflow,startedAt,completedAt'], { cwd: workspaceRoot, timeout: 8_000, maxBuffer: 2_000_000 }, (_err, stdout) => {
+                    try {
+                        resolve(JSON.parse(stdout));
+                    }
+                    catch {
+                        resolve([]);
+                    }
+                });
+            }),
+            'term-run': async (a) => new Promise((resolve) => {
+                // One-shot command (the mobile Terminal's model), via the same shell exec
+                // the desktop term-* sessions use. Combined stdout+stderr.
+                const command = typeof a.cmd === 'string' ? a.cmd : '';
+                if (!command) {
+                    resolve({ output: '' });
+                    return;
+                }
+                exec(command, { cwd: workspaceRoot, timeout: 15_000, maxBuffer: 2_000_000 }, (err, stdout, stderr) => {
+                    resolve({ output: `${stdout ?? ''}${stderr ?? ''}${err && !stdout && !stderr ? err.message : ''}` });
+                });
+            }),
             // Read-only surfaces — same pure modules the TUI commands use.
             // DESK-6m — sidebar sessions merged with their UI meta (title override,
             // pinned/archived/status/group) and sorted pinned-first; the renderer's
@@ -4242,10 +4291,13 @@ async function main() {
             clearTimeout(connectorSchedulerBootTimer);
             stopWorkspaceWatcher();
             void mcpClient.close?.();
-            process.exit(0);
+            if (!transport?.keepAlive)
+                process.exit(0);
         },
     });
-    if (port)
+    if (transport)
+        transport.onMessage((m) => { void core.handle(m); });
+    else if (port)
         port.on('message', (e) => {
             if (computerUseBridge?.handleMessage(e.data))
                 return;
@@ -4264,7 +4316,12 @@ async function main() {
         event: { kind: 'session-changed', sessionKey: activeAgent.sessionKey, loadedMessages: 0, model: activeAgent.getModel?.() ?? llm.model },
     });
 }
-main().catch((err) => {
-    console.error('[brainrouter-desktop host] fatal:', err instanceof Error ? err.stack : err);
-    process.exit(1);
-});
+// The Electron utilityProcess runs this file as its entry → auto-boot. An
+// embedding host (the mobile WS adapter) sets BRAINROUTER_HOST_EMBEDDED and calls
+// main(transport) itself, so importing this module must NOT double-boot.
+if (!process.env.BRAINROUTER_HOST_EMBEDDED) {
+    main().catch((err) => {
+        console.error('[brainrouter-desktop host] fatal:', err instanceof Error ? err.stack : err);
+        process.exit(1);
+    });
+}

@@ -6,18 +6,22 @@ import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-const ROOT = 'src/domain';
+// The pure, RN-free layers: the ported domain logic + the transport seam (the
+// RemoteTransport client is testable with an injected fake WebSocket).
+const ROOTS = ['src/domain', 'src/transport'];
 const files = [];
-(function walk(dir) {
-  for (const entry of readdirSync(dir)) {
-    const p = join(dir, entry);
-    if (statSync(p).isDirectory()) walk(p);
-    else if (entry.endsWith('.test.ts')) files.push(p);
-  }
-})(ROOT);
+for (const root of ROOTS) {
+  (function walk(dir) {
+    for (const entry of readdirSync(dir)) {
+      const p = join(dir, entry);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (entry.endsWith('.test.ts')) files.push(p);
+    }
+  })(root);
+}
 
 if (files.length === 0) {
-  console.error(`No *.test.ts files found under ${ROOT}/`);
+  console.error(`No *.test.ts files found under ${ROOTS.join(', ')}`);
   process.exit(1);
 }
 

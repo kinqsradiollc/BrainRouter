@@ -23,10 +23,27 @@ export type SettingsStackParamList = {
   Settings: undefined; // S-14
 };
 
+export type MoreStackParamList = {
+  More: undefined; // hub
+  Requirements: undefined; // S-26
+  Annotations: undefined; // S-27
+  Artifacts: undefined; // S-28
+  Schedules: undefined; // S-29
+  CI: undefined; // S-25
+  Worktrees: undefined; // S-30
+  Search: undefined; // S-22
+  Files: undefined; // S-20
+  FileViewer: { path: string }; // S-21
+  Track: undefined; // S-31
+  Terminal: undefined; // S-33
+  Editor: undefined; // S-32
+};
+
 export type AppTabsParamList = {
   ChatsTab: NavigatorScreenParams<ChatsStackParamList>;
   ActivityTab: NavigatorScreenParams<ActivityStackParamList>;
   ReviewTab: NavigatorScreenParams<ReviewStackParamList>;
+  MoreTab: NavigatorScreenParams<MoreStackParamList>;
   SettingsTab: NavigatorScreenParams<SettingsStackParamList>;
 };
 

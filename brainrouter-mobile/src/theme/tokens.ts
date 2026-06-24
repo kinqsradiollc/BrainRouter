@@ -154,14 +154,54 @@ export const themes: Record<ThemeName, ThemeTokens> = {
 /** Default theme — dark, matching the desktop app's default. */
 export const defaultTheme = darkTheme;
 
+/** Parse a `#rgb`/`#rrggbb` or `hsl(h, s%, l%)` color to 0–255 RGB; null if neither. */
+function toRgb(color: string): { r: number; g: number; b: number } | null {
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim());
+  if (hex) {
+    const h = hex[1].length === 3 ? hex[1].split('').map((c) => c + c).join('') : hex[1];
+    return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16) };
+  }
+  const hsl = /^hsl\(\s*([\d.]+)\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%\s*\)$/i.exec(color.trim());
+  if (hsl) return hslToRgb(Number(hsl[1]), Number(hsl[2]) / 100, Number(hsl[3]) / 100);
+  return null;
+}
+
+function hslToRgb(h: number, s: number, l: number): { r: number; g: number; b: number } {
+  const hn = (((h % 360) + 360) % 360) / 360;
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const channel = (t: number): number => {
+    let x = t;
+    if (x < 0) x += 1;
+    if (x > 1) x -= 1;
+    if (x < 1 / 6) return p + (q - p) * 6 * x;
+    if (x < 1 / 2) return q;
+    if (x < 2 / 3) return p + (q - p) * (2 / 3 - x) * 6;
+    return p;
+  };
+  return { r: Math.round(channel(hn + 1 / 3) * 255), g: Math.round(channel(hn) * 255), b: Math.round(channel(hn - 1 / 3) * 255) };
+}
+
 /**
  * Apply a runtime accent override (matches the desktop's user-overridable
- * `--accent`). Returns a new ThemeTokens with the accent family swapped; the
- * wash/line/press are derived from the same hue when given an hsl() string.
+ * `--accent`). Returns a new ThemeTokens with the accent swapped AND the
+ * wash / line / press DERIVED from the same color, so selected-row tints,
+ * hairline borders, and pressed states track the accent — not just primary
+ * fills. Falls back to leaving the derived tokens unchanged if the color string
+ * can't be parsed.
  */
 export function withAccent(theme: ThemeTokens, accent: string): ThemeTokens {
+  const rgb = toRgb(accent);
+  if (!rgb) return { ...theme, colors: { ...theme.colors, accent } };
+  const { r, g, b } = rgb;
   return {
     ...theme,
-    colors: { ...theme.colors, accent },
+    colors: {
+      ...theme.colors,
+      accent,
+      accentWash: `rgba(${r}, ${g}, ${b}, 0.14)`,
+      accentLine: `rgba(${r}, ${g}, ${b}, 0.40)`,
+      accentPress: `rgb(${Math.round(r * 0.86)}, ${Math.round(g * 0.86)}, ${Math.round(b * 0.86)})`,
+    },
   };
 }
