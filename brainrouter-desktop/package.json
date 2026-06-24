@@ -18,6 +18,7 @@
     "reset:desktop": "node scripts/reset-desktop.mjs"
   },
   "dependencies": {
+    "@dagrejs/dagre": "^3.0.0",
     "@kinqs/brainrouter-agent-protocol": "^0.4.16",
     "@kinqs/brainrouter-core": "^0.4.16",
     "@monaco-editor/react": "^4.7.0",
