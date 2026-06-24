@@ -1187,7 +1187,7 @@ export function App(): React.ReactElement {
             browser preview ignores app-region, which is why it only broke
             in the real Electron shell. */}
         <TopbarRight mode={mode} homeMode={homeMode} envRoom={envRoom} envOpen={envOpen} setEnvOpen={setEnvOpen} q={q}
-          termDockOpen={termDockOpen} setTermDockOpen={setTermDockOpen} sidePanelOpen={sidePanelOpen}
+          termDockOpen={termDockOpen} setTermDockOpen={setTermDockOpen} sidePanelOpen={sidePanelOpen} sideWidth={sideWidth}
           setSidePanelOpen={setSidePanelOpen} sideFullScreen={sideFullScreen} setSideFullScreen={setSideFullScreen}
           sideTabs={sideTabs} activeSideTab={activeSideTab} ensurePanel={ensurePanel} openBottomDock={openBottomDock}
           pop={pop} setPop={setPop} openSettings={openSettings} />

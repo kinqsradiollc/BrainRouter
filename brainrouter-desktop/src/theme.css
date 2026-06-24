@@ -141,7 +141,9 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
    The cluster is PINNED to the content area's top-right (absolute in .main),
    so it never moves when panels open — it sits on top of the side panel the
    way the left rail's controls sit on the sidebar. */
-.topbar-right { position: absolute; top: 8px; right: 12px; z-index: 66; display: flex; align-items: center; gap: 5px; min-height: 36px; -webkit-app-region: no-drag; }
+.topbar-right { position: absolute; top: 8px; right: 12px; z-index: 66; display: flex; align-items: center; gap: 5px; min-height: 36px; -webkit-app-region: no-drag; transition: right .18s ease; }
+/* thin separator between the Environment toggle and the layout/window controls */
+.topbar-div { flex: none; width: 1px; height: 18px; margin: 0 3px; background: var(--ov-10); border-radius: 1px; }
 .main:has(.views-rail) .topbar-right { padding: 2px; border: 1px solid var(--ov-06); border-radius: 13px; background: color-mix(in srgb, var(--sidebar) 88%, transparent); box-shadow: 0 8px 24px rgba(0,0,0,0.20); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
 .topbar-right button { -webkit-app-region: no-drag; } /* belt & braces for Electron drag regions */
 .app-switcher { height: 30px; display: inline-flex; align-items: center; gap: 7px; padding: 0 9px; border-radius: 9px; border: 1px solid var(--border); background: transparent; color: var(--text-dim); cursor: pointer; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
@@ -2100,8 +2102,13 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 .views-rail.fullscreen .dash-panel,
 .views-rail.fullscreen .sched-panel,
 .views-rail.fullscreen .wt-panel { width: 100%; max-width: 1120px; margin-inline: auto; }
-.side-tabs { flex: none; min-width: 0; min-height: 36px; display: flex; align-items: center; gap: 4px; padding: 0; padding-right: 216px; }
-.side-tabs.has-env { padding-right: 276px; }
+/* The window pill no longer overlays the rail (TopbarRight offsets it left of an
+   open rail), so the tab strip uses the full width — just a small end gap. Only
+   full-screen keeps the pill pinned over the wide rail, so reserve room there. */
+.side-tabs { flex: none; min-width: 0; min-height: 36px; display: flex; align-items: center; gap: 4px; padding: 0; padding-right: 8px; }
+.side-tabs.has-env { padding-right: 8px; }
+.views-rail.fullscreen .side-tabs { padding-right: 216px; }
+.views-rail.fullscreen .side-tabs.has-env { padding-right: 276px; }
 .side-tabs-list { display: flex; align-items: center; gap: 4px; overflow-x: auto; flex: 1; min-width: 0; scrollbar-width: none; }
 .side-tabs-list::-webkit-scrollbar { display: none; }
 .side-tabs > .composer-spacer { display: none; }
@@ -2348,7 +2355,6 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 @container sidepanel (max-width: 480px) {
   .side-tabs,
   .side-tabs.has-env {
-    margin-top: 34px;
     padding-right: 0;
   }
   .side-tabs-list {
