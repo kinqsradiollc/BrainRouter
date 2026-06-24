@@ -18,6 +18,7 @@ import {
   type AtlasChangeKind, type AtlasChangeAssessment,
 } from "../lib/atlas/atlasView.js";
 import { ATLAS_NODE_TYPES } from "./AtlasNodes.js";
+import { layeredLayout } from "../lib/atlas/layeredLayout.js";
 import { AtlasDetail } from "./AtlasDetail.js";
 import { Icon } from "../icons.js";
 
@@ -162,10 +163,11 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
       const cardW = 268;
       const cardH = 152;
       const cols = Math.max(1, Math.min(4, Math.ceil(Math.sqrt(overview.cards.length))));
+      const pos = layeredLayout(overview.cards.map((c) => ({ id: c.id, width: cardW, height: cardH })), overview.edges);
       const nodes: Node[] = overview.cards.map((c, i) => ({
         id: c.id,
         type: "atlasLayer",
-        position: { x: (i % cols) * (cardW + 44), y: Math.floor(i / cols) * (cardH + 44) },
+        position: pos.get(c.id) ?? { x: (i % cols) * (cardW + 44), y: Math.floor(i / cols) * (cardH + 44) },
         data: {
           name: c.name, description: c.description, fileCount: c.fileCount, complexity: c.complexity,
           changed: showDiff ? c.nodeIds.filter((id) => nodeChanges.has(id)).length : 0,
@@ -182,9 +184,10 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
       const cardW = 264;
       const cardH = 168;
       const cols = Math.max(1, Math.min(4, Math.ceil(Math.sqrt(domain.cards.length))));
+      const pos = layeredLayout(domain.cards.map((c) => ({ id: c.id, width: cardW, height: cardH })), domain.edges);
       const nodes: Node[] = domain.cards.map((c, i) => ({
         id: c.id, type: "atlasDomain",
-        position: { x: (i % cols) * (cardW + 48), y: Math.floor(i / cols) * (cardH + 48) },
+        position: pos.get(c.id) ?? { x: (i % cols) * (cardW + 48), y: Math.floor(i / cols) * (cardH + 48) },
         data: { name: c.name, description: c.description, entities: c.entities, flows: c.flows },
         style: { width: cardW },
       }));
@@ -212,9 +215,10 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
         outC.set(e.source, (outC.get(e.source) ?? 0) + 1);
         inC.set(e.target, (inC.get(e.target) ?? 0) + 1);
       }
+      const pos = layeredLayout(serviceModel.cards.map((c) => ({ id: c.id, width: cardW, height: cardH })), serviceModel.edges);
       const nodes: Node[] = serviceModel.cards.map((c, i) => ({
         id: c.id, type: "atlasService",
-        position: { x: (i % cols) * (cardW + 40), y: Math.floor(i / cols) * (cardH + 40) },
+        position: pos.get(c.id) ?? { x: (i % cols) * (cardW + 40), y: Math.floor(i / cols) * (cardH + 40) },
         data: { module: c.module, portPath: c.portPath, portNodeId: c.portNodeId, fileCount: c.fileCount, dependsOn: outC.get(c.id) ?? 0, dependedOnBy: inC.get(c.id) ?? 0 },
         style: { width: cardW },
       }));
