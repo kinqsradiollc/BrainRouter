@@ -108,10 +108,15 @@ before a public release.
 These reflect the repo state at the time of writing — worth knowing if a build
 behaves unexpectedly:
 
-- **electron-builder is pinned to `25.1.8`**, not the latest 26.x. electron-builder
-  26 requires Node ≥ 20.19; the repo's local toolchain has been seen on Node
-  20.10, where 26.x crashes with `ERR_REQUIRE_ESM`. 25.1.8 supports Node 14+ and
-  works on both local and CI. Bump to 26.x once everyone is on Node ≥ 20.19/22.
+- **electron-builder is invoked via `npx --yes electron-builder@25.1.8`** in the
+  `dist:*` scripts, not committed as a devDependency. Why: regenerating
+  `package-lock.json` on Windows drops other platforms' optional binaries
+  (`@esbuild/linux-*`, `@rollup/*`), which would break `npm ci` on Linux CI — so
+  the lockfile is left untouched and electron-builder is fetched on demand
+  (cached after first use). Once the lockfile is regenerated on Linux/CI it can be
+  promoted to a real devDependency. It's pinned to **25.1.8** because 26.x needs
+  Node ≥ 20.19 (the toolchain here runs Node 20.x, where 26.x crashes with
+  `ERR_REQUIRE_ESM`); bump once everyone is on Node ≥ 20.19/22.
 - **`@modelcontextprotocol/sdk` and `chalk` are direct dependencies here on
   purpose.** `@kinqs/brainrouter-core` imports them but doesn't declare them
   (they resolve via monorepo hoisting in dev). electron-builder only bundles
