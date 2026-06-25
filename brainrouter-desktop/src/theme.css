@@ -157,6 +157,29 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .chip:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15); }
 .chip.dim { color: var(--text-dim); }
 .chip.dim:hover { border-color: var(--border-strong); }
+/* WS12 — provider gallery: clickable cards that pre-fill the add-provider form. */
+.provider-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; margin: 8px 0 16px; }
+.provider-card { text-align: left; display: flex; flex-direction: column; gap: 4px; padding: 13px 15px; background: var(--raised); border: 1px solid var(--border); border-radius: 10px; cursor: pointer; transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s; }
+.provider-card:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15); }
+.provider-card .pc-name { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13.5px; color: var(--text); }
+.provider-card .pc-host { color: var(--text-dim); font-size: 11.5px; word-break: break-all; }
+/* compact status tag — Default (accent) / ✓ in use (green). Replaces the noisy per-card cloud/local badges. */
+.pc-tag { flex: none; font-size: 9.5px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; border-radius: 5px; padding: 1.5px 6px; }
+.pc-tag.default { color: var(--accent); background: var(--accent-soft); }
+.pc-tag.ok { color: var(--ok, #3fb950); background: rgba(63, 185, 80, 0.14); padding: 0 5px; }
+/* saved-provider cards: not click-to-open; actions appear on hover (less constant noise) */
+.provider-card.saved { cursor: default; }
+.provider-card.saved:hover { border-color: var(--border-strong); transform: none; box-shadow: none; }
+.provider-card .pc-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; opacity: 0; transition: opacity 0.15s; }
+.provider-card.saved:hover .pc-actions, .provider-card.saved:focus-within .pc-actions { opacity: 1; }
+.provider-card .pc-actions .btn { font-size: 11px; padding: 3px 9px; }
+.provider-card .pc-actions .btn.danger { color: var(--danger, #f85149); }
+.provider-card .pc-actions .btn.danger:hover { border-color: var(--danger, #f85149); background: rgba(248, 81, 73, 0.12); }
+/* WS9 — Brains vs Tools as two visually distinct areas (the brain is identity-bearing). */
+.mcp-group { border: 1px solid var(--border); border-radius: 10px; padding: 13px 15px; margin-bottom: 12px; background: color-mix(in srgb, var(--raised) 45%, transparent); }
+.mcp-group.brains { border-left: 2px solid var(--accent); }
+.mcp-group.tools { border-left: 2px solid var(--border-strong); }
+.mcp-group .set-h2 { display: flex; align-items: center; gap: 6px; }
 .icon-btn { background: transparent; border: 0; color: var(--text-faint); font-size: 13px; cursor: pointer; border-radius: 6px; padding: 4px 7px; line-height: 1; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
 .icon-btn:hover { background: var(--ov-08); color: var(--text); transform: translateY(-1px); }
 .dim { color: var(--text-dim); }
@@ -877,7 +900,11 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .okdot, .faildot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .okdot { background: var(--ok); } .faildot { background: var(--err); }
 .task-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 9px; background: var(--raised); border: 1px solid var(--border); margin-bottom: 6px; font-size: 12.5px; color: var(--text-dim); transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
-.task-kind { flex: none; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); background: var(--accent-soft); border-radius: 5px; padding: 2px 7px; }
+/* shrinkable + ellipsis so a long kind (VERIFICATION, PLAN-REVISION) gives up
+   width before the task name does, instead of squeezing the name to nothing. */
+.task-kind { flex: 0 1 auto; min-width: 44px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); background: var(--accent-soft); border-radius: 5px; padding: 2px 7px; }
+/* the name keeps a floor so it always shows a few chars (with ellipsis) */
+.task-row .file-name { min-width: 44px; }
 
 .plan-item { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px; border-radius: 8px; color: var(--text-dim); font-size: 12.5px; margin-bottom: 4px; background: var(--raised); border: 1px solid transparent; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
 .plan-item:hover { background: var(--ov-04); border-color: var(--border); transform: translateY(-1px); box-shadow: 0 4px 10px rgba(0, 0, 0, 0.12); }
@@ -1055,10 +1082,12 @@ textarea.ctl { min-width: 0; resize: vertical; line-height: 1.45; }
 .rule-kind.allow { color: var(--ok); } .rule-kind.deny { color: var(--err); }
 .usage-pre { background: var(--term-bg); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 12px 14px; font-family: var(--mono); font-size: 12px; line-height: 1.6; color: var(--text-dim); white-space: pre-wrap; overflow-x: auto; }
 .cmd-cat { margin-top: 18px; }
-.cmd-row { display: flex; align-items: baseline; gap: 10px; padding: 5.5px 4px; border-radius: 6px; }
+.cmd-row { display: flex; align-items: flex-start; gap: 12px; padding: 6px 8px; border-radius: 6px; }
 .cmd-row:hover { background: var(--ov-04); }
-.cmd-name { font-family: var(--mono); font-size: 12px; color: var(--text); flex: none; min-width: 215px; }
-.cmd-desc { color: var(--text-dim); font-size: 12px; flex: 1; min-width: 0; }
+/* fixed, wrapping name column so a long-syntax command (e.g. /requirement …) wraps
+   within its column instead of blowing the row out into a huge empty gap. */
+.cmd-name { font-family: var(--mono); font-size: 12px; line-height: 1.5; color: var(--text); flex: none; width: 220px; overflow-wrap: anywhere; }
+.cmd-desc { color: var(--text-dim); font-size: 12px; line-height: 1.5; flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .cmd-run { flex: none; background: transparent; border: 1px solid var(--border-strong); color: var(--text-dim); border-radius: 6px; padding: 2px 10px; font-size: 11px; cursor: pointer; transition: border-color .12s, color .12s; }
 .cmd-run:hover { border-color: var(--accent); color: var(--text); }
 
@@ -1093,7 +1122,9 @@ textarea.ctl { min-width: 0; resize: vertical; line-height: 1.45; }
 .home-mode .chat { flex: 1 1 0; min-height: 0; overflow: visible; display: flex; flex-direction: column; justify-content: flex-end; padding-top: 0; padding-bottom: 18px; }
 .home-mode .crumb { opacity: 0; }
 .home-mode .composer { flex: 1 1 0; min-height: 0; padding-top: 0; padding-bottom: 18px; }
-.home-mode .composer .box { max-width: 860px; min-height: 92px; border-radius: 20px; background: #21262d; }
+/* 860px when there's room, but always leave a gutter so the box never touches the
+   side panels when the center is squeezed (both panels open / narrowed window). */
+.home-mode .composer .box { max-width: min(860px, calc(100% - clamp(28px, 5vw, 64px))); min-height: 92px; border-radius: 20px; background: #21262d; }
 /* Keep the read-only banner the exact width of the composer in home mode too
    (the composer widens to 860px there; the banner defaults to --content-w). */
 .home-mode .chat-readonly { max-width: 860px; }
@@ -1745,7 +1776,9 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
   display: flex;
   align-items: center;
   border-radius: 8px;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  /* scope the transition — `all` animates EVERY property when a 2–5s poll
+     re-renders the row, which read as a flicker on the hovered ⋮ row. */
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
 }
 .session-wrap.active {
   background: linear-gradient(90deg, var(--accent-soft) 0%, transparent 100%);
@@ -1755,12 +1788,15 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
   background: var(--ov-055);
 }
 .session-wrap .project-session { flex: 1; min-width: 0; background: transparent !important; }
-.session-menu-btn { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); opacity: 0;
-  width: 22px; height: 22px; border-radius: 6px; color: var(--text-dim); background: transparent; border: 0;
-  cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.session-menu-btn { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); opacity: 0;
+  width: 22px; height: 22px; border-radius: 6px; color: var(--text-faint); background: transparent; border: 0;
+  cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0;
+  transition: opacity .12s, background .12s, color .12s; }
+.session-menu-btn svg { display: block; }
 .session-wrap:hover .session-menu-btn, .session-wrap.menu-open .session-menu-btn { opacity: 1; }
-.session-wrap:hover .session-age { opacity: 0; } /* the ⋮ takes the age's slot on hover */
-.session-menu-btn:hover { color: var(--text); background: var(--ov-12); }
+.session-wrap:hover .session-age, .session-wrap.menu-open .session-age { opacity: 0; } /* the ⋮ takes the age's slot */
+.session-menu-btn:hover { color: var(--text); background: transparent; } /* just brighten the glyph — no box to pop in/out */
+.session-wrap.menu-open .session-menu-btn { color: var(--text); background: var(--ov-08); } /* subtle box only while the menu is actually open */
 .st-pin { color: var(--accent, #6ea8fe); display: inline-flex; align-items: center; justify-content: center; }
 .session-done { color: var(--ok, #5bd6a0); display: inline-flex; margin-left: 4px; }
 .session-wrap.completed .session-title { color: var(--text-dim); }
@@ -1833,7 +1869,16 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
 /* clickable Running rows in the Background-tasks panel */
 .task-row.clickable { width: 100%; border: 0; background: transparent; cursor: pointer; text-align: left; }
 .task-row.clickable:hover { background: var(--ov-05); color: var(--text); }
-.task-row .task-open { margin-left: auto; opacity: 0.5; }
+/* WS2 2.4 — background-shell row: flex-1 open button + a Stop control. */
+.task-row-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; border: 0; background: transparent; cursor: pointer; text-align: left; color: inherit; font: inherit; padding: 0; }
+.task-row-main:hover { color: var(--text); }
+.task-row-main .file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-stop { flex: none; font-size: 11px; padding: 3px 9px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--danger, #f85149); cursor: pointer; transition: all 0.15s ease; }
+.task-stop:hover { background: rgba(248, 81, 73, 0.12); border-color: var(--danger, #f85149); }
+/* no margin-left:auto — it would consume the free space and squeeze the
+   flex:1 name to 0 (the task title vanished); the name's flex-grow pushes
+   the arrow to the right instead, so the title actually shows. */
+.task-row .task-open { opacity: 0.5; }
 .task-row.clickable:hover .task-open { opacity: 1; }
 /* §3 — durable task status / phase / elapsed chips in the Background panel */
 .task-row .task-status { flex: none; font-size: 10px; border-radius: 5px; padding: 1px 6px; text-transform: capitalize; }
@@ -2043,7 +2088,7 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
    No fixed width (inline, drag the left grip); slides in/out. */
 /* overflow stays VISIBLE so the "+" dropdown and the left resize grip are
    never clipped; inner bodies own their scrolling */
-.views-rail { position: relative; flex: none; min-width: 320px; border-left: 1px solid var(--ov-08); background: var(--sidebar); padding: 8px 10px 12px; display: flex; flex-direction: column; gap: 2px; animation: sideIn .18s ease-out; container-type: inline-size; container-name: sidepanel; }
+.views-rail { position: relative; flex: none; min-width: 240px; border-left: 1px solid var(--ov-08); background: var(--sidebar); padding: 8px 10px 12px; display: flex; flex-direction: column; gap: 2px; animation: sideIn .18s ease-out; container-type: inline-size; container-name: sidepanel; }
 .views-rail.closing { animation: sideOut .16s ease-in forwards; pointer-events: none; }
 .views-rail.fullscreen { position: absolute; inset: 0; z-index: 50; width: auto; min-width: 0; border-left: 0; border-radius: 0; padding: 8px clamp(12px, 2.2vw, 32px) 12px; box-shadow: -20px 0 60px rgba(0,0,0,0.34); }
 .views-rail.fullscreen .col-grip { display: none; }
@@ -2630,7 +2675,9 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
   grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)) !important;
   align-content: start !important;
   gap: 12px !important;
-  padding: 16px 14px !important;
+  /* top clearance so the first row (Plan) isn't hidden under the floating
+     .topbar-right control cluster (absolute, ~50px tall at the top). */
+  padding: 46px 14px 16px !important;
 }
 .side-chooser-actions {
   grid-column: 1 / -1;
@@ -2674,7 +2721,10 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
   color: var(--accent) !important;
   transform: translateY(-2px) !important;
 }
-.side-chooser .side-launcher span {
+/* Title span only — scope to the direct-child title, NOT the meta or the
+   live-dot/badge spans nested inside it (the old `span` selector stretched the
+   live-dot into a 108px bar on rows like Background tasks). */
+.side-chooser .side-launcher > span:not(.launcher-meta) {
   width: 100% !important;
   overflow: hidden !important;
   text-overflow: ellipsis !important;

@@ -15,10 +15,14 @@
  *   - Embedding       (acquireEmbeddingSlot) — the vector retriever's embedder.
  *       Cap: BRAINROUTER_EMBED_CONCURRENCY  (default 8).
  *   - Reranker        (acquireRerankerSlot)  — the cross-encoder rerank server.
- *       Cap: BRAINROUTER_RERANKER_MAX_CONCURRENT (default 1). A local bge-reranker
- *       is usually a SINGLE-WORKER CPU backend; firing concurrent recalls at it
- *       (briefing + pipeline, or rapid sessions) queue-stacks the server so each
- *       request blows the per-call timeout. Cap 1 = no client-side pile-up.
+ *       Cap: BRAINROUTER_RERANKER_MAX_CONCURRENT (default 8; 0/<1 = unbounded).
+ *       Recall now WAITS for the reranker with no per-call timeout (see
+ *       request-timeout.ts), so concurrent recalls no longer blow a deadline by
+ *       queue-stacking the server — the old cap-1 "single-worker CPU" guard is
+ *       obsolete and was the throughput ceiling under multi-agent load. The cap
+ *       still bounds simultaneous in-flight sockets to the rerank origin; raise it
+ *       (or set 0 = unbounded) for a scalable GPU/vLLM/Cohere backend, lower it to
+ *       1 to serialize against a strictly single-worker server.
  *
  * Coupling them under ONE cap=1 semaphore (the pre-0.4.15 behaviour) stalled the
  * recall query-embed behind a slow background generation, so `memory_recall`
@@ -38,7 +42,7 @@ function resolveGenerativeCap(): number {
 
 function resolveRerankerCap(): number {
   const raw = process.env.BRAINROUTER_RERANKER_MAX_CONCURRENT;
-  if (!raw) return 1; // single-worker CPU cross-encoder by default
+  if (!raw) return 8; // concurrent recalls are safe now that there's no per-call timeout
   const parsed = parseInt(raw, 10);
   if (!Number.isFinite(parsed) || parsed < 1) return Number.POSITIVE_INFINITY;
   return parsed;
@@ -66,6 +70,41 @@ class Semaphore {
     await new Promise<void>((resolve) => this.waiters.push(resolve));
     this.inFlight++;
     return this.makeRelease();
+  }
+
+  /**
+   * Like acquire(), but gives up after `timeoutMs` and resolves `null` instead
+   * of queuing indefinitely. Lets a caller load-shed (e.g. recall → RRF) when a
+   * single-slot backend is saturated, rather than stalling behind the queue.
+   */
+  async acquireOrNull(timeoutMs: number): Promise<(() => void) | null> {
+    if (!Number.isFinite(this.cap)) {
+      // Cap disabled — passthrough.
+      return () => {};
+    }
+    if (this.inFlight < this.cap) {
+      this.inFlight++;
+      return this.makeRelease();
+    }
+    return new Promise<(() => void) | null>((resolve) => {
+      let settled = false;
+      const grant = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.inFlight++;
+        resolve(this.makeRelease());
+      };
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        // Drop our waiter so a later release doesn't hand us a phantom slot.
+        const i = this.waiters.indexOf(grant);
+        if (i >= 0) this.waiters.splice(i, 1);
+        resolve(null);
+      }, timeoutMs);
+      this.waiters.push(grant);
+    });
   }
 
   private makeRelease(): () => void {
@@ -121,6 +160,16 @@ export async function acquireEmbeddingSlot(): Promise<() => void> {
  */
 export async function acquireRerankerSlot(): Promise<() => void> {
   return rerankerSemaphore.acquire();
+}
+
+/**
+ * Acquire one RERANKER slot, but give up after `timeoutMs` (resolving `null`)
+ * instead of queuing indefinitely. Under multi-agent parallel load the cap-1
+ * reranker slot is contended; a recall that can't get it quickly should shed to
+ * RRF rather than stall the `memory_recall` reply. `null` = "slot busy, skip".
+ */
+export async function acquireRerankerSlotOrNull(timeoutMs: number): Promise<(() => void) | null> {
+  return rerankerSemaphore.acquireOrNull(timeoutMs);
 }
 
 /** Exposed for tests / diagnostics. */

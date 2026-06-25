@@ -17,6 +17,7 @@ import { tryHandleBrainCommand } from './commands/brain.js';
 import { tryHandleOrchestrationCommand } from './commands/orchestration.js';
 import { tryHandleSessionCommand } from './commands/session.js';
 import { tryHandleGuardCommand } from './commands/guard.js';
+import { tryHandleExtensionCommand } from './commands/extension.js';
 import { tryHandleMcpCommand } from './commands/mcp.js';
 import { tryHandleInitCommand } from './commands/init.js';
 import { tryHandleConfigCommand } from './commands/config.js';
@@ -146,6 +147,7 @@ export async function handleSlashCommand(
   if (await tryHandleOrchestrationCommand(cmdCtx)) return;
   if (await tryHandleSessionCommand(cmdCtx)) return;
   if (await tryHandleGuardCommand(cmdCtx)) return;
+  if (await tryHandleExtensionCommand(cmdCtx)) return;
   if (await tryHandleMcpCommand(cmdCtx)) return;
 
   // CC-P4.1 — user-defined markdown slash commands. A file at

@@ -23,6 +23,7 @@ import { DEFAULT_REVIEW_ROSTER, DEFAULT_REVIEW_THRESHOLD } from '@kinqs/brainrou
 import { hashDiff, reviewGate } from '@kinqs/brainrouter-core/dist/review/reviewModel.js';
 import { getLatestReview } from '@kinqs/brainrouter-core/dist/review/reviewStore.js';
 import { formatPlan, readPlan, updatePlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
+import { appendTranscriptEntry } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
 import { recordPlanDecision, readPlanHistory, diffSnapshots, linkPlanDecision, type PlanDecision } from '@kinqs/brainrouter-core/dist/task/planHistoryStore.js';
 import { emitAgentEvent } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 import { getLoopState, parseInterval, startLoop, stopLoop } from '../../runtime/loopRunner.js';
@@ -1180,6 +1181,13 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         }
       }
       agent.refreshSystemPrompt();
+      // WS4 — record the goal text as the canonical (untagged) first user entry
+      // RIGHT NOW, before the kickoff turn fires. The sidebar lists a session
+      // only when its transcript exists, and titles it from the first untagged
+      // user message — so this both makes the goal session appear immediately
+      // and titles it by the goal (the kickoff prompt records after this, so it
+      // never wins the title). Best-effort: never block /goal on a transcript write.
+      try { appendTranscriptEntry(ws, sk, { role: 'user', content: goal.text }); } catch { /* listing is best-effort */ }
       console.log(chalk.green(`\n✓ Goal set: ${chalk.cyan(goal.text)}`));
 
       // Reconcile stale plan items from prior workflows. The plan store is

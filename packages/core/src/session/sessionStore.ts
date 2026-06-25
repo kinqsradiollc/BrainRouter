@@ -8,6 +8,7 @@ import {
   getSessionStateDir,
   isPathInside,
 } from '../storage/store.js';
+import { canRewindTo, entriesAfterRewind } from './rewind.js';
 
 export interface TranscriptEntry {
   role: string;
@@ -77,6 +78,26 @@ function isConsecutiveDuplicate(filePath: string, candidate: TranscriptEntry): b
 
 export function readTranscriptEntries(workspaceRoot: string, sessionKey: string, limit = 40): TranscriptEntry[] {
   return readTranscriptTail(workspaceRoot, sessionKey, limit, 0);
+}
+
+/**
+ * WS8 — rewind a session's transcript to (and including) entry `targetIndex`,
+ * rewriting the file in place. Blocked (no write) when code was generated after
+ * the target (see {@link canRewindTo}). Returns the kept entries so the caller
+ * can reload the agent's chatHistory from the rewound point.
+ */
+export function rewindTranscript(
+  workspaceRoot: string,
+  sessionKey: string,
+  targetIndex: number,
+): { ok: boolean; kept: TranscriptEntry[]; reason?: string } {
+  const all = loadTranscript(workspaceRoot, sessionKey);
+  const check = canRewindTo(all, targetIndex);
+  if (!check.canRewind) return { ok: false, kept: all, reason: check.reason };
+  const kept = entriesAfterRewind(all, targetIndex);
+  const filePath = resolveExistingTranscriptPath(workspaceRoot, sessionKey) ?? getTranscriptPath(workspaceRoot, sessionKey);
+  fs.writeFileSync(filePath, kept.length ? kept.map((e) => JSON.stringify(e)).join('\n') + '\n' : '', 'utf8');
+  return { ok: true, kept };
 }
 
 /**

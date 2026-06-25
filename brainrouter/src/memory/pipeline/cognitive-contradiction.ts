@@ -1,6 +1,7 @@
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
 import type { LLMRunner, CognitiveRecord, CognitiveFtsResult } from "@kinqs/brainrouter-types";
 import { COGNITIVE_CONTRADICTION_PROMPT } from "../prompts/cognitive-contradiction.js";
+import { extractJsonValue } from "../util/llm-json.js";
 import crypto from "node:crypto";
 
 export async function detectContradictions(params: {
@@ -44,10 +45,9 @@ export async function detectContradictions(params: {
         timeoutMs: contradictionTimeoutMs
       });
 
-      const jsonMatch = response.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) continue;
-
-      const data = JSON.parse(jsonMatch[0]);
+      // Robust parse: tolerant of role-token leaks / prose / fences (see llm-json.ts).
+      const data: any = extractJsonValue(response, { kind: "object" });
+      if (!data) continue;
       if (data.isContradiction && data.confidence > 0.7) {
         evaluations.push({
           candidate,

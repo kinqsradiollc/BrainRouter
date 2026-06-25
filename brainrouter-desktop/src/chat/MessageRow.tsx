@@ -17,7 +17,7 @@ import { Markdown, MD_COMPONENTS } from './markdown.js';
 import { ToolGroup } from './ToolGroup.js';
 import { ChangesetCard } from './ChangesetCard.js';
 
-export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onOpenFile, onOpenDiff, onOpenPlan, onDismissError, onFork }: {
+export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onOpenFile, onOpenDiff, onOpenPlan, onDismissError, onFork, onRewind }: {
   r: ChatRow;
   liveLast: boolean;
   inlineDiffs: Record<string, string>;
@@ -27,6 +27,7 @@ export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onOpenFile
   onOpenPlan: () => void;
   onDismissError: (id: number | string) => void;
   onFork: (ts: number) => void;
+  onRewind: (ts: number) => void;
 }): React.ReactElement | null {
   switch (r.kind) {
     case 'user': return (
@@ -34,6 +35,7 @@ export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onOpenFile
         <div className="user">{r.text}</div>
         <span className="msg-actions">
           <button className="icon-btn" title="Copy" onClick={() => void navigator.clipboard.writeText(r.text)}><Icon name="copy" size={11} /></button>
+          <button className="icon-btn" title="Rewind the conversation to here" onClick={() => onRewind(r.ts)}><Icon name="arrow-left" size={11} /></button>
           <span className="msg-time">{fmtRel(r.ts)}</span>
         </span>
       </div>
@@ -55,6 +57,7 @@ export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onOpenFile
         <span className="msg-actions">
           <button className="icon-btn" title="Copy" onClick={() => void navigator.clipboard.writeText(visible || r.text)}><Icon name="copy" size={11} /></button>
           <button className="icon-btn" title="Fork into a new chat from this message" onClick={() => onFork(r.ts)}><Icon name="fork" size={11} /></button>
+          <button className="icon-btn" title="Rewind the conversation to here" onClick={() => onRewind(r.ts)}><Icon name="arrow-left" size={11} /></button>
           <span className="msg-time">{fmtRel(r.ts)}</span>
         </span>
       </div>

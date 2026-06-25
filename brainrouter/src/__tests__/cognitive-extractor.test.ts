@@ -149,4 +149,89 @@ describe("cognitive extractor JSON escape repair", () => {
     expect(result.success).toBe(false);
     expect(result.errorMessage).toContain("non-JSON output");
   });
+
+  it("survives a leaked [user role] chat-template token before the real array (the field bug)", async () => {
+    // Reproduces: "Cognitive extraction body invalid … Unexpected token 'u',
+    // \"[user role]\"…". The free model leaks a role marker; the old greedy
+    // /\[[\s\S]*\]/ matched from THAT bracket and JSON.parse died on `[u`.
+    const raw = `[user role] Sure — here is the extraction:\n[{"scene_name":"Auth flow","memories":[${memory("reranker recall fell back to RRF")}]}]`;
+    await expect(extractContents(raw)).resolves.toEqual(["reranker recall fell back to RRF"]);
+  });
+
+  it("survives prose + a ```json fence around the array", async () => {
+    const raw = "Here you go:\n```json\n[{\"scene_name\":\"S\",\"memories\":[" + memory("fenced + prose still parses") + "]}]\n```\nLet me know if you need more.";
+    await expect(extractContents(raw)).resolves.toEqual(["fenced + prose still parses"]);
+  });
+
+  it("fails extraction (re-queue) when the model returns a bare identifier list", async () => {
+    // The headline bug: the model echoes the input sensory IDs as a bare array
+    // (`["sensory_7d...", ...]`). It parses to a JSON array but yields zero scene
+    // objects. This MUST be a failure so the caller re-queues the rows rather
+    // than marking them extracted and dropping them forever.
+    const result = await extractCognitiveMemories({
+      messages: [makeMessage("capture this later")],
+      userId: "user_test",
+      sessionKey: "session_test",
+      sessionId: "session_test",
+      llmRunner: makeRunner('["sensory_7dd3512e", "sensory_e9aa1234"]'),
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.records).toHaveLength(0);
+    expect(result.errorMessage).toContain("no valid scene objects");
+  });
+
+  it("fails extraction (re-queue) when the JSON inside the array brackets is unparseable", async () => {
+    const result = await extractCognitiveMemories({
+      messages: [makeMessage("capture this later")],
+      userId: "user_test",
+      sessionKey: "session_test",
+      sessionId: "session_test",
+      llmRunner: makeRunner('[ {"scene_name": "x", "memories": [ }} garbage ]'),
+    });
+
+    expect(result.success).toBe(false);
+    // The robust extractor (llm-json.ts) returns null for array-like-but-unparseable
+    // input, so it re-queues with this reason instead of throwing mid-parse.
+    expect(result.errorMessage).toContain("No parseable JSON array");
+  });
+
+  it("fails extraction (re-queue) when array items are not scene objects", async () => {
+    const result = await extractCognitiveMemories({
+      messages: [makeMessage("capture this later")],
+      userId: "user_test",
+      sessionKey: "session_test",
+      sessionId: "session_test",
+      llmRunner: makeRunner('[["a","b"],["c"]]'),
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.records).toHaveLength(0);
+  });
+
+  it("treats a genuine empty array as success with zero records (no re-queue)", async () => {
+    const result = await extractCognitiveMemories({
+      messages: [makeMessage("hi there")],
+      userId: "user_test",
+      sessionKey: "session_test",
+      sessionId: "session_test",
+      llmRunner: makeRunner("[]"),
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.records).toHaveLength(0);
+  });
+
+  it("treats valid scenes with empty memories as success, not a parse failure", async () => {
+    const result = await extractCognitiveMemories({
+      messages: [makeMessage("hi there")],
+      userId: "user_test",
+      sessionKey: "session_test",
+      sessionId: "session_test",
+      llmRunner: makeRunner('[{"scene_name":"Trivial chat","memories":[]}]'),
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.records).toHaveLength(0);
+  });
 });

@@ -26,8 +26,8 @@
     "reset:desktop": "node scripts/reset-desktop.mjs"
   },
   "dependencies": {
-    "@kinqs/brainrouter-agent-protocol": "^0.4.14",
-    "@kinqs/brainrouter-core": "^0.4.14",
+    "@kinqs/brainrouter-agent-protocol": "^0.4.15",
+    "@kinqs/brainrouter-core": "^0.4.15",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@monaco-editor/react": "^4.7.0",
     "@types/react-syntax-highlighter": "^15.5.13",

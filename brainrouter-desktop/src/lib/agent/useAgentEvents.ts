@@ -22,7 +22,7 @@ import type { ScheduleRecordView } from '../schedule/scheduleView.js';
 import type { PlanDecisionView } from '../plan/planReviewView.js';
 import type { RequirementRecord, AnnotationRecord, ArtifactRecord } from '@kinqs/brainrouter-types';
 import type { CommandsCatalog } from '../commands/commands.js';
-import type { ConfigSnapshot } from '../../settings.js';
+import type { ConfigSnapshot, UsageHistory } from '../../settings.js';
 import { parseWorktreeList, type WorktreeEntry } from '../worktree/worktreeParser.js';
 import { mergeOptimistic, dropPending } from '../session/sessionOrder.js';
 import { normalizeProjectSessionsResult, withCachedProjectSessions, type ProjectSessionsByRoot } from '../session/projectSessionsView.js';
@@ -104,6 +104,7 @@ export interface AgentEventsCtx {
   setCatalog: React.Dispatch<React.SetStateAction<CommandsCatalog | null>>;
   setSnapshot: React.Dispatch<React.SetStateAction<ConfigSnapshot | null>>;
   setUsageLines: React.Dispatch<React.SetStateAction<string[]>>;
+  setUsageHistory: React.Dispatch<React.SetStateAction<UsageHistory | null>>;
   setSearchHits: React.Dispatch<React.SetStateAction<SearchHit[] | null>>;
   setSchedules: React.Dispatch<React.SetStateAction<ScheduleRecordView[]>>;
   setRequirements: React.Dispatch<React.SetStateAction<RequirementRecord[]>>;
@@ -185,7 +186,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
     setDraft, planFeedbackRef, goalContPendingRef, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
-    setBranches, setModelsLoading, setEndpointModels, setProviderModels, setCatalog, setSnapshot, setUsageLines,
+    setBranches, setModelsLoading, setEndpointModels, setProviderModels, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
     setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
@@ -232,6 +233,19 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       // a background project's turn events are exactly what that drop discards,
       // and they're what powers the sidebar's "running elsewhere" dot.
       setRunningWs((s) => nextRunningWorkspaces(s, msg.event?.kind, wsMsg.workspaceRoot));
+      // WS3 — per-SESSION running state must also update for EVERY workspace, not
+      // just the active one: a session running in a PARKED workspace otherwise
+      // shows a stale spinner (its turn-lifecycle events are exactly what the
+      // stale-drop below discards). Mirror the per-workspace capture above and do
+      // it BEFORE the drop, keyed by the event's OWNING session.
+      {
+        const owning = msg.sessionKey;
+        const k = msg.event?.kind;
+        if (owning) {
+          if (k === 'turn-start') setSessionRunning(owning, true);
+          else if (k === 'turn-complete' || k === 'turn-error') setSessionRunning(owning, false);
+        }
+      }
       const pendingWorkspace = pendingWorkspaceRef.current;
       if (pendingWorkspace && msg.event?.kind === 'query-result') {
         const queryEvent = msg.event as { id?: string; ok?: boolean; result?: unknown; error?: string };
@@ -533,6 +547,15 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       setToast(`✗ ${error}`);
       return;
     }
+    // WS8 — rewind result: an in-app warning (top-right toast) when blocked
+    // because code was generated after the point, or a confirmation when it
+    // truncated. The agent's history is rewound host-side for the next turn.
+    if (id === 'a-rewind') {
+      const r = result as { ok?: boolean; reason?: string } | undefined;
+      if (r && r.ok === false) setToast(`⚠ ${r.reason ?? 'Rewind blocked.'}`);
+      else if (r && r.ok) setToast('Rewound to here — your next message continues from this point.');
+      return;
+    }
     if (id === 'q-attach' || id.startsWith('q-attach:')) {
       const uploadId = id.startsWith('q-attach:') ? id.slice('q-attach:'.length) : '';
       const r = result as { ok?: boolean; attachment?: { name: string; id: string; kind: string }; contextMarkdown?: string; error?: string } | null;
@@ -708,6 +731,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       case 'q-catalog': if (result && typeof result === 'object') setCatalog(result as CommandsCatalog); return;
       case 'q-snapshot': if (result && typeof result === 'object') setSnapshot(result as ConfigSnapshot); return;
       case 'q-usage': if (Array.isArray(result)) setUsageLines(result as string[]); return;
+      case 'q-usage-hist': if (result && typeof result === 'object') setUsageHistory(result as UsageHistory); return;
       case 'q-search': if (Array.isArray(result)) setSearchHits(result as SearchHit[]); return;
       case 'q-schedule': if (Array.isArray(result)) setSchedules(result as ScheduleRecordView[]); return;
       // REQUIREMENT-RECORDS — the list populates the slice; create/update/seed use
@@ -953,7 +977,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
         if (r.action === 'continue' && typeof r.followUp === 'string') {
           const followUp = r.followUp;
           goalContPendingRef.current = followUp;
-          setRows((rows) => [...rows, { id: rid(), kind: 'status', text: `🎯 Goal — continuing (iteration ${r.iteration ?? '?'}/${r.cap ?? '∞'})… send a message to steer, or /goal pause.`, ts: Date.now() }]);
+          setRows((rows) => [...rows, { id: rid(), kind: 'status', text: `🎯 Goal — continuing… send a message to steer, or pause the goal.`, ts: Date.now() }]);
           // Brief delay so a fast user message can preempt the auto-continuation.
           setTimeout(() => {
             if (goalContPendingRef.current !== followUp) return;          // canceled by user input
@@ -996,6 +1020,8 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       case 'a-mode': q('q-snapshot', 'config-snapshot'); setToast('Mode saved for this session.'); return;
       case 'a-pref': q('q-snapshot', 'config-snapshot'); setToast('Saved — shared with the CLI.'); return;
       case 'a-hook': q('q-snapshot', 'config-snapshot'); setToast('Hook updated.'); return;
+      case 'a-ext': q('q-snapshot', 'config-snapshot'); setToast('Extension updated — reloaded.'); return;
+      case 'a-trust': q('q-snapshot', 'config-snapshot'); setToast(result && typeof result === 'object' && (result as { trusted?: boolean }).trusted ? 'Workspace trusted — extensions loaded.' : 'Workspace trust revoked.'); return;
       case 'a-access': setToast('Access mode set for this session.'); return;
       case 'a-reconnect': q('q-snapshot', 'config-snapshot'); setToast('Reconnect requested.'); return;
       case 'a-rule': q('q-snapshot', 'config-snapshot'); setToast(result && typeof result === 'object' && (result as { ok?: boolean }).ok ? 'Permission rule saved — shared with the CLI.' : 'Could not save the rule.'); return;

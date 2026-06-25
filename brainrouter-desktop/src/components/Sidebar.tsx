@@ -42,6 +42,16 @@ export interface SidebarProps {
   setRecentsOpen: Dispatch<SetStateAction<boolean>>;
   visibleProjectSessions: SessionRow[];
   renderSessionNode: (s: SessionRow, i: number) => React.ReactElement;
+  /** WS-UX — open the per-chat ⋮ menu for a session in a NON-active workspace
+   *  (parked project): pass its row + workspace root so the menu acts on it
+   *  without switching workspaces. */
+  openSessionMenu: (e: React.MouseEvent, key: string, opts?: { row?: SessionRow; root?: string }) => void;
+  /** WS-UX — inline-rename state, so a parked-project chat can be renamed in place. */
+  renamingKey: string | null;
+  renameDraft: string;
+  setRenameDraft: Dispatch<SetStateAction<string>>;
+  setRenamingKey: Dispatch<SetStateAction<string | null>>;
+  commitRename: () => void;
   hiddenProjectSessions: number;
   ungroupedSessions: SessionRow[];
   setVisibleCount: Dispatch<SetStateAction<number>>;
@@ -52,6 +62,9 @@ export interface SidebarProps {
   expandedProjects: string[];
   projSessions: ProjectSessionsByRoot;
   runningWs: Set<string>;
+  /** WS3 — sessionKeys with a turn in flight, ACROSS all workspaces, so a parked
+   *  project's chat shows a live spinner instead of a stale dot. */
+  runningSessions: string[];
   /** Fix 4 / §3 — count of ACTIVE background tasks per workspace (durable + live),
    *  so a non-active workspace shows how much is running, not just a dot. */
   workspaceRunCount?: Map<string, number>;
@@ -68,9 +81,10 @@ export function Sidebar(p: SidebarProps): React.ReactElement | null {
   const {
     railAnim, railWidth, setRailOpen, setRailWidth, setPaletteOpen, ensurePanel, setSidePanelOpen,
     recentsSort, setRecentsSort, workspaces, info, projectRoots, activeReviewBadge, prInfo,
-    recentsOpen, setRecentsOpen, visibleProjectSessions, renderSessionNode, hiddenProjectSessions,
+    recentsOpen, setRecentsOpen, visibleProjectSessions, renderSessionNode, openSessionMenu, hiddenProjectSessions,
+    renamingKey, renameDraft, setRenameDraft, setRenamingKey, commitRename,
     ungroupedSessions, setVisibleCount, groupedSessions, archivedCount, setShowArchived, showArchived,
-    expandedProjects, projSessions, runningWs, workspaceRunCount, openProject, toggleProject, reorderProject, addProject,
+    expandedProjects, projSessions, runningWs, runningSessions, workspaceRunCount, openProject, toggleProject, reorderProject, addProject,
   } = p;
   const [projectSearchOpen, setProjectSearchOpen] = useState(false);
   const [projectQuery, setProjectQuery] = useState('');
@@ -254,12 +268,26 @@ export function Sidebar(p: SidebarProps): React.ReactElement | null {
                     {state === undefined || (state.loading && state.rows.length === 0) ? <div className="proj-empty"><span className="spinner sm" /> Loading chats…</div>
                       : rows.length === 0 ? <div className="proj-empty">{query ? 'No matching chats' : 'No chats yet'}</div>
                       : visibleRows.map((s) => (
-                        <button key={s.sessionKey} className="project-session" title={`${s.sessionKey} — opens ${w.split('/').pop()}`}
-                          onClick={() => openProject(w, s.sessionKey)}>
-                          <SessionStatus s={s} />
-                          <span className="session-title">{s.firstUserMessage || s.sessionKey}</span>
-                          {s.modifiedAt ? <span className="session-age">{fmtAge(s.modifiedAt)}</span> : null}
-                        </button>
+                        // WS-UX — parked-project chats get the same ⋮ menu as active
+                        // ones; it acts on this workspace (root=w) without switching.
+                        <div key={s.sessionKey} className="session-wrap">
+                          {renamingKey === s.sessionKey ? (
+                            <input className="session-rename" autoFocus value={renameDraft}
+                              onChange={(e) => setRenameDraft(e.target.value)}
+                              onKeyDown={(e) => { if (e.key === 'Enter') commitRename(); else if (e.key === 'Escape') setRenamingKey(null); }}
+                              onBlur={commitRename} />
+                          ) : (
+                            <>
+                              <button className="project-session" title={`${s.sessionKey} — opens ${w.split('/').pop()}`}
+                                onClick={() => openProject(w, s.sessionKey)}>
+                                <SessionStatus s={s} working={runningSessions.includes(s.sessionKey)} />
+                                <span className="session-title">{s.firstUserMessage || s.sessionKey}</span>
+                                {s.modifiedAt ? <span className="session-age">{fmtAge(s.modifiedAt)}</span> : null}
+                              </button>
+                              <button className="session-menu-btn icon-btn" aria-label="Chat options" onClick={(e) => openSessionMenu(e, s.sessionKey, { row: s, root: w })}><Icon name="dots" size={13} /></button>
+                            </>
+                          )}
+                        </div>
                       ))}
                     {rows.length > 0 && shouldShowProjectToggle(rows.length, visibleRows.length) ? (
                       <button className="show-more" onClick={() => setProjectVisibleCounts((counts) => ({

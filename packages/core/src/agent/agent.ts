@@ -90,8 +90,13 @@ import { applyFederationIdentity } from '../util/federationIdentity.js';
 import { acquireLLMSlot } from '../util/llmSemaphore.js';
 import { blockGoal, completeGoal, formatGoalBlock, readGoal } from '../goal/goalStore.js';
 import { runHooks, parseHookDecision } from '../hooks/hooksStore.js';
+import { extensionHookHandlers } from '../extension/registry.js';
 import { resolveSandboxConfig, runShell } from '../exec/sandbox.js';
 import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../exec/dangerousCommand.js';
+import { evaluateDestructiveCommand } from '../exec/destructiveCommandGuard.js';
+import { gitHeadSha } from '../git/workspaceGit.js';
+import { recordDailyUsage } from '../usage/usageHistoryStore.js';
+import { isTelemetryEnabled } from '../telemetry/telemetry.js';
 import { readPreferences, resolveEffort, type EffortLevel } from '../session/preferencesStore.js';
 import { resolveActiveMode } from '../session/sessionModeStore.js';
 import { resolveEffortForTurn } from './effortRouting.js';
@@ -103,7 +108,7 @@ import { startSpan, traceEvent } from '../telemetry/tracing.js';
 // 0.3.9 item 8 — cache-first context regions. The helper here lets us
 // fingerprint the cache-stable slice of every outbound chat request
 // without rewriting the legacy runTurn message plumbing.
-import { computePrefixFingerprint, computePrefixComponents, type PrefixComponents } from '../context/contextRegions.js';
+import { computePrefixFingerprint, computePrefixComponents, accumulatePrefixStability, newPrefixStabilityTally, prefixStabilityRatio, type PrefixComponents, type PrefixStabilityTally } from '../context/contextRegions.js';
 import { decideExecutionPolicy, resolveToolPolicy, externalDirectoryDecision, egressDecision, type ActionKind, type PolicyDecision } from '../exec/execPolicy.js';
 import { isPathWithinRoots } from '../exec/pathPolicy.js';
 import { runPostEditCheck } from '../util/postEditCheck.js';
@@ -152,7 +157,7 @@ import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PL
 import { DEFAULT_EFFORT_VALUE_MAP } from '../provider/providers/definition.js';
 import type { ProviderDefinition } from '../provider/providers/definition.js';
 import { normalizeModelName, isReasoningModel, isNonReasoningChatModel, isAlwaysOnReasoner, modelSupportsXhighEffort, isBinaryReasoningModel } from '../provider/models/reasoning.js';
-import { isSequenceGuardExempt } from './repeatGuard.js';
+import { isSequenceGuardExempt, buildSequenceSignature } from './repeatGuard.js';
 // 0.3.9 item 9 — prefix-pinned memory briefing policy.
 import {
   decideAnchorAction,
@@ -734,6 +739,11 @@ export class Agent {
   // file it hasn't seen (Claude Code's read-before-edit contract). Reset by
   // loadHistory / fork / bootstrapSession (see clearSessionState).
   private filesReadThisSession = new Set<string>();
+  // WS5 — commits the agent itself created THIS session (process-lifetime, NOT
+  // reset per turn). The destructive-command guard allows `git commit --amend`
+  // only when HEAD is in this set; a resumed session starts empty, so amending a
+  // pre-existing commit is blocked (fail-safe).
+  private agentAuthoredCommits = new Set<string>();
   /** MAS-READMANIFEST (B2) — the files this agent has read this session, so the
    *  phase orchestrator can forward a "already mapped" manifest to later phases
    *  (a child reads deltas, not the whole tree cold). */
@@ -1235,11 +1245,16 @@ export class Agent {
     await this.injectRecallContext(prompt, mcpTools, callbacks);
 
     // Lifecycle: pre-turn hook (informational; failures don't abort the turn).
-    if (this.hookAdvisoryActive()) runHooks(this.workspaceRoot, 'pre-turn', { payload: { prompt } });
+    if (this.hookAdvisoryActive()) {
+      runHooks(this.workspaceRoot, 'pre-turn', { payload: { prompt } });
+      void this.runExtensionHooks('pre-turn');
+    }
     // CC-P4.2 — user-prompt-submit gate: a hook returning {"decision":"deny"}
     // (or a non-zero exit) blocks the turn before any LLM call; the reason is
     // returned to the user verbatim. BLOCKING — runs for unattended agents too.
     if (this.hookEnforceActive()) {
+      const extDeny = await this.runExtensionHooks('user-prompt-submit', { args: { prompt } });
+      if (extDeny) return `Prompt blocked by user-prompt-submit hook: ${extDeny}`;
       const submitResults = runHooks(this.workspaceRoot, 'user-prompt-submit', { payload: { prompt } });
       for (const r of submitResults) {
         const d = parseHookDecision(r.stdout);
@@ -1651,6 +1666,12 @@ export class Agent {
       const OFFLINE_MAX_WAITS = 120; // generous: keep waiting for the network to return
       const llmEndpoint = this.llmConfig?.endpoint ?? '';
       const invokeLlmResilient = async (): Promise<Awaited<ReturnType<typeof invokeLlm>>> => {
+        // WS0 — record cache-stable-prefix stability once per logical LLM call
+        // (here, BEFORE the retry loop, so transient-failure retries don't
+        // double-count). The prefix slice is unaffected by invokeLlm's
+        // per-attempt sanitize, so deriving it from chatHistory + allTools is
+        // equivalent to the sanitized request.
+        this.recordPrefixStability(this.chatHistory, allTools);
         let attempt = 0;
         let offlineWaits = 0;
         for (;;) {
@@ -2333,20 +2354,25 @@ export class Agent {
       const normalizedNames = toolCalls.map((tc: any) =>
         normalizeToolName(tc.function.name, candidates),
       );
-      const sequenceSignature = JSON.stringify(normalizedNames);
+      // ARGUMENT-AWARE signature: a batch only counts as a "repeat" when the
+      // model re-issued the SAME tools with the SAME args in the SAME order — a
+      // genuine no-progress loop. A read_file → edit_file → run_command sweep
+      // over DIFFERENT files yields a different signature each iteration, so
+      // methodical multi-file work (read/edit/apply/test) never trips this guard.
+      // The per-call identical-(name,args) guard below still catches re-issuing
+      // the exact same call, and the mutation-exempt set is a further escape hatch.
+      const sequenceSignature = buildSequenceSignature(
+        toolCalls.map((tc: any, idx: number) => ({ name: normalizedNames[idx], args: tc.function?.arguments })),
+      );
       const previousSequenceRepeats = recentToolSequences.filter((s) => s === sequenceSignature).length;
       recentToolSequences.push(sequenceSignature);
       if (recentToolSequences.length > TOOL_SEQUENCE_GUARD_LIMIT * 2) recentToolSequences.shift();
-      // A sequence made entirely of mutation tools (write/edit/apply_patch) is
-      // productive repetition (different files each call), not a stalled loop —
-      // skip the name-only sequence guard for it. The identical-args guard below
-      // still catches re-writing the SAME file with the SAME content.
       if (previousSequenceRepeats >= TOOL_SEQUENCE_GUARD_LIMIT && !isSequenceGuardExempt(normalizedNames, sequenceGuardExempt)) {
         const sequenceLabel = normalizedNames.join(' → ');
         const resultText = [
-          `Repeat-loop guard tripped: the same tool sequence (${sequenceLabel}) has repeated ${previousSequenceRepeats + 1} times in this turn.`,
-          'The arguments changed, but the action pattern is stalled.',
-          'Stop calling the same tool pattern. Use the evidence already gathered, switch strategy, spawn a bounded child, or report what remains unknown.',
+          `Repeat-loop guard tripped: the identical tool batch (${sequenceLabel}) — same tools AND same arguments — has repeated ${previousSequenceRepeats + 1} times this turn.`,
+          'Re-running the same calls returns the same results.',
+          'Use the evidence already gathered, change the arguments or strategy, spawn a bounded child, or report what remains unknown.',
         ].join(' ');
         const processed = toolCalls.map((tc: any, idx: number) => ({
           toolMsg: {
@@ -2464,6 +2490,10 @@ export class Agent {
         let blockedByHook: string | undefined;
         const hookifyWarnings: string[] = [];
         if (this.hookEnforceActive()) {
+          // Typed extension pre-tool handlers (in-process) deny identically to a
+          // non-zero shell-hook exit; they may inspect the structured args.
+          const extDeny = await this.runExtensionHooks('pre-tool', { tool: name, args });
+          if (extDeny && !blockedByHook) blockedByHook = extDeny;
           const preResults = runHooks(this.workspaceRoot, 'pre-tool', { tool: name, payload: args });
           const denial = preResults.find((r) => r.exitCode !== 0);
           if (denial) {
@@ -2733,6 +2763,7 @@ export class Agent {
             tool: name,
             payload: { args, ok: !isError, summary, resultPreview: resultText.slice(0, 1000) },
           });
+          void this.runExtensionHooks('post-tool', { tool: name, args });
         }
 
         // Tool-result clamp: huge MCP payloads (memory_recall, spawn_agent
@@ -2958,6 +2989,17 @@ export class Agent {
       b.turns += 1;
       this.usageBySkill.set(skillKey, b);
     }
+    // WS10 — record this turn into the persistent cross-session usage history
+    // (TOP-LEVEL agent only, so children don't double-count; survives session
+    // delete). Gated on the local telemetry toggle; best-effort, never fatal.
+    if (!this.silent && isTelemetryEnabled()) {
+      try {
+        recordDailyUsage(
+          { promptTokens: this.lastTurnUsage.promptTokens, completionTokens: this.lastTurnUsage.completionTokens, calls: this.lastTurnUsage.calls },
+          Date.now(),
+        );
+      } catch { /* observability only */ }
+    }
 
     // 0.3.9 item 12 — turn-end tool-result auto-shrink. Any `role: tool`
     // message whose content exceeds TURN_END_RESULT_CAP_TOKENS gets
@@ -3147,6 +3189,29 @@ export class Agent {
         if (shellPolicy.decision === 'deny') {
           return `Command execution denied: ${shellPolicy.reason}.`;
         }
+        // WS5 — destructive-command guard: BLOCK git/IaC actions the user didn't
+        // ask for (reset --hard / checkout -- / clean -f / stash drop, an --amend
+        // of a commit we didn't author this session, or an IaC destroy without the
+        // stack named). Attended users can override via a confirm; silent/headless
+        // agents are refused outright (they can't answer a prompt).
+        let destructiveOverride = false;
+        {
+          const verdict = evaluateDestructiveCommand(cmd, {
+            userIntent: this.lastUserPrompt,
+            headSha: gitHeadSha(this.workspaceRoot),
+            agentAuthoredCommits: this.agentAuthoredCommits,
+          });
+          if (verdict.decision === 'block') {
+            if (this.silent || (!this.interactionPort && !this.prompter)) {
+              return `Command blocked (${verdict.rule}): ${verdict.reason}`;
+            }
+            const approved = this.interactionPort
+              ? await this.interactionPort.confirm({ title: 'Run destructive command?', detail: `${cmd}\n\n${verdict.reason}`, dangerous: true, tool: 'run_command' })
+              : await this.prompter.askYesNo(`${verdict.reason}\nRun it anyway? (y/N) `, false);
+            if (!approved) return `Command blocked (${verdict.rule}): ${verdict.reason}`;
+            destructiveOverride = true; // user explicitly authorized — skip the redundant approval below
+          }
+        }
         // Approval gating routes through the pure resolver in
         // runtime/dangerousCommand.ts. Three outcomes:
         //   • auto-approve: fast mode + safe command (or silent child whose
@@ -3183,7 +3248,9 @@ export class Agent {
         // "type a goal, walk away". Dangerous commands still ask.
         const goalForApproval = readGoal(this.workspaceRoot, this.sessionKey);
         const goalIsActive = !!(goalForApproval?.text && goalForApproval.status === 'active');
-        const approval = resolveRunCommandApproval(activeMode, cmd, { silent: this.silent, goalActive: goalIsActive, allowlist: getCliKnobs().commandAllowlist });
+        const approval = destructiveOverride
+          ? ('auto-approve' as const) // user already authorized the destructive command above — don't double-prompt
+          : resolveRunCommandApproval(activeMode, cmd, { silent: this.silent, goalActive: goalIsActive, allowlist: getCliKnobs().commandAllowlist });
         let parentApproved = false;
         if (approval === 'deny-silent') {
           const dangerous = isDangerousCommand(cmd);
@@ -3283,6 +3350,13 @@ export class Agent {
           { silent: this.silent, enforceWhenSilent: this.sandboxEnforceWhenSilent },
         );
         const result = await runShell(cmd, sandboxConfig, undefined, this.turnAbort?.signal);
+        // WS5 — remember commits WE authored this session, so a later
+        // `git commit --amend` of one of them is allowed (vs. amending a
+        // pre-existing/user commit, which the guard blocks).
+        if (result.exitCode === 0 && /\bgit\b[^|;&]*\bcommit\b/i.test(cmd)) {
+          const head = gitHeadSha(this.workspaceRoot);
+          if (head) this.agentAuthoredCommits.add(head);
+        }
         const enforcedTag = sandboxConfig.enforcedUnattended ? ' (enforced: unattended)' : '';
         const sandboxBadge = result.sandboxed
           ? `[sandboxed via ${result.sandboxTool}${enforcedTag}] `
@@ -3933,6 +4007,44 @@ export class Agent {
   }
 
   /**
+   * WS0 — record one logical LLM call's cache-stable prefix into the session
+   * stability tally and emit drift telemetry. Called once per call (in
+   * `invokeLlmResilient`, before the retry loop, so retries don't double-count).
+   * The prefix slice (system message + pinned anchors + tool list) is what the
+   * provider prefix-caches; the per-attempt tool-call-pairing sanitize only
+   * touches the append region, so deriving it from `this.chatHistory` here is
+   * equivalent to the sanitized request. Pure observability — wrapped so a
+   * tally/telemetry failure can never break a turn.
+   */
+  private recordPrefixStability(messages: readonly unknown[], tools: readonly unknown[]): void {
+    try {
+      const curr = computePrefixComponents(messages as any, tools as any);
+      const drift = accumulatePrefixStability(this.prefixStability, this.prevPrefixComponents, curr);
+      this.prevPrefixComponents = curr;
+      this.lastTurnUsage.lastPrefixFingerprint = computePrefixFingerprint(messages as any, tools as any);
+      traceEvent('llm_call.prefix_drift', {
+        model: this.llmConfig.model,
+        changed: drift.changed,
+        labels: drift.labels,
+        stableCalls: this.prefixStability.stableCalls,
+        bustCalls: this.prefixStability.bustCalls,
+      });
+    } catch {
+      /* observability only — never let prefix accounting break a turn */
+    }
+  }
+
+  /** WS0 — session prefix-cache stability summary (for `/tokens` + the usage view). */
+  public getPrefixStability(): { stableCalls: number; bustCalls: number; ratio: number; lastLabels: string[] } {
+    return {
+      stableCalls: this.prefixStability.stableCalls,
+      bustCalls: this.prefixStability.bustCalls,
+      ratio: prefixStabilityRatio(this.prefixStability),
+      lastLabels: this.prefixStability.lastLabels,
+    };
+  }
+
+  /**
    * CLI-4 — `/bg`: run a prompt as a DETACHED background worker. Reuses the
    * proven worker-thread infra (a separate in-process Agent + on-disk
    * transcript/status), so there's no concurrency hazard with the foreground
@@ -4191,6 +4303,13 @@ export class Agent {
     /** Last call's `prefixFingerprint` (item 8). Lets `/tokens` show whether the prefix was stable. */
     lastPrefixFingerprint?: string;
   } = { promptTokens: 0, completionTokens: 0, calls: 0, cachedTokens: 0, missedTokens: 0 };
+
+  /** WS0 — running prefix-cache stability tally (cache-stable-prefix hits vs
+   *  busts) across the whole session. This is the measurable signal any future
+   *  prefix-ordering change is judged against: reorder, then watch the ratio. */
+  public prefixStability: PrefixStabilityTally = newPrefixStabilityTally();
+  /** WS0 — previous LLM call's prefix components, for call-over-call drift detection. */
+  private prevPrefixComponents: PrefixComponents | null = null;
 
   /** Cumulative token usage across the WHOLE CLI session (all turns). */
   public sessionUsage: {
@@ -4464,6 +4583,27 @@ export class Agent {
   /** ADVISORY hook events (pre/post-turn, post-tool, pre-compact) stay interactive-only. */
   private hookAdvisoryActive(): boolean {
     return getCliKnobs().hooks.enabled && !this.silent;
+  }
+
+  /**
+   * EXTENSION-HOOKS — run the typed in-process handlers an extension registered
+   * for `event` (the code analogue of shell hooks). For deny events (pre-tool /
+   * user-prompt-submit) it returns the deny reason if any handler refuses; for
+   * advisory events the result is ignored. A throwing handler never blocks.
+   */
+  private async runExtensionHooks(
+    event: import('../hooks/hooksStore.js').HookEvent,
+    ctx: { tool?: string; args?: Record<string, unknown> } = {},
+  ): Promise<string | null> {
+    const handlers = extensionHookHandlers(event);
+    for (const h of handlers) {
+      if (h.match && ctx.tool && !ctx.tool.includes(h.match)) continue;
+      try {
+        const r = await h.handle({ event, tool: ctx.tool, args: ctx.args, workspaceRoot: this.workspaceRoot });
+        if (r === 'deny') return `Blocked by an extension ${event} hook`;
+      } catch { /* a throwing handler is ignored, never blocks the call */ }
+    }
+    return null;
   }
 
   private autoCaptureRequirement(prompt: string, callbacks: RunTurnCallbacks): void {

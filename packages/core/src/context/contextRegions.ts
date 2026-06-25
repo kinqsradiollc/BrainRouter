@@ -464,6 +464,47 @@ export function diffPrefixComponents(prev: PrefixComponents | null, curr: Prefix
   return labels.length ? { changed: true, labels } : { changed: false, labels: ['prefix stable — cache should hit'] };
 }
 
+/**
+ * WS0 — a running tally of prefix-cache stability across a session's LLM calls.
+ * `stableCalls` should hit the provider's prefix cache; `bustCalls` paid full
+ * input price because the cache-stable prefix changed since the previous call.
+ * The ratio is the measurable signal any prefix-ordering change is judged
+ * against (the "measure before you reorder" the prefix-stability work needs).
+ */
+export interface PrefixStabilityTally {
+  stableCalls: number;
+  bustCalls: number;
+  /** Labels from the most recent drift — the latest cache-miss cause, or stable. */
+  lastLabels: string[];
+}
+
+export function newPrefixStabilityTally(): PrefixStabilityTally {
+  return { stableCalls: 0, bustCalls: 0, lastLabels: [] };
+}
+
+/**
+ * Fold one LLM call's prefix into a running tally and return the drift. The
+ * FIRST call (prev === null) counts as stable — the prefix is being pinned for
+ * the first time, not busted. Mutates `tally` in place.
+ */
+export function accumulatePrefixStability(
+  tally: PrefixStabilityTally,
+  prev: PrefixComponents | null,
+  curr: PrefixComponents,
+): PrefixDrift {
+  const drift = diffPrefixComponents(prev, curr);
+  if (prev && drift.changed) tally.bustCalls += 1;
+  else tally.stableCalls += 1;
+  tally.lastLabels = drift.labels;
+  return drift;
+}
+
+/** Fraction of calls that hit the stable prefix (1 = perfect, 0 = every call busted). */
+export function prefixStabilityRatio(tally: PrefixStabilityTally): number {
+  const total = tally.stableCalls + tally.bustCalls;
+  return total === 0 ? 1 : tally.stableCalls / total;
+}
+
 // ---- internals --------------------------------------------------------
 
 function toolSpecsEqual(a: readonly ToolSpec[], b: readonly ToolSpec[]): boolean {

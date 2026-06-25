@@ -1,6 +1,7 @@
 import type { AccessMode, ActionKind } from '../exec/execPolicy.js';
 import { LOCAL_TOOLS } from './specs.js';
 import { LOCAL_TOOL_REGISTRY, registryEntry } from './registry.js';
+import { extensionExecutor, extensionExecutors } from '../extension/registry.js';
 
 export type ToolExposure = 'direct' | 'hidden';
 
@@ -102,13 +103,18 @@ export function localToolExecutors(): LocalToolExecutor[] {
 
 export function localToolExecutor(name: string): LocalToolExecutor | undefined {
   if (!cachedExecutorByName) localToolExecutors();
-  return cachedExecutorByName?.get(name);
+  // Native first; fall through to an extension-contributed executor.
+  return cachedExecutorByName?.get(name) ?? extensionExecutor(name);
 }
 
 export function localToolSpecsFromExecutors(): LocalToolSpec[] {
-  return localToolExecutors()
+  const native = localToolExecutors()
     .filter((executor) => executor.exposure() === 'direct')
     .map((executor) => executor.spec());
+  const ext = extensionExecutors()
+    .filter((executor) => executor.exposure() === 'direct')
+    .map((executor) => executor.spec());
+  return ext.length === 0 ? native : [...native, ...ext];
 }
 
 export function assertLocalToolExecutorInvariants(): void {

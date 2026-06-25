@@ -117,6 +117,7 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
         parent: agent.sessionUsage,
         children,
         offload: agent.getOffloadTotals(),
+        prefixStability: agent.getPrefixStability(), // WS0 — prefix-cache stability line
       });
       console.log('');
       for (const l of lines) console.log(l);

@@ -21,7 +21,7 @@ import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type Comm
 import { tagQueryId } from './lib/workspace/workspaceEvents.js';
 import { duplicateTitleKeys } from './lib/session/sessionDisplay.js';
 import { CommandPalette } from './palette.js';
-import { SettingsDialog, type ConfigSnapshot } from './settings.js';
+import { SettingsDialog, type ConfigSnapshot, type UsageHistory } from './settings.js';
 import { installDevBridge } from './devBridge.js';
 import { Icon } from './icons.js';
 import type { AttachmentUpload, PlanItem, ToolItem, ChatRow, SessionRow, FleetRow, PopId } from './types.js';
@@ -75,7 +75,7 @@ export function App(): React.ReactElement {
     viewKey, setViewKey, running, setRunning, stopping, setStopping,
     runningSessions, setRunningSessions, runningSessionsRef,
     sessions, setSessions, sessionsRef, pendingSessionsRef,
-    liveChildren, setLiveChildren, renamingKey, setRenamingKey, renameDraft, setRenameDraft,
+    liveChildren, setLiveChildren, renamingKey, setRenamingKey, renamingRoot, setRenamingRoot, renameDraft, setRenameDraft,
     showArchived, setShowArchived, sessionGroups, setSessionGroups,
     finishedTasks, setFinishedTasks, taskView, setTaskView, workflowView, setWorkflowView,
     sessionMenu, setSessionMenu, sessionKeyRef, cardOpenRef, errorsBySession, lastPromptRef, planFeedbackRef, goalContPendingRef, turnFailsRef,
@@ -144,6 +144,7 @@ export function App(): React.ReactElement {
   const [catalog, setCatalog] = useState<CommandsCatalog | null>(null);
   const [snapshot, setSnapshot] = useState<ConfigSnapshot | null>(null);
   const [usageLines, setUsageLines] = useState<string[]>([]);
+  const [usageHistory, setUsageHistory] = useState<UsageHistory | null>(null); // WS10 — cross-session heatmap
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settings, setSettings] = useState<{ open: boolean; section: SettingsSection }>({ open: false, section: 'general' });
   const [infoDialog, setInfoDialog] = useState<{ title: string; body: string } | null>(null);
@@ -343,7 +344,7 @@ export function App(): React.ReactElement {
     closeSessionMenu, setMeta, togglePin, toggleComplete, toggleArchive, moveToGroup,
     startRename, commitRename, forkSessionAction, deleteSessionAction, openExternal, openSessionMenu,
   } = useSessionActions({
-    q, running, stopping, interaction, renamingKey, renameDraft, workspaces, info, projSessions, recentsOpenByRoot,
+    q, running, stopping, interaction, renamingKey, renamingRoot, renameDraft, workspaces, info, projSessions, recentsOpenByRoot,
     runningSessionsRef, sessionKeyRef, activeWsRef, pendingWorkspaceRef, pendingResumeRef, pendingSessionsRef, sessionsRef,
     workspaceGenRef, expandedProjectsRef,
     liveBuf, chatRef, atBottomRef, errorsBySession, cachedSessionRowsRef,
@@ -351,7 +352,7 @@ export function App(): React.ReactElement {
     setSessions, setSearchHits, setViewKey, setTaskView, setWorkflowView, setWorkspaces, setExpandedProjects, setTrustAsk,
     setHostUp, setGitInfo, setPrInfo, setBranches, setChangedFiles, setAllFiles, setFileView, setDiffView,
     setTokens, setContextUsage, setGateBlock, setLastPlan, setPlanHistory, setFleet, setLiveChildren, setRecentTasks, setFinishedTasks, setCommitSubjects, setToast,
-    setProjSessions, setSettings, setSessionMenu, setRenamingKey, setRenameDraft, setDashBusy, setGlobalBoards,
+    setProjSessions, setSettings, setSessionMenu, setRenamingKey, setRenamingRoot, setRenameDraft, setDashBusy, setGlobalBoards,
     pendingGitRef, ensurePanel, resetTermDock, editor, ci,
   });
 
@@ -615,7 +616,7 @@ export function App(): React.ReactElement {
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
     setDraft, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
-    setBranches, setModelsLoading, setEndpointModels, setProviderModels, setCatalog, setSnapshot, setUsageLines,
+    setBranches, setModelsLoading, setEndpointModels, setProviderModels, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
     setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
@@ -856,6 +857,7 @@ export function App(): React.ReactElement {
         for (const k of Object.keys(errorsBySession.current)) errorsBySession.current[k] = errorsBySession.current[k].filter((er) => er.id !== id);
       }}
       onFork={(ts) => forkSessionAction(sessionKeyRef.current ?? '', ts)}
+      onRewind={(ts) => q('a-rewind', 'action:rewind-to', { ts })}
     />
   );
   // Memoized on [rows, inlineDiffs, running] ONLY — NOT liveText/nowTick — so the
@@ -943,7 +945,7 @@ export function App(): React.ReactElement {
           findingsByFile={reviewFindingsByFile} />);
       case 'terminal': return <TerminalPanel />;
       case 'tools': return <ToolsPanel log={toolLog} />;
-      case 'tasks': return <TasksPanel fleet={backgroundTasks} recent={recentTasks} finished={finishedTasks} onClear={() => setFinishedTasks([])} onOpen={(id) => { const f = backgroundTasks.find((t) => t.id === id) ?? recentTasks.find((t) => t.id === id); if (f) openTask(f); }} />;
+      case 'tasks': return <TasksPanel fleet={backgroundTasks} recent={recentTasks} finished={finishedTasks} onClear={() => setFinishedTasks([])} onOpen={(id) => { const f = backgroundTasks.find((t) => t.id === id) ?? recentTasks.find((t) => t.id === id); if (f) openTask(f); }} onKill={(id) => { q('a-killbg', 'action:kill-bgshell', { id }); setTimeout(() => q('q-fleet', 'fleet'), 150); }} />;
       case 'dashboard': return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading…</div>}><DashboardPanel scope={dashScope} setScope={(s) => { setDashScope(s); if (s === 'all') refreshDashboard(); }}
         tab={dashTab} setTab={setDashTab} boards={dashBoards} busy={dashBusy} onRefresh={refreshDashboard}
         onOpenTask={openDashboardTask}
@@ -1080,10 +1082,11 @@ export function App(): React.ReactElement {
         recentsSort={recentsSort} setRecentsSort={setRecentsSort} workspaces={workspaces} info={info}
         projectRoots={projectRoots} activeReviewBadge={activeReviewBadge} prInfo={prInfo}
         recentsOpen={recentsOpen} setRecentsOpen={setRecentsOpen} visibleProjectSessions={visibleProjectSessions}
-        renderSessionNode={renderSessionNode} hiddenProjectSessions={hiddenProjectSessions} ungroupedSessions={ungroupedSessions}
+        renderSessionNode={renderSessionNode} openSessionMenu={openSessionMenu} hiddenProjectSessions={hiddenProjectSessions} ungroupedSessions={ungroupedSessions}
+        renamingKey={renamingKey} renameDraft={renameDraft} setRenameDraft={setRenameDraft} setRenamingKey={setRenamingKey} commitRename={commitRename}
         setVisibleCount={setVisibleCount} groupedSessions={groupedSessions} archivedCount={archivedCount}
         setShowArchived={setShowArchived} showArchived={showArchived}
-        expandedProjects={expandedProjects} projSessions={projSessions} runningWs={runningWorkspaces} workspaceRunCount={workspaceRunCount}
+        expandedProjects={expandedProjects} projSessions={projSessions} runningWs={runningWorkspaces} runningSessions={runningSessions} workspaceRunCount={workspaceRunCount}
         openProject={openProject} toggleProject={toggleProject} reorderProject={reorderProject} addProject={addProject}
         mode={mode} setMode={setMode} />
 
@@ -1101,7 +1104,9 @@ export function App(): React.ReactElement {
             resumeSession={resumeSession} forkParent={forkParent} transcriptEls={transcriptEls} liveText={liveText}
             goal={goalState}
             onGoalResume={() => runBridge('goal', 'resume')}
-            onGoalPause={() => runBridge('goal', 'pause')}
+            // WS7 — pausing the goal also interrupts the in-flight turn, so the
+            // pause button and the chat Stop button converge on the same state.
+            onGoalPause={() => { runBridge('goal', 'pause'); window.brainrouter.send({ kind: 'interrupt' }); }}
             onGoalClear={() => runBridge('goal', 'clear')}
             onGoalEdit={(text) => { q('a-goal-edit', 'action:goal-edit', { text }); }}
             running={running} turnStart={turnStart} reasoningTail={reasoningTail} statusLine={statusLine}
@@ -1115,7 +1120,10 @@ export function App(): React.ReactElement {
                 </div>
               ) : null}
               <Composer
-                draft={draft} setDraft={setDraft} running={running} stopping={stopping} submit={submit} requestStop={requestStop}
+                draft={draft} setDraft={setDraft} running={running} stopping={stopping} submit={submit}
+                // WS7 — the chat Stop button also pauses an active goal, so an
+                // interrupt doesn't leave the goal "active" and silently auto-resume.
+                requestStop={() => { requestStop(); if (goalState?.status === 'active') runBridge('goal', 'pause'); }}
                 slashActive={slashActive} slashMatches={slashMatches} commands={commands} slashSel={slashSel} setSlashSel={setSlashSel}
                 setSlashDismissed={setSlashDismissed} onRunSlash={runSlash} pop={pop} setPop={setPop} q={q}
                 modeLabel={modeLabel} execMode={execMode} effort={effort} info={info} branches={branches}
@@ -1184,6 +1192,7 @@ export function App(): React.ReactElement {
         onClose={() => setSettings((st) => ({ ...st, open: false }))}
         snapshot={snapshot}
         usageLines={usageLines}
+        usageHistory={usageHistory}
         tokens={tokens}
         commands={commands}
         catalog={catalog}

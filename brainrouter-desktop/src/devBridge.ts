@@ -348,8 +348,25 @@ export function installDevBridge(): void {
   // T7/T6 — mutable permission rules + MCP servers so the Settings editors work in preview.
   const devRules: { allow: string[]; deny: string[] } = { allow: ['run_command(git *)', 'run_command(npm test*)'], deny: ['run_command(rm -rf *)'] };
   const devCliKnobs: Record<string, unknown> = { autoCompactTokens: 80000, maxToolLoops: 60, recallMode: 'gated', contextCompaction: true, llmTimeoutMs: 120000, automation: { enabled: true, requirements: { enabled: true, autopilot: false }, sync: { enabled: true }, sprints: { enabled: true, autopilot: true } } };
+  const devExtensions = {
+    trusted: true,
+    items: [
+      { name: 'warehouse', version: '1.0.0', source: 'workspace' as const, description: 'Adds query_warehouse + run_migration tools', contributes: ['tools'], enabled: true, blocked: false },
+      { name: 'acme-gateway', version: '0.3.1', source: 'user' as const, description: 'Custom-streaming provider', contributes: ['providers'], enabled: true, blocked: false },
+      { name: 'prod-guard', version: '2.0.0', source: 'builtin' as const, description: 'Denies run_command against prod hosts', contributes: ['hooks'], enabled: false, blocked: false },
+    ],
+  };
   const devGithub: { repo: string | null; hasToken: boolean; tokenSource: string | null } = { repo: 'kinqsradiollc/BrainRouter', hasToken: true, tokenSource: 'config' };
-  const devServers: Array<{ id: string; online: boolean; detail?: string }> = [{ id: 'brainrouter', online: true }, { id: 'github', online: false }];
+  // WS9 — carry identity/type so the grouped MCP layout (Brains vs Tools) and the
+  // single-active-brain affordance render in browser-only dev.
+  const devServers: Array<{ id: string; online: boolean; detail?: string; identity?: 'brainrouter' | 'third-party'; type?: 'stdio' | 'http'; url?: string | null; command?: string | null }> = [
+    { id: 'brainrouter', online: true, identity: 'brainrouter', type: 'stdio', command: 'npx -y @kinqs/brainrouter-mcp' },
+    { id: 'brainrouter-staging', online: false, identity: 'brainrouter', type: 'http', url: 'https://staging.brain.example/mcp' },
+    { id: 'github', online: false, identity: 'third-party', type: 'http', url: 'https://api.githubcopilot.com/mcp' },
+    { id: 'filesystem', online: true, identity: 'third-party', type: 'stdio', command: 'npx -y @modelcontextprotocol/server-filesystem .' },
+  ];
+  let devActiveServer = 'brainrouter';
+  let devShellAlive = true; // WS2 2.4 — a background dev-server shell the Stop control can kill
 
   // T5 — a tiny in-memory FS so the editor (open/edit/save/stale-write) is
   // exercisable in the browser preview without a real host.
@@ -637,7 +654,10 @@ export function installDevBridge(): void {
       { kind: 'agent', id: 'agent-3f2a', label: 'explorer·3f2a — survey recall pipeline', role: 'explorer', startedAt: new Date(Date.now() - 95_000).toISOString(), worktree: false, parentSessionKey: 'dev:fix-recall-blend' },
       { kind: 'worker', id: 'wkr-91', label: 'wkr-91 · vitest suite', role: 'worker', startedAt: new Date(Date.now() - 14 * 60_000).toISOString(), worktree: true, parentSessionKey: 'dev:fix-recall-blend' },
       { kind: 'workflow', id: 'wf-build', label: 'build · Implement (2/4)', startedAt: new Date(Date.now() - 31 * 60_000).toISOString(), parentSessionKey: 'dev:grid-tui' },
+      // WS2 2.4 — a background shell (dev server) with a Stop control; killing it drops it from the fleet.
+      ...(devShellAlive ? [{ kind: 'shell', id: 'bgsh_devsrv', label: 'npm run dev — http://localhost:5173', startedAt: new Date(Date.now() - 4 * 60_000).toISOString(), parentSessionKey: 'dev:fix-recall-blend' }] : []),
     ],
+    'action:kill-bgshell': (a) => { if (String(a.id ?? '') === 'bgsh_devsrv') devShellAlive = false; return { ok: true }; },
     // §3 — durable task list (scoped). Mirrors the host's tasks-list shape.
     'tasks-list': () => [
       { id: 'btask_a1', kind: 'plan-revision', status: 'running', title: 'Revise plan — requested changes', phase: 'writing-plan', sessionKey: 'dev:fix-recall-blend', createdAt: new Date(Date.now() - 22_000).toISOString(), startedAt: new Date(Date.now() - 22_000).toISOString(), updatedAt: new Date().toISOString(), progress: [], linkedMemoryIds: [] },
@@ -777,6 +797,8 @@ export function installDevBridge(): void {
       return { files, insertions: files.reduce((s, f) => s + f.added, 0), deletions: files.reduce((s, f) => s + f.removed, 0) };
     },
     'plan-state': () => ({ items: devPlanState.items, explanation: devPlanState.explanation }),
+    'action:ext-set-enabled': (a) => { const it = devExtensions.items.find((e) => e.name === a.name); if (it) it.enabled = a.enabled === true; return { ok: true, name: String(a.name ?? '') }; },
+    'action:trust-workspace': (a) => { devExtensions.trusted = a.trusted === true; devExtensions.items.forEach((e) => { e.blocked = e.source === 'workspace' && !devExtensions.trusted; }); return { ok: true, trusted: devExtensions.trusted }; },
     'goal-state': () => ({ text: 'Implement a full-featured Notion clone with a block-based editor and hierarchical pages', status: 'active', budget: { maxIterations: 10, iterationsUsed: 3 }, startedAt: new Date(Date.now() - 18 * 60_000).toISOString(), updatedAt: new Date().toISOString() }),
     'action:goal-edit': (a) => ({ ok: true, goal: { text: String(a.text ?? ''), status: 'active', budget: { maxIterations: 10, iterationsUsed: 3 }, startedAt: new Date(Date.now() - 18 * 60_000).toISOString(), updatedAt: new Date().toISOString() } }),
     // TRACK mode — the mock board persists create/transition so the preview is interactive.
@@ -991,6 +1013,7 @@ export function installDevBridge(): void {
       ],
       workspaceRoot: '/Users/dev/BrainRouter', sandbox: 'off', prefs: effectivePrefs(),
       cliKnobs: { ...devCliKnobs },
+      extensions: { trusted: devExtensions.trusted, items: devExtensions.items.map((e) => ({ ...e })) },
       integrations: { github: { ...devGithub } },
       workspacePrefs: { ...prefs },
       sessionMode: { ...(sessionModes[activeSession] ?? {}) },
@@ -1001,6 +1024,7 @@ export function installDevBridge(): void {
         { id: 'h2', event: 'user-prompt-submit', command: './hooks/inject-ticket.sh', enabled: false },
       ],
       servers: devServers.map((s) => ({ ...s })),
+      activeServer: devActiveServer, // WS9 — the single active brain
       // §multi-provider — named providers + per-sub-agent-role routing.
       providers: [
         { name: 'groq', provider: 'groq', model: 'llama-3.3-70b', endpoint: 'https://api.groq.com/openai/v1', hasKey: true },
@@ -1022,6 +1046,31 @@ export function installDevBridge(): void {
       'TOTAL       68,735 in · 3,927 out',
       'offload: 31% of parent context avoided via child agents',
     ],
+    // WS10 — synthetic daily usage so the contributions heatmap renders in
+    // browser-only dev (busier weekdays, ~20% idle days, a gentle wave). Honours
+    // the `days` arg so the week/month/year range selector actually changes it.
+    'usage-history': (a) => {
+      const span = typeof a.days === 'number' && a.days > 0 ? Math.floor(a.days) : 365;
+      const days: Array<{ day: string; promptTokens: number; completionTokens: number; calls: number; turns: number }> = [];
+      const total = { promptTokens: 0, completionTokens: 0, calls: 0, turns: 0 };
+      const now = Date.now();
+      for (let i = span - 1; i >= 0; i--) {
+        const t = now - i * 86_400_000;
+        const wd = new Date(t).getUTCDay();
+        const weekendDamp = wd === 0 || wd === 6 ? 0.2 : 1;
+        const wave = (Math.sin(i * 0.7) + 1) / 2; // 0..1
+        const turns = (i * 37) % 5 === 0 ? 0 : Math.round(weekendDamp * wave * 8);
+        const promptTokens = turns * (1200 + ((i * 53) % 900));
+        const completionTokens = turns * (300 + ((i * 29) % 400));
+        const calls = turns * (1 + ((i * 17) % 3));
+        days.push({ day: new Date(t).toISOString().slice(0, 10), promptTokens, completionTokens, calls, turns });
+        total.promptTokens += promptTokens;
+        total.completionTokens += completionTokens;
+        total.calls += calls;
+        total.turns += turns;
+      }
+      return { days, total };
+    },
     'search-transcript': (a) => [
       { index: 3, role: 'assistant', snippet: `…the reranker ${String(a.q ?? 'blend')} replaces the retriever order — fix is a weighted blend…` },
       { index: 7, role: 'user', snippet: `…can you re-run the sweep after the ${String(a.q ?? 'blend')} change…` },
@@ -1057,6 +1106,7 @@ export function installDevBridge(): void {
     'action:set-hook': () => ({ ok: true }),
     'action:set-access': (a) => ({ ok: true, mode: a.mode }),
     'action:reconnect-mcp': () => ({ ok: true }),
+    'action:set-active-server': (a) => { const id = String(a.id ?? ''); if (devServers.some((s) => s.id === id && s.identity === 'brainrouter')) devActiveServer = id; return { ok: true, id }; },
     'search-content': (a) => [
       { file: 'src/memory/recall.ts', line: 42, snippet: `const blended = 0.6 * rerank + 0.4 * rrf; // ${String(a.q ?? '')}` },
       { file: 'src/agent/agent.ts', line: 1240, snippet: 'private interruptRequested = false;' },
@@ -1091,7 +1141,7 @@ export function installDevBridge(): void {
       if (op === 'add') { if (r && !list.includes(r)) list.push(r); } else { const i = list.indexOf(r); if (i >= 0) list.splice(i, 1); }
       return { ok: true, permissions: { allow: [...devRules.allow], deny: [...devRules.deny] } };
     },
-    'action:add-mcp': (a) => { const id = String(a.id ?? '').trim(); if (!id || devServers.some((s) => s.id === id)) return { ok: false, error: 'invalid or duplicate id' }; devServers.push({ id, online: true, detail: `${a.type ?? 'stdio'}` }); return { ok: true, id }; },
+    'action:add-mcp': (a) => { const id = String(a.id ?? '').trim(); if (!id || devServers.some((s) => s.id === id)) return { ok: false, error: 'invalid or duplicate id' }; const http = a.type === 'http'; devServers.push({ id, online: true, identity: 'third-party', type: http ? 'http' : 'stdio', url: http ? String(a.url ?? '') : null, command: http ? null : String(a.command ?? ''), detail: `${a.type ?? 'stdio'}` }); return { ok: true, id }; },
     'action:remove-mcp': (a) => { const i = devServers.findIndex((s) => s.id === a.id); if (i >= 0) devServers.splice(i, 1); return { ok: i >= 0, id: a.id }; },
     'action:term-exec': (a) => ({ out: `$ ${String(a.cmd ?? '')}\n(demo) command executed in the workspace`, code: 0 }),
     'command:dispatch': (a) => {

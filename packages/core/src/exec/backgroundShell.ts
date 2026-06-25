@@ -47,10 +47,15 @@ export function startBackgroundShell(input: {
   const logPath = path.join(logDir, `${id}.log`);
   const fd = fs.openSync(logPath, 'a');
 
+  // `detached: true` puts the shell in its OWN process group, so killing the
+  // group (negative pid) takes down the whole tree — `sh -c "npm run dev"` AND
+  // the node it spawns — instead of orphaning the real server (WS2 2.4 / WS6 6.3).
   const child = spawn('sh', ['-c', input.command], {
     cwd: input.cwd,
     stdio: ['ignore', fd, fd],
+    detached: true,
   });
+  ensureExitCleanup();
   const run: BgShellRun = {
     id,
     command: input.command,
@@ -82,6 +87,54 @@ export function getBackgroundShell(id: string): BgShellRun | undefined {
 
 export function listBackgroundShells(): BgShellRun[] {
   return [...runs.values()].sort((a, b) => a.startedAt - b.startedAt);
+}
+
+/**
+ * Terminate a running background shell and its whole process tree (WS2 2.4 /
+ * WS6 6.3). The shell is spawned `detached`, so a negative-pid signal hits the
+ * process GROUP — `npm run dev` and the node it launched both die, nothing
+ * orphans. Idempotent: a no-op (returns false) for an unknown or already-ended
+ * run. The `exit` handler still flips status, but we set it eagerly for instant
+ * UI feedback.
+ */
+export function killBackgroundShell(id: string, signal: NodeJS.Signals = 'SIGTERM'): boolean {
+  const run = runs.get(id);
+  if (!run || run.status !== 'running' || run.pid == null) return false;
+  try {
+    process.kill(-run.pid, signal); // negative pid → the whole process group
+  } catch {
+    try { process.kill(run.pid, signal); } catch { /* already gone */ }
+  }
+  run.status = 'failed';
+  run.endedAt = Date.now();
+  return true;
+}
+
+/** Kill every running background shell. Returns how many were signalled. Used by
+ *  the desktop "Stop all" path and the on-exit cleanup. */
+export function killAllBackgroundShells(signal: NodeJS.Signals = 'SIGTERM'): number {
+  let n = 0;
+  for (const run of runs.values()) {
+    if (run.status === 'running' && killBackgroundShell(run.id, signal)) n += 1;
+  }
+  return n;
+}
+
+// Detached children survive their parent's group, so reap them when the host
+// process exits cleanly — otherwise a normal quit would leave dev servers
+// running. (Signal-based teardown is left to the CLI/host's own SIGINT handling
+// so we don't fight it; a hard SIGKILL of the host is an unavoidable OS edge.)
+let exitCleanupInstalled = false;
+function ensureExitCleanup(): void {
+  if (exitCleanupInstalled) return;
+  exitCleanupInstalled = true;
+  process.once('exit', () => {
+    for (const run of runs.values()) {
+      if (run.status === 'running' && run.pid != null) {
+        try { process.kill(-run.pid, 'SIGKILL'); } catch { /* already gone */ }
+      }
+    }
+  });
 }
 
 export interface BgOutputRead {

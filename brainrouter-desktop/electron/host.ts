@@ -22,7 +22,8 @@ import { loadConfig, saveConfig, getCliKnobs, type LLMConfig } from '@kinqs/brai
 // 0.4.15 — named providers + per-sub-agent model routing (pure transforms).
 import { setProvider, removeProvider, setAgentModel } from '@kinqs/brainrouter-core/dist/provider/agentModels.js';
 import { McpClientPool } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
-import { listTranscripts, loadTranscript, readTranscriptTail, transcriptExists, transcriptSizeBytes, deleteSession, forkSession, appendTranscriptEntry, type TranscriptSummary } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
+import { listTranscripts, loadTranscript, readTranscriptTail, transcriptExists, transcriptSizeBytes, deleteSession, forkSession, appendTranscriptEntry, rewindTranscript, type TranscriptSummary } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
+import { readUsageHistory, totalUsage } from '@kinqs/brainrouter-core/dist/usage/usageHistoryStore.js';
 import { classifyForVerification } from '@kinqs/brainrouter-core/dist/agent/verificationGate.js';
 import { resolveWorkspaceGit } from '@kinqs/brainrouter-core/dist/git/workspaceGit.js';
 import { readWorkspaceEntry, isWorkspaceDirectory, listWorkspaceFiles, statWorkspaceEntry, writeWorkspaceEntry } from './fsRead.js';
@@ -40,6 +41,7 @@ import { getLatestReview, saveReview, updateReviewFinding } from '@kinqs/brainro
 import { getStateDir } from '@kinqs/brainrouter-core/dist/storage/store.js';
 import { buildRecap } from '@kinqs/brainrouter-core/dist/session/sessionRecap.js';
 import { collectRunningTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
+import { killBackgroundShell } from '@kinqs/brainrouter-core/dist/exec/backgroundShell.js';
 import { contextWindowFor } from '@kinqs/brainrouter-core/dist/context/contextWindow.js';
 // DESK-4c — the command/settings surfaces reuse the CLI's own modules so the
 // desktop never drifts from the terminal: same catalog, same preferences
@@ -61,6 +63,11 @@ import { PROVIDER_CATALOG } from '@kinqs/brainrouter-core/dist/provider/catalog.
 import { LOCAL_PLACEHOLDER_KEY } from '@kinqs/brainrouter-core/dist/provider/providers/index.js';
 import { inferModelReasoningCapabilities, registerModelReasoningCapabilities } from '@kinqs/brainrouter-core/dist/provider/models/reasoning.js';
 import { refreshLmStudioCache } from '@kinqs/brainrouter-core/dist/provider/providers/lmstudio.js';
+import { loadExtensions } from '@kinqs/brainrouter-core/dist/extension/loader.js';
+import { listExtensions } from '@kinqs/brainrouter-core/dist/extension/manifest.js';
+import { isExtensionEnabled, setExtensionEnabled } from '@kinqs/brainrouter-core/dist/extension/extensionStore.js';
+import { extensionContributionSummary } from '@kinqs/brainrouter-core/dist/extension/registry.js';
+import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace } from '@kinqs/brainrouter-core/dist/workspace/workspaceTrust.js';
 import { readPlan, formatPlan, seedPlanFromRequirement, updatePlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
 // DURABLE BACKGROUND TASKS (0.4.15 workflow gaps) — plan-revision + review work
 // runs as visible, file-backed tasks (shared with the CLI store) so progress +
@@ -481,6 +488,7 @@ async function main(): Promise<void> {
   const mcpClient = new McpClientPool();
   try {
     await mcpClient.connectAll(config.servers ?? {}, llm, { timeoutMs: 5_000 });
+    mcpClient.startReconnectSupervisor(); // WS9 — auto-reconnect dropped MCP servers in the background
   } catch { /* offline-mode: local tools only, same as the CLI */ }
 
   // DESK-3 — the approval/choice port: agent asks become interaction-request
@@ -495,6 +503,9 @@ async function main(): Promise<void> {
     sessionKey: string,
     e: { kind: 'interaction-request'; request: import('@kinqs/brainrouter-agent-protocol').InteractionRequest },
   ): void => send({ seq: ++portSeq, ts: Date.now(), sessionKey, event: e });
+  // EXTENSIONS — activate code-level extensions before the first turn (workspace
+  // tier gated on project trust). Best-effort; never blocks the host boot.
+  await loadExtensions(workspaceRoot).catch(() => undefined);
   const agent = new Agent(mcpClient, llm, {
     workspaceRoot,
     launchCwd: workspaceRoot,
@@ -1938,6 +1949,7 @@ async function main(): Promise<void> {
             return {
               id,
               online: s?.status === 'connected',
+              identity: s?.identity ?? 'unknown', // WS9 — brainrouter | third-party | unknown (brain-vs-tools grouping)
               detail: s && s.identity !== 'unknown' ? s.identity : undefined,
               type: cfg.type,
               url: cfg.type === 'http' ? cfg.url ?? null : null,
@@ -1947,6 +1959,7 @@ async function main(): Promise<void> {
               headerCount: Object.keys(cfg.headers ?? {}).length,
             };
           }),
+          activeServer: fresh.activeServer ?? null, // WS9 — which brainrouter server is the ACTIVE brain (only one)
           // §multi-provider — named providers (API KEYS MASKED, never sent to the
           // renderer) + the per-sub-agent-role model routing.
           providers: providerEntries.map(([name, p]) => ({ name, provider: p.provider, model: p.model, endpoint: p.endpoint ?? null, hasKey: !!p.apiKey })),
@@ -1959,9 +1972,26 @@ async function main(): Promise<void> {
           // §settings-completeness — the raw cli.* block so the Advanced section can
           // show current knob values (no key here; values are config, not secrets).
           cliKnobs: (cli ?? {}) as Record<string, unknown>,
+          // EXTENSIONS — discovered extensions + workspace trust, for the
+          // Settings → Extensions section (toggle/trust refresh this snapshot).
+          extensions: {
+            trusted: isWorkspaceTrusted(workspaceRoot),
+            items: listExtensions(workspaceRoot).map((e) => ({
+              name: e.name, version: e.version, source: e.source, description: e.description,
+              contributes: e.contributes, enabled: isExtensionEnabled(e.name),
+              blocked: e.source === 'workspace' && !isWorkspaceTrusted(workspaceRoot),
+            })),
+          },
         };
       },
-      'usage-breakdown': () => buildUsageBreakdown({ parent: activeAgent.sessionUsage, children: [], offload: undefined }),
+      'usage-breakdown': () => buildUsageBreakdown({ parent: activeAgent.sessionUsage, children: [], offload: undefined, prefixStability: activeAgent.getPrefixStability() }),
+      // WS10 — persistent cross-session usage history (day-bucketed), for the
+      // contributions-style heatmap + range totals in the Usage panel.
+      'usage-history': (a) => {
+        const days = typeof a.days === 'number' && a.days > 0 ? Math.floor(a.days) : 30;
+        const records = readUsageHistory(days, Date.now());
+        return { days: records, total: totalUsage(records) };
+      },
       // DESK-5r — context fill for the composer ring. `used` is the agent's
       // authoritative last prompt_tokens (the live context size, updated after
       // every LLM call within a turn). The ring fills toward the AUTO-COMPACT
@@ -1995,6 +2025,25 @@ async function main(): Promise<void> {
       // Structured per-session plan for the renderer's Plan panel + the context
       // surfaces. Read fresh from THIS session's durable plan so switching chats
       // shows the right plan (a new chat → empty) instead of the last live one.
+      // EXTENSIONS — discovered extensions + their state for the Settings panel.
+      'extensions': () => {
+        const trusted = isWorkspaceTrusted(workspaceRoot);
+        const contrib = extensionContributionSummary();
+        return {
+          workspaceRoot,
+          trusted,
+          contributions: contrib,
+          items: listExtensions(workspaceRoot).map((e) => ({
+            name: e.name,
+            version: e.version,
+            source: e.source,
+            description: e.description,
+            contributes: e.contributes,
+            enabled: isExtensionEnabled(e.name),
+            blocked: e.source === 'workspace' && !trusted,
+          })),
+        };
+      },
       'plan-state': () => {
         const p = readPlan(workspaceRoot, activeAgent.sessionKey);
         return { items: p.items, explanation: p.explanation };
@@ -2274,6 +2323,10 @@ async function main(): Promise<void> {
               // the returned startTurn; the goal-continuation query keeps it going).
               const g = setGoal(workspaceRoot, rest, sk, { force: true });
               goalStrikes.delete(sk);
+              // WS4 — record the goal text as the canonical (untagged) first user
+              // entry immediately, so the session lists in the sidebar and titles
+              // by the goal even before the (hidden, name:'goal') kickoff turn runs.
+              try { appendTranscriptEntry(workspaceRoot, sk, { role: 'user', content: g.text }); } catch { /* listing is best-effort */ }
               // Seed a visible starter plan so the Plan panel populates the
               // instant the goal is set (instead of waiting on the model to call
               // update_plan). The kickoff prompt tells the agent to replace it.
@@ -2405,6 +2458,22 @@ async function main(): Promise<void> {
       // §settings-completeness — set ONE cli.* knob (vs set-cli-json's whole-block
       // replace). `value: null` deletes the key (reverts to the default). Shared
       // with the CLI's config.json.
+      // EXTENSIONS — enable/disable an extension (re-load to apply).
+      'action:ext-set-enabled': async (args) => {
+        const name = typeof args.name === 'string' ? args.name : '';
+        if (!name) return { ok: false, error: 'No extension name.' };
+        setExtensionEnabled(name, args.enabled === true);
+        await loadExtensions(workspaceRoot).catch(() => undefined);
+        return { ok: true, name };
+      },
+      // EXTENSIONS — trust / untrust this workspace, then (re)load so workspace
+      // extensions activate or deactivate immediately.
+      'action:trust-workspace': async (args) => {
+        if (args.trusted === true) trustWorkspace(workspaceRoot);
+        else untrustWorkspace(workspaceRoot);
+        await loadExtensions(workspaceRoot).catch(() => undefined);
+        return { ok: true, trusted: isWorkspaceTrusted(workspaceRoot) };
+      },
       'action:set-cli-knob': (args) => {
         const key = typeof args.key === 'string' ? args.key : '';
         if (!key) return { ok: false, error: 'No knob key.' };
@@ -2549,9 +2618,31 @@ async function main(): Promise<void> {
         if (sess) { try { sess.proc.kill(); } catch { /* already gone */ } terms.delete(String(args.id)); }
         return { ok: true };
       },
+      // WS2 2.4 / WS6 6.3 — stop a background shell (e.g. a dev server an agent
+      // started) from the Background-tasks panel. Kills the whole process group.
+      'action:kill-bgshell': (args) => ({ ok: killBackgroundShell(String(args.id ?? '')) }),
       // Actions — host-side mutations the Settings dialog / palette trigger.
       // They ride the query channel (free-form names, result routing by id).
       'action:clear': () => { activeAgent.clearHistory(); return { ok: true }; },
+      // WS8 — rewind the conversation to the message at (epoch) `ts`. Blocked when
+      // code was generated after that point (rewindTranscript → canRewindTo); the
+      // renderer surfaces the reason as an in-app warning. On success the
+      // transcript is truncated and the agent's history reloaded from that point.
+      'action:rewind-to': (args) => {
+        const ts = typeof args.ts === 'number' ? args.ts : NaN;
+        if (!Number.isFinite(ts)) return { ok: false, reason: 'Invalid rewind point.' };
+        const entries = loadTranscript(workspaceRoot, activeAgent.sessionKey);
+        let index = -1;
+        for (let i = 0; i < entries.length; i++) {
+          const et = Date.parse(entries[i].timestamp);
+          if (Number.isFinite(et) && et <= ts) index = i;
+        }
+        if (index < 0) return { ok: false, reason: 'Could not find that point in the transcript.' };
+        const r = rewindTranscript(workspaceRoot, activeAgent.sessionKey, index);
+        if (!r.ok) return { ok: false, reason: r.reason };
+        activeAgent.loadHistory(r.kept);
+        return { ok: true, kept: r.kept.length };
+      },
       'action:compact': async () => activeAgent.compactHistory(),
       'action:set-pref': (args) => {
         const key = typeof args.key === 'string' ? args.key : '';
@@ -2580,6 +2671,18 @@ async function main(): Promise<void> {
         const id = typeof args.id === 'string' ? args.id : '';
         await mcpClient.reconnectOne(id);
         return { ok: true };
+      },
+      // WS9 — choose which BrainRouter brain is ACTIVE (only one at a time; the
+      // user can keep several configured). selectMcpServerIds already enforces
+      // single-active at connect time; this persists the choice + reconnects.
+      'action:set-active-server': async (args) => {
+        const id = typeof args.id === 'string' ? args.id : '';
+        if (!id) return { ok: false, error: 'No server id.' };
+        const fresh = loadConfig();
+        (fresh as { activeServer?: string }).activeServer = id;
+        saveConfig(fresh);
+        try { await mcpClient.reconnectOne(id); } catch { /* offline brains surface in status */ }
+        return { ok: true, activeServer: id };
       },
       // T6 — add an MCP server: write the profile to config.json (shared with the
       // CLI) and connect it now. type 'stdio' needs a command; 'http' needs a url.
@@ -2625,31 +2728,36 @@ async function main(): Promise<void> {
       // Move to group / Archive / Delete / Fork / Open). All write the shared
       // CLI stores, so the terminal sees the same titles/pins/groups.
       'action:session-meta': (args) => {
+        // WS-UX — optional `root` lets the sidebar edit a session in a NON-active
+        // workspace (parked project) without switching to it. Defaults to active.
+        const root = typeof args.root === 'string' && args.root ? args.root : workspaceRoot;
         const sessionKey = typeof args.sessionKey === 'string' ? args.sessionKey : '';
         if (!sessionKey) throw new Error('session-meta: missing sessionKey');
         const patch = (args.patch ?? {}) as Partial<SessionMeta>;
-        const meta = setSessionMeta(workspaceRoot, sessionKey, patch);
-        return { ok: true, sessionKey, meta, groups: listSessionGroups(workspaceRoot) };
+        const meta = setSessionMeta(root, sessionKey, patch);
+        return { ok: true, sessionKey, meta, groups: listSessionGroups(root) };
       },
       'action:session-delete': (args) => {
+        const root = typeof args.root === 'string' && args.root ? args.root : workspaceRoot;
         const sessionKey = typeof args.sessionKey === 'string' ? args.sessionKey : '';
         if (!sessionKey) throw new Error('session-delete: missing sessionKey');
-        const removed = deleteSession(workspaceRoot, sessionKey);
-        removeSessionMeta(workspaceRoot, sessionKey);
+        const removed = deleteSession(root, sessionKey);
+        removeSessionMeta(root, sessionKey);
         return { ok: removed, sessionKey };
       },
       'action:session-fork': (args) => {
+        const root = typeof args.root === 'string' && args.root ? args.root : workspaceRoot;
         const sessionKey = typeof args.sessionKey === 'string' ? args.sessionKey : '';
         if (!sessionKey) throw new Error('session-fork: missing sessionKey');
         // DESK-6v — upToTs (epoch ms) branches from a specific message; absent = whole-conversation fork.
         const upToTs = typeof args.upToTs === 'number' ? args.upToTs : undefined;
-        const newKey = forkSession(workspaceRoot, sessionKey, upToTs);
+        const newKey = forkSession(root, sessionKey, upToTs);
         if (newKey) {
           // Record the lineage + carry the title forward with a "(fork)" suffix so
           // it's recognizable. forkedFrom drives the sidebar fork icon and the
           // "Forked from conversation" back-link in the renderer.
-          const src = getSessionMeta(workspaceRoot, sessionKey);
-          setSessionMeta(workspaceRoot, newKey, { forkedFrom: sessionKey, ...(src.title ? { title: `${src.title} (fork)` } : {}) });
+          const src = getSessionMeta(root, sessionKey);
+          setSessionMeta(root, newKey, { forkedFrom: sessionKey, ...(src.title ? { title: `${src.title} (fork)` } : {}) });
         }
         return { ok: !!newKey, newKey };
       },

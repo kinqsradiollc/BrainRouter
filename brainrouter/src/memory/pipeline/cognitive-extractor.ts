@@ -2,6 +2,7 @@ import { EXTRACT_MEMORIES_SYSTEM_PROMPT, formatExtractionPrompt } from "../promp
 import { getMemoryTypeConfig } from "../config/memory-type-config.js";
 import type { SensoryRecord, CognitiveRecord, LLMRunner, MemorySourceKind, MemoryType, MemoryVerificationStatus } from "@kinqs/brainrouter-types";
 import { isExternalTimeoutError } from "../llm/llm-response.js";
+import { extractJsonValue } from "../util/llm-json.js";
 import crypto from "node:crypto";
 
 const ALLOWED_MEMORY_TYPES = new Set<MemoryType>([
@@ -107,6 +108,14 @@ export async function extractCognitiveMemories(params: {
     return { success: false, extractedCount: 0, records: [], sceneNames: [], errorMessage };
   }
 
+  if (process.env.BRAINROUTER_EXTRACTION_DEBUG_RAW === "on") {
+    // Diagnostic only — OFF by default. When enabled, logs the raw model body
+    // (truncated) so malformed-output root causes (e.g. a bare `[sensory_...]`
+    // identifier list) can be confirmed under load. May contain user content;
+    // do not enable in shared/production logs.
+    console.warn(`[BrainRouter][diag] extraction raw len=${rawResult.length} body=${JSON.stringify(rawResult.slice(0, 500))}`);
+  }
+
   if (!rawResult.trim()) {
     return {
       success: false,
@@ -126,7 +135,22 @@ export async function extractCognitiveMemories(params: {
     };
   }
 
-  const parsedScenes = parseExtractionResult(rawResult);
+  const outcome = parseExtractionResult(rawResult);
+  if (outcome.parseFailed) {
+    // The body was non-empty but unusable (unparseable JSON, or a non-scene
+    // shape such as a bare `[sensory_...]` identifier list). Report failure so
+    // the caller re-queues the sensory rows for the sweeper instead of marking
+    // them extracted and dropping them. Single warn — no scary stack dump.
+    console.warn(`[BrainRouter] Cognitive extraction body invalid, re-queued: ${outcome.reason}`);
+    return {
+      success: false,
+      extractedCount: 0,
+      records: [],
+      sceneNames: [],
+      errorMessage: outcome.reason ?? "Failed to parse extraction result.",
+    };
+  }
+  const parsedScenes = outcome.scenes;
   
   const records: CognitiveRecord[] = [];
   const sceneNames: string[] = [];
@@ -195,23 +219,54 @@ interface ParsedScene {
   }>;
 }
 
-function parseExtractionResult(raw: string): ParsedScene[] {
+// Outcome of parsing one extraction body. `parseFailed` distinguishes a body
+// the caller must RE-QUEUE (unparseable, or a non-scene shape like a bare
+// `[sensory_...]` identifier list) from a genuine empty result (`[]`, "nothing
+// notable") which should be accepted and marked extracted. Conflating the two
+// is what silently dropped sensory rows.
+interface ParseExtractionOutcome {
+  scenes: ParsedScene[];
+  parseFailed: boolean;
+  reason?: string;
+}
+
+// A scene must be a plain object. Reject arrays explicitly — `typeof [] ===
+// "object"`, so a bare list item like ["a","b"] would otherwise be mistaken for
+// an (empty) scene and silently accepted.
+function isSceneObject(item: unknown): item is Record<string, unknown> {
+  return !!item && typeof item === "object" && !Array.isArray(item);
+}
+
+function parseExtractionResult(raw: string): ParseExtractionOutcome {
   try {
     let cleaned = raw.trim();
     if (cleaned.startsWith("\`\`\`")) {
       cleaned = cleaned.replace(/^\`\`\`(?:json)?\s*\n?/, "").replace(/\n?\`\`\`\s*$/, "");
     }
 
-    const match = cleaned.match(/\[[\s\S]*\]/);
-    if (!match) return [];
-
-    const parsed = parseJsonWithEscapeRepair(match[0]);
-    if (!Array.isArray(parsed)) return [];
+    // Robust extraction: tolerates leaked role tokens (`[user role]`), prose,
+    // fences, trailing commas, and bad backslash escapes — see llm-json.ts.
+    const parsed = extractJsonValue(cleaned, { kind: "array" });
+    if (parsed === null) {
+      // Covers both "no array at all" and "array-like but unparseable" — the
+      // robust extractor returns null for either (see llm-json.ts).
+      return { scenes: [], parseFailed: true, reason: "No parseable JSON array found in extraction output." };
+    }
+    if (!Array.isArray(parsed)) {
+      return { scenes: [], parseFailed: true, reason: "Extraction output was not a JSON array." };
+    }
+    if (parsed.length === 0) {
+      // Genuine "nothing notable" — the model correctly returned an empty list.
+      // Accept it so trivial turns are marked extracted, not re-queued forever.
+      return { scenes: [], parseFailed: false };
+    }
 
     const scenes: ParsedScene[] = [];
+    let validSceneObjects = 0;
     for (const item of parsed) {
-      if (!item || typeof item !== "object") continue;
-      
+      if (!isSceneObject(item)) continue;
+      validSceneObjects += 1;
+
       const s = item as any;
       const memories = Array.isArray(s.memories) ? s.memories.map((m: any) => ({
         content: String(m.content || ""),
@@ -233,94 +288,21 @@ function parseExtractionResult(raw: string): ParsedScene[] {
       });
     }
 
-    return scenes;
+    if (validSceneObjects === 0) {
+      // Non-empty body that yielded zero scene objects — e.g. a bare identifier
+      // list like ["sensory_7d...", ...]. Re-queue rather than silently drop.
+      return {
+        scenes: [],
+        parseFailed: true,
+        reason: `Extraction output had ${parsed.length} item(s) but no valid scene objects (likely a bare identifier list).`,
+      };
+    }
+
+    return { scenes, parseFailed: false };
   } catch (err) {
-    console.error("[BrainRouter] Failed to parse extraction result", err);
-    return [];
+    const msg = err instanceof Error ? err.message : String(err);
+    return { scenes: [], parseFailed: true, reason: `Failed to JSON-parse extraction output: ${msg}` };
   }
-}
-
-// LLMs frequently emit JSON where string values contain backslashes that
-// aren't valid JSON escapes — Windows paths (\users), regex literals,
-// LaTeX (\section), or shell snippets. JSON.parse rejects the entire
-// payload on the first bad escape, so we'd drop an otherwise-good batch
-// of memories over one stray backslash. Once the first parse has failed,
-// preserve ambiguous backslashes literally; otherwise valid JSON escapes
-// like \b, \f, \n, \r, \t, or \uXXXX can silently corrupt paths.
-function parseJsonWithEscapeRepair(raw: string): unknown {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    try {
-      return JSON.parse(stripTrailingCommas(raw));
-    } catch (err) {
-      if (!(err instanceof SyntaxError)) throw err;
-      const escaped = escapeAmbiguousBackslashesInJsonStrings(raw);
-      try {
-        return JSON.parse(stripTrailingCommas(escaped));
-      } catch {
-        return JSON.parse(escapeAmbiguousBackslashesInJsonStrings(stripTrailingCommas(escaped)));
-      }
-    }
-  }
-}
-
-function escapeAmbiguousBackslashesInJsonStrings(input: string): string {
-  let out = "";
-  let inString = false;
-  let escape = false;
-
-  for (let i = 0; i < input.length; i++) {
-    const ch = input[i];
-    if (!inString) {
-      out += ch;
-      if (ch === '"') inString = true;
-      continue;
-    }
-
-    if (escape) {
-      out += ['"', "\\", "/"].includes(ch) ? ch : `\\${ch}`;
-      escape = false;
-      continue;
-    }
-
-    if (ch === "\\") {
-      out += "\\";
-      escape = true;
-      continue;
-    }
-
-    out += ch;
-    if (ch === '"') inString = false;
-  }
-
-  return out;
-}
-
-// Strip trailing commas before `]` or `}` while respecting string literals.
-// LLMs often emit `["a", "b",]` which JSON.parse rejects.
-function stripTrailingCommas(input: string): string {
-  let out = "";
-  let inString = false;
-  let escape = false;
-  for (let i = 0; i < input.length; i++) {
-    const ch = input[i];
-    if (inString) {
-      out += ch;
-      if (escape) { escape = false; continue; }
-      if (ch === "\\") { escape = true; continue; }
-      if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') { inString = true; out += ch; continue; }
-    if (ch === ",") {
-      let j = i + 1;
-      while (j < input.length && /\s/.test(input[j])) j++;
-      if (input[j] === "]" || input[j] === "}") continue;
-    }
-    out += ch;
-  }
-  return out;
 }
 
 function parseMemoryType(value: unknown): MemoryType {

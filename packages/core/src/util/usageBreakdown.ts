@@ -28,6 +28,8 @@ export interface UsageBreakdownInput {
   };
   children: ActorUsage[];
   offload?: { childTokensSpent: number; offloadCharsAvoided: number };
+  /** WS0 — session prefix-cache stability (cache-stable-prefix hits vs busts). */
+  prefixStability?: { stableCalls: number; bustCalls: number; ratio: number; lastLabels: string[] };
 }
 
 const fmt = (n: number): string => n.toLocaleString('en-US');
@@ -75,6 +77,22 @@ export function buildUsageBreakdown(input: UsageBreakdownInput): string[] {
 
   if (input.offload && (input.offload.childTokensSpent > 0 || input.offload.offloadCharsAvoided > 0)) {
     lines.push(`  offload     ${fmt(input.offload.offloadCharsAvoided)} chars of child output kept out of the parent window`);
+  }
+  // WS0 0.5 — cache savings: cached vs full-price input tokens. The cached count
+  // is what the provider's prefix cache SERVED (didn't re-bill at the full input
+  // rate) — the payoff of prefix stability, in provider-agnostic token terms. ($
+  // saved is deliberately omitted: it needs per-provider pricing, which an
+  // OpenAI-compatible endpoint doesn't expose and we don't hardcode.)
+  if (cacheable > 0) {
+    lines.push(`  cache       ${fmt(p.cachedTokens)} tokens served from cache · ${fmt(p.missedTokens)} full-price (${pct(p.cachedTokens, cacheable)} hit)`);
+  }
+  // WS0 — prefix-cache stability: the share of calls whose cache-stable prefix
+  // was byte-identical to the prior call (so the provider prefix-cache served
+  // it). The measurable signal a prefix-ordering change is judged against.
+  const ps = input.prefixStability;
+  if (ps && ps.stableCalls + ps.bustCalls > 0) {
+    const last = ps.bustCalls > 0 && ps.lastLabels.length ? ` · last bust: ${ps.lastLabels[0]}` : '';
+    lines.push(`  prefix      ${(ps.ratio * 100).toFixed(1)}% cache-stable across ${ps.stableCalls + ps.bustCalls} calls (${ps.bustCalls} ${ps.bustCalls === 1 ? 'bust' : 'busts'})${last}`);
   }
   return lines;
 }

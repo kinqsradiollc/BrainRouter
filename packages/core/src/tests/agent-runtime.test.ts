@@ -432,7 +432,7 @@ test('runTurn empty LLM answer after a tool call returns a useful summary (not t
   });
 });
 
-test('runTurn repeat sequence guard stops same tool with changing args', async () => {
+test('runTurn repeat-SEQUENCE guard: reading DIFFERENT files is forward progress, not a loop (args-aware)', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     for (let i = 1; i <= 5; i++) {
       fs.writeFileSync(path.join(workspace, `file-${i}.txt`), `content ${i}`);
@@ -458,7 +458,7 @@ test('runTurn repeat sequence guard stops same tool with changing args', async (
         }), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       return new Response(JSON.stringify({
-        choices: [{ message: { content: 'I stopped the read loop.' } }],
+        choices: [{ message: { content: 'Read them all.' } }],
         usage: { prompt_tokens: 40, completion_tokens: 5 },
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }) as any;
@@ -477,9 +477,68 @@ test('runTurn repeat sequence guard stops same tool with changing args', async (
         onToolStart: () => {},
         onToolEnd: (name, result) => { events.push({ name, ok: result.success, summary: result.summary }); },
       });
-      assert.equal(answer, 'I stopped the read loop.');
-      assert.equal(events.filter((e) => e.name === 'read_file' && e.ok).length, 3);
-      assert.equal(events.some((e) => e.name === 'read_file' && !e.ok && /repeat sequence guard/.test(e.summary)), true);
+      assert.equal(answer, 'Read them all.');
+      // All 5 reads of DIFFERENT files succeed — the old name-only signature
+      // wrongly capped this methodical sweep at the limit (3). With the
+      // args-aware signature each distinct path is its own batch, never a repeat.
+      assert.equal(events.filter((e) => e.name === 'read_file' && e.ok).length, 5);
+      assert.equal(events.some((e) => /repeat sequence guard/.test(e.summary)), false);
+    } finally {
+      globalThis.fetch = originalFetch;
+      _resetCliKnobsCache();
+    }
+  });
+});
+
+test('runTurn repeat-SEQUENCE guard: re-issuing the IDENTICAL call (same file, same args) still trips', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    fs.writeFileSync(path.join(workspace, 'same.txt'), 'content');
+    const originalFetch = globalThis.fetch;
+    let llmCalls = 0;
+    setCliKnobOverride({ repeatToolSequenceLimit: 3 });
+    globalThis.fetch = (async () => {
+      llmCalls++;
+      if (llmCalls <= 8) {
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: '',
+              tool_calls: [{
+                id: `call_read_${llmCalls}`,
+                type: 'function',
+                // SAME file + SAME args every time → a genuine no-progress loop.
+                function: { name: 'read_file', arguments: JSON.stringify({ path: 'same.txt' }) },
+              }],
+            },
+          }],
+          usage: { prompt_tokens: 40, completion_tokens: 5 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'Stopped.' } }],
+        usage: { prompt_tokens: 40, completion_tokens: 5 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+    try {
+      const stubMcp: any = {
+        listTools: async () => ({ tools: [] }),
+        callTool: async () => ({ content: [{ text: '{}' }] }),
+        close: async () => {},
+      };
+      const events: Array<{ name: string; ok: boolean; summary: string }> = [];
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true,
+      });
+      await agent.runTurn('read same file', {
+        onStatusUpdate: () => {},
+        onToolStart: () => {},
+        onToolEnd: (name, result) => { events.push({ name, ok: result.success, summary: result.summary }); },
+      });
+      // A guard (sequence or per-call identical-args) must break the loop.
+      assert.equal(
+        events.some((e) => e.name === 'read_file' && !e.ok && /repeat (sequence )?guard/.test(e.summary)),
+        true,
+      );
     } finally {
       globalThis.fetch = originalFetch;
       _resetCliKnobsCache();

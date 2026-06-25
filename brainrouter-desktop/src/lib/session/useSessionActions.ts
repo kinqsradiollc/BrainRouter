@@ -33,6 +33,7 @@ export interface SessionActionsCtx {
   stopping: boolean;
   interaction: InteractionRequest | null;
   renamingKey: string | null;
+  renamingRoot: string | null;
   renameDraft: string;
   workspaces: { current: string | null; recents: string[] };
   info: { sessionKey?: string; model?: string; workspaceRoot?: string; username?: string };
@@ -89,8 +90,9 @@ export interface SessionActionsCtx {
   setToast: React.Dispatch<React.SetStateAction<string>>;
   setProjSessions: React.Dispatch<React.SetStateAction<ProjectSessionsByRoot>>;
   setSettings: React.Dispatch<React.SetStateAction<{ open: boolean; section: SettingsSection }>>;
-  setSessionMenu: React.Dispatch<React.SetStateAction<{ key: string; x: number; y: number } | null>>;
+  setSessionMenu: React.Dispatch<React.SetStateAction<{ key: string; x: number; y: number; row?: SessionRow; root?: string } | null>>;
   setRenamingKey: React.Dispatch<React.SetStateAction<string | null>>;
+  setRenamingRoot: React.Dispatch<React.SetStateAction<string | null>>;
   setRenameDraft: React.Dispatch<React.SetStateAction<string>>;
   setDashBusy: React.Dispatch<React.SetStateAction<boolean>>;
   setGlobalBoards: React.Dispatch<React.SetStateAction<WorkspaceDash[] | null>>;
@@ -127,21 +129,21 @@ export interface SessionActions {
   openDashboard: () => void;
   closeSessionMenu: () => void;
   setMeta: (key: string, patch: Record<string, unknown>) => void;
-  togglePin: (s: SessionRow) => void;
-  toggleComplete: (s: SessionRow) => void;
-  toggleArchive: (s: SessionRow) => void;
-  moveToGroup: (key: string, group: string | null) => void;
-  startRename: (s: SessionRow) => void;
+  togglePin: (s: SessionRow, root?: string) => void;
+  toggleComplete: (s: SessionRow, root?: string) => void;
+  toggleArchive: (s: SessionRow, root?: string) => void;
+  moveToGroup: (key: string, group: string | null, root?: string) => void;
+  startRename: (s: SessionRow, root?: string) => void;
   commitRename: () => void;
-  forkSessionAction: (key: string, upToTs?: number) => void;
-  deleteSessionAction: (key: string) => void;
+  forkSessionAction: (key: string, upToTs?: number, root?: string) => void;
+  deleteSessionAction: (key: string, root?: string) => void;
   openExternal: (what: string) => void;
-  openSessionMenu: (e: React.MouseEvent, key: string) => void;
+  openSessionMenu: (e: React.MouseEvent, key: string, opts?: { row?: SessionRow; root?: string }) => void;
 }
 
 export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
   const {
-    q, running, stopping, interaction, renamingKey, renameDraft, workspaces, info, projSessions, recentsOpenByRoot,
+    q, running, stopping, interaction, renamingKey, renamingRoot, renameDraft, workspaces, info, projSessions, recentsOpenByRoot,
     runningSessionsRef, sessionKeyRef, activeWsRef, pendingWorkspaceRef, pendingResumeRef, pendingSessionsRef, sessionsRef,
     workspaceGenRef, expandedProjectsRef,
     liveBuf, chatRef, atBottomRef, errorsBySession, cachedSessionRowsRef,
@@ -149,7 +151,7 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
     setSessions, setSearchHits, setViewKey, setTaskView, setWorkflowView, setWorkspaces, setExpandedProjects, setTrustAsk,
     setHostUp, setGitInfo, setPrInfo, setBranches, setChangedFiles, setAllFiles, setFileView, setDiffView,
     setTokens, setContextUsage, setGateBlock, setLastPlan, setPlanHistory, setFleet, setLiveChildren, setRecentTasks, setFinishedTasks, setCommitSubjects, setToast,
-    setProjSessions, setSettings, setSessionMenu, setRenamingKey, setRenameDraft, setDashBusy, setGlobalBoards,
+    setProjSessions, setSettings, setSessionMenu, setRenamingKey, setRenamingRoot, setRenameDraft, setDashBusy, setGlobalBoards,
     pendingGitRef, ensurePanel, resetTermDock, editor, ci,
   } = ctx;
 
@@ -207,6 +209,7 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
     setSettings({ open: true, section });
     q('q-snapshot', 'config-snapshot');
     q('q-usage', 'usage-breakdown');
+    q('q-usage-hist', 'usage-history', { days: 365 }); // WS10 — cross-session contributions heatmap
   }
 
   // ---- DESK-5d — single-window project switching --------------------------
@@ -470,28 +473,32 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
   // DESK-6m — per-chat ⋮ menu actions. Each writes the shared CLI store via a
   // host action, then refreshes the sidebar list.
   const closeSessionMenu = (): void => setSessionMenu(null);
-  const setMeta = (key: string, patch: Record<string, unknown>): void => { q('q-session-meta', 'action:session-meta', { sessionKey: key, patch }); closeSessionMenu(); };
-  const togglePin = (s: SessionRow): void => setMeta(s.sessionKey, { pinned: !s.pinned });
-  const toggleComplete = (s: SessionRow): void => setMeta(s.sessionKey, { status: s.status === 'completed' ? 'active' : 'completed' });
-  const toggleArchive = (s: SessionRow): void => setMeta(s.sessionKey, { archived: !s.archived });
-  const moveToGroup = (key: string, group: string | null): void => setMeta(key, { group });
-  const startRename = (s: SessionRow): void => { setRenamingKey(s.sessionKey); setRenameDraft(s.firstUserMessage || ''); closeSessionMenu(); };
-  const commitRename = (): void => { if (renamingKey) q('q-session-meta', 'action:session-meta', { sessionKey: renamingKey, patch: { title: renameDraft.trim() } }); setRenamingKey(null); };
+  // WS-UX — optional `root` routes the write to a NON-active workspace (parked
+  // project) so the sidebar can modify a chat without switching to it. Defaults
+  // to the active workspace in the host.
+  const setMeta = (key: string, patch: Record<string, unknown>, root?: string): void => { q('q-session-meta', 'action:session-meta', { sessionKey: key, patch, ...(root ? { root } : {}) }); closeSessionMenu(); };
+  const togglePin = (s: SessionRow, root?: string): void => setMeta(s.sessionKey, { pinned: !s.pinned }, root);
+  const toggleComplete = (s: SessionRow, root?: string): void => setMeta(s.sessionKey, { status: s.status === 'completed' ? 'active' : 'completed' }, root);
+  const toggleArchive = (s: SessionRow, root?: string): void => setMeta(s.sessionKey, { archived: !s.archived }, root);
+  const moveToGroup = (key: string, group: string | null, root?: string): void => setMeta(key, { group }, root);
+  const startRename = (s: SessionRow, root?: string): void => { setRenamingKey(s.sessionKey); setRenamingRoot(root ?? null); setRenameDraft(s.firstUserMessage || ''); closeSessionMenu(); };
+  const commitRename = (): void => { if (renamingKey) q('q-session-meta', 'action:session-meta', { sessionKey: renamingKey, patch: { title: renameDraft.trim() }, ...(renamingRoot ? { root: renamingRoot } : {}) }); setRenamingKey(null); setRenamingRoot(null); };
   // DESK-6v — upToTs (a message's epoch-ms ts) branches the fork at that message;
   // omitted (the ⋮ menu) forks the whole conversation.
-  const forkSessionAction = (key: string, upToTs?: number): void => { q('q-session-fork', 'action:session-fork', { sessionKey: key, ...(upToTs != null ? { upToTs } : {}) }); closeSessionMenu(); };
-  const deleteSessionAction = (key: string): void => {
+  const forkSessionAction = (key: string, upToTs?: number, root?: string): void => { q('q-session-fork', 'action:session-fork', { sessionKey: key, ...(upToTs != null ? { upToTs } : {}), ...(root ? { root } : {}) }); closeSessionMenu(); };
+  const deleteSessionAction = (key: string, root?: string): void => {
     closeSessionMenu();
     if (!window.confirm('Delete this chat permanently? This removes its transcript from disk.')) return;
-    q('q-session-delete', 'action:session-delete', { sessionKey: key });
+    q('q-session-delete', 'action:session-delete', { sessionKey: key, ...(root ? { root } : {}) });
     if (sessionKeyRef.current === key) window.brainrouter.send({ kind: 'new-session' });
   };
   const openExternal = (what: string): void => { q('q-open-external', 'action:open-external', { what }); closeSessionMenu(); };
-  const openSessionMenu = (e: React.MouseEvent, key: string): void => {
+  const openSessionMenu = (e: React.MouseEvent, key: string, opts?: { row?: SessionRow; root?: string }): void => {
     e.preventDefault(); e.stopPropagation();
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     q('q-session-groups', 'action:session-groups'); // refresh the Move-to-group list
-    setSessionMenu({ key, x: Math.min(r.left, window.innerWidth - 250), y: r.bottom + 4 });
+    // WS-UX — row + root let the menu act on a session in a non-active workspace.
+    setSessionMenu({ key, x: Math.min(r.left, window.innerWidth - 250), y: r.bottom + 4, row: opts?.row, root: opts?.root });
   };
 
   return {

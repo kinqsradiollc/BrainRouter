@@ -417,9 +417,9 @@ CLI's LLM is the chat agent.
 | `BRAINROUTER_LLM_MODEL` | `gpt-4o-mini` | Chat model. |
 | `BRAINROUTER_EXTRACTION_MODEL` (`brainrouter/.env`) | inherits | Cheaper/faster model for cognitive extraction. |
 | `BRAINROUTER_SYNTHESIS_MODEL` (`brainrouter/.env`) | inherits | Smarter model for scene/identity distillation. |
-| `BRAINROUTER_LLM_TIMEOUT_MS` | `120000` (2 min) | Per-call LLM timeout for **cloud** endpoints. Local (`localhost`/`127.0.0.1`/`::1`) endpoints floor to `BRAINROUTER_LOCAL_LLM_MIN_TIMEOUT_MS`. Not propagated CLI → MCP. |
-| `BRAINROUTER_LOCAL_LLM_MIN_TIMEOUT_MS` | `600000` (10 min) | Timeout floor for **local** backends (LM Studio / Ollama), which generate slowly. Lower it if a stuck local call starves the extraction queue while holding an LLM slot. |
-| `BRAINROUTER_EXTRACTION_TIMEOUT_MS` | inherits `BRAINROUTER_LLM_TIMEOUT_MS` | Override the per-call timeout for cognitive-extraction calls specifically. |
+| `BRAINROUTER_LLM_TIMEOUT_MS` | _(none — no timeout)_ | Per-call LLM timeout (extraction / synthesis / judge). **Default: none — the call waits for the server** (a local LLM or a saturated backend can take minutes; aborting just drops the extraction). Set a positive ms value to bound all generative calls. Not propagated CLI → MCP. |
+| `BRAINROUTER_LOCAL_LLM_MIN_TIMEOUT_MS` | _(none)_ | **Opt-in** timeout floor for **local** backends (`localhost`/`127.0.0.1`/`::1`). Unset = no floor (wait for the server). Set e.g. `600000` to floor local-endpoint calls at 10 min. |
+| `BRAINROUTER_EXTRACTION_TIMEOUT_MS` | inherits `BRAINROUTER_LLM_TIMEOUT_MS` (none) | Override the per-call timeout for cognitive-extraction calls specifically. Default none — set a positive ms value to bound. |
 | `BRAINROUTER_LLM_MAX_CONCURRENT` | `2` | Global cap on in-flight LLM calls **from the MCP process**; `<1` = uncapped. 1 for single-GPU LM Studio, 16+ for cloud. (The CLI pool is a separate `cli.*` knob.) |
 | `BRAINROUTER_INLINE_EXTRACTION` | _(unset → deferred)_ | `on` blocks the `memory_capture_turn` reply on cognitive extraction (synchronous; debug only). Default backgrounds it so the MCP reply never waits on the LLM. |
 
@@ -431,7 +431,7 @@ CLI's LLM is the chat agent.
 | `BRAINROUTER_EMBEDDING_API_KEY` | inherits `BRAINROUTER_LLM_API_KEY` | Embedding credential. |
 | `BRAINROUTER_EMBEDDING_MODEL` | `text-embedding-3-small` | e.g. `text-embedding-3-small`, `BAAI/bge-large-en-v1.5`. |
 | `BRAINROUTER_EMBEDDING_DIMENSIONS` | `768` | Vector width. Code falls back to **768** when unset — set it to match your model (OpenAI `text-embedding-3-small` is natively 1536). Changing it rebuilds the vector table. |
-| `BRAINROUTER_EMBEDDING_TIMEOUT_MS` | `30000` | Per-call embedding timeout, clamp [1000, 120000] (0.4.15). Bounded — does NOT inherit the generative local floor, so a hung embedder can't stall recall. |
+| `BRAINROUTER_EMBEDDING_TIMEOUT_MS` | _(none — no timeout)_ | Per-call embedding timeout. **Default: none — the embed call waits for the server** rather than degrading recall to FTS-only on a slow-but-alive embedder (0.4.15). Set a positive ms value (floored to 1000) as an opt-in backstop. |
 
 ### Reranker — `brainrouter/.env`
 
@@ -441,9 +441,11 @@ CLI's LLM is the chat agent.
 | `BRAINROUTER_RERANKER_API_KEY` | _(unset)_ | Reranker credential. |
 | `BRAINROUTER_RERANKER_MODEL` | `rerank-english-v3.0` | e.g. `rerank-english-v3.0`, `BAAI/bge-reranker-v2-m3`. |
 | `BRAINROUTER_RERANKER_TOP_N` | `5` | Top-K returned by the reranker. |
-| `BRAINROUTER_RERANKER_TIMEOUT_MS` | `15000` | Per-call reranker timeout, clamp [1000, 120000] (0.4.15). Bounded — a cross-encoder is sub-second, so it must NOT inherit the generative local floor; on timeout recall falls back to RRF fast. |
-| `BRAINROUTER_RERANKER_BREAKER_THRESHOLD` | `3` | Consecutive reranker failures before the circuit opens (0.4.15). |
-| `BRAINROUTER_RERANKER_BREAKER_COOLDOWN_MS` | `30000` | While open, the reranker is skipped entirely (recall uses RRF, no network wait) for this long, then retried (0.4.15). Stops a down reranker from costing a timeout on every recall. |
+| `BRAINROUTER_RERANKER_TIMEOUT_MS` | _(none — no timeout)_ | Per-call reranker timeout. **Default: none — recall waits for the reranker** however long it takes; only a genuine failure (connection refused/reset, HTTP error, bad body) falls back to RRF. Aborting a slow-but-alive cross-encoder silently degraded every recall to RRF, which is why the bound is now opt-in. Set a positive ms value (floored to 1000, no upper clamp) as a backstop against a server that holds the socket but never replies. |
+| `BRAINROUTER_RERANKER_MAX_CONCURRENT` | `8` | In-flight cap on outbound rerank requests from this process (separate pool from the generative + embedding caps). **Default 8** — concurrent recalls are safe now that there's no per-call timeout to blow. Set `0` (or `<1`) for **unbounded** on a scalable GPU/vLLM/Cohere backend; set `1` to serialize against a strictly single-worker server. |
+| `BRAINROUTER_RERANKER_ACQUIRE_WAIT_MS` | _(none — queue for the slot)_ | Max time a recall waits for a reranker slot before shedding to RRF. **Default: none — the recall queues for the slot indefinitely, so no recall is dropped under parallel load** (it waits its turn). Set a positive ms value (floored to 1000) to **opt into** load-shedding to RRF when the slot stays busy. Shedding is NOT a failure — it never trips the breaker. |
+| `BRAINROUTER_RERANKER_BREAKER_THRESHOLD` | `0` (disabled) | Consecutive reranker failures before the circuit opens. **Default 0 = breaker OFF** — every recall attempts the cross-encoder and surfaces its own failure (RRF for that call only) instead of pre-emptively skipping the server for a cooldown. Set N>0 to enable outage-dampening. |
+| `BRAINROUTER_RERANKER_BREAKER_COOLDOWN_MS` | `30000` | While open, the reranker is skipped entirely (recall uses RRF, no network wait) for this long, then retried. Only applies when `…BREAKER_THRESHOLD` > 0. |
 | `BRAINROUTER_RERANKER_MAX_DOC_CHARS` | `1500` | Per-doc chars sent to the cross-encoder (0.4.14). Covers a whole chunk instead of the old hardcoded 700; clamped [100, 8000]. Raise for larger-context rerankers, lower for strict 512-token ones. |
 | `BRAINROUTER_RECALL_RERANK_BLEND_ALPHA` | `1.0` | MEM-BLEND (0.4.14): weight of the cross-encoder relevance vs the pre-rerank score (RRF + half-life recency), by **reciprocal rank** (cross-encoder scores are bimodal, so a raw-score blend is a no-op). `1` = pure reranker; `0` = pure retriever order. Default **1.0** (trust the reranker — on reranker-favorable queries blending in the weaker lexical order hurts); MEM-ROUTE lowers it per query type so the retriever/recency wins for reflective/synthesis. Clamp [0,1]. |
 | `BRAINROUTER_RECALL_RERANK_CHAR_BUDGET` | `30000` | MEM-RERANK2 (0.4.14): total character budget sent to the cross-encoder (latency ∝ Σ doc-chars). Budgeting by chars rather than a fixed count adapts to doc length — long-doc corpora send ~20 candidates (cuts long-session latency ~1.5×: 22.7s→14.8s, recall fully held), short-doc corpora send the whole pool (deep gold still rescued). The tail keeps its pre-score order and is appended (no recall loss). Clamp [1500, 500000]. |
@@ -472,7 +474,7 @@ no-cross-encoder diversity selector.
 | `BRAINROUTER_RELEVANCE_JUDGE_ENDPOINT` | inherits `BRAINROUTER_LLM_ENDPOINT` | OpenAI-compatible chat-completions endpoint. |
 | `BRAINROUTER_RELEVANCE_JUDGE_MODEL` | inherits `BRAINROUTER_LLM_MODEL` | Model id. A fast/cheap model is usually right. |
 | `BRAINROUTER_RELEVANCE_JUDGE_MAX_CANDIDATES` | `10` | Max candidates batched into a single judge call. |
-| `BRAINROUTER_RELEVANCE_JUDGE_TIMEOUT_MS` | `15000` | Per-call timeout. On timeout the reranker output passes through unchanged. |
+| `BRAINROUTER_RELEVANCE_JUDGE_TIMEOUT_MS` | _(none — no timeout)_ | Per-call judge timeout. **Default: none — waits for the judge LLM** (falls back to `BRAINROUTER_LLM_TIMEOUT_MS`). Set a positive ms value to bound; on a genuine failure the reranker output passes through unchanged. |
 | `BRAINROUTER_RELEVANCE_JUDGE_MIN_KEEP` | `1` | Result floor (0.4.14): if the judge approves fewer than this, backfill from the top pre-judge results so recall never collapses to 0 on long records it can't verify. `0` = old collapse-to-zero. Short-record precision is unaffected. Only applies in `filter` mode. |
 | `BRAINROUTER_RELEVANCE_JUDGE_MODE` | `reorder` | How verdicts apply (MEM-JUDGE2, 0.4.14). `reorder` (default) keeps every candidate and promotes the approved ones to the front — recall-safe (top-K gains precision, recall@k never drops below the retriever). `filter` drops the rejects (legacy, floored by `MIN_KEEP`). |
 | `BRAINROUTER_RELEVANCE_JUDGE_DOC_CHARS` | `1200` | Chars of each candidate shown to the judge (MEM-JUDGE2, 0.4.14). The old hardcoded 600 showed ~40% of a 1500-char chunk, so the judge rejected text it never saw. Clamp [200, 4000]. |
@@ -488,8 +490,8 @@ no-cross-encoder diversity selector.
 | `BRAINROUTER_IMPORT_EMBED` | `1` (on) | Embed imported records immediately (0.4.14) for instant vector recall instead of waiting on the background sweep. `0` = backfill via the sweep (faster bulk import). |
 | `BRAINROUTER_EMBED_CONCURRENCY` | `8` | Cap of the **dedicated embedding pool** (0.4.15) — bulk embedding AND the recall query-embed. Independent of `BRAINROUTER_LLM_MAX_CONCURRENT` (pre-0.4.15 the embedder shared the generative semaphore, so a recall query-embed could stall behind a slow generation). Lower it if the embedder shares a single GPU with the generative model. |
 | `BRAINROUTER_GRAPH_ENABLED` | `true` | 2-hop graph extraction + BFS expansion. |
-| `BRAINROUTER_GRAPH_TIMEOUT_MS` | `120000` | Graph-extraction LLM timeout. |
-| `BRAINROUTER_CONTRADICTION_TIMEOUT_MS` | `60000` | Contradiction-check timeout. |
+| `BRAINROUTER_GRAPH_TIMEOUT_MS` | _(superseded — no timeout)_ | Graph-extraction LLM timeout. Superseded by the no-timeout policy: extraction waits for the server. Set `BRAINROUTER_LLM_TIMEOUT_MS` to bound generative calls globally. |
+| `BRAINROUTER_CONTRADICTION_TIMEOUT_MS` | _(superseded — no timeout)_ | Contradiction-check timeout. Superseded by the no-timeout policy — see `BRAINROUTER_LLM_TIMEOUT_MS`. |
 | `BRAINROUTER_CONTRADICTION_MAX_CANDIDATES` | `3` | Records compared against each new memory for contradictions (one LLM call each). Capped 5→3 in 0.4.15 to bound per-record fan-out. Clamp ≥1. |
 | `BRAINROUTER_NEURAL_SPARK_ENABLED` | `true` | 2-hop spreading activation (firing/propagation, Hebbian LTP, LTD decay+prune). When `false`, recall ranks on the plain scored/reranked set. |
 | `BRAINROUTER_BLACKBOARD_ADMISSION` | `on` | Stage newly extracted records on a blackboard before committing to cognitive memory. `off` admits every record directly (skips staging). |

@@ -24,7 +24,8 @@ export interface ConfigSnapshot {
   integrations?: { github?: { repo: string | null; hasToken: boolean; tokenSource: string | null } };
   permissionRules?: { allow: string[]; deny: string[] };
   hooks?: Array<{ id: string; event: string; command: string; enabled: boolean; match?: string }>;
-  servers?: Array<{ id: string; online: boolean; detail?: string; type?: 'stdio' | 'http'; url?: string | null; command?: string | null; hasKey?: boolean; envCount?: number; headerCount?: number }>;
+  servers?: Array<{ id: string; online: boolean; identity?: string; detail?: string; type?: 'stdio' | 'http'; url?: string | null; command?: string | null; hasKey?: boolean; envCount?: number; headerCount?: number }>;
+  activeServer?: string | null; // WS9 — the active BrainRouter brain (only one)
   // §multi-provider — named OpenAI-compatible providers (keys masked) + per-role routing.
   providers?: Array<{ name: string; provider: string; model: string; endpoint: string | null; hasKey: boolean }>;
   defaultProviderName?: string | null;
@@ -33,6 +34,11 @@ export interface ConfigSnapshot {
   providerCatalog?: Array<{ id: string; label: string; endpoint: string; local: boolean }>;
   // §settings-completeness — the raw cli.* config block (current knob values).
   cliKnobs?: Record<string, unknown>;
+  // EXTENSIONS — discovered extensions + workspace trust state.
+  extensions?: {
+    trusted: boolean;
+    items: Array<{ name: string; version: string; source: 'builtin' | 'user' | 'workspace'; description: string; contributes: string[]; enabled: boolean; blocked: boolean }>;
+  };
 }
 
 /** Sub-agent roles that can be routed to their own provider/model. */
@@ -55,7 +61,8 @@ const NAV: Array<{ section: SettingsSection; icon: string; title: string; group:
   { section: 'memory', icon: 'brain', title: 'Memory', group: 'Settings' },
   { section: 'hooks', icon: 'link', title: 'Hooks', group: 'Settings' },
   { section: 'workflow-automation', icon: 'fork', title: 'Workflow automation', group: 'Settings' },
-  { section: 'connectors', icon: 'bolt', title: 'Connectors', group: 'Settings' },
+  { section: 'extensions', icon: 'plug', title: 'Extensions', group: 'Settings' },
+  { section: 'connectors', icon: 'bolt', title: 'MCP', group: 'Settings' },
   { section: 'integrations', icon: 'branch', title: 'Integrations', group: 'Settings' },
   { section: 'advanced', icon: 'gear', title: 'Advanced', group: 'Settings' },
   { section: 'observability', icon: 'chart', title: 'Usage', group: 'Settings' },
@@ -97,11 +104,25 @@ function KnobValue({ value, onChange }: { value: unknown; onChange: (v: unknown)
 /** §control-consistency — a PROPER editor for the raw `cli.*` config block: each
  *  knob is a typed row (toggle / number / text) with add + remove, instead of a
  *  hand-edited JSON blob. Saves the whole block via the existing set-cli-json. */
+// WS11 — knobs that have a dedicated structured editor elsewhere (Permissions,
+// Workflow automation, Models, Integrations). Never shown as raw JSON here.
+const DEDICATED_KNOBS = new Set(['permissions', 'automation', 'track', 'providers', 'agentModels']);
+// WS11 — internal/safety knobs (loop & storm guards, sandbox internals, scheduler
+// ticks, offload tuning): non-obvious to hand-edit and rarely needed, so hidden
+// from the default list. Still settable via `/config` or the raw disclosure.
+const INTERNAL_KNOBS = new Set([
+  'stormWindow', 'repeatToolSequenceLimit', 'repeatSequenceExemptTools', 'repeatLoopLimit',
+  'offloadMaxEntries', 'offloadRetentionMs', 'scheduleTickMs',
+  'sandboxReadPaths', 'sandboxWritePaths', 'sandboxNetwork', 'sandboxUnavailable', 'sandboxEnforceWhenSilent',
+]);
+
 function CliConfigEditor({ cli, onSave }: { cli: Record<string, unknown>; onSave: (next: Record<string, unknown>) => void }): React.ReactElement {
   const [draft, setDraft] = useState<Record<string, unknown>>(() => ({ ...cli }));
   React.useEffect(() => setDraft({ ...cli }), [cli]);
   const [newKey, setNewKey] = useState('');
-  const keys = Object.keys(draft).sort();
+  // WS11 — hide dedicated-editor + internal knobs from the raw list. They stay in
+  // `draft` so saving never drops them; they're just not hand-edited as raw JSON here.
+  const keys = Object.keys(draft).filter((k) => !DEDICATED_KNOBS.has(k) && !INTERNAL_KNOBS.has(k)).sort();
   const dirty = JSON.stringify(draft) !== JSON.stringify(cli);
   const setVal = (k: string, v: unknown): void => setDraft((d) => ({ ...d, [k]: v }));
   const remove = (k: string): void => setDraft((d) => { const n = { ...d }; delete n[k]; return n; });
@@ -240,6 +261,52 @@ function ComboInput({ value, options, onChange, placeholder, disabled, style }: 
   );
 }
 
+/** WS10 — cross-session usage tally for the contributions heatmap. Shape mirrors
+ *  the host `usage-history` query ({ days, total }). */
+export interface UsageHistory {
+  days: Array<{ day: string; promptTokens: number; completionTokens: number; calls: number; turns: number }>;
+  total: { promptTokens: number; completionTokens: number; calls: number; turns: number };
+}
+
+/** GitHub-contributions-style grid: one square per UTC day, columns are weeks
+ *  (aligned on weekday), brightness scales with that day's token volume. Themed
+ *  via the accent var + opacity so it tracks any palette. */
+function UsageHeatmap({ hist }: { hist: UsageHistory }): JSX.Element {
+  const days = hist.days;
+  if (!days.length) return <pre className="usage-pre">No usage recorded yet.</pre>;
+  const tok = (d: { promptTokens: number; completionTokens: number }) => d.promptTokens + d.completionTokens;
+  const max = Math.max(1, ...days.map(tok));
+  const level = (n: number) => (n <= 0 ? 0 : n >= max * 0.75 ? 4 : n >= max * 0.5 ? 3 : n >= max * 0.25 ? 2 : 1);
+  const weekday = (s: string) => new Date(`${s}T00:00:00Z`).getUTCDay(); // 0=Sun
+  const cols: Array<Array<(typeof days)[number] | null>> = [];
+  let cur: Array<(typeof days)[number] | null> = [];
+  for (let i = 0; i < weekday(days[0].day); i++) cur.push(null); // pad first column to its weekday
+  for (const d of days) {
+    cur.push(d);
+    if (cur.length === 7) { cols.push(cur); cur = []; }
+  }
+  if (cur.length) { while (cur.length < 7) cur.push(null); cols.push(cur); }
+  return (
+    <div className="usage-heatmap" style={{ display: 'flex', gap: 3, overflowX: 'auto', padding: '4px 0' }}>
+      {cols.map((col, ci) => (
+        <div key={ci} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          {col.map((d, ri) =>
+            d ? (
+              <div
+                key={ri}
+                title={`${d.day}: ${tok(d).toLocaleString()} tokens · ${d.turns} turns · ${d.calls} req`}
+                style={{ width: 11, height: 11, borderRadius: 2, background: 'var(--accent)', opacity: level(tok(d)) === 0 ? 0.07 : 0.2 + 0.2 * level(tok(d)) }}
+              />
+            ) : (
+              <div key={ri} style={{ width: 11, height: 11 }} />
+            ),
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function SettingsDialog(props: {
   open: boolean;
   section: SettingsSection;
@@ -247,6 +314,7 @@ export function SettingsDialog(props: {
   onClose: () => void;
   snapshot: ConfigSnapshot | null;
   usageLines: string[];
+  usageHistory: UsageHistory | null; // WS10 — cross-session contributions heatmap
   tokens: { promptTokens: number; completionTokens: number; turns: number } | null;
   commands: DeskCommand[];
   catalog: CommandsCatalog | null;
@@ -281,7 +349,19 @@ export function SettingsDialog(props: {
   const [provDraft, setProvDraft] = useState<{ name: string; provider: string; endpoint: string; apiKey: string; model: string }>({ name: '', provider: 'openai', endpoint: '', apiKey: '', model: '' });
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
   const [roleDraft, setRoleDraft] = useState<Record<string, { provider: string; model: string }>>({});
+  // WS10 — usage heatmap range selector (week / month / year). Re-fetches usage-history.
+  const [usageDays, setUsageDays] = useState(365);
+  // WS12 — provider configure modal + delete confirmation.
+  const [provModalOpen, setProvModalOpen] = useState(false);
+  const [confirmDeleteProvider, setConfirmDeleteProvider] = useState<string | null>(null);
   const refreshSnapshot = (): void => props.onAction('q-snapshot', 'config-snapshot');
+  /** WS12 — open the configure modal: edit an existing provider, prefill from a
+   *  catalog id, or a blank custom provider. */
+  const openProviderModal = (init?: { name?: string; provider?: string; endpoint?: string | null; model?: string; editing?: string }): void => {
+    setEditingProvider(init?.editing ?? null);
+    setProvDraft({ name: init?.name ?? '', provider: init?.provider ?? 'openai', endpoint: init?.endpoint ?? '', apiKey: '', model: init?.model ?? '' });
+    setProvModalOpen(true);
+  };
   const prefs = (snapshot?.prefs ?? {}) as Record<string, unknown>;
   const ps = (key: string, dflt: string): string => String(prefs[key] ?? dflt);
   const pb = (key: string, dflt: boolean): boolean => Boolean(prefs[key] ?? dflt);
@@ -368,52 +448,102 @@ export function SettingsDialog(props: {
                 onChange={(name) => { props.onAction('a-setdefault', 'action:set-default-provider', { name }); setTimeout(refreshSnapshot, 80); }} />
             </Row>
 
-            <div className="set-h2">Providers</div>
-            <div className="set-desc" style={{ marginBottom: 6 }}>Your named OpenAI-compatible providers. <b>Use as default</b> makes one the default above (the main model picks straight from it — no re-entering the endpoint or key); any provider can also be routed to a sub-agent role below. Keys are write-only — never echoed back.</div>
-            {(snapshot?.providers ?? []).length === 0 ? <div className="empty">None yet — add one below, then “Use as default” or route a sub-agent to it.</div> : null}
-            {(snapshot?.providers ?? []).map((p) => (
-              <Row key={p.name} title={p.name} desc={<>{p.provider} · {p.model}{p.endpoint ? ` · ${p.endpoint.replace(/^https?:\/\//, '')}` : ''}{p.hasKey ? ' · key set' : ' · no key'}</>}>
-                <button className="btn" title="Make this the default — the main model picks from it"
-                  onClick={() => { props.onAction('a-setdefault', 'action:set-default-provider', { name: p.name }); setTimeout(refreshSnapshot, 80); }}>Use as default</button>
-                <button className="btn" title="Edit this provider" onClick={() => {
-                  setEditingProvider(p.name);
-                  setProvDraft({ name: p.name, provider: p.provider, endpoint: p.endpoint ?? '', apiKey: '', model: p.model });
-                }}>Edit</button>
-                <button className="btn" title="Remove this provider" onClick={() => { props.onAction('a-rmprov', 'action:remove-provider', { name: p.name }); refreshSnapshot(); }}>Remove</button>
-              </Row>
-            ))}
-            <div className="mcp-add">
-              <div className="mcp-add-row">
-                <input className="ctl" placeholder="name (e.g. groq)" disabled={!!editingProvider} value={provDraft.name} onChange={(e) => setProvDraft((d) => ({ ...d, name: e.target.value }))} />
-                <ChoiceControl value={providerCatalog.some((c) => c.id === provDraft.provider) ? provDraft.provider : '__custom__'}
-                  options={[...providerCatalog.map((c) => ({ value: c.id, label: c.label, detail: c.local ? 'local' : undefined })), { value: '__custom__', label: 'Custom...' }]}
-                  onChange={(id) => {
-                    if (id === '__custom__') setProvDraft((d) => ({ ...d, provider: '', endpoint: '' }));
-                    else setProvDraft((d) => ({ ...d, provider: id, endpoint: providerCatalog.find((c) => c.id === id)?.endpoint ?? d.endpoint }));
-                  }} />
-              </div>
-              {providerCatalog.some((c) => c.id === provDraft.provider) ? null : (
-                <input className="ctl" placeholder="provider id (openai, groq, …)" value={provDraft.provider} onChange={(e) => setProvDraft((d) => ({ ...d, provider: e.target.value }))} />
-              )}
-              <input className="ctl" placeholder="endpoint, e.g. https://api.groq.com/openai/v1"
-                value={provDraft.endpoint || providerCatalog.find((c) => c.id === provDraft.provider)?.endpoint || ''}
-                onChange={(e) => setProvDraft((d) => ({ ...d, endpoint: e.target.value }))} />
-              <div className="mcp-add-row">
-                <input className="ctl" placeholder="default model" value={provDraft.model} onChange={(e) => setProvDraft((d) => ({ ...d, model: e.target.value }))} />
-                <input className="ctl" type="password" placeholder="API key" value={provDraft.apiKey} onChange={(e) => setProvDraft((d) => ({ ...d, apiKey: e.target.value }))} />
-              </div>
-              <div className="set-actions">
-                {editingProvider ? <button className="btn" onClick={() => { setEditingProvider(null); setProvDraft({ name: '', provider: 'openai', endpoint: '', apiKey: '', model: '' }); }}>Cancel</button> : null}
-                <button className="btn primary" disabled={!provDraft.name.trim() || !provDraft.model.trim()}
-                onClick={() => {
-                  const catalogEndpoint = providerCatalog.find((c) => c.id === provDraft.provider)?.endpoint ?? '';
-                  props.onAction('a-setprov', 'action:set-provider', { name: (editingProvider ?? provDraft.name).trim(), provider: provDraft.provider.trim(), endpoint: (provDraft.endpoint || catalogEndpoint).trim(), model: provDraft.model.trim(), apiKey: provDraft.apiKey.trim() });
-                  setEditingProvider(null);
-                  setProvDraft({ name: '', provider: 'openai', endpoint: '', apiKey: '', model: '' });
-                  refreshSnapshot();
-                }}>{editingProvider ? 'Save provider' : 'Add provider'}</button>
-              </div>
+            <div className="set-h2">Set up a provider</div>
+            <div className="set-desc" style={{ marginBottom: 8 }}>Click one — a dialog opens with the endpoint pre-filled and a live model picker; just add your key.</div>
+            <div className="provider-gallery">
+              {providerCatalog.length === 0 ? <div className="empty">No providers in the catalog.</div> : null}
+              {providerCatalog.map((c) => {
+                const configured = savedProviders.some((p) => p.provider === c.id);
+                const host = c.endpoint.replace(/^https?:\/\//, '').replace(/\/.*$/, '') || 'custom endpoint';
+                const isCustom = c.id === 'openai-compatible';
+                return (
+                  <button key={c.id} type="button" className="provider-card" title={`Set up ${c.label}`}
+                    onClick={() => openProviderModal({ name: isCustom ? '' : c.id, provider: isCustom ? '' : c.id, endpoint: isCustom ? '' : c.endpoint })}>
+                    <span className="pc-name">{c.label}{configured ? <span className="pc-tag ok" title="Already configured">✓</span> : null}</span>
+                    <span className="pc-host">{host}</span>
+                  </button>
+                );
+              })}
             </div>
+
+            <div className="set-h2">Your providers</div>
+            {savedProviders.length === 0 ? <div className="empty">None yet — pick one above, or add a custom provider.</div> : null}
+            {savedProviders.length ? (
+              <div className="provider-gallery">
+                {[...savedProviders].sort((a, b) => (a.name === defaultProvider ? -1 : b.name === defaultProvider ? 1 : 0)).map((p) => (
+                  <div key={p.name} className="provider-card saved">
+                    <span className="pc-name">{p.name}{p.name === defaultProvider ? <span className="pc-tag default">Default</span> : null}</span>
+                    <span className="pc-host">{p.model}</span>
+                    <span className="pc-actions">
+                      {p.name !== defaultProvider ? <button className="btn" title="Make this the default model" onClick={() => { props.onAction('a-setdefault', 'action:set-default-provider', { name: p.name }); setTimeout(refreshSnapshot, 80); }}>Set default</button> : null}
+                      <button className="btn" onClick={() => openProviderModal({ editing: p.name, name: p.name, provider: p.provider, endpoint: p.endpoint ?? '', model: p.model })}>Configure</button>
+                      <button className="btn danger" title="Remove this provider" onClick={() => setConfirmDeleteProvider(p.name)}>Remove</button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <button className="btn" style={{ marginTop: 4 }} onClick={() => openProviderModal()}>+ Add custom provider</button>
+
+            {provModalOpen ? (
+              <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) setProvModalOpen(false); }}>
+                <div className="dialog" style={{ width: 480 }}>
+                  <div className="dialog-title">{editingProvider ? `Configure ${editingProvider}` : 'Add a provider'}</div>
+                  <div className="mcp-add">
+                    <div className="mcp-add-row">
+                      <input className="ctl" placeholder="name (e.g. groq)" disabled={!!editingProvider} value={provDraft.name} onChange={(e) => setProvDraft((d) => ({ ...d, name: e.target.value }))} />
+                      <ChoiceControl value={providerCatalog.some((c) => c.id === provDraft.provider) ? provDraft.provider : '__custom__'}
+                        options={[...providerCatalog.map((c) => ({ value: c.id, label: c.label, detail: c.local ? 'local' : undefined })), { value: '__custom__', label: 'Custom...' }]}
+                        onChange={(id) => {
+                          if (id === '__custom__') setProvDraft((d) => ({ ...d, provider: '', endpoint: '' }));
+                          else setProvDraft((d) => ({ ...d, provider: id, endpoint: providerCatalog.find((c) => c.id === id)?.endpoint ?? d.endpoint }));
+                        }} />
+                    </div>
+                    {providerCatalog.some((c) => c.id === provDraft.provider) ? null : (
+                      <input className="ctl" placeholder="provider id (openai, groq, …)" value={provDraft.provider} onChange={(e) => setProvDraft((d) => ({ ...d, provider: e.target.value }))} />
+                    )}
+                    <input className="ctl" placeholder="endpoint, e.g. https://api.groq.com/openai/v1"
+                      value={provDraft.endpoint || providerCatalog.find((c) => c.id === provDraft.provider)?.endpoint || ''}
+                      onChange={(e) => setProvDraft((d) => ({ ...d, endpoint: e.target.value }))} />
+                    <div className="mcp-add-row">
+                      {/* WS12 — model picker driven by the endpoint's live GET /models
+                          (never a hardcoded list); free-text fallback for an offline
+                          endpoint or a model the list doesn't include. */}
+                      <input className="ctl" placeholder="default model" list="ws12-provider-models" value={provDraft.model} onChange={(e) => setProvDraft((d) => ({ ...d, model: e.target.value }))} />
+                      <datalist id="ws12-provider-models">
+                        {(editingProvider ? (props.providerModels[editingProvider] ?? []) : props.endpointModels).map((m) => <option key={m} value={m} />)}
+                      </datalist>
+                      <input className="ctl" type="password" placeholder={editingProvider ? 'API key (blank = keep current)' : 'API key'} value={provDraft.apiKey} onChange={(e) => setProvDraft((d) => ({ ...d, apiKey: e.target.value }))} />
+                    </div>
+                    <div className="set-actions">
+                      <button className="btn" onClick={() => setProvModalOpen(false)}>Cancel</button>
+                      <button className="btn primary" disabled={!provDraft.name.trim() || !provDraft.model.trim()}
+                        onClick={() => {
+                          const catalogEndpoint = providerCatalog.find((c) => c.id === provDraft.provider)?.endpoint ?? '';
+                          props.onAction('a-setprov', 'action:set-provider', { name: (editingProvider ?? provDraft.name).trim(), provider: provDraft.provider.trim(), endpoint: (provDraft.endpoint || catalogEndpoint).trim(), model: provDraft.model.trim(), apiKey: provDraft.apiKey.trim() });
+                          setProvModalOpen(false);
+                          setEditingProvider(null);
+                          setProvDraft({ name: '', provider: 'openai', endpoint: '', apiKey: '', model: '' });
+                          setTimeout(refreshSnapshot, 80);
+                        }}>{editingProvider ? 'Save provider' : 'Add provider'}</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {confirmDeleteProvider ? (
+              <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) setConfirmDeleteProvider(null); }}>
+                <div className="dialog dangerous" style={{ width: 380 }}>
+                  <div className="dialog-title">Remove “{confirmDeleteProvider}”?</div>
+                  <div className="set-desc" style={{ marginBottom: 12 }}>Deletes the saved provider and its stored key. Sub-agents routed to it fall back to the main default provider.</div>
+                  <div className="set-actions">
+                    <button className="btn" onClick={() => setConfirmDeleteProvider(null)}>Cancel</button>
+                    <button className="btn primary" onClick={() => { props.onAction('a-rmprov', 'action:remove-provider', { name: confirmDeleteProvider }); setConfirmDeleteProvider(null); setTimeout(refreshSnapshot, 80); }}>Remove</button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             <div className="set-h2">Sub-agent models</div>
             <div className="set-desc" style={{ marginBottom: 6 }}>Optional routing for spawned agents. Leave roles unset to follow the main default provider. The fallback row only applies to sub-agents without a role-specific override.</div>
@@ -554,6 +684,34 @@ export function SettingsDialog(props: {
           </>
         );
       }
+      case 'extensions': {
+        const ext = snapshot?.extensions;
+        const trusted = ext?.trusted ?? false;
+        const items = ext?.items ?? [];
+        const setExtEnabled = (name: string, enabled: boolean): void => { props.onAction('a-ext', 'action:ext-set-enabled', { name, enabled }); setTimeout(refreshSnapshot, 120); };
+        const setTrust = (v: boolean): void => { props.onAction('a-trust', 'action:trust-workspace', { trusted: v }); setTimeout(refreshSnapshot, 120); };
+        return (
+          <>
+            <div className="set-h">Extensions</div>
+            <div className="set-desc" style={{ marginBottom: 8 }}>
+              Code-level extensions register agent tools, providers, and lifecycle hooks at runtime — no fork, no republish. They live at <code>~/.config/brainrouter/extensions/</code> (user) or <code>.brainrouter/extensions/</code> (workspace), each a folder with an <code>extension.json</code> + an entry module exporting <code>activate(host)</code>.
+            </div>
+            <Row title="Trust this workspace" desc="Workspace extensions run code from THIS repo — they only activate when the workspace is trusted. Built-in and user extensions are unaffected.">
+              <Toggle on={trusted} onChange={setTrust} />
+            </Row>
+            <div className="set-h2">Discovered</div>
+            {items.length === 0 ? (
+              <Row title="No extensions found" desc="Add one under ~/.config/brainrouter/extensions/<name>/ or <workspace>/.brainrouter/extensions/<name>/." />
+            ) : items.map((e) => (
+              <Row key={e.name}
+                title={`${e.name}  ·  v${e.version} · ${e.source}`}
+                desc={<>{e.description || '—'}{e.contributes.length ? <> · contributes: {e.contributes.join(', ')}</> : null}{e.blocked ? <> · <span style={{ color: 'rgb(214,156,60)' }}>blocked — workspace not trusted</span></> : null}</>}>
+                <Toggle on={e.enabled} onChange={(v) => setExtEnabled(e.name, v)} />
+              </Row>
+            ))}
+          </>
+        );
+      }
       case 'memory': return (
         <>
           <div className="set-h">Memory</div>
@@ -584,30 +742,57 @@ export function SettingsDialog(props: {
           ))}
         </>
       );
-      case 'connectors': return (
+      case 'connectors': {
+        // WS9 — group the flat pool into Brains (BrainRouter memory servers, only
+        // one active at a time) and Tools (third-party MCP) so the single-active-
+        // brain model reads at a glance. One row renderer, shared by both groups.
+        const allServers = snapshot?.servers ?? [];
+        const brains = allServers.filter((s) => s.identity === 'brainrouter');
+        const tools = allServers.filter((s) => s.identity !== 'brainrouter');
+        const renderServer = (s: NonNullable<ConfigSnapshot['servers']>[number]) => {
+          const isBrain = s.identity === 'brainrouter';
+          const isActiveBrain = isBrain && snapshot?.activeServer === s.id;
+          const meta = [
+            s.type ?? 'unknown',
+            s.type === 'http' ? (s.url ?? '') : (s.command ?? ''),
+            s.hasKey ? 'key set' : '',
+            s.headerCount ? `${s.headerCount} headers` : '',
+            s.envCount ? `${s.envCount} env` : '',
+          ].filter(Boolean).join(' · ');
+          return (
+            <Row key={s.id} title={s.id} desc={<><span className={`dot ${s.online ? 'on' : 'off'}`} />{s.online ? 'online' : 'offline'}{isActiveBrain ? ' · active brain' : ''}{meta ? ` — ${meta}` : ''}</>}>
+              {isBrain && !isActiveBrain ? <button className="btn" title="Make this the active BrainRouter brain (only one is active at a time)" onClick={() => { props.onAction('a-setactive', 'action:set-active-server', { id: s.id }); setTimeout(refreshSnapshot, 120); }}>Use as active</button> : null}
+              <button className="btn" onClick={() => props.onAction('a-reconnect', 'action:reconnect-mcp', { id: s.id })}>Reconnect</button>
+              <button className="btn" title="Remove this server" onClick={() => props.onAction('a-rmmcp', 'action:remove-mcp', { id: s.id })}>Remove</button>
+            </Row>
+          );
+        };
+        return (
         <>
-          <div className="set-h">Connectors (MCP)</div>
-          <div className="set-desc" style={{ marginBottom: 6 }}>Server profiles from config.json — the same pool the CLI connects. Sign in once, both heads use it.</div>
-          {(snapshot?.servers ?? []).length === 0 ? <div className="empty">No MCP servers configured (offline mode — local tools only).</div> : null}
-          {(snapshot?.servers ?? []).map((s) => {
-            const meta = [
-              s.type ?? 'unknown',
-              s.type === 'http' ? (s.url ?? '') : (s.command ?? ''),
-              s.hasKey ? 'key set' : '',
-              s.headerCount ? `${s.headerCount} headers` : '',
-              s.envCount ? `${s.envCount} env` : '',
-              s.detail ?? '',
-            ].filter(Boolean).join(' · ');
-            return (
-              <Row key={s.id} title={s.id} desc={<><span className={`dot ${s.online ? 'on' : 'off'}`} />{s.online ? 'online' : 'offline'}{meta ? ` — ${meta}` : ''}</>}>
-                <button className="btn" onClick={() => props.onAction('a-reconnect', 'action:reconnect-mcp', { id: s.id })}>Reconnect</button>
-                <button className="btn" title="Remove this server" onClick={() => props.onAction('a-rmmcp', 'action:remove-mcp', { id: s.id })}>Remove</button>
-              </Row>
-            );
-          })}
+          <div className="set-h">MCP</div>
+          <div className="set-desc" style={{ marginBottom: 6 }}>MCP servers from config.json — the same pool the CLI connects. All auto-reconnect in the background.</div>
+          {allServers.length === 0 ? <div className="empty">No MCP servers configured (offline mode — local tools only).</div> : null}
+
+          {allServers.length ? (
+            <div className="mcp-group brains">
+              <div className="set-h2" style={{ marginTop: 0 }}><Icon name="brain" size={13} /> Brains</div>
+              <div className="set-desc" style={{ marginBottom: 8 }}>BrainRouter memory servers — the identity-bearing brain. Only ONE is active at a time; others stay configured and keep reconnecting.</div>
+              {brains.length ? brains.map(renderServer) : <Row title="No brain configured" desc="Add a BrainRouter MCP server below to enable memory recall." />}
+            </div>
+          ) : null}
+
+          {allServers.length ? (
+            <div className="mcp-group tools">
+              <div className="set-h2" style={{ marginTop: 0 }}><Icon name="bolt" size={13} /> Tools</div>
+              <div className="set-desc" style={{ marginBottom: 8 }}>Third-party MCP tool servers (filesystem, web, etc.) — kept separate from the brain.</div>
+              {tools.length ? tools.map(renderServer) : <Row title="No tool servers" desc="Add MCP tool servers below." />}
+            </div>
+          ) : null}
+
+          <div className="set-h2">Add a server</div>
           <div className="mcp-add">
             <div className="mcp-add-row">
-              <input className="ctl" placeholder="server id" value={mcp.id} onChange={(e) => setMcp((m) => ({ ...m, id: e.target.value }))} />
+              <input className="ctl" placeholder="name (e.g. my-tools)" value={mcp.id} onChange={(e) => setMcp((m) => ({ ...m, id: e.target.value }))} />
               <ChoiceControl value={mcp.type} options={[{ value: 'stdio', label: 'stdio' }, { value: 'http', label: 'http' }]} onChange={(v) => setMcp((m) => ({ ...m, type: v as 'stdio' | 'http' }))} />
             </div>
             {mcp.type === 'stdio'
@@ -630,7 +815,8 @@ export function SettingsDialog(props: {
               }}>Add server</button>
           </div>
         </>
-      );
+        );
+      }
       case 'integrations': return (
         <>
           <div className="set-h">Integrations</div>
@@ -690,12 +876,18 @@ export function SettingsDialog(props: {
               <Toggle on={ks('updateCheck', 'true') !== 'false' && knobs.updateCheck !== false} onChange={(v) => setKnob('updateCheck', v)} />
             </Row>
 
-            <div className="set-h2">Raw cli.* config</div>
-            <div className="set-desc" style={{ marginBottom: 8 }}>Every <code>cli</code> knob from <code>~/.config/brainrouter/config.json</code> — the catch-all for knobs without a dedicated control above.</div>
-            <CliConfigEditor
-              cli={(snapshot?.cli ?? {}) as Record<string, unknown>}
-              onSave={(next) => { props.onAction('a-cli-json', 'action:set-cli-json', { json: JSON.stringify(next) }); setTimeout(refreshSnapshot, 80); }}
-            />
+            {/* WS11 — the raw knob editor is collapsed behind a Developer
+                disclosure: most users never need it, and the JSON-valued knobs
+                (permissions, automation) + internal safety knobs are handled by
+                their own panels and hidden from this list. */}
+            <details className="set-dev-raw">
+              <summary className="set-h2" style={{ cursor: 'pointer' }}>Developer — raw <code>cli.*</code> config</summary>
+              <div className="set-desc" style={{ marginBottom: 8 }}>Advanced: edit any remaining <code>cli</code> knob directly. Permissions, workflow automation, models and integrations have their own panels above and aren't shown here; internal safety knobs are hidden. Only change these if you know what they do.</div>
+              <CliConfigEditor
+                cli={(snapshot?.cli ?? {}) as Record<string, unknown>}
+                onSave={(next) => { props.onAction('a-cli-json', 'action:set-cli-json', { json: JSON.stringify(next) }); setTimeout(refreshSnapshot, 80); }}
+              />
+            </details>
           </>
         );
       }
@@ -705,8 +897,31 @@ export function SettingsDialog(props: {
           <Row title="This session" desc={props.tokens ? `${props.tokens.turns} turns` : 'No turns yet.'}>
             <span className="dim">{props.tokens ? `${props.tokens.promptTokens.toLocaleString()} in · ${props.tokens.completionTokens.toLocaleString()} out` : '—'}</span>
           </Row>
-          <div className="set-h2">Per-actor breakdown (/usage)</div>
-          <pre className="usage-pre">{props.usageLines.length ? props.usageLines.join('\n') : 'Run a turn first — the breakdown shows parent vs child spend, cache hit rate, and offload savings.'}</pre>
+          <div className="set-h2" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span>Across all sessions ({usageDays === 7 ? 'last week' : usageDays === 30 ? 'last 30 days' : 'last year'})</span>
+            <span style={{ display: 'flex', gap: 4 }}>
+              {[{ label: 'Week', days: 7 }, { label: 'Month', days: 30 }, { label: 'Year', days: 365 }].map((r) => (
+                <button
+                  key={r.days}
+                  className={`chip${usageDays === r.days ? '' : ' dim'}`}
+                  aria-pressed={usageDays === r.days}
+                  onClick={() => { setUsageDays(r.days); props.onAction('q-usage-hist', 'usage-history', { days: r.days }); }}
+                >{r.label}</button>
+              ))}
+            </span>
+          </div>
+          {props.usageHistory ? (
+            <>
+              <Row
+                title="Activity in range"
+                desc={`${props.usageHistory.total.turns.toLocaleString()} turns · ${props.usageHistory.total.calls.toLocaleString()} requests · ${(props.usageHistory.total.promptTokens + props.usageHistory.total.completionTokens).toLocaleString()} tokens`}
+              />
+              <UsageHeatmap hist={props.usageHistory} />
+              <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>Each square is a UTC day; brighter = more tokens. This tally is durable and survives session delete.</div>
+            </>
+          ) : (
+            <pre className="usage-pre">Loading cross-session usage…</pre>
+          )}
           <Row title="Workspace" desc={<code>{snapshot?.workspaceRoot ?? '—'}</code>} />
           <Row title="Local telemetry" desc="Privacy-conscious local-only task/latency log — no network (cli.telemetry.enabled).">
             <Toggle on={telemetryOn} onChange={(v) => setKnob('telemetry', { enabled: v })} />

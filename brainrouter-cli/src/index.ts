@@ -106,6 +106,7 @@ import { McpClientPool, selectMcpServerIds } from '@kinqs/brainrouter-core/dist/
 import { formatJsonlEvent, memoryRunEvent, isOffloadTool, type RunEvent } from './runtime/jsonlEvents.js';
 import { costUsd } from './runtime/pricing.js';
 import { VERSION } from '@kinqs/brainrouter-core/dist/version.js';
+import { loadExtensions } from '@kinqs/brainrouter-core/dist/extension/loader.js';
 import { setKnownMcpServerIds } from './cli/ink/toolFormat.js';
 import type { ServerConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
 import { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
@@ -240,6 +241,7 @@ program
     // comment); the banner's per-server row is the success signal.
     const mcpClient = new McpClientPool();
     const statuses = await mcpClient.connectAll(targetServers, llm, { timeoutMs: 5_000 });
+    mcpClient.startReconnectSupervisor(); // WS9 — auto-reconnect dropped MCP servers in the background
     // Register live server ids for Ink tool-name display so multi-word
     // server names (e.g. `my_server`) don't get mis-stripped by the
     // single-underscore prefix regex.
@@ -262,6 +264,10 @@ program
       console.error(chalk.yellow(`⚠ ${failures.length} of ${statuses.length} MCP servers offline: ${failed}. Other servers connected; use /mcp to inspect.`));
     }
 
+    // EXTENSIONS — discover + activate code-level extensions (tools/providers/
+    // hooks) before the first turn. Workspace-tier extensions only load in a
+    // trusted workspace; best-effort, never blocks boot.
+    await loadExtensions(workspace.workspaceRoot, { version: VERSION }).catch(() => undefined);
     const agent = new Agent(mcpClient, llm, {
       workspaceRoot: workspace.workspaceRoot,
       launchCwd: workspace.launchCwd,
@@ -436,6 +442,7 @@ program
 
     const mcpClient = new McpClientPool();
     const statuses = await mcpClient.connectAll(targetServers, llm, { timeoutMs: 5_000 });
+    mcpClient.startReconnectSupervisor(); // WS9 — auto-reconnect dropped MCP servers in the background
     // Register live server ids for Ink tool-name display so multi-word
     // server names (e.g. `my_server`) don't get mis-stripped by the
     // single-underscore prefix regex.
