@@ -42,6 +42,9 @@ export const LOCAL_TOOL_REGISTRY: LocalToolEntry[] = [
   { name: 'glob_files', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'fetch_url', accessTier: 'read', actionKind: 'network', parallelSafe: true },
   { name: 'web_search', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'list_mcp_resources', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'list_mcp_resource_templates', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'read_mcp_resource', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'lsp', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'update_plan', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'goal_complete', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
@@ -64,6 +67,8 @@ export const LOCAL_TOOL_REGISTRY: LocalToolEntry[] = [
   { name: 'wait_agents', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'read_agent_transcript', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'close_agent', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  { name: 'send_input', accessTier: 'read', actionKind: 'child_write', parallelSafe: false },
+  { name: 'resume_agent', accessTier: 'read', actionKind: 'child_write', parallelSafe: false },
   { name: 'route_task', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   // CC-P11.2 — blocking observer; waiting mutates nothing.
   { name: 'wait_until', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },

@@ -282,6 +282,8 @@ export interface GroupedLayoutOpts {
   groupGap?: number;
   maxRowWidth?: number;
   maxCols?: number;
+  containerWidth?: number;
+  containerHeight?: number;
 }
 
 /**
@@ -296,7 +298,15 @@ export function atlasGroupedLayout(groups: AtlasGroup[], opts: GroupedLayoutOpts
   const titleH = opts.titleH ?? 34;
   const groupGap = opts.groupGap ?? 40;
   const explicitRowWidth = opts.maxRowWidth;
-  const maxCols = opts.maxCols ?? 6;
+
+  const containerW = opts.containerWidth;
+  const containerH = opts.containerHeight;
+
+  let maxCols = opts.maxCols ?? 6;
+  if (containerW) {
+    const maxPossibleCols = Math.max(1, Math.floor((containerW - 64 - (pad * 2 - gap)) / (nodeW + gap)));
+    maxCols = Math.min(maxCols, maxPossibleCols);
+  }
 
   const positions = new Map<string, { x: number; y: number }>();
   const groupOf = new Map<string, string>();
@@ -321,7 +331,16 @@ export function atlasGroupedLayout(groups: AtlasGroup[], opts: GroupedLayoutOpts
   // (but never narrower than the widest single group).
   const totalArea = sized.reduce((s, x) => s + x.width * x.height, 0);
   const widest = sized.reduce((m, x) => Math.max(m, x.width), 0);
-  const maxRowWidth = explicitRowWidth ?? Math.max(widest, Math.ceil(Math.sqrt(totalArea) * 1.6));
+
+  let maxRowWidth = explicitRowWidth;
+  if (!maxRowWidth) {
+    const aspect = containerW && containerH ? Math.max(0.7, Math.min(1.5, containerW / containerH)) : 1.6;
+    maxRowWidth = Math.max(widest, Math.ceil(Math.sqrt(totalArea) * aspect));
+  }
+  if (containerW) {
+    const maxPossible = Math.max(widest, Math.min(1080, containerW - 64));
+    maxRowWidth = Math.min(maxRowWidth, maxPossible);
+  }
 
   const boxes: AtlasGroupBox[] = [];
   let cx = 0;

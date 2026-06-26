@@ -17,9 +17,26 @@ import { TrackDetail } from './TrackDetail.js';
 const looksLikeQuery = (s: string): boolean => /[=~<>]|(\s(and|or|in)\s)/i.test(s);
 
 // External sync (GitHub) — view-side shapes mirroring core's githubSync results.
-export interface SyncConfig { repo: string | null; hasToken: boolean; tokenSource: string | null }
+export interface SyncRepoConfig { repo: string; hasToken: boolean; tokenSource: string | null; active?: boolean; label?: string | null; source?: string | null; connectorId?: string | null }
+export interface SyncConfig { repo: string | null; hasToken: boolean; tokenSource: string | null; repos?: SyncRepoConfig[]; caBundle?: string | null }
 export interface SyncRow { key?: string; issueNumber?: number; title: string; action: 'create' | 'update' }
 export interface SyncResult { direction: 'export' | 'import'; dryRun: boolean; exported?: SyncRow[]; imported?: SyncRow[]; errors: string[] }
+export interface GitTrackRemote { name: string; url: string; githubRepo?: string }
+export interface GitTrackContext {
+  ok: boolean;
+  hasGit: boolean;
+  root?: string;
+  currentBranch?: string | null;
+  remotes: GitTrackRemote[];
+  githubRepo?: string;
+  error?: string;
+}
+export interface TrackPrStatus {
+  pr: { number?: number; state?: string; title?: string; url?: string; headRefName?: string; baseRefName?: string; isDraft?: boolean; mergeable?: string; statusCheckRollup?: unknown[] } | null;
+  branch: string | null;
+  itemKey?: string;
+  error?: string;
+}
 
 export const TYPE_ICON: Record<WorkItemType, string> = {
   epic: 'spark', story: 'review', task: 'check-circle', bug: 'warn', 'sub-task': 'tasks',
@@ -43,7 +60,15 @@ export interface TrackOps {
   removeMember: (id: string) => void;
   syncMembers: () => void;
   sync: (direction: 'import' | 'export', dryRun: boolean) => void;
+  importGhIssues: () => void;
   scanCommits: () => void;
+  refreshGit: () => void;
+  startGitWork: (idOrKey: string) => void;
+  refreshPr: () => void;
+  createDraftPr: (idOrKey: string) => void;
+  mergePr: () => void;
+  submitPrReview: (decision: 'comment' | 'approve' | 'request-changes', body: string) => void;
+  fixFailingChecks: () => void;
 }
 
 export interface TrackViewProps {
@@ -53,6 +78,8 @@ export interface TrackViewProps {
   automations: AutomationRule[];
   members: ProjectMember[];
   sync: { config: SyncConfig | null; result: SyncResult | null };
+  git: GitTrackContext | null;
+  pr: TrackPrStatus | null;
   ops: TrackOps;
   /** When the left sidebar is collapsed, show a reopen button in the header. */
   railOpen?: boolean;
@@ -74,7 +101,7 @@ const TABS: Array<{ id: TrackTab; label: string; icon: string }> = [
   { id: 'sync', label: 'Sync', icon: 'refresh' },
 ];
 
-export function TrackView({ project, items, sprints, automations, members, sync, ops, railOpen = true, onOpenRail }: TrackViewProps): React.ReactElement {
+export function TrackView({ project, items, sprints, automations, members, sync, git, pr, ops, railOpen = true, onOpenRail }: TrackViewProps): React.ReactElement {
   const [tab, setTab] = useState<TrackTab>('board');
   const [filter, setFilter] = useState<Filter>({});
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -181,7 +208,7 @@ export function TrackView({ project, items, sprints, automations, members, sync,
       ) : tab === 'members' ? (
         <MembersView members={members} ops={ops} />
       ) : (
-        <SyncView sync={sync} ops={ops} />
+        <SyncView sync={sync} git={git} ops={ops} />
       )}
 
       {selected ? <TrackDetail item={selected} project={project} allItems={items} sprints={sprints} ops={ops} onClose={() => setSelectedKey(null)} /> : null}
@@ -596,29 +623,53 @@ function MembersView({ members, ops }: { members: ProjectMember[]; ops: TrackOps
   );
 }
 
-function SyncView({ sync, ops }: { sync: { config: SyncConfig | null; result: SyncResult | null }; ops: TrackOps }): React.ReactElement {
-  const [busy, setBusy] = useState<'import' | 'export' | null>(null);
+type SyncBusy = 'import' | 'export' | 'gh-import' | 'scan' | 'refresh-git' | null;
+
+function SyncView({ sync, git, ops }: { sync: { config: SyncConfig | null; result: SyncResult | null }; git: GitTrackContext | null; ops: TrackOps }): React.ReactElement {
+  const [busy, setBusy] = useState<SyncBusy>(null);
   const cfg = sync.config;
   const result = sync.result;
   const configured = !!(cfg?.repo && cfg?.hasToken);
+  const gitLabel = git?.githubRepo ?? git?.root;
+  const repos = cfg?.repos?.length ? cfg.repos : (cfg?.repo ? [{ repo: cfg.repo, hasToken: cfg.hasToken, tokenSource: cfg.tokenSource, active: true }] : []);
 
   // Clear the busy spinner whenever a fresh result lands.
-  React.useEffect(() => { setBusy(null); }, [result]);
+  React.useEffect(() => { setBusy(null); }, [result, git]);
 
   const run = (direction: 'import' | 'export', dryRun: boolean): void => {
     if (!configured) return;
     setBusy(direction);
     ops.sync(direction, dryRun);
   };
+  const runAction = (kind: Exclude<SyncBusy, null>, fn: () => void): void => {
+    setBusy(kind);
+    fn();
+    window.setTimeout(() => setBusy((cur) => (cur === kind ? null : cur)), 15_000);
+  };
+  const iconFor = (kind: Exclude<SyncBusy, null>, icon: string): React.ReactNode => busy === kind ? <span className="spinner sm" /> : <Icon name={icon} size={12} />;
   const rows = result ? (result.exported ?? result.imported ?? []) : [];
 
   return (
     <div className="track-sync">
       <div className="track-section-head">
         External sync <span className="track-col-count">GitHub Issues</span>
-        <button className="track-member-pull" title="Scan recent commit messages for BR-123 references — link each commit to its work item and advance todo → in-progress" onClick={() => ops.scanCommits()}><Icon name="commit" size={12} /> Scan commits</button>
+        <button className={`track-member-pull${busy === 'gh-import' ? ' is-busy' : ''}`} disabled={!!busy} title="Import open GitHub issues through the GitHub CLI auth store" onClick={() => runAction('gh-import', ops.importGhIssues)}>{iconFor('gh-import', 'arrow-down')} {busy === 'gh-import' ? 'Importing' : 'Import via gh'}</button>
+        <button className={`track-member-pull${busy === 'scan' ? ' is-busy' : ''}`} disabled={!!busy} title="Scan recent commit messages for BR-123 references — link each commit to its work item and advance todo → in-progress" onClick={() => runAction('scan', ops.scanCommits)}>{iconFor('scan', 'commit')} {busy === 'scan' ? 'Scanning' : 'Scan commits'}</button>
       </div>
       <p className="track-auto-intro">Two-way sync between this project and a GitHub repository's issues. Work items export as issues (type/priority become labels, done → closed); issues import back as work items. Re-runs update in place — no duplicates. <b>Scan commits</b> links commits to items by their <code className="mono">BR-123</code> reference, so the board advances even when the agent forgets to link.</p>
+
+      <div className="track-sync-config">
+        <div className="track-sync-conn">
+          <span className={`track-sync-dot${git?.hasGit ? ' on' : ''}`} />
+          {git?.hasGit ? (
+            <>
+              <span className="track-sync-repo mono">{gitLabel}</span>
+              <span className="track-sync-token ok">{git.currentBranch || 'detached'}</span>
+            </>
+          ) : <span className="track-sync-unset">{git?.error ?? 'No local Git repository detected'}</span>}
+          <button className={`track-member-pull${busy === 'refresh-git' ? ' is-busy' : ''}`} disabled={!!busy} title="Refresh local Git context" onClick={() => runAction('refresh-git', ops.refreshGit)}>{iconFor('refresh-git', 'refresh')} {busy === 'refresh-git' ? 'Refreshing' : 'Refresh Git'}</button>
+        </div>
+      </div>
 
       <div className="track-sync-config">
         <div className="track-sync-conn">
@@ -626,13 +677,26 @@ function SyncView({ sync, ops }: { sync: { config: SyncConfig | null; result: Sy
           {cfg?.repo ? (
             <>
               <span className="track-sync-repo mono">{cfg.repo}</span>
-              <span className={`track-sync-token${cfg.hasToken ? ' ok' : ''}`}>{cfg.hasToken ? `token via ${cfg.tokenSource}` : 'no token'}</span>
+              <span className={`track-sync-token${cfg.hasToken ? ' ok' : ''}`}>{cfg.hasToken ? `active · token via ${cfg.tokenSource}` : 'active · no token'}</span>
             </>
           ) : <span className="track-sync-unset">No repository configured</span>}
         </div>
+        {repos.length ? (
+          <div className="track-sync-repos">
+            {repos.map((r) => (
+              <div key={r.repo} className={`track-sync-repo-row${r.active ? ' active' : ''}`}>
+                <span className={`track-sync-dot${r.hasToken ? ' on' : ''}`} />
+                <span className="track-sync-repo mono">{r.repo}</span>
+                {r.label ? <span className="track-sync-token">{r.source === 'connector' ? `connector · ${r.label}` : r.label}</span> : null}
+                {r.active ? <span className="track-sync-token ok">active</span> : null}
+                <span className={`track-sync-token${r.hasToken ? ' ok' : ''}`}>{r.hasToken ? `token via ${r.tokenSource}` : 'no token'}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
         {!configured ? (
           <p className="track-sync-help">
-            Connect a repository in <b>Settings → Integrations → GitHub</b>, then reopen this tab.
+            Connect a repository in <b>Settings → Connectors → GitHub Track sync</b>, then reopen this tab.
           </p>
         ) : null}
       </div>
@@ -643,7 +707,7 @@ function SyncView({ sync, ops }: { sync: { config: SyncConfig | null; result: Sy
           <div className="track-sync-act-sub">Push work items to issues</div>
           <div className="track-sync-btns">
             <button className="track-sync-dry" disabled={!configured || !!busy} onClick={() => run('export', true)}>Dry-run</button>
-            <button className="track-sync-go" disabled={!configured || !!busy} onClick={() => run('export', false)}>{busy === 'export' ? 'Exporting…' : 'Export'}</button>
+            <button className={`track-sync-go${busy === 'export' ? ' is-busy' : ''}`} disabled={!configured || !!busy} onClick={() => run('export', false)}>{busy === 'export' ? <span className="spinner sm" /> : null}{busy === 'export' ? 'Exporting' : 'Export'}</button>
           </div>
         </div>
         <div className="track-sync-act">
@@ -651,7 +715,7 @@ function SyncView({ sync, ops }: { sync: { config: SyncConfig | null; result: Sy
           <div className="track-sync-act-sub">Pull issues into the board</div>
           <div className="track-sync-btns">
             <button className="track-sync-dry" disabled={!configured || !!busy} onClick={() => run('import', true)}>Dry-run</button>
-            <button className="track-sync-go" disabled={!configured || !!busy} onClick={() => run('import', false)}>{busy === 'import' ? 'Importing…' : 'Import'}</button>
+            <button className={`track-sync-go${busy === 'import' ? ' is-busy' : ''}`} disabled={!configured || !!busy} onClick={() => run('import', false)}>{busy === 'import' ? <span className="spinner sm" /> : null}{busy === 'import' ? 'Importing' : 'Import'}</button>
           </div>
         </div>
       </div>
@@ -677,6 +741,7 @@ function SyncView({ sync, ops }: { sync: { config: SyncConfig | null; result: Sy
           ) : null}
         </div>
       ) : null}
+
     </div>
   );
 }

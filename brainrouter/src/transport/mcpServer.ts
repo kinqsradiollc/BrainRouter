@@ -352,6 +352,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         case 'memory_governance_delete':
         case 'memory_audit':
         case 'memory_diagnostics':
+        case 'memory_verify_anchors':
           return await handleMemoryGovernanceTool(request.params.name, request.params.arguments, { defaultUserId });
         case 'memory_debug_trace_save':
         case 'memory_debug_trace_search':

@@ -33,6 +33,7 @@ function response(content: string): Response {
 function automationOverride(enabled: boolean, autopilot = false) {
   return {
     nextActionPlanner: 'off' as const,
+    providerRequestFormat: {},
     automation: {
       enabled,
       requirements: { enabled, autoCreateThreshold: 0.7, lowActThreshold: 0.4, autopilot },

@@ -8,7 +8,7 @@
  * Plus a node detail card, a guided tour, search spotlight, category filters,
  * a drill breadcrumb, and open-in-editor. Styling tracks the app theme.
  */
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { ReactFlow, Background, Controls, MiniMap, type Edge, type Node, type ReactFlowInstance } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type { AtlasFileCategory, AtlasGraph, AtlasNode, AtlasNodeType } from "@kinqs/brainrouter-types";
@@ -60,13 +60,33 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
   const [hoverNode, setHoverNode] = useState<string | null>(null); // hover-to-highlight connections
   const [showInsights, setShowInsights] = useState(false); // Deep Dive stats overlay
   const rfRef = useRef<ReactFlowInstance | null>(null);
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const [dimensions, setDimensions] = useState<{ width: number; height: number } | null>(null);
+  const deferredQuery = useDeferredValue(query);
 
   useEffect(() => {
     if (!graph) onLoad?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      if (!entries || entries.length === 0) return;
+      const { width, height } = entries[0].contentRect;
+      setDimensions({ width, height });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const byId = useMemo(() => new Map((graph?.nodes ?? []).map((n) => [n.id, n] as const)), [graph]);
+  const fileIdByPath = useMemo(() => {
+    const out = new Map<string, string>();
+    for (const n of graph?.nodes ?? []) if (n.filePath) out.set(n.filePath, n.id);
+    return out;
+  }, [graph]);
 
   // Review overlay: node id → git change kind (added/modified/untracked/…).
   const nodeChanges = useMemo<Map<string, AtlasChangeKind>>(
@@ -76,7 +96,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
   const changedCount = nodeChanges.size;
 
   // Files with no test covering them (ATLAS-15) — flagged in Review.
-  const uncovered = useMemo(() => (graph ? atlasUncoveredFiles(graph) : new Set<string>()), [graph]);
+  const uncovered = useMemo(() => (graph && (showDiff || selected) ? atlasUncoveredFiles(graph) : new Set<string>()), [graph, showDiff, selected]);
   const untestedChanged = useMemo(() => {
     if (!showDiff) return 0;
     let n = 0;
@@ -115,17 +135,15 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
   }, [tourStep, graph]);
 
   const searchIds = useMemo(() => {
-    if (tourStep != null || !graph || !query.trim()) return null;
+    if (tourStep != null || !graph || !deferredQuery.trim()) return null;
     const out = new Set<string>();
-    const fileByPath = new Map<string, string>();
-    for (const n of graph.nodes) if (n.filePath) fileByPath.set(n.filePath, n.id);
-    for (const id of atlasSearchMatches(graph, query)) {
+    for (const id of atlasSearchMatches(graph, deferredQuery)) {
       const n = byId.get(id);
-      if (n && (n.type === "function" || n.type === "class") && n.filePath && fileByPath.has(n.filePath)) out.add(fileByPath.get(n.filePath)!);
+      if (n && (n.type === "function" || n.type === "class") && n.filePath && fileIdByPath.has(n.filePath)) out.add(fileIdByPath.get(n.filePath)!);
       else out.add(id);
     }
     return out;
-  }, [graph, query, tourStep, byId]);
+  }, [graph, deferredQuery, tourStep, byId, fileIdByPath]);
 
   // Review overlay spotlights the changed nodes (tour/search take precedence).
   const diffIds = useMemo(() => (showDiff && changedCount ? new Set(nodeChanges.keys()) : null), [showDiff, changedCount, nodeChanges]);
@@ -142,7 +160,24 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
   // to the changed files.
   const focusIds = useMemo(() => impactIds ?? tourIds ?? searchIds ?? null, [impactIds, tourIds, searchIds]);
   // Deep Dive — whole-graph stats for the insights overlay.
-  const stats = useMemo(() => (graph ? atlasProjectStats(graph) : null), [graph]);
+  const stats = useMemo(() => (graph && showInsights ? atlasProjectStats(graph) : null), [graph, showInsights]);
+  const reviewReach = useMemo(() => (
+    showDiff && changedCount && graph ? atlasImpactOf(graph, nodeChanges.keys()).dependents.length : 0
+  ), [showDiff, changedCount, graph, nodeChanges]);
+
+  const containerW = dimensions?.width ?? 1180;
+  const containerH = dimensions?.height ?? 800;
+
+  const getDynamicMaxWidth = (cardCount: number, cardW: number, cardH: number, nodesep: number, ranksep: number) => {
+    const maxPossibleW = Math.max(cardW, Math.min(1080, containerW - 64));
+    if (cardCount <= 1) return maxPossibleW;
+    const cellW = cardW + nodesep;
+    const cellH = cardH + ranksep;
+    const totalArea = cardCount * cellW * cellH;
+    const aspect = Math.max(0.7, Math.min(1.5, containerW / Math.max(1, containerH)));
+    const targetW = Math.sqrt(totalArea * aspect);
+    return Math.max(cardW, Math.min(maxPossibleW, targetW));
+  };
 
   // ---- model per mode ----
   // Overview caps to the biggest layers + an "Other" rollup so very large repos
@@ -156,8 +191,15 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
       graph.nodes.filter((n) => (!scope || scope.has(n.id)) && (!n.category || !disabledCats.has(n.category))).map((n) => n.id),
     );
     const groups = atlasGrouping(graph, catScope);
-    return { layout: atlasGroupedLayout(groups), visible: catScope };
-  }, [graph, effMode, scope, disabledCats]);
+    return {
+      layout: atlasGroupedLayout(groups, {
+        containerWidth: containerW,
+        containerHeight: containerH,
+        maxCols: 4,
+      }),
+      visible: catScope
+    };
+  }, [graph, effMode, scope, disabledCats, containerW, containerH]);
 
   // ---- React Flow nodes/edges ----
   const base = useMemo<{ rfNodes: Node[]; rfEdges: Edge[] }>(() => {
@@ -165,12 +207,15 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
     if (effMode === "overview" && overview) {
       const cardW = 268;
       const cardH = 152;
-      const cols = Math.max(1, Math.min(4, Math.ceil(Math.sqrt(overview.cards.length))));
-      const pos = layeredLayout(overview.cards.map((c) => ({ id: c.id, width: cardW, height: cardH })), overview.edges);
+      const nodesep = 44;
+      const ranksep = 84;
+      const maxWidth = getDynamicMaxWidth(overview.cards.length, cardW, cardH, nodesep, ranksep);
+      const fallbackCols = Math.max(1, Math.floor((maxWidth + nodesep) / (cardW + nodesep)));
+      const pos = layeredLayout(overview.cards.map((c) => ({ id: c.id, width: cardW, height: cardH })), overview.edges, { maxWidth, nodesep, ranksep });
       const nodes: Node[] = overview.cards.map((c, i) => ({
         id: c.id,
         type: "atlasLayer",
-        position: pos.get(c.id) ?? { x: (i % cols) * (cardW + 44), y: Math.floor(i / cols) * (cardH + 44) },
+        position: pos.get(c.id) ?? { x: (i % fallbackCols) * (cardW + nodesep), y: Math.floor(i / fallbackCols) * (cardH + ranksep) },
         data: {
           name: c.name, description: c.description, fileCount: c.fileCount, complexity: c.complexity,
           changed: showDiff ? c.nodeIds.filter((id) => nodeChanges.has(id)).length : 0,
@@ -186,11 +231,14 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
     if (effMode === "domain" && domain) {
       const cardW = 264;
       const cardH = 168;
-      const cols = Math.max(1, Math.min(4, Math.ceil(Math.sqrt(domain.cards.length))));
-      const pos = layeredLayout(domain.cards.map((c) => ({ id: c.id, width: cardW, height: cardH })), domain.edges);
+      const nodesep = 48;
+      const ranksep = 90;
+      const maxWidth = getDynamicMaxWidth(domain.cards.length, cardW, cardH, nodesep, ranksep);
+      const fallbackCols = Math.max(1, Math.floor((maxWidth + nodesep) / (cardW + nodesep)));
+      const pos = layeredLayout(domain.cards.map((c) => ({ id: c.id, width: cardW, height: cardH })), domain.edges, { maxWidth, nodesep, ranksep });
       const nodes: Node[] = domain.cards.map((c, i) => ({
         id: c.id, type: "atlasDomain",
-        position: pos.get(c.id) ?? { x: (i % cols) * (cardW + 48), y: Math.floor(i / cols) * (cardH + 48) },
+        position: pos.get(c.id) ?? { x: (i % fallbackCols) * (cardW + nodesep), y: Math.floor(i / fallbackCols) * (cardH + ranksep) },
         data: { name: c.name, description: c.description, entities: c.entities, flows: c.flows },
         style: { width: cardW },
       }));
@@ -211,17 +259,20 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
     if (effMode === "services" && serviceModel) {
       const cardW = 230;
       const cardH = 132;
-      const cols = Math.max(1, Math.min(5, Math.ceil(Math.sqrt(serviceModel.cards.length))));
+      const nodesep = 40;
+      const ranksep = 82;
+      const maxWidth = getDynamicMaxWidth(serviceModel.cards.length, cardW, cardH, nodesep, ranksep);
+      const fallbackCols = Math.max(1, Math.floor((maxWidth + nodesep) / (cardW + nodesep)));
       const outC = new Map<string, number>();
       const inC = new Map<string, number>();
       for (const e of serviceModel.edges) {
         outC.set(e.source, (outC.get(e.source) ?? 0) + 1);
         inC.set(e.target, (inC.get(e.target) ?? 0) + 1);
       }
-      const pos = layeredLayout(serviceModel.cards.map((c) => ({ id: c.id, width: cardW, height: cardH })), serviceModel.edges);
+      const pos = layeredLayout(serviceModel.cards.map((c) => ({ id: c.id, width: cardW, height: cardH })), serviceModel.edges, { maxWidth, nodesep, ranksep });
       const nodes: Node[] = serviceModel.cards.map((c, i) => ({
         id: c.id, type: "atlasService",
-        position: pos.get(c.id) ?? { x: (i % cols) * (cardW + 40), y: Math.floor(i / cols) * (cardH + 40) },
+        position: pos.get(c.id) ?? { x: (i % fallbackCols) * (cardW + nodesep), y: Math.floor(i / fallbackCols) * (cardH + ranksep) },
         data: { module: c.module, portPath: c.portPath, portNodeId: c.portNodeId, fileCount: c.fileCount, dependsOn: outC.get(c.id) ?? 0, dependedOnBy: inC.get(c.id) ?? 0 },
         style: { width: cardW },
       }));
@@ -250,7 +301,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
         if (!n) continue;
         fileNodes.push({
           id, type: "atlasFile", parentId: layout.groupOf.get(id), extent: "parent", position: pos,
-          data: { label: n.name, color: fileColor(n), dim: spotlight ? !spotlight.has(id) : false, hot: !!spotlight?.has(id), selected: selected === id, change: showDiff ? nodeChanges.get(id) : undefined },
+          data: { label: n.name, color: fileColor(n) },
         });
       }
       const edges: Edge[] = [];
@@ -263,7 +314,28 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
       return { rfNodes: [...groupNodes, ...fileNodes], rfEdges: edges };
     }
     return { rfNodes: [], rfEdges: [] };
-  }, [graph, effMode, overview, domain, structural, serviceModel, spotlight, selected, byId, showDiff, nodeChanges]);
+  }, [graph, effMode, overview, domain, structural, serviceModel, byId, showDiff, nodeChanges, containerW, containerH]);
+
+  const decoratedBase = useMemo<{ rfNodes: Node[]; rfEdges: Edge[] }>(() => {
+    if (effMode !== "structural") return base;
+    if (!spotlight && !selected && !showDiff) return base;
+    return {
+      rfNodes: base.rfNodes.map((n) => {
+        if (n.type !== "atlasFile") return n;
+        return {
+          ...n,
+          data: {
+            ...n.data,
+            dim: spotlight ? !spotlight.has(n.id) : false,
+            hot: !!spotlight?.has(n.id),
+            selected: selected === n.id,
+            change: showDiff ? nodeChanges.get(n.id) : undefined,
+          },
+        };
+      }),
+      rfEdges: base.rfEdges,
+    };
+  }, [base, effMode, spotlight, selected, showDiff, nodeChanges]);
 
   // HOVER HIGHLIGHT — hovering a node lights up its direct connections (edges
   // brighten + animate, the node and its neighbours stay full opacity) and fades
@@ -273,17 +345,17 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
   const { rfNodes, rfEdges } = useMemo<{ rfNodes: Node[]; rfEdges: Edge[] }>(() => {
     // Pulse the tour step's nodes (CSS keyframe) so the eye follows the walk.
     const pulse = tourStep != null ? tourIds : null;
-    if (!hoverNode && (!pulse || pulse.size === 0)) return base;
+    if (!hoverNode && (!pulse || pulse.size === 0)) return decoratedBase;
 
     const connected = new Set<string>();
     if (hoverNode) {
       connected.add(hoverNode);
-      for (const e of base.rfEdges) {
+      for (const e of decoratedBase.rfEdges) {
         if (e.source === hoverNode) connected.add(e.target);
         if (e.target === hoverNode) connected.add(e.source);
       }
     }
-    const rfNodes = base.rfNodes.map((n) => {
+    const rfNodes = decoratedBase.rfNodes.map((n) => {
       let nn: Node = n;
       if (pulse?.has(n.id)) nn = { ...nn, className: [nn.className, "atlas-tour-pulse"].filter(Boolean).join(" ") };
       if (hoverNode) {
@@ -293,23 +365,25 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
       return nn;
     });
     const rfEdges = hoverNode
-      ? base.rfEdges.map((e) => {
+      ? decoratedBase.rfEdges.map((e) => {
           const on = e.source === hoverNode || e.target === hoverNode;
           return { ...e, animated: on, style: { ...e.style, opacity: on ? 1 : 0.1, strokeWidth: on ? Math.max(2, Number(e.style?.strokeWidth ?? 1) + 1) : (e.style?.strokeWidth ?? 1) } };
         })
-      : base.rfEdges;
+      : decoratedBase.rfEdges;
     return { rfNodes, rfEdges };
-  }, [base, hoverNode, tourStep, tourIds]);
+  }, [decoratedBase, hoverNode, tourStep, tourIds]);
+
+  const renderedNodeIds = useMemo(() => new Set(rfNodes.map((n) => n.id)), [rfNodes]);
 
   // fit to an INTENTIONAL focus (impact click / tour / search) only — never the
   // passive Review highlight (see focusIds). Guard on rendered nodes so we don't
   // try to fit ids that aren't in the current mode's node set.
   useEffect(() => {
     if (!rfRef.current || !focusIds || focusIds.size === 0) return;
-    const present = [...focusIds].filter((id) => rfNodes.some((n) => n.id === id));
+    const present = [...focusIds].filter((id) => renderedNodeIds.has(id));
     if (present.length === 0) return;
     rfRef.current.fitView({ nodes: present.map((id) => ({ id })), duration: 600, padding: 0.5, maxZoom: 1.2 });
-  }, [focusIds, rfNodes]);
+  }, [focusIds, renderedNodeIds]);
 
   // re-fit when the mode/drill/filter changes the whole layout — AND when the
   // graph itself first loads (cold app open) or is rebuilt/enriched. Without the
@@ -399,21 +473,18 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
         {drillName ? <><span className="atlas-crumb-sep">›</span><span className="atlas-crumb cur">{drillName}</span><span className="atlas-crumb-esc">Esc to go back</span></> : <span className="atlas-crumb-mode">{effMode === "overview" ? "Overview" : effMode === "domain" ? "Domain" : effMode === "services" ? "Services" : "Structural"}</span>}
       </div>
 
-      {showDiff && changedCount ? (() => {
-        const reach = atlasImpactOf(graph, nodeChanges.keys()).dependents.length;
-        return (
-          <div className="atlas-review-banner">
-            <span><strong>{changedCount}</strong> changed file{changedCount === 1 ? "" : "s"}{reach ? <> · affects <strong>{reach}</strong> downstream</> : null}{untestedChanged ? <> · <strong className="atlas-untested">{untestedChanged} untested</strong></> : null} — review before commit</span>
-            <span className="atlas-review-legend">
-              <span className="lg added">added</span>
-              <span className="lg modified">modified</span>
-              <span className="lg untracked">new</span>
-            </span>
-          </div>
-        );
-      })() : null}
+      {showDiff && changedCount ? (
+        <div className="atlas-review-banner">
+          <span><strong>{changedCount}</strong> changed file{changedCount === 1 ? "" : "s"}{reviewReach ? <> · affects <strong>{reviewReach}</strong> downstream</> : null}{untestedChanged ? <> · <strong className="atlas-untested">{untestedChanged} untested</strong></> : null} — review before commit</span>
+          <span className="atlas-review-legend">
+            <span className="lg added">added</span>
+            <span className="lg modified">modified</span>
+            <span className="lg untracked">new</span>
+          </span>
+        </div>
+      ) : null}
 
-      <div className="atlas-canvas">
+      <div className="atlas-canvas" ref={canvasRef}>
         <div className="atlas-rf">
         <ReactFlow
           nodes={rfNodes}

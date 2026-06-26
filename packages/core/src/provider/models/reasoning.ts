@@ -180,9 +180,11 @@ function collectEffortVocab(
 
 /**
  * True iff the model's advertised vocabulary is a binary on/off toggle with NO
- * graded tier — i.e. it accepts `reasoning: 'on' | 'off'` but rejects a graded
- * `reasoning_effort: 'low'|'high'`. `google/gemma-*-qat` on LM Studio is the
- * canonical case. Capability-driven (from /models); no model names hardcoded.
+ * graded tier. This is capability evidence only: the request resolver still
+ * checks the active provider before putting `on` on the wire, because the same
+ * model id can be served by a provider whose API accepts only graded literals
+ * like `low|high|xhigh`. `google/gemma-*-qat` on LM Studio is the canonical
+ * binary case. Capability-driven (from /models); no model names hardcoded.
  */
 export function isBinaryReasoningModel(model: string | undefined): boolean {
   const efforts = lookupModelReasoningCapabilities(model)?.efforts;

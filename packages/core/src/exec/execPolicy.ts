@@ -75,6 +75,8 @@ export function actionKindForTool(name: string): ActionKind {
     case 'task_agent':
     case 'delegate_agent':
     case 'run_workflow':
+    case 'send_input':
+    case 'resume_agent':
       return 'child_write';
     case 'fetch_url':
       return 'network';
@@ -93,6 +95,8 @@ const CHILD_SPAWN_TOOLS = new Set([
   'task_agent',
   'delegate_agent',
   'run_workflow',
+  'send_input',
+  'resume_agent',
 ]);
 
 /** True for a tool that launches a child agent / worker. */

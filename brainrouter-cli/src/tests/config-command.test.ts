@@ -2,10 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   applyAutomationKnob,
+  applyProviderRequestFormat,
   buildScrubbedConfigJson,
   listKnownConfigKeys,
+  listProviderRequestFormatRows,
   parseConfigArgs,
   readAutomationKnob,
+  WIRE_FORMAT_OPTIONS,
 } from '../cli/commands/config.js';
 
 const emptyConfig = (): any => ({ activeServer: '', servers: {} });
@@ -53,6 +56,34 @@ test('listKnownConfigKeys exposes the workflow-automation keys', () => {
   for (const required of ['automation', 'automation.requirements', 'automation.sync', 'automation.sprints']) {
     assert.ok(keys.includes(required), `/config should support ${required}`);
   }
+});
+
+test('listProviderRequestFormatRows keys saved providers by runtime provider id', () => {
+  const cfg = emptyConfig();
+  cfg.providers = {
+    prod: { provider: 'OpenAI', model: 'gpt-4.1', apiKey: 'x' },
+    local: { provider: 'lmstudio', model: 'gpt-4.1', apiKey: '' },
+    anotherOpenAI: { provider: 'openai', model: 'gpt-4.1-mini', apiKey: 'x' },
+  };
+  const rows = listProviderRequestFormatRows(cfg);
+  const openaiRows = rows.filter((r) => r.id === 'openai');
+  assert.equal(openaiRows.length, 1);
+  assert.deepEqual(openaiRows[0].savedNames, ['prod', 'anotherOpenAI']);
+  assert.ok(rows.some((r) => r.id === 'lmstudio' && r.savedNames.includes('local')));
+});
+
+test('applyProviderRequestFormat persists lowercase overrides and default clears only that key', () => {
+  const cfg = emptyConfig();
+  cfg.cli = { providerRequestFormat: { openrouter: 'chat-completions' } };
+  assert.deepEqual(WIRE_FORMAT_OPTIONS, ['default', 'chat-completions', 'responses']);
+  assert.deepEqual(applyProviderRequestFormat(cfg, 'OpenAI', 'responses'), { ok: true });
+  assert.deepEqual(cfg.cli.providerRequestFormat, { openrouter: 'chat-completions', openai: 'responses' });
+
+  assert.deepEqual(applyProviderRequestFormat(cfg, 'openai', 'default'), { ok: true });
+  assert.deepEqual(cfg.cli.providerRequestFormat, { openrouter: 'chat-completions' });
+
+  assert.deepEqual(applyProviderRequestFormat(cfg, 'openrouter', 'default'), { ok: true });
+  assert.equal(cfg.cli.providerRequestFormat, undefined);
 });
 
 test('applyAutomationKnob: master toggle on/off, rejects garbage', () => {

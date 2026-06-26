@@ -11,7 +11,7 @@ import {
   RequirementsPanel, AnnotationsPanel, ArtifactsPanel, AtlasPanel, TasksPanel, TerminalPanel, ToolsPanel, ContextPanel, PANEL_DEFS, type PanelId, type SearchHit, type ReviewFindingView,
 } from './panels/index.js';
 import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph, TrackProject, WorkItem, WorkItemType, Sprint, SprintState, AutomationRule, AutomationTrigger, AutomationAction, ProjectMember, ProjectRole } from '@kinqs/brainrouter-types';
-import { TrackView, type SyncConfig, type SyncResult } from './track/TrackView.js';
+import { TrackView, type GitTrackContext, type SyncConfig, type SyncResult, type TrackPrStatus } from './track/TrackView.js';
 import type { ScheduleRecordView } from './lib/schedule/scheduleView.js';
 import { SESSION_BASE } from './lib/session/sessionPagination.js';
 import { mergeOptimistic } from './lib/session/sessionOrder.js';
@@ -134,7 +134,7 @@ export function App(): React.ReactElement {
   const [mode, setMode] = useState<'chat' | 'track' | 'code'>('code');
   // Track mode data (the per-workspace project + its work items), fed by the
   // host `track-*` queries. Mutations re-fetch the item list.
-  const [track, setTrack] = useState<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; automations: AutomationRule[]; members: ProjectMember[]; sync: { config: SyncConfig | null; result: SyncResult | null } }>({ project: null, items: [], sprints: [], automations: [], members: [], sync: { config: null, result: null } });
+  const [track, setTrack] = useState<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; automations: AutomationRule[]; members: ProjectMember[]; sync: { config: SyncConfig | null; result: SyncResult | null }; git: GitTrackContext | null; pr: TrackPrStatus | null }>({ project: null, items: [], sprints: [], automations: [], members: [], sync: { config: null, result: null }, git: null, pr: null });
   const [lastPlan, setLastPlan] = useState<{ items: PlanItem[]; explanation?: string } | null>(null);
   const [goalState, setGoalState] = useState<GoalRecord | null>(null);
   const [planHistory, setPlanHistory] = useState<PlanDecisionView[]>([]);
@@ -252,6 +252,8 @@ export function App(): React.ReactElement {
     q('q-track-automations', 'track-automations');
     q('q-track-members', 'track-members');
     q('q-track-sync-config', 'track-sync-config');
+    q('q-track-git-context', 'track-git-context');
+    q('q-track-pr-status', 'track-pr-status');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, info.workspaceRoot]);
 
@@ -286,7 +288,15 @@ export function App(): React.ReactElement {
       // A real run can create/modify items — refresh the board shortly after.
       if (!dryRun) window.setTimeout(() => { q('q-track-items', 'track-items'); }, 600);
     },
+    importGhIssues: () => q('q-track-gh-issues', 'track-gh-issues-import', {}),
     scanCommits: () => q('q-track-scan', 'track-scan-commits'),
+    refreshGit: () => q('q-track-git-context', 'track-git-context'),
+    startGitWork: (idOrKey: string) => q('q-track-start-work', 'track-start-work', { idOrKey }),
+    refreshPr: () => q('q-track-pr-status', 'track-pr-status'),
+    createDraftPr: (idOrKey: string) => q('q-track-create-pr', 'track-create-pr', { idOrKey }),
+    mergePr: () => q('q-track-merge-pr', 'track-merge-pr', {}),
+    submitPrReview: (decision: 'comment' | 'approve' | 'request-changes', body: string) => q('q-track-submit-pr-review', 'track-submit-pr-review', { decision, body }),
+    fixFailingChecks: () => q('q-track-fix-checks', 'track-fix-failing-checks', {}),
   };
 
   // T4 — git/diff/review STATE + the Changes-tab git action (runGit). Every symbol
@@ -939,7 +949,7 @@ export function App(): React.ReactElement {
             }} />
         </Suspense>
       );
-      case 'ci': return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading…</div>}><CIPanel ci={ci} onOpenExternal={openUrl} /></Suspense>;
+      case 'ci': return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading…</div>}><CIPanel ci={ci} onOpenExternal={openUrl} trackPr={track.pr} trackOps={trackOps} /></Suspense>;
       case 'diff': return (
         <DiffPanel gitInfo={gitInfo} changed={changedFiles} diff={diffView}
           scrollToLine={diffView && diffTarget && diffView.path === diffTarget.path ? diffTarget.line : undefined}
@@ -1105,7 +1115,17 @@ export function App(): React.ReactElement {
 
       <div className="main">
         {mode === 'track' ? (
-          <TrackView project={track.project} items={track.items} sprints={track.sprints} automations={track.automations} members={track.members} sync={track.sync} ops={trackOps} railOpen={railOpen} onOpenRail={() => setRailOpen(true)} />
+          <div className="workrow track-workrow" ref={workrowRef}>
+            <TrackView project={track.project} items={track.items} sprints={track.sprints} automations={track.automations} members={track.members} sync={track.sync} git={track.git} pr={track.pr} ops={trackOps} railOpen={railOpen} onOpenRail={() => setRailOpen(true)} />
+            <ViewsRail sideAnim={sideAnim} sideWidth={sideWidth} setSideWidth={setSideWidth} sideFullScreen={sideFullScreen}
+              setSidePanelOpen={setSidePanelOpen}
+              activeSideTab={activeSideTab} sideTabs={sideTabs} setActiveSideTab={setActiveSideTab} closeSideTab={closeSideTab} reorderSideTab={reorderSideTab}
+              tabTitle={tabTitle}
+              renderPanelBody={renderPanelBody} openSideView={openSideView} lastPlan={lastPlan} changedFiles={changedFiles}
+              backgroundTasks={backgroundTasks} fleet={fleet} toolLog={toolLog} schedules={schedules}
+              worktrees={worktrees} review={review} requirements={requirements} annotations={annotations} artifacts={artifacts} ci={ci}
+              envRoom={false} />
+          </div>
         ) : (<>
         <div className="workrow" ref={workrowRef}>
           <ChatThread

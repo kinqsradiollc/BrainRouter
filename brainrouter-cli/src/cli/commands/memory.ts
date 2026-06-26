@@ -33,7 +33,7 @@ export async function tryHandleMemoryCommand(ctx: CommandContext): Promise<boole
         const apply = args.includes('--apply');
         await printMcpCall(
           mcpClient,
-          'memory_verify',
+          'memory_verify_anchors',
           { apply },
           apply ? 'Memory verify — applying (archiving confirmed-dead anchors)' : 'Memory verify — read-only sweep',
         );

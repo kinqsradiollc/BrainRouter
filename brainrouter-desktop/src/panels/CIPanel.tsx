@@ -4,31 +4,95 @@
  * Pure UI over the useCi hook. CI status here is GitHub's truth — clearly labeled,
  * never conflated with the app's local "tests passed".
  */
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Icon } from '../icons.js';
 import { Button } from '../components/Button.js';
 import { summarizeChecks, ciStatusLabel, checkClass, runClass, ciDuration, type CheckRow } from '../lib/ci/ciFormat.js';
 import type { CiApi } from '../lib/ci/useCi.js';
+import { summarizePrReadiness } from '../lib/track/prReadiness.js';
+import type { TrackPrStatus } from '../track/TrackView.js';
 
-export function CIPanel({ ci, onOpenExternal }: { ci: CiApi; onOpenExternal: (url: string) => void }): React.ReactElement {
+type PrBusy = 'refresh' | 'review' | 'fix-checks' | 'merge' | null;
+type TrackPrOps = {
+  refreshPr: () => void;
+  mergePr: () => void;
+  submitPrReview: (decision: 'comment' | 'approve' | 'request-changes', body: string) => void;
+  fixFailingChecks: () => void;
+};
+
+export function CIPanel({ ci, onOpenExternal, trackPr, trackOps }: {
+  ci: CiApi;
+  onOpenExternal: (url: string) => void;
+  trackPr?: TrackPrStatus | null;
+  trackOps?: TrackPrOps;
+}): React.ReactElement {
   const summary = summarizeChecks(ci.checks);
+  const [runBusy, setRunBusy] = useState<{ kind: 'log' | 'rerun' | null; id: number | null }>({ kind: null, id: null });
+  const [prBusy, setPrBusy] = useState<PrBusy>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewDecision, setReviewDecision] = useState<'comment' | 'approve' | 'request-changes'>('comment');
+  const [reviewBody, setReviewBody] = useState('');
   // Initial load when the panel opens (once); manual Refresh + Watch handle the rest.
   const refreshRef = useRef(ci.refresh); refreshRef.current = ci.refresh;
-  useEffect(() => { refreshRef.current(); }, []);
+  const trackRefreshRef = useRef(trackOps?.refreshPr); trackRefreshRef.current = trackOps?.refreshPr;
+  useEffect(() => { refreshRef.current(); trackRefreshRef.current?.(); }, []);
+  useEffect(() => { setRunBusy({ kind: null, id: null }); }, [ci.runLog, ci.runs]);
+  useEffect(() => { setPrBusy(null); }, [trackPr]);
+  const runAction = (kind: 'log' | 'rerun', id: number, fn: () => void): void => {
+    setRunBusy({ kind, id });
+    fn();
+    window.setTimeout(() => setRunBusy((cur) => (cur.kind === kind && cur.id === id ? { kind: null, id: null } : cur)), 12_000);
+  };
+  const runPrAction = (kind: Exclude<PrBusy, null>, fn: () => void): void => {
+    setPrBusy(kind);
+    fn();
+    window.setTimeout(() => setPrBusy((cur) => (cur === kind ? null : cur)), 15_000);
+  };
+  const refreshAll = (): void => runPrAction('refresh', () => { ci.refresh(); trackOps?.refreshPr(); });
+  const submitReview = (): void => {
+    if (!trackPr?.pr || !trackOps) return;
+    runPrAction('review', () => {
+      trackOps.submitPrReview(reviewDecision, reviewBody);
+      setReviewOpen(false);
+      setReviewBody('');
+      setReviewDecision('comment');
+    });
+  };
+  const pr = trackPr?.pr ?? ci.pr;
+  const readiness = summarizePrReadiness(trackPr?.pr ?? ci.pr);
+  const canUsePrOps = !!trackOps && !!trackPr?.pr;
+  const errors = [...new Set([ci.error, trackPr?.error].filter((e): e is string => !!e))];
   return (
     <div className="scroll ci-panel">
       <div className="ci-bar">
-        <button className="btn primary" disabled={ci.loading} onClick={ci.refresh}>{ci.loading ? 'Refreshing…' : 'Refresh'}</button>
-        {ci.pr?.url ? <Button onClick={() => onOpenExternal(ci.pr!.url!)}>Open on GitHub</Button> : null}
+        <button className={`btn primary${ci.loading || prBusy === 'refresh' ? ' is-busy' : ''}`} disabled={ci.loading || !!prBusy} onClick={refreshAll}>{ci.loading || prBusy === 'refresh' ? <span className="spinner sm" /> : null}{ci.loading || prBusy === 'refresh' ? 'Refreshing' : 'Refresh'}</button>
+        {pr?.url ? <Button onClick={() => onOpenExternal(pr.url!)}>Open on GitHub</Button> : null}
       </div>
+      {errors.map((error) => <div key={error} className="ci-error"><Icon name="warn" size={13} /> {error}</div>)}
 
-      {ci.pr ? (
+      {pr ? (
         <div className="ci-pr">
-          <span className={`ci-pr-state ${String(ci.pr.state ?? '').toLowerCase()}`}>{ci.pr.isDraft ? 'draft' : (ci.pr.state ?? '').toLowerCase()}</span>
-          <span className="ci-pr-title" title={ci.pr.title}>#{ci.pr.number} {ci.pr.title}</span>
-          <span className="ci-pr-branch">{ci.pr.headRefName} → {ci.pr.baseRefName}</span>
+          <span className={`ci-pr-state ${String(pr.state ?? '').toLowerCase()}`}>{pr.isDraft ? 'draft' : (pr.state ?? '').toLowerCase()}</span>
+          <span className="ci-pr-title" title={pr.title}>#{pr.number} {pr.title}</span>
+          <span className="ci-pr-branch">{pr.headRefName} → {pr.baseRefName}</span>
         </div>
       ) : <div className="empty">No pull request for this branch. <span className="dim">(needs `gh` authed + an open PR)</span></div>}
+
+      <div className={`track-pr-ready ${readiness.state}`}>
+        <div className="track-pr-ready-head">
+          <span className="track-pr-ready-title">Merge readiness</span>
+          <span className="track-pr-ready-counts">{readiness.passing} pass · {readiness.failing} fail · {readiness.pending} pending</span>
+        </div>
+        <div className="track-pr-ready-notes">
+          {readiness.notes.map((note, i) => <span key={i}>{note}</span>)}
+        </div>
+      </div>
+
+      <div className="ci-pr-actions">
+        <Button className={prBusy === 'review' ? 'is-busy' : ''} disabled={!canUsePrOps || !!prBusy} onClick={() => setReviewOpen(true)}>{prBusy === 'review' ? <span className="spinner sm" /> : <Icon name="review" size={12} />}Review</Button>
+        <Button className={prBusy === 'fix-checks' ? 'is-busy' : ''} disabled={!canUsePrOps || !!prBusy || readiness.failing === 0} onClick={() => runPrAction('fix-checks', () => trackOps!.fixFailingChecks())}>{prBusy === 'fix-checks' ? <span className="spinner sm" /> : <Icon name="bolt" size={12} />}{prBusy === 'fix-checks' ? 'Starting' : 'Fix checks'}</Button>
+        <Button className={prBusy === 'merge' ? 'is-busy' : ''} disabled={!canUsePrOps || !!prBusy || trackPr?.pr?.isDraft} onClick={() => runPrAction('merge', () => trackOps!.mergePr())}>{prBusy === 'merge' ? <span className="spinner sm" /> : <Icon name="check-circle" size={12} />}{prBusy === 'merge' ? 'Merging' : 'Merge PR'}</Button>
+      </div>
 
       {/* Check-run rollup — GitHub's CI, NOT the local tool log. */}
       <div className="ci-section"><span>Checks</span></div>
@@ -62,9 +126,9 @@ export function CIPanel({ ci, onOpenExternal }: { ci: CiApi; onOpenExternal: (ur
               <div className="ci-run-body">
                 <div className="ci-run-actions">
                   {r.url ? <Button onClick={() => onOpenExternal(r.url!)}>Open</Button> : null}
-                  <Button onClick={() => ci.loadLog(id)}>Log tail</Button>
-                  <Button onClick={() => ci.loadLog(id, true)}>Failed log</Button>
-                  <Button onClick={() => ci.rerunFailed(id)}>Rerun failed</Button>
+                  <Button className={runBusy.kind === 'log' && runBusy.id === id ? 'is-busy' : ''} disabled={!!runBusy.kind} onClick={() => runAction('log', id, () => ci.loadLog(id))}>{runBusy.kind === 'log' && runBusy.id === id ? <span className="spinner sm" /> : null}Log tail</Button>
+                  <Button className={runBusy.kind === 'log' && runBusy.id === id ? 'is-busy' : ''} disabled={!!runBusy.kind} onClick={() => runAction('log', id, () => ci.loadLog(id, true))}>{runBusy.kind === 'log' && runBusy.id === id ? <span className="spinner sm" /> : null}Failed log</Button>
+                  <Button className={runBusy.kind === 'rerun' && runBusy.id === id ? 'is-busy' : ''} disabled={!!runBusy.kind} onClick={() => runAction('rerun', id, () => ci.rerunFailed(id))}>{runBusy.kind === 'rerun' && runBusy.id === id ? <span className="spinner sm" /> : null}Rerun failed</Button>
                   <button className={`wt-btn${ci.watching === id ? ' primary-ghost' : ''}`} onClick={() => ci.toggleWatch(id)}>{ci.watching === id ? 'Watching…' : 'Watch'}</button>
                 </div>
                 {ci.runDetail && ci.runDetail.databaseId === id && ci.runDetail.jobs ? (
@@ -80,6 +144,36 @@ export function CIPanel({ ci, onOpenExternal }: { ci: CiApi; onOpenExternal: (ur
           </div>
         );
       })}
+      {reviewOpen && trackPr?.pr ? (
+        <div className="track-modal-backdrop" onClick={() => setReviewOpen(false)}>
+          <div className="track-review-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="track-review-modal-head">
+              <div>
+                <div className="track-review-modal-title">Review PR #{trackPr.pr.number}</div>
+                <div className="track-review-modal-sub">{trackPr.pr.title}</div>
+              </div>
+              <button className="track-modal-close" title="Close" onClick={() => setReviewOpen(false)}><Icon name="close" size={13} /></button>
+            </div>
+            <textarea className="track-review-body" autoFocus value={reviewBody} onChange={(e) => setReviewBody(e.target.value)} placeholder="Review comment" />
+            <div className="track-review-options">
+              {([
+                ['comment', 'Comment'],
+                ['approve', 'Approve'],
+                ['request-changes', 'Request changes'],
+              ] as const).map(([id, label]) => (
+                <label key={id} className={`track-review-option${reviewDecision === id ? ' active' : ''}`}>
+                  <input type="radio" checked={reviewDecision === id} onChange={() => setReviewDecision(id)} />
+                  <span>{label}</span>
+                </label>
+              ))}
+            </div>
+            <div className="track-review-actions">
+              <button className="track-auto-cancel" onClick={() => setReviewOpen(false)}>Cancel</button>
+              <button className="track-auto-save" disabled={reviewDecision === 'comment' && !reviewBody.trim()} onClick={submitReview}>Submit review</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

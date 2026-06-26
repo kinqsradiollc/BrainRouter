@@ -16,7 +16,7 @@ import type React from 'react';
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import type { AttachmentUpload, PlanItem, ToolItem, ChatRow, ChangesetFile, SessionRow, FleetRow, TaskViewState, WorkflowDetail } from '../../types.js';
 import type { TrackProject, WorkItem, Sprint, AutomationRule, ProjectMember } from '@kinqs/brainrouter-types';
-import type { SyncConfig, SyncResult } from '../../track/TrackView.js';
+import type { GitTrackContext, SyncConfig, SyncResult, TrackPrStatus } from '../../track/TrackView.js';
 import type { SearchHit, ReviewFindingView, GrepHit } from '../../panels/index.js';
 import type { ScheduleRecordView } from '../schedule/scheduleView.js';
 import type { PlanDecisionView } from '../plan/planReviewView.js';
@@ -71,7 +71,7 @@ export interface AgentEventsCtx {
   // recall are counted here from their events). Reset on session-changed.
   setEfficiency: React.Dispatch<React.SetStateAction<{ compactions: number; droppedMessages: number; memoriesRecalled: number }>>;
   // Track mode data (project + work items + sprints), fed by the host `track-*` queries.
-  setTrack: React.Dispatch<React.SetStateAction<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; automations: AutomationRule[]; members: ProjectMember[]; sync: { config: SyncConfig | null; result: SyncResult | null } }>>;
+  setTrack: React.Dispatch<React.SetStateAction<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; automations: AutomationRule[]; members: ProjectMember[]; sync: { config: SyncConfig | null; result: SyncResult | null }; git: GitTrackContext | null; pr: TrackPrStatus | null }>>;
   setInteraction: React.Dispatch<React.SetStateAction<InteractionRequest | null>>;
   setPicked: React.Dispatch<React.SetStateAction<string[]>>;
   setViewKey: React.Dispatch<React.SetStateAction<string>>;
@@ -274,7 +274,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       if (!isForeground && FOREGROUND_ONLY_KINDS.has(e.kind)) return;
       switch (e.kind) {
         case 'status': setStatusLine(e.text); break;
-        case 'reasoning-delta': setReasoningTail((t) => (t + e.text).slice(-200)); break;
+        case 'reasoning-delta': setReasoningTail((t) => t + e.text); break;
         case 'assistant-turn-start': liveBuf.current = ''; liveFlushPending.current = false; setLiveText(''); break;
         case 'assistant-delta':
           streamedThisTurnRef.current = true;
@@ -631,6 +631,64 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       case 'q-track-sync-config':
         if (result && typeof result === 'object') setTrack((t) => ({ ...t, sync: { ...t.sync, config: result as SyncConfig } }));
         return;
+      case 'q-track-git-context':
+        if (result && typeof result === 'object') setTrack((t) => ({ ...t, git: result as GitTrackContext }));
+        return;
+      case 'q-track-start-work': {
+        const r = result as { ok?: boolean; error?: string; branch?: string; items?: WorkItem[]; context?: GitTrackContext } | null;
+        if (Array.isArray(r?.items)) setTrack((t) => ({ ...t, items: r!.items!, git: r!.context ?? t.git }));
+        if (r?.error) setToast(`Git start failed: ${r.error}`);
+        else if (r?.branch) setToast(`Started ${r.branch}.`);
+        return;
+      }
+      case 'q-track-pr-status':
+        if (result && typeof result === 'object') setTrack((t) => ({ ...t, pr: result as TrackPrStatus }));
+        return;
+      case 'q-track-create-pr': {
+        const r = result as { ok?: boolean; error?: string; url?: string; pr?: TrackPrStatus['pr']; branch?: string | null; itemKey?: string; items?: WorkItem[] } | null;
+        if (Array.isArray(r?.items)) setTrack((t) => ({
+          ...t,
+          items: r!.items!,
+          pr: { pr: r!.pr ?? null, branch: r!.branch ?? null, itemKey: r!.itemKey },
+        }));
+        if (r?.error) setToast(`Draft PR failed: ${r.error}`);
+        else if (r?.url) setToast(`Created draft PR: ${r.url}`);
+        return;
+      }
+      case 'q-track-gh-issues': {
+        const r = result as (SyncResult & { items?: WorkItem[] }) | null;
+        if (Array.isArray(r?.items)) setTrack((t) => ({ ...t, items: r!.items!, sync: { ...t.sync, result: r as SyncResult } }));
+        if (r) setToast(`Imported ${r.imported?.length ?? 0} issue(s) via gh${r.errors?.length ? ` · ${r.errors.length} error(s)` : ''}.`);
+        return;
+      }
+      case 'q-track-merge-pr': {
+        const r = result as { ok?: boolean; error?: string; pr?: TrackPrStatus['pr']; branch?: string | null; itemKey?: string; items?: WorkItem[] } | null;
+        if (Array.isArray(r?.items)) setTrack((t) => ({
+          ...t,
+          items: r!.items!,
+          pr: { pr: r!.ok ? null : (r!.pr ?? null), branch: r!.branch ?? null, itemKey: r!.itemKey },
+        }));
+        if (r?.error) setToast(`Merge failed: ${r.error}`);
+        else if (r?.ok) setToast('Pull request merged.');
+        return;
+      }
+      case 'q-track-submit-pr-review': {
+        const r = result as { ok?: boolean; error?: string; pr?: TrackPrStatus['pr']; branch?: string | null; itemKey?: string } | null;
+        if (r) setTrack((t) => ({ ...t, pr: { pr: r.pr ?? t.pr?.pr ?? null, branch: r.branch ?? t.pr?.branch ?? null, itemKey: r.itemKey ?? t.pr?.itemKey } }));
+        if (r?.error) setToast(`Review failed: ${r.error}`);
+        else if (r?.ok) setToast('Pull request review submitted.');
+        return;
+      }
+      case 'q-track-fix-checks': {
+        const r = result as { ok?: boolean; error?: string; pr?: TrackPrStatus['pr']; branch?: string | null; itemKey?: string; task?: { id?: string } } | null;
+        if (r) setTrack((t) => ({ ...t, pr: { pr: r.pr ?? t.pr?.pr ?? null, branch: r.branch ?? t.pr?.branch ?? null, itemKey: r.itemKey ?? t.pr?.itemKey } }));
+        if (r?.error) setToast(`Fix checks failed: ${r.error}`);
+        else if (r?.ok) {
+          setToast('Fix checks task started — see Background tasks.');
+          q('q-fleet', 'fleet');
+        }
+        return;
+      }
       case 'q-track-sync':
         if (result && typeof result === 'object' && !(result as { error?: string }).error) setTrack((t) => ({ ...t, sync: { ...t.sync, result: result as SyncResult } }));
         return;

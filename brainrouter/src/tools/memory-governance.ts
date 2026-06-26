@@ -93,7 +93,7 @@ export const memoryGovernanceToolSchemas = [
     },
   },
   {
-    name: "memory_verify",
+    name: "memory_verify_anchors",
     description: "Reconcile code-anchored memories against the CURRENT source index. Classifies each anchored memory as fresh, re-anchorable (its file changed — a reindex can refresh the anchor), or archivable (its source file is gone → confirmed-dead). Read-only by default; apply=true archives ONLY the confirmed-dead ones (recoverable expiry, not deletion). Returns counts + a sample. Non-code memories are ignored.",
     inputSchema: {
       type: "object",
@@ -262,7 +262,7 @@ export async function handleMemoryGovernanceTool(name: string, args: unknown, op
       // Back-compat: a bare cognitive plan returns its result unchanged.
       return toolResult(params.scope === "cognitive" ? cognitive : { scope: params.scope, cognitive, storage });
     }
-    case "memory_verify": {
+    case "memory_verify_anchors": {
       const params = z.object({
         ...baseUser,
         apply: z.boolean().optional().default(false),

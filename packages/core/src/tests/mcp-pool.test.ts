@@ -19,12 +19,28 @@ function seedFakeServer(
   identity: 'brainrouter' | 'third-party' | 'unknown',
   tools: FakeTool[],
   callImpl?: (rawTool: string, args: any) => any,
+  resources?: {
+    list?: any[];
+    templates?: any[];
+    read?: Record<string, any>;
+    nextCursor?: string;
+  },
 ) {
   const fakeWrapper: any = {
     isConnected: () => true,
     getIdentity: () => identity,
     getServerName: () => serverId,
     listTools: async () => ({ tools }),
+    listResources: async () => ({
+      resources: resources?.list ?? [],
+      ...(resources?.nextCursor ? { nextCursor: resources.nextCursor } : {}),
+    }),
+    listResourceTemplates: async () => ({
+      resourceTemplates: resources?.templates ?? [],
+      ...(resources?.nextCursor ? { nextCursor: resources.nextCursor } : {}),
+    }),
+    readResource: async ({ uri }: { uri: string }) =>
+      resources?.read?.[uri] ?? { contents: [{ uri, text: `${serverId}::${uri}` }] },
     callTool: async (name: string, args: any) =>
       callImpl ? callImpl(name, args) : { isError: false, content: [{ type: 'text', text: `${serverId}::${name}` }] },
     close: async () => {},
@@ -94,6 +110,57 @@ test('McpClientPool: listTools prefixes every tool with mcp_<serverId>_', async 
     'mcp_github_create_issue',
     'mcp_github_list_repos',
   ]);
+});
+
+test('McpClientPool: listResources aggregates connected servers and tags each resource with server id', async () => {
+  const pool = new McpClientPool();
+  seedFakeServer(pool, 'brainrouter', 'brainrouter', [], undefined, {
+    list: [{ uri: 'memory://recent', name: 'Recent memory' }],
+  });
+  seedFakeServer(pool, 'github', 'third-party', [], undefined, {
+    list: [{ uri: 'repo://issues', name: 'Issues' }],
+  });
+
+  const res = await pool.listResources();
+
+  assert.deepEqual(res.resources, [
+    { server: 'brainrouter', uri: 'memory://recent', name: 'Recent memory' },
+    { server: 'github', uri: 'repo://issues', name: 'Issues' },
+  ]);
+});
+
+test('McpClientPool: listResourceTemplates supports server selector and returns server-tagged templates', async () => {
+  const pool = new McpClientPool();
+  seedFakeServer(pool, 'brainrouter', 'brainrouter', [], undefined, {
+    templates: [{ uriTemplate: 'memory://{id}', name: 'Memory by id' }],
+  });
+  seedFakeServer(pool, 'github', 'third-party', [], undefined, {
+    templates: [{ uriTemplate: 'repo://{owner}/{repo}', name: 'Repository' }],
+    nextCursor: 'next-gh',
+  });
+
+  const res = await pool.listResourceTemplates({ server: 'github' });
+
+  assert.deepEqual(res, {
+    resourceTemplates: [{ server: 'github', uriTemplate: 'repo://{owner}/{repo}', name: 'Repository' }],
+    nextCursor: 'next-gh',
+  });
+});
+
+test('McpClientPool: readResource routes to the selected server and includes server in result', async () => {
+  const pool = new McpClientPool();
+  seedFakeServer(pool, 'github', 'third-party', [], undefined, {
+    read: {
+      'repo://issues': { contents: [{ uri: 'repo://issues', text: 'open issues' }] },
+    },
+  });
+
+  const res = await pool.readResource({ server: 'github', uri: 'repo://issues' });
+
+  assert.deepEqual(res, {
+    server: 'github',
+    contents: [{ uri: 'repo://issues', text: 'open issues' }],
+  });
 });
 
 test('McpClientPool: callTool with prefixed form routes to the right server', async () => {

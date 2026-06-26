@@ -29,6 +29,8 @@ import {
   type UpdateWorkItemPatch,
 } from './trackStore.js';
 import { getRawCliKnobs } from '../config/config.js';
+import { listConnectors } from '../connectors/connectorStore.js';
+import type { ConnectorRecord } from '@kinqs/brainrouter-types';
 
 // ── GitHub shapes (the minimal subset we read/write) ──────────────────────────
 
@@ -163,7 +165,66 @@ export interface SyncResult {
   errors: string[];
 }
 
-export interface ResolvedGithubConfig { repo?: string; token?: string; tokenSource?: 'config' | 'env' }
+export interface GithubRepoConfig {
+  repo: string;
+  token?: string;
+  label?: string;
+}
+export type GithubTokenSource = 'config' | 'env' | 'connector-env';
+export interface ResolvedGithubConfig { repo?: string; token?: string; tokenSource?: GithubTokenSource; connectorId?: string }
+export interface ResolvedGithubRepoSummary {
+  repo: string;
+  hasToken: boolean;
+  tokenSource?: GithubTokenSource;
+  active: boolean;
+  label?: string;
+  connectorId?: string;
+  source?: 'track' | 'connector';
+}
+
+function envGithubToken(): string | undefined {
+  return process.env.GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim() || undefined;
+}
+
+function normalizeGithubRepos(knobs: NonNullable<ReturnType<typeof getRawCliKnobs>['track']>): GithubRepoConfig[] {
+  const byRepo = new Map<string, GithubRepoConfig>();
+  const add = (entry: unknown): void => {
+    if (!entry || typeof entry !== 'object') return;
+    const e = entry as Record<string, unknown>;
+    const repo = typeof e.repo === 'string' ? e.repo.trim() : '';
+    if (!repo) return;
+    const token = typeof e.token === 'string' && e.token.trim() ? e.token.trim() : undefined;
+    const label = typeof e.label === 'string' && e.label.trim() ? e.label.trim() : undefined;
+    byRepo.set(repo, { ...byRepo.get(repo), repo, token: token ?? byRepo.get(repo)?.token, label: label ?? byRepo.get(repo)?.label });
+  };
+  if (Array.isArray(knobs.githubRepos)) for (const entry of knobs.githubRepos) add(entry);
+  const legacyRepo = knobs.githubRepo?.trim();
+  if (legacyRepo) {
+    const existing = byRepo.get(legacyRepo);
+    const legacyToken = knobs.githubToken?.trim() || undefined;
+    byRepo.set(legacyRepo, { ...existing, repo: legacyRepo, token: existing?.token ?? legacyToken });
+  }
+  return [...byRepo.values()];
+}
+
+export function listResolvedGithubConfigs(): ResolvedGithubRepoSummary[] {
+  const knobs = getRawCliKnobs().track ?? {};
+  const repos = normalizeGithubRepos(knobs);
+  const active = knobs.activeGithubRepo?.trim() || knobs.githubRepo?.trim() || repos[0]?.repo;
+  const envToken = envGithubToken();
+  const legacyToken = knobs.githubToken?.trim() || undefined;
+  return repos.map((entry) => {
+    const cfgToken = entry.token?.trim() || legacyToken;
+    const token = cfgToken || envToken;
+    return {
+      repo: entry.repo,
+      hasToken: !!token,
+      tokenSource: token ? (cfgToken ? 'config' : 'env') : undefined,
+      active: entry.repo === active,
+      label: entry.label,
+    };
+  });
+}
 
 /**
  * Resolve the GitHub repo + token for sync, layering explicit args over
@@ -172,11 +233,105 @@ export interface ResolvedGithubConfig { repo?: string; token?: string; tokenSour
  */
 export function resolveGithubConfig(repoArg?: string, tokenArg?: string): ResolvedGithubConfig {
   const knobs = getRawCliKnobs().track ?? {};
-  const repo = repoArg?.trim() || knobs.githubRepo?.trim() || undefined;
-  const cfgToken = tokenArg?.trim() || knobs.githubToken?.trim() || undefined;
-  const envToken = process.env.GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim() || undefined;
+  const repos = normalizeGithubRepos(knobs);
+  const repo = repoArg?.trim() || knobs.activeGithubRepo?.trim() || knobs.githubRepo?.trim() || repos[0]?.repo;
+  const matched = repo ? repos.find((r) => r.repo === repo) : undefined;
+  const cfgToken = tokenArg?.trim() || matched?.token?.trim() || knobs.githubToken?.trim() || undefined;
+  const envToken = envGithubToken();
   const token = cfgToken || envToken;
   return { repo, token, tokenSource: token ? (cfgToken ? 'config' : 'env') : undefined };
+}
+
+interface ConnectorGithubRepoConfig extends GithubRepoConfig {
+  connectorId: string;
+  tokenSource?: 'connector-env';
+}
+
+function connectorToken(connector: ConnectorRecord): string | undefined {
+  if (connector.credential?.mode !== 'static') return undefined;
+  const ref = connector.credential.ref?.trim();
+  return ref ? process.env[ref]?.trim() || undefined : undefined;
+}
+
+function connectorGithubRepos(workspaceRoot: string): ConnectorGithubRepoConfig[] {
+  const byRepo = new Map<string, ConnectorGithubRepoConfig>();
+  for (const connector of listConnectors(workspaceRoot, { source: 'github' })) {
+    if (connector.status === 'deleting' || connector.status === 'paused') continue;
+    const owner = typeof connector.config.owner === 'string' ? connector.config.owner.trim().replace(/^\/+|\/+$/g, '') : '';
+    const rawRepos = Array.isArray(connector.config.repositories)
+      ? connector.config.repositories.filter((repo): repo is string => typeof repo === 'string' && repo.trim().length > 0)
+      : [];
+    if (rawRepos.length === 0) continue;
+    const token = connectorToken(connector);
+    for (const rawRepo of rawRepos) {
+      const repoName = rawRepo.trim().replace(/^\/+|\/+$/g, '');
+      const repo = repoName.includes('/') ? repoName : (owner ? `${owner}/${repoName}` : '');
+      if (!repo) continue;
+      const existing = byRepo.get(repo);
+      if (existing?.token) continue;
+      byRepo.set(repo, {
+        repo,
+        label: connector.name,
+        connectorId: connector.id,
+        token: token ?? existing?.token,
+        tokenSource: token ? 'connector-env' : existing?.tokenSource,
+      });
+    }
+  }
+  return [...byRepo.values()];
+}
+
+export function listResolvedGithubConfigsForWorkspace(workspaceRoot: string): ResolvedGithubRepoSummary[] {
+  const trackRows = listResolvedGithubConfigs().map((row): ResolvedGithubRepoSummary => ({ ...row, source: 'track' }));
+  const byRepo = new Map<string, ResolvedGithubRepoSummary>();
+  for (const row of trackRows) byRepo.set(row.repo, row);
+
+  for (const entry of connectorGithubRepos(workspaceRoot)) {
+    const existing = byRepo.get(entry.repo);
+    const connectorRow: ResolvedGithubRepoSummary = {
+      repo: entry.repo,
+      hasToken: !!entry.token,
+      tokenSource: entry.token ? entry.tokenSource : undefined,
+      active: false,
+      label: entry.label,
+      connectorId: entry.connectorId,
+      source: 'connector',
+    };
+    if (!existing) {
+      byRepo.set(entry.repo, connectorRow);
+      continue;
+    }
+    byRepo.set(entry.repo, {
+      ...existing,
+      hasToken: existing.hasToken || !!entry.token,
+      tokenSource: existing.hasToken ? existing.tokenSource : (entry.token ? entry.tokenSource : existing.tokenSource),
+      label: existing.label ?? entry.label,
+      connectorId: existing.connectorId ?? entry.connectorId,
+    });
+  }
+
+  const rows = [...byRepo.values()];
+  if (!rows.some((row) => row.active) && rows.length > 0) rows[0] = { ...rows[0], active: true };
+  return rows;
+}
+
+export function resolveGithubConfigForWorkspace(workspaceRoot: string, repoArg?: string, tokenArg?: string): ResolvedGithubConfig {
+  const base = resolveGithubConfig(repoArg, tokenArg);
+  if (base.repo && base.token) return base;
+
+  const connectorRepos = connectorGithubRepos(workspaceRoot);
+  const connector = base.repo
+    ? connectorRepos.find((entry) => entry.repo === base.repo)
+    : connectorRepos[0];
+  if (!connector) return base;
+  if (base.repo && !connector.token) return { ...base, connectorId: connector.connectorId };
+  const useConnectorToken = !!connector.token && (!base.token || base.tokenSource === 'env');
+  return {
+    repo: base.repo ?? connector.repo,
+    token: useConnectorToken ? connector.token : (base.token ?? connector.token),
+    tokenSource: useConnectorToken ? connector.tokenSource : (base.tokenSource ?? connector.tokenSource),
+    connectorId: connector.connectorId,
+  };
 }
 
 function ghHeaders(token: string): Record<string, string> {

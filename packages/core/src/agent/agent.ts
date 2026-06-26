@@ -19,7 +19,7 @@ import { reconnectBackoffMs, probeConnectivity, parseRetryAfterMs } from '../mcp
 import { unsynthesizedChildIds, mergePendingChildIds, buildPendingChildStatusHint } from '../util/childResume.js';
 import { isChildSynthesisTool, resultHasChildOutput, looksLikeChildSynthesisPunt } from '../util/synthesisGuard.js';
 import { sanitizeModelArtifacts } from '../util/outputSanitize.js';
-import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
+import { buildPromptLayers, buildSystemPrompt, loadWorkspaceInstructionSummary, type PromptLayers } from '../prompt/systemPrompt.js';
 import { formatPlan, readPlan, updatePlan, type PlanState } from '../task/taskStore.js';
 import { createRequirement, getRequirement, linkRequirement, listRequirements, updateRequirement } from '../requirement/requirementStore.js';
 import { detectRequirementShapedPrompt } from '../requirement/requirementDetector.js';
@@ -153,7 +153,7 @@ import {
 import { shrinkOversizedToolResults } from './turnEndShrink.js';
 // 0.3.9 item 13 — model-tier self-escalation.
 import { currentTier, detectNeedsHigh, nextTier, resolveTierLadder, stripNeedsHigh } from '../provider/tierLadder.js';
-import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PLACEHOLDER_KEY } from '../provider/providers/index.js';
+import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PLACEHOLDER_KEY, normalizeProviderEndpoint } from '../provider/providers/index.js';
 import { DEFAULT_EFFORT_VALUE_MAP } from '../provider/providers/definition.js';
 import type { ProviderDefinition } from '../provider/providers/definition.js';
 import { normalizeModelName, isReasoningModel, isNonReasoningChatModel, isAlwaysOnReasoner, modelSupportsXhighEffort, isBinaryReasoningModel } from '../provider/models/reasoning.js';
@@ -477,6 +477,33 @@ export interface ChatCompletionPayload {
    * per the active provider's `effortField`. Same resolved value.
    */
   reasoning?: { effort: string };
+}
+
+export interface ResponsesPayload {
+  model: string;
+  instructions?: string;
+  input: any[];
+  tools?: Array<{
+    type: 'function';
+    name: string;
+    description: string;
+    parameters: Record<string, any>;
+    strict: boolean;
+  }>;
+  tool_choice?: 'auto' | { type: 'function'; name: string };
+  reasoning?: { effort: string };
+  max_output_tokens?: number;
+  store: false;
+  include: string[];
+  parallel_tool_calls?: boolean;
+  prompt_cache_key?: string;
+  client_metadata?: Record<string, string>;
+}
+
+interface PromptLayeredMessage {
+  role: 'system';
+  content: string;
+  promptLayers?: PromptLayers;
 }
 
 export interface AgentOptions {
@@ -3409,6 +3436,40 @@ export class Agent {
         const maxResults = Math.max(1, Math.min(10, Number(args.maxResults ?? 5)));
         return await runWebSearch(query, maxResults);
       }
+      case 'list_mcp_resources': {
+        const client = this.mcpClient as any;
+        if (typeof client.listResources !== 'function') {
+          throw new Error('MCP resources are not supported by the active MCP client.');
+        }
+        const result = await client.listResources({
+          cursor: typeof args.cursor === 'string' && args.cursor.trim() ? args.cursor.trim() : undefined,
+          server: typeof args.server === 'string' && args.server.trim() ? args.server.trim() : undefined,
+        }, { signal: this.turnAbort?.signal });
+        return JSON.stringify(result, null, 2);
+      }
+      case 'list_mcp_resource_templates': {
+        const client = this.mcpClient as any;
+        if (typeof client.listResourceTemplates !== 'function') {
+          throw new Error('MCP resource templates are not supported by the active MCP client.');
+        }
+        const result = await client.listResourceTemplates({
+          cursor: typeof args.cursor === 'string' && args.cursor.trim() ? args.cursor.trim() : undefined,
+          server: typeof args.server === 'string' && args.server.trim() ? args.server.trim() : undefined,
+        }, { signal: this.turnAbort?.signal });
+        return JSON.stringify(result, null, 2);
+      }
+      case 'read_mcp_resource': {
+        const client = this.mcpClient as any;
+        if (typeof client.readResource !== 'function') {
+          throw new Error('MCP resource reads are not supported by the active MCP client.');
+        }
+        const server = String(args.server ?? '').trim();
+        const uri = String(args.uri ?? '').trim();
+        if (!server) throw new Error('read_mcp_resource requires a server.');
+        if (!uri) throw new Error('read_mcp_resource requires a uri.');
+        const result = await client.readResource({ server, uri }, { signal: this.turnAbort?.signal });
+        return JSON.stringify(result, null, 2);
+      }
       case 'lsp': {
         // CLI-19 — semantic navigation via a language server.
         const action = String(args.action ?? '').trim() as 'definition' | 'references' | 'hover' | 'symbols';
@@ -3945,7 +4006,12 @@ export class Agent {
       workspaceRoot: this.workspaceRoot,
       lastUserMessage,
     });
-    const next: any[] = [this.createSystemMessage(), { role: 'system', content: renderCompactSystemMessage(result.summary) }];
+    const compactSystemMessage = renderCompactSystemMessage(result.summary);
+    const systemMessage = this.createSystemMessage();
+    const next: any[] = [systemMessage];
+    if (!appendDeveloperPromptLayer(systemMessage, compactSystemMessage)) {
+      next.push({ role: 'system', content: compactSystemMessage });
+    }
     if (lastUserMessage) next.push({ role: 'user', content: lastUserMessage });
     this.chatHistory = next;
     this.initialized = true;
@@ -4531,7 +4597,7 @@ export class Agent {
     // have been seen yet, leave it undefined — `buildSystemPrompt` treats
     // that as "assume brain online" for back-compat.
     const connectedMcpTools = this.lastKnownMcpTools?.map((t) => t.name);
-    const base = this.systemPromptOverride ?? buildSystemPrompt({
+    const promptContext = {
       workspaceRoot: this.workspaceRoot,
       launchCwd: this.launchCwd,
       sessionKey: this.sessionKey,
@@ -4551,7 +4617,9 @@ export class Agent {
       // pick up an aggressive Beast-mode reinforcement block; strong
       // families (claude-*, gpt-4/5, o-series, gemini-2.5) get no overlay.
       model: this.llmConfig.model,
-    });
+    };
+    const generatedLayers = this.systemPromptOverride ? undefined : buildPromptLayers(promptContext);
+    const base = this.systemPromptOverride ?? buildSystemPrompt(promptContext);
     const parts = [base];
     if (this.roleOverlay) parts.push(this.roleOverlay);
     // Goal text used to be appended here AND re-pushed as a per-turn
@@ -4562,10 +4630,15 @@ export class Agent {
     // final-budget wrap-up directive). `runTurn` re-injects it via
     // `formatGoalBlock` immediately before the user message is appended,
     // so even first-turn-after-`/resume` sees the goal.
-    return {
+    const content = appendVerbositySteering(parts.join('\n\n'), getCliKnobs().verbositySteeringLevel);
+    const msg: PromptLayeredMessage = {
       role: 'system',
-      content: appendVerbositySteering(parts.join('\n\n'), getCliKnobs().verbositySteeringLevel),
+      content,
     };
+    if (generatedLayers && !this.roleOverlay && getCliKnobs().verbositySteeringLevel === 0) {
+      msg.promptLayers = generatedLayers;
+    }
+    return msg;
   }
 
   /** Create one draft requirement from a high-confidence user implementation request. */
@@ -5341,6 +5414,12 @@ export function getToolSummary(name: string, args: Record<string, any>, result: 
       return `fetched content from ${args.url}`;
     case 'web_search':
       try { return `${JSON.parse(result).length} web results for "${args.query}"`; } catch { return `searched web for "${args.query}"`; }
+    case 'list_mcp_resources':
+      try { return `${JSON.parse(result).resources?.length ?? 0} MCP resources`; } catch { return 'listed MCP resources'; }
+    case 'list_mcp_resource_templates':
+      try { return `${JSON.parse(result).resourceTemplates?.length ?? 0} MCP resource templates`; } catch { return 'listed MCP resource templates'; }
+    case 'read_mcp_resource':
+      return `read MCP resource ${args.server}:${args.uri}`;
     case 'apply_patch':
       try { return `applied ${JSON.parse(result).applied.length} file ops`; } catch { return 'applied patch'; }
     case 'update_plan':
@@ -5355,6 +5434,10 @@ export function getToolSummary(name: string, args: Record<string, any>, result: 
       try { return `${JSON.parse(result).entries?.length || 0} transcript entries`; } catch { return 'read transcript'; }
     case 'close_agent':
       return `closed agent ${args.id}`;
+    case 'send_input':
+      return `sent input to agent ${args.id}`;
+    case 'resume_agent':
+      return `resumed agent ${args.id}`;
     default:
       return `${name} executed`;
   }
@@ -5505,6 +5588,117 @@ export function activeProviderDef(config: LLMConfig): ProviderDefinition | undef
   return findProviderByEndpoint(config.endpoint) ?? PROVIDER_REGISTRY.get((config.provider ?? '').toLowerCase());
 }
 
+function binaryEffortValueMapFor(def: ProviderDefinition | undefined): ProviderDefinition['binaryEffortValueMap'] | undefined {
+  if (def?.binaryEffortValueMap) return def.binaryEffortValueMap;
+  return undefined;
+}
+
+export type LlmRequestFormat = 'responses' | 'chat-completions';
+
+function modelSupportsResponsesFormat(model: string | undefined): boolean {
+  const id = normalizeModelName(model ?? '');
+  return (
+    /^gpt-[0-9]/.test(id) ||
+    /^o[134](-|$)/.test(id) ||
+    /^chatgpt-/.test(id)
+  );
+}
+
+export function resolveRequestFormat(config: LLMConfig, effectiveEndpoint?: string): LlmRequestFormat {
+  const def = activeProviderDef(config);
+  const providerId = (def?.id ?? config.provider ?? '').toLowerCase();
+  // PER-PROVIDER WIRE-FORMAT OVERRIDE — user-set in config.json under
+  // `cli.providerRequestFormat[<providerId>]`. Validated subset of literals
+  // (see `resolveCliKnobs → normalizeProviderRequestFormat`); an unknown
+  // provider key is a no-op, so adding overrides for new providers never
+  // throws and an obsolete provider id is silently ignored.
+  const override = getCliKnobs().providerRequestFormat[providerId];
+  const builtIn = def?.requestFormat ?? 'chat-completions';
+  const allowedFormat = override ?? builtIn;
+  if (allowedFormat !== 'responses') return 'chat-completions';
+  const builtInEndpoint = def?.endpoint;
+  const endpoint = effectiveEndpoint || config.endpoint || builtInEndpoint || 'https://api.openai.com/v1';
+  // When the user EXPLICITLY chose Responses for this provider, trust their
+  // endpoint assertion (they are responsible for it accepting /responses). Do
+  // NOT gate this by OpenAI-family model names: Responses-capable gateways can
+  // route non-OpenAI ids such as `google/gemma-4-12b`.
+  if (override === 'responses') return 'responses';
+  // Built-in Responses defaults are still provider/model conservative.
+  if (!modelSupportsResponsesFormat(config.model)) return 'chat-completions';
+  // When falling back to the BUILT-IN default, still require the endpoint
+  // to be the canonical one — otherwise `provider:'openai'` + a non-OpenAI
+  // endpoint (OpenRouter-shaped, an OpenAI-compatible gateway, ...) gets
+  // silently misrouted to /responses and 404s.
+  if (override === undefined && builtInEndpoint
+      && normalizeProviderEndpoint(endpoint) !== normalizeProviderEndpoint(builtInEndpoint)) {
+    return 'chat-completions';
+  }
+  return 'responses';
+}
+
+function normalizeProviderUsage(usage: any): { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; [k: string]: unknown } | undefined {
+  if (!usage || typeof usage !== 'object') return undefined;
+  if (typeof usage.prompt_tokens === 'number' || typeof usage.completion_tokens === 'number') return usage;
+
+  const normalized: Record<string, unknown> = { ...usage };
+  if (typeof usage.input_tokens === 'number') normalized.prompt_tokens = usage.input_tokens;
+  if (typeof usage.output_tokens === 'number') normalized.completion_tokens = usage.output_tokens;
+  if (usage.input_tokens_details && typeof usage.input_tokens_details === 'object') {
+    normalized.prompt_tokens_details = usage.input_tokens_details;
+  }
+  return normalized;
+}
+
+function normalizeResponsesOutput(data: any, endpoint: string, model: string) {
+  if (data && typeof data === 'object' && data.error) {
+    const errMsg = typeof data.error === 'string'
+      ? data.error
+      : (data.error.message ?? JSON.stringify(data.error).slice(0, 400));
+    throw new Error(`LLM endpoint returned an error envelope (HTTP 200): ${errMsg}`);
+  }
+  if (!Array.isArray(data?.output)) {
+    throw new Error(
+      `LLM endpoint returned no Responses output. ` +
+      `Model "${model}" at ${endpoint} may not support /responses, may need chat/completions, or be misconfigured. ` +
+      `Response body: ${JSON.stringify(data).slice(0, 600)}`,
+    );
+  }
+
+  const textParts: string[] = [];
+  const toolCalls: any[] = [];
+  for (const item of data.output) {
+    if (item?.type === 'message' && Array.isArray(item.content)) {
+      for (const part of item.content) {
+        if (part?.type === 'output_text' && typeof part.text === 'string') textParts.push(part.text);
+        else if (part?.type === 'refusal' && typeof part.refusal === 'string') textParts.push(part.refusal);
+        else if (part?.type === 'text' && typeof part.text === 'string') textParts.push(part.text);
+      }
+      continue;
+    }
+    if (item?.type === 'function_call') {
+      toolCalls.push({
+        id: item.call_id ?? item.id,
+        type: 'function',
+        function: {
+          name: item.name ?? '',
+          arguments: typeof item.arguments === 'string' ? item.arguments : stringifyContent(item.arguments ?? {}),
+        },
+      });
+    }
+  }
+
+  return {
+    content: typeof data.output_text === 'string' && data.output_text.length > 0
+      ? data.output_text
+      : textParts.join(''),
+    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+    usage: normalizeProviderUsage(data.usage),
+    finishReason: data.status === 'incomplete'
+      ? (data.incomplete_details?.reason ?? 'incomplete')
+      : undefined,
+  };
+}
+
 /**
  * Decide the literal `reasoning_effort` wire value (or null to omit) for the
  * active provider + model. Mechanism + accepted values differ per provider AND
@@ -5512,8 +5706,7 @@ export function activeProviderDef(config: LLMConfig): ProviderDefinition | undef
  * name → capability) instead of one global transform:
  *   1. effort unset or the CLI default 'medium' → omit (the prompt overlay is
  *      also empty at medium, so wire + prompt agree).
- *   2. provider's reasoningEffort mode is not 'param' → omit (LM Studio's
- *      chat-completions ignores the field; others may reject it).
+ *   2. provider's reasoningEffort mode is not 'param' → omit.
  *   3. always-on reasoners (DeepSeek `deepseek-reasoner`) and non-reasoning
  *      `*-chat` variants (OpenAI/gateways ERROR on those) → omit, on EVERY
  *      provider.
@@ -5521,9 +5714,12 @@ export function activeProviderDef(config: LLMConfig): ProviderDefinition | undef
  *      non-reasoning model) only send for detected reasoning models; every other
  *      OpenAI-compatible provider defaults to 'any' (accept-and-ignore), so the
  *      field works for reasoning models we have no name pattern for.
- *   5. map the EffortLevel through the provider's effortValueMap (default OpenAI
+ *   5. binary `on`/`off` model metadata is only honored when the provider
+ *      explicitly declares that wire vocabulary; otherwise provider rules win
+ *      so no endpoint receives invalid `reasoning_effort: "on"`.
+ *   6. map the EffortLevel through the provider's effortValueMap (default OpenAI
  *      map: low→low, high→high, xhigh→high). `null` in the map = omit on purpose.
- *   6. model-aware `xhigh`: the default caps xhigh→high, but models that natively
+ *   7. model-aware `xhigh`: the default caps xhigh→high, but models that natively
  *      accept `xhigh` (gpt-5.1-codex-max, gpt-5.2+, gpt-5.4/5.5) keep it — don't
  *      silently degrade them. Providers that map xhigh to their own token
  *      (deepseek `max`, opencode `xhigh`) are untouched.
@@ -5540,10 +5736,15 @@ export function resolveWireEffort(config: LLMConfig, effort: EffortLevel | undef
   // server ignores it when N/A) so effort works for unlisted reasoning models.
   if ((def?.effortModelGate ?? 'any') === 'reasoning-only' && !isReasoningModel(model)) return null;
   // Binary on/off model (advertises only `on`/`off` via /models): collapse any
-  // graded request to `on` — sending `low`/`high` would be rejected and the
-  // endpoint would fall back to `on` anyway (and warn). `medium` already
-  // returned null above, so it omits the field and the model uses its default.
-  if (isBinaryReasoningModel(model)) return 'on';
+  // graded request only when the active provider accepts binary effort literals.
+  // Provider rules are authoritative because the capability registry is keyed by
+  // model id, while wire vocabularies are provider-specific.
+  if (isBinaryReasoningModel(model)) {
+    const binaryMap = binaryEffortValueMapFor(def);
+    const binaryMapped = binaryMap?.[effort];
+    if (binaryMapped === null) return null;
+    if (typeof binaryMapped === 'string' && binaryMapped.trim()) return binaryMapped;
+  }
   const map = def?.effortValueMap ?? DEFAULT_EFFORT_VALUE_MAP;
   const mapped = map[effort];
   if (mapped === null) return null;             // explicit omit for this level
@@ -5567,35 +5768,239 @@ export interface BuildPayloadOptions {
   tool_choice?: 'auto' | { type: 'function'; function: { name: string } };
 }
 
+function stripTaggedContent(content: any): any {
+  return typeof content === 'string' && TAG_MARKER_RE.test(content)
+    ? content.replace(TAG_MARKER_RE, '')
+    : content;
+}
+
+function stringifyContent(content: any): string {
+  const stripped = stripTaggedContent(content);
+  if (typeof stripped === 'string') return stripped;
+  try {
+    return JSON.stringify(stripped);
+  } catch {
+    return String(stripped ?? '');
+  }
+}
+
+function hasPromptLayers(message: any): message is PromptLayeredMessage & { promptLayers: PromptLayers } {
+  return (
+    !!message &&
+    message.role === 'system' &&
+    message.promptLayers &&
+    typeof message.promptLayers.instructions === 'string' &&
+    Array.isArray(message.promptLayers.developer) &&
+    typeof message.promptLayers.environment === 'string'
+  );
+}
+
+function appendDeveloperPromptLayer(message: any, content: string): boolean {
+  if (!hasPromptLayers(message)) return false;
+  const rendered = content.trim();
+  if (!rendered) return true;
+  message.content = [stringifyContent(message.content), rendered].filter(Boolean).join('\n\n');
+  message.promptLayers = {
+    ...message.promptLayers,
+    developer: [...message.promptLayers.developer, rendered],
+  };
+  return true;
+}
+
+function promptLayerInputParts(layers: PromptLayers): Array<{ type: 'input_text'; text: string }> {
+  return [layers.instructions, ...layers.developer]
+    .map((text) => text.trim())
+    .filter(Boolean)
+    .map((text) => ({ type: 'input_text' as const, text }));
+}
+
+function promptLayerSystemContent(layers: PromptLayers): string {
+  return promptLayerInputParts(layers).map((part) => part.text).join('\n\n');
+}
+
+function expandPromptLayersForChatCompletions(messages: any[]): any[] {
+  const first = messages[0];
+  const systemParts: string[] = [];
+  const out: any[] = [];
+  let rest = messages;
+
+  if (hasPromptLayers(first)) {
+    const systemContent = [
+      promptLayerSystemContent(first.promptLayers),
+      first.promptLayers.environment.trim(),
+    ].filter(Boolean).join('\n\n');
+    if (systemContent) systemParts.push(systemContent);
+    rest = messages.slice(1);
+  } else if (first?.role === 'system' || first?.role === 'developer') {
+    const systemContent = stringifyContent(first.content).trim();
+    if (systemContent) systemParts.push(systemContent);
+    rest = messages.slice(1);
+  }
+
+  for (const message of rest) {
+    if (message?.role === 'system' || message?.role === 'developer') {
+      const systemContent = stringifyContent(message.content).trim();
+      if (systemContent) systemParts.push(systemContent);
+      continue;
+    }
+    out.push(message);
+  }
+
+  if (systemParts.length > 0) {
+    out.unshift({ role: 'system', content: systemParts.join('\n\n') });
+  }
+  return out;
+}
+
+function mapChatCompletionMessage(m: any): any {
+  if (m.role === 'tool') {
+    return {
+      role: 'tool',
+      tool_call_id: m.tool_call_id,
+      name: m.name,
+      content: stringifyContent(m.content),
+    };
+  }
+  if (m.role === 'assistant') {
+    const out: any = { role: 'assistant', content: m.content || null };
+    if (m.tool_calls) out.tool_calls = m.tool_calls;
+    return out;
+  }
+  if (m.role === 'developer') {
+    return {
+      role: 'system',
+      content: stripTaggedContent(m.content),
+    };
+  }
+  return {
+    role: m.role,
+    content: stripTaggedContent(m.content),
+  };
+}
+
+function inputTextContent(text: string): Array<{ type: 'input_text'; text: string }> {
+  return [{ type: 'input_text', text }];
+}
+
+function outputTextContent(text: string): Array<{ type: 'output_text'; text: string }> {
+  return [{ type: 'output_text', text }];
+}
+
+function buildResponsesInput(messages: any[]): { instructions?: string; input: any[] } {
+  const first = messages[0];
+  const input: any[] = [];
+  let instructions: string | undefined;
+  let rest = messages;
+
+  if (hasPromptLayers(first)) {
+    instructions = first.promptLayers.instructions.trim() || undefined;
+    const content = first.promptLayers.developer
+      .map((text) => text.trim())
+      .filter(Boolean)
+      .map((text) => ({ type: 'input_text' as const, text }));
+    if (content.length > 0) {
+      input.push({
+        type: 'message',
+        role: 'developer',
+        content,
+      });
+    }
+    if (first.promptLayers.environment.trim()) {
+      input.push({
+        type: 'message',
+        role: 'user',
+        content: inputTextContent(first.promptLayers.environment),
+      });
+    }
+    rest = messages.slice(1);
+  } else if (first?.role === 'system' || first?.role === 'developer') {
+    instructions = stringifyContent(first.content).trim() || undefined;
+    rest = messages.slice(1);
+  }
+
+  for (const message of rest) {
+    const role = message?.role;
+    if (role === 'tool') {
+      input.push({
+        type: 'function_call_output',
+        call_id: String(message.tool_call_id ?? message.name ?? ''),
+        output: stringifyContent(message.content),
+      });
+      continue;
+    }
+
+    if (role === 'assistant') {
+      const content = typeof message.content === 'string' ? message.content : '';
+      if (content.trim()) {
+        input.push({
+          type: 'message',
+          role: 'assistant',
+          content: outputTextContent(content),
+        });
+      }
+      if (Array.isArray(message.tool_calls)) {
+        for (const call of message.tool_calls) {
+          const fn = call?.function ?? {};
+          input.push({
+            type: 'function_call',
+            call_id: String(call?.id ?? ''),
+            name: String(fn.name ?? ''),
+            arguments: typeof fn.arguments === 'string' ? fn.arguments : stringifyContent(fn.arguments ?? {}),
+          });
+        }
+      }
+      continue;
+    }
+
+    if (role === 'system' || role === 'developer') {
+      input.push({
+        type: 'message',
+        role: 'developer',
+        content: inputTextContent(stringifyContent(message.content)),
+      });
+      continue;
+    }
+
+    if (role === 'user') {
+      input.push({
+        type: 'message',
+        role,
+        content: inputTextContent(stringifyContent(message.content)),
+      });
+    }
+  }
+
+  return { instructions, input };
+}
+
+function buildChatToolSpecs(tools: any[]): NonNullable<ChatCompletionPayload['tools']> {
+  return tools.map(t => ({
+    type: 'function',
+    function: {
+      name: t.name,
+      description: t.description || '',
+      parameters: t.inputSchema || { type: 'object', properties: {} },
+    },
+  }));
+}
+
+function buildResponsesToolSpecs(tools: any[]): NonNullable<ResponsesPayload['tools']> {
+  return tools.map(t => ({
+    type: 'function',
+    name: t.name,
+    description: t.description || '',
+    parameters: t.inputSchema || { type: 'object', properties: {} },
+    strict: false,
+  }));
+}
+
 export function buildChatCompletionPayload(
   config: LLMConfig,
   messages: any[],
   tools: any[],
   options: BuildPayloadOptions = {},
 ): ChatCompletionPayload {
-  const stripTag = (content: any) =>
-    typeof content === 'string' && TAG_MARKER_RE.test(content)
-      ? content.replace(TAG_MARKER_RE, '')
-      : content;
-  const mappedMessages = messages.map(m => {
-    if (m.role === 'tool') {
-      return {
-        role: 'tool',
-        tool_call_id: m.tool_call_id,
-        name: m.name,
-        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
-      };
-    }
-    if (m.role === 'assistant') {
-      const out: any = { role: 'assistant', content: m.content || null };
-      if (m.tool_calls) out.tool_calls = m.tool_calls;
-      return out;
-    }
-    return {
-      role: m.role,
-      content: stripTag(m.content),
-    };
-  });
+  const mappedMessages = expandPromptLayersForChatCompletions(messages).map(mapChatCompletionMessage);
 
   const body: ChatCompletionPayload = {
     model: config.model,
@@ -5603,14 +6008,7 @@ export function buildChatCompletionPayload(
   };
 
   if (tools.length > 0) {
-    body.tools = tools.map(t => ({
-      type: 'function',
-      function: {
-        name: t.name,
-        description: t.description || '',
-        parameters: t.inputSchema || { type: 'object', properties: {} }
-      }
-    }));
+    body.tools = buildChatToolSpecs(tools);
     // Default 'auto'; callers can force a specific function (structured output).
     body.tool_choice = options.tool_choice ?? 'auto';
   }
@@ -5639,6 +6037,68 @@ export function buildChatCompletionPayload(
   }
 
   return body;
+}
+
+export function buildResponsesPayload(
+  config: LLMConfig,
+  messages: any[],
+  tools: any[],
+  options: BuildPayloadOptions = {},
+): ResponsesPayload {
+  const { instructions, input } = buildResponsesInput(messages);
+  const body: ResponsesPayload = {
+    model: config.model,
+    input,
+    store: false,
+    include: [],
+  };
+  if (instructions) body.instructions = instructions;
+
+  if (tools.length > 0) {
+    body.tools = buildResponsesToolSpecs(tools);
+    const choice = options.tool_choice ?? 'auto';
+    body.tool_choice = choice === 'auto'
+      ? 'auto'
+      : { type: 'function', name: choice.function.name };
+    body.parallel_tool_calls = true;
+  }
+
+  const wireEffort = resolveWireEffort(config, options.effort);
+  if (wireEffort !== null) {
+    body.reasoning = { effort: wireEffort };
+  }
+
+  const maxOutput = getCliKnobs().maxOutputTokens;
+  if (typeof maxOutput === 'number' && maxOutput > 0) {
+    body.max_output_tokens = Math.floor(maxOutput);
+  }
+
+  return body;
+}
+
+function stripReasoningEffortFromBody(body: any): any | undefined {
+  if (!body || typeof body !== 'object') return undefined;
+  const hasFlat = Object.prototype.hasOwnProperty.call(body, 'reasoning_effort');
+  const hasNested = body.reasoning &&
+    typeof body.reasoning === 'object' &&
+    Object.prototype.hasOwnProperty.call(body.reasoning, 'effort');
+  if (!hasFlat && !hasNested) return undefined;
+
+  const next = { ...body };
+  delete next.reasoning_effort;
+  if (hasNested) {
+    const reasoning = { ...next.reasoning };
+    delete reasoning.effort;
+    if (Object.keys(reasoning).length > 0) next.reasoning = reasoning;
+    else delete next.reasoning;
+  }
+  return next;
+}
+
+function isInvalidReasoningEffortError(status: number, body: string): boolean {
+  if (status !== 400) return false;
+  return /(reasoning[_\-. ]?effort|reasoning\.effort)/i.test(body) &&
+    /(invalid|unsupported|not supported|supported values|possible values|unknown|unrecognized)/i.test(body);
 }
 
 /**
@@ -5678,8 +6138,10 @@ export async function callOpenAI(
   // We then re-append `/chat/completions` below, producing a duplicate
   // `/chat/completions/chat/completions` and a 404. Strip the suffix
   // defensively so both shapes (full URL or base URL) work.
-  const rawEndpoint = config.endpoint || 'https://api.openai.com/v1';
+  const initialDef = activeProviderDef(config);
+  const rawEndpoint = config.endpoint || initialDef?.endpoint || 'https://api.openai.com/v1';
   const endpoint = rawEndpoint.replace(/\/+$/, '').replace(/\/chat\/completions$/, '');
+  const effectiveConfig: LLMConfig = { ...config, endpoint };
   // Key resolution is CONFIG-DRIVEN, not env-driven: BrainRouter reads the key
   // from config.apiKey (the config knob). Standard provider env vars are imported
   // into config ONCE at load time (config.ts → backfillApiKeyFromEnv), so we never
@@ -5688,7 +6150,7 @@ export async function callOpenAI(
   // public/anonymous tier (opencode "public") supplies a last-resort key; a local
   // server accepts a throwaway bearer. Locality comes from the provider's `local`
   // flag first, then a loopback-endpoint check (covers a custom local gateway).
-  const def = activeProviderDef(config);
+  const def = activeProviderDef(effectiveConfig);
   let apiKey = config.apiKey || '';
   const isLocal = (def?.local ?? false) || isLoopbackEndpoint(endpoint);
   if (!apiKey && !isLocal && def?.defaultApiKey) apiKey = def.defaultApiKey;
@@ -5699,7 +6161,10 @@ export async function callOpenAI(
     apiKey = LOCAL_PLACEHOLDER_KEY;
   }
 
-  const body = buildChatCompletionPayload(config, messages, tools, options);
+  const requestFormat = resolveRequestFormat(effectiveConfig, endpoint);
+  const body = requestFormat === 'responses'
+    ? buildResponsesPayload(effectiveConfig, messages, tools, options)
+    : buildChatCompletionPayload(effectiveConfig, messages, tools, options);
 
   // 0.3.9 item 8 — emit the cache-stable prefix fingerprint for this
   // request. When tracing is disabled this resolves to a no-op
@@ -5711,8 +6176,9 @@ export async function callOpenAI(
   traceEvent('llm_call.prefix_fingerprint', {
     model: config.model,
     endpoint,
+    requestFormat,
     prefixFingerprint,
-    promptMessages: body.messages.length,
+    promptMessages: requestFormat === 'responses' ? (body as ResponsesPayload).input.length : (body as ChatCompletionPayload).messages.length,
     toolCount: body.tools?.length ?? 0,
   });
 
@@ -5723,48 +6189,69 @@ export async function callOpenAI(
     headers['Authorization'] = `Bearer ${apiKey}`;
   }
 
-  const timeoutMs = getCliKnobs().llmTimeoutMs;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  // DESK-6 — abort on EITHER the timeout OR the user's Stop signal; the catch
-  // disambiguates so a Stop never masquerades as a (retryable) timeout.
-  const fetchSignal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
+  const requestUrl = `${endpoint}/${requestFormat === 'responses' ? 'responses' : 'chat/completions'}`;
+  const postBody = async (requestBody: any): Promise<Response> => {
+    const timeoutMs = getCliKnobs().llmTimeoutMs;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    // DESK-6 — abort on EITHER the timeout OR the user's Stop signal; the catch
+    // disambiguates so a Stop never masquerades as a (retryable) timeout.
+    const fetchSignal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
 
-  // Gate every chat LLM call through the process-wide semaphore. This
-  // prevents a fan-out of N parallel children from firing N simultaneous
-  // requests at the backend — the same condition that was unloading the
-  // local LM Studio model. The MCP child has its own matching semaphore;
-  // both consume the BRAINROUTER_LLM_MAX_CONCURRENT budget on the same
-  // backend instance.
-  const release = await acquireLLMSlot();
-  let res: Response;
-  try {
-    res = await fetch(`${endpoint}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: fetchSignal,
-    });
-  } catch (err: any) {
-    release();
-    if (err?.name === 'AbortError') {
-      if (options.signal?.aborted) throw new InterruptError();
-      throw new Error(`LLM request timed out after ${timeoutMs}ms. Check that ${endpoint} is running and that model "${config.model}" can answer chat/completions requests with tools enabled.`);
+    // Gate every chat LLM call through the process-wide semaphore. This
+    // prevents a fan-out of N parallel children from firing N simultaneous
+    // requests at the backend — the same condition that was unloading the
+    // local LM Studio model. The MCP child has its own matching semaphore;
+    // both consume the BRAINROUTER_LLM_MAX_CONCURRENT budget on the same
+    // backend instance.
+    const release = await acquireLLMSlot();
+    try {
+      return await fetch(requestUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestBody),
+        signal: fetchSignal,
+      });
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        if (options.signal?.aborted) throw new InterruptError();
+        throw new Error(`LLM request timed out after ${timeoutMs}ms. Check that ${endpoint} is running and that model "${config.model}" can answer ${requestFormat} requests with tools enabled.`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeout);
+      // Release once the headers are back; reading the body is local work that
+      // doesn't need to block other LLM callers from starting.
+      release();
     }
-    throw err;
-  } finally {
-    clearTimeout(timeout);
-  }
+  };
 
-  // Release once the headers are back; reading the body is local work that
-  // doesn't need to block other LLM callers from starting.
-  release();
-
+  let res = await postBody(body);
   if (!res.ok) {
     const errText = await res.text();
+    const retryBody = isInvalidReasoningEffortError(res.status, errText)
+      ? stripReasoningEffortFromBody(body)
+      : undefined;
+    if (retryBody) {
+      traceEvent('llm_call.reasoning_effort_retry', {
+        model: config.model,
+        endpoint,
+        requestFormat,
+        status: res.status,
+      });
+      res = await postBody(retryBody);
+      if (res.ok) {
+        const retryData = await res.json() as any;
+        if (requestFormat === 'responses') {
+          return normalizeResponsesOutput(retryData, endpoint, config.model);
+        }
+        return normalizeChatCompletionOutput(retryData, endpoint, config.model);
+      }
+    }
     // RECONNECT — attach the structured status + any `Retry-After` so the resilient
     // loop classifies it (429/5xx → reconnect) and honors the server's backoff.
-    const apiErr: any = new Error(`OpenAI API error: ${res.status} ${res.statusText} - ${errText}`);
+    const finalErrText = retryBody ? await res.text() : errText;
+    const apiErr: any = new Error(`OpenAI API error: ${res.status} ${res.statusText} - ${finalErrText}`);
     apiErr.status = res.status;
     const retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'));
     if (retryAfterMs !== undefined) apiErr.retryAfterMs = retryAfterMs;
@@ -5772,7 +6259,14 @@ export async function callOpenAI(
   }
 
   const data = await res.json() as any;
+  if (requestFormat === 'responses') {
+    return normalizeResponsesOutput(data, endpoint, config.model);
+  }
 
+  return normalizeChatCompletionOutput(data, endpoint, config.model);
+}
+
+function normalizeChatCompletionOutput(data: any, endpoint: string, model: string) {
   // Defensive response-shape parsing. Some endpoints (LM Studio with certain
   // models, OpenRouter on specific upstream errors, local vLLM under load,
   // gpt-oss reasoning models with a non-standard envelope) return a 200 OK
@@ -5791,7 +6285,7 @@ export async function callOpenAI(
   if (!Array.isArray(data?.choices) || data.choices.length === 0) {
     throw new Error(
       `LLM endpoint returned no choices. ` +
-      `Model "${config.model}" at ${endpoint} may not support chat/completions, ` +
+      `Model "${model}" at ${endpoint} may not support chat/completions, ` +
       `may need a different request shape (reasoning/harmony format?), or be misconfigured. ` +
       `Response body: ${JSON.stringify(data).slice(0, 600)}`,
     );
@@ -5849,8 +6343,10 @@ export async function callOpenAIStream(
     onReasoningDelta?: (text: string) => void;
   } = {},
 ) {
-  const rawEndpoint = config.endpoint || 'https://api.openai.com/v1';
+  const initialDef = activeProviderDef(config);
+  const rawEndpoint = config.endpoint || initialDef?.endpoint || 'https://api.openai.com/v1';
   const endpoint = rawEndpoint.replace(/\/+$/, '').replace(/\/chat\/completions$/, '');
+  const effectiveConfig: LLMConfig = { ...config, endpoint };
   // Key resolution is CONFIG-DRIVEN, not env-driven: BrainRouter reads the key
   // from config.apiKey (the config knob). Standard provider env vars are imported
   // into config ONCE at load time (config.ts → backfillApiKeyFromEnv), so we never
@@ -5859,7 +6355,7 @@ export async function callOpenAIStream(
   // public/anonymous tier (opencode "public") supplies a last-resort key; a local
   // server accepts a throwaway bearer. Locality comes from the provider's `local`
   // flag first, then a loopback-endpoint check (covers a custom local gateway).
-  const def = activeProviderDef(config);
+  const def = activeProviderDef(effectiveConfig);
   let apiKey = config.apiKey || '';
   const isLocal = (def?.local ?? false) || isLoopbackEndpoint(endpoint);
   if (!apiKey && !isLocal && def?.defaultApiKey) apiKey = def.defaultApiKey;
@@ -5870,9 +6366,14 @@ export async function callOpenAIStream(
     apiKey = LOCAL_PLACEHOLDER_KEY;
   }
 
-  const body: any = buildChatCompletionPayload(config, messages, tools, options);
+  const requestFormat = resolveRequestFormat(effectiveConfig, endpoint);
+  const body: any = requestFormat === 'responses'
+    ? buildResponsesPayload(effectiveConfig, messages, tools, options)
+    : buildChatCompletionPayload(effectiveConfig, messages, tools, options);
   body.stream = true;
-  body.stream_options = { include_usage: true };
+  if (requestFormat === 'chat-completions') {
+    body.stream_options = { include_usage: true };
+  }
 
   // 0.3.9 item 8 — fingerprint the cache-stable prefix for this stream
   // call too. Item 10 will correlate this with the SSE-final usage row
@@ -5881,8 +6382,9 @@ export async function callOpenAIStream(
   traceEvent('llm_call.prefix_fingerprint', {
     model: config.model,
     endpoint,
+    requestFormat,
     prefixFingerprint: streamPrefixFingerprint,
-    promptMessages: body.messages.length,
+    promptMessages: requestFormat === 'responses' ? body.input.length : body.messages.length,
     toolCount: body.tools?.length ?? 0,
     stream: true,
   });
@@ -5893,43 +6395,75 @@ export async function callOpenAIStream(
   };
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
-  const timeoutMs = getCliKnobs().llmTimeoutMs;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  // DESK-6 — abort on timeout OR the user's Stop; disambiguate in the catch.
-  const fetchSignal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
+  const requestUrl = `${endpoint}/${requestFormat === 'responses' ? 'responses' : 'chat/completions'}`;
+  const openStreamRequest = async (requestBody: any): Promise<{ res: Response; finish: () => void }> => {
+    const timeoutMs = getCliKnobs().llmTimeoutMs;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    // DESK-6 — abort on timeout OR the user's Stop; disambiguate in the catch.
+    const fetchSignal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
 
-  const release = await acquireLLMSlot();
-  let res: Response;
-  try {
-    res = await fetch(`${endpoint}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: fetchSignal,
-    });
-  } catch (err: any) {
-    release();
-    clearTimeout(timeout);
-    if (err?.name === 'AbortError') {
-      if (options.signal?.aborted) throw new InterruptError();
-      throw new Error(`LLM stream request timed out after ${timeoutMs}ms.`);
+    const release = await acquireLLMSlot();
+    try {
+      const res = await fetch(requestUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestBody),
+        signal: fetchSignal,
+      });
+      return {
+        res,
+        finish: () => {
+          release();
+          clearTimeout(timeout);
+        },
+      };
+    } catch (err: any) {
+      release();
+      clearTimeout(timeout);
+      if (err?.name === 'AbortError') {
+        if (options.signal?.aborted) throw new InterruptError();
+        throw new Error(`LLM stream request timed out after ${timeoutMs}ms.`);
+      }
+      throw err;
     }
-    throw err;
-  }
+  };
 
-  if (!res.ok || !res.body) {
-    release();
-    clearTimeout(timeout);
-    const errText = res.body ? await res.text() : '';
-    throw new Error(`OpenAI API error (stream): ${res.status} ${res.statusText} - ${errText}`);
+  let attempt = await openStreamRequest(body);
+  if (!attempt.res.ok || !attempt.res.body) {
+    const errText = attempt.res.body ? await attempt.res.text() : '';
+    const retryBody = isInvalidReasoningEffortError(attempt.res.status, errText)
+      ? stripReasoningEffortFromBody(body)
+      : undefined;
+    attempt.finish();
+    if (retryBody) {
+      traceEvent('llm_call.reasoning_effort_retry', {
+        model: config.model,
+        endpoint,
+        requestFormat,
+        status: attempt.res.status,
+        stream: true,
+      });
+      attempt = await openStreamRequest(retryBody);
+      if (!attempt.res.ok || !attempt.res.body) {
+        const retryErrText = attempt.res.body ? await attempt.res.text() : '';
+        const status = attempt.res.status;
+        const statusText = attempt.res.statusText;
+        attempt.finish();
+        throw new Error(`OpenAI API error (stream): ${status} ${statusText} - ${retryErrText}`);
+      }
+    } else {
+      throw new Error(`OpenAI API error (stream): ${attempt.res.status} ${attempt.res.statusText} - ${errText}`);
+    }
   }
+  const res = attempt.res;
 
   // Accumulators that match the non-streaming response shape.
   let content = '';
   let reasoning = '';
   const toolCallsByIndex = new Map<number, { id?: string; type?: string; function: { name: string; arguments: string } }>();
   let usage: { prompt_tokens?: number; completion_tokens?: number } | undefined;
+  let finalResponse: any;
   // `length` ⇒ the provider truncated the stream at its token cap. The last
   // non-empty finish_reason in the stream wins.
   let finishReason: string | undefined;
@@ -5960,6 +6494,85 @@ export async function callOpenAIStream(
           if (payload === '[DONE]') continue;
           let frameJson: any;
           try { frameJson = JSON.parse(payload); } catch { continue; }
+          if (requestFormat === 'responses') {
+            if (frameJson?.type === 'error') {
+              const message = frameJson.error?.message ?? frameJson.message ?? JSON.stringify(frameJson).slice(0, 400);
+              throw new Error(`OpenAI Responses stream error: ${message}`);
+            }
+            if (frameJson?.type === 'response.output_text.delta' && typeof frameJson.delta === 'string') {
+              content += frameJson.delta;
+              handlers.onTextDelta?.(frameJson.delta);
+              continue;
+            }
+            if (frameJson?.type === 'response.refusal.delta' && typeof frameJson.delta === 'string') {
+              content += frameJson.delta;
+              handlers.onTextDelta?.(frameJson.delta);
+              continue;
+            }
+            if (typeof frameJson?.type === 'string' && frameJson.type.includes('reasoning') && typeof frameJson.delta === 'string') {
+              reasoning += frameJson.delta;
+              handlers.onReasoningDelta?.(frameJson.delta);
+              continue;
+            }
+            if (frameJson?.type === 'response.output_item.added' && frameJson.item?.type === 'function_call') {
+              const idx = typeof frameJson.output_index === 'number' ? frameJson.output_index : toolCallsByIndex.size;
+              toolCallsByIndex.set(idx, {
+                id: frameJson.item.call_id ?? frameJson.item.id,
+                type: 'function',
+                function: {
+                  name: frameJson.item.name ?? '',
+                  arguments: typeof frameJson.item.arguments === 'string' ? frameJson.item.arguments : '',
+                },
+              });
+              continue;
+            }
+            if (frameJson?.type === 'response.function_call_arguments.delta') {
+              const idx = typeof frameJson.output_index === 'number' ? frameJson.output_index : 0;
+              const acc = toolCallsByIndex.get(idx) ?? { type: 'function', function: { name: '', arguments: '' } };
+              if (typeof frameJson.delta === 'string') acc.function.arguments += frameJson.delta;
+              toolCallsByIndex.set(idx, acc);
+              continue;
+            }
+            if (frameJson?.type === 'response.function_call_arguments.done') {
+              const idx = typeof frameJson.output_index === 'number' ? frameJson.output_index : 0;
+              const acc = toolCallsByIndex.get(idx) ?? { type: 'function', function: { name: '', arguments: '' } };
+              const item = frameJson.item;
+              if (item?.call_id || item?.id) acc.id = item.call_id ?? item.id;
+              if (item?.name) acc.function.name = item.name;
+              if (typeof frameJson.arguments === 'string') acc.function.arguments = frameJson.arguments;
+              else if (typeof item?.arguments === 'string') acc.function.arguments = item.arguments;
+              toolCallsByIndex.set(idx, acc);
+              continue;
+            }
+            if (frameJson?.type === 'response.output_item.done' && frameJson.item?.type === 'function_call') {
+              const idx = typeof frameJson.output_index === 'number' ? frameJson.output_index : 0;
+              toolCallsByIndex.set(idx, {
+                id: frameJson.item.call_id ?? frameJson.item.id,
+                type: 'function',
+                function: {
+                  name: frameJson.item.name ?? '',
+                  arguments: typeof frameJson.item.arguments === 'string' ? frameJson.item.arguments : '',
+                },
+              });
+              continue;
+            }
+            if (frameJson?.type === 'response.completed' || frameJson?.type === 'response.done') {
+              finalResponse = frameJson.response;
+              usage = normalizeProviderUsage(frameJson.response?.usage) as typeof usage;
+              continue;
+            }
+            if (frameJson?.type === 'response.incomplete') {
+              finalResponse = frameJson.response;
+              usage = normalizeProviderUsage(frameJson.response?.usage) as typeof usage;
+              finishReason = frameJson.response?.incomplete_details?.reason ?? 'incomplete';
+              continue;
+            }
+            if (frameJson?.type === 'response.failed') {
+              const message = frameJson.response?.error?.message ?? JSON.stringify(frameJson.response?.error ?? frameJson).slice(0, 400);
+              throw new Error(`OpenAI Responses stream failed: ${message}`);
+            }
+            continue;
+          }
           if (frameJson?.usage) {
             usage = {
               prompt_tokens: frameJson.usage.prompt_tokens,
@@ -5999,14 +6612,23 @@ export async function callOpenAIStream(
       }
     }
   } finally {
-    release();
-    clearTimeout(timeout);
+    attempt.finish();
   }
 
   const toolCalls = [...toolCallsByIndex.entries()]
     .sort((a, b) => a[0] - b[0])
     .map(([, v]) => ({ id: v.id, type: v.type ?? 'function', function: v.function }))
     .filter((tc) => tc.function.name); // drop incomplete entries
+
+  if (requestFormat === 'responses' && finalResponse && (!content || toolCalls.length === 0)) {
+    const normalized = normalizeResponsesOutput(finalResponse, endpoint, config.model);
+    if (!content && normalized.content) content = normalized.content;
+    if (toolCalls.length === 0 && normalized.toolCalls?.length) {
+      toolCalls.push(...normalized.toolCalls);
+    }
+    usage = (usage ?? normalized.usage) as typeof usage;
+    finishReason = finishReason ?? normalized.finishReason;
+  }
 
   return {
     content,

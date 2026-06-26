@@ -477,6 +477,106 @@ export class McpClientPool {
     return { tools: all };
   }
 
+  private resolveResourceServerId(server: string): string | undefined {
+    if (this.clients.has(server)) return server;
+    return this.prefixToServerId.get(server);
+  }
+
+  private connectedResourceClients(server?: string): Array<[string, McpClientWrapper]> {
+    if (server) {
+      const serverId = this.resolveResourceServerId(server);
+      if (!serverId) return [];
+      const wrapper = this.clients.get(serverId);
+      return wrapper && wrapper.isConnected() ? [[serverId, wrapper]] : [];
+    }
+    return [...this.clients].filter(([, wrapper]) => wrapper.isConnected());
+  }
+
+  /**
+   * Codex-style MCP resource facade. Lists resources across connected servers
+   * and tags each result with the concrete `server` id that `readResource`
+   * expects. A cursor is server-local, so paging without a server selector is
+   * only accepted when exactly one server is connected.
+   */
+  async listResources(params: { cursor?: string; server?: string } = {}, options?: { signal?: AbortSignal }): Promise<any> {
+    const connected = this.connectedResourceClients(params.server);
+    if (params.server && connected.length === 0) {
+      throw new Error(`MCP server "${params.server}" is not connected or unknown.`);
+    }
+    if (params.cursor && !params.server && connected.length > 1) {
+      throw new Error('list_mcp_resources: `cursor` requires `server` when multiple MCP servers are connected.');
+    }
+
+    const all: any[] = [];
+    const nextCursors: Record<string, string> = {};
+    const settled = await Promise.allSettled(
+      connected.map(([, wrapper]) => wrapper.listResources({ cursor: params.cursor }, options)),
+    );
+    for (let i = 0; i < connected.length; i++) {
+      const [serverId] = connected[i];
+      const result = settled[i];
+      if (result.status !== 'fulfilled') continue;
+      for (const resource of (result.value as any).resources ?? []) {
+        all.push({ server: serverId, ...resource });
+      }
+      const nextCursor = (result.value as any).nextCursor;
+      if (typeof nextCursor === 'string' && nextCursor) nextCursors[serverId] = nextCursor;
+    }
+    return {
+      resources: all,
+      ...(Object.keys(nextCursors).length === 1 ? { nextCursor: Object.values(nextCursors)[0] } : {}),
+      ...(Object.keys(nextCursors).length > 1 ? { nextCursors } : {}),
+    };
+  }
+
+  /** Same facade as {@link listResources}, for parameterized MCP resources. */
+  async listResourceTemplates(params: { cursor?: string; server?: string } = {}, options?: { signal?: AbortSignal }): Promise<any> {
+    const connected = this.connectedResourceClients(params.server);
+    if (params.server && connected.length === 0) {
+      throw new Error(`MCP server "${params.server}" is not connected or unknown.`);
+    }
+    if (params.cursor && !params.server && connected.length > 1) {
+      throw new Error('list_mcp_resource_templates: `cursor` requires `server` when multiple MCP servers are connected.');
+    }
+
+    const all: any[] = [];
+    const nextCursors: Record<string, string> = {};
+    const settled = await Promise.allSettled(
+      connected.map(([, wrapper]) => wrapper.listResourceTemplates({ cursor: params.cursor }, options)),
+    );
+    for (let i = 0; i < connected.length; i++) {
+      const [serverId] = connected[i];
+      const result = settled[i];
+      if (result.status !== 'fulfilled') continue;
+      for (const template of (result.value as any).resourceTemplates ?? []) {
+        all.push({ server: serverId, ...template });
+      }
+      const nextCursor = (result.value as any).nextCursor;
+      if (typeof nextCursor === 'string' && nextCursor) nextCursors[serverId] = nextCursor;
+    }
+    return {
+      resourceTemplates: all,
+      ...(Object.keys(nextCursors).length === 1 ? { nextCursor: Object.values(nextCursors)[0] } : {}),
+      ...(Object.keys(nextCursors).length > 1 ? { nextCursors } : {}),
+    };
+  }
+
+  /** Read a single MCP resource from the server id returned by listResources. */
+  async readResource(params: { server: string; uri: string }, options?: { signal?: AbortSignal }): Promise<any> {
+    const server = String(params.server ?? '').trim();
+    const uri = String(params.uri ?? '').trim();
+    if (!server) throw new Error('read_mcp_resource requires a server.');
+    if (!uri) throw new Error('read_mcp_resource requires a uri.');
+
+    const serverId = this.resolveResourceServerId(server);
+    const wrapper = serverId ? this.clients.get(serverId) : undefined;
+    if (!serverId || !wrapper || !wrapper.isConnected()) {
+      throw new Error(`MCP server "${server}" is not connected or unknown.`);
+    }
+    const result = await wrapper.readResource({ uri }, options);
+    return { server: serverId, ...result };
+  }
+
   /**
    * Route a tool call to the right server. Accepts both name forms:
    *

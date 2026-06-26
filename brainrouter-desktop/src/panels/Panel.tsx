@@ -29,7 +29,7 @@ export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'requirements', title: 'Requirements', icon: 'tasks' },
   { id: 'annotations', title: 'Annotations', icon: 'review' },
   { id: 'artifacts', title: 'Artifacts', icon: 'file' },
-  { id: 'ci', title: 'CI / Checks', icon: 'check-circle' },
+  { id: 'ci', title: 'PR / Checks', icon: 'check-circle' },
   { id: 'atlas', title: 'Atlas', icon: 'atlas' },
 ];
 

@@ -15,6 +15,8 @@ import {
   createWaitAgentsTool,
   createReadAgentTranscriptTool,
   createCloseAgentTool,
+  createSendInputTool,
+  createResumeAgentTool,
   createRouteTaskTool,
   createRunWorkflowTool,
 } from '../orchestration/tools.js';
@@ -139,6 +141,40 @@ export const LOCAL_TOOLS = [
     }
   },
   {
+    name: 'list_mcp_resources',
+    description: 'List resources provided by MCP servers. Resources are structured context such as files, schemas, or app data; prefer them over web search when available.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cursor: { type: 'string', description: 'Optional pagination cursor from a previous list_mcp_resources result.' },
+        server: { type: 'string', description: 'Optional MCP server id to list. Use the server value returned by prior resource listings.' }
+      }
+    }
+  },
+  {
+    name: 'list_mcp_resource_templates',
+    description: 'List parameterized resource templates provided by MCP servers.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cursor: { type: 'string', description: 'Optional pagination cursor from a previous list_mcp_resource_templates result.' },
+        server: { type: 'string', description: 'Optional MCP server id to list. Use the server value returned by prior template listings.' }
+      }
+    }
+  },
+  {
+    name: 'read_mcp_resource',
+    description: 'Read a specific resource from an MCP server by server id and URI.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        server: { type: 'string', description: 'MCP server id returned by list_mcp_resources or list_mcp_resource_templates.' },
+        uri: { type: 'string', description: 'Resource URI to read.' }
+      },
+      required: ['server', 'uri']
+    }
+  },
+  {
     name: 'lsp',
     description: "Semantic code navigation via the language server (exact, not fuzzy). actions: definition / references / hover (need file + 1-based line + character), symbols (file only, lists the file's symbols). Returns file:line:col locations or hover text. Requires a configured language server (cli.lspServers); reports clearly when none is available.",
     inputSchema: {
@@ -242,7 +278,7 @@ export const LOCAL_TOOLS = [
       'Create or update a durable ARTIFACT — a self-contained, reusable piece of work the user will want to refer back to, edit, or keep: a design doc, a report, an HTML/SVG mockup, a diagram, a standalone code file. PROMOTE to an artifact (instead of leaving it inline in chat) when the content is substantial (~15+ lines), self-contained, and likely to be iterated or reused; keep short, conversational, or one-off answers inline. ' +
       'OMIT `id` to create a new artifact (needs `title`, `content`, and a `kind`). PASS `id` to GROW an existing artifact in place — every content change is saved as a new VERSION (the user can diff/revert), and passing an id is how a later turn or a sub-agent keeps editing the SAME artifact instead of making a new one. ' +
       'Artifacts are captures of work, NOT applications: keep them single, self-contained pages — no backend, no external network calls. ' +
-      'STYLING (§AV-6): when an artifact is visual (html/svg), honor the project DESIGN SYSTEM if the workspace instruction file (AGENT.md / AGENTS.md / CLAUDE.md, shown in your context) defines a "Design system" section — its palette, typography, and spacing. Precedence: an explicit user request wins over project tokens, which win over your own defaults.',
+      'STYLING (§AV-6): when an artifact is visual (html/svg), honor the project DESIGN SYSTEM if the workspace instruction file (AGENT.md / AGENTS.md / CLAUDE.md / .cursorrules / codex.md, shown in your context) defines a "Design system" section — its palette, typography, and spacing. Precedence: an explicit user request wins over project tokens, which win over your own defaults.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -278,6 +314,8 @@ export const LOCAL_TOOLS = [
   createWaitAgentsTool(),
   createReadAgentTranscriptTool(),
   createCloseAgentTool(),
+  createSendInputTool(),
+  createResumeAgentTool(),
   createRouteTaskTool(),
   createRunWorkflowTool(),
   {
@@ -441,7 +479,7 @@ export const LOCAL_TOOLS = [
   {
     name: 'goal_blocked',
     description:
-      'Mark the active /goal blocked. CALL when no defensible path remains within boundaries (missing data, ambiguous spec, external dependency). Pass a reason and what user input would unblock it. **PRECONDITION for "I don\'t know what X is" blockers: you MUST first have run `list_dir(.)`, at least one `glob_files` / `grep_search` for the term, AND read any `AGENT.md` / `AGENTS.md` / `CLAUDE.md` / `README.md` present in the workspace root. Workspace docs typically point at gitignored peer folders (e.g. `vendor/`, `third_party/`) that contain the answer — blocking purely on a memory miss is rejected.** The `reason` field MUST cite which directories/files you actually checked. CRITICAL: in the SAME assistant message as this tool call, ALSO write the user-visible explanation as prose — what you tried, what you learned, why you stopped, what the user needs to do next. The `reason` / `needed` fields are short audit metadata, NOT the deliverable.',
+      'Mark the active /goal blocked. CALL when no defensible path remains within boundaries (missing data, ambiguous spec, external dependency). Pass a reason and what user input would unblock it. **PRECONDITION for "I don\'t know what X is" blockers: you MUST first have run `list_dir(.)`, at least one `glob_files` / `grep_search` for the term, AND read any `AGENT.md` / `AGENTS.md` / `CLAUDE.md` / `.cursorrules` / `codex.md` / `README.md` present in the workspace root. Workspace docs typically point at gitignored peer folders (e.g. `vendor/`, `third_party/`) that contain the answer — blocking purely on a memory miss is rejected.** The `reason` field MUST cite which directories/files you actually checked. CRITICAL: in the SAME assistant message as this tool call, ALSO write the user-visible explanation as prose — what you tried, what you learned, why you stopped, what the user needs to do next. The `reason` / `needed` fields are short audit metadata, NOT the deliverable.',
     inputSchema: {
       type: 'object',
       properties: {

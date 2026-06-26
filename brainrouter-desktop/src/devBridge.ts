@@ -7,7 +7,7 @@
  * when the prompt mentions "approve". No-op when the real bridge exists.
  */
 import type { AgentCommand, AgentEvent, AgentEventMessage } from '@kinqs/brainrouter-agent-protocol';
-import type { AtlasGraph } from '@kinqs/brainrouter-types';
+import type { AtlasGraph, ConnectorCatalogEntry, ConnectorRecord } from '@kinqs/brainrouter-types';
 
 /** A representative synthetic codebase (small commerce app) for browser-only dev. */
 function devFile(path: string, category: 'code' | 'config' | 'docs' | 'infra', complexity: 'simple' | 'moderate' | 'complex', lang = 'typescript') {
@@ -469,7 +469,78 @@ export function installDevBridge(): void {
       { name: 'prod-guard', version: '2.0.0', source: 'builtin' as const, description: 'Denies run_command against prod hosts', contributes: ['hooks'], enabled: false, blocked: false },
     ],
   };
-  const devGithub: { repo: string | null; hasToken: boolean; tokenSource: string | null } = { repo: 'kinqsradiollc/BrainRouter', hasToken: true, tokenSource: 'config' };
+  const devGithub: {
+    repo: string | null;
+    hasToken: boolean;
+    tokenSource: string | null;
+    repos: Array<{ repo: string; hasToken: boolean; tokenSource: string | null; active: boolean; label?: string | null; source?: string | null; connectorId?: string | null }>;
+    caBundle: string | null;
+  } = {
+    repo: 'kinqsradiollc/BrainRouter',
+    hasToken: true,
+    tokenSource: 'config',
+    repos: [
+      { repo: 'kinqsradiollc/BrainRouter', hasToken: true, tokenSource: 'config', active: true },
+      { repo: 'kubernetes/kubernetes', hasToken: false, tokenSource: null, active: false },
+      { repo: 'kinqsradiollc/brainrouter-desktop', hasToken: true, tokenSource: 'connector-env', active: false, label: 'BrainRouter repos', source: 'connector', connectorId: 'conn_demo_github' },
+    ],
+    caBundle: null,
+  };
+  const devConnectorCatalog: ConnectorCatalogEntry[] = [
+    {
+      source: 'github',
+      title: 'GitHub',
+      description: 'Ingest issues, pull requests, files, and permissions from GitHub.',
+      flows: ['load', 'checkpoint', 'slim', 'permission-sync'],
+      credentialModes: ['static', 'dynamic', 'oauth'],
+      configFields: [
+        { key: 'owner', label: 'Owner or organization', type: 'string', required: true },
+        { key: 'repositories', label: 'Repositories', type: 'string-list' },
+        { key: 'includeIssues', label: 'Include issues', type: 'boolean', defaultValue: true },
+        { key: 'includePullRequests', label: 'Include pull requests', type: 'boolean', defaultValue: true },
+        { key: 'includeFiles', label: 'Include files', type: 'boolean', defaultValue: false },
+        { key: 'pollMinutes', label: 'Auto run minutes', type: 'number' },
+      ],
+      credentialFields: [{ key: 'token', label: 'Access token', type: 'secret', required: true }],
+    },
+    { source: 'gitlab', title: 'GitLab', description: 'Index issues, merge requests, and repository files from GitLab projects or groups.', flows: ['load', 'checkpoint', 'slim'], credentialModes: ['static', 'oauth'], configFields: [{ key: 'owner', label: 'Group or namespace', type: 'string' }, { key: 'projects', label: 'Projects', type: 'string-list' }, { key: 'pollMinutes', label: 'Auto run minutes', type: 'number' }], credentialFields: [{ key: 'token', label: 'GitLab token', type: 'secret', required: true }] },
+    { source: 'slack', title: 'Slack', description: 'Index selected channels, threads, and shared files for team/project recall.', flows: ['checkpoint', 'slim', 'permission-sync', 'event'], credentialModes: ['static', 'oauth'], configFields: [{ key: 'channels', label: 'Channels', type: 'string-list' }, { key: 'includeThreads', label: 'Include threads', type: 'boolean', defaultValue: true }, { key: 'pollMinutes', label: 'Auto run minutes', type: 'number' }], credentialFields: [{ key: 'botToken', label: 'Bot token', type: 'secret', required: true }] },
+    { source: 'google-drive', title: 'Google Drive', description: 'Index Drive folders, shared docs, sheets, and permissions for workspace knowledge.', flows: ['load', 'checkpoint', 'slim', 'permission-sync'], credentialModes: ['oauth', 'static'], configFields: [{ key: 'folderIds', label: 'Folder ids', type: 'string-list' }, { key: 'includeSharedDrives', label: 'Include shared drives', type: 'boolean', defaultValue: true }, { key: 'pollMinutes', label: 'Auto run minutes', type: 'number' }], credentialFields: [{ key: 'serviceAccountJson', label: 'Service account JSON', type: 'secret', required: true }] },
+    { source: 'confluence', title: 'Confluence', description: 'Index Confluence spaces, pages, comments, and page hierarchy.', flows: ['load', 'checkpoint', 'slim', 'permission-sync'], credentialModes: ['static', 'oauth'], configFields: [{ key: 'baseUrl', label: 'Confluence base URL', type: 'string' }, { key: 'spaces', label: 'Spaces', type: 'string-list' }, { key: 'pollMinutes', label: 'Auto run minutes', type: 'number' }], credentialFields: [{ key: 'apiToken', label: 'API token', type: 'secret', required: true }] },
+    { source: 'jira', title: 'Jira', description: 'Index Jira projects, issues, comments, labels, and status metadata.', flows: ['checkpoint', 'slim', 'permission-sync'], credentialModes: ['static', 'oauth'], configFields: [{ key: 'baseUrl', label: 'Jira base URL', type: 'string' }, { key: 'projects', label: 'Projects', type: 'string-list' }, { key: 'jql', label: 'JQL filter', type: 'string' }, { key: 'pollMinutes', label: 'Auto run minutes', type: 'number' }], credentialFields: [{ key: 'apiToken', label: 'API token', type: 'secret', required: true }] },
+    { source: 'filesystem', title: 'Filesystem', description: 'Index local folders, docs, notes, and generated artifacts from the workspace.', flows: ['load', 'checkpoint', 'slim'], credentialModes: ['none'], configFields: [{ key: 'roots', label: 'Folders', type: 'string-list' }, { key: 'includeGlobs', label: 'Include globs', type: 'string-list' }, { key: 'excludeGlobs', label: 'Exclude globs', type: 'string-list' }, { key: 'pollMinutes', label: 'Auto run minutes', type: 'number' }], credentialFields: [] },
+    { source: 'web', title: 'Web', description: 'Index product docs, public sites, sitemap pages, and release notes.', flows: ['load', 'checkpoint', 'slim'], credentialModes: ['none', 'static'], configFields: [{ key: 'baseUrl', label: 'Base URL', type: 'string' }, { key: 'mode', label: 'Scrape mode', type: 'string' }, { key: 'depth', label: 'Max depth', type: 'number' }, { key: 'pollMinutes', label: 'Auto run minutes', type: 'number' }], credentialFields: [{ key: 'headerToken', label: 'Header token', type: 'secret' }] },
+    { source: 'mcp', title: 'MCP Resources', description: 'Index resources exposed by a configured MCP tool server.', flows: ['checkpoint', 'slim', 'event'], credentialModes: ['none'], configFields: [{ key: 'serverId', label: 'MCP server id', type: 'string' }, { key: 'resourceUris', label: 'Resource URIs', type: 'string-list' }, { key: 'pollMinutes', label: 'Auto run minutes', type: 'number' }], credentialFields: [] },
+  ];
+  let devConnectors: ConnectorRecord[] = [
+    {
+      id: 'conn_demo1',
+      source: 'github',
+      name: 'BrainRouter GitHub',
+      status: 'active',
+      config: { owner: 'kinqsradiollc', repositories: ['BrainRouter', 'brainrouter-desktop'], includeIssues: true, includePullRequests: true, includeFiles: false },
+      credential: { mode: 'dynamic', ref: 'gh', label: 'GitHub CLI' },
+      flows: ['load', 'checkpoint', 'slim', 'permission-sync'],
+      workspaceRoot: '/Users/dev/BrainRouter',
+      lastRunAt: new Date(Date.now() - 3600_000).toISOString(),
+      lastSuccessAt: new Date(Date.now() - 3600_000).toISOString(),
+      checkpoint: { cursor: 'demo', documentCount: 3 },
+      createdAt: new Date(Date.now() - 86400_000).toISOString(),
+      updatedAt: new Date(Date.now() - 3600_000).toISOString(),
+    },
+  ];
+  const devConnectorDocuments = [
+    { id: 'github:demo:issue:1', connectorId: 'conn_demo1', source: 'github', kind: 'issue', repository: 'kinqsradiollc/BrainRouter', title: '#1 Demo issue', snippet: 'Demo issue from the GitHub connector.', metadata: { number: 1 } },
+    { id: 'github:demo:pull:2', connectorId: 'conn_demo1', source: 'github', kind: 'pull-request', repository: 'kinqsradiollc/BrainRouter', title: '#2 Demo PR', snippet: 'Demo PR from the GitHub connector.', metadata: { number: 2 } },
+    { id: 'github:demo:file:README.md', connectorId: 'conn_demo1', source: 'github', kind: 'file', repository: 'kinqsradiollc/BrainRouter', title: 'README.md', snippet: '# Demo connector readme.', metadata: { path: 'README.md' } },
+  ];
+  const devSlimDocuments = (connectorId?: string, limit = 20) =>
+    devConnectorDocuments
+      .filter((doc) => !connectorId || doc.connectorId === connectorId)
+      .slice(0, Math.max(1, Math.min(50, limit)))
+      .map((doc) => ({ ...doc, score: 1 }));
+  const devConnectorPermissionCounts: Record<string, number> = { conn_demo1: 2 };
+  const devConnectorRuns: Record<string, Array<{ id: string; connectorId: string; source: string; flow: string; status: string; startedAt: string; completedAt?: string; documentsSeen?: number; documentsIndexed?: number; permissionsSeen?: number; permissionsIndexed?: number; failures?: number }>> = {};
   // WS9 — carry identity/type so the grouped MCP layout (Brains vs Tools) and the
   // single-active-brain affordance render in browser-only dev.
   const devServers: Array<{ id: string; online: boolean; detail?: string; identity?: 'brainrouter' | 'third-party'; type?: 'stdio' | 'http'; url?: string | null; command?: string | null }> = [
@@ -763,7 +834,7 @@ export function installDevBridge(): void {
       ? { pr: { number: 395, state: 'OPEN', title: 'feat(desktop): DESK-4l — interactive views rail' } }
       : { pr: null }),
     // T6 — GitHub CI/CD mocks (browser preview; real gh runs in the host).
-    'git-pr-detail': () => ({ pr: { number: 446, state: 'OPEN', title: 'feat(desktop): in-app Monaco code editor', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/446', headRefName: 'feat/0.4.15-monaco-editor', baseRefName: 'release/0.4.15', isDraft: false, author: { login: 'anhdang' } } }),
+    'git-pr-detail': () => ({ pr: { number: 446, state: 'OPEN', title: 'feat(desktop): in-app Monaco code editor', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/446', headRefName: 'feat/0.4.15-monaco-editor', baseRefName: 'release/0.4.15', isDraft: false, mergeable: 'MERGEABLE', author: { login: 'anhdang' } } }),
     'git-pr-checks': () => ({ checks: [
       { name: 'Build & Test (Node 22.x)', bucket: 'pass', workflow: 'CI', link: 'https://github.com/kinqsradiollc/BrainRouter/actions/runs/1', startedAt: '2026-06-17T10:00:00Z', completedAt: '2026-06-17T10:03:06Z' },
       { name: 'Lint', bucket: 'pass', workflow: 'CI', startedAt: '2026-06-17T10:00:00Z', completedAt: '2026-06-17T10:00:42Z' },
@@ -1027,7 +1098,88 @@ export function installDevBridge(): void {
       if (i >= 0) members.splice(i, 1);
       return [...members];
     },
-    'track-sync-config': () => ({ repo: 'kinqsradiollc/BrainRouter', hasToken: true, tokenSource: 'env' }),
+    'track-git-context': () => ({
+      ok: true,
+      hasGit: true,
+      root: wsCurrent,
+      currentBranch: 'release/0.4.15',
+      remotes: [{ name: 'origin', url: 'git@github.com:kinqsradiollc/BrainRouter.git', githubRepo: 'kinqsradiollc/BrainRouter' }],
+      githubRepo: 'kinqsradiollc/BrainRouter',
+    }),
+    'track-start-work': (a) => {
+      const it = devFindItem(a.idOrKey);
+      const slug = String(it?.title ?? 'work').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'work';
+      const branch = `track/${String(it?.key ?? 'br-0').toLowerCase()}-${slug}`;
+      if (it) {
+        const links = Array.isArray(it.codeLinks) ? it.codeLinks : [];
+        if (!links.some((l) => l && typeof l === 'object' && (l as { kind?: string; ref?: string }).kind === 'branch' && (l as { ref?: string }).ref === branch)) {
+          it.codeLinks = [...links, { kind: 'branch', ref: branch, label: 'kinqsradiollc/BrainRouter' }];
+        }
+        if (it.statusCategory === 'todo') { it.status = 'in-progress'; it.statusCategory = 'in-progress'; }
+      }
+      return {
+        ok: !!it,
+        branch,
+        created: true,
+        switched: true,
+        context: {
+          ok: true,
+          hasGit: true,
+          root: wsCurrent,
+          currentBranch: branch,
+          remotes: [{ name: 'origin', url: 'git@github.com:kinqsradiollc/BrainRouter.git', githubRepo: 'kinqsradiollc/BrainRouter' }],
+          githubRepo: 'kinqsradiollc/BrainRouter',
+        },
+        items: [...devTrack.items],
+        error: it ? undefined : `Unknown work item "${String(a.idOrKey ?? '')}".`,
+      };
+    },
+    'track-pr-status': () => ({
+      pr: {
+        number: 42,
+        state: 'OPEN',
+        title: 'BR-3: Streaming retry fix',
+        url: 'https://github.com/kinqsradiollc/BrainRouter/pull/42',
+        headRefName: 'track/br-3-streaming-retry-fix',
+        baseRefName: 'main',
+        isDraft: false,
+        mergeable: 'MERGEABLE',
+        statusCheckRollup: [
+          { name: 'Build & Test', status: 'COMPLETED', conclusion: 'FAILURE' },
+          { name: 'Lint', status: 'COMPLETED', conclusion: 'SUCCESS' },
+          { name: 'e2e', status: 'IN_PROGRESS' },
+        ],
+      },
+      branch: 'track/br-3-streaming-retry-fix',
+      itemKey: 'BR-3',
+    }),
+    'track-create-pr': (a) => {
+      const it = devFindItem(a.idOrKey);
+      const url = `https://github.com/kinqsradiollc/BrainRouter/pull/${42 + devTrackN++}`;
+      if (it) {
+        const links = Array.isArray(it.codeLinks) ? it.codeLinks : [];
+        if (!links.some((l) => l && typeof l === 'object' && (l as { kind?: string; ref?: string }).kind === 'pull-request' && (l as { ref?: string }).ref === url)) {
+          it.codeLinks = [...links, { kind: 'pull-request', ref: url, label: 'GitHub PR' }];
+        }
+      }
+      return {
+        ok: !!it,
+        url,
+        pr: it ? { number: Number(url.split('/').pop()), state: 'OPEN', title: `${String(it.key)}: ${String(it.title)}`, url, isDraft: true, mergeable: 'UNKNOWN', statusCheckRollup: [] } : null,
+        branch: 'track/br-3-streaming-retry-fix',
+        itemKey: it?.key,
+        items: [...devTrack.items],
+        error: it ? undefined : `Unknown work item "${String(a.idOrKey ?? '')}".`,
+      };
+    },
+    'track-merge-pr': () => {
+      const it = devFindItem('BR-3');
+      if (it) { it.status = 'done'; it.statusCategory = 'done'; }
+      return { ok: true, pr: null, branch: 'track/br-3-streaming-retry-fix', itemKey: 'BR-3', items: [...devTrack.items] };
+    },
+    'track-submit-pr-review': () => ({ ok: true, pr: { number: 42, state: 'OPEN', title: 'BR-3: Streaming retry fix', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/42', headRefName: 'track/br-3-streaming-retry-fix', baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: [] }, branch: 'track/br-3-streaming-retry-fix', itemKey: 'BR-3' }),
+    'track-fix-failing-checks': () => ({ ok: true, task: { id: 'btask_fix_ci' }, pr: { number: 42, state: 'OPEN', title: 'BR-3: Streaming retry fix', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/42', headRefName: 'track/br-3-streaming-retry-fix', baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: [] }, branch: 'track/br-3-streaming-retry-fix', itemKey: 'BR-3' }),
+    'track-sync-config': () => ({ ...devGithub }),
     'track-scan-commits': () => ({ scanned: 12, linked: [{ sha: 'abc1234', key: 'BR-3', workItemKey: 'BR-3' }], transitioned: [{ key: 'BR-3', from: 'todo', to: 'in-progress' }], items: [...devTrack.items] }),
     'track-sync-members': (a) => {
       const members = devTrack.project.members as Record<string, unknown>[];
@@ -1042,6 +1194,17 @@ export function installDevBridge(): void {
         if (a.dryRun !== true) members.push({ ...c, addedAt: new Date().toISOString() });
       }
       return { members: [...members], added, errors: [] };
+    },
+    'track-gh-issues-import': () => {
+      const existing = devTrack.items.find((w) => w.key === 'BR-99');
+      if (!existing) devTrack.items.unshift(mkItem('BR-99', 'bug', 'Imported GitHub issue via gh', 'todo', 'high'));
+      return {
+        direction: 'import',
+        dryRun: false,
+        imported: [{ issueNumber: 99, title: 'Imported GitHub issue via gh', action: existing ? 'update' : 'create', key: 'BR-99' }],
+        errors: [],
+        items: [...devTrack.items],
+      };
     },
     'track-sync': (a) => {
       const dir = a.direction === 'export' ? 'export' : 'import';
@@ -1152,6 +1315,14 @@ export function installDevBridge(): void {
       cliKnobs: { ...devCliKnobs },
       extensions: { trusted: devExtensions.trusted, items: devExtensions.items.map((e) => ({ ...e })) },
       integrations: { github: { ...devGithub } },
+      connectors: {
+        catalog: devConnectorCatalog.map((entry) => ({ ...entry })),
+        items: devConnectors.map((entry) => ({ ...entry, config: { ...entry.config }, credential: { ...entry.credential }, flows: [...entry.flows] })),
+        documentCounts: Object.fromEntries(devConnectors.map((entry) => [entry.id, Number((entry.checkpoint as { documentCount?: number } | undefined)?.documentCount ?? 0)])),
+        permissionCounts: Object.fromEntries(devConnectors.map((entry) => [entry.id, devConnectorPermissionCounts[entry.id] ?? 0])),
+        runPreviews: Object.fromEntries(devConnectors.map((entry) => [entry.id, devConnectorRuns[entry.id] ?? []])),
+        documentPreviews: Object.fromEntries(devConnectors.map((entry) => [entry.id, devSlimDocuments(entry.id, 3)])),
+      },
       workspacePrefs: { ...prefs },
       sessionMode: { ...(sessionModes[activeSession] ?? {}) },
       modeScope: 'session',
@@ -1167,6 +1338,8 @@ export function installDevBridge(): void {
         { name: 'groq', provider: 'groq', model: 'llama-3.3-70b', endpoint: 'https://api.groq.com/openai/v1', hasKey: true },
         { name: 'local', provider: 'lmstudio', model: 'qwen2.5-coder-7b', endpoint: 'http://localhost:1234/v1', hasKey: false },
       ],
+      defaultProviderName: 'groq',
+      defaultProviderModelMatches: true,
       agentModels: [
         { role: 'explorer', provider: 'groq', model: null },
         { role: 'reviewer', provider: null, model: 'gpt-5.3-codex' },
@@ -1223,10 +1396,192 @@ export function installDevBridge(): void {
     'action:set-pref': (a) => { prefs[String(a.key)] = a.value; return { ...prefs }; },
     'action:set-cli-knob': (a) => { if (a.value === null) delete devCliKnobs[String(a.key)]; else devCliKnobs[String(a.key)] = a.value; return { ok: true, key: String(a.key) }; },
     'action:set-track-github': (a) => {
-      if (typeof a.repo === 'string') devGithub.repo = a.repo.trim() || null;
-      if (typeof a.token === 'string' && a.token.trim()) { devGithub.hasToken = true; devGithub.tokenSource = 'config'; }
-      if (a.clearToken === true) { devGithub.hasToken = false; devGithub.tokenSource = null; }
-      return { ok: true, repo: devGithub.repo, hasToken: devGithub.hasToken, tokenSource: devGithub.tokenSource };
+      if (typeof a.caBundle === 'string' || a.caBundle === null) devGithub.caBundle = typeof a.caBundle === 'string' ? (a.caBundle.trim() || null) : null;
+      if (typeof a.removeRepo === 'string') {
+        const repo = a.removeRepo.trim();
+        devGithub.repos = devGithub.repos.filter((r) => r.repo !== repo);
+        if (devGithub.repo === repo) devGithub.repo = devGithub.repos[0]?.repo ?? null;
+      }
+      if (typeof a.repo === 'string') {
+        const repo = a.repo.trim();
+        if (repo) {
+          let row = devGithub.repos.find((r) => r.repo === repo);
+          if (!row) { row = { repo, hasToken: false, tokenSource: null, active: false, source: 'track' }; devGithub.repos.push(row); }
+          if (typeof a.token === 'string' && a.token.trim()) { row.hasToken = true; row.tokenSource = 'config'; }
+          if (a.clearToken === true) { row.hasToken = false; row.tokenSource = null; }
+          if (a.makeActive === true || !devGithub.repo) {
+            devGithub.repos.forEach((r) => { r.active = r.repo === repo; });
+            devGithub.repo = repo;
+            devGithub.hasToken = row.hasToken;
+            devGithub.tokenSource = row.tokenSource;
+          }
+        }
+      }
+      const active = devGithub.repos.find((r) => r.active) ?? devGithub.repos[0];
+      if (active) {
+        devGithub.repos.forEach((r) => { r.active = r.repo === active.repo; });
+        devGithub.repo = active.repo;
+        devGithub.hasToken = active.hasToken;
+        devGithub.tokenSource = active.tokenSource;
+      } else {
+        devGithub.repo = null;
+        devGithub.hasToken = false;
+        devGithub.tokenSource = null;
+      }
+      return { ok: true, ...devGithub };
+    },
+    'connector-slim-documents': (a) => devSlimDocuments(typeof a.connectorId === 'string' ? a.connectorId : undefined, typeof a.limit === 'number' ? a.limit : 20),
+    'action:connector-create': (a) => {
+      const now = new Date().toISOString();
+      const rec = {
+        id: `conn_demo${devConnectors.length + 1}`,
+        source: a.source === 'github' ? 'github' : 'github',
+        name: typeof a.name === 'string' && a.name.trim() ? a.name.trim() : 'GitHub connector',
+        status: 'active',
+        config: a.config && typeof a.config === 'object' && !Array.isArray(a.config) ? a.config as never : {},
+        credential: a.credential && typeof a.credential === 'object' && !Array.isArray(a.credential) ? a.credential as never : { mode: 'dynamic', ref: 'gh' },
+        flows: Array.isArray(a.flows) ? a.flows as never : ['load', 'checkpoint', 'slim', 'permission-sync'],
+        workspaceRoot: wsCurrent,
+        createdAt: now,
+        updatedAt: now,
+      } as ConnectorRecord;
+      devConnectors = [rec, ...devConnectors];
+      return { ok: true, connector: rec };
+    },
+    'action:connector-update': (a) => {
+      const id = String(a.id ?? '');
+      const patch = a.patch && typeof a.patch === 'object' && !Array.isArray(a.patch) ? a.patch as Partial<ConnectorRecord> : {};
+      let updated: ConnectorRecord | null = null;
+      devConnectors = devConnectors.map((rec) => {
+        if (rec.id !== id) return rec;
+        updated = { ...rec, ...patch, id: rec.id, source: rec.source, workspaceRoot: rec.workspaceRoot, createdAt: rec.createdAt, updatedAt: new Date().toISOString() };
+        return updated;
+      });
+      return updated ? { ok: true, connector: updated } : { ok: false, error: 'Connector not found.' };
+    },
+    'action:connector-delete': (a) => {
+      const id = String(a.id ?? '');
+      const before = devConnectors.length;
+      devConnectors = devConnectors.filter((rec) => rec.id !== id);
+      return { ok: before !== devConnectors.length };
+    },
+    'action:connector-export-definitions': () => {
+      const bundle = {
+        schemaVersion: 1,
+        exportedAt: new Date().toISOString(),
+        connectors: devConnectors.map((connector) => ({
+          source: connector.source,
+          name: connector.name,
+          description: connector.description,
+          config: { ...connector.config },
+          credential: { ...connector.credential },
+          flows: [...connector.flows],
+        })),
+      };
+      return { ok: true, bundle, json: JSON.stringify(bundle, null, 2) };
+    },
+    'action:connector-import-definitions': (a) => {
+      const raw = typeof a.json === 'string' ? a.json : '';
+      if (!raw.trim()) return { ok: false, error: 'Connector definition JSON is required.' };
+      try {
+        const parsed = JSON.parse(raw) as { connectors?: Array<Partial<ConnectorRecord>> };
+        const now = new Date().toISOString();
+        const imported = (parsed.connectors ?? []).map((definition, index) => ({
+          id: `conn_import_${Date.now()}_${index}`,
+          source: definition.source === 'github' ? 'github' : 'github',
+          name: typeof definition.name === 'string' && definition.name.trim() ? definition.name.trim() : 'Imported connector',
+          description: typeof definition.description === 'string' ? definition.description : undefined,
+          status: 'active',
+          config: definition.config && typeof definition.config === 'object' ? { ...definition.config } : {},
+          credential: definition.credential && typeof definition.credential === 'object' ? { ...definition.credential } : { mode: 'none' },
+          flows: Array.isArray(definition.flows) ? definition.flows : ['checkpoint'],
+          workspaceRoot: wsCurrent,
+          createdAt: now,
+          updatedAt: now,
+        })) as ConnectorRecord[];
+        devConnectors = [...imported, ...devConnectors];
+        return { ok: true, connectors: imported };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+    'action:connector-validate': (a) => {
+      const id = String(a.id ?? '');
+      let checked: string[] = [];
+      let updated: ConnectorRecord | null = null;
+      devConnectors = devConnectors.map((rec) => {
+        if (rec.id !== id) return rec;
+        const owner = typeof rec.config.owner === 'string' ? rec.config.owner : 'kinqsradiollc';
+        const repos = Array.isArray(rec.config.repositories) ? rec.config.repositories.filter((repo): repo is string => typeof repo === 'string') : ['BrainRouter'];
+        checked = repos.length ? repos.map((repo) => (repo.includes('/') ? repo : `${owner}/${repo}`)) : [`${owner}/BrainRouter`];
+        updated = { ...rec, status: 'active', lastError: undefined, updatedAt: new Date().toISOString() };
+        return updated;
+      });
+      return updated ? { ok: true, checked, errors: [], connector: updated } : { ok: false, checked: [], errors: ['Connector not found.'], connector: null };
+    },
+    'action:connector-run': (a) => {
+      const id = String(a.id ?? '');
+      const now = new Date().toISOString();
+      let updated: ConnectorRecord | null = null;
+      const runCheckpoint = { highWatermark: now, repositories: [] as unknown[], completedAt: now, documentCount: 3, failureCount: 0 };
+      devConnectors = devConnectors.map((rec) => {
+        if (rec.id !== id) return rec;
+        runCheckpoint.repositories = Array.isArray(rec.config.repositories) ? rec.config.repositories : [];
+        updated = { ...rec, status: 'active', lastRunAt: now, lastSuccessAt: now, lastError: undefined, checkpoint: runCheckpoint, updatedAt: now };
+        return updated;
+      });
+      if (!updated) return { ok: false, error: 'Connector not found.', errors: ['Connector not found.'] };
+      const connector = updated;
+      const run = { id: `crun_demo${Date.now()}`, connectorId: id, source: 'github', flow: 'checkpoint', status: 'succeeded', startedAt: now, completedAt: now, documentsSeen: 3, documentsIndexed: 3, failures: 0 };
+      devConnectorRuns[id] = [run, ...(devConnectorRuns[id] ?? [])].slice(0, 10);
+      return {
+        ok: true,
+        connector,
+        run: { ...run, checkpointAfter: runCheckpoint },
+        documents: [
+          { id: 'github:demo:issue:1', connectorId: id, source: 'github', kind: 'issue', repository: 'kinqsradiollc/BrainRouter', title: '#1 Demo issue', text: 'Demo issue', metadata: { number: 1 } },
+          { id: 'github:demo:pull:2', connectorId: id, source: 'github', kind: 'pull-request', repository: 'kinqsradiollc/BrainRouter', title: '#2 Demo PR', text: 'Demo PR', metadata: { number: 2 } },
+          { id: 'github:demo:file:README.md', connectorId: id, source: 'github', kind: 'file', repository: 'kinqsradiollc/BrainRouter', title: 'README.md', text: '# Demo', metadata: { path: 'README.md' } },
+        ],
+        errors: [],
+      };
+    },
+    'action:connector-index-memory': (a) => {
+      const id = String(a.id ?? '');
+      const connector = devConnectors.find((rec) => rec.id === id);
+      if (!connector) return { ok: false, records: 0, evidence: 0, operations: 0, error: 'Connector not found.' };
+      const records = devSlimDocuments(id, 200).length;
+      return {
+        ok: true,
+        records,
+        evidence: records,
+        operations: records ? 1 : 0,
+        result: { importedMemories: records, importedEvidence: records, importedOperations: records ? 1 : 0 },
+      };
+    },
+    'action:connector-sync-permissions': (a) => {
+      const id = String(a.id ?? '');
+      const now = new Date().toISOString();
+      let updated: ConnectorRecord | null = null;
+      devConnectors = devConnectors.map((rec) => {
+        if (rec.id !== id) return rec;
+        devConnectorPermissionCounts[id] = 2;
+        updated = { ...rec, status: 'active', lastRunAt: now, lastSuccessAt: now, lastError: undefined, checkpoint: { ...(rec.checkpoint ?? {}), permissionSyncedAt: now, permissionCount: 2 }, updatedAt: now };
+        return updated;
+      });
+      if (!updated) return { ok: false, error: 'Connector not found.', errors: ['Connector not found.'] };
+      const run = { id: `crun_perm_demo${Date.now()}`, connectorId: id, source: 'github', flow: 'permission-sync', status: 'succeeded', startedAt: now, completedAt: now, permissionsSeen: 2, permissionsIndexed: 2, failures: 0 };
+      devConnectorRuns[id] = [run, ...(devConnectorRuns[id] ?? [])].slice(0, 10);
+      return {
+        ok: true,
+        connector: updated,
+        run,
+        permissions: [
+          { id: 'github:demo:user:octo', connectorId: id, source: 'github', principalId: 'octo', principalKind: 'user', role: 'admin', repositories: ['kinqsradiollc/BrainRouter'], metadata: {} },
+          { id: 'github:demo:user:dev', connectorId: id, source: 'github', principalId: 'dev', principalKind: 'user', role: 'write', repositories: ['kinqsradiollc/BrainRouter'], metadata: {} },
+        ],
+        errors: [],
+      };
     },
     'action:set-session-mode': (a) => {
       const next = { ...(sessionModes[activeSession] ?? {}) };

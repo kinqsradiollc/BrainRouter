@@ -38,14 +38,11 @@ export interface ServerConfig {
 }
 
 export interface LLMConfig {
-  // 0.3.9: the only supported dispatch is OpenAI-compatible
-  // `/v1/chat/completions`. The Anthropic native `/v1/messages`
-  // adapter (added in 0.3.8-I6) was removed in 0.3.9 — Claude
-  // models can still be reached via an OpenAI-compatible gateway
-  // (OpenRouter / Together / Fireworks) by pointing `endpoint` at
-  // the gateway base URL. `provider` is the catalog id (openai,
-  // lmstudio, ollama, deepseek, …) and is used as a label for
-  // tier-ladder lookups; the wire format is always OpenAI-compatible.
+  // Provider catalog id (openai, lmstudio, ollama, deepseek, ...). The
+  // request can be sent as either OpenAI Responses API or Chat Completions,
+  // selected by provider defaults plus `cli.providerRequestFormat`. Claude
+  // models still go through OpenAI-compatible gateways; the native Anthropic
+  // `/v1/messages` adapter was removed in 0.3.9.
   provider: string;
   apiKey: string;
   model: string;
@@ -362,7 +359,7 @@ export interface CliKnobs {
   maxConcurrentChildren?: number;
   /** MAS-P4-T4: max auto-chain follow-up agents per worker. Default 2. */
   autoChainMaxFollowups?: number;
-  /** MAS-P4-T1: cap on MCP tools shown to an agent per turn (0 = no cap). Default 40. */
+  /** MAS-P4-T1: cap on MCP tools shown to an agent per turn (0 = no cap). Default 16. */
   agentMcpToolBudget?: number;
 
   // ---- scheduling / tracing / search -----------------------------------
@@ -485,6 +482,12 @@ export interface CliKnobs {
   track?: {
     githubRepo?: string;
     githubToken?: string;
+    /** Multiple GitHub repositories available to Track sync. */
+    githubRepos?: Array<{ repo: string; token?: string; label?: string }>;
+    /** Repo from `githubRepos` used by default when a command omits `--repo`. */
+    activeGithubRepo?: string;
+    /** Optional trusted CA bundle path passed through to GitHub CLI commands. */
+    githubCaBundle?: string;
     /**
      * BR-123 commit scanner (0.4.16). `enabled` (default false): on `/track sync
      * --commits`, parse `<KEY>-<n>` from recent commit messages and link each
@@ -502,6 +505,37 @@ export interface CliKnobs {
    * stay interactive-only.
    */
   hooks?: { enabled?: boolean; enforceWhenSilent?: boolean };
+  /**
+   * PER-PROVIDER WIRE-FORMAT OVERRIDE. Maps `providerId` (as stored in
+   * `llm.provider`, lowercased) → the wire format to use for that provider's
+   * requests. Use when a custom OpenAI-compatible gateway supports the
+   * `/v1/responses` API even though BrainRouter's built-in catalog default
+   * (chat-completions) doesn't recognize it — or to force chat-completions
+   * on canonical OpenAI while debugging a Responses shape regression.
+   *
+   * SEMANTICS — an explicit override BYPASSES the canonical-endpoint safety
+   * gate. The resolver trusts the user's assertion that their endpoint
+   * accepts `/v1/responses`, including gateway model ids that do not look
+   * like OpenAI-native ids (for example `google/gemma-4-12b`). A gateway
+   * that 404s on `/responses` (most OpenRouter/LiteLLM/vLLM gateways only
+   * proxy `/chat/completions`) will only fail at the actual HTTP call.
+   * Built-in defaults remain conservative and still apply the canonical
+   * endpoint + model-shape gates when no explicit override is present.
+   *
+   * Values are validated against `'responses' | 'chat-completions'` (typos
+   * such as `'response'` or `'Responses'` are silently dropped so the
+   * resolver stays fail-safe). Keys are case-insensitive and trimmed.
+   * Set under `cli` in `~/.config/brainrouter/config.json`.
+   * Example: `{ "lmstudio": "responses", "opencode": "chat-completions" }`.
+   *
+   * CAVEAT — `setCliKnobOverride({ providerRequestFormat: {...} })` SHALLOW-
+   * REPLACES the whole map (consistent with how every other top-level knob
+   * on `ResolvedCliKnobs` works), so an argv override that targets one
+   * provider key will wipe config-file entries for the others. For multi-
+   * key sets, edit `config.json` directly; in-process overrides are for
+   * single-key tests/scripts.
+   */
+  providerRequestFormat?: Record<string, 'responses' | 'chat-completions'>;
 }
 
 /**
@@ -851,10 +885,31 @@ export interface ResolvedCliKnobs {
   debugExit: boolean;
   workspaceOverride?: string;
   maxOutputTokens?: number;
+  /** PER-PROVIDER WIRE-FORMAT OVERRIDE — validated subset of
+   *  `CliKnobs.providerRequestFormat`; entries whose value isn't strictly
+   *  `'responses'` or `'chat-completions'` are dropped on resolve. */
+  providerRequestFormat: Record<string, 'responses' | 'chat-completions'>;
 }
 
 function unitInterval(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? value : fallback;
+}
+
+/** Reduce a raw `providerRequestFormat` to its validated subset.
+ *  - non-object input → empty map (fail-safe)
+ *  - values other than the two accepted literals → dropped
+ *  - keys are preserved lowercased so lookups under `provider` ids are stable. */
+function normalizeProviderRequestFormat(input: unknown): Record<string, 'responses' | 'chat-completions'> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+  const out: Record<string, 'responses' | 'chat-completions'> = {};
+  for (const [rawKey, rawValue] of Object.entries(input as Record<string, unknown>)) {
+    const key = typeof rawKey === 'string' ? rawKey.trim().toLowerCase() : '';
+    if (!key) continue;
+    if (rawValue === 'responses' || rawValue === 'chat-completions') {
+      out[key] = rawValue;
+    }
+  }
+  return out;
 }
 
 export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
@@ -956,7 +1011,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     maxSpawnDepth: c.maxSpawnDepth ?? 3,
     maxConcurrentChildren: c.maxConcurrentChildren ?? 8,
     autoChainMaxFollowups: c.autoChainMaxFollowups ?? 2,
-    agentMcpToolBudget: c.agentMcpToolBudget ?? 40,
+    agentMcpToolBudget: c.agentMcpToolBudget ?? 16,
     scheduleTickMs: c.scheduleTickMs ?? 30_000,
     traceLog: c.traceLog,
     tracingBackend: c.tracingBackend ?? 'stdout-jsonl',
@@ -979,6 +1034,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     debugExit: c.debugExit ?? false,
     workspaceOverride: c.workspaceOverride,
     maxOutputTokens: c.maxOutputTokens,
+    providerRequestFormat: normalizeProviderRequestFormat(c.providerRequestFormat),
   };
 }
 

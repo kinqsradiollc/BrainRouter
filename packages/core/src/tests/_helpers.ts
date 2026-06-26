@@ -14,7 +14,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Agent } from '../agent/agent.js';
-import { _resetCliKnobsCache } from '../config/config.js';
+import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
+
+function applyTestSafeCliKnobDefaults(): void {
+  // The config file lives under ~/.config/brainrouter, not BRAINROUTER_HOME.
+  // Keep tests that stub Chat Completions responses from inheriting a local
+  // providerRequestFormat override while preserving any other per-test knobs
+  // that were set before entering the temp-workspace helper.
+  setCliKnobOverride({ providerRequestFormat: {} });
+}
 
 /**
  * Construct an Agent without touching MCP or the LLM. Only safe for tests
@@ -54,6 +62,7 @@ export function withTempWorkspace(fn: (workspace: string) => void) {
   // happen on exit so the next test starts clean.
   try {
     process.env.BRAINROUTER_HOME = home;
+    applyTestSafeCliKnobDefaults();
     process.chdir(workspace);
     fn(workspace);
   } finally {
@@ -77,6 +86,7 @@ export async function withTempWorkspaceAsync<T>(fn: (workspace: string) => Promi
   const previousHome = process.env.BRAINROUTER_HOME;
   // Do NOT reset CLI knobs on entry — see withTempWorkspace.
   process.env.BRAINROUTER_HOME = home;
+  applyTestSafeCliKnobDefaults();
   process.chdir(tmp);
   try {
     return await fn(tmp);
