@@ -460,6 +460,14 @@ export function installDevBridge(): void {
   };
   // T7/T6 — mutable permission rules + MCP servers so the Settings editors work in preview.
   const devRules: { allow: string[]; deny: string[] } = { allow: ['run_command(git *)', 'run_command(npm test*)'], deny: ['run_command(rm -rf *)'] };
+  // §multi-provider — MUTABLE provider list so the browser preview actually
+  // reflects create/configure/remove (the real Electron host persists to
+  // config.json; here we keep an in-memory list that config-snapshot reads).
+  const devProviders: Array<{ name: string; provider: string; model: string; endpoint: string | null; hasKey: boolean; models: string[]; apiVersion?: string | null }> = [
+    { name: 'groq', provider: 'groq', model: 'llama-3.3-70b', endpoint: 'https://api.groq.com/openai/v1', hasKey: true, models: ['llama-3.3-70b', 'llama-3.1-405b', 'mixtral-8x7b'] },
+    { name: 'local', provider: 'lmstudio', model: 'qwen2.5-coder-7b', endpoint: 'http://localhost:1234/v1', hasKey: false, models: [] },
+  ];
+  let devDefaultProvider: string | null = 'groq';
   const devCliKnobs: Record<string, unknown> = { autoCompactTokens: 80000, maxToolLoops: 60, recallMode: 'gated', contextCompaction: true, llmTimeoutMs: 120000, automation: { enabled: true, requirements: { enabled: true, autopilot: false }, sync: { enabled: true }, sprints: { enabled: true, autopilot: true } } };
   const devExtensions = {
     trusted: true,
@@ -1236,6 +1244,48 @@ export function installDevBridge(): void {
     'list-models': (a) => a?.provider
       ? ({ current: '', provider: String(a.provider), models: [`${a.provider}-fast`, `${a.provider}-pro`, `${a.provider}-reasoning`] })
       : ({ current: resolvedModel(activeSession), models: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'gpt-5.5', 'gpt-5.3-codex', 'qwen3-coder-32b', 'deepseek-v4', 'glm-5-air', 'text-embedding-nomic-embed-text-v1.5', 'whisper-large-v3'] }),
+    // §multi-select-models — dev mock of a draft-key /models probe. No real
+    // network: a blank key + blank endpoint unlocks nothing (exercises the
+    // "no models" empty state); otherwise returns a per-provider model set so the
+    // dialog's checkbox list + count badge can be driven in the preview.
+    'list-models-probe': async (a) => {
+      // Browser dev-preview: pull the ACTUAL models the key unlocks — never a
+      // canned list. Most gateways send NO CORS headers (ZenMux, OpenAI, …), so a
+      // direct browser fetch is blocked; we go through the vite dev proxy
+      // (/__brp/models, see vite.config.ts) which fetches server-side with no CORS
+      // — exactly like the Electron app's host. Falls back to a direct fetch for
+      // CORS-friendly endpoints or a production preview without the proxy.
+      const provider = String(a?.provider ?? '') || null;
+      const endpoint = String(a?.endpoint ?? '').trim();
+      const apiKey = String(a?.apiKey ?? '');
+      const apiVersion = String(a?.apiVersion ?? '').trim();
+      if (!endpoint) return { models: [], count: 0, provider, probe: true };
+      // 1) vite dev proxy (server-side fetch, bypasses CORS).
+      try {
+        const pr = await fetch('/__brp/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint, apiKey, apiVersion }) });
+        if (pr.ok) {
+          const j = (await pr.json()) as { models?: string[]; error?: string };
+          const models = j.models ?? [];
+          return { models, count: models.length, provider, probe: true, ...(j.error ? { error: j.error } : {}) };
+        }
+      } catch { /* proxy absent (prod preview) → direct fetch below */ }
+      // 2) direct fetch fallback (CORS-permitting endpoints only).
+      const base = endpoint.replace(/\/chat\/completions\/?$/, '').replace(/\/$/, '') + '/models';
+      const url = apiVersion ? base + (base.includes('?') ? '&' : '?') + 'api-version=' + encodeURIComponent(apiVersion) : base;
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8_000);
+      try {
+        const res = await fetch(url, { headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey.trim() || 'local'}` }, signal: ctrl.signal });
+        if (!res.ok) return { models: [], count: 0, provider, probe: true, error: `http-${res.status}` };
+        const body = (await res.json().catch(() => ({}))) as { data?: Array<{ id?: unknown }> };
+        const ids = [...new Set((Array.isArray(body.data) ? body.data : []).map((r) => (r && typeof r.id === 'string') ? r.id : '').filter(Boolean))].sort();
+        return { models: ids, count: ids.length, provider, probe: true };
+      } catch {
+        return { models: [], count: 0, provider, probe: true, error: 'unreachable' };
+      } finally {
+        clearTimeout(timer);
+      }
+    },
     'term-open': () => { termBuf = '\u001b[1;32mdemo-shell\u001b[0m on \u001b[1;34m/Users/dev/BrainRouter\u001b[0m\r\n$ '; return { id: 'tdemo', shell: '/bin/zsh (demo)' }; },
     'term-write': (a) => {
       const d = String(a.data ?? '');
@@ -1306,6 +1356,12 @@ export function installDevBridge(): void {
       // Mock of config/providers.json — the main-provider picker source.
       providerCatalog: [
         { id: 'openai', label: 'OpenAI', endpoint: 'https://api.openai.com/v1', local: false },
+        { id: 'anthropic', label: 'Anthropic (Claude)', endpoint: 'https://api.anthropic.com/v1', local: false },
+        { id: 'gemini', label: 'Google Gemini', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', local: false },
+        { id: 'openrouter', label: 'OpenRouter', endpoint: 'https://openrouter.ai/api/v1', local: false },
+        { id: 'zenmux', label: 'ZenMux', endpoint: 'https://zenmux.ai/api/v1', local: false },
+        { id: 'groq', label: 'Groq', endpoint: 'https://api.groq.com/openai/v1', local: false },
+        { id: 'azure', label: 'Azure OpenAI', endpoint: '', local: false },
         { id: 'openai-compatible', label: 'OpenAI-compatible (custom)', endpoint: '', local: false },
         { id: 'opencode', label: 'opencode (Zen gateway)', endpoint: 'https://opencode.ai/zen/v1', local: false },
         { id: 'lmstudio', label: 'LM Studio (local)', endpoint: 'http://localhost:1234/v1', local: true },
@@ -1333,21 +1389,39 @@ export function installDevBridge(): void {
       ],
       servers: devServers.map((s) => ({ ...s })),
       activeServer: devActiveServer, // WS9 — the single active brain
-      // §multi-provider — named providers + per-sub-agent-role routing.
-      providers: [
-        { name: 'groq', provider: 'groq', model: 'llama-3.3-70b', endpoint: 'https://api.groq.com/openai/v1', hasKey: true },
-        { name: 'local', provider: 'lmstudio', model: 'qwen2.5-coder-7b', endpoint: 'http://localhost:1234/v1', hasKey: false },
-      ],
-      defaultProviderName: 'groq',
+      // §multi-provider — named providers (mutable in dev) + per-role routing.
+      providers: devProviders.map((p) => ({ ...p })),
+      defaultProviderName: devDefaultProvider,
       defaultProviderModelMatches: true,
       agentModels: [
         { role: 'explorer', provider: 'groq', model: null },
         { role: 'reviewer', provider: null, model: 'gpt-5.3-codex' },
       ],
     }),
-    'action:set-provider': (a) => ({ ok: true, name: String(a.name ?? '') }),
-    'action:remove-provider': (a) => ({ ok: true, name: String(a.name ?? '') }),
-    'action:set-default-provider': (a) => ({ ok: true, name: String(a.name ?? '') }),
+    'action:set-provider': (a) => {
+      const name = String(a.name ?? '').trim();
+      if (!/^[a-zA-Z0-9._-]+$/.test(name)) return { ok: false, error: 'Provider name must be letters, digits, . _ - only.' };
+      const models = Array.isArray(a.models) ? a.models.filter((m): m is string => typeof m === 'string' && m.trim().length > 0) : [];
+      const model = String(a.model ?? '').trim() || models[0] || '';
+      if (!model) return { ok: false, error: 'A model is required.' };
+      const entry = { name, provider: String(a.provider ?? '').trim() || 'openai-compatible', model, endpoint: (String(a.endpoint ?? '').trim() || null), hasKey: !!String(a.apiKey ?? '').trim(), models, apiVersion: a.apiVersion ? String(a.apiVersion) : null };
+      const i = devProviders.findIndex((p) => p.name === name);
+      if (i >= 0) devProviders[i] = entry; else devProviders.push(entry);
+      return { ok: true, name };
+    },
+    'action:remove-provider': (a) => {
+      const name = String(a.name ?? '').trim();
+      const i = devProviders.findIndex((p) => p.name === name);
+      if (i >= 0) devProviders.splice(i, 1);
+      if (devDefaultProvider === name) devDefaultProvider = null;
+      return { ok: true, name };
+    },
+    'action:set-default-provider': (a) => {
+      const name = String(a.name ?? '').trim();
+      if (!devProviders.some((p) => p.name === name)) return { ok: false, error: `Unknown provider "${name}".` };
+      devDefaultProvider = name;
+      return { ok: true, name };
+    },
     'action:set-agent-model': (a) => ({ ok: true, role: String(a.role ?? '') }),
     'usage-breakdown': () => [
       'parent      48,213 in · 1,904 out · cache hit 92%',
@@ -1659,8 +1733,14 @@ export function installDevBridge(): void {
       switch (command.kind) {
         case 'query': {
           const handler = queries[command.name];
-          if (handler) emit({ kind: 'query-result', id: command.id, ok: true, result: handler(command.args ?? {}) }, 30);
-          else emit({ kind: 'query-result', id: command.id, ok: false, error: `Unknown query "${command.name}" (dev bridge)` }, 30);
+          if (handler) {
+            // Await async handlers (e.g. list-models-probe now does a REAL fetch)
+            // so the renderer receives the resolved value, never a pending Promise.
+            // Sync handlers resolve on the next microtask — behavior unchanged.
+            Promise.resolve(handler(command.args ?? {}))
+              .then((result) => emit({ kind: 'query-result', id: command.id, ok: true, result }, 30))
+              .catch((e) => emit({ kind: 'query-result', id: command.id, ok: false, error: String((e as Error)?.message ?? e) }, 30));
+          } else emit({ kind: 'query-result', id: command.id, ok: false, error: `Unknown query "${command.name}" (dev bridge)` }, 30);
           return;
         }
         case 'start-turn': {

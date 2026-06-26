@@ -190,6 +190,21 @@ export function App(): React.ReactElement {
   // model pickers (keyed by provider name; fetched via list-models { provider }).
   const [providerModels, setProviderModels] = useState<Record<string, string[]>>({});
   const [modelsLoading, setModelsLoading] = useState(false);
+  // §multi-select-models — probe state for the Models setup dialog: the live
+  // GET /models a freshly-typed provider key unlocks. Kept in its OWN state
+  // (never endpointModels) so a draft-key probe can't race the active-endpoint
+  // model load. probeError: '' = none, 'no-models' = the key/endpoint returned 0.
+  const [probedModels, setProbedModels] = useState<string[]>([]);
+  const [probeLoading, setProbeLoading] = useState(false);
+  const [probeError, setProbeError] = useState<string>('');
+  // §multi-select-models — the default provider's saved allowlist (if any)
+  // narrows the composer model picker. Empty ⇒ the picker shows the full
+  // endpoint list, so providers without an allowlist behave exactly as before.
+  const defaultProviderModels = useMemo<string[]>(() => {
+    const dp = snapshot?.defaultProviderName;
+    const p = dp ? snapshot?.providers?.find((x) => x.name === dp) : undefined;
+    return p?.models ?? [];
+  }, [snapshot]);
   // Item 10 — where a model pick is saved: 'global' = config.json (shared with
   // the CLI, every chat), 'session' = this chat only (sessionRuntimeStore).
   const [modelScope, setModelScope] = useState<'global' | 'session'>('global');
@@ -631,7 +646,7 @@ export function App(): React.ReactElement {
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
     setDraft, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
-    setBranches, setModelsLoading, setEndpointModels, setProviderModels, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
+    setBranches, setModelsLoading, setEndpointModels, setProviderModels, setProbedModels, setProbeLoading, setProbeError, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
     setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
@@ -1160,7 +1175,8 @@ export function App(): React.ReactElement {
                 slashActive={slashActive} slashMatches={slashMatches} commands={commands} slashSel={slashSel} setSlashSel={setSlashSel}
                 setSlashDismissed={setSlashDismissed} onRunSlash={runSlash} pop={pop} setPop={setPop} q={q}
                 modeLabel={modeLabel} execMode={execMode} effort={effort} info={info} branches={branches}
-                endpointModels={endpointModels} modelsLoading={modelsLoading} setModelsLoading={setModelsLoading}
+                endpointModels={endpointModels} allowedModels={defaultProviderModels} modelsLoading={modelsLoading} setModelsLoading={setModelsLoading}
+                connectedProviders={snapshot?.providers ?? []} defaultProviderName={snapshot?.defaultProviderName ?? null}
                 modelChoices={modelChoices} modelScope={modelScope} setModelScope={setModelScope}
                 hasConversation={hasConversation} contextUsage={contextUsage} tokens={tokens} openSettings={openSettings}
                 onAttach={attachFiles}
@@ -1232,6 +1248,11 @@ export function App(): React.ReactElement {
         onPref={setPreference}
         endpointModels={endpointModels}
         providerModels={providerModels}
+        probedModels={probedModels}
+        probeLoading={probeLoading}
+        probeError={probeError}
+        onProbe={(a) => { setProbeLoading(true); setProbeError(''); q('q-probe', 'list-models-probe', a); }}
+        onProbeReset={() => { setProbedModels([]); setProbeLoading(false); setProbeError(''); }}
         onModelSave={(model) => window.brainrouter.send({ kind: 'set-model', model, persist: true })}
         onAction={(id, name, args) => {
           if (name === 'new-session') { window.brainrouter.send({ kind: 'new-session' }); setSettings((st) => ({ ...st, open: false })); return; }

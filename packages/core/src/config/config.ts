@@ -47,6 +47,16 @@ export interface LLMConfig {
   apiKey: string;
   model: string;
   endpoint?: string;
+  // 0.4.17 — Onyx-parity multi-select: the set of models this provider key
+  // unlocks (from its live GET /models). `model` above stays the single
+  // required default and MUST be a member when this is non-empty. Omitted/empty
+  // ⇒ legacy single-default behavior, unchanged (no migration needed). The
+  // Desktop composer narrows its picker to this allowlist when present.
+  models?: string[];
+  // 0.4.17 — optional Azure-style `api-version`. When set it is appended as an
+  // `?api-version=` query param to the chat/completions (and /models) URL; the
+  // OpenAI-compatible providers that don't need it simply leave it unset.
+  apiVersion?: string;
 }
 
 /**
@@ -649,16 +659,14 @@ export function loadConfig(): Config {
  * use it without dragging in the wizard surface.
  */
 export function backfillApiKeyFromEnv(endpoint: string | undefined): string | undefined {
-  // Endpoint → env-var map, DERIVED from the provider code modules
-  // (BUILTIN_PROVIDERS) so it can never drift from the catalog — the old
-  // hand-maintained "keep in lockstep with PROVIDER_CATALOG" copy is gone.
-  // OpenRouter + Gemini have no code module yet (they're reachable via the
-  // generic openai-compatible flow), so they're the only explicit entries.
-  // (Anthropic native was removed in 0.3.9 — Claude routes through OpenRouter.)
+  // Endpoint → env-var map, DERIVED entirely from the provider code modules
+  // (BUILTIN_PROVIDERS) so it can never drift from the catalog. OpenRouter,
+  // Gemini, Anthropic and Groq now each have a code module, so the old hand-kept
+  // OpenRouter/Gemini literals are gone — every cloud provider with a non-empty
+  // endpoint + envKey is covered automatically. (Azure's endpoint is per-resource
+  // and therefore empty, so it's correctly excluded from endpoint matching.)
   const PROVIDER_ENV_BY_ENDPOINT: Array<{ endpoint: string; envKey: string }> = [
     ...BUILTIN_PROVIDERS.filter((p) => p.endpoint && p.envKey).map((p) => ({ endpoint: p.endpoint, envKey: p.envKey })),
-    { endpoint: 'https://openrouter.ai/api/v1',                     envKey: 'OPENROUTER_API_KEY' },
-    { endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', envKey: 'GEMINI_API_KEY' },
   ];
   if (endpoint) {
     const trimmed = endpoint.replace(/\/$/, '');

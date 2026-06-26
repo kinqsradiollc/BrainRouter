@@ -153,7 +153,7 @@ import {
 import { shrinkOversizedToolResults } from './turnEndShrink.js';
 // 0.3.9 item 13 — model-tier self-escalation.
 import { currentTier, detectNeedsHigh, nextTier, resolveTierLadder, stripNeedsHigh } from '../provider/tierLadder.js';
-import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PLACEHOLDER_KEY, normalizeProviderEndpoint } from '../provider/providers/index.js';
+import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PLACEHOLDER_KEY, normalizeProviderEndpoint, withApiVersion } from '../provider/providers/index.js';
 import { DEFAULT_EFFORT_VALUE_MAP } from '../provider/providers/definition.js';
 import type { ProviderDefinition } from '../provider/providers/definition.js';
 import { normalizeModelName, isReasoningModel, isNonReasoningChatModel, isAlwaysOnReasoner, modelSupportsXhighEffort, isBinaryReasoningModel } from '../provider/models/reasoning.js';
@@ -6189,7 +6189,7 @@ export async function callOpenAI(
     headers['Authorization'] = `Bearer ${apiKey}`;
   }
 
-  const requestUrl = `${endpoint}/${requestFormat === 'responses' ? 'responses' : 'chat/completions'}`;
+  const requestUrl = withApiVersion(`${endpoint}/${requestFormat === 'responses' ? 'responses' : 'chat/completions'}`, config.apiVersion);
   const postBody = async (requestBody: any): Promise<Response> => {
     const timeoutMs = getCliKnobs().llmTimeoutMs;
     const controller = new AbortController();
@@ -6395,7 +6395,7 @@ export async function callOpenAIStream(
   };
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
-  const requestUrl = `${endpoint}/${requestFormat === 'responses' ? 'responses' : 'chat/completions'}`;
+  const requestUrl = withApiVersion(`${endpoint}/${requestFormat === 'responses' ? 'responses' : 'chat/completions'}`, config.apiVersion);
   const openStreamRequest = async (requestBody: any): Promise<{ res: Response; finish: () => void }> => {
     const timeoutMs = getCliKnobs().llmTimeoutMs;
     const controller = new AbortController();

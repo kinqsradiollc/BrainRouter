@@ -39,11 +39,27 @@ test('backfillApiKeyFromEnv: OpenRouter endpoint → OPENROUTER_API_KEY wins', (
   assert.equal(out, 'sk-or-v1-aaaaaaaaaaa');
 });
 
-test('backfillApiKeyFromEnv: Gemini endpoint → GEMINI_API_KEY', () => {
+test('backfillApiKeyFromEnv: Gemini endpoint → GEMINI_API_KEY (now derived from the gemini module)', () => {
   const out = withEnv({
     GEMINI_API_KEY: 'AIzaXXXXXXXXXXXXXXXXX',
   }, () => backfillApiKeyFromEnv('https://generativelanguage.googleapis.com/v1beta/openai'));
   assert.equal(out, 'AIzaXXXXXXXXXXXXXXXXX');
+});
+
+test('backfillApiKeyFromEnv: Anthropic endpoint → ANTHROPIC_API_KEY (0.4.17 module)', () => {
+  const out = withEnv({
+    ANTHROPIC_API_KEY: 'sk-ant-aaaaaaaaaaaaaaaa',
+    OPENAI_API_KEY:    'sk-bbbbbbbbbbbbbbbb',
+  }, () => backfillApiKeyFromEnv('https://api.anthropic.com/v1'));
+  assert.equal(out, 'sk-ant-aaaaaaaaaaaaaaaa');
+});
+
+test('backfillApiKeyFromEnv: Groq endpoint → GROQ_API_KEY (0.4.17 module)', () => {
+  const out = withEnv({
+    GROQ_API_KEY:   'gsk-aaaaaaaaaaaaaaaa',
+    OPENAI_API_KEY: 'sk-bbbbbbbbbbbbbbbb',
+  }, () => backfillApiKeyFromEnv('https://api.groq.com/openai/v1'));
+  assert.equal(out, 'gsk-aaaaaaaaaaaaaaaa');
 });
 
 test('backfillApiKeyFromEnv: opencode endpoint → OPENCODE_API_KEY (now derived from the provider module)', () => {

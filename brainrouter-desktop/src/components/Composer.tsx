@@ -5,6 +5,8 @@
  */
 import React, { type Dispatch, type SetStateAction } from 'react';
 import { Icon } from '../icons.js';
+import { ProviderIcon } from './ProviderIcon.js';
+import { ModelIcon } from './ModelIcon.js';
 import { SlashPopup } from '../palette.js';
 import { UsageBar } from './UsageBar.js';
 import { ContextRing } from './ContextRing.js';
@@ -37,6 +39,14 @@ export interface ComposerProps {
   info: { workspaceRoot?: string; model?: string };
   branches: { current: string | null; branches: string[]; loading?: boolean };
   endpointModels: string[];
+  // §multi-select-models — the default provider's allowlist. When non-empty the
+  // model menu lists only these (∩ the live endpoint list); empty ⇒ full list.
+  allowedModels?: string[];
+  // §connected-models — every saved provider (name + its allowlist/default), so
+  // the model menu can list and switch to any connected provider, not just the
+  // active endpoint. defaultProviderName marks which one is currently active.
+  connectedProviders?: Array<{ name: string; provider: string; model: string; models?: string[]; endpoint?: string | null }>;
+  defaultProviderName?: string | null;
   modelsLoading: boolean;
   setModelsLoading: (v: boolean) => void;
   modelChoices: string[];
@@ -64,7 +74,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
   const {
     draft, setDraft, running, stopping, submit, requestStop, slashActive, slashMatches, commands,
     slashSel, setSlashSel, setSlashDismissed, onRunSlash, pop, setPop, q, modeLabel, execMode, effort,
-    info, branches, endpointModels, modelsLoading, setModelsLoading, modelChoices, modelScope, setModelScope,
+    info, branches, endpointModels, allowedModels, connectedProviders, defaultProviderName, modelsLoading, setModelsLoading, modelChoices, modelScope, setModelScope,
     hasConversation, contextUsage, tokens, openSettings, onAttach, attachments = [], onClearAttachment, canSubmit = false,
   } = p;
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -241,11 +251,23 @@ export function Composer(p: ComposerProps): React.ReactElement {
             {pop === 'model' ? (
               <div className="menu-pop model-menu">
                 {(() => {
+                  // §multi-select-models — when the default provider saved an
+                  // allowlist, narrow the live endpoint list to it (∩); an empty
+                  // allowlist falls through to the full list (unchanged behavior).
+                  const allow = allowedModels ?? [];
+                  const base = allow.length ? endpointModels.filter((m) => allow.includes(m)) : endpointModels;
                   // DESK-5l — only models that can actually chat;
                   // embedding/audio/rerank picks broke the session.
-                  const chatModels = endpointModels.filter((m) => !NON_CHAT_MODEL.test(m));
-                  const hidden = endpointModels.length - chatModels.length;
+                  const chatModels = base.filter((m) => !NON_CHAT_MODEL.test(m));
+                  const hidden = base.length - chatModels.length;
                   const listed = [...new Set([...(chatModels.length ? chatModels : []), ...modelChoices])];
+                  // §connected-models — every OTHER saved provider, listing its
+                  // models (the saved allowlist, else its single default) so you can
+                  // switch provider + model right here, not just the active endpoint.
+                  const providerGroups = (connectedProviders ?? [])
+                    .filter((p) => p.name !== (defaultProviderName ?? null))
+                    .map((p) => ({ name: p.name, provider: p.provider, models: ((p.models && p.models.length) ? p.models : (p.model ? [p.model] : [])).filter((m) => !NON_CHAT_MODEL.test(m)) }))
+                    .filter((g) => g.models.length);
                   return (
                     <>
                       <div className="menu-head"><span>Models{chatModels.length ? ` · ${chatModels.length} on endpoint` : ''}</span><span>⇧⌃I</span></div>
@@ -266,6 +288,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
                               setPop('');
                             }}>
                               <span className="mi-check">{m === info.model ? '✓' : ''}</span>
+                              <ModelIcon model={m} style={{ marginRight: 6 }} />
                               <span className="model-id">{m}</span>
                               {badges.length ? (
                                 <span className="model-caps">
@@ -280,6 +303,33 @@ export function Composer(p: ComposerProps): React.ReactElement {
                       {hidden > 0 ? (
                         <div className="menu-head"><span>{hidden} non-chat model{hidden === 1 ? '' : 's'} hidden (embeddings, audio…)</span></div>
                       ) : null}
+                      {providerGroups.map((g) => (
+                        <React.Fragment key={g.name}>
+                          <div className="menu-head"><span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><ProviderIcon id={g.provider} size={14} />{g.name}</span></div>
+                          <div className="model-list">
+                            {g.models.map((m) => {
+                              const badges = capabilityBadges(modelCapabilities(m));
+                              return (
+                                <button key={`${g.name}:${m}`} className="menu-item model-item" title={`Switch to ${g.name} and use ${m}`} onClick={() => {
+                                  // Switch the active provider to this one, then pick the model.
+                                  q('a-setdefault', 'action:set-default-provider', { name: g.name });
+                                  setTimeout(() => { window.brainrouter.send({ kind: 'set-model', model: m, persist: true }); q('q-snapshot', 'config-snapshot'); q('q-models', 'list-models'); }, 150);
+                                  setPop('');
+                                }}>
+                                  <span className="mi-check">{g.name === defaultProviderName && m === info.model ? '✓' : ''}</span>
+                                  <ModelIcon model={m} style={{ marginRight: 6 }} />
+                                  <span className="model-id">{m}</span>
+                                  {badges.length ? (
+                                    <span className="model-caps">
+                                      {badges.map((b) => <span key={b.key} className={`cap-chip cap-${b.key}`} title={b.title}>{b.label}</span>)}
+                                    </span>
+                                  ) : null}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </React.Fragment>
+                      ))}
                     </>
                   );
                 })()}

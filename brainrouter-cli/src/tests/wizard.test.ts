@@ -104,11 +104,14 @@ test('reduceWizard commit only fires on the done step', () => {
 
 test('PROVIDER_CATALOG = the picker-visible built-in providers (code modules)', () => {
   const ids = PROVIDER_CATALOG.map((p) => p.id);
-  // Built-in providers now live as code modules under provider/providers/.
-  assert.deepEqual(ids.sort(), ['lmstudio', 'ollama', 'openai', 'openai-compatible', 'opencode']);
+  // Built-in providers live as code modules under provider/providers/. The Onyx
+  // Models-panel redesign re-introduced branded per-vendor providers
+  // (anthropic, gemini, openrouter, groq, azure, zenmux) as first-class
+  // picker-visible entries alongside the OpenAI-compatible/local ones.
+  assert.deepEqual(ids.sort(), ['anthropic', 'azure', 'gemini', 'groq', 'lmstudio', 'ollama', 'openai', 'openai-compatible', 'opencode', 'openrouter', 'zenmux']);
   // deepseek is DEFINED (for its tier ladder) but pickerVisible:false → hidden;
-  // legacy per-vendor entries stay gone from the picker.
-  for (const removed of ['deepseek', 'openrouter', 'anthropic-via-gateway', 'gemini']) {
+  // the old anthropic-via-gateway alias stays gone from the picker.
+  for (const removed of ['deepseek', 'anthropic-via-gateway']) {
     assert.ok(!ids.includes(removed), `${removed} should not be in the picker`);
   }
   assert.ok(PROVIDER_CATALOG.some((p) => p.local), 'at least one local provider (LM Studio / Ollama)');
