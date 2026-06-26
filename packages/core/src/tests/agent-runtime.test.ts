@@ -2,7 +2,22 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Agent, buildChatCompletionPayload, sanitizeToolCallsForHistory } from '../agent/agent.js';
+import { Agent, buildChatCompletionPayload, buildResponsesPayload, callOpenAI, callOpenAIStream, resolveRequestFormat, sanitizeToolCallsForHistory } from '../agent/agent.js';
+import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
+import { _resetModelReasoningCapabilities, registerModelReasoningCapabilities } from '../provider/models/reasoning.js';
+
+function resetCliKnobsForAgentRuntimeTest(extra: Parameters<typeof setCliKnobOverride>[0] = {}): void {
+  _resetCliKnobsCache();
+  setCliKnobOverride({ providerRequestFormat: {}, ...extra });
+}
+
+test.beforeEach(() => {
+  resetCliKnobsForAgentRuntimeTest();
+});
+
+test.after(() => {
+  _resetCliKnobsCache();
+});
 
 test('sanitizeToolCallsForHistory: malformed/object args become valid JSON-object strings (run_workflow 400 fix)', () => {
   const orig = [
@@ -21,11 +36,653 @@ test('sanitizeToolCallsForHistory: malformed/object args become valid JSON-objec
   // originals are NOT mutated (execution still sees the raw malformed args)
   assert.equal(orig[0].function.arguments, '{"name":"x", bad json');
 });
+
+function layeredSystemForTests() {
+  return {
+    role: 'system',
+    content: 'FLAT SYSTEM',
+    promptLayers: {
+      instructions: 'CORE INSTRUCTIONS',
+      developer: ['DEV MEMORY', 'DEV POLICY'],
+      environment: 'WORKSPACE INSTRUCTIONS\n<environment_context>cwd=/repo</environment_context>',
+    },
+  };
+}
+
+const sampleTool = {
+  name: 'read_file',
+  description: 'Read a file',
+  inputSchema: {
+    type: 'object',
+    properties: { path: { type: 'string' } },
+    required: ['path'],
+    additionalProperties: false,
+  },
+};
+
+test('buildChatCompletionPayload: bundles Codex prompt layers into one provider-safe chat prefix', () => {
+  const body = buildChatCompletionPayload(
+    { provider: 'openai-compatible', apiKey: 'k', model: 'custom-model', endpoint: 'https://gateway.example/v1' },
+    [
+      layeredSystemForTests(),
+      { role: 'user', content: 'hello' },
+    ],
+    [sampleTool],
+  );
+
+  assert.deepEqual(body.messages.map((m) => m.role), ['system', 'user']);
+  assert.match(body.messages[0].content, /^CORE INSTRUCTIONS/);
+  assert.match(body.messages[0].content, /DEV MEMORY/);
+  assert.match(body.messages[0].content, /DEV POLICY/);
+  assert.match(body.messages[0].content, /WORKSPACE INSTRUCTIONS/);
+  assert.equal(body.messages[1].content, 'hello');
+  assert.equal(body.tools?.[0].function.name, 'read_file');
+  assert.equal(body.tool_choice, 'auto');
+  assert.equal(body.messages.some((m) => m.role === 'developer'), false);
+  assert.equal(body.messages.filter((m) => m.role === 'system').length, 1);
+});
+
+test('buildChatCompletionPayload: folds mid-history system/developer directives into the chat system prefix', () => {
+  const body = buildChatCompletionPayload(
+    { provider: 'openai-compatible', apiKey: 'k', model: 'custom-model', endpoint: 'https://gateway.example/v1' },
+    [
+      layeredSystemForTests(),
+      { role: 'system', content: 'runtime directive' },
+      { role: 'developer', content: 'developer hint' },
+      { role: 'user', content: 'hello' },
+    ],
+    [],
+  );
+
+  assert.deepEqual(body.messages.map((m) => m.role), ['system', 'user']);
+  assert.match(body.messages[0].content, /runtime directive/);
+  assert.match(body.messages[0].content, /developer hint/);
+  assert.equal(body.messages[1].content, 'hello');
+  assert.equal(body.messages.filter((m) => m.role === 'system').length, 1);
+});
+
+test('buildChatCompletionPayload: preserves waited child outputs as high-authority runtime context', () => {
+  const body = buildChatCompletionPayload(
+    { provider: 'openai-compatible', apiKey: 'k', model: 'custom-model', endpoint: 'https://gateway.example/v1' },
+    [
+      layeredSystemForTests(),
+      {
+        role: 'system',
+        content: [
+          '<system-reminder id="child-results">',
+          'Recently waited child-agent outputs are available below.',
+          'child output',
+          '</system-reminder>',
+        ].join('\n'),
+      },
+      { role: 'user', content: 'synthesize' },
+    ],
+    [],
+  );
+
+  assert.deepEqual(body.messages.map((m) => m.role), ['system', 'user']);
+  assert.match(body.messages[0].content, /Recently waited child-agent outputs/);
+  assert.equal(body.messages[1].content, 'synthesize');
+});
+
+test('buildResponsesPayload: emits Codex-style developer input/tools and preserves tool-call history', () => {
+  const body = buildResponsesPayload(
+    { provider: 'openai', apiKey: 'k', model: 'gpt-5', endpoint: 'https://api.openai.com/v1' },
+    [
+      layeredSystemForTests(),
+      {
+        role: 'assistant',
+        content: 'I will read it.',
+        tool_calls: [{
+          id: 'call_read',
+          type: 'function',
+          function: { name: 'read_file', arguments: '{"path":"README.md"}' },
+        }],
+      },
+      { role: 'tool', tool_call_id: 'call_read', name: 'read_file', content: 'README body' },
+      { role: 'user', content: 'continue' },
+    ],
+    [sampleTool],
+    { effort: 'high' },
+  );
+
+  assert.equal(body.instructions, 'CORE INSTRUCTIONS');
+  assert.equal(body.input[0].role, 'developer');
+  assert.deepEqual(body.input[0].content.map((c: any) => c.text), ['DEV MEMORY', 'DEV POLICY']);
+  assert.equal(body.input[1].role, 'user');
+  assert.match(body.input[1].content[0].text, /environment_context/);
+  assert.deepEqual(
+    body.input.slice(2).map((item: any) => item.type),
+    ['message', 'function_call', 'function_call_output', 'message'],
+  );
+  assert.equal(body.input[3].call_id, 'call_read');
+  assert.equal(body.input[4].call_id, 'call_read');
+  assert.equal(body.tools?.[0].name, 'read_file');
+  assert.equal(body.tools?.[0].strict, false);
+  assert.equal(body.tool_choice, 'auto');
+  assert.equal(body.parallel_tool_calls, true);
+  assert.deepEqual(body.reasoning, { effort: 'high' });
+  assert.equal(body.store, false);
+  assert.deepEqual(body.include, []);
+});
+
+test('buildResponsesPayload/buildChatCompletionPayload: OpenAI never emits binary reasoning_effort=on', () => {
+  _resetModelReasoningCapabilities();
+  registerModelReasoningCapabilities('gpt-5-binary-regression', { reasoning: true, efforts: ['on', 'off'] });
+  try {
+    const messages = [{ role: 'user', content: 'think hard' }];
+    const config = {
+      provider: 'openai',
+      apiKey: 'k',
+      model: 'gpt-5-binary-regression',
+      endpoint: 'https://api.openai.com/v1',
+    };
+
+    const responses = buildResponsesPayload(config, messages, [], { effort: 'high' });
+    assert.deepEqual((responses as any).reasoning, { effort: 'high' });
+
+    const chat = buildChatCompletionPayload(config, messages, [], { effort: 'high' });
+    assert.equal((chat as any).reasoning_effort, 'high');
+    assert.notEqual((chat as any).reasoning_effort, 'on');
+  } finally {
+    _resetModelReasoningCapabilities();
+  }
+});
+
+test('resolveRequestFormat: only canonical OpenAI uses Responses; custom endpoints fall back to chat completions', () => {
+  assert.equal(
+    resolveRequestFormat({ provider: 'openai', apiKey: 'k', model: 'gpt-5', endpoint: 'https://api.openai.com/v1' }),
+    'responses',
+  );
+  assert.equal(
+    resolveRequestFormat({ provider: 'openai', apiKey: 'k', model: 'gpt-5', endpoint: 'https://openrouter.ai/api/v1' }),
+    'chat-completions',
+  );
+  assert.equal(
+    resolveRequestFormat({ provider: 'openai-compatible', apiKey: 'k', model: 'gpt-5', endpoint: 'https://api.openai.com/v1' }),
+    'responses',
+  );
+});
+
+test('callOpenAI: sends Responses payload to canonical OpenAI and normalizes output/tool calls/usage', async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedUrl = '';
+  let capturedBody: any;
+  globalThis.fetch = (async (url: any, opts: any) => {
+    capturedUrl = String(url);
+    capturedBody = JSON.parse(opts.body);
+    return new Response(JSON.stringify({
+      id: 'resp_test',
+      status: 'completed',
+      output_text: 'done',
+      output: [{
+        type: 'function_call',
+        id: 'fc_1',
+        call_id: 'call_read',
+        name: 'read_file',
+        arguments: '{"path":"README.md"}',
+      }],
+      usage: {
+        input_tokens: 100,
+        output_tokens: 7,
+        total_tokens: 107,
+        input_tokens_details: { cached_tokens: 25 },
+      },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as any;
+
+  try {
+    const result = await callOpenAI(
+      { provider: 'openai', apiKey: 'k', model: 'gpt-5', endpoint: 'https://api.openai.com/v1' },
+      [layeredSystemForTests(), { role: 'user', content: 'read README' }],
+      [sampleTool],
+      { effort: 'high' },
+    );
+    assert.equal(capturedUrl, 'https://api.openai.com/v1/responses');
+    assert.equal(capturedBody.instructions, 'CORE INSTRUCTIONS');
+    assert.equal(capturedBody.input[0].role, 'developer');
+    assert.deepEqual(capturedBody.input[0].content.map((c: any) => c.text), ['DEV MEMORY', 'DEV POLICY']);
+    assert.equal(capturedBody.tools[0].name, 'read_file');
+    assert.deepEqual(capturedBody.reasoning, { effort: 'high' });
+    assert.equal(result.content, 'done');
+    assert.equal(result.toolCalls?.[0].id, 'call_read');
+    assert.equal(result.usage?.prompt_tokens, 100);
+    assert.equal((result.usage as any).prompt_tokens_details.cached_tokens, 25);
+  } finally {
+    resetCliKnobsForAgentRuntimeTest();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('callOpenAI: custom OpenAI-compatible endpoint keeps chat-completions with mirrored layers', async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedUrl = '';
+  let capturedBody: any;
+  globalThis.fetch = (async (url: any, opts: any) => {
+    capturedUrl = String(url);
+    capturedBody = JSON.parse(opts.body);
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: 'chat done' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 11, completion_tokens: 3 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as any;
+
+  try {
+    const result = await callOpenAI(
+      { provider: 'openai', apiKey: '', model: 'custom-model', endpoint: 'http://localhost:1234/v1' },
+      [layeredSystemForTests(), { role: 'user', content: 'hello' }],
+      [sampleTool],
+    );
+    assert.equal(capturedUrl, 'http://localhost:1234/v1/chat/completions');
+    assert.deepEqual(capturedBody.messages.map((m: any) => m.role), ['system', 'user']);
+    assert.match(capturedBody.messages[0].content, /^CORE INSTRUCTIONS/);
+    assert.match(capturedBody.messages[0].content, /DEV MEMORY/);
+    assert.match(capturedBody.messages[0].content, /WORKSPACE INSTRUCTIONS/);
+    assert.equal(capturedBody.messages[1].content, 'hello');
+    assert.equal(capturedBody.messages.some((m: any) => m.role === 'developer'), false);
+    assert.equal(capturedBody.messages.filter((m: any) => m.role === 'system').length, 1);
+    assert.equal(capturedBody.tools[0].function.name, 'read_file');
+    assert.equal(result.content, 'chat done');
+  } finally {
+    resetCliKnobsForAgentRuntimeTest();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('callOpenAI: explicit Responses override sends non-OpenAI gateway models through /responses', async () => {
+  const originalFetch = globalThis.fetch;
+  resetCliKnobsForAgentRuntimeTest({ providerRequestFormat: { 'openai-compatible': 'responses' } });
+  let capturedUrl = '';
+  let capturedBody: any;
+  globalThis.fetch = (async (url: any, opts: any) => {
+    capturedUrl = String(url);
+    capturedBody = JSON.parse(opts.body);
+    return new Response(JSON.stringify({
+      id: 'resp_gateway_model',
+      status: 'completed',
+      output_text: 'gemma done',
+      output: [],
+      usage: { input_tokens: 12, output_tokens: 2, total_tokens: 14 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as any;
+
+  try {
+    const result = await callOpenAI(
+      { provider: 'openai-compatible', apiKey: 'k', model: 'google/gemma-4-12b', endpoint: 'https://gateway.example/v1' },
+      [layeredSystemForTests(), { role: 'user', content: 'hi' }],
+      [],
+    );
+    assert.equal(capturedUrl, 'https://gateway.example/v1/responses');
+    assert.equal(capturedBody.model, 'google/gemma-4-12b');
+    assert.equal(capturedBody.instructions, 'CORE INSTRUCTIONS');
+    assert.equal(capturedBody.messages, undefined);
+    assert.equal(capturedBody.input[0].role, 'developer');
+    assert.deepEqual(capturedBody.input[0].content.map((c: any) => c.text), ['DEV MEMORY', 'DEV POLICY']);
+    assert.equal(capturedBody.input[1].role, 'user');
+    assert.match(capturedBody.input[1].content[0].text, /WORKSPACE INSTRUCTIONS/);
+    assert.equal(capturedBody.input[2].role, 'user');
+    assert.equal(capturedBody.input[2].content[0].text, 'hi');
+    assert.equal(result.content, 'gemma done');
+  } finally {
+    resetCliKnobsForAgentRuntimeTest();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('callOpenAI: retries once without reasoning effort when an OpenAI-compatible backend rejects the field', async () => {
+  const originalFetch = globalThis.fetch;
+  _resetModelReasoningCapabilities();
+  registerModelReasoningCapabilities('lmstudio/gemma-retry-binary', { reasoning: true, efforts: ['on', 'off'] });
+  const capturedBodies: any[] = [];
+  globalThis.fetch = (async (_url: any, opts: any) => {
+    const body = JSON.parse(opts.body);
+    capturedBodies.push(body);
+    if (capturedBodies.length === 1) {
+      return new Response(JSON.stringify({
+        error: {
+          message: "Invalid 'reasoning_effort' value: 'high'. Supported values: none, minimal, low, medium, high, xhigh.",
+          type: 'invalid_request_error',
+          param: 'reasoning_effort',
+          code: 'invalid_value',
+        },
+      }), { status: 400, statusText: 'Bad Request', headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: 'retried without effort' }, finish_reason: 'stop' }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as any;
+
+  try {
+    const result = await callOpenAI(
+      { provider: 'lmstudio', apiKey: '', model: 'lmstudio/gemma-retry-binary' },
+      [{ role: 'user', content: 'hello' }],
+      [],
+      { effort: 'high' },
+    );
+
+    assert.equal(capturedBodies.length, 2);
+    assert.equal(capturedBodies[0].reasoning_effort, 'high');
+    assert.deepEqual(capturedBodies[0].reasoning, { effort: 'high' });
+    assert.equal(capturedBodies[1].reasoning_effort, undefined);
+    assert.equal(capturedBodies[1].reasoning, undefined);
+    assert.equal(result.content, 'retried without effort');
+  } finally {
+    _resetModelReasoningCapabilities();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('callOpenAI: provider default endpoint is used before the OpenAI fallback', async () => {
+  const originalFetch = globalThis.fetch;
+  _resetModelReasoningCapabilities();
+  registerModelReasoningCapabilities('lmstudio/gemma-provider-default', { reasoning: true, efforts: ['on', 'off'] });
+  let capturedUrl = '';
+  let capturedHeaders: Record<string, string> = {};
+  let capturedBody: any;
+  globalThis.fetch = (async (url: any, opts: any) => {
+    capturedUrl = String(url);
+    capturedHeaders = opts.headers;
+    capturedBody = JSON.parse(opts.body);
+    return new Response(JSON.stringify({
+      choices: [{ message: { content: 'local done' }, finish_reason: 'stop' }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as any;
+
+  try {
+    const result = await callOpenAI(
+      { provider: 'lmstudio', apiKey: '', model: 'lmstudio/gemma-provider-default' },
+      [{ role: 'user', content: 'think locally' }],
+      [],
+      { effort: 'high' },
+    );
+
+    assert.equal(capturedUrl, 'http://localhost:1234/v1/chat/completions');
+    assert.equal(capturedHeaders.Authorization, 'Bearer local');
+    assert.equal(capturedBody.reasoning_effort, 'high');
+    assert.deepEqual(capturedBody.reasoning, { effort: 'high' });
+    assert.equal(result.content, 'local done');
+  } finally {
+    _resetModelReasoningCapabilities();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('callOpenAI: explicit canonical OpenAI endpoint overrides a mismatched binary-capable provider id', async () => {
+  const originalFetch = globalThis.fetch;
+  _resetModelReasoningCapabilities();
+  registerModelReasoningCapabilities('gpt-5-provider-mismatch', { reasoning: true, efforts: ['on', 'off'] });
+  let capturedUrl = '';
+  let capturedBody: any;
+  globalThis.fetch = (async (url: any, opts: any) => {
+    capturedUrl = String(url);
+    capturedBody = JSON.parse(opts.body);
+    return new Response(JSON.stringify({
+      id: 'resp_provider_mismatch',
+      status: 'completed',
+      output_text: 'openai done',
+      output: [],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as any;
+
+  try {
+    const result = await callOpenAI(
+      {
+        provider: 'lmstudio',
+        apiKey: 'k',
+        model: 'gpt-5-provider-mismatch',
+        endpoint: 'https://api.openai.com/v1',
+      },
+      [{ role: 'user', content: 'think on openai' }],
+      [],
+      { effort: 'high' },
+    );
+
+    assert.equal(capturedUrl, 'https://api.openai.com/v1/responses');
+    assert.deepEqual(capturedBody.reasoning, { effort: 'high' });
+    assert.equal(capturedBody.reasoning_effort, undefined);
+    assert.equal(result.content, 'openai done');
+  } finally {
+    _resetModelReasoningCapabilities();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('callOpenAIStream: parses Responses typed SSE text, function calls, and usage', async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+  const frames = [
+    { type: 'response.output_text.delta', delta: 'he' },
+    { type: 'response.output_text.delta', delta: 'llo' },
+    { type: 'response.output_item.added', output_index: 1, item: { type: 'function_call', id: 'fc_1', call_id: 'call_read', name: 'read_file', arguments: '' } },
+    { type: 'response.function_call_arguments.delta', output_index: 1, delta: '{"path":"' },
+    { type: 'response.function_call_arguments.delta', output_index: 1, delta: 'README.md"}' },
+    { type: 'response.function_call_arguments.done', output_index: 1, arguments: '{"path":"README.md"}', item: { type: 'function_call', call_id: 'call_read', name: 'read_file' } },
+    { type: 'response.completed', response: { status: 'completed', output: [], usage: { input_tokens: 8, output_tokens: 2 } } },
+  ];
+  globalThis.fetch = (async () => {
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(frames.map((f) => `data: ${JSON.stringify(f)}\n\n`).join('')));
+        controller.close();
+      },
+    });
+    return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+  }) as any;
+
+  try {
+    const deltas: string[] = [];
+    const result = await callOpenAIStream(
+      { provider: 'openai', apiKey: 'k', model: 'gpt-5', endpoint: 'https://api.openai.com/v1' },
+      [layeredSystemForTests(), { role: 'user', content: 'hello' }],
+      [sampleTool],
+      {},
+      { onTextDelta: (text) => deltas.push(text) },
+    );
+    assert.deepEqual(deltas, ['he', 'llo']);
+    assert.equal(result.content, 'hello');
+    assert.equal(result.toolCalls?.[0].id, 'call_read');
+    assert.equal(result.toolCalls?.[0].function.arguments, '{"path":"README.md"}');
+    assert.equal(result.usage?.prompt_tokens, 8);
+    assert.equal(result.usage?.completion_tokens, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('callOpenAIStream: provider default endpoint is used before the OpenAI fallback', async () => {
+  const originalFetch = globalThis.fetch;
+  _resetModelReasoningCapabilities();
+  registerModelReasoningCapabilities('lmstudio/gemma-provider-default-stream', { reasoning: true, efforts: ['on', 'off'] });
+  const encoder = new TextEncoder();
+  let capturedUrl = '';
+  let capturedHeaders: Record<string, string> = {};
+  let capturedBody: any;
+  globalThis.fetch = (async (url: any, opts: any) => {
+    capturedUrl = String(url);
+    capturedHeaders = opts.headers;
+    capturedBody = JSON.parse(opts.body);
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"local stream"},"finish_reason":"stop"}]}\n\n'));
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+      },
+    });
+    return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+  }) as any;
+
+  try {
+    const result = await callOpenAIStream(
+      { provider: 'lmstudio', apiKey: '', model: 'lmstudio/gemma-provider-default-stream' },
+      [{ role: 'user', content: 'think locally' }],
+      [],
+      { effort: 'high' },
+    );
+
+    assert.equal(capturedUrl, 'http://localhost:1234/v1/chat/completions');
+    assert.equal(capturedHeaders.Authorization, 'Bearer local');
+    assert.equal(capturedBody.reasoning_effort, 'high');
+    assert.deepEqual(capturedBody.reasoning, { effort: 'high' });
+    assert.equal(capturedBody.stream, true);
+    assert.equal(result.content, 'local stream');
+  } finally {
+    _resetModelReasoningCapabilities();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('callOpenAIStream: retries once without reasoning effort when the stream endpoint rejects the field', async () => {
+  const originalFetch = globalThis.fetch;
+  _resetModelReasoningCapabilities();
+  registerModelReasoningCapabilities('lmstudio/gemma-stream-retry-binary', { reasoning: true, efforts: ['on', 'off'] });
+  const encoder = new TextEncoder();
+  const capturedBodies: any[] = [];
+  globalThis.fetch = (async (_url: any, opts: any) => {
+    const body = JSON.parse(opts.body);
+    capturedBodies.push(body);
+    if (capturedBodies.length === 1) {
+      return new Response(JSON.stringify({
+        error: {
+          message: "Invalid 'reasoning_effort' value: 'high'. Supported values: none, minimal, low, medium, high, xhigh.",
+          param: 'reasoning_effort',
+        },
+      }), { status: 400, statusText: 'Bad Request', headers: { 'Content-Type': 'application/json' } });
+    }
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"retry stream"},"finish_reason":"stop"}]}\n\n'));
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+      },
+    });
+    return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+  }) as any;
+
+  try {
+    const result = await callOpenAIStream(
+      { provider: 'lmstudio', apiKey: '', model: 'lmstudio/gemma-stream-retry-binary' },
+      [{ role: 'user', content: 'hello' }],
+      [],
+      { effort: 'high' },
+    );
+
+    assert.equal(capturedBodies.length, 2);
+    assert.equal(capturedBodies[0].reasoning_effort, 'high');
+    assert.equal(capturedBodies[0].stream, true);
+    assert.equal(capturedBodies[1].reasoning_effort, undefined);
+    assert.equal(capturedBodies[1].reasoning, undefined);
+    assert.equal(capturedBodies[1].stream, true);
+    assert.equal(result.content, 'retry stream');
+  } finally {
+    _resetModelReasoningCapabilities();
+    globalThis.fetch = originalFetch;
+  }
+});
 import { executeOrchestrationTool } from '../orchestration/tools.js';
 import { clearGoal, readGoal, setGoal } from '../goal/goalStore.js';
-import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
 import { makeAgent, withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 import { listArtifacts } from '../artifact/artifactStore.js';
+
+test('compactHistory: stores compacted state in prompt layers without chat developer roles', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const agent: any = makeAgent(workspace);
+    agent.chatHistory = [
+      agent.createSystemMessage(),
+      { role: 'user', content: 'first request' },
+      { role: 'assistant', content: 'first answer' },
+      { role: 'user', content: 'continue from here' },
+    ];
+
+    const originalFetch = globalThis.fetch;
+    let capturedCompactionBody: any;
+    globalThis.fetch = (async (_url: any, opts: any) => {
+      capturedCompactionBody = JSON.parse(opts.body);
+      return new Response(JSON.stringify({
+        choices: [{
+          message: {
+            content: '<analysis>keep the key state</analysis><summary>Important compacted state.</summary>',
+          },
+        }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+
+    try {
+      const result = await agent.compactHistory();
+      assert.equal(result?.summary, 'Important compacted state.');
+      assert.deepEqual(capturedCompactionBody.messages.map((m: any) => m.role), ['system', 'user']);
+
+      const history = agent.chatHistory;
+      assert.equal(history.length, 2);
+      assert.equal(history[1].role, 'user');
+      assert.equal(history.some((m: any, index: number) => index > 0 && m.role === 'system'), false);
+      assert.equal(
+        history[0].promptLayers.developer.some((text: string) => text.includes('Important compacted state.')),
+        true,
+      );
+
+      const chatBody = buildChatCompletionPayload(
+        { provider: 'openai-compatible', apiKey: 'k', model: 'custom-model', endpoint: 'https://gateway.example/v1' },
+        history,
+        [],
+      );
+      assert.equal(chatBody.messages.some((m) => m.role === 'developer'), false);
+      assert.equal(chatBody.messages.some((m) => m.role === 'system' && String(m.content).includes('Important compacted state.')), true);
+
+    const responsesBody = buildResponsesPayload(
+      { provider: 'openai', apiKey: 'k', model: 'gpt-5', endpoint: 'https://api.openai.com/v1' },
+      history,
+      [],
+    );
+    assert.equal(responsesBody.input[0].role, 'developer');
+    assert.equal(
+      responsesBody.input[0].content.some((part: any) => part.text.includes('Important compacted state.')),
+        true,
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('compactHistory: normalizes full chat endpoint URLs and local auth', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const agent: any = makeAgent(workspace);
+    agent.setLLMConfig({
+      apiKey: '',
+      endpoint: 'http://localhost:1234/v1/chat/completions',
+      model: 'local-model',
+    });
+    agent.chatHistory = [
+      agent.createSystemMessage(),
+      { role: 'user', content: 'first request' },
+      { role: 'assistant', content: 'first answer' },
+      { role: 'user', content: 'continue from here' },
+    ];
+
+    const originalFetch = globalThis.fetch;
+    let capturedUrl = '';
+    let capturedHeaders: Record<string, string> = {};
+    globalThis.fetch = (async (url: any, opts: any) => {
+      capturedUrl = String(url);
+      capturedHeaders = opts.headers;
+      return new Response(JSON.stringify({
+        choices: [{
+          message: {
+            content: '<summary>Local compact summary.</summary>',
+          },
+        }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as any;
+
+    try {
+      await agent.compactHistory();
+      assert.equal(capturedUrl, 'http://localhost:1234/v1/chat/completions');
+      assert.equal(capturedHeaders.Authorization, 'Bearer local');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
 
 test('artifact_write tool: creates then grows an artifact by id (versioned, editedBy agent) — §AV-4', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
@@ -49,9 +706,9 @@ test('artifact_write tool: creates then grows an artifact by id (versioned, edit
 
 test('resolveRecallMode: cli.recallMode > default (9b)', async () => {
   const { resolveRecallMode } = await import('../agent/agent.js');
-  try {
-    _resetCliKnobsCache();
-    assert.equal(resolveRecallMode(), 'gated', 'unset config defaults to gated');
+    try {
+      resetCliKnobsForAgentRuntimeTest();
+      assert.equal(resolveRecallMode(), 'gated', 'unset config defaults to gated');
 
     setCliKnobOverride({ recallMode: 'always' });
     assert.equal(resolveRecallMode(), 'always');
@@ -61,9 +718,9 @@ test('resolveRecallMode: cli.recallMode > default (9b)', async () => {
 
     setCliKnobOverride({ recallMode: 'gated' });
     assert.equal(resolveRecallMode(), 'gated');
-  } finally {
-    _resetCliKnobsCache();
-  }
+    } finally {
+      resetCliKnobsForAgentRuntimeTest();
+    }
 });
 
 test('countEntityTokens: detects file paths, identifiers, and proper nouns (9b)', async () => {
@@ -485,7 +1142,7 @@ test('runTurn repeat-SEQUENCE guard: reading DIFFERENT files is forward progress
       assert.equal(events.some((e) => /repeat sequence guard/.test(e.summary)), false);
     } finally {
       globalThis.fetch = originalFetch;
-      _resetCliKnobsCache();
+      resetCliKnobsForAgentRuntimeTest();
     }
   });
 });
@@ -541,7 +1198,7 @@ test('runTurn repeat-SEQUENCE guard: re-issuing the IDENTICAL call (same file, s
       );
     } finally {
       globalThis.fetch = originalFetch;
-      _resetCliKnobsCache();
+      resetCliKnobsForAgentRuntimeTest();
     }
   });
 });
@@ -715,7 +1372,7 @@ test('runTurn auto-drains spawned children and reports explicit timeout statuses
       await new Promise((resolve) => setTimeout(resolve, 70));
     } finally {
       globalThis.fetch = originalFetch;
-      _resetCliKnobsCache();
+      resetCliKnobsForAgentRuntimeTest();
     }
   });
 });
@@ -986,6 +1643,29 @@ test('buildChatCompletionPayload: LM Studio gets BOTH effort wire shapes; flat-o
   assert.deepEqual((lmNon as any).reasoning, { effort: 'high' });
 });
 
+test('buildChatCompletionPayload: LM Studio binary metadata keeps graded wire effort', () => {
+  _resetModelReasoningCapabilities();
+  registerModelReasoningCapabilities('lmstudio/gemma-4-12b-qat-chat-payload', { reasoning: true, efforts: ['on', 'off'] });
+  try {
+    const lm = buildChatCompletionPayload(
+      {
+        provider: 'lmstudio',
+        apiKey: '',
+        model: 'lmstudio/gemma-4-12b-qat-chat-payload',
+        endpoint: 'http://localhost:1234/v1',
+      },
+      [{ role: 'user', content: 'think hard' }],
+      [],
+      { effort: 'high' },
+    );
+
+    assert.equal((lm as any).reasoning_effort, 'high');
+    assert.deepEqual((lm as any).reasoning, { effort: 'high' });
+  } finally {
+    _resetModelReasoningCapabilities();
+  }
+});
+
 test('runTurn: when goal_complete fires with empty prose, the fallback surfaces the recorded proof so the user has something to read', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const sessionKey = 'fixed-test-session-key-for-goal-complete-fallback';
@@ -1127,7 +1807,7 @@ test('P1.2: reasoning tier can spawn a worker agent', async () => {
 
 test('P1.2: depth cap is enforced at default limit (3)', async () => {
   try {
-    _resetCliKnobsCache();
+    resetCliKnobsForAgentRuntimeTest();
     await withTempWorkspaceAsync(async (workspace) => {
       const ctx = makeStubOrchCtx(workspace, { depth: 3 });
       await assert.rejects(
@@ -1136,7 +1816,7 @@ test('P1.2: depth cap is enforced at default limit (3)', async () => {
       );
     });
   } finally {
-    _resetCliKnobsCache();
+    resetCliKnobsForAgentRuntimeTest();
   }
 });
 
@@ -1161,7 +1841,7 @@ test('P1.2: depth cap is overridable via cli.maxSpawnDepth', async () => {
     });
   } finally {
     globalThis.fetch = originalFetch;
-    _resetCliKnobsCache();
+    resetCliKnobsForAgentRuntimeTest();
   }
 });
 
@@ -1547,14 +2227,14 @@ test('toolSafety.isParallelSafe accepts both bare and MCP-prefixed read tools, r
 test('toolSafety.parallelExecutionEnabled honors cli.parallelSafeToolCalls kill switch', async () => {
   const { parallelExecutionEnabled } = await import('../agent/toolSafety.js');
   try {
-    _resetCliKnobsCache();
+    resetCliKnobsForAgentRuntimeTest();
     assert.equal(parallelExecutionEnabled(), true, 'default ON');
     setCliKnobOverride({ parallelSafeToolCalls: false });
     assert.equal(parallelExecutionEnabled(), false, 'false disables');
     setCliKnobOverride({ parallelSafeToolCalls: true });
     assert.equal(parallelExecutionEnabled(), true);
   } finally {
-    _resetCliKnobsCache();
+    resetCliKnobsForAgentRuntimeTest();
   }
 });
 
@@ -1812,7 +2492,7 @@ test('R4: BRAINROUTER_PARALLEL_SAFE_TOOL_CALLS=false forces serial execution of 
     } finally {
       restore();
       (Agent.prototype as any).executeLocalTool = origExec;
-      _resetCliKnobsCache();
+      resetCliKnobsForAgentRuntimeTest();
     }
   });
 });
@@ -2217,7 +2897,7 @@ test('runTurn loop-limit turn still rolls usage into session totals + counts the
       assert.ok(agent.sessionUsage.completionTokens >= 10);
     } finally {
       globalThis.fetch = originalFetch;
-      _resetCliKnobsCache();
+      resetCliKnobsForAgentRuntimeTest();
     }
   });
 });

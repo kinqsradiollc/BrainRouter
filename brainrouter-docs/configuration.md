@@ -571,7 +571,7 @@ the load-bearing ones:
 | `sandboxNetwork` | `false` | Allow outbound network from the sandbox. |
 | `sandboxEnforceWhenSilent` | `true` | Force the sandbox **on** for silent / unattended agents (cloud workers, spawned children, non-interactive runs) even when `sandbox: off`. When enforced, outbound network is denied and a missing sandboxer fails closed (`sandboxUnavailable: deny`), and `background: true` runs are refused (they would escape the sandbox). Set `false` to let unattended shells run with the same posture as interactive ones. Mirrors `cli.hooks.enforceWhenSilent`. |
 | `autoChainMaxFollowups` | `2` | Cap on auto-chained review/verify follow-ups per worker. |
-| `agentMcpToolBudget` | `40` | Cap on MCP tools shown to a child agent per turn (0 = no cap). |
+| `agentMcpToolBudget` | `16` | Cap on MCP tools shown to an agent per turn (0 = no cap). |
 | `workspaceOverride` | _(auto)_ | Override the CLI workspace root. |
 
 ### Requirement to Track automation

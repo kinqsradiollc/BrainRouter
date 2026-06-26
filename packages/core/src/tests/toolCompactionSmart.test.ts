@@ -84,6 +84,7 @@ test('new runtime knobs resolve only from cli config and default to disabled', (
     effortRoutingMode: defaults.effortRoutingMode,
     effortForToolResumeTurns: defaults.effortForToolResumeTurns,
     verbositySteeringLevel: defaults.verbositySteeringLevel,
+    agentMcpToolBudget: defaults.agentMcpToolBudget,
   }, {
     toolOutputCompressionEnabled: false,
     toolOutputCompressionMinChars: 2_000,
@@ -91,5 +92,6 @@ test('new runtime knobs resolve only from cli config and default to disabled', (
     effortRoutingMode: 'off',
     effortForToolResumeTurns: 'low',
     verbositySteeringLevel: 0,
+    agentMcpToolBudget: 16,
   });
 });

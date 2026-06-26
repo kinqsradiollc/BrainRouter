@@ -9,6 +9,7 @@ export * from "./atlas-ops.js";
 export * from "./atlas-json.js";
 export * from "./atlas-enrich.js";
 export * from "./track.js";
+export * from "./connector.js";
 export * from "./task.js";
 export * from "./store.js";
 export * from "./api.js";

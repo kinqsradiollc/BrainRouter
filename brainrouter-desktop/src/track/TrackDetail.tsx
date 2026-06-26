@@ -93,6 +93,14 @@ export function TrackDetail({ item, project, allItems, sprints, ops, onClose }: 
           </Section>
 
           <Section title="Code links">
+            <div className="track-detail-code-actions">
+              <button title="Create or switch to a local Git branch for this work item" onClick={() => ops.startGitWork(item.key)}>
+                <Icon name="branch" size={12} /> Start branch
+              </button>
+              <button title="Create a draft pull request for the linked current branch" onClick={() => ops.createDraftPr(item.key)}>
+                <Icon name="merge" size={12} /> Draft PR
+              </button>
+            </div>
             <div className="track-detail-links">
               {item.codeLinks.map((c, i) => <span key={i} className="track-codelink"><Icon name={c.kind === 'branch' ? 'branch' : c.kind === 'file' ? 'file' : 'commit'} size={11} /> {c.ref}</span>)}
               {item.codeLinks.length === 0 ? <span className="track-detail-muted">No code links.</span> : null}

@@ -151,7 +151,7 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
               badge: annotations.filter((a) => a.status === 'open').length ? String(annotations.filter((a) => a.status === 'open').length) : '' },
             { id: 'artifacts' as PanelId, title: 'Artifacts', hint: '', icon: 'file',
               badge: artifacts.filter((a) => a.status === 'draft').length ? String(artifacts.filter((a) => a.status === 'draft').length) : '' },
-            { id: 'ci' as PanelId, title: 'CI / Checks', hint: '', icon: 'check-circle',
+            { id: 'ci' as PanelId, title: 'PR / Checks', hint: '', icon: 'check-circle',
               badge: ci.checks.length ? String(ci.checks.length) : '' },
             { id: 'atlas' as PanelId, title: 'Atlas', hint: '', icon: 'atlas', badge: '' },
             { id: 'context' as PanelId, title: 'Context', hint: '', icon: 'layout-right', badge: '' },

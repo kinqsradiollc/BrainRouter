@@ -4,8 +4,9 @@
  * the old single `config/providers.json` blob: adding/editing a provider is now
  * "create/edit a sibling module + register it in ./index.ts".
  *
- * BrainRouter talks to every provider over the SAME OpenAI-compatible wire
- * (`callOpenAI` appends `/chat/completions` to `endpoint`). Provider modules
+ * BrainRouter talks to most providers over the OpenAI-compatible
+ * `/chat/completions` wire. Providers can opt into the native Responses API
+ * request shape when their canonical endpoint supports it. Provider modules
  * describe endpoint identity + wire behavior only. They must NOT own model
  * catalogs, default model choices, or tier-model ladders; those come from the
  * live `/models` endpoint, saved user config, or bundled/user config data that
@@ -30,6 +31,15 @@ export interface ProviderDefinition {
   pickerVisible: boolean;
 
   /**
+   * Primary generation wire format:
+   *  - 'responses'        — POST /responses with typed `input` items
+   *                         (OpenAI-native Codex shape).
+   *  - 'chat-completions' — POST /chat/completions with layered messages.
+   * Omitted ⇒ 'chat-completions'.
+   */
+  requestFormat?: 'responses' | 'chat-completions';
+
+  /**
    * How this provider handles reasoning depth over `/v1/chat/completions`:
    *  - 'param'       — accepts a reasoning-effort value for reasoning-capable
    *                    models (further gated by model name + `effortValueMap`;
@@ -49,6 +59,15 @@ export interface ProviderDefinition {
    * `DEFAULT_EFFORT_VALUE_MAP` below (the conservative OpenAI map).
    */
   effortValueMap?: Partial<Record<'low' | 'medium' | 'high' | 'xhigh', string | null>>;
+
+  /**
+   * Optional map for a provider that explicitly documents binary `on`/`off` as
+   * a wire-level effort value. Model metadata alone is not enough: some local
+   * servers use `on`/`off` to describe thinking-mode toggles while the actual
+   * OpenAI-compatible `reasoning_effort` field still accepts graded values.
+   * Omitted ⇒ this provider does NOT accept binary effort literals.
+   */
+  binaryEffortValueMap?: Partial<Record<'low' | 'medium' | 'high' | 'xhigh', string | null>>;
 
   /**
    * WIRE SHAPE for the reasoning-effort value on `/chat/completions`:
@@ -105,4 +124,13 @@ export const DEFAULT_EFFORT_VALUE_MAP: Partial<Record<'low' | 'medium' | 'high' 
   low: 'low',
   high: 'high',
   xhigh: 'high',
+};
+
+/** Binary reasoning vocabulary for a provider that explicitly documents
+ * `on`/`off` as the accepted wire-level effort vocabulary. No built-in provider
+ * enables this by default; provider docs must opt in. */
+export const DEFAULT_BINARY_EFFORT_VALUE_MAP: Partial<Record<'low' | 'medium' | 'high' | 'xhigh', string | null>> = {
+  low: 'on',
+  high: 'on',
+  xhigh: 'on',
 };

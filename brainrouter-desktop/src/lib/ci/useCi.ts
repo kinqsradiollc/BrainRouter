@@ -28,6 +28,7 @@ export interface CiApi {
   runLog: string | null;
   expandedRunId: number | null;
   watching: number | null;
+  error: string | null;
   refresh: () => void;
   expandRun: (id: number) => void;
   loadLog: (id: number, failedOnly?: boolean) => void;
@@ -45,6 +46,7 @@ export function useCi(opts?: { workspaceRoot?: string | null; onToast?: (msg: st
   const [runLog, setRunLog] = useState<string | null>(null);
   const [expandedRunId, setExpandedRunId] = useState<number | null>(null);
   const [watching, setWatching] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const optsRef = useRef(opts); optsRef.current = opts;
   const workspaceRootRef = useRef(opts?.workspaceRoot); workspaceRootRef.current = opts?.workspaceRoot;
   const pending = useRef(0);
@@ -57,11 +59,14 @@ export function useCi(opts?: { workspaceRoot?: string | null; onToast?: (msg: st
       if (e.kind !== 'query-result' || !e.id || !e.id.startsWith('ci:')) return;
       const op = e.id.split(':')[1];
       const r = (e.result ?? {}) as Record<string, unknown>;
+      const err = typeof r.error === 'string' ? r.error : '';
+      if (err) { setError(err); setGhReady(false); }
+      else if (op === 'pr' || op === 'checks' || op === 'runs') setError(null);
       if (op === 'pr') { setPr((r.pr as PrDetail) ?? null); tick(); }
-      else if (op === 'checks') { setChecks((r.checks as CheckRow[]) ?? []); if (Array.isArray(r.checks)) setGhReady(true); tick(); }
+      else if (op === 'checks') { setChecks((r.checks as CheckRow[]) ?? []); if (Array.isArray(r.checks) && !err) setGhReady(true); tick(); }
       else if (op === 'runs') { setRuns((r.runs as RunRow[]) ?? []); tick(); }
       else if (op === 'detail') { setRunDetail((r.run as RunDetail) ?? null); }
-      else if (op === 'log') { setRunLog(String(r.log ?? '') || (r.error ? `(${String(r.error)})` : '(no log)')); }
+      else if (op === 'log') { setRunLog(String(r.log ?? '') || (err ? `(${err})` : '(no log)')); }
       else if (op === 'rerun') {
         if ((r as { ok?: boolean }).ok) { optsRef.current?.onToast?.('Re-running failed jobs…'); setTimeout(refresh, 1500); }
         else optsRef.current?.onToast?.(`Rerun failed: ${String((r as { error?: string }).error ?? 'unknown')}`);
@@ -73,7 +78,7 @@ export function useCi(opts?: { workspaceRoot?: string | null; onToast?: (msg: st
   const tick = (): void => { pending.current = Math.max(0, pending.current - 1); if (pending.current === 0) setLoading(false); };
 
   const refresh = (): void => {
-    setLoading(true); pending.current = 3;
+    setLoading(true); setError(null); pending.current = 3;
     window.brainrouter.send({ kind: 'query', id: 'ci:pr', name: 'git-pr-detail' });
     window.brainrouter.send({ kind: 'query', id: 'ci:checks', name: 'git-pr-checks' });
     window.brainrouter.send({ kind: 'query', id: 'ci:runs', name: 'git-actions-runs', args: { limit: 20 } });
@@ -105,5 +110,5 @@ export function useCi(opts?: { workspaceRoot?: string | null; onToast?: (msg: st
     return () => clearInterval(t);
   }, [watching]);
 
-  return { pr, checks, runs, loading, ghReady, runDetail, runLog, expandedRunId, watching, refresh, expandRun, loadLog, rerunFailed, toggleWatch };
+  return { pr, checks, runs, loading, ghReady, runDetail, runLog, expandedRunId, watching, error, refresh, expandRun, loadLog, rerunFailed, toggleWatch };
 }

@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import type { CommandContext } from './_context.js';
-import { getConfigPath, saveConfig, setCliKnobOverride, _resetCliKnobsCache, type ServerConfig, type LLMConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { getConfigPath, getCliKnobs, saveConfig, setCliKnobOverride, _resetCliKnobsCache, type ServerConfig, type LLMConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
 import {
   listProviderNames, setProvider, removeProvider, setAgentModel, describeAgentModel, SUBAGENT_ROLES,
 } from '@kinqs/brainrouter-core/dist/provider/agentModels.js';
@@ -75,6 +75,66 @@ export function parseConfigArgs(args: string[]): ParsedConfigArgs {
 
 export function listKnownConfigKeys(): string[] {
   return Object.keys(KEY_HANDLERS);
+}
+
+export const WIRE_FORMAT_OPTIONS = ['default', 'chat-completions', 'responses'] as const;
+export type WireFormatOption = (typeof WIRE_FORMAT_OPTIONS)[number];
+export type WireFormatOverride = Exclude<WireFormatOption, 'default'>;
+
+export interface ProviderRequestFormatRow {
+  id: string;
+  label: string;
+  description: string;
+  savedNames: string[];
+}
+
+function normalizeWireProviderId(id: string | undefined): string {
+  return (id ?? '').trim().toLowerCase();
+}
+
+export function listProviderRequestFormatRows(config: CommandContext['config']): ProviderRequestFormatRow[] {
+  const savedByProvider = new Map<string, string[]>();
+  for (const [name, provider] of Object.entries(config.providers ?? {})) {
+    const id = normalizeWireProviderId(provider.provider || name);
+    if (!id) continue;
+    const names = savedByProvider.get(id) ?? [];
+    names.push(name);
+    savedByProvider.set(id, names);
+  }
+
+  const catalogById = new Map(PROVIDER_CATALOG.map((p) => [normalizeWireProviderId(p.id), p] as const));
+  const rows: ProviderRequestFormatRow[] = [];
+  const seen = new Set<string>();
+  const add = (rawId: string, fallbackLabel?: string): void => {
+    const id = normalizeWireProviderId(rawId);
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    const catalog = catalogById.get(id);
+    const savedNames = savedByProvider.get(id) ?? [];
+    const label = catalog?.label ?? fallbackLabel ?? id;
+    const bits = [`provider id: ${id}`];
+    if (savedNames.length) bits.push(`saved as ${savedNames.join(', ')}`);
+    rows.push({ id, label, savedNames, description: bits.join(' · ') });
+  };
+
+  for (const provider of PROVIDER_CATALOG) add(provider.id, provider.label);
+  for (const id of savedByProvider.keys()) add(id);
+  return rows;
+}
+
+export function applyProviderRequestFormat(config: CommandContext['config'], providerId: string, format: WireFormatOption): { ok: true } | { ok: false; error: string } {
+  const id = normalizeWireProviderId(providerId);
+  if (!id) return { ok: false, error: 'Provider id is required.' };
+  if (!WIRE_FORMAT_OPTIONS.includes(format)) return { ok: false, error: `Unsupported wire format: ${format}` };
+
+  const next: Record<string, WireFormatOverride> = { ...(config.cli?.providerRequestFormat ?? {}) };
+  if (format === 'default') delete next[id];
+  else next[id] = format;
+
+  config.cli = { ...(config.cli ?? {}) };
+  if (Object.keys(next).length === 0) delete config.cli.providerRequestFormat;
+  else config.cli.providerRequestFormat = next;
+  return { ok: true };
 }
 
 // --- Settings home panel -----------------------------------------------
@@ -184,6 +244,20 @@ function buildPanelRows(ctx: CommandContext): PanelRow[] {
     { key: 'quiet',         label: 'Quiet mode',       current: () => prefs().quiet ? 'on' : 'off',  edit: toggleQuiet },
     { key: 'personality',   label: 'Personality',      current: () => prefs().personality,           edit: editPersonality },
     { key: 'editor',        label: 'Editor mode',      current: () => prefs().editorMode,            edit: editEditorMode },
+    {
+      key: 'wire-format',
+      label: 'Wire format (per provider)',
+      current: () => {
+        // Live-read so the row summary stays in sync after a sub-pick without
+        // needing to re-enter the home panel.
+        const overrides = getCliKnobs().providerRequestFormat ?? {};
+        const entries = Object.entries(overrides);
+        if (entries.length === 0) return '(all using built-in defaults)';
+        const head = entries.slice(0, 3).map(([k, v]) => `${k} → ${v}`);
+        return entries.length <= 3 ? head.join(' · ') : `${head.join(' · ')}, +${entries.length - 3}`;
+      },
+      edit: editWireFormat,
+    },
     { key: '__raw',         label: 'View raw config',  current: () => 'JSON dump',                   edit: async () => false },
     { key: '__exit',        label: 'Quit (esc)',       current: () => '',                            edit: async () => false },
   ];
@@ -979,6 +1053,75 @@ export async function promptBrainrouterApiKey(
   });
   if (result.kind !== 'accept') return undefined;
   return result.text.trim();
+}
+
+
+/**
+ * `/config` → "Wire format (per provider)" row. Lets the user override
+ * `cli.providerRequestFormat[providerId]` for every built-in catalog id and
+ * the underlying provider id of each saved provider. The key intentionally
+ * matches `llm.provider`, not the saved provider's friendly name.
+ *
+ * Each pick:
+ *   1. Provider id — builtin or configured custom provider (deduped).
+ *   2. Wire format — `(default)` | `chat-completions` | `responses`.
+ * Picking `(default)` removes the provider's key from the map; the others
+ * set it. Persists through `saveConfig` so CLI and Desktop share the same
+ * `cli.providerRequestFormat` map.
+ */
+async function editWireFormat(ctx: CommandContext): Promise<boolean> {
+  while (true) {
+    const theme = themeFor(ctx);
+    const rows = listProviderRequestFormatRows(ctx.config);
+    if (rows.length === 0) {
+      console.log(chalk.yellow('\n  No providers to configure. Add one under "Providers" first.\n'));
+      return false;
+    }
+    const overrides = getCliKnobs().providerRequestFormat ?? {};
+    const pickerRows: PickerRow[] = rows.map((row) => {
+      const cur = overrides[row.id];
+      return {
+        id: row.id,
+        label: row.label,
+        value: cur ?? 'default',
+        description: cur ? `${row.description} · override: ${cur}` : `${row.description} · default`,
+      };
+    });
+    const picked = await pickFromList({
+      theme,
+      title: 'Wire format',
+      subtitle: 'Override the OpenAI wire format per provider (`/v1/responses` vs `/v1/chat/completions`). Leave as "default" to use BrainRouter\'s built-in routing for that provider.',
+      rows: pickerRows,
+      initialCursor: 0,
+      footer: '↑/↓ pick provider  ·  ↵ change format  ·  esc back',
+    });
+    if (picked.kind !== 'pick') return true;
+
+    const cur = overrides[picked.id];
+    const cursor = Math.max(0, WIRE_FORMAT_OPTIONS.indexOf((cur as WireFormatOption | undefined) ?? 'default'));
+    const formatRow = await pickFromList({
+      theme,
+      title: `Wire format → ${picked.id}`,
+      subtitle: 'Built-in routing uses Responses where the provider declares it (canonical OpenAI today). "chat-completions" forces /v1/chat/completions; "responses" forces /v1/responses (and bypasses the canonical-endpoint guard — your endpoint asserts it accepts Responses).',
+      rows: [
+        { id: 'default',         label: '(default)',         value: 'built-in routing',     description: 'Remove the override for this provider' },
+        { id: 'chat-completions', label: 'chat-completions',  value: '/v1/chat/completions', description: 'Always POST chat/completions' },
+        { id: 'responses',       label: 'responses',          value: '/v1/responses',        description: 'Always POST responses (assumes your gateway supports it)' },
+      ],
+      initialCursor: cursor,
+    });
+    if (formatRow.kind !== 'pick') continue;
+
+    const applied = applyProviderRequestFormat(ctx.config, picked.id, formatRow.id as WireFormatOption);
+    if (!applied.ok) {
+      console.log(chalk.red(`\n  ${applied.error}\n`));
+      continue;
+    }
+    saveConfig(ctx.config);
+    _resetCliKnobsCache();
+    const after = formatRow.id === 'default' ? 'default' : formatRow.id;
+    console.log(chalk.green(`\n  ✓ ${picked.id} → ${after}\n`));
+  }
 }
 
 async function editTheme(ctx: CommandContext): Promise<boolean> {

@@ -8,6 +8,15 @@
 import React, { useMemo, useState } from 'react';
 import { wireBadge, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
 import { Icon } from './icons.js';
+import type { ConnectorCatalogEntry, ConnectorDefinitionBundle, ConnectorRecord, ConnectorRunRecord } from '@kinqs/brainrouter-types';
+
+interface ConnectorSlimPreview {
+  id: string;
+  kind: string;
+  repository?: string;
+  title: string;
+  snippet: string;
+}
 
 export interface ConfigSnapshot {
   model?: string;
@@ -21,7 +30,8 @@ export interface ConfigSnapshot {
   sessionMode?: Record<string, unknown>;
   modeScope?: 'session' | 'workspace';
   cli?: Record<string, unknown>;
-  integrations?: { github?: { repo: string | null; hasToken: boolean; tokenSource: string | null } };
+  integrations?: { github?: GithubIntegrationSnapshot };
+  connectors?: { catalog: ConnectorCatalogEntry[]; items: ConnectorRecord[]; documentCounts?: Record<string, number>; permissionCounts?: Record<string, number>; runPreviews?: Record<string, ConnectorRunRecord[]>; documentPreviews?: Record<string, ConnectorSlimPreview[]> };
   permissionRules?: { allow: string[]; deny: string[] };
   hooks?: Array<{ id: string; event: string; command: string; enabled: boolean; match?: string }>;
   servers?: Array<{ id: string; online: boolean; identity?: string; detail?: string; type?: 'stdio' | 'http'; url?: string | null; command?: string | null; hasKey?: boolean; envCount?: number; headerCount?: number }>;
@@ -29,6 +39,7 @@ export interface ConfigSnapshot {
   // §multi-provider — named OpenAI-compatible providers (keys masked) + per-role routing.
   providers?: Array<{ name: string; provider: string; model: string; endpoint: string | null; hasKey: boolean }>;
   defaultProviderName?: string | null;
+  defaultProviderModelMatches?: boolean;
   agentModels?: Array<{ role: string; provider: string | null; model: string | null }>;
   // Known-provider catalog (the CLI wizard's list) so the main provider is PICKED.
   providerCatalog?: Array<{ id: string; label: string; endpoint: string; local: boolean }>;
@@ -41,9 +52,52 @@ export interface ConfigSnapshot {
   };
 }
 
+export interface GithubRepoSnapshot {
+  repo: string;
+  hasToken: boolean;
+  tokenSource: string | null;
+  active?: boolean;
+  label?: string | null;
+}
+
+export interface GithubIntegrationSnapshot {
+  repo: string | null;
+  hasToken: boolean;
+  tokenSource: string | null;
+  repos?: GithubRepoSnapshot[];
+  caBundle?: string | null;
+}
+
+type GithubSaveArgs = {
+  repo?: string;
+  token?: string;
+  clearToken?: boolean;
+  makeActive?: boolean;
+  removeRepo?: string;
+  caBundle?: string | null;
+};
+
 /** Sub-agent roles that can be routed to their own provider/model. */
 const SUBAGENT_ROLES = ['default', 'explorer', 'architect', 'reviewer', 'worker', 'verifier'] as const;
 type SubagentRole = (typeof SUBAGENT_ROLES)[number];
+const WIRE_FORMAT_OPTIONS = ['default', 'chat-completions', 'responses'] as const;
+type WireFormatOption = (typeof WIRE_FORMAT_OPTIONS)[number];
+type WireFormatOverride = Exclude<WireFormatOption, 'default'>;
+
+function normalizeProviderId(id?: string | null): string {
+  return (id ?? '').trim().toLowerCase();
+}
+
+function normalizeWireFormatOverrides(value: unknown): Record<string, WireFormatOverride> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const out: Record<string, WireFormatOverride> = {};
+  for (const [rawKey, rawValue] of Object.entries(value as Record<string, unknown>)) {
+    const key = normalizeProviderId(rawKey);
+    if (!key) continue;
+    if (rawValue === 'responses' || rawValue === 'chat-completions') out[key] = rawValue;
+  }
+  return out;
+}
 
 const SUBAGENT_ROLE_LABELS: Record<SubagentRole, string> = {
   default: 'Fallback for sub-agents',
@@ -62,15 +116,15 @@ const NAV: Array<{ section: SettingsSection; icon: string; title: string; group:
   { section: 'hooks', icon: 'link', title: 'Hooks', group: 'Settings' },
   { section: 'workflow-automation', icon: 'fork', title: 'Workflow automation', group: 'Settings' },
   { section: 'extensions', icon: 'plug', title: 'Extensions', group: 'Settings' },
-  { section: 'connectors', icon: 'bolt', title: 'MCP', group: 'Settings' },
-  { section: 'integrations', icon: 'branch', title: 'Integrations', group: 'Settings' },
+  { section: 'connectors', icon: 'bolt', title: 'MCP Servers', group: 'Settings' },
+  { section: 'data-connectors', icon: 'branch', title: 'Connectors', group: 'Settings' },
   { section: 'advanced', icon: 'gear', title: 'Advanced', group: 'Settings' },
   { section: 'observability', icon: 'chart', title: 'Usage', group: 'Settings' },
   { section: 'appearance', icon: 'palette', title: 'Appearance', group: 'Desktop app' },
   { section: 'commands', icon: 'command', title: 'Commands', group: 'Desktop app' },
 ];
 
-function Row({ title, desc, children }: { title: string; desc?: React.ReactNode; children?: React.ReactNode }): React.ReactElement {
+function Row({ title, desc, children }: { title: React.ReactNode; desc?: React.ReactNode; children?: React.ReactNode }): React.ReactElement {
   return (
     <div className="set-row">
       <div className="grow">
@@ -105,8 +159,8 @@ function KnobValue({ value, onChange }: { value: unknown; onChange: (v: unknown)
  *  knob is a typed row (toggle / number / text) with add + remove, instead of a
  *  hand-edited JSON blob. Saves the whole block via the existing set-cli-json. */
 // WS11 — knobs that have a dedicated structured editor elsewhere (Permissions,
-// Workflow automation, Models, Integrations). Never shown as raw JSON here.
-const DEDICATED_KNOBS = new Set(['permissions', 'automation', 'track', 'providers', 'agentModels']);
+// Workflow automation, Models, Connectors). Never shown as raw JSON here.
+const DEDICATED_KNOBS = new Set(['permissions', 'automation', 'track', 'providers', 'agentModels', 'providerRequestFormat']);
 // WS11 — internal/safety knobs (loop & storm guards, sandbox internals, scheduler
 // ticks, offload tuning): non-obvious to hand-edit and rarely needed, so hidden
 // from the default list. Still settable via `/config` or the raw disclosure.
@@ -150,35 +204,63 @@ function CliConfigEditor({ cli, onSave }: { cli: Record<string, unknown>; onSave
   );
 }
 
-/** GitHub integration for Track sync — repo + a write-only token (never read
+/** GitHub Track sync — repo + a write-only token (never read
  * back; the host only reports whether one is set). Saves to config.json
  * cli.track.* via action:set-track-github, replacing any need for a .env. */
-function GithubIntegration({ gh, onSave }: { gh: { repo: string | null; hasToken: boolean; tokenSource: string | null }; onSave: (args: { repo?: string; token?: string; clearToken?: boolean }) => void }): React.ReactElement {
-  const [repo, setRepo] = useState(gh.repo ?? '');
+function GithubIntegration({ gh, onSave }: { gh: GithubIntegrationSnapshot; onSave: (args: GithubSaveArgs) => void }): React.ReactElement {
+  const repos = gh.repos?.length ? gh.repos : (gh.repo ? [{ repo: gh.repo, hasToken: gh.hasToken, tokenSource: gh.tokenSource, active: true }] : []);
+  const active = repos.find((r) => r.active) ?? repos[0];
+  const [repo, setRepo] = useState(active?.repo ?? gh.repo ?? '');
   const [token, setToken] = useState('');
-  React.useEffect(() => { setRepo(gh.repo ?? ''); }, [gh.repo]);
-  const repoChanged = repo.trim() !== (gh.repo ?? '');
-  const dirty = repoChanged || token.trim() !== '';
-  const connected = !!(gh.repo && gh.hasToken);
+  const [caBundle, setCaBundle] = useState(gh.caBundle ?? '');
+  React.useEffect(() => { setRepo(active?.repo ?? gh.repo ?? ''); }, [active?.repo, gh.repo]);
+  React.useEffect(() => { setCaBundle(gh.caBundle ?? ''); }, [gh.caBundle]);
+  const selected = repos.find((r) => r.repo === repo.trim());
+  const repoChanged = repo.trim() !== (active?.repo ?? gh.repo ?? '');
+  const dirty = repo.trim() !== '' && (repoChanged || token.trim() !== '');
+  const caDirty = caBundle.trim() !== (gh.caBundle ?? '');
+  const connected = repos.some((r) => r.active && r.hasToken);
   return (
     <div className="gh-int">
       <div className={`gh-int-status${connected ? ' ok' : ''}`}>
         <span className="gh-int-dot" />
-        {connected ? <>Connected to <b className="mono">{gh.repo}</b>{gh.tokenSource === 'env' ? ' · token via environment' : ''}</>
-          : gh.repo ? <>Repository set — add a token to connect</> : <>Not configured</>}
+        {connected ? <>Track sync uses <b className="mono">{active?.repo}</b>{active?.tokenSource === 'env' ? ' · token via environment' : ''}</>
+          : repos.length ? <>Repository set — add or select a token-enabled repo</> : <>Not configured</>}
       </div>
-      <Row title="Repository" desc="owner/name — the GitHub repo this workspace's Track board syncs issues + members with.">
+      {repos.length ? (
+        <div className="gh-repo-list">
+          {repos.map((r) => (
+            <div key={r.repo} className={`gh-repo-row${r.active ? ' active' : ''}`}>
+              <span className={`gh-int-dot${r.hasToken ? ' on' : ''}`} />
+              <span className="gh-repo-name mono">{r.repo}</span>
+              {r.active ? <span className="gh-repo-pill active">active</span> : null}
+              <span className={`gh-repo-pill${r.hasToken ? ' ok' : ''}`}>{r.hasToken ? `token via ${r.tokenSource}` : 'no token'}</span>
+              <button className="gh-row-btn" onClick={() => { setRepo(r.repo); setToken(''); }}>Edit</button>
+              {!r.active ? <button className="gh-row-btn" onClick={() => onSave({ repo: r.repo, makeActive: true })}>Use</button> : null}
+              {r.hasToken ? <button className="gh-row-btn danger" onClick={() => onSave({ repo: r.repo, clearToken: true })}>Remove token</button> : null}
+              <button className="gh-row-btn danger" onClick={() => onSave({ removeRepo: r.repo })}>Remove</button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <Row title="Repository" desc="owner/name — add another GitHub repo or update the selected repo used by Track issue sync.">
         <input className="ctl mono" style={{ minWidth: 220 }} value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="owner/name" spellCheck={false} autoCapitalize="off" />
       </Row>
       <Row title="Access token" desc={<>A fine-grained personal access token with <b>Issues</b> read/write. Stored only in your local <code>config.json</code>; sent to GitHub and nowhere else, and never displayed again.</>}>
         <div className="gh-token-row">
           <input className="ctl mono" style={{ minWidth: 220 }} type="password" value={token} onChange={(e) => setToken(e.target.value)} autoComplete="off" spellCheck={false}
-            placeholder={gh.hasToken ? '•••••••••••• (set)' : 'github_pat_… / ghp_…'} />
-          {gh.hasToken ? <button className="gh-token-clear" onClick={() => onSave({ clearToken: true })}>Remove</button> : null}
+            placeholder={selected?.hasToken ? '•••••••••••• (set)' : 'github_pat_… / ghp_…'} />
+          {selected?.hasToken ? <button className="gh-token-clear" onClick={() => onSave({ repo: selected.repo, clearToken: true })}>Remove</button> : null}
+        </div>
+      </Row>
+      <Row title="GitHub CLI CA bundle" desc={<>Optional trusted certificate bundle path for corporate TLS interception. Passed to <code>gh</code> as <code>SSL_CERT_FILE</code>.</>}>
+        <div className="gh-token-row">
+          <input className="ctl mono" style={{ minWidth: 260 }} value={caBundle} onChange={(e) => setCaBundle(e.target.value)} placeholder="/path/to/corp-ca.pem" spellCheck={false} />
+          <button className="gh-token-clear" disabled={!caDirty} onClick={() => onSave({ caBundle: caBundle.trim() || null })}>Save</button>
         </div>
       </Row>
       <div className="gh-int-actions">
-        <button className="gh-int-save" disabled={!dirty} onClick={() => { onSave({ repo: repo.trim(), token: token.trim() || undefined }); setToken(''); }}>Save</button>
+        <button className="gh-int-save" disabled={!dirty} onClick={() => { onSave({ repo: repo.trim(), token: token.trim() || undefined, makeActive: true }); setToken(''); }}>Save as active</button>
       </div>
     </div>
   );
@@ -229,6 +311,342 @@ function ChoiceControl({ value, options, onChange, placeholder = 'Select' }: {
 
 function Select({ value, options, onChange }: { value: string; options: string[]; onChange: (v: string) => void }): React.ReactElement {
   return <ChoiceControl value={value} options={options.map((o) => ({ value: o, label: o }))} onChange={onChange} />;
+}
+
+/** Per-provider wire-format selector. `default` removes the provider key from
+ *  `cli.providerRequestFormat`; the IPC handler shallow-replaces the map. */
+function WireFormatSelect({ value, onChange }: { value: WireFormatOverride | null; onChange: (v: WireFormatOverride | null) => void }): React.ReactElement {
+  return (
+    <ChoiceControl
+      value={value ?? 'default'}
+      options={[
+        { value: 'default', label: 'Default', detail: 'provider contract' },
+        { value: 'chat-completions', label: 'Chat Completions', detail: '/v1/chat/completions' },
+        { value: 'responses', label: 'Responses', detail: '/v1/responses' },
+      ]}
+      onChange={(v) => onChange(v === 'default' ? null : v as WireFormatOverride)}
+    />
+  );
+}
+
+function connectorConfigString(connector: ConnectorRecord, key: string): string {
+  const value = connector.config[key];
+  return typeof value === 'string' ? value : '';
+}
+
+function connectorConfigList(connector: ConnectorRecord, key: string): string[] {
+  const value = connector.config[key];
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function splitConnectorRepos(value: string): string[] {
+  return value.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean);
+}
+
+function ConnectorSettings({ connectors, githubIntegration, onGithubSave, onAction, refreshSnapshot }: {
+  connectors: NonNullable<ConfigSnapshot['connectors']>;
+  githubIntegration: GithubIntegrationSnapshot;
+  onGithubSave: (args: GithubSaveArgs) => void;
+  onAction: (id: string, name: string, args?: Record<string, unknown>) => void;
+  refreshSnapshot: () => void;
+}): React.ReactElement {
+  const github = connectors.catalog.find((entry) => entry.source === 'github');
+  const firstGithub = connectors.items.find((item) => item.source === 'github');
+  const [selectedSource, setSelectedSource] = useState(firstGithub?.source ?? 'github');
+  const selectedEntry = connectors.catalog.find((entry) => entry.source === selectedSource) ?? github ?? connectors.catalog[0];
+  const [name, setName] = useState(firstGithub?.name ?? 'GitHub connector');
+  const [owner, setOwner] = useState(firstGithub ? connectorConfigString(firstGithub, 'owner') : '');
+  const [repos, setRepos] = useState(firstGithub ? connectorConfigList(firstGithub, 'repositories').join('\n') : '');
+  const [includeIssues, setIncludeIssues] = useState(firstGithub ? firstGithub.config.includeIssues !== false : true);
+  const [includePrs, setIncludePrs] = useState(firstGithub ? firstGithub.config.includePullRequests !== false : true);
+  const [includeFiles, setIncludeFiles] = useState(Boolean(firstGithub?.config.includeFiles));
+  const [pollMinutes, setPollMinutes] = useState(firstGithub && typeof firstGithub.config.pollMinutes === 'number' ? String(firstGithub.config.pollMinutes) : '');
+  const [baseUrl, setBaseUrl] = useState(firstGithub ? connectorConfigString(firstGithub, 'baseUrl') : '');
+  const [credentialMode, setCredentialMode] = useState(firstGithub?.credential.mode ?? 'dynamic');
+  const [credentialRef, setCredentialRef] = useState(firstGithub?.credential.ref ?? 'gh');
+  const [genericName, setGenericName] = useState('');
+  const [genericCredentialMode, setGenericCredentialMode] = useState('none');
+  const [genericCredentialRef, setGenericCredentialRef] = useState('');
+  const [genericConfig, setGenericConfig] = useState<Record<string, string | boolean>>({});
+  const [definitionJson, setDefinitionJson] = useState('');
+
+  React.useEffect(() => {
+    if (!firstGithub) return;
+    setName(firstGithub.name);
+    setOwner(connectorConfigString(firstGithub, 'owner'));
+    setRepos(connectorConfigList(firstGithub, 'repositories').join('\n'));
+    setIncludeIssues(firstGithub.config.includeIssues !== false);
+    setIncludePrs(firstGithub.config.includePullRequests !== false);
+    setIncludeFiles(Boolean(firstGithub.config.includeFiles));
+    setPollMinutes(typeof firstGithub.config.pollMinutes === 'number' ? String(firstGithub.config.pollMinutes) : '');
+    setBaseUrl(connectorConfigString(firstGithub, 'baseUrl'));
+    setCredentialMode(firstGithub.credential.mode);
+    setCredentialRef(firstGithub.credential.ref ?? (firstGithub.credential.mode === 'dynamic' ? 'gh' : ''));
+  }, [firstGithub?.id, firstGithub?.updatedAt]);
+
+  React.useEffect(() => {
+    if (!selectedEntry || selectedEntry.source === 'github') return;
+    setGenericName(`${selectedEntry.title} connector`);
+    setGenericCredentialMode(selectedEntry.credentialModes[0] ?? 'none');
+    setGenericCredentialRef('');
+    setGenericConfig(Object.fromEntries(selectedEntry.configFields.map((field) => [
+      field.key,
+      field.type === 'boolean' ? Boolean(field.defaultValue) : field.defaultValue == null ? '' : String(field.defaultValue),
+    ])));
+  }, [selectedEntry?.source]);
+
+  const saveGithubConnector = (): void => {
+    const poll = Number(pollMinutes);
+    const config = {
+      owner: owner.trim(),
+      repositories: splitConnectorRepos(repos),
+      includeIssues,
+      includePullRequests: includePrs,
+      includeFiles,
+      pollMinutes: pollMinutes.trim() && Number.isFinite(poll) && poll > 0 ? Math.max(1, Math.floor(poll)) : null,
+      baseUrl: baseUrl.trim() || null,
+    };
+    const credential = {
+      mode: credentialMode,
+      ref: credentialRef.trim() || (credentialMode === 'dynamic' ? 'gh' : undefined),
+      label: credentialMode === 'dynamic' ? 'GitHub CLI' : undefined,
+      hasSecret: credentialMode === 'static',
+    };
+    if (firstGithub) {
+      onAction('a-connector-update', 'action:connector-update', {
+        id: firstGithub.id,
+        patch: { name: name.trim() || 'GitHub connector', config, credential, flows: github?.flows ?? firstGithub.flows },
+      });
+    } else {
+      onAction('a-connector-create', 'action:connector-create', {
+        source: 'github',
+        name: name.trim() || 'GitHub connector',
+        config,
+        credential,
+        flows: github?.flows ?? ['load', 'checkpoint', 'slim', 'permission-sync'],
+      });
+    }
+    setTimeout(refreshSnapshot, 120);
+  };
+  const canSave = Boolean(github && owner.trim() && (includeIssues || includePrs || includeFiles));
+  const saveGenericConnector = (): void => {
+    if (!selectedEntry || selectedEntry.source === 'github') return;
+    const config = Object.fromEntries(selectedEntry.configFields.map((field) => {
+      const raw = genericConfig[field.key];
+      if (field.type === 'boolean') return [field.key, raw === true];
+      if (field.type === 'number') {
+        const n = Number(raw);
+        return [field.key, Number.isFinite(n) && n > 0 ? n : null];
+      }
+      if (field.type === 'string-list') {
+        const text = typeof raw === 'string' ? raw : '';
+        return [field.key, text.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean)];
+      }
+      return [field.key, typeof raw === 'string' ? raw.trim() || null : null];
+    }));
+    onAction('a-connector-create', 'action:connector-create', {
+      source: selectedEntry.source,
+      name: genericName.trim() || `${selectedEntry.title} connector`,
+      config,
+      credential: {
+        mode: genericCredentialMode,
+        ref: genericCredentialRef.trim() || undefined,
+        hasSecret: genericCredentialMode === 'static',
+      },
+      flows: selectedEntry.flows,
+    });
+    setTimeout(refreshSnapshot, 150);
+  };
+  const exportDefinitions = (): void => {
+    const bundle: ConnectorDefinitionBundle = {
+      schemaVersion: 1,
+      exportedAt: new Date().toISOString(),
+      connectors: connectors.items.map((connector) => ({
+        source: connector.source,
+        name: connector.name,
+        description: connector.description,
+        config: { ...connector.config },
+        credential: { ...connector.credential },
+        flows: [...connector.flows],
+      })),
+    };
+    setDefinitionJson(JSON.stringify(bundle, null, 2));
+  };
+  const importDefinitions = (): void => {
+    if (!definitionJson.trim()) return;
+    onAction('a-connector-import-definitions', 'action:connector-import-definitions', { json: definitionJson });
+    setTimeout(refreshSnapshot, 200);
+  };
+
+  return (
+    <>
+      <div className="set-h">Connectors</div>
+      <div className="set-desc" style={{ marginBottom: 10 }}>Workspace data connectors for indexed sources, Track sync, permissions, and recall. MCP tool servers live in <b>MCP Servers</b>.</div>
+
+      <div className="connector-shell">
+        <div className="connector-catalog">
+          {connectors.catalog.map((entry) => {
+            const configured = connectors.items.filter((item) => item.source === entry.source).length;
+            const ready = entry.source === 'github';
+            return (
+              <button key={entry.source} type="button" className={`connector-source-card${entry.source === selectedSource ? ' active' : ''}`} onClick={() => setSelectedSource(entry.source)}>
+                <span className="connector-source-top">
+                  <span className="connector-source-title">{entry.title}</span>
+                  <span className={`connector-source-badge${ready ? ' ready' : ''}`}>{ready ? 'runtime' : 'catalog'}</span>
+                </span>
+                <span className="connector-source-desc">{entry.description}</span>
+                <span className="connector-source-meta">{entry.flows.join(' · ')}{configured ? ` · ${configured} configured` : ''}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="set-h2">Configured</div>
+      {connectors.items.length === 0 ? <div className="empty">No connectors configured yet.</div> : null}
+      {connectors.items.length ? (
+        <div className="provider-gallery connector-configured-grid">
+          {connectors.items.map((connector) => (
+            <div key={connector.id} className="provider-card saved">
+              <span className="pc-name">{connector.name}<span className={`pc-tag ${connector.status === 'active' ? 'ok' : connector.status === 'error' ? 'danger' : 'default'}`}>{connector.status}</span></span>
+              <span className="pc-host">{connector.source} · {connector.flows.join(', ')}</span>
+              <span className="pc-wire">
+                {connector.lastSuccessAt ? `last success ${new Date(connector.lastSuccessAt).toLocaleString()}` : connector.lastRunAt ? `last run ${new Date(connector.lastRunAt).toLocaleString()}` : 'not run yet'}
+              </span>
+              <span className="pc-wire">{(connectors.documentCounts?.[connector.id] ?? 0).toLocaleString()} documents</span>
+              <span className="pc-wire">{(connectors.permissionCounts?.[connector.id] ?? 0).toLocaleString()} permissions</span>
+              {typeof connector.config.pollMinutes === 'number' && connector.config.pollMinutes > 0 ? <span className="pc-wire">auto every {connector.config.pollMinutes}m</span> : null}
+              {(() => {
+                const latest = connectors.runPreviews?.[connector.id]?.[0];
+                return latest ? (
+                  <span className="pc-wire">
+                    latest {latest.flow}: {latest.status}{latest.completedAt ? ` · ${new Date(latest.completedAt).toLocaleString()}` : ''}
+                  </span>
+                ) : null;
+              })()}
+              {(connectors.documentPreviews?.[connector.id] ?? []).slice(0, 3).map((doc) => (
+                <span key={doc.id} className="pc-wire">
+                  {doc.kind} · {doc.repository ? `${doc.repository} · ` : ''}{doc.title}
+                </span>
+              ))}
+              {connector.lastError ? <span className="pc-host" style={{ color: 'var(--warn)' }}>{connector.lastError}</span> : null}
+              <span className="pc-actions">
+                <button className="btn" onClick={() => {
+                  onAction('a-connector-update', 'action:connector-update', { id: connector.id, patch: { status: connector.status === 'paused' ? 'active' : 'paused' } });
+                  setTimeout(refreshSnapshot, 120);
+                }}>{connector.status === 'paused' ? 'Resume' : 'Pause'}</button>
+                {connector.source === 'github' ? <button className="btn" onClick={() => { onAction('a-connector-validate', 'action:connector-validate', { id: connector.id }); setTimeout(refreshSnapshot, 700); }}>Validate</button> : null}
+                {connector.source === 'github' ? <button className="btn" onClick={() => { onAction('a-connector-run', 'action:connector-run', { id: connector.id }); setTimeout(refreshSnapshot, 1200); }}>Run</button> : null}
+                <button className="btn" disabled={(connectors.documentCounts?.[connector.id] ?? 0) === 0} title="Send stored connector documents to the active BrainRouter memory server for recall" onClick={() => { onAction('a-connector-index-memory', 'action:connector-index-memory', { id: connector.id }); setTimeout(refreshSnapshot, 700); }}>Index memory</button>
+                {connector.source === 'github' ? <button className="btn" onClick={() => { onAction('a-connector-sync-permissions', 'action:connector-sync-permissions', { id: connector.id }); setTimeout(refreshSnapshot, 1200); }}>Sync permissions</button> : null}
+                <button className="btn danger" onClick={() => { onAction('a-connector-delete', 'action:connector-delete', { id: connector.id }); setTimeout(refreshSnapshot, 120); }}>Remove</button>
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="set-h2">Import / export</div>
+      <Row title="Connector definitions" desc="Portable connector setup JSON. Runtime ids, runs, checkpoints, documents, permissions, and secret values are not included.">
+        <div style={{ display: 'grid', gap: 8, minWidth: 320 }}>
+          <textarea className="ctl mono" rows={5} value={definitionJson} onChange={(e) => setDefinitionJson(e.target.value)} placeholder="Export definitions here or paste a connector bundle to import." spellCheck={false} />
+          <span className="pc-actions">
+            <button className="btn" disabled={connectors.items.length === 0} onClick={exportDefinitions}>Export definitions</button>
+            <button className="btn" disabled={!definitionJson.trim()} onClick={importDefinitions}>Import definitions</button>
+          </span>
+        </div>
+      </Row>
+
+      {selectedEntry?.source === 'github' ? (
+        <>
+          <div className="set-h2">GitHub source</div>
+          <div className="set-desc" style={{ marginBottom: 8 }}>Configure one owner/org, many repositories, or leave repositories empty to cover all accessible repositories under that owner.</div>
+          {!github ? <div className="empty">GitHub is not available in the connector catalog.</div> : null}
+          <Row title="Name" desc="Local display name for this connector instance.">
+            <input className="ctl" value={name} onChange={(e) => setName(e.target.value)} placeholder="GitHub connector" />
+          </Row>
+          <Row title="Owner / organization" desc="GitHub owner, user, or organization.">
+            <input className="ctl mono" value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="owner-or-org" spellCheck={false} autoCapitalize="off" />
+          </Row>
+          <Row title="Repositories" desc="Optional. One repo name per line or comma-separated. Empty means every accessible repo under the owner.">
+            <textarea className="ctl mono" rows={3} value={repos} onChange={(e) => setRepos(e.target.value)} placeholder={'BrainRouter\nbrainrouter-desktop'} spellCheck={false} />
+          </Row>
+          <Row title="Content" desc="Choose what the connector ingests for memory and recall.">
+            <div className="connector-toggles">
+              <label><input type="checkbox" checked={includeIssues} onChange={(e) => setIncludeIssues(e.target.checked)} /> Issues</label>
+              <label><input type="checkbox" checked={includePrs} onChange={(e) => setIncludePrs(e.target.checked)} /> Pull requests</label>
+              <label><input type="checkbox" checked={includeFiles} onChange={(e) => setIncludeFiles(e.target.checked)} /> Files</label>
+            </div>
+          </Row>
+          <Row title="Auto run" desc="Optional polling cadence in minutes. Blank disables background connector runs.">
+            <input className="ctl mono" type="number" min={1} step={1} value={pollMinutes} onChange={(e) => setPollMinutes(e.target.value)} placeholder="disabled" />
+          </Row>
+          <Row title="Credential provider" desc="Dynamic uses the GitHub CLI account. Static reads a token from the named host environment variable.">
+            <ChoiceControl
+              value={credentialMode}
+              options={[
+                { value: 'dynamic', label: 'GitHub CLI', detail: 'uses gh auth' },
+                { value: 'static', label: 'Token reference', detail: 'env/config/keychain ref' },
+                { value: 'oauth', label: 'OAuth account', detail: 'future OAuth flow' },
+              ]}
+              onChange={(v) => {
+                if (v === 'none' || v === 'static' || v === 'dynamic' || v === 'oauth') setCredentialMode(v);
+              }}
+            />
+          </Row>
+          {credentialMode !== 'dynamic' ? (
+            <Row title="Credential reference" desc="Environment variable name for static tokens, or OAuth account id for future OAuth flows.">
+              <input className="ctl mono" value={credentialRef} onChange={(e) => setCredentialRef(e.target.value)} placeholder="GITHUB_TOKEN" spellCheck={false} />
+            </Row>
+          ) : null}
+          <Row title="GitHub Enterprise URL" desc="Optional API base URL for GitHub Enterprise.">
+            <input className="ctl mono" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://github.example.com/api/v3" spellCheck={false} />
+          </Row>
+          <div className="set-actions">
+            <button className="btn primary" disabled={!canSave} onClick={saveGithubConnector}>{firstGithub ? 'Update GitHub connector' : 'Add GitHub connector'}</button>
+          </div>
+
+          <div className="set-h2">GitHub Track sync</div>
+          <div className="set-desc" style={{ marginBottom: 8 }}>Track issue import/export uses the same GitHub area. Connector-backed repositories are listed here, while write tokens remain local to this machine.</div>
+          <GithubIntegration gh={githubIntegration} onSave={onGithubSave} />
+        </>
+      ) : selectedEntry ? (
+        <>
+          <div className="set-h2">{selectedEntry.title}</div>
+          <div className="set-desc" style={{ marginBottom: 8 }}>{selectedEntry.description}</div>
+          <Row title="Name" desc="Local display name for this connector instance.">
+            <input className="ctl" value={genericName} onChange={(e) => setGenericName(e.target.value)} placeholder={`${selectedEntry.title} connector`} />
+          </Row>
+          {selectedEntry.configFields.map((field) => (
+            <Row key={field.key} title={field.label} desc={field.description}>
+              {field.type === 'boolean' ? (
+                <label className="connector-switch"><input type="checkbox" checked={genericConfig[field.key] === true} onChange={(e) => setGenericConfig((c) => ({ ...c, [field.key]: e.target.checked }))} /> Enabled</label>
+              ) : field.type === 'string-list' ? (
+                <textarea className="ctl mono" rows={3} value={String(genericConfig[field.key] ?? '')} onChange={(e) => setGenericConfig((c) => ({ ...c, [field.key]: e.target.value }))} spellCheck={false} />
+              ) : (
+                <input className="ctl mono" type={field.type === 'number' ? 'number' : 'text'} value={String(genericConfig[field.key] ?? '')} onChange={(e) => setGenericConfig((c) => ({ ...c, [field.key]: e.target.value }))} spellCheck={false} />
+              )}
+            </Row>
+          ))}
+          <Row title="Credential provider" desc="Credential handling is source-specific. Runtime execution is enabled as connector runners are added.">
+            <ChoiceControl
+              value={genericCredentialMode}
+              options={selectedEntry.credentialModes.map((mode) => ({ value: mode, label: mode === 'none' ? 'None' : mode === 'static' ? 'Token reference' : mode === 'oauth' ? 'OAuth account' : 'Dynamic' }))}
+              onChange={setGenericCredentialMode}
+            />
+          </Row>
+          {genericCredentialMode !== 'none' ? (
+            <Row title="Credential reference" desc="Environment variable, keychain label, or future OAuth account id.">
+              <input className="ctl mono" value={genericCredentialRef} onChange={(e) => setGenericCredentialRef(e.target.value)} placeholder={selectedEntry.credentialFields[0]?.key?.toUpperCase() ?? 'TOKEN_REF'} spellCheck={false} />
+            </Row>
+          ) : null}
+          <div className="set-actions">
+            <button className="btn primary" onClick={saveGenericConnector}>Add {selectedEntry.title} connector</button>
+          </div>
+        </>
+      ) : null}
+    </>
+  );
 }
 
 function ComboInput({ value, options, onChange, placeholder, disabled, style }: {
@@ -374,8 +792,8 @@ export function SettingsDialog(props: {
   const kb = (key: string): boolean => Boolean(knobs[key]);
   const ks = (key: string, dflt: string): string => String(knobs[key] ?? dflt);
   const telemetryOn = (knobs.telemetry as { enabled?: boolean } | undefined)?.enabled !== false;
-  const github = (snapshot?.integrations as { github?: { repo: string | null; hasToken: boolean; tokenSource: string | null } } | undefined)?.github ?? { repo: null, hasToken: false, tokenSource: null };
-  const saveGithub = (args: { repo?: string; token?: string; clearToken?: boolean }): void => { props.onAction('a-gh', 'action:set-track-github', args); setTimeout(refreshSnapshot, 100); };
+  const github = snapshot?.integrations?.github ?? { repo: null, hasToken: false, tokenSource: null, repos: [], caBundle: null };
+  const saveGithub = (args: GithubSaveArgs): void => { props.onAction('a-gh', 'action:set-track-github', args); setTimeout(refreshSnapshot, 100); };
 
   const filteredCommands = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -436,20 +854,60 @@ export function SettingsDialog(props: {
         const currentDefault = defaultProvider
           ? savedProviders.find((p) => p.name === defaultProvider)
           : null;
+        const defaultModelMatches = snapshot?.defaultProviderModelMatches !== false;
+        const defaultProviderDesc = currentDefault
+          ? `${currentDefault.provider} · ${defaultModelMatches ? currentDefault.model : `${snapshot?.model ?? currentDefault.model} (current model)`}`
+          : snapshot?.model
+            ? `Current default is ${snapshot.model}. Save it as a Provider below to manage it here.`
+            : 'Add a provider below, then select it here.';
+        const overrideRaw = normalizeWireFormatOverrides(knobs.providerRequestFormat);
+        const updateWireFormat = (id: string, next: WireFormatOverride | null): void => {
+          const providerId = normalizeProviderId(id);
+          if (!providerId) return;
+          const m: Record<string, WireFormatOverride> = { ...overrideRaw };
+          if (next === null) delete m[providerId];
+          else m[providerId] = next;
+          setKnob('providerRequestFormat', Object.keys(m).length === 0 ? null : m);
+        };
+        const savedByProvider = new Map<string, typeof savedProviders>();
+        for (const provider of savedProviders) {
+          const id = normalizeProviderId(provider.provider || provider.name);
+          if (!id) continue;
+          const rows = savedByProvider.get(id) ?? [];
+          rows.push(provider);
+          savedByProvider.set(id, rows);
+        }
+        const catalogById = new Map(providerCatalog.map((p) => [normalizeProviderId(p.id), p] as const));
+        const providerFormatRows: Array<{ id: string; label: string; endpoint?: string; saved: typeof savedProviders }> = [];
+        const seenProviderFormatRows = new Set<string>();
+        const addProviderFormatRow = (rawId: string, fallbackLabel?: string): void => {
+          const id = normalizeProviderId(rawId);
+          if (!id || seenProviderFormatRows.has(id)) return;
+          seenProviderFormatRows.add(id);
+          const catalog = catalogById.get(id);
+          providerFormatRows.push({
+            id,
+            label: catalog?.label ?? fallbackLabel ?? id,
+            endpoint: catalog?.endpoint,
+            saved: savedByProvider.get(id) ?? [],
+          });
+        };
+        for (const provider of providerCatalog) addProviderFormatRow(provider.id, provider.label);
+        for (const id of savedByProvider.keys()) addProviderFormatRow(id);
         return (
           <>
             <div className="set-h">Models</div>
-            <div className="set-desc" style={{ marginBottom: 6 }}>Configure providers once, then pick which saved provider is the default. Endpoint and key fields live only inside Providers.</div>
+            <div className="set-desc" style={{ marginBottom: 6 }}>Configure provider endpoints, choose the default model, and set provider-level request routing.</div>
 
             <div className="set-h2">Default model &amp; provider</div>
-            <Row title="Provider" desc={currentDefault ? `${currentDefault.provider} · ${currentDefault.model}` : snapshot?.model ? `Current default is ${snapshot.model}. Save it as a Provider below to manage it here.` : 'Add a provider below, then select it here.'}>
+            <Row title="Provider" desc={defaultProviderDesc}>
               <ChoiceControl value={defaultProvider} placeholder={savedProviders.length ? 'Select provider' : 'No providers yet'}
                 options={savedProviders.map((p) => ({ value: p.name, label: p.name, detail: `${p.provider} · ${p.model}` }))}
                 onChange={(name) => { props.onAction('a-setdefault', 'action:set-default-provider', { name }); setTimeout(refreshSnapshot, 80); }} />
             </Row>
 
             <div className="set-h2">Set up a provider</div>
-            <div className="set-desc" style={{ marginBottom: 8 }}>Click one — a dialog opens with the endpoint pre-filled and a live model picker; just add your key.</div>
+            <div className="set-desc" style={{ marginBottom: 8 }}>Pick a catalog provider or add a custom OpenAI-compatible endpoint.</div>
             <div className="provider-gallery">
               {providerCatalog.length === 0 ? <div className="empty">No providers in the catalog.</div> : null}
               {providerCatalog.map((c) => {
@@ -473,7 +931,8 @@ export function SettingsDialog(props: {
                 {[...savedProviders].sort((a, b) => (a.name === defaultProvider ? -1 : b.name === defaultProvider ? 1 : 0)).map((p) => (
                   <div key={p.name} className="provider-card saved">
                     <span className="pc-name">{p.name}{p.name === defaultProvider ? <span className="pc-tag default">Default</span> : null}</span>
-                    <span className="pc-host">{p.model}</span>
+                    <span className="pc-host">{p.provider} · {p.model}</span>
+                    <span className="pc-wire">{overrideRaw[normalizeProviderId(p.provider)] ?? 'default'} wire</span>
                     <span className="pc-actions">
                       {p.name !== defaultProvider ? <button className="btn" title="Make this the default model" onClick={() => { props.onAction('a-setdefault', 'action:set-default-provider', { name: p.name }); setTimeout(refreshSnapshot, 80); }}>Set default</button> : null}
                       <button className="btn" onClick={() => openProviderModal({ editing: p.name, name: p.name, provider: p.provider, endpoint: p.endpoint ?? '', model: p.model })}>Configure</button>
@@ -587,6 +1046,46 @@ export function SettingsDialog(props: {
                 </Row>
               );
             })}
+
+            {(() => {
+              if (providerFormatRows.length === 0) return <div className="empty">No providers configured yet.</div>;
+              return (
+                <div className="wire-format-section">
+                  <div className="set-h2">Wire format (per provider)</div>
+                  <div className="set-desc" style={{ marginBottom: 8 }}>Default follows BrainRouter's provider contract. Responses uses <code>/v1/responses</code> when the selected model can use it.</div>
+                  <div className="wire-format-grid">
+                  {providerFormatRows.map((p) => {
+                    const cur = overrideRaw[p.id] ?? null;
+                    const target = cur === 'responses'
+                      ? '/v1/responses'
+                      : cur === 'chat-completions'
+                        ? '/v1/chat/completions'
+                        : 'built-in routing';
+                    const savedNames = p.saved.map((s) => s.name).join(', ');
+                    const host = p.endpoint ? p.endpoint.replace(/^https?:\/\//, '').replace(/\/.*$/, '') : '';
+                    return (
+                      <div className="wire-format-row" key={p.id}>
+                        <div className="wire-format-main">
+                          <div className="wire-format-title">
+                            <span>{p.label}</span>
+                            <code>{p.id}</code>
+                          </div>
+                          <div className="wire-format-meta">
+                            <span>{target}</span>
+                            {host ? <span>{host}</span> : null}
+                            {savedNames ? <span>saved as {savedNames}</span> : null}
+                          </div>
+                        </div>
+                        <div className="wire-format-control">
+                          <WireFormatSelect value={cur} onChange={(v) => updateWireFormat(p.id, v)} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                  </div>
+                </div>
+              );
+            })()}
           </>
         );
       }
@@ -817,14 +1316,14 @@ export function SettingsDialog(props: {
         </>
         );
       }
-      case 'integrations': return (
-        <>
-          <div className="set-h">Integrations</div>
-          <div className="set-desc" style={{ marginBottom: 10 }}>Connect external services. Secrets are stored locally in <code>config.json</code> — no <code>.env</code> needed.</div>
-          <div className="set-h2"><Icon name="branch" size={13} /> GitHub — Track sync</div>
-          <div className="set-desc" style={{ marginBottom: 6 }}>Two-way sync between this workspace's Track board and a GitHub repository's issues, and pull the repo's collaborators in as members. Used by the Track <b>Sync</b> and <b>Members</b> tabs.</div>
-          <GithubIntegration gh={github} onSave={saveGithub} />
-        </>
+      case 'data-connectors': return (
+        <ConnectorSettings
+          connectors={snapshot?.connectors ?? { catalog: [], items: [] }}
+          githubIntegration={github}
+          onGithubSave={saveGithub}
+          onAction={props.onAction}
+          refreshSnapshot={refreshSnapshot}
+        />
       );
       case 'advanced': {
         // §settings-completeness — the load-bearing cli.* knobs, individually
@@ -882,7 +1381,7 @@ export function SettingsDialog(props: {
                 their own panels and hidden from this list. */}
             <details className="set-dev-raw">
               <summary className="set-h2" style={{ cursor: 'pointer' }}>Developer — raw <code>cli.*</code> config</summary>
-              <div className="set-desc" style={{ marginBottom: 8 }}>Advanced: edit any remaining <code>cli</code> knob directly. Permissions, workflow automation, models and integrations have their own panels above and aren't shown here; internal safety knobs are hidden. Only change these if you know what they do.</div>
+              <div className="set-desc" style={{ marginBottom: 8 }}>Advanced: edit any remaining <code>cli</code> knob directly. Permissions, workflow automation, models and connectors have their own panels above and aren't shown here; internal safety knobs are hidden. Only change these if you know what they do.</div>
               <CliConfigEditor
                 cli={(snapshot?.cli ?? {}) as Record<string, unknown>}
                 onSave={(next) => { props.onAction('a-cli-json', 'action:set-cli-json', { json: JSON.stringify(next) }); setTimeout(refreshSnapshot, 80); }}

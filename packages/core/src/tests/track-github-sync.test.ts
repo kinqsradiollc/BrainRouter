@@ -8,11 +8,15 @@ import {
   exportToGithub,
   importFromGithub,
   importMembersFromGithub,
+  listResolvedGithubConfigsForWorkspace,
+  resolveGithubConfigForWorkspace,
   mapCollaboratorRole,
   type GithubIssue,
   type GithubCollaborator,
   type FetchLike,
 } from '../track/githubSync.js';
+import { createConnector } from '../connectors/connectorStore.js';
+import { setCliKnobOverride } from '../config/config.js';
 import { withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 
 /** A scriptable fetch mock: records calls, returns queued responses, fakes issue creation. */
@@ -179,5 +183,68 @@ test('github assignee: round-trips work-item assignee ↔ issue assignee', async
     // falls back to the first of `assignees`
     const mapped2 = issueToWorkItem({ number: 8, title: 'Y', assignees: [{ login: 'dev2' }], state: 'open' }, project);
     assert.equal(mapped2.input.assignee, 'dev2');
+  });
+});
+
+test('github config resolver includes repositories from GitHub connectors', () => {
+  const previous = process.env.BR_TEST_GITHUB_TOKEN;
+  process.env.BR_TEST_GITHUB_TOKEN = 'connector-token';
+  try {
+    withTempWorkspace((ws) => {
+      setCliKnobOverride({ track: { githubRepos: [] } } as never);
+      const connector = createConnector(ws, {
+        source: 'github',
+        name: 'BrainRouter repos',
+        config: {
+          owner: 'kinqsradiollc',
+          repositories: ['BrainRouter', 'external/already-qualified'],
+          includeIssues: true,
+        },
+        credential: { mode: 'static', ref: 'BR_TEST_GITHUB_TOKEN' },
+        flows: ['checkpoint'],
+      });
+
+      const rows = listResolvedGithubConfigsForWorkspace(ws);
+      assert.deepEqual(rows.map((row) => row.repo), ['kinqsradiollc/BrainRouter', 'external/already-qualified']);
+      assert.equal(rows[0].active, true);
+      assert.equal(rows[0].source, 'connector');
+      assert.equal(rows[0].label, 'BrainRouter repos');
+      assert.equal(rows[0].connectorId, connector.id);
+      assert.equal(rows[0].hasToken, true);
+      assert.equal(rows[0].tokenSource, 'connector-env');
+
+      const resolved = resolveGithubConfigForWorkspace(ws, 'external/already-qualified');
+      assert.equal(resolved.repo, 'external/already-qualified');
+      assert.equal(resolved.token, 'connector-token');
+      assert.equal(resolved.tokenSource, 'connector-env');
+      assert.equal(resolved.connectorId, connector.id);
+    });
+  } finally {
+    if (previous === undefined) delete process.env.BR_TEST_GITHUB_TOKEN;
+    else process.env.BR_TEST_GITHUB_TOKEN = previous;
+  }
+});
+
+test('github config resolver keeps dynamic connector repos visible without an HTTP token', () => {
+  withTempWorkspace((ws) => {
+    setCliKnobOverride({ track: { githubRepos: [] } } as never);
+    const connector = createConnector(ws, {
+      source: 'github',
+      name: 'GitHub CLI repos',
+      config: { owner: 'octo', repositories: ['app'] },
+      credential: { mode: 'dynamic', ref: 'gh', label: 'GitHub CLI' },
+      flows: ['checkpoint'],
+    });
+
+    const rows = listResolvedGithubConfigsForWorkspace(ws);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].repo, 'octo/app');
+    assert.equal(rows[0].hasToken, false);
+    assert.equal(rows[0].connectorId, connector.id);
+
+    const resolved = resolveGithubConfigForWorkspace(ws, 'octo/app');
+    assert.equal(resolved.repo, 'octo/app');
+    assert.equal(resolved.token, undefined);
+    assert.equal(resolved.connectorId, connector.id);
   });
 });

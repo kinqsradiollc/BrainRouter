@@ -5,7 +5,7 @@
  * the composer (passed in as a node so its 25-prop wiring stays in App).
  * Extracted verbatim from App.tsx; the App owns all state, refs, and handlers.
  */
-import React, { type Dispatch, type SetStateAction } from 'react';
+import React, { useState, type Dispatch, type SetStateAction } from 'react';
 import { Icon } from '../icons.js';
 import remarkGfm from 'remark-gfm';
 import { Markdown, MD_COMPONENTS } from '../chat/markdown.js';
@@ -71,6 +71,7 @@ export interface ChatThreadProps {
 }
 
 export function ChatThread(p: ChatThreadProps): React.ReactElement {
+  const [reasoningExpanded, setReasoningExpanded] = useState(false);
   const {
     homeMode, railOpen, setRailOpen, gitInfo, info, sessionTitle, taskView, setTaskView, chatRef, atBottomRef,
     setAtBottom, workflowView, setWorkflowView, renderRow, homeStats, statsTab, setStatsTab, statsRange, setStatsRange,
@@ -150,12 +151,38 @@ export function ChatThread(p: ChatThreadProps): React.ReactElement {
           </div>
         ) : null}
         {!taskView && !workflowView && running ? (
-          <div className="row workline">
-            <span className="spinner sm" />
-            <WorkElapsed startedAt={turnStart} />
-            <span>·</span>
-            <span>{liveText ? 'writing…' : reasoningTail ? 'thinking…' : statusLine || 'working…'}</span>
-            {reasoningTail && !liveText ? <span className="reasoning"> {reasoningTail.slice(-90)}</span> : null}
+          <div className="row workline-container">
+            <div className="workline-header">
+              <span className="spinner sm" />
+              <WorkElapsed startedAt={turnStart} />
+              <span className="dot-sep">·</span>
+              {reasoningTail && !liveText ? (
+                <span className="status-label">thinking…</span>
+              ) : (
+                <span className="status-label">{liveText ? 'writing…' : statusLine || 'working…'}</span>
+              )}
+            </div>
+
+            {reasoningTail && !liveText ? (
+              <details
+                className="workline-think"
+                open={reasoningExpanded}
+                onToggle={(e) => setReasoningExpanded((e.target as HTMLDetailsElement).open)}
+              >
+                <summary>
+                  {!reasoningExpanded ? (
+                    <span className="reasoning-preview">
+                      {reasoningTail.slice(-90)}
+                    </span>
+                  ) : (
+                    <span className="reasoning-toggle-hint">Click to collapse thinking</span>
+                  )}
+                </summary>
+                <div className="reasoning-full-box">
+                  <Markdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>{reasoningTail}</Markdown>
+                </div>
+              </details>
+            ) : null}
           </div>
         ) : null}
         {!taskView && !workflowView && interaction && interaction.type === 'confirm' ? (
