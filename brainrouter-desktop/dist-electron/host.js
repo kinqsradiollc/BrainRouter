@@ -11,6 +11,7 @@
  */
 import { createBrokerPort, createHostCore } from './hostCore.js';
 import { mergeGithubCliEnv, normalizeGithubCliError } from './ghCli.js';
+import { shellQuoteArg } from './shellQuote.js';
 import { exec, execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -3933,10 +3934,12 @@ async function main() {
                 const what = typeof args.what === 'string' ? args.what : '';
                 const root = workspaceRoot;
                 const sh = (cmd) => new Promise((resolve) => exec(cmd, { cwd: root, timeout: 8_000 }, () => resolve()));
-                const q = (s) => `'${s.replace(/'/g, "'\\''")}'`;
                 const isWin = process.platform === 'win32', isMac = process.platform === 'darwin';
+                // HOTFIX — cmd.exe does NOT strip single quotes, so an arg must be double-
+                // quoted on Windows or the opener silently fails (PR/CI links never opened).
+                const q = (s) => shellQuoteArg(s, isWin);
                 // T6 — open an explicit URL (CI/check/run links). https-only so a malicious
-                // gh payload can't smuggle a file:// or shell-ish scheme; single-quoted.
+                // gh payload can't smuggle a file:// or shell-ish scheme; shell-quoted.
                 const url = typeof args.url === 'string' ? args.url : '';
                 if (url) {
                     if (!/^https:\/\/[^\s'"]+$/.test(url))
