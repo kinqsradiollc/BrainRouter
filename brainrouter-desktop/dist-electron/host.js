@@ -1891,6 +1891,13 @@ async function main() {
             // call degrades to an empty/null payload when gh is missing/unauthed/no-PR,
             // so the panel shows "not connected" instead of erroring. This is GitHub's
             // real CI truth — the renderer keeps it SEPARATE from the local "tests passed".
+            // Every OPEN PR in the repo (not just the current branch's) — powers the
+            // Review panel's "Pull Requests" tab. Includes the body so the panel can
+            // show PR content inline. Degrades to [] when gh is missing/unauthed.
+            'git-pr-list': async () => {
+                const list = await ghJson(['pr', 'list', '--state', 'open', '--limit', '50', '--json', 'number,title,state,url,headRefName,baseRefName,author,isDraft,body,updatedAt'], { timeout: 8_000, maxBuffer: 4_000_000, allowNonZeroJson: true });
+                return list.error ? { prs: [], error: list.error } : { prs: list.data ?? [] };
+            },
             'git-pr-detail': async () => {
                 const view = await ghJson(['pr', 'view', '--json', 'number,state,title,url,headRefName,baseRefName,author,isDraft,mergeable,statusCheckRollup'], { timeout: 8_000, maxBuffer: 2_000_000 });
                 return view.error ? { pr: null, error: view.error } : { pr: view.data ?? null };

@@ -57,7 +57,7 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
   const [disabledCats, setDisabledCats] = useState<ReadonlySet<AtlasFileCategory>>(new Set());
   const [showDiff, setShowDiff] = useState(false); // Review overlay (ATLAS-11)
   const [impactNode, setImpactNode] = useState<string | null>(null); // blast-radius highlight (ATLAS-13)
-  const [hoverNode, setHoverNode] = useState<string | null>(null); // hover-to-highlight connections
+  const [highlightNode, setHighlightNode] = useState<string | null>(null); // click-to-highlight connections
   const [showInsights, setShowInsights] = useState(false); // Deep Dive stats overlay
   const rfRef = useRef<ReactFlowInstance | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -337,41 +337,41 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
     };
   }, [base, effMode, spotlight, selected, showDiff, nodeChanges]);
 
-  // HOVER HIGHLIGHT — hovering a node lights up its direct connections (edges
+  // CLICK HIGHLIGHT — clicking a node lights up its direct connections (edges
   // brighten + animate, the node and its neighbours stay full opacity) and fades
-  // everything else, so you can see "what links to what" at a glance. This is a
-  // cheap restyle ON TOP of the base layout (no re-layout on hover), composing
-  // node `style.opacity` + edge style without touching the node components.
+  // everything else, so you can see "what links to what". Driven by CLICK, not
+  // hover: hover recomputed this on every mousemove, which flashed the canvas and
+  // lagged large graphs. A cheap restyle ON TOP of the base layout (no re-layout).
   const { rfNodes, rfEdges } = useMemo<{ rfNodes: Node[]; rfEdges: Edge[] }>(() => {
     // Pulse the tour step's nodes (CSS keyframe) so the eye follows the walk.
     const pulse = tourStep != null ? tourIds : null;
-    if (!hoverNode && (!pulse || pulse.size === 0)) return decoratedBase;
+    if (!highlightNode && (!pulse || pulse.size === 0)) return decoratedBase;
 
     const connected = new Set<string>();
-    if (hoverNode) {
-      connected.add(hoverNode);
+    if (highlightNode) {
+      connected.add(highlightNode);
       for (const e of decoratedBase.rfEdges) {
-        if (e.source === hoverNode) connected.add(e.target);
-        if (e.target === hoverNode) connected.add(e.source);
+        if (e.source === highlightNode) connected.add(e.target);
+        if (e.target === highlightNode) connected.add(e.source);
       }
     }
     const rfNodes = decoratedBase.rfNodes.map((n) => {
       let nn: Node = n;
       if (pulse?.has(n.id)) nn = { ...nn, className: [nn.className, "atlas-tour-pulse"].filter(Boolean).join(" ") };
-      if (hoverNode) {
-        if (n.id === hoverNode) nn = { ...nn, style: { ...nn.style, boxShadow: "0 0 0 1.5px var(--accent), 0 0 22px rgba(124,147,255,0.5)", borderRadius: 10 } };
+      if (highlightNode) {
+        if (n.id === highlightNode) nn = { ...nn, style: { ...nn.style, boxShadow: "0 0 0 1.5px var(--accent), 0 0 22px rgba(124,147,255,0.5)", borderRadius: 10 } };
         else if (!(n.type === "atlasGroup" || connected.has(n.id))) nn = { ...nn, style: { ...nn.style, opacity: 0.3 } };
       }
       return nn;
     });
-    const rfEdges = hoverNode
+    const rfEdges = highlightNode
       ? decoratedBase.rfEdges.map((e) => {
-          const on = e.source === hoverNode || e.target === hoverNode;
+          const on = e.source === highlightNode || e.target === highlightNode;
           return { ...e, animated: on, style: { ...e.style, opacity: on ? 1 : 0.1, strokeWidth: on ? Math.max(2, Number(e.style?.strokeWidth ?? 1) + 1) : (e.style?.strokeWidth ?? 1) } };
         })
       : decoratedBase.rfEdges;
     return { rfNodes, rfEdges };
-  }, [decoratedBase, hoverNode, tourStep, tourIds]);
+  }, [decoratedBase, highlightNode, tourStep, tourIds]);
 
   const renderedNodeIds = useMemo(() => new Set(rfNodes.map((n) => n.id)), [rfNodes]);
 
@@ -500,7 +500,11 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
           proOptions={{ hideAttribution: true }}
           onInit={(inst) => { rfRef.current = inst; }}
           onNodeClick={(_e, n) => {
-            if (n.type === "atlasLayer" || n.type === "atlasDomain") { setDrill(n.id); setMode("structural"); return; }
+            if (n.type === "atlasGroup") return;
+            // Single click highlights ANY node's connections (drill / open is on
+            // double-click). Replaces hover-highlight, which recomputed on every
+            // mousemove — the flashing + lag on large graphs.
+            setHighlightNode((cur) => (cur === n.id ? null : n.id));
             if (n.type === "atlasService") {
               const portId = (n.data as { portNodeId?: string })?.portNodeId;
               if (portId) { setSelected(portId); onSelectNode?.(portId, byId.get(portId)?.filePath); }
@@ -512,12 +516,12 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
             }
           }}
           onNodeDoubleClick={(_e, n) => {
+            // Double click is the drill / open action.
+            if (n.type === "atlasLayer" || n.type === "atlasDomain") { setHighlightNode(null); setDrill(n.id); setMode("structural"); return; }
             const fp = byId.get(n.id)?.filePath;
             if (n.type === "atlasFile" && fp) onOpenFile?.(fp);
           }}
-          onNodeMouseEnter={(_e, n) => { if (n.type !== "atlasGroup") setHoverNode(n.id); }}
-          onNodeMouseLeave={() => setHoverNode(null)}
-          onPaneClick={() => { setSelected(null); setImpactNode(null); }}
+          onPaneClick={() => { setSelected(null); setImpactNode(null); setHighlightNode(null); }}
         >
           <Background color="var(--border)" gap={24} size={1} />
           <Controls showInteractive={false} />

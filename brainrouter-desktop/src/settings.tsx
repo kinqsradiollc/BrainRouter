@@ -370,6 +370,13 @@ function ConnectorSettings({ connectors, githubIntegration, onGithubSave, onActi
   const [genericCredentialRef, setGenericCredentialRef] = useState('');
   const [genericConfig, setGenericConfig] = useState<Record<string, string | boolean>>({});
   const [definitionJson, setDefinitionJson] = useState('');
+  // Connector config moved out of the inline panel into a modal (matching the
+  // Models provider dialog): a catalog card / "Configure" opens this editor.
+  const [editorOpen, setEditorOpen] = useState(false);
+  // The connector form is tall (GitHub config + Track sync); always open the
+  // dialog scrolled to its title rather than wherever a re-render left it.
+  const editorRef = useRef<HTMLDivElement>(null);
+  React.useEffect(() => { if (editorOpen) editorRef.current?.scrollTo({ top: 0 }); }, [editorOpen, selectedSource]);
 
   React.useEffect(() => {
     if (!firstGithub) return;
@@ -490,7 +497,7 @@ function ConnectorSettings({ connectors, githubIntegration, onGithubSave, onActi
             const configured = connectors.items.filter((item) => item.source === entry.source).length;
             const ready = entry.source === 'github';
             return (
-              <button key={entry.source} type="button" className={`connector-source-card${entry.source === selectedSource ? ' active' : ''}`} onClick={() => setSelectedSource(entry.source)}>
+              <button key={entry.source} type="button" className={`connector-source-card${entry.source === selectedSource ? ' active' : ''}`} onClick={() => { setSelectedSource(entry.source); setEditorOpen(true); }}>
                 <span className="connector-source-top">
                   <span className="connector-source-title">{entry.title}</span>
                   <span className={`connector-source-badge${ready ? ' ready' : ''}`}>{ready ? 'runtime' : 'catalog'}</span>
@@ -532,6 +539,7 @@ function ConnectorSettings({ connectors, githubIntegration, onGithubSave, onActi
               ))}
               {connector.lastError ? <span className="pc-host" style={{ color: 'var(--warn)' }}>{connector.lastError}</span> : null}
               <span className="pc-actions">
+                <button className="btn" onClick={() => { setSelectedSource(connector.source); setEditorOpen(true); }}>Configure</button>
                 <button className="btn" onClick={() => {
                   onAction('a-connector-update', 'action:connector-update', { id: connector.id, patch: { status: connector.status === 'paused' ? 'active' : 'paused' } });
                   setTimeout(refreshSnapshot, 120);
@@ -558,9 +566,28 @@ function ConnectorSettings({ connectors, githubIntegration, onGithubSave, onActi
         </div>
       </Row>
 
-      {selectedEntry?.source === 'github' ? (
+      {github ? (
         <>
-          <div className="set-h2">GitHub source</div>
+          <div className="set-h2">GitHub Track sync</div>
+          <div className="set-desc" style={{ marginBottom: 8 }}>Track issue import/export uses the same GitHub area. Connector-backed repositories are listed here, while write tokens remain local to this machine.</div>
+          <GithubIntegration gh={githubIntegration} onSave={onGithubSave} />
+        </>
+      ) : null}
+
+      {editorOpen && selectedEntry ? (
+        <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) setEditorOpen(false); }}>
+          <div className="dialog" style={{ width: 560, maxHeight: '86vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <div className="dialog-title" style={{ display: 'flex', alignItems: 'center', gap: 11, flex: 'none' }}>
+              <Icon name="branch" size={22} />
+              <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+                <span>{selectedEntry.source === 'github' && firstGithub ? `Configure ${selectedEntry.title}` : `Add ${selectedEntry.title} connector`}</span>
+                <span className="set-desc" style={{ margin: 0, fontWeight: 400 }}>{selectedEntry.description}</span>
+              </span>
+            </div>
+            <div ref={editorRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+            {selectedEntry.source === 'github' ? (
+        <>
+          <div className="set-h2" style={{ marginTop: 2 }}>GitHub source</div>
           <div className="set-desc" style={{ marginBottom: 8 }}>Configure one owner/org, many repositories, or leave repositories empty to cover all accessible repositories under that owner.</div>
           {!github ? <div className="empty">GitHub is not available in the connector catalog.</div> : null}
           <Row title="Name" desc="Local display name for this connector instance.">
@@ -604,16 +631,12 @@ function ConnectorSettings({ connectors, githubIntegration, onGithubSave, onActi
             <input className="ctl mono" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://github.example.com/api/v3" spellCheck={false} />
           </Row>
           <div className="set-actions">
-            <button className="btn primary" disabled={!canSave} onClick={saveGithubConnector}>{firstGithub ? 'Update GitHub connector' : 'Add GitHub connector'}</button>
+            <button className="btn primary" disabled={!canSave} onClick={() => { saveGithubConnector(); setEditorOpen(false); }}>{firstGithub ? 'Update GitHub connector' : 'Add GitHub connector'}</button>
           </div>
-
-          <div className="set-h2">GitHub Track sync</div>
-          <div className="set-desc" style={{ marginBottom: 8 }}>Track issue import/export uses the same GitHub area. Connector-backed repositories are listed here, while write tokens remain local to this machine.</div>
-          <GithubIntegration gh={githubIntegration} onSave={onGithubSave} />
         </>
-      ) : selectedEntry ? (
+            ) : (
         <>
-          <div className="set-h2">{selectedEntry.title}</div>
+          <div className="set-h2" style={{ marginTop: 2 }}>{selectedEntry.title}</div>
           <div className="set-desc" style={{ marginBottom: 8 }}>{selectedEntry.description}</div>
           <Row title="Name" desc="Local display name for this connector instance.">
             <input className="ctl" value={genericName} onChange={(e) => setGenericName(e.target.value)} placeholder={`${selectedEntry.title} connector`} />
@@ -642,9 +665,16 @@ function ConnectorSettings({ connectors, githubIntegration, onGithubSave, onActi
             </Row>
           ) : null}
           <div className="set-actions">
-            <button className="btn primary" onClick={saveGenericConnector}>Add {selectedEntry.title} connector</button>
+            <button className="btn primary" onClick={() => { saveGenericConnector(); setEditorOpen(false); }}>Add {selectedEntry.title} connector</button>
           </div>
         </>
+            )}
+            </div>
+            <div className="set-actions" style={{ marginTop: 0, paddingTop: 12, flex: 'none' }}>
+              <button className="btn" onClick={() => setEditorOpen(false)}>Close</button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </>
   );
@@ -772,6 +802,9 @@ export function SettingsDialog(props: {
   const [ruleKind, setRuleKind] = useState<'allow' | 'deny'>('deny');
   const [ruleDraft, setRuleDraft] = useState('');
   const [mcp, setMcp] = useState<{ id: string; type: 'stdio' | 'http'; command: string; url: string; apiKey: string; headers: string; env: string }>({ id: '', type: 'stdio', command: '', url: '', apiKey: '', headers: '', env: '' });
+  // Add-MCP-server modal (Onyx-style, matching the Models provider modal) — the
+  // form moved out of the inline panel into a dialog opened by "+ Add server".
+  const [mcpModalOpen, setMcpModalOpen] = useState(false);
   // §multi-provider — add-provider draft + per-role model drafts.
   const [provDraft, setProvDraft] = useState<{ name: string; provider: string; endpoint: string; apiKey: string; model: string; apiVersion: string }>({ name: '', provider: 'openai', endpoint: '', apiKey: '', model: '', apiVersion: '' });
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
@@ -992,15 +1025,15 @@ export function SettingsDialog(props: {
             <div className="set-h2">Your providers</div>
             {savedProviders.length === 0 ? <div className="empty">None yet — pick one above, or add a custom provider.</div> : null}
             {savedProviders.length ? (
-              <div className="provider-gallery" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(252px, 1fr))' }}>
+              <div className="provider-gallery" style={{ gridTemplateColumns: '1fr', gap: 8 }}>
                 {[...savedProviders].sort((a, b) => (a.name === defaultProvider ? -1 : b.name === defaultProvider ? 1 : 0)).map((p) => (
-                  <div key={p.name} className="provider-card saved" style={{ flexDirection: 'row', alignItems: 'center', gap: 10, textAlign: 'left' }}>
+                  <div key={p.name} className="provider-card saved" style={{ flexDirection: 'row', alignItems: 'center', gap: 11, textAlign: 'left' }}>
                     <ProviderIcon id={p.provider} size={28} title={p.provider} />
-                    <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+                    <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0, flex: 1 }}>
                       <span className="pc-name" style={{ fontWeight: 600 }}>{p.name}{p.name === defaultProvider ? <span className="pc-tag default" style={{ marginLeft: 6 }}>Default</span> : null}</span>
                       <span className="pc-host" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.model}{p.models && p.models.length ? ` · ${p.models.length} models` : ''}</span>
                     </span>
-                    <span className="pc-actions" style={{ marginLeft: 'auto' }}>
+                    <span className="pc-actions" style={{ marginLeft: 'auto', flexWrap: 'nowrap', flex: '0 0 auto' }}>
                       {p.name !== defaultProvider ? <button className="btn" title="Make this the default model" onClick={() => { props.onAction('a-setdefault', 'action:set-default-provider', { name: p.name }); setTimeout(refreshSnapshot, 80); }}>Set default</button> : null}
                       <button className="btn" onClick={() => openProviderModal({ editing: p.name, name: p.name, provider: p.provider, endpoint: p.endpoint ?? '', model: p.model, models: p.models ?? [], apiVersion: p.apiVersion ?? '' })}>Configure</button>
                       <button className="btn danger" title="Remove this provider" onClick={() => setConfirmDeleteProvider(p.name)}>Remove</button>
@@ -1043,15 +1076,15 @@ export function SettingsDialog(props: {
               const canConnect = !!provDraft.name.trim() && (selectedModels.length > 0 || !!provDraft.model.trim());
               return (
                 <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) { setProvModalOpen(false); props.onProbeReset(); } }}>
-                  <div className="dialog" style={{ width: 520, maxHeight: '86vh', overflowY: 'auto' }}>
-                    <div className="dialog-title" style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
+                  <div className="dialog" style={{ width: 520, maxHeight: '86vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                    <div className="dialog-title" style={{ display: 'flex', alignItems: 'center', gap: 11, flex: 'none' }}>
                       <ProviderIcon id={provDraft.provider || 'openai-compatible'} size={30} />
                       <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
                         <span>{headerTitle}</span>
                         <span className="set-desc" style={{ margin: 0, fontWeight: 400 }}>{headerSubtitle}</span>
                       </span>
                     </div>
-                    <div className="mcp-add" style={{ gap: 5 }}>
+                    <div className="mcp-add" style={{ gap: 5, flex: 1, minHeight: 0, overflowY: 'auto' }}>
                       {/* §onyx-dialog — labeled sections (API key → display name →
                           provider/endpoint for custom → models), each with helper text. */}
                       <div className="set-h2" style={{ marginTop: 2 }}>API key{editingProvider ? <span style={{ color: 'var(--text-faint)', fontWeight: 400 }}> (blank = keep current)</span> : null}</div>
@@ -1480,31 +1513,71 @@ export function SettingsDialog(props: {
             </div>
           ) : null}
 
-          <div className="set-h2">Add a server</div>
-          <div className="mcp-add">
-            <div className="mcp-add-row">
-              <input className="ctl" placeholder="name (e.g. my-tools)" value={mcp.id} onChange={(e) => setMcp((m) => ({ ...m, id: e.target.value }))} />
-              <ChoiceControl value={mcp.type} options={[{ value: 'stdio', label: 'stdio' }, { value: 'http', label: 'http' }]} onChange={(v) => setMcp((m) => ({ ...m, type: v as 'stdio' | 'http' }))} />
-            </div>
-            {mcp.type === 'stdio'
-              ? <>
-                  <input className="ctl" placeholder="command + args, e.g. npx -y @modelcontextprotocol/server-filesystem ." value={mcp.command} onChange={(e) => setMcp((m) => ({ ...m, command: e.target.value }))} />
-                  <textarea className="ctl" rows={2} placeholder="environment (optional) — one KEY=value per line" value={mcp.env} onChange={(e) => setMcp((m) => ({ ...m, env: e.target.value }))} />
-                </>
-              : <>
-                  <input className="ctl" placeholder="https://mcp.example.com/mcp (or /sse)" value={mcp.url} onChange={(e) => setMcp((m) => ({ ...m, url: e.target.value }))} />
-                  <input className="ctl" type="password" placeholder="API key / Bearer token (optional)" value={mcp.apiKey} onChange={(e) => setMcp((m) => ({ ...m, apiKey: e.target.value }))} />
-                  <textarea className="ctl" rows={2} placeholder="extra headers (optional) — one Header-Name=value per line" value={mcp.headers} onChange={(e) => setMcp((m) => ({ ...m, headers: e.target.value }))} />
-                </>}
-            <button className="btn primary" disabled={!mcp.id.trim() || !(mcp.type === 'stdio' ? mcp.command.trim() : mcp.url.trim())}
-              onClick={() => {
-                const parts = mcp.command.trim().split(/\s+/);
-                props.onAction('a-addmcp', 'action:add-mcp', mcp.type === 'http'
-                  ? { id: mcp.id.trim(), type: 'http', url: mcp.url.trim(), apiKey: mcp.apiKey.trim(), headers: mcp.headers.trim() }
-                  : { id: mcp.id.trim(), type: 'stdio', command: parts[0] ?? '', args: parts.slice(1).join(' '), env: mcp.env.trim() });
-                setMcp({ id: '', type: 'stdio', command: '', url: '', apiKey: '', headers: '', env: '' });
-              }}>Add server</button>
-          </div>
+          <button className="btn primary" style={{ marginTop: 6 }} onClick={() => setMcpModalOpen(true)}>+ Add server</button>
+
+          {mcpModalOpen ? (() => {
+            const isStdio = mcp.type === 'stdio';
+            const canAdd = !!mcp.id.trim() && (isStdio ? !!mcp.command.trim() : !!mcp.url.trim());
+            const closeModal = (): void => setMcpModalOpen(false);
+            return (
+              <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}>
+                <div className="dialog" style={{ width: 520, maxHeight: '86vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                  <div className="dialog-title" style={{ display: 'flex', alignItems: 'center', gap: 11, flex: 'none' }}>
+                    <Icon name="bolt" size={24} />
+                    <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
+                      <span>Add an MCP server</span>
+                      <span className="set-desc" style={{ margin: 0, fontWeight: 400 }}>Connect a stdio or HTTP MCP server — the same pool the CLI uses.</span>
+                    </span>
+                  </div>
+                  <div className="mcp-add" style={{ gap: 5, flex: 1, minHeight: 0, overflowY: 'auto' }}>
+                    <div className="set-h2" style={{ marginTop: 2 }}>Name</div>
+                    <input className="ctl" placeholder="name (e.g. my-tools)" value={mcp.id} onChange={(e) => setMcp((m) => ({ ...m, id: e.target.value }))} />
+                    <div className="set-desc" style={{ margin: 0 }}>Identifies this server in the app and config.json.</div>
+
+                    <div className="set-h2">Transport</div>
+                    <ChoiceControl value={mcp.type} options={[{ value: 'stdio', label: 'stdio', detail: 'local command' }, { value: 'http', label: 'http', detail: 'remote URL' }]} onChange={(v) => setMcp((m) => ({ ...m, type: v as 'stdio' | 'http' }))} />
+
+                    {isStdio ? (
+                      <>
+                        <div className="set-h2">Command</div>
+                        <input className="ctl" placeholder="command + args, e.g. npx -y @modelcontextprotocol/server-filesystem ." value={mcp.command} onChange={(e) => setMcp((m) => ({ ...m, command: e.target.value }))} />
+                        <div className="set-h2">Environment <span style={{ color: 'var(--text-faint)', fontWeight: 400 }}>(optional)</span></div>
+                        <textarea className="ctl" rows={2} placeholder="one KEY=value per line" value={mcp.env} onChange={(e) => setMcp((m) => ({ ...m, env: e.target.value }))} />
+                      </>
+                    ) : (
+                      <>
+                        <div className="set-h2">URL</div>
+                        <input className="ctl" placeholder="https://mcp.example.com/mcp (or /sse)" value={mcp.url} onChange={(e) => setMcp((m) => ({ ...m, url: e.target.value }))} />
+                        <div className="set-h2">API key <span style={{ color: 'var(--text-faint)', fontWeight: 400 }}>(optional)</span></div>
+                        <input className="ctl" type="password" placeholder="API key / Bearer token" value={mcp.apiKey} onChange={(e) => setMcp((m) => ({ ...m, apiKey: e.target.value }))} />
+                        <div className="set-h2">Headers <span style={{ color: 'var(--text-faint)', fontWeight: 400 }}>(optional)</span></div>
+                        <textarea className="ctl" rows={2} placeholder="one Header-Name=value per line" value={mcp.headers} onChange={(e) => setMcp((m) => ({ ...m, headers: e.target.value }))} />
+                      </>
+                    )}
+
+                    {!canAdd ? (
+                      <div className="set-desc" style={{ margin: '2px 0 0', color: 'var(--warn)' }}>
+                        {!mcp.id.trim() ? 'Enter a name to add the server.' : isStdio ? 'Enter the command to run.' : 'Enter the server URL.'}
+                      </div>
+                    ) : null}
+                    <div className="set-actions" style={{ marginTop: 6 }}>
+                      <button className="btn" onClick={closeModal}>Cancel</button>
+                      <button className="btn primary" disabled={!canAdd}
+                        onClick={() => {
+                          const parts = mcp.command.trim().split(/\s+/);
+                          props.onAction('a-addmcp', 'action:add-mcp', mcp.type === 'http'
+                            ? { id: mcp.id.trim(), type: 'http', url: mcp.url.trim(), apiKey: mcp.apiKey.trim(), headers: mcp.headers.trim() }
+                            : { id: mcp.id.trim(), type: 'stdio', command: parts[0] ?? '', args: parts.slice(1).join(' '), env: mcp.env.trim() });
+                          setMcp({ id: '', type: 'stdio', command: '', url: '', apiKey: '', headers: '', env: '' });
+                          setMcpModalOpen(false);
+                          setTimeout(refreshSnapshot, 80);
+                        }}>Add server</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })() : null}
         </>
         );
       }
