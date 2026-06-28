@@ -272,6 +272,22 @@ export function App(): React.ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, info.workspaceRoot]);
 
+  // Auto-refresh Track every 25s while it's open, so board items, sync state,
+  // git context, and PR status reflect external changes (commits, GitHub) on
+  // their own — no manual Refresh. Quiet + flicker-free: results replace state
+  // in useAgentEvents, and identical data produces no DOM change.
+  useEffect(() => {
+    if (mode !== 'track') return;
+    const t = window.setInterval(() => {
+      q('q-track-items', 'track-items');
+      q('q-track-sync-config', 'track-sync-config');
+      q('q-track-git-context', 'track-git-context');
+      q('q-track-pr-status', 'track-pr-status');
+    }, 25_000);
+    return () => window.clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, info.workspaceRoot]);
+
   // A4 — Chat is a READ-ONLY conversational stance: the agent can read, search,
   // and reason, but cannot write files or run shell. Entering Chat pins the
   // active agent to 'read' access; Code/Track restore the default 'shell'. Re-
