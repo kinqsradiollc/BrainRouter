@@ -316,6 +316,16 @@ app.whenReady().then(() => {
     else openWorkspaceWindow(workspaceRoot);
     return { opened: true };
   });
+  // Open a workspace in a SEPARATE window — always a new (or focused existing)
+  // window, NEVER swapping the calling window in place. Used for git worktrees:
+  // opening a worktree must not mutate the current window's projects list,
+  // active workspace, or chat. Trust is still enforced (defense-in-depth).
+  ipcMain.handle('workspace:open-window', (_event, workspaceRoot: unknown) => {
+    if (typeof workspaceRoot !== 'string' || !fs.existsSync(workspaceRoot)) return { opened: false };
+    if (!isWorkspaceTrusted(workspaceRoot)) return { opened: false, needsTrust: true };
+    openWorkspaceWindow(workspaceRoot);
+    return { opened: true };
+  });
   // T1 — trust persistence lives in the shared CLI store (not renderer
   // localStorage), so CLI + desktop agree and it survives reinstalls.
   ipcMain.handle('workspace:isTrusted', (_e, root: unknown) => ({ trusted: typeof root === 'string' && isWorkspaceTrusted(root) }));

@@ -369,7 +369,7 @@ export function App(): React.ReactElement {
   const {
     refreshSession, refreshSidebar, refreshGit, resumeSession, resumeSessionRef, resumeTimerRef,
     openTask, openWorkflow, viewToTop, answerInteraction, requestStop,
-    switchToWorkspace, openProject, addProject, toggleProject,
+    switchToWorkspace, openProject, openWorktree, addProject, toggleProject,
     openSettings, openFile, closeEditorTab, openUrl, openCiPanel, refreshDashboard, openDashboard,
     closeSessionMenu, setMeta, togglePin, toggleComplete, toggleArchive, moveToGroup,
     startRename, commitRename, forkSessionAction, deleteSessionAction, openExternal, openSessionMenu,
@@ -1015,7 +1015,7 @@ export function App(): React.ReactElement {
       case 'worktrees': return <WorktreesPanel worktrees={worktrees} diffs={worktreeDiffs}
         onCreate={(name, ref) => { q('q-worktree-create', 'worktree-create', { name, ref }); setTimeout(() => q('q-worktrees', 'git-worktrees'), 250); }}
         onRemove={(path) => { q('q-worktree-remove', 'worktree-remove', { path }); setTimeout(() => q('q-worktrees', 'git-worktrees'), 250); }}
-        onOpen={(path) => openProject(path)}
+        onOpen={(path) => openWorktree(path)}
         onDiff={(path) => q('q-worktree-diff', 'worktree-diff', { path })} />;
       case 'review': {
         const refresh = () => setTimeout(() => q('q-review-current', 'review-current'), 120);

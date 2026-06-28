@@ -118,6 +118,7 @@ export interface SessionActions {
   requestStop: () => void;
   switchToWorkspace: (root: string, resumeKey?: string) => void;
   openProject: (root: string, resumeKey?: string) => void;
+  openWorktree: (path: string) => void;
   addProject: () => void;
   toggleProject: (root: string) => void;
   openSettings: (section: SettingsSection) => void;
@@ -320,6 +321,15 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
     });
   }
 
+  /** Open a git worktree in a SEPARATE window. A worktree is a sibling checkout
+   *  of the (already-trusted) current repo — opening it must NEVER swap the
+   *  current window's workspace (that wiped the projects list + chat). It's
+   *  sourced from the active repo's `git worktree list`, so we trust it, then
+   *  open a fresh window rooted there; the current window is left untouched. */
+  function openWorktree(wtPath: string): void {
+    void window.brainrouter.trustWorkspace(wtPath).then(() => window.brainrouter.openWorkspaceWindow?.(wtPath));
+  }
+
   /** Add project = pick folder → trust dialog right away → open in place.
    *  T1 — optimistically insert the folder into the sidebar's project list the
    *  moment it's picked, so it appears instantly (the real recents reconcile on
@@ -504,7 +514,7 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
   return {
     refreshSession, refreshSidebar, refreshGit, resumeSession, resumeSessionRef, resumeTimerRef,
     openTask, openWorkflow, viewToTop, answerInteraction, requestStop,
-    switchToWorkspace, openProject, addProject, toggleProject,
+    switchToWorkspace, openProject, openWorktree, addProject, toggleProject,
     openSettings, openFile, closeEditorTab, openUrl, openCiPanel, refreshDashboard, openDashboard,
     closeSessionMenu, setMeta, togglePin, toggleComplete, toggleArchive, moveToGroup,
     startRename, commitRename, forkSessionAction, deleteSessionAction, openExternal, openSessionMenu,
