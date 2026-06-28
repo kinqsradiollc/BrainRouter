@@ -673,8 +673,8 @@ export function App(): React.ReactElement {
     q, refreshSession, refreshSidebar, runGit, setSessionRunning, info, gitInfo, homeStats, branches,
   });
 
-  function submit(): void {
-    const typedPrompt = draft.trim();
+  function submit(override?: string): void {
+    const typedPrompt = (override ?? draft).trim();
     const pendingAttachments = attachmentUploads.filter((a) => a.status === 'reading' || a.status === 'attaching');
     const failedAttachments = attachmentUploads.filter((a) => a.status === 'failed');
     const attached = readyAttachments(attachmentUploads);
@@ -717,7 +717,7 @@ export function App(): React.ReactElement {
     const nowTs = Date.now();
     const stableId = `${sessionKeyRef.current ?? 'global'}-user-${nowTs}-${displayPrompt.slice(0, 32).replace(/[^a-zA-Z0-9]/g, '_')}`;
     setRows((r) => [...r, { id: stableId, kind: 'user', text: displayPrompt, ts: nowTs }]);
-    setDraft('');
+    if (!override) setDraft('');
     if (attached.length > 0) setAttachmentUploads((prev) => prev.filter((a) => !attached.some((sent) => sent.id === a.id)));
     setRunning(true);
     // DESK-5v — mark THIS session running so its spinner survives a switch away.
@@ -745,6 +745,30 @@ export function App(): React.ReactElement {
     }
     window.brainrouter.send({ kind: 'start-turn', prompt });
   }
+
+  // AI PR review — kick the agent to review a PR on an ISOLATED git worktree so
+  // the user's working tree stays untouched. The agent creates the worktree with
+  // its own shell, reads the diff, works the code-review checklist, gives a
+  // verdict, and cleans up. Reuses the normal turn flow via submit(override).
+  const reviewPrWithAi = (pr: { number: number; title?: string; headRefName?: string; baseRefName?: string }): void => {
+    if (running || stopping) {
+      setToast('Finish the current turn before starting an AI review.');
+      return;
+    }
+    const base = pr.baseRefName ? `\`${pr.baseRefName}\`` : 'the base branch';
+    const head = pr.headRefName ? `\`${pr.headRefName}\`` : 'the PR branch';
+    const wt = `.worktrees/pr-${pr.number}`;
+    const prompt = [
+      `Review pull request #${pr.number}${pr.title ? ` ("${pr.title}")` : ''} — ${head} → ${base}.`,
+      `Do the review on an ISOLATED git worktree so my working tree stays untouched:`,
+      `1. Check out the PR head into a worktree: \`git fetch origin pull/${pr.number}/head\` then \`git worktree add --detach ${wt} FETCH_HEAD\`.`,
+      `2. Read the change in context: \`gh pr diff ${pr.number}\` for the diff, then open the changed files under \`${wt}\`.`,
+      `3. Work the review checklist: what is this change trying to achieve; does it actually achieve that (read the code, not the description); are there tests and did they actually validate the change; does it break existing functionality (check callers + adjacent behavior); do you genuinely understand what the feature does.`,
+      `4. Give a clear verdict — approve or request changes — with specific \`file:line\` references for each point.`,
+      `When finished, clean up: \`git worktree remove --force ${wt}\`.`,
+    ].join('\n');
+    submit(prompt);
+  };
 
   // §5 — attach dropped/picked files: read each as base64 in the renderer and
   // ingest into a durable attachment record (the host preserves the original,
@@ -980,7 +1004,7 @@ export function App(): React.ReactElement {
             }} />
         </Suspense>
       );
-      case 'ci': return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading…</div>}><CIPanel ci={ci} onOpenExternal={openUrl} trackPr={track.pr} trackOps={trackOps} /></Suspense>;
+      case 'ci': return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading…</div>}><CIPanel ci={ci} onOpenExternal={openUrl} onReviewPr={reviewPrWithAi} trackPr={track.pr} trackOps={trackOps} /></Suspense>;
       case 'diff': return (
         <DiffPanel gitInfo={gitInfo} changed={changedFiles} diff={diffView}
           scrollToLine={diffView && diffTarget && diffView.path === diffTarget.path ? diffTarget.line : undefined}

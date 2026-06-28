@@ -20,9 +20,10 @@ type TrackPrOps = {
   fixFailingChecks: () => void;
 };
 
-export function CIPanel({ ci, onOpenExternal, trackPr, trackOps }: {
+export function CIPanel({ ci, onOpenExternal, onReviewPr, trackPr, trackOps }: {
   ci: CiApi;
   onOpenExternal: (url: string) => void;
+  onReviewPr?: (pr: { number: number; title?: string; headRefName?: string; baseRefName?: string }) => void;
   trackPr?: TrackPrStatus | null;
   trackOps?: TrackPrOps;
 }): React.ReactElement {
@@ -98,7 +99,10 @@ export function CIPanel({ ci, onOpenExternal, trackPr, trackOps }: {
                     {expanded ? (
                       <div className="ci-pr-detail">
                         <pre className="ci-pr-bodytext">{(p.body && p.body.trim()) || '(no description provided)'}</pre>
-                        {p.url ? <div className="ci-run-actions"><Button onClick={() => onOpenExternal(p.url!)}>Open on GitHub</Button></div> : null}
+                        <div className="ci-run-actions">
+                          {onReviewPr ? <Button onClick={() => onReviewPr({ number: p.number, title: p.title, headRefName: p.headRefName, baseRefName: p.baseRefName })}><Icon name="review" size={12} />Review with AI</Button> : null}
+                          {p.url ? <Button onClick={() => onOpenExternal(p.url!)}>Open on GitHub</Button> : null}
+                        </div>
                       </div>
                     ) : null}
                   </div>
