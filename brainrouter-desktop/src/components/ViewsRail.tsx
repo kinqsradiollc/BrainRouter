@@ -192,8 +192,7 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
               else if (e.key === 'Enter') { e.preventDefault(); const l = shownLaunchers[launchSel]; if (l) { setChooserQuery(''); openSideView(l.id); } }
               else if (e.key === 'Escape') { e.preventDefault(); if (chooserQuery) setChooserQuery(''); else setSidePanelOpen(false); }
             }} />
-          <div className="chooser-list">
-            {shownLaunchers.length === 0 ? <div className="chooser-empty">No tools match “{chooserQuery}”.</div> : shownLaunchers.map((l, i) => (
+          {shownLaunchers.length === 0 ? <div className="chooser-empty">No tools match “{chooserQuery}”.</div> : shownLaunchers.map((l, i) => (
               <button key={l.id} className={`side-launcher${i === launchSel ? ' sel' : ''}`}
                 onClick={() => { setChooserQuery(''); openSideView(l.id); }} onMouseMove={() => setChooserSel(i)}>
                 <Icon name={l.icon} size={18} />
@@ -205,7 +204,6 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
                 </span>
               </button>
             ))}
-          </div>
         </div>
       )}
     </aside>
