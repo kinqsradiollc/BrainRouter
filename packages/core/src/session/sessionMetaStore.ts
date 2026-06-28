@@ -22,6 +22,10 @@ export interface SessionMeta {
    *  from. Lets the desktop show a fork icon + a "Forked from conversation"
    *  link back to the original. */
   forkedFrom?: string;
+  /** §session-pr — the git branch this session last ran a turn on (captured by
+   *  the desktop on activity). Lets the sidebar match a session to its PR and
+   *  show a live PR-status icon. */
+  branch?: string;
 }
 
 type MetaStore = Record<string, SessionMeta>;

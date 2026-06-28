@@ -911,6 +911,10 @@ async function main(): Promise<void> {
   const modelsCacheByKey = new Map<string, { models: string[]; at: number }>();
   // DESK-5d — PR state cache (gh is a network call; the sidebar refreshes often).
   let prCache: { at: number; pr: { number: number; state: string; title?: string } | null } | null = null;
+  // §session-pr — cached all-states PR rows (number/state/headRefName/isDraft/
+  // mergeable) used to match each session to its PR; ~60s TTL, polled by the
+  // renderer on its existing 25s cadence.
+  let prStatusMapCache: { at: number; prs: unknown[] } | null = null;
   // DESK-6t — short-lived transcript-read cache. Resuming a session reads the
   // transcript (for lazy-load bookkeeping) and the renderer immediately reads it
   // AGAIN to render — this memo makes that a single read. Also stashes a token
@@ -1729,7 +1733,7 @@ async function main(): Promise<void> {
             firstUserMessage: m.title || s.firstUserMessage, // title overrides the snippet
             pinned: !!m.pinned, archived: !!m.archived, status: m.status ?? 'active', group: m.group ?? null,
             forkedFrom: m.forkedFrom ?? null, // DESK-6u — lineage for the fork icon + back-link
-
+            branch: m.branch ?? null, // §session-pr — branch this session ran on, for PR-status matching
           };
         });
         // pinned first, then the store's recency order (sessionRows already sorts).
@@ -1886,6 +1890,20 @@ async function main(): Promise<void> {
           { timeout: 8_000, maxBuffer: 4_000_000, allowNonZeroJson: true },
         );
         return list.error ? { prs: [], error: list.error } : { prs: list.data ?? [] };
+      },
+      // §session-pr — a compact ALL-STATES PR list (open + merged + closed) keyed
+      // later by headRefName so the sidebar can show each session's PR status.
+      // Cached ~60s; degrades to [] when gh is missing/unauthed.
+      'git-pr-status-map': async () => {
+        const now = Date.now();
+        if (prStatusMapCache && now - prStatusMapCache.at < 60_000) return { prs: prStatusMapCache.prs };
+        const list = await ghJson<unknown[]>(
+          ['pr', 'list', '--state', 'all', '--limit', '50', '--json', 'number,state,headRefName,isDraft,mergeable,url'],
+          { timeout: 12_000, maxBuffer: 4_000_000, allowNonZeroJson: true },
+        );
+        const prs = list.data ?? [];
+        prStatusMapCache = { at: now, prs };
+        return list.error ? { prs, error: list.error } : { prs };
       },
       'git-pr-detail': async () => {
         const view = await ghJson<TrackPrView & { author?: { login?: string } }>(

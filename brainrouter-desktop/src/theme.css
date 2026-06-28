@@ -1985,6 +1985,13 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
 .session-menu-btn:hover { color: var(--text); background: transparent; } /* just brighten the glyph — no box to pop in/out */
 .session-wrap.menu-open .session-menu-btn { color: var(--text); background: var(--ov-08); } /* subtle box only while the menu is actually open */
 .st-pin { color: var(--accent, #6ea8fe); display: inline-flex; align-items: center; justify-content: center; }
+/* §session-pr — per-session PR status glyph colours (GitHub-like). */
+.st-pr { display: inline-flex; align-items: center; justify-content: center; }
+.st-pr-open { color: var(--ok, #3fb950); }
+.st-pr-draft { color: var(--text-faint); }
+.st-pr-conflict { color: var(--warn); }
+.st-pr-merged { color: #a371f7; }
+.st-pr-closed { color: #f85149; }
 .session-done { color: var(--ok, #5bd6a0); display: inline-flex; margin-left: 4px; }
 .session-wrap.completed .session-title { color: var(--text-dim); }
 .session-rename { flex: 1; margin: 2px 6px; padding: 4px 8px; border-radius: 7px; border: 1px solid var(--accent, #6ea8fe);

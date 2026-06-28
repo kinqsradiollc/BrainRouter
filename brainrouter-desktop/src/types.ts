@@ -32,6 +32,9 @@ export interface SessionRow {
   pinned?: boolean; archived?: boolean; status?: 'active' | 'completed'; group?: string | null;
   // DESK-6u — parent session key this chat was forked from (null = not a fork).
   forkedFrom?: string | null;
+  // §session-pr — git branch this session last ran a turn on; matched to its PR
+  // for the live status icon (null/absent = unknown).
+  branch?: string | null;
 }
 
 // Mirrors the CLI's BackgroundTask (runtime/backgroundTasks.ts): the fleet is
