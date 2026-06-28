@@ -46,6 +46,12 @@ export interface ChatThreadProps {
   setStatsRange: Dispatch<SetStateAction<'all' | '30d' | '7d'>>;
   snapshot: ConfigSnapshot | null;
   sessions: SessionRow[];
+  // header rename — the current session key + a title writer. The edit UI lives
+  // in ChatThread's OWN local state (NOT the sidebar's shared renamingKey) so the
+  // header input and the sidebar's active-row input can never both autofocus and
+  // fight for focus (the loser's onBlur used to commit and exit instantly).
+  viewKey: string;
+  onRenameCurrent: (title: string) => void;
   resumeSession: (key: string) => void;
   forkParent: { key: string; title?: string } | null;
   goal: GoalRecord | null;
@@ -75,10 +81,28 @@ export function ChatThread(p: ChatThreadProps): React.ReactElement {
   const {
     homeMode, railOpen, setRailOpen, gitInfo, info, sessionTitle, taskView, setTaskView, chatRef, atBottomRef,
     setAtBottom, workflowView, setWorkflowView, renderRow, homeStats, statsTab, setStatsTab, statsRange, setStatsRange,
-    snapshot, sessions, resumeSession, forkParent, transcriptEls, liveText, running, turnStart, reasoningTail,
+    snapshot, sessions, viewKey, onRenameCurrent,
+    resumeSession, forkParent, transcriptEls, liveText, running, turnStart, reasoningTail,
     statusLine, interaction, answerInteraction, q, chatEnd, atBottom, hasConversation, changedFiles, ensurePanel, composer,
   } = p;
   const taskTitle = taskView?.title || taskView?.goal || taskView?.role || taskView?.kind;
+  // header rename — show the CURRENT session's listed title (the host overrides
+  // it with a custom rename: host.ts `m.title || s.firstUserMessage`), falling
+  // back to the derived sessionTitle for a brand-new chat.
+  const currentRow = sessions.find((s) => s.sessionKey === viewKey);
+  const headerTitle = currentRow?.firstUserMessage?.trim() || sessionTitle;
+  // LOCAL edit state (independent of the sidebar's renamingKey). titleEditDoneRef
+  // swallows the trailing unmount-blur so Enter/Escape can't fire a second time.
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const titleEditDoneRef = React.useRef(false);
+  const beginTitleEdit = (): void => { if (!currentRow) return; titleEditDoneRef.current = false; setTitleDraft(headerTitle); setEditingTitle(true); };
+  const finishTitleEdit = (save: boolean): void => {
+    if (titleEditDoneRef.current) return;
+    titleEditDoneRef.current = true;
+    setEditingTitle(false);
+    if (save) { const t = titleDraft.trim(); if (t && t !== headerTitle) onRenameCurrent(t); }
+  };
   return (
     <main className={`center${homeMode ? ' home-mode' : ''}${railOpen ? '' : ' no-rail'}`}>
       <header className="chat-head">
@@ -98,7 +122,19 @@ export function ChatThread(p: ChatThreadProps): React.ReactElement {
               <span className="crumb-cur">{taskTitle}</span>
               {taskView.status ? <span className={`task-status ${taskView.status}`}>{taskView.status}</span> : null}
             </>
-          ) : sessionTitle}
+          ) : editingTitle ? (
+            <input className="session-rename" autoFocus value={titleDraft}
+              onChange={(e) => setTitleDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); finishTitleEdit(true); } else if (e.key === 'Escape') { e.preventDefault(); finishTitleEdit(false); } }}
+              onBlur={() => finishTitleEdit(true)} />
+          ) : (
+            <button type="button" className="crumb-cur crumb-link"
+              title={currentRow ? 'Rename chat' : undefined}
+              onClick={beginTitleEdit}
+              disabled={!currentRow}>
+              {headerTitle}
+            </button>
+          )}
         </span>
       </header>
       <div className="chat" ref={chatRef} onScroll={() => {

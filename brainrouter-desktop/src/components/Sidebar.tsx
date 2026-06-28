@@ -270,7 +270,8 @@ export function Sidebar(p: SidebarProps): React.ReactElement | null {
                       : visibleRows.map((s) => (
                         // WS-UX — parked-project chats get the same ⋮ menu as active
                         // ones; it acts on this workspace (root=w) without switching.
-                        <div key={s.sessionKey} className="session-wrap">
+                        <div key={s.sessionKey} className="session-wrap"
+                          onContextMenu={(e) => openSessionMenu(e, s.sessionKey, { row: s, root: w })}>
                           {renamingKey === s.sessionKey ? (
                             <input className="session-rename" autoFocus value={renameDraft}
                               onChange={(e) => setRenameDraft(e.target.value)}

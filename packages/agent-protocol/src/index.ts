@@ -152,8 +152,18 @@ export function isAgentEventMessage(value: unknown): value is AgentEventMessage 
 // Commands — presentation head → agent host
 // ---------------------------------------------------------------------------
 
+/**
+ * An image sent inline with a turn (pasted screenshot / attached picture), for
+ * vision-capable models. `dataBase64` is the raw base64 payload WITHOUT the
+ * `data:<mime>;base64,` prefix; `mediaType` is the MIME type (e.g. image/png).
+ */
+export interface AgentImage {
+  mediaType: string;
+  dataBase64: string;
+}
+
 export type AgentCommand =
-  | { kind: 'start-turn'; prompt: string; hidden?: boolean }
+  | { kind: 'start-turn'; prompt: string; hidden?: boolean; images?: AgentImage[] }
   | { kind: 'interrupt' }
   | { kind: 'interaction-response'; id: string; response: InteractionResponse }
   | { kind: 'query'; id: string; name: string; args?: Record<string, unknown> }

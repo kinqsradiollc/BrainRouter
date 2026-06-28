@@ -125,6 +125,48 @@ test('buildChatCompletionPayload: preserves waited child outputs as high-authori
   assert.equal(body.messages[1].content, 'synthesize');
 });
 
+test('buildChatCompletionPayload: a user turn with sidecar images becomes multi-part image_url content (vision)', () => {
+  const body = buildChatCompletionPayload(
+    { provider: 'openai-compatible', apiKey: 'k', model: 'gpt-4o', endpoint: 'https://gateway.example/v1' },
+    [
+      { role: 'user', content: 'what is in this screenshot?', images: [{ mediaType: 'image/png', dataBase64: 'iVBORw0KAAAA' }] },
+    ],
+    [],
+  );
+  const userMsg = body.messages[body.messages.length - 1];
+  assert.equal(userMsg.role, 'user');
+  // text stays a string token; the image rides as an OpenAI image_url data-URL part.
+  assert.deepEqual(userMsg.content, [
+    { type: 'text', text: 'what is in this screenshot?' },
+    { type: 'image_url', image_url: { url: 'data:image/png;base64,iVBORw0KAAAA' } },
+  ]);
+});
+
+test('buildChatCompletionPayload: a user turn with NO images keeps plain string content (no regression)', () => {
+  const body = buildChatCompletionPayload(
+    { provider: 'openai-compatible', apiKey: 'k', model: 'gpt-4o', endpoint: 'https://gateway.example/v1' },
+    [{ role: 'user', content: 'plain text only' }],
+    [],
+  );
+  assert.equal(body.messages[body.messages.length - 1].content, 'plain text only');
+});
+
+test('buildResponsesPayload: a user turn with sidecar images becomes input_text + input_image parts (vision)', () => {
+  const body = buildResponsesPayload(
+    { provider: 'openai', apiKey: 'k', model: 'gpt-5', endpoint: 'https://api.openai.com/v1' },
+    [
+      { role: 'user', content: 'describe this', images: [{ mediaType: 'image/jpeg', dataBase64: 'BBBB' }] },
+    ],
+    [],
+  );
+  const userInput = body.input[body.input.length - 1] as { role: string; content: unknown };
+  assert.equal(userInput.role, 'user');
+  assert.deepEqual(userInput.content, [
+    { type: 'input_text', text: 'describe this' },
+    { type: 'input_image', image_url: 'data:image/jpeg;base64,BBBB' },
+  ]);
+});
+
 test('buildResponsesPayload: emits Codex-style developer input/tools and preserves tool-call history', () => {
   const body = buildResponsesPayload(
     { provider: 'openai', apiKey: 'k', model: 'gpt-5', endpoint: 'https://api.openai.com/v1' },

@@ -50,6 +50,35 @@ test('anthropic: system extracted, roles + content blocks translated', () => {
   assert.deepEqual(p.messages[2], { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_1', content: 'a.ts\nb.ts' }] });
 });
 
+test('anthropic: inline image_url parts become base64 image blocks (vision)', () => {
+  const visionUser = {
+    role: 'user' as const,
+    content: [
+      { type: 'text' as const, text: 'what is in this image?' },
+      { type: 'image_url' as const, image_url: { url: 'data:image/png;base64,iVBORw0KAAAA' } },
+    ],
+  };
+  const p = buildAnthropicMessagesPayload(sampleInput({ messages: [visionUser], tools: [] }));
+  assert.deepEqual(p.messages[0].content[0], { type: 'text', text: 'what is in this image?' });
+  assert.deepEqual(p.messages[0].content[1], {
+    type: 'image',
+    source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KAAAA' },
+  });
+});
+
+test('gemini: inline image_url parts become inlineData parts (vision)', () => {
+  const visionUser = {
+    role: 'user' as const,
+    content: [
+      { type: 'text' as const, text: 'what is in this image?' },
+      { type: 'image_url' as const, image_url: { url: 'data:image/jpeg;base64,QkJCQg==' } },
+    ],
+  };
+  const p = buildGeminiGeneratePayload(sampleInput({ messages: [visionUser], tools: [] }));
+  assert.deepEqual(p.contents[0].parts[0], { text: 'what is in this image?' });
+  assert.deepEqual(p.contents[0].parts[1], { inlineData: { mimeType: 'image/jpeg', data: 'QkJCQg==' } });
+});
+
 test('anthropic: tools mapped to input_schema; tool_choice auto by default, forced when requested', () => {
   const auto = buildAnthropicMessagesPayload(sampleInput());
   assert.equal(auto.tools?.[0].name, 'list_files');

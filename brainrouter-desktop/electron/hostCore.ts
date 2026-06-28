@@ -26,6 +26,7 @@ import {
   type AgentCommand,
   type AgentEvent,
   type AgentEventMessage,
+  type AgentImage,
   type InteractionResponse,
 } from '@kinqs/brainrouter-agent-protocol';
 import { subscribeCompletions, pendingCompletionCount, peekCompletions } from '@kinqs/brainrouter-core/dist/session/completionInbox.js';
@@ -40,7 +41,7 @@ import { buildChildResumePrompt } from '@kinqs/brainrouter-core/dist/util/childR
 export interface AgentLike {
   sessionKey: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  runTurn(prompt: string, callbacks: any, opts?: { hiddenPrompt?: boolean }): Promise<string>;
+  runTurn(prompt: string, callbacks: any, opts?: { hiddenPrompt?: boolean; images?: AgentImage[] }): Promise<string>;
   /** DESK-2 — cooperative stop; the turn unwinds at the next boundary. */
   requestInterrupt?(): void;
   // DESK-3 — session lifecycle + model control (all present on the real Agent).
@@ -190,7 +191,7 @@ export function createHostCore(input: {
   // ONLY agent is busy is queued here and applied once its turn unwinds.
   let pendingSwitch: (() => void) | null = null;
 
-  async function startTurn(prompt: string, hidden?: boolean): Promise<void> {
+  async function startTurn(prompt: string, hidden?: boolean, images?: AgentImage[]): Promise<void> {
     const rt = pool.get(activeKey);
     if (!rt) { emit({ kind: 'turn-error', message: 'No active session to run in.' }); return; }
     if (rt.running) {
@@ -220,7 +221,7 @@ export function createHostCore(input: {
     const turnCallbacks = createCallbackBridge(turnEmit) as unknown as Record<string, unknown>;
     turnEmit({ kind: 'turn-start', prompt });
     try {
-      const answer = await rt.agent.runTurn(prompt, turnCallbacks, { hiddenPrompt: hidden });
+      const answer = await rt.agent.runTurn(prompt, turnCallbacks, { hiddenPrompt: hidden, images });
       turnEmit({ kind: 'turn-complete', answer });
       const u = rt.agent.sessionUsage;
       if (u) turnEmit({ kind: 'tokens-updated', promptTokens: u.promptTokens, completionTokens: u.completionTokens, calls: u.calls, turns: u.turns, cachedTokens: u.cachedTokens });
@@ -366,7 +367,7 @@ export function createHostCore(input: {
     switch (cmd.kind) {
       case 'start-turn':
         cancelResume(); // a real user prompt preempts any queued auto-resume
-        await startTurn(cmd.prompt, cmd.hidden);
+        await startTurn(cmd.prompt, cmd.hidden, cmd.images);
         return;
       case 'interrupt': {
         cancelResume(); // user stopped — never auto-resume on top of a stop

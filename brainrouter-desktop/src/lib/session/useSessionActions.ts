@@ -505,10 +505,16 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
   const openExternal = (what: string): void => { q('q-open-external', 'action:open-external', { what }); closeSessionMenu(); };
   const openSessionMenu = (e: React.MouseEvent, key: string, opts?: { row?: SessionRow; root?: string }): void => {
     e.preventDefault(); e.stopPropagation();
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     q('q-session-groups', 'action:session-groups'); // refresh the Move-to-group list
+    // A right-click (contextmenu) opens the menu AT the cursor; the ⋮ button
+    // keeps anchoring just below itself. The contextmenu path also clamps Y so
+    // a right-click near the bottom edge doesn't push the menu off-screen.
+    const isContext = e.type === 'contextmenu';
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const x = Math.min(isContext ? e.clientX : r.left, window.innerWidth - 250);
+    const y = isContext ? Math.min(e.clientY, Math.max(8, window.innerHeight - 340)) : r.bottom + 4;
     // WS-UX — row + root let the menu act on a session in a non-active workspace.
-    setSessionMenu({ key, x: Math.min(r.left, window.innerWidth - 250), y: r.bottom + 4, row: opts?.row, root: opts?.root });
+    setSessionMenu({ key, x, y, row: opts?.row, root: opts?.root });
   };
 
   return {
