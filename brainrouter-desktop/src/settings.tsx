@@ -10,6 +10,7 @@ import { wireBadge, type CommandsCatalog, type DeskCommand, type SettingsSection
 import { Icon } from './icons.js';
 import type { ConnectorCatalogEntry, ConnectorDefinitionBundle, ConnectorRecord, ConnectorRunRecord } from '@kinqs/brainrouter-types';
 import { ProviderIcon } from './components/ProviderIcon.js';
+import { ShortcutsReference } from './components/ShortcutsReference.js';
 
 interface ConnectorSlimPreview {
   id: string;
@@ -1639,6 +1640,9 @@ export function SettingsDialog(props: {
             <Row title="Update check" desc="Check for new BrainRouter versions on launch (cli.updateCheck).">
               <Toggle on={ks('updateCheck', 'true') !== 'false' && knobs.updateCheck !== false} onChange={(v) => setKnob('updateCheck', v)} />
             </Row>
+
+            <div className="set-h2">Keyboard shortcuts</div>
+            <ShortcutsReference />
 
             {/* WS11 — the raw knob editor is collapsed behind a Developer
                 disclosure: most users never need it, and the JSON-valued knobs

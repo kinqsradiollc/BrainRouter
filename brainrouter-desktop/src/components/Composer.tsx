@@ -15,6 +15,7 @@ import { modelCapabilities, capabilityBadges } from '../lib/models/modelCapabili
 import type { AttachmentUpload, PopId } from '../types.js';
 import type { DeskCommand, SettingsSection } from '../lib/commands/commands.js';
 import { recognizedCommandToken } from '../lib/composer/slashHighlight.js';
+import { usePlatform } from '../lib/shortcuts/shortcuts.js';
 
 export interface ComposerProps {
   draft: string;
@@ -82,6 +83,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
     hasConversation, contextUsage, tokens, openSettings, onAttach, attachments = [], onClearAttachment, canSubmit = false,
     pastedImages = [], onPasteImages, onClearPastedImage,
   } = p;
+  const { fmt } = usePlatform(); // §shortcuts — OS-correct menu hint glyphs
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
   const mirrorRef = React.useRef<HTMLDivElement | null>(null);
@@ -213,7 +215,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
           <span className="pop-wrap">
             {pop === 'mode' ? (
               <div className="menu-pop left">
-                <div className="menu-head"><span>Mode</span><span>⇧⌃M</span></div>
+                <div className="menu-head"><span>Mode</span><span>{fmt('Mod+Shift+M')}</span></div>
                 {([['Plan mode', 'planning', 'request', '1'], ['Accept edits', 'fast', 'request', '2'], ['Auto mode', 'fast', 'proceed', '3']] as const).map(([label, em, rp, num]) => (
                   <button key={label} className="menu-item" onClick={() => {
                     q('a-mode', 'action:set-session-mode', { executionMode: em, reviewPolicy: rp });
@@ -303,7 +305,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
                     .filter((g) => g.models.length);
                   return (
                     <>
-                      <div className="menu-head"><span>Models{chatModels.length ? ` · ${chatModels.length} on endpoint` : ''}</span><span>⇧⌃I</span></div>
+                      <div className="menu-head"><span>Models{chatModels.length ? ` · ${chatModels.length} on endpoint` : ''}</span><span>{fmt('Mod+Shift+I')}</span></div>
                       <div className="model-list model-list-endpoint">
                         {modelsLoading && !endpointModels.length ? (
                           <div className="empty" style={{ padding: '4px 9px' }}>Loading models…</div>

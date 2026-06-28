@@ -17,6 +17,7 @@ import { SESSION_BASE } from './lib/session/sessionPagination.js';
 import { mergeOptimistic } from './lib/session/sessionOrder.js';
 import { setEntry } from './lib/review/reviewWorkspace.js';
 import { usePanels } from './lib/panels/usePanels.js';
+import { detectOS } from './lib/shortcuts/shortcuts.js';
 import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
 import { tagQueryId } from './lib/workspace/workspaceEvents.js';
 import { duplicateTitleKeys } from './lib/session/sessionDisplay.js';
@@ -350,8 +351,8 @@ export function App(): React.ReactElement {
   // T4 — panel/dock state + handlers live in usePanels (q injected so ensurePanel
   // can refresh worktrees/review on open).
   const {
-    sideTabs, activeSideTab, sidePanelOpen, sideWidth, sideFullScreen, termDockOpen, termDockHeight, termTabs, activeTerm,
-    setSideTabs, setActiveSideTab, setSidePanelOpen, setSideWidth, setSideFullScreen, setTermDockOpen, setTermDockHeight, setTermTabs, setActiveTerm,
+    sideTabs, activeSideTab, sidePanelOpen, sideWidth, sideFullScreen, sidePinned, termDockOpen, termDockHeight, termTabs, activeTerm,
+    setSideTabs, setActiveSideTab, setSidePanelOpen, setSideWidth, setSideFullScreen, setSidePinned, setTermDockOpen, setTermDockHeight, setTermTabs, setActiveTerm,
     ensurePanel, closeSideTab, reorderSideTab, togglePanel, openSideView, openBottomDock, addBottomTab, closeBottomTab, resizeTerminal, resetTermDock,
   } = usePanels(q);
 
@@ -629,6 +630,21 @@ export function App(): React.ReactElement {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // §panel-drawer — Esc closes the drawer (only when unpinned). Skipped while
+  // focus is in the composer / an input, where Esc has its own meaning (e.g.
+  // stopping a turn) so a quick Esc there never also dismisses the panel.
+  useEffect(() => {
+    if (!sidePanelOpen || sidePinned) return;
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const ae = document.activeElement as HTMLElement | null;
+      if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.closest('.composer'))) return;
+      setSidePanelOpen(false);
+    };
+    window.addEventListener('keydown', onEsc);
+    return () => window.removeEventListener('keydown', onEsc);
+  }, [sidePanelOpen, sidePinned, setSidePanelOpen]);
+
   useEffect(() => {
     document.documentElement.style.setProperty('--mono',
       codeFont.trim() ? `"${codeFont.trim()}", "SF Mono", Consolas, monospace` : '"SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace');
@@ -638,7 +654,9 @@ export function App(): React.ReactElement {
   useEffect(() => {
     // DESK-5m — mark macOS so the rail can reserve the traffic-light strip
     // (the frameless hiddenInset window puts the lights over the top-left).
-    if (/Mac/i.test(navigator.platform) || /Mac/i.test(navigator.userAgent)) document.documentElement.dataset.os = 'mac';
+    // §shortcuts — expose the OS (mac/windows/linux) so CSS and the shortcut
+    // formatter render platform-correct keys (was mac-only for the traffic lights).
+    document.documentElement.dataset.os = detectOS();
     document.documentElement.dataset.theme = theme;
     localStorage.setItem('br-desktop-theme', theme);
   }, [theme]);
@@ -1215,8 +1233,11 @@ export function App(): React.ReactElement {
         {mode === 'track' ? (
           <div className="workrow track-workrow" ref={workrowRef}>
             <TrackView project={track.project} items={track.items} sprints={track.sprints} automations={track.automations} members={track.members} sync={track.sync} git={track.git} pr={track.pr} ops={trackOps} railOpen={railOpen} onOpenRail={() => setRailOpen(true)} />
+            {sidePanelOpen && !sidePinned && !sideFullScreen ? (
+              <div className="side-scrim" onClick={() => setSidePanelOpen(false)} aria-hidden="true" />
+            ) : null}
             <ViewsRail sideAnim={sideAnim} sideWidth={sideWidth} setSideWidth={setSideWidth} sideFullScreen={sideFullScreen}
-              setSidePanelOpen={setSidePanelOpen}
+              setSidePanelOpen={setSidePanelOpen} sidePinned={sidePinned} setSidePinned={setSidePinned}
               activeSideTab={activeSideTab} sideTabs={sideTabs} setActiveSideTab={setActiveSideTab} closeSideTab={closeSideTab} reorderSideTab={reorderSideTab}
               tabTitle={tabTitle}
               renderPanelBody={renderPanelBody} openSideView={openSideView} lastPlan={lastPlan} changedFiles={changedFiles}
@@ -1282,8 +1303,13 @@ export function App(): React.ReactElement {
             setTermDockOpen={setTermDockOpen} branches={branches} pop={pop} setPop={setPop} q={q} commitSubjects={commitSubjects} ci={ci}
             openCiPanel={openCiPanel} lastTurnFails={lastTurnFails} backgroundTasks={backgroundTasks} openTask={openTask} />
 
+          {/* §panel-drawer — scrim over the chat when the panel is an unpinned
+              drawer; clicking it (i.e. clicking outside the panel) closes it. */}
+          {sidePanelOpen && !sidePinned && !sideFullScreen ? (
+            <div className="side-scrim" onClick={() => setSidePanelOpen(false)} aria-hidden="true" />
+          ) : null}
           <ViewsRail sideAnim={sideAnim} sideWidth={sideWidth} setSideWidth={setSideWidth} sideFullScreen={sideFullScreen}
-            setSidePanelOpen={setSidePanelOpen}
+            setSidePanelOpen={setSidePanelOpen} sidePinned={sidePinned} setSidePinned={setSidePinned}
             activeSideTab={activeSideTab} sideTabs={sideTabs} setActiveSideTab={setActiveSideTab} closeSideTab={closeSideTab} reorderSideTab={reorderSideTab}
             tabTitle={tabTitle}
             renderPanelBody={renderPanelBody} openSideView={openSideView} lastPlan={lastPlan} changedFiles={changedFiles}

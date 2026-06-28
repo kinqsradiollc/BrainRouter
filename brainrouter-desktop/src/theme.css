@@ -1135,6 +1135,15 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .set-row .grow { flex: 1; min-width: 0; }
 .set-title { font-size: 13px; font-weight: 550; }
 .set-desc { font-size: 12px; color: var(--text-dim); margin-top: 3px; line-height: 1.5; }
+/* §shortcuts — the keyboard-shortcut reference table in Advanced settings. */
+.shortcut-search { width: 100%; box-sizing: border-box; margin: 4px 0 8px; padding: 7px 10px; border-radius: 9px; border: 1px solid var(--ov-08); background: var(--ov-04); color: var(--text); font-size: 13px; outline: 0; }
+.shortcut-search:focus { border-color: var(--accent); }
+.shortcut-search::placeholder { color: var(--text-faint); }
+.shortcut-table { display: flex; flex-direction: column; gap: 12px; }
+.shortcut-group-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-faint); margin-bottom: 4px; }
+.shortcut-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 5px 2px; border-bottom: 1px solid var(--ov-04); }
+.shortcut-action { font-size: 13px; color: var(--text); }
+.shortcut-keys { flex: none; font-family: var(--mono); font-size: 11.5px; color: var(--text); background: var(--raised); border: 1px solid var(--ov-08); border-radius: 6px; padding: 2px 7px; white-space: nowrap; }
 .set-desc code { font-family: var(--mono); font-size: 11.5px; background: var(--raised); padding: 1px 4px; border-radius: 4px; }
 .set-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 .set-error { margin-top: 6px; color: var(--warn); font-size: 12px; line-height: 1.4; }
@@ -2270,6 +2279,19 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
    never clipped; inner bodies own their scrolling */
 .views-rail { position: relative; flex: none; min-width: 240px; border-left: 1px solid var(--ov-08); background: var(--sidebar); padding: 8px 10px 12px; display: flex; flex-direction: column; gap: 2px; animation: sideIn .18s ease-out; container-type: inline-size; container-name: sidepanel; }
 .views-rail.closing { animation: sideOut .16s ease-in forwards; pointer-events: none; }
+/* §panel-drawer — unpinned = a transient overlay drawer anchored to the right of
+   the workrow (removed from layout flow), floating over the chat; the scrim sits
+   over the chat and dismisses the drawer on click. Pinning drops `.drawer` and
+   the panel returns to a docked, resizable, space-taking column. */
+.views-rail.drawer { position: absolute; right: 0; top: 0; bottom: 0; z-index: 40; box-shadow: -18px 0 50px rgba(0,0,0,0.32); }
+.side-scrim { position: absolute; inset: 0; z-index: 39; background: rgba(0,0,0,0.06); animation: fadeIn .14s ease-out; }
+.side-head { gap: 4px; }
+.side-head-title { flex: none; font-size: 12px; font-weight: 600; color: var(--text-dim); padding: 0 4px; }
+.side-back-btn { display: inline-flex; align-items: center; gap: 4px; flex: none; border: 0; background: transparent; color: var(--text-dim); border-radius: 8px; padding: 4px 8px 4px 6px; cursor: pointer; font-size: 12px; font-weight: 520; }
+.side-back-btn:hover { background: var(--ov-06); color: var(--text); }
+.side-head-btn { flex: none; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border: 0; background: transparent; color: var(--text-faint); border-radius: 7px; cursor: pointer; }
+.side-head-btn:hover { background: var(--ov-08); color: var(--text); }
+.side-head-btn.active { color: var(--accent); background: var(--accent-soft); }
 .views-rail.fullscreen { position: absolute; inset: 0; z-index: 50; width: auto; min-width: 0; border-left: 0; border-radius: 0; padding: 8px clamp(12px, 2.2vw, 32px) 12px; box-shadow: -20px 0 60px rgba(0,0,0,0.34); }
 .views-rail.fullscreen .col-grip { display: none; }
 .views-rail.fullscreen .req-panel,
@@ -2303,7 +2325,14 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 .side-body { flex: 1; min-width: 0; min-height: 0; overflow: hidden; padding: 6px 2px 0; animation: fadeIn .15s ease-out; }
 /* `safe center` + scroll: centers when the list fits, but never CLIPS the first
  * item ("Plan") and scrolls when all 16 views overflow the rail height. */
-.side-chooser { flex: 1; display: flex; flex-direction: column; justify-content: safe center; gap: 6px; padding: 8px 2px; overflow-y: auto; animation: fadeIn .15s ease-out; }
+.side-chooser { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; padding: 8px 2px; animation: fadeIn .15s ease-out; }
+/* §panel-search — search box pinned at the top; the launcher list scrolls below. */
+.chooser-search { flex: none; width: 100%; box-sizing: border-box; margin: 0 0 4px; padding: 7px 10px; border-radius: 9px; border: 1px solid var(--ov-08); background: var(--ov-04); color: var(--text); font-size: 13px; outline: 0; }
+.chooser-search:focus { border-color: var(--accent); }
+.chooser-search::placeholder { color: var(--text-faint); }
+.chooser-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.chooser-empty { padding: 14px 8px; color: var(--text-faint); font-size: 12.5px; text-align: center; }
+.side-launcher.sel { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
 .side-chooser-actions { display: flex; justify-content: flex-end; margin-bottom: 4px; }
 .side-chooser .side-launcher { flex: none; }
 /* DESK-5e — the launcher list is the panel's CONTENT: top-aligned, no void */
