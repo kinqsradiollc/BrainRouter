@@ -16,7 +16,26 @@ export type ConnectorSource =
   | "jira"
   | "filesystem"
   | "web"
-  | "mcp";
+  | "mcp"
+  | "notion"
+  | "linear"
+  | "asana"
+  | "clickup"
+  | "discord"
+  | "teams"
+  | "dropbox"
+  | "sharepoint"
+  | "hubspot"
+  | "salesforce"
+  | "zendesk"
+  | "airtable"
+  | "bitbucket"
+  | "gitbook"
+  | "discourse"
+  | "gmail"
+  | "s3"
+  | "gong"
+  | "fireflies";
 
 export const CONNECTOR_SOURCES: readonly ConnectorSource[] = [
   "github",
@@ -28,6 +47,25 @@ export const CONNECTOR_SOURCES: readonly ConnectorSource[] = [
   "filesystem",
   "web",
   "mcp",
+  "notion",
+  "linear",
+  "asana",
+  "clickup",
+  "discord",
+  "teams",
+  "dropbox",
+  "sharepoint",
+  "hubspot",
+  "salesforce",
+  "zendesk",
+  "airtable",
+  "bitbucket",
+  "gitbook",
+  "discourse",
+  "gmail",
+  "s3",
+  "gong",
+  "fireflies",
 ];
 
 export type ConnectorFlow =

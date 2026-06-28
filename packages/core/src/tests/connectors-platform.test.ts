@@ -90,7 +90,7 @@ test('connectorStore rejects unknown sources, empty names, and unsupported flows
       /does not support flow event/,
     );
     assert.throws(
-      () => createConnector(workspace, { source: 'dropbox' as any, name: 'Dropbox' }),
+      () => createConnector(workspace, { source: 'not-a-real-source' as any, name: 'Bogus' }),
       /Unsupported connector source/,
     );
   });
