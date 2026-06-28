@@ -16,6 +16,9 @@ declare global {
       /** Swaps the agent host to this workspace INSIDE the current window.
        *  `needsTrust` is returned when main refused an untrusted workspace. */
       openWorkspace(workspaceRoot: string): Promise<{ opened: boolean; needsTrust?: boolean }>;
+      /** Open a workspace in a SEPARATE window (git worktrees) — never swaps the
+       *  current window's active workspace / projects / chat. */
+      openWorkspaceWindow(workspaceRoot: string): Promise<{ opened: boolean; needsTrust?: boolean }>;
       /** T1 — workspace trust, backed by the shared CLI store (not localStorage). */
       isWorkspaceTrusted(workspaceRoot: string): Promise<{ trusted: boolean }>;
       trustWorkspace(workspaceRoot: string): Promise<{ trusted: boolean }>;

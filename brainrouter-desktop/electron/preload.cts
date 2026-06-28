@@ -32,6 +32,11 @@ contextBridge.exposeInMainWorld('brainrouter', {
   openWorkspace(workspaceRoot: string): Promise<{ opened: boolean; needsTrust?: boolean }> {
     return ipcRenderer.invoke('workspace:open', workspaceRoot);
   },
+  // Open a workspace in a SEPARATE window (git worktrees) — never swaps the
+  // current window's active workspace / projects / chat.
+  openWorkspaceWindow(workspaceRoot: string): Promise<{ opened: boolean; needsTrust?: boolean }> {
+    return ipcRenderer.invoke('workspace:open-window', workspaceRoot);
+  },
   // T1 — workspace trust, backed by the shared CLI store (not localStorage).
   isWorkspaceTrusted(workspaceRoot: string): Promise<{ trusted: boolean }> {
     return ipcRenderer.invoke('workspace:isTrusted', workspaceRoot);

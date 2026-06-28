@@ -33,6 +33,11 @@ contextBridge.exposeInMainWorld('brainrouter', {
     openWorkspace(workspaceRoot) {
         return ipcRenderer.invoke('workspace:open', workspaceRoot);
     },
+    // Open a workspace in a SEPARATE window (git worktrees) — never swaps the
+    // current window's active workspace / projects / chat.
+    openWorkspaceWindow(workspaceRoot) {
+        return ipcRenderer.invoke('workspace:open-window', workspaceRoot);
+    },
     // T1 — workspace trust, backed by the shared CLI store (not localStorage).
     isWorkspaceTrusted(workspaceRoot) {
         return ipcRenderer.invoke('workspace:isTrusted', workspaceRoot);
