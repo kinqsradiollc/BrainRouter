@@ -904,8 +904,8 @@ export function SettingsDialog(props: {
         <>
           <div className="set-h">General</div>
           <div className="set-desc" style={{ marginBottom: 6 }}>Model &amp; providers moved to their own <b>Models</b> section.</div>
-          <Row title="Reasoning effort" desc="low = terse, medium = default, high = step-by-step, xhigh = maximum. Forwarded to provider reasoning slots when the model supports it. (/effort)">
-            <Select value={ps('effort', 'medium')} options={['low', 'medium', 'high', 'xhigh']} onChange={(v) => props.onPref('effort', v)} />
+          <Row title="Reasoning effort" desc="low = terse, medium = default, high = step-by-step, xhigh = maximum. max / ultracode are Claude's top slider tiers (they cap to maximum on the wire). Forwarded to provider reasoning slots when the model supports it. (/effort)">
+            <Select value={ps('effort', 'medium')} options={['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']} onChange={(v) => props.onPref('effort', v)} />
           </Row>
           <Row title="Personality" desc="Communication style for the agent's prose. (/personality)">
             <Select value={ps('personality', 'standard')} options={['concise', 'standard', 'detailed', 'pair-programmer']} onChange={(v) => props.onPref('personality', v)} />

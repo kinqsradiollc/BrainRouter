@@ -1,0 +1,151 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { reasoningProfileForModel, reasoningPillLabel, sliderIndexForEffort, effortAtSliderFraction } from './reasoningProfile.js';
+
+test('generic graded reasoners (GPT-5, GLM, Qwen3, DeepSeek) offer Low/Medium/High, no Extra high', () => {
+  // Claude is special-cased with its own extended scale — covered separately below.
+  for (const model of ['gpt-5', 'z-ai/glm-4.6', 'qwen3-30b-a3b', 'deepseek-v3.2', 'magistral-small']) {
+    const p = reasoningProfileForModel(model);
+    assert.equal(p.kind, 'graded', model);
+    assert.deepEqual(p.options.map((o) => o.level), ['low', 'medium', 'high'], model);
+    assert.equal(p.xhigh, false, model);
+    assert.equal(p.min, 'low', model);
+    assert.equal(p.lockedLabel, null, model);
+  }
+});
+
+test('the family is carried on the profile (for the icon / label)', () => {
+  assert.equal(reasoningProfileForModel('claude-opus-4-8').family, 'claude');
+  assert.equal(reasoningProfileForModel('z-ai/glm-4.6').family, 'chatglm');
+});
+
+test('xhigh-capable models (gpt-5.2+, codex-max) add the Extra high tier', () => {
+  for (const model of ['gpt-5.2', 'gpt-5.5-codex', 'gpt-5.1-codex-max']) {
+    const p = reasoningProfileForModel(model);
+    assert.equal(p.kind, 'graded', model);
+    assert.equal(p.xhigh, true, model);
+    assert.deepEqual(p.options.map((o) => o.level), ['low', 'medium', 'high', 'xhigh'], model);
+  }
+});
+
+test('non-reasoning models (gpt-4o, *-chat) have no reasoning control', () => {
+  for (const model of ['gpt-4o', 'gpt-4o-mini', 'chatgpt-4o-latest', 'gpt-4.1', 'deepseek-chat', 'gpt-5-chat-latest']) {
+    const p = reasoningProfileForModel(model);
+    assert.equal(p.kind, 'none', model);
+    assert.deepEqual(p.options, [], model);
+    assert.equal(p.min, 'medium', model);
+  }
+});
+
+test('always-on reasoners (deepseek-reasoner) lock the control', () => {
+  const p = reasoningProfileForModel('deepseek-reasoner');
+  assert.equal(p.kind, 'always-on');
+  assert.deepEqual(p.options, []);
+  assert.equal(p.lockedLabel, 'Always on');
+  assert.equal(p.min, 'medium');
+});
+
+test('binary on/off models (gemma-qat) offer Off / On', () => {
+  const p = reasoningProfileForModel('gemma-3-12b-qat');
+  assert.equal(p.kind, 'binary');
+  assert.deepEqual(p.options, [
+    { level: 'medium', label: 'Off' },
+    { level: 'high', label: 'On' },
+  ]);
+});
+
+test('an unknown chat model falls back to graded (broad, accept-and-ignore — no regression)', () => {
+  const p = reasoningProfileForModel('some-local-finetune-v9');
+  assert.equal(p.kind, 'graded');
+  assert.equal(p.xhigh, false);
+});
+
+test('an empty/undefined model has no control (nothing selected yet)', () => {
+  assert.equal(reasoningProfileForModel('').kind, 'none');
+  assert.equal(reasoningProfileForModel(undefined).kind, 'none');
+});
+
+test('reasoningPillLabel reflects the family + Fast state', () => {
+  const graded = reasoningProfileForModel('gpt-5.2');
+  assert.equal(reasoningPillLabel(graded, 'high', false), 'High');
+  assert.equal(reasoningPillLabel(graded, 'xhigh', false), 'Extra high');
+  assert.equal(reasoningPillLabel(graded, 'high', true), 'Fast', 'Fast overrides the visible label');
+
+  const binary = reasoningProfileForModel('gemma-3-12b-qat');
+  assert.equal(reasoningPillLabel(binary, 'medium', false), 'Off');
+  assert.equal(reasoningPillLabel(binary, 'high', false), 'On');
+
+  const onlyOn = reasoningProfileForModel('deepseek-reasoner');
+  assert.equal(reasoningPillLabel(onlyOn, 'medium', false), 'Always on');
+
+  const none = reasoningProfileForModel('gpt-4o');
+  assert.equal(reasoningPillLabel(none, 'medium', false), null, 'no pill for non-reasoning models');
+});
+
+test('sliderIndexForEffort maps the active effort to its stop on the track', () => {
+  const g4 = reasoningProfileForModel('gpt-5.2'); // [low, medium, high, xhigh]
+  assert.equal(sliderIndexForEffort(g4, 'low'), 0);
+  assert.equal(sliderIndexForEffort(g4, 'medium'), 1);
+  assert.equal(sliderIndexForEffort(g4, 'high'), 2);
+  assert.equal(sliderIndexForEffort(g4, 'xhigh'), 3);
+
+  const g3 = reasoningProfileForModel('gpt-5'); // [low, medium, high] (no xhigh)
+  assert.equal(sliderIndexForEffort(g3, 'xhigh'), 2, 'xhigh on a non-xhigh model clamps to the top stop');
+
+  const bin = reasoningProfileForModel('gemma-3-12b-qat'); // [Off=medium, On=high]
+  assert.equal(sliderIndexForEffort(bin, 'medium'), 0, 'Off');
+  assert.equal(sliderIndexForEffort(bin, 'high'), 1, 'On');
+  assert.equal(sliderIndexForEffort(bin, 'low'), 1, 'any non-medium effort reads as On');
+});
+
+test('effortAtSliderFraction snaps a drag position to the nearest stop', () => {
+  const g4 = reasoningProfileForModel('gpt-5.2'); // 4 stops
+  assert.equal(effortAtSliderFraction(g4, 0), 'low');
+  assert.equal(effortAtSliderFraction(g4, 1), 'xhigh');
+  assert.equal(effortAtSliderFraction(g4, 0.33), 'medium', 'round(0.99) → stop 1');
+  assert.equal(effortAtSliderFraction(g4, 0.66), 'high', 'round(1.98) → stop 2');
+  assert.equal(effortAtSliderFraction(g4, -0.5), 'low', 'clamped past the left edge');
+  assert.equal(effortAtSliderFraction(g4, 2), 'xhigh', 'clamped past the right edge');
+
+  const bin = reasoningProfileForModel('gemma-3-12b-qat'); // 2 stops
+  assert.equal(effortAtSliderFraction(bin, 0.2), 'medium', 'left half → Off');
+  assert.equal(effortAtSliderFraction(bin, 0.8), 'high', 'right half → On');
+
+  assert.equal(effortAtSliderFraction(reasoningProfileForModel('gpt-4o'), 0.5), null, 'no stops → null');
+});
+
+test('Claude Opus gets the extended 6-tier scale (Low … Extra, Max, Ultracode)', () => {
+  const p = reasoningProfileForModel('claude-opus-4-8');
+  assert.equal(p.family, 'claude');
+  assert.equal(p.kind, 'graded');
+  assert.deepEqual(p.options.map((o) => o.label), ['Low', 'Medium', 'High', 'Extra', 'Max', 'Ultracode']);
+  assert.deepEqual(p.options.map((o) => o.level), ['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']);
+});
+
+test('other Claude models top out at Max (5 tiers, no Ultracode)', () => {
+  for (const m of ['claude-sonnet-4-6', 'claude-haiku-4-5', 'anthropic/claude-3-7-sonnet']) {
+    const p = reasoningProfileForModel(m);
+    assert.deepEqual(p.options.map((o) => o.label), ['Low', 'Medium', 'High', 'Extra', 'Max'], m);
+    assert.equal(p.options.some((o) => o.level === 'ultracode'), false, m);
+  }
+});
+
+test('reasoningPillLabel shows the Claude tier label (Extra, not "Extra high")', () => {
+  const opus = reasoningProfileForModel('claude-opus-4-8');
+  assert.equal(reasoningPillLabel(opus, 'ultracode', false), 'Ultracode');
+  assert.equal(reasoningPillLabel(opus, 'max', false), 'Max');
+  assert.equal(reasoningPillLabel(opus, 'xhigh', false), 'Extra');
+  assert.equal(reasoningPillLabel(opus, 'high', false), 'High');
+  assert.equal(reasoningPillLabel(opus, 'ultracode', true), 'Fast', 'Fast still overrides');
+});
+
+test('slider math spans the Claude scales (and clamps ultracode on non-opus)', () => {
+  const opus = reasoningProfileForModel('claude-opus-4-8'); // 6 stops
+  assert.equal(sliderIndexForEffort(opus, 'ultracode'), 5);
+  assert.equal(sliderIndexForEffort(opus, 'xhigh'), 3);
+  assert.equal(effortAtSliderFraction(opus, 1), 'ultracode');
+  assert.equal(effortAtSliderFraction(opus, 0.8), 'max', 'round(4.0) → Max');
+
+  const sonnet = reasoningProfileForModel('claude-sonnet-4-6'); // 5 stops, no ultracode
+  assert.equal(sliderIndexForEffort(sonnet, 'ultracode'), 4, 'ultracode clamps to Max on non-opus Claude');
+});
