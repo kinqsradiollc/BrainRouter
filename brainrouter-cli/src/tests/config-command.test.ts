@@ -75,9 +75,13 @@ test('listProviderRequestFormatRows keys saved providers by runtime provider id'
 test('applyProviderRequestFormat persists lowercase overrides and default clears only that key', () => {
   const cfg = emptyConfig();
   cfg.cli = { providerRequestFormat: { openrouter: 'chat-completions' } };
-  assert.deepEqual(WIRE_FORMAT_OPTIONS, ['default', 'chat-completions', 'responses']);
+  assert.deepEqual(WIRE_FORMAT_OPTIONS, ['default', 'chat-completions', 'responses', 'anthropic-messages', 'gemini-generate']);
   assert.deepEqual(applyProviderRequestFormat(cfg, 'OpenAI', 'responses'), { ok: true });
   assert.deepEqual(cfg.cli.providerRequestFormat, { openrouter: 'chat-completions', openai: 'responses' });
+  // Native wire formats persist for their providers too.
+  assert.deepEqual(applyProviderRequestFormat(cfg, 'Anthropic', 'anthropic-messages'), { ok: true });
+  assert.equal(cfg.cli.providerRequestFormat?.anthropic, 'anthropic-messages');
+  assert.deepEqual(applyProviderRequestFormat(cfg, 'anthropic', 'default'), { ok: true });
 
   assert.deepEqual(applyProviderRequestFormat(cfg, 'openai', 'default'), { ok: true });
   assert.deepEqual(cfg.cli.providerRequestFormat, { openrouter: 'chat-completions' });
