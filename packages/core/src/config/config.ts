@@ -125,6 +125,11 @@ export interface ResolvedAutomationKnobs {
   };
 }
 
+/** Per-provider generation wire format. The two OpenAI shapes plus the native
+ *  (non-OpenAI-compatible) Anthropic Messages and Gemini generateContent APIs.
+ *  Native formats are opt-in via `cli.providerRequestFormat`. */
+export type ProviderWireFormat = 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate';
+
 export interface CliKnobs {
   // ---- planning / orchestration -----------------------------------------
   /**
@@ -545,7 +550,7 @@ export interface CliKnobs {
    * key sets, edit `config.json` directly; in-process overrides are for
    * single-key tests/scripts.
    */
-  providerRequestFormat?: Record<string, 'responses' | 'chat-completions'>;
+  providerRequestFormat?: Record<string, ProviderWireFormat>;
 }
 
 /**
@@ -894,9 +899,9 @@ export interface ResolvedCliKnobs {
   workspaceOverride?: string;
   maxOutputTokens?: number;
   /** PER-PROVIDER WIRE-FORMAT OVERRIDE — validated subset of
-   *  `CliKnobs.providerRequestFormat`; entries whose value isn't strictly
-   *  `'responses'` or `'chat-completions'` are dropped on resolve. */
-  providerRequestFormat: Record<string, 'responses' | 'chat-completions'>;
+   *  `CliKnobs.providerRequestFormat`; entries whose value isn't one of the
+   *  accepted `ProviderWireFormat` literals are dropped on resolve. */
+  providerRequestFormat: Record<string, ProviderWireFormat>;
 }
 
 function unitInterval(value: unknown, fallback: number): number {
@@ -905,16 +910,17 @@ function unitInterval(value: unknown, fallback: number): number {
 
 /** Reduce a raw `providerRequestFormat` to its validated subset.
  *  - non-object input → empty map (fail-safe)
- *  - values other than the two accepted literals → dropped
+ *  - values other than the accepted `ProviderWireFormat` literals → dropped
  *  - keys are preserved lowercased so lookups under `provider` ids are stable. */
-function normalizeProviderRequestFormat(input: unknown): Record<string, 'responses' | 'chat-completions'> {
+const PROVIDER_WIRE_FORMATS: readonly ProviderWireFormat[] = ['responses', 'chat-completions', 'anthropic-messages', 'gemini-generate'];
+function normalizeProviderRequestFormat(input: unknown): Record<string, ProviderWireFormat> {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
-  const out: Record<string, 'responses' | 'chat-completions'> = {};
+  const out: Record<string, ProviderWireFormat> = {};
   for (const [rawKey, rawValue] of Object.entries(input as Record<string, unknown>)) {
     const key = typeof rawKey === 'string' ? rawKey.trim().toLowerCase() : '';
     if (!key) continue;
-    if (rawValue === 'responses' || rawValue === 'chat-completions') {
-      out[key] = rawValue;
+    if (typeof rawValue === 'string' && (PROVIDER_WIRE_FORMATS as readonly string[]).includes(rawValue)) {
+      out[key] = rawValue as ProviderWireFormat;
     }
   }
   return out;

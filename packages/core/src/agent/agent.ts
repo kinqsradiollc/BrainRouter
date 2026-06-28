@@ -20,6 +20,11 @@ import { unsynthesizedChildIds, mergePendingChildIds, buildPendingChildStatusHin
 import { isChildSynthesisTool, resultHasChildOutput, looksLikeChildSynthesisPunt } from '../util/synthesisGuard.js';
 import { sanitizeModelArtifacts } from '../util/outputSanitize.js';
 import { buildPromptLayers, buildSystemPrompt, loadWorkspaceInstructionSummary, type PromptLayers } from '../prompt/systemPrompt.js';
+import {
+  buildAnthropicMessagesPayload, normalizeAnthropicOutput, ANTHROPIC_DEFAULT_MAX_TOKENS,
+  buildGeminiGeneratePayload, normalizeGeminiOutput, nativeRequestSpec,
+  type NativeBuildInput, type NativeOutput, type NativeRequestFormat,
+} from './nativeProviders.js';
 import { formatPlan, readPlan, updatePlan, type PlanState } from '../task/taskStore.js';
 import { createRequirement, getRequirement, linkRequirement, listRequirements, updateRequirement } from '../requirement/requirementStore.js';
 import { detectRequirementShapedPrompt } from '../requirement/requirementDetector.js';
@@ -5593,7 +5598,7 @@ function binaryEffortValueMapFor(def: ProviderDefinition | undefined): ProviderD
   return undefined;
 }
 
-export type LlmRequestFormat = 'responses' | 'chat-completions';
+export type LlmRequestFormat = 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate';
 
 function modelSupportsResponsesFormat(model: string | undefined): boolean {
   const id = normalizeModelName(model ?? '');
@@ -5615,6 +5620,10 @@ export function resolveRequestFormat(config: LLMConfig, effectiveEndpoint?: stri
   const override = getCliKnobs().providerRequestFormat[providerId];
   const builtIn = def?.requestFormat ?? 'chat-completions';
   const allowedFormat = override ?? builtIn;
+  // NATIVE (non-OpenAI-compatible) formats are an explicit opt-in — honor them
+  // directly. They carry their own URL/headers/payload (see nativeProviders.ts)
+  // and bypass the Responses/Chat gating below entirely.
+  if (allowedFormat === 'anthropic-messages' || allowedFormat === 'gemini-generate') return allowedFormat;
   if (allowedFormat !== 'responses') return 'chat-completions';
   const builtInEndpoint = def?.endpoint;
   const endpoint = effectiveEndpoint || config.endpoint || builtInEndpoint || 'https://api.openai.com/v1';
@@ -6125,6 +6134,110 @@ function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+/**
+ * Translate the agent's internal messages/tools into the input a native
+ * (non-OpenAI) provider builder expects. Reuses the SAME proven normalization
+ * the chat-completions path uses (`expandPromptLayersForChatCompletions` +
+ * `mapChatCompletionMessage`), then peels the leading system message off as the
+ * provider `system` text. Keeping this here means `nativeProviders.ts` only ever
+ * sees OpenAI-clean messages and stays a pure shape-translator.
+ */
+function buildNativeInput(
+  format: NativeRequestFormat,
+  config: LLMConfig,
+  messages: any[],
+  tools: any[],
+  options: BuildPayloadOptions,
+): NativeBuildInput {
+  const mapped = expandPromptLayersForChatCompletions(messages).map(mapChatCompletionMessage);
+  let system = '';
+  let rest = mapped;
+  if (mapped[0]?.role === 'system') {
+    system = String(mapped[0].content ?? '');
+    rest = mapped.slice(1);
+  }
+  const maxOutput = getCliKnobs().maxOutputTokens;
+  const userMax = typeof maxOutput === 'number' && maxOutput > 0 ? Math.floor(maxOutput) : undefined;
+  // Anthropic REQUIRES max_tokens; fall back to the conservative default. Gemini
+  // has its own server default, so only forward an explicit user cap.
+  const maxTokens = format === 'anthropic-messages' ? (userMax ?? ANTHROPIC_DEFAULT_MAX_TOKENS) : userMax;
+  return {
+    model: config.model,
+    system,
+    messages: rest,
+    tools: tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
+    toolChoice: options.tool_choice,
+    maxTokens,
+  };
+}
+
+/**
+ * Issue ONE native-format LLM call (Anthropic Messages / Gemini generateContent)
+ * and return the same `{ content, toolCalls?, usage?, finishReason? }` shape as
+ * `callOpenAI`. Mirrors `callOpenAI`'s timeout / abort / semaphore / Retry-After
+ * handling so the resilient loop classifies failures identically. The OpenAI and
+ * Responses paths are untouched — this only runs when a provider is opted into a
+ * native format via `cli.providerRequestFormat`.
+ */
+async function callNativeProvider(
+  format: NativeRequestFormat,
+  config: LLMConfig,
+  endpoint: string,
+  apiKey: string,
+  messages: any[],
+  tools: any[],
+  options: BuildPayloadOptions,
+): Promise<NativeOutput> {
+  const buildInput = buildNativeInput(format, config, messages, tools, options);
+  const body = format === 'anthropic-messages'
+    ? buildAnthropicMessagesPayload(buildInput)
+    : buildGeminiGeneratePayload(buildInput);
+  const { url, headers } = nativeRequestSpec(format, endpoint, config.model, apiKey);
+
+  const prefixFingerprint = computePrefixFingerprint(messages, tools);
+  traceEvent('llm_call.prefix_fingerprint', {
+    model: config.model,
+    endpoint,
+    requestFormat: format,
+    prefixFingerprint,
+    promptMessages: buildInput.messages.length,
+    toolCount: tools.length,
+  });
+
+  const timeoutMs = getCliKnobs().llmTimeoutMs;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const fetchSignal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
+  const release = await acquireLLMSlot();
+  let res: Response;
+  try {
+    res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: fetchSignal });
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      if (options.signal?.aborted) throw new InterruptError();
+      throw new Error(`LLM request timed out after ${timeoutMs}ms. Check that ${endpoint} answers ${format} requests for model "${config.model}".`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+    release();
+  }
+
+  if (!res.ok) {
+    const errText = await res.text();
+    const apiErr: any = new Error(`${format} API error: ${res.status} ${res.statusText} - ${errText}`);
+    apiErr.status = res.status;
+    const retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'));
+    if (retryAfterMs !== undefined) apiErr.retryAfterMs = retryAfterMs;
+    throw apiErr;
+  }
+
+  const data = await res.json() as any;
+  return format === 'anthropic-messages'
+    ? normalizeAnthropicOutput(data, endpoint, config.model)
+    : normalizeGeminiOutput(data, endpoint, config.model);
+}
+
 export async function callOpenAI(
   config: LLMConfig,
   messages: any[],
@@ -6162,6 +6275,10 @@ export async function callOpenAI(
   }
 
   const requestFormat = resolveRequestFormat(effectiveConfig, endpoint);
+  // NATIVE formats carry their own URL/headers/payload — hand off and return.
+  if (requestFormat === 'anthropic-messages' || requestFormat === 'gemini-generate') {
+    return callNativeProvider(requestFormat, effectiveConfig, endpoint, apiKey, messages, tools, options);
+  }
   const body = requestFormat === 'responses'
     ? buildResponsesPayload(effectiveConfig, messages, tools, options)
     : buildChatCompletionPayload(effectiveConfig, messages, tools, options);
@@ -6367,6 +6484,14 @@ export async function callOpenAIStream(
   }
 
   const requestFormat = resolveRequestFormat(effectiveConfig, endpoint);
+  // NATIVE formats don't stream here — issue the non-streaming native call and
+  // surface its text as a single delta so the UI still paints. (Provider-native
+  // SSE is a future enhancement; correctness first while these are opt-in.)
+  if (requestFormat === 'anthropic-messages' || requestFormat === 'gemini-generate') {
+    const result = await callNativeProvider(requestFormat, effectiveConfig, endpoint, apiKey, messages, tools, options);
+    if (result.content) handlers.onTextDelta?.(result.content);
+    return result;
+  }
   const body: any = requestFormat === 'responses'
     ? buildResponsesPayload(effectiveConfig, messages, tools, options)
     : buildChatCompletionPayload(effectiveConfig, messages, tools, options);

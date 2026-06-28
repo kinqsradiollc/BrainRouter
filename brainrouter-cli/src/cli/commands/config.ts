@@ -77,7 +77,7 @@ export function listKnownConfigKeys(): string[] {
   return Object.keys(KEY_HANDLERS);
 }
 
-export const WIRE_FORMAT_OPTIONS = ['default', 'chat-completions', 'responses'] as const;
+export const WIRE_FORMAT_OPTIONS = ['default', 'chat-completions', 'responses', 'anthropic-messages', 'gemini-generate'] as const;
 export type WireFormatOption = (typeof WIRE_FORMAT_OPTIONS)[number];
 export type WireFormatOverride = Exclude<WireFormatOption, 'default'>;
 
@@ -1064,7 +1064,9 @@ export async function promptBrainrouterApiKey(
  *
  * Each pick:
  *   1. Provider id — builtin or configured custom provider (deduped).
- *   2. Wire format — `(default)` | `chat-completions` | `responses`.
+ *   2. Wire format — `(default)` | `chat-completions` | `responses` |
+ *      `anthropic-messages` | `gemini-generate` (the last two are native,
+ *      non-OpenAI-compatible, for the Anthropic/Gemini providers).
  * Picking `(default)` removes the provider's key from the map; the others
  * set it. Persists through `saveConfig` so CLI and Desktop share the same
  * `cli.providerRequestFormat` map.
@@ -1102,11 +1104,13 @@ async function editWireFormat(ctx: CommandContext): Promise<boolean> {
     const formatRow = await pickFromList({
       theme,
       title: `Wire format → ${picked.id}`,
-      subtitle: 'Built-in routing uses Responses where the provider declares it (canonical OpenAI today). "chat-completions" forces /v1/chat/completions; "responses" forces /v1/responses (and bypasses the canonical-endpoint guard — your endpoint asserts it accepts Responses).',
+      subtitle: 'Built-in routing uses Responses where the provider declares it (canonical OpenAI today). "chat-completions" forces /v1/chat/completions; "responses" forces /v1/responses; the native formats speak Anthropic/Gemini directly (non-OpenAI-compatible) — use only for those providers with a real key.',
       rows: [
         { id: 'default',         label: '(default)',         value: 'built-in routing',     description: 'Remove the override for this provider' },
         { id: 'chat-completions', label: 'chat-completions',  value: '/v1/chat/completions', description: 'Always POST chat/completions' },
         { id: 'responses',       label: 'responses',          value: '/v1/responses',        description: 'Always POST responses (assumes your gateway supports it)' },
+        { id: 'anthropic-messages', label: 'anthropic-messages', value: '/v1/messages',       description: 'Native Anthropic Messages API (Anthropic provider only)' },
+        { id: 'gemini-generate',  label: 'gemini-generate',   value: ':generateContent',     description: 'Native Gemini generateContent API (Gemini provider only)' },
       ],
       initialCursor: cursor,
     });

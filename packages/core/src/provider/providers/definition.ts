@@ -32,12 +32,15 @@ export interface ProviderDefinition {
 
   /**
    * Primary generation wire format:
-   *  - 'responses'        — POST /responses with typed `input` items
-   *                         (OpenAI-native Codex shape).
-   *  - 'chat-completions' — POST /chat/completions with layered messages.
-   * Omitted ⇒ 'chat-completions'.
+   *  - 'responses'         — POST /responses with typed `input` items
+   *                          (OpenAI-native Codex shape).
+   *  - 'chat-completions'  — POST /chat/completions with layered messages.
+   *  - 'anthropic-messages'— POST /messages, native Anthropic Messages API.
+   *  - 'gemini-generate'   — POST /models/{model}:generateContent, native Gemini.
+   * Omitted ⇒ 'chat-completions'. The native formats are normally reached via
+   * `cli.providerRequestFormat` opt-in rather than declared as a built-in.
    */
-  requestFormat?: 'responses' | 'chat-completions';
+  requestFormat?: 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate';
 
   /**
    * How this provider handles reasoning depth over `/v1/chat/completions`:
