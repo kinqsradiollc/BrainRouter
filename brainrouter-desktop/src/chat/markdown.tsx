@@ -13,6 +13,24 @@ export const Markdown = ReactMarkdown as unknown as React.ComponentType<{ remark
 
 /** Fenced code blocks render through the same highlighter as the File view. */
 export const MD_COMPONENTS: Record<string, unknown> = {
+  // HOTFIX — links were dead: react-markdown emitted a plain <a href>, but the
+  // renderer can't navigate away (will-navigate denies it) and target=_blank is
+  // blocked, so clicking a PR/CI link did nothing. Route the URL to the host to
+  // open in the system browser; right-click copies it (no menu otherwise).
+  a(props: { href?: string; children?: React.ReactNode }) {
+    const href = props.href ?? '';
+    if (!/^https?:\/\//i.test(href)) return <a href={href}>{props.children}</a>;
+    return (
+      <a href={href} title={`${href} — right-click to copy`}
+        onClick={(e) => {
+          e.preventDefault();
+          try { window.brainrouter?.send?.({ kind: 'query', id: 'q-open-link', name: 'action:open-external', args: { url: href } }); } catch { /* no bridge (dev) */ }
+        }}
+        onContextMenu={(e) => { e.preventDefault(); void navigator.clipboard.writeText(href); }}>
+        {props.children}
+      </a>
+    );
+  },
   code(props: { inline?: boolean; className?: string; children?: React.ReactNode }) {
     const match = /language-([\w-]+)/.exec(props.className ?? '');
     const text = String(props.children ?? '').replace(/\n$/, '');

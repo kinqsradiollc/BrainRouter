@@ -61,13 +61,15 @@ test('resolveRequestFormat: per-provider CLI override flips chat-completions →
 });
 
 test('resolveRequestFormat: per-provider override bypasses canonical-endpoint guard (user assertion wins)', () => {
-  // Without an override, `provider:'openai'` + endpoint OPENROUTER would be
-  // demoted to chat-completions by the canonical-endpoint guard. With an
-  // explicit override, the user is asserting their endpoint accepts Responses,
-  // so the resolver trusts it.
+  // Without an override, `provider:'openai'` + a non-canonical, unregistered
+  // gateway endpoint would be demoted to chat-completions by the canonical-
+  // endpoint guard. With an explicit override, the user is asserting their
+  // endpoint accepts Responses, so the resolver trusts it. (Uses CUSTOM_GATEWAY
+  // rather than openrouter.ai, which is now a registered provider endpoint that
+  // activeProviderDef resolves away from provider:'openai'.)
   setCliKnobOverride({ providerRequestFormat: { openai: 'responses' } });
   assert.equal(
-    resolveRequestFormat({ provider: 'openai', apiKey: 'k', model: 'gpt-5', endpoint: OPENROUTER }),
+    resolveRequestFormat({ provider: 'openai', apiKey: 'k', model: 'gpt-5', endpoint: CUSTOM_GATEWAY }),
     'responses',
   );
   // The same override also unlocks openai-compatible with a custom gateway.

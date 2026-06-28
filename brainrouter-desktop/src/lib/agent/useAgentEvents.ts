@@ -101,6 +101,9 @@ export interface AgentEventsCtx {
   setModelsLoading: React.Dispatch<React.SetStateAction<boolean>>;
   setEndpointModels: React.Dispatch<React.SetStateAction<string[]>>;
   setProviderModels: React.Dispatch<React.SetStateAction<Record<string, string[]>>>;
+  setProbedModels: React.Dispatch<React.SetStateAction<string[]>>;
+  setProbeLoading: React.Dispatch<React.SetStateAction<boolean>>;
+  setProbeError: React.Dispatch<React.SetStateAction<string>>;
   setCatalog: React.Dispatch<React.SetStateAction<CommandsCatalog | null>>;
   setSnapshot: React.Dispatch<React.SetStateAction<ConfigSnapshot | null>>;
   setUsageLines: React.Dispatch<React.SetStateAction<string[]>>;
@@ -191,7 +194,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
     setDraft, planFeedbackRef, goalContPendingRef, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
-    setBranches, setModelsLoading, setEndpointModels, setProviderModels, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
+    setBranches, setModelsLoading, setEndpointModels, setProviderModels, setProbedModels, setProbeLoading, setProbeError, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
     setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
@@ -797,6 +800,36 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           if (r.provider) setProviderModels((prev) => ({ ...prev, [r.provider!]: r.models ?? [] }));
           else setEndpointModels(r.models ?? []);
         }
+        return;
+      }
+      // §multi-select-models — a draft-key probe from the Models setup dialog.
+      // Feeds its OWN state (never endpointModels), so it can't race the on-open
+      // model load. An empty list means the key/endpoint unlocked nothing.
+      case 'q-probe': {
+        setProbeLoading(false);
+        const r = (result && typeof result === 'object') ? result as { models?: string[]; error?: string } : { models: [] };
+        const models = r.models ?? [];
+        setProbedModels(models);
+        // error reason (http-401 = bad key, unreachable = CORS/network) takes
+        // precedence so the dialog can validate the key; else generic no-models.
+        setProbeError(models.length ? '' : ((r as { error?: string }).error || 'no-models'));
+        return;
+      }
+      // §multi-provider — visible feedback (banner) for the Models-panel actions,
+      // so creating/removing/defaulting a provider never silently does nothing.
+      case 'a-setprov': {
+        const r = result as { ok?: boolean; name?: string; error?: string } | null;
+        setToast(r && r.ok ? `✓ Connected ${r.name ?? 'provider'}` : `✗ Couldn't save provider${r?.error ? `: ${r.error}` : ''}`);
+        return;
+      }
+      case 'a-rmprov': {
+        const r = result as { ok?: boolean; name?: string; error?: string } | null;
+        setToast(r && r.ok ? `✓ Removed ${r.name ?? 'provider'}` : `✗ Couldn't remove provider${r?.error ? `: ${r.error}` : ''}`);
+        return;
+      }
+      case 'a-setdefault': {
+        const r = result as { ok?: boolean; error?: string } | null;
+        setToast(r && r.ok ? '✓ Default provider updated' : `✗ Couldn't set default${r?.error ? `: ${r.error}` : ''}`);
         return;
       }
       case 'q-catalog': if (result && typeof result === 'object') setCatalog(result as CommandsCatalog); return;

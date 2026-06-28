@@ -54,7 +54,31 @@ export function resolveAgentLlm(
   const provider = assign.provider ? config.providers?.[assign.provider] : undefined;
   const base = provider ?? baseLlm;
   const model = (assign.model && assign.model.trim()) || base.model;
-  return { ...base, model };
+  const resolved: LLMConfig = { ...base, model };
+  // The multi-select `models` allowlist is a SAVED-provider concept; a resolved/
+  // active LLM carries only provider/key/model/endpoint (mirrors the rule that
+  // `config.llm` never holds the allowlist), so don't let it ride along.
+  delete resolved.models;
+  return resolved;
+}
+
+/**
+ * Reconcile a provider's single default `model` with its multi-select `models`
+ * allowlist (0.4.17 Onyx-parity). Pure; the host's set-provider action and the
+ * tests share this one rule so the invariant "default ∈ models" can't drift:
+ *  - empty/absent/all-blank `models` → `{ model }` only — the legacy
+ *    single-default shape, so no phantom `models: []` is ever persisted.
+ *  - non-empty `models` → trim, drop blanks, dedupe (order preserved); ensure
+ *    the default is a member, falling back to `models[0]` when it isn't.
+ */
+export function normalizeProviderModels(
+  model: string,
+  models: readonly string[] | undefined,
+): { model: string; models?: string[] } {
+  const deduped = [...new Set((models ?? []).map((m) => m.trim()).filter(Boolean))];
+  if (deduped.length === 0) return { model };
+  const def = deduped.includes(model.trim()) ? model.trim() : deduped[0];
+  return { model: def, models: deduped };
 }
 
 /** Add or replace a named provider. Returns a NEW config. */

@@ -11,6 +11,7 @@
  */
 import { createBrokerPort, createHostCore, type AgentLike } from './hostCore.js';
 import { mergeGithubCliEnv, normalizeGithubCliError } from './ghCli.js';
+import { shellQuoteArg } from './shellQuote.js';
 import { exec, execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -21,7 +22,7 @@ import { InteractionBroker, type AgentEvent, type RecordLifecycleAction } from '
 import { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
 import { loadConfig, saveConfig, getCliKnobs, _resetCliKnobsCache, type LLMConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
 // 0.4.15 — named providers + per-sub-agent model routing (pure transforms).
-import { setProvider, removeProvider, setAgentModel } from '@kinqs/brainrouter-core/dist/provider/agentModels.js';
+import { setProvider, removeProvider, setAgentModel, normalizeProviderModels } from '@kinqs/brainrouter-core/dist/provider/agentModels.js';
 import { McpClientPool } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
 import { listTranscripts, loadTranscript, readTranscriptTail, transcriptExists, transcriptSizeBytes, deleteSession, forkSession, appendTranscriptEntry, rewindTranscript, type TranscriptSummary } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
 import { readUsageHistory, totalUsage } from '@kinqs/brainrouter-core/dist/usage/usageHistoryStore.js';
@@ -61,7 +62,7 @@ import { readGoal, setGoal, clearGoal, pauseGoal, resumeGoal, editGoal, decideGo
 // §goal-autonomy — the kickoff prompt builder (shared with the CLI's /goal).
 import { buildGoalKickoffPrompt } from '@kinqs/brainrouter-core/dist/goal/goalKickoff.js';
 import { PROVIDER_CATALOG } from '@kinqs/brainrouter-core/dist/provider/catalog.js';
-import { LOCAL_PLACEHOLDER_KEY } from '@kinqs/brainrouter-core/dist/provider/providers/index.js';
+import { LOCAL_PLACEHOLDER_KEY, withApiVersion } from '@kinqs/brainrouter-core/dist/provider/providers/index.js';
 import { inferModelReasoningCapabilities, registerModelReasoningCapabilities } from '@kinqs/brainrouter-core/dist/provider/models/reasoning.js';
 import { refreshLmStudioCache } from '@kinqs/brainrouter-core/dist/provider/providers/lmstudio.js';
 import { loadExtensions } from '@kinqs/brainrouter-core/dist/extension/loader.js';
@@ -235,9 +236,17 @@ const TERM_BUF_CAP = 400_000;
  * when no key — the LM Studio/Ollama convention), 5s timeout,
  * `{ data: [{ id }] }` response shape.
  */
-async function fetchEndpointModels(endpoint: string | undefined, apiKey: string): Promise<string[]> {
+/** Live model list for an endpoint. Returns the ids plus, on failure, WHY:
+ *  `status` is the HTTP status when the server answered (e.g. 401 = bad key,
+ *  404 = wrong path), `error: 'unreachable'` when the request never landed
+ *  (network / CORS / timeout). The setup dialog uses this to tell a wrong key
+ *  apart from an empty catalog. Models is always an array (empty on failure). */
+async function fetchEndpointModels(endpoint: string | undefined, apiKey: string, apiVersion?: string): Promise<{ models: string[]; status?: number; error?: 'unreachable' }> {
   const chat = (endpoint && endpoint.trim()) || 'https://api.openai.com/v1/chat/completions';
-  const modelsUrl = chat.replace(/\/chat\/completions\/?$/, '').replace(/\/$/, '') + '/models';
+  // Azure-style endpoints need an `?api-version=` on /models too — append it via
+  // the same shared helper the chat call uses, so a saved/probed Azure provider
+  // can actually list its deployments.
+  const modelsUrl = withApiVersion(chat.replace(/\/chat\/completions\/?$/, '').replace(/\/$/, '') + '/models', apiVersion);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5_000);
   try {
@@ -245,7 +254,7 @@ async function fetchEndpointModels(endpoint: string | undefined, apiKey: string)
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey.trim() || LOCAL_PLACEHOLDER_KEY}` },
       signal: controller.signal,
     });
-    if (!res.ok) return [];
+    if (!res.ok) return { models: [], status: res.status };
     const body = await res.json() as { data?: Array<Record<string, unknown> & { id?: string }> };
     const ids: string[] = [];
     for (const row of body.data ?? []) {
@@ -259,9 +268,9 @@ async function fetchEndpointModels(endpoint: string | undefined, apiKey: string)
     // non-LM-Studio endpoints) so binary on/off models are detected and never
     // sent a graded `low`/`high` they would reject. Best-effort; never blocks.
     await refreshLmStudioCache(chat).catch(() => 0);
-    return [...new Set(ids)].sort();
+    return { models: [...new Set(ids)].sort() };
   } catch {
-    return [];
+    return { models: [], error: 'unreachable' };
   } finally {
     clearTimeout(timer);
   }
@@ -2859,7 +2868,7 @@ async function main(): Promise<void> {
           activeServer: fresh.activeServer ?? null, // WS9 — which brainrouter server is the ACTIVE brain (only one)
           // §multi-provider — named providers (API KEYS MASKED, never sent to the
           // renderer) + the per-sub-agent-role model routing.
-          providers: providerEntries.map(([name, p]) => ({ name, provider: p.provider, model: p.model, endpoint: p.endpoint ?? null, hasKey: !!p.apiKey })),
+          providers: providerEntries.map(([name, p]) => ({ name, provider: p.provider, model: p.model, endpoint: p.endpoint ?? null, hasKey: !!p.apiKey, models: p.models ?? [], apiVersion: p.apiVersion ?? null })),
           defaultProviderName,
           defaultProviderModelMatches: defaultProviderMatch.modelMatches,
           agentModels: Object.entries(fresh.agentModels ?? {}).map(([role, a]) => ({ role, provider: a.provider ?? null, model: a.model ?? null })),
@@ -3443,11 +3452,27 @@ async function main(): Promise<void> {
         const fresh = loadConfig();
         const existing = fresh.providers?.[name];
         const providerId = typeof args.provider === 'string' && args.provider.trim() ? args.provider.trim() : (existing?.provider ?? 'openai');
+        // §multi-select-models — the renderer sends the checked allowlist. Three
+        // cases on EDIT: omitted (undefined) keeps the existing allowlist; an
+        // explicit array (incl. []) replaces it; [] clears it. normalizeProviderModels
+        // then enforces the invariant "default model ∈ models" (self-healing to
+        // models[0]) so the single default and the allowlist can never disagree.
+        const rawModels = Array.isArray(args.models)
+          ? (args.models as unknown[]).filter((m): m is string => typeof m === 'string')
+          : undefined;
+        const allowlist = rawModels !== undefined ? rawModels : existing?.models;
+        const rawModel = typeof args.model === 'string' && args.model.trim() ? args.model.trim() : (existing?.model ?? '');
+        const { model, models } = normalizeProviderModels(rawModel, allowlist);
+        // Optional Azure-style api-version: explicit string sets/keeps it, '' clears,
+        // omitted (undefined) preserves the existing value.
+        const apiVersion = typeof args.apiVersion === 'string' ? args.apiVersion.trim() : existing?.apiVersion;
         const llmCfg: LLMConfig = {
           provider: providerId,
           apiKey: typeof args.apiKey === 'string' && args.apiKey.trim() ? args.apiKey.trim() : (existing?.apiKey ?? ''),
-          model: typeof args.model === 'string' && args.model.trim() ? args.model.trim() : (existing?.model ?? ''),
+          model,
           endpoint: typeof args.endpoint === 'string' ? (args.endpoint.trim() || PROVIDER_CATALOG.find((p) => p.id === providerId)?.endpoint || undefined) : (existing?.endpoint ?? PROVIDER_CATALOG.find((p) => p.id === providerId)?.endpoint),
+          ...(models ? { models } : {}),
+          ...(apiVersion ? { apiVersion } : {}),
         };
         if (!llmCfg.model) return { ok: false, error: 'A model is required.' };
         saveConfig(setProvider(fresh, name, llmCfg));
@@ -3522,9 +3547,30 @@ async function main(): Promise<void> {
         if (cached && now - cached.at < 60_000) return { models: cached.models, current, provider: provName };
         // Public/anonymous tier (opencode "public") — list free models with no key.
         const fallbackKey = PROVIDER_CATALOG.find((p) => p.id === (l.provider ?? '').toLowerCase())?.defaultApiKey ?? '';
-        const models = await fetchEndpointModels(l.endpoint, (l.apiKey && l.apiKey.trim()) ? l.apiKey : fallbackKey);
+        const { models } = await fetchEndpointModels(l.endpoint, (l.apiKey && l.apiKey.trim()) ? l.apiKey : fallbackKey, l.apiVersion);
         if (models.length) modelsCacheByKey.set(cacheKey, { models, at: now });
         return { models: models.length ? models : (cached?.models ?? []), current, provider: provName };
+      },
+      // §multi-select-models — probe a provider's GET /models with the DRAFT key
+      // the user just typed in the setup dialog (NOT a saved provider's stored
+      // key), so the dialog can show how many models that key unlocks BEFORE the
+      // provider is saved. Endpoint resolves explicit → catalog(provider id) →
+      // active llm. Deliberately does NOT read or write `modelsCacheByKey` (that
+      // 60s cache is for saved providers / the active llm — a draft-key probe must
+      // never poison it) and never persists config. Reuses the same
+      // fetchEndpointModels contract (5s timeout, Bearer, `local` for blank keys).
+      'list-models-probe': async (a) => {
+        const endpoint = typeof a?.endpoint === 'string' ? a.endpoint.trim() : '';
+        const apiKey = typeof a?.apiKey === 'string' ? a.apiKey : '';
+        const apiVersion = typeof a?.apiVersion === 'string' ? a.apiVersion : '';
+        const provId = typeof a?.provider === 'string' ? a.provider : '';
+        const ep = endpoint || PROVIDER_CATALOG.find((p) => p.id === provId)?.endpoint || loadConfig().llm?.endpoint || '';
+        const { models, status, error } = await fetchEndpointModels(ep || undefined, apiKey, apiVersion);
+        // Surface WHY a probe came back empty so the dialog can validate the key:
+        // a 4xx (esp. 401/403) means the key/endpoint was rejected; 'unreachable'
+        // means the request never landed. A 200 with no models needs no reason.
+        const reason = error ? 'unreachable' : (typeof status === 'number' && status >= 400 ? `http-${status}` : undefined);
+        return { models, count: models.length, provider: provId || null, probe: true, ...(reason ? { error: reason } : {}) };
       },
       // DESK-5c — real terminal sessions (offset-poll streaming).
       'term-open': () => {
@@ -3713,10 +3759,12 @@ async function main(): Promise<void> {
         const what = typeof args.what === 'string' ? args.what : '';
         const root = workspaceRoot;
         const sh = (cmd: string) => new Promise<void>((resolve) => exec(cmd, { cwd: root, timeout: 8_000 }, () => resolve()));
-        const q = (s: string) => `'${s.replace(/'/g, "'\\''")}'`;
         const isWin = process.platform === 'win32', isMac = process.platform === 'darwin';
+        // HOTFIX — cmd.exe does NOT strip single quotes, so an arg must be double-
+        // quoted on Windows or the opener silently fails (PR/CI links never opened).
+        const q = (s: string) => shellQuoteArg(s, isWin);
         // T6 — open an explicit URL (CI/check/run links). https-only so a malicious
-        // gh payload can't smuggle a file:// or shell-ish scheme; single-quoted.
+        // gh payload can't smuggle a file:// or shell-ish scheme; shell-quoted.
         const url = typeof args.url === 'string' ? args.url : '';
         if (url) {
           if (!/^https:\/\/[^\s'"]+$/.test(url)) return { ok: false, error: 'only https URLs are allowed' };
