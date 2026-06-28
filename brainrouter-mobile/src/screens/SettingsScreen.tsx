@@ -11,6 +11,11 @@ import { useTheme, useThemeControls } from '../theme/ThemeProvider';
 import { useTransport, useConnectionStatus } from '../state/TransportProvider';
 import { Icon } from '../components/Icon';
 import { MONO } from '../theme/fonts';
+import { normalizeModels } from '../domain/session/sessionControls';
+import { useNavigation } from '@react-navigation/native';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useConnectionStore } from '../state/connectionStore';
+import type { RootStackParamList } from '../navigation/types';
 
 interface ModelInfo {
   id: string;
@@ -38,15 +43,19 @@ export function SettingsScreen(): React.JSX.Element {
   const { themeName, setThemeName, setAccent } = useThemeControls();
   const transport = useTransport();
   const status = useConnectionStatus();
+  const rootNav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const mode = useConnectionStore((s) => s.mode);
+  const hosts = useConnectionStore((s) => s.hosts);
+  const activeUrl = useConnectionStore((s) => s.activeUrl);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [currentModel, setCurrentModel] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
     void (async () => {
-      const res = await transport.query<{ models: ModelInfo[]; current: string }>('list-models');
+      const res = await transport.query<{ models: Array<string | ModelInfo>; current: string }>('list-models');
       if (!alive) return;
-      setModels(res?.models ?? []);
+      setModels(normalizeModels(res?.models));
       setCurrentModel(res?.current ?? null);
     })();
     return () => {
@@ -121,11 +130,65 @@ export function SettingsScreen(): React.JSX.Element {
         </Section>
 
         <Section title="Connection">
-          <View style={[styles.row, { backgroundColor: theme.colors.raised, borderColor: theme.colors.border, borderRadius: theme.radius.card }]}>
-            <Icon name="plug" size={18} color={theme.colors.text2} />
-            <Text style={[styles.rowBody, { color: theme.colors.text, fontSize: 14 }]}>Host</Text>
-            <Text style={{ color: theme.colors.muted, fontSize: 13, fontFamily: MONO }}>{status}</Text>
+          {/* Current state */}
+          <View style={[styles.row, { backgroundColor: theme.colors.raised, borderColor: mode === 'remote' ? theme.colors.accentLine : theme.colors.border, borderRadius: theme.radius.card }]}>
+            <Icon name="plug" size={18} color={mode === 'remote' ? theme.colors.accent : theme.colors.text2} />
+            <View style={styles.rowBody}>
+              <Text style={{ color: theme.colors.text, fontSize: 14, fontWeight: '500' }}>
+                {mode === 'remote' ? 'Paired to a host' : 'Demo mode (mock data)'}
+              </Text>
+              <Text style={{ color: theme.colors.muted, fontSize: 11, fontFamily: MONO }} numberOfLines={1}>
+                {mode === 'remote' ? (activeUrl ?? status) : 'no live host connected'}
+              </Text>
+            </View>
           </View>
+
+          {/* Saved hosts — tap to connect / switch / reconnect; × to forget */}
+          {hosts.map((h) => {
+            const on = mode === 'remote' && h.url === activeUrl;
+            return (
+              <View key={h.url} style={[styles.hostRow, { backgroundColor: theme.colors.raised, borderColor: on ? theme.colors.accentLine : theme.colors.border, borderRadius: theme.radius.card }]}>
+                <Pressable style={styles.hostMain} onPress={() => useConnectionStore.getState().connectTo(h.url)}>
+                  <Icon name="plug" size={16} color={on ? theme.colors.accent : theme.colors.text2} />
+                  <View style={styles.rowBody}>
+                    <Text style={{ color: theme.colors.text, fontSize: 13, fontFamily: MONO }} numberOfLines={1}>{h.url}</Text>
+                    <Text style={{ color: on ? theme.colors.accent : theme.colors.muted, fontSize: 11 }}>{on ? 'connected' : 'tap to connect'}</Text>
+                  </View>
+                </Pressable>
+                <Pressable hitSlop={8} onPress={() => useConnectionStore.getState().forgetHost(h.url)} style={styles.forget}>
+                  <Icon name="close" size={16} color={theme.colors.muted} />
+                </Pressable>
+              </View>
+            );
+          })}
+
+          {/* Add a new host */}
+          <Pressable
+            accessibilityLabel="Add host"
+            onPress={() => rootNav.navigate('Connect')}
+            style={({ pressed }) => [styles.addHost, { backgroundColor: pressed ? theme.colors.accentPress : theme.colors.accent, borderRadius: theme.radius.card }]}
+          >
+            <Icon name="plus" size={18} color={theme.colors.accentText} />
+            <Text style={{ color: theme.colors.accentText, fontWeight: '600', fontSize: 14 }}>Add host</Text>
+          </Pressable>
+
+          {mode === 'remote' ? (
+            <Pressable
+              onPress={() => useConnectionStore.getState().disconnect()}
+              style={({ pressed }) => [styles.row, { backgroundColor: pressed ? theme.colors.overlay : theme.colors.raised, borderColor: theme.colors.border, borderRadius: theme.radius.card }]}
+            >
+              <Icon name="close" size={16} color={theme.colors.danger} />
+              <Text style={{ flex: 1, color: theme.colors.danger, fontSize: 14 }}>Disconnect (back to demo)</Text>
+            </Pressable>
+          ) : activeUrl ? (
+            <Pressable
+              onPress={() => useConnectionStore.getState().reconnect()}
+              style={({ pressed }) => [styles.row, { backgroundColor: pressed ? theme.colors.overlay : theme.colors.raised, borderColor: theme.colors.accentLine, borderRadius: theme.radius.card }]}
+            >
+              <Icon name="plug" size={16} color={theme.colors.accent} />
+              <Text style={{ flex: 1, color: theme.colors.accent, fontSize: 14 }}>Reconnect to last host</Text>
+            </Pressable>
+          ) : null}
         </Section>
 
         <Section title="About">
@@ -146,5 +209,9 @@ const styles = StyleSheet.create({
   chip: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 8, paddingHorizontal: 12, borderWidth: StyleSheet.hairlineWidth },
   swatch: { width: 14, height: 14, borderRadius: 7 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderWidth: StyleSheet.hairlineWidth },
+  hostRow: { flexDirection: 'row', alignItems: 'center', borderWidth: StyleSheet.hairlineWidth, paddingRight: 4 },
+  hostMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12 },
+  forget: { padding: 10 },
+  addHost: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 13 },
   rowBody: { flex: 1, minWidth: 0 },
 });

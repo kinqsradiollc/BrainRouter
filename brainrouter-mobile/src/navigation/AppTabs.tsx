@@ -10,6 +10,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useTheme } from '../theme/ThemeProvider';
 import { Icon, type IconName } from '../components/Icon';
+import { ProjectsScreen } from '../screens/ProjectsScreen';
 import { ChatsScreen } from '../screens/ChatsScreen';
 import { SessionScreen } from '../screens/SessionScreen';
 import { ChangesScreen } from '../screens/ChangesScreen';
@@ -61,6 +62,7 @@ function ChatsNavigator(): React.JSX.Element {
   const header = useStackHeader();
   return (
     <ChatsStack.Navigator screenOptions={{ headerShown: false }}>
+      <ChatsStack.Screen name="Projects" component={ProjectsScreen} />
       <ChatsStack.Screen name="Chats" component={ChatsScreen} />
       <ChatsStack.Screen name="Session" component={SessionScreen} options={{ headerShown: false }} />
       <ChatsStack.Screen name="Changes" component={ChangesScreen} options={{ ...header, title: 'Changes' }} />
@@ -133,7 +135,7 @@ export function AppTabs(): React.JSX.Element {
         tabBarIcon: ({ color, size }) => <Icon name={TAB_ICON[route.name]} size={size ?? 22} color={color} />,
       })}
     >
-      <Tabs.Screen name="ChatsTab" component={ChatsNavigator} options={{ title: 'Chats' }} />
+      <Tabs.Screen name="ChatsTab" component={ChatsNavigator} options={{ title: 'Projects' }} />
       <Tabs.Screen name="ActivityTab" component={ActivityNavigator} options={{ title: 'Activity' }} />
       <Tabs.Screen name="ReviewTab" component={ReviewNavigator} options={{ title: 'Review' }} />
       <Tabs.Screen name="MoreTab" component={MoreNavigator} options={{ title: 'More' }} />

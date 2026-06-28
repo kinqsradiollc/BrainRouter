@@ -6,7 +6,7 @@
  * ApprovalSheet. State comes from the pure transcript reducer via
  * `useSessionStore`; commands go out through `useActiveSession`.
  */
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -16,6 +16,7 @@ import { useActiveSession, useSessionStore } from '../state/sessionStore';
 import { useTransport, useConnectionStatus } from '../state/TransportProvider';
 import type { ChatsStackParamList } from '../navigation/types';
 import type { TranscriptItem } from '../domain/session/transcript';
+import { modelOptions, normalizeModels, type ModeOption, type Effort } from '../domain/session/sessionControls';
 import { Composer } from '../components/chat/Composer';
 import { ToolCard } from '../components/chat/ToolCard';
 import { ApprovalSheet } from '../components/chat/ApprovalSheet';
@@ -91,6 +92,32 @@ export function SessionScreen({ route, navigation }: Props): React.JSX.Element {
   const model = useSessionStore((s) => s.model);
   const scrollRef = useRef<ScrollView | null>(null);
   const [contextPct, setContextPct] = useState<number | null>(null);
+  const [controls, setControls] = useState<{ model?: string; executionMode?: string; reviewPolicy?: string; effort?: string }>({});
+  const [models, setModels] = useState<Array<{ id: string; label: string }>>([]);
+
+  // Live composer controls: the session's current model + mode/effort from the host.
+  const refreshControls = useCallback(async () => {
+    const snap = await transport.query<{ model?: string; prefs?: { executionMode?: string; reviewPolicy?: string; effort?: string } }>('config-snapshot');
+    if (snap) setControls({ model: snap.model, executionMode: snap.prefs?.executionMode, reviewPolicy: snap.prefs?.reviewPolicy, effort: snap.prefs?.effort });
+    const ml = await transport.query<{ models: Array<string | { id: string; label: string }> }>('list-models');
+    setModels(normalizeModels(ml?.models));
+  }, [transport]);
+  useEffect(() => {
+    void refreshControls();
+  }, [refreshControls]);
+
+  const pickModel = (id: string): void => {
+    transport.send({ kind: 'set-model', model: id, persist: true });
+    setControls((c) => ({ ...c, model: id }));
+  };
+  const pickMode = (opt: ModeOption): void => {
+    void transport.query('action:set-session-mode', { executionMode: opt.executionMode, reviewPolicy: opt.reviewPolicy });
+    setControls((c) => ({ ...c, executionMode: opt.executionMode, reviewPolicy: opt.reviewPolicy }));
+  };
+  const pickEffort = (key: Effort): void => {
+    void transport.query('action:set-session-mode', { effort: key });
+    setControls((c) => ({ ...c, effort: key }));
+  };
 
   // Initial context-window fill from the host.
   useEffect(() => {
@@ -143,7 +170,19 @@ export function SessionScreen({ route, navigation }: Props): React.JSX.Element {
           </Text>
         ) : null}
 
-        <Composer running={running} onSend={startTurn} onStop={interrupt} model={model ?? undefined} />
+        <Composer
+          running={running}
+          onSend={startTurn}
+          onStop={interrupt}
+          model={controls.model ?? model ?? undefined}
+          executionMode={controls.executionMode}
+          reviewPolicy={controls.reviewPolicy}
+          effort={controls.effort}
+          models={modelOptions(models, controls.model ?? model ?? undefined)}
+          onPickModel={pickModel}
+          onPickMode={pickMode}
+          onPickEffort={pickEffort}
+        />
       </KeyboardAvoidingView>
 
       <ApprovalSheet request={pending} onRespond={respond} />

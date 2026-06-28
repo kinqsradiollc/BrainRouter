@@ -59,7 +59,7 @@ export function ConnectScreen({ navigation }: Props): React.JSX.Element {
           keyboardType="url"
         />
 
-        <Text style={[styles.label, { color: theme.colors.text2 }]}>Pairing code</Text>
+        <Text style={[styles.label, { color: theme.colors.text2 }]}>Pairing code (optional)</Text>
         <TextInput
           style={[styles.input, field, { fontFamily: MONO }]}
           value={code}

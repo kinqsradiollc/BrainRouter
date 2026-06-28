@@ -6,7 +6,8 @@
 import type { NavigatorScreenParams } from '@react-navigation/native';
 
 export type ChatsStackParamList = {
-  Chats: undefined; // S-02
+  Projects: undefined; // S-02 — projects (workspaces)
+  Chats: { projectRoot?: string; projectName?: string }; // S-02 — a project's chat sessions
   Session: { sessionKey: string }; // S-03
   Changes: { sessionKey?: string }; // S-07
 };

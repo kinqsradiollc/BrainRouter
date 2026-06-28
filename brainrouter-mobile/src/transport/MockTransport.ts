@@ -189,6 +189,12 @@ export class MockTransport implements BrainRouterTransport {
   private wsRecents = [DEMO_ROOT, '/Users/dev/side-project', '/Users/dev/TradingAgents'];
   private readonly trusted = new Set<string>(this.wsRecents);
   private model = 'claude-opus-4-8';
+  private sessionMode: { executionMode: string; reviewPolicy: string; effort: string } = { executionMode: 'fast', reviewPolicy: 'proceed', effort: 'medium' };
+  // Mutable per-project session lists (seeded from the demo data). A New chat lands
+  // here on its first turn, so created projects/chats persist for the session.
+  private sessionsByRoot: Record<string, Array<Record<string, unknown>>> = Object.fromEntries(
+    Object.entries(SESSIONS_BY_ROOT).map(([root, list]) => [root, list.map((s) => ({ ...s }))]),
+  );
 
   constructor(opts: MockTransportOptions = {}) {
     this.activeSession = opts.activeSession ?? 'dev:new-chat';
@@ -220,6 +226,7 @@ export class MockTransport implements BrainRouterTransport {
   send(cmd: AgentCommand): void {
     switch (cmd.kind) {
       case 'start-turn':
+        this.registerSession(cmd.prompt);
         this.runEchoTurn(cmd.prompt);
         break;
       case 'query':
@@ -318,7 +325,13 @@ export class MockTransport implements BrainRouterTransport {
       case 'git-info':
         return { repo: 'BrainRouter', branch: 'brainrouter-mobile', files: DEMO_CHANGED.length, insertions: 30, deletions: 6, workspaceRoot: DEMO_ROOT };
       case 'config-snapshot':
-        return { model: this.model, provider: 'openai', endpoint: null, workspaceRoot: DEMO_ROOT, sandbox: 'off', prefs: { theme: 'dark' } };
+        return { model: this.model, provider: 'openai', endpoint: null, workspaceRoot: DEMO_ROOT, sandbox: 'off', prefs: { theme: 'dark', ...this.sessionMode } };
+      case 'action:set-session-mode': {
+        if (typeof args.executionMode === 'string') this.sessionMode.executionMode = args.executionMode;
+        if (typeof args.reviewPolicy === 'string') this.sessionMode.reviewPolicy = args.reviewPolicy;
+        if (typeof args.effort === 'string') this.sessionMode.effort = args.effort;
+        return { ok: true };
+      }
       case 'commands-catalog':
         return { commands: [] };
       case 'requirement-list':
@@ -365,9 +378,21 @@ export class MockTransport implements BrainRouterTransport {
   }
 
   private sessionsFor(root: string): Array<Record<string, unknown>> {
-    return [...(SESSIONS_BY_ROOT[root] ?? [])].sort(
+    return [...(this.sessionsByRoot[root] ?? [])].sort(
       (a, b) => Number(!!b.pinned) - Number(!!a.pinned),
     );
+  }
+
+  /** Ensure the active session shows up in its project's list (so a New chat
+   *  appears after the first message), titled by the first prompt. */
+  private registerSession(prompt: string): void {
+    const list = (this.sessionsByRoot[this.wsCurrent] ??= []);
+    const existing = list.find((s) => s.sessionKey === this.activeSession);
+    if (existing) {
+      existing.turnCount = Number(existing.turnCount ?? 0) + 1;
+    } else {
+      list.unshift({ sessionKey: this.activeSession, firstUserMessage: prompt, turnCount: 1, status: 'active', lastRole: 'user', pinned: false });
+    }
   }
 
   // ── Layer-1 promise methods ──
@@ -382,6 +407,8 @@ export class MockTransport implements BrainRouterTransport {
   openWorkspace(root: string): Promise<{ opened: boolean; needsTrust?: boolean }> {
     if (!this.trusted.has(root)) return Promise.resolve({ opened: false, needsTrust: true });
     this.wsCurrent = root;
+    if (!this.wsRecents.includes(root)) this.wsRecents = [root, ...this.wsRecents]; // a freshly-created project shows up top
+    this.sessionsByRoot[root] ??= [];
     return Promise.resolve({ opened: true });
   }
 
