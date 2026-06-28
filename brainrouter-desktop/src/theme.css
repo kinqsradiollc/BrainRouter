@@ -2207,10 +2207,12 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
   scrollbar-gutter: stable;
   -webkit-overflow-scrolling: touch;
 }
-.model-list {
-  flex: 1 1 96px;
-  min-height: 76px;
-  max-height: min(170px, 24vh);
+.model-list { display: flex; flex-direction: column; }
+/* Only the endpoint list (which can hold dozens of models) scrolls on its own;
+   the per-provider group lists size to their content, so a single-model provider
+   no longer stretches to fill a tall empty gap. */
+.model-list-endpoint {
+  max-height: min(190px, 28vh);
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
@@ -2421,6 +2423,21 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 .ci-pr-branch { font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
 .ci-pr-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 9px 0 10px; }
 .ci-pr-actions .wt-btn { display: inline-flex; align-items: center; gap: 6px; }
+/* Review panel — Pull Requests / Checks tabs + the all-PRs browse list. */
+.ci-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 10px; }
+.ci-tab { appearance: none; border: 0; background: transparent; color: var(--text-dim); font: 600 12.5px var(--font); padding: 7px 12px; cursor: pointer; position: relative; transition: color .15s; }
+.ci-tab:hover { color: var(--text); }
+.ci-tab.active { color: var(--text); }
+.ci-tab.active::after { content: ''; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; border-radius: 2px; background: var(--accent); }
+.ci-pr-list { display: flex; flex-direction: column; gap: 7px; }
+.ci-pr-item { border: 1px solid var(--border); border-radius: 9px; background: var(--raised); overflow: hidden; transition: border-color .15s; }
+.ci-pr-item:hover { border-color: var(--ov-14); }
+.ci-pr-item-head { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 11px; background: transparent; border: 0; cursor: pointer; text-align: left; color: inherit; }
+.ci-pr-item-head:hover { background: var(--ov-05); }
+.ci-pr-item-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.ci-pr-state.draft { background: var(--ov-07); border-color: var(--border-strong); color: var(--text-faint); }
+.ci-pr-detail { border-top: 1px solid var(--border); padding: 11px 12px; display: flex; flex-direction: column; gap: 10px; }
+.ci-pr-bodytext { margin: 0; font: 12px/1.55 var(--font); color: var(--text-dim); white-space: pre-wrap; word-break: break-word; max-height: 280px; overflow-y: auto; }
 .ci-section { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-faint); margin: 12px 0 4px; }
 .ci-status { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 10px 12px; border-radius: 9px; background: var(--raised); border: 1px solid var(--border); margin-bottom: 8px; }
 .ci-status.ci-passing { color: var(--ok); background: rgba(108, 192, 74, 0.06); border-color: rgba(108, 192, 74, 0.25); }

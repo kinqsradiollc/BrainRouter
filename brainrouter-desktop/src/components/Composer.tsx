@@ -271,7 +271,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
                   return (
                     <>
                       <div className="menu-head"><span>Models{chatModels.length ? ` · ${chatModels.length} on endpoint` : ''}</span><span>⇧⌃I</span></div>
-                      <div className="model-list">
+                      <div className="model-list model-list-endpoint">
                         {modelsLoading && !endpointModels.length ? (
                           <div className="empty" style={{ padding: '4px 9px' }}>Loading models…</div>
                         ) : null}

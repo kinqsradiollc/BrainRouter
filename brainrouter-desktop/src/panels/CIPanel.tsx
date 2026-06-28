@@ -32,6 +32,9 @@ export function CIPanel({ ci, onOpenExternal, trackPr, trackOps }: {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewDecision, setReviewDecision] = useState<'comment' | 'approve' | 'request-changes'>('comment');
   const [reviewBody, setReviewBody] = useState('');
+  // Separate the all-PRs browse view from the current-branch CI checks.
+  const [tab, setTab] = useState<'prs' | 'checks'>('prs');
+  const [expandedPr, setExpandedPr] = useState<number | null>(null);
   // Initial load when the panel opens (once); manual Refresh + Watch handle the rest.
   const refreshRef = useRef(ci.refresh); refreshRef.current = ci.refresh;
   const trackRefreshRef = useRef(trackOps?.refreshPr); trackRefreshRef.current = trackOps?.refreshPr;
@@ -69,6 +72,40 @@ export function CIPanel({ ci, onOpenExternal, trackPr, trackOps }: {
         {pr?.url ? <Button onClick={() => onOpenExternal(pr.url!)}>Open on GitHub</Button> : null}
       </div>
       {errors.map((error) => <div key={error} className="ci-error"><Icon name="warn" size={13} /> {error}</div>)}
+
+      <div className="ci-tabs">
+        <button type="button" className={`ci-tab${tab === 'prs' ? ' active' : ''}`} onClick={() => setTab('prs')}>Pull Requests{ci.prs.length ? ` (${ci.prs.length})` : ''}</button>
+        <button type="button" className={`ci-tab${tab === 'checks' ? ' active' : ''}`} onClick={() => setTab('checks')}>Checks</button>
+      </div>
+
+      {tab === 'prs' ? (
+        ci.prs.length === 0
+          ? <div className="empty">No open pull requests. <span className="dim">(needs `gh` authed)</span></div>
+          : <div className="ci-pr-list">
+              {ci.prs.map((p) => {
+                const expanded = expandedPr === p.number;
+                const st = (p.isDraft ? 'draft' : (p.state ?? 'open')).toLowerCase();
+                return (
+                  <div key={p.number} className="ci-pr-item">
+                    <button type="button" className="ci-pr-item-head" onClick={() => setExpandedPr(expanded ? null : p.number)}>
+                      <span className={`ci-pr-state ${st}`}>{st}</span>
+                      <span className="ci-pr-item-main">
+                        <span className="ci-pr-title" title={p.title}>#{p.number} {p.title}</span>
+                        <span className="ci-pr-branch">{p.headRefName} → {p.baseRefName}{p.author?.login ? ` · ${p.author.login}` : ''}</span>
+                      </span>
+                      <span className="step-chevron">{expanded ? '⌄' : '›'}</span>
+                    </button>
+                    {expanded ? (
+                      <div className="ci-pr-detail">
+                        <pre className="ci-pr-bodytext">{(p.body && p.body.trim()) || '(no description provided)'}</pre>
+                        {p.url ? <div className="ci-run-actions"><Button onClick={() => onOpenExternal(p.url!)}>Open on GitHub</Button></div> : null}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+      ) : (<>
 
       {pr ? (
         <div className="ci-pr">
@@ -144,6 +181,7 @@ export function CIPanel({ ci, onOpenExternal, trackPr, trackOps }: {
           </div>
         );
       })}
+      </>)}
       {reviewOpen && trackPr?.pr ? (
         <div className="track-modal-backdrop" onClick={() => setReviewOpen(false)}>
           <div className="track-review-modal" onClick={(e) => e.stopPropagation()}>
