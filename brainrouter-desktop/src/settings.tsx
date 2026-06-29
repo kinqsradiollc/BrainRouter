@@ -791,6 +791,8 @@ export function SettingsDialog(props: {
   onModelSave: (model: string) => void;
   onAction: (id: string, name: string, args?: Record<string, unknown>) => void;
   onRunCommand: (c: DeskCommand) => void;
+  /** The active session's execution mode — drives the Fast-mode toggle. */
+  execMode?: string;
   codeFont: string;
   onCodeFont: (f: string) => void;
   theme: string;
@@ -922,6 +924,9 @@ export function SettingsDialog(props: {
               onChange={(v) => props.onPref('tier', v === 'follow model' ? null : v)} />
           </Row>
           <div className="set-h2">Session</div>
+          <Row title="Fast mode" desc="Answer directly with minimal planning for quick, low-friction turns. Independent of reasoning effort (set that above) — Fast mode changes the agent's strategy, not how hard the model thinks. (/fast)">
+            <Toggle on={props.execMode === 'fast'} onChange={(v) => props.onAction('a-mode', 'action:set-session-mode', { executionMode: v ? 'fast' : 'planning' })} />
+          </Row>
           <Row title="New chat" desc="Fresh session key; current transcript stays on disk. (/new)">
             <button className="btn" onClick={() => props.onAction('a-new', 'new-session')}>New chat</button>
           </Row>

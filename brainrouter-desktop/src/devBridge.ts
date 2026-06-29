@@ -1941,6 +1941,14 @@ export function installDevBridge(): void {
     trustWorkspace: async (root: string) => { trustedRoots.add(root); return { trusted: true }; },
     untrustWorkspace: async (root: string) => { trustedRoots.delete(root); return { trusted: false }; },
     trustedWorkspaces: async () => ({ trusted: [...trustedRoots] }),
+    getZoomFactor(): number {
+      const saved = localStorage.getItem('br-zoom-factor');
+      return saved ? parseFloat(saved) : 1.0;
+    },
+    setZoomFactor(factor: number): void {
+      localStorage.setItem('br-zoom-factor', String(factor));
+      document.body.style.zoom = String(factor);
+    },
   };
 
   // Dev-only — fire a turn event tagged with ANY workspaceRoot (even one not on

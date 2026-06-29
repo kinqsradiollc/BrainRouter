@@ -37,7 +37,6 @@ export interface ComposerProps {
   setPop: Dispatch<SetStateAction<PopId>>;
   q: (id: string, name: string, args?: Record<string, unknown>) => void;
   modeLabel: string;
-  execMode: string;
   effort: string;
   info: { workspaceRoot?: string; model?: string };
   branches: { current: string | null; branches: string[]; loading?: boolean };
@@ -80,7 +79,7 @@ function formatBytes(size: number): string {
 export function Composer(p: ComposerProps): React.ReactElement {
   const {
     draft, setDraft, running, stopping, submit, requestStop, slashActive, slashMatches, commands,
-    slashSel, setSlashSel, setSlashDismissed, onRunSlash, pop, setPop, q, modeLabel, execMode, effort,
+    slashSel, setSlashSel, setSlashDismissed, onRunSlash, pop, setPop, q, modeLabel, effort,
     info, branches, endpointModels, allowedModels, connectedProviders, defaultProviderName, modelsLoading, setModelsLoading, modelChoices, modelScope, setModelScope,
     hasConversation, contextUsage, tokens, openSettings, onAttach, attachments = [], onClearAttachment, canSubmit = false,
     pastedImages = [], onPasteImages, onClearPastedImage,
@@ -129,11 +128,11 @@ export function Composer(p: ComposerProps): React.ReactElement {
   // token in accent blue so the user sees they're in that command's mode.
   const cmdToken = recognizedCommandToken(draft, slashActive, slashMatches, commands);
   // reasoning-profiles — the effort control is MODEL-FAMILY aware (graded tiers /
-  // binary On-Off / locked "Always on" / hidden). Fast = minimal reasoning, so
-  // the menu is disabled while Fast is on (core clamps the actual wire effort).
+  // binary On-Off / locked "Always on" / hidden). Reasoning is DECOUPLED from
+  // Fast mode: this slider is the user's explicit choice and stays live; Fast
+  // mode (a Settings toggle) only changes the agentic strategy, not the thinking.
   const reasoningProfile = reasoningProfileForModel(info.model);
-  const reasoningFast = execMode === 'fast';
-  const reasoningPill = reasoningPillLabel(reasoningProfile, effort, reasoningFast);
+  const reasoningPill = reasoningPillLabel(reasoningProfile, effort, false);
   return (
     <div className="composer">
       <div
@@ -287,8 +286,8 @@ export function Composer(p: ComposerProps): React.ReactElement {
           <span className="composer-spacer" />
           {/* DESK-5q + reasoning-profiles — the effort control adapts to the
               SELECTED model's family: graded tiers, binary On/Off, a locked
-              "Always on", or nothing for non-reasoning models. Fast = minimal
-              reasoning, so the menu is disabled while Fast is on. */}
+              "Always on", or nothing for non-reasoning models. Always live
+              (decoupled from Fast mode); only an always-on reasoner locks it. */}
           {reasoningPill ? (
             <span className="pop-wrap">
               {pop === 'effort' && reasoningProfile.options.length ? (
@@ -303,10 +302,10 @@ export function Composer(p: ComposerProps): React.ReactElement {
               <button
                 type="button"
                 className="effort-pill"
-                title={reasoningFast ? 'Fast mode uses minimal reasoning' : reasoningProfile.kind === 'always-on' ? 'This model always reasons' : 'Reasoning effort'}
-                disabled={reasoningFast || reasoningProfile.kind === 'always-on'}
-                style={reasoningFast || reasoningProfile.kind === 'always-on' ? { opacity: 0.6 } : undefined}
-                onClick={() => { if (!reasoningFast && reasoningProfile.options.length) setPop(pop === 'effort' ? '' : 'effort'); }}
+                title={reasoningProfile.kind === 'always-on' ? 'This model always reasons' : 'Reasoning effort'}
+                disabled={reasoningProfile.kind === 'always-on'}
+                style={reasoningProfile.kind === 'always-on' ? { opacity: 0.6 } : undefined}
+                onClick={() => { if (reasoningProfile.options.length) setPop(pop === 'effort' ? '' : 'effort'); }}
               >
                 {reasoningPill}
               </button>
@@ -409,19 +408,13 @@ export function Composer(p: ComposerProps): React.ReactElement {
                     {modelScope === 'global' ? 'All chats' : 'This chat only'}
                   </button>
                 </div>
-                <div className="menu-row">
-                  <span>Fast mode</span>
-                  <button className={`switch${execMode === 'fast' ? ' on' : ''}`} onClick={() => {
-                    q('a-mode', 'action:set-session-mode', { executionMode: execMode === 'fast' ? 'planning' : 'fast' });
-                  }} />
-                </div>
               </div>
             ) : null}
             <button type="button" className="model-pill" onClick={() => {
               if (pop !== 'model') { setModelsLoading(true); q('q-models', 'list-models'); }
               setPop(pop === 'model' ? '' : 'model');
             }}>
-              {info.model ?? ''}{execMode === 'fast' ? ' · Fast' : ''}
+              {info.model ?? ''}
             </button>
           </span>
           {/* DESK-5s/5u — click the ring for a full context + usage breakdown. */}

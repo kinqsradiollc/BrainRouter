@@ -54,7 +54,7 @@ export function TopbarRight(p: TopbarRightProps): React.ReactElement {
   // tabs in a narrow rail, butting against them in a wide one). Full-screen keeps
   // it at the edge over the wide rail, where the tab strip reserves room in CSS.
   const offRail = hasRightRail && sidePanelOpen && !sideFullScreen;
-  const showEnv = isCode && !homeMode && envRoom;
+  const showEnv = isCode && !homeMode;
   return (
     <span className="topbar-right" style={offRail ? { right: sideWidth + 12 } : undefined}>
       {showEnv ? (
