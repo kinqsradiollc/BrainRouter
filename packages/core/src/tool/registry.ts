@@ -42,6 +42,10 @@ export const LOCAL_TOOL_REGISTRY: LocalToolEntry[] = [
   { name: 'glob_files', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'fetch_url', accessTier: 'read', actionKind: 'network', parallelSafe: true },
   { name: 'web_search', accessTier: 'read', actionKind: 'network', parallelSafe: true },
+  // §5.2 — research ledger tools persist session state (research.json), like
+  // update_plan / artifact_write: read tier, read_only, serialized (not parallel).
+  { name: 'research_note', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  { name: 'research_brief', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'list_mcp_resources', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'list_mcp_resource_templates', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'read_mcp_resource', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },

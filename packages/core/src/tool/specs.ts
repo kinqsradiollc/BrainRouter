@@ -169,6 +169,31 @@ export const LOCAL_TOOLS = [
     }
   },
   {
+    name: 'research_note',
+    description: 'Record one piece of evidence into the session research ledger: a claim, the sources backing it, whether they support/refute/are unclear about it, and your confidence. Use during evidence-driven research (after web_search / fetch_url) so the final research_brief can cross-check sources and flag conflicts.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        claim: { type: 'string', description: 'The specific factual claim this evidence bears on.' },
+        sources: { type: 'array', items: { type: 'string' }, description: 'URLs or short source descriptions backing the claim.' },
+        stance: { type: 'string', enum: ['support', 'refute', 'unclear'], description: 'Do the sources support, refute, or are unclear about the claim? Default unclear.' },
+        confidence: { type: 'string', enum: ['high', 'medium', 'low'], description: 'Confidence in this finding. Default low.' },
+        note: { type: 'string', description: 'Optional nuance, caveat, or short quote.' }
+      },
+      required: ['claim']
+    }
+  },
+  {
+    name: 'research_brief',
+    description: 'Emit a report-ready markdown research brief from the session ledger: every finding plus an explicit "Uncertainty & conflicts" section (corroborated vs single-source vs conflicting). Optionally set/refine the research question. Save the returned markdown with artifact_write to persist it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'Optional — set or refine the research question shown in the brief header.' }
+      }
+    }
+  },
+  {
     name: 'list_mcp_resources',
     description: 'List resources provided by MCP servers. Resources are structured context such as files, schemas, or app data; prefer them over web search when available.',
     inputSchema: {
