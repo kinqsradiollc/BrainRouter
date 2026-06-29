@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { renderToStaticMarkup } from 'react-dom/server';
 import EditorComp, { type OnMount } from '@monaco-editor/react';
+import type * as Monaco from 'monaco-editor';
 import {
   computeReviewChunks,
   applyReview,
@@ -39,6 +40,32 @@ const MonacoEditor = EditorComp as unknown as React.ComponentType<MonacoEditorPr
 installMonaco();
 
 type MonacoRange = { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number };
+
+// §2 W4 — ghost-text inline completion. Registered once on the global markdown
+// language; scoped to the Write editor's model via `activeWriteModelUri` so it
+// doesn't ghost in the code Editor. Debounced + single-in-flight by honouring
+// Monaco's CancellationToken (a newer keystroke cancels the prior request).
+let ghostRegistered = false;
+let activeWriteModelUri: string | null = null;
+
+function registerGhostProvider(monaco: Parameters<OnMount>[1]): void {
+  if (ghostRegistered) return;
+  ghostRegistered = true;
+  const provider: Monaco.languages.InlineCompletionsProvider = {
+    provideInlineCompletions: async (model, position, _ctx, token) => {
+      if (model.uri.toString() !== activeWriteModelUri) return { items: [] };
+      await new Promise((r) => setTimeout(r, 300)); // debounce typing bursts
+      if (token.isCancellationRequested) return { items: [] };
+      const prefix = model.getValueInRange({ startLineNumber: 1, startColumn: 1, endLineNumber: position.lineNumber, endColumn: position.column });
+      if (prefix.trim().length < 3) return { items: [] };
+      const res = await hostQuery<{ text?: string }>('write-ghost-complete', { prefix: prefix.slice(-2000) });
+      if (token.isCancellationRequested || !res || typeof res.text !== 'string' || !res.text) return { items: [] };
+      return { items: [{ insertText: res.text, range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column) }] };
+    },
+    disposeInlineCompletions: () => { /* no per-result resources to free */ },
+  };
+  monaco.languages.registerInlineCompletionsProvider('markdown', provider);
+}
 
 const WRITABLE = /\.(md|markdown|mdx|txt|text)$/i;
 
@@ -116,12 +143,15 @@ export function WritePanel(): React.ReactElement {
 
   const dirty = content !== loaded;
 
-  const onEditorMount = useCallback<OnMount>((editor) => {
+  const onEditorMount = useCallback<OnMount>((editor, monaco) => {
     edRef.current = editor;
+    activeWriteModelUri = editor.getModel()?.uri.toString() ?? null;
+    editor.onDidChangeModel(() => { activeWriteModelUri = editor.getModel()?.uri.toString() ?? null; });
     editor.onDidChangeCursorSelection(() => {
       const s = editor.getSelection();
       setHasSel(!!s && !s.isEmpty());
     });
+    registerGhostProvider(monaco); // §2 W4 — ghost-text completion (scoped to this model)
   }, []);
 
   const refreshFiles = useCallback(async () => {
@@ -324,6 +354,7 @@ export function WritePanel(): React.ReactElement {
                     fontFamily: editorFontFamily(),
                     fontSize: 14,
                     wordWrap: 'on',
+                    inlineSuggest: { enabled: true }, // §2 W4 — ghost-text (Tab accepts, Esc dismisses)
                     minimap: { enabled: false },
                     lineNumbers: 'off',
                     folding: false,
