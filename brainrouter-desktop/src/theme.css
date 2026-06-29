@@ -4231,3 +4231,12 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .wf-node-output { border-left-color: #61afef; }
 .wf-node-set { border-left-color: #c678dd; }
 .wf-node-merge { border-left-color: #56b6c2; }
+
+/* ===== §5.10 — friendly permission mode cards ===== */
+.perm-modes { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.perm-card { text-align: left; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; cursor: pointer; transition: border-color .12s ease; }
+.perm-card:hover { border-color: var(--border-strong); }
+.perm-card.active { border-color: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent); }
+.perm-card-label { font-weight: 600; font-size: 13px; color: var(--text); }
+.perm-card.active .perm-card-label { color: var(--accent); }
+.perm-card-desc { font-size: 11px; color: var(--text-dim); margin-top: 2px; line-height: 1.35; }

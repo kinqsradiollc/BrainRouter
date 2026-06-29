@@ -12,6 +12,7 @@ import { Icon } from './icons.js';
 import type { ConnectorCatalogEntry, ConnectorDefinitionBundle, ConnectorRecord, ConnectorRunRecord } from '@kinqs/brainrouter-types';
 import { ProviderIcon } from './components/ProviderIcon.js';
 import { ShortcutsReference } from './components/ShortcutsReference.js';
+import { PERMISSION_MODES, policyForMode, nearestMode } from '@kinqs/brainrouter-core/dist/session/permissionModes.js';
 
 interface ConnectorSlimPreview {
   id: string;
@@ -126,6 +127,45 @@ const NAV: Array<{ section: SettingsSection; icon: string; title: string; group:
   { section: 'appearance', icon: 'palette', title: 'Appearance', group: 'Desktop app' },
   { section: 'commands', icon: 'command', title: 'Commands', group: 'Desktop app' },
 ];
+
+/**
+ * §5.10 — five friendly permission modes that each set the access tier, approval
+ * (executionMode × reviewPolicy), sandbox, and out-of-workspace policy in one
+ * click. The highlighted card is the nearest match to the stored combination.
+ */
+function PermissionModeCards({ ps, ks, onPref, onAction, setKnob }: {
+  ps: (key: string, def: string) => string;
+  ks: (key: string, def: string) => string;
+  onPref: (key: string, value: string) => void;
+  onAction: (id: string, action: string, args: Record<string, unknown>) => void;
+  setKnob: (key: string, value: string) => void;
+}): React.ReactElement {
+  const current = nearestMode({
+    executionMode: ps('executionMode', 'planning') as 'planning' | 'fast',
+    reviewPolicy: ps('reviewPolicy', 'request') as 'request' | 'proceed',
+    sandbox: ks('sandbox', 'off') as 'off' | 'on',
+    externalDirWrites: ks('externalDirWrites', 'ask') as 'deny' | 'ask' | 'allow',
+  });
+  const apply = (id: (typeof PERMISSION_MODES)[number]['id']): void => {
+    const p = policyForMode(id);
+    if (!p) return;
+    onPref('executionMode', p.executionMode);
+    onPref('reviewPolicy', p.reviewPolicy);
+    onAction('a-access', 'action:set-access', { mode: p.accessMode });
+    setKnob('sandbox', p.sandbox);
+    setKnob('externalDirWrites', p.externalDirWrites);
+  };
+  return (
+    <div className="perm-modes">
+      {PERMISSION_MODES.map((m) => (
+        <button key={m.id} type="button" className={`perm-card${current === m.id ? ' active' : ''}`} onClick={() => apply(m.id)}>
+          <div className="perm-card-label">{m.label}</div>
+          <div className="perm-card-desc">{m.description}</div>
+        </button>
+      ))}
+    </div>
+  );
+}
 
 function Row({ title, desc, children }: { title: React.ReactNode; desc?: React.ReactNode; children?: React.ReactNode }): React.ReactElement {
   return (
@@ -1377,6 +1417,8 @@ export function SettingsDialog(props: {
       case 'permissions': return (
         <>
           <div className="set-h">Permissions</div>
+          <div className="set-desc" style={{ marginBottom: 8 }}>Pick a mode — it sets the access tier, approval, sandbox, and out-of-workspace policy below in one click. Any stored combination maps back to the nearest card.</div>
+          <PermissionModeCards ps={ps} ks={ks} onPref={props.onPref} onAction={props.onAction} setKnob={setKnob} />
           <Row title="Execution mode" desc="planning routes shell commands through per-call approval; fast skips confirmation for non-dangerous commands. (/mode)">
             <Select value={ps('executionMode', 'planning')} options={['planning', 'fast']} onChange={(v) => props.onPref('executionMode', v)} />
           </Row>
