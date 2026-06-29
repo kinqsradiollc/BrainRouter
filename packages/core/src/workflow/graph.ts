@@ -12,7 +12,19 @@
  * arbitrary nodes with conditional routing and `$nodes` data passing.
  */
 
-export type WorkflowNodeType = 'trigger' | 'agent' | 'set' | 'condition' | 'merge' | 'output';
+export type WorkflowNodeType =
+  | 'trigger' | 'agent' | 'set' | 'condition' | 'merge' | 'output'
+  // §7 L3 — advanced nodes
+  | 'switch'      // multi-branch on a value matched against declared cases
+  | 'filter'      // keep array items matching field/op/value
+  | 'sort'        // order an array by a field
+  | 'limit'       // take the first N array items
+  | 'aggregate'   // reduce an array → scalar (count/sum/avg/min/max/join/first/last)
+  | 'loop'        // iterate an agent body: 'foreach' an array, or 'refine' until a stop string
+  | 'approval'    // human-approval pause (branches approved/rejected via the injected approver)
+  | 'extract'     // LLM parameter-extractor → JSON object
+  | 'classify'    // LLM question-classifier → branch = chosen label
+  | 'subworkflow';// run a saved graph as a node (depth + recursion guarded)
 
 export interface WorkflowNode {
   id: string;
@@ -59,7 +71,7 @@ export function validateGraph(graph: WorkflowGraph): GraphValidation {
     if (!ids.has(e.target)) errors.push(`edge ${e.id} target "${e.target}" is not a node`);
   }
   if (!graph.nodes.some((n) => n.type === 'trigger')) errors.push('graph has no trigger node');
-  if (detectCycle(graph)) errors.push('graph contains a cycle (loops are not supported here)');
+  if (detectCycle(graph)) errors.push('graph contains a cycle (use a Loop node for iteration)');
   return { ok: errors.length === 0, errors };
 }
 
