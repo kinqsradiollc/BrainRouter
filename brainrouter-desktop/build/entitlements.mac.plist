@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Electron/V8 JIT under the hardened runtime. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <!-- Required so the native input module (@nut-tree-fork/libnut, asarUnpacked
+       *.node) loads under the hardened runtime in a signed + notarized build —
+       without this, computer_use fails to load its native binding at runtime. -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <!-- AppleScript / System Events automation used by the permissions deep-links. -->
+  <key>com.apple.security.automation.apple-events</key>
+  <true/>
+  <key>com.apple.security.device.camera</key>
+  <false/>
+</dict>
+<!-- NOTE: macOS Accessibility (input control) and Screen Recording (desktopCapturer)
+     are NOT app entitlements — they are TCC permissions the user grants at runtime via
+     System Settings. The computer-use Settings panel deep-links to those panes. -->
+
+</plist>

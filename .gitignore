@@ -20,6 +20,10 @@ yarn-error.log*
 # Build/Dist
 dist/
 build/
+# …but the desktop's electron-builder resources (entitlements, notarize hook,
+# packaging docs) are source, not build output — they must be tracked.
+!brainrouter-desktop/build/
+!brainrouter-desktop/build/**
 out/
 .next/
 .open-next/

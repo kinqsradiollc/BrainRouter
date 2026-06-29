@@ -15,25 +15,31 @@
     "start": "npm run build:deps && npm run build && electron .",
     "start:fast": "electron .",
     "electron": "electron .",
-    "reset:desktop": "node scripts/reset-desktop.mjs"
+    "reset:desktop": "node scripts/reset-desktop.mjs",
+    "dist:mac": "npm run build && npx --yes electron-builder --mac --publish never",
+    "dist:win": "npm run build && npx --yes electron-builder --win --publish never"
   },
   "build": {
+    "appId": "com.brainrouter.desktop",
+    "productName": "BrainRouter",
+    "afterSign": "build/notarize.cjs",
     "asarUnpack": [
       "**/*.node",
       "node_modules/@nut-tree-fork/libnut-*/**/*"
     ],
     "mac": {
       "hardenedRuntime": true,
+      "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "target": [
-        "dmg",
-        "zip"
+        { "target": "dmg", "arch": ["arm64", "x64"] },
+        { "target": "zip", "arch": ["arm64", "x64"] }
       ]
     },
     "win": {
       "target": [
-        "nsis"
+        { "target": "nsis", "arch": ["x64"] }
       ]
     }
   },
