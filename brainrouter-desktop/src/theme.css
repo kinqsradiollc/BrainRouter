@@ -4277,6 +4277,20 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .write-preview { flex: 1; padding: 12px 20px; border-left: 1px solid var(--border); overflow: auto; }
 .write-status { font-size: 11px; color: var(--text-dim); padding: 4px 8px; border-top: 1px solid var(--border); }
 
+/* ===== §3 D4 — Prototype panel ===== */
+.proto-panel { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.proto-section { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); margin-top: 4px; }
+.proto-color { display: flex; align-items: center; gap: 8px; }
+.proto-swatch { width: 18px; height: 18px; border-radius: 5px; border: 1px solid var(--border); flex: none; }
+.proto-warn { font-size: 11px; color: var(--err); }
+.proto-tones { display: flex; flex-wrap: wrap; gap: 4px; }
+.proto-tone { font-size: 12px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg); color: var(--text-dim); cursor: pointer; }
+.proto-tone.on { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.proto-steering { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px; font-size: 12px; white-space: pre-wrap; color: var(--text-dim); margin: 0; }
+.proto-actions { display: flex; align-items: center; gap: 8px; }
+.proto-path { font-family: var(--mono); font-size: 11px; color: var(--text-faint); margin-right: auto; }
+.proto-prompt { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-family: var(--mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap; color: var(--text); margin: 0; max-height: 360px; overflow: auto; }
+
 /* ===== §2 W5 — Write-mode workspace-grounded assistant ===== */
 .write-asst { border-top: 1px solid var(--border); }
 .write-asst-toggle { width: 100%; text-align: left; background: none; border: 0; color: var(--accent); font-size: 12px; font-weight: 600; padding: 6px 10px; cursor: pointer; }
