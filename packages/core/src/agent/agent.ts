@@ -5791,18 +5791,20 @@ export function minimalReasoningEffort(model: string | undefined): EffortLevel {
 }
 
 /**
- * Pick the reasoning effort for a turn. A per-run override (a spawned child's
- * fixed effort) wins; otherwise `fast` execution mode forces the model's minimum
- * (Fast = minimal reasoning) and `planning` keeps the user's chosen level. Pure +
- * isolated so the Fast→reasoning coupling is unit-tested without the agent loop.
+ * Pick the reasoning effort for a turn. Reasoning effort is DECOUPLED from
+ * executionMode: it is the user's explicit choice (the composer's model-aware
+ * reasoning slider), independent of Fast mode. Fast mode now only affects the
+ * agentic strategy (direct answers / minimal planning), not how hard the model
+ * thinks. A per-run override (a spawned child's fixed effort) still wins.
+ * `minimalReasoningEffort` is retained (and unit-tested) for callers that want
+ * to dial a model to its floor explicitly. Pure + isolated.
  */
 export function effortForTurnSelection(
   mode: { effort: EffortLevel; executionMode?: string },
-  model: string | undefined,
+  _model: string | undefined,
   override: EffortLevel | undefined,
 ): EffortLevel {
   if (override) return override;
-  if (mode.executionMode === 'fast') return minimalReasoningEffort(model);
   return mode.effort;
 }
 

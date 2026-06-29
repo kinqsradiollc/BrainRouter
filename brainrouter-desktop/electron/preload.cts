@@ -2,7 +2,7 @@
  * DESK-3b — the renderer's ONLY capability surface. Agent protocol on one
  * channel; workspace management (main-process dialogs) on invoke channels.
  */
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webFrame } = require('electron');
 
 contextBridge.exposeInMainWorld('brainrouter', {
   send(command: unknown): void {
@@ -59,5 +59,11 @@ contextBridge.exposeInMainWorld('brainrouter', {
   // T1 — cross-workspace dashboard (running tasks + last review gate per recent root).
   globalDashboard(): Promise<{ workspaces: Array<{ workspaceRoot: string; tasks: Array<Record<string, unknown>>; reviewGate: { status: string; blocked: boolean; reason: string } | null }> }> {
     return ipcRenderer.invoke('dashboard:global');
+  },
+  getZoomFactor(): number {
+    return webFrame.getZoomFactor();
+  },
+  setZoomFactor(factor: number): void {
+    webFrame.setZoomFactor(factor);
   },
 });

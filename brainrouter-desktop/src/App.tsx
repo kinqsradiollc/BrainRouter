@@ -162,6 +162,40 @@ export function App(): React.ReactElement {
   } | null>(null);
   const [statsTab, setStatsTab] = useState<'overview' | 'models'>('overview');
   const [statsRange, setStatsRange] = useState<'all' | '30d' | '7d'>('all');
+
+  const [zoomFactor, setZoomFactorState] = useState(() => {
+    const saved = localStorage.getItem('br-zoom-factor');
+    return saved ? parseFloat(saved) : 1.0;
+  });
+
+  const zoomIn = () => {
+    setZoomFactorState((z) => {
+      const next = Math.min(2.5, z + 0.1);
+      localStorage.setItem('br-zoom-factor', next.toFixed(1));
+      return next;
+    });
+  };
+
+  const zoomOut = () => {
+    setZoomFactorState((z) => {
+      const next = Math.max(0.5, z - 0.1);
+      localStorage.setItem('br-zoom-factor', next.toFixed(1));
+      return next;
+    });
+  };
+
+  const resetZoom = () => {
+    setZoomFactorState(1.0);
+    localStorage.setItem('br-zoom-factor', '1.0');
+  };
+
+  useEffect(() => {
+    if (window.brainrouter && typeof window.brainrouter.setZoomFactor === 'function') {
+      window.brainrouter.setZoomFactor(zoomFactor);
+    } else if (document.body) {
+      document.body.style.zoom = zoomFactor.toString();
+    }
+  }, [zoomFactor]);
   // DESK-4m — popovers (one open at a time) across composer, top bar, and menus.
   const [pop, setPop] = useState<PopId>('');
   // DESK-5q/5r — context fill for the composer ring (vs the auto-compact limit).
@@ -634,6 +668,10 @@ export function App(): React.ReactElement {
         if (sess) { e.preventDefault(); resumeSessionRef.current(sess.sessionKey); }
       }
       if (mod && e.key === ',') { e.preventDefault(); openSettings('general'); }
+      // Zoom shortcuts
+      if (mod && (e.key === '=' || e.key === '+')) { e.preventDefault(); zoomIn(); }
+      if (mod && e.key === '-') { e.preventDefault(); zoomOut(); }
+      if (mod && e.key === '0') { e.preventDefault(); resetZoom(); }
     };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
@@ -1229,7 +1267,7 @@ export function App(): React.ReactElement {
   // Env column may ONLY appear when the chat keeps its full natural content
   // width (760px content + padding ≈ 820): opening Environment must never
   // visibly shrink the conversation. No room → column AND toggle yield.
-  const envRoom = !sideFullScreen && (workW === 0 || workW - (sidePanelOpen ? sideWidth : 0) - 316 >= 820);
+  const envRoom = !sideFullScreen && (workW === 0 || workW - (sidePanelOpen ? sideWidth : 0) - 316 >= 820 / zoomFactor);
   const envVisible = envOpen && !homeMode && envRoom;
   const railAnim = useClosable(railOpen);
   const sideAnim = useClosable(sidePanelOpen);
@@ -1301,7 +1339,7 @@ export function App(): React.ReactElement {
                 requestStop={() => { requestStop(); if (goalState?.status === 'active') runBridge('goal', 'pause'); }}
                 slashActive={slashActive} slashMatches={slashMatches} commands={commands} slashSel={slashSel} setSlashSel={setSlashSel}
                 setSlashDismissed={setSlashDismissed} onRunSlash={runSlash} pop={pop} setPop={setPop} q={q}
-                modeLabel={modeLabel} execMode={execMode} effort={effort} info={info} branches={branches}
+                modeLabel={modeLabel} effort={effort} info={info} branches={branches}
                 endpointModels={endpointModels} allowedModels={defaultProviderModels} modelsLoading={modelsLoading} setModelsLoading={setModelsLoading}
                 connectedProviders={snapshot?.providers ?? []} defaultProviderName={snapshot?.defaultProviderName ?? null}
                 modelChoices={modelChoices} modelScope={modelScope} setModelScope={setModelScope}
@@ -1394,6 +1432,7 @@ export function App(): React.ReactElement {
           q(id, name, args);
         }}
         onRunCommand={(c) => { setSettings((st) => ({ ...st, open: false })); runCommand(c, cmdCtx); }}
+        execMode={execMode}
         codeFont={codeFont}
         onCodeFont={setCodeFont}
         theme={theme}

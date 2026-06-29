@@ -30,6 +30,8 @@ declare global {
       reorderWorkspace?(dragged: string, target: string): Promise<{ recents: string[] }>;
       /** T1 — cross-workspace dashboard: running tasks + last review gate per recent root. */
       globalDashboard?(): Promise<{ workspaces: Array<{ workspaceRoot: string; tasks: Array<Record<string, unknown>>; reviewGate: { status: string; blocked: boolean; reason: string } | null }> }>;
+      getZoomFactor?(): number;
+      setZoomFactor?(factor: number): void;
     };
   }
 }

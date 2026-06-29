@@ -144,9 +144,11 @@ test('resolveWireEffort: Claude extended tiers (max, ultracode) cap at the wire 
   assert.equal(resolveWireEffort(claude, 'ultracode'), xh, 'Ultracode → same wire reasoning_effort as Extra');
 });
 
-test('effortForTurnSelection: fast mode forces minimal reasoning; planning keeps the chosen level', () => {
-  assert.equal(effortForTurnSelection({ effort: 'high', executionMode: 'fast' }, 'gpt-5', undefined), 'low', 'fast + graded → low');
-  assert.equal(effortForTurnSelection({ effort: 'high', executionMode: 'fast' }, 'gpt-4o', undefined), 'medium', 'fast + non-reasoning → medium (off)');
+test('effortForTurnSelection: reasoning is DECOUPLED from executionMode (Fast no longer clamps)', () => {
+  // Reasoning effort is the user's explicit choice and is independent of Fast
+  // mode — Fast only changes the agentic strategy, not how hard the model thinks.
+  assert.equal(effortForTurnSelection({ effort: 'high', executionMode: 'fast' }, 'gpt-5', undefined), 'high', 'fast keeps the chosen level (no clamp)');
   assert.equal(effortForTurnSelection({ effort: 'high', executionMode: 'planning' }, 'gpt-5', undefined), 'high', 'planning keeps the chosen level');
-  assert.equal(effortForTurnSelection({ effort: 'medium', executionMode: 'fast' }, 'gpt-5', 'xhigh'), 'xhigh', 'an explicit per-run override wins over fast');
+  assert.equal(effortForTurnSelection({ effort: 'low', executionMode: 'fast' }, 'gpt-5', undefined), 'low', 'fast respects an explicitly-low choice');
+  assert.equal(effortForTurnSelection({ effort: 'medium', executionMode: 'fast' }, 'gpt-5', 'xhigh'), 'xhigh', 'an explicit per-run override still wins');
 });

@@ -1817,17 +1817,6 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
 /* ≤900px — panel columns become right-side drawers */
 @media (max-width: 920px) {
   .center { min-width: 0; }
-  /* Hide the secondary Environment panel on narrow windows — it's toggleable
-     and the chat needs the width back. */
-  .env-col { display: none; }
-}
-/* Narrow the sidebar (overriding its inline drag-resized width) so the chat
-   stays usable as the window shrinks — covers small/odd window dimensions. */
-@media (max-width: 720px) {
-  .rail { width: 200px !important; }
-}
-@media (max-width: 520px) {
-  .rail { width: 162px !important; }
 }
 
 /* ≤640px window — only window-scoped chrome (dialogs); content compression

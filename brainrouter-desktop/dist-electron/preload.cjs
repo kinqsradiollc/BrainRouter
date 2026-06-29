@@ -4,7 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
  * DESK-3b — the renderer's ONLY capability surface. Agent protocol on one
  * channel; workspace management (main-process dialogs) on invoke channels.
  */
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webFrame } = require('electron');
 contextBridge.exposeInMainWorld('brainrouter', {
     send(command) {
         ipcRenderer.send('agent-command', command);
@@ -60,5 +60,11 @@ contextBridge.exposeInMainWorld('brainrouter', {
     // T1 — cross-workspace dashboard (running tasks + last review gate per recent root).
     globalDashboard() {
         return ipcRenderer.invoke('dashboard:global');
+    },
+    getZoomFactor() {
+        return webFrame.getZoomFactor();
+    },
+    setZoomFactor(factor) {
+        webFrame.setZoomFactor(factor);
     },
 });
