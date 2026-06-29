@@ -2160,6 +2160,9 @@ async function main(): Promise<void> {
       // round-tripping. All escape/symlink/stale guards live in fsRead.ts.
       'file-read': (args) => readWorkspaceEntry(workspaceRoot, typeof args.path === 'string' ? args.path : ''),
       'file-stat': (args) => statWorkspaceEntry(workspaceRoot, typeof args.path === 'string' ? args.path : ''),
+      // §2 Write mode — save a prose file through the same guarded write the
+      // editor uses (writeWorkspaceEntry: escape/symlink/stale guards in fsRead).
+      'write-save': (args) => writeWorkspaceEntry(workspaceRoot, typeof args.path === 'string' ? args.path : '', typeof args.content === 'string' ? args.content : ''),
       // DESK-4j — branch picker (pattern: branch chip with dropdown in the
       // composer context row). Listing is read-only; checkout runs through
       // the same user-command path as the terminal input.

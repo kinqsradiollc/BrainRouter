@@ -563,6 +563,7 @@ export function installDevBridge(): void {
   // T5 — a tiny in-memory FS so the editor (open/edit/save/stale-write) is
   // exercisable in the browser preview without a real host.
   const devFiles: Record<string, { content: string; mtimeMs: number }> = {
+    'README.md': { content: '# BrainRouter\n\nA **memory-first** AI coding agent.\n\n## Features\n\n- 4-stage recall pipeline\n- Multi-agent orchestration\n- Visual workflow canvas\n\n> Write mode lets you edit Markdown with a live preview.\n', mtimeMs: 1_000 },
     'src/memory/recall.ts': { content: 'export function recall(query: string) {\n  // 4-stage pipeline: retrieve -> rerank -> judge -> expand\n  const ranked = rerank(retrieve(query));\n  return expand(judge(ranked));\n}\n', mtimeMs: 1_000 },
     'src/state/completionInbox.ts': { content: '/** Completion inbox - detached workers report back here. */\nimport { randomUUID } from "node:crypto";\n\nexport interface Completion {\n  id: string;\n  parentSessionKey: string;\n  summary: string;\n}\n', mtimeMs: 1_000 },
     'assets/logo.png': { content: 'binary-bytes', mtimeMs: 1_000 },
@@ -1318,6 +1319,7 @@ export function installDevBridge(): void {
     }),
     // T5 — editor backend (in-memory): read / stat / guarded save (stale-write).
     'file-read': (a) => devFileRead(String(a.path ?? 'src/memory/recall.ts')),
+    'write-save': (a) => { const p = String(a.path ?? ''); const c = String(a.content ?? ''); if (devFiles[p]) { devFiles[p].content = c; } return { ok: true, path: p }; },
     'file-stat': (a) => { const p = String(a.path ?? ''); const f = devFiles[p]; return f ? { path: p, exists: true, kind: 'file', mtimeMs: f.mtimeMs, size: f.content.length } : { path: p, exists: false }; },
     'action:file-save': (a) => {
       const p = String(a.path ?? ''); const content = String(a.content ?? ''); const f = devFiles[p];
