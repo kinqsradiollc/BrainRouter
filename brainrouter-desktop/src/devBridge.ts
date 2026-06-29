@@ -569,6 +569,7 @@ export function installDevBridge(): void {
     'assets/logo.png': { content: 'binary-bytes', mtimeMs: 1_000 },
   };
   const devWorkflows: Record<string, Record<string, unknown>> = {};
+  const devShortcuts: Record<string, string> = {}; // §5.9 — in-memory shortcut overrides
   const devFileRead = (p: string): unknown => {
     const f = devFiles[p];
     if (!f) return { path: p, kind: 'file', content: '', error: 'ENOENT: no such file (dev bridge)' };
@@ -1329,6 +1330,8 @@ export function installDevBridge(): void {
     'write-inline-ai': (a) => { const action = String(a.action ?? 'polish'); const text = String(a.text ?? ''); if (!text.trim()) return { text: '', error: 'No text selected.' }; if (action === 'continue') return { text: text + (/\s$/.test(text) ? '' : ' ') + 'Moreover, this continuation is produced by the dev-bridge stub to exercise the inline assistant.' }; const polished = text.replace(/\bvery\s+/gi, '').replace(/\bgood\b/gi, 'excellent').replace(/\butilize\b/gi, 'use').replace(/[ \t]+/g, ' ').replace(/(^|[.!?]\s+)([a-z])/g, (_m, p, c) => p + (c as string).toUpperCase()).trim(); return { text: polished || text }; },
     'write-ghost-complete': (a) => { const prefix = String(a.prefix ?? ''); if (prefix.trim().length < 3) return { text: '' }; return { text: /\s$/.test(prefix) ? 'this continuation is from the dev-bridge stub.' : ' — continued by the dev-bridge stub.' }; },
     'write-assistant': (a) => { const q = String(a.question ?? '').trim(); if (!q) return { text: '', error: 'Ask a question.' }; return { text: `(dev-bridge) On "${q.slice(0, 60)}": ground your prose in README.md — keep the memory-first framing consistent and cite the source doc.`, grounded: true }; },
+    'shortcuts-get': () => { try { return { overrides: JSON.parse(localStorage.getItem('br-dev-shortcuts') || '{}') }; } catch { return { overrides: { ...devShortcuts } }; } },
+    'shortcuts-save': (a) => { const raw = (a.overrides && typeof a.overrides === 'object') ? a.overrides as Record<string, unknown> : {}; const clean: Record<string, string> = {}; for (const [k, v] of Object.entries(raw)) if (typeof v === 'string' && v.trim()) clean[k] = v.trim(); try { localStorage.setItem('br-dev-shortcuts', JSON.stringify(clean)); } catch { /* ignore */ } return { ok: true, overrides: clean }; },
     'file-stat': (a) => { const p = String(a.path ?? ''); const f = devFiles[p]; return f ? { path: p, exists: true, kind: 'file', mtimeMs: f.mtimeMs, size: f.content.length } : { path: p, exists: false }; },
     'action:file-save': (a) => {
       const p = String(a.path ?? ''); const content = String(a.content ?? ''); const f = devFiles[p];
