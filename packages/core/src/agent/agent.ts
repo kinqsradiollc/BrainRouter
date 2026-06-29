@@ -3102,7 +3102,13 @@ export class Agent {
     if (!this.silent && isTelemetryEnabled()) {
       try {
         recordDailyUsage(
-          { promptTokens: this.lastTurnUsage.promptTokens, completionTokens: this.lastTurnUsage.completionTokens, calls: this.lastTurnUsage.calls },
+          {
+            promptTokens: this.lastTurnUsage.promptTokens,
+            completionTokens: this.lastTurnUsage.completionTokens,
+            calls: this.lastTurnUsage.calls,
+            cachedTokens: this.lastTurnUsage.cachedTokens,
+            missedTokens: this.lastTurnUsage.missedTokens,
+          },
           Date.now(),
         );
       } catch { /* observability only */ }

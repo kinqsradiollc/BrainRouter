@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   contextWindowFor,
   formatContextWindow,
+  contextWindowForBudget,
+  DEFAULT_CONTEXT_WINDOW,
   _resetContextWindowCache,
 } from '../context/contextWindow.js';
 import { loadModelsConfig, _resetConfigCache } from '../config/configLoader.js';
@@ -51,6 +53,16 @@ test('formatContextWindow returns "?" for unknown models so the footer never lie
   _resetContextWindowCache();
   assert.equal(formatContextWindow('made-up-model'), '?');
   assert.equal(formatContextWindow(''), '?');
+});
+
+test('§5.6 contextWindowForBudget always returns a number (128k default for unknown)', () => {
+  _resetContextWindowCache();
+  assert.equal(contextWindowForBudget('gpt-5'), 400_000);
+  assert.equal(DEFAULT_CONTEXT_WINDOW, 128_000);
+  assert.equal(contextWindowForBudget('made-up-model'), DEFAULT_CONTEXT_WINDOW);
+  assert.equal(contextWindowForBudget(''), DEFAULT_CONTEXT_WINDOW);
+  assert.equal(contextWindowForBudget(undefined), DEFAULT_CONTEXT_WINDOW);
+  assert.equal(contextWindowForBudget(null), DEFAULT_CONTEXT_WINDOW);
 });
 
 test('models.json keys are lowercase only (case-insensitive lookup contract)', () => {
