@@ -7,6 +7,7 @@
  * placeholder so every row still aligns. Used in the composer's model menu.
  */
 import React from 'react';
+import { modelFamily } from '../lib/models/modelFamily.js';
 import openaiSvg from '@lobehub/icons-static-svg/icons/openai.svg?raw';
 import claudeSvg from '@lobehub/icons-static-svg/icons/claude.svg?raw';
 import geminiSvg from '@lobehub/icons-static-svg/icons/gemini.svg?raw';
@@ -37,38 +38,10 @@ const FAMILY_SVG: Record<string, string> = {
   perplexity: perplexitySvg, hunyuan: hunyuanSvg,
 };
 
-// First match wins — order specific patterns before broad ones. Matched against
-// the lower-cased model id (which may include a vendor prefix like "z-ai/").
-const RULES: Array<[RegExp, string]> = [
-  [/claude|anthropic/, 'claude'],
-  [/gemini/, 'gemini'],
-  [/gemma/, 'gemma'],
-  [/gpt|openai|chatgpt|davinci|\bo[1345](?:-|\b)/, 'openai'],
-  [/qwen|qwq/, 'qwen'],
-  [/deepseek/, 'deepseek'],
-  [/mi[sx]tral|magistral|codestral|ministral|pixtral|devstral/, 'mistral'],
-  [/llama|meta-/, 'meta'],
-  [/glm|chatglm|z-ai|zhipu|cogview/, 'chatglm'],
-  [/grok/, 'grok'],
-  [/command|cohere|\baya\b/, 'cohere'],
-  [/phi-?\d/, 'microsoft'],
-  [/kimi/, 'kimi'],
-  [/moonshot/, 'moonshot'],
-  [/nemotron|nvidia/, 'nvidia'],
-  [/minimax|abab/, 'minimax'],
-  [/doubao/, 'doubao'],
-  [/baichuan/, 'baichuan'],
-  [/perplexity|sonar/, 'perplexity'],
-  [/hunyuan/, 'hunyuan'],
-  [/\byi-/, 'yi'],
-];
-
-/** The detected model family id (lobehub key), or null when unrecognized. */
-export function modelFamily(model: string): string | null {
-  const m = (model || '').toLowerCase();
-  for (const [re, fam] of RULES) if (re.test(m)) return fam;
-  return null;
-}
+// The model-family detector moved to lib/models/modelFamily so it can be reused
+// by reasoningProfile without pulling these React/`?raw` imports. Re-exported
+// here for back-compat with existing `import { modelFamily } from './ModelIcon'`.
+export { modelFamily };
 
 export function ModelIcon({ model, size = 15, style }: { model: string; size?: number; style?: React.CSSProperties }): React.ReactElement {
   const fam = modelFamily(model);

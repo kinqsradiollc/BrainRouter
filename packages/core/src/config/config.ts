@@ -250,8 +250,10 @@ export interface CliKnobs {
    * Default true.
    */
   confirmRunWorkflow?: boolean;
-  /** Reasoning depth preference override (`/effort`). Default 'medium'. */
-  effort?: 'low' | 'medium' | 'high' | 'xhigh';
+  /** Reasoning depth preference override (`/effort`). Default 'medium'. `max` and
+   *  `ultracode` are the desktop Claude slider's top tiers (cap to the wire's top
+   *  reasoning_effort, like xhigh). */
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultracode';
   /** PARITY-E3 — model to fall back to when the primary model is unavailable. */
   fallbackModel?: string | null;
 
@@ -851,7 +853,7 @@ export interface ResolvedCliKnobs {
   llmMaxConcurrent: number;
   disableStream: boolean;
   confirmRunWorkflow: boolean;
-  effort: 'low' | 'medium' | 'high' | 'xhigh';
+  effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultracode';
   fallbackModel: string | null;
   mcpTimeoutMs: number;
   /** REMOTE-BRAIN — remote brain HTTP endpoint, or null for the embedded default. */

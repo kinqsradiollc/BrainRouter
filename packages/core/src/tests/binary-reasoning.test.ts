@@ -5,7 +5,7 @@ import {
   registerModelReasoningCapabilities,
   isBinaryReasoningModel,
 } from '../provider/models/reasoning.js';
-import { resolveWireEffort } from '../agent/agent.js';
+import { resolveWireEffort, minimalReasoningEffort, effortForTurnSelection } from '../agent/agent.js';
 
 /**
  * Binary on/off reasoning detection (the google/gemma-4-12b-qat on LM Studio
@@ -108,4 +108,45 @@ test('resolveWireEffort: model with no advertised vocab keeps prior behavior', (
   // No registration → isBinaryReasoningModel false → DEFAULT_EFFORT_VALUE_MAP applies.
   const c = cfg('vendor/unknown-effort-model');
   assert.equal(resolveWireEffort(c, 'high'), 'high');
+});
+
+/**
+ * Fast = minimal reasoning. The desktop "Fast" toggle and CLI fast execution
+ * mode dial reasoning down to the LOWEST the model supports: graded reasoners
+ * drop to `low` (still reasons, minimally), while non-reasoning / always-on /
+ * binary on-off models collapse to `medium` — which OMITS the reasoning_effort
+ * field (off / model default) per resolveWireEffort. Mirrors the renderer's
+ * reasoningProfile.min so the chip and the wire agree.
+ */
+test('minimalReasoningEffort: graded reasoning models dial down to low', () => {
+  for (const m of ['gpt-5', 'gpt-5.3-codex', 'o3-mini', 'deepseek-v3.1', 'qwen3-30b-a3b', 'magistral-small', 'phi-4-reasoning-plus']) {
+    assert.equal(minimalReasoningEffort(m), 'low', m);
+  }
+});
+
+test('minimalReasoningEffort: non-reasoning, always-on, and binary models omit (medium = off)', () => {
+  assert.equal(minimalReasoningEffort('gpt-4o'), 'medium', 'non-reasoning chat model');
+  assert.equal(minimalReasoningEffort('deepseek-chat'), 'medium', '*-chat variant rejects the field');
+  assert.equal(minimalReasoningEffort('deepseek-reasoner'), 'medium', 'always-on reasoner cannot be dialed down');
+  assert.equal(minimalReasoningEffort(undefined), 'medium', 'no model → safe omit');
+  registerModelReasoningCapabilities('vendor/gemma-min-qat', { reasoning: true, efforts: ['on', 'off'] });
+  assert.equal(minimalReasoningEffort('vendor/gemma-min-qat'), 'medium', 'binary on/off → off, not a graded low');
+});
+
+test('resolveWireEffort: Claude extended tiers (max, ultracode) cap at the wire top — same value as xhigh', () => {
+  // The OpenAI-compatible reasoning_effort field has no level above xhigh, so the
+  // desktop Claude slider's Max/Ultracode tiers request the same top effort as
+  // Extra (xhigh). They persist distinctly for the UI but converge on the wire.
+  const claude = cfg('claude-opus-4-8', { provider: 'openai-compatible', endpoint: 'https://openrouter.ai/api/v1' });
+  const xh = resolveWireEffort(claude, 'xhigh');
+  assert.notEqual(xh, null, 'sanity: Extra (xhigh) produces a wire value here');
+  assert.equal(resolveWireEffort(claude, 'max'), xh, 'Max → same wire reasoning_effort as Extra');
+  assert.equal(resolveWireEffort(claude, 'ultracode'), xh, 'Ultracode → same wire reasoning_effort as Extra');
+});
+
+test('effortForTurnSelection: fast mode forces minimal reasoning; planning keeps the chosen level', () => {
+  assert.equal(effortForTurnSelection({ effort: 'high', executionMode: 'fast' }, 'gpt-5', undefined), 'low', 'fast + graded → low');
+  assert.equal(effortForTurnSelection({ effort: 'high', executionMode: 'fast' }, 'gpt-4o', undefined), 'medium', 'fast + non-reasoning → medium (off)');
+  assert.equal(effortForTurnSelection({ effort: 'high', executionMode: 'planning' }, 'gpt-5', undefined), 'high', 'planning keeps the chosen level');
+  assert.equal(effortForTurnSelection({ effort: 'medium', executionMode: 'fast' }, 'gpt-5', 'xhigh'), 'xhigh', 'an explicit per-run override wins over fast');
 });

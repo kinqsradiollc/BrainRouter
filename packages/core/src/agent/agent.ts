@@ -102,7 +102,7 @@ import { evaluateDestructiveCommand } from '../exec/destructiveCommandGuard.js';
 import { gitHeadSha } from '../git/workspaceGit.js';
 import { recordDailyUsage } from '../usage/usageHistoryStore.js';
 import { isTelemetryEnabled } from '../telemetry/telemetry.js';
-import { readPreferences, resolveEffort, type EffortLevel } from '../session/preferencesStore.js';
+import { readPreferences, resolveEffort, effortToWireLevel, type EffortLevel } from '../session/preferencesStore.js';
 import { resolveActiveMode } from '../session/sessionModeStore.js';
 import { resolveEffortForTurn } from './effortRouting.js';
 // 0.3.9 — Anthropic native adapter removed (the /v1/messages path landed in
@@ -1636,8 +1636,10 @@ export class Agent {
         // request's reasoning_effort slot — no restart needed. Resolve from
         // the ACTIVE SESSION (session override > workspace pref/config) so a
         // per-chat `/effort` sticks to that chat. A spawned child with a
-        // per-run effort override (0.4.x-5) uses that instead.
-        const selectedEffort = this.effortOverride ?? resolveActiveMode(this.workspaceRoot, this.sessionKey).effort;
+        // per-run effort override (0.4.x-5) uses that instead. `fast` execution
+        // mode forces the model's MINIMUM reasoning (Fast = minimal reasoning).
+        const activeMode = resolveActiveMode(this.workspaceRoot, this.sessionKey);
+        const selectedEffort = effortForTurnSelection(activeMode, this.llmConfig.model, this.effortOverride);
         const effort = resolveEffortForTurn(selectedEffort, this.chatHistory, getCliKnobs());
         // TIER A: stream when the UI is listening for deltas, AND the
         // user hasn't disabled it. Streaming opts in only when a delta
@@ -4620,7 +4622,7 @@ export class Agent {
       // child override) still wins when set.
       executionMode: activeMode.executionMode,
       reviewPolicy: activeMode.reviewPolicy,
-      effort: this.effortOverride ?? activeMode.effort,
+      effort: effortToWireLevel(this.effortOverride ?? activeMode.effort),
       connectedMcpTools,
       // Drive `modelFamilyOverlay`: weaker / OS / free-tier models
       // (Nemotron, Kimi, Llama, Qwen, Mistral, gpt-oss, DeepSeek, …)
@@ -5740,6 +5742,10 @@ function normalizeResponsesOutput(data: any, endpoint: string, model: string) {
  */
 export function resolveWireEffort(config: LLMConfig, effort: EffortLevel | undefined): string | null {
   if (!effort || effort === 'medium') return null;
+  // Claude's extended UI tiers (max, ultracode) have no distinct reasoning_effort
+  // value (the field tops at xhigh), so they cap to xhigh on the wire. They still
+  // persist distinctly so the slider remembers its position.
+  const lvl = effortToWireLevel(effort);
   const def = activeProviderDef(config);
   if ((def?.reasoningEffort ?? 'param') !== 'param') return null;
   const model = normalizeModelName(config.model);
@@ -5755,18 +5761,49 @@ export function resolveWireEffort(config: LLMConfig, effort: EffortLevel | undef
   // model id, while wire vocabularies are provider-specific.
   if (isBinaryReasoningModel(model)) {
     const binaryMap = binaryEffortValueMapFor(def);
-    const binaryMapped = binaryMap?.[effort];
+    const binaryMapped = binaryMap?.[lvl];
     if (binaryMapped === null) return null;
     if (typeof binaryMapped === 'string' && binaryMapped.trim()) return binaryMapped;
   }
   const map = def?.effortValueMap ?? DEFAULT_EFFORT_VALUE_MAP;
-  const mapped = map[effort];
+  const mapped = map[lvl];
   if (mapped === null) return null;             // explicit omit for this level
-  let wire = mapped ?? (effort === 'xhigh' ? 'high' : effort); // undefined → conservative default
-  if (effort === 'xhigh' && wire === 'high' && modelSupportsXhighEffort(model)) {
+  let wire = mapped ?? (lvl === 'xhigh' ? 'high' : lvl); // undefined → conservative default
+  if (lvl === 'xhigh' && wire === 'high' && modelSupportsXhighEffort(model)) {
     wire = 'xhigh';                             // capable model — pass xhigh through, don't degrade
   }
   return wire;
+}
+
+/**
+ * Fast = minimal reasoning. The LOWEST reasoning level a model supports: graded
+ * reasoners dial down to `low` (still reasons, just minimally); non-reasoning,
+ * always-on (`deepseek-reasoner`), and binary on/off models collapse to `medium`,
+ * which OMITS the reasoning_effort field (off / model default) — see
+ * resolveWireEffort. Lets the "Fast" toggle "just go fast" on any model family
+ * without the user re-picking an effort. Mirrors the renderer's reasoningProfile.
+ */
+export function minimalReasoningEffort(model: string | undefined): EffortLevel {
+  if (isReasoningModel(model) && !isAlwaysOnReasoner(model) && !isBinaryReasoningModel(model)) {
+    return 'low';
+  }
+  return 'medium';
+}
+
+/**
+ * Pick the reasoning effort for a turn. A per-run override (a spawned child's
+ * fixed effort) wins; otherwise `fast` execution mode forces the model's minimum
+ * (Fast = minimal reasoning) and `planning` keeps the user's chosen level. Pure +
+ * isolated so the Fast→reasoning coupling is unit-tested without the agent loop.
+ */
+export function effortForTurnSelection(
+  mode: { effort: EffortLevel; executionMode?: string },
+  model: string | undefined,
+  override: EffortLevel | undefined,
+): EffortLevel {
+  if (override) return override;
+  if (mode.executionMode === 'fast') return minimalReasoningEffort(model);
+  return mode.effort;
 }
 
 export interface BuildPayloadOptions {

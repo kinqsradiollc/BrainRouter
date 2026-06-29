@@ -7,11 +7,13 @@ import React, { type Dispatch, type SetStateAction } from 'react';
 import { Icon } from '../icons.js';
 import { ProviderIcon } from './ProviderIcon.js';
 import { ModelIcon } from './ModelIcon.js';
+import { ReasoningSlider } from './ReasoningSlider.js';
 import { SlashPopup } from '../palette.js';
 import { UsageBar } from './UsageBar.js';
 import { ContextRing } from './ContextRing.js';
-import { EFFORT_LEVELS, NON_CHAT_MODEL } from '../constants.js';
+import { NON_CHAT_MODEL } from '../constants.js';
 import { modelCapabilities, capabilityBadges } from '../lib/models/modelCapabilities.js';
+import { reasoningProfileForModel, reasoningPillLabel } from '../lib/models/reasoningProfile.js';
 import type { AttachmentUpload, PopId } from '../types.js';
 import type { DeskCommand, SettingsSection } from '../lib/commands/commands.js';
 import { recognizedCommandToken } from '../lib/composer/slashHighlight.js';
@@ -114,6 +116,12 @@ export function Composer(p: ComposerProps): React.ReactElement {
   // goes transparent and this mirror paints it instead, with the "/command"
   // token in accent blue so the user sees they're in that command's mode.
   const cmdToken = recognizedCommandToken(draft, slashActive, slashMatches, commands);
+  // reasoning-profiles — the effort control is MODEL-FAMILY aware (graded tiers /
+  // binary On-Off / locked "Always on" / hidden). Fast = minimal reasoning, so
+  // the menu is disabled while Fast is on (core clamps the actual wire effort).
+  const reasoningProfile = reasoningProfileForModel(info.model);
+  const reasoningFast = execMode === 'fast';
+  const reasoningPill = reasoningPillLabel(reasoningProfile, effort, reasoningFast);
   return (
     <div className="composer">
       <div
@@ -265,22 +273,33 @@ export function Composer(p: ComposerProps): React.ReactElement {
             ) : null}
           </span>
           <span className="composer-spacer" />
-          {/* DESK-5q — effort is its OWN control (Codex: Faster → Smarter) */}
-          <span className="pop-wrap">
-            {pop === 'effort' ? (
-              <div className="menu-pop effort-menu">
-                <div className="menu-head"><span>Effort</span><span>Faster → Smarter</span></div>
-                {EFFORT_LEVELS.map((lvl) => (
-                  <button key={lvl} className="menu-item" onClick={() => { q('a-mode', 'action:set-session-mode', { effort: lvl }); setPop(''); }}>
-                    <span className="mi-check">{effort === lvl ? '✓' : ''}</span>{lvl === 'xhigh' ? 'Extra high' : lvl[0].toUpperCase() + lvl.slice(1)}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            <button type="button" className="effort-pill" title="Reasoning effort" onClick={() => setPop(pop === 'effort' ? '' : 'effort')}>
-              {effort === 'xhigh' ? 'Extra high' : effort[0].toUpperCase() + effort.slice(1)}
-            </button>
-          </span>
+          {/* DESK-5q + reasoning-profiles — the effort control adapts to the
+              SELECTED model's family: graded tiers, binary On/Off, a locked
+              "Always on", or nothing for non-reasoning models. Fast = minimal
+              reasoning, so the menu is disabled while Fast is on. */}
+          {reasoningPill ? (
+            <span className="pop-wrap">
+              {pop === 'effort' && reasoningProfile.options.length ? (
+                <div className="menu-pop effort-menu">
+                  <ReasoningSlider
+                    profile={reasoningProfile}
+                    effort={effort}
+                    onPick={(lvl) => q('a-mode', 'action:set-session-mode', { effort: lvl })}
+                  />
+                </div>
+              ) : null}
+              <button
+                type="button"
+                className="effort-pill"
+                title={reasoningFast ? 'Fast mode uses minimal reasoning' : reasoningProfile.kind === 'always-on' ? 'This model always reasons' : 'Reasoning effort'}
+                disabled={reasoningFast || reasoningProfile.kind === 'always-on'}
+                style={reasoningFast || reasoningProfile.kind === 'always-on' ? { opacity: 0.6 } : undefined}
+                onClick={() => { if (!reasoningFast && reasoningProfile.options.length) setPop(pop === 'effort' ? '' : 'effort'); }}
+              >
+                {reasoningPill}
+              </button>
+            </span>
+          ) : null}
           {/* model selection is now separate from effort */}
           <span className="pop-wrap">
             {pop === 'model' ? (
