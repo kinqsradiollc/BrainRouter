@@ -46,9 +46,21 @@ const KIND_LABEL: Record<WfKind, string> = {
   condition: 'Condition',
   merge: 'Merge',
   output: 'Output',
+  // §7 L3 — advanced nodes
+  switch: 'Switch',
+  filter: 'Filter',
+  sort: 'Sort',
+  limit: 'Limit',
+  aggregate: 'Aggregate',
+  loop: 'Loop',
+  approval: 'Approval',
+  extract: 'Extract',
+  classify: 'Classify',
+  subworkflow: 'Sub-workflow',
 };
 
 const PALETTE: WfKind[] = ['trigger', 'agent', 'set', 'condition', 'merge', 'output'];
+const PALETTE_L3: WfKind[] = ['switch', 'filter', 'sort', 'limit', 'aggregate', 'loop', 'approval', 'extract', 'classify', 'subworkflow'];
 
 function defaultConfig(kind: WfKind): Record<string, unknown> {
   switch (kind) {
@@ -56,33 +68,74 @@ function defaultConfig(kind: WfKind): Record<string, unknown> {
     case 'set': return { fields: { key: 'value' } };
     case 'condition': return { left: '{{$vars.x}}', op: '==', right: '1' };
     case 'output': return { template: '{{$nodes.agent.text}}' };
+    case 'switch': return { value: '{{$vars.tier}}', cases: ['free', 'pro'] };
+    case 'filter': return { source: '[]', field: 'score', op: '>', value: '5' };
+    case 'sort': return { source: '[]', field: 'score', order: 'desc', numeric: true };
+    case 'limit': return { source: '[]', count: 10 };
+    case 'aggregate': return { source: '[]', op: 'count', field: '' };
+    case 'loop': return { mode: 'foreach', source: '[]', prompt: 'Process {{$vars.item}}', maxIterations: 10, stopContains: '' };
+    case 'approval': return { summary: 'Approve this step?' };
+    case 'extract': return { prompt: 'Extract parameters from {{$vars.input}}', fields: ['name'] };
+    case 'classify': return { input: '{{$vars.question}}', labels: ['billing', 'technical'] };
+    case 'subworkflow': return { workflowId: '', inputs: {} };
     default: return {};
   }
 }
 
 function summarize(kind: WfKind, config: Record<string, unknown>): string {
+  const arr = (v: unknown): string[] => (Array.isArray(v) ? v.map(String) : []);
   switch (kind) {
     case 'agent': return String(config.prompt ?? '').slice(0, 60) || 'prompt…';
     case 'condition': return `${config.left ?? ''} ${config.op ?? '=='} ${config.right ?? ''}`;
     case 'output': return String(config.template ?? '').slice(0, 60) || 'template…';
     case 'set': return Object.keys((config.fields as Record<string, unknown>) ?? {}).join(', ') || 'fields…';
+    case 'switch': return `${config.value ?? ''} ∈ [${arr(config.cases).join(', ')}]`;
+    case 'filter': return `${config.field ?? ''} ${config.op ?? ''} ${config.value ?? ''}`.trim() || 'filter…';
+    case 'sort': return `by ${config.field ?? '?'} ${config.order ?? 'asc'}`;
+    case 'limit': return `first ${config.count ?? 0}`;
+    case 'aggregate': return `${config.op ?? 'count'}(${config.field ?? ''})`;
+    case 'loop': return `${config.mode ?? 'foreach'} ·≤${config.maxIterations ?? 10}`;
+    case 'approval': return String(config.summary ?? '').slice(0, 60) || 'approve…';
+    case 'extract': return arr(config.fields).join(', ') || 'fields…';
+    case 'classify': return `→ [${arr(config.labels).join(', ')}]`;
+    case 'subworkflow': return String(config.workflowId ?? '') || 'pick a workflow…';
     default: return '';
+  }
+}
+
+/**
+ * The outgoing handles for a node's kind. `null` → one unlabeled source handle;
+ * `[]` → terminal (no source); a list → one labeled handle per branch, evenly
+ * spaced down the right edge. Branch ids must match the engine's `rec.branch`.
+ */
+function sourceHandlesFor(kind: WfKind, config: Record<string, unknown>): string[] | null {
+  switch (kind) {
+    case 'output': return [];
+    case 'condition': return ['true', 'false'];
+    case 'switch': { const c = Array.isArray(config.cases) ? config.cases.map(String) : []; return [...c, 'default']; }
+    case 'classify': { const l = Array.isArray(config.labels) ? config.labels.map(String) : []; return l.length ? l : ['default']; }
+    case 'approval': return ['approved', 'rejected'];
+    default: return null;
   }
 }
 
 function WfNode({ data, selected }: NodeProps): React.ReactElement {
   const d = data as WfNodeData;
+  const handles = sourceHandlesFor(d.kind, d.config);
   return (
     <div className={`wf-node wf-node-${d.kind}${selected ? ' selected' : ''}`}>
       {d.kind !== 'trigger' ? <Handle type="target" position={Position.Left} /> : null}
       <div className="wf-node-kind">{KIND_LABEL[d.kind]}</div>
       <div className="wf-node-summary">{summarize(d.kind, d.config)}</div>
-      {d.kind === 'condition' ? (
-        <>
-          <Handle type="source" position={Position.Right} id="true" style={{ top: '35%' }} />
-          <Handle type="source" position={Position.Right} id="false" style={{ top: '65%' }} />
-        </>
-      ) : d.kind !== 'output' ? <Handle type="source" position={Position.Right} /> : null}
+      {handles === null ? <Handle type="source" position={Position.Right} /> : handles.map((h, i) => {
+        const top = `${((i + 1) / (handles.length + 1)) * 100}%`;
+        return (
+          <React.Fragment key={h}>
+            <Handle type="source" position={Position.Right} id={h} style={{ top }} />
+            {handles.length > 1 ? <span className="wf-handle-label" style={{ top }}>{h}</span> : null}
+          </React.Fragment>
+        );
+      })}
     </div>
   );
 }
@@ -221,6 +274,10 @@ export function WorkflowsPanel(_props: WorkflowsPanelProps): React.ReactElement 
         <span className="wf-palette-label">Add node:</span>
         {PALETTE.map((k) => <button key={k} className="seg-toggle" onClick={() => addNode(k)}>{KIND_LABEL[k]}</button>)}
       </div>
+      <div className="wf-palette">
+        <span className="wf-palette-label">Advanced:</span>
+        {PALETTE_L3.map((k) => <button key={k} className="seg-toggle" onClick={() => addNode(k)}>{KIND_LABEL[k]}</button>)}
+      </div>
 
       {problem ? <div className="wf-problem">{problem}</div> : null}
 
@@ -247,7 +304,7 @@ export function WorkflowsPanel(_props: WorkflowsPanelProps): React.ReactElement 
 
         <div className="wf-side">
           <div className="wf-inspector">
-            {selected ? <NodeConfig node={selected} onPatch={patchConfig} onDelete={() => { setNodes((nds) => nds.filter((n) => n.id !== selectedId)); setSelectedId(null); }} /> : (
+            {selected ? <NodeConfig node={selected} saved={saved} onPatch={patchConfig} onDelete={() => { setNodes((nds) => nds.filter((n) => n.id !== selectedId)); setSelectedId(null); }} /> : (
               <div className="wf-inspector-empty">
                 <div className="wf-section">Run variables</div>
                 <textarea className="wf-textarea" value={vars} onChange={(e) => setVars(e.target.value)} rows={5} spellCheck={false} />
@@ -278,27 +335,35 @@ export function WorkflowsPanel(_props: WorkflowsPanelProps): React.ReactElement 
   );
 }
 
-function NodeConfig({ node, onPatch, onDelete }: { node: Node; onPatch: (p: Record<string, unknown>) => void; onDelete: () => void }): React.ReactElement {
+const FILTER_OPS = ['==', '!=', 'contains', '>', '<', 'truthy'];
+const AGG_OPS = ['count', 'sum', 'avg', 'min', 'max', 'join', 'first', 'last'];
+const csv = (v: unknown): string => (Array.isArray(v) ? v.map(String).join(', ') : '');
+const toArr = (s: string): string[] => s.split(',').map((x) => x.trim()).filter(Boolean);
+
+function NodeConfig({ node, saved, onPatch, onDelete }: { node: Node; saved: SavedWorkflowMeta[]; onPatch: (p: Record<string, unknown>) => void; onDelete: () => void }): React.ReactElement {
   const d = node.data as WfNodeData;
   const cfg = d.config;
+  const str = (k: string): string => String(cfg[k] ?? '');
+  const text = (k: string, label: string, rows = 4): React.ReactElement => (
+    <label className="wf-field">{label}
+      <textarea className="wf-textarea" rows={rows} value={str(k)} onChange={(e) => onPatch({ [k]: e.target.value })} />
+    </label>
+  );
+  const line = (k: string, label: string, placeholder = ''): React.ReactElement => (
+    <label className="wf-field">{label}
+      <input className="filter" value={str(k)} onChange={(e) => onPatch({ [k]: e.target.value })} placeholder={placeholder} />
+    </label>
+  );
   return (
     <div className="wf-config">
       <div className="wf-section">{KIND_LABEL[d.kind]} · <code>{node.id}</code></div>
-      {d.kind === 'agent' ? (
-        <label className="wf-field">Prompt
-          <textarea className="wf-textarea" rows={4} value={String(cfg.prompt ?? '')} onChange={(e) => onPatch({ prompt: e.target.value })} />
-        </label>
-      ) : null}
-      {d.kind === 'output' ? (
-        <label className="wf-field">Template
-          <textarea className="wf-textarea" rows={4} value={String(cfg.template ?? '')} onChange={(e) => onPatch({ template: e.target.value })} />
-        </label>
-      ) : null}
+      {d.kind === 'agent' ? text('prompt', 'Prompt') : null}
+      {d.kind === 'output' ? text('template', 'Template') : null}
       {d.kind === 'condition' ? (
         <div className="wf-cond">
           <input className="filter" value={String(cfg.left ?? '')} onChange={(e) => onPatch({ left: e.target.value })} placeholder="left" />
           <select className="filter" value={String(cfg.op ?? '==')} onChange={(e) => onPatch({ op: e.target.value })}>
-            {['==', '!=', 'contains', '>', '<', 'truthy'].map((o) => <option key={o} value={o}>{o}</option>)}
+            {FILTER_OPS.map((o) => <option key={o} value={o}>{o}</option>)}
           </select>
           <input className="filter" value={String(cfg.right ?? '')} onChange={(e) => onPatch({ right: e.target.value })} placeholder="right" />
         </div>
@@ -308,6 +373,107 @@ function NodeConfig({ node, onPatch, onDelete }: { node: Node; onPatch: (p: Reco
           <textarea className="wf-textarea" rows={4} value={JSON.stringify(cfg.fields ?? {}, null, 2)}
             onChange={(e) => { try { onPatch({ fields: JSON.parse(e.target.value) }); } catch { /* keep typing */ } }} />
         </label>
+      ) : null}
+      {d.kind === 'switch' ? (
+        <>
+          {line('value', 'Value', '{{$vars.tier}}')}
+          <label className="wf-field">Cases (comma-separated)
+            <input className="filter" value={csv(cfg.cases)} onChange={(e) => onPatch({ cases: toArr(e.target.value) })} placeholder="free, pro" />
+          </label>
+          <div className="wf-hint">Routes to the matching case handle, else <code>default</code>.</div>
+        </>
+      ) : null}
+      {d.kind === 'filter' ? (
+        <>
+          {line('source', 'Source (array or {{$nodes.id.items}})', '[]')}
+          {line('field', 'Field', 'score')}
+          <label className="wf-field">Operator
+            <select className="filter" value={String(cfg.op ?? '==')} onChange={(e) => onPatch({ op: e.target.value })}>
+              {FILTER_OPS.map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          </label>
+          {line('value', 'Value', '5')}
+        </>
+      ) : null}
+      {d.kind === 'sort' ? (
+        <>
+          {line('source', 'Source', '[]')}
+          {line('field', 'Field', 'score')}
+          <label className="wf-field">Order
+            <select className="filter" value={String(cfg.order ?? 'asc')} onChange={(e) => onPatch({ order: e.target.value })}>
+              {['asc', 'desc'].map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          </label>
+          <label className="wf-check"><input type="checkbox" checked={cfg.numeric === true} onChange={(e) => onPatch({ numeric: e.target.checked })} /> Numeric</label>
+        </>
+      ) : null}
+      {d.kind === 'limit' ? (
+        <>
+          {line('source', 'Source', '[]')}
+          <label className="wf-field">Count
+            <input className="filter" type="number" value={Number(cfg.count ?? 0)} onChange={(e) => onPatch({ count: Number(e.target.value) })} />
+          </label>
+        </>
+      ) : null}
+      {d.kind === 'aggregate' ? (
+        <>
+          {line('source', 'Source', '[]')}
+          <label className="wf-field">Operation
+            <select className="filter" value={String(cfg.op ?? 'count')} onChange={(e) => onPatch({ op: e.target.value })}>
+              {AGG_OPS.map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          </label>
+          {line('field', 'Field', '')}
+          {String(cfg.op) === 'join' ? line('separator', 'Separator', ', ') : null}
+        </>
+      ) : null}
+      {d.kind === 'loop' ? (
+        <>
+          <label className="wf-field">Mode
+            <select className="filter" value={String(cfg.mode ?? 'foreach')} onChange={(e) => onPatch({ mode: e.target.value })}>
+              {['foreach', 'refine'].map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          </label>
+          {String(cfg.mode ?? 'foreach') === 'foreach' ? line('source', 'Items (array)', '[]') : null}
+          {text('prompt', 'Body prompt', 3)}
+          <label className="wf-field">Max iterations
+            <input className="filter" type="number" value={Number(cfg.maxIterations ?? 10)} onChange={(e) => onPatch({ maxIterations: Number(e.target.value) })} />
+          </label>
+          {String(cfg.mode) === 'refine' ? line('stopContains', 'Stop when output contains', 'DONE') : null}
+          <div className="wf-hint">foreach: <code>{'{{$vars.item}}'}</code>/<code>{'{{$vars.index}}'}</code>. refine: <code>{'{{$vars.last}}'}</code>.</div>
+        </>
+      ) : null}
+      {d.kind === 'approval' ? text('summary', 'Summary shown to the approver', 3) : null}
+      {d.kind === 'extract' ? (
+        <>
+          {text('prompt', 'Instruction', 3)}
+          <label className="wf-field">Fields (comma-separated)
+            <input className="filter" value={csv(cfg.fields)} onChange={(e) => onPatch({ fields: toArr(e.target.value) })} placeholder="name, email" />
+          </label>
+        </>
+      ) : null}
+      {d.kind === 'classify' ? (
+        <>
+          {text('input', 'Input', 3)}
+          <label className="wf-field">Labels (comma-separated)
+            <input className="filter" value={csv(cfg.labels)} onChange={(e) => onPatch({ labels: toArr(e.target.value) })} placeholder="billing, technical" />
+          </label>
+          <div className="wf-hint">Routes to the chosen-label handle.</div>
+        </>
+      ) : null}
+      {d.kind === 'subworkflow' ? (
+        <>
+          <label className="wf-field">Workflow
+            <select className="filter" value={str('workflowId')} onChange={(e) => onPatch({ workflowId: e.target.value })}>
+              <option value="">pick a saved workflow…</option>
+              {saved.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+            </select>
+          </label>
+          <label className="wf-field">Inputs (JSON)
+            <textarea className="wf-textarea" rows={3} value={JSON.stringify(cfg.inputs ?? {}, null, 2)}
+              onChange={(e) => { try { onPatch({ inputs: JSON.parse(e.target.value) }); } catch { /* keep typing */ } }} />
+          </label>
+        </>
       ) : null}
       {d.kind === 'trigger' || d.kind === 'merge' ? <div className="wf-hint">No configuration.</div> : null}
       <button className="icon-btn wf-delete" onClick={onDelete}>Delete node</button>
