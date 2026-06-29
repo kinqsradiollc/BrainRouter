@@ -1425,6 +1425,9 @@ textarea.ctl { min-width: 0; resize: vertical; line-height: 1.45; }
 .art-view-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .art-interactive { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-dim); cursor: pointer; }
 .art-interactive input { margin: 0; }
+/* §3 D3 — webview reload control */
+.art-wv-reload { font-size: 11.5px; color: var(--text-dim); background: var(--raised); border: 1px solid var(--ov-08); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
+.art-wv-reload:hover { color: var(--text); border-color: var(--accent); }
 /* T7 — permission-rule editor; T6 — MCP add-server form */
 .rule-row { display: flex; align-items: center; gap: 8px; }
 .rule-text { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

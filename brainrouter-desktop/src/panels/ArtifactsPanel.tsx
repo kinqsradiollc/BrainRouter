@@ -258,7 +258,12 @@ function ArtifactPreview({ art, content }: { art: ArtifactRecord; content: strin
   // (no scripts); the user can explicitly opt a single artifact into running its
   // scripts (still no network — a strict CSP blocks it). Reset on artifact switch.
   const [interactive, setInteractive] = useState(false);
-  useEffect(() => { setInteractive(false); }, [art.id]);
+  // §3 D3 — opt into a process-isolated, src-gated <webview> for an html
+  // prototype (electron only; the main process hardens every attach). Reset on switch.
+  const [webviewMode, setWebviewMode] = useState(false);
+  const webviewRef = React.useRef<{ reload: () => void } | null>(null);
+  const hasWebview = typeof window !== 'undefined' && 'customElements' in window && !!window.customElements.get?.('webview');
+  useEffect(() => { setInteractive(false); setWebviewMode(false); }, [art.id]);
   if (!content.trim()) {
     return <div className="empty">{art.path ? 'Loading preview…' : 'No content to preview.'}</div>;
   }
@@ -307,6 +312,21 @@ function ArtifactPreview({ art, content }: { art: ArtifactRecord; content: strin
                 ? resolved.replace(/<head[^>]*>/i, (m) => m + csp)
                 : csp + resolved)
             : resolved);
+      // §3 D3 — a process-isolated <webview> for the prototype: scripts run, but a
+      // forced network-blocking CSP + the main-process harden/src-gate keep it
+      // sealed. data:text/html is allowed by the gate. (electron only.)
+      if (art.format === 'html' && webviewMode && hasWebview) {
+        const wvCsp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:">`;
+        const wvDoc = /<head[^>]*>/i.test(resolved) ? resolved.replace(/<head[^>]*>/i, (m) => m + wvCsp) : wvCsp + resolved;
+        return React.createElement('webview', {
+          key: `wv-${art.id}`,
+          ref: webviewRef,
+          className: 'art-html-frame',
+          src: `data:text/html;charset=utf-8,${encodeURIComponent(wvDoc)}`,
+          partition: 'persist:proto-preview',
+          allowpopups: 'false',
+        });
+      }
       // sandbox: locked ('') by default; 'allow-scripts' only after explicit opt-in
       // (never allow-same-origin, so the frame can't reach the parent app).
       return <iframe className="art-html-frame" sandbox={interactive ? 'allow-scripts' : ''} srcDoc={doc} title={`Preview of ${art.title}`} />;
@@ -326,6 +346,15 @@ function ArtifactPreview({ art, content }: { art: ArtifactRecord; content: strin
               <input type="checkbox" checked={interactive} onChange={(e) => setInteractive(e.target.checked)} />
               <span>Enable interactivity{interactive ? ' · scripts on, no network' : ''}</span>
             </label>
+          ) : null}
+          {canInteract && view === 'preview' && art.format === 'html' && hasWebview ? (
+            <label className="art-interactive" title="Render in a process-isolated, src-gated webview (still no network)">
+              <input type="checkbox" checked={webviewMode} onChange={(e) => setWebviewMode(e.target.checked)} />
+              <span>Sandboxed webview</span>
+            </label>
+          ) : null}
+          {webviewMode && hasWebview ? (
+            <button className="art-wv-reload" title="Reload the prototype" onClick={() => webviewRef.current?.reload?.()}>Reload</button>
           ) : null}
         </div>
       ) : null}
