@@ -29,6 +29,8 @@ import { readUsageHistory, totalUsage } from '@kinqs/brainrouter-core/dist/usage
 import { classifyForVerification } from '@kinqs/brainrouter-core/dist/agent/verificationGate.js';
 import { resolveWorkspaceGit } from '@kinqs/brainrouter-core/dist/git/workspaceGit.js';
 import { readWorkspaceEntry, isWorkspaceDirectory, listWorkspaceFiles, statWorkspaceEntry, writeWorkspaceEntry } from './fsRead.js';
+import { saveWorkflowGraph, loadWorkflowGraph, listWorkflowGraphs, deleteWorkflowGraph } from '@kinqs/brainrouter-core/dist/workflow/graphStore.js';
+import type { WorkflowGraph } from '@kinqs/brainrouter-core/dist/workflow/graph.js';
 import { WorkspaceFileListCache, type WorkspaceFileListResult } from './workspaceFileListCache.js';
 import { startWorkspaceWatcher } from './fileWatch.js';
 import { readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups, type SessionMeta } from '@kinqs/brainrouter-core/dist/session/sessionMetaStore.js';
@@ -2163,6 +2165,11 @@ async function main(): Promise<void> {
       // §2 Write mode — save a prose file through the same guarded write the
       // editor uses (writeWorkspaceEntry: escape/symlink/stale guards in fsRead).
       'write-save': (args) => writeWorkspaceEntry(workspaceRoot, typeof args.path === 'string' ? args.path : '', typeof args.content === 'string' ? args.content : ''),
+      // §7 L4 — visual workflow canvas persistence (graphs under <stateDir>/workflows/).
+      'workflow-list': () => listWorkflowGraphs(workspaceRoot),
+      'workflow-save': (args) => saveWorkflowGraph(workspaceRoot, (args.graph ?? {}) as WorkflowGraph),
+      'workflow-load': (args) => loadWorkflowGraph(workspaceRoot, typeof args.id === 'string' ? args.id : ''),
+      'workflow-delete': (args) => ({ ok: deleteWorkflowGraph(workspaceRoot, typeof args.id === 'string' ? args.id : '') }),
       // DESK-4j — branch picker (pattern: branch chip with dropdown in the
       // composer context row). Listing is read-only; checkout runs through
       // the same user-command path as the terminal input.

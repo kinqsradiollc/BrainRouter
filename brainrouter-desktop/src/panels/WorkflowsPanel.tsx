@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -22,6 +22,8 @@ import {
   type WorkflowNodeType,
 } from '@kinqs/brainrouter-core/dist/workflow/graph.js';
 import { runGraph, type GraphRunResult } from '@kinqs/brainrouter-core/dist/workflow/graphEngine.js';
+import type { SavedWorkflowMeta } from '@kinqs/brainrouter-core/dist/workflow/graphStore.js';
+import { hostQuery } from '../lib/hostQuery.js';
 
 /**
  * Visual workflow canvas (§7 L1) — an n8n-style node editor over the L2 graph
@@ -90,21 +92,25 @@ const NODE_TYPES = { wf: WfNode };
 let seq = 0;
 const nextId = (kind: WfKind): string => `${kind}_${++seq}`;
 
-const STORE_KEY = 'br.workflows.v1';
-type SavedGraphs = Record<string, { nodes: Node[]; edges: Edge[]; vars: Record<string, unknown> }>;
-function loadSaved(): SavedGraphs {
-  try { return JSON.parse(localStorage.getItem(STORE_KEY) ?? '{}'); } catch { return {}; }
-}
-function persistSaved(all: SavedGraphs): void {
-  try { localStorage.setItem(STORE_KEY, JSON.stringify(all)); } catch { /* quota — ignore */ }
+function rfToGraph(name: string, nodes: Node[], edges: Edge[], vars: Record<string, unknown>): WorkflowGraph {
+  return {
+    name,
+    vars,
+    nodes: nodes.map((n) => ({ id: n.id, type: (n.data as WfNodeData).kind, data: (n.data as WfNodeData).config, position: n.position })),
+    edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle ?? undefined })),
+  };
 }
 
-function rfToGraph(nodes: Node[], edges: Edge[], vars: Record<string, unknown>): WorkflowGraph {
+/** Restore React Flow nodes/edges from a saved WorkflowGraph (positions kept, or auto-laid-out). */
+function graphToRf(graph: WorkflowGraph): { nodes: Node[]; edges: Edge[] } {
   return {
-    name: 'canvas',
-    vars,
-    nodes: nodes.map((n) => ({ id: n.id, type: (n.data as WfNodeData).kind, data: (n.data as WfNodeData).config })),
-    edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle ?? undefined })),
+    nodes: graph.nodes.map((n, i) => ({
+      id: n.id,
+      type: 'wf',
+      position: n.position ?? { x: 80 + (i % 4) * 190, y: 80 + Math.floor(i / 4) * 120 },
+      data: { kind: n.type, config: n.data ?? {} },
+    })),
+    edges: graph.edges.map((e) => ({ id: e.id, source: e.source, target: e.target, ...(e.sourceHandle ? { sourceHandle: e.sourceHandle } : {}) })),
   };
 }
 
@@ -129,7 +135,7 @@ export function WorkflowsPanel(_props: WorkflowsPanelProps): React.ReactElement 
   const [vars, setVars] = useState<string>('{\n  "topic": "vector databases"\n}');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [name, setName] = useState('untitled');
-  const [saved, setSaved] = useState<SavedGraphs>(() => loadSaved());
+  const [saved, setSaved] = useState<SavedWorkflowMeta[]>([]);
   const [run, setRun] = useState<GraphRunResult | null>(null);
   const [problem, setProblem] = useState<string>('');
 
@@ -161,7 +167,7 @@ export function WorkflowsPanel(_props: WorkflowsPanelProps): React.ReactElement 
   }, [vars]);
 
   const doValidate = (): WorkflowGraph | null => {
-    const g = rfToGraph(nodes, edges, parsedVars);
+    const g = rfToGraph(name.trim() || 'untitled', nodes, edges, parsedVars);
     const v = validateGraph(g);
     setProblem(v.ok ? '' : v.errors.join(' · '));
     return v.ok ? g : null;
@@ -174,17 +180,25 @@ export function WorkflowsPanel(_props: WorkflowsPanelProps): React.ReactElement 
     setRun(result);
   };
 
-  const doSave = (): void => {
-    const all = { ...saved, [name.trim() || 'untitled']: { nodes, edges, vars: parsedVars } };
-    persistSaved(all); setSaved(all);
+  const refreshSaved = useCallback(async () => {
+    setSaved((await hostQuery<SavedWorkflowMeta[]>('workflow-list')) ?? []);
+  }, []);
+  useEffect(() => { void refreshSaved(); }, [refreshSaved]);
+
+  const doSave = async (): Promise<void> => {
+    const graph = rfToGraph(name.trim() || 'untitled', nodes, edges, parsedVars);
+    const res = await hostQuery<{ id?: string }>('workflow-save', { graph });
+    if (res?.id) { setProblem(`Saved "${graph.name}" to the project.`); void refreshSaved(); }
+    else setProblem('Save failed.');
   };
-  const doLoad = (key: string): void => {
-    const g = saved[key];
-    if (!g) return;
-    setNodes(g.nodes); setEdges(g.edges); setVars(JSON.stringify(g.vars ?? {}, null, 2)); setName(key); setSelectedId(null); setRun(null);
+  const doLoad = async (id: string): Promise<void> => {
+    const graph = await hostQuery<WorkflowGraph>('workflow-load', { id });
+    if (!graph) { setProblem(`Could not load "${id}".`); return; }
+    const rf = graphToRf(graph);
+    setNodes(rf.nodes); setEdges(rf.edges); setVars(JSON.stringify(graph.vars ?? {}, null, 2)); setName(graph.name ?? id); setSelectedId(null); setRun(null); setProblem('');
   };
   const doExport = (): void => {
-    const stripped = stripSecretsForExport(rfToGraph(nodes, edges, parsedVars));
+    const stripped = stripSecretsForExport(rfToGraph(name.trim() || 'untitled', nodes, edges, parsedVars));
     void navigator.clipboard?.writeText(JSON.stringify(stripped, null, 2));
     setProblem('Secret-stripped graph copied to clipboard.');
   };
@@ -193,10 +207,10 @@ export function WorkflowsPanel(_props: WorkflowsPanelProps): React.ReactElement 
     <div className="scroll wf-panel">
       <div className="wf-toolbar">
         <input className="filter" style={{ maxWidth: 160 }} value={name} onChange={(e) => setName(e.target.value)} placeholder="workflow name" />
-        <button className="sched-add-btn" onClick={doSave}>Save</button>
-        <select className="filter" style={{ maxWidth: 140 }} value="" onChange={(e) => e.target.value && doLoad(e.target.value)}>
+        <button className="sched-add-btn" onClick={() => void doSave()}>Save</button>
+        <select className="filter" style={{ maxWidth: 140 }} value="" onChange={(e) => { if (e.target.value) void doLoad(e.target.value); }}>
           <option value="">Load…</option>
-          {Object.keys(saved).map((k) => <option key={k} value={k}>{k}</option>)}
+          {saved.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
         </select>
         <button className="seg-toggle" onClick={doValidate}>Validate</button>
         <button className="sched-add-btn" onClick={doTestRun}>Test run</button>
