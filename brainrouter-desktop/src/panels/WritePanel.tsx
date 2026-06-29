@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { renderToStaticMarkup } from 'react-dom/server';
 
 /**
  * WRITE MODE (§2 W1) — a Markdown writing workspace: a file tree of the
@@ -87,6 +88,24 @@ export function WritePanel(): React.ReactElement {
     }
   }, [path, content, refreshFiles]);
 
+  // §2 W6 — export the current Markdown to a self-contained, print-styled HTML
+  // file next to the source. (PDF/DOCX via the host printToPDF / html-to-docx
+  // path layer on top.) Client-side render — no new deps.
+  const exportHtml = useCallback(async () => {
+    if (!path) return;
+    setStatus('Exporting…');
+    const body = renderToStaticMarkup(React.createElement(ReactMarkdown, { remarkPlugins: [remarkGfm] }, content));
+    const title = path.split('/').pop() ?? 'document';
+    const doc = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
+<style>body{font:16px/1.65 -apple-system,system-ui,sans-serif;max-width:46rem;margin:3rem auto;padding:0 1.25rem;color:#1a1a1a}pre{background:#f4f4f5;padding:1rem;border-radius:8px;overflow:auto}code{font-family:ui-monospace,monospace;background:#f4f4f5;padding:.15em .35em;border-radius:4px}pre code{padding:0;background:none}blockquote{border-left:3px solid #ddd;margin:0;padding-left:1rem;color:#555}table{border-collapse:collapse}th,td{border:1px solid #ddd;padding:.4em .7em}img{max-width:100%}@media(prefers-color-scheme:dark){body{background:#1a1a1a;color:#e4e4e7}pre,code{background:#27272a}}</style>
+</head><body>${body}</body></html>`;
+    const outPath = `${path.replace(/\.[^/.]+$/, '')}.html`;
+    const res = await hostQuery<{ ok?: boolean; error?: string }>('write-save', { path: outPath, content: doc });
+    setStatus(res?.ok ? `Exported to ${outPath}` : `Export failed${res?.error ? `: ${res.error}` : ''}.`);
+    void refreshFiles();
+  }, [path, content, refreshFiles]);
+
   // Cmd/Ctrl-S saves.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -123,6 +142,7 @@ export function WritePanel(): React.ReactElement {
               <button key={m} className={`seg-toggle${view === m ? ' active' : ''}`} onClick={() => setView(m)}>{m}</button>
             ))}
             <button className="sched-add-btn" disabled={!path || !dirty} onClick={() => void save()}>Save</button>
+            <button className="seg-toggle" disabled={!path} onClick={() => void exportHtml()} title="Export this Markdown as a self-contained HTML file">Export HTML</button>
           </div>
         </div>
 
