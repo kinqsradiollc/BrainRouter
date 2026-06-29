@@ -568,6 +568,7 @@ export function installDevBridge(): void {
     'src/state/completionInbox.ts': { content: '/** Completion inbox - detached workers report back here. */\nimport { randomUUID } from "node:crypto";\n\nexport interface Completion {\n  id: string;\n  parentSessionKey: string;\n  summary: string;\n}\n', mtimeMs: 1_000 },
     'assets/logo.png': { content: 'binary-bytes', mtimeMs: 1_000 },
   };
+  const devWorkflows: Record<string, Record<string, unknown>> = {};
   const devFileRead = (p: string): unknown => {
     const f = devFiles[p];
     if (!f) return { path: p, kind: 'file', content: '', error: 'ENOENT: no such file (dev bridge)' };
@@ -1320,6 +1321,10 @@ export function installDevBridge(): void {
     // T5 — editor backend (in-memory): read / stat / guarded save (stale-write).
     'file-read': (a) => devFileRead(String(a.path ?? 'src/memory/recall.ts')),
     'write-save': (a) => { const p = String(a.path ?? ''); const c = String(a.content ?? ''); if (devFiles[p]) { devFiles[p].content = c; } return { ok: true, path: p }; },
+    'workflow-list': () => Object.values(devWorkflows).map((g) => ({ id: g.id, name: g.name || g.id, updatedAt: g.updatedAt || '' })),
+    'workflow-save': (a) => { const g = (a.graph ?? {}) as Record<string, unknown>; const id = String(g.id || g.name || 'untitled').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64) || 'untitled'; const rec = { ...g, id, updatedAt: new Date().toISOString() }; devWorkflows[id] = rec; return { id, name: g.name || id, updatedAt: rec.updatedAt }; },
+    'workflow-load': (a) => devWorkflows[String(a.id ?? '')] ?? null,
+    'workflow-delete': (a) => { const id = String(a.id ?? ''); const had = !!devWorkflows[id]; delete devWorkflows[id]; return { ok: had }; },
     'file-stat': (a) => { const p = String(a.path ?? ''); const f = devFiles[p]; return f ? { path: p, exists: true, kind: 'file', mtimeMs: f.mtimeMs, size: f.content.length } : { path: p, exists: false }; },
     'action:file-save': (a) => {
       const p = String(a.path ?? ''); const content = String(a.content ?? ''); const f = devFiles[p];
