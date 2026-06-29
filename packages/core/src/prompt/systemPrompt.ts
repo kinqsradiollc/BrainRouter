@@ -53,6 +53,12 @@ export interface SystemPromptContext {
    * that extra hand-holding just costs tokens.
    */
   model?: string;
+  /**
+   * §5.7 — a durable, user-configured house-style / guardrail block
+   * (`cli.codePromptPrefix`) prepended as a developer overlay so it applies to
+   * every turn. Empty / undefined emits no overlay.
+   */
+  codePromptPrefix?: string;
 }
 
 function personalityOverlay(style: SystemPromptContext['personality']): string {
@@ -441,9 +447,16 @@ function workspaceInstructionLines(instructionSummary: string): string[] {
  * clarify / model-family overlays. Each returns '' when inactive; the caller
  * filters before use. This is the `developer`-layer content.
  */
+/** §5.7 — the user's durable house-style block, or '' when unset. */
+function codePrefixOverlay(prefix: SystemPromptContext['codePromptPrefix']): string {
+  const text = prefix?.trim();
+  return text ? `## Project house rules\n${text}` : '';
+}
+
 function developerOverlays(context: SystemPromptContext, brainOnline: boolean): string[] {
   return [
     brainOnline ? memoryFirstSection() : brainOfflineNotice(),
+    codePrefixOverlay(context.codePromptPrefix),
     collaborationModeBlock(context.executionMode, context.reviewPolicy),
     personalityOverlay(context.personality),
     policyOverlay(context.executionMode, context.reviewPolicy),

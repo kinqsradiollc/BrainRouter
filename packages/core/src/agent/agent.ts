@@ -4827,6 +4827,8 @@ export class Agent {
       // pick up an aggressive Beast-mode reinforcement block; strong
       // families (claude-*, gpt-4/5, o-series, gemini-2.5) get no overlay.
       model: this.llmConfig.model,
+      // §5.7 — durable user house-style block (cli.codePromptPrefix).
+      codePromptPrefix: getCliKnobs().codePromptPrefix,
     };
     const generatedLayers = this.systemPromptOverride ? undefined : buildPromptLayers(promptContext);
     const base = this.systemPromptOverride ?? buildSystemPrompt(promptContext);
