@@ -77,7 +77,8 @@ export { applyPatchEnvelope } from './applyPatch.js';
 // REFAC-TOOLS-MODULE (0.4.6) — tool specs + name normalization live in agent/tools/.
 import { LOCAL_TOOLS } from '../tool/specs.js';
 import { normalizeToolName } from '../tool/names.js';
-import { registryAllowedTools, hideWorkerToolsFor, WORKER_THREAD_TOOLS } from '../tool/registry.js';
+import { registryAllowedTools, hideWorkerToolsFor, WORKER_THREAD_TOOLS, MCP_DISCOVERY_TOOLS } from '../tool/registry.js';
+import { searchMcpCatalog } from '../mcp/discovery.js';
 import { localToolExecutor, localToolSpecsFromExecutors } from '../tool/executors.js';
 import { assessMcpToolApproval } from './mcpApproval.js';
 export { LOCAL_TOOLS } from '../tool/specs.js';
@@ -1076,6 +1077,76 @@ export class Agent {
   }
 
   /**
+   * §5.4 — the MCP tool-call approval gate, shared by the main MCP dispatch path
+   * and the `mcp_call` discovery tool so neither can bypass it. Throws if the
+   * call requires approval and it is rejected (or a silent session has no parent
+   * approver). `args` is shown to a parent approver in silent sessions.
+   */
+  private async approveMcpToolCall(
+    name: string,
+    descriptor: any,
+    args: Record<string, any>,
+  ): Promise<void> {
+    const mcpApproval = assessMcpToolApproval(name, descriptor);
+    if (!mcpApproval.requiresApproval) return;
+    if (this.silent) {
+      if (!this.confirmToolApproval) {
+        throw new Error(`MCP tool "${name}" requires approval but this silent session has no parent approver: ${mcpApproval.reason}.`);
+      }
+      const approved = await this.confirmToolApproval({
+        tool: name,
+        arguments: args,
+        reason: mcpApproval.reason,
+        dangerous: mcpApproval.dangerous,
+      });
+      if (!approved) {
+        throw new Error(`MCP tool "${name}" rejected by parent approval.`);
+      }
+    } else if (this.interactionPort) {
+      const uiApproved = await this.interactionPort.confirm({
+        title: 'MCP tool approval',
+        detail: `${name} — ${mcpApproval.reason}`,
+        dangerous: mcpApproval.dangerous,
+        tool: name,
+      });
+      if (!uiApproved) {
+        throw new Error(`MCP tool "${name}" rejected by user.`);
+      }
+    } else {
+      const approved = await this.prompter.askYesNo(
+        `${chalk.yellow('⚠️  MCP tool approval request:')} ${chalk.cyan(name)}${mcpApproval.dangerous ? chalk.red(' (potentially destructive)') : ''}\nReason: ${mcpApproval.reason}\nAllow MCP tool call? (y/N) `,
+        false,
+      );
+      if (!approved) {
+        throw new Error(`MCP tool "${name}" rejected by user.`);
+      }
+    }
+  }
+
+  /**
+   * §5.4 — the live, model-visible MCP catalog (listTools + the same visibility
+   * filter the per-turn assembly uses), for the discovery tools. Empty on error.
+   */
+  private async visibleMcpToolList(): Promise<any[]> {
+    try {
+      const res = await this.mcpClient.listTools();
+      return (res.tools || []).filter((t: any) => this.isModelVisibleMcpTool(t));
+    } catch {
+      return [];
+    }
+  }
+
+  /** §5.4 — resolve a visible MCP tool by its exact namespaced name or bare name. */
+  private async findVisibleMcpTool(target: string): Promise<any | undefined> {
+    const want = target.trim();
+    if (!want) return undefined;
+    const tools = await this.visibleMcpToolList();
+    return tools.find((t: any) =>
+      String(t?.name ?? '') === want ||
+      String(t?.__rawName ?? this.rawMcpToolName(String(t?.name ?? ''))) === want);
+  }
+
+  /**
    * MAS-P4-T1 — the most recent user message text, used to rank MCP tools by
    * relevance when the catalog exceeds the budget. Empty string when there's
    * no user turn yet (the cap then keeps the first N in stable order).
@@ -1193,12 +1264,17 @@ export class Agent {
       !this.computerUsePort ||
       this.silent ||
       !!cliKnobs.brainUrl;
+    // §5.4 — when progressive discovery is OFF (default) the discovery entry
+    // points stay hidden; when ON they're exposed and the full MCP catalog is
+    // collapsed below so the model searches for tools instead of carrying them all.
+    const mcpDiscoveryOn = cliKnobs.mcpProgressiveDiscovery;
     const filteredLocalTools = localToolSpecsFromExecutors().filter(
       (t) =>
         allowed.has(t.name) &&
         !MODEL_HIDDEN_TOOLS.has(t.name) &&
         !(hideWorkerTools && WORKER_THREAD_TOOLS.has(t.name)) &&
-        !(hideComputerUse && t.name === 'computer_use'),
+        !(hideComputerUse && t.name === 'computer_use') &&
+        !(!mcpDiscoveryOn && MCP_DISCOVERY_TOOLS.has(t.name)),
     );
     // Multi-MCP parity: expose every connected third-party MCP tool and the
     // model-safe BrainRouter MCP tools in one turn, using the pool's
@@ -1218,15 +1294,23 @@ export class Agent {
         disallow: this.disallowedTools,
       });
     }
-    const toolBudget = cliKnobs.agentMcpToolBudget;
-    if (toolBudget > 0 && visibleMcpTools.length > toolBudget) {
-      const taskText = this.latestUserText();
-      const { kept, hidden } = rankAndCapTools(visibleMcpTools, taskText, toolBudget);
-      for (const t of hidden) {
-        this.lastBudgetHiddenTools.add(String(t?.name ?? ''));
+    if (mcpDiscoveryOn && visibleMcpTools.length > 0) {
+      // Progressive discovery: hide the full catalog; the model reaches it via
+      // mcp_search / mcp_describe / mcp_call (which run the same approval gate).
+      const collapsed = visibleMcpTools.length;
+      visibleMcpTools = [];
+      callbacks.onStatusUpdate(`MCP progressive discovery: ${collapsed} catalog tools hidden — use mcp_search / mcp_call.`);
+    } else {
+      const toolBudget = cliKnobs.agentMcpToolBudget;
+      if (toolBudget > 0 && visibleMcpTools.length > toolBudget) {
+        const taskText = this.latestUserText();
+        const { kept, hidden } = rankAndCapTools(visibleMcpTools, taskText, toolBudget);
+        for (const t of hidden) {
+          this.lastBudgetHiddenTools.add(String(t?.name ?? ''));
+        }
+        visibleMcpTools = kept;
+        callbacks.onStatusUpdate(`Tool budget: showing ${kept.length}/${kept.length + hidden.length} MCP tools (most task-relevant).`);
       }
-      visibleMcpTools = kept;
-      callbacks.onStatusUpdate(`Tool budget: showing ${kept.length}/${kept.length + hidden.length} MCP tools (most task-relevant).`);
     }
     // MAS-P2-M1: synthesize one `delegate_<agentId>` tool per active
     // agent definition. Rebuilt every turn so a workspace agent JSON
@@ -2715,41 +2799,7 @@ export class Agent {
             // key the poller/registry actually used (otherwise the read
             // misses the federation-key inbox and comes back empty).
             const mcpArgs = applyFederationIdentity(name, args, this.federationSessionKey) as Record<string, any>;
-            const mcpApproval = assessMcpToolApproval(name, mcpToolByName.get(name));
-            if (mcpApproval.requiresApproval) {
-              if (this.silent) {
-                if (!this.confirmToolApproval) {
-                  throw new Error(`MCP tool "${name}" requires approval but this silent session has no parent approver: ${mcpApproval.reason}.`);
-                }
-                const approved = await this.confirmToolApproval({
-                  tool: name,
-                  arguments: mcpArgs,
-                  reason: mcpApproval.reason,
-                  dangerous: mcpApproval.dangerous,
-                });
-                if (!approved) {
-                  throw new Error(`MCP tool "${name}" rejected by parent approval.`);
-                }
-              } else if (this.interactionPort) {
-                const uiApproved = await this.interactionPort.confirm({
-                  title: 'MCP tool approval',
-                  detail: `${name} — ${mcpApproval.reason}`,
-                  dangerous: mcpApproval.dangerous,
-                  tool: name,
-                });
-                if (!uiApproved) {
-                  throw new Error(`MCP tool "${name}" rejected by user.`);
-                }
-              } else {
-                const approved = await this.prompter.askYesNo(
-                  `${chalk.yellow('⚠️  MCP tool approval request:')} ${chalk.cyan(name)}${mcpApproval.dangerous ? chalk.red(' (potentially destructive)') : ''}\nReason: ${mcpApproval.reason}\nAllow MCP tool call? (y/N) `,
-                  false,
-                );
-                if (!approved) {
-                  throw new Error(`MCP tool "${name}" rejected by user.`);
-                }
-              }
-            }
+            await this.approveMcpToolCall(name, mcpToolByName.get(name), mcpArgs);
             const mcpRes = await this.mcpClient.callTool(name, mcpArgs, { signal: this.turnAbort?.signal });
             if (mcpRes.isError) {
               isError = true;
@@ -3529,6 +3579,53 @@ export class Agent {
         if (!uri) throw new Error('read_mcp_resource requires a uri.');
         const result = await client.readResource({ server, uri }, { signal: this.turnAbort?.signal });
         return JSON.stringify(result, null, 2);
+      }
+      case 'mcp_search': {
+        const query = String(args.query ?? '').trim();
+        if (!query) throw new Error('mcp_search requires a non-empty `query`.');
+        const maxResults = Math.max(1, Math.min(25, Number(args.maxResults ?? 8)));
+        const tools = await this.visibleMcpToolList();
+        const matches = searchMcpCatalog(tools, query, maxResults);
+        return JSON.stringify({ query, count: matches.length, tools: matches }, null, 2);
+      }
+      case 'mcp_describe': {
+        const names: string[] = Array.isArray(args.names)
+          ? args.names.map((n: any) => String(n))
+          : args.name != null ? [String(args.name)] : [];
+        if (names.length === 0) throw new Error('mcp_describe requires `name` or `names`.');
+        const out: Array<Record<string, unknown>> = [];
+        for (const target of names) {
+          const tool = await this.findVisibleMcpTool(target);
+          if (!tool) {
+            out.push({ name: target, error: 'not found or not an available MCP tool' });
+            continue;
+          }
+          out.push({ name: String(tool.name), description: tool.description ?? '', inputSchema: tool.inputSchema ?? {} });
+        }
+        return JSON.stringify(out, null, 2);
+      }
+      case 'mcp_call': {
+        const target = String(args.name ?? '').trim();
+        if (!target) throw new Error('mcp_call requires a tool `name` (use mcp_search to find one).');
+        const tool = await this.findVisibleMcpTool(target);
+        if (!tool) throw new Error(`mcp_call: "${target}" is not an available MCP tool. Use mcp_search to find the exact name.`);
+        const callArgs = args.args && typeof args.args === 'object' && !Array.isArray(args.args)
+          ? (args.args as Record<string, any>)
+          : {};
+        const toolName = String(tool.name);
+        const mcpArgs = applyFederationIdentity(toolName, callArgs, this.federationSessionKey) as Record<string, any>;
+        await this.approveMcpToolCall(toolName, tool, mcpArgs);
+        const mcpRes = await this.mcpClient.callTool(toolName, mcpArgs, { signal: this.turnAbort?.signal });
+        return extractToolText(mcpRes);
+      }
+      case 'mcp_refresh_catalog': {
+        const tools = await this.visibleMcpToolList();
+        const byServer: Record<string, number> = {};
+        for (const t of tools) {
+          const server = String(t?.__serverId ?? this.serverIdFromMcpToolName(String(t?.name ?? '')) ?? 'unknown');
+          byServer[server] = (byServer[server] ?? 0) + 1;
+        }
+        return JSON.stringify({ totalTools: tools.length, servers: byServer }, null, 2);
       }
       case 'lsp': {
         // CLI-19 — semantic navigation via a language server.

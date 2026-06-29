@@ -419,6 +419,10 @@ export interface CliKnobs {
   autoChainMaxFollowups?: number;
   /** MAS-P4-T1: cap on MCP tools shown to an agent per turn (0 = no cap). Default 16. */
   agentMcpToolBudget?: number;
+  /** §5.4: collapse the per-turn MCP tool list to discovery entry points
+   *  (mcp_search / mcp_describe / mcp_call) to save context on large catalogs.
+   *  Default false (full catalog shown, capped by agentMcpToolBudget). */
+  mcpProgressiveDiscovery?: boolean;
 
   // ---- scheduling / tracing / search -----------------------------------
   /** Background ticker interval for /schedule jobs in ms. Default 30000. */
@@ -923,6 +927,7 @@ export interface ResolvedCliKnobs {
   maxConcurrentChildren: number;
   autoChainMaxFollowups: number;
   agentMcpToolBudget: number;
+  mcpProgressiveDiscovery: boolean;
   scheduleTickMs: number;
   updateCheck: boolean;
   externalDirWrites: ExternalDirMode;
@@ -1109,6 +1114,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     maxConcurrentChildren: c.maxConcurrentChildren ?? 8,
     autoChainMaxFollowups: c.autoChainMaxFollowups ?? 2,
     agentMcpToolBudget: c.agentMcpToolBudget ?? 16,
+    mcpProgressiveDiscovery: c.mcpProgressiveDiscovery ?? false,
     scheduleTickMs: c.scheduleTickMs ?? 30_000,
     traceLog: c.traceLog,
     tracingBackend: c.tracingBackend ?? 'stdout-jsonl',

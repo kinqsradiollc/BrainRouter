@@ -45,6 +45,13 @@ export const LOCAL_TOOL_REGISTRY: LocalToolEntry[] = [
   { name: 'list_mcp_resources', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'list_mcp_resource_templates', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'read_mcp_resource', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  // MCP progressive discovery (§5.4) — search/describe the catalog cheaply, then
+  // call by name through the SAME approval gate as a direct MCP call. mcp_call is
+  // `network` (allowed in every mode, like normal MCP calls); the rest are reads.
+  { name: 'mcp_search', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'mcp_describe', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'mcp_call', accessTier: 'read', actionKind: 'network', parallelSafe: false },
+  { name: 'mcp_refresh_catalog', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'lsp', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'update_plan', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'goal_complete', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
@@ -136,6 +143,18 @@ export const WORKER_THREAD_TOOLS = new Set([
   'wait_worker',
   'read_worker_summary',
   'close_worker',
+]);
+
+/**
+ * The MCP progressive-discovery entry points (§5.4). Registered like any read
+ * tool, but only exposed to the model when `cli.mcpProgressiveDiscovery` is on
+ * (the agent hides them otherwise so default behaviour is unchanged).
+ */
+export const MCP_DISCOVERY_TOOLS = new Set([
+  'mcp_search',
+  'mcp_describe',
+  'mcp_call',
+  'mcp_refresh_catalog',
 ]);
 
 /**
