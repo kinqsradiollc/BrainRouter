@@ -255,6 +255,39 @@ export function atlasGrouping(graph: AtlasGraph, scope?: ReadonlySet<string>): A
     .map(([dir, ids]) => ({ id: `group:${dir || "root"}`, label: dir || "(root)", nodeIds: ids }));
 }
 
+/**
+ * Bound the number of file nodes a grouped view renders. Large repos otherwise
+ * pack thousands of nodes into a canvas far taller than wide, which fitView
+ * shrinks to an unreadable strip. Keeps the BIGGEST groups first (most
+ * significant), truncates the group that crosses the budget, and reports how
+ * many files/groups were dropped so the UI can show a "+N more" note. A
+ * non-finite cap (drill-in) returns everything untouched.
+ */
+export function capAtlasGroups(
+  groups: AtlasGroup[],
+  cap: number,
+): { groups: AtlasGroup[]; hidden: number; hiddenGroups: number; shown: number } {
+  const total = groups.reduce((s, g) => s + g.nodeIds.length, 0);
+  if (!Number.isFinite(cap) || total <= cap) {
+    return { groups, hidden: 0, hiddenGroups: 0, shown: total };
+  }
+  const sorted = [...groups].sort((a, b) => b.nodeIds.length - a.nodeIds.length);
+  const out: AtlasGroup[] = [];
+  let budget = Math.max(0, Math.floor(cap));
+  let hidden = 0;
+  let hiddenGroups = 0;
+  for (const g of sorted) {
+    if (budget <= 0) { hidden += g.nodeIds.length; hiddenGroups += 1; continue; }
+    if (g.nodeIds.length <= budget) { out.push(g); budget -= g.nodeIds.length; }
+    else {
+      out.push({ ...g, nodeIds: g.nodeIds.slice(0, budget) });
+      hidden += g.nodeIds.length - budget;
+      budget = 0;
+    }
+  }
+  return { groups: out, hidden, hiddenGroups, shown: total - hidden };
+}
+
 export interface AtlasGroupBox {
   id: string;
   label: string;
@@ -332,14 +365,15 @@ export function atlasGroupedLayout(groups: AtlasGroup[], opts: GroupedLayoutOpts
   const totalArea = sized.reduce((s, x) => s + x.width * x.height, 0);
   const widest = sized.reduce((m, x) => Math.max(m, x.width), 0);
 
+  // Size the wrap width to the viewport ASPECT, not its pixel width. The canvas
+  // uses fitView (it scales the whole layout to fit), so a big graph reads as a
+  // wide band only when the layout's own aspect matches the viewport's — capping
+  // the width to the container (the old behavior) just forced a tall strip that
+  // fitView then shrank to an unreadable sliver. `widest` stays the floor.
   let maxRowWidth = explicitRowWidth;
   if (!maxRowWidth) {
-    const aspect = containerW && containerH ? Math.max(0.7, Math.min(1.5, containerW / containerH)) : 1.6;
+    const aspect = containerW && containerH ? Math.max(1.0, Math.min(2.4, containerW / containerH)) : 1.7;
     maxRowWidth = Math.max(widest, Math.ceil(Math.sqrt(totalArea) * aspect));
-  }
-  if (containerW) {
-    const maxPossible = Math.max(widest, Math.min(1080, containerW - 64));
-    maxRowWidth = Math.min(maxRowWidth, maxPossible);
   }
 
   const boxes: AtlasGroupBox[] = [];
