@@ -322,6 +322,22 @@ export function createRunWorkflowTool() {
   };
 }
 
+export function createRunWorkflowGraphTool() {
+  return {
+    name: 'run_workflow_graph',
+    description:
+      'Run a saved VISUAL workflow graph (built on the Workflows canvas) by id, in ONE call. The runtime executes the graph node-by-node — AI Agent nodes run as real child agents, Condition/Switch/Filter/Sort/Limit/Aggregate/Loop wire the dataflow, and Sub-workflow nodes call other saved graphs — then returns the graph\'s final output. Use this to invoke a reusable automation the user designed visually, instead of re-orchestrating it by hand. Distinct from `run_workflow` (which takes an inline declarative phase-plan); this one loads a named, saved graph.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'The saved workflow-graph id or name (as shown in the Workflows canvas / workflow list).' },
+        vars: { type: 'object', description: 'Optional run variables, merged over the graph\'s own defaults and available to nodes as {{$vars.*}}.' },
+      },
+      required: ['id'],
+    },
+  };
+}
+
 /**
  * MAS-P2-M2 — `route_task` tool. Returns a typed 4-tier policy
  * decision (answer-direct / direct-tool / spawn-inline / spawn-worker)

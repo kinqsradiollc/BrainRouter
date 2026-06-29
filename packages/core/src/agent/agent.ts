@@ -2751,18 +2751,22 @@ export class Agent {
             // workflow → token blow-up, with no human to approve it. Phase work
             // is done DIRECTLY (or via plain spawn_agents, depth-capped); only a
             // top-level, user-facing agent may launch a workflow.
-            if (name === 'run_workflow' && this.silent) {
+            // Both the declarative `run_workflow` and the saved-graph
+            // `run_workflow_graph` fan out child agents, so they share the
+            // nest-block + cost-confirm gate.
+            const isWorkflowLaunch = name === 'run_workflow' || name === 'run_workflow_graph';
+            if (isWorkflowLaunch && this.silent) {
               isError = true;
               resultText =
-                'run_workflow is not available to a spawned/child agent — nested workflows are blocked ' +
+                `${name} is not available to a spawned/child agent — nested workflows are blocked ` +
                 '(they recurse and run unattended). Do this work directly with the regular tools ' +
                 '(read_file, write_file, edit_file, run_command), or use spawn_agents for genuinely ' +
                 'independent sub-tasks.';
-              summary = 'nested run_workflow blocked';
-            } else if (name === 'run_workflow' && !(await this.confirmRunWorkflowLaunch(args))) {
+              summary = `nested ${name} blocked`;
+            } else if (isWorkflowLaunch && !(await this.confirmRunWorkflowLaunch(args))) {
               isError = true;
               resultText =
-                'run_workflow declined — the workflow launch was not approved (workflows fan out ' +
+                `${name} declined — the workflow launch was not approved (workflows fan out ` +
                 'multiple agents and cost more tokens). Proceed with the regular tools (spawn_agents, ' +
                 'run_command, …) or ask the user to approve the workflow.';
               summary = 'workflow launch declined';

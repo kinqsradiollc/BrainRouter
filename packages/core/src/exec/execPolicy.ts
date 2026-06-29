@@ -81,6 +81,7 @@ export function actionKindForTool(name: string): ActionKind {
     case 'task_agent':
     case 'delegate_agent':
     case 'run_workflow':
+    case 'run_workflow_graph':
     case 'send_input':
     case 'resume_agent':
       return 'child_write';

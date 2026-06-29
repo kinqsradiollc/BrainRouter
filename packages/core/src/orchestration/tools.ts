@@ -23,6 +23,8 @@ import {
 } from './orchestrator.js';
 import { buildRolePrompt, resolveRole, type AccessMode } from './roles.js';
 import { runWorkflow } from '../workflow/workflowTool.js';
+import { loadWorkflowGraph } from '../workflow/graphStore.js';
+import { runGraph } from '../workflow/graphEngine.js';
 import { countRunningChildren, spawnSlotDecision } from './spawnSlots.js';
 import { ownershipRequirementError } from './ownership.js';
 import { findById, listAll, type Tier } from './agentRegistry.js';
@@ -199,6 +201,7 @@ const ORCHESTRATION_TOOL_NAMES = new Set([
   'resume_agent',
   'route_task',
   'run_workflow',
+  'run_workflow_graph',
 ]);
 
 /**
@@ -310,7 +313,7 @@ function parentWaitTimeoutMsFromArgs(args: any): number {
   return Number.isFinite(raw) && raw > 0 ? raw : 0;
 }
 
-export { createSpawnAgentTool, createTaskAgentTool, createDelegateAgentTool, createListAgentsTool, createWaitAgentTool, createReadAgentTranscriptTool, createCloseAgentTool, createSendInputTool, createResumeAgentTool, createSpawnAgentsTool, createWaitAgentsTool, createRouteTaskTool, createRunWorkflowTool } from './agentTools.js';
+export { createSpawnAgentTool, createTaskAgentTool, createDelegateAgentTool, createListAgentsTool, createWaitAgentTool, createReadAgentTranscriptTool, createCloseAgentTool, createSendInputTool, createResumeAgentTool, createSpawnAgentsTool, createWaitAgentsTool, createRouteTaskTool, createRunWorkflowTool, createRunWorkflowGraphTool } from './agentTools.js';
 
 /**
  * MAS-P2-M1: per-turn synthesized `delegate_<agentId>` tools.
@@ -461,6 +464,10 @@ export async function executeOrchestrationTool(
       // very dispatcher as the spawn backend (run_workflow's children go through
       // the same spawn_agents/wait_agents path everything else does).
       return await runWorkflow(args, ctx, { dispatch: executeOrchestrationTool });
+    case 'run_workflow_graph':
+      // §7 L4 — run a saved visual-workflow GRAPH. Agent nodes delegate to the
+      // same task_agent spawn path; sub-workflow nodes load from the same store.
+      return await handleRunWorkflowGraph(args, ctx);
     default:
       throw new Error(`Unknown orchestration tool: ${name}`);
   }
@@ -538,6 +545,43 @@ async function handleRouteTask(args: any, ctx: OrchestrationContext): Promise<st
 
 async function handleTaskAgent(args: any, ctx: OrchestrationContext): Promise<string> {
   return await handleSpawn({ ...args, wait: true, timeoutMs: args?.timeoutMs ?? DEFAULT_TASK_AGENT_TIMEOUT_MS }, ctx);
+}
+
+/**
+ * §7 L4 — run a saved visual-workflow graph by id. Each `agent` node delegates to
+ * the same `task_agent` foreground-spawn path (so the graph's AI work is real
+ * child agents, clamped to the parent's access mode), and `subworkflow` nodes load
+ * from the same store (the engine's own depth + recursion guard prevents runaway
+ * nesting). Returns the graph's final output plus a one-line run summary.
+ */
+async function handleRunWorkflowGraph(args: any, ctx: OrchestrationContext): Promise<string> {
+  const id = String(args?.id ?? args?.workflowId ?? '').trim();
+  if (!id) throw new Error('run_workflow_graph requires an `id` — the saved workflow-graph id/name (see the Workflows canvas).');
+  const graph = loadWorkflowGraph(ctx.workspaceRoot, id);
+  if (!graph) throw new Error(`No saved workflow graph "${id}". Build and save one in the Workflows canvas, or check the id with the desktop's workflow list.`);
+
+  // Seed run vars from the caller's `vars` object over the graph's own defaults.
+  const callerVars = args?.vars && typeof args.vars === 'object' && !Array.isArray(args.vars)
+    ? (args.vars as Record<string, unknown>)
+    : {};
+  const seeded = { ...graph, vars: { ...(graph.vars ?? {}), ...callerVars } };
+
+  const result = await runGraph(seeded, {
+    runAgent: async (prompt) => {
+      const out = await handleTaskAgent({ prompt }, ctx);
+      // handleTaskAgent may return raw text or a JSON envelope — surface the text.
+      try {
+        const j = JSON.parse(out) as Record<string, unknown>;
+        if (j && typeof j === 'object') return String(j.output ?? j.raw ?? j.text ?? out);
+      } catch { /* raw text */ }
+      return out;
+    },
+    loadSubWorkflow: async (ref) => loadWorkflowGraph(ctx.workspaceRoot, ref),
+  });
+
+  if (!result.ok) return `Workflow "${id}" failed: ${result.error ?? 'unknown error'}`;
+  const ran = result.order.filter((n) => result.nodes[n]?.status === 'ok').length;
+  return `Workflow "${id}" completed (${ran} node${ran === 1 ? '' : 's'} ran).\n\n${result.finalOutput ?? '(no output node produced text)'}`;
 }
 
 async function handleDelegateAgent(args: any, ctx: OrchestrationContext): Promise<string> {
