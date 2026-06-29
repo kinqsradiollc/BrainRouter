@@ -4199,3 +4199,35 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .atlas-untested { color: var(--err); }
 .atlas-detail-untested { display: flex; align-items: center; gap: 7px; padding: 5px 9px; border-radius: 7px; font-size: 11px; color: var(--err); background: color-mix(in srgb, var(--err) 12%, transparent); }
 .atlas-detail-untested .atlas-detail-change-dot { background: var(--err); }
+
+/* ===== §7 — Visual workflow canvas ===== */
+.wf-panel { display: flex; flex-direction: column; height: 100%; gap: 8px; padding: 8px; box-sizing: border-box; }
+.wf-toolbar, .wf-palette { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.wf-palette-label { color: var(--text-dim); font-size: 11px; }
+.wf-problem { color: var(--accent); font-size: 12px; padding: 4px 8px; background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 6px; }
+.wf-body { display: flex; gap: 8px; flex: 1; min-height: 380px; }
+.wf-canvas { flex: 1; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; min-height: 380px; background: var(--surface); }
+.wf-side { width: 290px; display: flex; flex-direction: column; gap: 8px; overflow: auto; }
+.wf-section { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); margin-bottom: 6px; }
+.wf-inspector, .wf-run { border: 1px solid var(--border); border-radius: 8px; padding: 8px; background: var(--surface); }
+.wf-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; margin-bottom: 8px; color: var(--text-dim); }
+.wf-textarea { width: 100%; box-sizing: border-box; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px; font-family: var(--mono); font-size: 12px; resize: vertical; }
+.wf-cond { display: flex; gap: 4px; }
+.wf-hint { color: var(--text-faint); font-size: 11px; line-height: 1.4; }
+.wf-hint code, .wf-section code, .sched-note code { color: var(--text-dim); }
+.wf-delete { color: var(--err); margin-top: 8px; }
+.wf-run-row { display: flex; justify-content: space-between; font-size: 12px; padding: 2px 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent); }
+.wf-run-id { font-family: var(--mono); color: var(--text-dim); }
+.wf-run-ok .wf-run-status { color: var(--ok); }
+.wf-run-skipped { opacity: .5; }
+.wf-run-error .wf-run-status { color: var(--err); }
+.wf-run-output { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px; font-size: 12px; white-space: pre-wrap; margin-top: 6px; color: var(--text); }
+.wf-node { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 6px; padding: 6px 10px; min-width: 124px; font-size: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+.wf-node.selected { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent); }
+.wf-node-kind { font-weight: 600; color: var(--text); }
+.wf-node-summary { color: var(--text-dim); font-size: 11px; max-width: 168px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-node-trigger { border-left-color: var(--ok); }
+.wf-node-condition { border-left-color: #e5c07b; }
+.wf-node-output { border-left-color: #61afef; }
+.wf-node-set { border-left-color: #c678dd; }
+.wf-node-merge { border-left-color: #56b6c2; }
