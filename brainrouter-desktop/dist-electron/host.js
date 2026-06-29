@@ -2283,6 +2283,24 @@ async function main() {
             'workflow-save': (args) => saveWorkflowGraph(workspaceRoot, (args.graph ?? {})),
             'workflow-load': (args) => loadWorkflowGraph(workspaceRoot, typeof args.id === 'string' ? args.id : ''),
             'workflow-delete': (args) => ({ ok: deleteWorkflowGraph(workspaceRoot, typeof args.id === 'string' ? args.id : '') }),
+            // §5.9 — customizable keyboard shortcuts: read/persist user overrides in
+            // cli.shortcuts (action id → neutral combo). Both heads read the same file.
+            'shortcuts-get': () => {
+                const cli = loadConfig().cli;
+                return { overrides: (cli?.shortcuts && typeof cli.shortcuts === 'object') ? cli.shortcuts : {} };
+            },
+            'shortcuts-save': (args) => {
+                const raw = (args.overrides && typeof args.overrides === 'object') ? args.overrides : {};
+                const clean = {};
+                for (const [k, v] of Object.entries(raw))
+                    if (typeof v === 'string' && v.trim())
+                        clean[k] = v.trim();
+                const fresh = loadConfig();
+                fresh.cli = { ...(fresh.cli ?? {}), shortcuts: clean };
+                saveConfig(fresh);
+                _resetCliKnobsCache();
+                return { ok: true, overrides: clean };
+            },
             // §5.3 Memory panel — search the brain memory engine via the MCP tool.
             // Robust to the loose memory_search shape: structured records when it
             // returns JSON, otherwise the raw text. Surfaces a clear "is the brain

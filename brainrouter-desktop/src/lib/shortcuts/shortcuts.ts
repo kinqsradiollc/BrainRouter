@@ -88,3 +88,67 @@ export function usePlatform(): { os: OS; isMac: boolean; fmt: (combo: string) =>
     return { os, isMac: os === 'mac', fmt: (combo: string) => formatCombo(combo, os) };
   }, []);
 }
+
+// ===========================================================================
+// §5.9 — customizable shortcuts: capture a keystroke → neutral combo, and apply
+// user overrides (stored in cli.shortcuts as { id: combo }) over the defaults.
+// ===========================================================================
+
+/** A pressed key normalized to a neutral combo token (matches the SHORTCUTS form). */
+function normalizeKey(key: string): string {
+  if (key === '`') return 'Backtick';
+  if (key === ' ') return 'Space';
+  if (key === 'Escape' || key === 'Enter' || key === 'Tab' || key === 'Backspace' || key === 'Delete') return key;
+  if (key.startsWith('Arrow')) return key.slice(5); // ArrowUp → Up
+  return key.length === 1 ? key.toUpperCase() : key;
+}
+
+const MODIFIER_KEYS = new Set(['Meta', 'Control', 'Shift', 'Alt']);
+
+export interface CaptureEvent { key: string; metaKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean; altKey?: boolean }
+
+/**
+ * Turn a keydown into a neutral combo (`Mod+Shift+D`, `Ctrl+Backtick`), or null
+ * if only modifiers are held. `Mod` is the platform's primary accelerator (⌘ on
+ * mac, Ctrl elsewhere); a literal Ctrl on mac stays `Ctrl` (so e.g. Ctrl+Backtick
+ * round-trips). The token order is fixed: Mod, Ctrl, Shift, Alt, key.
+ */
+export function captureCombo(e: CaptureEvent, os: OS = detectOS()): string | null {
+  if (MODIFIER_KEYS.has(e.key)) return null;
+  const isMac = os === 'mac';
+  const tokens: string[] = [];
+  if (isMac ? e.metaKey : e.ctrlKey) tokens.push('Mod');
+  if (isMac && e.ctrlKey) tokens.push('Ctrl'); // literal Ctrl on mac (distinct from ⌘)
+  if (e.shiftKey) tokens.push('Shift');
+  if (e.altKey) tokens.push('Alt');
+  tokens.push(normalizeKey(e.key));
+  return tokens.join('+');
+}
+
+export interface ResolvedShortcuts {
+  /** SHORTCUTS with any user override applied to `combo`. */
+  shortcuts: ShortcutDef[];
+  /** Pairs of shortcut ids that, after overrides, collide WITHIN the same area. */
+  conflicts: Array<[string, string]>;
+}
+
+/**
+ * Apply user overrides (id → neutral combo) over the built-in {@link SHORTCUTS}
+ * and report any within-area collisions. Cross-area duplicates (e.g. `Escape`
+ * for both "close panel" and "stop turn") are intentional and not flagged.
+ */
+export function resolveShortcutOverrides(overrides: Record<string, string> = {}): ResolvedShortcuts {
+  const shortcuts = SHORTCUTS.map((s) => {
+    const ov = overrides[s.id];
+    return ov && ov.trim() ? { ...s, combo: ov.trim() } : s;
+  });
+  const conflicts: Array<[string, string]> = [];
+  for (let i = 0; i < shortcuts.length; i++) {
+    for (let j = i + 1; j < shortcuts.length; j++) {
+      if (shortcuts[i].area === shortcuts[j].area && shortcuts[i].combo === shortcuts[j].combo) {
+        conflicts.push([shortcuts[i].id, shortcuts[j].id]);
+      }
+    }
+  }
+  return { shortcuts, conflicts };
+}

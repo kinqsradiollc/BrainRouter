@@ -17,7 +17,8 @@ import { SESSION_BASE } from './lib/session/sessionPagination.js';
 import { mergeOptimistic } from './lib/session/sessionOrder.js';
 import { setEntry } from './lib/review/reviewWorkspace.js';
 import { usePanels } from './lib/panels/usePanels.js';
-import { detectOS } from './lib/shortcuts/shortcuts.js';
+import { detectOS, captureCombo } from './lib/shortcuts/shortcuts.js';
+import { hostQuery } from './lib/hostQuery.js';
 import { buildCommandList, runCommand, resolveSlashInput, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
 import { tagQueryId } from './lib/workspace/workspaceEvents.js';
 import { duplicateTitleKeys } from './lib/session/sessionDisplay.js';
@@ -651,8 +652,35 @@ export function App(): React.ReactElement {
     return () => ro.disconnect();
   }, []);
 
+  // §5.9 — user shortcut overrides (cli.shortcuts), read once; dispatched
+  // ADDITIVELY below (an override fires its action; the built-in defaults stay).
+  const shortcutOverridesRef = useRef<Record<string, string>>({});
+  useEffect(() => { void hostQuery<{ overrides?: Record<string, string> }>('shortcuts-get').then((r) => { if (r?.overrides) shortcutOverridesRef.current = r.overrides; }); }, []);
+
   useEffect(() => {
+    const os = detectOS();
+    // App-action map for the registry ids that have a handler here.
+    const ACTIONS: Record<string, () => void> = {
+      palette: () => setPaletteOpen((p) => !p),
+      'panel-diff': () => togglePanel('diff'),
+      'panel-files': () => togglePanel('files'),
+      'panel-files-alt': () => togglePanel('files'),
+      'panel-plan': () => togglePanel('plan'),
+      'panel-fullscreen': () => { setSideFullScreen((v) => !v); setSidePanelOpen(true); },
+      terminal: () => setTermDockOpen((o) => !o),
+      settings: () => openSettings('general'),
+    };
     const h = (e: KeyboardEvent) => {
+      // §5.9 — honour a user override first (additive: matches only when set).
+      const overrides = shortcutOverridesRef.current;
+      if (Object.keys(overrides).length) {
+        const pressed = captureCombo(e, os);
+        if (pressed) {
+          for (const id in overrides) {
+            if (overrides[id] === pressed && ACTIONS[id]) { e.preventDefault(); ACTIONS[id](); return; }
+          }
+        }
+      }
       const mod = e.metaKey || e.ctrlKey;
       if (mod && e.key.toLowerCase() === 'k') { e.preventDefault(); setPaletteOpen((p) => !p); }
       // View shortcuts (parity with the reference app's Views menu)
