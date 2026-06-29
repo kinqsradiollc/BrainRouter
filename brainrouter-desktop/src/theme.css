@@ -4274,3 +4274,14 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .write-editor { flex: 1; border: 0; outline: 0; resize: none; background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 13px; line-height: 1.6; padding: 12px 16px; }
 .write-preview { flex: 1; padding: 12px 20px; border-left: 1px solid var(--border); overflow: auto; }
 .write-status { font-size: 11px; color: var(--text-dim); padding: 4px 8px; border-top: 1px solid var(--border); }
+
+/* ===== §5.3 — Memory panel ===== */
+.mem-row { border-bottom: 1px solid var(--border); padding: 8px 10px; }
+.mem-row-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: 11px; }
+.mem-type { color: var(--accent); text-transform: uppercase; letter-spacing: .03em; }
+.mem-score { color: var(--ok); font-family: var(--mono); }
+.mem-source { color: var(--text-faint); }
+.mem-id { color: var(--text-faint); font-family: var(--mono); margin-left: auto; }
+.mem-content { font-size: 13px; color: var(--text); line-height: 1.45; }
+.mem-error { color: var(--err); font-size: 12px; padding: 8px 10px; }
+.mem-raw { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin: 8px; font-size: 12px; white-space: pre-wrap; color: var(--text-dim); }

@@ -2191,6 +2191,34 @@ async function main() {
             'workflow-save': (args) => saveWorkflowGraph(workspaceRoot, (args.graph ?? {})),
             'workflow-load': (args) => loadWorkflowGraph(workspaceRoot, typeof args.id === 'string' ? args.id : ''),
             'workflow-delete': (args) => ({ ok: deleteWorkflowGraph(workspaceRoot, typeof args.id === 'string' ? args.id : '') }),
+            // §5.3 Memory panel — search the brain memory engine via the MCP tool.
+            // Robust to the loose memory_search shape: structured records when it
+            // returns JSON, otherwise the raw text. Surfaces a clear "is the brain
+            // connected?" error when the MCP isn't available.
+            'memory-search': async (args) => {
+                try {
+                    const result = await mcpClient.callTool('memory_search', { query: typeof args.query === 'string' ? args.query : '' });
+                    const text = typeof result === 'string'
+                        ? result
+                        : (result?.content?.[0]?.text ?? JSON.stringify(result));
+                    try {
+                        const parsed = JSON.parse(text);
+                        const records = Array.isArray(parsed)
+                            ? parsed
+                            : (parsed?.records
+                                ?? parsed?.results
+                                ?? parsed?.memories
+                                ?? []);
+                        return { records, raw: Array.isArray(records) && records.length ? '' : text };
+                    }
+                    catch {
+                        return { records: [], raw: text };
+                    }
+                }
+                catch (e) {
+                    return { records: [], error: e instanceof Error ? e.message : String(e) };
+                }
+            },
             // DESK-4j — branch picker (pattern: branch chip with dropdown in the
             // composer context row). Listing is read-only; checkout runs through
             // the same user-command path as the terminal input.
