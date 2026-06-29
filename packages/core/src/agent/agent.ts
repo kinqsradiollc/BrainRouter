@@ -79,6 +79,8 @@ import { LOCAL_TOOLS } from '../tool/specs.js';
 import { normalizeToolName } from '../tool/names.js';
 import { registryAllowedTools, hideWorkerToolsFor, WORKER_THREAD_TOOLS, MCP_DISCOVERY_TOOLS } from '../tool/registry.js';
 import { searchMcpCatalog } from '../mcp/discovery.js';
+import { appendEvidence, setQuestion, readLedger } from '../research/researchStore.js';
+import { summarizeLedger, formatBrief } from '../research/evidenceLedger.js';
 import { localToolExecutor, localToolSpecsFromExecutors } from '../tool/executors.js';
 import { assessMcpToolApproval } from './mcpApproval.js';
 export { LOCAL_TOOLS } from '../tool/specs.js';
@@ -3569,6 +3571,29 @@ export class Agent {
         } catch (err: any) {
           return `web_search failed: ${err?.message ?? err}`;
         }
+      }
+      case 'research_note': {
+        const claim = String(args.claim ?? '').trim();
+        if (!claim) throw new Error('research_note requires a non-empty `claim`.');
+        const sources = Array.isArray(args.sources) ? args.sources.map((s: any) => String(s)) : [];
+        const stance = ['support', 'refute', 'unclear'].includes(String(args.stance))
+          ? (String(args.stance) as 'support' | 'refute' | 'unclear')
+          : undefined;
+        const confidence = ['high', 'medium', 'low'].includes(String(args.confidence))
+          ? (String(args.confidence) as 'high' | 'medium' | 'low')
+          : undefined;
+        const note = typeof args.note === 'string' ? args.note : undefined;
+        const ledger = appendEvidence(this.workspaceRoot, this.sessionKey, { claim, sources, stance, confidence, note });
+        const s = summarizeLedger(ledger);
+        return `Recorded. Ledger: ${s.total} finding${s.total === 1 ? '' : 's'} (${s.corroborated} corroborated, ${s.conflicting} conflicting, ${s.singleSource} single-source).`;
+      }
+      case 'research_brief': {
+        if (typeof args.question === 'string' && args.question.trim()) {
+          setQuestion(this.workspaceRoot, this.sessionKey, args.question);
+        }
+        const ledger = readLedger(this.workspaceRoot, this.sessionKey);
+        if (!ledger) return 'No research ledger yet — record evidence with research_note first.';
+        return formatBrief(ledger);
       }
       case 'list_mcp_resources': {
         const client = this.mcpClient as any;
