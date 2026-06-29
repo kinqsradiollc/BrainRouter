@@ -29,6 +29,7 @@ import { isAllowedNavigation, allowedOriginFor } from './windowSecurity.js';
 import { addOpened, noteActivity, reorderWorkspace } from './recents.js';
 import { createComputerUsePort } from './computerUse.js';
 import { checkComputerUsePermissions, openAccessibilitySettings, openScreenRecordingSettings } from './computerUsePermissions.js';
+import { setupTray } from './tray.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 function reconcileWorkspaceBackground(workspaceRoot) {
     try {
@@ -320,12 +321,42 @@ function openWorkspaceWindow(workspaceRoot) {
 // between it and its neighbor. This is what makes Codex/native apps look
 // clean; classic Chromium scrollbars reserve space and draw a hard divider.
 app.commandLine.appendSwitch('enable-features', 'OverlayScrollbar');
+// §5.8 — the tray instance, kept in module scope so V8 never GCs it (which would
+// make the icon vanish). Assigned once the app is ready.
+let tray = null;
 app.whenReady().then(() => {
     // T1 — the folder the app launched in is implicitly trusted (the user chose
     // it); every OTHER workspace must be trusted before main will open it.
     const launchRoot = process.env.BRAINROUTER_DESKTOP_WORKSPACE || readRecents()[0] || process.cwd();
     trustWorkspace(launchRoot);
     openWorkspaceWindow(launchRoot);
+    // §5.8 — system tray: quick show/hide, a live recent-workspaces submenu, quit.
+    // Held in module scope so it isn't garbage-collected; failure is non-fatal.
+    tray = setupTray({
+        recents: () => readRecents(),
+        isWindowVisible: () => [...wins.values()].some((wp) => !wp.win.isDestroyed() && wp.win.isVisible()),
+        toggleWindow: () => {
+            const live = [...wins.values()].filter((wp) => !wp.win.isDestroyed());
+            if (live.length === 0) {
+                openWorkspaceWindow(readRecents()[0] || launchRoot);
+                return;
+            }
+            const anyVisible = live.some((wp) => wp.win.isVisible());
+            for (const wp of live) {
+                if (anyVisible)
+                    wp.win.hide();
+                else {
+                    wp.win.show();
+                    wp.win.focus();
+                }
+            }
+        },
+        openWorkspace: (root) => { try {
+            trustWorkspace(root);
+        }
+        catch { /* best-effort */ } openWorkspaceWindow(root); },
+        quit: () => app.quit(),
+    });
     ipcMain.on('agent-command', (event, raw) => {
         const wp = wins.get(event.sender.id);
         if (!wp || event.senderFrame !== wp.win.webContents.mainFrame)
