@@ -4248,3 +4248,11 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .errbnd-msg { color: var(--err); font-size: 13px; margin-bottom: 10px; }
 .errbnd-stack { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; font-size: 11px; color: var(--text-dim); white-space: pre-wrap; max-height: 220px; overflow: auto; }
 .errbnd-actions { display: flex; gap: 8px; margin-top: 14px; }
+
+/* ===== §5.1 — requirement PM-framework buttons ===== */
+.req-frameworks { padding: 8px; border-bottom: 1px solid var(--border); }
+.req-fw-label { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); margin-bottom: 6px; }
+.req-fw-group { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-bottom: 5px; }
+.req-fw-group-label { font-size: 10px; color: var(--text-faint); width: 56px; flex: 0 0 auto; }
+.req-fw-btn { font-size: 11px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; color: var(--text-dim); cursor: pointer; transition: border-color .12s ease, color .12s ease; }
+.req-fw-btn:hover { border-color: var(--accent); color: var(--text); }
