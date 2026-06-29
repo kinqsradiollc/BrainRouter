@@ -89,6 +89,8 @@ export const LOCAL_TOOL_REGISTRY: LocalToolEntry[] = [
   { name: 'mark_chapter', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   // WF-TOOL — run_workflow launches a fan-out of child agents (child_write), like spawn_*.
   { name: 'run_workflow', accessTier: 'read', actionKind: 'child_write', parallelSafe: false },
+  // §7 L4 — run_workflow_graph runs a saved visual graph; its agent nodes spawn children (child_write).
+  { name: 'run_workflow_graph', accessTier: 'read', actionKind: 'child_write', parallelSafe: false },
   // §AV-4 — artifact_write persists an Artifact Record (BrainRouter state, not
   // workspace source), so it gates like update_plan / mark_chapter: read tier,
   // read_only action kind, no approval. Not parallel-safe (serialized JSON store).

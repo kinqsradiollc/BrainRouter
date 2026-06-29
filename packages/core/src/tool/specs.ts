@@ -19,6 +19,7 @@ import {
   createResumeAgentTool,
   createRouteTaskTool,
   createRunWorkflowTool,
+  createRunWorkflowGraphTool,
 } from '../orchestration/tools.js';
 
 export const LOCAL_TOOLS = [
@@ -411,6 +412,7 @@ export const LOCAL_TOOLS = [
   createResumeAgentTool(),
   createRouteTaskTool(),
   createRunWorkflowTool(),
+  createRunWorkflowGraphTool(),
   {
     name: 'ask_user_choice',
     description:
