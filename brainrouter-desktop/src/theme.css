@@ -4240,3 +4240,11 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .perm-card-label { font-weight: 600; font-size: 13px; color: var(--text); }
 .perm-card.active .perm-card-label { color: var(--accent); }
 .perm-card-desc { font-size: 11px; color: var(--text-dim); margin-top: 2px; line-height: 1.35; }
+
+/* ===== §5.9 — top-level error boundary ===== */
+.errbnd { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--bg); padding: 24px; z-index: 9999; }
+.errbnd-card { max-width: 560px; width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+.errbnd-title { font-size: 16px; font-weight: 700; color: var(--text); margin-bottom: 8px; }
+.errbnd-msg { color: var(--err); font-size: 13px; margin-bottom: 10px; }
+.errbnd-stack { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; font-size: 11px; color: var(--text-dim); white-space: pre-wrap; max-height: 220px; overflow: auto; }
+.errbnd-actions { display: flex; gap: 8px; margin-top: 14px; }
