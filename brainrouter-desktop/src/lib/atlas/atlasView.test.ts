@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { AtlasGraph } from '@kinqs/brainrouter-types';
-import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize, atlasNodeFacts, atlasSearchMatches, atlasGrouping, atlasGroupedLayout, atlasOverviewModel, ATLAS_OVERVIEW_OTHER_ID, atlasDomainModel, atlasServiceModel, isServicePortPath, serviceModuleLabel, atlasChangeKind, atlasChangeMap, atlasNodeChanges, atlasImpact, atlasImpactOf, atlasUncoveredFiles, atlasProjectStats, isTestFile } from './atlasView.js';
+import { atlasViewModel, atlasNodeColor, atlasLayout, atlasNodeSize, atlasNodeFacts, atlasSearchMatches, atlasGrouping, atlasGroupedLayout, capAtlasGroups, atlasOverviewModel, ATLAS_OVERVIEW_OTHER_ID, atlasDomainModel, atlasServiceModel, isServicePortPath, serviceModuleLabel, atlasChangeKind, atlasChangeMap, atlasNodeChanges, atlasImpact, atlasImpactOf, atlasUncoveredFiles, atlasProjectStats, isTestFile } from './atlasView.js';
 
 function fixture(): AtlasGraph {
   return {
@@ -207,6 +207,57 @@ test('atlasGroupedLayout packs large graphs roughly square (no tall column)', ()
   // should be wider-than-or-near-square, never a tall sliver
   assert.ok(right >= bottom * 0.6, `expected roughly square, got ${right}x${bottom}`);
   assert.ok(out.groups.length === 16);
+});
+
+test('atlasGroupedLayout fills a wide viewport (no fixed 1080 cap → no tall strip)', () => {
+  // Many groups in a WIDE container: the row width should track the viewport,
+  // not the old fixed 1080 cap that forced a tall column.
+  const groups = Array.from({ length: 30 }, (_, g) => ({
+    id: `group:g${g}`, label: `g${g}`, nodeIds: Array.from({ length: 4 }, (_, i) => `file:g${g}/f${i}.ts`),
+  }));
+  const out = atlasGroupedLayout(groups, { containerWidth: 1600, containerHeight: 700 });
+  const right = Math.max(...out.groups.map((b) => b.x + b.width));
+  const bottom = Math.max(...out.groups.map((b) => b.y + b.height));
+  // The layout targets the viewport ASPECT (fitView scales it), so for a wide
+  // viewport it must read as a band — wider than tall — not a vertical strip.
+  assert.ok(right > 1080, `wide viewport should spread past the old 1080 cap, got width ${right}`);
+  assert.ok(right >= bottom, `wide viewport ⇒ band wider than tall, got ${right}x${bottom}`);
+});
+
+test('atlasGroupedLayout: a tall viewport produces a narrower, taller pack (aspect tracks the viewport)', () => {
+  const groups = Array.from({ length: 30 }, (_, g) => ({
+    id: `group:g${g}`, label: `g${g}`, nodeIds: Array.from({ length: 4 }, (_, i) => `file:g${g}/f${i}.ts`),
+  }));
+  const wide = atlasGroupedLayout(groups, { containerWidth: 1600, containerHeight: 700 });
+  const tall = atlasGroupedLayout(groups, { containerWidth: 800, containerHeight: 1200 });
+  const w = (o: typeof wide) => Math.max(...o.groups.map((b) => b.x + b.width));
+  // Same groups, wider viewport ⇒ a wider layout than the tall viewport.
+  assert.ok(w(wide) > w(tall), `wide ${w(wide)} should exceed tall ${w(tall)}`);
+});
+
+test('capAtlasGroups: bounds nodes biggest-first, truncates the crossing group, reports hidden', () => {
+  const groups = [
+    { id: 'a', label: 'a', nodeIds: ['n1', 'n2', 'n3'] },        // 3
+    { id: 'b', label: 'b', nodeIds: ['n4', 'n5', 'n6', 'n7', 'n8'] }, // 5 (biggest)
+    { id: 'c', label: 'c', nodeIds: ['n9', 'n10'] },             // 2
+  ];
+  const capped = capAtlasGroups(groups, 6);
+  // total 10 > cap 6 → 4 hidden. Biggest first: b(5) then a → truncated to 1.
+  assert.equal(capped.hidden, 4);
+  assert.equal(capped.shown, 6);
+  assert.equal(capped.groups[0].id, 'b');
+  assert.equal(capped.groups[0].nodeIds.length, 5);
+  assert.equal(capped.groups[1].id, 'a');
+  assert.equal(capped.groups[1].nodeIds.length, 1); // truncated
+  assert.equal(capped.hiddenGroups, 1);             // c dropped entirely
+  const rendered = capped.groups.reduce((s, g) => s + g.nodeIds.length, 0);
+  assert.equal(rendered, 6);
+});
+
+test('capAtlasGroups: under-cap and Infinity (drill-in) pass through untouched', () => {
+  const groups = [{ id: 'a', label: 'a', nodeIds: ['n1', 'n2'] }];
+  assert.deepEqual(capAtlasGroups(groups, 10), { groups, hidden: 0, hiddenGroups: 0, shown: 2 });
+  assert.deepEqual(capAtlasGroups(groups, Infinity), { groups, hidden: 0, hiddenGroups: 0, shown: 2 });
 });
 
 test('atlasOverviewModel: layer cards + inter-layer edges', () => {

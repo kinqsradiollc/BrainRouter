@@ -13,7 +13,7 @@ import { ReactFlow, Background, Controls, MiniMap, type Edge, type Node, type Re
 import "@xyflow/react/dist/style.css";
 import type { AtlasFileCategory, AtlasGraph, AtlasNode, AtlasNodeType } from "@kinqs/brainrouter-types";
 import {
-  atlasGrouping, atlasGroupedLayout, atlasOverviewModel, atlasDomainModel, atlasServiceModel, atlasNodeColor, atlasSearchMatches,
+  atlasGrouping, atlasGroupedLayout, capAtlasGroups, atlasOverviewModel, atlasDomainModel, atlasServiceModel, atlasNodeColor, atlasSearchMatches,
   atlasChangeMap, atlasNodeChanges, atlasImpact, atlasImpactOf, atlasUncoveredFiles, atlasProjectStats, ATLAS_FILE_CATEGORIES, ATLAS_CATEGORY_COLORS,
   type AtlasChangeKind, type AtlasChangeAssessment,
 } from "../lib/atlas/atlasView.js";
@@ -23,6 +23,11 @@ import { AtlasDetail } from "./AtlasDetail.js";
 import { Icon } from "../icons.js";
 
 type Mode = "overview" | "structural" | "domain" | "services";
+
+/** Max file nodes the top-level Structural view renders before summarizing the
+ *  rest as "+N more files". Keeps a large repo a readable wide band instead of a
+ *  thousand-node strip; drilling into a single layer shows it in full. */
+const STRUCTURAL_NODE_CAP = 240;
 
 export interface AtlasPanelProps {
   graph: AtlasGraph | null;
@@ -190,14 +195,24 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
     const catScope = new Set(
       graph.nodes.filter((n) => (!scope || scope.has(n.id)) && (!n.category || !disabledCats.has(n.category))).map((n) => n.id),
     );
-    const groups = atlasGrouping(graph, catScope);
+    // Cap the top-level (all-groups) view to a legible number of file nodes so a
+    // big repo reads as a wide band, not a thousand-node strip. Drilling into a
+    // single layer (scope set) shows that layer in full.
+    const { groups, hidden, hiddenGroups } = capAtlasGroups(
+      atlasGrouping(graph, catScope),
+      scope ? Infinity : STRUCTURAL_NODE_CAP,
+    );
+    const visible = new Set<string>();
+    for (const g of groups) for (const id of g.nodeIds) visible.add(id);
     return {
       layout: atlasGroupedLayout(groups, {
         containerWidth: containerW,
         containerHeight: containerH,
         maxCols: 4,
       }),
-      visible: catScope
+      visible,
+      hidden,
+      hiddenGroups,
     };
   }, [graph, effMode, scope, disabledCats, containerW, containerH]);
 
@@ -471,6 +486,9 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
       <div className="atlas-breadcrumb">
         <button className="atlas-crumb" onClick={() => { setMode(hasLayers ? "overview" : "structural"); setDrill(null); }}>{graph.project.name}</button>
         {drillName ? <><span className="atlas-crumb-sep">›</span><span className="atlas-crumb cur">{drillName}</span><span className="atlas-crumb-esc">Esc to go back</span></> : <span className="atlas-crumb-mode">{effMode === "overview" ? "Overview" : effMode === "domain" ? "Domain" : effMode === "services" ? "Services" : "Structural"}</span>}
+        {effMode === "structural" && structural && structural.hidden > 0
+          ? <span className="atlas-crumb-note" title={hasLayers ? "Open a layer (Overview) or double-click a group to see every file" : "Double-click a group to drill in and see every file"}>+{structural.hidden} more {structural.hidden === 1 ? "file" : "files"} not shown</span>
+          : null}
       </div>
 
       {showDiff && changedCount ? (
