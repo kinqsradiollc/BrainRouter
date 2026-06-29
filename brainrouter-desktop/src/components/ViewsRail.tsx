@@ -131,11 +131,7 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
       {/* §panel-drawer — the header is ALWAYS present: a back-to-tools button
           (when inside a panel), the open tabs, then pin (dock⇄drawer) + close. */}
       <div className={`side-tabs side-head${envRoom ? ' has-env' : ''}`}>
-        {activeSideTab ? (
-          <button className="side-back-btn" onClick={() => setActiveSideTab(null)} title="Back to all tools">
-            <Icon name="arrow-left" size={13} /><span>All tools</span>
-          </button>
-        ) : (
+        {activeSideTab ? null : (
           <span className="side-head-title">Tools</span>
         )}
         {sideTabs.length ? (

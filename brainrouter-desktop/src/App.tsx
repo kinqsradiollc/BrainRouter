@@ -487,6 +487,15 @@ export function App(): React.ReactElement {
     }
   }, [lastPlan]);
 
+  // The Worktrees panel only fetched on its FIRST open (ensurePanel). Switching
+  // back to an already-open tab (or restoring it in full-screen) left the list
+  // at its stale empty state → "No worktrees" even when the repo has some.
+  // Re-read whenever it becomes the active side tab, or the workspace changes.
+  useEffect(() => {
+    if (activeSideTab === 'worktrees') q('q-worktrees', 'git-worktrees');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSideTab, info.workspaceRoot]);
+
   // DESK-5w — keep the per-session background-task list fresh even when the
   // VIEWED chat is idle: another chat may be running work whose tasks should
   // appear/clear in the sidebar (and reflect the boot-time stale reconcile).

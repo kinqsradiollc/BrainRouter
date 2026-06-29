@@ -6,6 +6,7 @@
  * scoped through the same session-mode layer the CLI resolves.
  */
 import React, { useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { wireBadge, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
 import { Icon } from './icons.js';
 import type { ConnectorCatalogEntry, ConnectorDefinitionBundle, ConnectorRecord, ConnectorRunRecord } from '@kinqs/brainrouter-types';
@@ -575,7 +576,12 @@ function ConnectorSettings({ connectors, githubIntegration, onGithubSave, onActi
         </>
       ) : null}
 
-      {editorOpen && selectedEntry ? (
+      {editorOpen && selectedEntry ? createPortal((
+        // Portal to <body>: the Settings modal carries a transient `transform`
+        // (the popIn animation) which would make this fixed overlay resolve
+        // against — and get clipped by — the settings-modal box (height 660px,
+        // overflow:hidden), cutting a tall connector form off at top and bottom.
+        // Rendering at the document root keeps it anchored to the real viewport.
         <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) setEditorOpen(false); }}>
           <div className="dialog" style={{ width: 560, maxHeight: '86vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             <div className="dialog-title" style={{ display: 'flex', alignItems: 'center', gap: 11, flex: 'none' }}>
@@ -676,7 +682,7 @@ function ConnectorSettings({ connectors, githubIntegration, onGithubSave, onActi
             </div>
           </div>
         </div>
-      ) : null}
+      ), document.body) : null}
     </>
   );
 }
