@@ -30,6 +30,7 @@ import { addOpened, noteActivity, reorderWorkspace } from './recents.js';
 import { createComputerUsePort } from './computerUse.js';
 import { checkComputerUsePermissions, openAccessibilitySettings, openScreenRecordingSettings } from './computerUsePermissions.js';
 import { setupTray } from './tray.js';
+import { hardenWebviewPreferences, isAllowedWebviewSrc } from './webviewPolicy.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 function reconcileWorkspaceBackground(workspaceRoot) {
     try {
@@ -280,7 +281,20 @@ function openWorkspaceWindow(workspaceRoot) {
             contextIsolation: true,
             nodeIntegration: false,
             sandbox: false,
+            // §3 D3 — allow <webview> ONLY for the prototype preview; every attach is
+            // hardened + src-gated by the will-attach-webview handler below.
+            webviewTag: true,
         },
+    });
+    // §3 D3 — secure-webview gate: harden every attached webview (no preload/node,
+    // sandboxed, isolated) and restrict its src to a self-contained data:text/html
+    // doc or an authorized prototype file under THIS workspace. Anything else is
+    // refused. The policy is a pure, unit-tested helper (webviewPolicy.ts).
+    win.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+        hardenWebviewPreferences(webPreferences);
+        if (!isAllowedWebviewSrc(typeof params.src === 'string' ? params.src : '', workspaceRoot)) {
+            event.preventDefault();
+        }
     });
     const wp = { win, hosts: new Map(), lastSession: new Map(), pool: emptyPool(), retiring: new Set() };
     wins.set(win.webContents.id, wp);
