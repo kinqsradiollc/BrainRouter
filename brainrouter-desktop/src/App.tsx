@@ -230,6 +230,10 @@ export function App(): React.ReactElement {
   const [filesTruncated, setFilesTruncated] = useState(false);
   const [filesError, setFilesError] = useState('');
   const [attachmentUploads, setAttachmentUploads] = useState<AttachmentUpload[]>([]);
+  // §vision — pasted screenshots staged for the next send. Unlike file
+  // attachments (which the host text-extracts), these go to the model inline as
+  // image blocks via start-turn `images`. Cleared on send.
+  const [pastedImages, setPastedImages] = useState<Array<{ id: string; mediaType: string; dataBase64: string }>>([]);
   const activeSidebarRoot = workspaces.current ?? info.workspaceRoot ?? '';
   const recentsOpen = activeSidebarRoot ? (recentsOpenByRoot[activeSidebarRoot] ?? true) : true;
   const setRecentsOpen = useCallback<React.Dispatch<React.SetStateAction<boolean>>>((value) => {
@@ -678,8 +682,9 @@ export function App(): React.ReactElement {
     const pendingAttachments = attachmentUploads.filter((a) => a.status === 'reading' || a.status === 'attaching');
     const failedAttachments = attachmentUploads.filter((a) => a.status === 'failed');
     const attached = readyAttachments(attachmentUploads);
+    const imagesToSend = pastedImages.map((p) => ({ mediaType: p.mediaType, dataBase64: p.dataBase64 }));
     if (running || stopping) return;
-    if (!typedPrompt && attached.length === 0) return;
+    if (!typedPrompt && attached.length === 0 && imagesToSend.length === 0) return;
     if (pendingAttachments.length > 0) {
       setToast(pendingAttachments.length === 1 ? `Still attaching ${pendingAttachments[0].name}…` : `Still attaching ${pendingAttachments.length} files…`);
       return;
@@ -688,16 +693,23 @@ export function App(): React.ReactElement {
       setToast(failedAttachments.length === 1 ? `Remove failed attachment ${failedAttachments[0].name} before sending.` : 'Remove failed attachments before sending.');
       return;
     }
-    const prompt = buildPromptWithAttachments(typedPrompt, attached);
-    const displayPrompt = typedPrompt || (attached.length === 1 ? `Use attached file: ${attached[0].name}` : `Use ${attached.length} attached files`);
+    // §vision — an image-only send (no typed text, no file attachments) gets a
+    // sensible default question so the model has something to answer about it.
+    const promptText = typedPrompt || (imagesToSend.length > 0 && attached.length === 0 ? "What's in this image?" : typedPrompt);
+    const prompt = buildPromptWithAttachments(promptText, attached);
+    const displayPrompt = typedPrompt
+      || (attached.length === 1 ? `Use attached file: ${attached[0].name}`
+        : attached.length > 1 ? `Use ${attached.length} attached files`
+        : imagesToSend.length === 1 ? 'Pasted an image'
+        : `Pasted ${imagesToSend.length} images`);
     // T8 — a slash command is NEVER sent to the LLM. Route it through the
     // command registry: bridge runs against the CLI stores, known commands run
     // their wire (panel/settings/native/cli fallback), and an UNKNOWN slash
     // surfaces a command-output card instead of becoming a chat prompt.
     const slash = resolveSlashInput(typedPrompt, commands);
     if (slash.kind !== 'not-slash') {
-      if (attached.length > 0) {
-        setToast('Attachments are sent with chat messages, not slash commands.');
+      if (attached.length > 0 || imagesToSend.length > 0) {
+        setToast('Attachments and images are sent with chat messages, not slash commands.');
         return;
       }
       setDraft('');
@@ -719,6 +731,7 @@ export function App(): React.ReactElement {
     setRows((r) => [...r, { id: stableId, kind: 'user', text: displayPrompt, ts: nowTs }]);
     if (!override) setDraft('');
     if (attached.length > 0) setAttachmentUploads((prev) => prev.filter((a) => !attached.some((sent) => sent.id === a.id)));
+    if (imagesToSend.length > 0) setPastedImages([]);
     setRunning(true);
     // DESK-5v — mark THIS session running so its spinner survives a switch away.
     setSessionRunning(sessionKeyRef.current ?? info.sessionKey ?? '', true);
@@ -743,7 +756,7 @@ export function App(): React.ReactElement {
       });
       setTimeout(() => refreshSession(), 400);
     }
-    window.brainrouter.send({ kind: 'start-turn', prompt });
+    window.brainrouter.send({ kind: 'start-turn', prompt, ...(imagesToSend.length ? { images: imagesToSend } : {}) });
   }
 
   // AI PR review — kick the agent to review a PR on an ISOLATED git worktree so
@@ -806,6 +819,35 @@ export function App(): React.ReactElement {
       setToast(batch.length === 1 ? `Attaching ${batch[0].name}…` : `Attaching ${batch.length} files…`);
       ensurePanel('tasks');
     }
+  };
+
+  // §vision — read pasted images as base64 and stage them for the next send (a
+  // vision model receives them inline via start-turn `images`). Size-guarded and
+  // capped; these bypass the text-extracting attachment pipeline by design.
+  const addPastedImages = (files: File[]): void => {
+    const imgs = files.filter((f) => f.type.startsWith('image/')).slice(0, 6);
+    imgs.forEach((file) => {
+      if (file.size > 12 * 1024 * 1024) { setToast(`Image too large (max 12 MB): ${file.name || 'pasted image'}`); return; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const out = reader.result;
+        if (typeof out !== 'string') { setToast('✗ Could not read pasted image'); return; }
+        const base64 = out.includes(',') ? out.slice(out.indexOf(',') + 1) : out;
+        const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        setPastedImages((prev) => [...prev, { id, mediaType: file.type || 'image/png', dataBase64: base64 }]);
+      };
+      reader.onerror = () => setToast('✗ Could not read pasted image');
+      reader.readAsDataURL(file);
+    });
+  };
+
+  // header rename — persist a new title for the currently-viewed session via the
+  // SAME host write the sidebar's rename uses (action:session-meta → title). The
+  // header drives this from its own local edit state (see ChatThread), so it
+  // never collides with the sidebar's inline-rename input.
+  const renameCurrentSession = (title: string): void => {
+    const t = title.trim();
+    if (viewKey && t) q('q-session-meta', 'action:session-meta', { sessionKey: viewKey, patch: { title: t } });
   };
 
   // DESK-5n — the Running list the panels show: live in-turn children (from
@@ -882,7 +924,8 @@ export function App(): React.ReactElement {
   // inline rename. Background tasks are not rendered as chats.
   const renderSessionNode = (s: SessionRow, i: number): React.ReactElement => (
     <React.Fragment key={s.sessionKey}>
-      <div className={`session-wrap${s.sessionKey === viewKey ? ' active' : ''}${s.status === 'completed' ? ' completed' : ''}${sessionMenu?.key === s.sessionKey ? ' menu-open' : ''}`}>
+      <div className={`session-wrap${s.sessionKey === viewKey ? ' active' : ''}${s.status === 'completed' ? ' completed' : ''}${sessionMenu?.key === s.sessionKey ? ' menu-open' : ''}`}
+        onContextMenu={(e) => openSessionMenu(e, s.sessionKey)}>
         {renamingKey === s.sessionKey ? (
           <input className="session-rename" autoFocus value={renameDraft}
             onChange={(e) => setRenameDraft(e.target.value)}
@@ -1189,6 +1232,7 @@ export function App(): React.ReactElement {
             atBottomRef={atBottomRef} setAtBottom={setAtBottom} workflowView={workflowView} setWorkflowView={setWorkflowView}
             renderRow={renderRow} homeStats={homeStats} statsTab={statsTab} setStatsTab={setStatsTab}
             statsRange={statsRange} setStatsRange={setStatsRange} snapshot={snapshot} sessions={sessions}
+            viewKey={viewKey} onRenameCurrent={renameCurrentSession}
             resumeSession={resumeSession} forkParent={forkParent} transcriptEls={transcriptEls} liveText={liveText}
             goal={goalState}
             onGoalResume={() => runBridge('goal', 'resume')}
@@ -1222,7 +1266,10 @@ export function App(): React.ReactElement {
                 onAttach={attachFiles}
                 attachments={attachmentUploads}
                 canSubmit={readyAttachments(attachmentUploads).length > 0}
-                onClearAttachment={(id) => setAttachmentUploads((prev) => prev.filter((u) => u.id !== id))} />
+                onClearAttachment={(id) => setAttachmentUploads((prev) => prev.filter((u) => u.id !== id))}
+                pastedImages={pastedImages}
+                onPasteImages={addPastedImages}
+                onClearPastedImage={(id) => setPastedImages((prev) => prev.filter((pi) => pi.id !== id))} />
               </>
             } />
 

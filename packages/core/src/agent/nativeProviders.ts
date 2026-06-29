@@ -21,10 +21,18 @@
  * `{ content, toolCalls?, usage?, finishReason? }`.
  */
 
-/** OpenAI-clean message, post-`mapChatCompletionMessage` (string content). */
+/** An OpenAI chat content part — plain text or an inline image (data-URL). A
+ *  user message that carries a pasted screenshot arrives here as an array of
+ *  these (text + image_url), produced by `mapChatCompletionMessage`. */
+export type CleanContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
+/** OpenAI-clean message, post-`mapChatCompletionMessage`. `content` is normally
+ *  a string; a vision user turn carries an array of text + image_url parts. */
 export interface CleanMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content?: string | null;
+  content?: string | CleanContentPart[] | null;
   name?: string;
   tool_call_id?: string;
   tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>;
@@ -72,6 +80,27 @@ function asText(content: unknown): string {
   return '';
 }
 
+/** Parse a `data:<mime>;base64,<payload>` URL into its parts (null if not one). */
+function parseImageDataUrl(url: unknown): { mediaType: string; dataBase64: string } | null {
+  if (typeof url !== 'string') return null;
+  const m = /^data:([^;,]+);base64,([\s\S]*)$/.exec(url.trim());
+  return m ? { mediaType: m[1], dataBase64: m[2] } : null;
+}
+
+/** Extract inline images from OpenAI `image_url` content parts (vision turns).
+ *  A string/empty content yields none — the common, no-image case. */
+function imagePartsFromContent(content: unknown): Array<{ mediaType: string; dataBase64: string }> {
+  if (!Array.isArray(content)) return [];
+  const out: Array<{ mediaType: string; dataBase64: string }> = [];
+  for (const part of content) {
+    if (part && typeof part === 'object' && (part as any).type === 'image_url') {
+      const parsed = parseImageDataUrl((part as any).image_url?.url);
+      if (parsed) out.push(parsed);
+    }
+  }
+  return out;
+}
+
 function safeParseObject(raw: unknown): Record<string, unknown> {
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>;
   if (typeof raw !== 'string') return {};
@@ -102,13 +131,14 @@ export const ANTHROPIC_VERSION = '2023-06-01';
 export const ANTHROPIC_DEFAULT_MAX_TOKENS = 8192;
 
 interface AnthropicBlock {
-  type: 'text' | 'tool_use' | 'tool_result';
+  type: 'text' | 'tool_use' | 'tool_result' | 'image';
   text?: string;
   id?: string;
   name?: string;
   input?: Record<string, unknown>;
   tool_use_id?: string;
   content?: string;
+  source?: { type: 'base64'; media_type: string; data: string };
 }
 interface AnthropicMessage { role: 'user' | 'assistant'; content: AnthropicBlock[] }
 
@@ -160,8 +190,16 @@ export function buildAnthropicMessagesPayload(input: NativeBuildInput): Anthropi
       continue;
     }
 
-    // user (and any unexpected role) → a text block
-    messages.push({ role: 'user', content: [{ type: 'text', text: asText(m.content) }] });
+    // user (and any unexpected role) → a text block plus any inline image blocks
+    // (vision turns). Anthropic wants base64 images as `image` source blocks.
+    const userBlocks: AnthropicBlock[] = [];
+    const userText = asText(m.content);
+    if (userText) userBlocks.push({ type: 'text', text: userText });
+    for (const img of imagePartsFromContent(m.content)) {
+      userBlocks.push({ type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.dataBase64 } });
+    }
+    if (userBlocks.length === 0) userBlocks.push({ type: 'text', text: '' });
+    messages.push({ role: 'user', content: userBlocks });
   }
 
   const payload: AnthropicPayload = {
@@ -247,6 +285,7 @@ export function normalizeAnthropicOutput(data: any, endpoint: string, model: str
 
 interface GeminiPart {
   text?: string;
+  inlineData?: { mimeType: string; data: string };
   functionCall?: { name: string; args: Record<string, unknown> };
   functionResponse?: { name: string; response: Record<string, unknown> };
 }
@@ -317,7 +356,16 @@ export function buildGeminiGeneratePayload(input: NativeBuildInput): GeminiPaylo
       continue;
     }
 
-    contents.push({ role: 'user', parts: [{ text: asText(m.content) }] });
+    // user → a text part plus any inline image parts (vision turns). Gemini
+    // takes base64 images as `inlineData` parts.
+    const userParts: GeminiPart[] = [];
+    const gUserText = asText(m.content);
+    if (gUserText) userParts.push({ text: gUserText });
+    for (const img of imagePartsFromContent(m.content)) {
+      userParts.push({ inlineData: { mimeType: img.mediaType, data: img.dataBase64 } });
+    }
+    if (userParts.length === 0) userParts.push({ text: '' });
+    contents.push({ role: 'user', parts: userParts });
   }
 
   const payload: GeminiPayload = { contents };

@@ -1089,7 +1089,7 @@ export class Agent {
     return registryAllowedTools(this.accessMode);
   }
 
-  async runTurn(prompt: string, callbacks: RunTurnCallbacks, opts?: { hiddenPrompt?: boolean }): Promise<string> {
+  async runTurn(prompt: string, callbacks: RunTurnCallbacks, opts?: { hiddenPrompt?: boolean; images?: Array<{ mediaType: string; dataBase64: string }> }): Promise<string> {
     if (!this.initialized) {
       await this.bootstrapSession(callbacks);
     }
@@ -1383,7 +1383,12 @@ export class Agent {
       }
     }
 
-    const userMsg = { role: 'user', content: prompt };
+    const userMsg: { role: string; content: string; images?: Array<{ mediaType: string; dataBase64: string }> } = { role: 'user', content: prompt };
+    // vision — pasted/attached images ride as a SIDECAR on the user message so
+    // `content` stays a string (every token-tally / transcript / compaction path
+    // keeps working); the payload builders inline them per provider at request
+    // time. The durable transcript (recorded above) stays text-only by design.
+    if (opts?.images?.length) userMsg.images = opts.images;
     this.chatHistory.push(userMsg);
     // The durable transcript record for this user message was already written
     // at the top of runTurn (so it survives a mid-turn failure); here we only
@@ -5881,9 +5886,24 @@ function mapChatCompletionMessage(m: any): any {
       content: stripTaggedContent(m.content),
     };
   }
+  const text = stripTaggedContent(m.content);
+  // vision — a user message carrying pasted images becomes MULTI-PART content
+  // (OpenAI `image_url` data-URLs). OpenAI-compatible endpoints read these
+  // directly; the native Anthropic/Gemini adapters translate the image_url
+  // parts into their own image blocks. Non-vision endpoints ignore them.
+  if (Array.isArray(m.images) && m.images.length > 0) {
+    const parts: any[] = [];
+    if (text) parts.push({ type: 'text', text });
+    for (const img of m.images) {
+      if (img?.dataBase64 && img?.mediaType) {
+        parts.push({ type: 'image_url', image_url: { url: `data:${img.mediaType};base64,${img.dataBase64}` } });
+      }
+    }
+    if (parts.length > 0) return { role: m.role, content: parts };
+  }
   return {
     role: m.role,
-    content: stripTaggedContent(m.content),
+    content: text,
   };
 }
 
@@ -5971,11 +5991,16 @@ function buildResponsesInput(messages: any[]): { instructions?: string; input: a
     }
 
     if (role === 'user') {
-      input.push({
-        type: 'message',
-        role,
-        content: inputTextContent(stringifyContent(message.content)),
-      });
+      const content: any[] = inputTextContent(stringifyContent(message.content));
+      // vision — the Responses API takes images as `input_image` parts (data-URL).
+      if (Array.isArray(message.images)) {
+        for (const img of message.images) {
+          if (img?.dataBase64 && img?.mediaType) {
+            content.push({ type: 'input_image', image_url: `data:${img.mediaType};base64,${img.dataBase64}` });
+          }
+        }
+      }
+      input.push({ type: 'message', role, content });
     }
   }
 

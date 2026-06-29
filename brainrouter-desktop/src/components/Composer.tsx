@@ -61,6 +61,10 @@ export interface ComposerProps {
   attachments?: AttachmentUpload[];
   onClearAttachment?: (id: string) => void;
   canSubmit?: boolean;
+  /** vision — pasted screenshots, sent inline to a vision-capable model. */
+  pastedImages?: Array<{ id: string; mediaType: string; dataBase64: string }>;
+  onPasteImages?: (files: File[]) => void;
+  onClearPastedImage?: (id: string) => void;
 }
 
 function formatBytes(size: number): string {
@@ -76,6 +80,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
     slashSel, setSlashSel, setSlashDismissed, onRunSlash, pop, setPop, q, modeLabel, execMode, effort,
     info, branches, endpointModels, allowedModels, connectedProviders, defaultProviderName, modelsLoading, setModelsLoading, modelChoices, modelScope, setModelScope,
     hasConversation, contextUsage, tokens, openSettings, onAttach, attachments = [], onClearAttachment, canSubmit = false,
+    pastedImages = [], onPasteImages, onClearPastedImage,
   } = p;
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
@@ -137,6 +142,25 @@ export function Composer(p: ComposerProps): React.ReactElement {
             ))}
           </div>
         ) : null}
+        {pastedImages.length ? (
+          <div className="attachment-strip" aria-label="Pasted images">
+            {pastedImages.map((img) => (
+              <div key={img.id} className="image-chip" title="Pasted image">
+                <img src={`data:${img.mediaType};base64,${img.dataBase64}`} alt="Pasted screenshot" />
+                {onClearPastedImage ? (
+                  <button type="button" className="attachment-clear" aria-label="Remove image" onClick={() => onClearPastedImage(img.id)}>
+                    <Icon name="close" size={11} />
+                  </button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {pastedImages.length && info.model && !modelCapabilities(info.model).vision ? (
+          <div className="vision-warn" role="status">
+            <Icon name="eye" size={12} /> <span>{info.model} may not read images — switch to a vision model.</span>
+          </div>
+        ) : null}
         <div className="input-wrap">
           {cmdToken ? (
             <div ref={mirrorRef} className="input-mirror" aria-hidden="true">
@@ -151,6 +175,15 @@ export function Composer(p: ComposerProps): React.ReactElement {
             value={draft}
             onChange={(e) => { setDraft(e.target.value); setSlashSel(0); setSlashDismissed(false); }}
             onScroll={syncMirrorScroll}
+            onPaste={onPasteImages ? (e) => {
+              // §vision — pull any image blobs off the clipboard (a pasted
+              // screenshot) and hand them up; let text paste through untouched.
+              const files = Array.from(e.clipboardData?.items ?? [])
+                .filter((it) => it.kind === 'file' && it.type.startsWith('image/'))
+                .map((it) => it.getAsFile())
+                .filter((f): f is File => !!f);
+              if (files.length) { e.preventDefault(); onPasteImages(files); }
+            } : undefined}
             onKeyDown={(e) => {
               if (slashActive && slashMatches.length) {
                 if (e.key === 'ArrowDown') { e.preventDefault(); setSlashSel((s) => Math.min(s + 1, slashMatches.length - 1)); return; }
@@ -175,7 +208,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
         ) : null}
         <button className={`input-send icon-btn${running ? ' stop-red' : ''}${stopping ? ' stopping' : ''}`} title={stopping ? 'Stopping…' : running ? 'Stop' : 'Send'}
           onClick={() => running ? requestStop() : submit()}
-          disabled={(!running && !draft.trim() && !canSubmit) || stopping}>{running ? <Icon name="stop" size={14} /> : <Icon name="arrow-up" size={14} />}</button>
+          disabled={(!running && !draft.trim() && !canSubmit && pastedImages.length === 0) || stopping}>{running ? <Icon name="stop" size={14} /> : <Icon name="arrow-up" size={14} />}</button>
         <div className="composer-controls">
           <span className="pop-wrap">
             {pop === 'mode' ? (
