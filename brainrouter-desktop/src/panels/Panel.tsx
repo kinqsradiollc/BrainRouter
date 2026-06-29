@@ -9,7 +9,7 @@
 import React, { useState } from 'react';
 import { Icon } from '../icons.js';
 
-export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'dashboard' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'review' | 'requirements' | 'annotations' | 'artifacts' | 'ci' | 'atlas' | 'workflows' | 'write';
+export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'dashboard' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'review' | 'requirements' | 'annotations' | 'artifacts' | 'ci' | 'atlas' | 'workflows' | 'write' | 'memory';
 
 export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'context', title: 'Context', icon: 'layout-right' },
@@ -33,6 +33,7 @@ export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'atlas', title: 'Atlas', icon: 'atlas' },
   { id: 'workflows', title: 'Workflows', icon: 'bolt' },
   { id: 'write', title: 'Write', icon: 'file' },
+  { id: 'memory', title: 'Memory', icon: 'pin' },
 ];
 
 const HIDDEN_MANUAL_PANEL_IDS = new Set<PanelId>([

@@ -94,6 +94,7 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
       badge: schedules.filter((s) => s.enabled).length ? String(schedules.filter((s) => s.enabled).length) : '' },
     { id: 'workflows' as PanelId, title: 'Workflows', hint: '', icon: 'bolt', badge: '' },
     { id: 'write' as PanelId, title: 'Write', hint: '', icon: 'file', badge: '' },
+    { id: 'memory' as PanelId, title: 'Memory', hint: '', icon: 'pin', badge: '' },
     { id: 'worktrees' as PanelId, title: 'Worktrees', hint: '', icon: 'branch',
       badge: worktrees.length ? String(worktrees.length) : '' },
     { id: 'review' as PanelId, title: 'Review', hint: '', icon: 'review',
