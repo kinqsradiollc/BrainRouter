@@ -60,6 +60,29 @@ interface ReviewSession {
 
 const ACTION_LABEL: Record<InlineAction, string> = { polish: 'Polish', rewrite: 'Rewrite', continue: 'Continue' };
 
+// §2 W6 — one print-styled stylesheet shared by every export target.
+const EXPORT_CSS = 'body{font:16px/1.65 -apple-system,system-ui,sans-serif;max-width:46rem;margin:3rem auto;padding:0 1.25rem;color:#1a1a1a}pre{background:#f4f4f5;padding:1rem;border-radius:8px;overflow:auto}code{font-family:ui-monospace,monospace;background:#f4f4f5;padding:.15em .35em;border-radius:4px}pre code{padding:0;background:none}blockquote{border-left:3px solid #ddd;margin:0;padding-left:1rem;color:#555}table{border-collapse:collapse}th,td{border:1px solid #ddd;padding:.4em .7em}img{max-width:100%}@media(prefers-color-scheme:dark){body{background:#1a1a1a;color:#e4e4e7}pre,code{background:#27272a}}';
+
+/** Render the Markdown body to HTML (GFM: tables, strikethrough, task lists). */
+function renderBody(content: string): string {
+  return renderToStaticMarkup(React.createElement(ReactMarkdown, { remarkPlugins: [remarkGfm] }, content));
+}
+
+/**
+ * Wrap a rendered body in a self-contained HTML document. `word: true` adds the
+ * Office namespaces + WordDocument block so a `.doc` file opens directly in Word
+ * (the classic dependency-free DOC export — true OOXML .docx via a converter
+ * layers on top).
+ */
+function htmlDoc(title: string, body: string, opts?: { word?: boolean }): string {
+  const ns = opts?.word ? ' xmlns:o="urn:schemas-microsoft-office:office" xmlns:w="urn:schemas-microsoft-office:word"' : '';
+  const wordMeta = opts?.word ? '<!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View><w:Zoom>100</w:Zoom></w:WordDocument></xml><![endif]-->' : '';
+  return `<!doctype html>
+<html lang="en"${ns}><head><meta charset="utf-8">${wordMeta}<meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
+<style>${EXPORT_CSS}</style>
+</head><body>${body}</body></html>`;
+}
+
 export function WritePanel(): React.ReactElement {
   const [files, setFiles] = useState<string[]>([]);
   const [path, setPath] = useState<string | null>(null);
@@ -116,22 +139,40 @@ export function WritePanel(): React.ReactElement {
     }
   }, [path, content, refreshFiles]);
 
-  // §2 W6 — export the current Markdown to a self-contained, print-styled HTML
-  // file next to the source. Client-side render — no new deps.
-  const exportHtml = useCallback(async () => {
+  // §2 W6 — export the current Markdown to a self-contained file next to the
+  // source. Client-side render — no new deps.
+  const exportAs = useCallback(async (kind: 'html' | 'doc') => {
     if (!path) return;
     setStatus('Exporting…');
-    const body = renderToStaticMarkup(React.createElement(ReactMarkdown, { remarkPlugins: [remarkGfm] }, content));
     const title = path.split('/').pop() ?? 'document';
-    const doc = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
-<style>body{font:16px/1.65 -apple-system,system-ui,sans-serif;max-width:46rem;margin:3rem auto;padding:0 1.25rem;color:#1a1a1a}pre{background:#f4f4f5;padding:1rem;border-radius:8px;overflow:auto}code{font-family:ui-monospace,monospace;background:#f4f4f5;padding:.15em .35em;border-radius:4px}pre code{padding:0;background:none}blockquote{border-left:3px solid #ddd;margin:0;padding-left:1rem;color:#555}table{border-collapse:collapse}th,td{border:1px solid #ddd;padding:.4em .7em}img{max-width:100%}@media(prefers-color-scheme:dark){body{background:#1a1a1a;color:#e4e4e7}pre,code{background:#27272a}}</style>
-</head><body>${body}</body></html>`;
-    const outPath = `${path.replace(/\.[^/.]+$/, '')}.html`;
+    const doc = htmlDoc(title, renderBody(content), { word: kind === 'doc' });
+    const outPath = `${path.replace(/\.[^/.]+$/, '')}.${kind}`;
     const res = await hostQuery<{ ok?: boolean; error?: string }>('write-save', { path: outPath, content: doc });
     setStatus(res?.ok ? `Exported to ${outPath}` : `Export failed${res?.error ? `: ${res.error}` : ''}.`);
     void refreshFiles();
   }, [path, content, refreshFiles]);
+
+  // §2 W6 — copy the rendered document to the clipboard as rich text, so pasting
+  // into Word / Google Docs / email keeps the formatting (plain-text fallback).
+  const copyRich = useCallback(async () => {
+    if (!path) return;
+    const html = htmlDoc(path.split('/').pop() ?? 'document', renderBody(content));
+    try {
+      const clip = navigator.clipboard as Clipboard & { write?: (items: ClipboardItem[]) => Promise<void> };
+      if (typeof ClipboardItem !== 'undefined' && clip.write) {
+        await clip.write([new ClipboardItem({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([content], { type: 'text/plain' }),
+        })]);
+        setStatus('Copied as rich text.');
+        return;
+      }
+      await navigator.clipboard.writeText(content);
+      setStatus('Copied as plain text (rich text unavailable here).');
+    } catch {
+      setStatus('Copy failed — the clipboard is unavailable.');
+    }
+  }, [path, content]);
 
   // §2 W3 — run the selection through the inline assistant, then open a diff review.
   const runInline = useCallback(async (action: InlineAction) => {
@@ -216,7 +257,9 @@ export function WritePanel(): React.ReactElement {
               <button key={m} className={`seg-toggle${view === m ? ' active' : ''}`} onClick={() => setView(m)}>{m}</button>
             ))}
             <button className="sched-add-btn" disabled={!path || !dirty} onClick={() => void save()}>Save</button>
-            <button className="seg-toggle" disabled={!path} onClick={() => void exportHtml()} title="Export this Markdown as a self-contained HTML file">Export HTML</button>
+            <button className="seg-toggle" disabled={!path} onClick={() => void exportAs('html')} title="Export as a self-contained HTML file">HTML</button>
+            <button className="seg-toggle" disabled={!path} onClick={() => void exportAs('doc')} title="Export as a Word-openable .doc file">DOC</button>
+            <button className="seg-toggle" disabled={!path} onClick={() => void copyRich()} title="Copy the formatted document — paste into Word, Docs, or email">Copy rich</button>
           </div>
         </div>
 
