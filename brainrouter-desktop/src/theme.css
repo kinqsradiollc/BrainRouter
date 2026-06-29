@@ -4347,6 +4347,32 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .wai-toggle.on { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .wai-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--border); }
 
+/* Write + Workflows reflow when their panel is narrow (split view / side panel).
+   Side-by-side editor|preview and canvas|inspector are unusable below ~620px, so
+   stack them and let the toolbars wrap. Placed AFTER the component rules above so
+   these container-query overrides win the cascade (equal specificity). */
+@container panel (max-width: 620px) {
+  /* Write: stack the editor over the preview, shrink the file tree, wrap the bar. */
+  .write-tree { width: 156px; }
+  .write-bar { flex-wrap: wrap; row-gap: 6px; }
+  .write-ai-bar { row-gap: 4px; }
+  .write-body.view-split { flex-direction: column; }
+  .write-body.view-split .write-editor-mon,
+  .write-body.view-split .write-preview { width: 100%; flex: 1 1 50%; }
+  .write-body.view-split .write-preview { border-left: 0; border-top: 1px solid var(--border); }
+  /* Workflows: stack the canvas over the inspector/run side, both full width. */
+  .wf-body { flex-direction: column; }
+  .wf-side { width: 100%; }
+  .wf-canvas { min-height: 260px; }
+}
+
+@container panel (max-width: 440px) {
+  .write-tree { width: 124px; }
+  .write-file-dir { display: none; } /* keep the filename; drop the dir subtitle */
+  .write-bar-right .seg-toggle,
+  .write-bar-right .sched-add-btn { padding-inline: 7px; }
+}
+
 /* ===== §5.3 — Memory panel ===== */
 .mem-row { border-bottom: 1px solid var(--border); padding: 8px 10px; }
 .mem-row-head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-size: 11px; }
