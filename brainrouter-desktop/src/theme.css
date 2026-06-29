@@ -4272,8 +4272,8 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .write-path { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .write-bar-right { display: flex; gap: 4px; align-items: center; flex: 0 0 auto; }
 .write-body { flex: 1; display: flex; min-height: 0; }
-.write-body.view-split .write-editor, .write-body.view-split .write-preview { width: 50%; flex: 1 1 50%; }
-.write-editor { flex: 1; border: 0; outline: 0; resize: none; background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 13px; line-height: 1.6; padding: 12px 16px; }
+.write-body.view-split .write-editor-mon, .write-body.view-split .write-preview { width: 50%; flex: 1 1 50%; }
+.write-editor-mon { flex: 1; min-width: 0; min-height: 0; overflow: hidden; background: var(--bg); }
 .write-preview { flex: 1; padding: 12px 20px; border-left: 1px solid var(--border); overflow: auto; }
 .write-status { font-size: 11px; color: var(--text-dim); padding: 4px 8px; border-top: 1px solid var(--border); }
 

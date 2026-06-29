@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { renderToStaticMarkup } from 'react-dom/server';
+import EditorComp, { type OnMount } from '@monaco-editor/react';
+import type * as Monaco from 'monaco-editor';
 import {
   computeReviewChunks,
   applyReview,
@@ -9,19 +11,61 @@ import {
   type ReviewChunk,
   type ReviewDecision,
 } from '@kinqs/brainrouter-core/dist/write/writeDiff.js';
+import { installMonaco, editorTheme, editorFontFamily } from '../lib/editor/monacoEnv.js';
 
 /**
  * WRITE MODE (§2 W1 + W3) — a Markdown writing workspace: a file tree of the
- * workspace's prose files, an editor, and a live Markdown preview (edit / split /
- * preview), with save + HTML export. Self-contained via a promise-wrapped host
- * query.
+ * workspace's prose files, a Monaco source editor, and a live Markdown preview
+ * (edit / split / preview), with save + HTML/DOC export. Self-contained via a
+ * promise-wrapped host query.
+ *
+ * §2 W1 — the editor is Monaco (the same engine the code Editor uses, so no extra
+ * dependency), tuned for prose: word-wrap on, no line numbers / minimap / folding.
  *
  * §2 W3 — selection-driven inline AI: select prose → Polish / Rewrite / Continue
  * → the host rewrites it (one-shot, read-only model call) → the change lands as a
  * red/green per-chunk diff review (the W2 `writeDiff` primitive) you accept or
- * reject, hunk by hunk, before it replaces the selection. The editor is a textarea
- * for this slice; a CodeMirror editor with inline decorations layers on top.
+ * reject, hunk by hunk, before it replaces the selection (applied via Monaco's
+ * `executeEdits`, so undo history + cursor survive).
  */
+
+// Same @types/react clash the Editor panel works around — the runtime component
+// is fine; cast to the props we pass.
+type MonacoEditorProps = {
+  path?: string; language?: string; value?: string; theme?: string;
+  onMount?: OnMount; onChange?: (value: string | undefined) => void;
+  loading?: React.ReactNode; options?: Record<string, unknown>; height?: string; width?: string;
+};
+const MonacoEditor = EditorComp as unknown as React.ComponentType<MonacoEditorProps>;
+installMonaco();
+
+type MonacoRange = { startLineNumber: number; startColumn: number; endLineNumber: number; endColumn: number };
+
+// §2 W4 — ghost-text inline completion. Registered once on the global markdown
+// language; scoped to the Write editor's model via `activeWriteModelUri` so it
+// doesn't ghost in the code Editor. Debounced + single-in-flight by honouring
+// Monaco's CancellationToken (a newer keystroke cancels the prior request).
+let ghostRegistered = false;
+let activeWriteModelUri: string | null = null;
+
+function registerGhostProvider(monaco: Parameters<OnMount>[1]): void {
+  if (ghostRegistered) return;
+  ghostRegistered = true;
+  const provider: Monaco.languages.InlineCompletionsProvider = {
+    provideInlineCompletions: async (model, position, _ctx, token) => {
+      if (model.uri.toString() !== activeWriteModelUri) return { items: [] };
+      await new Promise((r) => setTimeout(r, 300)); // debounce typing bursts
+      if (token.isCancellationRequested) return { items: [] };
+      const prefix = model.getValueInRange({ startLineNumber: 1, startColumn: 1, endLineNumber: position.lineNumber, endColumn: position.column });
+      if (prefix.trim().length < 3) return { items: [] };
+      const res = await hostQuery<{ text?: string }>('write-ghost-complete', { prefix: prefix.slice(-2000) });
+      if (token.isCancellationRequested || !res || typeof res.text !== 'string' || !res.text) return { items: [] };
+      return { items: [{ insertText: res.text, range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column) }] };
+    },
+    disposeInlineCompletions: () => { /* no per-result resources to free */ },
+  };
+  monaco.languages.registerInlineCompletionsProvider('markdown', provider);
+}
 
 const WRITABLE = /\.(md|markdown|mdx|txt|text)$/i;
 
@@ -53,8 +97,8 @@ type InlineAction = 'polish' | 'rewrite' | 'continue';
 interface ReviewSession {
   chunks: ReviewChunk[];
   decisions: Record<number, ReviewDecision>;
-  /** The selection range in `content` this review will replace on apply. */
-  range: { start: number; end: number };
+  /** The Monaco selection range this review replaces on apply. */
+  range: MonacoRange;
   action: InlineAction;
 }
 
@@ -92,12 +136,23 @@ export function WritePanel(): React.ReactElement {
   const [status, setStatus] = useState('');
   const [filter, setFilter] = useState('');
 
-  const taRef = useRef<HTMLTextAreaElement>(null);
+  const edRef = useRef<Parameters<OnMount>[0] | null>(null);
   const [hasSel, setHasSel] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [review, setReview] = useState<ReviewSession | null>(null);
 
   const dirty = content !== loaded;
+
+  const onEditorMount = useCallback<OnMount>((editor, monaco) => {
+    edRef.current = editor;
+    activeWriteModelUri = editor.getModel()?.uri.toString() ?? null;
+    editor.onDidChangeModel(() => { activeWriteModelUri = editor.getModel()?.uri.toString() ?? null; });
+    editor.onDidChangeCursorSelection(() => {
+      const s = editor.getSelection();
+      setHasSel(!!s && !s.isEmpty());
+    });
+    registerGhostProvider(monaco); // §2 W4 — ghost-text completion (scoped to this model)
+  }, []);
 
   const refreshFiles = useCallback(async () => {
     const res = await hostQuery<{ files?: Array<string | { path?: string }> }>('list-files', { limit: 3000 });
@@ -176,12 +231,13 @@ export function WritePanel(): React.ReactElement {
 
   // §2 W3 — run the selection through the inline assistant, then open a diff review.
   const runInline = useCallback(async (action: InlineAction) => {
-    const ta = taRef.current;
-    if (!ta) return;
-    const start = ta.selectionStart;
-    const end = ta.selectionEnd;
-    const text = content.slice(start, end);
+    const ed = edRef.current;
+    const sel = ed?.getSelection();
+    const model = ed?.getModel();
+    if (!ed || !sel || sel.isEmpty() || !model) { setStatus('Select some text first.'); return; }
+    const text = model.getValueInRange(sel);
     if (!text.trim()) { setStatus('Select some text first.'); return; }
+    const range: MonacoRange = { startLineNumber: sel.startLineNumber, startColumn: sel.startColumn, endLineNumber: sel.endLineNumber, endColumn: sel.endColumn };
     setAiBusy(true);
     setStatus(`${ACTION_LABEL[action]}…`);
     const res = await hostQuery<{ text?: string; error?: string }>('write-inline-ai', { action, text, doc: content });
@@ -193,7 +249,7 @@ export function WritePanel(): React.ReactElement {
     const revised = res.text;
     if (revised === text) { setStatus('No change suggested.'); return; }
     const chunks = computeReviewChunks(text, revised);
-    setReview({ chunks, decisions: {}, range: { start, end }, action });
+    setReview({ chunks, decisions: {}, range, action });
     setStatus('');
   }, [content]);
 
@@ -213,7 +269,10 @@ export function WritePanel(): React.ReactElement {
     setReview((r) => {
       if (!r) return null;
       const result = applyReview(r.chunks, r.decisions, 'accept');
-      setContent((c) => c.slice(0, r.range.start) + result + c.slice(r.range.end));
+      const ed = edRef.current;
+      // Apply through Monaco so undo history + cursor are preserved; the value
+      // syncs back to `content` via onChange.
+      if (ed) { ed.executeEdits('inline-ai', [{ range: r.range, text: result, forceMoveMarkers: true }]); ed.focus(); }
       setStatus(`Applied — ${ACTION_LABEL[r.action]}.`);
       return null;
     });
@@ -279,16 +338,41 @@ export function WritePanel(): React.ReactElement {
 
         <div className={`write-body view-${view}`}>
           {view !== 'preview' ? (
-            <textarea
-              ref={taRef}
-              className="write-editor"
-              value={content}
-              spellCheck
-              placeholder={path ? '' : 'Open a file from the list to start writing.'}
-              onChange={(e) => setContent(e.target.value)}
-              onSelect={(e) => { const t = e.currentTarget; setHasSel(t.selectionEnd > t.selectionStart); }}
-              disabled={!path}
-            />
+            <div className="write-editor-mon">
+              {path ? (
+                <MonacoEditor
+                  path={path}
+                  language="markdown"
+                  value={content}
+                  theme={editorTheme()}
+                  height="100%"
+                  width="100%"
+                  onMount={onEditorMount}
+                  onChange={(v) => setContent(v ?? '')}
+                  loading={<div className="empty">Loading editor…</div>}
+                  options={{
+                    fontFamily: editorFontFamily(),
+                    fontSize: 14,
+                    wordWrap: 'on',
+                    inlineSuggest: { enabled: true }, // §2 W4 — ghost-text (Tab accepts, Esc dismisses)
+                    minimap: { enabled: false },
+                    lineNumbers: 'off',
+                    folding: false,
+                    glyphMargin: false,
+                    lineDecorationsWidth: 8,
+                    overviewRulerLanes: 0,
+                    renderLineHighlight: 'none',
+                    renderWhitespace: 'none',
+                    scrollBeyondLastLine: false,
+                    quickSuggestions: false,
+                    occurrencesHighlight: 'off',
+                    automaticLayout: true,
+                    padding: { top: 10, bottom: 10 },
+                    scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
+                  }}
+                />
+              ) : <div className="empty center-empty">Open a file from the list to start writing.</div>}
+            </div>
           ) : null}
           {view !== 'edit' ? (
             <div className="write-preview scroll">

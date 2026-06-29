@@ -2193,6 +2193,24 @@ async function main(): Promise<void> {
         if (action === 'continue') revised = text + (/\s$/.test(text) ? '' : ' ') + revised;
         return { text: revised };
       },
+      // §2 W4 — Write-mode ghost-text inline completion. A short, fast, read-only
+      // continuation of the text before the cursor; the editor renders it as a
+      // ghost suggestion (Tab accepts). Empty answer ⇒ no suggestion.
+      'write-ghost-complete': async (args) => {
+        const prefix = typeof args.prefix === 'string' ? args.prefix : '';
+        if (prefix.trim().length < 3) return { text: '' };
+        const llm = llmForSession(activeAgent.sessionKey);
+        if (!llm || (!llm.apiKey && (llm.provider ?? 'openai') === 'openai')) return { text: '' };
+        const system = 'You are an inline writing autocomplete. Continue the user\'s text by a few words up to one sentence. Return ONLY the continuation that comes immediately AFTER their text — never repeat their text, no quotes, no preamble. If nothing natural follows, return an empty string.';
+        let raw = '';
+        try {
+          const resp = await callOpenAI(llm, [{ role: 'system', content: system }, { role: 'user', content: prefix.slice(-2000) }], [], { effort: 'low' });
+          raw = (resp?.content as string) ?? '';
+        } catch { return { text: '' }; }
+        // Keep it short + single-line so the ghost stays unobtrusive.
+        const text = raw.replace(/^\s+/, '').split('\n')[0].slice(0, 160);
+        return { text };
+      },
       // §7 L4 — visual workflow canvas persistence (graphs under <stateDir>/workflows/).
       'workflow-list': () => listWorkflowGraphs(workspaceRoot),
       'workflow-save': (args) => saveWorkflowGraph(workspaceRoot, (args.graph ?? {}) as WorkflowGraph),
