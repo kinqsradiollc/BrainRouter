@@ -66,4 +66,18 @@ contextBridge.exposeInMainWorld('brainrouter', {
   setZoomFactor(factor: number): void {
     webFrame.setZoomFactor(factor);
   },
+  computerUse: {
+    checkPermissions(): Promise<unknown> {
+      return ipcRenderer.invoke('computerUse:checkPermissions');
+    },
+    openAccessibilitySettings(): Promise<unknown> {
+      return ipcRenderer.invoke('computerUse:openAccessibilitySettings');
+    },
+    openScreenRecordingSettings(): Promise<unknown> {
+      return ipcRenderer.invoke('computerUse:openScreenRecordingSettings');
+    },
+    setMode(args: { enabled?: boolean; mode?: string }): Promise<unknown> {
+      return ipcRenderer.invoke('computerUse:setMode', args);
+    },
+  },
 });

@@ -60,9 +60,9 @@ test('CODEX-TOOL-REGISTRY exposure tiers reproduce the historical allowed sets e
   for (const t of read) assert.ok(write.has(t), `read tool ${t} must remain in write`);
   for (const t of write) assert.ok(shell.has(t), `write tool ${t} must remain in shell`);
 
-  // Write adds exactly the structured file tools; shell adds exactly run_command.
+  // Write adds exactly the structured file tools; shell adds command/computer control.
   assert.deepEqual([...write].filter((t) => !read.has(t)).sort(), ['apply_patch', 'edit_file', 'write_file']);
-  assert.deepEqual([...shell].filter((t) => !write.has(t)).sort(), ['run_command']);
+  assert.deepEqual([...shell].filter((t) => !write.has(t)).sort(), ['computer_use', 'run_command']);
 
   // Read tier exposes the read/observe/orchestration surface and nothing mutating.
   assert.ok(read.has('read_file') && read.has('task_agent') && read.has('goal_complete'));

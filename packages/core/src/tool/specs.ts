@@ -118,8 +118,36 @@ export const LOCAL_TOOLS = [
     }
   },
   {
+    name: 'computer_use',
+    description: 'Control the real local desktop mouse/keyboard or capture a screenshot. Requires user approval for mutating actions and only appears when desktop computer use is enabled.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['screenshot', 'left_click', 'right_click', 'double_click', 'move', 'type', 'key', 'scroll', 'drag'],
+          description: 'The computer action to perform.'
+        },
+        x: { type: 'number', description: 'Logical screen x coordinate.' },
+        y: { type: 'number', description: 'Logical screen y coordinate.' },
+        x2: { type: 'number', description: 'Logical destination x coordinate for drag.' },
+        y2: { type: 'number', description: 'Logical destination y coordinate for drag.' },
+        text: { type: 'string', description: 'Text to type for action=type.' },
+        keys: {
+          oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+          description: 'Key or chord for action=key, e.g. "cmd+s" or ["cmd","s"].'
+        },
+        clicks: { type: 'integer', description: 'Scroll notches/click count; capped for safety.' },
+        direction: { type: 'string', enum: ['up', 'down', 'left', 'right'], description: 'Scroll direction.' },
+        button: { type: 'string', enum: ['left', 'right', 'middle'], description: 'Mouse button for actions that support it.' },
+        hold_keys: { type: 'array', items: { type: 'string' }, description: 'Modifier keys to hold during a click or drag.' }
+      },
+      required: ['action']
+    }
+  },
+  {
     name: 'fetch_url',
-    description: 'Fetch the text content of a URL from the internet (e.g. documentation, api references, etc.).',
+    description: 'Fetch and extract clean text from an HTTP(S) URL using the configured in-house crawler.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -130,7 +158,7 @@ export const LOCAL_TOOLS = [
   },
   {
     name: 'web_search',
-    description: 'Search the public web for a query and return top results (title, url, snippet). Useful when fetch_url needs a starting point.',
+    description: 'Search the public web with the configured provider and return normalized results (title, url, snippet). Useful when fetch_url needs a starting point.',
     inputSchema: {
       type: 'object',
       properties: {

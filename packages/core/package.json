@@ -22,12 +22,14 @@
     "prepack": "npm run build && node -e \"const fs=require('fs');function w(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=d+'/'+e.name;if(e.isDirectory())w(p);else if(/\\.test\\./.test(e.name))fs.rmSync(p)}}w('dist')\""
   },
   "dependencies": {
+    "@kinqs/brainrouter-agent-protocol": "^0.4.16",
     "@kinqs/brainrouter-types": "^0.4.16",
-    "@modelcontextprotocol/sdk": "^1.11.0"
+    "@modelcontextprotocol/sdk": "^1.11.0",
+    "cheerio": "^1.2.0"
   },
   "devDependencies": {
-    "typescript": "^5.5.4",
-    "@types/node": "^22.5.0"
+    "@types/node": "^22.5.0",
+    "typescript": "^5.5.4"
   },
   "keywords": [
     "brainrouter",

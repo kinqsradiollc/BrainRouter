@@ -23,9 +23,12 @@ import { recordTelemetry } from '@kinqs/brainrouter-core/dist/telemetry/telemetr
 import { TELEMETRY_EVENTS } from '@kinqs/brainrouter-core/dist/telemetry/contracts.js';
 import { getLatestReview } from '@kinqs/brainrouter-core/dist/review/reviewStore.js';
 import { reviewGate } from '@kinqs/brainrouter-core/dist/review/reviewModel.js';
+import { loadConfig, saveConfig, _resetCliKnobsCache } from '@kinqs/brainrouter-core/dist/config/config.js';
 import { emptyPool, planActivate, applyActivate, setRunning, removeEntry, } from './hostPoolPolicy.js';
 import { isAllowedNavigation, allowedOriginFor } from './windowSecurity.js';
 import { addOpened, noteActivity, reorderWorkspace } from './recents.js';
+import { createComputerUsePort } from './computerUse.js';
+import { checkComputerUsePermissions, openAccessibilitySettings, openScreenRecordingSettings } from './computerUsePermissions.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 function reconcileWorkspaceBackground(workspaceRoot) {
     try {
@@ -41,6 +44,24 @@ const wins = new Map(); // webContents.id → WinPool
 const recentsPath = () => path.join(app.getPath('userData'), 'recent-workspaces.json');
 const WORKSPACE_SESSIONS_CACHE_MS = 30_000;
 const workspaceSessionsCache = new Map();
+function isComputerUseRequest(value) {
+    if (!value || typeof value !== 'object')
+        return false;
+    const v = value;
+    return v.kind === 'computer-use-request' && typeof v.id === 'string' && (v.op === 'screenshot' || v.op === 'act');
+}
+async function handleComputerUseRequest(wp, host, request) {
+    const port = createComputerUsePort(() => wp.win);
+    try {
+        const result = request.op === 'screenshot'
+            ? await port.screenshot()
+            : await port.act(request.action);
+        host.postMessage({ kind: 'computer-use-response', id: request.id, ok: true, result });
+    }
+    catch (err) {
+        host.postMessage({ kind: 'computer-use-response', id: request.id, ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+}
 function readRecents() {
     try {
         return JSON.parse(fs.readFileSync(recentsPath(), 'utf-8'));
@@ -139,6 +160,10 @@ function spawnHost(wp, workspaceRoot) {
     host.on('message', (msg) => {
         if (wp.win.isDestroyed())
             return;
+        if (isComputerUseRequest(msg)) {
+            void handleComputerUseRequest(wp, host, msg);
+            return;
+        }
         if (msg && typeof msg === 'object') {
             const ev = msg.event;
             const kind = ev?.kind;
@@ -408,6 +433,22 @@ app.whenReady().then(() => {
         if (typeof dragged !== 'string' || typeof target !== 'string')
             return { recents: readRecents() };
         return { recents: markWorkspaceReordered(dragged, target) };
+    });
+    ipcMain.handle('computerUse:checkPermissions', () => checkComputerUsePermissions());
+    ipcMain.handle('computerUse:openAccessibilitySettings', () => openAccessibilitySettings());
+    ipcMain.handle('computerUse:openScreenRecordingSettings', () => openScreenRecordingSettings());
+    ipcMain.handle('computerUse:setMode', (_e, raw) => {
+        const next = raw && typeof raw === 'object' ? raw : {};
+        const cfg = loadConfig();
+        cfg.cli = cfg.cli ?? {};
+        const current = cfg.cli.computerUse ?? {};
+        cfg.cli.computerUse = {
+            enabled: typeof next.enabled === 'boolean' ? next.enabled : current.enabled,
+            mode: typeof next.mode === 'string' && next.mode.trim() ? next.mode.trim() : current.mode,
+        };
+        saveConfig(cfg);
+        _resetCliKnobsCache();
+        return { ok: true, computerUse: cfg.cli.computerUse };
     });
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) {

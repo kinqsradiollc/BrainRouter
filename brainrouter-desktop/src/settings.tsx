@@ -316,6 +316,54 @@ function Select({ value, options, onChange }: { value: string; options: string[]
   return <ChoiceControl value={value} options={options.map((o) => ({ value: o, label: o }))} onChange={onChange} />;
 }
 
+function ComputerUseSettings({ knobs, refreshSnapshot }: { knobs: Record<string, unknown>; refreshSnapshot: () => void }): React.ReactElement {
+  const cfg = (knobs.computerUse && typeof knobs.computerUse === 'object' ? knobs.computerUse : {}) as { enabled?: boolean; mode?: string };
+  const [permissions, setPermissions] = useState<any>(null);
+  const [busy, setBusy] = useState(false);
+  const refreshPermissions = React.useCallback(() => {
+    void window.brainrouter.computerUse?.checkPermissions().then(setPermissions).catch(() => setPermissions(null));
+  }, []);
+  React.useEffect(() => { refreshPermissions(); }, [refreshPermissions]);
+  const save = (patch: { enabled?: boolean; mode?: string }): void => {
+    setBusy(true);
+    void window.brainrouter.computerUse?.setMode({ enabled: cfg.enabled ?? false, mode: cfg.mode ?? 'smart_approve', ...patch })
+      .finally(() => {
+        setBusy(false);
+        refreshSnapshot();
+      });
+  };
+  const accessOk = permissions?.accessibility?.granted !== false;
+  const screenOk = permissions?.screen?.granted !== false;
+  return (
+    <>
+      <div className="set-h2">Computer use</div>
+      <Row title="Enable computer use" desc="OFF by default. Exposes the shell-tier local tool only in the desktop app when the native host is available.">
+        <Toggle on={cfg.enabled === true} onChange={(v) => save({ enabled: v })} />
+      </Row>
+      <Row title="Approval mode" desc="Mutating actions still follow the active execution mode; destructive actions always ask.">
+        <ChoiceControl
+          value={cfg.mode ?? 'smart_approve'}
+          options={[
+            { value: 'smart_approve', label: 'Smart approve', detail: 'safe actions follow mode' },
+            { value: 'approve_all', label: 'Approve all', detail: 'prompt every mutating action' },
+            { value: 'full_control', label: 'Full control', detail: 'fast-mode native control' },
+          ]}
+          onChange={(mode) => save({ mode })}
+        />
+      </Row>
+      <Row title="Native permissions" desc="macOS requires Screen Recording for screenshots and Accessibility for mouse/keyboard control.">
+        <div className="pc-actions" style={{ justifyContent: 'flex-end' }}>
+          <span className={`pc-tag ${screenOk ? 'ok' : 'danger'}`}>Screen {screenOk ? 'granted' : permissions?.screen?.status ?? 'needed'}</span>
+          <span className={`pc-tag ${accessOk ? 'ok' : 'danger'}`}>Accessibility {accessOk ? 'granted' : 'needed'}</span>
+          <button className="btn" disabled={busy} onClick={refreshPermissions}>Refresh</button>
+          <button className="btn" onClick={() => window.brainrouter.computerUse?.openScreenRecordingSettings()}>Screen</button>
+          <button className="btn" onClick={() => window.brainrouter.computerUse?.openAccessibilitySettings()}>Accessibility</button>
+        </div>
+      </Row>
+    </>
+  );
+}
+
 /** Per-provider wire-format selector. `default` removes the provider key from
  *  `cli.providerRequestFormat`; the IPC handler shallow-replaces the map. */
 function WireFormatSelect({ value, onChange }: { value: WireFormatOverride | null; onChange: (v: WireFormatOverride | null) => void }): React.ReactElement {
@@ -1355,6 +1403,7 @@ export function SettingsDialog(props: {
           <Row title="External-dir writes" desc="Writing files outside the workspace root (cli.externalDirWrites).">
             <Select value={ks('externalDirWrites', 'ask')} options={['ask', 'allow', 'deny']} onChange={(v) => setKnob('externalDirWrites', v)} />
           </Row>
+          <ComputerUseSettings knobs={knobs} refreshSnapshot={refreshSnapshot} />
           <div className="set-h2">Permission rules (cli.permissions)</div>
           <div className="set-desc" style={{ marginBottom: 8 }}>Glob rules evaluated at the unified execution-policy gate. Deny wins; allow downgrades ask. Shared with the CLI.</div>
           {(snapshot?.permissionRules?.deny ?? []).map((r) => (

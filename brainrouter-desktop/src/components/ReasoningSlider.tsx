@@ -3,8 +3,7 @@
  * reasoning popup. The stops are the active model's family profile options
  * (graded Low/Med/High[/Extra high] or binary Off/On), so dragging snaps between
  * the levels that model actually supports. Drag (or click / arrow keys) the knob;
- * the pick commits on release. Inline-styled with theme CSS variables only — no
- * theme.css changes.
+ * the pick commits on release.
  */
 import React from 'react';
 import type { ReasoningProfile, EffortLevel } from '../lib/models/reasoningProfile.js';
@@ -23,37 +22,78 @@ const TRACK_H = 15;  // px — the thick rounded track (Claude-Code reference lo
 const KNOB_W = 14;   // px — white rounded-square knob width (matches the reference handle).
 const KNOB_H = 18;   // px — knob height (a touch taller than the 15px bar).
 
-// Injected once via a <style> inside the popup. Animates ONLY opacity (GPU-safe).
-// The trough opacity + duration ride on inline CSS vars / longhand props, so this
-// keyframe DECLARATION stays byte-constant across renders and the running pulse is
-// retargeted (not torn down + restarted) while dragging. The reduced-motion rule
-// is source-ordered after theme.css, so it pins a clean STILL state.
-const RSL_KEYFRAMES = `
-@keyframes rsl-twinkle {
-  0%, 100% { opacity: var(--rsl-lo, 0.82); }
-  50%      { opacity: 1; }
-}
-@keyframes rsl-sweep {
-  0%   { background-position: -55% 0; opacity: 0; }
-  14%  { opacity: var(--rsl-sweep-peak, 0.46); }
-  44%  { opacity: var(--rsl-sweep-peak, 0.46); }
-  55%  { background-position: 155% 0; opacity: 0; }
-  100% { background-position: 155% 0; opacity: 0; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .rsl-twinkle { animation: none !important; opacity: 1 !important; }
-  .rsl-sweep   { animation: none !important; background-position: 50% 0 !important; opacity: var(--rsl-sweep-still, 0.30) !important; }
-}`;
+const outerStyle: React.CSSProperties = { padding: '8px 11px 9px', minWidth: 188 };
+const headerStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 9 };
+const helpStyle: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 15,
+  height: 15,
+  borderRadius: '50%',
+  border: '1px solid var(--border-strong)',
+  color: 'var(--text-dim)',
+  fontSize: 10,
+  lineHeight: 1,
+  cursor: 'help',
+  userSelect: 'none',
+};
+const railStyle: React.CSSProperties = { position: 'relative', height: 22, cursor: 'pointer', touchAction: 'none', userSelect: 'none' };
+const labelRowStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', marginTop: 7, fontSize: 11, opacity: 0.55 };
+const stopDotStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: '50%',
+  width: 3,
+  height: 3,
+  borderRadius: '50%',
+  transform: 'translate(-50%, -50%)',
+  pointerEvents: 'none',
+  background: 'color-mix(in srgb, var(--text) 50%, transparent)',
+};
 
-export function ReasoningSlider({ profile, effort, onPick }: Props): React.ReactElement {
+function usePrefersReducedMotion(): boolean {
+  const [reduceMotion, setReduceMotion] = React.useState<boolean>(() => (
+    typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  ));
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const update = (): void => setReduceMotion(media.matches);
+    update();
+    if (typeof media.addEventListener === 'function') {
+      media.addEventListener('change', update);
+      return () => media.removeEventListener('change', update);
+    }
+    media.addListener(update);
+    return () => media.removeListener(update);
+  }, []);
+
+  return reduceMotion;
+}
+
+function ReasoningSliderComponent({ profile, effort, onPick }: Props): React.ReactElement {
   const opts = profile.options;
   const count = opts.length;
   const railRef = React.useRef<HTMLDivElement | null>(null);
+  const rectRef = React.useRef<DOMRect | null>(null);
+  const rafRef = React.useRef<number | null>(null);
+  const latestClientXRef = React.useRef<number | null>(null);
+  const draggingRef = React.useRef(false);
+  const idxRef = React.useRef(0);
   // While dragging (or awaiting the ~prop round-trip) the knob follows this
   // local index; otherwise it derives from the committed `effort`.
   const [previewIdx, setPreviewIdx] = React.useState<number | null>(null);
+  const [isDragging, setIsDragging] = React.useState(false);
   const baseIdx = sliderIndexForEffort(profile, effort);
   const idx = previewIdx ?? baseIdx;
+  const reduceMotion = usePrefersReducedMotion();
+
+  React.useEffect(() => {
+    idxRef.current = idx;
+  }, [idx]);
 
   // Once the committed effort catches up to the preview, drop the local override.
   React.useEffect(() => {
@@ -62,37 +102,65 @@ export function ReasoningSlider({ profile, effort, onPick }: Props): React.React
     }
   }, [effort, previewIdx, opts]);
 
-  const indexFromClientX = (clientX: number): number => {
-    const el = railRef.current;
-    if (!el) return idx;
-    const r = el.getBoundingClientRect();
-    const usable = r.width - INSET * 2;
-    const frac = usable > 0 ? (clientX - r.left - INSET) / usable : 0;
-    const level = effortAtSliderFraction(profile, frac);
-    const i = level ? opts.findIndex((o) => o.level === level) : idx;
-    return i < 0 ? idx : i;
-  };
+  React.useEffect(() => () => {
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+  }, []);
 
-  const commit = (i: number): void => {
+  const indexFromClientX = React.useCallback((clientX: number, rect = rectRef.current): number => {
+    if (!rect) return idxRef.current;
+    const usable = rect.width - INSET * 2;
+    const frac = usable > 0 ? (clientX - rect.left - INSET) / usable : 0;
+    const level = effortAtSliderFraction(profile, frac);
+    const i = level ? opts.findIndex((o) => o.level === level) : idxRef.current;
+    return i < 0 ? idxRef.current : i;
+  }, [opts, profile]);
+
+  const commit = React.useCallback((i: number): void => {
     const lvl = opts[i] && opts[i].level;
     if (lvl && lvl !== opts[baseIdx]?.level) onPick(lvl);
-  };
+  }, [baseIdx, onPick, opts]);
+
+  const flushPointerFrame = React.useCallback((): void => {
+    rafRef.current = null;
+    if (!draggingRef.current || latestClientXRef.current === null) return;
+    const i = indexFromClientX(latestClientXRef.current);
+    if (i !== idxRef.current) {
+      idxRef.current = i;
+      setPreviewIdx(i);
+    }
+  }, [indexFromClientX]);
 
   const onPointerDown = (e: React.PointerEvent): void => {
     e.preventDefault();
     try { railRef.current?.setPointerCapture(e.pointerId); } catch { /* pointer not active */ }
-    setPreviewIdx(indexFromClientX(e.clientX));
+    rectRef.current = railRef.current?.getBoundingClientRect() ?? null;
+    draggingRef.current = true;
+    setIsDragging(true);
+    const i = indexFromClientX(e.clientX, rectRef.current);
+    idxRef.current = i;
+    setPreviewIdx(i);
   };
   const onPointerMove = (e: React.PointerEvent): void => {
-    if (previewIdx === null) return;
-    const i = indexFromClientX(e.clientX);
-    if (i !== previewIdx) setPreviewIdx(i);
+    if (!draggingRef.current) return;
+    latestClientXRef.current = e.clientX;
+    if (rafRef.current === null) {
+      rafRef.current = requestAnimationFrame(flushPointerFrame);
+    }
   };
   const onPointerUp = (e: React.PointerEvent): void => {
     // Commit the RELEASE position (authoritative) rather than the last move state —
     // robust to a fast click where the move handler never fired.
     const i = indexFromClientX(e.clientX);
     try { railRef.current?.releasePointerCapture(e.pointerId); } catch { /* not captured */ }
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    draggingRef.current = false;
+    rectRef.current = null;
+    latestClientXRef.current = null;
+    setIsDragging(false);
+    idxRef.current = i;
     setPreviewIdx(i);
     commit(i);
   };
@@ -106,42 +174,129 @@ export function ReasoningSlider({ profile, effort, onPick }: Props): React.React
   };
 
   const frac = count > 1 ? idx / (count - 1) : 0;
-  const stopLeft = (i: number): string => `calc(${INSET}px + ${count > 1 ? i / (count - 1) : 0} * (100% - ${INSET * 2}px))`;
+  const stopLeft = React.useCallback((i: number): string => `calc(${INSET}px + ${count > 1 ? i / (count - 1) : 0} * (100% - ${INSET * 2}px))`, [count]);
 
   // §reasoning-slider-animation — one normalized driver t (0 at Low … 1 at the
   // top stop = Max/Ultracode) escalates the fill's dot-shimmer + the knob glow.
-  // Low (and a binary "Off") stay perfectly still; motion is gated off there and
-  // under prefers-reduced-motion (the static dot density + ring remain as cues).
+  // Two motion triggers, both compositor-only (opacity / transform — no layout):
+  //   • SLIDE FEEDBACK — while you DRAG any stop above Low, the dotted shimmer
+  //     plays so the slide feels alive; it escalates toward the top.
+  //   • TOP-TIER SIGNATURE — the highest graded stop (Extra high / Max /
+  //     Ultracode) animates ALWAYS (shimmer + a specular sweep), even at rest, as
+  //     the "maxed reasoning" cue. prefers-reduced-motion pins everything static
+  //     (the static dot density + accent fill + knob glow remain as cues).
   const t = count > 1 ? idx / (count - 1) : 0;
-  const dotPct = Math.round(40 + 45 * t);                              // dot color: 40% … 85% of --accent
   const twLo = (0.86 - 0.40 * t).toFixed(3);                           // pulse trough: 0.86 (calm) … 0.46 (lively)
   const twDur = `${(2.9 - 1.6 * t).toFixed(2)}s`;                      // pulse speed: 2.9s … 1.3s
-  const reduceMotion = typeof window !== 'undefined' && !!window.matchMedia
-    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  const animate = idx >= 1 && frac > 0 && !reduceMotion;
   // §top-tier signature — the highest stop of a GRADED model with 3+ stops
   // (Extra high / Max / Ultracode). Excludes binary On/Off and always-on/none.
   const isTop = profile.kind === 'graded' && count >= 3 && idx === count - 1;
-  const sweepOn = isTop && animate;
+  const motion = !reduceMotion;
+  const slideShimmer = motion && isDragging && idx >= 1 && frac > 0;   // alive while sliding
+  const animate = slideShimmer || (isTop && motion);                  // dot-shimmer animation gate
+  const twinkleVisible = isDragging || isTop;                         // render the dot grid (drag or summit)
+  const sweepOn = isTop && motion;                                    // specular sweep — ALWAYS on at the top stop
   // A static "maxed" cue so the bar reads densest/brightest even between sweeps.
-  const dotMaxPct = isTop ? 90 : dotPct;
   const fillPct = isTop ? 32 : 26;
 
+  const trackStyle = React.useMemo<React.CSSProperties>(() => ({
+    position: 'absolute',
+    top: '50%',
+    left: INSET,
+    right: INSET,
+    height: TRACK_H,
+    borderRadius: TRACK_H / 2,
+    transform: 'translateY(-50%)',
+    overflow: 'hidden',
+    background: 'var(--border-strong)',
+    pointerEvents: 'none',
+    contain: 'layout paint',
+    isolation: 'isolate',
+  }), []);
+
+  const fillStyle = React.useMemo<React.CSSProperties>(() => ({
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    width: `calc(${frac} * 100%)`,
+    background: isTop ? `color-mix(in srgb, var(--accent) ${fillPct}%, transparent)` : 'color-mix(in srgb, var(--text) 30%, transparent)',
+  }), [fillPct, frac, isTop]);
+
+  const twinkleStyle = React.useMemo<React.CSSProperties>(() => ({
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    width: `calc(${frac} * 100%)`,
+    pointerEvents: 'none',
+    backgroundImage: 'radial-gradient(circle at 1.6px 1.6px, rgba(255, 255, 255, 0.72) 1px, transparent 1.5px)',
+    backgroundSize: '4.5px 4.5px',
+    backgroundRepeat: 'repeat',
+    ['--rsl-lo' as keyof React.CSSProperties]: twLo,
+    animationName: animate ? 'rsl-twinkle' : 'none',
+    animationDuration: twDur,
+    animationTimingFunction: 'ease-in-out',
+    animationIterationCount: 'infinite',
+    opacity: 1,
+    willChange: animate ? 'opacity' : 'auto',
+  }), [animate, frac, twDur, twLo]);
+
+  const sweepStyle = React.useMemo<React.CSSProperties>(() => ({
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    width: '42%',
+    pointerEvents: 'none',
+    background: 'linear-gradient(100deg, transparent 0%, rgba(255, 255, 255, 0.08) 32%, rgba(255, 255, 255, 0.58) 50%, rgba(255, 255, 255, 0.08) 68%, transparent 100%)',
+    transform: 'translateX(-140%)',
+    mixBlendMode: 'screen',
+    ['--rsl-sweep-peak' as keyof React.CSSProperties]: 0.46,
+    ['--rsl-sweep-still' as keyof React.CSSProperties]: 0.3,
+    animationName: sweepOn ? 'rsl-sweep' : 'none',
+    animationDuration: '3s',
+    animationTimingFunction: 'ease-in-out',
+    animationIterationCount: 'infinite',
+    opacity: sweepOn ? undefined : 0,
+    willChange: sweepOn ? 'transform, opacity' : 'auto',
+  }), [sweepOn]);
+
+  const knobStyle = React.useMemo<React.CSSProperties>(() => ({
+    position: 'absolute',
+    top: '50%',
+    left: stopLeft(idx),
+    width: KNOB_W,
+    height: KNOB_H,
+    borderRadius: 6,
+    transform: 'translate(-50%, -50%)',
+    background: 'var(--text)',
+    // Static accent halo at the summit (the "maxed" knob cue) — a fixed shadow,
+    // not an animated one, so it costs no repaint loop.
+    boxShadow: isTop
+      ? '0 0 0 2px color-mix(in srgb, var(--accent) 42%, transparent), 0 0 9px color-mix(in srgb, var(--accent) 40%, transparent), 0 1px 3px rgba(0, 0, 0, 0.45)'
+      : '0 1px 3px rgba(0, 0, 0, 0.45)',
+    pointerEvents: 'none',
+  }), [idx, isTop, stopLeft]);
+
+  const stopDots = React.useMemo(() => opts.map((o, i) => (
+    <div
+      key={o.level}
+      aria-hidden
+      style={{ ...stopDotStyle, left: stopLeft(i) }}
+    />
+  )), [opts, stopLeft]);
+
   return (
-    <div style={{ padding: '8px 11px 9px', minWidth: 188 }}>
-      <style>{RSL_KEYFRAMES}</style>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 9 }}>
+    <div style={outerStyle}>
+      <div style={headerStyle}>
         <span style={{ fontSize: 12.5 }}>
           <span style={{ opacity: 0.6 }}>Effort </span>
           <b style={{ color: isTop ? 'var(--accent)' : 'var(--text)' }}>{opts[idx]?.label ?? ''}</b>
         </span>
         <span
           title="Higher effort = more reasoning before answering (slower). Fast mode forces the minimum."
-          style={{
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 15, height: 15,
-            borderRadius: '50%', border: '1px solid var(--border-strong)', color: 'var(--text-dim)',
-            fontSize: 10, lineHeight: 1, cursor: 'help', userSelect: 'none',
-          }}
+          style={helpStyle}
         >?</span>
       </div>
       <div
@@ -157,37 +312,24 @@ export function ReasoningSlider({ profile, effort, onPick }: Props): React.React
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onKeyDown={onKeyDown}
-        style={{ position: 'relative', height: 22, cursor: 'pointer', touchAction: 'none', userSelect: 'none' }}
+        style={railStyle}
       >
         {/* track — a thick rounded bar; the FILLED portion carries the dotted
             accent shimmer; a white pill knob rides above it (Claude-Code look).
             The drag target is this wrapper (railRef); inner layers are inert. */}
-        <div
-          style={{
-            position: 'absolute', top: '50%', left: INSET, right: INSET, height: TRACK_H,
-            borderRadius: TRACK_H / 2, transform: 'translateY(-50%)', overflow: 'hidden',
-            background: 'var(--border-strong)', pointerEvents: 'none',
-          }}
-        >
+        <div style={trackStyle}>
           {/* filled base — NEUTRAL grey up to the knob at every tier; only the
               TOP tier lights up to the accent wash (per spec: colour at the summit). */}
-          <div style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: `calc(${frac} * 100%)`, background: isTop ? `color-mix(in srgb, var(--accent) ${fillPct}%, transparent)` : 'color-mix(in srgb, var(--text) 30%, transparent)' }} />
-          {/* dotted shimmer — a tiled accent dot GRID whose opacity breathes.
-              ONLY at the top tier; below, the bar stays a clean neutral fill.
+          <div style={fillStyle} />
+          {/* dotted shimmer — a tiled dot GRID whose opacity breathes. Shown WHILE
+              DRAGGING (slide feedback, escalating toward the top) and ALWAYS at the
+              top tier; at rest below the top the bar stays a clean neutral fill.
               Decorative (pointerEvents:none). */}
-          {isTop ? (
+          {twinkleVisible ? (
             <div
               className="rsl-twinkle"
               aria-hidden
-              style={{
-                position: 'absolute', top: 0, bottom: 0, left: 0, width: `calc(${frac} * 100%)`, pointerEvents: 'none',
-                backgroundImage: `radial-gradient(circle at 1.6px 1.6px, color-mix(in srgb, var(--accent) ${dotMaxPct}%, transparent) 1px, transparent 1.5px)`,
-                backgroundSize: '4.5px 4.5px', backgroundRepeat: 'repeat',
-                ['--rsl-lo' as keyof React.CSSProperties]: twLo,
-                animationName: animate ? 'rsl-twinkle' : 'none',
-                animationDuration: twDur, animationTimingFunction: 'ease-in-out', animationIterationCount: 'infinite',
-                opacity: 1, willChange: animate ? 'opacity' : 'auto',
-              } as React.CSSProperties}
+              style={twinkleStyle}
             />
           ) : null}
           {/* §top-tier signature — a specular accent band sweeps the whole bar
@@ -198,52 +340,24 @@ export function ReasoningSlider({ profile, effort, onPick }: Props): React.React
             <div
               className="rsl-sweep"
               aria-hidden
-              style={{
-                position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, pointerEvents: 'none',
-                backgroundImage:
-                  'linear-gradient(100deg, transparent 42%, '
-                  + 'color-mix(in srgb, var(--accent) 72%, transparent) 48%, '
-                  + 'color-mix(in srgb, var(--accent) 90%, var(--text)) 50%, '
-                  + 'color-mix(in srgb, var(--accent) 72%, transparent) 52%, '
-                  + 'transparent 58%)',
-                backgroundSize: '230% 100%', backgroundRepeat: 'no-repeat', backgroundPosition: '-55% 0',
-                ['--rsl-sweep-peak' as keyof React.CSSProperties]: 0.46,
-                ['--rsl-sweep-still' as keyof React.CSSProperties]: 0.3,
-                animationName: sweepOn ? 'rsl-sweep' : 'none',
-                animationDuration: '3s', animationTimingFunction: 'ease-in-out', animationIterationCount: 'infinite',
-                opacity: sweepOn ? undefined : 0,
-                willChange: sweepOn ? 'background-position, opacity' : 'auto',
-              } as React.CSSProperties}
+              style={sweepStyle}
             />
           ) : null}
         </div>
         {/* level stop dots — small neutral markers so the tiers are visible. One
             coordinated soft grey for ALL of them (no purple cue): colour is
             reserved for the top tier, where the whole bar lights up. */}
-        {opts.map((o, i) => (
-          <div
-            key={o.level}
-            aria-hidden
-            style={{
-              position: 'absolute', top: '50%', left: stopLeft(i), width: 3, height: 3, borderRadius: '50%',
-              transform: 'translate(-50%, -50%)', pointerEvents: 'none',
-              background: 'color-mix(in srgb, var(--text) 50%, transparent)',
-            }}
-          />
-        ))}
+        {stopDots}
         {/* knob — white rounded pill, above the track (taller than the bar) */}
-        <div
-          style={{
-            position: 'absolute', top: '50%', left: stopLeft(idx), width: KNOB_W, height: KNOB_H,
-            borderRadius: 6, transform: 'translate(-50%, -50%)', background: 'var(--text)',
-            boxShadow: '0 1px 3px rgba(0, 0, 0, 0.45)', pointerEvents: 'none',
-          }}
-        />
+        <div style={knobStyle} />
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 7, fontSize: 11, opacity: 0.55 }}>
+      <div style={labelRowStyle}>
         <span>{profile.kind === 'binary' ? 'Off' : 'Faster'}</span>
         <span>{profile.kind === 'binary' ? 'On' : 'Smarter'}</span>
       </div>
     </div>
   );
 }
+
+export const ReasoningSlider = React.memo(ReasoningSliderComponent);
+ReasoningSlider.displayName = 'ReasoningSlider';

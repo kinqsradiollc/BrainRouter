@@ -41,7 +41,7 @@ export const LOCAL_TOOL_REGISTRY: LocalToolEntry[] = [
   { name: 'grep_search', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'glob_files', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'fetch_url', accessTier: 'read', actionKind: 'network', parallelSafe: true },
-  { name: 'web_search', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'web_search', accessTier: 'read', actionKind: 'network', parallelSafe: true },
   { name: 'list_mcp_resources', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'list_mcp_resource_templates', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'read_mcp_resource', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
@@ -96,6 +96,7 @@ export const LOCAL_TOOL_REGISTRY: LocalToolEntry[] = [
   { name: 'apply_patch', accessTier: 'write', actionKind: 'file_edit', parallelSafe: false },
   // --- shell tier: + command execution ------------------------------------
   { name: 'run_command', accessTier: 'shell', actionKind: 'shell', parallelSafe: false },
+  { name: 'computer_use', accessTier: 'shell', actionKind: 'computer', parallelSafe: false },
 ];
 
 const TIER_RANK: Record<AccessMode, number> = { read: 0, write: 1, shell: 2 };

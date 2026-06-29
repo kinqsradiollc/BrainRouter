@@ -162,6 +162,42 @@ export interface AgentImage {
   dataBase64: string;
 }
 
+export type ComputerUseActionName =
+  | 'screenshot'
+  | 'left_click'
+  | 'right_click'
+  | 'double_click'
+  | 'move'
+  | 'type'
+  | 'key'
+  | 'scroll'
+  | 'drag';
+
+export interface ComputerUseAction {
+  action: ComputerUseActionName;
+  x?: number;
+  y?: number;
+  x2?: number;
+  y2?: number;
+  text?: string;
+  keys?: string | string[];
+  clicks?: number;
+  direction?: 'up' | 'down' | 'left' | 'right';
+  button?: 'left' | 'right' | 'middle';
+  hold_keys?: string[];
+}
+
+export interface ComputerUseActionResult {
+  success: boolean;
+  error?: string;
+  permissionDenied?: boolean;
+}
+
+export interface ComputerUsePort {
+  screenshot(): Promise<AgentImage>;
+  act(action: ComputerUseAction): Promise<ComputerUseActionResult>;
+}
+
 export type AgentCommand =
   | { kind: 'start-turn'; prompt: string; hidden?: boolean; images?: AgentImage[] }
   | { kind: 'interrupt' }

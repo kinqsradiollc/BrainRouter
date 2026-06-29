@@ -165,14 +165,11 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
               ))}
             </div>
         ) : null}
-        <span className="composer-spacer" />
+        {!sideTabs.length && <div style={{ flex: 1 }} />}
         <button className={`side-head-btn${sidePinned ? ' active' : ''}`} aria-pressed={sidePinned}
           onClick={() => setSidePinned((v) => !v)}
           title={sidePinned ? 'Pinned — click to float as a drawer' : 'Drawer — click to pin (dock)'}>
           <Icon name="pin" size={13} />
-        </button>
-        <button className="side-head-btn" onClick={() => setSidePanelOpen(false)} title="Close panel" aria-label="Close panel">
-          <Icon name="close" size={13} />
         </button>
       </div>
       {activeSideTab ? (
