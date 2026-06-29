@@ -4277,6 +4277,15 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .write-preview { flex: 1; padding: 12px 20px; border-left: 1px solid var(--border); overflow: auto; }
 .write-status { font-size: 11px; color: var(--text-dim); padding: 4px 8px; border-top: 1px solid var(--border); }
 
+/* ===== §2 W5 — Write-mode workspace-grounded assistant ===== */
+.write-asst { border-top: 1px solid var(--border); }
+.write-asst-toggle { width: 100%; text-align: left; background: none; border: 0; color: var(--accent); font-size: 12px; font-weight: 600; padding: 6px 10px; cursor: pointer; }
+.write-asst-body { padding: 0 10px 8px; display: flex; flex-direction: column; gap: 6px; max-height: 280px; overflow: auto; }
+.write-asst-row { display: flex; gap: 6px; }
+.write-asst-answer { font-size: 13px; color: var(--text); line-height: 1.5; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.write-asst-grounded { display: inline-block; font-size: 10px; color: var(--ok); border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent); border-radius: 999px; padding: 0 6px; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }
+.write-asst-note { font-size: 11px; color: var(--text-faint); }
+
 /* ===== §2 W3 — Write-mode selection inline AI + diff review ===== */
 .write-ai-bar { display: flex; align-items: center; gap: 10px; padding: 5px 8px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--accent) 7%, transparent); flex-wrap: wrap; }
 .write-ai-label { font-size: 11px; color: var(--accent); font-weight: 600; }
