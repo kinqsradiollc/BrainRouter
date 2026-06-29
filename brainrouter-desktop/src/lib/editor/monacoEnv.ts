@@ -15,6 +15,7 @@ import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker'
 import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
 import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
 import { loader } from '@monaco-editor/react';
+import { isMonacoHex, normalizedColorToHex } from './monacoColor.js';
 
 let installed = false;
 
@@ -25,57 +26,83 @@ function cssVar(name: string, fallback: string): string {
   return v || fallback;
 }
 
+// Monaco's theme parser only accepts hex colors — `editor.foreground`/`background`
+// flow into the token theme, which THROWS "Illegal value for token color" on
+// anything else, and every other `colors` entry is run through `Color.fromHex`
+// (a non-hex value silently becomes red). Our palette (theme.css) is authored in
+// `hsl(...)`, so each value must be normalized to hex before it reaches Monaco.
+let colorProbe: CanvasRenderingContext2D | null | undefined;
+function toMonacoHex(value: string, fallback: string): string {
+  const v = (value || '').trim();
+  if (!v) return fallback;
+  if (isMonacoHex(v)) return v; // already #rgb/#rgba/#rrggbb/#rrggbbaa
+  if (typeof document === 'undefined') return fallback;
+  if (colorProbe === undefined) colorProbe = document.createElement('canvas').getContext('2d');
+  if (!colorProbe) return fallback;
+  // Seed with the fallback so an unparseable value degrades to it (a fresh assign
+  // leaves the previous probe value untouched on parse failure).
+  colorProbe.fillStyle = fallback;
+  colorProbe.fillStyle = v; // the canvas normalizes any valid CSS color
+  return normalizedColorToHex(colorProbe.fillStyle, fallback); // '#rrggbb' | 'rgba(...)' → hex
+}
+
+/** Read a CSS custom property as a Monaco-safe hex color (resolves hsl/rgb/named → hex). */
+function cssColor(name: string, fallback: string): string {
+  return toMonacoHex(cssVar(name, fallback), fallback);
+}
+
 /** The mono font Monaco should paint with (matches CodeBlock / the rest of the UI). */
 export function editorFontFamily(): string {
   return cssVar('--mono', 'ui-monospace, SFMono-Regular, Menlo, monospace');
 }
 
-/** Define the BrainRouter dark + light Monaco themes from the app palette. */
+/** Define the BrainRouter dark + light Monaco themes from the LIVE app palette. */
 function defineThemes(): void {
-  // Dark (GitHub-Midnight) — literals mirror theme.css :root.
+  // Dark (graphite) — colors are read live from theme.css and normalized to hex
+  // (the palette is authored in hsl, which Monaco rejects).
   monaco.editor.defineTheme('brainrouter-dark', {
     base: 'vs-dark',
     inherit: true,
     rules: [],
     colors: {
-      'editor.background': cssVar('--bg', '#0d1117'),
-      'editor.foreground': cssVar('--text', '#e6edf3'),
-      'editorLineNumber.foreground': cssVar('--text-faint', '#6e7681'),
-      'editorLineNumber.activeForeground': cssVar('--text-dim', '#9198a1'),
-      'editor.lineHighlightBackground': cssVar('--surface', '#151a22'),
+      'editor.background': cssColor('--bg', '#0d1117'),
+      'editor.foreground': cssColor('--text', '#e6edf3'),
+      'editorLineNumber.foreground': cssColor('--text-faint', '#6e7681'),
+      'editorLineNumber.activeForeground': cssColor('--text-dim', '#9198a1'),
+      'editor.lineHighlightBackground': cssColor('--surface', '#151a22'),
       'editor.lineHighlightBorder': '#00000000', // no boxed border around the active line
-      // Selection = a subtle BLUE accent tint. Use hex-alpha literals because
-      // Monaco theme color parsing is stricter than CSS custom properties.
+      // Selection = a subtle BLUE accent tint (hex-alpha literals).
       'editor.selectionBackground': '#58a6ff33',
       'editor.inactiveSelectionBackground': '#58a6ff1a',
       'editor.selectionHighlightBackground': '#58a6ff1f',
       'editor.wordHighlightBackground': '#58a6ff1a',
       'editor.findMatchBackground': '#d2992266',
       'editor.findMatchHighlightBackground': '#d299222e',
-      'editorCursor.foreground': cssVar('--accent', '#58a6ff'),
-      'editorWidget.background': cssVar('--raised', '#21262d'),
-      'editorWidget.border': cssVar('--border', '#30363d'),
-      'editorIndentGuide.background1': cssVar('--border', '#21262d'),
-      'editorGutter.background': cssVar('--bg', '#0d1117'),
+      'editorCursor.foreground': cssColor('--accent', '#58a6ff'),
+      'editorWidget.background': cssColor('--raised', '#21262d'),
+      'editorWidget.border': cssColor('--border', '#30363d'),
+      'editorIndentGuide.background1': cssColor('--border', '#21262d'),
+      'editorGutter.background': cssColor('--bg', '#0d1117'),
       'editorWhitespace.foreground': '#30363d',
       'editorBracketMatch.background': '#58a6ff29',
       'editorBracketMatch.border': '#00000000',
       // Diagnostics — semantic foregrounds, no heavy backgrounds.
-      'editorError.foreground': cssVar('--err', '#e3b341'),
-      'editorWarning.foreground': cssVar('--warn', '#d29922'),
-      'editorInfo.foreground': cssVar('--accent', '#58a6ff'),
+      'editorError.foreground': cssColor('--err', '#e3b341'),
+      'editorWarning.foreground': cssColor('--warn', '#d29922'),
+      'editorInfo.foreground': cssColor('--accent', '#58a6ff'),
       // Diff: green add / amber remove, as accessible tints.
       'diffEditor.insertedTextBackground': '#3fb95038',
       'diffEditor.removedTextBackground': '#d2992238',
       'diffEditor.insertedLineBackground': '#3fb9501a',
       'diffEditor.removedLineBackground': '#d299221a',
       // Change gutter ticks use the semantic add/del/modify tokens.
-      'editorGutter.addedBackground': cssVar('--ok', '#3fb950'),
-      'editorGutter.deletedBackground': cssVar('--warn', '#d29922'),
-      'editorGutter.modifiedBackground': cssVar('--accent', '#58a6ff'),
-      'scrollbarSlider.background': 'rgba(110,118,129,0.20)',
-      'scrollbarSlider.hoverBackground': 'rgba(110,118,129,0.30)',
-      'scrollbarSlider.activeBackground': 'rgba(110,118,129,0.45)',
+      'editorGutter.addedBackground': cssColor('--ok', '#3fb950'),
+      'editorGutter.deletedBackground': cssColor('--warn', '#d29922'),
+      'editorGutter.modifiedBackground': cssColor('--accent', '#58a6ff'),
+      // hex-alpha equivalents of rgba(110,118,129, .20/.30/.45) — Monaco needs hex.
+      'scrollbarSlider.background': '#6e768133',
+      'scrollbarSlider.hoverBackground': '#6e76814d',
+      'scrollbarSlider.activeBackground': '#6e768173',
       'editorOverviewRuler.border': '#00000000',
     },
   });
@@ -84,14 +111,14 @@ function defineThemes(): void {
     inherit: true,
     rules: [],
     colors: {
-      'editor.background': cssVar('--bg', '#ffffff'),
-      'editor.foreground': cssVar('--text', '#1f2328'),
-      'editor.lineHighlightBackground': cssVar('--surface', '#f6f8fa'),
+      'editor.background': cssColor('--bg', '#ffffff'),
+      'editor.foreground': cssColor('--text', '#1f2328'),
+      'editor.lineHighlightBackground': cssColor('--surface', '#f6f8fa'),
       'editor.selectionBackground': '#0969da2e',
       'editor.selectionHighlightBackground': '#0969da1a',
-      'editorCursor.foreground': cssVar('--accent', '#0969da'),
-      'editorError.foreground': cssVar('--err', '#9a6700'),
-      'editorWarning.foreground': cssVar('--warn', '#9a6700'),
+      'editorCursor.foreground': cssColor('--accent', '#0969da'),
+      'editorError.foreground': cssColor('--err', '#9a6700'),
+      'editorWarning.foreground': cssColor('--warn', '#9a6700'),
       'diffEditor.insertedTextBackground': '#1a7f372e',
       'diffEditor.removedTextBackground': '#9a67002e',
     },
@@ -119,6 +146,14 @@ export function installMonaco(): void {
   };
   loader.config({ monaco });
   defineThemes();
+  // Re-read the palette + re-apply whenever the app theme flips, so the editor
+  // tracks the active theme instead of the one that happened to be live at mount.
+  if (typeof document !== 'undefined' && typeof MutationObserver !== 'undefined') {
+    new MutationObserver(() => {
+      defineThemes();
+      monaco.editor.setTheme(editorTheme());
+    }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  }
 }
 
 export { monacoLanguage } from './language.js';
