@@ -94,7 +94,7 @@ export function runHooks(
   const results: HookRunResult[] = [];
   for (const hook of readHooks(workspaceRoot)) {
     if (!hook.enabled || hook.event !== event) continue;
-    if (hook.match && context.tool && !context.tool.includes(hook.match)) continue;
+    if (hook.match && context.tool && !hookMatchesTool(hook.match, context.tool)) continue;
     const env = {
       ...process.env,
       BRAINROUTER_HOOK_EVENT: event,
@@ -131,7 +131,14 @@ export function runHooks(
 export interface HookDecision {
   decision?: 'allow' | 'deny';
   reason?: string;
+  /** pre-tool: REPLACE the tool arguments before execution. */
   updatedInput?: Record<string, unknown>;
+  /** user-prompt-submit: extra context appended to the prompt the model sees. */
+  additionalContext?: string;
+  /** post-tool: REPLACE the tool result text the model receives (e.g. redact). */
+  updatedOutput?: string;
+  /** post-tool: mark the tool result an error (e.g. a lint/policy breach). */
+  isError?: boolean;
 }
 
 export function parseHookDecision(stdout: string): HookDecision | null {
@@ -140,10 +147,34 @@ export function parseHookDecision(stdout: string): HookDecision | null {
   try {
     const parsed = JSON.parse(t) as HookDecision;
     if (parsed && typeof parsed === 'object') {
-      const ok = parsed.decision === 'allow' || parsed.decision === 'deny' || parsed.updatedInput !== undefined;
+      const ok =
+        parsed.decision === 'allow' ||
+        parsed.decision === 'deny' ||
+        parsed.updatedInput !== undefined ||
+        parsed.additionalContext !== undefined ||
+        parsed.updatedOutput !== undefined ||
+        parsed.isError !== undefined;
       return ok ? parsed : null;
     }
   } catch { /* non-JSON stdout — legacy semantics */ }
   return null;
+}
+
+/**
+ * Match a hook's `match` pattern against a tool name. A pattern containing glob
+ * metacharacters (`*` / `?`) is an ANCHORED glob (`read_*` → any `read_` tool,
+ * `*_file` → `read_file`/`write_file`); any other pattern keeps the legacy
+ * SUBSTRING behaviour (`list` → `list_dir`) so existing hooks are unchanged. An
+ * empty pattern matches everything. Pure.
+ */
+export function hookMatchesTool(pattern: string, tool: string): boolean {
+  if (!pattern) return true;
+  if (/[*?]/.test(pattern)) {
+    const rx = new RegExp(
+      '^' + pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.') + '$',
+    );
+    return rx.test(tool);
+  }
+  return tool.includes(pattern);
 }
 

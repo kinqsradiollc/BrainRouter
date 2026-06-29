@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Agent } from '../agent/agent.js';
-import { parseHookDecision, addHook } from '../hooks/hooksStore.js';
+import { parseHookDecision, addHook, hookMatchesTool, readHooks, removeHook } from '../hooks/hooksStore.js';
 import { setCliKnobOverride, _resetCliKnobsCache, resolveCliKnobs } from '../config/config.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
 
@@ -50,6 +50,26 @@ test('parseHookDecision: deny/allow/updatedInput; non-JSON → null', () => {
   assert.equal(parseHookDecision('all good'), null);
   assert.equal(parseHookDecision(''), null);
   assert.equal(parseHookDecision('{"unrelated":true}'), null);
+});
+
+test('parseHookDecision: accepts additionalContext / updatedOutput / isError', () => {
+  assert.deepEqual(parseHookDecision('{"additionalContext":"note"}'), { additionalContext: 'note' });
+  assert.deepEqual(parseHookDecision('{"updatedOutput":"redacted"}'), { updatedOutput: 'redacted' });
+  assert.deepEqual(parseHookDecision('{"isError":true}'), { isError: true });
+});
+
+test('hookMatchesTool: anchored glob, substring back-compat, empty', () => {
+  // glob is anchored
+  assert.ok(hookMatchesTool('read_*', 'read_file'));
+  assert.ok(!hookMatchesTool('read_*', 'write_file'));
+  assert.ok(hookMatchesTool('*_file', 'write_file'));
+  assert.ok(hookMatchesTool('read_?ile', 'read_file'));
+  assert.ok(!hookMatchesTool('read_*', 'list_dir'));
+  // no glob char → legacy substring
+  assert.ok(hookMatchesTool('list', 'list_dir'));
+  assert.ok(!hookMatchesTool('write', 'list_dir'));
+  // empty matches everything
+  assert.ok(hookMatchesTool('', 'anything'));
 });
 
 test('cli.hooks config: enabled + enforceWhenSilent default true; both overridable', () => {
@@ -139,6 +159,74 @@ test('user-prompt-submit deny blocks the turn before any LLM call', async () => 
       const answer = await agent.runTurn('do something', { onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {} } as any);
       assert.match(answer, /Prompt blocked by user-prompt-submit hook: prompts are frozen/);
       assert.equal(llmCalled, false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }));
+});
+
+// --- user-prompt-submit: inject context (non-denying) -------------------------
+
+test('user-prompt-submit additionalContext is injected into the prompt the model sees', async () => {
+  await serial(() => withTempWorkspaceAsync(async (workspace) => {
+    for (const h of readHooks(workspace)) removeHook(workspace, h.id); // isolate from any leaked deny hook
+    addHook(workspace, {
+      event: 'user-prompt-submit',
+      command: `echo '{"additionalContext":"REMEMBER prod is frozen"}'`,
+    });
+    const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [{ text: '{}' }] }), close: async () => {} };
+    const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+      workspaceRoot: workspace, launchCwd: workspace, silent: false,
+    });
+    const originalFetch = globalThis.fetch;
+    // Capture EVERY request body — the turn makes a planner pre-call plus the main
+    // call(s), and the injected context must reach the model in at least one.
+    const bodies: string[] = [];
+    try {
+      globalThis.fetch = (async (_url: string, init: any) => {
+        bodies.push(init?.body ? String(init.body) : '');
+        return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }], usage: { prompt_tokens: 5, completion_tokens: 1 } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }) as any;
+      const ans = await agent.runTurn('ship the feature', { onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {} } as any);
+      assert.match(bodies.join('\n'), /REMEMBER prod is frozen/, `fetches=${bodies.length} answer=${JSON.stringify(ans).slice(0, 200)}`);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }));
+});
+
+// --- post-tool: replace the model-visible output ------------------------------
+
+test('post-tool updatedOutput replaces the tool result the model receives', async () => {
+  await serial(() => withTempWorkspaceAsync(async (workspace) => {
+    for (const h of readHooks(workspace)) removeHook(workspace, h.id); // isolate from any leaked deny hook
+    addHook(workspace, {
+      event: 'post-tool',
+      match: 'list_dir',
+      command: `echo '{"updatedOutput":"REDACTED-BY-HOOK"}'`,
+    });
+    const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [{ text: '{}' }] }), close: async () => {} };
+    const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+      workspaceRoot: workspace, launchCwd: workspace, silent: false,
+    });
+    const originalFetch = globalThis.fetch;
+    const bodies: string[] = [];
+    let toolEmitted = false;
+    try {
+      // Emit list_dir once from the MAIN agent loop (not the planner pre-call),
+      // so the tool runs and the post-tool hook redacts its output; the redacted
+      // text then appears in the next request body sent to the model.
+      globalThis.fetch = (async (_url: string, init: any) => {
+        const body = init?.body ? String(init.body) : '';
+        bodies.push(body);
+        if (!toolEmitted && !body.includes('PLANNER') && body.includes('"tools"')) {
+          toolEmitted = true;
+          return new Response(JSON.stringify({ choices: [{ message: { content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'list_dir', arguments: JSON.stringify({ path: '.' }) } }] } }], usage: { prompt_tokens: 5, completion_tokens: 1 } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({ choices: [{ message: { content: 'done' } }], usage: { prompt_tokens: 5, completion_tokens: 1 } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }) as any;
+      await agent.runTurn('list the workspace', { onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {} } as any);
+      assert.ok(bodies.some((b) => b.includes('REDACTED-BY-HOOK')), 'redacted output should reach the LLM');
     } finally {
       globalThis.fetch = originalFetch;
     }
