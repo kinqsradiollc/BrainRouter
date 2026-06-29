@@ -27,6 +27,17 @@ test('start-turn: streams bridged events between turn-start and turn-complete', 
     assert.equal(done.answer, 'answer to: do it');
     assert.ok(out.every((m) => m.sessionKey === 'sess-test'));
 });
+test('start-turn: forwards inline images to runTurn opts (vision)', async () => {
+    const { send } = collect();
+    let seenImages;
+    const agent = {
+        sessionKey: 'sess-img',
+        runTurn: async (_p, _cb, opts) => { seenImages = opts?.images; return 'ok'; },
+    };
+    const core = createHostCore({ agent, send });
+    await core.handle({ kind: 'start-turn', prompt: 'what is this?', images: [{ mediaType: 'image/png', dataBase64: 'AAAA' }] });
+    assert.deepEqual(seenImages, [{ mediaType: 'image/png', dataBase64: 'AAAA' }]);
+});
 test('observeTurnEvent: receives the turn tool stream tagged with the turn sessionKey (verification scoping)', async () => {
     const { send } = collect();
     const seen = [];
