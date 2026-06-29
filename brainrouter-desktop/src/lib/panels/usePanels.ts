@@ -73,10 +73,12 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
   // On launch, it starts at its minimum size (SIDE_RAIL_MIN).
   const [sideWidth, setSideWidth] = useState(SIDE_RAIL_MIN);
   const [sideFullScreen, setSideFullScreen] = useState(() => localStorage.getItem('br-side-fullscreen') === '1');
-  // §panel-drawer — default UNPINNED (drawer) so the panel behaves like an
-  // overlay that dismisses on outside-click; pinning docks it as a persistent
-  // resizable column (the prior behavior).
-  const [sidePinned, setSidePinned] = useState(() => localStorage.getItem('br-side-pinned') === '1');
+  // §panel-drawer — default DOCKED (pinned) so the panel is a persistent
+  // resizable column that STAYS PUT when you click elsewhere; unpinning turns it
+  // into an overlay drawer that dismisses on outside-click. A `-v2` key resets
+  // the prior unpinned default (which persisted '0' on first mount) so existing
+  // installs also get the docked behavior unless they explicitly unpin again.
+  const [sidePinned, setSidePinned] = useState(() => localStorage.getItem('br-side-pinned-v2') !== '0');
   const [termDockOpen, setTermDockOpen] = useState(() => {
     const saved = localStorage.getItem('br-dock-open');
     if (saved !== null) return saved === '1';
@@ -97,7 +99,7 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
   }, [sideFullScreen]);
 
   useEffect(() => {
-    localStorage.setItem('br-side-pinned', sidePinned ? '1' : '0');
+    localStorage.setItem('br-side-pinned-v2', sidePinned ? '1' : '0');
   }, [sidePinned]);
 
   useEffect(() => {

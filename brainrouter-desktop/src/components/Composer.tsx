@@ -89,7 +89,19 @@ export function Composer(p: ComposerProps): React.ReactElement {
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
   const mirrorRef = React.useRef<HTMLDivElement | null>(null);
+  const modelMenuRef = React.useRef<HTMLDivElement | null>(null);
   const [dragOver, setDragOver] = React.useState(false);
+  // The model menu opens UPWARD from the composer. A tall menu (several connected
+  // providers) could push its top — the "Models" header + first model — above the
+  // viewport, clipping them. Clamp its height to the room actually above the
+  // trigger so it never overflows the top; it scrolls internally instead.
+  React.useLayoutEffect(() => {
+    if (pop !== 'model') return;
+    const el = modelMenuRef.current;
+    if (!el) return;
+    const bottom = el.getBoundingClientRect().bottom; // bottom-anchored: stable vs height
+    el.style.maxHeight = `${Math.max(220, Math.min(440, Math.floor(bottom - 14)))}px`;
+  }, [pop]);
   const handleFiles = (list: FileList | null): void => {
     if (!list || !onAttach) return;
     const files = Array.from(list);
@@ -303,7 +315,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
           {/* model selection is now separate from effort */}
           <span className="pop-wrap">
             {pop === 'model' ? (
-              <div className="menu-pop model-menu">
+              <div className="menu-pop model-menu" ref={modelMenuRef}>
                 {(() => {
                   // §multi-select-models — when the default provider saved an
                   // allowlist, narrow the live endpoint list to it (∩); an empty
