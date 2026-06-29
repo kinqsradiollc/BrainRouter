@@ -12,6 +12,7 @@ import type { McpClientPool as McpClientWrapper } from '../mcp/mcpPool.js';
 import { NoTTYError, HEADLESS_PROMPTER, type InteractivePrompter } from './prompter.js';
 import type { LLMConfig } from '../config/config.js';
 import { getCliKnobs } from '../config/config.js';
+import type { ComputerUsePort } from '@kinqs/brainrouter-agent-protocol';
 import { appendTranscriptEntry, isInternalSessionKey, redactText, readTranscriptEntries } from '../session/sessionStore.js';
 import { recordFileMutation } from '../storage/fileSnapshotStore.js';
 import { isConnectivityError, isRetryableServerError } from '../storage/checkpointStore.js';
@@ -187,9 +188,13 @@ import {
   looksLikeDeferredToolPromise,
   mentionsImminentToolWork,
 } from './toolCallRecovery.js';
+import { fetchAndExtract } from '../websearch/crawler.js';
+import { buildSearchProvider } from '../websearch/factory.js';
+import { evaluateDestructiveAction, isComputerActionMutating, validateComputerAction } from './computerUse.js';
 
 const execPromise = promisify(exec);
 const DEFAULT_CHILD_DRAIN_TIMEOUT_MS = 30_000;
+const MAX_COMPUTER_ACTIONS_PER_TURN = 20;
 
 function parseJsonObject(text: string): any | undefined {
   try {
@@ -568,6 +573,8 @@ export interface AgentOptions {
     confirm(req: { title: string; detail?: string; dangerous?: boolean; tool?: string }): Promise<boolean>;
     choice(req: { question: string; header: string; options: Array<{ label: string; description: string }>; multiSelect?: boolean }): Promise<string[] | null>;
   };
+  /** Desktop-only native computer control capability. Omitted in CLI/headless runtimes. */
+  computerUsePort?: ComputerUsePort;
   /**
    * §ADR-003 — the interactive prompt surface (TTY yes/no + choice picker).
    * The CLI injects its readline/ink-backed prompter; headless hosts (Desktop,
@@ -793,6 +800,7 @@ export class Agent {
   // opaque file-writing shell command (path unknown → can't be ruled docs-only).
   private filesWrittenThisTurn: string[] = [];
   private shellWroteThisTurn = false;
+  private computerActionsThisTurn = 0;
   // DESK-2 / CC-P1.5 — cooperative turn interrupt. Set by requestInterrupt()
   // (desktop Stop button / TUI Esc); checked at every LLM-call and tool
   // boundary so a long multi-tool turn stops at the next seam instead of
@@ -871,6 +879,7 @@ export class Agent {
   private effortOverride?: EffortLevel;
   private confirmToolApproval?: AgentOptions['confirmToolApproval'];
   private interactionPort?: AgentOptions['interactionPort'];
+  private computerUsePort?: ComputerUsePort;
   // §ADR-003 — injected interactive prompter (default = headless/no-TTY stub).
   private prompter: InteractivePrompter;
   // DESK-5n — parent's review stance, for the silent-child Auto-mode bypass.
@@ -909,6 +918,7 @@ export class Agent {
     this.agentDepth = options.agentDepth ?? 0;
     this.confirmToolApproval = options.confirmToolApproval;
     this.interactionPort = options.interactionPort;
+    this.computerUsePort = options.computerUsePort;
     this.prompter = options.prompter ?? HEADLESS_PROMPTER;
     this.parentReviewPolicy = options.parentReviewPolicy;
     this.parentExecutionMode = options.parentExecutionMode;
@@ -1100,6 +1110,7 @@ export class Agent {
     this.verifiedThisTurn = false;
     this.filesWrittenThisTurn = [];
     this.shellWroteThisTurn = false;
+    this.computerActionsThisTurn = 0;
     this.interruptRequested = false;
     // DESK-6 — fresh abort controller per turn (AFTER the reset), so a stale
     // pre-turn abort can never poison this turn's first LLM call.
@@ -1176,11 +1187,18 @@ export class Agent {
     // depth-0, non-worker orchestrator should SEE them (workers can't spawn
     // workers; a child owns none) — hide the surface from everyone else.
     const hideWorkerTools = hideWorkerToolsFor(this.agentDepth, this.tier);
+    const cliKnobs = getCliKnobs();
+    const hideComputerUse =
+      !cliKnobs.computerUse.enabled ||
+      !this.computerUsePort ||
+      this.silent ||
+      !!cliKnobs.brainUrl;
     const filteredLocalTools = localToolSpecsFromExecutors().filter(
       (t) =>
         allowed.has(t.name) &&
         !MODEL_HIDDEN_TOOLS.has(t.name) &&
-        !(hideWorkerTools && WORKER_THREAD_TOOLS.has(t.name)),
+        !(hideWorkerTools && WORKER_THREAD_TOOLS.has(t.name)) &&
+        !(hideComputerUse && t.name === 'computer_use'),
     );
     // Multi-MCP parity: expose every connected third-party MCP tool and the
     // model-safe BrainRouter MCP tools in one turn, using the pool's
@@ -1200,7 +1218,7 @@ export class Agent {
         disallow: this.disallowedTools,
       });
     }
-    const toolBudget = getCliKnobs().agentMcpToolBudget;
+    const toolBudget = cliKnobs.agentMcpToolBudget;
     if (toolBudget > 0 && visibleMcpTools.length > toolBudget) {
       const taskText = this.latestUserText();
       const { kept, hidden } = rankAndCapTools(visibleMcpTools, taskText, toolBudget);
@@ -3405,6 +3423,52 @@ export class Agent {
         const notice = result.notice ? `${result.notice}\n` : '';
         return `${notice}${sandboxBadge}Exit Code: ${result.exitCode}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`;
       }
+      case 'computer_use': {
+        if (!getCliKnobs().computerUse.enabled) return 'computer_use is disabled. Set cli.computerUse.enabled=true to enable it.';
+        if (!this.computerUsePort) return 'computer_use is unavailable in this runtime.';
+        if (this.silent) return 'computer_use denied: silent child agents cannot control the desktop.';
+        if (getCliKnobs().brainUrl) return 'computer_use denied: remote-brain sessions cannot control the local desktop.';
+        if (this.computerActionsThisTurn >= MAX_COMPUTER_ACTIONS_PER_TURN) {
+          return `computer_use denied: per-turn action cap (${MAX_COMPUTER_ACTIONS_PER_TURN}) reached.`;
+        }
+        const validation = validateComputerAction(args);
+        if (!validation.ok) return `computer_use invalid action: ${validation.error}`;
+        const action = validation.action;
+        this.computerActionsThisTurn += 1;
+
+        if (action.action === 'screenshot') {
+          try {
+            const image = await this.computerUsePort.screenshot();
+            return JSON.stringify({
+              success: true,
+              action: 'screenshot',
+              image,
+              note: 'Screenshot captured at full logical resolution.',
+            }, null, 2);
+          } catch (err: any) {
+            return JSON.stringify({
+              success: false,
+              action: 'screenshot',
+              permissionDenied: /permission|screen recording|accessibility/i.test(String(err?.message ?? err)),
+              error: err?.message ?? String(err),
+            }, null, 2);
+          }
+        }
+
+        const destructive = evaluateDestructiveAction(action, { userIntent: this.lastUserPrompt });
+        const activeMode = resolveActiveMode(this.workspaceRoot, this.sessionKey);
+        const shouldAsk = destructive.dangerous || (isComputerActionMutating(action.action) && activeMode.executionMode !== 'fast');
+        if (shouldAsk) {
+          const detail = `${JSON.stringify(action, null, 2)}${destructive.reason ? `\n\n${destructive.reason}` : ''}`;
+          const approved = this.interactionPort
+            ? await this.interactionPort.confirm({ title: 'Allow computer control?', detail, dangerous: destructive.dangerous, tool: 'computer_use' })
+            : await this.prompter.askYesNo(`${detail}\nAllow computer control? (y/N) `, false);
+          if (!approved) return 'computer_use rejected by user.';
+        }
+
+        const result = await this.computerUsePort.act(action);
+        return JSON.stringify({ action: action.action, ...result }, null, 2);
+      }
       case 'fetch_url': {
         const url = args.url;
         // POLICY-3 — per-host egress allowlist (empty = unrestricted).
@@ -3412,41 +3476,25 @@ export class Agent {
         if (egress.decision === 'deny') {
           return `fetch_url blocked by egress policy: ${egress.reason}.`;
         }
-        try {
-          // DESK-6 — abort on Stop OR a 30s ceiling (this fetch had neither).
-          const fetchUrlSignal = AbortSignal.any([
-            AbortSignal.timeout(30_000),
-            ...(this.turnAbort?.signal ? [this.turnAbort.signal] : []),
-          ]);
-          const res = await fetch(url, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (compatible; BrainRouterCLI/0.3.8)'
-            },
-            signal: fetchUrlSignal,
-          });
-          if (!res.ok) {
-            throw new Error(`Failed to fetch URL: ${res.status} ${res.statusText}`);
-          }
-          const text = await res.text();
-          if (url.includes('.html') || text.includes('<html') || text.includes('<!DOCTYPE html')) {
-            const cleanText = text
-              .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-              .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
-              .replace(/<[^>]+>/g, ' ')
-              .replace(/\s+/g, ' ')
-              .trim();
-            return cleanText.slice(0, 15000);
-          }
-          return text.slice(0, 15000);
-        } catch (err: any) {
-          return `Failed to fetch URL ${url}: ${err.message}`;
-        }
+        const knobs = getCliKnobs();
+        const result = await fetchAndExtract(String(url), {
+          ...knobs.webSearch.crawler,
+          signal: this.turnAbort?.signal,
+        });
+        return JSON.stringify(result, null, 2);
       }
       case 'web_search': {
         const query = String(args.query ?? '').trim();
         if (!query) throw new Error('web_search requires a non-empty query.');
-        const maxResults = Math.max(1, Math.min(10, Number(args.maxResults ?? 5)));
-        return await runWebSearch(query, maxResults);
+        const knobs = getCliKnobs();
+        const maxResults = Math.max(1, Math.min(10, Number(args.maxResults ?? knobs.webSearch.maxResults)));
+        try {
+          const provider = buildSearchProvider(knobs);
+          const results = await provider.search(query, maxResults, this.turnAbort?.signal);
+          return JSON.stringify(results.slice(0, maxResults), null, 2);
+        } catch (err: any) {
+          return `web_search failed: ${err?.message ?? err}`;
+        }
       }
       case 'list_mcp_resources': {
         const client = this.mcpClient as any;
@@ -5295,68 +5343,6 @@ export class Agent {
     } catch {
       // Transcript persistence should not break the interactive turn.
     }
-  }
-}
-
-/**
- * Run a web search via DuckDuckGo's Instant Answer API. No API key required.
- *
- * This is a thin, dependency-free default. For production-grade results, users
- * can configure an upstream search provider (Brave / Tavily / SerpAPI) and
- * point `BRAINROUTER_WEB_SEARCH_ENDPOINT` at it — when set, we POST the query
- * and expect `{ results: [{title, url, snippet}] }`.
- */
-async function runWebSearch(query: string, maxResults: number): Promise<string> {
-  const customEndpoint = getCliKnobs().webSearchEndpoint?.trim();
-  if (customEndpoint) {
-    try {
-      const res = await fetch(customEndpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, maxResults }),
-      });
-      if (res.ok) {
-        const body = await res.json() as any;
-        if (Array.isArray(body?.results)) {
-          return JSON.stringify(body.results.slice(0, maxResults), null, 2);
-        }
-      }
-    } catch {
-      // fall through to DuckDuckGo fallback
-    }
-  }
-
-  try {
-    const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-    const res = await fetch(url, { headers: { 'User-Agent': 'BrainRouterCLI/0.3.8' } });
-    if (!res.ok) {
-      return `web_search failed: DuckDuckGo returned ${res.status} ${res.statusText}.`;
-    }
-    const data = await res.json() as any;
-    const results: Array<{ title: string; url: string; snippet: string }> = [];
-    if (data?.AbstractURL && data?.AbstractText) {
-      results.push({ title: data.Heading ?? query, url: data.AbstractURL, snippet: data.AbstractText });
-    }
-    const topics = Array.isArray(data?.RelatedTopics) ? data.RelatedTopics : [];
-    for (const t of topics) {
-      if (results.length >= maxResults) break;
-      if (t.FirstURL && t.Text) {
-        results.push({ title: t.Text.split(' - ')[0] ?? t.Text, url: t.FirstURL, snippet: t.Text });
-      } else if (Array.isArray(t?.Topics)) {
-        for (const inner of t.Topics) {
-          if (results.length >= maxResults) break;
-          if (inner.FirstURL && inner.Text) {
-            results.push({ title: inner.Text.split(' - ')[0] ?? inner.Text, url: inner.FirstURL, snippet: inner.Text });
-          }
-        }
-      }
-    }
-    if (results.length === 0) {
-      return `web_search returned no results for "${query}". DuckDuckGo Instant Answer is best for factual queries; configure BRAINROUTER_WEB_SEARCH_ENDPOINT for a full search backend.`;
-    }
-    return JSON.stringify(results.slice(0, maxResults), null, 2);
-  } catch (err: any) {
-    return `web_search failed: ${err?.message ?? err}`;
   }
 }
 

@@ -125,6 +125,47 @@ export interface ResolvedAutomationKnobs {
   };
 }
 
+export type WebSearchProviderName = 'duckduckgo' | 'serper' | 'google_pse' | 'brave' | 'searxng' | 'custom_http';
+
+export interface WebSearchCliKnobs {
+  provider?: WebSearchProviderName;
+  maxResults?: number;
+  serperApiKey?: string;
+  google?: { apiKey?: string; cx?: string };
+  braveApiKey?: string;
+  searxngBaseUrl?: string;
+  crawler?: {
+    respectRobots?: boolean;
+    maxContentChars?: number;
+    maxHtmlBytes?: number;
+    timeoutMs?: number;
+    ratePerHostMs?: number;
+    userAgent?: string;
+  };
+}
+
+export interface ResolvedWebSearchKnobs {
+  provider: WebSearchProviderName;
+  maxResults: number;
+  serperApiKey: string;
+  google: { apiKey: string; cx: string };
+  braveApiKey: string;
+  searxngBaseUrl: string;
+  crawler: {
+    respectRobots: boolean;
+    maxContentChars: number;
+    maxHtmlBytes: number;
+    timeoutMs: number;
+    ratePerHostMs: number;
+    userAgent: string;
+  };
+}
+
+export interface ComputerUseCliKnobs {
+  enabled?: boolean;
+  mode?: string;
+}
+
 /** Per-provider generation wire format. The two OpenAI shapes plus the native
  *  (non-OpenAI-compatible) Anthropic Messages and Gemini generateContent APIs.
  *  Native formats are opt-in via `cli.providerRequestFormat`. */
@@ -397,6 +438,10 @@ export interface CliKnobs {
   tracingApiKey?: string;
   /** Override the web_search tool's endpoint URL (when not using the brain default). */
   webSearchEndpoint?: string;
+  /** Provider-backed web_search plus crawler defaults. */
+  webSearch?: WebSearchCliKnobs;
+  /** Native desktop computer-use tool. Default off; desktop host only. */
+  computerUse?: ComputerUseCliKnobs;
 
   // ---- tier escalation --------------------------------------------------
   /** Tier ladder override — when set, beats the provider built-in. */
@@ -893,6 +938,8 @@ export interface ResolvedCliKnobs {
   tracingEndpoint?: string;
   tracingApiKey?: string;
   webSearchEndpoint?: string;
+  webSearch: ResolvedWebSearchKnobs;
+  computerUse: { enabled: boolean; mode: string };
   tierLadder?: { flash?: string; standard?: string; pro?: string };
   contextCompaction: boolean;
   childAgentTimeoutMs: number;
@@ -926,6 +973,40 @@ function normalizeProviderRequestFormat(input: unknown): Record<string, Provider
     }
   }
   return out;
+}
+
+const WEB_SEARCH_PROVIDER_NAMES: readonly WebSearchProviderName[] = ['duckduckgo', 'serper', 'google_pse', 'brave', 'searxng', 'custom_http'];
+
+function positiveInt(value: unknown, fallback: number, opts: { min?: number; max?: number } = {}): number {
+  const n = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : fallback;
+  const min = opts.min ?? 1;
+  const max = opts.max ?? Number.MAX_SAFE_INTEGER;
+  return Math.max(min, Math.min(max, n));
+}
+
+function resolveWebSearchKnobs(input: WebSearchCliKnobs | undefined): ResolvedWebSearchKnobs {
+  const provider = WEB_SEARCH_PROVIDER_NAMES.includes(input?.provider as WebSearchProviderName)
+    ? input!.provider!
+    : 'duckduckgo';
+  return {
+    provider,
+    maxResults: positiveInt(input?.maxResults, 5, { min: 1, max: 10 }),
+    serperApiKey: input?.serperApiKey ?? '',
+    google: {
+      apiKey: input?.google?.apiKey ?? '',
+      cx: input?.google?.cx ?? '',
+    },
+    braveApiKey: input?.braveApiKey ?? '',
+    searxngBaseUrl: input?.searxngBaseUrl ?? '',
+    crawler: {
+      respectRobots: input?.crawler?.respectRobots ?? true,
+      maxContentChars: positiveInt(input?.crawler?.maxContentChars, 15_000, { min: 1 }),
+      maxHtmlBytes: positiveInt(input?.crawler?.maxHtmlBytes, 5_242_880, { min: 1 }),
+      timeoutMs: positiveInt(input?.crawler?.timeoutMs, 30_000, { min: 1 }),
+      ratePerHostMs: positiveInt(input?.crawler?.ratePerHostMs, 1_000, { min: 0 }),
+      userAgent: input?.crawler?.userAgent?.trim() || 'BrainRouterCrawler/0.4.16',
+    },
+  };
 }
 
 export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
@@ -1034,6 +1115,11 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     tracingEndpoint: c.tracingEndpoint,
     tracingApiKey: c.tracingApiKey,
     webSearchEndpoint: c.webSearchEndpoint,
+    webSearch: resolveWebSearchKnobs(c.webSearch),
+    computerUse: {
+      enabled: c.computerUse?.enabled ?? false,
+      mode: c.computerUse?.mode?.trim() || 'smart_approve',
+    },
     tierLadder: c.tierLadder,
     contextCompaction: c.contextCompaction ?? true,
     updateCheck: c.updateCheck ?? true,

@@ -227,6 +227,15 @@ function buildPanelRows(ctx: CommandContext): PanelRow[] {
       edit: editProviders,
     },
     {
+      key: 'web-search',
+      label: 'Web search',
+      current: () => {
+        const ws = config.cli?.webSearch ?? {};
+        return `${ws.provider ?? getCliKnobs().webSearch.provider} · robots ${ws.crawler?.respectRobots === false ? 'off' : 'on'}`;
+      },
+      edit: editWebSearch,
+    },
+    {
       key: 'agent-models',
       label: 'Sub-agent models',
       current: () => {
@@ -524,6 +533,81 @@ async function editProviders(ctx: CommandContext): Promise<boolean> {
   ctx.config = setProvider(ctx.config, picked.id, gathered.llm);
   saveConfig(ctx.config);
   console.log(chalk.green(`\n  ✓ Provider "${picked.id}" updated: ${gathered.label} · ${gathered.llm.model}${gathered.sourceTail}`));
+  return true;
+}
+
+function ensureWebSearchConfig(ctx: CommandContext): NonNullable<NonNullable<CommandContext['config']['cli']>['webSearch']> {
+  ctx.config.cli = ctx.config.cli ?? {};
+  ctx.config.cli.webSearch = ctx.config.cli.webSearch ?? {};
+  return ctx.config.cli.webSearch;
+}
+
+async function editWebSearch(ctx: CommandContext): Promise<boolean> {
+  const theme = themeFor(ctx);
+  const current = ctx.config.cli?.webSearch ?? {};
+  const provider = current.provider ?? getCliKnobs().webSearch.provider;
+  const picked = await pickFromList({
+    theme,
+    title: 'Web search',
+    subtitle: 'Configure web_search provider keys and crawler behavior.',
+    rows: [
+      { id: 'provider', label: 'Provider', value: provider, description: 'duckduckgo, serper, google_pse, brave, searxng, custom_http' },
+      { id: 'serper', label: 'Serper API key', value: current.serperApiKey ? maskApiKey(current.serperApiKey) : '(unset)', description: 'write-only key' },
+      { id: 'google-key', label: 'Google PSE API key', value: current.google?.apiKey ? maskApiKey(current.google.apiKey) : '(unset)', description: 'write-only key' },
+      { id: 'google-cx', label: 'Google PSE cx', value: current.google?.cx ? '(set)' : '(unset)', description: 'custom search engine id' },
+      { id: 'brave', label: 'Brave API key', value: current.braveApiKey ? maskApiKey(current.braveApiKey) : '(unset)', description: 'write-only key' },
+      { id: 'searxng', label: 'SearXNG URL', value: current.searxngBaseUrl ?? '(unset)', description: 'self-hosted base URL' },
+      { id: 'robots', label: 'Respect robots.txt', value: current.crawler?.respectRobots === false ? 'off' : 'on', description: 'crawler policy' },
+    ],
+    initialCursor: 0,
+  });
+  if (picked.kind !== 'pick') return false;
+  const ws = ensureWebSearchConfig(ctx);
+  if (picked.id === 'provider') {
+    const prov = await pickFromList({
+      theme,
+      title: 'Web search provider',
+      subtitle: 'DuckDuckGo is keyless and keeps zero-config behavior.',
+      rows: ['duckduckgo', 'serper', 'google_pse', 'brave', 'searxng', 'custom_http'].map((id) => ({ id, label: id, value: id === provider ? 'current' : '' })),
+      initialCursor: 0,
+    });
+    if (prov.kind !== 'pick') return false;
+    ws.provider = prov.id as NonNullable<typeof ws.provider>;
+  } else if (picked.id === 'robots') {
+    ws.crawler = { ...(ws.crawler ?? {}), respectRobots: ws.crawler?.respectRobots === false };
+  } else {
+    const labels: Record<string, string> = {
+      serper: 'Serper API key',
+      'google-key': 'Google PSE API key',
+      'google-cx': 'Google PSE cx',
+      brave: 'Brave API key',
+      searxng: 'SearXNG base URL',
+    };
+    const result = await promptText({
+      theme,
+      title: labels[picked.id] ?? 'Web search value',
+      subtitle: 'Stored in local config.json. Keys are masked in config output.',
+      badge: 'web_search',
+      placeholder: picked.id === 'searxng' ? 'https://search.example.com' : '',
+      validate: (raw) => {
+        const value = raw.trim();
+        if (picked.id === 'searxng') {
+          try { new URL(value); } catch { return 'must be a valid URL'; }
+        }
+        return undefined;
+      },
+    });
+    if (result.kind !== 'accept') return false;
+    const value = result.text.trim();
+    if (picked.id === 'serper') ws.serperApiKey = value;
+    if (picked.id === 'google-key') ws.google = { ...(ws.google ?? {}), apiKey: value };
+    if (picked.id === 'google-cx') ws.google = { ...(ws.google ?? {}), cx: value };
+    if (picked.id === 'brave') ws.braveApiKey = value;
+    if (picked.id === 'searxng') ws.searxngBaseUrl = value;
+  }
+  saveConfig(ctx.config);
+  _resetCliKnobsCache();
+  console.log(chalk.green('\n  ✓ Web search settings saved.\n'));
   return true;
 }
 
@@ -1302,6 +1386,11 @@ function buildRawConfigLines(ctx: CommandContext): string[] {
 
 function scrubSecrets(scrubbed: any): void {
   if (scrubbed.llm?.apiKey) scrubbed.llm.apiKey = maskApiKey(scrubbed.llm.apiKey);
+  if (scrubbed.cli?.webSearch) {
+    if (scrubbed.cli.webSearch.serperApiKey) scrubbed.cli.webSearch.serperApiKey = maskApiKey(scrubbed.cli.webSearch.serperApiKey);
+    if (scrubbed.cli.webSearch.braveApiKey) scrubbed.cli.webSearch.braveApiKey = maskApiKey(scrubbed.cli.webSearch.braveApiKey);
+    if (scrubbed.cli.webSearch.google?.apiKey) scrubbed.cli.webSearch.google.apiKey = maskApiKey(scrubbed.cli.webSearch.google.apiKey);
+  }
   // Named provider keys (multi-provider routing) — these were NOT masked before,
   // so `/config show` leaked every saved provider's api key.
   for (const p of Object.values(scrubbed.providers ?? {})) {
@@ -1417,6 +1506,75 @@ function automationHandler(key: string): ConfigKeyHandler {
   };
 }
 
+function webSearchHandler(path: 'provider' | 'serperApiKey' | 'googleApiKey' | 'googleCx' | 'braveApiKey' | 'searxngBaseUrl' | 'respectRobots'): ConfigKeyHandler {
+  return {
+    get: (ctx) => {
+      const ws = ctx.config.cli?.webSearch ?? {};
+      switch (path) {
+        case 'provider': return ws.provider ?? getCliKnobs().webSearch.provider;
+        case 'serperApiKey': return ws.serperApiKey ? maskApiKey(ws.serperApiKey) : '(unset)';
+        case 'googleApiKey': return ws.google?.apiKey ? maskApiKey(ws.google.apiKey) : '(unset)';
+        case 'googleCx': return ws.google?.cx ? '(set)' : '(unset)';
+        case 'braveApiKey': return ws.braveApiKey ? maskApiKey(ws.braveApiKey) : '(unset)';
+        case 'searxngBaseUrl': return ws.searxngBaseUrl ?? '(unset)';
+        case 'respectRobots': return ws.crawler?.respectRobots === false ? 'off' : 'on';
+      }
+    },
+    set: (ctx, value) => {
+      const ws = ensureWebSearchConfig(ctx);
+      const v = value.trim();
+      if (path === 'provider') {
+        if (!['duckduckgo', 'serper', 'google_pse', 'brave', 'searxng', 'custom_http'].includes(v)) {
+          return { ok: false, reason: `web-search.provider must be duckduckgo|serper|google_pse|brave|searxng|custom_http (got "${value}")` };
+        }
+        ws.provider = v as NonNullable<typeof ws.provider>;
+      } else if (path === 'serperApiKey') ws.serperApiKey = v;
+      else if (path === 'googleApiKey') ws.google = { ...(ws.google ?? {}), apiKey: v };
+      else if (path === 'googleCx') ws.google = { ...(ws.google ?? {}), cx: v };
+      else if (path === 'braveApiKey') ws.braveApiKey = v;
+      else if (path === 'searxngBaseUrl') {
+        try { new URL(v); } catch { return { ok: false, reason: 'web-search.searxng-url must be a valid URL' }; }
+        ws.searxngBaseUrl = v;
+      } else {
+        const on = TRUE_WORDS.includes(v.toLowerCase());
+        const off = FALSE_WORDS.includes(v.toLowerCase());
+        if (!on && !off) return { ok: false, reason: `web-search.respect-robots must be on|off (got "${value}")` };
+        ws.crawler = { ...(ws.crawler ?? {}), respectRobots: on };
+      }
+      saveConfig(ctx.config);
+      _resetCliKnobsCache();
+      return { ok: true, message: `web-search.${path} saved` };
+    },
+  };
+}
+
+function computerUseHandler(path: 'enabled' | 'mode'): ConfigKeyHandler {
+  return {
+    get: (ctx) => {
+      const c = ctx.config.cli?.computerUse ?? {};
+      return path === 'enabled' ? (c.enabled ? 'on' : 'off') : (c.mode ?? getCliKnobs().computerUse.mode);
+    },
+    set: (ctx, value) => {
+      ctx.config.cli = ctx.config.cli ?? {};
+      ctx.config.cli.computerUse = ctx.config.cli.computerUse ?? {};
+      if (path === 'enabled') {
+        const v = value.toLowerCase().trim();
+        const on = TRUE_WORDS.includes(v);
+        const off = FALSE_WORDS.includes(v);
+        if (!on && !off) return { ok: false, reason: `computer-use.enabled must be on|off (got "${value}")` };
+        ctx.config.cli.computerUse.enabled = on;
+      } else {
+        const v = value.trim();
+        if (!v) return { ok: false, reason: 'computer-use.mode cannot be empty' };
+        ctx.config.cli.computerUse.mode = v;
+      }
+      saveConfig(ctx.config);
+      _resetCliKnobsCache();
+      return { ok: true, message: `computer-use.${path} saved` };
+    },
+  };
+}
+
 const KEY_HANDLERS: Record<string, ConfigKeyHandler> = {
   theme: {
     get: (ctx) => readPreferences(ctx.agent.workspaceRoot).theme,
@@ -1528,6 +1686,15 @@ const KEY_HANDLERS: Record<string, ConfigKeyHandler> = {
   'automation.requirements': automationHandler('automation.requirements'),
   'automation.sync': automationHandler('automation.sync'),
   'automation.sprints': automationHandler('automation.sprints'),
+  'web-search.provider': webSearchHandler('provider'),
+  'web-search.serper-api-key': webSearchHandler('serperApiKey'),
+  'web-search.google-api-key': webSearchHandler('googleApiKey'),
+  'web-search.google-cx': webSearchHandler('googleCx'),
+  'web-search.brave-api-key': webSearchHandler('braveApiKey'),
+  'web-search.searxng-url': webSearchHandler('searxngBaseUrl'),
+  'web-search.respect-robots': webSearchHandler('respectRobots'),
+  'computer-use.enabled': computerUseHandler('enabled'),
+  'computer-use.mode': computerUseHandler('mode'),
 };
 
 function printKey(ctx: CommandContext, key: string): void {

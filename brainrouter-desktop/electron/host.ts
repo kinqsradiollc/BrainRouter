@@ -16,7 +16,7 @@ import { exec, execFile, spawn, type ChildProcessWithoutNullStreams } from 'node
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { InteractionBroker, type AgentEvent, type RecordLifecycleAction } from '@kinqs/brainrouter-agent-protocol';
+import { InteractionBroker, type AgentEvent, type AgentImage, type ComputerUseAction, type ComputerUseActionResult, type ComputerUsePort, type RecordLifecycleAction } from '@kinqs/brainrouter-agent-protocol';
 // Deep imports into the CLI's built runtime (no "exports" field = allowed).
 // Extracting a proper @kinqs/brainrouter-agent package is tracked for 0.4.16.
 import { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
@@ -123,6 +123,17 @@ import type { WorkItemType, SprintState, CodeLink, AutomationTrigger, Automation
  */
 function scrubCliSecrets(cli: unknown): Record<string, unknown> {
   const c = (cli && typeof cli === 'object' ? { ...(cli as Record<string, unknown>) } : {}) as Record<string, unknown>;
+  if (c.webSearch && typeof c.webSearch === 'object') {
+    const webSearch = { ...(c.webSearch as Record<string, unknown>) };
+    if (typeof webSearch.serperApiKey === 'string' && webSearch.serperApiKey) webSearch.serperApiKey = '••••';
+    if (typeof webSearch.braveApiKey === 'string' && webSearch.braveApiKey) webSearch.braveApiKey = '••••';
+    if (webSearch.google && typeof webSearch.google === 'object') {
+      const google = { ...(webSearch.google as Record<string, unknown>) };
+      if (typeof google.apiKey === 'string' && google.apiKey) google.apiKey = '••••';
+      webSearch.google = google;
+    }
+    c.webSearch = webSearch;
+  }
   if (c.track && typeof c.track === 'object') {
     const track = { ...(c.track as Record<string, unknown>) };
     delete track.githubToken;
@@ -215,6 +226,41 @@ import { desktopSessionModePatchFromArgs, mergeSessionModePrefs } from './sessio
 interface ParentPortLike {
   on(event: 'message', listener: (e: { data: unknown }) => void): void;
   postMessage(message: unknown): void;
+}
+
+type ComputerUseBridge = ComputerUsePort & { handleMessage(message: unknown): boolean };
+
+function createComputerUseBridge(port: ParentPortLike | undefined): ComputerUseBridge | undefined {
+  if (!port) return undefined;
+  let seq = 0;
+  const pending = new Map<string, { resolve: (value: unknown) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  const request = <T,>(op: 'screenshot' | 'act', action?: ComputerUseAction): Promise<T> => {
+    const id = `cu_${++seq}`;
+    port.postMessage({ kind: 'computer-use-request', id, op, ...(action ? { action } : {}) });
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error('computer_use timed out waiting for Electron main.'));
+      }, 60_000);
+      pending.set(id, { resolve: (value: unknown) => resolve(value as T), reject, timer });
+    });
+  };
+  return {
+    screenshot: () => request<AgentImage>('screenshot'),
+    act: (action: ComputerUseAction) => request<ComputerUseActionResult>('act', action),
+    handleMessage(message: unknown): boolean {
+      if (!message || typeof message !== 'object') return false;
+      const msg = message as { kind?: string; id?: string; ok?: boolean; result?: unknown; error?: string };
+      if (msg.kind !== 'computer-use-response' || typeof msg.id !== 'string') return false;
+      const entry = pending.get(msg.id);
+      if (!entry) return true;
+      pending.delete(msg.id);
+      clearTimeout(entry.timer);
+      if (msg.ok) entry.resolve(msg.result);
+      else entry.reject(new Error(msg.error || 'computer_use failed in Electron main.'));
+      return true;
+    },
+  };
 }
 
 /**
@@ -584,6 +630,7 @@ async function main(): Promise<void> {
   const send = port
     ? (msg: unknown) => port.postMessage(msg)
     : (msg: unknown) => console.log(JSON.stringify(msg));
+  const computerUseBridge = createComputerUseBridge(port);
 
   // Identical boot recipe to `brainrouter chat` (index.ts): config → llm →
   // pool.connectAll(profiles) → Agent. Offline MCP does not block (same
@@ -629,6 +676,7 @@ async function main(): Promise<void> {
     workspaceRoot,
     launchCwd: workspaceRoot,
     interactionPort: createBrokerPort(broker, (e) => emitPortFor(agent.sessionKey, e)),
+    computerUsePort: computerUseBridge,
   });
   // DESK-5v — the agent the user is currently VIEWING. hostCore keeps a pool of
   // agents (one per running/active session) and tells us which is active via
@@ -658,6 +706,7 @@ async function main(): Promise<void> {
       workspaceRoot,
       launchCwd: workspaceRoot,
       interactionPort: createBrokerPort(broker, (e) => emitPortFor(a.sessionKey, e)),
+      computerUsePort: computerUseBridge,
     });
     a.sessionKey = sessionKey;
     return a as unknown as AgentLike;
@@ -3815,7 +3864,10 @@ async function main(): Promise<void> {
     },
   });
 
-  if (port) port.on('message', (e) => { void core.handle(e.data); });
+  if (port) port.on('message', (e) => {
+    if (computerUseBridge?.handleMessage(e.data)) return;
+    void core.handle(e.data);
+  });
 
   // DESK-5d/5u — boot announcement. Emitted AFTER the message listener is
   // attached, so a renderer that waits for it can safely start querying. The

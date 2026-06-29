@@ -116,6 +116,20 @@ import { retrieveConnectorSlimDocuments } from '@kinqs/brainrouter-core/dist/con
  */
 function scrubCliSecrets(cli) {
     const c = (cli && typeof cli === 'object' ? { ...cli } : {});
+    if (c.webSearch && typeof c.webSearch === 'object') {
+        const webSearch = { ...c.webSearch };
+        if (typeof webSearch.serperApiKey === 'string' && webSearch.serperApiKey)
+            webSearch.serperApiKey = '••••';
+        if (typeof webSearch.braveApiKey === 'string' && webSearch.braveApiKey)
+            webSearch.braveApiKey = '••••';
+        if (webSearch.google && typeof webSearch.google === 'object') {
+            const google = { ...webSearch.google };
+            if (typeof google.apiKey === 'string' && google.apiKey)
+                google.apiKey = '••••';
+            webSearch.google = google;
+        }
+        c.webSearch = webSearch;
+    }
     if (c.track && typeof c.track === 'object') {
         const track = { ...c.track };
         delete track.githubToken;
@@ -196,6 +210,44 @@ import { readRun } from '@kinqs/brainrouter-core/dist/workflow/workflowRun.js';
 import { reconcileStaleBackgroundTasks } from '@kinqs/brainrouter-core/dist/background/backgroundReconcile.js';
 import { childSessionKey } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
 import { desktopSessionModePatchFromArgs, mergeSessionModePrefs } from './sessionModeBridge.js';
+function createComputerUseBridge(port) {
+    if (!port)
+        return undefined;
+    let seq = 0;
+    const pending = new Map();
+    const request = (op, action) => {
+        const id = `cu_${++seq}`;
+        port.postMessage({ kind: 'computer-use-request', id, op, ...(action ? { action } : {}) });
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                pending.delete(id);
+                reject(new Error('computer_use timed out waiting for Electron main.'));
+            }, 60_000);
+            pending.set(id, { resolve: (value) => resolve(value), reject, timer });
+        });
+    };
+    return {
+        screenshot: () => request('screenshot'),
+        act: (action) => request('act', action),
+        handleMessage(message) {
+            if (!message || typeof message !== 'object')
+                return false;
+            const msg = message;
+            if (msg.kind !== 'computer-use-response' || typeof msg.id !== 'string')
+                return false;
+            const entry = pending.get(msg.id);
+            if (!entry)
+                return true;
+            pending.delete(msg.id);
+            clearTimeout(entry.timer);
+            if (msg.ok)
+                entry.resolve(msg.result);
+            else
+                entry.reject(new Error(msg.error || 'computer_use failed in Electron main.'));
+            return true;
+        },
+    };
+}
 const TERM_BUF_CAP = 400_000;
 /**
  * DESK-5c — live model list, same endpoint contract as the CLI wizard's
@@ -563,6 +615,7 @@ async function main() {
     const send = port
         ? (msg) => port.postMessage(msg)
         : (msg) => console.log(JSON.stringify(msg));
+    const computerUseBridge = createComputerUseBridge(port);
     // Identical boot recipe to `brainrouter chat` (index.ts): config → llm →
     // pool.connectAll(profiles) → Agent. Offline MCP does not block (same
     // semantics as the CLI's non-strict mode).
@@ -605,6 +658,7 @@ async function main() {
         workspaceRoot,
         launchCwd: workspaceRoot,
         interactionPort: createBrokerPort(broker, (e) => emitPortFor(agent.sessionKey, e)),
+        computerUsePort: computerUseBridge,
     });
     // DESK-5v — the agent the user is currently VIEWING. hostCore keeps a pool of
     // agents (one per running/active session) and tells us which is active via
@@ -633,6 +687,7 @@ async function main() {
             workspaceRoot,
             launchCwd: workspaceRoot,
             interactionPort: createBrokerPort(broker, (e) => emitPortFor(a.sessionKey, e)),
+            computerUsePort: computerUseBridge,
         });
         a.sessionKey = sessionKey;
         return a;
@@ -4044,7 +4099,11 @@ async function main() {
         },
     });
     if (port)
-        port.on('message', (e) => { void core.handle(e.data); });
+        port.on('message', (e) => {
+            if (computerUseBridge?.handleMessage(e.data))
+                return;
+            void core.handle(e.data);
+        });
     // DESK-5d/5u — boot announcement. Emitted AFTER the message listener is
     // attached, so a renderer that waits for it can safely start querying. The
     // renderer treats a fresh `session-changed` as "reset surfaces".

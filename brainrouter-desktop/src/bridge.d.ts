@@ -32,6 +32,12 @@ declare global {
       globalDashboard?(): Promise<{ workspaces: Array<{ workspaceRoot: string; tasks: Array<Record<string, unknown>>; reviewGate: { status: string; blocked: boolean; reason: string } | null }> }>;
       getZoomFactor?(): number;
       setZoomFactor?(factor: number): void;
+      computerUse?: {
+        checkPermissions(): Promise<unknown>;
+        openAccessibilitySettings(): Promise<unknown>;
+        openScreenRecordingSettings(): Promise<unknown>;
+        setMode(args: { enabled?: boolean; mode?: string }): Promise<unknown>;
+      };
     };
   }
 }

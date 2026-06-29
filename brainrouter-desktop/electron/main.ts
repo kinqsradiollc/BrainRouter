@@ -23,12 +23,16 @@ import { recordTelemetry } from '@kinqs/brainrouter-core/dist/telemetry/telemetr
 import { TELEMETRY_EVENTS } from '@kinqs/brainrouter-core/dist/telemetry/contracts.js';
 import { getLatestReview } from '@kinqs/brainrouter-core/dist/review/reviewStore.js';
 import { reviewGate } from '@kinqs/brainrouter-core/dist/review/reviewModel.js';
+import { loadConfig, saveConfig, _resetCliKnobsCache } from '@kinqs/brainrouter-core/dist/config/config.js';
+import type { ComputerUseAction } from '@kinqs/brainrouter-agent-protocol';
 import {
   emptyPool, planActivate, applyActivate, setRunning, removeEntry,
   type HostPoolState,
 } from './hostPoolPolicy.js';
 import { isAllowedNavigation, allowedOriginFor } from './windowSecurity.js';
 import { addOpened, noteActivity, reorderWorkspace, type ActivityReason } from './recents.js';
+import { createComputerUsePort } from './computerUse.js';
+import { checkComputerUsePermissions, openAccessibilitySettings, openScreenRecordingSettings } from './computerUsePermissions.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -58,6 +62,28 @@ type WorkspaceSessionRow = TranscriptSummary & { lastRole?: string };
 type WorkspaceSessionsResult = { rows: WorkspaceSessionRow[]; truncated?: boolean; error?: string };
 const WORKSPACE_SESSIONS_CACHE_MS = 30_000;
 const workspaceSessionsCache = new Map<string, { at: number; limit: number; rows: WorkspaceSessionRow[] }>();
+
+type ComputerUseRequest =
+  | { kind: 'computer-use-request'; id: string; op: 'screenshot' }
+  | { kind: 'computer-use-request'; id: string; op: 'act'; action: ComputerUseAction };
+
+function isComputerUseRequest(value: unknown): value is ComputerUseRequest {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  return v.kind === 'computer-use-request' && typeof v.id === 'string' && (v.op === 'screenshot' || v.op === 'act');
+}
+
+async function handleComputerUseRequest(wp: WinPool, host: UtilityProcess, request: ComputerUseRequest): Promise<void> {
+  const port = createComputerUsePort(() => wp.win);
+  try {
+    const result = request.op === 'screenshot'
+      ? await port.screenshot()
+      : await port.act(request.action);
+    host.postMessage({ kind: 'computer-use-response', id: request.id, ok: true, result });
+  } catch (err) {
+    host.postMessage({ kind: 'computer-use-response', id: request.id, ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+}
 
 function readRecents(): string[] {
   try { return JSON.parse(fs.readFileSync(recentsPath(), 'utf-8')) as string[]; } catch { return []; }
@@ -145,6 +171,10 @@ function spawnHost(wp: WinPool, workspaceRoot: string): UtilityProcess {
   });
   host.on('message', (msg) => {
     if (wp.win.isDestroyed()) return;
+    if (isComputerUseRequest(msg)) {
+      void handleComputerUseRequest(wp, host, msg);
+      return;
+    }
     if (msg && typeof msg === 'object') {
       const ev = (msg as { event?: { kind?: string; sessionKey?: string } }).event;
       const kind = ev?.kind;
@@ -363,6 +393,22 @@ app.whenReady().then(() => {
   ipcMain.handle('workspace:reorder', (_e, dragged: unknown, target: unknown) => {
     if (typeof dragged !== 'string' || typeof target !== 'string') return { recents: readRecents() };
     return { recents: markWorkspaceReordered(dragged, target) };
+  });
+  ipcMain.handle('computerUse:checkPermissions', () => checkComputerUsePermissions());
+  ipcMain.handle('computerUse:openAccessibilitySettings', () => openAccessibilitySettings());
+  ipcMain.handle('computerUse:openScreenRecordingSettings', () => openScreenRecordingSettings());
+  ipcMain.handle('computerUse:setMode', (_e, raw: unknown) => {
+    const next = raw && typeof raw === 'object' ? raw as { enabled?: unknown; mode?: unknown } : {};
+    const cfg = loadConfig();
+    cfg.cli = cfg.cli ?? {};
+    const current = cfg.cli.computerUse ?? {};
+    cfg.cli.computerUse = {
+      enabled: typeof next.enabled === 'boolean' ? next.enabled : current.enabled,
+      mode: typeof next.mode === 'string' && next.mode.trim() ? next.mode.trim() : current.mode,
+    };
+    saveConfig(cfg);
+    _resetCliKnobsCache();
+    return { ok: true, computerUse: cfg.cli.computerUse };
   });
 
   app.on('activate', () => {
