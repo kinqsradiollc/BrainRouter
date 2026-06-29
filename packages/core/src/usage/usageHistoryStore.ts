@@ -19,6 +19,10 @@ export interface DailyUsage {
   completionTokens: number;
   calls: number;
   turns: number;
+  /** §5.6 — prompt-cache reuse, for cross-session token-ROI. Absent on
+   *  pre-0.4.16 records, so readers treat a missing value as 0. */
+  cachedTokens: number;
+  missedTokens: number;
 }
 
 type Store = Record<string, DailyUsage>;
@@ -51,12 +55,14 @@ export function dayKey(tsMs: number): string {
   return new Date(tsMs).toISOString().slice(0, 10);
 }
 
-const ZERO = (day: string): DailyUsage => ({ day, promptTokens: 0, completionTokens: 0, calls: 0, turns: 0 });
+const ZERO = (day: string): DailyUsage => ({
+  day, promptTokens: 0, completionTokens: 0, calls: 0, turns: 0, cachedTokens: 0, missedTokens: 0,
+});
 
 /** Record ONE turn's usage into today's bucket (adds a turn). Durable + session-
  *  independent, so it survives a later session delete/archive. */
 export function recordDailyUsage(
-  usage: { promptTokens?: number; completionTokens?: number; calls?: number },
+  usage: { promptTokens?: number; completionTokens?: number; calls?: number; cachedTokens?: number; missedTokens?: number },
   nowMs: number,
 ): void {
   const day = dayKey(nowMs);
@@ -66,6 +72,9 @@ export function recordDailyUsage(
   b.completionTokens += usage.completionTokens ?? 0;
   b.calls += usage.calls ?? 0;
   b.turns += 1;
+  // `?? 0` on the bucket too: a pre-0.4.16 record on disk has no cache fields.
+  b.cachedTokens = (b.cachedTokens ?? 0) + (usage.cachedTokens ?? 0);
+  b.missedTokens = (b.missedTokens ?? 0) + (usage.missedTokens ?? 0);
   s[day] = b;
   write(s);
 }
@@ -83,15 +92,18 @@ export function readUsageHistory(days: number, nowMs: number): DailyUsage[] {
   return out;
 }
 
-/** Pure: totals over a set of daily records. */
-export function totalUsage(records: DailyUsage[]): { promptTokens: number; completionTokens: number; calls: number; turns: number } {
+/** Pure: totals over a set of daily records. Cache fields default to 0 for any
+ *  legacy record that predates them. */
+export function totalUsage(records: DailyUsage[]): { promptTokens: number; completionTokens: number; calls: number; turns: number; cachedTokens: number; missedTokens: number } {
   return records.reduce(
     (a, r) => ({
       promptTokens: a.promptTokens + r.promptTokens,
       completionTokens: a.completionTokens + r.completionTokens,
       calls: a.calls + r.calls,
       turns: a.turns + r.turns,
+      cachedTokens: a.cachedTokens + (r.cachedTokens ?? 0),
+      missedTokens: a.missedTokens + (r.missedTokens ?? 0),
     }),
-    { promptTokens: 0, completionTokens: 0, calls: 0, turns: 0 },
+    { promptTokens: 0, completionTokens: 0, calls: 0, turns: 0, cachedTokens: 0, missedTokens: 0 },
   );
 }

@@ -124,3 +124,15 @@ export function formatContextWindow(modelId: string | undefined | null): string 
   }
   return String(w);
 }
+
+/**
+ * §5.6 — a context window that is ALWAYS a usable number, for budget / ring math.
+ * `contextWindowFor` returns `undefined` for an unknown model so the footer can
+ * honestly render "?"; a consumer sizing a context ring or a token budget needs
+ * a real number instead, so this falls back to a safe 128k default.
+ */
+export const DEFAULT_CONTEXT_WINDOW = 128_000;
+
+export function contextWindowForBudget(modelId: string | undefined | null): number {
+  return contextWindowFor(modelId) ?? DEFAULT_CONTEXT_WINDOW;
+}

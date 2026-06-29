@@ -44,7 +44,7 @@ import { getStateDir } from '@kinqs/brainrouter-core/dist/storage/store.js';
 import { buildRecap } from '@kinqs/brainrouter-core/dist/session/sessionRecap.js';
 import { collectRunningTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
 import { killBackgroundShell } from '@kinqs/brainrouter-core/dist/exec/backgroundShell.js';
-import { contextWindowFor } from '@kinqs/brainrouter-core/dist/context/contextWindow.js';
+import { contextWindowForBudget } from '@kinqs/brainrouter-core/dist/context/contextWindow.js';
 // DESK-4c — the command/settings surfaces reuse the CLI's own modules so the
 // desktop never drifts from the terminal: same catalog, same preferences
 // file, same hooks store, same transcript tooling.
@@ -3117,7 +3117,7 @@ async function main() {
                 const sizeEstimate = Math.round(transcriptSizeBytes(workspaceRoot, activeAgent.sessionKey) / 4);
                 const used = Math.max(agentTokens, sizeEstimate);
                 const model = activeAgent.getModel?.() ?? llm.model;
-                const window = contextWindowFor(model) ?? 0;
+                const window = contextWindowForBudget(model);
                 const compactAt = getCliKnobs().autoCompactTokens || 80_000;
                 const limit = compactAt > 0 ? compactAt : window;
                 return { used, window, compactAt, limit, pct: limit > 0 ? Math.min(1, used / limit) : 0 };
