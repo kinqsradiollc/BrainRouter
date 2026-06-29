@@ -501,6 +501,16 @@ export interface CliKnobs {
    *  built-in defaults; set "" to disable a language. */
   lspServers?: Record<string, string>;
 
+  // ---- code-mode global prompt prefix (§5.7) ----------------------------
+  /** Prepended to the system prompt in Code mode — a durable house-style /
+   *  guardrail block applied to every code-mode turn. Empty = none. */
+  codePromptPrefix?: string;
+
+  // ---- customizable keyboard shortcuts (§5.9) ---------------------------
+  /** Desktop shortcut overrides: action id → chord string (e.g. {"save":"Cmd+S"}).
+   *  Resolved through ui/shortcuts.ts over the built-in defaults. */
+  shortcuts?: Record<string, string>;
+
   // ---- orchestration ----------------------------------------------------
   /**
    * Default parent wait timeout for child-agent tools in ms. Default **0 = wait
@@ -938,6 +948,8 @@ export interface ResolvedCliKnobs {
   autoReindex: boolean;
   browserSmoke: string;
   lspServers: Record<string, string>;
+  codePromptPrefix: string;
+  shortcuts: Record<string, string>;
   traceLog?: string;
   tracingBackend: 'stdout-jsonl' | 'otel' | 'langsmith' | 'langfuse';
   tracingEndpoint?: string;
@@ -1137,6 +1149,8 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     autoReindex: c.autoReindex ?? true,
     browserSmoke: c.browserSmoke ?? '',
     lspServers: (c.lspServers && typeof c.lspServers === 'object') ? c.lspServers : {},
+    codePromptPrefix: typeof c.codePromptPrefix === 'string' ? c.codePromptPrefix : '',
+    shortcuts: (c.shortcuts && typeof c.shortcuts === 'object') ? (c.shortcuts as Record<string, string>) : {},
     childAgentTimeoutMs: c.childAgentTimeoutMs ?? 0, // 0 = parent waits until child completion
     agentPreviewChars: c.agentPreviewChars ?? 2_500,
     debugExit: c.debugExit ?? false,

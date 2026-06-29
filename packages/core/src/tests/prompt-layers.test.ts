@@ -71,6 +71,23 @@ test('buildPromptLayers: developer layer is one block per active overlay; inacti
   assert.ok(minimal.developer[2].includes('Review policy is `request`'));
 });
 
+test('codePromptPrefix (§5.7): house-style block injected in both flat and layered prompts', () => {
+  const ctx: SystemPromptContext = { ...baseCtx, model: 'claude-opus-4-8', codePromptPrefix: '  Always prefer tabs over spaces.  ' };
+  const flat = buildSystemPrompt(ctx);
+  assert.ok(flat.includes('## Project house rules'));
+  assert.ok(flat.includes('Always prefer tabs over spaces.'));
+  assert.ok(!flat.includes('  Always prefer'), 'prefix is trimmed');
+
+  const { developer } = buildPromptLayers(ctx);
+  const block = developer.find((b) => b.includes('## Project house rules'));
+  assert.ok(block, 'present as its own developer block');
+  assert.ok(developer[0].includes('Memory-First Workflow'), 'memory posture stays first');
+  assert.equal(developer[1], block, 'house-rules block sits right after the memory posture');
+
+  // blank / unset prefix emits no block (length unchanged from the minimal case)
+  assert.equal(buildPromptLayers({ ...baseCtx, model: 'claude-opus-4-8', codePromptPrefix: '   ' }).developer.length, 3);
+});
+
 test('buildPromptLayers: collaboration mode maps proceed policy to Codex Default mode', () => {
   const { developer } = buildPromptLayers({ ...baseCtx, reviewPolicy: 'proceed', executionMode: 'fast' });
   const block = developer.find((b) => b.includes('<collaboration_mode>'));
