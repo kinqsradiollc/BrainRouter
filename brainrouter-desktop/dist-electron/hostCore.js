@@ -79,7 +79,7 @@ export function createHostCore(input) {
     // DESK-5q (retained for the single-agent path) — a switch requested while the
     // ONLY agent is busy is queued here and applied once its turn unwinds.
     let pendingSwitch = null;
-    async function startTurn(prompt, hidden) {
+    async function startTurn(prompt, hidden, images) {
         const rt = pool.get(activeKey);
         if (!rt) {
             emit({ kind: 'turn-error', message: 'No active session to run in.' });
@@ -116,7 +116,7 @@ export function createHostCore(input) {
         const turnCallbacks = createCallbackBridge(turnEmit);
         turnEmit({ kind: 'turn-start', prompt });
         try {
-            const answer = await rt.agent.runTurn(prompt, turnCallbacks, { hiddenPrompt: hidden });
+            const answer = await rt.agent.runTurn(prompt, turnCallbacks, { hiddenPrompt: hidden, images });
             turnEmit({ kind: 'turn-complete', answer });
             const u = rt.agent.sessionUsage;
             if (u)
@@ -277,7 +277,7 @@ export function createHostCore(input) {
         switch (cmd.kind) {
             case 'start-turn':
                 cancelResume(); // a real user prompt preempts any queued auto-resume
-                await startTurn(cmd.prompt, cmd.hidden);
+                await startTurn(cmd.prompt, cmd.hidden, cmd.images);
                 return;
             case 'interrupt': {
                 cancelResume(); // user stopped — never auto-resume on top of a stop
