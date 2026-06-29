@@ -1088,6 +1088,12 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .badge.cli { color: var(--text-faint); background: var(--ov-06); }
 .slash-pop { position: absolute; bottom: calc(100% + 8px); left: 0; right: 0; background: rgba(26, 29, 36, 0.85); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: var(--r-md); overflow: hidden; box-shadow: 0 -10px 40px rgba(0,0,0,0.5); z-index: 50; }
 .slash-pop .pal-list { max-height: 300px; }
+/* §5.7 — @-mention workspace-file picker */
+.mention-pop { position: absolute; bottom: calc(100% + 8px); left: 0; right: 0; max-height: 280px; overflow: auto; background: rgba(26, 29, 36, 0.92); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.08); border-radius: var(--r-md); box-shadow: 0 -10px 40px rgba(0,0,0,0.5); z-index: 50; padding: 4px; }
+.mention-item { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; background: none; border: 0; color: var(--text); font-size: 13px; padding: 6px 8px; border-radius: 8px; cursor: pointer; }
+.mention-item.sel, .mention-item:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.mention-base { font-weight: 500; }
+.mention-path { color: var(--text-faint); font-size: 11px; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55%; }
 
 /* ---------- settings (CC-style modal) ---------- */
 .settings-modal { display: flex; width: 980px; max-width: 95vw; height: 660px; max-height: 88vh; background: rgba(26, 29, 36, 0.8); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: var(--r-lg); overflow: hidden; box-shadow: 0 24px 80px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.05); }
