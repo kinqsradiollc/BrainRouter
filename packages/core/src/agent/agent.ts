@@ -1390,6 +1390,7 @@ export class Agent {
       const extDeny = await this.runExtensionHooks('user-prompt-submit', { args: { prompt } });
       if (extDeny) return `Prompt blocked by user-prompt-submit hook: ${extDeny}`;
       const submitResults = runHooks(this.workspaceRoot, 'user-prompt-submit', { payload: { prompt } });
+      const injectedContext: string[] = [];
       for (const r of submitResults) {
         const d = parseHookDecision(r.stdout);
         const denied = d?.decision === 'deny' || (!d && r.exitCode !== 0);
@@ -1397,6 +1398,14 @@ export class Agent {
           const reason = d?.reason?.trim() || (r.stderr || r.stdout || '').toString().trim() || `Hook ${r.hook.id} blocked this prompt`;
           return `Prompt blocked by user-prompt-submit hook: ${reason}`;
         }
+        // A non-denying hook may INJECT extra context for the model (e.g. a
+        // policy reminder, ticket metadata) via {"additionalContext":"…"}.
+        if (typeof d?.additionalContext === 'string' && d.additionalContext.trim()) {
+          injectedContext.push(d.additionalContext.trim());
+        }
+      }
+      if (injectedContext.length > 0) {
+        prompt = `${prompt}\n\n[hook context]\n${injectedContext.join('\n')}`;
       }
     }
 
@@ -2866,10 +2875,19 @@ export class Agent {
           session_key: this.sessionKey,
         }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
         if (this.hookAdvisoryActive()) {
-          runHooks(this.workspaceRoot, 'post-tool', {
+          const postResults = runHooks(this.workspaceRoot, 'post-tool', {
             tool: name,
             payload: { args, ok: !isError, summary, resultPreview: resultText.slice(0, 1000) },
           });
+          // A post-tool hook may REPLACE the model-visible result text and/or
+          // mark it an error (redact secrets, fail on a lint/policy breach).
+          // Applied before the result is clamped + handed to the LLM below.
+          for (const r of postResults) {
+            const d = parseHookDecision(r.stdout);
+            if (!d) continue;
+            if (typeof d.updatedOutput === 'string') resultText = d.updatedOutput;
+            if (d.isError === true) isError = true;
+          }
           void this.runExtensionHooks('post-tool', { tool: name, args });
         }
 
