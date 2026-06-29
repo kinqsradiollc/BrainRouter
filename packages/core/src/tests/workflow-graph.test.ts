@@ -158,3 +158,192 @@ test('runSingleNode: condition test affordance evaluates in isolation', async ()
   assert.equal(rec.branch, 'true');
   assert.deepEqual(rec.output, { result: true });
 });
+
+// ===========================================================================
+// §7 L3 — advanced nodes
+// ===========================================================================
+
+const ctx0 = () => ({ nodes: {}, vars: {} });
+
+test('switch: branches to the matching case, else default', async () => {
+  const hit = await runSingleNode({ id: 's', type: 'switch', data: { value: '{{$vars.tier}}', cases: ['free', 'pro'] } }, { nodes: {}, vars: { tier: 'pro' } }, echoAgent);
+  assert.equal(hit.branch, 'pro');
+  const miss = await runSingleNode({ id: 's', type: 'switch', data: { value: '{{$vars.tier}}', cases: ['free', 'pro'] } }, { nodes: {}, vars: { tier: 'enterprise' } }, echoAgent);
+  assert.equal(miss.branch, 'default');
+});
+
+test('runGraph: switch routes only down the matching handle (default falls through)', async () => {
+  const g = graph(
+    [
+      { id: 't', type: 'trigger' },
+      { id: 'sw', type: 'switch', data: { value: '{{$vars.k}}', cases: ['a', 'b'] } },
+      { id: 'na', type: 'agent', data: { prompt: 'A' } },
+      { id: 'nb', type: 'agent', data: { prompt: 'B' } },
+      { id: 'nd', type: 'agent', data: { prompt: 'D' } },
+    ],
+    [
+      { id: 'e0', source: 't', target: 'sw' },
+      { id: 'e1', source: 'sw', target: 'na', sourceHandle: 'a' },
+      { id: 'e2', source: 'sw', target: 'nb', sourceHandle: 'b' },
+      { id: 'e3', source: 'sw', target: 'nd', sourceHandle: 'default' },
+    ],
+    { k: 'b' },
+  );
+  const r = await runGraph(g, echoAgent);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.nodes.nb.status, 'ok');
+  assert.equal(r.nodes.na.status, 'skipped');
+  assert.equal(r.nodes.nd.status, 'skipped');
+});
+
+test('filter: keeps items matching field/op/value', async () => {
+  const rec = await runSingleNode(
+    { id: 'f', type: 'filter', data: { source: '[{"score":"9"},{"score":"3"},{"score":"7"}]', field: 'score', op: '>', value: '5' } },
+    ctx0(), echoAgent,
+  );
+  assert.deepEqual((rec.output as { items: unknown[] }).items, [{ score: '9' }, { score: '7' }]);
+});
+
+test('sort: orders an array by a field (numeric desc) and string asc', async () => {
+  const numeric = await runSingleNode(
+    { id: 's', type: 'sort', data: { source: '[{"n":"2"},{"n":"10"},{"n":"1"}]', field: 'n', order: 'desc', numeric: true } },
+    ctx0(), echoAgent,
+  );
+  assert.deepEqual((numeric.output as { items: Array<{ n: string }> }).items.map((x) => x.n), ['10', '2', '1']);
+  const str = await runSingleNode(
+    { id: 's', type: 'sort', data: { source: '["banana","apple","cherry"]' } },
+    ctx0(), echoAgent,
+  );
+  assert.deepEqual((str.output as { items: string[] }).items, ['apple', 'banana', 'cherry']);
+});
+
+test('limit: takes the first N', async () => {
+  const rec = await runSingleNode({ id: 'l', type: 'limit', data: { source: '[1,2,3,4,5]', count: 2 } }, ctx0(), echoAgent);
+  assert.deepEqual((rec.output as { items: unknown[] }).items, [1, 2]);
+});
+
+test('aggregate: count / sum / avg / join over a field', async () => {
+  const src = '[{"v":"10"},{"v":"20"},{"v":"30"}]';
+  const count = await runSingleNode({ id: 'a', type: 'aggregate', data: { source: src, op: 'count' } }, ctx0(), echoAgent);
+  assert.equal((count.output as { value: number }).value, 3);
+  const sum = await runSingleNode({ id: 'a', type: 'aggregate', data: { source: src, op: 'sum', field: 'v' } }, ctx0(), echoAgent);
+  assert.equal((sum.output as { value: number }).value, 60);
+  const avg = await runSingleNode({ id: 'a', type: 'aggregate', data: { source: src, op: 'avg', field: 'v' } }, ctx0(), echoAgent);
+  assert.equal((avg.output as { value: number }).value, 20);
+  const join = await runSingleNode({ id: 'a', type: 'aggregate', data: { source: src, op: 'join', field: 'v', separator: '-' } }, ctx0(), echoAgent);
+  assert.equal((join.output as { value: string }).value, '10-20-30');
+});
+
+test('loop foreach: runs the body once per item with {{$vars.item}}', async () => {
+  const rec = await runSingleNode(
+    { id: 'lp', type: 'loop', data: { mode: 'foreach', source: '["x","y","z"]', prompt: 'do {{$vars.item}}#{{$vars.index}}' } },
+    ctx0(), echoAgent,
+  );
+  const out = rec.output as { outputs: string[]; iterations: number };
+  assert.equal(out.iterations, 3);
+  assert.deepEqual(out.outputs, ['AGENT(do x#0)', 'AGENT(do y#1)', 'AGENT(do z#2)']);
+});
+
+test('loop refine: stops early when the output contains the stop string', async () => {
+  let calls = 0;
+  const deps: GraphRunDeps = { runAgent: async () => { calls++; return calls >= 2 ? 'looks DONE now' : 'keep going'; } };
+  const rec = await runSingleNode(
+    { id: 'lp', type: 'loop', data: { mode: 'refine', maxIterations: 5, stopContains: 'DONE', prompt: 'improve {{$vars.last}}' } },
+    ctx0(), deps,
+  );
+  const out = rec.output as { text: string; iterations: number };
+  assert.equal(out.iterations, 2);
+  assert.equal(out.text, 'looks DONE now');
+});
+
+test('approval: auto-passes with no approver; injected reject halts the branch', async () => {
+  const auto = await runSingleNode({ id: 'ap', type: 'approval', data: {} }, ctx0(), echoAgent);
+  assert.equal(auto.branch, 'approved');
+  assert.equal((auto.output as { auto: boolean }).auto, true);
+
+  const g = graph(
+    [
+      { id: 't', type: 'trigger' },
+      { id: 'ap', type: 'approval', data: { summary: 'ship it?' } },
+      { id: 'after', type: 'agent', data: { prompt: 'shipped' } },
+    ],
+    [
+      { id: 'e0', source: 't', target: 'ap' },
+      { id: 'e1', source: 'ap', target: 'after' },
+    ],
+  );
+  const rejecting: GraphRunDeps = { runAgent: async (p) => `AGENT(${p})`, requestApproval: async () => false };
+  const r = await runGraph(g, rejecting);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.nodes.ap.branch, 'rejected');
+  assert.equal(r.nodes.after.status, 'skipped'); // unconditional edge still halted
+});
+
+test('extract: parses an LLM JSON reply into output.fields', async () => {
+  const deps: GraphRunDeps = { runAgent: async () => 'Sure! {"city":"Paris","days":3} hope that helps' };
+  const rec = await runSingleNode({ id: 'ex', type: 'extract', data: { prompt: 'pull trip params', fields: ['city', 'days'] } }, ctx0(), deps);
+  assert.deepEqual((rec.output as { fields: unknown }).fields, { city: 'Paris', days: 3 });
+});
+
+test('classify: branch is the matched label', async () => {
+  const deps: GraphRunDeps = { runAgent: async () => 'this is clearly a billing question' };
+  const rec = await runSingleNode({ id: 'cl', type: 'classify', data: { input: '...', labels: ['billing', 'technical', 'sales'] } }, ctx0(), deps);
+  assert.equal(rec.branch, 'billing');
+  assert.equal((rec.output as { label: string }).label, 'billing');
+});
+
+test('subworkflow: runs a loaded graph and surfaces its finalOutput', async () => {
+  const child: WorkflowGraph = {
+    id: 'child',
+    nodes: [
+      { id: 't', type: 'trigger' },
+      { id: 'o', type: 'output', data: { template: 'child saw {{$vars.passed}}' } },
+    ],
+    edges: [{ id: 'e', source: 't', target: 'o' }],
+  };
+  const parent = graph(
+    [
+      { id: 't', type: 'trigger' },
+      { id: 'sw', type: 'subworkflow', data: { workflowId: 'child', inputs: { passed: 'hello' } } },
+      { id: 'o', type: 'output', data: { template: 'parent got [{{$nodes.sw.text}}]' } },
+    ],
+    [
+      { id: 'e0', source: 't', target: 'sw' },
+      { id: 'e1', source: 'sw', target: 'o' },
+    ],
+  );
+  const deps: GraphRunDeps = { runAgent: async (p) => `AGENT(${p})`, loadSubWorkflow: async (id) => (id === 'child' ? child : null) };
+  const r = await runGraph(parent, deps);
+  assert.equal(r.ok, true, r.error);
+  assert.equal((r.nodes.sw.output as { text: string }).text, 'child saw hello');
+  assert.equal(r.finalOutput, 'parent got [child saw hello]');
+});
+
+test('subworkflow: recursion is detected and fails closed', async () => {
+  const selfRef: WorkflowGraph = {
+    id: 'loop-self',
+    nodes: [
+      { id: 't', type: 'trigger' },
+      { id: 'sw', type: 'subworkflow', data: { workflowId: 'loop-self' } },
+    ],
+    edges: [{ id: 'e', source: 't', target: 'sw' }],
+  };
+  const deps: GraphRunDeps = { runAgent: async (p) => p, loadSubWorkflow: async () => selfRef };
+  const r = await runGraph(selfRef, deps);
+  assert.equal(r.ok, false);
+  assert.match(r.error ?? '', /recursion detected/);
+});
+
+test('subworkflow: missing loader / missing graph fail with a clear message', async () => {
+  const g = graph(
+    [{ id: 't', type: 'trigger' }, { id: 'sw', type: 'subworkflow', data: { workflowId: 'nope' } }],
+    [{ id: 'e', source: 't', target: 'sw' }],
+  );
+  const noLoader = await runGraph(g, echoAgent);
+  assert.equal(noLoader.ok, false);
+  assert.match(noLoader.error ?? '', /no loader wired/);
+
+  const notFound = await runGraph(g, { runAgent: async (p) => p, loadSubWorkflow: async () => null });
+  assert.equal(notFound.ok, false);
+  assert.match(notFound.error ?? '', /not found: nope/);
+});
