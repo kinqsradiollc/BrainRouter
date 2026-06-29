@@ -2165,6 +2165,34 @@ async function main(): Promise<void> {
       // §2 Write mode — save a prose file through the same guarded write the
       // editor uses (writeWorkspaceEntry: escape/symlink/stale guards in fsRead).
       'write-save': (args) => writeWorkspaceEntry(workspaceRoot, typeof args.path === 'string' ? args.path : '', typeof args.content === 'string' ? args.content : ''),
+      // §2 W3 — Write-mode selection inline AI. A one-shot, read-only model call
+      // (no tools) that polishes / rewrites / continues the selected prose; the
+      // panel reviews the result as an accept/reject diff before it lands.
+      'write-inline-ai': async (args) => {
+        const action = String(args.action ?? 'polish');
+        const text = typeof args.text === 'string' ? args.text : '';
+        if (!text.trim()) return { text: '', error: 'No text selected.' };
+        const llm = llmForSession(activeAgent.sessionKey);
+        if (!llm || (!llm.apiKey && (llm.provider ?? 'openai') === 'openai')) {
+          return { text: '', error: 'No model configured — set a provider/model (and API key) in Settings.' };
+        }
+        const system = 'You are a precise writing assistant. Return ONLY the revised prose — no preamble, no explanation, no surrounding code fences. Preserve Markdown formatting.';
+        const ask = action === 'continue'
+          ? 'Continue the following text naturally, matching its voice and style. Return ONLY the continuation (it will be appended directly after the text).'
+          : action === 'rewrite'
+            ? 'Rewrite the following text to be clearer and better structured. Preserve the meaning and any Markdown.'
+            : 'Lightly polish the following text: fix grammar, tighten wording, and improve flow. Preserve the meaning, voice, and any Markdown.';
+        let raw = '';
+        try {
+          const resp = await callOpenAI(llm, [{ role: 'system', content: system }, { role: 'user', content: `${ask}\n\n---\n${text}` }], [], { effort: 'low' });
+          raw = (resp?.content as string) ?? '';
+        } catch (e) {
+          return { text: '', error: `Model call failed: ${e instanceof Error ? e.message : String(e)}` };
+        }
+        let revised = raw.trim().replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '').trim();
+        if (action === 'continue') revised = text + (/\s$/.test(text) ? '' : ' ') + revised;
+        return { text: revised };
+      },
       // §7 L4 — visual workflow canvas persistence (graphs under <stateDir>/workflows/).
       'workflow-list': () => listWorkflowGraphs(workspaceRoot),
       'workflow-save': (args) => saveWorkflowGraph(workspaceRoot, (args.graph ?? {}) as WorkflowGraph),
