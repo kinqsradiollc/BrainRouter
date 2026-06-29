@@ -23,6 +23,7 @@ export { AtlasPanel, type AtlasPanelProps } from './AtlasPanel.js';
 export { WorkflowsPanel, type WorkflowsPanelProps } from './WorkflowsPanel.js';
 export { WritePanel } from './WritePanel.js';
 export { MemoryPanel } from './MemoryPanel.js';
+export { PrototypePanel } from './PrototypePanel.js';
 export { SearchPanel, type SearchHit } from './SearchPanel.js';
 export { PlanPanel } from './PlanPanel.js';
 export { ContextPanel } from './ContextPanel.js';
