@@ -203,6 +203,46 @@ export const LOCAL_TOOLS = [
     }
   },
   {
+    name: 'mcp_search',
+    description: 'Search the connected MCP tool catalog by keyword (matches tool name, server, and description) and return the best-matching tools, each with a one-line summary. Use this FIRST when MCP progressive discovery is on: the full catalog is hidden to save context, so search for what you need, then run it with mcp_call (or mcp_describe first to see its parameters).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Keywords to match against tool names, servers, and descriptions.' },
+        maxResults: { type: 'integer', description: 'Maximum tools to return. Default 8, max 25.' }
+      },
+      required: ['query']
+    }
+  },
+  {
+    name: 'mcp_describe',
+    description: 'Return the full description and input JSON schema for one or more MCP tools by their exact name (as returned by mcp_search). Call before mcp_call to learn a tool\'s parameters.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        names: { type: 'array', items: { type: 'string' }, description: 'Exact MCP tool name(s) to describe (from mcp_search results).' },
+        name: { type: 'string', description: 'A single MCP tool name (alternative to names).' }
+      }
+    }
+  },
+  {
+    name: 'mcp_call',
+    description: 'Invoke an MCP tool by its exact name (from mcp_search) with the given arguments. Runs the SAME approval and safety checks as calling the tool directly. Use this to actually run a tool you found via mcp_search when progressive discovery has the full catalog hidden.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Exact MCP tool name to call (from mcp_search / mcp_describe).' },
+        args: { type: 'object', description: 'Arguments object for the tool, matching its input schema.' }
+      },
+      required: ['name']
+    }
+  },
+  {
+    name: 'mcp_refresh_catalog',
+    description: 'Re-scan connected MCP servers and return a summary of available tools grouped by server (with counts). Use if a server was just connected or you suspect the catalog changed.',
+    inputSchema: { type: 'object', properties: {} }
+  },
+  {
     name: 'lsp',
     description: "Semantic code navigation via the language server (exact, not fuzzy). actions: definition / references / hover (need file + 1-based line + character), symbols (file only, lists the file's symbols). Returns file:line:col locations or hover text. Requires a configured language server (cli.lspServers); reports clearly when none is available.",
     inputSchema: {

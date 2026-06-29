@@ -86,6 +86,9 @@ export function actionKindForTool(name: string): ActionKind {
       return 'child_write';
     case 'fetch_url':
     case 'web_search':
+    // mcp_call proxies a real MCP tool call (not access-mode gated, like other
+    // MCP/recall calls); its handler re-applies the MCP approval gate.
+    case 'mcp_call':
       return 'network';
     default:
       // Observation / planning orchestration tools (wait_*, list_agents,
