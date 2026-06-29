@@ -42,10 +42,42 @@ npm run dist:win
 `dist:mac` / `dist:win` run `npm run build` (compiles `dist-electron` + the Vite
 renderer) then invoke electron-builder. Output lands in `release/` (electron-builder default).
 
+## Automated release (CI) — the one-click path
+
+[`.github/workflows/release-desktop.yml`](../../.github/workflows/release-desktop.yml)
+runs the whole signed + notarized macOS build on a GitHub `macos-14` runner —
+you don't need a local Mac build. Add these **repository secrets** once
+(Settings → Secrets and variables → Actions), then trigger the workflow
+manually (Actions → "Release — Desktop" → Run workflow) or by pushing a
+`desktop-v*` tag:
+
+| Repo secret | Maps to | What |
+|-------------|---------|------|
+| `MAC_CSC_LINK` | `CSC_LINK` | base64 of your "Developer ID Application" `.p12` |
+| `MAC_CSC_KEY_PASSWORD` | `CSC_KEY_PASSWORD` | the `.p12` password |
+| `APPLE_ID` | `APPLE_ID` | Apple Developer account email |
+| `APPLE_APP_SPECIFIC_PASSWORD` | `APPLE_APP_SPECIFIC_PASSWORD` | app-specific password |
+| `APPLE_TEAM_ID` | `APPLE_TEAM_ID` | 10-char Team ID |
+
+The workflow installs the packager + notarizer, builds the per-arch app, signs +
+notarizes it, runs [`scripts/verify-packaged.mjs`](../scripts/verify-packaged.mjs)
+(asserts the installers exist and libnut is asar-unpacked + loadable), and
+uploads the `.dmg`/`.zip` as artifacts (and to the GitHub Release on a tag).
+Without the secrets it still runs and produces an un-signed build (the notarize
+hook fails open), so the pipeline is self-verifying before you add credentials.
+
+`node scripts/verify-packaged.mjs` is also runnable locally against a `dist:mac`
+output for the same structural + (advisory) signature checks.
+
 ## Acceptance (needs real hardware + certs — tracked as CP-B)
 
-1. `npm run dist:mac` on an Apple-silicon Mac with the certs → a signed, notarized
-   `.dmg` for both arches; Gatekeeper opens it without a warning.
+Everything code-side is automated above. The remaining steps are irreducibly
+yours — a signing identity + interactive macOS TCC grants:
+
+1. Add the five repo secrets and run the **Release — Desktop** workflow (or
+   `npm run dist:mac` locally) → a signed, notarized `.dmg` for both arches;
+   Gatekeeper opens it without a warning (`spctl -a -t exec` passes).
 2. Grant Accessibility + Screen Recording in System Settings → the chat agent can
-   `screenshot` then `left_click`/`type` a real app end-to-end.
+   `screenshot` then `left_click`/`type` a real app end-to-end (with the approval
+   prompt on each mutating action).
 3. `npm run dist:win` → an `.nsis` installer that loads the native module.

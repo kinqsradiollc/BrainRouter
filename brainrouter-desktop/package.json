@@ -17,12 +17,21 @@
     "electron": "electron .",
     "reset:desktop": "node scripts/reset-desktop.mjs",
     "dist:mac": "npm run build && npx --yes electron-builder --mac --publish never",
-    "dist:win": "npm run build && npx --yes electron-builder --win --publish never"
+    "dist:win": "npm run build && npx --yes electron-builder --win --publish never",
+    "verify:packaged": "node scripts/verify-packaged.mjs"
   },
   "build": {
     "appId": "com.brainrouter.desktop",
     "productName": "BrainRouter",
     "afterSign": "build/notarize.cjs",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
     "asarUnpack": [
       "**/*.node",
       "node_modules/@nut-tree-fork/libnut-*/**/*"
