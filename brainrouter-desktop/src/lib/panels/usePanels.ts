@@ -17,6 +17,9 @@ export interface PanelsApi {
   sidePanelOpen: boolean;
   sideWidth: number;
   sideFullScreen: boolean;
+  /** §panel-drawer — pinned = docked column (today's behavior); unpinned =
+   *  transient overlay drawer that closes on outside-click / Esc. */
+  sidePinned: boolean;
   termDockOpen: boolean;
   termDockHeight: number;
   termTabs: TermTab[];
@@ -26,6 +29,7 @@ export interface PanelsApi {
   setSidePanelOpen: Dispatch<SetStateAction<boolean>>;
   setSideWidth: Dispatch<SetStateAction<number>>;
   setSideFullScreen: Dispatch<SetStateAction<boolean>>;
+  setSidePinned: Dispatch<SetStateAction<boolean>>;
   setTermDockOpen: Dispatch<SetStateAction<boolean>>;
   setTermDockHeight: Dispatch<SetStateAction<number>>;
   setTermTabs: Dispatch<SetStateAction<TermTab[]>>;
@@ -69,6 +73,10 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
   // On launch, it starts at its minimum size (SIDE_RAIL_MIN).
   const [sideWidth, setSideWidth] = useState(SIDE_RAIL_MIN);
   const [sideFullScreen, setSideFullScreen] = useState(() => localStorage.getItem('br-side-fullscreen') === '1');
+  // §panel-drawer — default UNPINNED (drawer) so the panel behaves like an
+  // overlay that dismisses on outside-click; pinning docks it as a persistent
+  // resizable column (the prior behavior).
+  const [sidePinned, setSidePinned] = useState(() => localStorage.getItem('br-side-pinned') === '1');
   const [termDockOpen, setTermDockOpen] = useState(() => {
     const saved = localStorage.getItem('br-dock-open');
     if (saved !== null) return saved === '1';
@@ -87,6 +95,10 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
   useEffect(() => {
     localStorage.setItem('br-side-fullscreen', sideFullScreen ? '1' : '0');
   }, [sideFullScreen]);
+
+  useEffect(() => {
+    localStorage.setItem('br-side-pinned', sidePinned ? '1' : '0');
+  }, [sidePinned]);
 
   useEffect(() => {
     localStorage.setItem('br-side-open', sidePanelOpen ? '1' : '0');
@@ -190,8 +202,8 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
   }
 
   return {
-    sideTabs, activeSideTab, sidePanelOpen, sideWidth, sideFullScreen, termDockOpen, termDockHeight, termTabs, activeTerm,
-    setSideTabs, setActiveSideTab, setSidePanelOpen, setSideWidth, setSideFullScreen, setTermDockOpen, setTermDockHeight, setTermTabs, setActiveTerm,
+    sideTabs, activeSideTab, sidePanelOpen, sideWidth, sideFullScreen, sidePinned, termDockOpen, termDockHeight, termTabs, activeTerm,
+    setSideTabs, setActiveSideTab, setSidePanelOpen, setSideWidth, setSideFullScreen, setSidePinned, setTermDockOpen, setTermDockHeight, setTermTabs, setActiveTerm,
     ensurePanel, closeSideTab, reorderSideTab, togglePanel, openSideView, openBottomDock, addBottomTab, closeBottomTab, resizeTerminal, resetTermDock,
   };
 }
