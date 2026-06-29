@@ -140,6 +140,19 @@ export function WritePanel(): React.ReactElement {
   const [hasSel, setHasSel] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [review, setReview] = useState<ReviewSession | null>(null);
+  // §2 W5 — workspace-grounded writing assistant (its own per-workspace thread).
+  const [asstOpen, setAsstOpen] = useState(false);
+  const [asstQ, setAsstQ] = useState('');
+  const [asstA, setAsstA] = useState<{ text: string; grounded?: boolean; error?: string } | null>(null);
+  const [asstBusy, setAsstBusy] = useState(false);
+
+  const askAssistant = async (): Promise<void> => {
+    if (!asstQ.trim()) return;
+    setAsstBusy(true); setAsstA(null);
+    const res = await hostQuery<{ text?: string; grounded?: boolean; error?: string }>('write-assistant', { question: asstQ.trim(), currentPath: path });
+    setAsstBusy(false);
+    setAsstA(res && typeof res.text === 'string' ? { text: res.text, grounded: res.grounded, error: res.error } : { text: '', error: 'No response from the assistant.' });
+  };
 
   const dirty = content !== loaded;
 
@@ -381,6 +394,34 @@ export function WritePanel(): React.ReactElement {
           ) : null}
 
           {review ? <ReviewOverlay review={review} onDecision={setDecision} onAll={setAllDecisions} onApply={applyReviewToDoc} onCancel={() => setReview(null)} /> : null}
+        </div>
+
+        <div className={`write-asst${asstOpen ? ' open' : ''}`}>
+          <button className="write-asst-toggle" onClick={() => setAsstOpen((o) => !o)} title="A workspace-grounded writing assistant in its own thread">
+            ✦ Writing assistant {asstOpen ? '▾' : '▸'}
+          </button>
+          {asstOpen ? (
+            <div className="write-asst-body">
+              <div className="write-asst-row">
+                <input
+                  className="filter"
+                  placeholder="Ask about your docs — grounded in this workspace…"
+                  value={asstQ}
+                  onChange={(e) => setAsstQ(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') void askAssistant(); }}
+                />
+                <button className="sched-add-btn" disabled={asstBusy || !asstQ.trim()} onClick={() => void askAssistant()}>{asstBusy ? '…' : 'Ask'}</button>
+              </div>
+              {asstA?.error ? <div className="mem-error">{asstA.error}</div> : null}
+              {asstA && !asstA.error ? (
+                <div className="write-asst-answer">
+                  {asstA.grounded ? <span className="write-asst-grounded" title="Answer used workspace documents">grounded</span> : null}
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{asstA.text || '_(no answer)_'}</ReactMarkdown>
+                </div>
+              ) : null}
+              <div className="write-asst-note">Separate per-workspace thread; grounds on your workspace docs (the brain's recall augments this when connected).</div>
+            </div>
+          ) : null}
         </div>
 
         {status ? <div className="write-status">{status}</div> : null}

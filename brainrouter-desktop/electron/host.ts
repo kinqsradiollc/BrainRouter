@@ -31,6 +31,7 @@ import { resolveWorkspaceGit } from '@kinqs/brainrouter-core/dist/git/workspaceG
 import { readWorkspaceEntry, isWorkspaceDirectory, listWorkspaceFiles, statWorkspaceEntry, writeWorkspaceEntry } from './fsRead.js';
 import { saveWorkflowGraph, loadWorkflowGraph, listWorkflowGraphs, deleteWorkflowGraph } from '@kinqs/brainrouter-core/dist/workflow/graphStore.js';
 import type { WorkflowGraph } from '@kinqs/brainrouter-core/dist/workflow/graph.js';
+import { writeThreadKey, buildGroundingBlock, pickLocalGrounding } from '@kinqs/brainrouter-core/dist/write/grounding.js';
 import { WorkspaceFileListCache, type WorkspaceFileListResult } from './workspaceFileListCache.js';
 import { startWorkspaceWatcher } from './fileWatch.js';
 import { readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups, type SessionMeta } from '@kinqs/brainrouter-core/dist/session/sessionMetaStore.js';
@@ -2210,6 +2211,40 @@ async function main(): Promise<void> {
         // Keep it short + single-line so the ghost stays unobtrusive.
         const text = raw.replace(/^\s+/, '').split('\n')[0].slice(0, 160);
         return { text };
+      },
+      // §2 W5 — Write-mode assistant: a per-workspace thread (writeThreadKey, kept
+      // separate from code chats) grounded on the workspace's prose docs. The
+      // brain's recall is primary when online; here we add a cheap local keyword
+      // grounding over the Markdown files so the answer cites real workspace docs.
+      'write-assistant': async (args) => {
+        const question = typeof args.question === 'string' ? args.question : '';
+        if (!question.trim()) return { text: '', error: 'Ask a question.' };
+        const llm = llmForSession(writeThreadKey(workspaceRoot));
+        if (!llm || (!llm.apiKey && (llm.provider ?? 'openai') === 'openai')) {
+          return { text: '', error: 'No model configured — set a provider/model (and API key) in Settings.' };
+        }
+        let grounding = '';
+        try {
+          const listed = await listWorkspaceFilesCached({ limit: 3000 });
+          const mdPaths = (listed.files ?? [])
+            .map((f) => (typeof f === 'string' ? f : (f as { path?: string }).path))
+            .filter((p): p is string => !!p && /\.(md|markdown|mdx|txt)$/i.test(p))
+            .slice(0, 60);
+          const docs = mdPaths
+            .map((p) => { const r = readWorkspaceEntry(workspaceRoot, p) as { content?: string }; return { path: p, content: typeof r?.content === 'string' ? r.content : '' }; })
+            .filter((d) => d.content.trim());
+          const current = typeof args.currentPath === 'string' ? args.currentPath : undefined;
+          grounding = buildGroundingBlock(pickLocalGrounding(question, docs, current, 3));
+        } catch { /* grounding is best-effort */ }
+        const system = 'You are a writing assistant for this workspace. Be concise and practical.' +
+          (grounding ? ' Ground your answer in the provided workspace documents and cite the source path when you rely on one.' : '');
+        const user = grounding ? `${grounding}\n\n---\nQuestion: ${question}` : question;
+        try {
+          const resp = await callOpenAI(llm, [{ role: 'system', content: system }, { role: 'user', content: user }], [], { effort: 'low' });
+          return { text: ((resp?.content as string) ?? '').trim(), grounded: !!grounding };
+        } catch (e) {
+          return { text: '', error: `Model call failed: ${e instanceof Error ? e.message : String(e)}` };
+        }
       },
       // §7 L4 — visual workflow canvas persistence (graphs under <stateDir>/workflows/).
       'workflow-list': () => listWorkflowGraphs(workspaceRoot),
