@@ -1228,7 +1228,10 @@ textarea.ctl { min-width: 0; resize: vertical; line-height: 1.45; }
    (the composer widens to 860px there; the banner defaults to --content-w). */
 .home-mode .chat-readonly { max-width: 860px; }
 .home-mode .composer textarea { min-height: 46px; padding-top: 4px; padding-bottom: 8px; font-size: 15px; }
-.home-mode .composer-controls { max-width: none; margin-top: 3px; padding: 0; position: relative; z-index: 3; }
+/* z-index must sit ABOVE the absolutely-positioned send button (.input-send,
+   z-index 6) — otherwise the controls row's own stacking context traps the
+   model/effort menus below it and the send arrow pokes through an open menu. */
+.home-mode .composer-controls { max-width: none; margin-top: 3px; padding: 0; position: relative; z-index: 8; }
 /* DESK-5h — NO shell-open modifiers: typography and controls stay identical
    whether panels are open or closed (the columns just reflow). */
 /* hero WRAPS at tight widths — same size at every zoom, never shrinks */
