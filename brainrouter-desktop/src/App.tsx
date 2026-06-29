@@ -42,7 +42,8 @@ const EditorPanel = lazy(() => import('./panels/EditorPanel.js').then((m) => ({ 
 const CIPanel = lazy(() => import('./panels/CIPanel.js').then((m) => ({ default: m.CIPanel })));
 const DashboardPanel = lazy(() => import('./panels/DashboardPanel.js').then((m) => ({ default: m.DashboardPanel })));
 import { MessageRow } from './chat/MessageRow.js';
-import { SessionStatus } from './components/SessionStatus.js';
+import { SessionStatus, PrStatusIcon } from './components/SessionStatus.js';
+import { prStatusFor } from './lib/ci/prStatus.js';
 import { Composer } from './components/Composer.js';
 import { useComposerDerived } from './lib/composer/useComposerDerived.js';
 import { buildPromptWithAttachments, readyAttachments } from './lib/attachments/attachmentPrompt.js';
@@ -760,7 +761,11 @@ export function App(): React.ReactElement {
     // refreshSession() shortly after reconciles it with the host-backed row.
     const sk = sessionKeyRef.current ?? info.sessionKey;
     if (sk) {
-      const optimistic: SessionRow = { sessionKey: sk, firstUserMessage: displayPrompt, modifiedAt: new Date().toISOString(), turnCount: 1, lastRole: 'user' };
+      // §session-pr — record the branch this session is running on so the sidebar
+      // can show its live PR status; persisted via session meta + mirrored on the
+      // optimistic row for an immediate icon.
+      if (branches.current) q('q-session-branch', 'action:session-meta', { sessionKey: sk, patch: { branch: branches.current } });
+      const optimistic: SessionRow = { sessionKey: sk, firstUserMessage: displayPrompt, modifiedAt: new Date().toISOString(), turnCount: 1, lastRole: 'user', branch: branches.current ?? null };
       // Wave 2 — track it as pending so subsequent list-sessions refreshes MERGE
       // it (instead of replacing it away) until the host transcript confirms it.
       if (!pendingSessionsRef.current.some((s) => s.sessionKey === sk)) pendingSessionsRef.current = [optimistic, ...pendingSessionsRef.current];
@@ -940,7 +945,12 @@ export function App(): React.ReactElement {
 
   // DESK-6m — one chat row with its ⋮ menu trigger + pinned/completed state +
   // inline rename. Background tasks are not rendered as chats.
-  const renderSessionNode = (s: SessionRow, i: number): React.ReactElement => (
+  const renderSessionNode = (s: SessionRow, i: number): React.ReactElement => {
+    const running = runningSessions.includes(s.sessionKey);
+    // §session-pr — match the session's branch to its PR (skipped while a turn
+    // runs; the running spinner takes priority over the PR icon).
+    const pr = running ? null : prStatusFor(s.branch, ci.prByBranch);
+    return (
     <React.Fragment key={s.sessionKey}>
       <div className={`session-wrap${s.sessionKey === viewKey ? ' active' : ''}${s.status === 'completed' ? ' completed' : ''}${sessionMenu?.key === s.sessionKey ? ' menu-open' : ''}`}
         onContextMenu={(e) => openSessionMenu(e, s.sessionKey)}>
@@ -953,9 +963,11 @@ export function App(): React.ReactElement {
           <button className="project-session" title={s.firstUserMessage || s.sessionKey}
             onClick={() => resumeSession(s.sessionKey)}>
             {s.pinned ? <span className="st st-pin" title="Pinned"><Icon name="pin" size={11} /></span>
-              : (s.forkedFrom && !runningSessions.includes(s.sessionKey))
+              : (s.forkedFrom && !running)
                 ? <span className="st st-fork" title="Forked conversation"><Icon name="branch" size={11} /></span>
-                : <SessionStatus s={s} working={runningSessions.includes(s.sessionKey)} />}
+                : pr
+                  ? <PrStatusIcon status={pr.status} pr={pr.pr} />
+                  : <SessionStatus s={s} working={running} />}
             <span className="session-title">
               {s.firstUserMessage || s.sessionKey}
               {dupeTitleKeys.has(s.sessionKey) && s.modifiedAt ? <span className="title-age"> · {fmtAge(s.modifiedAt)}</span> : null}
@@ -968,7 +980,8 @@ export function App(): React.ReactElement {
         <button className="session-menu-btn icon-btn" aria-label="Chat options" onClick={(e) => openSessionMenu(e, s.sessionKey)}><Icon name="dots" size={13} /></button>
       </div>
     </React.Fragment>
-  );
+    );
+  };
 
   // DESK-5w (#4 lag) — render ONE transcript row. Extracted + memoized (below)
   // so streaming deltas / the per-second tick don't re-render the whole history
