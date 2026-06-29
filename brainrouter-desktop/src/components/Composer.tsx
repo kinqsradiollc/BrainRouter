@@ -17,6 +17,8 @@ import { reasoningProfileForModel, reasoningPillLabel } from '../lib/models/reas
 import type { AttachmentUpload, PopId } from '../types.js';
 import type { DeskCommand, SettingsSection } from '../lib/commands/commands.js';
 import { recognizedCommandToken } from '../lib/composer/slashHighlight.js';
+import { findMentionToken, rankFileMatches, applyMention } from '../lib/composer/mention.js';
+import { hostQuery } from '../lib/hostQuery.js';
 import { usePlatform } from '../lib/shortcuts/shortcuts.js';
 
 export interface ComposerProps {
@@ -90,6 +92,35 @@ export function Composer(p: ComposerProps): React.ReactElement {
   const mirrorRef = React.useRef<HTMLDivElement | null>(null);
   const modelMenuRef = React.useRef<HTMLDivElement | null>(null);
   const [dragOver, setDragOver] = React.useState(false);
+  // §5.7 — @-mention: workspace file picker. Self-contained (independent of the
+  // slash system); fetched once, recomputed from the caret on each keystroke.
+  const [mentionFiles, setMentionFiles] = React.useState<string[]>([]);
+  const [mention, setMention] = React.useState<{ token: ReturnType<typeof findMentionToken>; matches: string[] } | null>(null);
+  const [mentionSel, setMentionSel] = React.useState(0);
+  React.useEffect(() => {
+    void hostQuery<{ files?: Array<string | { path?: string }> }>('list-files', { limit: 3000 }).then((r) => {
+      setMentionFiles((r?.files ?? []).map((f) => (typeof f === 'string' ? f : f.path ?? '')).filter(Boolean));
+    });
+  }, []);
+  const recomputeMention = React.useCallback((value: string, caret: number) => {
+    const token = findMentionToken(value, caret);
+    if (!token) { setMention(null); return; }
+    const matches = rankFileMatches(token.query, mentionFiles, 8);
+    setMention(matches.length ? { token, matches } : null);
+    setMentionSel(0);
+  }, [mentionFiles]);
+  const pickMention = React.useCallback((path: string) => {
+    setMention((m) => {
+      if (!m?.token) return null;
+      const ta = textareaRef.current;
+      const caret = ta ? ta.selectionStart : draft.length;
+      const out = applyMention(draft, m.token, caret, path);
+      setDraft(out.text);
+      requestAnimationFrame(() => { const t = textareaRef.current; if (t) { t.focus(); t.setSelectionRange(out.caret, out.caret); } });
+      return null;
+    });
+  }, [draft, setDraft]);
+  const mentionOpen = !!(mention && mention.matches.length && !(slashActive && slashMatches.length));
   // The model menu opens UPWARD from the composer. A tall menu (several connected
   // providers) could push its top — the "Models" header + first model — above the
   // viewport, clipping them. Clamp its height to the room actually above the
@@ -146,6 +177,25 @@ export function Composer(p: ComposerProps): React.ReactElement {
             <SlashPopup commands={commands} filter={draft} selected={slashSel} onPick={onRunSlash} onHover={setSlashSel} />
           </div>
         ) : null}
+        {mentionOpen ? (
+          <div className="mention-pop" role="listbox" aria-label="Workspace files">
+            {mention!.matches.map((f, i) => (
+              <button
+                key={f}
+                type="button"
+                role="option"
+                aria-selected={i === mentionSel}
+                className={`mention-item${i === mentionSel ? ' sel' : ''}`}
+                onMouseEnter={() => setMentionSel(i)}
+                onMouseDown={(e) => { e.preventDefault(); pickMention(f); }}
+              >
+                <Icon name="file" size={12} />
+                <span className="mention-base">{f.slice(f.lastIndexOf('/') + 1)}</span>
+                <span className="mention-path">{f.includes('/') ? f.slice(0, f.lastIndexOf('/')) : ''}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
         {attachments.length ? (
           <div className="attachment-strip" aria-label="Attached files">
             {attachments.map((file) => (
@@ -194,7 +244,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
             rows={1}
             placeholder={stopping ? 'Stopping…' : running ? 'Working…' : 'Message BrainRouter…  ( / for commands )'}
             value={draft}
-            onChange={(e) => { setDraft(e.target.value); setSlashSel(0); setSlashDismissed(false); }}
+            onChange={(e) => { setDraft(e.target.value); setSlashSel(0); setSlashDismissed(false); recomputeMention(e.target.value, e.target.selectionStart); }}
             onScroll={syncMirrorScroll}
             onPaste={onPasteImages ? (e) => {
               // §vision — pull any image blobs off the clipboard (a pasted
@@ -206,6 +256,13 @@ export function Composer(p: ComposerProps): React.ReactElement {
               if (files.length) { e.preventDefault(); onPasteImages(files); }
             } : undefined}
             onKeyDown={(e) => {
+              // §5.7 — @-mention picker keys (gated; never competes with slash).
+              if (mentionOpen && mention) {
+                if (e.key === 'ArrowDown') { e.preventDefault(); setMentionSel((s) => Math.min(s + 1, mention.matches.length - 1)); return; }
+                if (e.key === 'ArrowUp') { e.preventDefault(); setMentionSel((s) => Math.max(s - 1, 0)); return; }
+                if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(mention.matches[Math.min(mentionSel, mention.matches.length - 1)]); return; }
+                if (e.key === 'Escape') { e.preventDefault(); setMention(null); return; }
+              }
               if (slashActive && slashMatches.length) {
                 if (e.key === 'ArrowDown') { e.preventDefault(); setSlashSel((s) => Math.min(s + 1, slashMatches.length - 1)); return; }
                 if (e.key === 'ArrowUp') { e.preventDefault(); setSlashSel((s) => Math.max(s - 1, 0)); return; }
