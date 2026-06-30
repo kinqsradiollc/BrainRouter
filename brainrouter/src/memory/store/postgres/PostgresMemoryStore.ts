@@ -82,6 +82,7 @@ import type {
   VaultExportInput,
   AtlasGraph,
   AtlasWorkspaceSummary,
+  FleetSnapshotEntry,
   IMemoryStore,
 } from "@kinqs/brainrouter-types";
 import { createPgPool } from "./connection.js";
@@ -1642,6 +1643,35 @@ export class PostgresMemoryStore implements IMemoryStore {
       nodeCount: asNumber(r.node_count),
       updatedAt: r.updated_at,
     }));
+  }
+
+  // HONK-H3.3 — fleet snapshot store-and-serve (mirrors the atlas_graphs pattern).
+  public async putFleetSnapshot(userId: string, host: string, snapshot: unknown, jobCount: number): Promise<void> {
+    await this.run(
+      `INSERT INTO fleet_snapshots (user_id, host, snapshot_json, job_count, updated_at)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (user_id, host) DO UPDATE SET
+         snapshot_json=EXCLUDED.snapshot_json,
+         job_count=EXCLUDED.job_count,
+         updated_at=EXCLUDED.updated_at`,
+      [userId, host, JSON.stringify(snapshot ?? null), Math.max(0, Math.floor(jobCount) || 0), new Date().toISOString()],
+    );
+  }
+
+  public async getFleetSnapshots(userId: string): Promise<FleetSnapshotEntry[]> {
+    const rows = await this.rows<{ host: string; snapshot_json: string; job_count: unknown; updated_at: string }>(
+      "SELECT host, snapshot_json, job_count, updated_at FROM fleet_snapshots WHERE user_id = $1 ORDER BY updated_at DESC",
+      [userId],
+    );
+    return rows.map((r) => {
+      let snapshot: unknown = null;
+      try {
+        snapshot = JSON.parse(r.snapshot_json);
+      } catch {
+        snapshot = null; // corrupt row — relay as empty rather than throwing
+      }
+      return { host: r.host, snapshot, jobCount: asNumber(r.job_count), updatedAt: r.updated_at };
+    });
   }
 
   public async getIdentityAndInstructionCognitives(userId: string, limit = 100): Promise<any[]> {

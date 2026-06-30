@@ -46,6 +46,18 @@ export interface AtlasWorkspaceSummary {
   updatedAt: string;
 }
 
+/** HONK-H3.3 — a client-pushed fleet queue snapshot the brain stores + serves. */
+export interface FleetSnapshotEntry {
+  /** The fleet host that pushed this snapshot. */
+  host: string;
+  /** The opaque snapshot payload (the shape `summarizeFleet()` returns). */
+  snapshot: unknown;
+  /** Total job count at push time (cheap list metadata, no payload parse). */
+  jobCount: number;
+  /** ISO-8601 timestamp of the last push. */
+  updatedAt: string;
+}
+
 export interface CursorPaginationOptions<TCursor = Record<string, unknown>> {
   cursor?: TCursor;
   limit: number;
@@ -358,4 +370,10 @@ export interface IMemoryStore {
   getAtlasGraph(userId: string, workspaceTag: string): Promise<AtlasGraph | null>;
   /** List a tenant's stored Atlas workspaces, most-recently-updated first. */
   listAtlasWorkspaces(userId: string): Promise<AtlasWorkspaceSummary[]>;
+
+  // HONK-H3.3 — fleet snapshot store-and-serve (the dashboard console reads these).
+  /** Upsert a fleet host's queue snapshot for a tenant (keyed by user + host). */
+  putFleetSnapshot(userId: string, host: string, snapshot: unknown, jobCount: number): Promise<void>;
+  /** List a tenant's stored fleet snapshots (one per host), most-recent first. */
+  getFleetSnapshots(userId: string): Promise<FleetSnapshotEntry[]>;
 }

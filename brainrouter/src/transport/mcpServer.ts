@@ -79,6 +79,7 @@ import { memoryRecordLessonToolSchema, handleMemoryRecordLesson } from '../tools
 import { memoryCreateRequirementToolSchema, handleMemoryCreateRequirement } from '../tools/memory_create_requirement.js';
 import { memoryCaptureArtifactToolSchema, handleMemoryCaptureArtifact } from '../tools/memory_capture_artifact.js';
 import { atlasPutToolSchema, handleAtlasPut, atlasGetToolSchema, handleAtlasGet, atlasListToolSchema, handleAtlasList, atlasQueryToolSchema, handleAtlasQuery, atlasImpactToolSchema, handleAtlasImpact, atlasEnrichToolSchema, handleAtlasEnrich } from '../tools/atlas_graph.js';
+import { fleetSnapshotPutToolSchema, handleFleetSnapshotPut, fleetSnapshotGetToolSchema, handleFleetSnapshotGet } from '../tools/fleet_snapshot.js';
 import { memoryCaptureAnnotationToolSchema, handleMemoryCaptureAnnotation } from '../tools/memory_capture_annotation.js';
 import { memoryExtractSkillToolSchema, handleMemoryExtractSkill } from '../tools/memory_extract_skill.js';
 import { memoryGraphAnalyticsToolSchema, handleMemoryGraphAnalytics } from '../tools/memory_graph_analytics.js';
@@ -282,6 +283,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       atlasQueryToolSchema,
       atlasImpactToolSchema,
       atlasEnrichToolSchema,
+      fleetSnapshotPutToolSchema,
+      fleetSnapshotGetToolSchema,
     ],
   }));
 
@@ -402,6 +405,10 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           return await handleAtlasImpact(request.params.arguments, { defaultUserId });
         case 'atlas_enrich':
           return await handleAtlasEnrich(request.params.arguments, { defaultUserId });
+        case 'fleet_snapshot_put':
+          return await handleFleetSnapshotPut(request.params.arguments, { defaultUserId });
+        case 'fleet_snapshot_get':
+          return await handleFleetSnapshotGet(request.params.arguments, { defaultUserId });
         case 'memory_capture_annotation':
           return await handleMemoryCaptureAnnotation(request.params.arguments, { defaultUserId });
         case 'memory_extract_skill':
