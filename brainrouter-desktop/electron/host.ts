@@ -40,7 +40,7 @@ import { hashDiff, reviewGate, staleIfDiffChanged, isFindingStatus, type ReviewR
 import { getLatestReview, saveReview, updateReviewFinding } from '@kinqs/brainrouter-core/dist/review/reviewStore.js';
 import { getStateDir } from '@kinqs/brainrouter-core/dist/storage/store.js';
 import { collectRunningTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
-import { killBackgroundShell } from '@kinqs/brainrouter-core/dist/exec/backgroundShell.js';
+import { killBackgroundShell } from '@kinqs/brainrouter-core/exec';
 import { contextWindowForBudget } from '@kinqs/brainrouter-core/dist/context/contextWindow.js';
 // DESK-4c — the command/settings surfaces reuse the CLI's own modules so the
 // desktop never drifts from the terminal: same catalog, same preferences

@@ -384,7 +384,7 @@ program
       if (Number.isFinite(n) && n > 0) setCliKnobOverride({ maxToolLoops: Math.floor(n) });
     }
     if (options.disallowedTools) {
-      const { parseToolList } = await import('@kinqs/brainrouter-core/dist/exec/permissionRules.js');
+      const { parseToolList } = await import('@kinqs/brainrouter-core/exec');
       const denied = parseToolList(String(options.disallowedTools));
       if (denied.length > 0) {
         const current = getCliKnobs().permissions;

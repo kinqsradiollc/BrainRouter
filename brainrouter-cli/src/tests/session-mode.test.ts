@@ -18,7 +18,7 @@ const {
   resolveActiveMode,
 } = await import('@kinqs/brainrouter-core/session');
 const { writePreferences } = await import('@kinqs/brainrouter-core/session');
-const { resolveRunCommandApproval } = await import('@kinqs/brainrouter-core/dist/exec/dangerousCommand.js');
+const { resolveRunCommandApproval } = await import('@kinqs/brainrouter-core/exec');
 
 const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sm-ws-')));
 

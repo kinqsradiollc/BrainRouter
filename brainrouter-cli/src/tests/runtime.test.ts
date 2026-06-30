@@ -1,9 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseInterval, isLoopRunning, startLoop, stopLoop, getLoopState } from '../runtime/loopRunner.js';
-import { resolveSandboxConfig, decideUnavailableSandbox, detectSandboxDenial } from '@kinqs/brainrouter-core/dist/exec/sandbox.js';
+import { resolveSandboxConfig, decideUnavailableSandbox, detectSandboxDenial, isDangerousCommand, resolveRunCommandApproval } from '@kinqs/brainrouter-core/exec';
 import { startSpan, traceEnabled } from '@kinqs/brainrouter-core/dist/telemetry/tracing.js';
-import { isDangerousCommand, resolveRunCommandApproval } from '@kinqs/brainrouter-core/dist/exec/dangerousCommand.js';
 
 test('callOpenAI: rejects malformed LLM responses with a useful error instead of TypeError', async () => {
   // Stub the global fetch with three scenarios that have historically crashed
