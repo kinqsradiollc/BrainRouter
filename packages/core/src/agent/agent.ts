@@ -118,6 +118,7 @@ import { startSpan, traceEvent } from '../telemetry/tracing.js';
 // fingerprint the cache-stable slice of every outbound chat request
 // without rewriting the legacy runTurn message plumbing.
 import { computePrefixFingerprint, computePrefixComponents, accumulatePrefixStability, newPrefixStabilityTally, prefixStabilityRatio, type PrefixComponents, type PrefixStabilityTally } from '../context/contextRegions.js';
+import { contextWindowForBudget } from '../context/contextWindow.js';
 import { decideExecutionPolicy, resolveToolPolicy, externalDirectoryDecision, egressDecision, type ActionKind, type PolicyDecision } from '../exec/execPolicy.js';
 import { isPathWithinRoots } from '../exec/pathPolicy.js';
 import { runPostEditCheck } from '../util/postEditCheck.js';
@@ -1333,12 +1334,14 @@ export class Agent {
 
     // Auto-compact pre-turn check.
     //
-    // Threshold: `BRAINROUTER_AUTO_COMPACT_TOKENS` (default 80_000). Single
-    // absolute knob — the model's max context window is NOT used as the
-    // driver because (a) hitting 75% of a 1M-context model still costs
-    // real money and the user might want to compact much earlier, (b)
-    // smaller models with tight windows are better served by a hard
-    // ceiling the user explicitly set.
+    // Threshold: `cli.autoCompactTokens` (default 80_000). An absolute knob —
+    // the model's max context window is NOT the driver because (a) hitting 75%
+    // of a 1M-context model still costs real money and the user might want to
+    // compact much earlier, (b) smaller models with tight windows are better
+    // served by a hard ceiling the user explicitly set. BUT the knob is clamped
+    // DOWN to ~90% of the model window: a knob larger than the window can never
+    // fire (the provider rejects the request before that many tokens accrue), so
+    // compaction must trigger within the window, leaving output headroom.
     //
     // Token-count source (the actual correction in 0.3.9):
     //   1. `lastSeenPromptTokens` — the authoritative `usage.prompt_tokens`
@@ -1350,7 +1353,8 @@ export class Agent {
     //      code dumps don't drift the count by 2–4× as the old
     //      `text.length / 4` proxy did.
     if (!this.silent) {
-      const autoCompactThreshold = getCliKnobs().autoCompactTokens;
+      const windowCap = Math.floor(contextWindowForBudget(this.getModel()) * 0.9);
+      const autoCompactThreshold = Math.min(getCliKnobs().autoCompactTokens, windowCap);
       const promptTokens = this.lastSeenPromptTokens !== undefined && this.lastSeenPromptTokens > 0
         ? this.lastSeenPromptTokens
         : estimateChatHistoryTokens(this.chatHistory as any);

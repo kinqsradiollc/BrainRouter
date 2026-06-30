@@ -7,7 +7,7 @@
  * Lazy-loaded (React.lazy in App) so Monaco's ~5MB only loads when the editor
  * first opens — it must not inflate first paint.
  */
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import EditorComp, { type OnMount } from '@monaco-editor/react';
 import { Icon } from '../icons.js';
 
@@ -22,6 +22,15 @@ type MonacoEditorProps = {
 const Editor = EditorComp as unknown as React.ComponentType<MonacoEditorProps>;
 import { installMonaco, editorTheme, editorFontFamily } from '../lib/editor/monacoEnv.js';
 import { isDirty, type EditorTab } from '../lib/editor/editorModel.js';
+import { hostQuery } from '../lib/hostQuery.js';
+import { renderBody, htmlDoc, MARKDOWN_FILE } from '../lib/docs/markdownExport.js';
+import { computeReviewChunks, applyReview, type ReviewDecision } from '@kinqs/brainrouter-core/dist/write/writeDiff.js';
+import {
+  MarkdownPreview, WritingAssistant, ReviewOverlay,
+  registerMarkdownGhost, setActiveMarkdownModel,
+  ACTION_LABEL, type InlineAction, type MonacoRange, type ReviewSession,
+} from './editor/markdownMode.js';
+import { BarMenu } from './editor/BarMenu.js';
 import {
   editorBasename,
   editorBreadcrumbs,
@@ -49,7 +58,7 @@ function setQuietDragImage(e: React.DragEvent<HTMLElement>): void {
   e.dataTransfer.setDragImage(canvas, 0, 0);
 }
 
-export function EditorPanel({ tabs, activePath, conflictPaths, saving, revealLine, onSelect, onChange, onSave, onSaveAll, onRevert, onClose, onReorder, onAnnotateSelection }: {
+export function EditorPanel({ tabs, activePath, conflictPaths, saving, revealLine, onSelect, onChange, onSave, onSaveAll, onRevert, onClose, onReorder, onAnnotateSelection, onOpenFile, onOpenUrl }: {
   tabs: EditorTab[];
   activePath: string | null;
   conflictPaths?: string[];
@@ -64,6 +73,9 @@ export function EditorPanel({ tabs, activePath, conflictPaths, saving, revealLin
   onClose: (path: string) => void;
   onReorder?: (draggedPath: string, targetPath: string) => void;
   onAnnotateSelection?: (path: string, body: string, anchor: { startLine: number; endLine: number; selectedText: string }) => void;
+  /** Markdown-mode preview links: open a workspace file (code Editor) / external URL (browser). */
+  onOpenFile?: (path: string) => void;
+  onOpenUrl?: (url: string) => void;
 }): React.ReactElement {
   const active = tabs.find((t) => t.path === activePath) ?? null;
   const [secondaryPath, setSecondaryPath] = useState<string | null>(null);
@@ -91,6 +103,12 @@ export function EditorPanel({ tabs, activePath, conflictPaths, saving, revealLin
   const [draggedTab, setDraggedTab] = useState<string | null>(null);
   const [dropTab, setDropTab] = useState<string | null>(null);
   const lastDropTab = useRef<string | null>(null);
+  // ── Markdown mode (the folded-in Docs experience for .md/.markdown/.mdx).
+  const [mdView, setMdView] = useState<'edit' | 'split' | 'preview'>(() => (localStorage.getItem('br-editor-mdview') as 'edit' | 'split' | 'preview') || 'split');
+  const [review, setReview] = useState<ReviewSession | null>(null);
+  const [mdStatus, setMdStatus] = useState('');
+  const [aiBusy, setAiBusy] = useState(false);
+  useEffect(() => { localStorage.setItem('br-editor-mdview', mdView); }, [mdView]);
 
   useEffect(() => {
     localStorage.setItem('br-editor-wrap', serializeEditorPref(wordWrap));
@@ -104,6 +122,8 @@ export function EditorPanel({ tabs, activePath, conflictPaths, saving, revealLin
     setCursor({ line: 1, column: 1 });
     setHasSelection({ primary: false, secondary: false });
     setFocusedPane('primary');
+    setReview(null);
+    setMdStatus('');
   }, [activePath]);
 
   useEffect(() => {
@@ -131,21 +151,90 @@ export function EditorPanel({ tabs, activePath, conflictPaths, saving, revealLin
   const breadcrumbs = useMemo(() => focusedTab ? editorBreadcrumbs(focusedTab.path) : [], [focusedTab]);
   const statusItems = useMemo(() => focusedTab ? editorStatusItems(focusedTab, cursor) : [], [focusedTab, cursor]);
 
+  // Markdown mode applies to a non-binary .md file in the primary pane (the code
+  // split takes precedence, so two Monacos never fight a preview pane).
+  const mdTab = active && !active.binary && !secondary && MARKDOWN_FILE.test(active.path) ? active : null;
+  const mdEditor = (): Parameters<OnMount>[0] | null => editorRefs.current.primary;
+
+  const exportAs = useCallback(async (kind: 'html' | 'doc') => {
+    if (!mdTab) return;
+    setMdStatus('Exporting…');
+    const title = mdTab.path.split('/').pop() ?? 'document';
+    const doc = htmlDoc(title, renderBody(mdTab.content), { word: kind === 'doc' });
+    const outPath = `${mdTab.path.replace(/\.[^/.]+$/, '')}.${kind}`;
+    const res = await hostQuery<{ ok?: boolean; error?: string }>('write-save', { path: outPath, content: doc });
+    setMdStatus(res?.ok ? `Exported to ${outPath}` : `Export failed${res?.error ? `: ${res.error}` : ''}.`);
+  }, [mdTab]);
+
+  const copyRich = useCallback(async () => {
+    if (!mdTab) return;
+    const html = htmlDoc(mdTab.path.split('/').pop() ?? 'document', renderBody(mdTab.content));
+    try {
+      const clip = navigator.clipboard as Clipboard & { write?: (items: ClipboardItem[]) => Promise<void> };
+      if (typeof ClipboardItem !== 'undefined' && clip.write) {
+        await clip.write([new ClipboardItem({ 'text/html': new Blob([html], { type: 'text/html' }), 'text/plain': new Blob([mdTab.content], { type: 'text/plain' }) })]);
+        setMdStatus('Copied as rich text.'); return;
+      }
+      await navigator.clipboard.writeText(mdTab.content);
+      setMdStatus('Copied as plain text (rich text unavailable here).');
+    } catch { setMdStatus('Copy failed — the clipboard is unavailable.'); }
+  }, [mdTab]);
+
+  const runInline = useCallback(async (action: InlineAction) => {
+    const ed = mdEditor();
+    const sel = ed?.getSelection();
+    const model = ed?.getModel();
+    if (!ed || !sel || sel.isEmpty() || !model || !mdTab) { setMdStatus('Select some text first.'); return; }
+    const text = model.getValueInRange(sel);
+    if (!text.trim()) { setMdStatus('Select some text first.'); return; }
+    const range: MonacoRange = { startLineNumber: sel.startLineNumber, startColumn: sel.startColumn, endLineNumber: sel.endLineNumber, endColumn: sel.endColumn };
+    setAiBusy(true); setMdStatus(`${ACTION_LABEL[action]}…`);
+    const res = await hostQuery<{ text?: string; error?: string }>('write-inline-ai', { action, text, doc: mdTab.content });
+    setAiBusy(false);
+    if (!res || res.error || typeof res.text !== 'string') { setMdStatus(res?.error ? `Inline AI: ${res.error}` : 'Inline AI is unavailable (is a model configured?).'); return; }
+    if (res.text === text) { setMdStatus('No change suggested.'); return; }
+    setReview({ chunks: computeReviewChunks(text, res.text), decisions: {}, range, action });
+    setMdStatus('');
+  }, [mdTab]);
+
+  const setDecision = useCallback((id: number, decision: ReviewDecision) => setReview((r) => (r ? { ...r, decisions: { ...r.decisions, [id]: decision } } : r)), []);
+  const setAllDecisions = useCallback((decision: ReviewDecision) => setReview((r) => {
+    if (!r) return r;
+    const d: Record<number, ReviewDecision> = {};
+    for (const c of r.chunks) if (c.op !== 'equal') d[c.id] = decision;
+    return { ...r, decisions: d };
+  }), []);
+  const applyReviewToDoc = useCallback(() => setReview((r) => {
+    if (!r) return null;
+    const result = applyReview(r.chunks, r.decisions, 'accept');
+    const ed = mdEditor();
+    if (ed) { ed.executeEdits('inline-ai', [{ range: r.range, text: result, forceMoveMarkers: true }]); ed.focus(); }
+    setMdStatus(`Applied — ${ACTION_LABEL[r.action]}.`);
+    return null;
+  }), []);
+
   const mountPane = (pane: EditorPaneId, path: string): OnMount => (editor, monaco) => {
     editorRefs.current[pane] = editor;
+    // Markdown ghost-text (W4): register once; scope completions to the active
+    // Markdown file in the primary pane so code files never ghost.
+    registerMarkdownGhost(monaco);
+    if (pane === 'primary' && MARKDOWN_FILE.test(path)) setActiveMarkdownModel(editor.getModel()?.uri.toString() ?? null);
     // A reveal queued before this editor mounted (newly-opened file) applies now.
     const pending = revealLineRef.current;
     if (pending && pending.path === path && pending.seq !== lastRevealSeq.current) {
       applyReveal(editor, pending.line, pending.seq);
     }
+    // Cmd/Ctrl+S routes to the host save (not a Monaco built-in, so it must be
+    // bound). Find (Cmd+F), Replace (Cmd+Alt+F), Go-to-symbol (Cmd+Shift+O),
+    // multi-cursor, move/copy/delete-line, comment toggle, fold, rename, etc. are
+    // all Monaco built-ins — no rebinding needed.
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       saveRef.current(path);
     });
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF, () => {
-      void editor.getAction('actions.find')?.run();
-    });
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyO, () => {
-      void editor.getAction('editor.action.quickOutline')?.run();
+    // macOS alias: Cmd+G → Go to Line (Monaco's mac default is Ctrl+G; on mac
+    // Cmd+G is find-next). Gives the familiar VS Code Windows-style key on mac too.
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyG, () => {
+      void editor.getAction('editor.action.gotoLine')?.run();
     });
     const pos = editor.getPosition();
     if (pos) setCursor({ line: pos.lineNumber, column: pos.column });
@@ -257,23 +346,109 @@ export function EditorPanel({ tabs, activePath, conflictPaths, saving, revealLin
               onMount={mountPane(pane, tab.path)}
               onChange={(v) => onChange(tab.path, v ?? '')}
               loading={<div className="row status"><span className="spinner" /> Loading editor…</div>}
+              // The full modern-code-editor feature set. `.md`/prose tabs guard a
+              // few options (no minimap, ghost-text on, always-wrap, no
+              // quick-suggest); everything else is the complete editor experience.
               options={{
                 readOnly: tab.readOnly,
+                // ── font + text ──
                 fontFamily: editorFontFamily(),
-                fontSize: 12.5,
-                minimap: { enabled: minimap },
-                wordWrap: wordWrap ? 'on' : 'off',
-                scrollBeyondLastLine: false,
-                renderLineHighlight: 'line',
+                fontSize: 13,
+                lineHeight: 19,
+                fontLigatures: true,
+                // ── view prefs (toolbar-toggled) ──
+                minimap: { enabled: minimap && !MARKDOWN_FILE.test(tab.path) },
+                wordWrap: (wordWrap || MARKDOWN_FILE.test(tab.path)) ? 'on' : 'off',
+                wrappingIndent: 'same',
+                inlineSuggest: { enabled: MARKDOWN_FILE.test(tab.path) }, // W4 ghost-text for prose
+                // ── rendering / appearance ──
+                lineNumbers: 'on',
+                lineNumbersMinChars: 5,
+                glyphMargin: true,
+                renderLineHighlight: 'all',
                 renderWhitespace: 'selection',
-                stickyScroll: { enabled: true },
-                bracketPairColorization: { enabled: true },
-                overviewRulerLanes: 0,
+                renderControlCharacters: true,
+                renderFinalNewline: 'on',
+                roundedSelection: true,
+                cursorStyle: 'line',
+                cursorBlinking: 'blink',
+                cursorSmoothCaretAnimation: 'on',
+                cursorSurroundingLines: 3,
+                scrollBeyondLastLine: false,
+                scrollBeyondLastColumn: 4,
+                overviewRulerLanes: 3,
                 smoothScrolling: true,
+                mouseWheelZoom: true,
+                fastScrollSensitivity: 5,
+                scrollPredominantAxis: true,
+                stickyScroll: { enabled: true, maxLineCount: 5 },
+                stopRenderingLineAfter: 10000,
+                padding: { top: 8, bottom: 8 },
+                scrollbar: { vertical: 'auto', horizontal: 'auto', verticalScrollbarSize: 14, horizontalScrollbarSize: 14, useShadows: true },
+                // ── syntax, brackets, colour swatches ──
+                'semanticHighlighting.enabled': true,
+                bracketPairColorization: { enabled: true },
+                matchBrackets: 'always',
+                guides: { indentation: true, highlightActiveIndentation: true, bracketPairs: true, bracketPairsHorizontal: 'active', highlightActiveBracketPair: true },
+                colorDecorators: true,
+                colorDecoratorsActivatedOn: 'clickAndHover',
+                colorDecoratorsLimit: 500,
+                unicodeHighlight: { ambiguousCharacters: true, invisibleCharacters: true },
+                unusualLineTerminators: 'prompt',
+                // ── folding ──
+                folding: true,
+                foldingStrategy: 'auto',
+                foldingHighlight: true,
+                showFoldingControls: 'mouseover',
+                // ── IntelliSense: suggestions, hints, lenses ──
+                quickSuggestions: MARKDOWN_FILE.test(tab.path) ? false : { other: true, comments: false, strings: false },
+                quickSuggestionsDelay: 10,
+                suggestOnTriggerCharacters: true,
+                acceptSuggestionOnEnter: 'on',
+                suggestSelection: 'first',
+                snippetSuggestions: 'inline',
+                tabCompletion: 'on',
+                wordBasedSuggestions: 'matchingDocuments',
+                suggest: { insertMode: 'insert', showStatusBar: false, preview: false, showInlineDetails: true },
+                parameterHints: { enabled: true, cycle: true },
+                inlayHints: { enabled: 'on' },
+                codeLens: true,
+                hover: { enabled: true, delay: 300, sticky: true, above: true },
+                lightbulb: { enabled: 'onCode' },
+                links: true,
+                occurrencesHighlight: 'singleFile',
+                selectionHighlight: true,
+                linkedEditing: true,
+                gotoLocation: { multiple: 'peek' },
+                // ── auto-edit behaviour ──
+                autoClosingBrackets: 'languageDefined',
+                autoClosingQuotes: 'languageDefined',
+                autoClosingComments: 'languageDefined',
+                autoClosingDelete: 'auto',
+                autoClosingOvertype: 'auto',
+                autoSurround: 'languageDefined',
+                autoIndent: 'full',
+                formatOnPaste: false,
+                formatOnType: false,
+                dragAndDrop: true,
+                dropIntoEditor: { enabled: true },
+                pasteAs: { enabled: true },
+                emptySelectionClipboard: true,
+                copyWithSyntaxHighlighting: true,
+                useTabStops: true,
+                smartSelect: { selectLeadingAndTrailingWhitespace: true, selectSubwords: true },
+                // ── multi-cursor + selection ──
+                multiCursorModifier: 'alt',
+                multiCursorPaste: 'spread',
+                multiCursorMergeOverlapping: true,
+                // ── find widget ──
+                find: { cursorMoveOnType: true, seedSearchStringFromSelection: 'always', addExtraSpaceOnTop: true, loop: true },
+                // ── desktop chrome ──
+                contextmenu: true,
+                selectionClipboard: true,
+                // ── layout ──
                 tabSize: 2,
                 automaticLayout: true,
-                padding: { top: 8, bottom: 8 },
-                scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
               }}
             />
           </>
@@ -348,6 +523,40 @@ export function EditorPanel({ tabs, activePath, conflictPaths, saving, revealLin
         </div>
       </div>
 
+      {mdTab ? (
+        <div className="editor-md-bar">
+          <div className="docs-modes">
+            {(['edit', 'split', 'preview'] as const).map((m) => (
+              <button key={m} className={`docs-mode${mdView === m ? ' on' : ''}`} onClick={() => setMdView(m)}>{m}</button>
+            ))}
+          </div>
+          {mdView !== 'preview' ? (
+            <BarMenu
+              label={aiBusy ? '✦ Working…' : '✦ Selection AI'}
+              disabled={aiBusy}
+              title={hasSelection.primary ? 'Rewrite the selected text' : 'Select text in the editor, then choose an action'}
+              items={(['polish', 'rewrite', 'continue'] as InlineAction[]).map((act) => ({
+                label: ACTION_LABEL[act],
+                hint: act === 'polish' ? 'tighten & fix' : act === 'rewrite' ? 'reword' : 'extend',
+                disabled: !hasSelection.primary,
+                onSelect: () => void runInline(act),
+              }))}
+            />
+          ) : null}
+          <span className="editor-md-spacer" />
+          {mdStatus ? <span className="editor-md-status">{mdStatus}</span> : null}
+          <BarMenu
+            label="Export"
+            title="Export or copy the rendered document"
+            items={[
+              { label: 'Export as HTML', hint: '.html', onSelect: () => void exportAs('html') },
+              { label: 'Export as Word', hint: '.doc', onSelect: () => void exportAs('doc') },
+              { label: 'Copy as rich text', hint: 'clipboard', onSelect: () => void copyRich() },
+            ]}
+          />
+        </div>
+      ) : null}
+
       {conflict || focusedConflict ? (
         <div className="editor-conflict">This file changed on disk since you opened it. Save was blocked. Reopen it to get the latest, or Save again to confirm overwrite.</div>
       ) : null}
@@ -366,6 +575,12 @@ export function EditorPanel({ tabs, activePath, conflictPaths, saving, revealLin
       <div className="editor-body">
         {!active ? (
           <div className="empty center-empty">Open a file from the Files panel or a diff to edit it here.</div>
+        ) : mdTab ? (
+          <div className={`editor-md view-${mdView}`}>
+            {mdView !== 'preview' ? <div className="editor-md-edit">{renderPane('primary', mdTab)}</div> : null}
+            {mdView !== 'edit' ? <MarkdownPreview content={mdTab.content} currentPath={mdTab.path} onOpenFile={onOpenFile} onOpenUrl={onOpenUrl} /> : null}
+            {review ? <ReviewOverlay review={review} onDecision={setDecision} onAll={setAllDecisions} onApply={applyReviewToDoc} onCancel={() => setReview(null)} /> : null}
+          </div>
         ) : (
           <div className={`editor-split${secondary ? ' two' : ' one'}`}>
             {renderPane('primary', active)}
@@ -373,6 +588,8 @@ export function EditorPanel({ tabs, activePath, conflictPaths, saving, revealLin
           </div>
         )}
       </div>
+
+      {mdTab ? <WritingAssistant currentPath={mdTab.path} onOpenFile={onOpenFile} onOpenUrl={onOpenUrl} /> : null}
 
       {focusedTab && !focusedTab.binary ? (
         <div className="editor-status">

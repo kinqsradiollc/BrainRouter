@@ -21,7 +21,6 @@ export { AnnotationsPanel } from './AnnotationsPanel.js';
 export { ArtifactsPanel } from './ArtifactsPanel.js';
 export { AtlasPanel, type AtlasPanelProps } from './AtlasPanel.js';
 export { WorkflowsPanel, type WorkflowsPanelProps } from './WorkflowsPanel.js';
-export { WritePanel } from './WritePanel.js';
 export { MemoryPanel } from './MemoryPanel.js';
 export { PrototypePanel } from './PrototypePanel.js';
 export { SearchPanel, type SearchHit } from './SearchPanel.js';

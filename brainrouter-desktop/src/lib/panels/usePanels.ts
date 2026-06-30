@@ -7,7 +7,21 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import type { PanelId } from '../../panels/index.js';
 import { devPanels, devFlag } from '../devFlags.js';
+import { VALID_PANEL_IDS } from '../../constants.js';
 import { clampSideRailWidth, reorderByValue, SIDE_RAIL_MIN } from './sideRailLayout.js';
+
+// Persisted layouts can carry renamed/retired panel ids. The Markdown writing
+// experience ('write' → 'docs') folded into the Editor, so both map to 'editor'.
+// Unknown ids are dropped, and duplicates are collapsed, so an upgrade never
+// leaves a dead or doubled tab.
+const PANEL_ID_ALIASES: Record<string, PanelId> = { write: 'editor', docs: 'editor' };
+const migratePanelId = (id: string): PanelId => (PANEL_ID_ALIASES[id] ?? id) as PanelId;
+const migratePanelIds = (ids: unknown[]): PanelId[] => {
+  const seen = new Set<PanelId>();
+  return ids
+    .map((p) => migratePanelId(String(p)))
+    .filter((p) => VALID_PANEL_IDS.has(p) && !seen.has(p) && (seen.add(p), true));
+};
 
 export interface TermTab { id: number; kind: 'shell' | PanelId }
 
@@ -53,7 +67,7 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
     if (saved !== null) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed as PanelId[];
+        if (Array.isArray(parsed)) return migratePanelIds(parsed);
       } catch (e) {
         // ignore
       }
@@ -62,7 +76,7 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
   });
   const [activeSideTab, setActiveSideTab] = useState<PanelId | null>(() => {
     const saved = localStorage.getItem('br-active-side-tab');
-    if (saved !== null && saved !== 'null') return saved as PanelId;
+    if (saved !== null && saved !== 'null') return migratePanelId(saved);
     return devPanels()[0] ?? null;
   });
   const [sidePanelOpen, setSidePanelOpen] = useState(() => {

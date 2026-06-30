@@ -1705,7 +1705,7 @@ export function SettingsDialog(props: {
             <Row title="Max output tokens" desc="Cap on completion tokens per call (cli.maxOutputTokens). Blank = the provider default; raise it (e.g. 8192) if replies get cut off mid-sentence.">
               <KnobNumber value={knobs.maxOutputTokens} onSave={(v) => setKnob('maxOutputTokens', v)} placeholder="provider default" />
             </Row>
-            <Row title="Auto-compact threshold" desc="Summarize + reset context above this many prompt tokens (cli.autoCompactTokens).">
+            <Row title="Auto-compact threshold" desc="Summarize + reset context above this many prompt tokens (cli.autoCompactTokens). Automatically capped to the current model's context window — set it BELOW the window to compact earlier (e.g. to save cost on large-window models).">
               <KnobNumber value={knobs.autoCompactTokens} onSave={(v) => setKnob('autoCompactTokens', v)} placeholder="80000" />
             </Row>
             <Row title="Max tool loops" desc="Hard cap on tool iterations per turn (cli.maxToolLoops).">

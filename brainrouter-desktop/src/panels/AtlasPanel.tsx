@@ -9,7 +9,7 @@
  * a drill breadcrumb, and open-in-editor. Styling tracks the app theme.
  */
 import React, { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
-import { ReactFlow, Background, Controls, MiniMap, type Edge, type Node, type ReactFlowInstance } from "@xyflow/react";
+import { ReactFlow, Background, Controls, ControlButton, MiniMap, type Edge, type Node, type ReactFlowInstance } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type { AtlasFileCategory, AtlasGraph, AtlasNode, AtlasNodeType } from "@kinqs/brainrouter-types";
 import {
@@ -542,7 +542,15 @@ export function AtlasPanel({ graph, building, enriching = false, onBuild, onEnri
           onPaneClick={() => { setSelected(null); setImpactNode(null); setHighlightNode(null); }}
         >
           <Background color="var(--border)" gap={24} size={1} />
-          <Controls showInteractive={false} />
+          <Controls showInteractive={false} showFitView={false}>
+            {/* Custom fit button: the default fits only on-screen (measured)
+                nodes, which is a no-op here because off-screen nodes are
+                virtualized away — pass the explicit id list so it frames all. */}
+            <ControlButton title="Fit view" aria-label="Fit view"
+              onClick={() => rfRef.current?.fitView({ nodes: rfNodes.map((n) => ({ id: n.id })), padding: 0.2, duration: 300, maxZoom: 1.2 })}>
+              <svg viewBox="0 0 14 14" width="12" height="12" aria-hidden="true"><path d="M2 2h3v1.4H3.4V5H2V2zm7 0h3v3h-1.4V3.4H9V2zM2 9h1.4v1.6H5V12H2V9zm8.6 0H12v3H9v-1.4h1.6V9z" /></svg>
+            </ControlButton>
+          </Controls>
           <MiniMap pannable zoomable nodeColor={(n) => {
             if (n.type === "atlasGroup") return "transparent";
             const gn = byId.get(n.id);

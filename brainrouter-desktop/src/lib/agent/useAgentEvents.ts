@@ -607,7 +607,16 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
         setProjSessions((prev) => withCachedProjectSessions(prev, root, merged));
       } return;
       case 'q-pr': setPrInfo(((result as { pr?: { number: number; state: string; title?: string } | null })?.pr) ?? null); return;
-      case 'q-ctx': if (result && typeof result === 'object') setContextUsage(result as { used: number; window: number; compactAt: number; limit: number; pct: number }); return;
+      case 'q-ctx': if (result && typeof result === 'object') {
+        const u = result as { used: number; window: number; compactAt: number; limit: number; pct: number };
+        // Auto-compaction must trigger WITHIN the model window — clamp the
+        // threshold to the window so its bar never shows a max larger than the
+        // model window (a knob bigger than the window can never fire: the
+        // provider rejects the request before that many tokens accrue).
+        const compactAt = u.window > 0 ? Math.min(u.compactAt, u.window) : u.compactAt;
+        const limit = compactAt > 0 ? compactAt : u.window;
+        setContextUsage({ ...u, compactAt, limit, pct: limit > 0 ? Math.min(1, u.used / limit) : 0 });
+      } return;
       // TRACK mode — project + work items. Create/transition return the updated list.
       case 'q-track-project': setTrack((t) => ({ ...t, project: (result as TrackProject | null) ?? null })); return;
       case 'q-track-items': case 'q-track-create': case 'q-track-transition':

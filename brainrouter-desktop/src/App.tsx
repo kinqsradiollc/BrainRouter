@@ -8,7 +8,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspens
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import {
   DiffPanel, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
-  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, AtlasPanel, WorkflowsPanel, WritePanel, MemoryPanel, PrototypePanel, TasksPanel, TerminalPanel, ToolsPanel, ContextPanel, PANEL_DEFS, type PanelId, type SearchHit, type ReviewFindingView,
+  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, AtlasPanel, WorkflowsPanel, MemoryPanel, PrototypePanel, TasksPanel, TerminalPanel, ToolsPanel, ContextPanel, PANEL_DEFS, type PanelId, type SearchHit, type ReviewFindingView,
 } from './panels/index.js';
 import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph, TrackProject, WorkItem, WorkItemType, Sprint, SprintState, AutomationRule, AutomationTrigger, AutomationAction, ProjectMember, ProjectRole } from '@kinqs/brainrouter-types';
 import { TrackView, type GitTrackContext, type SyncConfig, type SyncResult, type TrackPrStatus } from './track/TrackView.js';
@@ -1142,6 +1142,7 @@ export function App(): React.ReactElement {
             tabs={editor.tabs} activePath={editor.activePath} conflictPaths={editor.conflictPaths} saving={editor.saving} revealLine={editor.revealLine}
             onSelect={editor.select} onChange={editor.change} onSave={editor.save} onSaveAll={editor.saveAll}
             onRevert={editor.revert} onClose={closeEditorTab} onReorder={editor.reorder}
+            onOpenFile={(f) => openFile(f)} onOpenUrl={openUrl}
             onAnnotateSelection={(path, body, anchor) => {
               q('q-annot-create', 'annotation-create', {
                 type: 'file',
@@ -1198,7 +1199,6 @@ export function App(): React.ReactElement {
       }
       case 'search': return <SearchPanel hits={searchHits} onSearch={(query) => q('q-search', 'search-transcript', { q: query })} />;
       case 'workflows': return <WorkflowsPanel />;
-      case 'write': return <WritePanel />;
       case 'memory': return <MemoryPanel />;
       case 'prototype': return <PrototypePanel />;
       case 'schedule': return <SchedulePanel schedules={schedules} now={Date.now()}
