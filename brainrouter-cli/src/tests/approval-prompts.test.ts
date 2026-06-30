@@ -21,8 +21,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { applyYoloOn, applyYoloOff, writePreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
-import { setGoal, clearGoal } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
+import { applyYoloOn, applyYoloOff, writePreferences } from '@kinqs/brainrouter-core/session';
+import { setGoal, clearGoal } from '@kinqs/brainrouter-core/goal';
 
 // Helper — spin up a fresh workspace dir per test so the per-workspace
 // preferences file doesn't leak across cases.
@@ -56,7 +56,7 @@ test('applyYoloOn / applyYoloOff round-trip the two-axis state', async () => {
 test('ask_user_choice throws NoTTYError under /yolo (fast + proceed)', async () => {
   await withTempWorkspace(async (workspace) => {
     applyYoloOn(workspace);
-    const { Agent } = await import('@kinqs/brainrouter-core/dist/agent/agent.js');
+    const { Agent } = await import('@kinqs/brainrouter-core/agent');
     const { NoTTYError } = await import('../cli/cliPrompt.js');
     const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [] }), close: async () => {} };
     const agent = new Agent(
@@ -94,7 +94,7 @@ test('ask_user_choice does NOT bypass under fast-mode-only (no /yolo)', async ()
     // separately because there's no active readline in test mode; we just
     // assert the failure reason isn't the YOLO bypass.
     writePreferences(workspace, { executionMode: 'fast', reviewPolicy: 'request' });
-    const { Agent } = await import('@kinqs/brainrouter-core/dist/agent/agent.js');
+    const { Agent } = await import('@kinqs/brainrouter-core/agent');
     const { NoTTYError } = await import('../cli/cliPrompt.js');
     const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [] }), close: async () => {} };
     const agent = new Agent(
@@ -129,7 +129,7 @@ test('ask_user_choice bypasses under an active /goal even with /yolo off', async
     // The picker MUST still bypass because the auto-continuation loop
     // would otherwise stall on the modal.
     applyYoloOff(workspace);
-    const { Agent } = await import('@kinqs/brainrouter-core/dist/agent/agent.js');
+    const { Agent } = await import('@kinqs/brainrouter-core/agent');
     const { NoTTYError } = await import('../cli/cliPrompt.js');
     const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [] }), close: async () => {} };
     const agent = new Agent(
@@ -166,7 +166,7 @@ test('ask_user_choice combines bypass reasons when both /yolo and /goal are acti
   await withTempWorkspace(async (workspace) => {
     applyYoloOn(workspace);
     setGoal(workspace, 'Both axes engaged.', 's:both');
-    const { Agent } = await import('@kinqs/brainrouter-core/dist/agent/agent.js');
+    const { Agent } = await import('@kinqs/brainrouter-core/agent');
     const { NoTTYError } = await import('../cli/cliPrompt.js');
     const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [] }), close: async () => {} };
     const agent = new Agent(
@@ -203,7 +203,7 @@ test('ask_user_choice does NOT bypass under proceed-only (no /yolo)', async () =
   await withTempWorkspace(async (workspace) => {
     // Mirror of the previous test on the other axis.
     writePreferences(workspace, { executionMode: 'planning', reviewPolicy: 'proceed' });
-    const { Agent } = await import('@kinqs/brainrouter-core/dist/agent/agent.js');
+    const { Agent } = await import('@kinqs/brainrouter-core/agent');
     const { NoTTYError } = await import('../cli/cliPrompt.js');
     const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [] }), close: async () => {} };
     const agent = new Agent(
@@ -232,7 +232,7 @@ test('ask_user_choice does NOT bypass under proceed-only (no /yolo)', async () =
 
 // --- buildRunCommandPrompt: the helper that feeds askYesNo --------------
 
-import { buildRunCommandPrompt } from '@kinqs/brainrouter-core/dist/exec/dangerousCommand.js';
+import { buildRunCommandPrompt } from '@kinqs/brainrouter-core/exec';
 
 test('buildRunCommandPrompt embeds the command for the dangerous branch', () => {
   const prompt = buildRunCommandPrompt('rm -rf /tmp/foo');
@@ -249,7 +249,7 @@ test('buildRunCommandPrompt keeps the non-destructive variant clean', () => {
 });
 
 test('resolveRunCommandApproval: active /goal auto-approves safe commands even in planning mode', async () => {
-  const { resolveRunCommandApproval } = await import('@kinqs/brainrouter-core/dist/exec/dangerousCommand.js');
+  const { resolveRunCommandApproval } = await import('@kinqs/brainrouter-core/exec');
   // Planning + goal active + safe → auto-approve (don't stall the goal loop).
   assert.equal(
     resolveRunCommandApproval({ executionMode: 'planning' }, 'ls -la', { silent: false, goalActive: true }),
@@ -273,7 +273,7 @@ test('resolveRunCommandApproval: active /goal auto-approves safe commands even i
 });
 
 test('resolveRunCommandApproval: silent child + active /goal + safe → auto-approve', async () => {
-  const { resolveRunCommandApproval } = await import('@kinqs/brainrouter-core/dist/exec/dangerousCommand.js');
+  const { resolveRunCommandApproval } = await import('@kinqs/brainrouter-core/exec');
   // Silent children inherit the parent's "I trust automation" signal from
   // either /mode fast OR an active /goal.
   assert.equal(

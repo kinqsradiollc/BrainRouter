@@ -1,13 +1,13 @@
 import chalk from 'chalk';
 import type { CommandContext } from './_context.js';
-import { saveConfig, type ServerConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
-import { McpClientWrapper } from '@kinqs/brainrouter-core/dist/mcp/mcpClient.js';
-import { maskApiKey } from '@kinqs/brainrouter-core/dist/provider/catalog.js';
+import { saveConfig, type ServerConfig } from '@kinqs/brainrouter-core/config';
+import { McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
+import { maskApiKey } from '@kinqs/brainrouter-core/provider';
 import { runPicker, runTextField } from '../ink/runPicker.js';
 const pickFromList = runPicker;
 const promptText = runTextField;
 import { buildTheme, type Theme } from '../theme.js';
-import { readPreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
+import { readPreferences } from '@kinqs/brainrouter-core/session';
 import { editLlm, promptBrainrouterApiKey } from './config.js';
 
 /**

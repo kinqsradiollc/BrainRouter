@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildAgentForest, formatAgentForest, formatAgentWhy, statusGlyph } from '../orchestration/agentTree.js';
-import type { ChildSessionRecord } from '@kinqs/brainrouter-core/dist/orchestration/orchestrator.js';
+import type { ChildSessionRecord } from '@kinqs/brainrouter-core/orchestration';
 
 function rec(p: Partial<ChildSessionRecord> & { id: string; parentSessionKey: string; startedAt: string }): ChildSessionRecord {
   return {

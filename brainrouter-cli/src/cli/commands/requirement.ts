@@ -30,10 +30,10 @@ import {
   addClarifyingQuestion,
   answerClarifyingQuestion,
   openClarifyingQuestions,
-} from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
-import { seedPlanFromRequirement, formatPlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
-import { syncRequirementPlanTrack } from '@kinqs/brainrouter-core/dist/requirement/planTrackSync.js';
-import { emitAgentEvent } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
+} from '@kinqs/brainrouter-core/requirement';
+import { seedPlanFromRequirement, formatPlan } from '@kinqs/brainrouter-core/task';
+import { syncRequirementPlanTrack } from '@kinqs/brainrouter-core/requirement';
+import { emitAgentEvent } from '@kinqs/brainrouter-core/memory';
 import type { CommandContext } from './_context.js';
 
 export async function tryHandleRequirementCommand(ctx: CommandContext): Promise<boolean> {

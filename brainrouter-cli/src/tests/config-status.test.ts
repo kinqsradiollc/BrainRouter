@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { selfHealConfig, type Config } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { selfHealConfig, type Config } from '@kinqs/brainrouter-core/config';
 import { describeActiveServer } from '../cli/commands/serverStatus.js';
 
 /**

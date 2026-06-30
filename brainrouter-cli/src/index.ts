@@ -90,8 +90,8 @@ import fs from 'node:fs';
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
-import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath, getCliKnobs, setCliKnobOverride, hydrateConfigDefaultsOnDisk, resolveCliKnobs, type LLMConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
-import { redactText } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
+import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath, getCliKnobs, setCliKnobOverride, hydrateConfigDefaultsOnDisk, resolveCliKnobs, type LLMConfig } from '@kinqs/brainrouter-core/config';
+import { redactText, resolveSessionLlmConfig } from '@kinqs/brainrouter-core/session';
 
 if (getCliKnobs().debugExit) {
   process.on('beforeExit', (code) => {
@@ -101,20 +101,18 @@ if (getCliKnobs().debugExit) {
     process.stderr.write(`[brainrouter:debug] exit code=${code}\n`);
   });
 }
-import { McpClientWrapper } from '@kinqs/brainrouter-core/dist/mcp/mcpClient.js';
-import { McpClientPool, selectMcpServerIds, applyBrainUrlOverride, probeBrainHealth, embeddedBrainId } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
+import { McpClientWrapper, McpClientPool, selectMcpServerIds, applyBrainUrlOverride, probeBrainHealth, embeddedBrainId } from '@kinqs/brainrouter-core/mcp';
 import { formatJsonlEvent, memoryRunEvent, isOffloadTool, type RunEvent } from './runtime/jsonlEvents.js';
 import { costUsd } from './runtime/pricing.js';
-import { VERSION } from '@kinqs/brainrouter-core/dist/version.js';
-import { loadExtensions } from '@kinqs/brainrouter-core/dist/extension/loader.js';
+import { VERSION } from '@kinqs/brainrouter-core/version';
+import { loadExtensions } from '@kinqs/brainrouter-core/extension';
 import { setKnownMcpServerIds } from './cli/ink/toolFormat.js';
-import type { ServerConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
-import { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import type { ServerConfig } from '@kinqs/brainrouter-core/config';
+import { Agent } from '@kinqs/brainrouter-core/agent';
 import { cliPrompter } from './cli/cliPrompt.js';
 import { runChat } from './cli/ink/runChat.js';
-import { applyWorkspaceRoot, findWorkspaceRoot } from '@kinqs/brainrouter-core/dist/workspace/workspace.js';
+import { applyWorkspaceRoot, findWorkspaceRoot } from '@kinqs/brainrouter-core/workspace';
 import { runWizard, isOnboarded } from './cli/ink/runWizard.js';
-import { resolveSessionLlmConfig } from '@kinqs/brainrouter-core/dist/session/sessionRuntimeStore.js';
 
 const DEFAULT_LLM: LLMConfig = { provider: 'openai', model: 'gpt-4o-mini', apiKey: '' };
 
@@ -300,7 +298,7 @@ program
     // transcript into this launch before the REPL starts. Errors print and
     // fall through to a fresh session (never abort the launch).
     if (options.continue || options.resume) {
-      const { listTranscripts, loadTranscript } = await import('@kinqs/brainrouter-core/dist/session/sessionStore.js');
+      const { listTranscripts, loadTranscript } = await import('@kinqs/brainrouter-core/session');
       const { pickResumeSession } = await import('./state/resumePicker.js');
       const pick = pickResumeSession(listTranscripts(workspace.workspaceRoot), {
         continueLatest: !!options.continue,
@@ -386,7 +384,7 @@ program
       if (Number.isFinite(n) && n > 0) setCliKnobOverride({ maxToolLoops: Math.floor(n) });
     }
     if (options.disallowedTools) {
-      const { parseToolList } = await import('@kinqs/brainrouter-core/dist/exec/permissionRules.js');
+      const { parseToolList } = await import('@kinqs/brainrouter-core/exec');
       const denied = parseToolList(String(options.disallowedTools));
       if (denied.length > 0) {
         const current = getCliKnobs().permissions;
@@ -802,7 +800,7 @@ program
     const workspace = findWorkspaceRoot();
     applyWorkspaceRoot(workspace.workspaceRoot);
     // Reconcile + list happens locally — no MCP needed.
-    const { reconcileStale, listSessions } = await import('@kinqs/brainrouter-core/dist/orchestration/orchestrator.js');
+    const { reconcileStale, listSessions } = await import('@kinqs/brainrouter-core/orchestration');
     reconcileStale(workspace.workspaceRoot);
     const sessions = listSessions(workspace.workspaceRoot);
     if (options.json) {

@@ -1,4 +1,4 @@
-import type { AccessMode } from '@kinqs/brainrouter-core/dist/exec/execPolicy.js';
+import type { AccessMode } from '@kinqs/brainrouter-core/exec';
 
 /**
  * REVIEW-FIX (0.4.7) — the single authoritative `/review` orchestration prompt.

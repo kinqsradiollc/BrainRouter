@@ -13,8 +13,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { McpClientPool } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
-import { callMcpTool, hasMcpTool } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
+import { callMcpTool, hasMcpTool, type McpClientPool } from '@kinqs/brainrouter-core/mcp';
 
 const HEARTBEAT_INTERVAL_MS = 30 * 1000;
 const INBOX_POLL_INTERVAL_MS = 5 * 1000;

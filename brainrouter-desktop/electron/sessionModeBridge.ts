@@ -1,5 +1,4 @@
-import type { EffortLevel, ExecutionMode, ReviewPolicy } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
-import type { ResolvedMode, SessionMode } from '@kinqs/brainrouter-core/dist/session/sessionModeStore.js';
+import type { EffortLevel, ExecutionMode, ReviewPolicy, ResolvedMode, SessionMode } from '@kinqs/brainrouter-core/session';
 
 export type DesktopSessionModePatch = Partial<SessionMode>;
 

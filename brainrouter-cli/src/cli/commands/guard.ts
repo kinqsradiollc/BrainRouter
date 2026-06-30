@@ -7,11 +7,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { exec } from 'node:child_process';
 import chalk from 'chalk';
-import { applyYoloOff, applyYoloOn, readPreferences, writePreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
-import { resolveActiveMode, setSessionMode } from '@kinqs/brainrouter-core/dist/session/sessionModeStore.js';
-import { addHook, readHooks, removeHook, setHookEnabled, type HookEvent } from '@kinqs/brainrouter-core/dist/hooks/hooksStore.js';
-import { createHookifyRule, deleteHookifyRule, listHookifyRules, toggleHookifyRule } from '@kinqs/brainrouter-core/dist/hooks/hookifyStore.js';
-import { saveConfig, getCliKnobs } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { applyYoloOff, applyYoloOn, readPreferences, writePreferences, resolveActiveMode, setSessionMode } from '@kinqs/brainrouter-core/session';
+import { addHook, readHooks, removeHook, setHookEnabled, type HookEvent } from '@kinqs/brainrouter-core/hooks';
+import { createHookifyRule, deleteHookifyRule, listHookifyRules, toggleHookifyRule } from '@kinqs/brainrouter-core/hooks';
+import { saveConfig, getCliKnobs } from '@kinqs/brainrouter-core/config';
 import type { CommandContext } from './_context.js';
 
 
@@ -285,7 +284,7 @@ export async function tryHandleGuardCommand(ctx: CommandContext): Promise<boolea
         console.log(chalk.gray(`\nNo credentials were set on profile "${profile}".\n`));
         return true;
       }
-      const { saveConfig } = await import('@kinqs/brainrouter-core/dist/config/config.js');
+      const { saveConfig } = await import('@kinqs/brainrouter-core/config');
       saveConfig(config);
       console.log(chalk.green(`\n✓ Cleared ${removed.join(', ')} from profile "${profile}".`));
       console.log(chalk.gray('  Re-attach with /login.\n'));

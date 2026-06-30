@@ -1,21 +1,21 @@
 import chalk from 'chalk';
 import type { CommandContext } from './_context.js';
-import { getConfigPath, getCliKnobs, saveConfig, setCliKnobOverride, _resetCliKnobsCache, type ServerConfig, type LLMConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { getConfigPath, getCliKnobs, saveConfig, setCliKnobOverride, _resetCliKnobsCache, type ServerConfig, type LLMConfig } from '@kinqs/brainrouter-core/config';
 import {
   listProviderNames, setProvider, removeProvider, setAgentModel, describeAgentModel, SUBAGENT_ROLES,
-} from '@kinqs/brainrouter-core/dist/provider/agentModels.js';
+  PROVIDER_CATALOG, maskApiKey, validateApiKey,
+} from '@kinqs/brainrouter-core/provider';
 import {
   readPreferences,
   writePreferences,
   resolveEffort,
+  setSessionRuntime,
   type Preferences,
   type EffortLevel,
   type ExecutionMode,
   type ReviewPolicy,
-} from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
-import { setSessionRuntime } from '@kinqs/brainrouter-core/dist/session/sessionRuntimeStore.js';
+} from '@kinqs/brainrouter-core/session';
 import { isKnownSegment, SEGMENT_NAMES } from '../statusline.js';
-import { PROVIDER_CATALOG, maskApiKey, validateApiKey } from '@kinqs/brainrouter-core/dist/provider/catalog.js';
 import { selectModel } from '../wizard/modelsApi.js';
 // 0.3.7 — picker / prompt moved to Ink. The raw-stdout pickFromList /
 // promptText primitives had compounding redraw bugs (frame creep on

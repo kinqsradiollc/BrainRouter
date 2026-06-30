@@ -30,11 +30,11 @@ import {
   addMember,
   updateMemberRole,
   removeMember,
-} from '@kinqs/brainrouter-core/dist/track/trackStore.js';
-import { parseTrackQuery } from '@kinqs/brainrouter-core/dist/track/query.js';
-import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/dist/track/githubSync.js';
-import { scanGitCommitsForTrack } from '@kinqs/brainrouter-core/dist/track/commitScanner.js';
-import { emitAgentEvent } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
+} from '@kinqs/brainrouter-core/track';
+import { parseTrackQuery } from '@kinqs/brainrouter-core/track';
+import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/track';
+import { scanGitCommitsForTrack } from '@kinqs/brainrouter-core/track';
+import { emitAgentEvent } from '@kinqs/brainrouter-core/memory';
 import type { CommandContext } from './_context.js';
 
 const TYPE_MARK: Record<WorkItemType, string> = { epic: '◆', story: '▣', task: '▸', bug: '✦', 'sub-task': '↳' };

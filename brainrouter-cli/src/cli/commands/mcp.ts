@@ -19,9 +19,8 @@
 import chalk from 'chalk';
 import { spinner as makeSpinner } from '../spinner.js';
 import type { CommandContext } from './_context.js';
-import { saveConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
-import { resolveIdentityFromConfig } from '@kinqs/brainrouter-core/dist/mcp/mcpClient.js';
-import { selectMcpServerIds } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
+import { saveConfig } from '@kinqs/brainrouter-core/config';
+import { resolveIdentityFromConfig, selectMcpServerIds } from '@kinqs/brainrouter-core/mcp';
 import { buildBannerInputs, renderBanner } from '../banner.js';
 import { resolveTheme } from '../theme.js';
 import { runMcpInstall } from './mcpInstall.js';

@@ -1,6 +1,6 @@
 import { BrowserWindow, desktopCapturer, screen } from 'electron';
 import type { AgentImage, ComputerUseAction, ComputerUseActionResult, ComputerUsePort } from '@kinqs/brainrouter-agent-protocol';
-import { expandChordKeys } from '@kinqs/brainrouter-core/dist/agent/computerUse.js';
+import { expandChordKeys } from '@kinqs/brainrouter-core/agent';
 import { checkComputerUsePermissions } from './computerUsePermissions.js';
 import { loadLibnut, type LibnutBinding } from './computerUseLibnut.js';
 

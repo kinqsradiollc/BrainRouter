@@ -7,6 +7,162 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": "./dist/index.js",
+    "./agent": {
+      "types": "./dist/agent/index.d.ts",
+      "default": "./dist/agent/index.js"
+    },
+    "./annotation": {
+      "types": "./dist/annotation/index.d.ts",
+      "default": "./dist/annotation/index.js"
+    },
+    "./artifact": {
+      "types": "./dist/artifact/index.d.ts",
+      "default": "./dist/artifact/index.js"
+    },
+    "./atlas": {
+      "types": "./dist/atlas/index.d.ts",
+      "default": "./dist/atlas/index.js"
+    },
+    "./attachment": {
+      "types": "./dist/attachment/index.d.ts",
+      "default": "./dist/attachment/index.js"
+    },
+    "./background": {
+      "types": "./dist/background/index.d.ts",
+      "default": "./dist/background/index.js"
+    },
+    "./command": {
+      "types": "./dist/command/index.d.ts",
+      "default": "./dist/command/index.js"
+    },
+    "./config": {
+      "types": "./dist/config/index.d.ts",
+      "default": "./dist/config/index.js"
+    },
+    "./connectors": {
+      "types": "./dist/connectors/index.d.ts",
+      "default": "./dist/connectors/index.js"
+    },
+    "./context": {
+      "types": "./dist/context/index.d.ts",
+      "default": "./dist/context/index.js"
+    },
+    "./exec": {
+      "types": "./dist/exec/index.d.ts",
+      "default": "./dist/exec/index.js"
+    },
+    "./extension": {
+      "types": "./dist/extension/index.d.ts",
+      "default": "./dist/extension/index.js"
+    },
+    "./git": {
+      "types": "./dist/git/index.d.ts",
+      "default": "./dist/git/index.js"
+    },
+    "./goal": {
+      "types": "./dist/goal/index.d.ts",
+      "default": "./dist/goal/index.js"
+    },
+    "./hooks": {
+      "types": "./dist/hooks/index.d.ts",
+      "default": "./dist/hooks/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp/index.d.ts",
+      "default": "./dist/mcp/index.js"
+    },
+    "./memory": {
+      "types": "./dist/memory/index.d.ts",
+      "default": "./dist/memory/index.js"
+    },
+    "./orchestration": {
+      "types": "./dist/orchestration/index.d.ts",
+      "default": "./dist/orchestration/index.js"
+    },
+    "./pack": {
+      "types": "./dist/pack/index.d.ts",
+      "default": "./dist/pack/index.js"
+    },
+    "./prompt": {
+      "types": "./dist/prompt/index.d.ts",
+      "default": "./dist/prompt/index.js"
+    },
+    "./prototype": {
+      "types": "./dist/prototype/index.d.ts",
+      "default": "./dist/prototype/index.js"
+    },
+    "./provider": {
+      "types": "./dist/provider/index.d.ts",
+      "default": "./dist/provider/index.js"
+    },
+    "./requirement": {
+      "types": "./dist/requirement/index.d.ts",
+      "default": "./dist/requirement/index.js"
+    },
+    "./review": {
+      "types": "./dist/review/index.d.ts",
+      "default": "./dist/review/index.js"
+    },
+    "./schedule": {
+      "types": "./dist/schedule/index.d.ts",
+      "default": "./dist/schedule/index.js"
+    },
+    "./session": {
+      "types": "./dist/session/index.d.ts",
+      "default": "./dist/session/index.js"
+    },
+    "./storage": {
+      "types": "./dist/storage/index.d.ts",
+      "default": "./dist/storage/index.js"
+    },
+    "./task": {
+      "types": "./dist/task/index.d.ts",
+      "default": "./dist/task/index.js"
+    },
+    "./telemetry": {
+      "types": "./dist/telemetry/index.d.ts",
+      "default": "./dist/telemetry/index.js"
+    },
+    "./tool": {
+      "types": "./dist/tool/index.d.ts",
+      "default": "./dist/tool/index.js"
+    },
+    "./track": {
+      "types": "./dist/track/index.d.ts",
+      "default": "./dist/track/index.js"
+    },
+    "./usage": {
+      "types": "./dist/usage/index.d.ts",
+      "default": "./dist/usage/index.js"
+    },
+    "./util": {
+      "types": "./dist/util/index.d.ts",
+      "default": "./dist/util/index.js"
+    },
+    "./worker": {
+      "types": "./dist/worker/index.d.ts",
+      "default": "./dist/worker/index.js"
+    },
+    "./workflow": {
+      "types": "./dist/workflow/index.d.ts",
+      "default": "./dist/workflow/index.js"
+    },
+    "./workspace": {
+      "types": "./dist/workspace/index.d.ts",
+      "default": "./dist/workspace/index.js"
+    },
+    "./worktree": {
+      "types": "./dist/worktree/index.d.ts",
+      "default": "./dist/worktree/index.js"
+    },
+    "./write": {
+      "types": "./dist/write/index.d.ts",
+      "default": "./dist/write/index.js"
+    },
+    "./version": {
+      "types": "./dist/version.d.ts",
+      "default": "./dist/version.js"
+    },
     "./dist/*": "./dist/*"
   },
   "files": [

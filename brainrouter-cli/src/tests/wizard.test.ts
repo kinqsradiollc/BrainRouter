@@ -13,14 +13,12 @@ import {
   maskApiKey,
   PROVIDER_CATALOG,
   validateApiKey,
-} from '@kinqs/brainrouter-core/dist/provider/catalog.js';
-import { initPickerState, reducePicker } from '../cli/cliPrompt.js';
-import {
   findProviderByEndpoint,
   isLoopbackEndpoint,
   normalizeProviderEndpoint,
   LOCAL_PLACEHOLDER_KEY,
-} from '@kinqs/brainrouter-core/dist/provider/providers/index.js';
+} from '@kinqs/brainrouter-core/provider';
+import { initPickerState, reducePicker } from '../cli/cliPrompt.js';
 
 // --- Step ordering -----------------------------------------------------
 

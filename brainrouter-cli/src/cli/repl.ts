@@ -2,9 +2,9 @@ import readline from 'node:readline';
 import fs from 'node:fs';
 import path from 'node:path';
 import chalk from 'chalk';
-import type { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
-import type { McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
-import type { Config } from '@kinqs/brainrouter-core/dist/config/config.js';
+import type { Agent } from '@kinqs/brainrouter-core/agent';
+import type { McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
+import type { Config } from '@kinqs/brainrouter-core/config';
 import type { ReplContext } from './commands/_context.js';
 // Category dispatch — extracted slash-command handlers. Each module exports
 // a tryHandleX(ctx) that returns true iff it matched the command. Walked
@@ -41,7 +41,7 @@ import { loadCustomCommands, findCustomCommand, expandCommandBody } from '../run
  */
 // §ADR-003 — the command catalog moved to core; imported here for the REPL's
 // own help renderer AND re-exported so existing CLI importers keep working.
-import { SLASH_COMMANDS, HELP_CATEGORIES, type HelpEntry, type HelpCategory } from '@kinqs/brainrouter-core/dist/command/catalog.js';
+import { SLASH_COMMANDS, HELP_CATEGORIES, type HelpEntry, type HelpCategory } from '@kinqs/brainrouter-core/command';
 export { SLASH_COMMANDS, HELP_CATEGORIES, type HelpEntry, type HelpCategory };
 
 export function renderHelp(category?: string): void {

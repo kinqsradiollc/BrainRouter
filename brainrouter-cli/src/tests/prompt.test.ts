@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildChatCompletionPayload, LOCAL_TOOLS, resolveWireEffort } from '@kinqs/brainrouter-core/dist/agent/agent.js';
-import { _resetModelReasoningCapabilities, registerModelReasoningCapabilities } from '@kinqs/brainrouter-core/dist/provider/models/reasoning.js';
-import { buildSystemPrompt } from '@kinqs/brainrouter-core/dist/prompt/systemPrompt.js';
-import { buildRolePrompt, listRoles, resolveRole } from '@kinqs/brainrouter-core/dist/orchestration/roles.js';
+import { buildChatCompletionPayload, LOCAL_TOOLS, resolveWireEffort } from '@kinqs/brainrouter-core/agent';
+import { _resetModelReasoningCapabilities, registerModelReasoningCapabilities } from '@kinqs/brainrouter-core/provider';
+import { buildSystemPrompt } from '@kinqs/brainrouter-core/prompt';
+import { buildRolePrompt, listRoles, resolveRole } from '@kinqs/brainrouter-core/orchestration';
 import { buildSkillPrompt, resolveSkill, SLASH_TO_SKILL } from '../prompt/skillRunner.js';
-import { setCliKnobOverride, _resetCliKnobsCache } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { setCliKnobOverride, _resetCliKnobsCache } from '@kinqs/brainrouter-core/config';
 
 test('buildChatCompletionPayload exposes local and MCP tools to the LLM', () => {
   const payload = buildChatCompletionPayload(

@@ -9,14 +9,14 @@
  * command wiring in `workflow.ts` calls them.
  */
 
-import { buildTemplatePlan, WORKFLOW_TEMPLATES } from '@kinqs/brainrouter-core/dist/workflow/workflowTemplates.js';
+import { buildTemplatePlan, WORKFLOW_TEMPLATES } from '@kinqs/brainrouter-core/workflow';
 import {
   type WorkflowRun,
   phaseRunGlyph,
   summarizePhases,
   formatPhaseGlyphs,
   formatDuration,
-} from '@kinqs/brainrouter-core/dist/workflow/workflowRun.js';
+} from '@kinqs/brainrouter-core/workflow';
 
 export type LaunchResult =
   | { ok: true; prompt: string; title: string }
