@@ -145,7 +145,7 @@ import { advanceRunStep, summarizeRun } from '../workflow/workflowRun.js';
 import { spawnWorkerThread, waitWorker } from '../orchestration/workerTools.js';
 // PARITY-E3: runtime model fallback on model-not-found.
 import { isModelNotFoundError, shouldFallbackModel } from '../provider/modelFallback.js';
-import { resolveLocalModelProfile } from '../provider/modelFamily.js';
+import { resolveLocalModelProfile, localModelProfileActive, isLocalModelCoreTool } from '../provider/modelFamily.js';
 // 0.3.9 item 10 — provider-normalised cache-hit accounting.
 import { extractCacheStats } from '../util/cacheStats.js';
 // 0.3.9 item 11 — tool-call repair pipeline (flatten / scavenge /
@@ -1279,13 +1279,19 @@ export class Agent {
     // points stay hidden; when ON they're exposed and the full MCP catalog is
     // collapsed below so the model searches for tools instead of carrying them all.
     const mcpDiscoveryOn = cliKnobs.mcpProgressiveDiscovery;
+    // HONK-L2 — for local/weak models, pin the built-in surface to the core
+    // allowlist and hide the long tail (a small surface is what they handle
+    // reliably). Strong/unknown models are untouched. Orchestration tools are
+    // added separately, so delegation is unaffected.
+    const localToolScope = localModelProfileActive(this.llmConfig.model, cliKnobs.localModelProfile);
     const filteredLocalTools = localToolSpecsFromExecutors().filter(
       (t) =>
         allowed.has(t.name) &&
         !MODEL_HIDDEN_TOOLS.has(t.name) &&
         !(hideWorkerTools && WORKER_THREAD_TOOLS.has(t.name)) &&
         !(hideComputerUse && t.name === 'computer_use') &&
-        !(!mcpDiscoveryOn && MCP_DISCOVERY_TOOLS.has(t.name)),
+        !(!mcpDiscoveryOn && MCP_DISCOVERY_TOOLS.has(t.name)) &&
+        !(localToolScope && !isLocalModelCoreTool(t.name)),
     );
     // Multi-MCP parity: expose every connected third-party MCP tool and the
     // model-safe BrainRouter MCP tools in one turn, using the pool's

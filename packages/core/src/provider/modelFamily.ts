@@ -64,6 +64,55 @@ export function isLocalModelFamily(model: string | undefined): boolean {
   return local.some((re) => re.test(id));
 }
 
+/**
+ * HONK-L2 — the hard tool allowlist for local models. When the profile is active,
+ * the built-in tool surface is pinned to this core set and the long tail (computer
+ * use, web/research, LSP, worker threads, artifacts, track, MCP-resource browsing,
+ * catalog refresh) is hidden — a small surface is what weak models handle reliably.
+ * Orchestration tools (task_agent/delegate_agent) are added elsewhere and are NOT
+ * affected here, so delegation still works.
+ *
+ * Deliberately GENEROUS on lifecycle/turn-control (plan, finish, ask, chapter) so a
+ * clamped model can still drive and end a turn.
+ */
+export const LOCAL_MODEL_CORE_TOOLS: ReadonlySet<string> = new Set<string>([
+  // file + search + edit + shell — the Honk core allowlist
+  'read_file',
+  'write_file',
+  'edit_file',
+  'apply_patch',
+  'list_dir',
+  'grep_search',
+  'glob_files',
+  'run_command',
+  // turn control / lifecycle — must stay so the model can plan + end its turn
+  'update_plan',
+  'goal_complete',
+  'goal_blocked',
+  'mark_chapter',
+  'ask_user_choice',
+  'extract_result',
+  'task_output',
+  // bounded waits + the MCP discovery entrypoints (when progressive discovery is on)
+  'wait_until',
+  'wait_worker',
+  'mcp_search',
+  'mcp_describe',
+  'mcp_call',
+  'read_mcp_resource',
+]);
+
+/** True when `name` is in the local-model core allowlist (HONK-L2). */
+export function isLocalModelCoreTool(name: string): boolean {
+  return LOCAL_MODEL_CORE_TOOLS.has(name);
+}
+
+/** Whether the local-model profile is active for `model` under `mode`
+ *  (shared gate for the caps clamp AND the tool allowlist). */
+export function localModelProfileActive(model: string | undefined, mode: LocalModelProfileMode): boolean {
+  return mode === 'on' || (mode === 'auto' && isLocalModelFamily(model));
+}
+
 export type LocalModelProfileMode = 'auto' | 'on' | 'off';
 
 /** Caps the harness consumes. Structurally a subset of `ResolvedCliKnobs`, so the
@@ -103,7 +152,7 @@ export function resolveLocalModelProfile(
   mode: LocalModelProfileMode,
   base: HarnessCaps,
 ): ResolvedHarnessCaps {
-  const active = mode === 'on' || (mode === 'auto' && isLocalModelFamily(model));
+  const active = localModelProfileActive(model, mode);
   if (!active) return { active: false, ...base };
   return {
     active: true,
