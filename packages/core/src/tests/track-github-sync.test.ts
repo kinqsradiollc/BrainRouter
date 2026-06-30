@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ensureProject, createWorkItem, listWorkItems, getWorkItem, getGithubLinks, listMembers } from '../track/trackStore.js';
+import { ensureProject, createWorkItem, listWorkItems, getWorkItem, getGithubLinks, listMembers, addComment, listLabels, getLabel } from '../track/trackStore.js';
 import {
   workItemToIssue,
   issueToWorkItem,
@@ -19,22 +19,32 @@ import { createConnector } from '../connectors/connectorStore.js';
 import { setCliKnobOverride } from '../config/config.js';
 import { withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 
-/** A scriptable fetch mock: records calls, returns queued responses, fakes issue creation. */
-function mockGithub(initialIssues: GithubIssue[] = [], collaborators: GithubCollaborator[] = []) {
+/** A scriptable fetch mock: records calls, returns queued responses, fakes issue + comment creation. */
+function mockGithub(initialIssues: GithubIssue[] = [], collaborators: GithubCollaborator[] = [], initialComments: Record<number, Array<{ id: number; body?: string; user?: { login: string } }>> = {}) {
   const calls: Array<{ method: string; url: string; body?: unknown }> = [];
   const issues = [...initialIssues];
+  const comments: Record<number, Array<{ id: number; body?: string; user?: { login: string } }>> = { ...initialComments };
   let nextNumber = Math.max(0, ...issues.map((i) => i.number)) + 1;
+  let nextCommentId = 1000;
+  const issueNumberFromUrl = (url: string): number => Number(url.match(/\/issues\/(\d+)\/comments/)?.[1] ?? 0);
   const fetchImpl: FetchLike = async (url, init) => {
     const method = init?.method ?? 'GET';
     const body = init?.body ? JSON.parse(init.body) : undefined;
     calls.push({ method, url, body });
+    // Comment endpoints (must precede the generic issue handlers).
+    if (url.includes('/comments')) {
+      const n = issueNumberFromUrl(url);
+      if (method === 'GET') return resp(200, comments[n] ?? []);
+      if (method === 'POST') { const c = { id: nextCommentId++, body: body.body, user: { login: 'tester' } }; (comments[n] ??= []).push(c); return resp(201, c); }
+      return resp(400, {});
+    }
     if (method === 'GET' && url.includes('/collaborators')) return resp(200, collaborators);
     if (method === 'GET') return resp(200, issues);
     if (method === 'POST') { const created: GithubIssue = { number: nextNumber++, title: body.title, body: body.body, labels: body.labels, state: 'open', html_url: `https://github.com/x/y/issues/${nextNumber - 1}` }; issues.push(created); return resp(201, created); }
     if (method === 'PATCH') return resp(200, { number: 1 });
     return resp(400, {});
   };
-  return { fetchImpl, calls, issues };
+  return { fetchImpl, calls, issues, comments };
   function resp(status: number, json: unknown) { return { ok: status < 400, status, json: async () => json, text: async () => JSON.stringify(json) }; }
 }
 
@@ -245,5 +255,47 @@ test('github config resolver keeps dynamic connector repos visible without an HT
     assert.equal(resolved.repo, 'octo/app');
     assert.equal(resolved.token, undefined);
     assert.equal(resolved.connectorId, connector.id);
+  });
+});
+
+test('github comments: local comments push up; remote comments pull down; both id-mapped (no dupes)', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    ensureProject(ws, { key: 'BR' });
+    const w = createWorkItem(ws, { title: 'Discuss' });
+    addComment(ws, w.key, 'you', 'first thought');
+    const gh = mockGithub();
+    // export: creates the issue AND pushes the local comment
+    const exp = await exportToGithub(ws, OPTS(gh.fetchImpl));
+    assert.equal(exp.comments!.pushed, 1);
+    assert.equal(gh.calls.filter((c) => c.method === 'POST' && c.url.includes('/comments')).length, 1);
+    // re-export: the comment now has an externalId → not pushed again
+    const exp2 = await exportToGithub(ws, OPTS(gh.fetchImpl));
+    assert.equal(exp2.comments!.pushed, 0);
+
+    // a NEW remote comment arrives on the same issue
+    const issueNumber = Object.values(getGithubLinks(ws))[0].number;
+    gh.comments[issueNumber].push({ id: 42, body: 'reply from GitHub', user: { login: 'octo' } });
+    const imp = await importFromGithub(ws, OPTS(gh.fetchImpl));
+    assert.equal(imp.comments!.pulled, 1);
+    const after = getWorkItem(ws, w.key)!;
+    assert.ok(after.comments.some((c) => c.body === 'reply from GitHub' && c.author === 'octo' && c.externalId === '42'));
+    // re-import: the pushed-up comment + the pulled-down one are both mapped → no dupes
+    const imp2 = await importFromGithub(ws, OPTS(gh.fetchImpl));
+    assert.equal(imp2.comments!.pulled, 0);
+    assert.equal(getWorkItem(ws, w.key)!.comments.length, 2);
+  });
+});
+
+test('github labels: importing an issue registers its labels with their GitHub colors', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    ensureProject(ws, { key: 'BR' });
+    const gh = mockGithub([
+      { number: 1, title: 'Colored', state: 'open', labels: [{ name: 'bug', color: 'd73a4a' }, { name: 'ui', color: '00ff00' }] },
+    ]);
+    await importFromGithub(ws, OPTS(gh.fetchImpl));
+    assert.equal(getLabel(ws, 'bug')?.color, '#d73a4a'); // GitHub hex gets a "#" prefix
+    assert.equal(getLabel(ws, 'ui')?.color, '#00ff00');
+    assert.equal(getLabel(ws, 'bug')?.externalSource, 'github');
+    assert.ok(listLabels(ws).length >= 2);
   });
 });

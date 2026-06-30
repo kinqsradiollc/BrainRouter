@@ -472,18 +472,32 @@ export function transitionWorkItem(workspaceRoot: string, idOrKey: string, toSta
   return getWorkItem(workspaceRoot, item.id) ?? item;
 }
 
-/** Add a comment; returns the updated item. */
-export function addComment(workspaceRoot: string, idOrKey: string, author: string, body: string): WorkItem | undefined {
+/** Optional external provenance for a synced comment (e.g. a GitHub issue comment). */
+export interface CommentExternal { externalSource: string; externalId: string }
+
+/** Add a comment; returns the updated item. `external` tags it as synced (round-trip key). */
+export function addComment(workspaceRoot: string, idOrKey: string, author: string, body: string, external?: CommentExternal): WorkItem | undefined {
   const store = readTrack(workspaceRoot);
   const item = store.workItems[idOrKey] ?? Object.values(store.workItems).find((w) => w.key === idOrKey);
   if (!item) return undefined;
   assertCan(workspaceRoot, author, 'edit-item');
   const ts = nowIso();
-  const comment: WorkItemComment = { id: shortId('cmt'), author, body, createdAt: ts };
+  const comment: WorkItemComment = { id: shortId('cmt'), author, body, createdAt: ts, ...external };
   item.comments.push(comment);
   item.updatedAt = ts;
   writeTrack(workspaceRoot, store);
   return item;
+}
+
+/** Record the external id for a locally-authored comment after it is pushed to GitHub. */
+export function recordCommentSync(workspaceRoot: string, itemId: string, commentId: string, external: CommentExternal): void {
+  const store = readTrack(workspaceRoot);
+  const item = store.workItems[itemId];
+  const comment = item?.comments.find((c) => c.id === commentId);
+  if (!comment) return;
+  comment.externalSource = external.externalSource;
+  comment.externalId = external.externalId;
+  writeTrack(workspaceRoot, store);
 }
 
 export interface LinkWorkItemInput {
