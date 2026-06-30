@@ -12,7 +12,7 @@ import {
   detectProviderFromEnv,
   validateApiKey,
   maskApiKey,
-} from '@kinqs/brainrouter-core/dist/provider/catalog.js';
+} from '@kinqs/brainrouter-core/provider';
 import {
   initWizardState,
   reduceWizard,

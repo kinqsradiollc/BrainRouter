@@ -22,7 +22,7 @@ import { InteractionBroker, type AgentEvent, type AgentImage, type ComputerUseAc
 import { Agent, classifyForVerification, callOpenAI } from '@kinqs/brainrouter-core/agent';
 import { loadConfig, saveConfig, getCliKnobs, _resetCliKnobsCache, applyRuleEdit, type LLMConfig } from '@kinqs/brainrouter-core/config';
 // 0.4.15 — named providers + per-sub-agent model routing (pure transforms).
-import { setProvider, removeProvider, setAgentModel, normalizeProviderModels } from '@kinqs/brainrouter-core/dist/provider/agentModels.js';
+import { setProvider, removeProvider, setAgentModel, normalizeProviderModels, PROVIDER_CATALOG, LOCAL_PLACEHOLDER_KEY, withApiVersion, inferModelReasoningCapabilities, registerModelReasoningCapabilities, refreshLmStudioCache } from '@kinqs/brainrouter-core/provider';
 import { McpClientPool, childSessionKey } from '@kinqs/brainrouter-core/mcp';
 import { listTranscripts, loadTranscript, readTranscriptTail, transcriptExists, transcriptSizeBytes, deleteSession, forkSession, appendTranscriptEntry, rewindTranscript, type TranscriptSummary, readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups, type SessionMeta, getSessionRuntime, setSessionRuntime, resolveSessionLlmConfig, getSessionMode, setSessionMode, resolveActiveMode, buildRecap, readPreferences, writePreferences, searchTranscript, exportTranscriptMarkdown, exportTranscriptJson, exportFileName, listChapters } from '@kinqs/brainrouter-core/session';
 import { readUsageHistory, totalUsage } from '@kinqs/brainrouter-core/dist/usage/usageHistoryStore.js';
@@ -54,10 +54,6 @@ import { buildUsageBreakdown } from '@kinqs/brainrouter-core/dist/util/usageBrea
 import { readGoal, setGoal, clearGoal, pauseGoal, resumeGoal, editGoal, decideGoalContinuation, buildGoalContinuationPrompt, goalCorrectiveNotice, tickGoalIteration, usageLimitGoal, formatBudget } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
 // §goal-autonomy — the kickoff prompt builder (shared with the CLI's /goal).
 import { buildGoalKickoffPrompt } from '@kinqs/brainrouter-core/dist/goal/goalKickoff.js';
-import { PROVIDER_CATALOG } from '@kinqs/brainrouter-core/dist/provider/catalog.js';
-import { LOCAL_PLACEHOLDER_KEY, withApiVersion } from '@kinqs/brainrouter-core/dist/provider/providers/index.js';
-import { inferModelReasoningCapabilities, registerModelReasoningCapabilities } from '@kinqs/brainrouter-core/dist/provider/models/reasoning.js';
-import { refreshLmStudioCache } from '@kinqs/brainrouter-core/dist/provider/providers/lmstudio.js';
 import { loadExtensions } from '@kinqs/brainrouter-core/dist/extension/loader.js';
 import { listExtensions } from '@kinqs/brainrouter-core/dist/extension/manifest.js';
 import { isExtensionEnabled, setExtensionEnabled } from '@kinqs/brainrouter-core/dist/extension/extensionStore.js';

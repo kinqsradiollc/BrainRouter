@@ -10,7 +10,7 @@ import type { WorkspaceInfo } from '@kinqs/brainrouter-core/dist/workspace/works
 import { resolveTheme } from '../theme.js';
 import { buildBannerInputs, renderBanner } from '../banner.js';
 import { isKnownSegment, renderSegments } from '../statusline.js';
-import { resolveTierLadder, currentTier } from '@kinqs/brainrouter-core/dist/provider/tierLadder.js';
+import { resolveTierLadder, currentTier } from '@kinqs/brainrouter-core/provider';
 import { readPreferences } from '@kinqs/brainrouter-core/session';
 import { resolveSandboxConfig, runShell } from '@kinqs/brainrouter-core/dist/exec/sandbox.js';
 import { parseBangCommand, parseNoteCommand } from '../../runtime/exec/bangCommand.js';
@@ -1085,7 +1085,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
             try {
               const endpoint = (agent as any).llmConfig?.endpoint;
               if (endpoint) {
-                const { refreshLmStudioCache } = await import('@kinqs/brainrouter-core/dist/provider/providers/lmstudio.js');
+                const { refreshLmStudioCache } = await import('@kinqs/brainrouter-core/provider');
                 const count = await refreshLmStudioCache(endpoint);
                 if (count > 0) {
                   refreshFooter();

@@ -3,7 +3,8 @@ import type { CommandContext } from './_context.js';
 import { getConfigPath, getCliKnobs, saveConfig, setCliKnobOverride, _resetCliKnobsCache, type ServerConfig, type LLMConfig } from '@kinqs/brainrouter-core/config';
 import {
   listProviderNames, setProvider, removeProvider, setAgentModel, describeAgentModel, SUBAGENT_ROLES,
-} from '@kinqs/brainrouter-core/dist/provider/agentModels.js';
+  PROVIDER_CATALOG, maskApiKey, validateApiKey,
+} from '@kinqs/brainrouter-core/provider';
 import {
   readPreferences,
   writePreferences,
@@ -15,7 +16,6 @@ import {
   type ReviewPolicy,
 } from '@kinqs/brainrouter-core/session';
 import { isKnownSegment, SEGMENT_NAMES } from '../statusline.js';
-import { PROVIDER_CATALOG, maskApiKey, validateApiKey } from '@kinqs/brainrouter-core/dist/provider/catalog.js';
 import { selectModel } from '../wizard/modelsApi.js';
 // 0.3.7 — picker / prompt moved to Ink. The raw-stdout pickFromList /
 // promptText primitives had compounding redraw bugs (frame creep on

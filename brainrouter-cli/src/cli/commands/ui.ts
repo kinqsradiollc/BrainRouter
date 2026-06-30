@@ -23,7 +23,7 @@ import { describeActiveServer } from './serverStatus.js';
 import { copyToClipboard } from '../../runtime/clipboard.js';
 import type { CommandContext } from './_context.js';
 import { completeWorkspacePath, renderHelp } from '../repl.js';
-import { PROVIDER_CATALOG, findProvider } from '@kinqs/brainrouter-core/dist/provider/catalog.js';
+import { PROVIDER_CATALOG, findProvider } from '@kinqs/brainrouter-core/provider';
 import { loadApiKeyPrefixesConfig } from '@kinqs/brainrouter-core/config';
 import { selectModel } from '../wizard/modelsApi.js';
 import { buildTheme } from '../theme.js';
@@ -59,7 +59,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         // doesn't carry — currently-loaded? trained for tool use?
         // reasoning modes? format + quantisation. This is the "is my
         // model actually appropriate for the agent loop?" check.
-        const { lookupLmStudioModel } = await import('@kinqs/brainrouter-core/dist/provider/providers/lmstudio.js');
+        const { lookupLmStudioModel } = await import('@kinqs/brainrouter-core/provider');
         const lm = lookupLmStudioModel(llm.model);
         if (lm) {
           const loadedBadge = lm.loaded ? chalk.green('● loaded') : chalk.gray('○ not loaded');
@@ -537,7 +537,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
     }
     case '/tier':
     {
-      const { resolveTierLadder, currentTier } = await import('@kinqs/brainrouter-core/dist/provider/tierLadder.js');
+      const { resolveTierLadder, currentTier } = await import('@kinqs/brainrouter-core/provider');
       const arg = (args[0] ?? '').toLowerCase();
       const prefs = readPreferences(agent.workspaceRoot);
       const provider = (agent.getLlmConfig?.()?.provider ?? 'openai').toLowerCase();

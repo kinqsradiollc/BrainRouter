@@ -1,11 +1,11 @@
 import { runPicker, type PickerRow } from '../ink/runPicker.js';
 import type { Theme } from '../theme.js';
-import type { ProviderEntry } from '@kinqs/brainrouter-core/dist/provider/catalog.js';
-import { LOCAL_PLACEHOLDER_KEY } from '@kinqs/brainrouter-core/dist/provider/providers/index.js';
 import {
   inferModelReasoningCapabilities,
   registerModelReasoningCapabilities,
-} from '@kinqs/brainrouter-core/dist/provider/models/reasoning.js';
+  type ProviderEntry,
+  LOCAL_PLACEHOLDER_KEY,
+} from '@kinqs/brainrouter-core/provider';
 
 /**
  * Fetch the live model list from an OpenAI-compatible `/v1/models`
