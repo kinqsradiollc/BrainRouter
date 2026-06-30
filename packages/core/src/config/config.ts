@@ -240,6 +240,14 @@ export interface CliKnobs {
   stormThreshold?: number;
   /** Hard cap on inner-loop iterations per user turn. Default 60. */
   maxToolLoops?: number;
+  /**
+   * HONK-L1/L7 — the local-model bounded-harness profile. `'auto'` (default)
+   * clamps the turn-loop caps (maxToolLoops, repeat/storm guards, MCP-tool budget,
+   * spawn depth) only for positively-identified small/local model families;
+   * `'on'` always clamps; `'off'` never does. A tight bounded harness is what makes
+   * weak local models reliable — strong/unknown models are passed through untouched.
+   */
+  localModelProfile?: 'auto' | 'on' | 'off';
   /** Threshold for the repeat-SEQUENCE guard (tool-name pattern repeats,
    *  ignoring args). Default 12. */
   repeatToolSequenceLimit?: number;
@@ -939,6 +947,7 @@ export interface ResolvedCliKnobs {
   stormWindow: number;
   stormThreshold: number;
   maxToolLoops: number;
+  localModelProfile: 'auto' | 'on' | 'off';
   repeatToolSequenceLimit: number;
   repeatSequenceExemptTools: string[];
   repeatLoopLimit: number;
@@ -1131,6 +1140,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     stormWindow: c.stormWindow ?? 6,
     stormThreshold: c.stormThreshold ?? 4,
     maxToolLoops: c.maxToolLoops ?? 60,
+    localModelProfile: c.localModelProfile === 'on' || c.localModelProfile === 'off' ? c.localModelProfile : 'auto',
     repeatToolSequenceLimit: c.repeatToolSequenceLimit ?? 12,
     repeatSequenceExemptTools: Array.isArray(c.repeatSequenceExemptTools)
       ? c.repeatSequenceExemptTools
