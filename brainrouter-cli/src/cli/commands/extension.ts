@@ -4,11 +4,11 @@
  */
 import chalk from 'chalk';
 import type { CommandContext } from './_context.js';
-import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace, listTrustedWorkspaces } from '@kinqs/brainrouter-core/dist/workspace/workspaceTrust.js';
-import { listExtensions } from '@kinqs/brainrouter-core/dist/extension/manifest.js';
-import { isExtensionEnabled, setExtensionEnabled } from '@kinqs/brainrouter-core/dist/extension/extensionStore.js';
-import { loadExtensions } from '@kinqs/brainrouter-core/dist/extension/loader.js';
-import { extensionContributionSummary } from '@kinqs/brainrouter-core/dist/extension/registry.js';
+import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace, listTrustedWorkspaces } from '@kinqs/brainrouter-core/workspace';
+import { listExtensions } from '@kinqs/brainrouter-core/extension';
+import { isExtensionEnabled, setExtensionEnabled } from '@kinqs/brainrouter-core/extension';
+import { loadExtensions } from '@kinqs/brainrouter-core/extension';
+import { extensionContributionSummary } from '@kinqs/brainrouter-core/extension';
 import { runAuditedUpdate } from '../../runtime/updateApply.js';
 
 export async function tryHandleExtensionCommand(ctx: CommandContext): Promise<boolean> {

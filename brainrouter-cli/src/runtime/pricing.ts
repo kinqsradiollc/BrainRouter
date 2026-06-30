@@ -15,7 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { extractCacheStats, type CacheStats } from '@kinqs/brainrouter-core/dist/util/cacheStats.js';
+import { extractCacheStats, type CacheStats } from '@kinqs/brainrouter-core/util';
 import { loadModelsConfig, type ModelPricing } from '@kinqs/brainrouter-core/config';
 
 export type { ModelPricing } from '@kinqs/brainrouter-core/config';

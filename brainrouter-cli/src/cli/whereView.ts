@@ -1,13 +1,13 @@
 import path from 'node:path';
 import { type Goal, formatBudget, readGoal } from '@kinqs/brainrouter-core/goal';
-import { readPlan, type PlanState } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
-import { getCurrentWorkflow, listWorkflows, type WorkflowMeta } from '@kinqs/brainrouter-core/dist/workflow/workflowArtifacts.js';
+import { readPlan, type PlanState } from '@kinqs/brainrouter-core/task';
+import { getCurrentWorkflow, listWorkflows, type WorkflowMeta } from '@kinqs/brainrouter-core/workflow';
 import { listSessions, type ChildSessionRecord } from '@kinqs/brainrouter-core/orchestration';
-import type { RecalledRecord } from '@kinqs/brainrouter-core/dist/memory/briefing.js';
+import type { RecalledRecord } from '@kinqs/brainrouter-core/memory';
 import { readPreferences, resolveEffort, type EffortLevel, type ExecutionMode, type ReviewPolicy, getSessionMode, resolveActiveMode } from '@kinqs/brainrouter-core/session';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import { BOX, type Theme } from './theme.js';
-import { formatContextWindow } from '@kinqs/brainrouter-core/dist/context/contextWindow.js';
+import { formatContextWindow } from '@kinqs/brainrouter-core/context';
 
 /**
  * `/where` — single-screen "where am I right now" answer.

@@ -314,7 +314,7 @@ test('orchestration: clampAccess prevents a child from exceeding the parent\'s a
 });
 
 test('breadthHint: realistic broad prompts trigger fan-out; narrow ones do not', async () => {
-  const { shouldSuggestFanOut } = await import('@kinqs/brainrouter-core/dist/prompt/breadthHint.js');
+  const { shouldSuggestFanOut } = await import('@kinqs/brainrouter-core/prompt');
   // Prompts that obviously want fan-out — the original calibration missed
   // several of these (they all scored 1.5, just under the old 1.8 threshold).
   const broad = [
@@ -343,7 +343,7 @@ test('breadthHint: realistic broad prompts trigger fan-out; narrow ones do not',
 });
 
 test('breadthHint: multi-target comparisons trigger fan-out (the live "why no spawn?" miss)', async () => {
-  const { shouldSuggestFanOut } = await import('@kinqs/brainrouter-core/dist/prompt/breadthHint.js');
+  const { shouldSuggestFanOut } = await import('@kinqs/brainrouter-core/prompt');
   // The exact prompt that scored 0 and never fanned out — an inherently
   // parallel "compare N codebases" task (one explorer per target).
   const comparisons = [
@@ -362,7 +362,7 @@ test('breadthHint: multi-target comparisons trigger fan-out (the live "why no sp
 });
 
 test('breadthHint: analytical "pros and cons / against those" comparisons fan out, without false-firing on "guard against"', async () => {
-  const { shouldSuggestFanOut } = await import('@kinqs/brainrouter-core/dist/prompt/breadthHint.js');
+  const { shouldSuggestFanOut } = await import('@kinqs/brainrouter-core/prompt');
   // The exact live miss + relational-comparison shapes (one child per peer).
   for (const p of [
     'what are our pros and cons of brainrouter against those in the peer set',
@@ -379,7 +379,7 @@ test('breadthHint: analytical "pros and cons / against those" comparisons fan ou
 });
 
 test('breadthHint: explicit no-fan-out hints in the prompt veto suggestion even at high score', async () => {
-  const { shouldSuggestFanOut, detectFanOutVeto } = await import('@kinqs/brainrouter-core/dist/prompt/breadthHint.js');
+  const { shouldSuggestFanOut, detectFanOutVeto } = await import('@kinqs/brainrouter-core/prompt');
   // These prompts ALL score high on breadth (verb-object-broad, every,
   // etc.) but the user explicitly opted out. We must honor that.
   const vetoed = [
@@ -402,7 +402,7 @@ test('breadthHint: explicit no-fan-out hints in the prompt veto suggestion even 
 });
 
 test('detectBreadthIntent flags "do everything in 1 go" / "as much as I could" / parallel hints', async () => {
-  const { detectBreadthIntent, shouldSuggestFanOut } = await import('@kinqs/brainrouter-core/dist/prompt/breadthHint.js');
+  const { detectBreadthIntent, shouldSuggestFanOut } = await import('@kinqs/brainrouter-core/prompt');
 
   const cases: Array<{ prompt: string; expectFanOut: boolean; expectSignal?: string }> = [
     { prompt: 'test all the MCP tools in 1 go, as much as you could', expectFanOut: true, expectSignal: 'one-shot' },

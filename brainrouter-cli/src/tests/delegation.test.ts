@@ -5,7 +5,7 @@ import {
   renderDelegationPrompt,
   adaptDelegationFor,
 } from "../orchestration/delegation.js";
-import { applyFederationIdentity } from "@kinqs/brainrouter-core/dist/util/federationIdentity.js";
+import { applyFederationIdentity } from "@kinqs/brainrouter-core/util";
 import type { DelegationPacket } from "@kinqs/brainrouter-types";
 
 const PACKET: DelegationPacket = {

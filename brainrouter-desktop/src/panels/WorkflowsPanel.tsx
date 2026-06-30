@@ -18,11 +18,12 @@ import '@xyflow/react/dist/style.css';
 import {
   validateGraph,
   stripSecretsForExport,
+  runGraph,
   type WorkflowGraph,
   type WorkflowNodeType,
-} from '@kinqs/brainrouter-core/dist/workflow/graph.js';
-import { runGraph, type GraphRunResult } from '@kinqs/brainrouter-core/dist/workflow/graphEngine.js';
-import type { SavedWorkflowMeta } from '@kinqs/brainrouter-core/dist/workflow/graphStore.js';
+  type GraphRunResult,
+  type SavedWorkflowMeta,
+} from '@kinqs/brainrouter-core/workflow';
 import { hostQuery } from '../lib/hostQuery.js';
 
 /**

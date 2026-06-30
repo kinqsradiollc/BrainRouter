@@ -31,8 +31,8 @@ import {
   linkArtifact,
   listArtifactVersions,
   revertArtifact,
-} from '@kinqs/brainrouter-core/dist/artifact/artifactStore.js';
-import { emitArtifactCapture } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
+} from '@kinqs/brainrouter-core/artifact';
+import { emitArtifactCapture } from '@kinqs/brainrouter-core/memory';
 import type { CommandContext } from './_context.js';
 
 export async function tryHandleArtifactCommand(ctx: CommandContext): Promise<boolean> {

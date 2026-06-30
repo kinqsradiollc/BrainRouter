@@ -12,7 +12,7 @@ import {
   renderPicker,
   setActiveReadline,
 } from '../cli/cliPrompt.js';
-import { ARTIFACT, createWorkflow, getWorkflowDir } from '@kinqs/brainrouter-core/dist/workflow/workflowArtifacts.js';
+import { ARTIFACT, createWorkflow, getWorkflowDir } from '@kinqs/brainrouter-core/workflow';
 import { withTempWorkspace } from './_helpers.js';
 
 // --- askChoice / ask_user_choice -----------------------------------------

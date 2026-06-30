@@ -104,14 +104,14 @@ if (getCliKnobs().debugExit) {
 import { McpClientWrapper, McpClientPool, selectMcpServerIds, applyBrainUrlOverride, probeBrainHealth, embeddedBrainId } from '@kinqs/brainrouter-core/mcp';
 import { formatJsonlEvent, memoryRunEvent, isOffloadTool, type RunEvent } from './runtime/jsonlEvents.js';
 import { costUsd } from './runtime/pricing.js';
-import { VERSION } from '@kinqs/brainrouter-core/dist/version.js';
-import { loadExtensions } from '@kinqs/brainrouter-core/dist/extension/loader.js';
+import { VERSION } from '@kinqs/brainrouter-core/version';
+import { loadExtensions } from '@kinqs/brainrouter-core/extension';
 import { setKnownMcpServerIds } from './cli/ink/toolFormat.js';
 import type { ServerConfig } from '@kinqs/brainrouter-core/config';
 import { Agent } from '@kinqs/brainrouter-core/agent';
 import { cliPrompter } from './cli/cliPrompt.js';
 import { runChat } from './cli/ink/runChat.js';
-import { applyWorkspaceRoot, findWorkspaceRoot } from '@kinqs/brainrouter-core/dist/workspace/workspace.js';
+import { applyWorkspaceRoot, findWorkspaceRoot } from '@kinqs/brainrouter-core/workspace';
 import { runWizard, isOnboarded } from './cli/ink/runWizard.js';
 
 const DEFAULT_LLM: LLMConfig = { provider: 'openai', model: 'gpt-4o-mini', apiKey: '' };

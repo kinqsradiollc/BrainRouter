@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseInterval, isLoopRunning, startLoop, stopLoop, getLoopState } from '../runtime/loopRunner.js';
 import { resolveSandboxConfig, decideUnavailableSandbox, detectSandboxDenial, isDangerousCommand, resolveRunCommandApproval } from '@kinqs/brainrouter-core/exec';
-import { startSpan, traceEnabled } from '@kinqs/brainrouter-core/dist/telemetry/tracing.js';
+import { startSpan, traceEnabled } from '@kinqs/brainrouter-core/telemetry';
 
 test('callOpenAI: rejects malformed LLM responses with a useful error instead of TypeError', async () => {
   // Stub the global fetch with three scenarios that have historically crashed
@@ -49,7 +49,7 @@ test('callOpenAI: rejects malformed LLM responses with a useful error instead of
 
 test('llmSemaphore: caps concurrent acquires and queues the rest', async () => {
   const { acquireLLMSlot, getLLMSemaphoreState, resetLLMSemaphoreForTests } =
-    await import('@kinqs/brainrouter-core/dist/util/llmSemaphore.js');
+    await import('@kinqs/brainrouter-core/util');
   const { setCliKnobOverride, _resetCliKnobsCache } = await import('@kinqs/brainrouter-core/config');
   // Force a known cap of 2 for this test.
   setCliKnobOverride({ llmMaxConcurrent: 2 });
@@ -182,7 +182,7 @@ test('tracing.startSpan is a no-op when cli.traceLog is unset', async () => {
 });
 
 test('compactor: renderCompactSystemMessage tags the summary clearly', async () => {
-  const { renderCompactSystemMessage } = await import('@kinqs/brainrouter-core/dist/prompt/compactor.js');
+  const { renderCompactSystemMessage } = await import('@kinqs/brainrouter-core/prompt');
   const rendered = renderCompactSystemMessage('# Goals\n- Ship feature X');
   assert.match(rendered, /Compacted conversation summary/);
   assert.match(rendered, /Ship feature X/);

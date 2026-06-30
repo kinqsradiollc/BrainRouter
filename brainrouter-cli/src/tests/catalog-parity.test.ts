@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SLASH_COMMANDS, HELP_CATEGORIES } from '../cli/repl.js';
-import { validateCatalogParity } from '@kinqs/brainrouter-core/dist/command/parity.js';
+import { validateCatalogParity } from '@kinqs/brainrouter-core/command';
 import { listRoles, loadRegistry } from '@kinqs/brainrouter-core/orchestration';
 
 // T16 GOLDEN — the catalog both heads serve must be internally consistent.

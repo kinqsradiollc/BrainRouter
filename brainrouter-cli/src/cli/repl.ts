@@ -41,7 +41,7 @@ import { loadCustomCommands, findCustomCommand, expandCommandBody } from '../run
  */
 // §ADR-003 — the command catalog moved to core; imported here for the REPL's
 // own help renderer AND re-exported so existing CLI importers keep working.
-import { SLASH_COMMANDS, HELP_CATEGORIES, type HelpEntry, type HelpCategory } from '@kinqs/brainrouter-core/dist/command/catalog.js';
+import { SLASH_COMMANDS, HELP_CATEGORIES, type HelpEntry, type HelpCategory } from '@kinqs/brainrouter-core/command';
 export { SLASH_COMMANDS, HELP_CATEGORIES, type HelpEntry, type HelpCategory };
 
 export function renderHelp(category?: string): void {

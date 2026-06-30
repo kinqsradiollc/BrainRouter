@@ -8,7 +8,7 @@ import {
   helpEntryRows,
   findDuplicates,
   registryDrift,
-} from '@kinqs/brainrouter-core/dist/command/registry.js';
+} from '@kinqs/brainrouter-core/command';
 
 
 // --- pure helpers ----------------------------------------------------------

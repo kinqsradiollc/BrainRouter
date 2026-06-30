@@ -2,9 +2,9 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import type { Config } from '@kinqs/brainrouter-core/config';
 import { type Goal, formatBudget, readGoal } from '@kinqs/brainrouter-core/goal';
-import { getCurrentWorkflow, getLastUsedWorkflow } from '@kinqs/brainrouter-core/dist/workflow/workflowArtifacts.js';
+import { getCurrentWorkflow, getLastUsedWorkflow } from '@kinqs/brainrouter-core/workflow';
 import { BOX, type Theme } from './theme.js';
-import { VERSION } from '@kinqs/brainrouter-core/dist/version.js';
+import { VERSION } from '@kinqs/brainrouter-core/version';
 
 /**
  * Compose the boxed startup banner. Replaces the prior three-line text dump

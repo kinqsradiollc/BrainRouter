@@ -1,7 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import type { ScrollbackEntry } from '../ChatApp.js';
-import { GLYPH, groupTasksByKind, type BackgroundTask, type BackgroundTaskKind } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
+import { GLYPH, groupTasksByKind, type BackgroundTask, type BackgroundTaskKind } from '@kinqs/brainrouter-core/background';
 
 interface SidebarProps {
   model?: string;

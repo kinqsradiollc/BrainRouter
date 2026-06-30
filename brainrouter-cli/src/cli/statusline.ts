@@ -1,9 +1,9 @@
 import { execSync } from 'node:child_process';
 import { formatBudget, readGoal } from '@kinqs/brainrouter-core/goal';
-import { readPlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
-import { getCurrentWorkflow } from '@kinqs/brainrouter-core/dist/workflow/workflowArtifacts.js';
+import { readPlan } from '@kinqs/brainrouter-core/task';
+import { getCurrentWorkflow } from '@kinqs/brainrouter-core/workflow';
 import { resolveActiveMode } from '@kinqs/brainrouter-core/session';
-import { activeRun, formatActivePhase } from '@kinqs/brainrouter-core/dist/workflow/workflowRun.js';
+import { activeRun, formatActivePhase } from '@kinqs/brainrouter-core/workflow';
 import { costUsd } from '../runtime/pricing.js';
 
 /**

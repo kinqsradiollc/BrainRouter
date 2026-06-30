@@ -8,8 +8,8 @@ import path from 'node:path';
 import { exec } from 'node:child_process';
 import chalk from 'chalk';
 import { applyYoloOff, applyYoloOn, readPreferences, writePreferences, resolveActiveMode, setSessionMode } from '@kinqs/brainrouter-core/session';
-import { addHook, readHooks, removeHook, setHookEnabled, type HookEvent } from '@kinqs/brainrouter-core/dist/hooks/hooksStore.js';
-import { createHookifyRule, deleteHookifyRule, listHookifyRules, toggleHookifyRule } from '@kinqs/brainrouter-core/dist/hooks/hookifyStore.js';
+import { addHook, readHooks, removeHook, setHookEnabled, type HookEvent } from '@kinqs/brainrouter-core/hooks';
+import { createHookifyRule, deleteHookifyRule, listHookifyRules, toggleHookifyRule } from '@kinqs/brainrouter-core/hooks';
 import { saveConfig, getCliKnobs } from '@kinqs/brainrouter-core/config';
 import type { CommandContext } from './_context.js';
 

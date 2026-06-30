@@ -30,7 +30,7 @@ import {
   type InteractionResponse,
 } from '@kinqs/brainrouter-agent-protocol';
 import { subscribeCompletions, pendingCompletionCount, peekCompletions } from '@kinqs/brainrouter-core/session';
-import { buildChildResumePrompt } from '@kinqs/brainrouter-core/dist/util/childResume.js';
+import { buildChildResumePrompt } from '@kinqs/brainrouter-core/util';
 
 /**
  * The slice of the CLI Agent the host needs — structural, so tests can fake

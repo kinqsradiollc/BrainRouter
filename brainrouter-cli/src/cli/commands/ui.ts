@@ -12,7 +12,7 @@ import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/agent';
 import { callMcpTool, hasMcpTool } from '@kinqs/brainrouter-core/mcp';
 import { listSessions, reconcileStale } from '@kinqs/brainrouter-core/orchestration';
 import { readPreferences, resolveEffort, writePreferences, normalizeEffort, getSessionMode, resolveActiveMode, setSessionMode, setSessionRuntime } from '@kinqs/brainrouter-core/session';
-import { readPlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
+import { readPlan } from '@kinqs/brainrouter-core/task';
 // initAgentMd usage moved to commands/init.ts (0.3.7 wizard). The
 // legacy /config + /init switch cases here are gone — the dispatcher
 // in repl.ts routes them to the new handlers first. getConfigPath
@@ -46,7 +46,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         // can tell whether they're 5% or 95% through it. Source +
         // override path live in runtime/contextWindow.ts. Unknown
         // models render "?" rather than a guess.
-        const { formatContextWindow } = await import('@kinqs/brainrouter-core/dist/context/contextWindow.js');
+        const { formatContextWindow } = await import('@kinqs/brainrouter-core/context');
         const ctxLabel = formatContextWindow(llm.model);
         console.log(`  LLM Provider:  ${chalk.green(llm.provider)}`);
         console.log(`  LLM Model:     ${chalk.cyan(llm.model)}${ctxLabel !== '?' ? chalk.gray(` (${ctxLabel} ctx)`) : ''}`);

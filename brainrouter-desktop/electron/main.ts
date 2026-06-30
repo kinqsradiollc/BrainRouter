@@ -11,18 +11,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isAgentCommand } from '@kinqs/brainrouter-agent-protocol';
-import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace, listTrustedWorkspaces } from '@kinqs/brainrouter-core/dist/workspace/workspaceTrust.js';
+import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace, listTrustedWorkspaces } from '@kinqs/brainrouter-core/workspace';
 import { listTranscripts, type TranscriptSummary } from '@kinqs/brainrouter-core/session';
-import { getStateDir } from '@kinqs/brainrouter-core/dist/storage/store.js';
+import { getStateDir } from '@kinqs/brainrouter-core/storage';
 // T1 — global dashboard disk reads (no live host needed): running tasks + last
 // review gate per recent workspace.
-import { collectDashboardTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
-import { pidAlive, reconcileStaleBackgroundTasks } from '@kinqs/brainrouter-core/dist/background/backgroundReconcile.js';
-import { reconcileBackgroundTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTaskStore.js';
-import { recordTelemetry } from '@kinqs/brainrouter-core/dist/telemetry/telemetry.js';
-import { TELEMETRY_EVENTS } from '@kinqs/brainrouter-core/dist/telemetry/contracts.js';
-import { getLatestReview } from '@kinqs/brainrouter-core/dist/review/reviewStore.js';
-import { reviewGate } from '@kinqs/brainrouter-core/dist/review/reviewModel.js';
+import { collectDashboardTasks } from '@kinqs/brainrouter-core/background';
+import { pidAlive, reconcileStaleBackgroundTasks } from '@kinqs/brainrouter-core/background';
+import { reconcileBackgroundTasks } from '@kinqs/brainrouter-core/background';
+import { recordTelemetry } from '@kinqs/brainrouter-core/telemetry';
+import { TELEMETRY_EVENTS } from '@kinqs/brainrouter-core/telemetry';
+import { getLatestReview } from '@kinqs/brainrouter-core/review';
+import { reviewGate } from '@kinqs/brainrouter-core/review';
 import { loadConfig, saveConfig, _resetCliKnobsCache } from '@kinqs/brainrouter-core/config';
 import type { ComputerUseAction } from '@kinqs/brainrouter-agent-protocol';
 import {

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { callMcpTool, type McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
-import { getWorkspaceStateRoot } from '@kinqs/brainrouter-core/dist/storage/store.js';
+import { getWorkspaceStateRoot } from '@kinqs/brainrouter-core/storage';
 
 /**
  * Filesystem memory consolidation — the human-readable companion to the

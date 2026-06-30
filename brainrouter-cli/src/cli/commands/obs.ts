@@ -4,7 +4,7 @@
  */
 
 import fs from 'node:fs';
-import { buildUsageBreakdown } from '@kinqs/brainrouter-core/dist/util/usageBreakdown.js';
+import { buildUsageBreakdown } from '@kinqs/brainrouter-core/util';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import chalk from 'chalk';
@@ -12,9 +12,9 @@ import { listSessions } from '@kinqs/brainrouter-core/orchestration';
 import { formatContextReport } from '../../runtime/contextReport.js';
 import { formatMemoryDecisions } from '../../runtime/memoryDecisionView.js';
 import { formatOffloadList, formatOffloadGraph, type OffloadStep } from '../../runtime/offloadView.js';
-import { contextWindowFor } from '@kinqs/brainrouter-core/dist/context/contextWindow.js';
+import { contextWindowFor } from '@kinqs/brainrouter-core/context';
 import { readPreferences, readTranscriptEntries } from '@kinqs/brainrouter-core/session';
-import { getStateFile } from '@kinqs/brainrouter-core/dist/storage/store.js';
+import { getStateFile } from '@kinqs/brainrouter-core/storage';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import type { CommandContext } from './_context.js';
 import { formatTranscriptContent } from './_helpers.js';
@@ -185,7 +185,7 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
       // provider either doesn't expose cache info (LM Studio /
       // Ollama / older endpoints) or this session hasn't yet seen a
       // turn — print "—" instead of misleading 0% / 0.
-      const { formatCacheStats } = await import('@kinqs/brainrouter-core/dist/util/cacheStats.js');
+      const { formatCacheStats } = await import('@kinqs/brainrouter-core/util');
       const turnCache = formatCacheStats({
         cachedTokens: agent.lastTurnUsage.cachedTokens,
         missedTokens: agent.lastTurnUsage.missedTokens,
@@ -303,7 +303,7 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
       // (system / memory-anchor) since the last check, diffed against a
       // CLI-state snapshot. Read-only; no change to the turn loop.
       if ((args[0] ?? '').toLowerCase() === 'prefix') {
-        const { diffPrefixComponents } = await import('@kinqs/brainrouter-core/dist/context/contextRegions.js');
+        const { diffPrefixComponents } = await import('@kinqs/brainrouter-core/context');
         const curr = agent.getPrefixComponents();
         const snapFile = getStateFile(agent.workspaceRoot, 'prefix-snapshot.json');
         let prev: ReturnType<typeof agent.getPrefixComponents> | null = null;
@@ -386,7 +386,7 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
     }
     case '/rollout':
     {
-      const { getSessionStateDir } = await import('@kinqs/brainrouter-core/dist/storage/store.js');
+      const { getSessionStateDir } = await import('@kinqs/brainrouter-core/storage');
       const sessionDir = getSessionStateDir(agent.workspaceRoot, agent.sessionKey);
       console.log(chalk.bold('\nSession bucket'));
       console.log(`  Session:   ${chalk.cyan(agent.sessionKey)}`);

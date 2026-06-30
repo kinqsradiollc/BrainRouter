@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { VERSION } from '@kinqs/brainrouter-core/dist/version.js';
+import { VERSION } from '@kinqs/brainrouter-core/version';
 import { getConfigPath } from '@kinqs/brainrouter-core/config';
 
 /**

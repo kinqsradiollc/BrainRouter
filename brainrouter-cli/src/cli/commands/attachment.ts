@@ -13,9 +13,9 @@
  */
 import path from 'node:path';
 import chalk from 'chalk';
-import { ingestAttachment, attachmentContextMarkdown } from '@kinqs/brainrouter-core/dist/attachment/ingest.js';
-import { getAttachment, listAttachments, linkAttachmentMemory } from '@kinqs/brainrouter-core/dist/attachment/attachmentStore.js';
-import { emitAgentEvent } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
+import { ingestAttachment, attachmentContextMarkdown } from '@kinqs/brainrouter-core/attachment';
+import { getAttachment, listAttachments, linkAttachmentMemory } from '@kinqs/brainrouter-core/attachment';
+import { emitAgentEvent } from '@kinqs/brainrouter-core/memory';
 import type { AttachmentRecord } from '@kinqs/brainrouter-types';
 import type { CommandContext } from './_context.js';
 

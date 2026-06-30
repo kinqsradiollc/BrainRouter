@@ -12,8 +12,8 @@
  * same "advance past now" rule.
  */
 
-import { loadSchedules, recordFire, removeSchedule, setScheduleEnabled, type ScheduleRecord } from '@kinqs/brainrouter-core/dist/schedule/scheduleStore.js';
-import { parseCron, nextCronFire } from '@kinqs/brainrouter-core/dist/schedule/cronParser.js';
+import { loadSchedules, recordFire, removeSchedule, setScheduleEnabled, type ScheduleRecord } from '@kinqs/brainrouter-core/schedule';
+import { parseCron, nextCronFire } from '@kinqs/brainrouter-core/schedule';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 
 const DEFAULT_INTERVAL_MS = 30_000;

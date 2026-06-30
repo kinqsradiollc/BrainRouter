@@ -13,7 +13,7 @@
 import React, { useEffect, useState } from 'react';
 import type { ArtifactRecord, ArtifactKind, ArtifactStatus, AnnotationRecord } from '@kinqs/brainrouter-types';
 import remarkGfm from 'remark-gfm';
-import { inlinePlaceholders } from '@kinqs/brainrouter-core/dist/prototype/placeholderRender.js';
+import { inlinePlaceholders } from '@kinqs/brainrouter-core/prototype';
 import { Markdown, MD_COMPONENTS } from '../chat/markdown.js';
 import { Button } from '../components/Button.js';
 import { Chip } from '../components/Badge.js';

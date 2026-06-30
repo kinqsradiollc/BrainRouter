@@ -9,8 +9,8 @@ import { isKnownSegment, renderSegment, renderSegments, SEGMENT_NAMES } from '..
 import { gatherWhereInputs, renderWhere } from '../cli/whereView.js';
 import { readPreferences, writePreferences } from '@kinqs/brainrouter-core/session';
 import { blockGoal, setGoal, tickGoalIteration } from '@kinqs/brainrouter-core/goal';
-import { updatePlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
-import { createWorkflow } from '@kinqs/brainrouter-core/dist/workflow/workflowArtifacts.js';
+import { updatePlan } from '@kinqs/brainrouter-core/task';
+import { createWorkflow } from '@kinqs/brainrouter-core/workflow';
 import { _resetCliKnobsCache, setCliKnobOverride } from '@kinqs/brainrouter-core/config';
 
 /**

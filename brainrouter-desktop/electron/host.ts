@@ -25,80 +25,80 @@ import { loadConfig, saveConfig, getCliKnobs, _resetCliKnobsCache, applyRuleEdit
 import { setProvider, removeProvider, setAgentModel, normalizeProviderModels, PROVIDER_CATALOG, LOCAL_PLACEHOLDER_KEY, withApiVersion, inferModelReasoningCapabilities, registerModelReasoningCapabilities, refreshLmStudioCache } from '@kinqs/brainrouter-core/provider';
 import { McpClientPool, childSessionKey } from '@kinqs/brainrouter-core/mcp';
 import { listTranscripts, loadTranscript, readTranscriptTail, transcriptExists, transcriptSizeBytes, deleteSession, forkSession, appendTranscriptEntry, rewindTranscript, type TranscriptSummary, readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups, type SessionMeta, getSessionRuntime, setSessionRuntime, resolveSessionLlmConfig, getSessionMode, setSessionMode, resolveActiveMode, buildRecap, readPreferences, writePreferences, searchTranscript, exportTranscriptMarkdown, exportTranscriptJson, exportFileName, listChapters } from '@kinqs/brainrouter-core/session';
-import { readUsageHistory, totalUsage } from '@kinqs/brainrouter-core/dist/usage/usageHistoryStore.js';
-import { resolveWorkspaceGit } from '@kinqs/brainrouter-core/dist/git/workspaceGit.js';
+import { readUsageHistory, totalUsage } from '@kinqs/brainrouter-core/usage';
+import { resolveWorkspaceGit } from '@kinqs/brainrouter-core/git';
 import { readWorkspaceEntry, isWorkspaceDirectory, listWorkspaceFiles, statWorkspaceEntry, writeWorkspaceEntry } from './fsRead.js';
-import { saveWorkflowGraph, loadWorkflowGraph, listWorkflowGraphs, deleteWorkflowGraph } from '@kinqs/brainrouter-core/dist/workflow/graphStore.js';
-import type { WorkflowGraph } from '@kinqs/brainrouter-core/dist/workflow/graph.js';
-import { writeThreadKey, buildGroundingBlock, pickLocalGrounding } from '@kinqs/brainrouter-core/dist/write/grounding.js';
+import { saveWorkflowGraph, loadWorkflowGraph, listWorkflowGraphs, deleteWorkflowGraph } from '@kinqs/brainrouter-core/workflow';
+import type { WorkflowGraph } from '@kinqs/brainrouter-core/workflow';
+import { writeThreadKey, buildGroundingBlock, pickLocalGrounding } from '@kinqs/brainrouter-core/write';
 import { WorkspaceFileListCache, type WorkspaceFileListResult } from './workspaceFileListCache.js';
 import { startWorkspaceWatcher } from './fileWatch.js';
-import { loadSchedules, addSchedule, removeSchedule, setScheduleEnabled } from '@kinqs/brainrouter-core/dist/schedule/scheduleStore.js';
-import { parseCron, nextCronFire } from '@kinqs/brainrouter-core/dist/schedule/cronParser.js';
-import { parseReviewFindings, REVIEW_OUTPUT_CONTRACT, stripReasoning } from '@kinqs/brainrouter-core/dist/review/reviewFindings.js';
-import { hashDiff, reviewGate, staleIfDiffChanged, isFindingStatus, type ReviewRun, type ReviewFinding, type Severity } from '@kinqs/brainrouter-core/dist/review/reviewModel.js';
-import { getLatestReview, saveReview, updateReviewFinding } from '@kinqs/brainrouter-core/dist/review/reviewStore.js';
-import { getStateDir } from '@kinqs/brainrouter-core/dist/storage/store.js';
-import { collectRunningTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
+import { loadSchedules, addSchedule, removeSchedule, setScheduleEnabled } from '@kinqs/brainrouter-core/schedule';
+import { parseCron, nextCronFire } from '@kinqs/brainrouter-core/schedule';
+import { parseReviewFindings, REVIEW_OUTPUT_CONTRACT, stripReasoning } from '@kinqs/brainrouter-core/review';
+import { hashDiff, reviewGate, staleIfDiffChanged, isFindingStatus, type ReviewRun, type ReviewFinding, type Severity } from '@kinqs/brainrouter-core/review';
+import { getLatestReview, saveReview, updateReviewFinding } from '@kinqs/brainrouter-core/review';
+import { getStateDir } from '@kinqs/brainrouter-core/storage';
+import { collectRunningTasks } from '@kinqs/brainrouter-core/background';
 import { killBackgroundShell } from '@kinqs/brainrouter-core/exec';
-import { contextWindowForBudget } from '@kinqs/brainrouter-core/dist/context/contextWindow.js';
+import { contextWindowForBudget } from '@kinqs/brainrouter-core/context';
 // DESK-4c — the command/settings surfaces reuse the CLI's own modules so the
 // desktop never drifts from the terminal: same catalog, same preferences
 // file, same hooks store, same transcript tooling.
-import { SLASH_COMMANDS, HELP_CATEGORIES } from '@kinqs/brainrouter-core/dist/command/catalog.js';
-import { validateCatalogParity } from '@kinqs/brainrouter-core/dist/command/parity.js';
-import { readHooks, setHookEnabled } from '@kinqs/brainrouter-core/dist/hooks/hooksStore.js';
-import { buildUsageBreakdown } from '@kinqs/brainrouter-core/dist/util/usageBreakdown.js';
+import { SLASH_COMMANDS, HELP_CATEGORIES } from '@kinqs/brainrouter-core/command';
+import { validateCatalogParity } from '@kinqs/brainrouter-core/command';
+import { readHooks, setHookEnabled } from '@kinqs/brainrouter-core/hooks';
+import { buildUsageBreakdown } from '@kinqs/brainrouter-core/util';
 // DESK-5 — the command bridge dispatches REPL-only commands against the SAME
 // stores the terminal CLI uses. No parallel state: /goal here is /goal there.
 import { readGoal, setGoal, clearGoal, pauseGoal, resumeGoal, editGoal, decideGoalContinuation, buildGoalContinuationPrompt, goalCorrectiveNotice, tickGoalIteration, usageLimitGoal, formatBudget, buildGoalKickoffPrompt } from '@kinqs/brainrouter-core/goal';
 // §goal-autonomy — the kickoff prompt builder (shared with the CLI's /goal).
-import { loadExtensions } from '@kinqs/brainrouter-core/dist/extension/loader.js';
-import { listExtensions } from '@kinqs/brainrouter-core/dist/extension/manifest.js';
-import { isExtensionEnabled, setExtensionEnabled } from '@kinqs/brainrouter-core/dist/extension/extensionStore.js';
-import { extensionContributionSummary } from '@kinqs/brainrouter-core/dist/extension/registry.js';
-import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace } from '@kinqs/brainrouter-core/dist/workspace/workspaceTrust.js';
-import { readPlan, formatPlan, seedPlanFromRequirement, updatePlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
+import { loadExtensions } from '@kinqs/brainrouter-core/extension';
+import { listExtensions } from '@kinqs/brainrouter-core/extension';
+import { isExtensionEnabled, setExtensionEnabled } from '@kinqs/brainrouter-core/extension';
+import { extensionContributionSummary } from '@kinqs/brainrouter-core/extension';
+import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace } from '@kinqs/brainrouter-core/workspace';
+import { readPlan, formatPlan, seedPlanFromRequirement, updatePlan } from '@kinqs/brainrouter-core/task';
 // DURABLE BACKGROUND TASKS (0.4.15 workflow gaps) — plan-revision + review work
 // runs as visible, file-backed tasks (shared with the CLI store) so progress +
 // transcript survive workspace/session switches and host reload.
 import {
   createBackgroundTask, updateBackgroundTask, appendTaskProgress, listBackgroundTasks,
   getBackgroundTask, linkBackgroundTaskMemory, currentPhase, reconcileBackgroundTasks,
-} from '@kinqs/brainrouter-core/dist/background/backgroundTaskStore.js';
-import { collectDurableRunningTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
-import { pidAlive } from '@kinqs/brainrouter-core/dist/background/backgroundReconcile.js';
+} from '@kinqs/brainrouter-core/background';
+import { collectDurableRunningTasks } from '@kinqs/brainrouter-core/background';
+import { pidAlive } from '@kinqs/brainrouter-core/background';
 import type { BackgroundTaskRecord } from '@kinqs/brainrouter-types';
 import type { BackgroundTaskEventView } from '@kinqs/brainrouter-agent-protocol';
 // ATTACHMENTS (0.4.15 workflow gaps) — ingest files (drag/drop + picker) into
 // durable attachment records, shared with the CLI `/attach` store.
-import { ingestAttachment, attachmentContextMarkdown } from '@kinqs/brainrouter-core/dist/attachment/ingest.js';
-import { listAttachments, getAttachment, linkAttachmentMemory } from '@kinqs/brainrouter-core/dist/attachment/attachmentStore.js';
+import { ingestAttachment, attachmentContextMarkdown } from '@kinqs/brainrouter-core/attachment';
+import { listAttachments, getAttachment, linkAttachmentMemory } from '@kinqs/brainrouter-core/attachment';
 // TELEMETRY (0.4.15 workflow gaps) — local-first task/review/upload lifecycle.
-import { recordTelemetry } from '@kinqs/brainrouter-core/dist/telemetry/telemetry.js';
-import { TELEMETRY_EVENTS } from '@kinqs/brainrouter-core/dist/telemetry/contracts.js';
+import { recordTelemetry } from '@kinqs/brainrouter-core/telemetry';
+import { TELEMETRY_EVENTS } from '@kinqs/brainrouter-core/telemetry';
 // §7 PLAN REVIEW — durable plan approval + version history (per-session decision
 // log that snapshots the plan). Shared with the CLI's /plan approve·request-changes·
 // history; the desktop panel reads/records through these thin wrappers — no
 // parallel store. A best-effort memory note is captured + linked, mirroring the CLI.
-import { readPlanHistory, recordPlanDecision, linkPlanDecision, type PlanVerdict, type PlanDecision } from '@kinqs/brainrouter-core/dist/task/planHistoryStore.js';
-import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
+import { readPlanHistory, recordPlanDecision, linkPlanDecision, type PlanVerdict, type PlanDecision } from '@kinqs/brainrouter-core/task';
+import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kinqs/brainrouter-core/memory';
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
-import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement, deleteRequirement, type RequirementPatch } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
-import { buildBaseGraph, saveAtlasGraph, readAtlasGraph, atlasGraphStats, atlasWorkspaceTag, enrichAtlasGraph, extractAtlasJson, type AtlasLlmCaller } from '@kinqs/brainrouter-core/dist/atlas/index.js';
-import { syncRequirementPlanTrack } from '@kinqs/brainrouter-core/dist/requirement/planTrackSync.js';
-import { ensureProject, getProject, getWorkItem, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember, getGithubLinks, setGithubLink, type CreateWorkItemInput, type UpdateWorkItemPatch, type AutomationPatch } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
-import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfigForWorkspace, listResolvedGithubConfigsForWorkspace, issueToWorkItem, type GithubIssue } from '@kinqs/brainrouter-core/dist/track/githubSync.js';
-import { scanGitCommitsForTrack } from '@kinqs/brainrouter-core/dist/track/commitScanner.js';
-import { readGitTrackContext, startGitWorkForTrackItem } from '@kinqs/brainrouter-core/dist/track/gitWorkflow.js';
-import { listConnectorCatalog } from '@kinqs/brainrouter-core/dist/connectors/catalog.js';
-import { createConnector, deleteConnector, finishConnectorRun, getConnector, listConnectorRuns, listConnectors, recordConnectorRun, updateConnector } from '@kinqs/brainrouter-core/dist/connectors/connectorStore.js';
-import { exportConnectorDefinitions, importConnectorDefinitions } from '@kinqs/brainrouter-core/dist/connectors/definitionTransfer.js';
-import { runGithubConnectorCheckpoint, runGithubConnectorPermissionSync, validateGithubConnectorAccess, type GithubConnectorClient, type GithubConnectorPermissionClient, type GithubConnectorValidationClient } from '@kinqs/brainrouter-core/dist/connectors/githubConnector.js';
-import { countConnectorDocuments, searchConnectorDocuments, upsertConnectorDocuments } from '@kinqs/brainrouter-core/dist/connectors/documentStore.js';
-import { exportConnectorDocumentsForMemory } from '@kinqs/brainrouter-core/dist/connectors/memoryBridge.js';
-import { countConnectorPermissions, listConnectorPermissions, upsertConnectorPermissions } from '@kinqs/brainrouter-core/dist/connectors/permissionStore.js';
-import { retrieveConnectorSlimDocuments } from '@kinqs/brainrouter-core/dist/connectors/slimRetrieval.js';
+import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement, deleteRequirement, type RequirementPatch } from '@kinqs/brainrouter-core/requirement';
+import { buildBaseGraph, saveAtlasGraph, readAtlasGraph, atlasGraphStats, atlasWorkspaceTag, enrichAtlasGraph, extractAtlasJson, type AtlasLlmCaller } from '@kinqs/brainrouter-core/atlas';
+import { syncRequirementPlanTrack } from '@kinqs/brainrouter-core/requirement';
+import { ensureProject, getProject, getWorkItem, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember, getGithubLinks, setGithubLink, type CreateWorkItemInput, type UpdateWorkItemPatch, type AutomationPatch } from '@kinqs/brainrouter-core/track';
+import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfigForWorkspace, listResolvedGithubConfigsForWorkspace, issueToWorkItem, type GithubIssue } from '@kinqs/brainrouter-core/track';
+import { scanGitCommitsForTrack } from '@kinqs/brainrouter-core/track';
+import { readGitTrackContext, startGitWorkForTrackItem } from '@kinqs/brainrouter-core/track';
+import { listConnectorCatalog } from '@kinqs/brainrouter-core/connectors';
+import { createConnector, deleteConnector, finishConnectorRun, getConnector, listConnectorRuns, listConnectors, recordConnectorRun, updateConnector } from '@kinqs/brainrouter-core/connectors';
+import { exportConnectorDefinitions, importConnectorDefinitions } from '@kinqs/brainrouter-core/connectors';
+import { runGithubConnectorCheckpoint, runGithubConnectorPermissionSync, validateGithubConnectorAccess, type GithubConnectorClient, type GithubConnectorPermissionClient, type GithubConnectorValidationClient } from '@kinqs/brainrouter-core/connectors';
+import { countConnectorDocuments, searchConnectorDocuments, upsertConnectorDocuments } from '@kinqs/brainrouter-core/connectors';
+import { exportConnectorDocumentsForMemory } from '@kinqs/brainrouter-core/connectors';
+import { countConnectorPermissions, listConnectorPermissions, upsertConnectorPermissions } from '@kinqs/brainrouter-core/connectors';
+import { retrieveConnectorSlimDocuments } from '@kinqs/brainrouter-core/connectors';
 import type { WorkItemType, SprintState, CodeLink, AutomationTrigger, AutomationAction, ProjectRole, ConnectorFlow, ConnectorSource } from '@kinqs/brainrouter-types';
 
 /**
@@ -195,18 +195,18 @@ import { isRequirementStatus, isRequirementPriority, type RequirementRecord } fr
 // ANNOTATION-RECORDS (0.4.15) — durable feedback records store + markdown
 // export (shared with the CLI). Thin wrappers below keep all business logic in
 // the CLI store; the desktop panel only reads/mutates through these endpoints.
-import { listAnnotations, getAnnotation, createAnnotation, setStatus as setAnnotationStatus, addComment as addAnnotationComment, linkAnnotation, type AnnotationFilter, type CreateAnnotationInput } from '@kinqs/brainrouter-core/dist/annotation/annotationStore.js';
-import { annotationsToMarkdown } from '@kinqs/brainrouter-core/dist/annotation/annotationExport.js';
+import { listAnnotations, getAnnotation, createAnnotation, setStatus as setAnnotationStatus, addComment as addAnnotationComment, linkAnnotation, type AnnotationFilter, type CreateAnnotationInput } from '@kinqs/brainrouter-core/annotation';
+import { annotationsToMarkdown } from '@kinqs/brainrouter-core/annotation';
 import { isAnnotationStatus, isAnnotationTargetKind, isAnnotationSeverity, isAnchorStale, type AnnotationAnchor, type AnnotationRecord } from '@kinqs/brainrouter-types';
 // ARTIFACT-RECORDS (0.4.15) — durable Artifact Records store (shared with the
 // CLI). Thin wrappers below keep all business logic in the CLI store; the
 // desktop panel only reads/mutates/previews through these endpoints.
-import { listArtifacts, createArtifact, updateArtifact, getArtifact, linkArtifact, revertArtifact, type ArtifactFilter, type CreateArtifactInput, type ArtifactPatch } from '@kinqs/brainrouter-core/dist/artifact/artifactStore.js';
+import { listArtifacts, createArtifact, updateArtifact, getArtifact, linkArtifact, revertArtifact, type ArtifactFilter, type CreateArtifactInput, type ArtifactPatch } from '@kinqs/brainrouter-core/artifact';
 import { isArtifactKind, isArtifactStatus, isArtifactFormat, type ArtifactRecord } from '@kinqs/brainrouter-types';
-import { listWorkers, readWorkerSummary, readWorkerTranscript, readWorkerMeta } from '@kinqs/brainrouter-core/dist/worker/workerStore.js';
+import { listWorkers, readWorkerSummary, readWorkerTranscript, readWorkerMeta } from '@kinqs/brainrouter-core/worker';
 import { listSessions } from '@kinqs/brainrouter-core/orchestration';
-import { readRun } from '@kinqs/brainrouter-core/dist/workflow/workflowRun.js';
-import { reconcileStaleBackgroundTasks } from '@kinqs/brainrouter-core/dist/background/backgroundReconcile.js';
+import { readRun } from '@kinqs/brainrouter-core/workflow';
+import { reconcileStaleBackgroundTasks } from '@kinqs/brainrouter-core/background';
 import { desktopSessionModePatchFromArgs, mergeSessionModePrefs } from './sessionModeBridge.js';
 
 interface ParentPortLike {

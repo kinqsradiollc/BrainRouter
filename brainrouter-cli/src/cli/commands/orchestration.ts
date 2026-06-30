@@ -12,8 +12,8 @@ import { formatInboxPane } from '../../runtime/inboxView.js';
 import { validateAgentDefinition, buildAgentDefinition, previewAgentDefinition } from '../../orchestration/agentDefValidation.js';
 import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/agent';
 import { listRoles, listAll as listAgentDefs, formatSessionSummary, getSession, listSessions, reconcileStale, updateSession, resolveAutoChainMode, isAutoChainMode, resolveDelegationPolicy, isDelegationPolicy, parseChildOutput } from '@kinqs/brainrouter-core/orchestration';
-import { collectRunningTasks, formatBackgroundTasks, summarizeTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
-import { activeRun, formatActivePhase } from '@kinqs/brainrouter-core/dist/workflow/workflowRun.js';
+import { collectRunningTasks, formatBackgroundTasks, summarizeTasks } from '@kinqs/brainrouter-core/background';
+import { activeRun, formatActivePhase } from '@kinqs/brainrouter-core/workflow';
 import { resolveBackgroundTarget, describeStopOutcome } from '../../runtime/bgDetach.js';
 import { buildAgentForest, formatAgentForest, formatAgentWhy } from '../../orchestration/agentTree.js';
 import { formatAgentTranscript, formatAgentReplay } from '../../orchestration/agentTranscriptView.js';
@@ -23,9 +23,9 @@ import { buildHandoffPacket, resolveHandoffTarget, type HandoffPacket } from '..
 import { getLoopState, stopLoop } from '../../runtime/loopRunner.js';
 import type { CommandContext } from './_context.js';
 import { formatTranscriptContent } from './_helpers.js';
-import { listPacks, packAgentIds } from '@kinqs/brainrouter-core/dist/pack/packs.js';
-import { readPackState, isPackEnabled, enablePack, disablePack } from '@kinqs/brainrouter-core/dist/pack/packStore.js';
-import { listWorkers, readWorkerMeta, readWorkerSummary, readWorkerTranscript, closeWorker, type WorkerStatus } from '@kinqs/brainrouter-core/dist/worker/workerStore.js';
+import { listPacks, packAgentIds } from '@kinqs/brainrouter-core/pack';
+import { readPackState, isPackEnabled, enablePack, disablePack } from '@kinqs/brainrouter-core/pack';
+import { listWorkers, readWorkerMeta, readWorkerSummary, readWorkerTranscript, closeWorker, type WorkerStatus } from '@kinqs/brainrouter-core/worker';
 
 interface DmAddressResolution {
   to: string;
@@ -765,7 +765,7 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
             console.log(chalk.red(`\n  No recovery patch on disk for ${match.id}${patchPath ? " (GC'd or discarded)" : ''}.\n`));
             return true;
           }
-          const { applyPatchFile } = await import('@kinqs/brainrouter-core/dist/worktree/worktreeIsolation.js');
+          const { applyPatchFile } = await import('@kinqs/brainrouter-core/worktree');
           const res = applyPatchFile(applyCwd, patchPath!);
           if (!res.ok) {
             console.log(chalk.yellow(`\n  Patch does not apply cleanly: ${res.error}`));
