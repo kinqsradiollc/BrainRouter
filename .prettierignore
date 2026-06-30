@@ -1,0 +1,18 @@
+# build output + deps
+**/dist/
+**/dist-electron/
+**/build/
+**/.next/
+**/.open-next/
+**/.wrangler/
+**/.turbo/
+**/release/
+**/coverage/
+**/node_modules/
+*.d.ts
+package-lock.json
+# vendored / generated content
+openSrc/
+brainrouter-changelog/
+brainrouter-roadmap/
+brainrouter-docs/
