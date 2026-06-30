@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { INSTRUCTION_FILES } from '../workspace/workspace.js';
+import { isStrongModelFamily } from '../provider/modelFamily.js';
 
 export interface SystemPromptContext {
   workspaceRoot: string;
@@ -181,19 +182,8 @@ function effortOverlay(effort: SystemPromptContext['effort']): string {
  */
 function modelFamilyOverlay(model: string | undefined): string {
   if (!model) return '';
-  const id = model.toLowerCase();
-  const strongFamilies = [
-    /^claude-/,                      // any Anthropic Claude
-    /^anthropic\//,                  // some OpenRouter / OpenAI-compatible prefixes
-    /^gpt-4/,                        // gpt-4, gpt-4o, gpt-4.1, gpt-4-turbo
-    /^gpt-5/,                        // gpt-5, gpt-5-mini, gpt-5-pro, gpt-5-codex
-    /^o[134](-|$)/,                  // o1, o3, o4 and dated variants — strong reasoners
-    /^chatgpt-/,                     // chatgpt-4o-latest etc.
-    /^gemini-2\.5/,                  // Gemini 2.5 Pro / Flash — agentic-grade
-    /^openai\/gpt-4/,                // LM Studio / OpenRouter prefixed
-    /^openai\/gpt-5/,
-  ];
-  if (strongFamilies.some((re) => re.test(id))) return '';
+  // Shared source of truth with the local-model harness profile (HONK-L7).
+  if (isStrongModelFamily(model)) return '';
   return [
     '## Reinforced autonomy directives',
     `(Detected model "${model}" benefits from explicit autonomy reinforcement.)`,

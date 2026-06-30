@@ -145,6 +145,7 @@ import { advanceRunStep, summarizeRun } from '../workflow/workflowRun.js';
 import { spawnWorkerThread, waitWorker } from '../orchestration/workerTools.js';
 // PARITY-E3: runtime model fallback on model-not-found.
 import { isModelNotFoundError, shouldFallbackModel } from '../provider/modelFallback.js';
+import { resolveLocalModelProfile } from '../provider/modelFamily.js';
 // 0.3.9 item 10 — provider-normalised cache-hit accounting.
 import { extractCacheStats } from '../util/cacheStats.js';
 // 0.3.9 item 11 — tool-call repair pipeline (flatten / scavenge /
@@ -1546,7 +1547,11 @@ export class Agent {
     // → write tasks) can easily eat 10-15 iterations. 20 was too tight and
     // caused workflows to abort mid-architect. Cap defaults to 60 and is
     // overridable via BRAINROUTER_MAX_TOOL_LOOPS for very heavy workflows.
-    const maxLoops = Math.max(5, getCliKnobs().maxToolLoops);
+    // HONK-L1/L7 — clamp the turn-loop caps for local/weak model families (a tight
+    // bounded harness, not more prompt, is what makes them reliable). Passthrough
+    // for strong/unknown models, so this is a no-op for the common case.
+    const harnessCaps = resolveLocalModelProfile(this.llmConfig.model, getCliKnobs().localModelProfile, getCliKnobs());
+    const maxLoops = Math.max(5, harnessCaps.maxToolLoops);
     let finalAnswer = '';
     // Stalled-preamble guardrail counter — see the `looksLikeStalledPreamble`
     // branch below. Bounded so a model that ONLY emits preambles can't keep
@@ -1621,7 +1626,7 @@ export class Agent {
     // different files is real work, not a loop (the identical-args guard below
     // still catches writing the SAME file over and over).
     const recentToolSequences: string[] = [];
-    const TOOL_SEQUENCE_GUARD_LIMIT = Math.max(3, getCliKnobs().repeatToolSequenceLimit);
+    const TOOL_SEQUENCE_GUARD_LIMIT = Math.max(3, harnessCaps.repeatToolSequenceLimit);
     const sequenceGuardExempt = new Set(getCliKnobs().repeatSequenceExemptTools);
     const spawnedChildIdsThisTurn = new Set<string>();
     const waitedChildIdsThisTurn = new Set<string>();
