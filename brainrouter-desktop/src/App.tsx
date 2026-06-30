@@ -244,7 +244,9 @@ export function App(): React.ReactElement {
   }, [snapshot]);
   // Item 10 — where a model pick is saved: 'global' = config.json (shared with
   // the CLI, every chat), 'session' = this chat only (sessionRuntimeStore).
-  const [modelScope, setModelScope] = useState<'global' | 'session'>('global');
+  // Default to per-session so picking a model in one chat never syncs to the
+  // others; the explicit "All chats" toggle sets the global default.
+  const [modelScope, setModelScope] = useState<'global' | 'session'>('session');
   // T14 — scheduled tasks for the viewed session (cron/once), from the CLI store.
   const [schedules, setSchedules] = useState<ScheduleRecordView[]>([]);
   // REQUIREMENT-RECORDS — this workspace's Requirement Records, from the CLI store.

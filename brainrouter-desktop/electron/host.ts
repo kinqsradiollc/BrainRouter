@@ -674,8 +674,30 @@ async function main(): Promise<void> {
     llm = fresh.llm ?? llm;
     return llm;
   };
-  const llmForSession = (sessionKey: string): LLMConfig =>
-    resolveSessionLlmConfig(loadGlobalLlm(), workspaceRoot, sessionKey);
+  const llmForSession = (sessionKey: string): LLMConfig => {
+    const base = loadGlobalLlm();
+    const resolved = resolveSessionLlmConfig(base, workspaceRoot, sessionKey);
+    // A session can run a DIFFERENT provider than the global default; the session
+    // runtime stores provider/model/endpoint but never a secret, so the global
+    // apiKey would be wrong. Resolve the chosen provider's key from the saved
+    // connections (match by provider + endpoint, then provider alone).
+    if (resolved.provider !== base.provider || (resolved.endpoint ?? '') !== (base.endpoint ?? '')) {
+      const conns = Object.values(loadConfig().providers ?? {});
+      const match =
+        conns.find((p) => p.provider === resolved.provider && (p.endpoint ?? '') === (resolved.endpoint ?? '')) ??
+        conns.find((p) => p.provider === resolved.provider);
+      if (match?.apiKey) return { ...resolved, apiKey: match.apiKey, endpoint: resolved.endpoint ?? match.endpoint };
+    }
+    return resolved;
+  };
+  // Item 10 / per-session provider — resolve a named saved connection to a full
+  // LLM config (incl. its apiKey, main-process only). Used to (re)build the active
+  // agent when the user picks a model from another provider.
+  const resolveProviderLlm = (providerName: string, model: string): LLMConfig | undefined => {
+    const p = loadConfig().providers?.[providerName];
+    if (!p) return undefined;
+    return { provider: p.provider, apiKey: p.apiKey, model: model || p.model, endpoint: p.endpoint };
+  };
   const syncActiveSessionLlm = (base: LLMConfig = loadGlobalLlm()): LLMConfig => {
     const next = resolveSessionLlmConfig(base, workspaceRoot, activeAgent.sessionKey);
     activeAgent.setLLMConfig(next);
@@ -1754,6 +1776,25 @@ async function main(): Promise<void> {
     getSessionModel: (sessionKey) => getSessionRuntime(workspaceRoot, sessionKey).model || undefined,
     setSessionModel: (sessionKey, model) => { setSessionRuntime(workspaceRoot, sessionKey, { model }); },
     clearSessionModel: (sessionKey) => { setSessionRuntime(workspaceRoot, sessionKey, { model: '' }); },
+    // Per-session provider+model: write the full runtime override (no secret) so a
+    // chat can run a different provider than the global default.
+    setSessionLlm: (sessionKey, patch) => { setSessionRuntime(workspaceRoot, sessionKey, patch); },
+    // Resolve a saved connection (by name) to a full LLM config — used to rebuild
+    // the active agent when a cross-provider model is picked.
+    resolveProviderLlm: (providerName, model) => resolveProviderLlm(providerName, model),
+    // Full per-session LLM (provider/model/endpoint + resolved key) for the active
+    // chat — used to rebuild the agent on a session switch.
+    resolveSessionLlm: (sessionKey) => llmForSession(sessionKey),
+    // GLOBAL default from a named connection + a chosen model (config.json).
+    persistProviderModel: (providerName, model) => {
+      const fresh = loadConfig();
+      const p = fresh.providers?.[providerName];
+      if (!p) return;
+      fresh.llm = { provider: p.provider, apiKey: p.apiKey, model: model || p.model, endpoint: p.endpoint };
+      saveConfig(fresh);
+      llm = fresh.llm;
+      modelsCacheByKey.delete('');
+    },
     queries: {
       // Read-only surfaces — same pure modules the TUI commands use.
       // DESK-6m — sidebar sessions merged with their UI meta (title override,

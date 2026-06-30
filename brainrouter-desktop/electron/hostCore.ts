@@ -50,6 +50,10 @@ export interface AgentLike {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   loadHistory?(entries: any[]): number;
   setModel?(model: string): void;
+  /** Per-session provider switch — rebuild the whole LLM config (provider/model/
+   *  endpoint/key), not just the model string. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  setLLMConfig?(config: any): void;
   getModel?(): string;
   /** DESK-4 — cumulative session token usage (mirrors the CLI's /tokens). */
   sessionUsage?: { promptTokens: number; completionTokens: number; calls: number; turns: number; cachedTokens?: number };
@@ -158,6 +162,17 @@ export function createHostCore(input: {
   /** Clear a stale per-session model override when the user intentionally picks
    *  a GLOBAL default for the active chat. */
   clearSessionModel?: (sessionKey: string) => void;
+  /** Per-session provider+model: persist the full runtime override (no secret). */
+  setSessionLlm?: (sessionKey: string, patch: { provider?: string; model?: string; endpoint?: string }) => void;
+  /** Resolve a saved connection (by name) + chosen model to a full LLM config
+   *  (incl. key) so the active agent can be rebuilt for a cross-provider pick. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  resolveProviderLlm?: (providerName: string, model: string) => any | undefined;
+  /** Full per-session LLM (provider/model/endpoint + key) for a session switch. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  resolveSessionLlm?: (sessionKey: string) => any | undefined;
+  /** Set the GLOBAL default from a named connection + chosen model. */
+  persistProviderModel?: (providerName: string, model: string) => void;
   /** DESK-3 — share the broker with the agent's InteractionPort adapter. */
   broker?: InteractionBroker;
   /** Called on `shutdown` after pending interactions are dismissed. */
@@ -313,11 +328,17 @@ export function createHostCore(input: {
     // old session; clear it before retargeting so a fresh chat cannot ingest the
     // previous transcript on its first turn.
     rt.pendingHistoryKey = undefined;
-    // Item 10 — restore this session's per-session model override (if any) so a
-    // resumed/backgrounded chat keeps the model it was set to, independent of the
+    // Item 10 — restore this session's per-session runtime (if any) so a resumed/
+    // backgrounded chat keeps the provider+model it was set to, independent of the
     // global default and of whatever the previous agent in this slot was using.
-    const sessModel = input.getSessionModel?.(targetKey);
-    if (sessModel) rt.agent.setModel?.(sessModel);
+    // Prefer the full LLM (handles a cross-provider override + its key); fall back
+    // to the model string alone.
+    const sessLlm = input.resolveSessionLlm?.(targetKey);
+    if (sessLlm) rt.agent.setLLMConfig?.(sessLlm);
+    else {
+      const sessModel = input.getSessionModel?.(targetKey);
+      if (sessModel) rt.agent.setModel?.(sessModel);
+    }
     const loaded = init(rt);
     pool.set(targetKey, rt);
     setActive(targetKey);
@@ -409,17 +430,27 @@ export function createHostCore(input: {
       }
       case 'set-model': {
         const a = pool.get(activeKey)?.agent;
-        a?.setModel?.(cmd.model);
         // Item 10 — persist:true → GLOBAL default (config.json, shared with the
         // CLI). persist:false → THIS SESSION ONLY (sessionRuntimeStore), so it
         // survives a respawn for this chat without changing every other chat.
+        // A `providerName` means a CROSS-PROVIDER pick: rebuild the agent's whole
+        // LLM (provider/model/endpoint/key) and write the full session override
+        // (never the global default unless persist) — so it never syncs to others.
+        const full = cmd.providerName ? input.resolveProviderLlm?.(cmd.providerName, cmd.model) : undefined;
+        if (full) a?.setLLMConfig?.(full); else a?.setModel?.(cmd.model);
         if (cmd.persist) {
-          try { input.persistModel?.(cmd.model); } catch (err) {
+          try {
+            if (cmd.providerName) input.persistProviderModel?.(cmd.providerName, cmd.model);
+            else input.persistModel?.(cmd.model);
+          } catch (err) {
             emit({ kind: 'status', text: `Model switched for this session, but persisting failed: ${err instanceof Error ? err.message : err}` });
             emit({ kind: 'session-changed', sessionKey: activeKey, loadedMessages: -1, model: cmd.model });
             return;
           }
           try { input.clearSessionModel?.(activeKey); } catch { /* global model still persisted */ }
+        } else if (cmd.providerName) {
+          // Per-session cross-provider override (provider/model/endpoint, no secret).
+          try { input.setSessionLlm?.(activeKey, { provider: full?.provider, model: cmd.model, endpoint: full?.endpoint }); } catch { /* in-memory set already applied */ }
         } else {
           try { input.setSessionModel?.(activeKey, cmd.model); } catch { /* in-memory set already applied */ }
         }
