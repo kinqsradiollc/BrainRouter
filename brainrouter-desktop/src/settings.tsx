@@ -12,7 +12,7 @@ import { Icon } from './icons.js';
 import type { ConnectorCatalogEntry, ConnectorDefinitionBundle, ConnectorRecord, ConnectorRunRecord } from '@kinqs/brainrouter-types';
 import { ProviderIcon } from './components/ProviderIcon.js';
 import { ShortcutsReference } from './components/ShortcutsReference.js';
-import { PERMISSION_MODES, policyForMode, nearestMode } from '@kinqs/brainrouter-core/session';
+import { PERMISSION_MODES, policyForMode, nearestMode } from '@kinqs/brainrouter-core/dist/session/permissionModes.js';
 
 interface ConnectorSlimPreview {
   id: string;

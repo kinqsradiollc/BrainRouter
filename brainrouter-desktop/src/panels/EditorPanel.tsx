@@ -24,7 +24,7 @@ import { installMonaco, editorTheme, editorFontFamily } from '../lib/editor/mona
 import { isDirty, type EditorTab } from '../lib/editor/editorModel.js';
 import { hostQuery } from '../lib/hostQuery.js';
 import { renderBody, htmlDoc, MARKDOWN_FILE } from '../lib/docs/markdownExport.js';
-import { computeReviewChunks, applyReview, type ReviewDecision } from '@kinqs/brainrouter-core/write';
+import { computeReviewChunks, applyReview, type ReviewDecision } from '@kinqs/brainrouter-core/dist/write/writeDiff.js';
 import {
   MarkdownPreview, WritingAssistant, ReviewOverlay,
   registerMarkdownGhost, setActiveMarkdownModel,
