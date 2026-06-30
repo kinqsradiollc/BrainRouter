@@ -428,6 +428,17 @@ export function installDevBridge(): void {
     { id: 'sp_2', workspaceRoot: wsCurrent, name: 'Sprint 2 — Views', state: 'future', createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
   ];
   let devSprintN = 3;
+  const devModules: Record<string, unknown>[] = [
+    { id: 'mod_1', workspaceRoot: wsCurrent, name: 'Recall pipeline', description: 'reranker + RRF blend, graph expansion', status: 'in-progress', lead: 'anhdang', members: ['anhdang', 'bob'], targetDate: '2026-07-12T00:00:00.000Z', createdAt: '2026-06-18T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
+    { id: 'mod_2', workspaceRoot: wsCurrent, name: 'Unified workspace', description: 'Chat · Track · Code modes', status: 'in-progress', lead: 'you', members: ['you', 'anhdang'], targetDate: '2026-07-20T00:00:00.000Z', createdAt: '2026-06-18T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
+    { id: 'mod_3', workspaceRoot: wsCurrent, name: 'Cloud packaging', description: 'server image + remote dashboard', status: 'planned', lead: 'you', members: ['you'], targetDate: '2026-08-01T00:00:00.000Z', createdAt: '2026-06-20T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
+  ];
+  let devModuleN = 4;
+  // Seed a few module assignments so the preview's progress bars have data.
+  for (const it of devTrack.items) {
+    if (it.key === 'BR-1' || it.key === 'BR-2') it.moduleId = 'mod_2';
+    if (it.key === 'BR-3' || it.key === 'BR-5') it.moduleId = 'mod_1';
+  }
   const devFindItem = (k: unknown): Record<string, unknown> | undefined => devTrack.items.find((w) => w.key === k || w.id === k);
   const devAutomations: Record<string, unknown>[] = [
     { id: 'auto_1', name: 'Bugs start high', enabled: true, trigger: 'created', condition: 'type = bug', actions: [{ type: 'set-priority', value: 'high' }], createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
@@ -1096,6 +1107,27 @@ export function installDevBridge(): void {
       const sp = devSprints.find((s) => s.id === a.id);
       if (sp) sp.state = String(a.state ?? 'future');
       return [...devSprints];
+    },
+    'track-modules': () => [...devModules],
+    'track-create-module': (a) => {
+      devModules.unshift({ id: `mod_${devModuleN++}`, workspaceRoot: wsCurrent, name: String(a.name ?? 'Module'), description: a.description ? String(a.description) : undefined, status: 'planned', members: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      return [...devModules];
+    },
+    'track-module-update': (a) => {
+      const m = devModules.find((x) => x.id === a.id);
+      if (m && a.patch && typeof a.patch === 'object') Object.assign(m, a.patch);
+      return [...devModules];
+    },
+    'track-module-delete': (a) => {
+      const i = devModules.findIndex((x) => x.id === a.id);
+      if (i >= 0) devModules.splice(i, 1);
+      for (const it of devTrack.items) if (it.moduleId === a.id) it.moduleId = undefined;
+      return [...devModules];
+    },
+    'track-assign-module': (a) => {
+      const it = devFindItem(a.idOrKey);
+      if (it) it.moduleId = a.moduleId ? String(a.moduleId) : undefined;
+      return [...devTrack.items];
     },
     'track-automations': () => [...devAutomations],
     'track-create-automation': (a) => {

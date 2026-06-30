@@ -6,7 +6,7 @@
  * (fed by host `track-*` queries) and mutates through the `ops` callbacks.
  */
 import React, { useMemo, useState } from 'react';
-import type { TrackProject, WorkItem, WorkItemType, WorkItemPriority, Sprint, SprintState, AutomationRule, AutomationTrigger, AutomationAction, AutomationActionType, ProjectMember, ProjectRole, ProjectCapability } from '@kinqs/brainrouter-types';
+import type { TrackProject, WorkItem, WorkItemType, WorkItemPriority, Sprint, SprintState, Module, ModuleStatus, AutomationRule, AutomationTrigger, AutomationAction, AutomationActionType, ProjectMember, ProjectRole, ProjectCapability } from '@kinqs/brainrouter-types';
 import { roleCan } from '../lib/track/permissions.js';
 import { parseTrackQuery } from '../lib/track/query.js';
 import { TrackDropdown } from './Dropdown.js';
@@ -52,6 +52,10 @@ export interface TrackOps {
   assignSprint: (idOrKey: string, sprintId: string | null) => void;
   createSprint: (name: string, goal?: string) => void;
   sprintState: (id: string, state: SprintState) => void;
+  assignModule: (idOrKey: string, moduleId: string | null) => void;
+  createModule: (name: string, description?: string) => void;
+  updateModule: (id: string, patch: Partial<Module>) => void;
+  deleteModule: (id: string) => void;
   createAutomation: (input: { name: string; trigger: AutomationTrigger; condition?: string; actions: AutomationAction[] }) => void;
   updateAutomation: (id: string, patch: Partial<AutomationRule>) => void;
   deleteAutomation: (id: string) => void;
@@ -75,6 +79,7 @@ export interface TrackViewProps {
   project: TrackProject | null;
   items: WorkItem[];
   sprints: Sprint[];
+  modules: Module[];
   automations: AutomationRule[];
   members: ProjectMember[];
   sync: { config: SyncConfig | null; result: SyncResult | null };
@@ -86,7 +91,7 @@ export interface TrackViewProps {
   onOpenRail?: () => void;
 }
 
-type TrackTab = 'board' | 'list' | 'backlog' | 'sprint' | 'roadmap' | 'reports' | 'automation' | 'members' | 'sync';
+type TrackTab = 'board' | 'list' | 'backlog' | 'sprint' | 'modules' | 'roadmap' | 'reports' | 'automation' | 'members' | 'sync';
 interface Filter { type?: WorkItemType; statusCategory?: string; priority?: WorkItemPriority; assignee?: string; text?: string }
 
 const TABS: Array<{ id: TrackTab; label: string; icon: string }> = [
@@ -94,6 +99,7 @@ const TABS: Array<{ id: TrackTab; label: string; icon: string }> = [
   { id: 'list', label: 'List', icon: 'tasks' },
   { id: 'backlog', label: 'Backlog', icon: 'panels' },
   { id: 'sprint', label: 'Sprint', icon: 'bolt' },
+  { id: 'modules', label: 'Modules', icon: 'panels' },
   { id: 'roadmap', label: 'Roadmap', icon: 'chart' },
   { id: 'reports', label: 'Reports', icon: 'chart' },
   { id: 'automation', label: 'Automation', icon: 'bolt' },
@@ -101,7 +107,7 @@ const TABS: Array<{ id: TrackTab; label: string; icon: string }> = [
   { id: 'sync', label: 'Sync', icon: 'refresh' },
 ];
 
-export function TrackView({ project, items, sprints, automations, members, sync, git, pr, ops, railOpen = true, onOpenRail }: TrackViewProps): React.ReactElement {
+export function TrackView({ project, items, sprints, modules, automations, members, sync, git, pr, ops, railOpen = true, onOpenRail }: TrackViewProps): React.ReactElement {
   const [tab, setTab] = useState<TrackTab>('board');
   const [filter, setFilter] = useState<Filter>({});
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -207,6 +213,8 @@ export function TrackView({ project, items, sprints, automations, members, sync,
         <SprintView items={items} sprints={sprints} states={states} ops={ops} onOpen={(w) => setSelectedKey(w.key)} />
       ) : tab === 'roadmap' ? (
         <RoadmapView items={filtered} states={states} onOpen={(w) => setSelectedKey(w.key)} />
+      ) : tab === 'modules' ? (
+        <ModulesView modules={modules} items={items} ops={ops} />
       ) : tab === 'reports' ? (
         <ReportsView items={items} states={states} sprints={sprints} />
       ) : tab === 'automation' ? (
@@ -217,7 +225,56 @@ export function TrackView({ project, items, sprints, automations, members, sync,
         <SyncView sync={sync} git={git} ops={ops} />
       )}
 
-      {selected ? <TrackDetail item={selected} project={project} allItems={items} sprints={sprints} ops={ops} onClose={() => setSelectedKey(null)} /> : null}
+      {selected ? <TrackDetail item={selected} project={project} allItems={items} sprints={sprints} modules={modules} ops={ops} onClose={() => setSelectedKey(null)} /> : null}
+    </div>
+  );
+}
+
+const MODULE_STATUSES: ModuleStatus[] = ['backlog', 'planned', 'in-progress', 'paused', 'completed', 'cancelled'];
+
+function ModulesView({ modules, items, ops }: { modules: Module[]; items: WorkItem[]; ops: TrackOps }): React.ReactElement {
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState('');
+  const submit = (): void => { const n = name.trim(); if (n) ops.createModule(n); setName(''); setCreating(false); };
+  return (
+    <div className="track-modules">
+      <div className="track-modules-head">
+        <span className="track-modules-count">{modules.length} module{modules.length === 1 ? '' : 's'}</span>
+        <button className="track-mod-new" onClick={() => setCreating(true)}>+ New module</button>
+      </div>
+      {creating ? (
+        <div className="track-mod-create">
+          <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Module name"
+            onKeyDown={(e) => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') { setCreating(false); setName(''); } }} />
+          <button onClick={submit}>Add</button><button onClick={() => { setCreating(false); setName(''); }}>Cancel</button>
+        </div>
+      ) : null}
+      {modules.length === 0 && !creating ? <div className="track-empty">No modules yet. Group related work into a module.</div> : null}
+      <div className="track-mod-grid">
+        {modules.map((m) => {
+          const own = items.filter((w) => w.moduleId === m.id);
+          const done = own.filter((w) => w.statusCategory === 'completed').length;
+          const pct = own.length ? Math.round((done / own.length) * 100) : 0;
+          return (
+            <div className="track-mod-card" key={m.id}>
+              <div className="track-mod-card-top">
+                <span className={`track-cat track-mod-st-${m.status}`} />
+                <span className="track-mod-name">{m.name}</span>
+                <TrackDropdown value={m.status} options={MODULE_STATUSES.map((s) => ({ value: s, label: s }))}
+                  onChange={(v) => ops.updateModule(m.id, { status: v as ModuleStatus })} />
+                <button className="track-mod-del" title="Delete module" onClick={() => ops.deleteModule(m.id)}>×</button>
+              </div>
+              {m.description ? <div className="track-mod-desc">{m.description}</div> : null}
+              <div className="track-mod-bar"><span className="track-mod-bar-fill" style={{ width: `${pct}%` }} /></div>
+              <div className="track-mod-meta">
+                <span>{done} / {own.length} done · {pct}%</span>
+                {m.lead ? <span className="track-mod-lead">lead {m.lead}</span> : null}
+                {m.targetDate ? <span>{new Date(m.targetDate).toLocaleDateString()}</span> : null}
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
