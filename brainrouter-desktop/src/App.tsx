@@ -32,7 +32,7 @@ import { fileFromSummary, fmtAge, fmt, download } from './lib/format.js';
 import { FOREGROUND_ONLY_KINDS } from './constants.js';
 import { useClosable } from './lib/useClosable.js';
 import { rid } from './lib/rid.js';
-import { useAgentEvents } from './lib/agent/useAgentEvents.js';
+import { useAgentEvents, type ToolCatalog } from './lib/agent/useAgentEvents.js';
 import { useEditor } from './lib/editor/useEditor.js';
 import { useCi } from './lib/ci/useCi.js';
 import { type DashTab, type DashTask, type WorkspaceDash } from './lib/workspace/dashboard.js';
@@ -223,6 +223,8 @@ export function App(): React.ReactElement {
   const [grepHits, setGrepHits] = useState<import('./panels/index.js').GrepHit[] | null>(null);
   const [branches, setBranches] = useState<{ current: string | null; branches: string[]; loading?: boolean }>({ current: null, branches: [] });
   const [endpointModels, setEndpointModels] = useState<string[]>([]);
+  // Tool enable/disable catalog for Settings → Tools (built-in + connected MCP).
+  const [toolCatalog, setToolCatalog] = useState<ToolCatalog>({ builtin: [], mcp: [] });
   // §endpoint-driven-models — per-named-provider /models lists for the sub-agent
   // model pickers (keyed by provider name; fetched via list-models { provider }).
   const [providerModels, setProviderModels] = useState<Record<string, string[]>>({});
@@ -299,6 +301,13 @@ export function App(): React.ReactElement {
     if (name === 'list-files') { setFilesLoading(true); setFilesError(''); }
     window.brainrouter.send({ kind: 'query', id: tagQueryId(id, workspaceGenRef.current), name, args });
   };
+
+  // Fetch the tool enable/disable catalog (built-in + connected MCP tools) when
+  // Settings opens, so the Tools section can render a toggle per tool.
+  useEffect(() => {
+    if (settings.open) q('q-toolcat', 'tool-catalog');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.open]);
 
   // Track mode — fetch the project + work items on entering Track or switching
   // workspace; mutations return the updated list (handled in useAgentEvents).
@@ -762,7 +771,7 @@ export function App(): React.ReactElement {
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
     setDraft, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
-    setBranches, setModelsLoading, setEndpointModels, setProviderModels, setProbedModels, setProbeLoading, setProbeError, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
+    setBranches, setModelsLoading, setEndpointModels, setToolCatalog, setProviderModels, setProbedModels, setProbeLoading, setProbeError, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
     setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
@@ -1460,6 +1469,7 @@ export function App(): React.ReactElement {
         probeLoading={probeLoading}
         probeError={probeError}
         onProbe={(a) => { setProbeLoading(true); setProbeError(''); q('q-probe', 'list-models-probe', a); }}
+        toolCatalog={toolCatalog}
         onProbeReset={() => { setProbedModels([]); setProbeLoading(false); setProbeError(''); }}
         onModelSave={(model) => window.brainrouter.send({ kind: 'set-model', model, persist: true })}
         onAction={(id, name, args) => {

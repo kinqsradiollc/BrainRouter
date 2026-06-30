@@ -121,6 +121,7 @@ const NAV: Array<{ section: SettingsSection; icon: string; title: string; group:
   { section: 'workflow-automation', icon: 'fork', title: 'Workflow automation', group: 'Settings' },
   { section: 'extensions', icon: 'plug', title: 'Extensions', group: 'Settings' },
   { section: 'connectors', icon: 'bolt', title: 'MCP Servers', group: 'Settings' },
+  { section: 'tools', icon: 'gear', title: 'Tools', group: 'Settings' },
   { section: 'data-connectors', icon: 'branch', title: 'Connectors', group: 'Settings' },
   { section: 'advanced', icon: 'gear', title: 'Advanced', group: 'Settings' },
   { section: 'observability', icon: 'chart', title: 'Usage', group: 'Settings' },
@@ -868,6 +869,8 @@ export function SettingsDialog(props: {
    * hand-write a model list. */
   endpointModels: string[];
   providerModels: Record<string, string[]>;
+  /** Tool enable/disable catalog (built-in + connected MCP) for the Tools section. */
+  toolCatalog: { builtin: Array<{ name: string; description: string; protected: boolean }>; mcp: Array<{ server: string; name: string }> };
   /** §multi-select-models — live result of probing a DRAFT provider key in the
    *  setup dialog (the models that key unlocks), with loading + error state.
    *  probeError: '' = none, 'no-models' = the key/endpoint returned nothing. */
@@ -1569,6 +1572,45 @@ export function SettingsDialog(props: {
           ))}
         </>
       );
+      case 'tools': {
+        // Per-tool enable/disable (cli.toolOverrides). 'default' leaves it to the
+        // agent's normal logic (incl. the local-model allowlist); 'on' force-enables
+        // (the re-enable case); 'off' disables. Protected core tools can't be off.
+        const overrides = (knobs.toolOverrides ?? {}) as Record<string, boolean>;
+        const stateOf = (name: string): string => overrides[name] === true ? 'on' : overrides[name] === false ? 'off' : 'default';
+        const setOverride = (name: string, v: string): void => {
+          const next = { ...overrides };
+          if (v === 'on') next[name] = true;
+          else if (v === 'off') next[name] = false;
+          else delete next[name];
+          setKnob('toolOverrides', next);
+        };
+        const cat = props.toolCatalog;
+        return (
+          <>
+            <div className="set-h">Tools</div>
+            <div className="set-desc" style={{ marginBottom: 10 }}>
+              Enable or disable individual agent tools. Local models hide some by default — set those to <b>On</b> to force-enable them. Core tools (read / edit / run + plan / goal) are always on.
+            </div>
+            <div className="set-h2">Built-in tools</div>
+            {cat.builtin.length === 0
+              ? <Row title="Loading…" desc="" />
+              : cat.builtin.map((t) => (
+                  <Row key={t.name} title={t.name} desc={t.protected ? `${t.description}${t.description ? ' · ' : ''}core — always on` : t.description}>
+                    <Select value={stateOf(t.name)} options={t.protected ? ['default', 'on'] : ['default', 'on', 'off']} onChange={(v) => setOverride(t.name, v)} />
+                  </Row>
+                ))}
+            <div className="set-h2" style={{ marginTop: 14 }}>MCP tools</div>
+            {cat.mcp.length === 0
+              ? <Row title="No MCP tools" desc="Connect MCP servers under “MCP Servers” to see their tools here." />
+              : cat.mcp.map((t) => (
+                  <Row key={t.name} title={t.name.replace(/^mcp_/, '')} desc={`from ${t.server}`}>
+                    <Select value={stateOf(t.name)} options={['default', 'on', 'off']} onChange={(v) => setOverride(t.name, v)} />
+                  </Row>
+                ))}
+          </>
+        );
+      }
       case 'connectors': {
         // WS9 — group the flat pool into Brains (BrainRouter memory servers, only
         // one active at a time) and Tools (third-party MCP) so the single-active-
