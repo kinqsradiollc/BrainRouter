@@ -49,6 +49,12 @@ function isWorkspaceScopedReviewQuery(id: string): boolean {
   return WORKSPACE_SCOPED_REVIEW_QUERY_IDS.has(id);
 }
 
+/** Tool enable/disable catalog (the `tool-catalog` query result). */
+export interface ToolCatalog {
+  builtin: Array<{ name: string; description: string; protected: boolean }>;
+  mcp: Array<{ server: string; name: string }>;
+}
+
 export interface AgentEventsCtx {
   setRows: React.Dispatch<React.SetStateAction<ChatRow[]>>;
   setRunning: React.Dispatch<React.SetStateAction<boolean>>;
@@ -100,6 +106,7 @@ export interface AgentEventsCtx {
   setBranches: React.Dispatch<React.SetStateAction<BranchesState>>;
   setModelsLoading: React.Dispatch<React.SetStateAction<boolean>>;
   setEndpointModels: React.Dispatch<React.SetStateAction<string[]>>;
+  setToolCatalog: React.Dispatch<React.SetStateAction<ToolCatalog>>;
   setProviderModels: React.Dispatch<React.SetStateAction<Record<string, string[]>>>;
   setProbedModels: React.Dispatch<React.SetStateAction<string[]>>;
   setProbeLoading: React.Dispatch<React.SetStateAction<boolean>>;
@@ -194,7 +201,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
     setDraft, planFeedbackRef, goalContPendingRef, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
-    setBranches, setModelsLoading, setEndpointModels, setProviderModels, setProbedModels, setProbeLoading, setProbeError, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
+    setBranches, setModelsLoading, setEndpointModels, setToolCatalog, setProviderModels, setProbedModels, setProbeLoading, setProbeError, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
     setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
@@ -808,6 +815,13 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           // endpoint's /models — never a hand-written list.
           if (r.provider) setProviderModels((prev) => ({ ...prev, [r.provider!]: r.models ?? [] }));
           else setEndpointModels(r.models ?? []);
+        }
+        return;
+      }
+      case 'q-toolcat': {
+        if (result && typeof result === 'object') {
+          const r = result as Partial<ToolCatalog>;
+          setToolCatalog({ builtin: r.builtin ?? [], mcp: r.mcp ?? [] });
         }
         return;
       }

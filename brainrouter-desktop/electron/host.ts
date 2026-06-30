@@ -205,6 +205,7 @@ import { listArtifacts, createArtifact, updateArtifact, getArtifact, linkArtifac
 import { isArtifactKind, isArtifactStatus, isArtifactFormat, type ArtifactRecord } from '@kinqs/brainrouter-types';
 import { listWorkers, readWorkerSummary, readWorkerTranscript, readWorkerMeta } from '@kinqs/brainrouter-core/worker';
 import { listSessions } from '@kinqs/brainrouter-core/orchestration';
+import { localToolSpecsFromExecutors, isProtectedCoreTool } from '@kinqs/brainrouter-core/tool';
 import { readRun } from '@kinqs/brainrouter-core/workflow';
 import { reconcileStaleBackgroundTasks } from '@kinqs/brainrouter-core/background';
 import { desktopSessionModePatchFromArgs, mergeSessionModePrefs } from './sessionModeBridge.js';
@@ -3765,6 +3766,31 @@ async function main(): Promise<void> {
       // pickers are ALWAYS endpoint-driven, never a hand-written list. With no
       // arg this lists the active llm's models; `{ provider }` lists a named
       // provider's (the key is resolved HERE so it never leaves the host).
+      // Tool enable/disable catalog — the built-in agent tools (with their
+      // protected flag) + the connected MCP tools, so Settings can render a toggle
+      // per tool. The current on/off state is read from cli.toolOverrides in the
+      // config snapshot; this just enumerates what exists.
+      'tool-catalog': async () => {
+        const builtin = localToolSpecsFromExecutors().map((t) => ({
+          name: t.name,
+          description: typeof t.description === 'string' ? t.description : '',
+          protected: isProtectedCoreTool(t.name),
+        }));
+        let mcp: Array<{ server: string; name: string }> = [];
+        try {
+          const res = (await mcpClient.listTools()) as { tools?: Array<{ name?: string }> };
+          mcp = (res.tools ?? [])
+            .map((t) => String(t?.name ?? ''))
+            .filter(Boolean)
+            .map((full) => {
+              const m = full.match(/^mcp_([^_]+)_/);
+              return { server: m ? m[1] : 'mcp', name: full };
+            });
+        } catch {
+          mcp = [];
+        }
+        return { builtin, mcp };
+      },
       'list-models': async (a) => {
         const fresh = loadConfig();
         llm = fresh.llm ?? llm;
