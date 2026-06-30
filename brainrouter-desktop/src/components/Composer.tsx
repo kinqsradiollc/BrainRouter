@@ -432,10 +432,13 @@ export function Composer(p: ComposerProps): React.ReactElement {
                             {g.models.map((m) => {
                               const badges = capabilityBadges(modelCapabilities(m));
                               return (
-                                <button key={`${g.name}:${m}`} className="menu-item model-item" title={`Switch to ${g.name} and use ${m}`} onClick={() => {
-                                  // Switch the active provider to this one, then pick the model.
-                                  q('a-setdefault', 'action:set-default-provider', { name: g.name });
-                                  setTimeout(() => { window.brainrouter.send({ kind: 'set-model', model: m, persist: true }); q('q-snapshot', 'config-snapshot'); q('q-models', 'list-models'); }, 150);
+                                <button key={`${g.name}:${m}`} className="menu-item model-item" title={`Use ${m} from ${g.name}${modelScope === 'global' ? '' : ' for this chat only'}`} onClick={() => {
+                                  // Cross-provider pick. The host switches provider per SCOPE:
+                                  // 'global' → sets the shared default; 'session' → a per-chat
+                                  // override (provider+model+endpoint, key resolved host-side) so
+                                  // it never syncs to the other chats.
+                                  window.brainrouter.send({ kind: 'set-model', model: m, providerName: g.name, persist: modelScope === 'global' });
+                                  q('q-snapshot', 'config-snapshot'); q('q-models', 'list-models');
                                   setPop('');
                                 }}>
                                   <span className="mi-check">{g.name === defaultProviderName && m === info.model ? '✓' : ''}</span>

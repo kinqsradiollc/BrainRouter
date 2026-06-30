@@ -205,7 +205,7 @@ export type AgentCommand =
   | { kind: 'query'; id: string; name: string; args?: Record<string, unknown> }
   | { kind: 'new-session'; label?: string }
   | { kind: 'resume-session'; sessionKey: string }
-  | { kind: 'set-model'; model: string; persist?: boolean }
+  | { kind: 'set-model'; model: string; persist?: boolean; providerName?: string }
   | { kind: 'shutdown' };
 
 const COMMAND_KINDS = new Set<string>(['start-turn', 'interrupt', 'interaction-response', 'query', 'new-session', 'resume-session', 'set-model', 'shutdown']);
