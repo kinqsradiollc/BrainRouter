@@ -9,6 +9,7 @@ import path from 'node:path';
 import type { McpClientPool as McpClientWrapper } from '../mcp/mcpPool.js';
 import type { LLMConfig } from '../config/config.js';
 import { getCliKnobs, loadOrInitConfig } from '../config/config.js';
+import { localModelProfileActive } from '../provider/modelFamily.js';
 import { resolveAgentLlm } from '../provider/agentModels.js';
 // MAS-P5-T2: the child-output offload thresholds are now the shared
 // result-handoff constants (single source of truth in runtime/resultHandoff).
@@ -545,6 +546,8 @@ async function handleRouteTask(args: any, ctx: OrchestrationContext): Promise<st
     mcpClient: ctx.mcpClient,
     mcpToolNames: toolNames,
     sessionKey: ctx.parentSessionKey,
+    // HONK-L6 — bias toward bounded inline tasks when the parent runs a local model.
+    localModel: localModelProfileActive(ctx.llmConfig?.model, getCliKnobs().localModelProfile),
   });
   return JSON.stringify(result, null, 2);
 }
