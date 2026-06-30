@@ -86,6 +86,7 @@ import { assessMcpToolApproval } from './mcpApproval.js';
 export { LOCAL_TOOLS } from '../tool/specs.js';
 export { normalizeToolName } from '../tool/names.js';
 import { applyToolScope, rankAndCapTools } from '../tool/toolBudget.js';
+import { resolveToolVisible } from '../tool/toolPolicy.js';
 import { buildDefaultSourcePlan, buildMemoryBriefing, describeSourcePlan, selectCitedRecordIds, type RecalledRecord } from '../memory/briefing.js';
 import { assessCapturePayload } from '../memory/memoryPolicy.js';
 import {
@@ -1288,15 +1289,25 @@ export class Agent {
     // reliably). Strong/unknown models are untouched. Orchestration tools are
     // added separately, so delegation is unaffected.
     const localToolScope = localModelProfileActive(this.llmConfig.model, cliKnobs.localModelProfile);
-    let filteredLocalTools = localToolSpecsFromExecutors().filter(
-      (t) =>
+    // Per-tool user overrides (cli.toolOverrides). Force-on re-enables a tool the
+    // L2 allowlist / budget hid; force-off hides a non-protected tool. Hard gates
+    // (access tier, capability) are NEVER bypassed by an override.
+    const toolOverrides = cliKnobs.toolOverrides;
+    const overrideForceOnNames = new Set(Object.keys(toolOverrides).filter((k) => toolOverrides[k] === true));
+    const overrideForceOffNames = Object.keys(toolOverrides).filter((k) => toolOverrides[k] === false);
+    let filteredLocalTools = localToolSpecsFromExecutors().filter((t) => {
+      // HARD gates first — a user override can never escalate past these.
+      const hardVisible =
         allowed.has(t.name) &&
         !MODEL_HIDDEN_TOOLS.has(t.name) &&
         !(hideWorkerTools && WORKER_THREAD_TOOLS.has(t.name)) &&
         !(hideComputerUse && t.name === 'computer_use') &&
-        !(!mcpDiscoveryOn && MCP_DISCOVERY_TOOLS.has(t.name)) &&
-        !(localToolScope && !isLocalModelCoreTool(t.name)),
-    );
+        !(!mcpDiscoveryOn && MCP_DISCOVERY_TOOLS.has(t.name));
+      if (!hardVisible) return false;
+      // SOFT gate = the local-model L2 allowlist; the override flips it.
+      const softVisible = !(localToolScope && !isLocalModelCoreTool(t.name));
+      return resolveToolVisible(t.name, softVisible, toolOverrides);
+    });
     // HONK-L3 — for local models, flatten deep/wide tool schemas (the dormant,
     // tested repair pass) so they stop dropping nested args; `nestArguments` at
     // dispatch (executeLocalTool) reverses it. Returns NEW spec objects so the
@@ -1323,12 +1334,17 @@ export class Agent {
     // one returns a structured "hidden by budget" hint instead of a bare
     // unknown-tool error.
     this.lastBudgetHiddenTools = new Set();
-    if (this.toolScope || this.disallowedTools.length > 0) {
+    if (this.toolScope || this.disallowedTools.length > 0 || overrideForceOffNames.length > 0) {
       visibleMcpTools = applyToolScope(visibleMcpTools, {
         allow: this.toolScope?.mcp,
-        disallow: this.disallowedTools,
+        // cli.toolOverrides force-off applies to MCP tools by their namespaced name.
+        disallow: [...this.disallowedTools, ...overrideForceOffNames],
       });
     }
+    // Snapshot the user-force-on MCP tools so the discovery/budget step below can't
+    // hide them — captured AFTER scope filtering (force-on never overrides force-off
+    // or the agent-def allowlist).
+    const forceOnMcpTools = visibleMcpTools.filter((t: any) => overrideForceOnNames.has(String(t?.name ?? '')));
     if (mcpDiscoveryOn && visibleMcpTools.length > 0) {
       // Progressive discovery: hide the full catalog; the model reaches it via
       // mcp_search / mcp_describe / mcp_call (which run the same approval gate).
@@ -1345,6 +1361,18 @@ export class Agent {
         }
         visibleMcpTools = kept;
         callbacks.onStatusUpdate(`Tool budget: showing ${kept.length}/${kept.length + hidden.length} MCP tools (most task-relevant).`);
+      }
+    }
+    // cli.toolOverrides force-on: re-add any user-enabled MCP tool the
+    // progressive-discovery hide or the budget trim removed.
+    if (forceOnMcpTools.length > 0) {
+      const present = new Set(visibleMcpTools.map((t: any) => String(t?.name ?? '')));
+      for (const t of forceOnMcpTools) {
+        const n = String(t?.name ?? '');
+        if (!present.has(n)) {
+          visibleMcpTools.push(t);
+          this.lastBudgetHiddenTools.delete(n);
+        }
       }
     }
     // MAS-P2-M1: synthesize one `delegate_<agentId>` tool per active
