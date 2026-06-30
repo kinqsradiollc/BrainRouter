@@ -8,7 +8,7 @@ import { loadRegistry, findById, listAll, type AgentDefinition } from '../orches
 test('built-in registry loads all canonical roles', () => {
   const defs = loadRegistry();
   const ids = defs.map((d) => d.def.id).sort();
-  assert.deepEqual(ids, ['architect', 'explorer', 'fleet', 'reviewer', 'verifier', 'worker']);
+  assert.deepEqual(ids, ['architect', 'explorer', 'fleet', 'intake', 'reviewer', 'verifier', 'worker']);
 });
 
 test('all built-in definitions carry required fields', () => {
@@ -44,7 +44,7 @@ test('findById returns undefined for unknown id', () => {
 
 test('listAll without workspace returns all builtins', () => {
   const all = listAll();
-  assert.equal(all.length, 6);
+  assert.equal(all.length, 7);
 });
 
 test('workspace definition overrides builtin with same id', () => {
@@ -118,7 +118,7 @@ test('workspace-only id coexists with builtins', () => {
     const ids = defs.map((d) => d.def.id).sort();
     assert.ok(ids.includes('my-custom-agent'), 'custom agent present');
     assert.ok(ids.includes('explorer'), 'builtin still present');
-    assert.equal(defs.length, 7, '6 builtins + 1 custom');
+    assert.equal(defs.length, 8, '7 builtins + 1 custom');
   });
 });
 
