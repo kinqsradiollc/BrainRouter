@@ -33,11 +33,13 @@ import {
   type ProjectMember,
   type ProjectRole,
   type ProjectCapability,
+  type TrackLabel,
   roleCan,
   ROLE_RANK,
   DEFAULT_WORKFLOW_STATES,
   DEFAULT_ISSUE_TYPES,
   STATUS_CATEGORY_COLORS,
+  colorForLabelName,
 } from '@kinqs/brainrouter-types';
 import { getStateFile, readJsonFile, writeJsonFile } from '../storage/store.js';
 import { parseTrackQuery, matchesTrackQuery } from './query.js';
@@ -59,8 +61,12 @@ interface TrackStore {
 
 const EMPTY: TrackStore = { project: null, workItems: {}, sprints: {}, boards: {}, automations: {}, githubLinks: {} };
 
-/** Current on-disk schema. v2 = lifecycle groups + urgent/none priority + start/target/completed/archived dates. */
-const SCHEMA_VERSION = 2;
+/**
+ * Current on-disk schema.
+ * v2 = lifecycle groups + urgent/none priority + start/target/completed/archived dates.
+ * v3 = multi-assignee (`assignees`) + the project label registry.
+ */
+const SCHEMA_VERSION = 3;
 
 /** Remap pre-v2 lifecycle groups (3-lane todo/in-progress/done) onto the new groups. */
 const CATEGORY_MIGRATION: Record<string, StatusCategory> = {
@@ -96,6 +102,8 @@ function migrateStore(store: TrackStore): boolean {
     if (!store.project.workflowStates.some((s) => s.default) && store.project.workflowStates[0]) {
       store.project.workflowStates[0].default = true; changed = true;
     }
+    // v3: a label registry, backfilled from the labels already in use.
+    if (!Array.isArray(store.project.labels)) { store.project.labels = []; changed = true; }
     for (const item of Object.values(store.workItems)) {
       const bag = item as unknown as Record<string, unknown>;
       const remapped = PRIORITY_MIGRATION[item.priority as string];
@@ -105,6 +113,12 @@ function migrateStore(store: TrackStore): boolean {
       const cat = categoryOf(store.project, item.status);
       if (item.statusCategory !== cat) { item.statusCategory = cat; changed = true; }
       if (cat === 'completed' && !item.completedAt) { item.completedAt = item.updatedAt; changed = true; }
+      // v3: derive the assignees list from the legacy single `assignee`.
+      if (!Array.isArray(item.assignees)) {
+        item.assignees = item.assignee ? [item.assignee] : []; changed = true;
+      }
+      if (item.assignee !== item.assignees[0]) { item.assignee = item.assignees[0]; changed = true; }
+      for (const name of item.labels ?? []) registerLabel(store.project, name);
     }
   }
   store.schemaVersion = SCHEMA_VERSION;
@@ -156,11 +170,20 @@ export const LOCAL_MEMBER_ID = 'you';
 export function ensureProject(workspaceRoot: string, input: EnsureProjectInput = {}): TrackProject {
   const store = readTrack(workspaceRoot);
   if (store.project) {
+    let dirty = false;
     // Backfill members for projects created before A3 (permissions).
     if (!Array.isArray(store.project.members) || store.project.members.length === 0) {
       store.project.members = [{ id: LOCAL_MEMBER_ID, name: 'You', role: 'owner', addedAt: store.project.createdAt }];
-      writeTrack(workspaceRoot, store);
+      dirty = true;
     }
+    // Backfill the label registry (pre-T2 projects) from the labels in use.
+    if (!Array.isArray(store.project.labels)) {
+      store.project.labels = [];
+      const names = new Set(Object.values(store.workItems).flatMap((w) => w.labels ?? []));
+      for (const name of names) registerLabel(store.project, name);
+      dirty = true;
+    }
+    if (dirty) writeTrack(workspaceRoot, store);
     return store.project;
   }
   const ts = nowIso();
@@ -173,6 +196,7 @@ export function ensureProject(workspaceRoot: string, input: EnsureProjectInput =
     workflowStates: [...DEFAULT_WORKFLOW_STATES],
     issueTypes: [...DEFAULT_ISSUE_TYPES],
     components: [],
+    labels: [],
     members: [{ id: LOCAL_MEMBER_ID, name: 'You', role: 'owner', addedAt: ts }],
     createdAt: ts,
     updatedAt: ts,
@@ -207,6 +231,23 @@ function defaultStatusId(project: TrackProject): string {
   return project.workflowStates.find((s) => s.default)?.id ?? project.workflowStates[0]?.id ?? 'backlog';
 }
 
+/** Register a label name in the project registry if absent (auto-colored). Returns the label. */
+function registerLabel(project: TrackProject, name: string): TrackLabel {
+  const trimmed = name.trim();
+  const existing = project.labels.find((l) => l.name.toLowerCase() === trimmed.toLowerCase());
+  if (existing) return existing;
+  const label: TrackLabel = { id: shortId('lbl'), name: trimmed, color: colorForLabelName(trimmed) };
+  project.labels.push(label);
+  return label;
+}
+
+/** Trim, drop empties, de-dupe an assignee list (order preserved). */
+function normalizeAssignees(list: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const a of list) { const v = a.trim(); if (v && !out.includes(v)) out.push(v); }
+  return out;
+}
+
 // ── Work items ────────────────────────────────────────────────────────────────
 
 export interface CreateWorkItemInput {
@@ -215,7 +256,10 @@ export interface CreateWorkItemInput {
   description?: string;
   status?: string;
   priority?: WorkItemPriority;
+  /** Primary assignee (legacy single field; folded into `assignees`). */
   assignee?: string;
+  /** Multiple assignees (the source of truth). */
+  assignees?: string[];
   reporter?: string;
   labels?: string[];
   components?: string[];
@@ -244,6 +288,9 @@ export function createWorkItem(workspaceRoot: string, input: CreateWorkItemInput
   const project = store.project!;
   const status = input.status ?? defaultStatusId(project);
   const category = categoryOf(project, status);
+  const assignees = normalizeAssignees(input.assignees ?? (input.assignee ? [input.assignee] : []));
+  const labels = input.labels ?? [];
+  for (const name of labels) registerLabel(project, name);
   const n = project.keyCounter;
   project.keyCounter = n + 1;
   project.updatedAt = nowIso();
@@ -257,10 +304,11 @@ export function createWorkItem(workspaceRoot: string, input: CreateWorkItemInput
     status,
     statusCategory: category,
     priority: input.priority ?? 'none',
-    assignee: input.assignee,
+    assignees,
+    assignee: assignees[0],
     reporter: input.reporter,
     watchers: [],
-    labels: input.labels ?? [],
+    labels,
     components: input.components ?? [],
     storyPoints: input.storyPoints,
     startDate: input.startDate,
@@ -323,7 +371,7 @@ export function listWorkItems(workspaceRoot: string, filter: WorkItemFilter = {}
       (filter.type === undefined || w.type === filter.type) &&
       (filter.status === undefined || w.status === filter.status) &&
       (filter.statusCategory === undefined || w.statusCategory === filter.statusCategory) &&
-      (filter.assignee === undefined || w.assignee === filter.assignee) &&
+      (filter.assignee === undefined || w.assignees.includes(filter.assignee)) &&
       (filter.sprintId === undefined || w.sprintId === filter.sprintId) &&
       (filter.epicId === undefined || w.epicId === filter.epicId) &&
       (filter.parentId === undefined || w.parentId === filter.parentId) &&
@@ -349,7 +397,7 @@ export function findWorkItemsByCodeLink(
 export type UpdateWorkItemPatch = Partial<
   Pick<
     WorkItem,
-    | 'title' | 'description' | 'status' | 'priority' | 'assignee' | 'reporter'
+    | 'title' | 'description' | 'status' | 'priority' | 'assignee' | 'assignees' | 'reporter'
     | 'labels' | 'components' | 'storyPoints' | 'estimateSeconds' | 'startDate' | 'targetDate'
     | 'parentId' | 'epicId' | 'sprintId' | 'rank'
   >
@@ -372,8 +420,13 @@ export function updateWorkItem(
   if (!item) return undefined;
   assertCan(workspaceRoot, actor, 'edit-item');
   const ts = nowIso();
+  // Resolve a multi-assignee change from either field (assignees wins; legacy
+  // `assignee` is folded in). `assignee` then mirrors `assignees[0]`.
+  let nextAssignees: string[] | undefined;
+  if (patch.assignees !== undefined) nextAssignees = normalizeAssignees(patch.assignees);
+  else if (patch.assignee !== undefined) nextAssignees = patch.assignee ? normalizeAssignees([patch.assignee]) : [];
   const scalarFields: Array<keyof UpdateWorkItemPatch> = [
-    'title', 'description', 'status', 'priority', 'assignee', 'reporter', 'storyPoints', 'estimateSeconds', 'startDate', 'targetDate', 'parentId', 'epicId', 'sprintId', 'rank',
+    'title', 'description', 'status', 'priority', 'reporter', 'storyPoints', 'estimateSeconds', 'startDate', 'targetDate', 'parentId', 'epicId', 'sprintId', 'rank',
   ];
   const bag = item as unknown as Record<string, unknown>;
   for (const f of scalarFields) {
@@ -381,7 +434,14 @@ export function updateWorkItem(
       item.activity.push({ at: ts, actor, field: String(f), from: fmt(bag[f]), to: fmt(patch[f]) });
     }
   }
+  if (nextAssignees !== undefined && nextAssignees.join(',') !== item.assignees.join(',')) {
+    item.activity.push({ at: ts, actor, field: 'assignees', from: item.assignees.join(', ') || undefined, to: nextAssignees.join(', ') || undefined });
+  }
+  if (patch.labels !== undefined && store.project) {
+    for (const name of patch.labels) registerLabel(store.project, name);
+  }
   Object.assign(item, patch);
+  if (nextAssignees !== undefined) { item.assignees = nextAssignees; item.assignee = nextAssignees[0]; }
   if (patch.status !== undefined && store.project) {
     item.statusCategory = categoryOf(store.project, patch.status);
     // Auto-manage completedAt as the item enters/leaves a completed state.
@@ -661,12 +721,15 @@ function applyAutomationAction(project: TrackProject, item: WorkItem, action: Au
       if (item.priority === (action.value as WorkItem['priority'])) return null;
       item.priority = action.value as WorkItem['priority'];
       return `priority → ${action.value}`;
-    case 'set-assignee':
-      if (item.assignee === (action.value || undefined)) return null;
-      item.assignee = action.value || undefined;
-      return `assignee → ${action.value || 'none'}`;
+    case 'set-assignee': {
+      const next = normalizeAssignees(action.value ? action.value.split(',') : []);
+      if (next.join(',') === item.assignees.join(',')) return null;
+      item.assignees = next; item.assignee = next[0];
+      return `assignee → ${next.join(', ') || 'none'}`;
+    }
     case 'add-label':
       if (item.labels.includes(action.value)) return null;
+      registerLabel(project, action.value);
       item.labels = [...item.labels, action.value];
       return `+label ${action.value}`;
     case 'comment':
@@ -801,6 +864,69 @@ export function removeMember(workspaceRoot: string, id: string, actor = 'user'):
     throw new Error('Cannot remove the last owner.');
   }
   project.members = project.members.filter((m) => m.id !== id);
+  project.updatedAt = nowIso();
+  writeTrack(workspaceRoot, store);
+  return true;
+}
+
+// ── Label registry ─────────────────────────────────────────────────────────────
+
+/** List the project's labels (alphabetical). */
+export function listLabels(workspaceRoot: string): TrackLabel[] {
+  const project = getProject(workspaceRoot);
+  return project?.labels ? [...project.labels].sort((a, b) => a.name.localeCompare(b.name)) : [];
+}
+
+export interface UpsertLabelInput {
+  name: string;
+  color?: string;
+  description?: string;
+  externalSource?: string;
+  externalId?: string;
+}
+
+/** Create or update (by case-insensitive name) a label in the registry. */
+export function upsertLabel(workspaceRoot: string, input: UpsertLabelInput): TrackLabel {
+  ensureProject(workspaceRoot);
+  const store = readTrack(workspaceRoot);
+  const project = store.project!;
+  const name = input.name.trim();
+  if (!name) throw new Error('Label name is required.');
+  const label = registerLabel(project, name);
+  if (input.color) label.color = input.color;
+  if (input.description !== undefined) label.description = input.description;
+  if (input.externalSource !== undefined) label.externalSource = input.externalSource;
+  if (input.externalId !== undefined) label.externalId = input.externalId;
+  project.updatedAt = nowIso();
+  writeTrack(workspaceRoot, store);
+  return label;
+}
+
+/** Resolve a label by id or (case-insensitive) name. */
+export function getLabel(workspaceRoot: string, idOrName: string): TrackLabel | undefined {
+  const project = getProject(workspaceRoot);
+  const key = idOrName.trim().toLowerCase();
+  return project?.labels.find((l) => l.id === idOrName || l.name.toLowerCase() === key);
+}
+
+/**
+ * Delete a label from the registry and strip its name from every work item.
+ * Returns true if a label was removed.
+ */
+export function deleteLabel(workspaceRoot: string, idOrName: string): boolean {
+  const store = readTrack(workspaceRoot);
+  const project = store.project;
+  if (!project) return false;
+  const key = idOrName.trim().toLowerCase();
+  const label = project.labels.find((l) => l.id === idOrName || l.name.toLowerCase() === key);
+  if (!label) return false;
+  project.labels = project.labels.filter((l) => l.id !== label.id);
+  for (const item of Object.values(store.workItems)) {
+    if (item.labels.some((n) => n.toLowerCase() === label.name.toLowerCase())) {
+      item.labels = item.labels.filter((n) => n.toLowerCase() !== label.name.toLowerCase());
+      item.updatedAt = nowIso();
+    }
+  }
   project.updatedAt = nowIso();
   writeTrack(workspaceRoot, store);
   return true;

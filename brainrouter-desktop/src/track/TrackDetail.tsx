@@ -29,6 +29,7 @@ export function TrackDetail({ item, project, allItems, sprints, ops, onClose }: 
   const states = project?.workflowStates ?? [];
   const subtasks = allItems.filter((w) => w.parentId === item.id);
   const epics = allItems.filter((w) => w.type === 'epic' && w.id !== item.id);
+  const labelColor = (name: string): string | undefined => project?.labels.find((l) => l.name.toLowerCase() === name.toLowerCase())?.color;
 
   const saveTitle = (): void => { if (title.trim() && title !== item.title) ops.update(item.key, { title: title.trim() }); setEditTitle(false); };
   const saveDesc = (): void => { if (desc !== (item.description ?? '')) ops.update(item.key, { description: desc }); setEditDesc(false); };
@@ -59,8 +60,11 @@ export function TrackDetail({ item, project, allItems, sprints, ops, onClose }: 
             <Field label="Priority">
               <TrackDropdown value={item.priority} options={PRIORITIES.map((p) => ({ value: p, label: p }))} onChange={(v) => ops.update(item.key, { priority: v as WorkItemPriority })} />
             </Field>
-            <Field label="Assignee">
-              <input defaultValue={item.assignee ?? ''} placeholder="unassigned" onBlur={(e) => { const v = e.target.value.trim(); if (v !== (item.assignee ?? '')) ops.update(item.key, { assignee: v || undefined }); }} />
+            <Field label="Assignees">
+              <input defaultValue={item.assignees.join(', ')} placeholder="unassigned (comma-separated)" onBlur={(e) => {
+                const next = e.target.value.split(',').map((s) => s.trim()).filter(Boolean);
+                if (next.join(',') !== item.assignees.join(',')) ops.update(item.key, { assignees: next });
+              }} />
             </Field>
             <Field label="Sprint">
               <TrackDropdown value={item.sprintId ?? ''} onChange={(v) => ops.assignSprint(item.key, v || null)}
@@ -79,7 +83,7 @@ export function TrackDetail({ item, project, allItems, sprints, ops, onClose }: 
 
           <Field label="Labels">
             <div className="track-detail-labels">
-              {item.labels.map((l) => <span key={l} className="track-label">{l}<button onClick={() => removeLabel(l)}>×</button></span>)}
+              {item.labels.map((l) => <span key={l} className="track-label" style={labelColor(l) ? { borderColor: labelColor(l), color: labelColor(l) } : undefined}>{l}<button onClick={() => removeLabel(l)}>×</button></span>)}
               <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="+ label" onKeyDown={(e) => { if (e.key === 'Enter') addLabel(); }} />
             </div>
           </Field>

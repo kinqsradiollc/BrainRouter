@@ -30,6 +30,9 @@ import {
   addMember,
   updateMemberRole,
   removeMember,
+  listLabels,
+  upsertLabel,
+  deleteLabel,
 } from '@kinqs/brainrouter-core/track';
 import { parseTrackQuery } from '@kinqs/brainrouter-core/track';
 import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/track';
@@ -113,6 +116,8 @@ export async function tryHandleTrackCommand(ctx: CommandContext): Promise<boolea
   if (sub === 'automations' || sub === 'auto') { handleAutomations(ws, rest); return true; }
 
   if (sub === 'members' || sub === 'member') { await handleMembers(ws, rest); return true; }
+
+  if (sub === 'labels' || sub === 'label') { handleLabels(ws, rest); return true; }
 
   if (sub === 'sync') { await handleSync(ws, rest); return true; }
 
@@ -415,10 +420,38 @@ function parseCreate(tokens: string[]): ParsedCreate {
   return out;
 }
 
+/** `/track labels [list|color <name> <#hex>|rm <name>]` — the project label registry. */
+function handleLabels(ws: string, args: string[]): void {
+  ensureProject(ws);
+  const op = (args[0] ?? 'list').toLowerCase();
+  if (op === 'list') {
+    const labels = listLabels(ws);
+    if (!labels.length) { console.log(chalk.yellow('\nNo labels yet — they auto-register as you tag work items.\n')); return; }
+    console.log('');
+    for (const l of labels) console.log(`  ${chalk.hex(l.color)('●')} ${l.name}${l.description ? chalk.gray(` — ${l.description}`) : ''}`);
+    console.log('');
+    return;
+  }
+  if (op === 'color' || op === 'set') {
+    const [, name, color] = args;
+    if (!name || !color) { console.log(chalk.red('\nUsage: /track labels color <name> <#hex>\n')); return; }
+    const l = upsertLabel(ws, { name, color });
+    console.log(chalk.green(`\n${chalk.hex(l.color)('●')} ${l.name} → ${l.color}\n`));
+    return;
+  }
+  if (op === 'rm' || op === 'remove' || op === 'delete') {
+    const name = args[1];
+    if (!name) { console.log(chalk.red('\nUsage: /track labels rm <name>\n')); return; }
+    console.log(deleteLabel(ws, name) ? chalk.green(`\nRemoved label "${name}" (and stripped it from items).\n`) : chalk.yellow(`\nNo label "${name}".\n`));
+    return;
+  }
+  console.log(chalk.yellow(`\nUnknown labels op "${op}". Try: list · color · rm\n`));
+}
+
 function printItem(item: WorkItem): void {
   console.log(`\n${chalk.cyan(item.key)} ${typeMark(item.type)} ${chalk.bold(item.title)} ${statusTag(item)}`);
   if (item.description) console.log(chalk.gray(`  ${item.description}`));
-  const meta = [`priority: ${item.priority}`, item.assignee ? `assignee: ${item.assignee}` : '', item.labels.length ? `labels: ${item.labels.join(', ')}` : '', item.sprintId ? `sprint: ${item.sprintId}` : ''].filter(Boolean);
+  const meta = [`priority: ${item.priority}`, item.assignees.length ? `assignees: ${item.assignees.join(', ')}` : '', item.labels.length ? `labels: ${item.labels.join(', ')}` : '', item.sprintId ? `sprint: ${item.sprintId}` : ''].filter(Boolean);
   if (meta.length) console.log(chalk.gray(`  ${meta.join(' · ')}`));
   if (item.codeLinks.length) console.log(chalk.gray(`  code: ${item.codeLinks.map((c) => `${c.kind}:${c.ref}`).join(', ')}`));
   console.log('');
@@ -434,6 +467,7 @@ function printUsage(): void {
   console.log(chalk.gray('  /track show <key>                            Show one work item'));
   console.log(chalk.gray('  /track automations [list|add|rm|on|off]      Trigger→action rules (e.g. bugs → high priority)'));
   console.log(chalk.gray('  /track members [list|add|role|rm]            Project members + roles (owner·admin·member·viewer)'));
+  console.log(chalk.gray('  /track labels [list|color|rm]                Label registry + colors'));
   console.log(chalk.gray('  /track sync github import|export [--dry-run]  Two-way sync with GitHub Issues'));
   console.log(chalk.gray('  /track commits [--depth N] [--since <when>]   Link commits to items by BR-123 ref + advance todo→in-progress\n'));
 }

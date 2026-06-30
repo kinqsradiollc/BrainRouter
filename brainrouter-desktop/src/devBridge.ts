@@ -383,7 +383,7 @@ export function installDevBridge(): void {
             : 'started'); // in-progress / in-review
   const mkItem = (key: string, type: string, title: string, status: string, priority: string, assignee?: string, labels: string[] = []) => ({
     id: `wi_${key}`, key, type, title, status, statusCategory: trackCat(status), priority,
-    assignee, watchers: [], labels, components: [], links: [], comments: [], attachmentIds: [],
+    assignees: assignee ? [assignee] : [], assignee, watchers: [], labels, components: [], links: [], comments: [], attachmentIds: [],
     activity: [{ at: '2026-06-21T00:00:00.000Z', actor: 'user', field: 'created' }],
     workspaceRoot: wsCurrent, linkedMemoryIds: [], codeLinks: [], taskIds: [], artifactIds: [], reviewFindingIds: [],
     createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z',
@@ -400,6 +400,11 @@ export function installDevBridge(): void {
         { id: 'cancelled', name: 'Cancelled', category: 'cancelled', color: '#9ca3af' },
       ],
       issueTypes: [], components: ['cli', 'desktop', 'memory'],
+      labels: [
+        { id: 'lbl_track', name: 'track', color: '#6366f1' },
+        { id: 'lbl_desktop', name: 'desktop', color: '#3b82f6' },
+        { id: 'lbl_memory', name: 'memory', color: '#a855f7' },
+      ],
       members: [
         { id: 'you', name: 'You', role: 'owner', addedAt: '2026-06-21T00:00:00.000Z' },
         { id: 'anhdang', name: 'Anh Dang', role: 'admin', addedAt: '2026-06-21T00:00:00.000Z' },

@@ -174,15 +174,14 @@ test('github members: dry-run reports who would be added but writes nothing', as
 test('github assignee: round-trips work-item assignee ↔ issue assignee', async () => {
   await withTempWorkspaceAsync(async (ws) => {
     const project = ensureProject(ws, { key: 'BR' });
-    const item = createWorkItem(ws, { title: 'Assigned', assignee: 'octo' });
+    const item = createWorkItem(ws, { title: 'Assigned', assignees: ['octo', 'dev1'] });
     const issue = workItemToIssue(item);
-    assert.deepEqual(issue.assignees, ['octo']); // exported as a GitHub assignee
-    // import direction: issue.assignee → work-item assignee
-    const mapped = issueToWorkItem({ number: 7, title: 'X', assignee: { login: 'dev1' }, state: 'open' }, project);
-    assert.equal(mapped.input.assignee, 'dev1');
-    // falls back to the first of `assignees`
+    assert.deepEqual(issue.assignees, ['octo', 'dev1']); // all assignees exported
+    // import direction: issue.assignee + assignees → work-item assignees (deduped)
+    const mapped = issueToWorkItem({ number: 7, title: 'X', assignee: { login: 'dev1' }, assignees: [{ login: 'dev1' }, { login: 'dev2' }], state: 'open' }, project);
+    assert.deepEqual(mapped.input.assignees, ['dev1', 'dev2']);
     const mapped2 = issueToWorkItem({ number: 8, title: 'Y', assignees: [{ login: 'dev2' }], state: 'open' }, project);
-    assert.equal(mapped2.input.assignee, 'dev2');
+    assert.deepEqual(mapped2.input.assignees, ['dev2']);
   });
 });
 

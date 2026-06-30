@@ -7,7 +7,7 @@ function wi(p: Partial<WorkItem>): WorkItem {
   return {
     id: p.id ?? 'wi', key: p.key ?? 'BR-1', type: p.type ?? 'task', title: p.title ?? 'Item',
     status: p.status ?? 'todo', statusCategory: p.statusCategory ?? 'unstarted', priority: p.priority ?? 'medium',
-    assignee: p.assignee, reporter: p.reporter, watchers: [], labels: p.labels ?? [], components: [],
+    assignees: p.assignees ?? (p.assignee ? [p.assignee] : []), assignee: p.assignee, reporter: p.reporter, watchers: [], labels: p.labels ?? [], components: [],
     sprintId: p.sprintId, epicId: p.epicId, links: [], comments: [], attachmentIds: [], activity: [],
     workspaceRoot: '/tmp', linkedMemoryIds: [], codeLinks: [], taskIds: [], artifactIds: [], reviewFindingIds: [],
     description: p.description, createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z',

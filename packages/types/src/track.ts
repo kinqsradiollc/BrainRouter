@@ -21,6 +21,7 @@ export type WorkItemId = string;
 export type SprintId = string;
 export type BoardId = string;
 export type CommentId = string;
+export type LabelId = string;
 
 // ── Enums ───────────────────────────────────────────────────────────────────
 
@@ -156,6 +157,36 @@ export interface IssueTypeConfig {
 }
 
 /**
+ * A first-class label in a project's registry. Work items reference labels by
+ * `name` (in {@link WorkItem.labels}); this registry adds the color (and an
+ * optional description) so chips render consistently and round-trip to GitHub.
+ */
+export interface TrackLabel {
+  id: LabelId;
+  /** Unique, case-insensitive within the project. */
+  name: string;
+  /** Hex swatch. */
+  color: string;
+  description?: string;
+  /** External-system provenance (e.g. a GitHub label), when synced. */
+  externalSource?: string;
+  externalId?: string;
+}
+
+/** A palette new auto-registered labels cycle through (stable by name hash). */
+export const LABEL_PALETTE: readonly string[] = [
+  "#ef4444", "#f59e0b", "#eab308", "#22c55e", "#14b8a6",
+  "#3b82f6", "#6366f1", "#a855f7", "#ec4899", "#64748b",
+];
+
+/** Deterministically pick a palette color for a label name (stable across runs). */
+export function colorForLabelName(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return LABEL_PALETTE[h % LABEL_PALETTE.length];
+}
+
+/**
  * A Track project — one per workspace. Holds the key prefix used to mint
  * human work-item keys (`<prefix>-<n>`), the ordered workflow states, the
  * enabled issue types, and the component list.
@@ -176,6 +207,8 @@ export interface TrackProject {
   issueTypes: IssueTypeConfig[];
   /** Component / area labels for grouping work. */
   components: string[];
+  /** Label registry — name → color/description. Auto-grows as items add labels. */
+  labels: TrackLabel[];
   /** Project members + their roles (see {@link ProjectMember}). Seeded with one owner. */
   members: ProjectMember[];
   createdAt: string;
@@ -240,9 +273,13 @@ export interface WorkItem {
   /** Bucket of `status`, denormalised for boards + reports. */
   statusCategory: StatusCategory;
   priority: WorkItemPriority;
+  /** All assignees (the source of truth). `assignee` mirrors the first of these. */
+  assignees: string[];
+  /** Primary assignee — derived as `assignees[0]`. Kept for back-compat readers. */
   assignee?: string;
   reporter?: string;
   watchers: string[];
+  /** Label names applied to this item; colors live in the project's label registry. */
   labels: string[];
   components: string[];
   /** Story-point estimate (scrum). */
@@ -476,6 +513,7 @@ export function isWorkItem(x: unknown): x is WorkItem {
     typeof w.status === "string" &&
     isStatusCategory(w.statusCategory) &&
     isWorkItemPriority(w.priority) &&
+    isStringArray(w.assignees) &&
     isStringArray(w.watchers) &&
     isStringArray(w.labels) &&
     isStringArray(w.components) &&
