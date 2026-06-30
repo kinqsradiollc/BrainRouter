@@ -404,9 +404,11 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .track-col { display: flex; flex-direction: column; width: 290px; flex: none; max-height: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
 .track-col-head { display: flex; align-items: center; gap: 8px; padding: 11px 13px; border-bottom: 1px solid var(--border); }
 .track-cat { width: 8px; height: 8px; border-radius: 3px; flex: none; }
-.track-cat-todo { background: var(--text-faint); }
-.track-cat-in-progress { background: var(--accent); }
-.track-cat-done { background: var(--ok); }
+.track-cat-backlog { background: #94a3b8; }
+.track-cat-unstarted { background: var(--text-faint); }
+.track-cat-started { background: var(--accent); }
+.track-cat-completed { background: var(--ok); }
+.track-cat-cancelled { background: #9ca3af; }
 .track-col-name { font-size: 12.5px; font-weight: 650; color: var(--text); }
 .track-col-count { font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
 .track-add { margin-left: auto; background: transparent; border: 0; color: var(--text-faint); cursor: pointer; padding: 3px; border-radius: 6px; display: inline-flex; }
@@ -424,9 +426,9 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .track-type-task { color: var(--accent); } .track-type-bug { color: var(--err); } .track-type-sub-task { color: var(--text-dim); }
 .track-card-key { font-size: 11.5px; color: var(--text-faint); }
 .track-pri { width: 8px; height: 8px; border-radius: 50%; margin-left: auto; flex: none; }
-.track-pri.pri-highest, .track-pri.pri-high { background: var(--err); }
+.track-pri.pri-urgent, .track-pri.pri-high { background: var(--err); }
 .track-pri.pri-medium { background: var(--warn); }
-.track-pri.pri-low, .track-pri.pri-lowest { background: var(--text-faint); }
+.track-pri.pri-low, .track-pri.pri-none { background: var(--text-faint); }
 /* Drag handle — a subtle affordance that brightens on card hover. */
 .track-card-grip { display: inline-flex; color: var(--text-faint); opacity: .5; transition: opacity .14s, color .14s; }
 .track-card:hover .track-card-grip { opacity: 1; color: var(--text-dim); }
@@ -457,7 +459,7 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .track-list-row .tl-type { display: inline-flex; align-items: center; gap: 6px; text-transform: capitalize; }
 .track-list-row .tl-status { display: inline-flex; align-items: center; gap: 6px; }
 .tl-pri { text-transform: capitalize; }
-.tl-pri.pri-highest, .tl-pri.pri-high { color: var(--err); } .tl-pri.pri-medium { color: var(--warn); } .tl-pri.pri-low, .tl-pri.pri-lowest { color: var(--text-faint); }
+.tl-pri.pri-urgent, .tl-pri.pri-high { color: var(--err); } .tl-pri.pri-medium { color: var(--warn); } .tl-pri.pri-low, .tl-pri.pri-none { color: var(--text-faint); }
 .track-empty { color: var(--text-faint); font-size: 13px; text-align: center; padding: 40px 0; }
 
 /* ── Track — filter bar ─────────────────────────────────────────────────────── */
@@ -538,7 +540,7 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .trb-label { width: 84px; color: var(--text-dim); text-transform: capitalize; flex: none; }
 .trb-track { flex: 1; height: 8px; background: var(--ov-05); border-radius: 999px; overflow: hidden; }
 .trb-fill { display: block; height: 100%; border-radius: 999px; }
-.trb-fill.track-cat-todo { background: var(--text-faint); } .trb-fill.track-cat-in-progress { background: var(--accent); } .trb-fill.track-cat-done { background: var(--ok); }
+.trb-fill.track-cat-backlog { background: #94a3b8; } .trb-fill.track-cat-unstarted { background: var(--text-faint); } .trb-fill.track-cat-started { background: var(--accent); } .trb-fill.track-cat-completed { background: var(--ok); } .trb-fill.track-cat-cancelled { background: #9ca3af; }
 .trb-n { width: 26px; text-align: right; color: var(--text); font-variant-numeric: tabular-nums; flex: none; }
 .track-report-row { display: flex; align-items: center; gap: 9px; font-size: 12.5px; padding: 4px 0; color: var(--text-dim); }
 .trr-label { flex: 1; text-transform: capitalize; }

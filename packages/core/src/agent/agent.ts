@@ -50,7 +50,7 @@ import {
 } from '../track/trackStore.js';
 import { parseTrackQuery } from '../track/query.js';
 import { createArtifact, updateArtifact, getArtifact, linkArtifact } from '../artifact/artifactStore.js';
-import { isArtifactKind, isArtifactFormat, isCodeLinkKind, isWorkItemType, isWorkItemPriority, type ArtifactKind, type ArtifactFormat, type ArtifactRecord } from '@kinqs/brainrouter-types';
+import { isArtifactKind, isArtifactFormat, isCodeLinkKind, isWorkItemType, isWorkItemPriority, isTerminalCategory, isUnstartedCategory, type ArtifactKind, type ArtifactFormat, type ArtifactRecord } from '@kinqs/brainrouter-types';
 // Auto mode (fast + proceed) has no approval prompt, so the plan history would
 // otherwise never record that a plan was acted on. When the agent establishes a
 // new plan version under auto mode we record an `actor: 'auto'` approval so the
@@ -5167,7 +5167,7 @@ export class Agent {
     const action = String(args.action ?? '');
     if (action === 'transition') {
       const item = trackGetWorkItem(this.workspaceRoot, String(args.key ?? ''));
-      if (item?.statusCategory === 'done' && String(args.toStatus ?? '') === item.status) {
+      if (item?.statusCategory === 'completed' && String(args.toStatus ?? '') === item.status) {
         this.autoLinkDoneTrackItem(item, callbacks);
       }
       return 0;
@@ -5176,7 +5176,7 @@ export class Agent {
 
     const project = trackGetProject(this.workspaceRoot) ?? trackEnsureProject(this.workspaceRoot);
     const inProgress = project.workflowStates.find((state) => state.id === 'in-progress')
-      ?? project.workflowStates.find((state) => state.category === 'in-progress');
+      ?? project.workflowStates.find((state) => state.category === 'started');
     const review = project.workflowStates.find((state) => state.id === 'in-review') ?? inProgress;
     if (!inProgress || !review) return 0;
 
@@ -5185,8 +5185,8 @@ export class Agent {
       if (!codeLink || !isCodeLinkKind(codeLink.kind) || typeof codeLink.ref !== 'string' || !codeLink.ref.trim()) continue;
       const target = codeLink.kind === 'pull-request' ? review : inProgress;
       for (const item of trackFindWorkItemsByCodeLink(this.workspaceRoot, { kind: codeLink.kind, ref: codeLink.ref })) {
-        if (item.statusCategory === 'done' || item.status === target.id) continue;
-        if (codeLink.kind !== 'pull-request' && item.statusCategory !== 'todo') continue;
+        if (isTerminalCategory(item.statusCategory) || item.status === target.id) continue;
+        if (codeLink.kind !== 'pull-request' && !isUnstartedCategory(item.statusCategory)) continue;
         const moved = trackTransitionWorkItem(this.workspaceRoot, item.id, target.id, 'agent');
         if (!moved) continue;
         advanced += 1;

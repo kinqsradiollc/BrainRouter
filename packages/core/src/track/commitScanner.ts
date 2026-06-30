@@ -10,7 +10,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { getProject, ensureProject, getWorkItem, linkWorkItem, transitionWorkItem } from './trackStore.js';
-import type { TrackProject } from '@kinqs/brainrouter-types';
+import { isUnstartedCategory, type TrackProject } from '@kinqs/brainrouter-types';
 
 export interface ScannedCommit { sha: string; subject: string; body?: string }
 
@@ -46,7 +46,7 @@ export function parseCommitKeys(message: string, projectKey: string): string[] {
 /** The in-progress workflow state a commit advances a `todo` item into. */
 function inProgressState(project: TrackProject): { id: string } | undefined {
   return project.workflowStates.find((s) => s.id === 'in-progress')
-    ?? project.workflowStates.find((s) => s.category === 'in-progress');
+    ?? project.workflowStates.find((s) => s.category === 'started');
 }
 
 /**
@@ -72,8 +72,8 @@ export function scanCommitsForTrack(workspaceRoot: string, commits: ScannedCommi
         linkWorkItem(workspaceRoot, item.id, { codeLinks: [{ kind: 'commit', ref: sha, label: commit.subject?.slice(0, 80) }] });
         result.linked.push({ sha, key, workItemKey: item.key });
       }
-      // A commit is evidence work started: advance only from `todo`.
-      if (inProgress && item.statusCategory === 'todo' && item.status !== inProgress.id) {
+      // A commit is evidence work started: advance only from a not-started state.
+      if (inProgress && isUnstartedCategory(item.statusCategory) && item.status !== inProgress.id) {
         const moved = transitionWorkItem(workspaceRoot, item.id, inProgress.id, 'agent');
         if (moved) result.transitioned.push({ key: item.key, from: item.status, to: moved.status });
       }

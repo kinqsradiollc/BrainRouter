@@ -19,9 +19,9 @@
  * callers — the store, the desktop filter, the `/track` CLI — never crash on a
  * bad query.
  */
-import type { WorkItem } from '@kinqs/brainrouter-types';
+import { PRIORITY_RANK, type WorkItem } from '@kinqs/brainrouter-types';
 
-const PRIORITY_ORDER: Record<string, number> = { lowest: 0, low: 1, medium: 2, high: 3, highest: 4 };
+const PRIORITY_ORDER: Record<string, number> = PRIORITY_RANK;
 const COMPARATORS = new Set(['=', '!=', '~', '>', '<', '>=', '<=']);
 
 export type WorkItemPredicate = (w: WorkItem) => boolean;

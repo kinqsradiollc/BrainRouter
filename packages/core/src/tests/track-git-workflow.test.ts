@@ -68,7 +68,7 @@ test('startGitWorkForTrackItem: creates a branch, links it, and advances todo wo
     assert.ok(calls.includes(`checkout -b track/${item.key.toLowerCase()}-from-issue-to-merge`));
 
     const after = getWorkItem(ws, item.key)!;
-    assert.equal(after.statusCategory, 'in-progress');
+    assert.equal(after.statusCategory, 'started');
     assert.ok(after.codeLinks.some((link) => link.kind === 'branch' && link.ref === result.branch));
   });
 });

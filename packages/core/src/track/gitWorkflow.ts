@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import type { WorkItem, TrackProject } from '@kinqs/brainrouter-types';
+import { isUnstartedCategory, type WorkItem, type TrackProject } from '@kinqs/brainrouter-types';
 import { ensureProject, getProject, getWorkItem, linkWorkItem, transitionWorkItem } from './trackStore.js';
 
 export interface GitCommandResult {
@@ -115,7 +115,7 @@ export function readGitTrackContext(workspaceRoot: string, runner: GitRunner = d
 
 function inProgressState(project: TrackProject): { id: string } | undefined {
   return project.workflowStates.find((s) => s.id === 'in-progress')
-    ?? project.workflowStates.find((s) => s.category === 'in-progress');
+    ?? project.workflowStates.find((s) => s.category === 'started');
 }
 
 function gitError(result: GitCommandResult, fallback: string): string {
@@ -158,7 +158,7 @@ export function startGitWorkForTrackItem(
   let updated = linkWorkItem(workspaceRoot, item.id, { codeLinks: [{ kind: 'branch', ref: branch, label: context.githubRepo ?? 'local git' }] }) ?? item;
   let transitioned: StartGitWorkResult['transitioned'];
   const inProgress = inProgressState(project);
-  if (inProgress && updated.statusCategory === 'todo' && updated.status !== inProgress.id) {
+  if (inProgress && isUnstartedCategory(updated.statusCategory) && updated.status !== inProgress.id) {
     const moved = transitionWorkItem(workspaceRoot, updated.id, inProgress.id, options.actor ?? 'user');
     if (moved) {
       transitioned = { from: updated.status, to: moved.status };

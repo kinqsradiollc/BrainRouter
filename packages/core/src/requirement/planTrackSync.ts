@@ -108,7 +108,7 @@ export function syncRequirementPlanTrack(
         title: workItem.title,
       });
     }
-    if (item.status === 'completed' && workItem.statusCategory !== 'done') {
+    if (item.status === 'completed' && workItem.statusCategory !== 'completed') {
       const completed = transitionWorkItem(workspaceRoot, workItem.id, 'done', 'agent');
       if (completed) {
         actions.push({

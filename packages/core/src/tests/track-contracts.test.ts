@@ -23,18 +23,20 @@ import {
 test('track enum guards: accept members, reject non-members', () => {
   assert.ok(isWorkItemType('epic') && isWorkItemType('sub-task'));
   assert.ok(!isWorkItemType('feature') && !isWorkItemType(3));
-  assert.ok(isStatusCategory('in-progress') && !isStatusCategory('blocked'));
-  assert.ok(isWorkItemPriority('highest') && !isWorkItemPriority('urgent'));
+  assert.ok(isStatusCategory('started') && !isStatusCategory('blocked'));
+  assert.ok(isWorkItemPriority('urgent') && !isWorkItemPriority('highest'));
   assert.ok(isSprintState('active') && !isSprintState('paused'));
   assert.ok(isBoardType('scrum') && !isBoardType('list'));
   assert.ok(isWorkItemLinkType('blocked-by') && !isWorkItemLinkType('parent'));
   assert.ok(isCodeLinkKind('pull-request') && !isCodeLinkKind('issue'));
 });
 
-test('defaults: workflow has a todo→done span, issue types include epic + sub-task', () => {
+test('defaults: workflow spans backlog→completed, issue types include epic + sub-task', () => {
   const cats = DEFAULT_WORKFLOW_STATES.map((s) => s.category);
-  assert.ok(cats.includes('todo') && cats.includes('in-progress') && cats.includes('done'));
+  assert.ok(cats.includes('backlog') && cats.includes('started') && cats.includes('completed'));
   assert.ok(DEFAULT_WORKFLOW_STATES.every((s) => isStatusCategory(s.category)));
+  assert.ok(DEFAULT_WORKFLOW_STATES.every((s) => typeof s.color === 'string' && s.color.startsWith('#')));
+  assert.equal(DEFAULT_WORKFLOW_STATES.filter((s) => s.default).length, 1); // exactly one default state
   const types = DEFAULT_ISSUE_TYPES.map((t) => t.type);
   assert.ok(types.includes('epic') && types.includes('sub-task'));
   assert.equal(DEFAULT_ISSUE_TYPES.find((t) => t.type === 'sub-task')?.subtask, true);
@@ -60,7 +62,7 @@ const workItem: WorkItem = {
   type: 'story',
   title: 'Add the Track board',
   status: 'in-progress',
-  statusCategory: 'in-progress',
+  statusCategory: 'started',
   priority: 'high',
   watchers: [],
   labels: ['track'],

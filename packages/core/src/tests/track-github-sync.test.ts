@@ -82,7 +82,7 @@ test('github export: a done item is closed after creation', async () => {
     const w = createWorkItem(ws, { title: 'Done thing' });
     // move it to a done-category state
     const project = ensureProject(ws);
-    const doneState = project.workflowStates.find((s) => s.category === 'done')!;
+    const doneState = project.workflowStates.find((s) => s.category === 'completed')!;
     createWorkItem(ws, { title: 'open thing' });
     const { transitionWorkItem } = await import('../track/trackStore.js');
     transitionWorkItem(ws, w.key, doneState.id);
@@ -110,7 +110,7 @@ test('github import: creates items from issues, skips PRs, no dupes on re-import
     assert.equal(bug.type, 'bug');
     assert.equal(bug.priority, 'high');
     const closed = items.find((i) => i.title === 'Closed task')!;
-    assert.equal(closed.statusCategory, 'done'); // closed → done category
+    assert.equal(closed.statusCategory, 'completed'); // closed issue → completed category
     // re-import → both UPDATE (matched by recorded link), still only 2 items
     const r2 = await importFromGithub(ws, OPTS(gh.fetchImpl));
     assert.ok(r2.imported!.every((e) => e.action === 'update'));

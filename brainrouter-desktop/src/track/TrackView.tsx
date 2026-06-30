@@ -41,7 +41,7 @@ export interface TrackPrStatus {
 export const TYPE_ICON: Record<WorkItemType, string> = {
   epic: 'spark', story: 'review', task: 'check-circle', bug: 'warn', 'sub-task': 'tasks',
 };
-export const PRIORITY_RANK: Record<WorkItemPriority, number> = { lowest: 0, low: 1, medium: 2, high: 3, highest: 4 };
+export const PRIORITY_RANK: Record<WorkItemPriority, number> = { urgent: 4, high: 3, medium: 2, low: 1, none: 0 };
 
 export interface TrackOps {
   create: (input: { title: string; type: WorkItemType; status: string }) => void;
@@ -165,8 +165,8 @@ export function TrackView({ project, items, sprints, automations, members, sync,
         </span>
         {query && !query.ok ? <span className="track-query-error" title={query.error}>{query.error}</span> : null}
         <FilterChip label="Type" value={filter.type} options={['epic', 'story', 'task', 'bug', 'sub-task']} onPick={(v) => setFilter((f) => ({ ...f, type: v as WorkItemType }))} />
-        <FilterChip label="Status" value={filter.statusCategory} options={['todo', 'in-progress', 'done']} onPick={(v) => setFilter((f) => ({ ...f, statusCategory: v }))} />
-        <FilterChip label="Priority" value={filter.priority} options={['highest', 'high', 'medium', 'low', 'lowest']} onPick={(v) => setFilter((f) => ({ ...f, priority: v as WorkItemPriority }))} />
+        <FilterChip label="Status" value={filter.statusCategory} options={['backlog', 'unstarted', 'started', 'completed', 'cancelled']} onPick={(v) => setFilter((f) => ({ ...f, statusCategory: v }))} />
+        <FilterChip label="Priority" value={filter.priority} options={['urgent', 'high', 'medium', 'low', 'none']} onPick={(v) => setFilter((f) => ({ ...f, priority: v as WorkItemPriority }))} />
         {assignees.length ? <FilterChip label="Assignee" value={filter.assignee} options={assignees} onPick={(v) => setFilter((f) => ({ ...f, assignee: v }))} /> : null}
         {Object.values(filter).some(Boolean) ? <button className="track-filter-clear" onClick={() => setFilter({})}>Clear</button> : null}
       </div>
@@ -332,7 +332,7 @@ function SprintView({ items, sprints, states, ops, onOpen }: { items: WorkItem[]
   if (!active) return <div className="track-empty">No sprint yet — create one in Backlog.</div>;
   const sprintItems = items.filter((w) => w.sprintId === active.id);
   const points = sprintItems.reduce((n, w) => n + (w.storyPoints ?? 0), 0);
-  const done = sprintItems.filter((w) => w.statusCategory === 'done').length;
+  const done = sprintItems.filter((w) => w.statusCategory === 'completed').length;
   return (
     <div className="track-sprintview">
       <div className="track-sprint-banner">
@@ -369,7 +369,7 @@ function RoadmapView({ items, states, onOpen }: { items: WorkItem[]; states: Tra
     <div className="track-roadmap">
       {epics.map((e) => {
         const children = items.filter((w) => w.epicId === e.id);
-        const done = children.filter((w) => cat(w) === 'done').length;
+        const done = children.filter((w) => cat(w) === 'completed').length;
         const pct = children.length ? Math.round((done / children.length) * 100) : 0;
         return (
           <div className="track-epic" key={e.id}>
@@ -403,12 +403,12 @@ function ReportsView({ items, states, sprints }: { items: WorkItem[]; states: Tr
   const byPri = (p: WorkItemPriority) => items.filter((w) => w.priority === p).length;
   const total = items.length || 1;
   const points = items.reduce((n, w) => n + (w.storyPoints ?? 0), 0);
-  const donePoints = items.filter((w) => w.statusCategory === 'done').reduce((n, w) => n + (w.storyPoints ?? 0), 0);
+  const donePoints = items.filter((w) => w.statusCategory === 'completed').reduce((n, w) => n + (w.storyPoints ?? 0), 0);
   return (
     <div className="track-reports">
       <div className="track-report-card">
         <div className="track-report-title">Status</div>
-        {(['todo', 'in-progress', 'done'] as const).map((c) => (
+        {(['backlog', 'unstarted', 'started', 'completed', 'cancelled'] as const).map((c) => (
           <div key={c} className="track-report-bar"><span className="trb-label">{c}</span><span className="trb-track"><span className={`trb-fill track-cat-${c}`} style={{ width: `${(byCat(c) / total) * 100}%` }} /></span><span className="trb-n">{byCat(c)}</span></div>
         ))}
       </div>
@@ -420,14 +420,14 @@ function ReportsView({ items, states, sprints }: { items: WorkItem[]; states: Tr
       </div>
       <div className="track-report-card">
         <div className="track-report-title">By priority</div>
-        {(['highest', 'high', 'medium', 'low', 'lowest'] as const).map((p) => byPri(p) ? (
+        {(['urgent', 'high', 'medium', 'low', 'none'] as const).map((p) => byPri(p) ? (
           <div key={p} className="track-report-row"><span className={`track-pri pri-${p}`} /><span className="trr-label">{p}</span><span className="trr-n">{byPri(p)}</span></div>
         ) : null)}
       </div>
       <div className="track-report-card">
         <div className="track-report-title">Throughput</div>
-        <div className="track-report-big">{Math.round((byCat('done') / total) * 100)}%<span> done</span></div>
-        <div className="track-report-row"><span className="trr-label">Items</span><span className="trr-n">{byCat('done')} / {items.length}</span></div>
+        <div className="track-report-big">{Math.round((byCat('completed') / total) * 100)}%<span> done</span></div>
+        <div className="track-report-row"><span className="trr-label">Items</span><span className="trr-n">{byCat('completed')} / {items.length}</span></div>
         {points ? <div className="track-report-row"><span className="trr-label">Story points</span><span className="trr-n">{donePoints} / {points}</span></div> : null}
         <div className="track-report-row"><span className="trr-label">Sprints</span><span className="trr-n">{sprints.filter((s) => s.state === 'active').length} active · {sprints.length} total</span></div>
       </div>
@@ -442,7 +442,7 @@ const TRIGGERS: Array<{ id: AutomationTrigger; label: string; hint: string }> = 
 ];
 const ACTION_TYPES: Array<{ id: AutomationActionType; label: string; placeholder: string }> = [
   { id: 'set-status', label: 'Set status', placeholder: 'status id (e.g. in-progress)' },
-  { id: 'set-priority', label: 'Set priority', placeholder: 'highest · high · medium · low · lowest' },
+  { id: 'set-priority', label: 'Set priority', placeholder: 'urgent · high · medium · low · none' },
   { id: 'set-assignee', label: 'Assign to', placeholder: 'name' },
   { id: 'add-label', label: 'Add label', placeholder: 'label' },
   { id: 'comment', label: 'Comment', placeholder: 'comment text' },
@@ -522,7 +522,7 @@ function AutomationForm({ states, onCreate, onCancel }: { states: TrackProject['
                   options={states.map((s) => ({ value: s.id, label: s.name }))} />
               ) : a.type === 'set-priority' ? (
                 <TrackDropdown value={a.value} placeholder="priority…" onChange={(v) => setAction(i, { value: v })}
-                  options={(['highest', 'high', 'medium', 'low', 'lowest'] as const).map((p) => ({ value: p, label: p }))} />
+                  options={(['urgent', 'high', 'medium', 'low', 'none'] as const).map((p) => ({ value: p, label: p }))} />
               ) : (
                 <input value={a.value} onChange={(e) => setAction(i, { value: e.target.value })} placeholder={ACTION_TYPES.find((t) => t.id === a.type)?.placeholder} />
               )}

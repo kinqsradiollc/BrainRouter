@@ -20,7 +20,7 @@ test('automation: a "created" rule with a condition sets a field', () => {
     const bug = createWorkItem(ws, { title: 'Crash', type: 'bug' });
     assert.equal(bug.priority, 'high'); // automation applied before return
     const story = createWorkItem(ws, { title: 'Feature', type: 'story' });
-    assert.equal(story.priority, 'medium'); // condition didn't match
+    assert.equal(story.priority, 'none'); // condition didn't match → default priority
   });
 });
 
