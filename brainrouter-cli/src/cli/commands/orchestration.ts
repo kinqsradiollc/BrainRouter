@@ -11,9 +11,7 @@ import { callMcpTool, childSessionKey } from '@kinqs/brainrouter-core/mcp';
 import { formatInboxPane } from '../../runtime/inboxView.js';
 import { validateAgentDefinition, buildAgentDefinition, previewAgentDefinition } from '../../orchestration/agentDefValidation.js';
 import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/dist/agent/agent.js';
-import { listRoles } from '@kinqs/brainrouter-core/dist/orchestration/roles.js';
-import { listAll as listAgentDefs } from '@kinqs/brainrouter-core/dist/orchestration/agentRegistry.js';
-import { formatSessionSummary, getSession, listSessions, reconcileStale, updateSession } from '@kinqs/brainrouter-core/dist/orchestration/orchestrator.js';
+import { listRoles, listAll as listAgentDefs, formatSessionSummary, getSession, listSessions, reconcileStale, updateSession, resolveAutoChainMode, isAutoChainMode, resolveDelegationPolicy, isDelegationPolicy, parseChildOutput } from '@kinqs/brainrouter-core/orchestration';
 import { collectRunningTasks, formatBackgroundTasks, summarizeTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
 import { activeRun, formatActivePhase } from '@kinqs/brainrouter-core/dist/workflow/workflowRun.js';
 import { resolveBackgroundTarget, describeStopOutcome } from '../../runtime/bgDetach.js';
@@ -25,12 +23,9 @@ import { buildHandoffPacket, resolveHandoffTarget, type HandoffPacket } from '..
 import { getLoopState, stopLoop } from '../../runtime/loopRunner.js';
 import type { CommandContext } from './_context.js';
 import { formatTranscriptContent } from './_helpers.js';
-import { resolveAutoChainMode, isAutoChainMode } from '@kinqs/brainrouter-core/dist/orchestration/autoChain.js';
-import { resolveDelegationPolicy, isDelegationPolicy } from '@kinqs/brainrouter-core/dist/orchestration/delegationPolicy.js';
 import { listPacks, packAgentIds } from '@kinqs/brainrouter-core/dist/pack/packs.js';
 import { readPackState, isPackEnabled, enablePack, disablePack } from '@kinqs/brainrouter-core/dist/pack/packStore.js';
 import { listWorkers, readWorkerMeta, readWorkerSummary, readWorkerTranscript, closeWorker, type WorkerStatus } from '@kinqs/brainrouter-core/dist/worker/workerStore.js';
-import { parseChildOutput } from '@kinqs/brainrouter-core/dist/orchestration/outputContracts.js';
 
 interface DmAddressResolution {
   to: string;
@@ -736,7 +731,7 @@ export async function tryHandleOrchestrationCommand(ctx: CommandContext): Promis
           console.log(chalk.red(`\nNo child session matches "${target}". Try /agents to list, or pass a full id.\n`));
           return true;
         }
-        const { formatSnapshotForHuman } = await import('@kinqs/brainrouter-core/dist/orchestration/parentContext.js');
+        const { formatSnapshotForHuman } = await import('@kinqs/brainrouter-core/orchestration');
         console.log(chalk.bold(`\nChild ${match.id} (${match.role}) — ${match.status}`));
         if (match.parentContext) {
           console.log(formatSnapshotForHuman(match.parentContext));

@@ -19,6 +19,10 @@
       "types": "./dist/mcp/index.d.ts",
       "default": "./dist/mcp/index.js"
     },
+    "./orchestration": {
+      "types": "./dist/orchestration/index.d.ts",
+      "default": "./dist/orchestration/index.js"
+    },
     "./dist/*": "./dist/*"
   },
   "files": [

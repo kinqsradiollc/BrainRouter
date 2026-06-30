@@ -8,7 +8,7 @@ import { buildUsageBreakdown } from '@kinqs/brainrouter-core/dist/util/usageBrea
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import chalk from 'chalk';
-import { listSessions } from '@kinqs/brainrouter-core/dist/orchestration/orchestrator.js';
+import { listSessions } from '@kinqs/brainrouter-core/orchestration';
 import { formatContextReport } from '../../runtime/contextReport.js';
 import { formatMemoryDecisions } from '../../runtime/memoryDecisionView.js';
 import { formatOffloadList, formatOffloadGraph, type OffloadStep } from '../../runtime/offloadView.js';

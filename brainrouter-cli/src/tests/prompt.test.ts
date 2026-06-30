@@ -6,7 +6,7 @@ import path from 'node:path';
 import { buildChatCompletionPayload, LOCAL_TOOLS, resolveWireEffort } from '@kinqs/brainrouter-core/dist/agent/agent.js';
 import { _resetModelReasoningCapabilities, registerModelReasoningCapabilities } from '@kinqs/brainrouter-core/dist/provider/models/reasoning.js';
 import { buildSystemPrompt } from '@kinqs/brainrouter-core/dist/prompt/systemPrompt.js';
-import { buildRolePrompt, listRoles, resolveRole } from '@kinqs/brainrouter-core/dist/orchestration/roles.js';
+import { buildRolePrompt, listRoles, resolveRole } from '@kinqs/brainrouter-core/orchestration';
 import { buildSkillPrompt, resolveSkill, SLASH_TO_SKILL } from '../prompt/skillRunner.js';
 import { setCliKnobOverride, _resetCliKnobsCache } from '@kinqs/brainrouter-core/config';
 

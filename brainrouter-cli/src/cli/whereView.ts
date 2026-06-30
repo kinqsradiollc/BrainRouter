@@ -3,7 +3,7 @@ import type { Goal } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
 import { formatBudget, readGoal } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
 import { readPlan, type PlanState } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
 import { getCurrentWorkflow, listWorkflows, type WorkflowMeta } from '@kinqs/brainrouter-core/dist/workflow/workflowArtifacts.js';
-import { listSessions, type ChildSessionRecord } from '@kinqs/brainrouter-core/dist/orchestration/orchestrator.js';
+import { listSessions, type ChildSessionRecord } from '@kinqs/brainrouter-core/orchestration';
 import type { RecalledRecord } from '@kinqs/brainrouter-core/dist/memory/briefing.js';
 import { readPreferences, resolveEffort, type EffortLevel, type ExecutionMode, type ReviewPolicy, getSessionMode, resolveActiveMode } from '@kinqs/brainrouter-core/session';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';

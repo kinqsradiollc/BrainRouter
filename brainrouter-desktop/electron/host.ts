@@ -211,7 +211,7 @@ import { isAnnotationStatus, isAnnotationTargetKind, isAnnotationSeverity, isAnc
 import { listArtifacts, createArtifact, updateArtifact, getArtifact, linkArtifact, revertArtifact, type ArtifactFilter, type CreateArtifactInput, type ArtifactPatch } from '@kinqs/brainrouter-core/dist/artifact/artifactStore.js';
 import { isArtifactKind, isArtifactStatus, isArtifactFormat, type ArtifactRecord } from '@kinqs/brainrouter-types';
 import { listWorkers, readWorkerSummary, readWorkerTranscript, readWorkerMeta } from '@kinqs/brainrouter-core/dist/worker/workerStore.js';
-import { listSessions } from '@kinqs/brainrouter-core/dist/orchestration/orchestrator.js';
+import { listSessions } from '@kinqs/brainrouter-core/orchestration';
 import { readRun } from '@kinqs/brainrouter-core/dist/workflow/workflowRun.js';
 import { reconcileStaleBackgroundTasks } from '@kinqs/brainrouter-core/dist/background/backgroundReconcile.js';
 import { desktopSessionModePatchFromArgs, mergeSessionModePrefs } from './sessionModeBridge.js';

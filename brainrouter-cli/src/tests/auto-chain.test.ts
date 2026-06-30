@@ -4,7 +4,7 @@ import {
   resolveAutoChainMode,
   autoChainRoles,
   isAutoChainMode,
-} from '@kinqs/brainrouter-core/dist/orchestration/autoChain.js';
+} from '@kinqs/brainrouter-core/orchestration';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

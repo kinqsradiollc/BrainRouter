@@ -1,8 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { callMcpTool, childSessionKey, extractToolText, safeJsonParse } from '@kinqs/brainrouter-core/mcp';
-import { createSession, getSession, listSessions, updateSession } from '@kinqs/brainrouter-core/dist/orchestration/orchestrator.js';
-import { executeOrchestrationTool } from '@kinqs/brainrouter-core/dist/orchestration/tools.js';
+import { createSession, getSession, listSessions, updateSession, executeOrchestrationTool } from '@kinqs/brainrouter-core/orchestration';
 import { normalizeSkillsList } from '../cli/commands/workflow.js';
 import { withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 
@@ -275,7 +274,7 @@ test('orchestration: spawn_agent wait=true remains backward-compatible', async (
 });
 
 test('orchestration: extractChildPreview prefers a Headline/Summary section over head-of-output', async () => {
-  const { extractChildPreview } = await import('@kinqs/brainrouter-core/dist/orchestration/tools.js');
+  const { extractChildPreview } = await import('@kinqs/brainrouter-core/orchestration');
   // When the child wrote a Headline block, the preview returns THAT,
   // not the framing intro the head-slice would have captured.
   const withHeadline =
@@ -298,7 +297,7 @@ test('orchestration: extractChildPreview prefers a Headline/Summary section over
 });
 
 test('orchestration: clampAccess prevents a child from exceeding the parent\'s access mode', async () => {
-  const { clampAccess } = await import('@kinqs/brainrouter-core/dist/orchestration/tools.js');
+  const { clampAccess } = await import('@kinqs/brainrouter-core/orchestration');
   // Same level: no clamp.
   assert.equal(clampAccess('shell', 'shell'), 'shell');
   assert.equal(clampAccess('write', 'write'), 'write');
@@ -425,7 +424,7 @@ test('detectBreadthIntent flags "do everything in 1 go" / "as much as I could" /
 });
 
 test('inferRoleFromTask routes verbs to the right child role', async () => {
-  const { inferRoleFromTask } = await import('@kinqs/brainrouter-core/dist/orchestration/tools.js');
+  const { inferRoleFromTask } = await import('@kinqs/brainrouter-core/orchestration');
   assert.equal(inferRoleFromTask('investigate the auth middleware'), 'explorer');
   assert.equal(inferRoleFromTask('Map the MCP package layout'), 'explorer');
   assert.equal(inferRoleFromTask('Design the data model for the chat feature'), 'architect');

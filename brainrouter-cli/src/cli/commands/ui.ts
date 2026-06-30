@@ -10,7 +10,7 @@ import chalk from 'chalk';
 import { spinner as makeSpinner } from '../spinner.js';
 import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/dist/agent/agent.js';
 import { callMcpTool, hasMcpTool } from '@kinqs/brainrouter-core/mcp';
-import { listSessions, reconcileStale } from '@kinqs/brainrouter-core/dist/orchestration/orchestrator.js';
+import { listSessions, reconcileStale } from '@kinqs/brainrouter-core/orchestration';
 import { readPreferences, resolveEffort, writePreferences, normalizeEffort, getSessionMode, resolveActiveMode, setSessionMode, setSessionRuntime } from '@kinqs/brainrouter-core/session';
 import { readPlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
 // initAgentMd usage moved to commands/init.ts (0.3.7 wizard). The

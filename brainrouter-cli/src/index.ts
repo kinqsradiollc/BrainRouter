@@ -800,7 +800,7 @@ program
     const workspace = findWorkspaceRoot();
     applyWorkspaceRoot(workspace.workspaceRoot);
     // Reconcile + list happens locally — no MCP needed.
-    const { reconcileStale, listSessions } = await import('@kinqs/brainrouter-core/dist/orchestration/orchestrator.js');
+    const { reconcileStale, listSessions } = await import('@kinqs/brainrouter-core/orchestration');
     reconcileStale(workspace.workspaceRoot);
     const sessions = listSessions(workspace.workspaceRoot);
     if (options.json) {
