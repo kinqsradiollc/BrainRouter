@@ -5,7 +5,7 @@
  * every change goes through the `ops` callbacks (host `track-*` queries).
  */
 import React, { useState } from 'react';
-import type { TrackProject, WorkItem, WorkItemPriority, Sprint } from '@kinqs/brainrouter-types';
+import type { TrackProject, WorkItem, WorkItemPriority, Sprint, Module } from '@kinqs/brainrouter-types';
 import { Icon } from '../icons.js';
 import { TYPE_ICON } from './TrackView.js';
 import type { TrackOps } from './TrackView.js';
@@ -13,8 +13,8 @@ import { TrackDropdown } from './Dropdown.js';
 
 const PRIORITIES: WorkItemPriority[] = ['urgent', 'high', 'medium', 'low', 'none'];
 
-export function TrackDetail({ item, project, allItems, sprints, ops, onClose }: {
-  item: WorkItem; project: TrackProject | null; allItems: WorkItem[]; sprints: Sprint[]; ops: TrackOps; onClose: () => void;
+export function TrackDetail({ item, project, allItems, sprints, modules, ops, onClose }: {
+  item: WorkItem; project: TrackProject | null; allItems: WorkItem[]; sprints: Sprint[]; modules: Module[]; ops: TrackOps; onClose: () => void;
 }): React.ReactElement {
   const [editTitle, setEditTitle] = useState(false);
   const [title, setTitle] = useState(item.title);
@@ -69,6 +69,10 @@ export function TrackDetail({ item, project, allItems, sprints, ops, onClose }: 
             <Field label="Sprint">
               <TrackDropdown value={item.sprintId ?? ''} onChange={(v) => ops.assignSprint(item.key, v || null)}
                 options={[{ value: '', label: '— none —' }, ...sprints.map((s) => ({ value: s.id, label: s.name }))]} />
+            </Field>
+            <Field label="Module">
+              <TrackDropdown value={item.moduleId ?? ''} onChange={(v) => ops.assignModule(item.key, v || null)}
+                options={[{ value: '', label: '— none —' }, ...modules.map((m) => ({ value: m.id, label: m.name }))]} />
             </Field>
             {item.type !== 'epic' ? (
               <Field label="Epic">

@@ -87,7 +87,7 @@ import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kin
 import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement, deleteRequirement, type RequirementPatch } from '@kinqs/brainrouter-core/requirement';
 import { buildBaseGraph, saveAtlasGraph, readAtlasGraph, atlasGraphStats, atlasWorkspaceTag, enrichAtlasGraph, extractAtlasJson, type AtlasLlmCaller } from '@kinqs/brainrouter-core/atlas';
 import { syncRequirementPlanTrack } from '@kinqs/brainrouter-core/requirement';
-import { ensureProject, getProject, getWorkItem, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember, getGithubLinks, setGithubLink, type CreateWorkItemInput, type UpdateWorkItemPatch, type AutomationPatch } from '@kinqs/brainrouter-core/track';
+import { ensureProject, getProject, getWorkItem, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, createModule, listModules, updateModule, deleteModule, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember, getGithubLinks, setGithubLink, type CreateWorkItemInput, type UpdateWorkItemPatch, type UpdateModulePatch, type AutomationPatch } from '@kinqs/brainrouter-core/track';
 import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfigForWorkspace, listResolvedGithubConfigsForWorkspace, issueToWorkItem, type GithubIssue } from '@kinqs/brainrouter-core/track';
 import { scanGitCommitsForTrack } from '@kinqs/brainrouter-core/track';
 import { readGitTrackContext, startGitWorkForTrackItem } from '@kinqs/brainrouter-core/track';
@@ -2495,6 +2495,21 @@ async function main(): Promise<void> {
       'track-sprint-state': (a) => {
         setSprintState(workspaceRoot, String(a.id ?? ''), String(a.state ?? 'future') as SprintState);
         return listSprints(workspaceRoot);
+      },
+      // Modules — feature-sized groupings of work items.
+      'track-modules': () => { ensureProject(workspaceRoot); return listModules(workspaceRoot); },
+      'track-create-module': (a) => {
+        createModule(workspaceRoot, { name: String(a.name ?? 'Module'), description: a.description ? String(a.description) : undefined });
+        return listModules(workspaceRoot);
+      },
+      'track-module-update': (a) => {
+        updateModule(workspaceRoot, String(a.id ?? ''), (a.patch && typeof a.patch === 'object' ? a.patch : {}) as UpdateModulePatch);
+        return listModules(workspaceRoot);
+      },
+      'track-module-delete': (a) => { deleteModule(workspaceRoot, String(a.id ?? '')); return listModules(workspaceRoot); },
+      'track-assign-module': (a) => {
+        updateWorkItem(workspaceRoot, String(a.idOrKey ?? ''), { moduleId: a.moduleId ? String(a.moduleId) : undefined }, 'user');
+        return listWorkItems(workspaceRoot);
       },
       // Automation rules — trigger → action over the project board.
       'track-automations': () => { ensureProject(workspaceRoot); return listAutomations(workspaceRoot); },

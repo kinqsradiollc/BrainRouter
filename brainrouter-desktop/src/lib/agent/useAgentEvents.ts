@@ -15,7 +15,7 @@ import { useEffect, useRef } from 'react';
 import type React from 'react';
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import type { AttachmentUpload, PlanItem, ToolItem, ChatRow, ChangesetFile, SessionRow, FleetRow, TaskViewState, WorkflowDetail } from '../../types.js';
-import type { TrackProject, WorkItem, Sprint, AutomationRule, ProjectMember } from '@kinqs/brainrouter-types';
+import type { TrackProject, WorkItem, Sprint, Module, AutomationRule, ProjectMember } from '@kinqs/brainrouter-types';
 import type { GitTrackContext, SyncConfig, SyncResult, TrackPrStatus } from '../../track/TrackView.js';
 import type { SearchHit, ReviewFindingView, GrepHit } from '../../panels/index.js';
 import type { ScheduleRecordView } from '../schedule/scheduleView.js';
@@ -77,7 +77,7 @@ export interface AgentEventsCtx {
   // recall are counted here from their events). Reset on session-changed.
   setEfficiency: React.Dispatch<React.SetStateAction<{ compactions: number; droppedMessages: number; memoriesRecalled: number }>>;
   // Track mode data (project + work items + sprints), fed by the host `track-*` queries.
-  setTrack: React.Dispatch<React.SetStateAction<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; automations: AutomationRule[]; members: ProjectMember[]; sync: { config: SyncConfig | null; result: SyncResult | null }; git: GitTrackContext | null; pr: TrackPrStatus | null }>>;
+  setTrack: React.Dispatch<React.SetStateAction<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; modules: Module[]; automations: AutomationRule[]; members: ProjectMember[]; sync: { config: SyncConfig | null; result: SyncResult | null }; git: GitTrackContext | null; pr: TrackPrStatus | null }>>;
   setInteraction: React.Dispatch<React.SetStateAction<InteractionRequest | null>>;
   setPicked: React.Dispatch<React.SetStateAction<string[]>>;
   setViewKey: React.Dispatch<React.SetStateAction<string>>;
@@ -627,11 +627,14 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       // TRACK mode — project + work items. Create/transition return the updated list.
       case 'q-track-project': setTrack((t) => ({ ...t, project: (result as TrackProject | null) ?? null })); return;
       case 'q-track-items': case 'q-track-create': case 'q-track-transition':
-      case 'q-track-update-item': case 'q-track-comment': case 'q-track-link': case 'q-track-assign-sprint':
+      case 'q-track-update-item': case 'q-track-comment': case 'q-track-link': case 'q-track-assign-sprint': case 'q-track-assign-module':
         if (Array.isArray(result)) setTrack((t) => ({ ...t, items: result as WorkItem[] }));
         return;
       case 'q-track-sprints': case 'q-track-create-sprint': case 'q-track-sprint-state':
         if (Array.isArray(result)) setTrack((t) => ({ ...t, sprints: result as Sprint[] }));
+        return;
+      case 'q-track-modules': case 'q-track-create-module': case 'q-track-module-update': case 'q-track-module-delete':
+        if (Array.isArray(result)) setTrack((t) => ({ ...t, modules: result as Module[] }));
         return;
       case 'q-track-automations': case 'q-track-create-automation':
       case 'q-track-update-automation': case 'q-track-delete-automation':
