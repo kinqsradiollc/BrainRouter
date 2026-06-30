@@ -8,7 +8,7 @@
  * the board stays provenance-linked, same as `/requirement`.
  */
 import chalk from 'chalk';
-import { type WorkItem, type WorkItemType, type AutomationTrigger, type AutomationAction, type AutomationActionType, type ProjectRole, isWorkItemType, isWorkItemPriority, isAutomationTrigger, isAutomationActionType, isProjectRole } from '@kinqs/brainrouter-types';
+import { type WorkItem, type WorkItemType, type AutomationTrigger, type AutomationAction, type AutomationActionType, type ProjectRole, isWorkItemType, isWorkItemPriority, isAutomationTrigger, isAutomationActionType, isProjectRole, isModuleStatus } from '@kinqs/brainrouter-types';
 import {
   ensureProject,
   getProject,
@@ -33,6 +33,11 @@ import {
   listLabels,
   upsertLabel,
   deleteLabel,
+  createModule,
+  listModules,
+  getModule,
+  updateModule,
+  deleteModule,
 } from '@kinqs/brainrouter-core/track';
 import { parseTrackQuery } from '@kinqs/brainrouter-core/track';
 import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/track';
@@ -118,6 +123,8 @@ export async function tryHandleTrackCommand(ctx: CommandContext): Promise<boolea
   if (sub === 'members' || sub === 'member') { await handleMembers(ws, rest); return true; }
 
   if (sub === 'labels' || sub === 'label') { handleLabels(ws, rest); return true; }
+
+  if (sub === 'modules' || sub === 'module') { handleModules(ws, rest); return true; }
 
   if (sub === 'sync') { await handleSync(ws, rest); return true; }
 
@@ -422,6 +429,56 @@ function parseCreate(tokens: string[]): ParsedCreate {
   return out;
 }
 
+/** `/track modules [list|create|status|assign|rm]` — feature-sized work groupings. */
+function handleModules(ws: string, args: string[]): void {
+  ensureProject(ws);
+  const op = (args[0] ?? 'list').toLowerCase();
+  if (op === 'list') {
+    const mods = listModules(ws);
+    if (!mods.length) { console.log(chalk.yellow('\nNo modules. Create one: /track modules create <name>\n')); return; }
+    console.log('');
+    for (const m of mods) {
+      const count = listWorkItems(ws, { moduleId: m.id }).length;
+      console.log(`  ${chalk.cyan(m.name)} ${chalk.gray(`[${m.status}]`)}${m.lead ? chalk.gray(` · lead ${m.lead}`) : ''} ${chalk.gray(`· ${count} item(s)`)}`);
+    }
+    console.log('');
+    return;
+  }
+  if (op === 'create') {
+    const name = args.slice(1).join(' ').trim();
+    if (!name) { console.log(chalk.red('\nUsage: /track modules create <name>\n')); return; }
+    const m = createModule(ws, { name });
+    console.log(chalk.green(`\n✓ Module "${m.name}" created [${m.status}]\n`));
+    return;
+  }
+  if (op === 'status') {
+    const [, name, status] = args;
+    if (!name || !isModuleStatus(status)) { console.log(chalk.red('\nUsage: /track modules status <name> <backlog|planned|in-progress|paused|completed|cancelled>\n')); return; }
+    const m = updateModule(ws, name, { status });
+    console.log(m ? chalk.green(`\n${m.name} → [${m.status}]\n`) : chalk.yellow(`\nNo module "${name}".\n`));
+    return;
+  }
+  if (op === 'assign') {
+    const [, key, mod] = args;
+    if (!key || !mod) { console.log(chalk.red('\nUsage: /track modules assign <item-key> <module-name|->\n')); return; }
+    const item = getWorkItem(ws, key);
+    if (!item) { console.log(chalk.red(`\nNo work item "${key}".\n`)); return; }
+    if (mod === '-' || mod === 'none') { updateWorkItem(ws, item.key, { moduleId: undefined }); console.log(chalk.green(`\n${item.key} removed from its module.\n`)); return; }
+    const m = getModule(ws, mod);
+    if (!m) { console.log(chalk.red(`\nNo module "${mod}".\n`)); return; }
+    updateWorkItem(ws, item.key, { moduleId: m.id });
+    console.log(chalk.green(`\n${item.key} → module "${m.name}".\n`));
+    return;
+  }
+  if (op === 'rm' || op === 'remove' || op === 'delete') {
+    const name = args[1];
+    if (!name) { console.log(chalk.red('\nUsage: /track modules rm <name>\n')); return; }
+    console.log(deleteModule(ws, name) ? chalk.green(`\nRemoved module "${name}" (and unassigned its items).\n`) : chalk.yellow(`\nNo module "${name}".\n`));
+    return;
+  }
+  console.log(chalk.yellow(`\nUnknown modules op "${op}". Try: list · create · status · assign · rm\n`));
+}
+
 /** `/track labels [list|color <name> <#hex>|rm <name>]` — the project label registry. */
 function handleLabels(ws: string, args: string[]): void {
   ensureProject(ws);
@@ -470,6 +527,7 @@ function printUsage(): void {
   console.log(chalk.gray('  /track automations [list|add|rm|on|off]      Trigger→action rules (e.g. bugs → high priority)'));
   console.log(chalk.gray('  /track members [list|add|role|rm]            Project members + roles (owner·admin·member·viewer)'));
   console.log(chalk.gray('  /track labels [list|color|rm]                Label registry + colors'));
+  console.log(chalk.gray('  /track modules [list|create|status|assign|rm]  Feature-sized work groupings'));
   console.log(chalk.gray('  /track sync github import|export [--dry-run]  Two-way sync with GitHub Issues'));
   console.log(chalk.gray('  /track commits [--depth N] [--since <when>]   Link commits to items by BR-123 ref + advance todo→in-progress\n'));
 }
