@@ -16,7 +16,7 @@ test('commit scanner: links a commit to its work item + advances todo → in-pro
   withTempWorkspace((ws) => {
     ensureProject(ws, { key: 'BR' });
     const w = createWorkItem(ws, { title: 'Rate limiting', status: 'todo' });
-    assert.equal(w.statusCategory, 'todo');
+    assert.equal(w.statusCategory, 'unstarted');
 
     const r = scanCommitsForTrack(ws, [{ sha: 'abc1234', subject: `feat: rate limiter (${w.key})` }]);
     assert.equal(r.linked.length, 1);
@@ -24,7 +24,7 @@ test('commit scanner: links a commit to its work item + advances todo → in-pro
     assert.equal(r.transitioned.length, 1);
 
     const after = getWorkItem(ws, w.key)!;
-    assert.equal(after.statusCategory, 'in-progress');
+    assert.equal(after.statusCategory, 'started');
     assert.ok(after.codeLinks.some((c) => c.kind === 'commit' && c.ref === 'abc1234'));
   });
 });
@@ -45,7 +45,7 @@ test('commit scanner: idempotent — re-scanning the same commit is a no-op', ()
 test('commit scanner: does not move a done item back, and ignores unknown keys', () => {
   withTempWorkspace((ws) => {
     const project = ensureProject(ws, { key: 'BR' });
-    const done = project.workflowStates.find((s) => s.category === 'done')!;
+    const done = project.workflowStates.find((s) => s.category === 'completed')!;
     const w = createWorkItem(ws, { title: 'Shipped', status: 'todo' });
     transitionWorkItem(ws, w.key, done.id);
 
@@ -53,8 +53,8 @@ test('commit scanner: does not move a done item back, and ignores unknown keys',
       { sha: 's1', subject: `${w.key} a late commit` },
       { sha: 's2', subject: 'BR-999 references a non-existent item' },
     ]);
-    // The done item still gets the commit linked (provenance) but is NOT moved.
-    assert.equal(getWorkItem(ws, w.key)!.statusCategory, 'done');
+    // The completed item still gets the commit linked (provenance) but is NOT moved.
+    assert.equal(getWorkItem(ws, w.key)!.statusCategory, 'completed');
     assert.equal(r.transitioned.length, 0);
     assert.ok(r.linked.some((l) => l.key === w.key));
     assert.ok(!r.linked.some((l) => l.key === 'BR-999'));

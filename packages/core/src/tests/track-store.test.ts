@@ -41,7 +41,7 @@ test('createWorkItem: mints sequential keys, resolves category, seeds activity',
     assert.ok(isWorkItem(a) && isWorkItem(b));
     assert.equal(a.key, 'BR-1');
     assert.equal(b.key, 'BR-2');
-    assert.equal(a.statusCategory, 'todo'); // default first state → todo
+    assert.equal(a.statusCategory, 'backlog'); // default state → backlog
     assert.equal(a.activity[0].field, 'created');
     assert.equal(a.activity[0].actor, 'agent');
     assert.equal(b.priority, 'high');
@@ -61,13 +61,14 @@ test('getWorkItem: by id and by human key', () => {
 test('updateWorkItem + transition: status change recomputes category + logs activity', () => {
   withTempWorkspace((ws) => {
     const a = createWorkItem(ws, { title: 'Move me' });
-    const moved = transitionWorkItem(ws, a.key, 'in-review', 'agent')!;
-    assert.equal(moved.status, 'in-review');
-    assert.equal(moved.statusCategory, 'in-progress');
+    const moved = transitionWorkItem(ws, a.key, 'in-progress', 'agent')!;
+    assert.equal(moved.status, 'in-progress');
+    assert.equal(moved.statusCategory, 'started');
     const statusEntry = moved.activity.find((e) => e.field === 'status');
-    assert.ok(statusEntry && statusEntry.to === 'in-review' && statusEntry.actor === 'agent');
+    assert.ok(statusEntry && statusEntry.to === 'in-progress' && statusEntry.actor === 'agent');
     const done = transitionWorkItem(ws, a.key, 'done')!;
-    assert.equal(done.statusCategory, 'done');
+    assert.equal(done.statusCategory, 'completed');
+    assert.ok(done.completedAt); // auto-stamped on entering a completed state
     // invalid transition throws
     assert.throws(() => transitionWorkItem(ws, a.key, 'nonsense'), /Unknown workflow state/);
   });
@@ -80,7 +81,7 @@ test('listWorkItems: filters by type, category, assignee, and text', () => {
     const bug = createWorkItem(ws, { title: 'Fix crash', type: 'bug', assignee: 'bob' });
     transitionWorkItem(ws, bug.key, 'done');
     assert.equal(listWorkItems(ws, { type: 'bug' }).length, 1);
-    assert.equal(listWorkItems(ws, { statusCategory: 'done' }).length, 1);
+    assert.equal(listWorkItems(ws, { statusCategory: 'completed' }).length, 1);
     assert.equal(listWorkItems(ws, { assignee: 'ann' }).length, 1);
     assert.equal(listWorkItems(ws, { text: 'crash' }).length, 1);
     assert.equal(listWorkItems(ws, { text: 'BR-' }).length, 2); // key match
@@ -118,14 +119,14 @@ test('sprints + board view: state transitions + column grouping', () => {
     assert.equal(setSprintState(ws, sp.id, 'active')!.state, 'active');
     assert.equal(listSprints(ws).length, 1);
 
-    const todo = createWorkItem(ws, { title: 'Todo item' });
+    const backlogItem = createWorkItem(ws, { title: 'Backlog item' });
     const doing = createWorkItem(ws, { title: 'Doing item' });
     transitionWorkItem(ws, doing.key, 'in-progress');
     const board = createBoard(ws, { name: 'Sprint board', type: 'scrum' });
     const view = boardView(ws, board.id);
-    const todoCol = view.find((c) => c.column === 'To Do');
+    const backlogCol = view.find((c) => c.column === 'Backlog');
     const doingCol = view.find((c) => c.column === 'In Progress');
-    assert.ok(todoCol!.items.some((w) => w.id === todo.id));
+    assert.ok(backlogCol!.items.some((w) => w.id === backlogItem.id));
     assert.ok(doingCol!.items.some((w) => w.id === doing.id));
   });
 });

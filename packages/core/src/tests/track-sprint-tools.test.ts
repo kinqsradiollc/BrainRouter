@@ -46,7 +46,7 @@ test('track_update: assigns work to a sprint and batch-transitions only matching
     assert.match(transitioned, /transitioned 2/i);
     assert.equal(getWorkItem(workspace, first.key)!.status, 'in-progress');
     assert.equal(getWorkItem(workspace, second.key)!.status, 'in-progress');
-    assert.equal(getWorkItem(workspace, bug.key)!.status, 'todo');
+    assert.equal(getWorkItem(workspace, bug.key)!.status, 'backlog');
 
     const invalid = await invoke({
       action: 'batch-transition', query: 'not-a-real-field = value', toStatus: 'done',

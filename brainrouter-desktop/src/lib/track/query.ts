@@ -21,7 +21,9 @@
  */
 import type { WorkItem } from '@kinqs/brainrouter-types';
 
-const PRIORITY_ORDER: Record<string, number> = { lowest: 0, low: 1, medium: 2, high: 3, highest: 4 };
+// Inlined (not imported) to keep this renderer module free of the types barrel,
+// whose value exports pull in node:crypto and break the browser bundle.
+const PRIORITY_ORDER: Record<string, number> = { urgent: 4, high: 3, medium: 2, low: 1, none: 0 };
 const COMPARATORS = new Set(['=', '!=', '~', '>', '<', '>=', '<=']);
 
 export type WorkItemPredicate = (w: WorkItem) => boolean;

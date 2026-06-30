@@ -11,7 +11,7 @@ import { TYPE_ICON } from './TrackView.js';
 import type { TrackOps } from './TrackView.js';
 import { TrackDropdown } from './Dropdown.js';
 
-const PRIORITIES: WorkItemPriority[] = ['highest', 'high', 'medium', 'low', 'lowest'];
+const PRIORITIES: WorkItemPriority[] = ['urgent', 'high', 'medium', 'low', 'none'];
 
 export function TrackDetail({ item, project, allItems, sprints, ops, onClose }: {
   item: WorkItem; project: TrackProject | null; allItems: WorkItem[]; sprints: Sprint[]; ops: TrackOps; onClose: () => void;
@@ -118,7 +118,7 @@ export function TrackDetail({ item, project, allItems, sprints, ops, onClose }: 
               <div key={s.id} className="track-subtask"><span className={`track-cat track-cat-${s.statusCategory}`} /><span className="mono tl-key">{s.key}</span><span className="tl-title">{s.title}</span></div>
             ))}
             <div className="track-detail-addsub">
-              <input value={subTitle} onChange={(e) => setSubTitle(e.target.value)} placeholder="+ sub-task" onKeyDown={(e) => { if (e.key === 'Enter' && subTitle.trim()) { ops.create({ title: subTitle.trim(), type: 'sub-task', status: states[0]?.id ?? 'todo' }); setSubTitle(''); } }} />
+              <input value={subTitle} onChange={(e) => setSubTitle(e.target.value)} placeholder="+ sub-task" onKeyDown={(e) => { if (e.key === 'Enter' && subTitle.trim()) { ops.create({ title: subTitle.trim(), type: 'sub-task', status: states[0]?.id ?? 'backlog' }); setSubTitle(''); } }} />
             </div>
           </Section>
 

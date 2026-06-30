@@ -1665,7 +1665,7 @@ async function main(): Promise<void> {
     if (!merged.ok) return { ok: false, pr: status.pr, branch: status.branch, itemKey: status.itemKey, items: listWorkItems(workspaceRoot), error: merged.error ?? 'GitHub CLI could not merge the PR.' };
     if (status.itemKey) {
       const project = getProject(workspaceRoot) ?? ensureProject(workspaceRoot);
-      const done = project.workflowStates.find((state) => state.category === 'done');
+      const done = project.workflowStates.find((state) => state.category === 'completed');
       if (done) transitionWorkItem(workspaceRoot, status.itemKey, done.id, 'user');
     }
     prCache = null;

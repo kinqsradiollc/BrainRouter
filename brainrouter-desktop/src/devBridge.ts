@@ -375,7 +375,12 @@ export function installDevBridge(): void {
   type DevPlanDecision = { id: string; verdict: 'approved' | 'changes-requested' | 'revised'; actor?: 'user' | 'auto'; feedback?: string; planSnapshot: DevPlanItem[]; explanation?: string; createdAt: string; linkedMemoryIds: string[] };
   const devPlanState: { items: DevPlanItem[]; explanation?: string } = { items: [{ step: 'Audit the session/context meter logic', status: 'completed' }, { step: 'Reset context + plan on session switch', status: 'in_progress' }], explanation: 'Session-scoped state fix' };
   // TRACK mode mock: a project + work items the board/list renders from.
-  const trackCat = (s: string): string => (s === 'done' ? 'done' : s === 'todo' ? 'todo' : 'in-progress');
+  const trackCat = (s: string): string => (
+    s === 'done' ? 'completed'
+      : s === 'cancelled' ? 'cancelled'
+        : s === 'backlog' ? 'backlog'
+          : s === 'todo' ? 'unstarted'
+            : 'started'); // in-progress / in-review
   const mkItem = (key: string, type: string, title: string, status: string, priority: string, assignee?: string, labels: string[] = []) => ({
     id: `wi_${key}`, key, type, title, status, statusCategory: trackCat(status), priority,
     assignee, watchers: [], labels, components: [], links: [], comments: [], attachmentIds: [],
@@ -387,8 +392,12 @@ export function installDevBridge(): void {
     project: {
       id: 'proj_dev', workspaceRoot: wsCurrent, name: 'BrainRouter', key: 'BR', keyCounter: 8,
       workflowStates: [
-        { id: 'todo', name: 'To Do', category: 'todo' }, { id: 'in-progress', name: 'In Progress', category: 'in-progress' },
-        { id: 'in-review', name: 'In Review', category: 'in-progress' }, { id: 'done', name: 'Done', category: 'done' },
+        { id: 'backlog', name: 'Backlog', category: 'backlog', color: '#94a3b8', default: true },
+        { id: 'todo', name: 'Todo', category: 'unstarted', color: '#64748b' },
+        { id: 'in-progress', name: 'In Progress', category: 'started', color: '#f59e0b' },
+        { id: 'in-review', name: 'In Review', category: 'started', color: '#6366f1' },
+        { id: 'done', name: 'Done', category: 'completed', color: '#22c55e' },
+        { id: 'cancelled', name: 'Cancelled', category: 'cancelled', color: '#9ca3af' },
       ],
       issueTypes: [], components: ['cli', 'desktop', 'memory'],
       members: [
@@ -403,9 +412,9 @@ export function installDevBridge(): void {
       mkItem('BR-2', 'story', 'Track data model + durable store', 'done', 'high', 'anhdang', ['track']),
       mkItem('BR-3', 'story', 'Left-sidebar mode switcher', 'in-progress', 'high', 'anhdang', ['desktop']),
       mkItem('BR-4', 'task', 'Track board view (columns + cards)', 'in-review', 'medium', 'anhdang', ['desktop']),
-      mkItem('BR-5', 'bug', 'Reranker timeout under a slow local server', 'done', 'highest', 'bob', ['memory']),
+      mkItem('BR-5', 'bug', 'Reranker timeout under a slow local server', 'done', 'urgent', 'bob', ['memory']),
       mkItem('BR-6', 'task', 'Agent tools for the tracker', 'todo', 'medium'),
-      mkItem('BR-7', 'task', '/track CLI commands', 'todo', 'low'),
+      mkItem('BR-7', 'task', '/track CLI commands', 'backlog', 'low'),
     ],
   };
   let devTrackN = 8;
@@ -1135,7 +1144,7 @@ export function installDevBridge(): void {
         if (!links.some((l) => l && typeof l === 'object' && (l as { kind?: string; ref?: string }).kind === 'branch' && (l as { ref?: string }).ref === branch)) {
           it.codeLinks = [...links, { kind: 'branch', ref: branch, label: 'kinqsradiollc/BrainRouter' }];
         }
-        if (it.statusCategory === 'todo') { it.status = 'in-progress'; it.statusCategory = 'in-progress'; }
+        if (it.statusCategory === 'backlog' || it.statusCategory === 'unstarted') { it.status = 'in-progress'; it.statusCategory = 'started'; }
       }
       return {
         ok: !!it,
@@ -1194,7 +1203,7 @@ export function installDevBridge(): void {
     },
     'track-merge-pr': () => {
       const it = devFindItem('BR-3');
-      if (it) { it.status = 'done'; it.statusCategory = 'done'; }
+      if (it) { it.status = 'done'; it.statusCategory = 'completed'; }
       return { ok: true, pr: null, branch: 'track/br-3-streaming-retry-fix', itemKey: 'BR-3', items: [...devTrack.items] };
     },
     'track-submit-pr-review': () => ({ ok: true, pr: { number: 42, state: 'OPEN', title: 'BR-3: Streaming retry fix', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/42', headRefName: 'track/br-3-streaming-retry-fix', baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: [] }, branch: 'track/br-3-streaming-retry-fix', itemKey: 'BR-3' }),

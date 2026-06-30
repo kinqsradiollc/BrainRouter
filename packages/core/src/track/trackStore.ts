@@ -20,6 +20,7 @@ import {
   type WorkItemComment,
   type WorkItemActivity,
   type StatusCategory,
+  type WorkflowState,
   type CodeLink,
   type Sprint,
   type SprintState,
@@ -36,6 +37,7 @@ import {
   ROLE_RANK,
   DEFAULT_WORKFLOW_STATES,
   DEFAULT_ISSUE_TYPES,
+  STATUS_CATEGORY_COLORS,
 } from '@kinqs/brainrouter-types';
 import { getStateFile, readJsonFile, writeJsonFile } from '../storage/store.js';
 import { parseTrackQuery, matchesTrackQuery } from './query.js';
@@ -51,17 +53,74 @@ interface TrackStore {
   automations: Record<string, AutomationRule>;
   /** GitHub issue links, keyed by work-item id (external sync round-trip). */
   githubLinks: Record<string, ExternalLink>;
+  /** Migration marker; bumped whenever the record shapes change (see migrateStore). */
+  schemaVersion?: number;
 }
 
 const EMPTY: TrackStore = { project: null, workItems: {}, sprints: {}, boards: {}, automations: {}, githubLinks: {} };
+
+/** Current on-disk schema. v2 = lifecycle groups + urgent/none priority + start/target/completed/archived dates. */
+const SCHEMA_VERSION = 2;
+
+/** Remap pre-v2 lifecycle groups (3-lane todo/in-progress/done) onto the new groups. */
+const CATEGORY_MIGRATION: Record<string, StatusCategory> = {
+  todo: 'unstarted',
+  'in-progress': 'started',
+  done: 'completed',
+};
+/** Remap pre-v2 priorities (lowest…highest) onto the new urgent…none scale. */
+const PRIORITY_MIGRATION: Record<string, WorkItemPriority> = {
+  lowest: 'low',
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+  highest: 'urgent',
+};
+
+/**
+ * Idempotently bring an on-disk store up to {@link SCHEMA_VERSION}. Remaps the
+ * pre-v2 status categories + priorities, backfills state colors and a default
+ * flag, moves `dueDate`→`targetDate`, recomputes each item's `statusCategory`
+ * from its (remapped) state, and backfills `completedAt`. Returns whether any
+ * change was made so the caller persists exactly once.
+ */
+function migrateStore(store: TrackStore): boolean {
+  if ((store.schemaVersion ?? 1) >= SCHEMA_VERSION) return false;
+  let changed = false;
+  if (store.project) {
+    for (const s of store.project.workflowStates as WorkflowState[]) {
+      const remapped = CATEGORY_MIGRATION[s.category as string];
+      if (remapped && s.category !== remapped) { s.category = remapped; changed = true; }
+      if (!s.color) { s.color = STATUS_CATEGORY_COLORS[s.category] ?? '#94a3b8'; changed = true; }
+    }
+    if (!store.project.workflowStates.some((s) => s.default) && store.project.workflowStates[0]) {
+      store.project.workflowStates[0].default = true; changed = true;
+    }
+    for (const item of Object.values(store.workItems)) {
+      const bag = item as unknown as Record<string, unknown>;
+      const remapped = PRIORITY_MIGRATION[item.priority as string];
+      if (remapped && remapped !== item.priority) { item.priority = remapped; changed = true; }
+      if (typeof bag.dueDate === 'string' && !bag.targetDate) { bag.targetDate = bag.dueDate; changed = true; }
+      if ('dueDate' in bag) { delete bag.dueDate; changed = true; }
+      const cat = categoryOf(store.project, item.status);
+      if (item.statusCategory !== cat) { item.statusCategory = cat; changed = true; }
+      if (cat === 'completed' && !item.completedAt) { item.completedAt = item.updatedAt; changed = true; }
+    }
+  }
+  store.schemaVersion = SCHEMA_VERSION;
+  return changed || !!store.project || Object.keys(store.workItems).length > 0;
+}
 
 function trackFile(workspaceRoot: string): string {
   return getStateFile(workspaceRoot, 'track.json');
 }
 function readTrack(workspaceRoot: string): TrackStore {
-  return { ...EMPTY, ...readJsonFile<TrackStore>(trackFile(workspaceRoot), EMPTY) };
+  const store = { ...EMPTY, ...readJsonFile<TrackStore>(trackFile(workspaceRoot), EMPTY) };
+  if (migrateStore(store)) writeJsonFile(trackFile(workspaceRoot), store);
+  return store;
 }
 function writeTrack(workspaceRoot: string, store: TrackStore): void {
+  store.schemaVersion = SCHEMA_VERSION;
   writeJsonFile(trackFile(workspaceRoot), store);
 }
 function shortId(prefix: string): string {
@@ -138,9 +197,14 @@ export function getProject(workspaceRoot: string): TrackProject | undefined {
   return readTrack(workspaceRoot).project ?? undefined;
 }
 
-/** Resolve a status id to its board/report category (default `todo`). */
+/** Resolve a status id to its lifecycle group (default `backlog`). */
 function categoryOf(project: TrackProject, statusId: string): StatusCategory {
-  return project.workflowStates.find((s) => s.id === statusId)?.category ?? 'todo';
+  return project.workflowStates.find((s) => s.id === statusId)?.category ?? 'backlog';
+}
+
+/** The status id new items default into: the project's `default` state, else the first. */
+function defaultStatusId(project: TrackProject): string {
+  return project.workflowStates.find((s) => s.default)?.id ?? project.workflowStates[0]?.id ?? 'backlog';
 }
 
 // ── Work items ────────────────────────────────────────────────────────────────
@@ -156,7 +220,8 @@ export interface CreateWorkItemInput {
   labels?: string[];
   components?: string[];
   storyPoints?: number;
-  dueDate?: string;
+  startDate?: string;
+  targetDate?: string;
   parentId?: string;
   epicId?: string;
   sprintId?: string;
@@ -177,7 +242,8 @@ export function createWorkItem(workspaceRoot: string, input: CreateWorkItemInput
   assertCan(workspaceRoot, input.actor ?? 'user', 'create-item');
   const store = readTrack(workspaceRoot);
   const project = store.project!;
-  const status = input.status ?? project.workflowStates[0]?.id ?? 'todo';
+  const status = input.status ?? defaultStatusId(project);
+  const category = categoryOf(project, status);
   const n = project.keyCounter;
   project.keyCounter = n + 1;
   project.updatedAt = nowIso();
@@ -189,15 +255,17 @@ export function createWorkItem(workspaceRoot: string, input: CreateWorkItemInput
     title: input.title,
     description: input.description,
     status,
-    statusCategory: categoryOf(project, status),
-    priority: input.priority ?? 'medium',
+    statusCategory: category,
+    priority: input.priority ?? 'none',
     assignee: input.assignee,
     reporter: input.reporter,
     watchers: [],
     labels: input.labels ?? [],
     components: input.components ?? [],
     storyPoints: input.storyPoints,
-    dueDate: input.dueDate,
+    startDate: input.startDate,
+    targetDate: input.targetDate,
+    completedAt: category === 'completed' ? ts : undefined,
     parentId: input.parentId,
     epicId: input.epicId,
     sprintId: input.sprintId,
@@ -240,15 +308,18 @@ export interface WorkItemFilter {
   text?: string;
   /** A JQL-style query (see query.ts). A malformed query matches nothing. */
   query?: string;
+  /** Include archived items (excluded by default, matching the default board/list view). */
+  includeArchived?: boolean;
 }
 
-/** List work items (newest first), optionally filtered. */
+/** List work items (newest first), optionally filtered. Archived items are excluded unless asked for. */
 export function listWorkItems(workspaceRoot: string, filter: WorkItemFilter = {}): WorkItem[] {
   const items = Object.values(readTrack(workspaceRoot).workItems);
   const t = filter.text?.toLowerCase();
   const queryPred = filter.query ? parseTrackQuery(filter.query) : undefined;
   return items
     .filter((w) =>
+      (filter.includeArchived || !w.archivedAt) &&
       (filter.type === undefined || w.type === filter.type) &&
       (filter.status === undefined || w.status === filter.status) &&
       (filter.statusCategory === undefined || w.statusCategory === filter.statusCategory) &&
@@ -274,12 +345,12 @@ export function findWorkItemsByCodeLink(
   );
 }
 
-/** Fields a caller may patch. Status changes recompute the category. */
+/** Fields a caller may patch. Status changes recompute the category + completedAt. */
 export type UpdateWorkItemPatch = Partial<
   Pick<
     WorkItem,
     | 'title' | 'description' | 'status' | 'priority' | 'assignee' | 'reporter'
-    | 'labels' | 'components' | 'storyPoints' | 'estimateSeconds' | 'dueDate'
+    | 'labels' | 'components' | 'storyPoints' | 'estimateSeconds' | 'startDate' | 'targetDate'
     | 'parentId' | 'epicId' | 'sprintId' | 'rank'
   >
 >;
@@ -302,7 +373,7 @@ export function updateWorkItem(
   assertCan(workspaceRoot, actor, 'edit-item');
   const ts = nowIso();
   const scalarFields: Array<keyof UpdateWorkItemPatch> = [
-    'title', 'description', 'status', 'priority', 'assignee', 'reporter', 'storyPoints', 'estimateSeconds', 'dueDate', 'parentId', 'epicId', 'sprintId', 'rank',
+    'title', 'description', 'status', 'priority', 'assignee', 'reporter', 'storyPoints', 'estimateSeconds', 'startDate', 'targetDate', 'parentId', 'epicId', 'sprintId', 'rank',
   ];
   const bag = item as unknown as Record<string, unknown>;
   for (const f of scalarFields) {
@@ -311,7 +382,12 @@ export function updateWorkItem(
     }
   }
   Object.assign(item, patch);
-  if (patch.status !== undefined && store.project) item.statusCategory = categoryOf(store.project, patch.status);
+  if (patch.status !== undefined && store.project) {
+    item.statusCategory = categoryOf(store.project, patch.status);
+    // Auto-manage completedAt as the item enters/leaves a completed state.
+    if (item.statusCategory === 'completed') { if (!item.completedAt) item.completedAt = ts; }
+    else item.completedAt = undefined;
+  }
   item.updatedAt = ts;
   store.workItems[item.id] = item;
   writeTrack(workspaceRoot, store);
@@ -400,6 +476,26 @@ export function deleteWorkItem(workspaceRoot: string, idOrKey: string): boolean 
   return true;
 }
 
+/**
+ * Archive (or, with `archived=false`, restore) a work item. Archived items keep
+ * all their data but drop out of the default board/list views — the soft-delete
+ * counterpart to {@link deleteWorkItem}. Returns the updated item.
+ */
+export function setWorkItemArchived(workspaceRoot: string, idOrKey: string, archived = true, actor = 'user'): WorkItem | undefined {
+  const store = readTrack(workspaceRoot);
+  const item = store.workItems[idOrKey] ?? Object.values(store.workItems).find((w) => w.key === idOrKey);
+  if (!item) return undefined;
+  assertCan(workspaceRoot, actor, 'edit-item');
+  const next = archived ? nowIso() : undefined;
+  if ((item.archivedAt ?? undefined) === next) return item;
+  const ts = nowIso();
+  item.activity.push({ at: ts, actor, field: 'archived', from: fmt(item.archivedAt), to: archived ? 'true' : 'false' });
+  item.archivedAt = next;
+  item.updatedAt = ts;
+  writeTrack(workspaceRoot, store);
+  return item;
+}
+
 // ── Sprints ───────────────────────────────────────────────────────────────────
 
 export interface CreateSprintInput {
@@ -446,7 +542,7 @@ export function sprintVelocity(workspaceRoot: string, sprintId: string): number 
   const store = readTrack(workspaceRoot);
   if (!store.sprints[sprintId]) return undefined;
   return Object.values(store.workItems)
-    .filter((item) => item.sprintId === sprintId && item.statusCategory === 'done')
+    .filter((item) => item.sprintId === sprintId && item.statusCategory === 'completed')
     .reduce((total, item) => total + (item.storyPoints ?? 0), 0);
 }
 
@@ -500,7 +596,7 @@ export function boardView(workspaceRoot: string, boardId: string): Array<{ colum
   const store = readTrack(workspaceRoot);
   const board = store.boards[boardId];
   if (!board) return [];
-  const items = Object.values(store.workItems);
+  const items = Object.values(store.workItems).filter((w) => !w.archivedAt);
   const cols = board.columns.map((c) => ({ column: c.name, items: items.filter((w) => c.stateIds.includes(w.status)) }));
   const mapped = new Set(board.columns.flatMap((c) => c.stateIds));
   const unmapped = items.filter((w) => !mapped.has(w.status));

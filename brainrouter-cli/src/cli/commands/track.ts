@@ -79,7 +79,7 @@ export async function tryHandleTrackCommand(ctx: CommandContext): Promise<boolea
 
   if (sub === 'create' || sub === 'new') {
     const parsed = parseCreate(rest);
-    if (!parsed.title) { console.log(chalk.red('\nUsage: /track create <title> [--type story|task|bug|epic|sub-task] [--status <id>] [--priority lowest|low|medium|high|highest]\n')); return true; }
+    if (!parsed.title) { console.log(chalk.red('\nUsage: /track create <title> [--type story|task|bug|epic|sub-task] [--status <id>] [--priority urgent|high|medium|low|none]\n')); return true; }
     const item = createWorkItem(ws, { title: parsed.title, type: parsed.type, status: parsed.status, priority: parsed.priority, sessionKey: agent.sessionKey, actor: 'user' });
     console.log(chalk.green(`\n✓ Created ${chalk.cyan(item.key)} ${typeMark(item.type)} ${item.title} `) + chalk.gray(`[${item.status}]\n`));
     await captureTrackNote(ctx, item, 'created');
@@ -387,7 +387,10 @@ function parseAutomation(tokens: string[]): ParsedAutomation {
 }
 
 function statusTag(w: WorkItem): string {
-  const c = w.statusCategory === 'done' ? chalk.green : w.statusCategory === 'in-progress' ? chalk.cyan : chalk.gray;
+  const c = w.statusCategory === 'completed' ? chalk.green
+    : w.statusCategory === 'cancelled' ? chalk.red
+    : w.statusCategory === 'started' ? chalk.cyan
+    : chalk.gray;
   return c(`[${w.status}]`);
 }
 

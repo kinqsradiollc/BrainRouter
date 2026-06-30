@@ -13,7 +13,7 @@
  * issue number/url) so re-runs UPDATE rather than duplicate.
  */
 import type { TrackProject, WorkItem, WorkItemType, WorkItemPriority, StatusCategory, ProjectMember, ProjectRole } from '@kinqs/brainrouter-types';
-import { isWorkItemType, isWorkItemPriority } from '@kinqs/brainrouter-types';
+import { isWorkItemType, isWorkItemPriority, isTerminalCategory } from '@kinqs/brainrouter-types';
 import {
   ensureProject,
   listWorkItems,
@@ -104,7 +104,7 @@ export function workItemToIssue(item: WorkItem, includeMarker = true): GithubIss
   const body = includeMarker ? `${desc}${keyMarker(item.key)}` : desc.trimEnd();
   // The assignee is treated as a GitHub login (members are pulled from the repo).
   const assignees = item.assignee ? [item.assignee] : [];
-  return { title: item.title, body, labels, assignees, state: item.statusCategory === 'done' ? 'closed' : 'open' };
+  return { title: item.title, body, labels, assignees, state: isTerminalCategory(item.statusCategory) ? 'closed' : 'open' };
 }
 
 /** The GitHub login assigned to an issue (legacy `assignee`, else the first of `assignees`). */
@@ -114,7 +114,7 @@ function issueAssignee(issue: GithubIssue): string | undefined {
 
 /** Resolve a concrete project status id for a target category (first match). */
 function statusForCategory(project: TrackProject, category: StatusCategory): string {
-  return project.workflowStates.find((s) => s.category === category)?.id ?? project.workflowStates[0]?.id ?? 'todo';
+  return project.workflowStates.find((s) => s.category === category)?.id ?? project.workflowStates[0]?.id ?? 'backlog';
 }
 
 export interface MappedIssue {
@@ -131,9 +131,9 @@ export function issueToWorkItem(issue: GithubIssue, project: TrackProject): Mapp
   const typeLabel = names.find((n) => n.startsWith('type:'))?.slice('type:'.length);
   const priLabel = names.find((n) => n.startsWith('priority:'))?.slice('priority:'.length);
   const type: WorkItemType = isWorkItemType(typeLabel) ? typeLabel : 'task';
-  const priority: WorkItemPriority = isWorkItemPriority(priLabel) ? priLabel : 'medium';
+  const priority: WorkItemPriority = isWorkItemPriority(priLabel) ? priLabel : 'none';
   const plainLabels = names.filter((n) => !n.startsWith('type:') && !n.startsWith('priority:'));
-  const status = statusForCategory(project, issue.state === 'closed' ? 'done' : 'todo');
+  const status = statusForCategory(project, issue.state === 'closed' ? 'completed' : 'unstarted');
   const body = (issue.body ?? '').replace(MARKER_RE, '').trim();
   const assignee = issueAssignee(issue);
   return {

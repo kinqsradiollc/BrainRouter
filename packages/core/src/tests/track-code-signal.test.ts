@@ -104,7 +104,7 @@ test('code-link automation: branch then PR advance an item and done back-links i
 
       const completed = getWorkItem(workspace, workItem.id)!;
       assert.equal(llmCalls, 4);
-      assert.equal(completed.statusCategory, 'done');
+      assert.equal(completed.statusCategory, 'completed');
       assert.equal(completed.codeLinks.length, 2);
       assert.ok(getRequirement(workspace, requirement.id)?.taskIds.includes(workItem.id));
       const eventActions = captured
@@ -147,7 +147,7 @@ test('code-link automation: disabled configuration leaves a linked todo item unc
         workspaceRoot: workspace, launchCwd: workspace, sessionKey: 'session:disabled', silent: false,
       });
       await agent.runTurn('link evidence only', { onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {} });
-      assert.equal(getWorkItem(workspace, workItem.id)?.statusCategory, 'todo');
+      assert.equal(getWorkItem(workspace, workItem.id)?.statusCategory, 'backlog');
     } finally {
       globalThis.fetch = originalFetch;
       _resetCliKnobsCache();
