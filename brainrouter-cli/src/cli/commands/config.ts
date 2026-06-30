@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import type { CommandContext } from './_context.js';
-import { getConfigPath, getCliKnobs, saveConfig, setCliKnobOverride, _resetCliKnobsCache, type ServerConfig, type LLMConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { getConfigPath, getCliKnobs, saveConfig, setCliKnobOverride, _resetCliKnobsCache, type ServerConfig, type LLMConfig } from '@kinqs/brainrouter-core/config';
 import {
   listProviderNames, setProvider, removeProvider, setAgentModel, describeAgentModel, SUBAGENT_ROLES,
 } from '@kinqs/brainrouter-core/dist/provider/agentModels.js';

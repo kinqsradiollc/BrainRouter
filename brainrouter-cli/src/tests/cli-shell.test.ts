@@ -11,7 +11,7 @@ import { readPreferences, writePreferences } from '@kinqs/brainrouter-core/dist/
 import { blockGoal, setGoal, tickGoalIteration } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
 import { updatePlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
 import { createWorkflow } from '@kinqs/brainrouter-core/dist/workflow/workflowArtifacts.js';
-import { _resetCliKnobsCache, setCliKnobOverride } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { _resetCliKnobsCache, setCliKnobOverride } from '@kinqs/brainrouter-core/config';
 
 /**
  * Tests for the 0.3.6 CLI shell redesign — theme, banner, statusline,
@@ -720,7 +720,7 @@ test('/where: persona line reports "no body yet" when anchor is on but brain has
 });
 
 test('/where: persona line hidden semantics — cli.personaAnchor=off forces off message', async () => {
-  const { setCliKnobOverride, _resetCliKnobsCache } = await import('@kinqs/brainrouter-core/dist/config/config.js');
+  const { setCliKnobOverride, _resetCliKnobsCache } = await import('@kinqs/brainrouter-core/config');
   withTempWorkspace((workspace) => {
     const theme = buildTheme('mono');
     setCliKnobOverride({ personaAnchor: 'off' });

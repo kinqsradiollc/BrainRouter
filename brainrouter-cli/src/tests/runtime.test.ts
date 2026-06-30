@@ -51,7 +51,7 @@ test('callOpenAI: rejects malformed LLM responses with a useful error instead of
 test('llmSemaphore: caps concurrent acquires and queues the rest', async () => {
   const { acquireLLMSlot, getLLMSemaphoreState, resetLLMSemaphoreForTests } =
     await import('@kinqs/brainrouter-core/dist/util/llmSemaphore.js');
-  const { setCliKnobOverride, _resetCliKnobsCache } = await import('@kinqs/brainrouter-core/dist/config/config.js');
+  const { setCliKnobOverride, _resetCliKnobsCache } = await import('@kinqs/brainrouter-core/config');
   // Force a known cap of 2 for this test.
   setCliKnobOverride({ llmMaxConcurrent: 2 });
   resetLLMSemaphoreForTests();
@@ -112,7 +112,7 @@ test('loopRunner: only one loop runs at a time and stop releases the slot', asyn
 });
 
 test('resolveSandboxConfig reflects cli.sandbox knobs', async () => {
-  const { setCliKnobOverride, _resetCliKnobsCache } = await import('@kinqs/brainrouter-core/dist/config/config.js');
+  const { setCliKnobOverride, _resetCliKnobsCache } = await import('@kinqs/brainrouter-core/config');
   try {
     setCliKnobOverride({
       sandbox: 'on',
@@ -130,7 +130,7 @@ test('resolveSandboxConfig reflects cli.sandbox knobs', async () => {
 });
 
 test('CODEX-SANDBOX-FAILCLOSED resolveSandboxConfig honours cli.sandboxUnavailable', async () => {
-  const { setCliKnobOverride, _resetCliKnobsCache } = await import('@kinqs/brainrouter-core/dist/config/config.js');
+  const { setCliKnobOverride, _resetCliKnobsCache } = await import('@kinqs/brainrouter-core/config');
   try {
     setCliKnobOverride({ sandbox: 'on', sandboxUnavailable: 'warn' });
     assert.equal(resolveSandboxConfig('/tmp/x').unavailableMode, 'warn');
@@ -169,7 +169,7 @@ test('CODEX-SANDBOX-FAILCLOSED detectSandboxDenial flags sandbox denials, not or
 });
 
 test('tracing.startSpan is a no-op when cli.traceLog is unset', async () => {
-  const { _resetCliKnobsCache } = await import('@kinqs/brainrouter-core/dist/config/config.js');
+  const { _resetCliKnobsCache } = await import('@kinqs/brainrouter-core/config');
   try {
     _resetCliKnobsCache();
     assert.equal(traceEnabled(), false);

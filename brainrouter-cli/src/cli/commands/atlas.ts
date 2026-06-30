@@ -21,7 +21,7 @@ import {
   type AtlasLlmCaller,
 } from "@kinqs/brainrouter-core/dist/atlas/index.js";
 import { callOpenAI } from "@kinqs/brainrouter-core/dist/agent/agent.js";
-import { resolveCliKnobs } from "@kinqs/brainrouter-core/dist/config/config.js";
+import { resolveCliKnobs } from '@kinqs/brainrouter-core/config';
 import type { AtlasGraph } from "@kinqs/brainrouter-types";
 import type { CommandContext } from "./_context.js";
 import type { McpClientPool } from "@kinqs/brainrouter-core/dist/mcp/mcpPool.js";

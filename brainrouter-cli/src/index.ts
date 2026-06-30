@@ -90,7 +90,7 @@ import fs from 'node:fs';
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
-import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath, getCliKnobs, setCliKnobOverride, hydrateConfigDefaultsOnDisk, resolveCliKnobs, type LLMConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath, getCliKnobs, setCliKnobOverride, hydrateConfigDefaultsOnDisk, resolveCliKnobs, type LLMConfig } from '@kinqs/brainrouter-core/config';
 import { redactText } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
 
 if (getCliKnobs().debugExit) {
@@ -108,7 +108,7 @@ import { costUsd } from './runtime/pricing.js';
 import { VERSION } from '@kinqs/brainrouter-core/dist/version.js';
 import { loadExtensions } from '@kinqs/brainrouter-core/dist/extension/loader.js';
 import { setKnownMcpServerIds } from './cli/ink/toolFormat.js';
-import type { ServerConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
+import type { ServerConfig } from '@kinqs/brainrouter-core/config';
 import { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
 import { cliPrompter } from './cli/cliPrompt.js';
 import { runChat } from './cli/ink/runChat.js';

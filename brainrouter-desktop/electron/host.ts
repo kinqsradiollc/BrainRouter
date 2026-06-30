@@ -20,7 +20,7 @@ import { InteractionBroker, type AgentEvent, type AgentImage, type ComputerUseAc
 // Deep imports into the CLI's built runtime (no "exports" field = allowed).
 // Extracting a proper @kinqs/brainrouter-agent package is tracked for 0.4.16.
 import { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
-import { loadConfig, saveConfig, getCliKnobs, _resetCliKnobsCache, type LLMConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { loadConfig, saveConfig, getCliKnobs, _resetCliKnobsCache, applyRuleEdit, type LLMConfig } from '@kinqs/brainrouter-core/config';
 // 0.4.15 — named providers + per-sub-agent model routing (pure transforms).
 import { setProvider, removeProvider, setAgentModel, normalizeProviderModels } from '@kinqs/brainrouter-core/dist/provider/agentModels.js';
 import { McpClientPool } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
@@ -39,7 +39,6 @@ import { getSessionRuntime, setSessionRuntime, resolveSessionLlmConfig } from '@
 import { getSessionMode, setSessionMode, resolveActiveMode } from '@kinqs/brainrouter-core/dist/session/sessionModeStore.js';
 import { loadSchedules, addSchedule, removeSchedule, setScheduleEnabled } from '@kinqs/brainrouter-core/dist/schedule/scheduleStore.js';
 import { parseCron, nextCronFire } from '@kinqs/brainrouter-core/dist/schedule/cronParser.js';
-import { applyRuleEdit } from '@kinqs/brainrouter-core/dist/config/permissionRules.js';
 import { parseReviewFindings, REVIEW_OUTPUT_CONTRACT, stripReasoning } from '@kinqs/brainrouter-core/dist/review/reviewFindings.js';
 import { hashDiff, reviewGate, staleIfDiffChanged, isFindingStatus, type ReviewRun, type ReviewFinding, type Severity } from '@kinqs/brainrouter-core/dist/review/reviewModel.js';
 import { getLatestReview, saveReview, updateReviewFinding } from '@kinqs/brainrouter-core/dist/review/reviewStore.js';

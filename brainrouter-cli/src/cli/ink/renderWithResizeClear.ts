@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { render, type Instance, type RenderOptions } from 'ink';
-import { getCliKnobs } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 
 export interface ResizeClearInkInstance {
   instance: Instance;

@@ -23,7 +23,7 @@ import { recordTelemetry } from '@kinqs/brainrouter-core/dist/telemetry/telemetr
 import { TELEMETRY_EVENTS } from '@kinqs/brainrouter-core/dist/telemetry/contracts.js';
 import { getLatestReview } from '@kinqs/brainrouter-core/dist/review/reviewStore.js';
 import { reviewGate } from '@kinqs/brainrouter-core/dist/review/reviewModel.js';
-import { loadConfig, saveConfig, _resetCliKnobsCache } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { loadConfig, saveConfig, _resetCliKnobsCache } from '@kinqs/brainrouter-core/config';
 import type { ComputerUseAction } from '@kinqs/brainrouter-agent-protocol';
 import {
   emptyPool, planActivate, applyActivate, setRunning, removeEntry,

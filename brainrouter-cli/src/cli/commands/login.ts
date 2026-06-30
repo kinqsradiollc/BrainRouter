@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import type { CommandContext } from './_context.js';
-import { saveConfig, type ServerConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { saveConfig, type ServerConfig } from '@kinqs/brainrouter-core/config';
 import { McpClientWrapper } from '@kinqs/brainrouter-core/dist/mcp/mcpClient.js';
 import { maskApiKey } from '@kinqs/brainrouter-core/dist/provider/catalog.js';
 import { runPicker, runTextField } from '../ink/runPicker.js';

@@ -8,7 +8,7 @@ import { _resetModelReasoningCapabilities, registerModelReasoningCapabilities } 
 import { buildSystemPrompt } from '@kinqs/brainrouter-core/dist/prompt/systemPrompt.js';
 import { buildRolePrompt, listRoles, resolveRole } from '@kinqs/brainrouter-core/dist/orchestration/roles.js';
 import { buildSkillPrompt, resolveSkill, SLASH_TO_SKILL } from '../prompt/skillRunner.js';
-import { setCliKnobOverride, _resetCliKnobsCache } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { setCliKnobOverride, _resetCliKnobsCache } from '@kinqs/brainrouter-core/config';
 
 test('buildChatCompletionPayload exposes local and MCP tools to the LLM', () => {
   const payload = buildChatCompletionPayload(

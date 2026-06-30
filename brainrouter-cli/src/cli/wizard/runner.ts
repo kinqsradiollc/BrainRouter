@@ -8,7 +8,7 @@ import {
   loadOrInitConfig,
   saveConfig,
   type Config,
-} from '@kinqs/brainrouter-core/dist/config/config.js';
+} from '@kinqs/brainrouter-core/config';
 import { initAgentMd } from '../../prompt/initAgentMd.js';
 import { McpClientWrapper } from '@kinqs/brainrouter-core/dist/mcp/mcpClient.js';
 import {

@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { VERSION } from '@kinqs/brainrouter-core/dist/version.js';
-import { getConfigPath } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { getConfigPath } from '@kinqs/brainrouter-core/config';
 
 /**
  * CLI-22 (0.4.4) — "you're N versions behind" notice. Throttled + cached so it

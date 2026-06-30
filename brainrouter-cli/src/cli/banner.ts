@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
-import type { Config } from '@kinqs/brainrouter-core/dist/config/config.js';
+import type { Config } from '@kinqs/brainrouter-core/config';
 import type { Goal } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
 import { formatBudget } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
 import { getCurrentWorkflow, getLastUsedWorkflow } from '@kinqs/brainrouter-core/dist/workflow/workflowArtifacts.js';

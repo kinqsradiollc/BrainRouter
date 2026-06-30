@@ -18,7 +18,7 @@ import { extractMemories, renderMemoryCards } from '../../memory/formatters.js';
 import { consolidateMemories } from '../../memory/consolidation.js';
 import { scanWorkspaceSources } from '../../memory/sourceManifest.js';
 import { readPreferences, writePreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
-import { getCliKnobs } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import type { CommandContext } from './_context.js';
 import { printMcpCall, printMemoryCards } from './_helpers.js';
 

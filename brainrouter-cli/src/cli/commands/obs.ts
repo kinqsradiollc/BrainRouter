@@ -16,7 +16,7 @@ import { contextWindowFor } from '@kinqs/brainrouter-core/dist/context/contextWi
 import { readPreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
 import { readTranscriptEntries } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
 import { getStateFile } from '@kinqs/brainrouter-core/dist/storage/store.js';
-import { getCliKnobs } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import type { CommandContext } from './_context.js';
 import { formatTranscriptContent } from './_helpers.js';
 

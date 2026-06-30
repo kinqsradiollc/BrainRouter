@@ -19,14 +19,14 @@ import { readPlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
 // legacy /config + /init switch cases here are gone — the dispatcher
 // in repl.ts routes them to the new handlers first. getConfigPath
 // stays in scope because /doctor still surfaces the path.
-import { getConfigPath, saveConfig, setCliKnobOverride, getCliKnobs } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { getConfigPath, saveConfig, setCliKnobOverride, getCliKnobs } from '@kinqs/brainrouter-core/config';
 import { getPolicyProfile, profileNames } from '../../runtime/exec/policyProfiles.js';
 import { describeActiveServer } from './serverStatus.js';
 import { copyToClipboard } from '../../runtime/clipboard.js';
 import type { CommandContext } from './_context.js';
 import { completeWorkspacePath, renderHelp } from '../repl.js';
 import { PROVIDER_CATALOG, findProvider } from '@kinqs/brainrouter-core/dist/provider/catalog.js';
-import { loadApiKeyPrefixesConfig } from '@kinqs/brainrouter-core/dist/config/configLoader.js';
+import { loadApiKeyPrefixesConfig } from '@kinqs/brainrouter-core/config';
 import { selectModel } from '../wizard/modelsApi.js';
 import { buildTheme } from '../theme.js';
 import { listFilesystemSkills } from '../../prompt/skillCatalog.js';
