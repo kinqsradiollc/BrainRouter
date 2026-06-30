@@ -2,3 +2,4 @@
 // `@kinqs/brainrouter-core/fleet` instead of deep `dist/fleet/*.js` paths.
 export * from './fleetStore.js';
 export * from './fleetRunner.js';
+export * from './executors.js';
