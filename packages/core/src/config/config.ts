@@ -416,6 +416,11 @@ export interface CliKnobs {
    * branch (e.g. `main`).
    */
   buildLoopPrBaseBranch?: string;
+  /**
+   * HONK-H1 — open the emitted PR as a DRAFT (default true) so a human reviews
+   * the agent's work before it can merge. Set false to open ready-for-review PRs.
+   */
+  buildLoopPrDraft?: boolean;
   /** PARITY-W3 — ring the terminal bell on an idle background-completion notice. Default false. */
   notifyBell?: boolean;
   /** Child-drain timeout in ms. Default 30000. */
@@ -949,6 +954,7 @@ export interface ResolvedCliKnobs {
   buildLoopMaxRepairs: number;
   buildLoopEmitPr: boolean;
   buildLoopPrBaseBranch: string;
+  buildLoopPrDraft: boolean;
   notifyBell: boolean;
   childDrainTimeoutMs: number;
   offloadRetentionMs: number;
@@ -1140,6 +1146,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     buildLoopMaxRepairs: Math.max(0, Math.floor(c.buildLoopMaxRepairs ?? 0)),
     buildLoopEmitPr: c.buildLoopEmitPr === true,
     buildLoopPrBaseBranch: (c.buildLoopPrBaseBranch ?? '').trim(),
+    buildLoopPrDraft: c.buildLoopPrDraft !== false,
     notifyBell: c.notifyBell ?? false,
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,
     offloadRetentionMs: c.offloadRetentionMs ?? 1_800_000,

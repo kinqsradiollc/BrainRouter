@@ -249,9 +249,10 @@ export function finalizeBuildLoop(
   // the normal merge so the work is never lost.
   const emitPr = apply && getCliKnobs().buildLoopEmitPr === true;
 
-  // Unique patch name per finalize so a preserved recovery patch from an earlier
-  // run with the SAME slug is never silently overwritten.
-  const patchFile = path.join(getStateDir(workspaceRoot), 'worktree-patches', `build-${slug}-${Date.now().toString(36)}.patch`);
+  // Unique per-finalize token: names the recovery patch AND makes the PR branch
+  // unique, so a re-run never overwrites a patch nor collides with a live branch.
+  const runToken = Date.now().toString(36);
+  const patchFile = path.join(getStateDir(workspaceRoot), 'worktree-patches', `build-${slug}-${runToken}.patch`);
   const cleanup = removeChildWorktree(shared.isolation, { applyBack: emitPr ? false : apply, patchFile });
   // No diff + no persisted patch ⇒ the build produced no file changes; a gate-pass
   // here is a clean no-op (NOT a failed apply). `removeChildWorktree` only sets
@@ -267,9 +268,11 @@ export function finalizeBuildLoop(
       sourceRoot: shared.isolation.sourceRoot,
       patchPath: cleanup.patchPath,
       slug,
+      runToken,
       title: derivePrTitle(slug, phaseOutput('implement')),
       body: derivePrBody({ slug, verifyGreen, changedFiles: cleanup.changedFiles ?? 0, reviewOutput: phaseOutput('review') }),
       baseBranch: getCliKnobs().buildLoopPrBaseBranch,
+      draft: getCliKnobs().buildLoopPrDraft,
     });
     if (res.ok) {
       pr = { ok: true, url: res.prUrl, number: res.prNumber, branch: res.branch };
@@ -285,6 +288,13 @@ export function finalizeBuildLoop(
         ? `verify green + review ok → PR emit unavailable (${why}); merged ${cleanup.changedFiles ?? 0} file(s) into your tree instead`
         : `verify green + review ok → PR emit failed (${why}) AND fallback merge failed (${fallback.error ?? 'conflict'}) — work preserved as a patch`;
     }
+  } else if (emitPr && !noChanges && !cleanup.patchPath) {
+    // PR mode chose applyBack:false, but the work patch failed to persist (disk /
+    // unwritable state dir) and the worktree is already gone. Report it accurately
+    // rather than misclassifying it as a merge conflict.
+    merged = false;
+    pr = { ok: false, error: 'work patch could not be persisted' };
+    reason = `verify green + review ok → could NOT deliver as a PR: the work patch failed to persist (check disk / ${getStateDir(workspaceRoot)}); re-run the build`;
   } else if (!apply) {
     merged = false;
     const why = [!verifyGreen ? 'verify not green' : null, !reviewApproved ? 'review has a blocker' : null].filter(Boolean).join(' + ');
