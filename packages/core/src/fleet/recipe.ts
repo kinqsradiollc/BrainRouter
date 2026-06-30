@@ -34,10 +34,11 @@ export interface RecipeRunCommandResult {
 export interface RecipeRunBuildDeps {
   /**
    * REQUIRED. Run `command` in `cwd` (the isolated worktree) and report success.
-   * The caller is responsible for sandboxing — this module never provides an
-   * unconfined default for unattended execution.
+   * May be sync or async (e.g. a sandboxed `runShell`). The caller is responsible
+   * for sandboxing — this module never provides an unconfined default for
+   * unattended execution.
    */
-  runCommand: (command: string, cwd: string) => RecipeRunCommandResult;
+  runCommand: (command: string, cwd: string) => RecipeRunCommandResult | Promise<RecipeRunCommandResult>;
   /** Create the isolated worktree (default: `prepareSharedWorktree`). */
   prepareWorktree?: (
     repo: string,
@@ -85,7 +86,7 @@ export function makeRecipeRunBuild(
     let removal: RemoveChildWorktreeResult;
     let cmd: RecipeRunCommandResult;
     try {
-      cmd = deps.runCommand(command, prep.workspaceRoot);
+      cmd = await deps.runCommand(command, prep.workspaceRoot);
     } finally {
       // Always tear the worktree down (capture-only) so a thrown command can't
       // leak a worktree. patchFile is keyed on the job id for traceability.
