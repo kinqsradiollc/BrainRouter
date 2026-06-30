@@ -177,7 +177,7 @@ test('buildSystemPrompt includes workspace, session, and raw MCP tool names', ()
 
 test('agent role registry lists built-in roles and DEGRADES unknown ones to a best-fit', () => {
   const names = listRoles().map(r => r.name).sort();
-  assert.deepEqual(names, ['architect', 'explorer', 'fleet', 'reviewer', 'verifier', 'worker']);
+  assert.deepEqual(names, ['architect', 'explorer', 'fleet', 'intake', 'reviewer', 'verifier', 'worker']);
   assert.equal(resolveRole('explorer').defaultAccess, 'read');
   assert.equal(resolveRole('worker').defaultAccess, 'write');
   // FS-FIX: an unknown/custom role no longer THROWS (which killed whole workflows
