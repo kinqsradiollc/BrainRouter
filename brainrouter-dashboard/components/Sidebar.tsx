@@ -190,6 +190,20 @@ const links = [
     )
   },
   {
+    href: "/fleet",
+    label: "Fleet",
+    icon: (
+      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M3 7h18" />
+        <path d="M3 12h18" />
+        <path d="M3 17h18" />
+        <circle cx="7" cy="7" r="0.5" />
+        <circle cx="7" cy="12" r="0.5" />
+        <circle cx="7" cy="17" r="0.5" />
+      </svg>
+    )
+  },
+  {
     href: "/skills",
     label: "Skill Routing",
     icon: (
@@ -265,7 +279,7 @@ export function Sidebar({ isCollapsed: isCollapsedProp, onToggleCollapse, isMobi
     { title: "Memory", hrefs: ["/memories", "/scenes", "/persona", "/working-memory", "/blackboard", "/vault"] },
     { title: "Graph & Recall", hrefs: ["/recall-inspector", "/timeline", "/intelligence", "/tree"] },
     { title: "Integrity", hrefs: ["/contradictions", "/evidence", "/sources"] },
-    { title: "System", hrefs: ["/hooks", "/skills", "/profile", "/users", "/brand"] },
+    { title: "System", hrefs: ["/hooks", "/fleet", "/skills", "/profile", "/users", "/brand"] },
   ];
   const linkByHref = new Map<string, (typeof visibleLinks)[number]>(visibleLinks.map((l) => [l.href, l]));
 

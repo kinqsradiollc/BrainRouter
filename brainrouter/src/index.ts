@@ -55,6 +55,7 @@ import { authRouter } from './api/routes/auth.js';
 import { chatCompletionsRouter } from './api/routes/chat-completions.js';
 import { governanceRouter } from './api/routes/governance.js';
 import { evidenceRouter } from './api/routes/evidence.js';
+import { fleetRouter } from './api/routes/fleet.js';
 import { hooksRouter } from './api/routes/hooks.js';
 import { workingRouter } from './api/routes/working.js';
 import { skillsRouter } from './api/routes/skills.js';
@@ -188,6 +189,7 @@ if (USE_HTTP) {
   app.use("/api/graph", graphRouter);
   app.use("/api", governanceRouter);
   app.use("/api/evidence", evidenceRouter);
+  app.use("/api/fleet", fleetRouter);
   app.use("/api/hooks", hooksRouter);
   app.use("/api/working", workingRouter);
   app.use("/api/skills", skillsRouter);
