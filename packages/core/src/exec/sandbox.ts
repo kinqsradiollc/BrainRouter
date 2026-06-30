@@ -55,24 +55,36 @@ export interface SandboxConfig {
   scopedEnv?: NodeJS.ProcessEnv;
 }
 
-// HONK-H0 — env var names that carry secrets. A scoped (unattended/fleet) shell
-// runs without these unless the operator allowlists them, so a compromised or
-// prompt-injected child can't exfiltrate the host's keys via `printenv`.
-const SECRET_ENV_NAME = /(^|_)(API_?KEY|KEY|TOKEN|SECRET|PASSWORD|PASSWD|PAT|BEARER|CREDENTIALS?|SESSION|COOKIE)$/i;
-const SECRET_ENV_VALUE = /^(br_[A-Za-z0-9._-]{8,}|sk-[A-Za-z0-9._-]{8,}|gh[pousr]_[A-Za-z0-9]{16,})$/;
+// HONK-H0 — best-effort secret scrubbing for an unattended/fleet shell's env. This
+// is DEFENSE-IN-DEPTH, not a hermetic barrier: the real containment for fleet runs
+// is the forced sandbox + network-deny. It removes env-borne secrets so a
+// compromised child can't trivially `printenv` the host's keys; it does NOT cover
+// file-borne secrets (e.g. ~/.aws, the CLI config) and the shapes below are not
+// exhaustive. Substring name-matching is intentional (fails CLOSED: over-scrubs a
+// benign var rather than leaking a real one); the operator re-grants specific vars
+// a job needs with cli.jobSecretAllowlist.
+const SECRET_ENV_NAME = /(KEY|TOKEN|SECRET|PASSWORD|PASSWD|\bPWD\b|PWD$|PASSPHRASE|CREDENTIAL|PRIVATE|BEARER|AUTH|SESSION|COOKIE|APIKEY|_DSN)/i;
+const SECRET_ENV_VALUE = new RegExp(
+  [
+    'br_[A-Za-z0-9._-]{8,}', 'sk-[A-Za-z0-9._-]{8,}', 'gh[pousr]_[A-Za-z0-9]{16,}', // BrainRouter / OpenAI / GitHub
+    'AKIA[0-9A-Z]{16}', 'xox[baprs]-[A-Za-z0-9-]{10,}', 'AIza[0-9A-Za-z_-]{20,}', // AWS / Slack / Google
+    '[A-Za-z][A-Za-z0-9+.-]*://[^/\\s:@]+:[^/\\s@]+@', // url with user:password@host (DATABASE_URL/REDIS_URL)
+    'eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}', // JWT
+  ].join('|'),
+);
 
 /**
- * HONK-H0 — return a copy of `env` with secret-shaped variables removed. A var is
- * dropped when its NAME looks like a secret (API_KEY, *_TOKEN, *_SECRET, …) or its
- * VALUE matches a known token shape (sk-…, br_…, gh*_…), unless its name is in
- * `allow`. Non-secret vars (PATH, HOME, LANG, …) always pass through so the shell
- * still works. Pure — never reads `process.env` itself (the caller passes it).
+ * HONK-H0 — return a copy of `env` with secret-shaped variables removed (best
+ * effort; see SECRET_ENV_NAME). A var is dropped when its NAME contains a secret
+ * keyword or its VALUE matches a known token/credential shape, unless its name is
+ * in `allow` (case-insensitive). Non-secret vars (PATH, HOME, LANG, …) pass
+ * through so the shell still works. Pure — never reads `process.env` itself.
  */
 export function scopeSecretEnv(env: NodeJS.ProcessEnv, opts?: { allow?: string[] }): NodeJS.ProcessEnv {
-  const allow = new Set((opts?.allow ?? []).map((s) => s.trim()).filter(Boolean));
+  const allow = new Set((opts?.allow ?? []).map((s) => s.trim().toLowerCase()).filter(Boolean));
   const out: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(env)) {
-    if (allow.has(name)) { out[name] = value; continue; }
+    if (allow.has(name.toLowerCase())) { out[name] = value; continue; }
     if (SECRET_ENV_NAME.test(name)) continue;
     if (typeof value === 'string' && SECRET_ENV_VALUE.test(value.trim())) continue;
     out[name] = value;
@@ -150,7 +162,9 @@ export function resolveSandboxConfig(
   // HONK-H0 — a fleet/background role passes `forceEnforce` so its sandbox can't
   // be disabled by an operator's `cli.sandboxEnforceWhenSilent: false` opt-out.
   const enforceWhenSilent = opts?.enforceWhenSilent ?? knobs.sandboxEnforceWhenSilent;
-  const enforcedUnattended = !!opts?.silent && (enforceWhenSilent || !!opts?.forceEnforce);
+  // `forceEnforce` (fleet) forces the locked-down posture independently of `silent`,
+  // so a future non-silent fleet entry point can't silently bypass it.
+  const enforcedUnattended = (!!opts?.silent && enforceWhenSilent) || !!opts?.forceEnforce;
   const enabled = knobs.sandbox === 'on' || enforcedUnattended;
   const allowNetwork = enforcedUnattended ? false : knobs.sandboxNetwork;
   const unavailableMode: SandboxUnavailableMode = enforcedUnattended ? 'deny' : knobs.sandboxUnavailable;

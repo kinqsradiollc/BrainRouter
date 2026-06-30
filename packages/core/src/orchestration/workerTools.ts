@@ -19,7 +19,7 @@ import type { McpClientPool } from '../mcp/mcpPool.js';
 import type { LLMConfig } from '../config/config.js';
 import { loadOrInitConfig } from '../config/config.js';
 import { resolveAgentLlm } from '../provider/agentModels.js';
-import type { AccessMode } from './roles.js';
+import { resolveRole, type AccessMode } from './roles.js';
 import type { EffortLevel } from '../session/preferencesStore.js';
 import {
   createWorker,
@@ -50,6 +50,9 @@ export interface SpawnWorkerInput {
   /** The spawning agent's depth (the worker is created at this depth). */
   spawnerDepth: number;
   effortOverride?: EffortLevel;
+  /** HONK-H0 — true when an ancestor is a fleet executor, so the locked-down
+   *  sandbox posture cascades to this worker too (not just the fleet role). */
+  ancestorFleet?: boolean;
 }
 
 function ts(): string {
@@ -82,6 +85,8 @@ export function spawnWorkerThread(
     sessionKey: `${input.parentSessionKey}:worker:${worker.id}`,
     accessMode: input.parentAccessMode ?? 'write',
     silent: true,
+    // HONK-H0 — a fleet role OR a fleet ancestor locks this worker down too.
+    forceFleetSandbox: resolveRole(input.role).forceSandbox || input.ancestorFleet,
     enableRecall: true,
     ownership: input.ownership ?? null,
     tier: 'worker',

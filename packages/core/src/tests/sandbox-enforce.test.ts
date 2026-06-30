@@ -113,18 +113,31 @@ test('HONK-H0: jobSecretScoping=false is a global kill switch for scoping', () =
   _resetCliKnobsCache();
 });
 
-test('HONK-H0: scopeSecretEnv masks secret-shaped vars, keeps the rest, honors allowlist', () => {
-  const env = {
-    PATH: '/usr/bin', HOME: '/home/x', LANG: 'en_US.UTF-8',
-    OPENAI_API_KEY: 'sk-abc', DATABASE_PASSWORD: 'hunter2', GITHUB_TOKEN: 'ghp_x',
-    MY_SESSION: 'z', NORMAL_VAR: 'keepme', WEIRD: 'sk-abcdef123456',
+test('HONK-H0: scopeSecretEnv masks secret-shaped vars (incl. real-world shapes), keeps the rest', () => {
+  const env: NodeJS.ProcessEnv = {
+    PATH: '/usr/bin', HOME: '/home/x', LANG: 'en_US.UTF-8', SHELL: '/bin/sh', NORMAL_VAR: 'keepme',
+    OPENAI_API_KEY: 'sk-abc', DATABASE_PASSWORD: 'hunter2', GITHUB_TOKEN: 'ghp_x', MY_SESSION: 'z',
+    // shapes the first cut missed (PGPASSWORD has no underscore; PWD; cred-bearing URLs; AWS id; DSN; JWT)
+    PGPASSWORD: 'hunter2', MYSQL_PWD: 'hunter2', SECRET_KEY_BASE: 'x', AWS_ACCESS_KEY_ID: 'AKIAIOSFODNN7EXAMPLE',
+    DATABASE_URL: 'postgres://app:s3cr3t@db.internal/prod', SENTRY_DSN: 'https://k@o.ingest.sentry.io/1',
+    JWT_BLOB: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N', WEIRD: 'sk-abcdef123456',
   };
   const out = scopeSecretEnv(env);
-  assert.equal(out.PATH, '/usr/bin');
-  assert.equal(out.NORMAL_VAR, 'keepme');
-  for (const dropped of ['OPENAI_API_KEY', 'DATABASE_PASSWORD', 'GITHUB_TOKEN', 'MY_SESSION', 'WEIRD']) {
+  for (const keep of ['PATH', 'HOME', 'LANG', 'SHELL', 'NORMAL_VAR']) assert.ok(out[keep], `${keep} preserved`);
+  for (const dropped of ['OPENAI_API_KEY', 'DATABASE_PASSWORD', 'GITHUB_TOKEN', 'MY_SESSION', 'PGPASSWORD',
+    'MYSQL_PWD', 'SECRET_KEY_BASE', 'AWS_ACCESS_KEY_ID', 'DATABASE_URL', 'SENTRY_DSN', 'JWT_BLOB', 'WEIRD']) {
     assert.equal(out[dropped], undefined, `${dropped} scrubbed (by name or value shape)`);
   }
-  // Allowlist re-grants a specific var a job legitimately needs.
-  assert.equal(scopeSecretEnv(env, { allow: ['OPENAI_API_KEY'] }).OPENAI_API_KEY, 'sk-abc');
+  // Allowlist re-grants a var a job needs — and is CASE-INSENSITIVE.
+  assert.equal(scopeSecretEnv(env, { allow: ['openai_api_key'] }).OPENAI_API_KEY, 'sk-abc', 'allowlist is case-insensitive');
+});
+
+test('HONK-H0: forceEnforce locks down even a NON-silent caller (decoupled from silent)', () => {
+  _resetCliKnobsCache();
+  setCliKnobOverride({ sandbox: 'off', sandboxNetwork: true, sandboxEnforceWhenSilent: false });
+  const cfg = resolveSandboxConfig(WS, {}, { silent: false, forceEnforce: true });
+  assert.equal(cfg.enabled, true, 'forceEnforce forces sandbox regardless of silent');
+  assert.equal(cfg.allowNetwork, false);
+  assert.equal(cfg.enforcedUnattended, true);
+  _resetCliKnobsCache();
 });

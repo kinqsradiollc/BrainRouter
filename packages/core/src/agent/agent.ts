@@ -1630,6 +1630,7 @@ export class Agent {
       parentSessionKey: this.sessionKey,
       interruptSignal: this.turnAbort?.signal, // DESK-6 — Stop unblocks child waits
       parentAccessMode: this.accessMode,
+      ancestorFleet: this.forceFleetSandbox, // HONK-H0 — cascade fleet lockdown to descendants
       // Thread the parent's trace context so child agents nest their
       // per-turn spans under THIS turn instead of starting a fresh
       // trace tree. Lets observability backends reconstruct fan-out.
@@ -3479,8 +3480,13 @@ export class Agent {
           // they are refused whenever the sandbox is active: either the user
           // turned it on, or this is a silent/unattended agent where the
           // sandbox is enforced regardless of the global knob.
+          // HONK-H0 — a fleet/background executor's `forceFleetSandbox` also makes
+          // the detached (unsandboxed) background path off-limits, so it can't be
+          // used to escape the forced sandbox + network-deny the foreground path
+          // applies — even when the operator opted out of silent enforcement.
           const sandboxActive =
-            getCliKnobs().sandbox === 'on' || (this.silent && this.sandboxEnforceWhenSilent);
+            getCliKnobs().sandbox === 'on' ||
+            (this.silent && (this.sandboxEnforceWhenSilent || this.forceFleetSandbox));
           if (sandboxActive) {
             return 'Background run_command is not supported while the sandbox is active (v1) — run it foreground or disable the sandbox.';
           }
@@ -3739,6 +3745,7 @@ export class Agent {
           parentAccessMode: this.accessMode,
           spawnerDepth: this.agentDepth,
           effortOverride: this.effortOverride,
+          ancestorFleet: this.forceFleetSandbox, // HONK-H0 — cascade fleet lockdown
         });
         return JSON.stringify({ id: worker.id, status: worker.status, goal: worker.goal });
       }
@@ -4347,6 +4354,7 @@ export class Agent {
       parentAccessMode: this.accessMode,
       spawnerDepth: this.agentDepth,
       effortOverride: this.effortOverride,
+      ancestorFleet: this.forceFleetSandbox, // HONK-H0 — cascade fleet lockdown
     });
     return { id: worker.id, status: worker.status, goal: worker.goal };
   }
