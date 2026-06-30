@@ -837,9 +837,34 @@ program
     console.log();
   });
 
+// HONK-H3.3 — best-effort push of a fleet snapshot to the configured brain so the
+// dashboard console can serve it. Never throws (fleet draining must not depend on
+// the brain being reachable); returns a small status for the caller to log.
+async function pushFleetSnapshotToBrain(summary: unknown): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const { fleetSnapshotPushArgs } = await import('./runtime/fleetCommand.js');
+    const config = loadConfig();
+    if (!config.servers || Object.keys(config.servers).length === 0) return { ok: false, error: 'no MCP server configured' };
+    const targetIds = selectMcpServerIds(config.servers, config.activeServer, undefined);
+    const targetServers: Record<string, ServerConfig> = {};
+    for (const id of targetIds) targetServers[id] = config.servers[id];
+    const llm: LLMConfig = { ...(config.llm ?? DEFAULT_LLM) };
+    const pool = new McpClientPool();
+    try {
+      await pool.connectAll(targetServers, llm, { timeoutMs: 5_000 });
+      await pool.callTool('fleet_snapshot_put', fleetSnapshotPushArgs(summary as never));
+      return { ok: true };
+    } finally {
+      await pool.close();
+    }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 program
   .command('fleet [action]')
-  .description('Background multi-repo migrations: run | status | drain (a recipe → one PR per repo)')
+  .description('Background multi-repo migrations: run | status | drain | push (a recipe → one PR per repo)')
   .option('--repos <paths>', 'Comma-separated repo roots (run)')
   .option('--command <cmd>', 'Recipe shell command run in each repo, sandboxed (run)')
   .option('--slug <slug>', 'Migration slug — branch/PR seed + per-repo idempotency key (run)')
@@ -847,6 +872,7 @@ program
   .option('--title <title>', 'PR title override (run)')
   .option('--capacity <n>', 'Max concurrent jobs (drain); default cli.fleetMaxConcurrentJobs')
   .option('--once', 'Drain a single pass and exit (drain)')
+  .option('--push', 'Push the snapshot to the brain for the dashboard console (drain)')
   .option('--json', 'Machine-readable output')
   .action(async (action, options) => {
     const { parseRepoList, buildMigrationSpec, validateRunArgs, formatFleetStatus } = await import('./runtime/fleetCommand.js');
@@ -877,6 +903,15 @@ program
       return;
     }
 
+    if (act === 'push') {
+      // One-shot: push the current snapshot to the brain (for the dashboard console).
+      const res = await pushFleetSnapshotToBrain(fleet.summarizeFleet());
+      if (options.json) { process.stdout.write(JSON.stringify(res) + '\n'); return; }
+      console.log(res.ok ? chalk.green('Pushed fleet snapshot to the brain.') : chalk.yellow(`Snapshot push skipped: ${res.error}`));
+      if (!res.ok) process.exitCode = 1;
+      return;
+    }
+
     if (act === 'drain') {
       const { getCliKnobs } = await import('@kinqs/brainrouter-core/config');
       const cap = options.capacity != null ? Math.max(0, parseInt(String(options.capacity), 10) || 0) : getCliKnobs().fleetMaxConcurrentJobs;
@@ -896,21 +931,33 @@ program
         return;
       }
       console.log(chalk.green(`Fleet runner started (capacity ${cap}, reconciled ${started.reconciled}).`));
+      // HONK-H3.3 — when --push, periodically post the snapshot to the brain so the
+      // dashboard console reflects this host live (best-effort; never blocks drain).
+      const pushOnce = async () => {
+        if (!options.push) return;
+        const res = await pushFleetSnapshotToBrain(fleet.summarizeFleet());
+        if (!res.ok) console.error(chalk.gray(`(snapshot push skipped: ${res.error})`));
+      };
       if (options.once) {
         await runner.tick();
         const deadline = Date.now() + 30 * 60_000;
         while (runner.activeCount > 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 200));
         runner.stop();
+        await pushOnce();
         console.log(formatFleetStatus(fleet.summarizeFleet(), fleet.readFleetLock()));
         return;
       }
-      console.log(chalk.gray('Draining… press Ctrl-C to stop.'));
-      await new Promise<void>((resolve) => { process.once('SIGINT', () => { runner.stop(); resolve(); }); });
+      console.log(chalk.gray(`Draining… press Ctrl-C to stop.${options.push ? ' (pushing snapshots to the brain)' : ''}`));
+      await pushOnce();
+      const pushTimer = options.push ? setInterval(() => { void pushOnce(); }, 15_000) : undefined;
+      if (pushTimer && 'unref' in pushTimer) (pushTimer as { unref: () => void }).unref();
+      await new Promise<void>((resolve) => { process.once('SIGINT', () => { if (pushTimer) clearInterval(pushTimer); runner.stop(); resolve(); }); });
+      await pushOnce();
       console.log(chalk.gray('Fleet runner stopped.'));
       return;
     }
 
-    console.error(chalk.red(`Unknown fleet action "${act}". Use: run | status | drain.`));
+    console.error(chalk.red(`Unknown fleet action "${act}". Use: run | status | drain | push.`));
     process.exitCode = 1;
   });
 

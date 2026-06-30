@@ -1,7 +1,7 @@
 /** HONK-H4 — `brainrouter fleet` command helpers (pure). */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseRepoList, buildMigrationSpec, validateRunArgs, formatFleetStatus } from '../runtime/fleetCommand.js';
+import { parseRepoList, buildMigrationSpec, validateRunArgs, formatFleetStatus, fleetSnapshotPushArgs } from '../runtime/fleetCommand.js';
 import type { FleetSummary, FleetLockRecord } from '@kinqs/brainrouter-core/fleet';
 
 test('parseRepoList splits, trims, de-dups, and resolves to absolute paths', () => {
@@ -61,4 +61,14 @@ test('formatFleetStatus renders counts, the runner holder, and recent PR links',
 
 test('formatFleetStatus reports no active runner when the lock is empty', () => {
   assert.match(formatFleetStatus(summary({ total: 1 }), null), /runner: none active/);
+});
+
+test('fleetSnapshotPushArgs carries the summary + total as the brain put-args', () => {
+  const s = summary({ total: 4 });
+  const args = fleetSnapshotPushArgs(s, 'mac-host');
+  assert.equal(args.host, 'mac-host');
+  assert.equal(args.jobCount, 4);
+  assert.equal(args.snapshot, s);
+  // Default host falls back to the OS hostname (non-empty).
+  assert.ok(fleetSnapshotPushArgs(s).host.length > 0);
 });
