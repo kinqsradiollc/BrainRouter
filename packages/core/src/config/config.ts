@@ -449,6 +449,12 @@ export interface CliKnobs {
    * Default 8.
    */
   maxConcurrentChildren?: number;
+  /**
+   * HONK-H3 — shared GLOBAL concurrency cap for the fleet runner: the most fleet
+   * jobs that drain at once across ALL workspaces (vs `maxConcurrentChildren`,
+   * which is per-parent-session). `0` disables the cap. Default 4.
+   */
+  fleetMaxConcurrentJobs?: number;
   /** MAS-P4-T4: max auto-chain follow-up agents per worker. Default 2. */
   autoChainMaxFollowups?: number;
   /** MAS-P4-T1: cap on MCP tools shown to an agent per turn (0 = no cap). Default 16. */
@@ -974,6 +980,7 @@ export interface ResolvedCliKnobs {
   offloadMaxEntries: number;
   maxSpawnDepth: number;
   maxConcurrentChildren: number;
+  fleetMaxConcurrentJobs: number;
   autoChainMaxFollowups: number;
   agentMcpToolBudget: number;
   mcpProgressiveDiscovery: boolean;
@@ -1168,6 +1175,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     offloadMaxEntries: c.offloadMaxEntries ?? 64,
     maxSpawnDepth: c.maxSpawnDepth ?? 3,
     maxConcurrentChildren: c.maxConcurrentChildren ?? 8,
+    fleetMaxConcurrentJobs: Math.max(0, Math.floor(c.fleetMaxConcurrentJobs ?? 4)),
     autoChainMaxFollowups: c.autoChainMaxFollowups ?? 2,
     agentMcpToolBudget: c.agentMcpToolBudget ?? 16,
     mcpProgressiveDiscovery: c.mcpProgressiveDiscovery ?? false,
