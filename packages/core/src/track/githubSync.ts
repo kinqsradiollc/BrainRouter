@@ -102,14 +102,17 @@ export function workItemToIssue(item: WorkItem, includeMarker = true): GithubIss
   ];
   const desc = item.description ? `${item.description}\n\n` : '';
   const body = includeMarker ? `${desc}${keyMarker(item.key)}` : desc.trimEnd();
-  // The assignee is treated as a GitHub login (members are pulled from the repo).
-  const assignees = item.assignee ? [item.assignee] : [];
-  return { title: item.title, body, labels, assignees, state: isTerminalCategory(item.statusCategory) ? 'closed' : 'open' };
+  // Assignees are treated as GitHub logins (members are pulled from the repo).
+  return { title: item.title, body, labels, assignees: item.assignees, state: isTerminalCategory(item.statusCategory) ? 'closed' : 'open' };
 }
 
-/** The GitHub login assigned to an issue (legacy `assignee`, else the first of `assignees`). */
-function issueAssignee(issue: GithubIssue): string | undefined {
-  return issue.assignee?.login ?? issue.assignees?.[0]?.login ?? undefined;
+/** Every GitHub login assigned to an issue (legacy `assignee` + the `assignees` array, deduped). */
+function issueAssignees(issue: GithubIssue): string[] {
+  const out: string[] = [];
+  for (const login of [issue.assignee?.login, ...(issue.assignees ?? []).map((a) => a?.login)]) {
+    if (login && !out.includes(login)) out.push(login);
+  }
+  return out;
 }
 
 /** Resolve a concrete project status id for a target category (first match). */
@@ -135,11 +138,11 @@ export function issueToWorkItem(issue: GithubIssue, project: TrackProject): Mapp
   const plainLabels = names.filter((n) => !n.startsWith('type:') && !n.startsWith('priority:'));
   const status = statusForCategory(project, issue.state === 'closed' ? 'completed' : 'unstarted');
   const body = (issue.body ?? '').replace(MARKER_RE, '').trim();
-  const assignee = issueAssignee(issue);
+  const assignees = issueAssignees(issue);
   return {
     key: keyFromBody(issue.body),
-    input: { title: issue.title, type, priority, status, description: body || undefined, labels: plainLabels, assignee },
-    patch: { title: issue.title, priority, status, description: body || undefined, labels: plainLabels, assignee },
+    input: { title: issue.title, type, priority, status, description: body || undefined, labels: plainLabels, assignees },
+    patch: { title: issue.title, priority, status, description: body || undefined, labels: plainLabels, assignees },
   };
 }
 

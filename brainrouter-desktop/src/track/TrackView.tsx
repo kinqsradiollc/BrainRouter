@@ -128,7 +128,7 @@ export function TrackView({ project, items, sprints, automations, members, sync,
       (!filter.type || w.type === filter.type) &&
       (!filter.statusCategory || w.statusCategory === filter.statusCategory) &&
       (!filter.priority || w.priority === filter.priority) &&
-      (!filter.assignee || w.assignee === filter.assignee) &&
+      (!filter.assignee || w.assignees.includes(filter.assignee)) &&
       (query ? (query.ok ? query.pred!(w) : false) : (!t || w.key.toLowerCase().includes(t) || w.title.toLowerCase().includes(t))));
   }, [items, filter, query]);
 
@@ -138,7 +138,13 @@ export function TrackView({ project, items, sprints, automations, members, sync,
     setDraft(''); setComposing(null);
   };
 
-  const assignees = useMemo(() => [...new Set(items.map((w) => w.assignee).filter(Boolean) as string[])], [items]);
+  const assignees = useMemo(() => [...new Set(items.flatMap((w) => w.assignees))], [items]);
+  // name → color from the project's label registry (for colored chips).
+  const labelColors = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const l of project?.labels ?? []) m.set(l.name.toLowerCase(), l.color);
+    return m;
+  }, [project]);
 
   return (
     <div className="track">
@@ -186,7 +192,7 @@ export function TrackView({ project, items, sprints, automations, members, sync,
                 </div>
                 <div className="track-col-body">
                   {composing === s.id ? <Compose draft={draft} setDraft={setDraft} onAdd={() => submitNew(s.id)} onCancel={() => setComposing(null)} /> : null}
-                  {col.map((w) => <Card key={w.id} item={w} onOpen={() => setSelectedKey(w.key)} onDragStart={() => setDragKey(w.key)} onDragEnd={() => { setDragKey(null); setOverCol(null); }} dragging={dragKey === w.key} />)}
+                  {col.map((w) => <Card key={w.id} item={w} labelColors={labelColors} onOpen={() => setSelectedKey(w.key)} onDragStart={() => setDragKey(w.key)} onDragEnd={() => { setDragKey(null); setOverCol(null); }} dragging={dragKey === w.key} />)}
                   {col.length === 0 && composing !== s.id ? <div className="track-col-empty">{dragKey ? 'Drop here' : '—'}</div> : null}
                 </div>
               </section>
@@ -241,7 +247,7 @@ function Compose({ draft, setDraft, onAdd, onCancel }: { draft: string; setDraft
   );
 }
 
-function Card({ item, onOpen, onDragStart, onDragEnd, dragging }: { item: WorkItem; onOpen: () => void; onDragStart: () => void; onDragEnd: () => void; dragging: boolean }): React.ReactElement {
+function Card({ item, onOpen, onDragStart, onDragEnd, dragging, labelColors }: { item: WorkItem; onOpen: () => void; onDragStart: () => void; onDragEnd: () => void; dragging: boolean; labelColors?: Map<string, string> }): React.ReactElement {
   return (
     <div className={`track-card${dragging ? ' dragging' : ''}`} onClick={onOpen} draggable
       onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', item.key); onDragStart(); }}
@@ -253,10 +259,11 @@ function Card({ item, onOpen, onDragStart, onDragEnd, dragging }: { item: WorkIt
         <span className="track-card-grip" title="Drag to another column"><Icon name="dots" size={13} /></span>
       </div>
       <div className="track-card-title">{item.title}</div>
-      {(item.assignee || item.labels.length) ? (
+      {(item.assignees.length || item.labels.length) ? (
         <div className="track-card-foot">
-          {item.labels.slice(0, 2).map((l) => <span key={l} className="track-label">{l}</span>)}
-          {item.assignee ? <span className="track-asn" title={item.assignee}>{item.assignee.slice(0, 2).toUpperCase()}</span> : null}
+          {item.labels.slice(0, 2).map((l) => <span key={l} className="track-label" style={labelColors?.get(l.toLowerCase()) ? { borderColor: labelColors.get(l.toLowerCase()), color: labelColors.get(l.toLowerCase()) } : undefined}>{l}</span>)}
+          {item.assignees.slice(0, 2).map((a) => <span key={a} className="track-asn" title={a}>{a.slice(0, 2).toUpperCase()}</span>)}
+          {item.assignees.length > 2 ? <span className="track-asn track-asn-more" title={item.assignees.join(', ')}>+{item.assignees.length - 2}</span> : null}
         </div>
       ) : null}
     </div>
@@ -274,7 +281,7 @@ function ListView({ items, states, onOpen }: { items: WorkItem[]; states: TrackP
           <span className="tl-title">{w.title}</span>
           <span className="tl-status"><span className={`track-cat track-cat-${w.statusCategory}`} /> {states.find((s) => s.id === w.status)?.name ?? w.status}</span>
           <span className={`tl-pri pri-${w.priority}`}>{w.priority}</span>
-          <span className="tl-asn">{w.assignee ?? '—'}</span>
+          <span className="tl-asn">{w.assignees.join(', ') || '—'}</span>
         </button>
       ))}
       {items.length === 0 ? <div className="track-empty">No matching work items.</div> : null}
