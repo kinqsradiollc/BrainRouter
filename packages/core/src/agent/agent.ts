@@ -2401,7 +2401,7 @@ export class Agent {
           const docsOnly = verificationDecision === 'report-docs-only';
           const content = docsOnly
             ? buildDocsOnlyVerificationNote(this.filesWrittenThisTurn)
-            : buildVerificationNudge();
+            : buildVerificationNudge({ local: localModelProfileActive(this.llmConfig.model, getCliKnobs().localModelProfile) });
           const guardMsg = { role: 'user', content };
           this.chatHistory.push(guardMsg);
           this.recordTranscript({ ...guardMsg, name: 'guard' });
