@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildChatCompletionPayload, LOCAL_TOOLS, resolveWireEffort } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import { buildChatCompletionPayload, LOCAL_TOOLS, resolveWireEffort } from '@kinqs/brainrouter-core/agent';
 import { _resetModelReasoningCapabilities, registerModelReasoningCapabilities } from '@kinqs/brainrouter-core/dist/provider/models/reasoning.js';
 import { buildSystemPrompt } from '@kinqs/brainrouter-core/dist/prompt/systemPrompt.js';
 import { buildRolePrompt, listRoles, resolveRole } from '@kinqs/brainrouter-core/orchestration';

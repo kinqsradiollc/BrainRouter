@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/agent';
 import {
   askChoice,
   CancelledChoiceError,

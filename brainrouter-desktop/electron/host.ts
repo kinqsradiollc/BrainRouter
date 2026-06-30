@@ -19,14 +19,13 @@ import path from 'node:path';
 import { InteractionBroker, type AgentEvent, type AgentImage, type ComputerUseAction, type ComputerUseActionResult, type ComputerUsePort, type RecordLifecycleAction } from '@kinqs/brainrouter-agent-protocol';
 // Deep imports into the CLI's built runtime (no "exports" field = allowed).
 // Extracting a proper @kinqs/brainrouter-agent package is tracked for 0.4.16.
-import { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import { Agent, classifyForVerification, callOpenAI } from '@kinqs/brainrouter-core/agent';
 import { loadConfig, saveConfig, getCliKnobs, _resetCliKnobsCache, applyRuleEdit, type LLMConfig } from '@kinqs/brainrouter-core/config';
 // 0.4.15 — named providers + per-sub-agent model routing (pure transforms).
 import { setProvider, removeProvider, setAgentModel, normalizeProviderModels } from '@kinqs/brainrouter-core/dist/provider/agentModels.js';
 import { McpClientPool, childSessionKey } from '@kinqs/brainrouter-core/mcp';
 import { listTranscripts, loadTranscript, readTranscriptTail, transcriptExists, transcriptSizeBytes, deleteSession, forkSession, appendTranscriptEntry, rewindTranscript, type TranscriptSummary, readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups, type SessionMeta, getSessionRuntime, setSessionRuntime, resolveSessionLlmConfig, getSessionMode, setSessionMode, resolveActiveMode, buildRecap, readPreferences, writePreferences, searchTranscript, exportTranscriptMarkdown, exportTranscriptJson, exportFileName, listChapters } from '@kinqs/brainrouter-core/session';
 import { readUsageHistory, totalUsage } from '@kinqs/brainrouter-core/dist/usage/usageHistoryStore.js';
-import { classifyForVerification } from '@kinqs/brainrouter-core/dist/agent/verificationGate.js';
 import { resolveWorkspaceGit } from '@kinqs/brainrouter-core/dist/git/workspaceGit.js';
 import { readWorkspaceEntry, isWorkspaceDirectory, listWorkspaceFiles, statWorkspaceEntry, writeWorkspaceEntry } from './fsRead.js';
 import { saveWorkflowGraph, loadWorkflowGraph, listWorkflowGraphs, deleteWorkflowGraph } from '@kinqs/brainrouter-core/dist/workflow/graphStore.js';
@@ -92,7 +91,6 @@ import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kin
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
 import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement, deleteRequirement, type RequirementPatch } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
 import { buildBaseGraph, saveAtlasGraph, readAtlasGraph, atlasGraphStats, atlasWorkspaceTag, enrichAtlasGraph, extractAtlasJson, type AtlasLlmCaller } from '@kinqs/brainrouter-core/dist/atlas/index.js';
-import { callOpenAI } from '@kinqs/brainrouter-core/dist/agent/agent.js';
 import { syncRequirementPlanTrack } from '@kinqs/brainrouter-core/dist/requirement/planTrackSync.js';
 import { ensureProject, getProject, getWorkItem, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember, getGithubLinks, setGithubLink, type CreateWorkItemInput, type UpdateWorkItemPatch, type AutomationPatch } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
 import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfigForWorkspace, listResolvedGithubConfigsForWorkspace, issueToWorkItem, type GithubIssue } from '@kinqs/brainrouter-core/dist/track/githubSync.js';

@@ -8,7 +8,7 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import chalk from 'chalk';
 import { spinner as makeSpinner } from '../spinner.js';
-import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/agent';
 import { callMcpTool, hasMcpTool } from '@kinqs/brainrouter-core/mcp';
 import { listSessions, reconcileStale } from '@kinqs/brainrouter-core/orchestration';
 import { readPreferences, resolveEffort, writePreferences, normalizeEffort, getSessionMode, resolveActiveMode, setSessionMode, setSessionRuntime } from '@kinqs/brainrouter-core/session';

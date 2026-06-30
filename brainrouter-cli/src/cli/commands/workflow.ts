@@ -11,7 +11,7 @@ import { exec } from 'node:child_process';
 import chalk from 'chalk';
 import { spinner as makeSpinner } from '../spinner.js';
 import { marked } from 'marked';
-import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/agent';
 import { callMcpTool } from '@kinqs/brainrouter-core/mcp';
 import { listSessions, reconcileStale } from '@kinqs/brainrouter-core/orchestration';
 import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, listWorkflows, readArtifact, setCurrentWorkflow, slugify, updateWorkflowStatus, workflowExists } from '@kinqs/brainrouter-core/dist/workflow/workflowArtifacts.js';

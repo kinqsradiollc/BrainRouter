@@ -9,7 +9,7 @@ test('callOpenAI: rejects malformed LLM responses with a useful error instead of
   // Stub the global fetch with three scenarios that have historically crashed
   // the agent loop with `Cannot read properties of undefined (reading '0')`
   // when the upstream returned HTTP 200 + a non-standard body.
-  const { callOpenAI } = await import('@kinqs/brainrouter-core/dist/agent/agent.js');
+  const { callOpenAI } = await import('@kinqs/brainrouter-core/agent');
   const realFetch = global.fetch;
   const llmConfig = { provider: 'openai' as const, apiKey: 'test', model: 'gpt-oss-120b', endpoint: 'http://localhost:9999/v1' };
 

@@ -10,7 +10,7 @@
 
 import chalk from 'chalk';
 import { spinner } from '../spinner.js';
-import type { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import type { Agent } from '@kinqs/brainrouter-core/agent';
 import { callMcpTool, type McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
 import { clampPayload, extractMemories, renderMemoryCards } from '../../memory/formatters.js';
 import { buildSkillPrompt, resolveSkill, SLASH_TO_SKILL } from '../../prompt/skillRunner.js';

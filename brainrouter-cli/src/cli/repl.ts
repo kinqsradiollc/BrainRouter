@@ -2,7 +2,7 @@ import readline from 'node:readline';
 import fs from 'node:fs';
 import path from 'node:path';
 import chalk from 'chalk';
-import type { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import type { Agent } from '@kinqs/brainrouter-core/agent';
 import type { McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
 import type { Config } from '@kinqs/brainrouter-core/config';
 import type { ReplContext } from './commands/_context.js';

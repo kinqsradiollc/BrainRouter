@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { callOpenAIStream } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import { callOpenAIStream } from '@kinqs/brainrouter-core/agent';
 import { extractAtToken, applyAtCompletion, getFileIndex, matchFiles } from '../cli/ink/fileIndex.js';
 
 /**

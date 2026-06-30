@@ -108,7 +108,7 @@ import { VERSION } from '@kinqs/brainrouter-core/dist/version.js';
 import { loadExtensions } from '@kinqs/brainrouter-core/dist/extension/loader.js';
 import { setKnownMcpServerIds } from './cli/ink/toolFormat.js';
 import type { ServerConfig } from '@kinqs/brainrouter-core/config';
-import { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import { Agent } from '@kinqs/brainrouter-core/agent';
 import { cliPrompter } from './cli/cliPrompt.js';
 import { runChat } from './cli/ink/runChat.js';
 import { applyWorkspaceRoot, findWorkspaceRoot } from '@kinqs/brainrouter-core/dist/workspace/workspace.js';

@@ -10,7 +10,7 @@ import chalk from 'chalk';
 import { callMcpTool, childSessionKey } from '@kinqs/brainrouter-core/mcp';
 import { formatInboxPane } from '../../runtime/inboxView.js';
 import { validateAgentDefinition, buildAgentDefinition, previewAgentDefinition } from '../../orchestration/agentDefValidation.js';
-import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/agent';
 import { listRoles, listAll as listAgentDefs, formatSessionSummary, getSession, listSessions, reconcileStale, updateSession, resolveAutoChainMode, isAutoChainMode, resolveDelegationPolicy, isDelegationPolicy, parseChildOutput } from '@kinqs/brainrouter-core/orchestration';
 import { collectRunningTasks, formatBackgroundTasks, summarizeTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
 import { activeRun, formatActivePhase } from '@kinqs/brainrouter-core/dist/workflow/workflowRun.js';

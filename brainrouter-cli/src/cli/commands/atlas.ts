@@ -20,7 +20,7 @@ import {
   enrichAtlasGraph,
   type AtlasLlmCaller,
 } from "@kinqs/brainrouter-core/dist/atlas/index.js";
-import { callOpenAI } from "@kinqs/brainrouter-core/dist/agent/agent.js";
+import { callOpenAI } from "@kinqs/brainrouter-core/agent";
 import { resolveCliKnobs } from '@kinqs/brainrouter-core/config';
 import type { AtlasGraph } from "@kinqs/brainrouter-types";
 import type { CommandContext } from "./_context.js";

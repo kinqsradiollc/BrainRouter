@@ -13,7 +13,7 @@
  */
 
 import type readline from 'node:readline';
-import type { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import type { Agent } from '@kinqs/brainrouter-core/agent';
 import type { McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
 import type { Config } from '@kinqs/brainrouter-core/config';
 

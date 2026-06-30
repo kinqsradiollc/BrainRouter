@@ -56,7 +56,7 @@ test('applyYoloOn / applyYoloOff round-trip the two-axis state', async () => {
 test('ask_user_choice throws NoTTYError under /yolo (fast + proceed)', async () => {
   await withTempWorkspace(async (workspace) => {
     applyYoloOn(workspace);
-    const { Agent } = await import('@kinqs/brainrouter-core/dist/agent/agent.js');
+    const { Agent } = await import('@kinqs/brainrouter-core/agent');
     const { NoTTYError } = await import('../cli/cliPrompt.js');
     const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [] }), close: async () => {} };
     const agent = new Agent(
@@ -94,7 +94,7 @@ test('ask_user_choice does NOT bypass under fast-mode-only (no /yolo)', async ()
     // separately because there's no active readline in test mode; we just
     // assert the failure reason isn't the YOLO bypass.
     writePreferences(workspace, { executionMode: 'fast', reviewPolicy: 'request' });
-    const { Agent } = await import('@kinqs/brainrouter-core/dist/agent/agent.js');
+    const { Agent } = await import('@kinqs/brainrouter-core/agent');
     const { NoTTYError } = await import('../cli/cliPrompt.js');
     const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [] }), close: async () => {} };
     const agent = new Agent(
@@ -129,7 +129,7 @@ test('ask_user_choice bypasses under an active /goal even with /yolo off', async
     // The picker MUST still bypass because the auto-continuation loop
     // would otherwise stall on the modal.
     applyYoloOff(workspace);
-    const { Agent } = await import('@kinqs/brainrouter-core/dist/agent/agent.js');
+    const { Agent } = await import('@kinqs/brainrouter-core/agent');
     const { NoTTYError } = await import('../cli/cliPrompt.js');
     const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [] }), close: async () => {} };
     const agent = new Agent(
@@ -166,7 +166,7 @@ test('ask_user_choice combines bypass reasons when both /yolo and /goal are acti
   await withTempWorkspace(async (workspace) => {
     applyYoloOn(workspace);
     setGoal(workspace, 'Both axes engaged.', 's:both');
-    const { Agent } = await import('@kinqs/brainrouter-core/dist/agent/agent.js');
+    const { Agent } = await import('@kinqs/brainrouter-core/agent');
     const { NoTTYError } = await import('../cli/cliPrompt.js');
     const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [] }), close: async () => {} };
     const agent = new Agent(
@@ -203,7 +203,7 @@ test('ask_user_choice does NOT bypass under proceed-only (no /yolo)', async () =
   await withTempWorkspace(async (workspace) => {
     // Mirror of the previous test on the other axis.
     writePreferences(workspace, { executionMode: 'planning', reviewPolicy: 'proceed' });
-    const { Agent } = await import('@kinqs/brainrouter-core/dist/agent/agent.js');
+    const { Agent } = await import('@kinqs/brainrouter-core/agent');
     const { NoTTYError } = await import('../cli/cliPrompt.js');
     const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [] }), close: async () => {} };
     const agent = new Agent(

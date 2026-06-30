@@ -3,7 +3,7 @@ import readline from 'node:readline';
 import { EventEmitter } from 'node:events';
 import { execSync } from 'node:child_process';
 import chalk from 'chalk';
-import type { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import type { Agent } from '@kinqs/brainrouter-core/agent';
 import type { Config } from '@kinqs/brainrouter-core/config';
 import { getCliKnobs, setCliKnobOverride } from '@kinqs/brainrouter-core/config';
 import type { WorkspaceInfo } from '@kinqs/brainrouter-core/dist/workspace/workspace.js';

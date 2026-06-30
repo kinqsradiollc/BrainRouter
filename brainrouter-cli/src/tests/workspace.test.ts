@@ -10,9 +10,10 @@ import {
   isPathInside,
   matchGlob,
   resolveWorkspacePath,
-} from '@kinqs/brainrouter-core/dist/agent/agent.js';
-import { grepSearch } from '@kinqs/brainrouter-core/dist/agent/workspaceFs.js';
-import { parsePatchEnvelope, assessPatchSafety } from '@kinqs/brainrouter-core/dist/agent/applyPatch.js';
+  grepSearch,
+  parsePatchEnvelope,
+  assessPatchSafety,
+} from '@kinqs/brainrouter-core/agent';
 import { findWorkspaceRoot } from '@kinqs/brainrouter-core/dist/workspace/workspace.js';
 import { loadWorkspaceInstructionSummary } from '@kinqs/brainrouter-core/dist/prompt/systemPrompt.js';
 import { withTempWorkspace } from './_helpers.js';

@@ -13,7 +13,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import { Agent } from '@kinqs/brainrouter-core/agent';
 import { _resetCliKnobsCache } from '@kinqs/brainrouter-core/config';
 
 /**

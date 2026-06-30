@@ -23,6 +23,10 @@
       "types": "./dist/orchestration/index.d.ts",
       "default": "./dist/orchestration/index.js"
     },
+    "./agent": {
+      "types": "./dist/agent/index.d.ts",
+      "default": "./dist/agent/index.js"
+    },
     "./dist/*": "./dist/*"
   },
   "files": [

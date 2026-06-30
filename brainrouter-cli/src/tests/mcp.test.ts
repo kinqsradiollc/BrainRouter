@@ -437,7 +437,7 @@ test('inferRoleFromTask routes verbs to the right child role', async () => {
 });
 
 test('explainUnknownToolName: skill-shaped names get the skill correction; others get the generic hint', async () => {
-  const { explainUnknownToolName } = await import('@kinqs/brainrouter-core/dist/agent/agent.js');
+  const { explainUnknownToolName } = await import('@kinqs/brainrouter-core/agent');
   assert.match(explainUnknownToolName('incremental-implementation'), /tried to invoke a SKILL/);
   assert.match(explainUnknownToolName('spec-driven-skill'), /load its instructions/);
   assert.match(explainUnknownToolName('code-structure-cleanup'), /tried to invoke a SKILL/);
