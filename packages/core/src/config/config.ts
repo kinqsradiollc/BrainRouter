@@ -660,6 +660,17 @@ export interface CliKnobs {
    * single-key tests/scripts.
    */
   providerRequestFormat?: Record<string, ProviderWireFormat>;
+  /**
+   * Per-tool enable/disable overrides (keyed by tool name; MCP tools use their
+   * `mcp_<server>_<tool>` namespaced name). `true` force-ENABLES a tool the agent
+   * would otherwise hide (e.g. a built-in hidden by the local-model L2 allowlist,
+   * or an MCP tool trimmed by the relevance budget); `false` force-DISABLES it.
+   * A PROTECTED core tool (lifecycle + file/shell — see `tool/toolPolicy.ts`)
+   * ignores `false` and is always shown. Overrides never bypass the HARD gates
+   * (access tier, worker-thread/computer-use capability) — they only flip the
+   * soft visibility layers. Absent key = default behaviour. Set under `cli`.
+   */
+  toolOverrides?: Record<string, boolean>;
 }
 
 /**
@@ -1023,6 +1034,22 @@ export interface ResolvedCliKnobs {
    *  `CliKnobs.providerRequestFormat`; entries whose value isn't one of the
    *  accepted `ProviderWireFormat` literals are dropped on resolve. */
   providerRequestFormat: Record<string, ProviderWireFormat>;
+  /** Per-tool enable/disable overrides (validated subset of `CliKnobs.toolOverrides`;
+   *  non-boolean values dropped). `true` = force-enable, `false` = force-disable. */
+  toolOverrides: Record<string, boolean>;
+}
+
+/** Reduce a raw `toolOverrides` to a validated `{ [tool]: boolean }` map. Non-object
+ *  input → empty; non-boolean values dropped; tool-name keys trimmed (case kept —
+ *  tool names are case-sensitive, incl. `mcp_<server>_<tool>`). */
+function normalizeToolOverrides(input: unknown): Record<string, boolean> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+  const out: Record<string, boolean> = {};
+  for (const [rawKey, rawValue] of Object.entries(input as Record<string, unknown>)) {
+    const key = typeof rawKey === 'string' ? rawKey.trim() : '';
+    if (key && typeof rawValue === 'boolean') out[key] = rawValue;
+  }
+  return out;
 }
 
 function unitInterval(value: unknown, fallback: number): number {
@@ -1219,6 +1246,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     workspaceOverride: c.workspaceOverride,
     maxOutputTokens: c.maxOutputTokens,
     providerRequestFormat: normalizeProviderRequestFormat(c.providerRequestFormat),
+    toolOverrides: normalizeToolOverrides(c.toolOverrides),
   };
 }
 
