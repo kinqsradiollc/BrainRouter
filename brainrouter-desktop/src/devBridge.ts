@@ -563,7 +563,8 @@ export function installDevBridge(): void {
   // T5 — a tiny in-memory FS so the editor (open/edit/save/stale-write) is
   // exercisable in the browser preview without a real host.
   const devFiles: Record<string, { content: string; mtimeMs: number }> = {
-    'README.md': { content: '# BrainRouter\n\nA **memory-first** AI coding agent.\n\n## Features\n\n- 4-stage recall pipeline\n- Multi-agent orchestration\n- Visual workflow canvas\n\n> Write mode lets you edit Markdown with a live preview.\n', mtimeMs: 1_000 },
+    'README.md': { content: '# BrainRouter\n\nA **memory-first** AI coding agent.\n\n## Features\n\n- 4-stage recall pipeline\n- Multi-agent orchestration\n- Visual workflow canvas\n\nSee the [getting-started guide](docs/guide.md) or the [website](https://brainrouter.dev).\n\n> Docs mode lets you edit Markdown with a live preview.\n', mtimeMs: 1_000 },
+    'docs/guide.md': { content: '# Getting started\n\nThis opened **in the Docs editor** — not a new window.\n\nBack to the [README](../README.md).\n', mtimeMs: 1_100 },
     'src/memory/recall.ts': { content: 'export function recall(query: string) {\n  // 4-stage pipeline: retrieve -> rerank -> judge -> expand\n  const ranked = rerank(retrieve(query));\n  return expand(judge(ranked));\n}\n', mtimeMs: 1_000 },
     'src/state/completionInbox.ts': { content: '/** Completion inbox - detached workers report back here. */\nimport { randomUUID } from "node:crypto";\n\nexport interface Completion {\n  id: string;\n  parentSessionKey: string;\n  summary: string;\n}\n', mtimeMs: 1_000 },
     'assets/logo.png': { content: 'binary-bytes', mtimeMs: 1_000 },
@@ -1012,7 +1013,9 @@ export function installDevBridge(): void {
       workspaceRoot: wsCurrent, gitRoot: '/Users/dev/BrainRouter', repoRelativePath: 'brainrouter-desktop', isSubdir: true,
     }),
     'git-log': () => ({ subjects: ['feat(desktop): DESK-4l — interactive views rail, tabbed bottom terminal', 'feat(desktop): DESK-4k — modern skin', 'feat(desktop): DESK-5c — file tree, real terminal'] }),
-    'context-usage': () => ({ used: devCtxUsed, window: 256_000, compactAt: 80_000, limit: 80_000, pct: Math.min(1, devCtxUsed / 80_000) }),
+    // Models a 128k-window model with a 256k auto-compact knob (knob > window) —
+    // the renderer clamps compactAt down to the window so the two bars share a max.
+    'context-usage': () => ({ used: devCtxUsed, window: 128_000, compactAt: 256_000, limit: 256_000, pct: Math.min(1, devCtxUsed / 256_000) }),
     // End-of-turn changeset — echo the turn's edited paths with plausible per-file
     // +/- so the transcript's "Edited N files" card is exercisable in preview.
     'turn-changeset': (a) => {

@@ -62,6 +62,15 @@ const KIND_LABEL: Record<WfKind, string> = {
 const PALETTE: WfKind[] = ['trigger', 'agent', 'set', 'condition', 'merge', 'output'];
 const PALETTE_L3: WfKind[] = ['switch', 'filter', 'sort', 'limit', 'aggregate', 'loop', 'approval', 'extract', 'classify', 'subworkflow'];
 
+// Each palette chip carries the dot colour of the node it adds — so the palette
+// reads as a legend for the canvas (mirrors Atlas's category pills).
+const KIND_COLOR: Partial<Record<WfKind, string>> = {
+  trigger: 'var(--ok)', agent: 'var(--accent)', output: '#61afef',
+  condition: '#e5c07b', set: '#c678dd', merge: '#56b6c2', approval: '#e5c07b',
+  switch: '#61afef', classify: '#c678dd',
+};
+const kindColor = (k: WfKind): string => KIND_COLOR[k] ?? 'var(--accent)';
+
 function defaultConfig(kind: WfKind): Record<string, unknown> {
   switch (kind) {
     case 'agent': return { prompt: 'Do the task using {{$vars.input}}' };
@@ -259,24 +268,33 @@ export function WorkflowsPanel(_props: WorkflowsPanelProps): React.ReactElement 
   return (
     <div className="scroll wf-panel">
       <div className="wf-toolbar">
-        <input className="filter" style={{ maxWidth: 160 }} value={name} onChange={(e) => setName(e.target.value)} placeholder="workflow name" />
-        <button className="sched-add-btn" onClick={() => void doSave()}>Save</button>
-        <select className="filter" style={{ maxWidth: 140 }} value="" onChange={(e) => { if (e.target.value) void doLoad(e.target.value); }}>
+        <input className="toolbar-input wf-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="workflow name" />
+        <select className="toolbar-input wf-load" value="" onChange={(e) => { if (e.target.value) void doLoad(e.target.value); }}>
           <option value="">Load…</option>
           {saved.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
         </select>
-        <button className="seg-toggle" onClick={doValidate}>Validate</button>
-        <button className="sched-add-btn" onClick={doTestRun}>Test run</button>
-        <button className="seg-toggle" onClick={doExport}>Export</button>
+        <span className="wf-spacer" />
+        <button className="btn" onClick={doValidate}>Validate</button>
+        <button className="btn" onClick={() => void doSave()}>Save</button>
+        <button className="btn primary" onClick={doTestRun}>Test run</button>
+        <button className="btn" onClick={doExport}>Export</button>
       </div>
 
       <div className="wf-palette">
-        <span className="wf-palette-label">Add node:</span>
-        {PALETTE.map((k) => <button key={k} className="seg-toggle" onClick={() => addNode(k)}>{KIND_LABEL[k]}</button>)}
+        <span className="wf-palette-label">Add node</span>
+        {PALETTE.map((k) => (
+          <button key={k} className="wf-add" onClick={() => addNode(k)} title={`Add a ${KIND_LABEL[k]} node`}>
+            <span className="wf-add-dot" style={{ background: kindColor(k) }} />{KIND_LABEL[k]}
+          </button>
+        ))}
       </div>
       <div className="wf-palette">
-        <span className="wf-palette-label">Advanced:</span>
-        {PALETTE_L3.map((k) => <button key={k} className="seg-toggle" onClick={() => addNode(k)}>{KIND_LABEL[k]}</button>)}
+        <span className="wf-palette-label">Advanced</span>
+        {PALETTE_L3.map((k) => (
+          <button key={k} className="wf-add" onClick={() => addNode(k)} title={`Add a ${KIND_LABEL[k]} node`}>
+            <span className="wf-add-dot" style={{ background: kindColor(k) }} />{KIND_LABEL[k]}
+          </button>
+        ))}
       </div>
 
       {problem ? <div className="wf-problem">{problem}</div> : null}

@@ -1298,6 +1298,13 @@ textarea.ctl { min-width: 0; resize: vertical; line-height: 1.45; }
 .seg-toggle { min-height: 30px; border: 1px solid var(--border-strong); background: var(--raised); color: var(--text-dim); font-size: 11px; font-weight: 480; padding: 3px 9px; border-radius: 999px; cursor: pointer; transition: color .12s, background .12s; }
 .seg-toggle:hover { color: var(--text); background: var(--ov-06); }
 .seg-toggle.active { color: var(--text); background: var(--accent-soft, var(--ov-10)); border-color: var(--accent, var(--border-strong)); }
+/* Toolbar input/select that sits on the same 30px baseline as .btn — the Atlas
+   toolbar idiom (surface chrome, r-sm), for panel toolbars (Workflows, Docs). */
+.toolbar-input { min-height: 30px; box-sizing: border-box; background: var(--surface); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 6px 10px; font-size: 12px; font-family: var(--font); outline: none; transition: border-color .15s, box-shadow .15s; }
+.toolbar-input:hover { border-color: var(--border-strong); }
+.toolbar-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft, transparent); }
+.toolbar-input::placeholder { color: var(--text-faint); }
+select.toolbar-input { cursor: pointer; }
 /* T14 — schedules panel */
 .sched-panel { padding: 4px 2px; }
 .sched-add { display: flex; flex-direction: column; gap: 6px; padding: 6px 6px 10px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
@@ -2462,6 +2469,37 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
 .editor-split.two { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .editor-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; position: relative; background: var(--term-bg); border-left: 1px solid transparent; }
 .editor-pane + .editor-pane { border-left-color: var(--border); }
+
+/* ── Markdown mode in the Editor — the folded-in Docs experience (preview, export,
+   selection AI, assistant) for .md/.markdown/.mdx files. ── */
+.editor-md-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 8px; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
+.editor-md-spacer { flex: 1 1 auto; min-width: 8px; }
+/* BarMenu — a .btn-styled action menu (Export, Selection AI) with a portaled popover. */
+.bar-menu { display: inline-flex; }
+.bar-menu-trigger.on { border-color: var(--accent); }
+.bar-menu-caret { font-size: 9px; opacity: 0.7; margin-left: 1px; }
+.bar-menu-pop { z-index: 320; background: rgba(24, 27, 34, 0.97); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 5px; box-shadow: 0 14px 40px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 1px; animation: ddIn .12s ease-out; }
+.bar-menu-item { display: flex; align-items: center; justify-content: space-between; gap: 14px; width: 100%; background: transparent; border: 0; border-radius: 6px; padding: 7px 10px; color: var(--text-dim); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; transition: background .14s, color .14s; white-space: nowrap; }
+.bar-menu-item:hover:not(:disabled) { background: var(--ov-07); color: var(--text); }
+.bar-menu-item:disabled { opacity: 0.4; cursor: default; }
+.bar-menu-item-label { white-space: nowrap; }
+.bar-menu-item-hint { font-size: 10.5px; color: var(--text-faint); font-family: var(--mono); flex: none; }
+.editor-md-status { font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
+.editor-md { height: 100%; min-height: 0; display: flex; position: relative; background: var(--term-bg); }
+.editor-md-edit { flex: 1 1 50%; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.editor-md.view-edit .editor-md-edit { flex: 1 1 100%; }
+.editor-md-edit > .editor-pane { flex: 1 1 auto; min-height: 0; }
+.editor-md-preview { flex: 1 1 50%; min-width: 0; padding: 14px 22px; border-left: 1px solid var(--border); overflow: auto; background: var(--bg); }
+/* Preview hyperlinks track the user's accent (Settings → Accent colour) with a
+   tasteful hover underline — the editor link-colour convention. */
+.editor-md-preview a { color: var(--accent); text-decoration: none; }
+.editor-md-preview a:hover { text-decoration: underline; text-underline-offset: 2px; }
+.editor-md.view-preview .editor-md-preview { flex: 1 1 100%; border-left: 0; }
+@container panel (max-width: 620px) {
+  .editor-md.view-split { flex-direction: column; }
+  .editor-md.view-split .editor-md-edit, .editor-md.view-split .editor-md-preview { flex: 1 1 50%; width: 100%; }
+  .editor-md.view-split .editor-md-preview { border-left: 0; border-top: 1px solid var(--border); }
+}
 .editor-pane.focused::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 2px; background: var(--accent); opacity: 0.85; pointer-events: none; z-index: 2; }
 .editor-pane-head { height: 28px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 10px; border-bottom: 1px solid var(--border); color: var(--text-dim); font-size: 11.5px; background: var(--surface); }
 .editor-pane-head span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -4059,16 +4097,32 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .atlas-tour-desc { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
 .atlas-tour-nav { display: flex; gap: 8px; justify-content: flex-end; margin-top: 2px; }
 
-/* React Flow re-skin — kill the light-theme defaults so controls + minimap
- * read as part of the dark surface. */
-.atlas-canvas .react-flow__attribution { display: none; }
-.atlas-canvas .react-flow__controls { box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3); border-radius: var(--r-sm); overflow: hidden; }
-.atlas-canvas .react-flow__controls-button { background: var(--raised); border-bottom: 1px solid var(--border); width: 24px; height: 24px; }
-.atlas-canvas .react-flow__controls-button:hover { background: var(--surface); }
-.atlas-canvas .react-flow__controls-button svg { fill: var(--text-dim); }
-.atlas-canvas .react-flow__controls-button:hover svg { fill: var(--accent); }
-.atlas-canvas .react-flow__minimap { border-radius: var(--r-sm); }
-.atlas-canvas .react-flow__node { cursor: pointer; }
+/* React Flow re-skin — SHARED by Atlas + Workflows so both canvases read as the
+ * dark surface (kills the stock light-theme controls + white minimap). */
+.atlas-canvas .react-flow__attribution,
+.wf-canvas .react-flow__attribution { display: none; }
+.atlas-canvas .react-flow__controls,
+.wf-canvas .react-flow__controls { box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3); border-radius: var(--r-sm); overflow: hidden; border: 1px solid var(--border); }
+.atlas-canvas .react-flow__controls-button,
+.wf-canvas .react-flow__controls-button { background: var(--raised); border-bottom: 1px solid var(--border); width: 24px; height: 24px; }
+.atlas-canvas .react-flow__controls-button:hover,
+.wf-canvas .react-flow__controls-button:hover { background: var(--surface); }
+.atlas-canvas .react-flow__controls-button svg,
+.wf-canvas .react-flow__controls-button svg { fill: var(--text-dim); }
+.atlas-canvas .react-flow__controls-button:hover svg,
+.wf-canvas .react-flow__controls-button:hover svg { fill: var(--accent); }
+.atlas-canvas .react-flow__controls-button:disabled svg,
+.wf-canvas .react-flow__controls-button:disabled svg { fill: var(--text-faint); opacity: .5; }
+.atlas-canvas .react-flow__minimap,
+.wf-canvas .react-flow__minimap { border-radius: var(--r-sm); }
+/* The minimap viewport window (the draggable "square") — outline it so it reads
+ * against the dark mask instead of the stock white. */
+.atlas-canvas .react-flow__minimap-mask,
+.wf-canvas .react-flow__minimap-mask { stroke: var(--border-strong); stroke-width: 2; }
+.atlas-canvas .react-flow__minimap-node,
+.wf-canvas .react-flow__minimap-node { stroke: none; }
+.atlas-canvas .react-flow__node,
+.wf-canvas .react-flow__node { cursor: pointer; }
 .atlas-canvas .react-flow__edge-path { stroke: var(--border-strong); }
 
 /* ===== ATLAS-10 — modes, filters, breadcrumb, grouped nodes, layer cards ===== */
@@ -4220,15 +4274,31 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .atlas-detail-untested .atlas-detail-change-dot { background: var(--err); }
 
 /* ===== §7 — Visual workflow canvas ===== */
-.wf-panel { display: flex; flex-direction: column; height: 100%; gap: 8px; padding: 8px; box-sizing: border-box; }
-.wf-toolbar, .wf-palette { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-.wf-palette-label { color: var(--text-dim); font-size: 11px; }
-.wf-problem { color: var(--accent); font-size: 12px; padding: 4px 8px; background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 6px; }
-.wf-body { display: flex; gap: 8px; flex: 1; min-height: 380px; }
-.wf-canvas { flex: 1; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; min-height: 380px; background: var(--surface); }
-.wf-side { width: 290px; display: flex; flex-direction: column; gap: 8px; overflow: auto; }
-.wf-section { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); margin-bottom: 6px; }
-.wf-inspector, .wf-run { border: 1px solid var(--border); border-radius: 8px; padding: 8px; background: var(--surface); }
+.wf-panel { display: flex; flex-direction: column; height: 100%; gap: 10px; padding: 10px; box-sizing: border-box; }
+/* Toolbar mirrors .atlas-toolbar — a single centered baseline + a bottom rule. */
+.wf-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.wf-spacer { flex: 1 1 auto; min-width: 8px; }
+.wf-palette { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.wf-palette-label { color: var(--text-faint); font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; width: 58px; flex: none; }
+/* Node-add chips — legible (full-contrast text), button-radius, with the node's
+   dot colour so the palette doubles as the canvas legend. */
+.wf-add { display: inline-flex; align-items: center; gap: 6px; min-height: 26px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--raised); color: var(--text); font-size: 11.5px; font-weight: 500; cursor: pointer; transition: border-color .14s, background .14s; }
+.wf-add:hover { border-color: var(--border-strong); background: var(--ov-06); }
+.wf-add-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.wf-name { flex: 0 1 180px; min-width: 120px; }
+.wf-load { flex: 0 1 150px; }
+.wf-problem { color: var(--accent); font-size: 12px; padding: 5px 9px; background: color-mix(in srgb, var(--accent) 12%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent); border-radius: var(--r-sm); }
+.wf-body { display: flex; gap: 10px; flex: 1; min-height: 380px; }
+.wf-canvas { flex: 1; border: 1px solid var(--border); border-radius: var(--r-md, 10px); overflow: hidden; min-height: 380px; background: var(--surface); }
+.wf-side { width: 300px; display: flex; flex-direction: column; gap: 10px; overflow: auto; min-height: 0; }
+.wf-section { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); margin-bottom: 8px; font-weight: 600; }
+/* The inspector fills the side column so short content reads as a panel, not a
+   card floating in empty space. */
+.wf-inspector { flex: 1; display: flex; flex-direction: column; min-height: 160px; }
+.wf-inspector, .wf-run { border: 1px solid var(--border); border-radius: var(--r-md, 10px); padding: 10px; background: var(--surface); }
+.wf-inspector-empty { display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 0; }
+.wf-inspector-empty .wf-textarea { flex: 1; min-height: 96px; }
+.wf-config { display: flex; flex-direction: column; min-height: 0; }
 .wf-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; margin-bottom: 8px; color: var(--text-dim); }
 .wf-textarea { width: 100%; box-sizing: border-box; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px; font-family: var(--mono); font-size: 12px; resize: vertical; }
 .wf-cond { display: flex; gap: 4px; }
@@ -4279,22 +4349,12 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .req-fw-btn:hover { border-color: var(--accent); color: var(--text); }
 
 /* ===== §2 — Write mode (Markdown writing workspace) ===== */
-.write-panel { display: flex; height: 100%; min-height: 0; }
-.write-tree { width: 220px; flex: 0 0 auto; border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 6px; gap: 6px; min-height: 0; }
-.write-files { flex: 1; display: flex; flex-direction: column; gap: 1px; min-height: 0; }
-.write-file-row { display: flex; flex-direction: column; align-items: flex-start; text-align: left; background: transparent; border: 0; border-radius: 6px; padding: 4px 8px; cursor: pointer; color: var(--text); font-size: 12px; width: 100%; }
-.write-file-row:hover { background: var(--surface); }
-.write-file-row.active { background: color-mix(in srgb, var(--accent) 18%, transparent); }
-.write-file-dir { font-size: 10px; color: var(--text-faint); max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-.write-main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.write-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border-bottom: 1px solid var(--border); }
-.write-path { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.write-bar-right { display: flex; gap: 4px; align-items: center; flex: 0 0 auto; }
-.write-body { flex: 1; display: flex; min-height: 0; }
-.write-body.view-split .write-editor-mon, .write-body.view-split .write-preview { width: 50%; flex: 1 1 50%; }
-.write-editor-mon { flex: 1; min-width: 0; min-height: 0; overflow: hidden; background: var(--bg); }
-.write-preview { flex: 1; padding: 12px 20px; border-left: 1px solid var(--border); overflow: auto; }
-.write-status { font-size: 11px; color: var(--text-dim); padding: 4px 8px; border-top: 1px solid var(--border); }
+/* Markdown segmented control (Edit/Split/Preview) — reused by the Editor's
+   Markdown mode (the Docs panel folded in). Same compact look as .atlas-modes. */
+.docs-modes { display: inline-flex; gap: 2px; padding: 2px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border); flex: none; }
+.docs-mode { background: transparent; border: 0; color: var(--text-dim); font-size: 11.5px; font-weight: 550; padding: 4px 11px; border-radius: 6px; cursor: pointer; text-transform: capitalize; }
+.docs-mode:hover { color: var(--text); }
+.docs-mode.on { background: var(--raised); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
 
 /* ===== §3 D4 — Prototype panel ===== */
 .proto-panel { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
@@ -4310,22 +4370,23 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .proto-path { font-family: var(--mono); font-size: 11px; color: var(--text-faint); margin-right: auto; }
 .proto-prompt { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-family: var(--mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap; color: var(--text); margin: 0; max-height: 360px; overflow: auto; }
 
-/* ===== §2 W5 — Write-mode workspace-grounded assistant ===== */
-.write-asst { border-top: 1px solid var(--border); }
-.write-asst-toggle { width: 100%; text-align: left; background: none; border: 0; color: var(--accent); font-size: 12px; font-weight: 600; padding: 6px 10px; cursor: pointer; }
-.write-asst-body { padding: 0 10px 8px; display: flex; flex-direction: column; gap: 6px; max-height: 280px; overflow: auto; }
-.write-asst-row { display: flex; gap: 6px; }
-.write-asst-answer { font-size: 13px; color: var(--text); line-height: 1.5; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
-.write-asst-grounded { display: inline-block; font-size: 10px; color: var(--ok); border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent); border-radius: 999px; padding: 0 6px; margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }
-.write-asst-note { font-size: 11px; color: var(--text-faint); }
+/* ===== §2 W5 — Docs workspace-grounded assistant (its own bottom section) ===== */
+.docs-asst { flex: none; border-top: 1px solid var(--border); background: var(--surface); }
+.docs-asst-toggle { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left; background: none; border: 0; color: var(--accent); font-size: 12px; font-weight: 600; padding: 9px 12px; cursor: pointer; }
+.docs-asst-toggle:hover { color: var(--text); }
+.docs-asst-chev { color: var(--text-faint); font-size: 10px; }
+.docs-asst-body { padding: 2px 12px 12px; display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow: auto; }
+.docs-asst-row { display: flex; gap: 8px; align-items: center; }
+.docs-asst-input { flex: 1 1 auto; min-width: 0; }
+.docs-asst-answer { font-size: 13px; color: var(--text); line-height: 1.55; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.docs-asst-answer > :first-child { margin-top: 0; }
+.docs-asst-answer > :last-child { margin-bottom: 0; }
+.docs-asst-answer a { color: var(--accent); text-decoration: none; }
+.docs-asst-answer a:hover { text-decoration: underline; text-underline-offset: 2px; }
+.docs-asst-grounded { display: inline-block; font-size: 10px; color: var(--ok); border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent); border-radius: 999px; padding: 1px 7px; margin-bottom: 6px; text-transform: uppercase; letter-spacing: .04em; }
+.docs-asst-note { font-size: 11px; color: var(--text-faint); line-height: 1.4; }
 
-/* ===== §2 W3 — Write-mode selection inline AI + diff review ===== */
-.write-ai-bar { display: flex; align-items: center; gap: 10px; padding: 5px 8px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--accent) 7%, transparent); flex-wrap: wrap; }
-.write-ai-label { font-size: 11px; color: var(--accent); font-weight: 600; }
-.write-ai-actions { display: flex; gap: 4px; }
-.write-ai-hint { font-size: 11px; color: var(--text-faint); margin-left: auto; }
-
-.write-body { position: relative; }
+/* ===== Selection inline AI — the accept/reject diff review overlay (Editor Markdown mode) ===== */
 .wai-overlay { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .wai-head { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
 .wai-title { font-size: 12px; font-weight: 600; color: var(--text); }
@@ -4347,30 +4408,13 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .wai-toggle.on { border-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .wai-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--border); }
 
-/* Write + Workflows reflow when their panel is narrow (split view / side panel).
-   Side-by-side editor|preview and canvas|inspector are unusable below ~620px, so
-   stack them and let the toolbars wrap. Placed AFTER the component rules above so
-   these container-query overrides win the cascade (equal specificity). */
+/* Workflows reflows when its panel is narrow (split view / side panel): the
+   side-by-side canvas|inspector is unusable below ~620px, so stack them. Placed
+   AFTER the component rules so this container-query override wins the cascade. */
 @container panel (max-width: 620px) {
-  /* Write: stack the editor over the preview, shrink the file tree, wrap the bar. */
-  .write-tree { width: 156px; }
-  .write-bar { flex-wrap: wrap; row-gap: 6px; }
-  .write-ai-bar { row-gap: 4px; }
-  .write-body.view-split { flex-direction: column; }
-  .write-body.view-split .write-editor-mon,
-  .write-body.view-split .write-preview { width: 100%; flex: 1 1 50%; }
-  .write-body.view-split .write-preview { border-left: 0; border-top: 1px solid var(--border); }
-  /* Workflows: stack the canvas over the inspector/run side, both full width. */
   .wf-body { flex-direction: column; }
   .wf-side { width: 100%; }
   .wf-canvas { min-height: 260px; }
-}
-
-@container panel (max-width: 440px) {
-  .write-tree { width: 124px; }
-  .write-file-dir { display: none; } /* keep the filename; drop the dir subtitle */
-  .write-bar-right .seg-toggle,
-  .write-bar-right .sched-add-btn { padding-inline: 7px; }
 }
 
 /* ===== §5.3 — Memory panel ===== */
