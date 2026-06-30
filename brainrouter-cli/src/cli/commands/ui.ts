@@ -11,9 +11,7 @@ import { spinner as makeSpinner } from '../spinner.js';
 import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/dist/agent/agent.js';
 import { callMcpTool, hasMcpTool } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
 import { listSessions, reconcileStale } from '@kinqs/brainrouter-core/dist/orchestration/orchestrator.js';
-import { readPreferences, resolveEffort, writePreferences, normalizeEffort } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
-import { getSessionMode, resolveActiveMode, setSessionMode } from '@kinqs/brainrouter-core/dist/session/sessionModeStore.js';
-import { setSessionRuntime } from '@kinqs/brainrouter-core/dist/session/sessionRuntimeStore.js';
+import { readPreferences, resolveEffort, writePreferences, normalizeEffort, getSessionMode, resolveActiveMode, setSessionMode, setSessionRuntime } from '@kinqs/brainrouter-core/session';
 import { readPlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
 // initAgentMd usage moved to commands/init.ts (0.3.7 wizard). The
 // legacy /config + /init switch cases here are gone — the dispatcher

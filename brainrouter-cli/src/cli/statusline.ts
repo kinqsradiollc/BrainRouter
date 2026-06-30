@@ -2,7 +2,7 @@ import { execSync } from 'node:child_process';
 import { formatBudget, readGoal } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
 import { readPlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
 import { getCurrentWorkflow } from '@kinqs/brainrouter-core/dist/workflow/workflowArtifacts.js';
-import { resolveActiveMode } from '@kinqs/brainrouter-core/dist/session/sessionModeStore.js';
+import { resolveActiveMode } from '@kinqs/brainrouter-core/session';
 import { activeRun, formatActivePhase } from '@kinqs/brainrouter-core/dist/workflow/workflowRun.js';
 import { costUsd } from '../runtime/pricing.js';
 

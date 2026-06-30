@@ -12,7 +12,7 @@ import { resolveTheme } from '../theme.js';
 import { buildBannerInputs, renderBanner } from '../banner.js';
 import { isKnownSegment, renderSegments } from '../statusline.js';
 import { resolveTierLadder, currentTier } from '@kinqs/brainrouter-core/dist/provider/tierLadder.js';
-import { readPreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
+import { readPreferences } from '@kinqs/brainrouter-core/session';
 import { resolveSandboxConfig, runShell } from '@kinqs/brainrouter-core/dist/exec/sandbox.js';
 import { parseBangCommand, parseNoteCommand } from '../../runtime/exec/bangCommand.js';
 import { runHooks } from '@kinqs/brainrouter-core/dist/hooks/hooksStore.js';

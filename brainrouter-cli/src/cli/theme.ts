@@ -1,5 +1,5 @@
 import chalk, { type ChalkInstance } from 'chalk';
-import { readPreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
+import { readPreferences } from '@kinqs/brainrouter-core/session';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 
 /**

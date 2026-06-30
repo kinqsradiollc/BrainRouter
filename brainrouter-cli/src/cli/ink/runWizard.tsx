@@ -5,7 +5,7 @@ import os from 'node:os';
 import { WizardApp } from './WizardApp.js';
 import type { WizardState, WizardDraft } from '../wizard/types.js';
 import type { McpPick } from '../wizard/types.js';
-import { writePreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
+import { writePreferences } from '@kinqs/brainrouter-core/session';
 import { loadOrInitConfig, saveConfig, type Config } from '@kinqs/brainrouter-core/config';
 import { initAgentMd } from '../../prompt/initAgentMd.js';
 import { NoTTYError } from '../cliPrompt.js';

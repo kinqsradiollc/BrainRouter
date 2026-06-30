@@ -17,7 +17,7 @@ import { callMcpTool } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
 import { extractMemories, renderMemoryCards } from '../../memory/formatters.js';
 import { consolidateMemories } from '../../memory/consolidation.js';
 import { scanWorkspaceSources } from '../../memory/sourceManifest.js';
-import { readPreferences, writePreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
+import { readPreferences, writePreferences } from '@kinqs/brainrouter-core/session';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import type { CommandContext } from './_context.js';
 import { printMcpCall, printMemoryCards } from './_helpers.js';

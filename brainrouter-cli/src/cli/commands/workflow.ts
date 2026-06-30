@@ -23,7 +23,7 @@ import { DEFAULT_REVIEW_ROSTER, DEFAULT_REVIEW_THRESHOLD } from '@kinqs/brainrou
 import { hashDiff, reviewGate } from '@kinqs/brainrouter-core/dist/review/reviewModel.js';
 import { getLatestReview } from '@kinqs/brainrouter-core/dist/review/reviewStore.js';
 import { formatPlan, readPlan, updatePlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
-import { appendTranscriptEntry } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
+import { appendTranscriptEntry } from '@kinqs/brainrouter-core/session';
 import { recordPlanDecision, readPlanHistory, diffSnapshots, linkPlanDecision, type PlanDecision } from '@kinqs/brainrouter-core/dist/task/planHistoryStore.js';
 import { emitAgentEvent } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 import { getLoopState, parseInterval, startLoop, stopLoop } from '../../runtime/loopRunner.js';

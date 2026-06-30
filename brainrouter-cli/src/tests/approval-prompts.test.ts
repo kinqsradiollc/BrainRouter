@@ -21,7 +21,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { applyYoloOn, applyYoloOff, writePreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
+import { applyYoloOn, applyYoloOff, writePreferences } from '@kinqs/brainrouter-core/session';
 import { setGoal, clearGoal } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
 
 // Helper — spin up a fresh workspace dir per test so the per-workspace

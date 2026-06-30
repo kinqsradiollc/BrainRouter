@@ -91,7 +91,7 @@ import { Command } from 'commander';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
 import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath, getCliKnobs, setCliKnobOverride, hydrateConfigDefaultsOnDisk, resolveCliKnobs, type LLMConfig } from '@kinqs/brainrouter-core/config';
-import { redactText } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
+import { redactText, resolveSessionLlmConfig } from '@kinqs/brainrouter-core/session';
 
 if (getCliKnobs().debugExit) {
   process.on('beforeExit', (code) => {
@@ -114,7 +114,6 @@ import { cliPrompter } from './cli/cliPrompt.js';
 import { runChat } from './cli/ink/runChat.js';
 import { applyWorkspaceRoot, findWorkspaceRoot } from '@kinqs/brainrouter-core/dist/workspace/workspace.js';
 import { runWizard, isOnboarded } from './cli/ink/runWizard.js';
-import { resolveSessionLlmConfig } from '@kinqs/brainrouter-core/dist/session/sessionRuntimeStore.js';
 
 const DEFAULT_LLM: LLMConfig = { provider: 'openai', model: 'gpt-4o-mini', apiKey: '' };
 
@@ -300,7 +299,7 @@ program
     // transcript into this launch before the REPL starts. Errors print and
     // fall through to a fresh session (never abort the launch).
     if (options.continue || options.resume) {
-      const { listTranscripts, loadTranscript } = await import('@kinqs/brainrouter-core/dist/session/sessionStore.js');
+      const { listTranscripts, loadTranscript } = await import('@kinqs/brainrouter-core/session');
       const { pickResumeSession } = await import('./state/resumePicker.js');
       const pick = pickResumeSession(listTranscripts(workspace.workspaceRoot), {
         continueLatest: !!options.continue,

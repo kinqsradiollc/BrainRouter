@@ -8,12 +8,12 @@ import {
   readPreferences,
   writePreferences,
   resolveEffort,
+  setSessionRuntime,
   type Preferences,
   type EffortLevel,
   type ExecutionMode,
   type ReviewPolicy,
-} from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
-import { setSessionRuntime } from '@kinqs/brainrouter-core/dist/session/sessionRuntimeStore.js';
+} from '@kinqs/brainrouter-core/session';
 import { isKnownSegment, SEGMENT_NAMES } from '../statusline.js';
 import { PROVIDER_CATALOG, maskApiKey, validateApiKey } from '@kinqs/brainrouter-core/dist/provider/catalog.js';
 import { selectModel } from '../wizard/modelsApi.js';

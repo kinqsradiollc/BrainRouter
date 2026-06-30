@@ -19,8 +19,7 @@ import { activeRun, formatActivePhase } from '@kinqs/brainrouter-core/dist/workf
 import { resolveBackgroundTarget, describeStopOutcome } from '../../runtime/bgDetach.js';
 import { buildAgentForest, formatAgentForest, formatAgentWhy } from '../../orchestration/agentTree.js';
 import { formatAgentTranscript, formatAgentReplay } from '../../orchestration/agentTranscriptView.js';
-import { readPreferences, writePreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
-import { readTranscriptEntries, appendTranscriptEntry } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
+import { readPreferences, writePreferences, readTranscriptEntries, appendTranscriptEntry } from '@kinqs/brainrouter-core/session';
 import { readGoal, setGoal, pauseGoal } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
 import { buildHandoffPacket, resolveHandoffTarget, type HandoffPacket } from '../../orchestration/handoff.js';
 import { getLoopState, stopLoop } from '../../runtime/loopRunner.js';

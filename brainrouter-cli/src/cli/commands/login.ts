@@ -7,7 +7,7 @@ import { runPicker, runTextField } from '../ink/runPicker.js';
 const pickFromList = runPicker;
 const promptText = runTextField;
 import { buildTheme, type Theme } from '../theme.js';
-import { readPreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
+import { readPreferences } from '@kinqs/brainrouter-core/session';
 import { editLlm, promptBrainrouterApiKey } from './config.js';
 
 /**

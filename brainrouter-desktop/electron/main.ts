@@ -12,7 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isAgentCommand } from '@kinqs/brainrouter-agent-protocol';
 import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace, listTrustedWorkspaces } from '@kinqs/brainrouter-core/dist/workspace/workspaceTrust.js';
-import { listTranscripts, type TranscriptSummary } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
+import { listTranscripts, type TranscriptSummary } from '@kinqs/brainrouter-core/session';
 import { getStateDir } from '@kinqs/brainrouter-core/dist/storage/store.js';
 // T1 — global dashboard disk reads (no live host needed): running tasks + last
 // review gate per recent workspace.

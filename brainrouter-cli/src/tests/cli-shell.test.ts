@@ -7,7 +7,7 @@ import { buildTheme, resolveTheme } from '../cli/theme.js';
 import { renderBanner, resolveDisplayedMcpState } from '../cli/banner.js';
 import { isKnownSegment, renderSegment, renderSegments, SEGMENT_NAMES } from '../cli/statusline.js';
 import { gatherWhereInputs, renderWhere } from '../cli/whereView.js';
-import { readPreferences, writePreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
+import { readPreferences, writePreferences } from '@kinqs/brainrouter-core/session';
 import { blockGoal, setGoal, tickGoalIteration } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
 import { updatePlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
 import { createWorkflow } from '@kinqs/brainrouter-core/dist/workflow/workflowArtifacts.js';

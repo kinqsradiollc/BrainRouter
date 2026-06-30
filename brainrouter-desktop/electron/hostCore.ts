@@ -29,7 +29,7 @@ import {
   type AgentImage,
   type InteractionResponse,
 } from '@kinqs/brainrouter-agent-protocol';
-import { subscribeCompletions, pendingCompletionCount, peekCompletions } from '@kinqs/brainrouter-core/dist/session/completionInbox.js';
+import { subscribeCompletions, pendingCompletionCount, peekCompletions } from '@kinqs/brainrouter-core/session';
 import { buildChildResumePrompt } from '@kinqs/brainrouter-core/dist/util/childResume.js';
 
 /**

@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import chalk from 'chalk';
 import { NoTTYError } from '../cliPrompt.js';
-import { writePreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
+import { writePreferences } from '@kinqs/brainrouter-core/session';
 import {
   loadOrInitConfig,
   saveConfig,

@@ -24,7 +24,7 @@ import { loadConfig, saveConfig, getCliKnobs, _resetCliKnobsCache, applyRuleEdit
 // 0.4.15 — named providers + per-sub-agent model routing (pure transforms).
 import { setProvider, removeProvider, setAgentModel, normalizeProviderModels } from '@kinqs/brainrouter-core/dist/provider/agentModels.js';
 import { McpClientPool } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
-import { listTranscripts, loadTranscript, readTranscriptTail, transcriptExists, transcriptSizeBytes, deleteSession, forkSession, appendTranscriptEntry, rewindTranscript, type TranscriptSummary } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
+import { listTranscripts, loadTranscript, readTranscriptTail, transcriptExists, transcriptSizeBytes, deleteSession, forkSession, appendTranscriptEntry, rewindTranscript, type TranscriptSummary, readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups, type SessionMeta, getSessionRuntime, setSessionRuntime, resolveSessionLlmConfig, getSessionMode, setSessionMode, resolveActiveMode, buildRecap, readPreferences, writePreferences, searchTranscript, exportTranscriptMarkdown, exportTranscriptJson, exportFileName, listChapters } from '@kinqs/brainrouter-core/session';
 import { readUsageHistory, totalUsage } from '@kinqs/brainrouter-core/dist/usage/usageHistoryStore.js';
 import { classifyForVerification } from '@kinqs/brainrouter-core/dist/agent/verificationGate.js';
 import { resolveWorkspaceGit } from '@kinqs/brainrouter-core/dist/git/workspaceGit.js';
@@ -34,16 +34,12 @@ import type { WorkflowGraph } from '@kinqs/brainrouter-core/dist/workflow/graph.
 import { writeThreadKey, buildGroundingBlock, pickLocalGrounding } from '@kinqs/brainrouter-core/dist/write/grounding.js';
 import { WorkspaceFileListCache, type WorkspaceFileListResult } from './workspaceFileListCache.js';
 import { startWorkspaceWatcher } from './fileWatch.js';
-import { readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups, type SessionMeta } from '@kinqs/brainrouter-core/dist/session/sessionMetaStore.js';
-import { getSessionRuntime, setSessionRuntime, resolveSessionLlmConfig } from '@kinqs/brainrouter-core/dist/session/sessionRuntimeStore.js';
-import { getSessionMode, setSessionMode, resolveActiveMode } from '@kinqs/brainrouter-core/dist/session/sessionModeStore.js';
 import { loadSchedules, addSchedule, removeSchedule, setScheduleEnabled } from '@kinqs/brainrouter-core/dist/schedule/scheduleStore.js';
 import { parseCron, nextCronFire } from '@kinqs/brainrouter-core/dist/schedule/cronParser.js';
 import { parseReviewFindings, REVIEW_OUTPUT_CONTRACT, stripReasoning } from '@kinqs/brainrouter-core/dist/review/reviewFindings.js';
 import { hashDiff, reviewGate, staleIfDiffChanged, isFindingStatus, type ReviewRun, type ReviewFinding, type Severity } from '@kinqs/brainrouter-core/dist/review/reviewModel.js';
 import { getLatestReview, saveReview, updateReviewFinding } from '@kinqs/brainrouter-core/dist/review/reviewStore.js';
 import { getStateDir } from '@kinqs/brainrouter-core/dist/storage/store.js';
-import { buildRecap } from '@kinqs/brainrouter-core/dist/session/sessionRecap.js';
 import { collectRunningTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
 import { killBackgroundShell } from '@kinqs/brainrouter-core/dist/exec/backgroundShell.js';
 import { contextWindowForBudget } from '@kinqs/brainrouter-core/dist/context/contextWindow.js';
@@ -52,11 +48,7 @@ import { contextWindowForBudget } from '@kinqs/brainrouter-core/dist/context/con
 // file, same hooks store, same transcript tooling.
 import { SLASH_COMMANDS, HELP_CATEGORIES } from '@kinqs/brainrouter-core/dist/command/catalog.js';
 import { validateCatalogParity } from '@kinqs/brainrouter-core/dist/command/parity.js';
-import { readPreferences, writePreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
 import { readHooks, setHookEnabled } from '@kinqs/brainrouter-core/dist/hooks/hooksStore.js';
-import { searchTranscript } from '@kinqs/brainrouter-core/dist/session/transcriptSearch.js';
-import { exportTranscriptMarkdown, exportTranscriptJson, exportFileName } from '@kinqs/brainrouter-core/dist/session/transcriptExport.js';
-import { listChapters } from '@kinqs/brainrouter-core/dist/session/chapterMarks.js';
 import { buildUsageBreakdown } from '@kinqs/brainrouter-core/dist/util/usageBreakdown.js';
 // DESK-5 — the command bridge dispatches REPL-only commands against the SAME
 // stores the terminal CLI uses. No parallel state: /goal here is /goal there.

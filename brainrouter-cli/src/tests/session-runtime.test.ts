@@ -8,7 +8,7 @@ const HOME = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rt-home-')))
 process.env.BRAINROUTER_HOME = HOME;
 
 const { getSessionRuntime, setSessionRuntime, clearSessionRuntime, resolveSessionRuntime, resolveSessionLlmConfig } =
-  await import('@kinqs/brainrouter-core/dist/session/sessionRuntimeStore.js');
+  await import('@kinqs/brainrouter-core/session');
 
 const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'rt-ws-')));
 const GLOBAL = { provider: 'anthropic', model: 'claude-opus-4-8', mcpProfiles: [] };
