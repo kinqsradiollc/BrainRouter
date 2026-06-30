@@ -5,6 +5,9 @@ import {
   isStrongModelFamily,
   isLocalModelFamily,
   resolveLocalModelProfile,
+  localModelProfileActive,
+  isLocalModelCoreTool,
+  LOCAL_MODEL_CORE_TOOLS,
   type HarnessCaps,
 } from '../provider/modelFamily.js';
 
@@ -71,4 +74,23 @@ test('resolveLocalModelProfile: clamp is a ceiling — never loosens an already-
   assert.equal(r.repeatToolSequenceLimit, 4);
   assert.equal(r.stormThreshold, 2);
   assert.equal(r.maxSpawnDepth, 1);
+});
+
+test('localModelProfileActive: shared gate matches the resolver/overlay logic', () => {
+  assert.equal(localModelProfileActive('llama-3.1-8b', 'auto'), true);
+  assert.equal(localModelProfileActive('claude-opus-4-8', 'auto'), false);
+  assert.equal(localModelProfileActive('claude-opus-4-8', 'on'), true);
+  assert.equal(localModelProfileActive('llama-3.1-8b', 'off'), false);
+});
+
+test('L2 allowlist: keeps file/search/edit/shell + lifecycle, hides the long tail', () => {
+  for (const keep of ['read_file', 'write_file', 'edit_file', 'apply_patch', 'list_dir', 'grep_search', 'glob_files', 'run_command', 'update_plan', 'goal_complete', 'ask_user_choice']) {
+    assert.equal(isLocalModelCoreTool(keep), true, `${keep} stays in the local allowlist`);
+  }
+  for (const hide of ['computer_use', 'web_search', 'fetch_url', 'research_brief', 'lsp', 'artifact_write', 'track_query', 'spawn_worker_thread', 'mcp_refresh_catalog']) {
+    assert.equal(isLocalModelCoreTool(hide), false, `${hide} is hidden for local models`);
+  }
+  // Orchestration tools are filtered elsewhere — they must NOT be in this set
+  // (so they're never accidentally clamped out by the built-in filter).
+  assert.equal(LOCAL_MODEL_CORE_TOOLS.has('task_agent'), false);
 });
