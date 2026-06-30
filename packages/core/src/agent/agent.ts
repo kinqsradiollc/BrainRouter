@@ -6364,6 +6364,33 @@ function isInvalidReasoningEffortError(status: number, body: string): boolean {
 }
 
 /**
+ * HONK-L4 — drop `tools`/`tool_choice` for the retry. Returns a cloned body
+ * without them, or `undefined` when the body never carried tools (so the caller
+ * skips the retry). This is the "must replicate the drop-and-retry" safety net:
+ * some local/OSS endpoints (and a few OpenAI-compatible gateways) 400 on tools or
+ * a forced `tool_choice` they don't implement; rather than hard-fail the turn we
+ * resend without them and let the model answer in plain content.
+ */
+export function stripToolsFromBody(body: any): any | undefined {
+  if (!body || typeof body !== 'object') return undefined;
+  const hasTools = Object.prototype.hasOwnProperty.call(body, 'tools') && Array.isArray(body.tools) && body.tools.length > 0;
+  const hasChoice = Object.prototype.hasOwnProperty.call(body, 'tool_choice');
+  if (!hasTools && !hasChoice) return undefined;
+  const next = { ...body };
+  delete next.tools;
+  delete next.tool_choice;
+  // Responses-format payloads carry tools under the same keys; covered above.
+  return next;
+}
+
+/** A 400/404/422 whose body blames `tools` / `tool_choice` / `function` support. */
+export function isToolsUnsupportedError(status: number, body: string): boolean {
+  if (status !== 400 && status !== 404 && status !== 422) return false;
+  return /(tool_choice|tool[_\-. ]?call|\btools\b|function[_\-. ]?call|functions?)/i.test(body) &&
+    /(invalid|unsupported|not supported|no(t)? (support|implement)|unknown|unrecognized|does not support|cannot|unexpected|not allowed|unavailable)/i.test(body);
+}
+
+/**
  * DESK-6 — sentinel thrown when an in-flight LLM call is aborted because the
  * USER pressed Stop (not a timeout / connectivity blip). The resilient loop
  * must NOT reconnect on this (a Stop is deliberate), and the turn unwinds with
@@ -6599,11 +6626,18 @@ export async function callOpenAI(
   let res = await postBody(body);
   if (!res.ok) {
     const errText = await res.text();
-    const retryBody = isInvalidReasoningEffortError(res.status, errText)
+    let retryBody = isInvalidReasoningEffortError(res.status, errText)
       ? stripReasoningEffortFromBody(body)
       : undefined;
+    let retryKind = retryBody ? 'reasoning_effort' : '';
+    // HONK-L4 — if the endpoint rejected tools/tool_choice, drop them and retry
+    // (degrade to a plain-content answer) instead of hard-failing the turn.
+    if (!retryBody && isToolsUnsupportedError(res.status, errText)) {
+      retryBody = stripToolsFromBody(body);
+      if (retryBody) retryKind = 'tools_unsupported';
+    }
     if (retryBody) {
-      traceEvent('llm_call.reasoning_effort_retry', {
+      traceEvent(retryKind === 'tools_unsupported' ? 'llm_call.tools_unsupported_retry' : 'llm_call.reasoning_effort_retry', {
         model: config.model,
         endpoint,
         requestFormat,
