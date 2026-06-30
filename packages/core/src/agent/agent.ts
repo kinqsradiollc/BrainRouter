@@ -151,6 +151,7 @@ import { extractCacheStats } from '../util/cacheStats.js';
 // 0.3.9 item 11 — tool-call repair pipeline (flatten / scavenge /
 // truncation / storm).
 import { ToolCallRepair, type RepairReport } from './repair/index.js';
+import { analyzeSchema, flattenSchema, nestArguments, type JSONSchema } from './repair/flatten.js';
 // 0.3.9 token-tally rework: content-aware estimator. The compaction
 // threshold itself stays a single `BRAINROUTER_AUTO_COMPACT_TOKENS`
 // absolute knob — the model's max context window isn't a good driver
@@ -884,6 +885,9 @@ export class Agent {
   /** MAS-P4-T1 per-agent tool scope (from the agent def); undefined = no filter. */
   private toolScope?: { local: string[]; mcp: string[] };
   private disallowedTools: string[];
+  /** HONK-L3 — built-in tools whose schema was flattened for a local model THIS
+   *  turn; their args are re-nested at dispatch via `nestArguments`. */
+  private flattenedToolNames = new Set<string>();
   /** MAS-P4-T1 — MCP tools trimmed by the budget this turn (model-facing names). */
   private lastBudgetHiddenTools = new Set<string>();
   /** 0.4.x-5 — per-child reasoning-effort override; falls back to session /effort. */
@@ -1284,7 +1288,7 @@ export class Agent {
     // reliably). Strong/unknown models are untouched. Orchestration tools are
     // added separately, so delegation is unaffected.
     const localToolScope = localModelProfileActive(this.llmConfig.model, cliKnobs.localModelProfile);
-    const filteredLocalTools = localToolSpecsFromExecutors().filter(
+    let filteredLocalTools = localToolSpecsFromExecutors().filter(
       (t) =>
         allowed.has(t.name) &&
         !MODEL_HIDDEN_TOOLS.has(t.name) &&
@@ -1293,6 +1297,20 @@ export class Agent {
         !(!mcpDiscoveryOn && MCP_DISCOVERY_TOOLS.has(t.name)) &&
         !(localToolScope && !isLocalModelCoreTool(t.name)),
     );
+    // HONK-L3 — for local models, flatten deep/wide tool schemas (the dormant,
+    // tested repair pass) so they stop dropping nested args; `nestArguments` at
+    // dispatch (executeLocalTool) reverses it. Returns NEW spec objects so the
+    // shared registry schemas are never mutated. No-op for strong models, and
+    // for tools whose schema isn't deep/wide enough to benefit.
+    this.flattenedToolNames = new Set<string>();
+    if (localToolScope) {
+      filteredLocalTools = filteredLocalTools.map((t) => {
+        const schema = t.inputSchema as JSONSchema | undefined;
+        if (!analyzeSchema(schema).shouldFlatten || !schema) return t;
+        this.flattenedToolNames.add(t.name);
+        return { ...t, inputSchema: flattenSchema(schema) };
+      });
+    }
     // Multi-MCP parity: expose every connected third-party MCP tool and the
     // model-safe BrainRouter MCP tools in one turn, using the pool's
     // `mcp_<serverId>_<tool>` namespaces. BrainRouter's auto-pipeline/admin
@@ -3191,6 +3209,9 @@ export class Agent {
   }
 
   private async executeLocalTool(name: string, args: Record<string, any>): Promise<string> {
+    // HONK-L3 — re-nest args the local model emitted against a flattened schema
+    // (dot-notation keys → nested objects) before any executor sees them.
+    if (this.flattenedToolNames.has(name)) args = nestArguments(args);
     const executor = localToolExecutor(name);
     if (executor) {
       return executor.handle({
