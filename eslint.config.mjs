@@ -41,13 +41,18 @@ export default [
     plugins: { '@typescript-eslint': tsPlugin, 'react-hooks': reactHooks },
     linterOptions: { reportUnusedDisableDirectives: 'off' },
     rules: {
-      // Refactor P1: import a package's public entrypoint, never its compiled
-      // `dist/*` internals. WARN now (debt) → ERROR after the migration.
-      'no-restricted-imports': ['warn', {
+      // Refactor P1 (complete for core): import @kinqs/brainrouter-core through a
+      // curated subsystem entrypoint (`@kinqs/brainrouter-core/<subsystem>`), never
+      // its compiled `dist/*` internals. The migration is done — every consumer is
+      // off deep imports and core's `./dist/*` wildcard export is gone — so this is
+      // ERROR to keep the boundary closed. Other @kinqs packages aren't god-packages
+      // and are intentionally deep-imported in a couple of browser-bundle-sensitive
+      // spots, so they are not banned here.
+      'no-restricted-imports': ['error', {
         patterns: [
           {
-            group: ['@kinqs/*/dist/**'],
-            message: 'Import from the package public entrypoint, not its compiled dist/* internals (Refactor P1 — migrate to a curated core entrypoint).',
+            group: ['@kinqs/brainrouter-core/dist/**'],
+            message: 'Import from a curated entrypoint (e.g. @kinqs/brainrouter-core/agent), not compiled dist/* internals. The core public API is the per-subsystem entrypoints (Refactor P1).',
           },
         ],
       }],

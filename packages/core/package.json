@@ -162,8 +162,7 @@
     "./version": {
       "types": "./dist/version.d.ts",
       "default": "./dist/version.js"
-    },
-    "./dist/*": "./dist/*"
+    }
   },
   "files": [
     "dist",
