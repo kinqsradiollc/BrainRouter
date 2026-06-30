@@ -13,9 +13,21 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { removeChildWorktree, applyPatchFile, type ChildWorktreeIsolation } from '../worktree/worktreeIsolation.js';
 import { getStateDir } from '../storage/store.js';
+import { getCliKnobs } from '../config/config.js';
+import { emitPrFromPatch, derivePrTitle, derivePrBody } from '../git/prEmit.js';
 import { parsePatchFiles, planSynthesisMerge, type WorktreeChangeSet } from './mergeGate.js';
 import { normalizePhasePlan, type PhasePlan } from './phasePlan.js';
 import type { PhasePlanExecution } from './phaseOrchestrator.js';
+
+export interface BuildLoopPrOutcome {
+  ok: boolean;
+  url?: string;
+  number?: number;
+  branch?: string;
+  error?: string;
+  /** Why the PR emit was a no-op (gh/remote/base missing) — caller merged back instead. */
+  skipped?: string;
+}
 
 export interface BuildLoopMergeOutcome {
   merged: boolean;
@@ -24,6 +36,8 @@ export interface BuildLoopMergeOutcome {
   changedFiles?: number;
   patchPath?: string;
   applyError?: string;
+  /** HONK-H1 — present when `cli.buildLoopEmitPr` delivered the work as a PR. */
+  pr?: BuildLoopPrOutcome;
   reason: string;
 }
 
@@ -229,26 +243,72 @@ export function finalizeBuildLoop(
   const verifyGreen = verifyPhase ? verifyLooksGreen(verifyPhase.output) : true;
   const reviewApproved = !reviewHasBlocker(phaseOutput('review'));
   const apply = verifyGreen && reviewApproved;
+  // HONK-H1 — when opted in, a passing build is delivered as a PR, NOT merged into
+  // the user's tree. Capture the patch WITHOUT applying it back (applyBack:false);
+  // the PR step below is the delivery. If the PR emit can't proceed we fall back to
+  // the normal merge so the work is never lost.
+  const emitPr = apply && getCliKnobs().buildLoopEmitPr === true;
 
-  // Unique patch name per finalize so a preserved recovery patch from an earlier
-  // run with the SAME slug is never silently overwritten.
-  const patchFile = path.join(getStateDir(workspaceRoot), 'worktree-patches', `build-${slug}-${Date.now().toString(36)}.patch`);
-  const cleanup = removeChildWorktree(shared.isolation, { applyBack: apply, patchFile });
+  // Unique per-finalize token: names the recovery patch AND makes the PR branch
+  // unique, so a re-run never overwrites a patch nor collides with a live branch.
+  const runToken = Date.now().toString(36);
+  const patchFile = path.join(getStateDir(workspaceRoot), 'worktree-patches', `build-${slug}-${runToken}.patch`);
+  const cleanup = removeChildWorktree(shared.isolation, { applyBack: emitPr ? false : apply, patchFile });
   // No diff + no persisted patch ⇒ the build produced no file changes; a gate-pass
   // here is a clean no-op (NOT a failed apply). `removeChildWorktree` only sets
   // `applied` when there was a patch to apply, so distinguish the cases explicitly.
   const noChanges = (cleanup.changedFiles ?? 0) === 0 && !cleanup.patchPath;
-  const merged = apply && (cleanup.applied === true || noChanges);
 
+  let merged: boolean;
+  let pr: BuildLoopPrOutcome | undefined;
   let reason: string;
-  if (!apply) {
+
+  if (emitPr && !noChanges && cleanup.patchPath) {
+    const res = emitPrFromPatch({
+      sourceRoot: shared.isolation.sourceRoot,
+      patchPath: cleanup.patchPath,
+      slug,
+      runToken,
+      title: derivePrTitle(slug, phaseOutput('implement')),
+      body: derivePrBody({ slug, verifyGreen, changedFiles: cleanup.changedFiles ?? 0, reviewOutput: phaseOutput('review') }),
+      baseBranch: getCliKnobs().buildLoopPrBaseBranch,
+      draft: getCliKnobs().buildLoopPrDraft,
+    });
+    if (res.ok) {
+      pr = { ok: true, url: res.prUrl, number: res.prNumber, branch: res.branch };
+      merged = false; // delivered via PR, intentionally NOT merged into the tree
+      reason = `verify green + review ok → opened PR ${res.prUrl ?? `(branch ${res.branch})`} with ${cleanup.changedFiles ?? 0} file(s) — your tree is untouched`;
+    } else {
+      // PR emit declined/failed → fall back to merging into the tree so work survives.
+      const fallback = applyPatchFile(workspaceRoot, cleanup.patchPath);
+      merged = fallback.ok;
+      pr = { ok: false, error: res.error, skipped: res.skipped, branch: res.branch };
+      const why = res.skipped ?? res.error ?? 'unknown';
+      reason = fallback.ok
+        ? `verify green + review ok → PR emit unavailable (${why}); merged ${cleanup.changedFiles ?? 0} file(s) into your tree instead`
+        : `verify green + review ok → PR emit failed (${why}) AND fallback merge failed (${fallback.error ?? 'conflict'}) — work preserved as a patch`;
+    }
+  } else if (emitPr && !noChanges && !cleanup.patchPath) {
+    // PR mode chose applyBack:false, but the work patch failed to persist (disk /
+    // unwritable state dir) and the worktree is already gone. Report it accurately
+    // rather than misclassifying it as a merge conflict.
+    merged = false;
+    pr = { ok: false, error: 'work patch could not be persisted' };
+    reason = `verify green + review ok → could NOT deliver as a PR: the work patch failed to persist (check disk / ${getStateDir(workspaceRoot)}); re-run the build`;
+  } else if (!apply) {
+    merged = false;
     const why = [!verifyGreen ? 'verify not green' : null, !reviewApproved ? 'review has a blocker' : null].filter(Boolean).join(' + ');
     reason = `merge gated (${why}) — ${cleanup.changedFiles ?? 0} file(s) preserved as a patch (apply with /agents diff or git apply)`;
   } else if (noChanges) {
-    reason = 'verify green + review ok → no file changes to merge (clean no-op)';
+    merged = true;
+    reason = emitPr
+      ? 'verify green + review ok → no file changes to deliver (clean no-op)'
+      : 'verify green + review ok → no file changes to merge (clean no-op)';
   } else if (cleanup.applied === true) {
+    merged = true;
     reason = `verify green + review ok → merged ${cleanup.changedFiles ?? 0} file(s) into your tree`;
   } else {
+    merged = false;
     reason = `gate passed but the patch did not apply cleanly (${cleanup.applyError ?? 'conflict'}) — work preserved as a patch`;
   }
 
@@ -259,6 +319,7 @@ export function finalizeBuildLoop(
     changedFiles: cleanup.changedFiles,
     patchPath: cleanup.patchPath,
     applyError: cleanup.applyError,
+    pr,
     reason,
   };
 }
