@@ -5,4 +5,5 @@
 export * from './checkpoint.js';
 export * from './checkpointStore.js';
 export * from './gitChurn.js';
+export * from './prEmit.js';
 export * from './workspaceGit.js';

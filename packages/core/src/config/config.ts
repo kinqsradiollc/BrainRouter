@@ -398,6 +398,24 @@ export interface CliKnobs {
    * builds only; fan-out builds are not retried.
    */
   buildLoopMaxRepairs?: number;
+  /**
+   * HONK-H1 (0.4.x) — deliver a successful build loop's work as a GitHub Pull
+   * Request instead of merging it into your working tree. `false` (default) =
+   * 0.4.12 behavior (verify-green + review-ok → patch applied to your tree).
+   * `true` = OPT-IN Honk model: the work is committed on a fresh `honk/<slug>-<hash>`
+   * branch in an isolated worktree, pushed, and opened as a PR via the GitHub CLI
+   * (`gh`) — your working tree is never touched. Requires `gh` installed +
+   * authenticated and a GitHub `origin`; if any of that is missing the run falls
+   * back to the normal merge-back so work is never lost. Single-worktree builds
+   * only (fan-out builds always hold slices for manual synthesis).
+   */
+  buildLoopEmitPr?: boolean;
+  /**
+   * HONK-H1 — base branch for the emitted PR. Empty (default) = the repo's current
+   * branch (the branch the build started from). Set to target a fixed integration
+   * branch (e.g. `main`).
+   */
+  buildLoopPrBaseBranch?: string;
   /** PARITY-W3 — ring the terminal bell on an idle background-completion notice. Default false. */
   notifyBell?: boolean;
   /** Child-drain timeout in ms. Default 30000. */
@@ -929,6 +947,8 @@ export interface ResolvedCliKnobs {
   buildLoop: 'off' | 'escalate' | 'always';
   worktreeMergeReview: 'off' | 'on';
   buildLoopMaxRepairs: number;
+  buildLoopEmitPr: boolean;
+  buildLoopPrBaseBranch: string;
   notifyBell: boolean;
   childDrainTimeoutMs: number;
   offloadRetentionMs: number;
@@ -1118,6 +1138,8 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     buildLoop: c.buildLoop ?? 'escalate',
     worktreeMergeReview: c.worktreeMergeReview ?? 'off',
     buildLoopMaxRepairs: Math.max(0, Math.floor(c.buildLoopMaxRepairs ?? 0)),
+    buildLoopEmitPr: c.buildLoopEmitPr === true,
+    buildLoopPrBaseBranch: (c.buildLoopPrBaseBranch ?? '').trim(),
     notifyBell: c.notifyBell ?? false,
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,
     offloadRetentionMs: c.offloadRetentionMs ?? 1_800_000,
