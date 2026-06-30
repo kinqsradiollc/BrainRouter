@@ -11,8 +11,7 @@
 import chalk from 'chalk';
 import { spinner } from '../spinner.js';
 import type { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
-import type { McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
-import { callMcpTool } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
+import { callMcpTool, type McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
 import { clampPayload, extractMemories, renderMemoryCards } from '../../memory/formatters.js';
 import { buildSkillPrompt, resolveSkill, SLASH_TO_SKILL } from '../../prompt/skillRunner.js';
 

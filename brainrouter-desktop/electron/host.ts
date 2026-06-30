@@ -23,7 +23,7 @@ import { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
 import { loadConfig, saveConfig, getCliKnobs, _resetCliKnobsCache, applyRuleEdit, type LLMConfig } from '@kinqs/brainrouter-core/config';
 // 0.4.15 — named providers + per-sub-agent model routing (pure transforms).
 import { setProvider, removeProvider, setAgentModel, normalizeProviderModels } from '@kinqs/brainrouter-core/dist/provider/agentModels.js';
-import { McpClientPool } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
+import { McpClientPool, childSessionKey } from '@kinqs/brainrouter-core/mcp';
 import { listTranscripts, loadTranscript, readTranscriptTail, transcriptExists, transcriptSizeBytes, deleteSession, forkSession, appendTranscriptEntry, rewindTranscript, type TranscriptSummary, readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups, type SessionMeta, getSessionRuntime, setSessionRuntime, resolveSessionLlmConfig, getSessionMode, setSessionMode, resolveActiveMode, buildRecap, readPreferences, writePreferences, searchTranscript, exportTranscriptMarkdown, exportTranscriptJson, exportFileName, listChapters } from '@kinqs/brainrouter-core/session';
 import { readUsageHistory, totalUsage } from '@kinqs/brainrouter-core/dist/usage/usageHistoryStore.js';
 import { classifyForVerification } from '@kinqs/brainrouter-core/dist/agent/verificationGate.js';
@@ -214,7 +214,6 @@ import { listWorkers, readWorkerSummary, readWorkerTranscript, readWorkerMeta } 
 import { listSessions } from '@kinqs/brainrouter-core/dist/orchestration/orchestrator.js';
 import { readRun } from '@kinqs/brainrouter-core/dist/workflow/workflowRun.js';
 import { reconcileStaleBackgroundTasks } from '@kinqs/brainrouter-core/dist/background/backgroundReconcile.js';
-import { childSessionKey } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
 import { desktopSessionModePatchFromArgs, mergeSessionModePrefs } from './sessionModeBridge.js';
 
 interface ParentPortLike {

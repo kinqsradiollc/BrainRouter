@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import chalk from 'chalk';
-import { callMcpTool, childSessionKey } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
+import { callMcpTool, childSessionKey } from '@kinqs/brainrouter-core/mcp';
 import { formatInboxPane } from '../../runtime/inboxView.js';
 import { validateAgentDefinition, buildAgentDefinition, previewAgentDefinition } from '../../orchestration/agentDefValidation.js';
 import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/dist/agent/agent.js';

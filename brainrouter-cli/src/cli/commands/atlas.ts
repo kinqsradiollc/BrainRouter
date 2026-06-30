@@ -24,7 +24,7 @@ import { callOpenAI } from "@kinqs/brainrouter-core/dist/agent/agent.js";
 import { resolveCliKnobs } from '@kinqs/brainrouter-core/config';
 import type { AtlasGraph } from "@kinqs/brainrouter-types";
 import type { CommandContext } from "./_context.js";
-import type { McpClientPool } from "@kinqs/brainrouter-core/dist/mcp/mcpPool.js";
+import type { McpClientPool } from "@kinqs/brainrouter-core/mcp";
 
 /** Call a brain Atlas tool through the MCP pool, parsing its JSON text result. Null on any failure. */
 async function callBrainAtlas(mcpClient: McpClientPool, tool: string, args: Record<string, unknown>): Promise<any | null> {

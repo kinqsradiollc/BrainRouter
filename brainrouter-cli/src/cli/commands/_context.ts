@@ -14,7 +14,7 @@
 
 import type readline from 'node:readline';
 import type { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
-import type { McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
+import type { McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
 import type { Config } from '@kinqs/brainrouter-core/config';
 
 /**

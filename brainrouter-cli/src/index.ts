@@ -101,8 +101,7 @@ if (getCliKnobs().debugExit) {
     process.stderr.write(`[brainrouter:debug] exit code=${code}\n`);
   });
 }
-import { McpClientWrapper } from '@kinqs/brainrouter-core/dist/mcp/mcpClient.js';
-import { McpClientPool, selectMcpServerIds, applyBrainUrlOverride, probeBrainHealth, embeddedBrainId } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
+import { McpClientWrapper, McpClientPool, selectMcpServerIds, applyBrainUrlOverride, probeBrainHealth, embeddedBrainId } from '@kinqs/brainrouter-core/mcp';
 import { formatJsonlEvent, memoryRunEvent, isOffloadTool, type RunEvent } from './runtime/jsonlEvents.js';
 import { costUsd } from './runtime/pricing.js';
 import { VERSION } from '@kinqs/brainrouter-core/dist/version.js';

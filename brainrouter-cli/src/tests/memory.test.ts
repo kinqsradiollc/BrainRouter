@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { buildMemoryBriefing, selectCitedRecordIds } from '@kinqs/brainrouter-core/dist/memory/briefing.js';
 import { decideMemoryBriefing } from '@kinqs/brainrouter-core/dist/memory/briefingTriggers.js';
-import { hasMcpTool } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
+import { hasMcpTool } from '@kinqs/brainrouter-core/mcp';
 import { clampPayload, extractMemories, renderMemoryCards } from '../memory/formatters.js';
 import { expandMentions } from '../memory/mentions.js';
 import { initAgentMd } from '../prompt/initAgentMd.js';

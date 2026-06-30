@@ -10,7 +10,7 @@ import {
   type Config,
 } from '@kinqs/brainrouter-core/config';
 import { initAgentMd } from '../../prompt/initAgentMd.js';
-import { McpClientWrapper } from '@kinqs/brainrouter-core/dist/mcp/mcpClient.js';
+import { McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
 import {
   PROVIDER_CATALOG,
   type ProviderEntry,

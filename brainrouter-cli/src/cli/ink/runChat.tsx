@@ -4,7 +4,6 @@ import { EventEmitter } from 'node:events';
 import { execSync } from 'node:child_process';
 import chalk from 'chalk';
 import type { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
-import type { McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
 import type { Config } from '@kinqs/brainrouter-core/config';
 import { getCliKnobs, setCliKnobOverride } from '@kinqs/brainrouter-core/config';
 import type { WorkspaceInfo } from '@kinqs/brainrouter-core/dist/workspace/workspace.js';
@@ -24,7 +23,7 @@ import { reconcileOrphanWorktrees } from '@kinqs/brainrouter-core/dist/worktree/
 import { reconcileStaleWorkers, listWorkers } from '@kinqs/brainrouter-core/dist/worker/workerStore.js';
 import { beginTurnCheckpoint, endTurnCheckpoint, queueOfflinePrompt, isConnectivityError, readRecoverable, clearOfflineQueue, shouldAutoReplayOffline } from '@kinqs/brainrouter-core/dist/storage/checkpointStore.js';
 import { shouldAutoExtractSkill, buildSessionSummary } from '../../runtime/autoSkill.js';
-import { callMcpTool } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
+import { callMcpTool, type McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
 import { reconcileStaleRuns, listRuns } from '@kinqs/brainrouter-core/dist/workflow/workflowRun.js';
 import { collectRunningTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
 import { newlyTerminal, formatCompletionNotice, type CompletionItem } from '../../runtime/completionNotices.js';

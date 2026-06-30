@@ -1,19 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { callMcpTool, childSessionKey, extractToolText, safeJsonParse } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
+import { callMcpTool, childSessionKey, extractToolText, safeJsonParse } from '@kinqs/brainrouter-core/mcp';
 import { createSession, getSession, listSessions, updateSession } from '@kinqs/brainrouter-core/dist/orchestration/orchestrator.js';
 import { executeOrchestrationTool } from '@kinqs/brainrouter-core/dist/orchestration/tools.js';
 import { normalizeSkillsList } from '../cli/commands/workflow.js';
 import { withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 
 test('McpClientWrapper.isConnected is false before connect', async () => {
-  const { McpClientWrapper } = await import('@kinqs/brainrouter-core/dist/mcp/mcpClient.js');
+  const { McpClientWrapper } = await import('@kinqs/brainrouter-core/mcp');
   const wrapper = new McpClientWrapper();
   assert.equal(wrapper.isConnected(), false);
 });
 
 test('resolveIdentityFromConfig: explicit identity wins over heuristics (10a)', async () => {
-  const { resolveIdentityFromConfig } = await import('@kinqs/brainrouter-core/dist/mcp/mcpClient.js');
+  const { resolveIdentityFromConfig } = await import('@kinqs/brainrouter-core/mcp');
   assert.equal(
     resolveIdentityFromConfig({ type: 'http', url: 'https://example.com', identity: 'third-party' }, 'brainrouter-cloud'),
     'third-party',
@@ -27,7 +27,7 @@ test('resolveIdentityFromConfig: explicit identity wins over heuristics (10a)', 
 });
 
 test('resolveIdentityFromConfig: name prefix and URL host detect BrainRouter (10a)', async () => {
-  const { resolveIdentityFromConfig } = await import('@kinqs/brainrouter-core/dist/mcp/mcpClient.js');
+  const { resolveIdentityFromConfig } = await import('@kinqs/brainrouter-core/mcp');
   // Name prefix.
   assert.equal(
     resolveIdentityFromConfig({ type: 'http', url: 'https://example.com' }, 'brainrouter-cloud'),
@@ -70,20 +70,20 @@ test('resolveIdentityFromConfig: name prefix and URL host detect BrainRouter (10
 });
 
 test('McpClientWrapper.getIdentity returns "unknown" before listTools (10a)', async () => {
-  const { McpClientWrapper } = await import('@kinqs/brainrouter-core/dist/mcp/mcpClient.js');
+  const { McpClientWrapper } = await import('@kinqs/brainrouter-core/mcp');
   const wrapper = new McpClientWrapper();
   assert.equal(wrapper.getIdentity(), 'unknown');
 });
 
 test('McpClientWrapper.listTools returns empty list when disconnected (offline mode)', async () => {
-  const { McpClientWrapper } = await import('@kinqs/brainrouter-core/dist/mcp/mcpClient.js');
+  const { McpClientWrapper } = await import('@kinqs/brainrouter-core/mcp');
   const wrapper = new McpClientWrapper();
   const res = await wrapper.listTools();
   assert.deepEqual(res, { tools: [] });
 });
 
 test('McpClientWrapper.callTool returns an error envelope when disconnected (offline mode)', async () => {
-  const { McpClientWrapper } = await import('@kinqs/brainrouter-core/dist/mcp/mcpClient.js');
+  const { McpClientWrapper } = await import('@kinqs/brainrouter-core/mcp');
   const wrapper = new McpClientWrapper();
   const res = await wrapper.callTool('memory_recall', { query: 'anything' });
   const env = res as { isError: boolean; content: Array<{ type: string; text: string }> };
