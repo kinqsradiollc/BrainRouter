@@ -55,6 +55,10 @@
       "types": "./dist/extension/index.d.ts",
       "default": "./dist/extension/index.js"
     },
+    "./fleet": {
+      "types": "./dist/fleet/index.d.ts",
+      "default": "./dist/fleet/index.js"
+    },
     "./git": {
       "types": "./dist/git/index.d.ts",
       "default": "./dist/git/index.js"
