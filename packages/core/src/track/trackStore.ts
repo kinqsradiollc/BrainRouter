@@ -24,6 +24,8 @@ import {
   type CodeLink,
   type Sprint,
   type SprintState,
+  type Module,
+  type ModuleStatus,
   type Board,
   type BoardType,
   type BoardColumn,
@@ -51,6 +53,7 @@ interface TrackStore {
   project: TrackProject | null;
   workItems: Record<string, WorkItem>;
   sprints: Record<string, Sprint>;
+  modules: Record<string, Module>;
   boards: Record<string, Board>;
   automations: Record<string, AutomationRule>;
   /** GitHub issue links, keyed by work-item id (external sync round-trip). */
@@ -59,7 +62,7 @@ interface TrackStore {
   schemaVersion?: number;
 }
 
-const EMPTY: TrackStore = { project: null, workItems: {}, sprints: {}, boards: {}, automations: {}, githubLinks: {} };
+const EMPTY: TrackStore = { project: null, workItems: {}, sprints: {}, modules: {}, boards: {}, automations: {}, githubLinks: {} };
 
 /**
  * Current on-disk schema.
@@ -269,6 +272,7 @@ export interface CreateWorkItemInput {
   parentId?: string;
   epicId?: string;
   sprintId?: string;
+  moduleId?: string;
   sessionKey?: string;
   requirementId?: string;
   codeLinks?: CodeLink[];
@@ -317,6 +321,7 @@ export function createWorkItem(workspaceRoot: string, input: CreateWorkItemInput
     parentId: input.parentId,
     epicId: input.epicId,
     sprintId: input.sprintId,
+    moduleId: input.moduleId,
     links: [],
     comments: [],
     attachmentIds: [],
@@ -349,6 +354,7 @@ export interface WorkItemFilter {
   statusCategory?: StatusCategory;
   assignee?: string;
   sprintId?: string;
+  moduleId?: string;
   epicId?: string;
   parentId?: string;
   label?: string;
@@ -373,6 +379,7 @@ export function listWorkItems(workspaceRoot: string, filter: WorkItemFilter = {}
       (filter.statusCategory === undefined || w.statusCategory === filter.statusCategory) &&
       (filter.assignee === undefined || w.assignees.includes(filter.assignee)) &&
       (filter.sprintId === undefined || w.sprintId === filter.sprintId) &&
+      (filter.moduleId === undefined || w.moduleId === filter.moduleId) &&
       (filter.epicId === undefined || w.epicId === filter.epicId) &&
       (filter.parentId === undefined || w.parentId === filter.parentId) &&
       (filter.label === undefined || w.labels.includes(filter.label)) &&
@@ -399,7 +406,7 @@ export type UpdateWorkItemPatch = Partial<
     WorkItem,
     | 'title' | 'description' | 'status' | 'priority' | 'assignee' | 'assignees' | 'reporter'
     | 'labels' | 'components' | 'storyPoints' | 'estimateSeconds' | 'startDate' | 'targetDate'
-    | 'parentId' | 'epicId' | 'sprintId' | 'rank'
+    | 'parentId' | 'epicId' | 'sprintId' | 'moduleId' | 'rank'
   >
 >;
 
@@ -426,7 +433,7 @@ export function updateWorkItem(
   if (patch.assignees !== undefined) nextAssignees = normalizeAssignees(patch.assignees);
   else if (patch.assignee !== undefined) nextAssignees = patch.assignee ? normalizeAssignees([patch.assignee]) : [];
   const scalarFields: Array<keyof UpdateWorkItemPatch> = [
-    'title', 'description', 'status', 'priority', 'reporter', 'storyPoints', 'estimateSeconds', 'startDate', 'targetDate', 'parentId', 'epicId', 'sprintId', 'rank',
+    'title', 'description', 'status', 'priority', 'reporter', 'storyPoints', 'estimateSeconds', 'startDate', 'targetDate', 'parentId', 'epicId', 'sprintId', 'moduleId', 'rank',
   ];
   const bag = item as unknown as Record<string, unknown>;
   for (const f of scalarFields) {
@@ -632,6 +639,82 @@ export function setSprintState(workspaceRoot: string, id: string, state: SprintS
   sprint.updatedAt = nowIso();
   writeTrack(workspaceRoot, store);
   return sprint;
+}
+
+// ── Modules ─────────────────────────────────────────────────────────────────────
+
+export interface CreateModuleInput {
+  name: string;
+  description?: string;
+  status?: ModuleStatus;
+  lead?: string;
+  members?: string[];
+  startDate?: string;
+  targetDate?: string;
+}
+
+export function createModule(workspaceRoot: string, input: CreateModuleInput): Module {
+  ensureProject(workspaceRoot);
+  const store = readTrack(workspaceRoot);
+  const ts = nowIso();
+  const module: Module = {
+    id: shortId('mod'), workspaceRoot, name: input.name, description: input.description,
+    status: input.status ?? 'planned', lead: input.lead, members: input.members ?? [],
+    startDate: input.startDate, targetDate: input.targetDate, createdAt: ts, updatedAt: ts,
+  };
+  store.modules[module.id] = module;
+  writeTrack(workspaceRoot, store);
+  return module;
+}
+
+/** List modules (newest first). Archived modules are excluded unless asked for. */
+export function listModules(workspaceRoot: string, opts: { includeArchived?: boolean } = {}): Module[] {
+  return Object.values(readTrack(workspaceRoot).modules)
+    .filter((m) => opts.includeArchived || !m.archivedAt)
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+}
+
+/** Resolve a module by id or (case-insensitive) name. */
+export function getModule(workspaceRoot: string, idOrName: string): Module | undefined {
+  const store = readTrack(workspaceRoot);
+  const key = idOrName.trim().toLowerCase();
+  return store.modules[idOrName] ?? Object.values(store.modules).find((m) => m.name.toLowerCase() === key);
+}
+
+export type UpdateModulePatch = Partial<Pick<Module, 'name' | 'description' | 'status' | 'lead' | 'members' | 'startDate' | 'targetDate'>>;
+
+export function updateModule(workspaceRoot: string, id: string, patch: UpdateModulePatch): Module | undefined {
+  const store = readTrack(workspaceRoot);
+  const module = store.modules[id] ?? Object.values(store.modules).find((m) => m.name.toLowerCase() === id.trim().toLowerCase());
+  if (!module) return undefined;
+  Object.assign(module, patch);
+  module.updatedAt = nowIso();
+  writeTrack(workspaceRoot, store);
+  return module;
+}
+
+/** Archive (or restore) a module — hides it from the default list; items keep their `moduleId`. */
+export function setModuleArchived(workspaceRoot: string, id: string, archived = true): Module | undefined {
+  const store = readTrack(workspaceRoot);
+  const module = store.modules[id];
+  if (!module) return undefined;
+  module.archivedAt = archived ? nowIso() : undefined;
+  module.updatedAt = nowIso();
+  writeTrack(workspaceRoot, store);
+  return module;
+}
+
+/** Delete a module and clear it from every work item that referenced it. */
+export function deleteModule(workspaceRoot: string, id: string): boolean {
+  const store = readTrack(workspaceRoot);
+  const module = store.modules[id] ?? Object.values(store.modules).find((m) => m.name.toLowerCase() === id.trim().toLowerCase());
+  if (!module) return false;
+  delete store.modules[module.id];
+  for (const item of Object.values(store.workItems)) {
+    if (item.moduleId === module.id) { item.moduleId = undefined; item.updatedAt = nowIso(); }
+  }
+  writeTrack(workspaceRoot, store);
+  return true;
 }
 
 // ── Boards ────────────────────────────────────────────────────────────────────

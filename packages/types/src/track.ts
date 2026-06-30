@@ -19,6 +19,7 @@
 export type ProjectId = string;
 export type WorkItemId = string;
 export type SprintId = string;
+export type ModuleId = string;
 export type BoardId = string;
 export type CommentId = string;
 export type LabelId = string;
@@ -61,7 +62,13 @@ export type WorkItemLinkType =
   | "blocked-by"
   | "relates-to"
   | "duplicates"
-  | "duplicated-by";
+  | "duplicated-by"
+  | "start-before"
+  | "start-after"
+  | "finish-before"
+  | "finish-after"
+  | "implements"
+  | "implemented-by";
 
 /** Kind of code artifact a work item is linked to. */
 export type CodeLinkKind = "branch" | "commit" | "pull-request" | "file";
@@ -106,6 +113,12 @@ const WORK_ITEM_LINK_TYPES: readonly WorkItemLinkType[] = [
   "relates-to",
   "duplicates",
   "duplicated-by",
+  "start-before",
+  "start-after",
+  "finish-before",
+  "finish-after",
+  "implements",
+  "implemented-by",
 ];
 const CODE_LINK_KINDS: readonly CodeLinkKind[] = ["branch", "commit", "pull-request", "file"];
 
@@ -304,6 +317,8 @@ export interface WorkItem {
   epicId?: WorkItemId;
   /** The sprint this item is committed to. */
   sprintId?: SprintId;
+  /** The module (feature grouping) this item belongs to. */
+  moduleId?: ModuleId;
   /** Fractional rank string for stable board/backlog ordering. */
   rank?: string;
   /** Dependencies / relationships to other items. */
@@ -337,7 +352,7 @@ export interface WorkItem {
   updatedAt: string;
 }
 
-// ── Sprints + boards ──────────────────────────────────────────────────────────
+// ── Sprints + modules + boards ─────────────────────────────────────────────────
 
 export interface Sprint {
   id: SprintId;
@@ -354,6 +369,53 @@ export interface Sprint {
   velocity?: number;
   createdAt: string;
   updatedAt: string;
+}
+
+/** A module's delivery state (independent of the work-item lifecycle). */
+export type ModuleStatus = "backlog" | "planned" | "in-progress" | "paused" | "completed" | "cancelled";
+
+const MODULE_STATUSES: readonly ModuleStatus[] = ["backlog", "planned", "in-progress", "paused", "completed", "cancelled"];
+
+export function isModuleStatus(x: unknown): x is ModuleStatus {
+  return typeof x === "string" && (MODULE_STATUSES as readonly string[]).includes(x);
+}
+
+/**
+ * A Module — a feature-sized grouping of work items (a cross-cutting deliverable),
+ * complementary to the time-boxed {@link Sprint}. Items reference it via
+ * {@link WorkItem.moduleId}.
+ */
+export interface Module {
+  id: ModuleId;
+  workspaceRoot: string;
+  name: string;
+  description?: string;
+  status: ModuleStatus;
+  /** Module lead (a username/handle). */
+  lead?: string;
+  /** Contributors (handles). */
+  members: string[];
+  startDate?: string;
+  targetDate?: string;
+  /** Set when archived (hidden from default module lists). */
+  archivedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Structural guard for a {@link Module}. */
+export function isModule(x: unknown): x is Module {
+  if (!x || typeof x !== "object") return false;
+  const m = x as Record<string, unknown>;
+  return (
+    typeof m.id === "string" &&
+    typeof m.workspaceRoot === "string" &&
+    typeof m.name === "string" &&
+    isModuleStatus(m.status) &&
+    Array.isArray(m.members) &&
+    typeof m.createdAt === "string" &&
+    typeof m.updatedAt === "string"
+  );
 }
 
 /** One column on a board, mapping to one or more workflow states. */
