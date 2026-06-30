@@ -8,9 +8,22 @@
  * here too but only invoked by the live `drain` action.
  */
 import path from 'node:path';
+import { hostname } from 'node:os';
 import type { FleetMigrationSpec } from '@kinqs/brainrouter-core/fleet';
 import type { FleetSummary } from '@kinqs/brainrouter-core/fleet';
 import type { FleetLockRecord } from '@kinqs/brainrouter-core/fleet';
+
+/**
+ * HONK-H3.3 — args for the brain's `fleet_snapshot_put` tool. The brain stores
+ * the snapshot per (tenant, host) so the dashboard console can read it back.
+ */
+export function fleetSnapshotPushArgs(summary: FleetSummary, host: string = hostname()): {
+  host: string;
+  snapshot: FleetSummary;
+  jobCount: number;
+} {
+  return { host, snapshot: summary, jobCount: summary.total };
+}
 
 /** Split a `--repos a,b,c` value into absolute repo roots (resolved against cwd). */
 export function parseRepoList(raw: string | undefined, cwd: string): string[] {
