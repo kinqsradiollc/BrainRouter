@@ -10,6 +10,7 @@ import {
   LOCAL_MODEL_CORE_TOOLS,
   type HarnessCaps,
 } from '../provider/modelFamily.js';
+import { analyzeSchema, flattenSchema, nestArguments, type JSONSchema } from '../agent/repair/flatten.js';
 
 const BASE: HarnessCaps = {
   maxToolLoops: 60,
@@ -93,4 +94,38 @@ test('L2 allowlist: keeps file/search/edit/shell + lifecycle, hides the long tai
   // Orchestration tools are filtered elsewhere — they must NOT be in this set
   // (so they're never accidentally clamped out by the built-in filter).
   assert.equal(LOCAL_MODEL_CORE_TOOLS.has('task_agent'), false);
+});
+
+test('L3 flatten round-trip: a deep/wide schema flattens for the model and re-nests losslessly at dispatch', () => {
+  // A schema deep+wide enough that analyzeSchema flags it (the gate the L3
+  // wiring uses before flattening a tool the local model sees).
+  const schema: JSONSchema = {
+    type: 'object',
+    properties: {
+      target: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          range: { type: 'object', properties: { start: { type: 'integer' }, end: { type: 'integer' } } },
+        },
+        required: ['path'],
+      },
+      opts: { type: 'object', properties: { dryRun: { type: 'boolean' }, label: { type: 'string' } } },
+      note: { type: 'string' },
+    },
+    required: ['target'],
+  };
+  assert.equal(analyzeSchema(schema).shouldFlatten, true, 'deep/wide schema is flagged for flattening');
+
+  const flat = flattenSchema(schema);
+  assert.ok(flat.properties && 'target.range.start' in flat.properties, 'nested leaves become dot-paths');
+
+  // The local model emits FLAT args against the flattened schema…
+  const flatArgs = { 'target.path': 'a.ts', 'target.range.start': 1, 'target.range.end': 9, 'opts.dryRun': true, note: 'x' };
+  // …and dispatch re-nests them to the shape the tool executor expects.
+  assert.deepEqual(nestArguments(flatArgs), {
+    target: { path: 'a.ts', range: { start: 1, end: 9 } },
+    opts: { dryRun: true },
+    note: 'x',
+  });
 });
