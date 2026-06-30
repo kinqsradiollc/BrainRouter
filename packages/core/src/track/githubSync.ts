@@ -24,6 +24,9 @@ import {
   setGithubLink,
   listMembers,
   addMember,
+  addComment,
+  recordCommentSync,
+  upsertLabel,
   LOCAL_MEMBER_ID,
   type CreateWorkItemInput,
   type UpdateWorkItemPatch,
@@ -41,13 +44,23 @@ export interface GithubIssue {
   title: string;
   body?: string | null;
   state?: 'open' | 'closed';
-  labels?: Array<string | { name?: string }>;
+  /** GitHub returns hex `color` (no `#`) on the object form. */
+  labels?: Array<string | { name?: string; color?: string }>;
   html_url?: string;
   /** The assigned user(s). `assignee` is the legacy single field. */
   assignee?: GithubUser | null;
   assignees?: GithubUser[];
   /** Present on PRs — used to filter them out of the issues list. */
   pull_request?: unknown;
+}
+
+/** A GitHub issue comment (the subset we sync). */
+export interface GithubComment {
+  id: number;
+  body?: string | null;
+  user?: GithubUser | null;
+  html_url?: string;
+  created_at?: string;
 }
 
 export interface GithubIssuePayload {
@@ -92,6 +105,12 @@ export function keyFromBody(body: string | null | undefined): string | undefined
 
 const labelNames = (labels: GithubIssue['labels']): string[] =>
   (labels ?? []).map((l) => (typeof l === 'string' ? l : l?.name ?? '')).filter(Boolean);
+
+/** Extract {name, color} pairs from issue labels (GitHub hex `color` has no `#`). */
+const labelColors = (labels: GithubIssue['labels']): Array<{ name: string; color?: string }> =>
+  (labels ?? [])
+    .map((l) => (typeof l === 'string' ? { name: l } : { name: l?.name ?? '', color: l?.color ? `#${l.color}` : undefined }))
+    .filter((l) => l.name && !l.name.startsWith('type:') && !l.name.startsWith('priority:'));
 
 /** A work item → the issue payload we POST/PATCH. Status category drives open/closed. */
 export function workItemToIssue(item: WorkItem, includeMarker = true): GithubIssuePayload {
@@ -165,6 +184,8 @@ export interface SyncResult {
   dryRun: boolean;
   exported?: ExportPlanEntry[];
   imported?: ImportPlanEntry[];
+  /** Comment-sync tallies (G1): pushed = local→GitHub, pulled = GitHub→local. */
+  comments?: { pushed: number; pulled: number };
   errors: string[];
 }
 
@@ -345,6 +366,61 @@ function apiRoot(opts: SyncOptions): string {
   return `${opts.apiBase ?? 'https://api.github.com'}/repos/${opts.repo}`;
 }
 
+function issueCommentsUrl(opts: SyncOptions, issueNumber: number): string {
+  return `${apiRoot(opts)}/issues/${issueNumber}/comments`;
+}
+
+/**
+ * Push the work item's locally-authored comments (those without an `externalId`)
+ * to the GitHub issue, recording each returned comment id so it never re-pushes
+ * or re-imports. Returns the count pushed.
+ */
+async function pushComments(workspaceRoot: string, opts: SyncOptions, item: WorkItem, issueNumber: number, errors: string[]): Promise<number> {
+  let pushed = 0;
+  for (const c of item.comments) {
+    if (c.externalId) continue; // already mirrored to GitHub
+    try {
+      const res = await opts.fetchImpl(issueCommentsUrl(opts, issueNumber), {
+        method: 'POST', headers: ghHeaders(opts.token), body: JSON.stringify({ body: c.body }),
+      });
+      if (!res.ok) { errors.push(`${item.key} comment: push failed (HTTP ${res.status})`); continue; }
+      const created = (await res.json()) as GithubComment;
+      recordCommentSync(workspaceRoot, item.id, c.id, { externalSource: 'github', externalId: String(created.id) });
+      pushed += 1;
+    } catch (e) {
+      errors.push(`${item.key} comment: ${(e as Error).message}`);
+    }
+  }
+  return pushed;
+}
+
+/**
+ * Pull the GitHub issue's comments that aren't yet mirrored locally (matched by
+ * the GitHub comment id) and append them to the work item. Returns the count pulled.
+ */
+async function pullComments(workspaceRoot: string, opts: SyncOptions, itemId: string, issueNumber: number, errors: string[]): Promise<number> {
+  let remote: GithubComment[] = [];
+  try {
+    const res = await opts.fetchImpl(`${issueCommentsUrl(opts, issueNumber)}?per_page=100`, { headers: ghHeaders(opts.token) });
+    if (!res.ok) { errors.push(`#${issueNumber} comments: list failed (HTTP ${res.status})`); return 0; }
+    remote = (await res.json()) as GithubComment[];
+  } catch (e) {
+    errors.push(`#${issueNumber} comments: ${(e as Error).message}`);
+    return 0;
+  }
+  const item = getWorkItem(workspaceRoot, itemId);
+  const known = new Set((item?.comments ?? []).map((c) => c.externalId).filter(Boolean) as string[]);
+  let pulled = 0;
+  for (const gc of remote) {
+    const ext = String(gc.id);
+    if (known.has(ext)) continue;
+    addComment(workspaceRoot, itemId, gc.user?.login ?? 'github', gc.body ?? '', { externalSource: 'github', externalId: ext });
+    known.add(ext);
+    pulled += 1;
+  }
+  return pulled;
+}
+
 /**
  * Push local work items to GitHub. New items are created (and the issue number
  * recorded); previously-synced items are updated. Returns the plan; with
@@ -357,12 +433,14 @@ export async function exportToGithub(workspaceRoot: string, opts: SyncOptions): 
   const plan: ExportPlanEntry[] = [];
   const errors: string[] = [];
 
+  let pushed = 0;
   for (const item of items) {
     const existing = links[item.id];
     plan.push({ key: item.key, title: item.title, action: existing ? 'update' : 'create', issueNumber: existing?.number });
-    if (opts.dryRun) continue;
+    if (opts.dryRun) { pushed += item.comments.filter((c) => !c.externalId).length; continue; }
     const payload = workItemToIssue(item);
     try {
+      let issueNumber = existing?.number;
       if (existing) {
         const res = await opts.fetchImpl(`${apiRoot(opts)}/issues/${existing.number}`, {
           method: 'PATCH', headers: ghHeaders(opts.token), body: JSON.stringify(payload),
@@ -374,6 +452,7 @@ export async function exportToGithub(workspaceRoot: string, opts: SyncOptions): 
         });
         if (!res.ok) { errors.push(`${item.key}: create failed (HTTP ${res.status})`); continue; }
         const created = (await res.json()) as GithubIssue;
+        issueNumber = created.number;
         setGithubLink(workspaceRoot, item.id, { number: created.number, url: created.html_url ?? '' });
         // POST always opens the issue; close it if the item is done.
         if (payload.state === 'closed') {
@@ -382,11 +461,13 @@ export async function exportToGithub(workspaceRoot: string, opts: SyncOptions): 
           });
         }
       }
+      // Mirror locally-authored comments up to the issue (id-mapped, no re-push).
+      if (issueNumber !== undefined) pushed += await pushComments(workspaceRoot, opts, item, issueNumber, errors);
     } catch (e) {
       errors.push(`${item.key}: ${(e as Error).message}`);
     }
   }
-  return { direction: 'export', dryRun: opts.dryRun ?? false, exported: plan, errors };
+  return { direction: 'export', dryRun: opts.dryRun ?? false, exported: plan, comments: { pushed, pulled: 0 }, errors };
 }
 
 /**
@@ -412,6 +493,7 @@ export async function importFromGithub(workspaceRoot: string, opts: SyncOptions)
   const byNumber = new Map<number, string>(); // issue number → work-item id
   for (const [wid, link] of Object.entries(links)) byNumber.set(link.number, wid);
 
+  let pulled = 0;
   for (const issue of issues) {
     const mapped = issueToWorkItem(issue, project);
     const existingByKey = mapped.key ? getWorkItem(workspaceRoot, mapped.key) : undefined;
@@ -420,18 +502,27 @@ export async function importFromGithub(workspaceRoot: string, opts: SyncOptions)
     plan.push({ issueNumber: issue.number, title: issue.title, action: existing ? 'update' : 'create', key: existing?.key ?? mapped.key });
     if (opts.dryRun) continue;
     try {
+      // Register the issue's labels with their real GitHub colors.
+      for (const l of labelColors(issue.labels)) {
+        if (l.color) upsertLabel(workspaceRoot, { name: l.name, color: l.color, externalSource: 'github' });
+      }
+      let itemId: string;
       if (existing) {
         updateWorkItem(workspaceRoot, existing.id, mapped.patch, 'agent');
         setGithubLink(workspaceRoot, existing.id, { number: issue.number, url: issue.html_url ?? '' });
+        itemId = existing.id;
       } else {
         const created = createWorkItem(workspaceRoot, { ...mapped.input, actor: 'agent' });
         setGithubLink(workspaceRoot, created.id, { number: issue.number, url: issue.html_url ?? '' });
+        itemId = created.id;
       }
+      // Mirror the issue's comments down (id-mapped, no dupes on re-import).
+      pulled += await pullComments(workspaceRoot, opts, itemId, issue.number, errors);
     } catch (e) {
       errors.push(`#${issue.number}: ${(e as Error).message}`);
     }
   }
-  return { direction: 'import', dryRun: opts.dryRun ?? false, imported: plan, errors };
+  return { direction: 'import', dryRun: opts.dryRun ?? false, imported: plan, comments: { pushed: 0, pulled }, errors };
 }
 
 // ── Members from GitHub collaborators ─────────────────────────────────────────

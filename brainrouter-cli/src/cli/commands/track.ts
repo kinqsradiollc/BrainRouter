@@ -219,6 +219,8 @@ async function handleSync(ws: string, rest: string[]): Promise<void> {
     const creates = rows.filter((r) => r.action === 'create').length;
     const updates = rows.filter((r) => r.action === 'update').length;
     console.log(chalk.green(`${dryRun ? 'Would ' : ''}${direction === 'export' ? 'push' : 'pull'}: ${creates} new, ${updates} updated`) + chalk.gray(` (${rows.length} total)`));
+    const comments = direction === 'export' ? res.comments?.pushed : res.comments?.pulled;
+    if (comments) console.log(chalk.gray(`  comments ${direction === 'export' ? 'pushed' : 'pulled'}: ${comments}`));
     for (const r of rows.slice(0, 20)) {
       const label = 'key' in r ? (r.key ?? '—') : `#${(r as { issueNumber: number }).issueNumber}`;
       console.log(`  ${r.action === 'create' ? chalk.green('+') : chalk.cyan('~')} ${chalk.cyan(String(label).padEnd(8))} ${r.title}`);

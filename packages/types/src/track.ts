@@ -240,6 +240,10 @@ export interface WorkItemComment {
   body: string;
   createdAt: string;
   updatedAt?: string;
+  /** Origin system when synced (e.g. "github"); absent for locally-authored comments. */
+  externalSource?: string;
+  /** The external system's id for this comment — the round-trip key that prevents dupes. */
+  externalId?: string;
 }
 
 /** One append-only entry in a work item's activity log. */
