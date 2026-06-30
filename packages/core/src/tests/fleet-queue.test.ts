@@ -25,6 +25,7 @@ import {
   FLEET_MAX_DELAY_MS,
 } from '../fleet/fleetStore.js';
 import { FleetJobRunner } from '../fleet/fleetRunner.js';
+import { acquireFleetLock, readFleetLock } from '../fleet/lock.js';
 
 function freshHome(): string {
   return mkdtempSync(path.join(tmpdir(), 'br-fleet-'));
@@ -317,6 +318,41 @@ test('write() prunes terminal jobs beyond MAX_TERMINAL_RETAINED but never prunes
     assert.ok(!keptIs.has(0), 'oldest terminal job pruned');
     assert.ok(keptIs.has(MAX_TERMINAL_RETAINED + overflow - 1), 'newest terminal job retained');
     assert.equal(getFleetJob(live.job.id, home)?.status, 'pending', 'active job never pruned');
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('FleetJobRunner.start acquires the host lock; a second runner stands down and does not drain', async () => {
+  const home = freshHome();
+  try {
+    enqueueFleetJob({ kind: 'echo', workspaceRoot: '/ws' }, { home });
+
+    // Runner A owns the host (pid 100, alive).
+    const a = new FleetJobRunner({ capacity: 4, home, lockPid: 100, lockIsAlive: () => true, executors: { echo: async () => ({}) } });
+    const startA = a.start();
+    assert.equal(startA.acquired, true, 'first runner acquires the lock');
+    assert.equal(readFleetLock(home)?.pid, 100);
+    a.stop();
+    // After stop, A released the lock — but reacquire it for B's refusal test.
+    const held = acquireFleetLock({ home, pid: 100, isAlive: () => true })!;
+    assert.ok(held);
+
+    // Runner B (pid 200) sees a live foreign holder → stands down, never drains.
+    let drained = 0;
+    const b = new FleetJobRunner({
+      capacity: 4,
+      home,
+      lockPid: 200,
+      lockIsAlive: () => true,
+      executors: { echo: async () => { drained += 1; return {}; } },
+    });
+    const startB = b.start();
+    assert.equal(startB.acquired, false, 'second runner is refused the lock');
+    await b.tick(); // even a forced tick must not drain without the lock
+    assert.equal(drained, 0, 'a runner without the lock does not drain');
+    assert.equal(listFleetJobs({ status: ['pending'] }, home).length, 1, 'job untouched by the stood-down runner');
+    held.release();
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

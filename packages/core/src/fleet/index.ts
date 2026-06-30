@@ -3,3 +3,4 @@
 export * from './fleetStore.js';
 export * from './fleetRunner.js';
 export * from './executors.js';
+export * from './lock.js';
