@@ -7,6 +7,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test \"dist/**/*.test.js\"",
     "bench:memory:dry-run": "npm run build --silent && node dist/index.js memory:dry-run",
     "bench:memory:retrieval": "npm run build --silent && node dist/index.js memory:retrieval",

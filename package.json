@@ -30,6 +30,8 @@
     "cf:build": "npm run build:cf -w dashboard",
     "cf:deploy": "npm run cf:deploy -w dashboard",
     "test": "npm run test -ws --if-present",
+    "typecheck": "npm run typecheck -ws --if-present",
+    "verify": "npm run typecheck && npm run test",
     "cli": "npm run build -w @kinqs/brainrouter-cli --silent && node brainrouter-cli/dist/index.js",
     "cli:nobuild": "node brainrouter-cli/dist/index.js"
   },
