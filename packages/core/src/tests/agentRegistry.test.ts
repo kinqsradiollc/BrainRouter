@@ -5,10 +5,10 @@ import path from 'node:path';
 import { withTempWorkspace } from './_helpers.js';
 import { loadRegistry, findById, listAll, type AgentDefinition } from '../orchestration/agentRegistry.js';
 
-test('built-in registry loads all 5 roles', () => {
+test('built-in registry loads all canonical roles', () => {
   const defs = loadRegistry();
   const ids = defs.map((d) => d.def.id).sort();
-  assert.deepEqual(ids, ['architect', 'explorer', 'reviewer', 'verifier', 'worker']);
+  assert.deepEqual(ids, ['architect', 'explorer', 'fleet', 'reviewer', 'verifier', 'worker']);
 });
 
 test('all built-in definitions carry required fields', () => {
@@ -44,7 +44,7 @@ test('findById returns undefined for unknown id', () => {
 
 test('listAll without workspace returns all builtins', () => {
   const all = listAll();
-  assert.equal(all.length, 5);
+  assert.equal(all.length, 6);
 });
 
 test('workspace definition overrides builtin with same id', () => {
@@ -118,7 +118,7 @@ test('workspace-only id coexists with builtins', () => {
     const ids = defs.map((d) => d.def.id).sort();
     assert.ok(ids.includes('my-custom-agent'), 'custom agent present');
     assert.ok(ids.includes('explorer'), 'builtin still present');
-    assert.equal(defs.length, 6, '5 builtins + 1 custom');
+    assert.equal(defs.length, 7, '6 builtins + 1 custom');
   });
 });
 

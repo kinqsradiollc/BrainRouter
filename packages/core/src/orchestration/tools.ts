@@ -55,6 +55,12 @@ export interface OrchestrationContext {
    */
   parentAccessMode?: AccessMode;
   /**
+   * HONK-H0 — true when the spawning agent is itself a fleet executor (or has a
+   * fleet ancestor). The locked-down sandbox + secret-scoping posture cascades to
+   * EVERY descendant, so a fleet child can't escape it by spawning a plain worker.
+   */
+  ancestorFleet?: boolean;
+  /**
    * Parent OTEL trace context. When set, child agents nest their per-turn
    * spans under the dispatching `spawn_agent` tool span instead of starting
    * a fresh trace. Lets observability viewers reconstruct fan-out trees.
@@ -927,6 +933,8 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     roleOverlay: undefined,
     accessMode: access,
     silent: true,
+    forceFleetSandbox: role.forceSandbox || ctx.ancestorFleet, // HONK-H0 — fleet role OR fleet ancestor → locked-down posture
+
     // Children NEED memory: skipping the briefing makes them amnesiac and the
     // parent LLM eventually learns inline work outperforms fan-out. With recall
     // enabled, children join the same cognitive context as the parent.
@@ -1480,6 +1488,7 @@ async function continueChildAgent(
     roleOverlay: undefined,
     accessMode: record.access,
     silent: true,
+    forceFleetSandbox: role.forceSandbox || ctx.ancestorFleet, // HONK-H0 — fleet role OR fleet ancestor → locked-down posture
     enableRecall: true,
     systemPromptOverride: buildRolePrompt(role, basePrompt, ''),
     parentTraceId: ctx.parentTraceId,

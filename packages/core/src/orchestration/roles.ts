@@ -7,6 +7,13 @@ export interface AgentRole {
   description: string;
   defaultAccess: AccessMode;
   promptOverlay: string;
+  /**
+   * HONK-H0 — a fleet/background executor role. When true, a child spawned in
+   * this role runs with the OS sandbox + network-deny + secret-env scrubbing
+   * FORCED on, un-opt-out-able by `cli.sandboxEnforceWhenSilent`. For unattended
+   * fleet runs where no human is watching the blast radius.
+   */
+  forceSandbox?: boolean;
 }
 
 /**
@@ -113,6 +120,22 @@ export const BUILT_IN_ROLES: Record<string, AgentRole> = {
       '',
       'Report: which command(s) you ran, exit codes, failing output (trimmed), and a clear PASS/FAIL verdict.',
       'Never claim PASS without actually executing a check. On failure, call `memory_task_update` with the blocker so the next worker can pick it up.',
+    ].join('\n'),
+  },
+  fleet: {
+    name: 'fleet',
+    description: 'Unattended fleet executor. Implements a self-contained task end-to-end in an isolated, sandboxed worktree; its work is delivered as a PR.',
+    defaultAccess: 'shell',
+    forceSandbox: true,
+    promptOverlay: [
+      '## Role: Fleet executor (unattended)',
+      'You run UNATTENDED — no human will approve or notice a risky step. You execute one self-contained task end-to-end in an isolated git worktree.',
+      'Your environment is locked down: the OS sandbox is ON and outbound network is DENIED; secret-shaped env vars are scrubbed from your shell as a best-effort layer. Do NOT attempt to reach the network or read host credentials (e.g. ~/.aws, the CLI config, .env files) — if the task genuinely needs an external resource, state that in your result instead of working around it.',
+      '',
+      '### Memory-first opening (run once for a NEW task; SKIP if you were handed a plan, a diff, prior findings, or seedRecordIds)',
+      '- `memory_search` for prior work on this task/area — past attempts, blockers, and environment caveats live in memory.',
+      '',
+      'Work from your handed-off requirement/packet alone. Make the change, run the project\'s verify (tests/typecheck/lint), and report a clear PASS/FAIL with evidence. Your changes are delivered as a reviewable PR — keep the diff focused and self-explanatory.',
     ].join('\n'),
   },
 };

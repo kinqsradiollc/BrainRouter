@@ -341,6 +341,17 @@ export interface CliKnobs {
    */
   sandboxEnforceWhenSilent?: boolean;
   /**
+   * HONK-H0 — scrub secret-shaped environment variables (API_KEY/*_TOKEN/*_SECRET
+   * names, sk-/br_/gh*_ values) from an ENFORCED (unattended / fleet) shell's
+   * environment, so a compromised background child can't exfiltrate the host's
+   * keys via `printenv`. Default `true`. Only affects enforced runs; interactive
+   * shells are untouched. Allowlist specific vars a job legitimately needs with
+   * `cli.jobSecretAllowlist`.
+   */
+  jobSecretScoping?: boolean;
+  /** HONK-H0 — env var NAMES an enforced shell may keep despite secret scoping. */
+  jobSecretAllowlist?: string[];
+  /**
    * CODEX-EXEC-POLICY (0.4.7) — command prefixes the user pre-approves, so a
    * `run_command` whose every segment matches one auto-approves without a prompt
    * in any mode (e.g. `git status`, `npm test`). Prefixes match on a word
@@ -946,6 +957,8 @@ export interface ResolvedCliKnobs {
   sandboxNetwork: boolean;
   sandboxUnavailable: 'ask' | 'deny' | 'warn';
   sandboxEnforceWhenSilent: boolean;
+  jobSecretScoping: boolean;
+  jobSecretAllowlist: string[];
   commandAllowlist: string[];
   childWorkspaceIsolation: 'off' | 'auto' | 'git-worktree';
   worktreeRoot: string;
@@ -1136,6 +1149,8 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     sandboxNetwork: c.sandboxNetwork ?? false,
     sandboxUnavailable: c.sandboxUnavailable ?? 'deny',
     sandboxEnforceWhenSilent: c.sandboxEnforceWhenSilent ?? true,
+    jobSecretScoping: c.jobSecretScoping !== false,
+    jobSecretAllowlist: Array.isArray(c.jobSecretAllowlist) ? c.jobSecretAllowlist : [],
     // CODEX-APPROVAL-GUARD — drop over-broad prefixes (bare `git`/`bash`/`sudo`/…)
     // so a too-permissive config.json entry can never auto-approve everything.
     commandAllowlist: sanitizeCommandAllowlist(c.commandAllowlist ?? []).allowed,

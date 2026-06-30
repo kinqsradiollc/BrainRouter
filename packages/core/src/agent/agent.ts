@@ -527,6 +527,11 @@ export interface AgentOptions {
   roleOverlay?: string;
   accessMode?: AccessMode;
   silent?: boolean;
+  /**
+   * HONK-H0 — fleet/background executor: force the sandbox + network-deny +
+   * secret-env scrubbing on, un-opt-out-able by `cli.sandboxEnforceWhenSilent`.
+   */
+  forceFleetSandbox?: boolean;
   systemPromptOverride?: string;
   /** When true (default for silent children: false), pre-turn memory recall runs even in silent mode. */
   enableRecall?: boolean;
@@ -842,6 +847,7 @@ export class Agent {
    * resets, which matters for the concurrent shared-process test runner).
    */
   private readonly sandboxEnforceWhenSilent: boolean;
+  private readonly forceFleetSandbox: boolean;
   private enableRecall: boolean;
   private systemPromptOverride?: string;
   /**
@@ -908,6 +914,7 @@ export class Agent {
     this.accessMode = options.accessMode ?? 'shell';
     this.silent = options.silent ?? false;
     this.sandboxEnforceWhenSilent = getCliKnobs().sandboxEnforceWhenSilent;
+    this.forceFleetSandbox = options.forceFleetSandbox ?? false;
     // Children default to no recall (their seed context already covers the parent's recall).
     // Parents (non-silent) always recall.
     this.enableRecall = options.enableRecall ?? !this.silent;
@@ -1623,6 +1630,7 @@ export class Agent {
       parentSessionKey: this.sessionKey,
       interruptSignal: this.turnAbort?.signal, // DESK-6 — Stop unblocks child waits
       parentAccessMode: this.accessMode,
+      ancestorFleet: this.forceFleetSandbox, // HONK-H0 — cascade fleet lockdown to descendants
       // Thread the parent's trace context so child agents nest their
       // per-turn spans under THIS turn instead of starting a fresh
       // trace tree. Lets observability backends reconstruct fan-out.
@@ -3472,8 +3480,13 @@ export class Agent {
           // they are refused whenever the sandbox is active: either the user
           // turned it on, or this is a silent/unattended agent where the
           // sandbox is enforced regardless of the global knob.
+          // HONK-H0 — a fleet/background executor's `forceFleetSandbox` also makes
+          // the detached (unsandboxed) background path off-limits, so it can't be
+          // used to escape the forced sandbox + network-deny the foreground path
+          // applies — even when the operator opted out of silent enforcement.
           const sandboxActive =
-            getCliKnobs().sandbox === 'on' || (this.silent && this.sandboxEnforceWhenSilent);
+            getCliKnobs().sandbox === 'on' ||
+            (this.silent && (this.sandboxEnforceWhenSilent || this.forceFleetSandbox));
           if (sandboxActive) {
             return 'Background run_command is not supported while the sandbox is active (v1) — run it foreground or disable the sandbox.';
           }
@@ -3488,7 +3501,7 @@ export class Agent {
         const sandboxConfig = resolveSandboxConfig(
           this.workspaceRoot,
           { readPaths: prefs.sandboxReadPaths, writePaths: prefs.sandboxWritePaths },
-          { silent: this.silent, enforceWhenSilent: this.sandboxEnforceWhenSilent },
+          { silent: this.silent, enforceWhenSilent: this.sandboxEnforceWhenSilent, forceEnforce: this.forceFleetSandbox, scopeSecrets: this.forceFleetSandbox },
         );
         const result = await runShell(cmd, sandboxConfig, undefined, this.turnAbort?.signal);
         // WS5 — remember commits WE authored this session, so a later
@@ -3732,6 +3745,7 @@ export class Agent {
           parentAccessMode: this.accessMode,
           spawnerDepth: this.agentDepth,
           effortOverride: this.effortOverride,
+          ancestorFleet: this.forceFleetSandbox, // HONK-H0 — cascade fleet lockdown
         });
         return JSON.stringify({ id: worker.id, status: worker.status, goal: worker.goal });
       }
@@ -4340,6 +4354,7 @@ export class Agent {
       parentAccessMode: this.accessMode,
       spawnerDepth: this.agentDepth,
       effortOverride: this.effortOverride,
+      ancestorFleet: this.forceFleetSandbox, // HONK-H0 — cascade fleet lockdown
     });
     return { id: worker.id, status: worker.status, goal: worker.goal };
   }

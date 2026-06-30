@@ -19,9 +19,9 @@ test('catalog parity validator flags injected drift (negative control)', () => {
 
 // T16 GOLDEN — agent/role inventory parity: every built-in role maps to a real
 // agent definition, and the canonical builtin agent set is present.
-test('agent inventory: the five built-in agents load from the builtin tier', () => {
+test('agent inventory: the built-in agents load from the builtin tier', () => {
   const builtinIds = loadRegistry().filter((l) => l.source === 'builtin').map((l) => l.def.id).sort();
-  for (const id of ['architect', 'explorer', 'reviewer', 'verifier', 'worker']) {
+  for (const id of ['architect', 'explorer', 'fleet', 'reviewer', 'verifier', 'worker']) {
     assert.ok(builtinIds.includes(id), `missing builtin agent: ${id} (have ${builtinIds.join(', ')})`);
   }
 });
@@ -33,6 +33,6 @@ test('role inventory: every built-in role has a matching agent definition (no or
   }
 });
 
-test('role inventory: exactly the five canonical roles are built in', () => {
-  assert.deepEqual(listRoles().map((r) => r.name).sort(), ['architect', 'explorer', 'reviewer', 'verifier', 'worker']);
+test('role inventory: exactly the canonical roles are built in', () => {
+  assert.deepEqual(listRoles().map((r) => r.name).sort(), ['architect', 'explorer', 'fleet', 'reviewer', 'verifier', 'worker']);
 });
