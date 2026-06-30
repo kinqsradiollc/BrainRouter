@@ -51,9 +51,8 @@ import { readHooks, setHookEnabled } from '@kinqs/brainrouter-core/dist/hooks/ho
 import { buildUsageBreakdown } from '@kinqs/brainrouter-core/dist/util/usageBreakdown.js';
 // DESK-5 — the command bridge dispatches REPL-only commands against the SAME
 // stores the terminal CLI uses. No parallel state: /goal here is /goal there.
-import { readGoal, setGoal, clearGoal, pauseGoal, resumeGoal, editGoal, decideGoalContinuation, buildGoalContinuationPrompt, goalCorrectiveNotice, tickGoalIteration, usageLimitGoal, formatBudget } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
+import { readGoal, setGoal, clearGoal, pauseGoal, resumeGoal, editGoal, decideGoalContinuation, buildGoalContinuationPrompt, goalCorrectiveNotice, tickGoalIteration, usageLimitGoal, formatBudget, buildGoalKickoffPrompt } from '@kinqs/brainrouter-core/goal';
 // §goal-autonomy — the kickoff prompt builder (shared with the CLI's /goal).
-import { buildGoalKickoffPrompt } from '@kinqs/brainrouter-core/dist/goal/goalKickoff.js';
 import { loadExtensions } from '@kinqs/brainrouter-core/dist/extension/loader.js';
 import { listExtensions } from '@kinqs/brainrouter-core/dist/extension/manifest.js';
 import { isExtensionEnabled, setExtensionEnabled } from '@kinqs/brainrouter-core/dist/extension/extensionStore.js';

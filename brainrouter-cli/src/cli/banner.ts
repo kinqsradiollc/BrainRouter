@@ -1,10 +1,8 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import type { Config } from '@kinqs/brainrouter-core/config';
-import type { Goal } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
-import { formatBudget } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
+import { type Goal, formatBudget, readGoal } from '@kinqs/brainrouter-core/goal';
 import { getCurrentWorkflow, getLastUsedWorkflow } from '@kinqs/brainrouter-core/dist/workflow/workflowArtifacts.js';
-import { readGoal } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
 import { BOX, type Theme } from './theme.js';
 import { VERSION } from '@kinqs/brainrouter-core/dist/version.js';
 

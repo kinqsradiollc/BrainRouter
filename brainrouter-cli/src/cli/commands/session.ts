@@ -13,7 +13,7 @@ import { listTranscripts, loadTranscript, exportTranscriptMarkdown, exportTransc
 import { readPlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
 import { buildRewindTimeline, truncateAtTurn } from '../../runtime/rewindTimeline.js';
 import { planRestore, readFileMutations } from '@kinqs/brainrouter-core/dist/storage/fileSnapshotStore.js';
-import { readGoal, resumeGoal } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
+import { readGoal, resumeGoal } from '@kinqs/brainrouter-core/goal';
 import { askYesNo } from '../cliPrompt.js';
 import { buildGoalKickoffPrompt } from './_helpers.js';
 import type { CommandContext } from './_context.js';

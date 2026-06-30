@@ -95,7 +95,7 @@ export function formatTranscriptContent(value: unknown): string {
  * goal_blocked, the budget runs out, or the user interrupts.
  */
 // §ADR-003 — extracted to core so the Desktop host builds the same prompt.
-export { buildGoalKickoffPrompt } from '@kinqs/brainrouter-core/dist/goal/goalKickoff.js';
+export { buildGoalKickoffPrompt } from '@kinqs/brainrouter-core/goal';
 
 /**
  * Resolve a slash-mapped skill (/spec, /feature-dev, /review, /implement-plan)

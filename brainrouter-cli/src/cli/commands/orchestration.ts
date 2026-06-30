@@ -18,7 +18,7 @@ import { resolveBackgroundTarget, describeStopOutcome } from '../../runtime/bgDe
 import { buildAgentForest, formatAgentForest, formatAgentWhy } from '../../orchestration/agentTree.js';
 import { formatAgentTranscript, formatAgentReplay } from '../../orchestration/agentTranscriptView.js';
 import { readPreferences, writePreferences, readTranscriptEntries, appendTranscriptEntry } from '@kinqs/brainrouter-core/session';
-import { readGoal, setGoal, pauseGoal } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
+import { readGoal, setGoal, pauseGoal } from '@kinqs/brainrouter-core/goal';
 import { buildHandoffPacket, resolveHandoffTarget, type HandoffPacket } from '../../orchestration/handoff.js';
 import { getLoopState, stopLoop } from '../../runtime/loopRunner.js';
 import type { CommandContext } from './_context.js';

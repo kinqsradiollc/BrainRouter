@@ -1,6 +1,5 @@
 import path from 'node:path';
-import type { Goal } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
-import { formatBudget, readGoal } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
+import { type Goal, formatBudget, readGoal } from '@kinqs/brainrouter-core/goal';
 import { readPlan, type PlanState } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
 import { getCurrentWorkflow, listWorkflows, type WorkflowMeta } from '@kinqs/brainrouter-core/dist/workflow/workflowArtifacts.js';
 import { listSessions, type ChildSessionRecord } from '@kinqs/brainrouter-core/orchestration';

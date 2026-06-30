@@ -31,6 +31,10 @@
       "types": "./dist/provider/index.d.ts",
       "default": "./dist/provider/index.js"
     },
+    "./goal": {
+      "types": "./dist/goal/index.d.ts",
+      "default": "./dist/goal/index.js"
+    },
     "./dist/*": "./dist/*"
   },
   "files": [

@@ -22,7 +22,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { applyYoloOn, applyYoloOff, writePreferences } from '@kinqs/brainrouter-core/session';
-import { setGoal, clearGoal } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
+import { setGoal, clearGoal } from '@kinqs/brainrouter-core/goal';
 
 // Helper — spin up a fresh workspace dir per test so the per-workspace
 // preferences file doesn't leak across cases.

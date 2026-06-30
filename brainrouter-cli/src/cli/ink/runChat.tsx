@@ -36,7 +36,7 @@ import {
   readGoal,
   tickGoalIteration,
   usageLimitGoal,
-} from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
+} from '@kinqs/brainrouter-core/goal';
 import { setActiveReadline } from '../cliPrompt.js';
 import { ChatApp, type ChatController, type PushScrollback } from './ChatApp.js';
 import type { SlashCommandDef } from './SlashPalette.js';
