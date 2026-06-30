@@ -927,6 +927,8 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     roleOverlay: undefined,
     accessMode: access,
     silent: true,
+    forceFleetSandbox: role.forceSandbox, // HONK-H0 — fleet role → locked-down posture
+
     // Children NEED memory: skipping the briefing makes them amnesiac and the
     // parent LLM eventually learns inline work outperforms fan-out. With recall
     // enabled, children join the same cognitive context as the parent.
@@ -1480,6 +1482,7 @@ async function continueChildAgent(
     roleOverlay: undefined,
     accessMode: record.access,
     silent: true,
+    forceFleetSandbox: role.forceSandbox, // HONK-H0 — fleet role → locked-down posture
     enableRecall: true,
     systemPromptOverride: buildRolePrompt(role, basePrompt, ''),
     parentTraceId: ctx.parentTraceId,

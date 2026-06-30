@@ -527,6 +527,11 @@ export interface AgentOptions {
   roleOverlay?: string;
   accessMode?: AccessMode;
   silent?: boolean;
+  /**
+   * HONK-H0 — fleet/background executor: force the sandbox + network-deny +
+   * secret-env scrubbing on, un-opt-out-able by `cli.sandboxEnforceWhenSilent`.
+   */
+  forceFleetSandbox?: boolean;
   systemPromptOverride?: string;
   /** When true (default for silent children: false), pre-turn memory recall runs even in silent mode. */
   enableRecall?: boolean;
@@ -842,6 +847,7 @@ export class Agent {
    * resets, which matters for the concurrent shared-process test runner).
    */
   private readonly sandboxEnforceWhenSilent: boolean;
+  private readonly forceFleetSandbox: boolean;
   private enableRecall: boolean;
   private systemPromptOverride?: string;
   /**
@@ -908,6 +914,7 @@ export class Agent {
     this.accessMode = options.accessMode ?? 'shell';
     this.silent = options.silent ?? false;
     this.sandboxEnforceWhenSilent = getCliKnobs().sandboxEnforceWhenSilent;
+    this.forceFleetSandbox = options.forceFleetSandbox ?? false;
     // Children default to no recall (their seed context already covers the parent's recall).
     // Parents (non-silent) always recall.
     this.enableRecall = options.enableRecall ?? !this.silent;
@@ -3488,7 +3495,7 @@ export class Agent {
         const sandboxConfig = resolveSandboxConfig(
           this.workspaceRoot,
           { readPaths: prefs.sandboxReadPaths, writePaths: prefs.sandboxWritePaths },
-          { silent: this.silent, enforceWhenSilent: this.sandboxEnforceWhenSilent },
+          { silent: this.silent, enforceWhenSilent: this.sandboxEnforceWhenSilent, forceEnforce: this.forceFleetSandbox, scopeSecrets: this.forceFleetSandbox },
         );
         const result = await runShell(cmd, sandboxConfig, undefined, this.turnAbort?.signal);
         // WS5 — remember commits WE authored this session, so a later
