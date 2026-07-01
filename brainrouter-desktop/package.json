@@ -8,7 +8,7 @@
   "scripts": {
     "build": "npm run build:electron && vite build",
     "build:electron": "node -e \"fs.rmSync('dist-electron',{recursive:true,force:true})\" && tsc -p tsconfig.electron.json",
-    "build:deps": "npm --prefix ../packages/types run build && npm --prefix ../packages/core run build",
+    "build:deps": "npm --prefix ../packages/types run build && npm --prefix ../packages/agent-protocol run build && npm --prefix ../packages/core run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build:deps && npm run typecheck && npm run build:electron && node --test \"dist-electron/**/*.test.js\" && tsx --test \"src/**/*.test.ts\" \"scripts/**/*.test.ts\"",
     "dev": "vite",
