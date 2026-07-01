@@ -1,7 +1,7 @@
 {
   "name": "brainrouter-monorepo",
   "private": true,
-  "version": "0.4.15",
+  "version": "0.4.16",
   "workspaces": [
     "packages/*",
     "brainrouter",
@@ -12,9 +12,9 @@
   ],
   "scripts": {
     "build": "npm run build:packages && npm run build:apps",
-    "build:packages": "npm run build -w @kinqs/brainrouter-types && npm run build -w @kinqs/brainrouter-core && npm run build -w @kinqs/brainrouter-sdk && npm run build -w @kinqs/brainrouter-hooks",
+    "build:packages": "npm run build -w @kinqs/brainrouter-types && npm run build -w @kinqs/brainrouter-agent-protocol && npm run build -w @kinqs/brainrouter-core && npm run build -w @kinqs/brainrouter-sdk && npm run build -w @kinqs/brainrouter-hooks",
     "build:packages:dashboard": "npm run build -w @kinqs/brainrouter-types && npm run build -w @kinqs/brainrouter-sdk && npm run build -w @kinqs/brainrouter-hooks",
-    "build:apps": "npm run build -w @kinqs/brainrouter-mcp-server && npm run build -w @kinqs/brainrouter-cli && npm run build -w dashboard",
+    "build:apps": "npm run build -w @kinqs/brainrouter-mcp-server && npm run build -w @kinqs/brainrouter-cli && npm run build -w dashboard && npm run build -w brainrouter-desktop",
     "bench:memory:dry-run": "npm run bench:memory:dry-run -w brainrouter-benchmark --",
     "bench:memory:retrieval": "npm run bench:memory:retrieval -w brainrouter-benchmark --",
     "bench:memory:load": "npm run bench:memory:load -w brainrouter-benchmark --",
@@ -31,19 +31,33 @@
     "cf:build": "npm run build:cf -w dashboard",
     "cf:deploy": "npm run cf:deploy -w dashboard",
     "test": "npm run test -ws --if-present",
+    "typecheck": "npm run typecheck -ws --if-present",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "prepare": "node scripts/install-git-hooks.mjs",
+    "hooks:install": "node scripts/install-git-hooks.mjs",
+    "format:check": "prettier --check .",
+    "verify": "npm run typecheck && npm run lint && npm run test",
     "cli": "npm run build -w @kinqs/brainrouter-cli --silent && node brainrouter-cli/dist/index.js",
     "cli:nobuild": "node brainrouter-cli/dist/index.js"
   },
   "devDependencies": {
     "@types/react": "^19.2.15",
+    "@typescript-eslint/eslint-plugin": "^8.62.1",
+    "@typescript-eslint/parser": "^8.62.1",
     "esbuild": "^0.25.12",
+    "eslint": "^9.39.4",
+    "eslint-config-prettier": "^9.1.2",
+    "eslint-plugin-react-hooks": "^5.2.0",
     "jest": "^30.4.2",
+    "prettier": "^3.9.4",
     "react-router-dom": "^7.15.1",
     "ts-jest": "^29.4.11",
     "typescript": "^6.0.3"
   },
   "dependencies": {
-    "@kinqs/brainrouter-mcp-server": "^0.4.15",
+    "@kinqs/brainrouter-mcp-server": "^0.4.16",
     "@modelcontextprotocol/sdk": "^1.11.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"

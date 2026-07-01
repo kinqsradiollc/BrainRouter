@@ -98,7 +98,7 @@ export async function handleSessionRegister(args: any, options?: { defaultUserId
     const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
     const now = new Date().toISOString();
     const sessionKey = params.sessionKey ?? randomUUID();
-    const record = memoryEngine.store.registerActiveSession({
+    const record = await memoryEngine.store.registerActiveSession({
       sessionKey,
       userId: effectiveUserId,
       clientKind: params.clientKind ?? "http-unknown",
@@ -145,7 +145,7 @@ export async function handleSessionHeartbeat(args: any, options?: { defaultUserI
     const params = sessionHeartbeatSchema.parse(args ?? {});
     const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
     const now = new Date().toISOString();
-    const updated = memoryEngine.store.heartbeatActiveSession(
+    const updated = await memoryEngine.store.heartbeatActiveSession(
       effectiveUserId,
       params.sessionKey,
       now,
@@ -182,7 +182,7 @@ export async function handleSessionUnregister(args: any, options?: { defaultUser
   try {
     const params = sessionUnregisterSchema.parse(args ?? {});
     const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
-    const deleted = memoryEngine.store.unregisterActiveSession(effectiveUserId, params.sessionKey);
+    const deleted = await memoryEngine.store.unregisterActiveSession(effectiveUserId, params.sessionKey);
     return toolResult({ deleted });
   } catch (err) {
     return toolError("session_unregister", err);
@@ -227,7 +227,7 @@ export async function handleSessionList(args: any, options?: { defaultUserId?: s
   try {
     const params = sessionListSchema.parse(args ?? {});
     const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
-    const sessions = memoryEngine.store.listActiveSessions({
+    const sessions = await memoryEngine.store.listActiveSessions({
       userId: effectiveUserId,
       clientKind: params.clientKind,
       workspaceRoot: params.workspaceRoot,

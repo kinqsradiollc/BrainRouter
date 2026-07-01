@@ -38,18 +38,25 @@ export interface ServerConfig {
 }
 
 export interface LLMConfig {
-  // 0.3.9: the only supported dispatch is OpenAI-compatible
-  // `/v1/chat/completions`. The Anthropic native `/v1/messages`
-  // adapter (added in 0.3.8-I6) was removed in 0.3.9 — Claude
-  // models can still be reached via an OpenAI-compatible gateway
-  // (OpenRouter / Together / Fireworks) by pointing `endpoint` at
-  // the gateway base URL. `provider` is the catalog id (openai,
-  // lmstudio, ollama, deepseek, …) and is used as a label for
-  // tier-ladder lookups; the wire format is always OpenAI-compatible.
+  // Provider catalog id (openai, lmstudio, ollama, deepseek, ...). The
+  // request can be sent as either OpenAI Responses API or Chat Completions,
+  // selected by provider defaults plus `cli.providerRequestFormat`. Claude
+  // models still go through OpenAI-compatible gateways; the native Anthropic
+  // `/v1/messages` adapter was removed in 0.3.9.
   provider: string;
   apiKey: string;
   model: string;
   endpoint?: string;
+  // 0.4.17 — Onyx-parity multi-select: the set of models this provider key
+  // unlocks (from its live GET /models). `model` above stays the single
+  // required default and MUST be a member when this is non-empty. Omitted/empty
+  // ⇒ legacy single-default behavior, unchanged (no migration needed). The
+  // Desktop composer narrows its picker to this allowlist when present.
+  models?: string[];
+  // 0.4.17 — optional Azure-style `api-version`. When set it is appended as an
+  // `?api-version=` query param to the chat/completions (and /models) URL; the
+  // OpenAI-compatible providers that don't need it simply leave it unset.
+  apiVersion?: string;
 }
 
 /**
@@ -117,6 +124,52 @@ export interface ResolvedAutomationKnobs {
     autopilot: boolean;
   };
 }
+
+export type WebSearchProviderName = 'duckduckgo' | 'serper' | 'google_pse' | 'brave' | 'searxng' | 'custom_http';
+
+export interface WebSearchCliKnobs {
+  provider?: WebSearchProviderName;
+  maxResults?: number;
+  serperApiKey?: string;
+  google?: { apiKey?: string; cx?: string };
+  braveApiKey?: string;
+  searxngBaseUrl?: string;
+  crawler?: {
+    respectRobots?: boolean;
+    maxContentChars?: number;
+    maxHtmlBytes?: number;
+    timeoutMs?: number;
+    ratePerHostMs?: number;
+    userAgent?: string;
+  };
+}
+
+export interface ResolvedWebSearchKnobs {
+  provider: WebSearchProviderName;
+  maxResults: number;
+  serperApiKey: string;
+  google: { apiKey: string; cx: string };
+  braveApiKey: string;
+  searxngBaseUrl: string;
+  crawler: {
+    respectRobots: boolean;
+    maxContentChars: number;
+    maxHtmlBytes: number;
+    timeoutMs: number;
+    ratePerHostMs: number;
+    userAgent: string;
+  };
+}
+
+export interface ComputerUseCliKnobs {
+  enabled?: boolean;
+  mode?: string;
+}
+
+/** Per-provider generation wire format. The two OpenAI shapes plus the native
+ *  (non-OpenAI-compatible) Anthropic Messages and Gemini generateContent APIs.
+ *  Native formats are opt-in via `cli.providerRequestFormat`. */
+export type ProviderWireFormat = 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate';
 
 export interface CliKnobs {
   // ---- planning / orchestration -----------------------------------------
@@ -187,6 +240,14 @@ export interface CliKnobs {
   stormThreshold?: number;
   /** Hard cap on inner-loop iterations per user turn. Default 60. */
   maxToolLoops?: number;
+  /**
+   * HONK-L1/L7 — the local-model bounded-harness profile. `'auto'` (default)
+   * clamps the turn-loop caps (maxToolLoops, repeat/storm guards, MCP-tool budget,
+   * spawn depth) only for positively-identified small/local model families;
+   * `'on'` always clamps; `'off'` never does. A tight bounded harness is what makes
+   * weak local models reliable — strong/unknown models are passed through untouched.
+   */
+  localModelProfile?: 'auto' | 'on' | 'off';
   /** Threshold for the repeat-SEQUENCE guard (tool-name pattern repeats,
    *  ignoring args). Default 12. */
   repeatToolSequenceLimit?: number;
@@ -238,14 +299,25 @@ export interface CliKnobs {
    * Default true.
    */
   confirmRunWorkflow?: boolean;
-  /** Reasoning depth preference override (`/effort`). Default 'medium'. */
-  effort?: 'low' | 'medium' | 'high' | 'xhigh';
+  /** Reasoning depth preference override (`/effort`). Default 'medium'. `max` and
+   *  `ultracode` are the desktop Claude slider's top tiers (cap to the wire's top
+   *  reasoning_effort, like xhigh). */
+  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultracode';
   /** PARITY-E3 — model to fall back to when the primary model is unavailable. */
   fallbackModel?: string | null;
 
   // ---- MCP plumbing -----------------------------------------------------
   /** MCP call timeout in ms. Default 60000. */
   mcpTimeoutMs?: number;
+  /**
+   * REMOTE-BRAIN (Workstream A, ADR-005) — point the active BrainRouter brain at
+   * a remote Streamable-HTTP endpoint instead of the embedded/stdio default.
+   * When set, the active `brainrouter` profile is rewritten to
+   * `{ type: 'http', url: brainUrl }` at connect time (its `apiKey`/`headers`
+   * are preserved; the brain's HTTP transport requires a Bearer API key). Unset
+   * (the default) keeps the embedded brain — no behaviour change.
+   */
+  brainUrl?: string | null;
 
   // ---- approval / sandbox / spawn --------------------------------------
   /** Sandbox engine. Default 'off'. */
@@ -276,6 +348,17 @@ export interface CliKnobs {
    * strict when nobody is.
    */
   sandboxEnforceWhenSilent?: boolean;
+  /**
+   * HONK-H0 — scrub secret-shaped environment variables (API_KEY/*_TOKEN/*_SECRET
+   * names, sk-/br_/gh*_ values) from an ENFORCED (unattended / fleet) shell's
+   * environment, so a compromised background child can't exfiltrate the host's
+   * keys via `printenv`. Default `true`. Only affects enforced runs; interactive
+   * shells are untouched. Allowlist specific vars a job legitimately needs with
+   * `cli.jobSecretAllowlist`.
+   */
+  jobSecretScoping?: boolean;
+  /** HONK-H0 — env var NAMES an enforced shell may keep despite secret scoping. */
+  jobSecretAllowlist?: string[];
   /**
    * CODEX-EXEC-POLICY (0.4.7) — command prefixes the user pre-approves, so a
    * `run_command` whose every segment matches one auto-approves without a prompt
@@ -334,6 +417,29 @@ export interface CliKnobs {
    * builds only; fan-out builds are not retried.
    */
   buildLoopMaxRepairs?: number;
+  /**
+   * HONK-H1 (0.4.x) — deliver a successful build loop's work as a GitHub Pull
+   * Request instead of merging it into your working tree. `false` (default) =
+   * 0.4.12 behavior (verify-green + review-ok → patch applied to your tree).
+   * `true` = OPT-IN Honk model: the work is committed on a fresh `honk/<slug>-<hash>`
+   * branch in an isolated worktree, pushed, and opened as a PR via the GitHub CLI
+   * (`gh`) — your working tree is never touched. Requires `gh` installed +
+   * authenticated and a GitHub `origin`; if any of that is missing the run falls
+   * back to the normal merge-back so work is never lost. Single-worktree builds
+   * only (fan-out builds always hold slices for manual synthesis).
+   */
+  buildLoopEmitPr?: boolean;
+  /**
+   * HONK-H1 — base branch for the emitted PR. Empty (default) = the repo's current
+   * branch (the branch the build started from). Set to target a fixed integration
+   * branch (e.g. `main`).
+   */
+  buildLoopPrBaseBranch?: string;
+  /**
+   * HONK-H1 — open the emitted PR as a DRAFT (default true) so a human reviews
+   * the agent's work before it can merge. Set false to open ready-for-review PRs.
+   */
+  buildLoopPrDraft?: boolean;
   /** PARITY-W3 — ring the terminal bell on an idle background-completion notice. Default false. */
   notifyBell?: boolean;
   /** Child-drain timeout in ms. Default 30000. */
@@ -351,10 +457,20 @@ export interface CliKnobs {
    * Default 8.
    */
   maxConcurrentChildren?: number;
+  /**
+   * HONK-H3 — shared GLOBAL concurrency cap for the fleet runner: the most fleet
+   * jobs that drain at once across ALL workspaces (vs `maxConcurrentChildren`,
+   * which is per-parent-session). `0` disables the cap. Default 4.
+   */
+  fleetMaxConcurrentJobs?: number;
   /** MAS-P4-T4: max auto-chain follow-up agents per worker. Default 2. */
   autoChainMaxFollowups?: number;
-  /** MAS-P4-T1: cap on MCP tools shown to an agent per turn (0 = no cap). Default 40. */
+  /** MAS-P4-T1: cap on MCP tools shown to an agent per turn (0 = no cap). Default 16. */
   agentMcpToolBudget?: number;
+  /** §5.4: collapse the per-turn MCP tool list to discovery entry points
+   *  (mcp_search / mcp_describe / mcp_call) to save context on large catalogs.
+   *  Default false (full catalog shown, capped by agentMcpToolBudget). */
+  mcpProgressiveDiscovery?: boolean;
 
   // ---- scheduling / tracing / search -----------------------------------
   /** Background ticker interval for /schedule jobs in ms. Default 30000. */
@@ -374,6 +490,10 @@ export interface CliKnobs {
   tracingApiKey?: string;
   /** Override the web_search tool's endpoint URL (when not using the brain default). */
   webSearchEndpoint?: string;
+  /** Provider-backed web_search plus crawler defaults. */
+  webSearch?: WebSearchCliKnobs;
+  /** Native desktop computer-use tool. Default off; desktop host only. */
+  computerUse?: ComputerUseCliKnobs;
 
   // ---- tier escalation --------------------------------------------------
   /** Tier ladder override — when set, beats the provider built-in. */
@@ -429,6 +549,16 @@ export interface CliKnobs {
    *  built-in defaults; set "" to disable a language. */
   lspServers?: Record<string, string>;
 
+  // ---- code-mode global prompt prefix (§5.7) ----------------------------
+  /** Prepended to the system prompt in Code mode — a durable house-style /
+   *  guardrail block applied to every code-mode turn. Empty = none. */
+  codePromptPrefix?: string;
+
+  // ---- customizable keyboard shortcuts (§5.9) ---------------------------
+  /** Desktop shortcut overrides: action id → chord string (e.g. {"save":"Cmd+S"}).
+   *  Resolved through ui/shortcuts.ts over the built-in defaults. */
+  shortcuts?: Record<string, string>;
+
   // ---- orchestration ----------------------------------------------------
   /**
    * Default parent wait timeout for child-agent tools in ms. Default **0 = wait
@@ -476,6 +606,12 @@ export interface CliKnobs {
   track?: {
     githubRepo?: string;
     githubToken?: string;
+    /** Multiple GitHub repositories available to Track sync. */
+    githubRepos?: Array<{ repo: string; token?: string; label?: string }>;
+    /** Repo from `githubRepos` used by default when a command omits `--repo`. */
+    activeGithubRepo?: string;
+    /** Optional trusted CA bundle path passed through to GitHub CLI commands. */
+    githubCaBundle?: string;
     /**
      * BR-123 commit scanner (0.4.16). `enabled` (default false): on `/track sync
      * --commits`, parse `<KEY>-<n>` from recent commit messages and link each
@@ -493,6 +629,48 @@ export interface CliKnobs {
    * stay interactive-only.
    */
   hooks?: { enabled?: boolean; enforceWhenSilent?: boolean };
+  /**
+   * PER-PROVIDER WIRE-FORMAT OVERRIDE. Maps `providerId` (as stored in
+   * `llm.provider`, lowercased) → the wire format to use for that provider's
+   * requests. Use when a custom OpenAI-compatible gateway supports the
+   * `/v1/responses` API even though BrainRouter's built-in catalog default
+   * (chat-completions) doesn't recognize it — or to force chat-completions
+   * on canonical OpenAI while debugging a Responses shape regression.
+   *
+   * SEMANTICS — an explicit override BYPASSES the canonical-endpoint safety
+   * gate. The resolver trusts the user's assertion that their endpoint
+   * accepts `/v1/responses`, including gateway model ids that do not look
+   * like OpenAI-native ids (for example `google/gemma-4-12b`). A gateway
+   * that 404s on `/responses` (most OpenRouter/LiteLLM/vLLM gateways only
+   * proxy `/chat/completions`) will only fail at the actual HTTP call.
+   * Built-in defaults remain conservative and still apply the canonical
+   * endpoint + model-shape gates when no explicit override is present.
+   *
+   * Values are validated against `'responses' | 'chat-completions'` (typos
+   * such as `'response'` or `'Responses'` are silently dropped so the
+   * resolver stays fail-safe). Keys are case-insensitive and trimmed.
+   * Set under `cli` in `~/.config/brainrouter/config.json`.
+   * Example: `{ "lmstudio": "responses", "opencode": "chat-completions" }`.
+   *
+   * CAVEAT — `setCliKnobOverride({ providerRequestFormat: {...} })` SHALLOW-
+   * REPLACES the whole map (consistent with how every other top-level knob
+   * on `ResolvedCliKnobs` works), so an argv override that targets one
+   * provider key will wipe config-file entries for the others. For multi-
+   * key sets, edit `config.json` directly; in-process overrides are for
+   * single-key tests/scripts.
+   */
+  providerRequestFormat?: Record<string, ProviderWireFormat>;
+  /**
+   * Per-tool enable/disable overrides (keyed by tool name; MCP tools use their
+   * `mcp_<server>_<tool>` namespaced name). `true` force-ENABLES a tool the agent
+   * would otherwise hide (e.g. a built-in hidden by the local-model L2 allowlist,
+   * or an MCP tool trimmed by the relevance budget); `false` force-DISABLES it.
+   * A PROTECTED core tool (lifecycle + file/shell — see `tool/toolPolicy.ts`)
+   * ignores `false` and is always shown. Overrides never bypass the HARD gates
+   * (access tier, worker-thread/computer-use capability) — they only flip the
+   * soft visibility layers. Absent key = default behaviour. Set under `cli`.
+   */
+  toolOverrides?: Record<string, boolean>;
 }
 
 /**
@@ -606,16 +784,14 @@ export function loadConfig(): Config {
  * use it without dragging in the wizard surface.
  */
 export function backfillApiKeyFromEnv(endpoint: string | undefined): string | undefined {
-  // Endpoint → env-var map, DERIVED from the provider code modules
-  // (BUILTIN_PROVIDERS) so it can never drift from the catalog — the old
-  // hand-maintained "keep in lockstep with PROVIDER_CATALOG" copy is gone.
-  // OpenRouter + Gemini have no code module yet (they're reachable via the
-  // generic openai-compatible flow), so they're the only explicit entries.
-  // (Anthropic native was removed in 0.3.9 — Claude routes through OpenRouter.)
+  // Endpoint → env-var map, DERIVED entirely from the provider code modules
+  // (BUILTIN_PROVIDERS) so it can never drift from the catalog. OpenRouter,
+  // Gemini, Anthropic and Groq now each have a code module, so the old hand-kept
+  // OpenRouter/Gemini literals are gone — every cloud provider with a non-empty
+  // endpoint + envKey is covered automatically. (Azure's endpoint is per-resource
+  // and therefore empty, so it's correctly excluded from endpoint matching.)
   const PROVIDER_ENV_BY_ENDPOINT: Array<{ endpoint: string; envKey: string }> = [
     ...BUILTIN_PROVIDERS.filter((p) => p.endpoint && p.envKey).map((p) => ({ endpoint: p.endpoint, envKey: p.envKey })),
-    { endpoint: 'https://openrouter.ai/api/v1',                     envKey: 'OPENROUTER_API_KEY' },
-    { endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', envKey: 'GEMINI_API_KEY' },
   ];
   if (endpoint) {
     const trimmed = endpoint.replace(/\/$/, '');
@@ -782,6 +958,7 @@ export interface ResolvedCliKnobs {
   stormWindow: number;
   stormThreshold: number;
   maxToolLoops: number;
+  localModelProfile: 'auto' | 'on' | 'off';
   repeatToolSequenceLimit: number;
   repeatSequenceExemptTools: string[];
   repeatLoopLimit: number;
@@ -795,29 +972,38 @@ export interface ResolvedCliKnobs {
   llmMaxConcurrent: number;
   disableStream: boolean;
   confirmRunWorkflow: boolean;
-  effort: 'low' | 'medium' | 'high' | 'xhigh';
+  effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultracode';
   fallbackModel: string | null;
   mcpTimeoutMs: number;
+  /** REMOTE-BRAIN — remote brain HTTP endpoint, or null for the embedded default. */
+  brainUrl: string | null;
   sandbox: 'off' | 'on';
   sandboxReadPaths: string[];
   sandboxWritePaths: string[];
   sandboxNetwork: boolean;
   sandboxUnavailable: 'ask' | 'deny' | 'warn';
   sandboxEnforceWhenSilent: boolean;
+  jobSecretScoping: boolean;
+  jobSecretAllowlist: string[];
   commandAllowlist: string[];
   childWorkspaceIsolation: 'off' | 'auto' | 'git-worktree';
   worktreeRoot: string;
   buildLoop: 'off' | 'escalate' | 'always';
   worktreeMergeReview: 'off' | 'on';
   buildLoopMaxRepairs: number;
+  buildLoopEmitPr: boolean;
+  buildLoopPrBaseBranch: string;
+  buildLoopPrDraft: boolean;
   notifyBell: boolean;
   childDrainTimeoutMs: number;
   offloadRetentionMs: number;
   offloadMaxEntries: number;
   maxSpawnDepth: number;
   maxConcurrentChildren: number;
+  fleetMaxConcurrentJobs: number;
   autoChainMaxFollowups: number;
   agentMcpToolBudget: number;
+  mcpProgressiveDiscovery: boolean;
   scheduleTickMs: number;
   updateCheck: boolean;
   externalDirWrites: ExternalDirMode;
@@ -828,11 +1014,15 @@ export interface ResolvedCliKnobs {
   autoReindex: boolean;
   browserSmoke: string;
   lspServers: Record<string, string>;
+  codePromptPrefix: string;
+  shortcuts: Record<string, string>;
   traceLog?: string;
   tracingBackend: 'stdout-jsonl' | 'otel' | 'langsmith' | 'langfuse';
   tracingEndpoint?: string;
   tracingApiKey?: string;
   webSearchEndpoint?: string;
+  webSearch: ResolvedWebSearchKnobs;
+  computerUse: { enabled: boolean; mode: string };
   tierLadder?: { flash?: string; standard?: string; pro?: string };
   contextCompaction: boolean;
   childAgentTimeoutMs: number;
@@ -840,10 +1030,82 @@ export interface ResolvedCliKnobs {
   debugExit: boolean;
   workspaceOverride?: string;
   maxOutputTokens?: number;
+  /** PER-PROVIDER WIRE-FORMAT OVERRIDE — validated subset of
+   *  `CliKnobs.providerRequestFormat`; entries whose value isn't one of the
+   *  accepted `ProviderWireFormat` literals are dropped on resolve. */
+  providerRequestFormat: Record<string, ProviderWireFormat>;
+  /** Per-tool enable/disable overrides (validated subset of `CliKnobs.toolOverrides`;
+   *  non-boolean values dropped). `true` = force-enable, `false` = force-disable. */
+  toolOverrides: Record<string, boolean>;
+}
+
+/** Reduce a raw `toolOverrides` to a validated `{ [tool]: boolean }` map. Non-object
+ *  input → empty; non-boolean values dropped; tool-name keys trimmed (case kept —
+ *  tool names are case-sensitive, incl. `mcp_<server>_<tool>`). */
+function normalizeToolOverrides(input: unknown): Record<string, boolean> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+  const out: Record<string, boolean> = {};
+  for (const [rawKey, rawValue] of Object.entries(input as Record<string, unknown>)) {
+    const key = typeof rawKey === 'string' ? rawKey.trim() : '';
+    if (key && typeof rawValue === 'boolean') out[key] = rawValue;
+  }
+  return out;
 }
 
 function unitInterval(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? value : fallback;
+}
+
+/** Reduce a raw `providerRequestFormat` to its validated subset.
+ *  - non-object input → empty map (fail-safe)
+ *  - values other than the accepted `ProviderWireFormat` literals → dropped
+ *  - keys are preserved lowercased so lookups under `provider` ids are stable. */
+const PROVIDER_WIRE_FORMATS: readonly ProviderWireFormat[] = ['responses', 'chat-completions', 'anthropic-messages', 'gemini-generate'];
+function normalizeProviderRequestFormat(input: unknown): Record<string, ProviderWireFormat> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+  const out: Record<string, ProviderWireFormat> = {};
+  for (const [rawKey, rawValue] of Object.entries(input as Record<string, unknown>)) {
+    const key = typeof rawKey === 'string' ? rawKey.trim().toLowerCase() : '';
+    if (!key) continue;
+    if (typeof rawValue === 'string' && (PROVIDER_WIRE_FORMATS as readonly string[]).includes(rawValue)) {
+      out[key] = rawValue as ProviderWireFormat;
+    }
+  }
+  return out;
+}
+
+const WEB_SEARCH_PROVIDER_NAMES: readonly WebSearchProviderName[] = ['duckduckgo', 'serper', 'google_pse', 'brave', 'searxng', 'custom_http'];
+
+function positiveInt(value: unknown, fallback: number, opts: { min?: number; max?: number } = {}): number {
+  const n = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : fallback;
+  const min = opts.min ?? 1;
+  const max = opts.max ?? Number.MAX_SAFE_INTEGER;
+  return Math.max(min, Math.min(max, n));
+}
+
+function resolveWebSearchKnobs(input: WebSearchCliKnobs | undefined): ResolvedWebSearchKnobs {
+  const provider = WEB_SEARCH_PROVIDER_NAMES.includes(input?.provider as WebSearchProviderName)
+    ? input!.provider!
+    : 'duckduckgo';
+  return {
+    provider,
+    maxResults: positiveInt(input?.maxResults, 5, { min: 1, max: 10 }),
+    serperApiKey: input?.serperApiKey ?? '',
+    google: {
+      apiKey: input?.google?.apiKey ?? '',
+      cx: input?.google?.cx ?? '',
+    },
+    braveApiKey: input?.braveApiKey ?? '',
+    searxngBaseUrl: input?.searxngBaseUrl ?? '',
+    crawler: {
+      respectRobots: input?.crawler?.respectRobots ?? true,
+      maxContentChars: positiveInt(input?.crawler?.maxContentChars, 15_000, { min: 1 }),
+      maxHtmlBytes: positiveInt(input?.crawler?.maxHtmlBytes, 5_242_880, { min: 1 }),
+      timeoutMs: positiveInt(input?.crawler?.timeoutMs, 30_000, { min: 1 }),
+      ratePerHostMs: positiveInt(input?.crawler?.ratePerHostMs, 1_000, { min: 0 }),
+      userAgent: input?.crawler?.userAgent?.trim() || 'BrainRouterCrawler/0.4.16',
+    },
+  };
 }
 
 export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
@@ -905,6 +1167,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     stormWindow: c.stormWindow ?? 6,
     stormThreshold: c.stormThreshold ?? 4,
     maxToolLoops: c.maxToolLoops ?? 60,
+    localModelProfile: c.localModelProfile === 'on' || c.localModelProfile === 'off' ? c.localModelProfile : 'auto',
     repeatToolSequenceLimit: c.repeatToolSequenceLimit ?? 12,
     repeatSequenceExemptTools: Array.isArray(c.repeatSequenceExemptTools)
       ? c.repeatSequenceExemptTools
@@ -923,12 +1186,15 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     effort: c.effort ?? 'medium',
     fallbackModel: c.fallbackModel ?? null,
     mcpTimeoutMs: c.mcpTimeoutMs ?? 60_000,
+    brainUrl: c.brainUrl ?? null,
     sandbox: c.sandbox ?? 'off',
     sandboxReadPaths: c.sandboxReadPaths ?? [],
     sandboxWritePaths: c.sandboxWritePaths ?? [],
     sandboxNetwork: c.sandboxNetwork ?? false,
     sandboxUnavailable: c.sandboxUnavailable ?? 'deny',
     sandboxEnforceWhenSilent: c.sandboxEnforceWhenSilent ?? true,
+    jobSecretScoping: c.jobSecretScoping !== false,
+    jobSecretAllowlist: Array.isArray(c.jobSecretAllowlist) ? c.jobSecretAllowlist : [],
     // CODEX-APPROVAL-GUARD — drop over-broad prefixes (bare `git`/`bash`/`sudo`/…)
     // so a too-permissive config.json entry can never auto-approve everything.
     commandAllowlist: sanitizeCommandAllowlist(c.commandAllowlist ?? []).allowed,
@@ -937,20 +1203,30 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     buildLoop: c.buildLoop ?? 'escalate',
     worktreeMergeReview: c.worktreeMergeReview ?? 'off',
     buildLoopMaxRepairs: Math.max(0, Math.floor(c.buildLoopMaxRepairs ?? 0)),
+    buildLoopEmitPr: c.buildLoopEmitPr === true,
+    buildLoopPrBaseBranch: (c.buildLoopPrBaseBranch ?? '').trim(),
+    buildLoopPrDraft: c.buildLoopPrDraft !== false,
     notifyBell: c.notifyBell ?? false,
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,
     offloadRetentionMs: c.offloadRetentionMs ?? 1_800_000,
     offloadMaxEntries: c.offloadMaxEntries ?? 64,
     maxSpawnDepth: c.maxSpawnDepth ?? 3,
     maxConcurrentChildren: c.maxConcurrentChildren ?? 8,
+    fleetMaxConcurrentJobs: Math.max(0, Math.floor(c.fleetMaxConcurrentJobs ?? 4)),
     autoChainMaxFollowups: c.autoChainMaxFollowups ?? 2,
-    agentMcpToolBudget: c.agentMcpToolBudget ?? 40,
+    agentMcpToolBudget: c.agentMcpToolBudget ?? 16,
+    mcpProgressiveDiscovery: c.mcpProgressiveDiscovery ?? false,
     scheduleTickMs: c.scheduleTickMs ?? 30_000,
     traceLog: c.traceLog,
     tracingBackend: c.tracingBackend ?? 'stdout-jsonl',
     tracingEndpoint: c.tracingEndpoint,
     tracingApiKey: c.tracingApiKey,
     webSearchEndpoint: c.webSearchEndpoint,
+    webSearch: resolveWebSearchKnobs(c.webSearch),
+    computerUse: {
+      enabled: c.computerUse?.enabled ?? false,
+      mode: c.computerUse?.mode?.trim() || 'smart_approve',
+    },
     tierLadder: c.tierLadder,
     contextCompaction: c.contextCompaction ?? true,
     updateCheck: c.updateCheck ?? true,
@@ -962,11 +1238,15 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     autoReindex: c.autoReindex ?? true,
     browserSmoke: c.browserSmoke ?? '',
     lspServers: (c.lspServers && typeof c.lspServers === 'object') ? c.lspServers : {},
+    codePromptPrefix: typeof c.codePromptPrefix === 'string' ? c.codePromptPrefix : '',
+    shortcuts: (c.shortcuts && typeof c.shortcuts === 'object') ? (c.shortcuts as Record<string, string>) : {},
     childAgentTimeoutMs: c.childAgentTimeoutMs ?? 0, // 0 = parent waits until child completion
     agentPreviewChars: c.agentPreviewChars ?? 2_500,
     debugExit: c.debugExit ?? false,
     workspaceOverride: c.workspaceOverride,
     maxOutputTokens: c.maxOutputTokens,
+    providerRequestFormat: normalizeProviderRequestFormat(c.providerRequestFormat),
+    toolOverrides: normalizeToolOverrides(c.toolOverrides),
   };
 }
 

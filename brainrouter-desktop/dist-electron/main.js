@@ -23,9 +23,14 @@ import { recordTelemetry } from '@kinqs/brainrouter-core/dist/telemetry/telemetr
 import { TELEMETRY_EVENTS } from '@kinqs/brainrouter-core/dist/telemetry/contracts.js';
 import { getLatestReview } from '@kinqs/brainrouter-core/dist/review/reviewStore.js';
 import { reviewGate } from '@kinqs/brainrouter-core/dist/review/reviewModel.js';
+import { loadConfig, saveConfig, _resetCliKnobsCache } from '@kinqs/brainrouter-core/dist/config/config.js';
 import { emptyPool, planActivate, applyActivate, setRunning, removeEntry, } from './hostPoolPolicy.js';
 import { isAllowedNavigation, allowedOriginFor } from './windowSecurity.js';
 import { addOpened, noteActivity, reorderWorkspace } from './recents.js';
+import { createComputerUsePort } from './computerUse.js';
+import { checkComputerUsePermissions, openAccessibilitySettings, openScreenRecordingSettings } from './computerUsePermissions.js';
+import { setupTray } from './tray.js';
+import { hardenWebviewPreferences, isAllowedWebviewSrc } from './webviewPolicy.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 function reconcileWorkspaceBackground(workspaceRoot) {
     try {
@@ -41,6 +46,24 @@ const wins = new Map(); // webContents.id → WinPool
 const recentsPath = () => path.join(app.getPath('userData'), 'recent-workspaces.json');
 const WORKSPACE_SESSIONS_CACHE_MS = 30_000;
 const workspaceSessionsCache = new Map();
+function isComputerUseRequest(value) {
+    if (!value || typeof value !== 'object')
+        return false;
+    const v = value;
+    return v.kind === 'computer-use-request' && typeof v.id === 'string' && (v.op === 'screenshot' || v.op === 'act');
+}
+async function handleComputerUseRequest(wp, host, request) {
+    const port = createComputerUsePort(() => wp.win);
+    try {
+        const result = request.op === 'screenshot'
+            ? await port.screenshot()
+            : await port.act(request.action);
+        host.postMessage({ kind: 'computer-use-response', id: request.id, ok: true, result });
+    }
+    catch (err) {
+        host.postMessage({ kind: 'computer-use-response', id: request.id, ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+}
 function readRecents() {
     try {
         return JSON.parse(fs.readFileSync(recentsPath(), 'utf-8'));
@@ -139,6 +162,10 @@ function spawnHost(wp, workspaceRoot) {
     host.on('message', (msg) => {
         if (wp.win.isDestroyed())
             return;
+        if (isComputerUseRequest(msg)) {
+            void handleComputerUseRequest(wp, host, msg);
+            return;
+        }
         if (msg && typeof msg === 'object') {
             const ev = msg.event;
             const kind = ev?.kind;
@@ -254,7 +281,20 @@ function openWorkspaceWindow(workspaceRoot) {
             contextIsolation: true,
             nodeIntegration: false,
             sandbox: false,
+            // §3 D3 — allow <webview> ONLY for the prototype preview; every attach is
+            // hardened + src-gated by the will-attach-webview handler below.
+            webviewTag: true,
         },
+    });
+    // §3 D3 — secure-webview gate: harden every attached webview (no preload/node,
+    // sandboxed, isolated) and restrict its src to a self-contained data:text/html
+    // doc or an authorized prototype file under THIS workspace. Anything else is
+    // refused. The policy is a pure, unit-tested helper (webviewPolicy.ts).
+    win.webContents.on('will-attach-webview', (event, webPreferences, params) => {
+        hardenWebviewPreferences(webPreferences);
+        if (!isAllowedWebviewSrc(typeof params.src === 'string' ? params.src : '', workspaceRoot)) {
+            event.preventDefault();
+        }
     });
     const wp = { win, hosts: new Map(), lastSession: new Map(), pool: emptyPool(), retiring: new Set() };
     wins.set(win.webContents.id, wp);
@@ -295,12 +335,42 @@ function openWorkspaceWindow(workspaceRoot) {
 // between it and its neighbor. This is what makes Codex/native apps look
 // clean; classic Chromium scrollbars reserve space and draw a hard divider.
 app.commandLine.appendSwitch('enable-features', 'OverlayScrollbar');
+// §5.8 — the tray instance, kept in module scope so V8 never GCs it (which would
+// make the icon vanish). Assigned once the app is ready.
+let tray = null;
 app.whenReady().then(() => {
     // T1 — the folder the app launched in is implicitly trusted (the user chose
     // it); every OTHER workspace must be trusted before main will open it.
     const launchRoot = process.env.BRAINROUTER_DESKTOP_WORKSPACE || readRecents()[0] || process.cwd();
     trustWorkspace(launchRoot);
     openWorkspaceWindow(launchRoot);
+    // §5.8 — system tray: quick show/hide, a live recent-workspaces submenu, quit.
+    // Held in module scope so it isn't garbage-collected; failure is non-fatal.
+    tray = setupTray({
+        recents: () => readRecents(),
+        isWindowVisible: () => [...wins.values()].some((wp) => !wp.win.isDestroyed() && wp.win.isVisible()),
+        toggleWindow: () => {
+            const live = [...wins.values()].filter((wp) => !wp.win.isDestroyed());
+            if (live.length === 0) {
+                openWorkspaceWindow(readRecents()[0] || launchRoot);
+                return;
+            }
+            const anyVisible = live.some((wp) => wp.win.isVisible());
+            for (const wp of live) {
+                if (anyVisible)
+                    wp.win.hide();
+                else {
+                    wp.win.show();
+                    wp.win.focus();
+                }
+            }
+        },
+        openWorkspace: (root) => { try {
+            trustWorkspace(root);
+        }
+        catch { /* best-effort */ } openWorkspaceWindow(root); },
+        quit: () => app.quit(),
+    });
     ipcMain.on('agent-command', (event, raw) => {
         const wp = wins.get(event.sender.id);
         if (!wp || event.senderFrame !== wp.win.webContents.mainFrame)
@@ -345,6 +415,18 @@ app.whenReady().then(() => {
             activateWorkspace(wp, workspaceRoot); // park the old host, don't kill running work
         else
             openWorkspaceWindow(workspaceRoot);
+        return { opened: true };
+    });
+    // Open a workspace in a SEPARATE window — always a new (or focused existing)
+    // window, NEVER swapping the calling window in place. Used for git worktrees:
+    // opening a worktree must not mutate the current window's projects list,
+    // active workspace, or chat. Trust is still enforced (defense-in-depth).
+    ipcMain.handle('workspace:open-window', (_event, workspaceRoot) => {
+        if (typeof workspaceRoot !== 'string' || !fs.existsSync(workspaceRoot))
+            return { opened: false };
+        if (!isWorkspaceTrusted(workspaceRoot))
+            return { opened: false, needsTrust: true };
+        openWorkspaceWindow(workspaceRoot);
         return { opened: true };
     });
     // T1 — trust persistence lives in the shared CLI store (not renderer
@@ -396,6 +478,22 @@ app.whenReady().then(() => {
         if (typeof dragged !== 'string' || typeof target !== 'string')
             return { recents: readRecents() };
         return { recents: markWorkspaceReordered(dragged, target) };
+    });
+    ipcMain.handle('computerUse:checkPermissions', () => checkComputerUsePermissions());
+    ipcMain.handle('computerUse:openAccessibilitySettings', () => openAccessibilitySettings());
+    ipcMain.handle('computerUse:openScreenRecordingSettings', () => openScreenRecordingSettings());
+    ipcMain.handle('computerUse:setMode', (_e, raw) => {
+        const next = raw && typeof raw === 'object' ? raw : {};
+        const cfg = loadConfig();
+        cfg.cli = cfg.cli ?? {};
+        const current = cfg.cli.computerUse ?? {};
+        cfg.cli.computerUse = {
+            enabled: typeof next.enabled === 'boolean' ? next.enabled : current.enabled,
+            mode: typeof next.mode === 'string' && next.mode.trim() ? next.mode.trim() : current.mode,
+        };
+        saveConfig(cfg);
+        _resetCliKnobsCache();
+        return { ok: true, computerUse: cfg.cli.computerUse };
     });
     app.on('activate', () => {
         if (BrowserWindow.getAllWindows().length === 0) {

@@ -1,0 +1,36 @@
+#!/bin/sh
+# BrainRouter pre-commit hook (Refactor R0.3).
+# Lints ONLY the staged TS/JS files so a lint error is caught here rather than in
+# CI. Deliberately no `prettier --write` (would reformat the not-yet-formatted
+# tree and churn every commit) and no full build/test (too slow for a hook).
+#
+# Bypass:  git commit --no-verify   OR   BR_SKIP_HOOKS=1 git commit ...
+set -e
+
+if [ "$BR_SKIP_HOOKS" = "1" ]; then
+  echo "pre-commit: skipped (BR_SKIP_HOOKS=1)"
+  exit 0
+fi
+
+# Staged Added/Copied/Modified source files (exclude deletions + dist output).
+files=$(git diff --cached --name-only --diff-filter=ACM \
+  | grep -E '\.(ts|tsx|js|mjs|cjs)$' \
+  | grep -vE '(^|/)(dist|dist-electron|node_modules)/' \
+  || true)
+
+if [ -z "$files" ]; then
+  exit 0
+fi
+
+# Resolve a local eslint; if it isn't installed (fresh clone before `npm ci`),
+# skip rather than hard-block — the hook must never wedge an otherwise-valid repo.
+root=$(git rev-parse --show-toplevel)
+eslint_bin="$root/node_modules/.bin/eslint"
+if [ ! -x "$eslint_bin" ]; then
+  echo "pre-commit: eslint not installed (run npm ci) — skipping lint."
+  exit 0
+fi
+
+echo "pre-commit: linting staged files…"
+# shellcheck disable=SC2086
+"$eslint_bin" --no-error-on-unmatched-pattern $files

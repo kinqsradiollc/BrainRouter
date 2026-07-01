@@ -17,8 +17,8 @@ export function bearerFrom(req: AuthedRequest): string {
 }
 
 /** Look the API-key user up and attach identity to the request. */
-function attachApiKeyUser(req: AuthedRequest, key: string): boolean {
-  const user = memoryEngine.getUserByApiKey(key);
+async function attachApiKeyUser(req: AuthedRequest, key: string): Promise<boolean> {
+  const user = await memoryEngine.getUserByApiKey(key);
   if (!user) return false;
   req.userId = user.userId;
   req.isAdmin = user.isAdmin;
@@ -54,20 +54,20 @@ if (USING_FALLBACK_JWT_SECRET) {
 // valid JWT payload without that re-check (its API-key branch reuses
 // `attachApiKeyUser`). They share `bearerFrom` + the `{ error, code }` envelope.
 
-export function requireAuth(req: AuthedRequest, res: Response, next: NextFunction) {
+export async function requireAuth(req: AuthedRequest, res: Response, next: NextFunction) {
   const key = bearerFrom(req);
   if (!key) {
     sendError(res, 401, "API key required");
     return;
   }
-  if (!attachApiKeyUser(req, key)) {
+  if (!(await attachApiKeyUser(req, key))) {
     sendError(res, 403, "Invalid API key");
     return;
   }
   next();
 }
 
-export function requireJwt(req: AuthedRequest, res: Response, next: NextFunction) {
+export async function requireJwt(req: AuthedRequest, res: Response, next: NextFunction) {
   const token = bearerFrom(req);
   if (!token) {
     sendError(res, 401, "JWT required");
@@ -85,7 +85,7 @@ export function requireJwt(req: AuthedRequest, res: Response, next: NextFunction
     sendError(res, 401, "Invalid or expired token");
     return;
   }
-  const user = memoryEngine.getUserById(req.userId);
+  const user = await memoryEngine.getUserById(req.userId);
   if (!user) {
     sendError(res, 401, "Invalid or expired token");
     return;
@@ -97,7 +97,7 @@ export function requireJwt(req: AuthedRequest, res: Response, next: NextFunction
   next();
 }
 
-export function requireAnyAuth(req: AuthedRequest, res: Response, next: NextFunction) {
+export async function requireAnyAuth(req: AuthedRequest, res: Response, next: NextFunction) {
   const bearer = bearerFrom(req);
   if (!bearer) {
     sendError(res, 401, "Authentication required");
@@ -114,7 +114,7 @@ export function requireAnyAuth(req: AuthedRequest, res: Response, next: NextFunc
     }
   }
 
-  if (!attachApiKeyUser(req, bearer)) {
+  if (!(await attachApiKeyUser(req, bearer))) {
     sendError(res, 401, "Authentication required");
     return;
   }

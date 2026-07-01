@@ -45,7 +45,7 @@ export async function handleMemoryMarkCited(args: unknown, options?: { defaultUs
   const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
 
   try {
-    const result = memoryEngine.markCited(
+    const result = await memoryEngine.markCited(
       effectiveUserId,
       params.citedRecordIds,
       params.allRecalledRecordIds

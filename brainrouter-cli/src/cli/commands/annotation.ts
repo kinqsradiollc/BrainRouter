@@ -34,9 +34,9 @@ import {
   addComment,
   linkAnnotation,
   type AnnotationFilter,
-} from '@kinqs/brainrouter-core/dist/annotation/annotationStore.js';
-import { annotationsToMarkdown } from '@kinqs/brainrouter-core/dist/annotation/annotationExport.js';
-import { emitAgentEvent, emitAnnotationCapture } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
+} from '@kinqs/brainrouter-core/annotation';
+import { annotationsToMarkdown } from '@kinqs/brainrouter-core/annotation';
+import { emitAgentEvent, emitAnnotationCapture } from '@kinqs/brainrouter-core/memory';
 import type { CommandContext } from './_context.js';
 
 const TARGET_KINDS = 'plan|requirement|artifact|markdown|html|message|diff|file|review-finding';

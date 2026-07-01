@@ -1,21 +1,21 @@
 import chalk from 'chalk';
 import type { CommandContext } from './_context.js';
-import { getConfigPath, saveConfig, setCliKnobOverride, _resetCliKnobsCache, type ServerConfig, type LLMConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { getConfigPath, getCliKnobs, saveConfig, setCliKnobOverride, _resetCliKnobsCache, type ServerConfig, type LLMConfig } from '@kinqs/brainrouter-core/config';
 import {
   listProviderNames, setProvider, removeProvider, setAgentModel, describeAgentModel, SUBAGENT_ROLES,
-} from '@kinqs/brainrouter-core/dist/provider/agentModels.js';
+  PROVIDER_CATALOG, maskApiKey, validateApiKey,
+} from '@kinqs/brainrouter-core/provider';
 import {
   readPreferences,
   writePreferences,
   resolveEffort,
+  setSessionRuntime,
   type Preferences,
   type EffortLevel,
   type ExecutionMode,
   type ReviewPolicy,
-} from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
-import { setSessionRuntime } from '@kinqs/brainrouter-core/dist/session/sessionRuntimeStore.js';
+} from '@kinqs/brainrouter-core/session';
 import { isKnownSegment, SEGMENT_NAMES } from '../statusline.js';
-import { PROVIDER_CATALOG, maskApiKey, validateApiKey } from '@kinqs/brainrouter-core/dist/provider/catalog.js';
 import { selectModel } from '../wizard/modelsApi.js';
 // 0.3.7 — picker / prompt moved to Ink. The raw-stdout pickFromList /
 // promptText primitives had compounding redraw bugs (frame creep on
@@ -75,6 +75,66 @@ export function parseConfigArgs(args: string[]): ParsedConfigArgs {
 
 export function listKnownConfigKeys(): string[] {
   return Object.keys(KEY_HANDLERS);
+}
+
+export const WIRE_FORMAT_OPTIONS = ['default', 'chat-completions', 'responses', 'anthropic-messages', 'gemini-generate'] as const;
+export type WireFormatOption = (typeof WIRE_FORMAT_OPTIONS)[number];
+export type WireFormatOverride = Exclude<WireFormatOption, 'default'>;
+
+export interface ProviderRequestFormatRow {
+  id: string;
+  label: string;
+  description: string;
+  savedNames: string[];
+}
+
+function normalizeWireProviderId(id: string | undefined): string {
+  return (id ?? '').trim().toLowerCase();
+}
+
+export function listProviderRequestFormatRows(config: CommandContext['config']): ProviderRequestFormatRow[] {
+  const savedByProvider = new Map<string, string[]>();
+  for (const [name, provider] of Object.entries(config.providers ?? {})) {
+    const id = normalizeWireProviderId(provider.provider || name);
+    if (!id) continue;
+    const names = savedByProvider.get(id) ?? [];
+    names.push(name);
+    savedByProvider.set(id, names);
+  }
+
+  const catalogById = new Map(PROVIDER_CATALOG.map((p) => [normalizeWireProviderId(p.id), p] as const));
+  const rows: ProviderRequestFormatRow[] = [];
+  const seen = new Set<string>();
+  const add = (rawId: string, fallbackLabel?: string): void => {
+    const id = normalizeWireProviderId(rawId);
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    const catalog = catalogById.get(id);
+    const savedNames = savedByProvider.get(id) ?? [];
+    const label = catalog?.label ?? fallbackLabel ?? id;
+    const bits = [`provider id: ${id}`];
+    if (savedNames.length) bits.push(`saved as ${savedNames.join(', ')}`);
+    rows.push({ id, label, savedNames, description: bits.join(' · ') });
+  };
+
+  for (const provider of PROVIDER_CATALOG) add(provider.id, provider.label);
+  for (const id of savedByProvider.keys()) add(id);
+  return rows;
+}
+
+export function applyProviderRequestFormat(config: CommandContext['config'], providerId: string, format: WireFormatOption): { ok: true } | { ok: false; error: string } {
+  const id = normalizeWireProviderId(providerId);
+  if (!id) return { ok: false, error: 'Provider id is required.' };
+  if (!WIRE_FORMAT_OPTIONS.includes(format)) return { ok: false, error: `Unsupported wire format: ${format}` };
+
+  const next: Record<string, WireFormatOverride> = { ...(config.cli?.providerRequestFormat ?? {}) };
+  if (format === 'default') delete next[id];
+  else next[id] = format;
+
+  config.cli = { ...(config.cli ?? {}) };
+  if (Object.keys(next).length === 0) delete config.cli.providerRequestFormat;
+  else config.cli.providerRequestFormat = next;
+  return { ok: true };
 }
 
 // --- Settings home panel -----------------------------------------------
@@ -167,6 +227,15 @@ function buildPanelRows(ctx: CommandContext): PanelRow[] {
       edit: editProviders,
     },
     {
+      key: 'web-search',
+      label: 'Web search',
+      current: () => {
+        const ws = config.cli?.webSearch ?? {};
+        return `${ws.provider ?? getCliKnobs().webSearch.provider} · robots ${ws.crawler?.respectRobots === false ? 'off' : 'on'}`;
+      },
+      edit: editWebSearch,
+    },
+    {
       key: 'agent-models',
       label: 'Sub-agent models',
       current: () => {
@@ -184,6 +253,20 @@ function buildPanelRows(ctx: CommandContext): PanelRow[] {
     { key: 'quiet',         label: 'Quiet mode',       current: () => prefs().quiet ? 'on' : 'off',  edit: toggleQuiet },
     { key: 'personality',   label: 'Personality',      current: () => prefs().personality,           edit: editPersonality },
     { key: 'editor',        label: 'Editor mode',      current: () => prefs().editorMode,            edit: editEditorMode },
+    {
+      key: 'wire-format',
+      label: 'Wire format (per provider)',
+      current: () => {
+        // Live-read so the row summary stays in sync after a sub-pick without
+        // needing to re-enter the home panel.
+        const overrides = getCliKnobs().providerRequestFormat ?? {};
+        const entries = Object.entries(overrides);
+        if (entries.length === 0) return '(all using built-in defaults)';
+        const head = entries.slice(0, 3).map(([k, v]) => `${k} → ${v}`);
+        return entries.length <= 3 ? head.join(' · ') : `${head.join(' · ')}, +${entries.length - 3}`;
+      },
+      edit: editWireFormat,
+    },
     { key: '__raw',         label: 'View raw config',  current: () => 'JSON dump',                   edit: async () => false },
     { key: '__exit',        label: 'Quit (esc)',       current: () => '',                            edit: async () => false },
   ];
@@ -450,6 +533,81 @@ async function editProviders(ctx: CommandContext): Promise<boolean> {
   ctx.config = setProvider(ctx.config, picked.id, gathered.llm);
   saveConfig(ctx.config);
   console.log(chalk.green(`\n  ✓ Provider "${picked.id}" updated: ${gathered.label} · ${gathered.llm.model}${gathered.sourceTail}`));
+  return true;
+}
+
+function ensureWebSearchConfig(ctx: CommandContext): NonNullable<NonNullable<CommandContext['config']['cli']>['webSearch']> {
+  ctx.config.cli = ctx.config.cli ?? {};
+  ctx.config.cli.webSearch = ctx.config.cli.webSearch ?? {};
+  return ctx.config.cli.webSearch;
+}
+
+async function editWebSearch(ctx: CommandContext): Promise<boolean> {
+  const theme = themeFor(ctx);
+  const current = ctx.config.cli?.webSearch ?? {};
+  const provider = current.provider ?? getCliKnobs().webSearch.provider;
+  const picked = await pickFromList({
+    theme,
+    title: 'Web search',
+    subtitle: 'Configure web_search provider keys and crawler behavior.',
+    rows: [
+      { id: 'provider', label: 'Provider', value: provider, description: 'duckduckgo, serper, google_pse, brave, searxng, custom_http' },
+      { id: 'serper', label: 'Serper API key', value: current.serperApiKey ? maskApiKey(current.serperApiKey) : '(unset)', description: 'write-only key' },
+      { id: 'google-key', label: 'Google PSE API key', value: current.google?.apiKey ? maskApiKey(current.google.apiKey) : '(unset)', description: 'write-only key' },
+      { id: 'google-cx', label: 'Google PSE cx', value: current.google?.cx ? '(set)' : '(unset)', description: 'custom search engine id' },
+      { id: 'brave', label: 'Brave API key', value: current.braveApiKey ? maskApiKey(current.braveApiKey) : '(unset)', description: 'write-only key' },
+      { id: 'searxng', label: 'SearXNG URL', value: current.searxngBaseUrl ?? '(unset)', description: 'self-hosted base URL' },
+      { id: 'robots', label: 'Respect robots.txt', value: current.crawler?.respectRobots === false ? 'off' : 'on', description: 'crawler policy' },
+    ],
+    initialCursor: 0,
+  });
+  if (picked.kind !== 'pick') return false;
+  const ws = ensureWebSearchConfig(ctx);
+  if (picked.id === 'provider') {
+    const prov = await pickFromList({
+      theme,
+      title: 'Web search provider',
+      subtitle: 'DuckDuckGo is keyless and keeps zero-config behavior.',
+      rows: ['duckduckgo', 'serper', 'google_pse', 'brave', 'searxng', 'custom_http'].map((id) => ({ id, label: id, value: id === provider ? 'current' : '' })),
+      initialCursor: 0,
+    });
+    if (prov.kind !== 'pick') return false;
+    ws.provider = prov.id as NonNullable<typeof ws.provider>;
+  } else if (picked.id === 'robots') {
+    ws.crawler = { ...(ws.crawler ?? {}), respectRobots: ws.crawler?.respectRobots === false };
+  } else {
+    const labels: Record<string, string> = {
+      serper: 'Serper API key',
+      'google-key': 'Google PSE API key',
+      'google-cx': 'Google PSE cx',
+      brave: 'Brave API key',
+      searxng: 'SearXNG base URL',
+    };
+    const result = await promptText({
+      theme,
+      title: labels[picked.id] ?? 'Web search value',
+      subtitle: 'Stored in local config.json. Keys are masked in config output.',
+      badge: 'web_search',
+      placeholder: picked.id === 'searxng' ? 'https://search.example.com' : '',
+      validate: (raw) => {
+        const value = raw.trim();
+        if (picked.id === 'searxng') {
+          try { new URL(value); } catch { return 'must be a valid URL'; }
+        }
+        return undefined;
+      },
+    });
+    if (result.kind !== 'accept') return false;
+    const value = result.text.trim();
+    if (picked.id === 'serper') ws.serperApiKey = value;
+    if (picked.id === 'google-key') ws.google = { ...(ws.google ?? {}), apiKey: value };
+    if (picked.id === 'google-cx') ws.google = { ...(ws.google ?? {}), cx: value };
+    if (picked.id === 'brave') ws.braveApiKey = value;
+    if (picked.id === 'searxng') ws.searxngBaseUrl = value;
+  }
+  saveConfig(ctx.config);
+  _resetCliKnobsCache();
+  console.log(chalk.green('\n  ✓ Web search settings saved.\n'));
   return true;
 }
 
@@ -981,6 +1139,79 @@ export async function promptBrainrouterApiKey(
   return result.text.trim();
 }
 
+
+/**
+ * `/config` → "Wire format (per provider)" row. Lets the user override
+ * `cli.providerRequestFormat[providerId]` for every built-in catalog id and
+ * the underlying provider id of each saved provider. The key intentionally
+ * matches `llm.provider`, not the saved provider's friendly name.
+ *
+ * Each pick:
+ *   1. Provider id — builtin or configured custom provider (deduped).
+ *   2. Wire format — `(default)` | `chat-completions` | `responses` |
+ *      `anthropic-messages` | `gemini-generate` (the last two are native,
+ *      non-OpenAI-compatible, for the Anthropic/Gemini providers).
+ * Picking `(default)` removes the provider's key from the map; the others
+ * set it. Persists through `saveConfig` so CLI and Desktop share the same
+ * `cli.providerRequestFormat` map.
+ */
+async function editWireFormat(ctx: CommandContext): Promise<boolean> {
+  while (true) {
+    const theme = themeFor(ctx);
+    const rows = listProviderRequestFormatRows(ctx.config);
+    if (rows.length === 0) {
+      console.log(chalk.yellow('\n  No providers to configure. Add one under "Providers" first.\n'));
+      return false;
+    }
+    const overrides = getCliKnobs().providerRequestFormat ?? {};
+    const pickerRows: PickerRow[] = rows.map((row) => {
+      const cur = overrides[row.id];
+      return {
+        id: row.id,
+        label: row.label,
+        value: cur ?? 'default',
+        description: cur ? `${row.description} · override: ${cur}` : `${row.description} · default`,
+      };
+    });
+    const picked = await pickFromList({
+      theme,
+      title: 'Wire format',
+      subtitle: 'Override the OpenAI wire format per provider (`/v1/responses` vs `/v1/chat/completions`). Leave as "default" to use BrainRouter\'s built-in routing for that provider.',
+      rows: pickerRows,
+      initialCursor: 0,
+      footer: '↑/↓ pick provider  ·  ↵ change format  ·  esc back',
+    });
+    if (picked.kind !== 'pick') return true;
+
+    const cur = overrides[picked.id];
+    const cursor = Math.max(0, WIRE_FORMAT_OPTIONS.indexOf((cur as WireFormatOption | undefined) ?? 'default'));
+    const formatRow = await pickFromList({
+      theme,
+      title: `Wire format → ${picked.id}`,
+      subtitle: 'Built-in routing uses Responses where the provider declares it (canonical OpenAI today). "chat-completions" forces /v1/chat/completions; "responses" forces /v1/responses; the native formats speak Anthropic/Gemini directly (non-OpenAI-compatible) — use only for those providers with a real key.',
+      rows: [
+        { id: 'default',         label: '(default)',         value: 'built-in routing',     description: 'Remove the override for this provider' },
+        { id: 'chat-completions', label: 'chat-completions',  value: '/v1/chat/completions', description: 'Always POST chat/completions' },
+        { id: 'responses',       label: 'responses',          value: '/v1/responses',        description: 'Always POST responses (assumes your gateway supports it)' },
+        { id: 'anthropic-messages', label: 'anthropic-messages', value: '/v1/messages',       description: 'Native Anthropic Messages API (Anthropic provider only)' },
+        { id: 'gemini-generate',  label: 'gemini-generate',   value: ':generateContent',     description: 'Native Gemini generateContent API (Gemini provider only)' },
+      ],
+      initialCursor: cursor,
+    });
+    if (formatRow.kind !== 'pick') continue;
+
+    const applied = applyProviderRequestFormat(ctx.config, picked.id, formatRow.id as WireFormatOption);
+    if (!applied.ok) {
+      console.log(chalk.red(`\n  ${applied.error}\n`));
+      continue;
+    }
+    saveConfig(ctx.config);
+    _resetCliKnobsCache();
+    const after = formatRow.id === 'default' ? 'default' : formatRow.id;
+    console.log(chalk.green(`\n  ✓ ${picked.id} → ${after}\n`));
+  }
+}
+
 async function editTheme(ctx: CommandContext): Promise<boolean> {
   const theme = themeFor(ctx);
   const result = await pickFromList({
@@ -1155,6 +1386,11 @@ function buildRawConfigLines(ctx: CommandContext): string[] {
 
 function scrubSecrets(scrubbed: any): void {
   if (scrubbed.llm?.apiKey) scrubbed.llm.apiKey = maskApiKey(scrubbed.llm.apiKey);
+  if (scrubbed.cli?.webSearch) {
+    if (scrubbed.cli.webSearch.serperApiKey) scrubbed.cli.webSearch.serperApiKey = maskApiKey(scrubbed.cli.webSearch.serperApiKey);
+    if (scrubbed.cli.webSearch.braveApiKey) scrubbed.cli.webSearch.braveApiKey = maskApiKey(scrubbed.cli.webSearch.braveApiKey);
+    if (scrubbed.cli.webSearch.google?.apiKey) scrubbed.cli.webSearch.google.apiKey = maskApiKey(scrubbed.cli.webSearch.google.apiKey);
+  }
   // Named provider keys (multi-provider routing) — these were NOT masked before,
   // so `/config show` leaked every saved provider's api key.
   for (const p of Object.values(scrubbed.providers ?? {})) {
@@ -1270,6 +1506,75 @@ function automationHandler(key: string): ConfigKeyHandler {
   };
 }
 
+function webSearchHandler(path: 'provider' | 'serperApiKey' | 'googleApiKey' | 'googleCx' | 'braveApiKey' | 'searxngBaseUrl' | 'respectRobots'): ConfigKeyHandler {
+  return {
+    get: (ctx) => {
+      const ws = ctx.config.cli?.webSearch ?? {};
+      switch (path) {
+        case 'provider': return ws.provider ?? getCliKnobs().webSearch.provider;
+        case 'serperApiKey': return ws.serperApiKey ? maskApiKey(ws.serperApiKey) : '(unset)';
+        case 'googleApiKey': return ws.google?.apiKey ? maskApiKey(ws.google.apiKey) : '(unset)';
+        case 'googleCx': return ws.google?.cx ? '(set)' : '(unset)';
+        case 'braveApiKey': return ws.braveApiKey ? maskApiKey(ws.braveApiKey) : '(unset)';
+        case 'searxngBaseUrl': return ws.searxngBaseUrl ?? '(unset)';
+        case 'respectRobots': return ws.crawler?.respectRobots === false ? 'off' : 'on';
+      }
+    },
+    set: (ctx, value) => {
+      const ws = ensureWebSearchConfig(ctx);
+      const v = value.trim();
+      if (path === 'provider') {
+        if (!['duckduckgo', 'serper', 'google_pse', 'brave', 'searxng', 'custom_http'].includes(v)) {
+          return { ok: false, reason: `web-search.provider must be duckduckgo|serper|google_pse|brave|searxng|custom_http (got "${value}")` };
+        }
+        ws.provider = v as NonNullable<typeof ws.provider>;
+      } else if (path === 'serperApiKey') ws.serperApiKey = v;
+      else if (path === 'googleApiKey') ws.google = { ...(ws.google ?? {}), apiKey: v };
+      else if (path === 'googleCx') ws.google = { ...(ws.google ?? {}), cx: v };
+      else if (path === 'braveApiKey') ws.braveApiKey = v;
+      else if (path === 'searxngBaseUrl') {
+        try { new URL(v); } catch { return { ok: false, reason: 'web-search.searxng-url must be a valid URL' }; }
+        ws.searxngBaseUrl = v;
+      } else {
+        const on = TRUE_WORDS.includes(v.toLowerCase());
+        const off = FALSE_WORDS.includes(v.toLowerCase());
+        if (!on && !off) return { ok: false, reason: `web-search.respect-robots must be on|off (got "${value}")` };
+        ws.crawler = { ...(ws.crawler ?? {}), respectRobots: on };
+      }
+      saveConfig(ctx.config);
+      _resetCliKnobsCache();
+      return { ok: true, message: `web-search.${path} saved` };
+    },
+  };
+}
+
+function computerUseHandler(path: 'enabled' | 'mode'): ConfigKeyHandler {
+  return {
+    get: (ctx) => {
+      const c = ctx.config.cli?.computerUse ?? {};
+      return path === 'enabled' ? (c.enabled ? 'on' : 'off') : (c.mode ?? getCliKnobs().computerUse.mode);
+    },
+    set: (ctx, value) => {
+      ctx.config.cli = ctx.config.cli ?? {};
+      ctx.config.cli.computerUse = ctx.config.cli.computerUse ?? {};
+      if (path === 'enabled') {
+        const v = value.toLowerCase().trim();
+        const on = TRUE_WORDS.includes(v);
+        const off = FALSE_WORDS.includes(v);
+        if (!on && !off) return { ok: false, reason: `computer-use.enabled must be on|off (got "${value}")` };
+        ctx.config.cli.computerUse.enabled = on;
+      } else {
+        const v = value.trim();
+        if (!v) return { ok: false, reason: 'computer-use.mode cannot be empty' };
+        ctx.config.cli.computerUse.mode = v;
+      }
+      saveConfig(ctx.config);
+      _resetCliKnobsCache();
+      return { ok: true, message: `computer-use.${path} saved` };
+    },
+  };
+}
+
 const KEY_HANDLERS: Record<string, ConfigKeyHandler> = {
   theme: {
     get: (ctx) => readPreferences(ctx.agent.workspaceRoot).theme,
@@ -1381,6 +1686,15 @@ const KEY_HANDLERS: Record<string, ConfigKeyHandler> = {
   'automation.requirements': automationHandler('automation.requirements'),
   'automation.sync': automationHandler('automation.sync'),
   'automation.sprints': automationHandler('automation.sprints'),
+  'web-search.provider': webSearchHandler('provider'),
+  'web-search.serper-api-key': webSearchHandler('serperApiKey'),
+  'web-search.google-api-key': webSearchHandler('googleApiKey'),
+  'web-search.google-cx': webSearchHandler('googleCx'),
+  'web-search.brave-api-key': webSearchHandler('braveApiKey'),
+  'web-search.searxng-url': webSearchHandler('searxngBaseUrl'),
+  'web-search.respect-robots': webSearchHandler('respectRobots'),
+  'computer-use.enabled': computerUseHandler('enabled'),
+  'computer-use.mode': computerUseHandler('mode'),
 };
 
 function printKey(ctx: CommandContext, key: string): void {

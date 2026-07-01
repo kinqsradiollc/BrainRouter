@@ -1,13 +1,13 @@
 {
   "name": "brainrouter-desktop",
-  "version": "0.4.15",
+  "version": "0.4.16",
   "private": true,
   "description": "BrainRouter Desktop — native macOS/Windows shell (Electron + React) over the shared @kinqs/brainrouter-core agent runtime (the same engine the CLI uses).",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
     "build": "npm run build:electron && vite build",
-    "build:electron": "rm -rf dist-electron && tsc -p tsconfig.electron.json",
+    "build:electron": "node -e \"fs.rmSync('dist-electron',{recursive:true,force:true})\" && tsc -p tsconfig.electron.json",
     "build:deps": "npm --prefix ../packages/types run build && npm --prefix ../packages/core run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build:deps && npm run typecheck && npm run build:electron && node --test \"dist-electron/**/*.test.js\" && tsx --test \"src/**/*.test.ts\" \"scripts/**/*.test.ts\"",
@@ -15,15 +15,57 @@
     "start": "npm run build:deps && npm run build && electron .",
     "start:fast": "electron .",
     "electron": "electron .",
-    "reset:desktop": "node scripts/reset-desktop.mjs"
+    "reset:desktop": "node scripts/reset-desktop.mjs",
+    "dist:mac": "npm run build && npx --yes electron-builder --mac --publish never",
+    "dist:win": "npm run build && npx --yes electron-builder --win --publish never",
+    "verify:packaged": "node scripts/verify-packaged.mjs"
+  },
+  "build": {
+    "appId": "com.brainrouter.desktop",
+    "productName": "BrainRouter",
+    "afterSign": "build/notarize.cjs",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "**/*.node",
+      "node_modules/@nut-tree-fork/libnut-*/**/*"
+    ],
+    "mac": {
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] },
+        { "target": "zip", "arch": ["arm64", "x64"] }
+      ]
+    },
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ]
+    }
   },
   "dependencies": {
-    "@kinqs/brainrouter-agent-protocol": "^0.4.15",
-    "@kinqs/brainrouter-core": "^0.4.15",
+    "@dagrejs/dagre": "^3.0.0",
+    "@kinqs/brainrouter-agent-protocol": "^0.4.16",
+    "@kinqs/brainrouter-core": "^0.4.16",
+    "@lobehub/icons-static-svg": "^1.91.0",
     "@monaco-editor/react": "^4.7.0",
+    "@nut-tree-fork/libnut": "^4.2.6",
+    "@nut-tree-fork/provider-interfaces": "^4.2.6",
+    "@nut-tree-fork/shared": "^4.2.6",
     "@types/react-syntax-highlighter": "^15.5.13",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
+    "@xyflow/react": "^12.11.0",
+    "d3-force": "^3.0.0",
     "monaco-editor": "^0.55.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -32,6 +74,7 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
+    "@types/d3-force": "^3.0.10",
     "@types/node": "^22.5.0",
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",

@@ -35,7 +35,7 @@ export async function deduplicateMemories(params: {
   for (const newRecord of records) {
     // 1. Keyword search to find potentially identical memories
     // We only need top 3 to see if there is an exact match
-    const candidates = store.searchCognitiveFts(userId, newRecord.content, 3);
+    const candidates = await store.searchCognitiveFts(userId, newRecord.content, 3);
     
     let isDuplicate = false;
     

@@ -142,13 +142,22 @@ export function shouldNudgeVerification(input: {
 }
 
 /** The corrective nudge injected at turn end when code was changed but not verified. Pure. */
-export function buildVerificationNudge(): string {
-  return [
+export function buildVerificationNudge(opts?: { local?: boolean }): string {
+  const lines = [
     'Runtime verification guardrail tripped.',
     'You wrote files this turn (code edits / writes) but ran no verification — no build, test, typecheck, or lint.',
     'Before claiming the work is done, prove it: run the relevant check (`run_command` with the project\'s test/build/typecheck/lint) and report the result.',
     'If there is genuinely nothing to run (a docs-only or config-only change), say so explicitly in your final answer instead of just asserting it works.',
-  ].join('\n');
+  ];
+  // HONK-L5 — weak/local models skip this step the most, so make it a hard,
+  // non-optional directive (the worker→verify loop in one turn) rather than a
+  // gentle reminder they can talk past.
+  if (opts?.local) {
+    lines.push(
+      'This is REQUIRED, not optional: your NEXT action this turn MUST be that verification `run_command` (as a tool call). Do NOT write a final answer until you have run it and seen the result; if it fails, fix the cause and run it again before finishing.',
+    );
+  }
+  return lines.join('\n');
 }
 
 /**

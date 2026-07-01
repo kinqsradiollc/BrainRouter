@@ -7,14 +7,14 @@ import { SlashPalettePanel } from './SlashPalettePanel.js';
 import { FooterStatus } from './FooterStatus.js';
 import { ScrollbackRow } from './ScrollbackRow.js';
 export { ScrollbackRow } from './ScrollbackRow.js';
-import { type BackgroundTask, formatBackgroundTasks, summarizeTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
+import { type BackgroundTask, formatBackgroundTasks, summarizeTasks } from '@kinqs/brainrouter-core/background';
 import { useTerminalSize } from './useTerminalSize.js';
 import { getFileIndex, matchFiles, extractAtToken, applyAtCompletion } from './fileIndex.js';
 import { appendHistory, historyPrev, historyNext, searchHistory, LIVE } from '../../runtime/inputHistory.js';
 import { flagSuggestions, applyFlagCompletion } from '../../runtime/slashFlags.js';
 // 0.3.9 — show the model's max prompt-context window in the footer next
 // to the model name (e.g. `gpt-4o-mini · 128k ctx · session-…`).
-import { formatContextWindow } from '@kinqs/brainrouter-core/dist/context/contextWindow.js';
+import { formatContextWindow } from '@kinqs/brainrouter-core/context';
 import { TuiRouterProvider, useTuiRouter, type TuiRoute } from './TuiRouter.js';
 import { GridWorkspace } from './layouts/GridWorkspace.js';
 import { renderMarkdown } from './markdownRender.js';
@@ -23,7 +23,7 @@ import { WelcomeView } from './views/WelcomeView.js';
 import type { BannerInputs } from '../banner.js';
 import { resolveTheme } from '../theme.js';
 import { TuiHeader } from './components/TuiHeader.js';
-import { VERSION } from '@kinqs/brainrouter-core/dist/version.js';
+import { VERSION } from '@kinqs/brainrouter-core/version';
 
 /**
  * Ink-based chat REPL — replaces the readline-based `startREPL` shell.
@@ -1253,7 +1253,7 @@ const CHROME_RESERVED_ROWS = 10;
 // per-render cost stays flat even while streaming re-runs the memo.
 const _mdRenderCache = new Map<string, string>();
 function renderMarkdownCached(text: string, width: number): string {
-  const key = width + ' ' + text;
+  const key = width + '\x00' + text;
   let rendered = _mdRenderCache.get(key);
   if (rendered === undefined) {
     rendered = renderMarkdown(text, { width }).trimEnd();

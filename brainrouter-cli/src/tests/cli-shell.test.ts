@@ -7,11 +7,11 @@ import { buildTheme, resolveTheme } from '../cli/theme.js';
 import { renderBanner, resolveDisplayedMcpState } from '../cli/banner.js';
 import { isKnownSegment, renderSegment, renderSegments, SEGMENT_NAMES } from '../cli/statusline.js';
 import { gatherWhereInputs, renderWhere } from '../cli/whereView.js';
-import { readPreferences, writePreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
-import { blockGoal, setGoal, tickGoalIteration } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
-import { updatePlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
-import { createWorkflow } from '@kinqs/brainrouter-core/dist/workflow/workflowArtifacts.js';
-import { _resetCliKnobsCache, setCliKnobOverride } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { readPreferences, writePreferences } from '@kinqs/brainrouter-core/session';
+import { blockGoal, setGoal, tickGoalIteration } from '@kinqs/brainrouter-core/goal';
+import { updatePlan } from '@kinqs/brainrouter-core/task';
+import { createWorkflow } from '@kinqs/brainrouter-core/workflow';
+import { _resetCliKnobsCache, setCliKnobOverride } from '@kinqs/brainrouter-core/config';
 
 /**
  * Tests for the 0.3.6 CLI shell redesign — theme, banner, statusline,
@@ -502,7 +502,7 @@ test('statusline: workflow segment is pure navigation (no goal-status annotation
   // carried their own goals. Post-decoupling the workflow segment is
   // purely "which folder is this session writing artifacts to" — goal
   // status lives entirely in the separate `goal` segment.
-  const { pauseGoal, blockGoal, usageLimitGoal } = await import('@kinqs/brainrouter-core/dist/goal/goalStore.js');
+  const { pauseGoal, blockGoal, usageLimitGoal } = await import('@kinqs/brainrouter-core/goal');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:wf-segment';
     createWorkflow(workspace, { title: 'flagged feature', kind: 'feature-dev', sessionKey: sk });
@@ -720,7 +720,7 @@ test('/where: persona line reports "no body yet" when anchor is on but brain has
 });
 
 test('/where: persona line hidden semantics — cli.personaAnchor=off forces off message', async () => {
-  const { setCliKnobOverride, _resetCliKnobsCache } = await import('@kinqs/brainrouter-core/dist/config/config.js');
+  const { setCliKnobOverride, _resetCliKnobsCache } = await import('@kinqs/brainrouter-core/config');
   withTempWorkspace((workspace) => {
     const theme = buildTheme('mono');
     setCliKnobOverride({ personaAnchor: 'off' });

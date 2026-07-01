@@ -1,5 +1,6 @@
 import type { LLMConfig } from '../config/config.js';
 import { getCliKnobs } from '../config/config.js';
+import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PLACEHOLDER_KEY } from '../provider/providers/index.js';
 
 /**
  * Conversation compaction for long sessions.
@@ -111,10 +112,18 @@ export async function runCompaction(llm: LLMConfig, input: CompactionInput): Pro
     ],
   };
 
-  const endpoint = llm.endpoint || 'https://api.openai.com/v1';
+  const rawEndpoint = llm.endpoint || 'https://api.openai.com/v1';
+  const endpoint = rawEndpoint.replace(/\/+$/, '').replace(/\/chat\/completions$/, '');
+  const providerDef = findProviderByEndpoint(endpoint) ?? PROVIDER_REGISTRY.get((llm.provider ?? '').toLowerCase());
   // Config-driven key (not env): env is imported into config at load time, so the
   // compaction call reads the same config knob as the main chat path.
-  const apiKey = llm.apiKey || '';
+  let apiKey = llm.apiKey || '';
+  const isLocal = (providerDef?.local ?? false) || isLoopbackEndpoint(endpoint);
+  if (!apiKey && !isLocal && providerDef?.defaultApiKey) apiKey = providerDef.defaultApiKey;
+  if (!apiKey && isLocal) apiKey = LOCAL_PLACEHOLDER_KEY;
+  if (!apiKey) {
+    throw new Error('compaction call failed: LLM API key is required — set it in your BrainRouter config.');
+  }
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 

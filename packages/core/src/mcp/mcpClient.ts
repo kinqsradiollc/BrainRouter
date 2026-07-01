@@ -280,6 +280,85 @@ export class McpClientWrapper {
     return res;
   }
 
+  async listResources(params?: { cursor?: string; server?: string }, options?: { signal?: AbortSignal }) {
+    // Single-wrapper mode has no server selector; the pool handles that layer.
+    if (!this.connected) return { resources: [] };
+    const timeoutMs = getCliKnobs().mcpTimeoutMs;
+    const request = { ...(params?.cursor ? { cursor: params.cursor } : {}) };
+    const invoke = () =>
+      Promise.race([
+        this.client.listResources(request, { signal: options?.signal, timeout: timeoutMs }),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`MCP resources/list timed out after ${timeoutMs}ms`)),
+            timeoutMs,
+          ),
+        ),
+      ]);
+    try {
+      return await invoke();
+    } catch (err) {
+      if (isSessionNotFoundError(err) && this.lastServerConfig) {
+        await this.reinit();
+        return await invoke();
+      }
+      throw err;
+    }
+  }
+
+  async listResourceTemplates(params?: { cursor?: string; server?: string }, options?: { signal?: AbortSignal }) {
+    // Single-wrapper mode has no server selector; the pool handles that layer.
+    if (!this.connected) return { resourceTemplates: [] };
+    const timeoutMs = getCliKnobs().mcpTimeoutMs;
+    const request = { ...(params?.cursor ? { cursor: params.cursor } : {}) };
+    const invoke = () =>
+      Promise.race([
+        this.client.listResourceTemplates(request, { signal: options?.signal, timeout: timeoutMs }),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`MCP resources/templates/list timed out after ${timeoutMs}ms`)),
+            timeoutMs,
+          ),
+        ),
+      ]);
+    try {
+      return await invoke();
+    } catch (err) {
+      if (isSessionNotFoundError(err) && this.lastServerConfig) {
+        await this.reinit();
+        return await invoke();
+      }
+      throw err;
+    }
+  }
+
+  async readResource(params: { uri: string; server?: string }, options?: { signal?: AbortSignal }) {
+    // Single-wrapper mode has no server selector; the pool handles that layer.
+    if (!this.connected) {
+      throw new Error(`MCP server is not connected. Resource "${params.uri}" is unavailable in offline mode.`);
+    }
+    const timeoutMs = getCliKnobs().mcpTimeoutMs;
+    const invoke = () =>
+      Promise.race([
+        this.client.readResource({ uri: params.uri }, { signal: options?.signal, timeout: timeoutMs }),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error(`MCP resources/read timed out after ${timeoutMs}ms`)),
+            timeoutMs,
+          ),
+        ),
+      ]);
+    try {
+      return await invoke();
+    } catch (err) {
+      if (isSessionNotFoundError(err) && this.lastServerConfig) {
+        await this.reinit();
+        return await invoke();
+      }
+      throw err;
+    }
+  }
+
   async callTool(name: string, args: Record<string, any>, options?: { signal?: AbortSignal }) {
     // Offline mode: synthesize an error envelope that downstream consumers
     // (callMcpTool, agent.captureTurn, memory_recall pipelines) already know

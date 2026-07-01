@@ -90,8 +90,8 @@ import fs from 'node:fs';
 import { Command } from 'commander';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
-import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath, getCliKnobs, setCliKnobOverride, hydrateConfigDefaultsOnDisk, type LLMConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
-import { redactText } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
+import { loadConfig, loadOrInitConfig, saveConfig, getConfigPath, getCliKnobs, setCliKnobOverride, hydrateConfigDefaultsOnDisk, resolveCliKnobs, type LLMConfig } from '@kinqs/brainrouter-core/config';
+import { redactText, resolveSessionLlmConfig } from '@kinqs/brainrouter-core/session';
 
 if (getCliKnobs().debugExit) {
   process.on('beforeExit', (code) => {
@@ -101,20 +101,18 @@ if (getCliKnobs().debugExit) {
     process.stderr.write(`[brainrouter:debug] exit code=${code}\n`);
   });
 }
-import { McpClientWrapper } from '@kinqs/brainrouter-core/dist/mcp/mcpClient.js';
-import { McpClientPool, selectMcpServerIds } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
+import { McpClientWrapper, McpClientPool, selectMcpServerIds, applyBrainUrlOverride, probeBrainHealth, embeddedBrainId } from '@kinqs/brainrouter-core/mcp';
 import { formatJsonlEvent, memoryRunEvent, isOffloadTool, type RunEvent } from './runtime/jsonlEvents.js';
 import { costUsd } from './runtime/pricing.js';
-import { VERSION } from '@kinqs/brainrouter-core/dist/version.js';
-import { loadExtensions } from '@kinqs/brainrouter-core/dist/extension/loader.js';
+import { VERSION } from '@kinqs/brainrouter-core/version';
+import { loadExtensions } from '@kinqs/brainrouter-core/extension';
 import { setKnownMcpServerIds } from './cli/ink/toolFormat.js';
-import type { ServerConfig } from '@kinqs/brainrouter-core/dist/config/config.js';
-import { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
+import type { ServerConfig } from '@kinqs/brainrouter-core/config';
+import { Agent } from '@kinqs/brainrouter-core/agent';
 import { cliPrompter } from './cli/cliPrompt.js';
 import { runChat } from './cli/ink/runChat.js';
-import { applyWorkspaceRoot, findWorkspaceRoot } from '@kinqs/brainrouter-core/dist/workspace/workspace.js';
+import { applyWorkspaceRoot, findWorkspaceRoot } from '@kinqs/brainrouter-core/workspace';
 import { runWizard, isOnboarded } from './cli/ink/runWizard.js';
-import { resolveSessionLlmConfig } from '@kinqs/brainrouter-core/dist/session/sessionRuntimeStore.js';
 
 const DEFAULT_LLM: LLMConfig = { provider: 'openai', model: 'gpt-4o-mini', apiKey: '' };
 
@@ -191,6 +189,29 @@ program
     const config = loadConfig();
     if (addedKnobs > 0) {
       console.error(`[BrainRouter] config.json updated — added ${addedKnobs} default setting${addedKnobs === 1 ? '' : 's'} you can now edit (run /debug-config to see them).`);
+    }
+
+    // REMOTE-BRAIN (Workstream A) — if `cli.brainUrl` is set, point the active
+    // brain at the remote HTTP endpoint (embedded/stdio stays default when unset).
+    // Phase 2: probe the remote's /health first and gracefully fall back to a
+    // configured embedded brain when it's unreachable, so a momentary remote
+    // outage never strands a user who also has a local brain.
+    const brainUrl = resolveCliKnobs(config).brainUrl;
+    if (brainUrl) {
+      const health = await probeBrainHealth(brainUrl, { timeoutMs: 3_000 });
+      const embedded = embeddedBrainId(config.servers);
+      if (health.ok || !embedded) {
+        const overridden = applyBrainUrlOverride(config.servers, config.activeServer, brainUrl);
+        config.servers = overridden.servers;
+        config.activeServer = overridden.activeServer;
+        if (health.ok) {
+          console.error(`[BrainRouter] remote brain: ${config.activeServer} → ${brainUrl} (cli.brainUrl)`);
+        } else {
+          console.error(`[BrainRouter] remote brain ${brainUrl} unreachable (${health.error ?? `HTTP ${health.status}`}); no embedded fallback — connecting anyway, will retry in background.`);
+        }
+      } else {
+        console.error(`[BrainRouter] remote brain ${brainUrl} unreachable (${health.error ?? `HTTP ${health.status}`}); falling back to embedded brain "${embedded}".`);
+      }
     }
 
     // 0.3.7 — multi-MCP support. Third-party MCPs are additive and all
@@ -277,7 +298,7 @@ program
     // transcript into this launch before the REPL starts. Errors print and
     // fall through to a fresh session (never abort the launch).
     if (options.continue || options.resume) {
-      const { listTranscripts, loadTranscript } = await import('@kinqs/brainrouter-core/dist/session/sessionStore.js');
+      const { listTranscripts, loadTranscript } = await import('@kinqs/brainrouter-core/session');
       const { pickResumeSession } = await import('./state/resumePicker.js');
       const pick = pickResumeSession(listTranscripts(workspace.workspaceRoot), {
         continueLatest: !!options.continue,
@@ -363,7 +384,7 @@ program
       if (Number.isFinite(n) && n > 0) setCliKnobOverride({ maxToolLoops: Math.floor(n) });
     }
     if (options.disallowedTools) {
-      const { parseToolList } = await import('@kinqs/brainrouter-core/dist/exec/permissionRules.js');
+      const { parseToolList } = await import('@kinqs/brainrouter-core/exec');
       const denied = parseToolList(String(options.disallowedTools));
       if (denied.length > 0) {
         const current = getCliKnobs().permissions;
@@ -779,7 +800,7 @@ program
     const workspace = findWorkspaceRoot();
     applyWorkspaceRoot(workspace.workspaceRoot);
     // Reconcile + list happens locally — no MCP needed.
-    const { reconcileStale, listSessions } = await import('@kinqs/brainrouter-core/dist/orchestration/orchestrator.js');
+    const { reconcileStale, listSessions } = await import('@kinqs/brainrouter-core/orchestration');
     reconcileStale(workspace.workspaceRoot);
     const sessions = listSessions(workspace.workspaceRoot);
     if (options.json) {
@@ -814,6 +835,130 @@ program
       if (s.prompt) console.log(chalk.gray(`    ${s.prompt.replace(/\s+/g, ' ').slice(0, 100)}`));
     }
     console.log();
+  });
+
+// HONK-H3.3 — best-effort push of a fleet snapshot to the configured brain so the
+// dashboard console can serve it. Never throws (fleet draining must not depend on
+// the brain being reachable); returns a small status for the caller to log.
+async function pushFleetSnapshotToBrain(summary: unknown): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const { fleetSnapshotPushArgs } = await import('./runtime/fleetCommand.js');
+    const config = loadConfig();
+    if (!config.servers || Object.keys(config.servers).length === 0) return { ok: false, error: 'no MCP server configured' };
+    const targetIds = selectMcpServerIds(config.servers, config.activeServer, undefined);
+    const targetServers: Record<string, ServerConfig> = {};
+    for (const id of targetIds) targetServers[id] = config.servers[id];
+    const llm: LLMConfig = { ...(config.llm ?? DEFAULT_LLM) };
+    const pool = new McpClientPool();
+    try {
+      await pool.connectAll(targetServers, llm, { timeoutMs: 5_000 });
+      await pool.callTool('fleet_snapshot_put', fleetSnapshotPushArgs(summary as never));
+      return { ok: true };
+    } finally {
+      await pool.close();
+    }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+program
+  .command('fleet [action]')
+  .description('Background multi-repo migrations: run | status | drain | push (a recipe → one PR per repo)')
+  .option('--repos <paths>', 'Comma-separated repo roots (run)')
+  .option('--command <cmd>', 'Recipe shell command run in each repo, sandboxed (run)')
+  .option('--slug <slug>', 'Migration slug — branch/PR seed + per-repo idempotency key (run)')
+  .option('--base <branch>', 'Base branch for the PRs (run)')
+  .option('--title <title>', 'PR title override (run)')
+  .option('--capacity <n>', 'Max concurrent jobs (drain); default cli.fleetMaxConcurrentJobs')
+  .option('--once', 'Drain a single pass and exit (drain)')
+  .option('--push', 'Push the snapshot to the brain for the dashboard console (drain)')
+  .option('--json', 'Machine-readable output')
+  .action(async (action, options) => {
+    const { parseRepoList, buildMigrationSpec, validateRunArgs, formatFleetStatus } = await import('./runtime/fleetCommand.js');
+    const fleet = await import('@kinqs/brainrouter-core/fleet');
+    const act = String(action ?? 'status').toLowerCase();
+
+    if (act === 'run') {
+      const repos = parseRepoList(options.repos, process.cwd());
+      const err = validateRunArgs({ repos, command: options.command });
+      if (err) { console.error(chalk.red(err)); process.exitCode = 1; return; }
+      const spec = buildMigrationSpec({ repos, command: options.command, slug: options.slug, base: options.base, title: options.title });
+      const { jobs, deduped } = fleet.enqueueFleetMigration(spec);
+      if (options.json) {
+        process.stdout.write(JSON.stringify({ enqueued: jobs.map((j) => ({ id: j.id, workspaceRoot: j.workspaceRoot })), deduped }) + '\n');
+        return;
+      }
+      console.log(chalk.green(`Enqueued ${jobs.length} fleet job(s)${deduped ? ` (${deduped} already in-flight)` : ''}:`));
+      for (const j of jobs) console.log(`  ${chalk.cyan(j.id)}  ${j.workspaceRoot}`);
+      console.log(chalk.gray('Drain them with:  brainrouter fleet drain'));
+      return;
+    }
+
+    if (act === 'status') {
+      const summary = fleet.summarizeFleet();
+      const lock = fleet.readFleetLock();
+      if (options.json) { process.stdout.write(JSON.stringify({ summary, lock }) + '\n'); return; }
+      console.log(formatFleetStatus(summary, lock));
+      return;
+    }
+
+    if (act === 'push') {
+      // One-shot: push the current snapshot to the brain (for the dashboard console).
+      const res = await pushFleetSnapshotToBrain(fleet.summarizeFleet());
+      if (options.json) { process.stdout.write(JSON.stringify(res) + '\n'); return; }
+      console.log(res.ok ? chalk.green('Pushed fleet snapshot to the brain.') : chalk.yellow(`Snapshot push skipped: ${res.error}`));
+      if (!res.ok) process.exitCode = 1;
+      return;
+    }
+
+    if (act === 'drain') {
+      const { getCliKnobs } = await import('@kinqs/brainrouter-core/config');
+      const cap = options.capacity != null ? Math.max(0, parseInt(String(options.capacity), 10) || 0) : getCliKnobs().fleetMaxConcurrentJobs;
+      // Sandboxed recipe runner — unattended fleet work must be confined (HONK-H0).
+      const runCommand = async (command: string, cwd: string) => {
+        const exec = await import('@kinqs/brainrouter-core/exec');
+        const cfg = exec.resolveSandboxConfig(cwd, undefined, { forceEnforce: true, scopeSecrets: true });
+        const r = await exec.runShell(command, cfg, 120_000);
+        return { ok: r.exitCode === 0 && !r.refused, stdout: r.stdout, stderr: r.stderr };
+      };
+      const executor = fleet.makeFleetBuildExecutor({ runBuild: fleet.makeRecipeRunBuild({ runCommand }) });
+      const runner = new fleet.FleetJobRunner({ capacity: cap, executors: { build: executor } });
+      const started = runner.start();
+      if (!started.acquired) {
+        console.error(chalk.yellow('Another fleet runner already owns this host — standing down.'));
+        process.exitCode = 1;
+        return;
+      }
+      console.log(chalk.green(`Fleet runner started (capacity ${cap}, reconciled ${started.reconciled}).`));
+      // HONK-H3.3 — when --push, periodically post the snapshot to the brain so the
+      // dashboard console reflects this host live (best-effort; never blocks drain).
+      const pushOnce = async () => {
+        if (!options.push) return;
+        const res = await pushFleetSnapshotToBrain(fleet.summarizeFleet());
+        if (!res.ok) console.error(chalk.gray(`(snapshot push skipped: ${res.error})`));
+      };
+      if (options.once) {
+        await runner.tick();
+        const deadline = Date.now() + 30 * 60_000;
+        while (runner.activeCount > 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 200));
+        runner.stop();
+        await pushOnce();
+        console.log(formatFleetStatus(fleet.summarizeFleet(), fleet.readFleetLock()));
+        return;
+      }
+      console.log(chalk.gray(`Draining… press Ctrl-C to stop.${options.push ? ' (pushing snapshots to the brain)' : ''}`));
+      await pushOnce();
+      const pushTimer = options.push ? setInterval(() => { void pushOnce(); }, 15_000) : undefined;
+      if (pushTimer && 'unref' in pushTimer) (pushTimer as { unref: () => void }).unref();
+      await new Promise<void>((resolve) => { process.once('SIGINT', () => { if (pushTimer) clearInterval(pushTimer); runner.stop(); resolve(); }); });
+      await pushOnce();
+      console.log(chalk.gray('Fleet runner stopped.'));
+      return;
+    }
+
+    console.error(chalk.red(`Unknown fleet action "${act}". Use: run | status | drain | push.`));
+    process.exitCode = 1;
   });
 
 program.parse(process.argv);

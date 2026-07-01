@@ -9,7 +9,7 @@ const HOME = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'trust-home-'
 process.env.BRAINROUTER_HOME = HOME;
 
 const { isWorkspaceTrusted, trustWorkspace, untrustWorkspace, listTrustedWorkspaces } =
-  await import('@kinqs/brainrouter-core/dist/workspace/workspaceTrust.js');
+  await import('@kinqs/brainrouter-core/workspace');
 
 const tmpWs = (): string => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'trust-ws-')));
 

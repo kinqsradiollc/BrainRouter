@@ -15,8 +15,11 @@ import {
   createWaitAgentsTool,
   createReadAgentTranscriptTool,
   createCloseAgentTool,
+  createSendInputTool,
+  createResumeAgentTool,
   createRouteTaskTool,
   createRunWorkflowTool,
+  createRunWorkflowGraphTool,
 } from '../orchestration/tools.js';
 
 export const LOCAL_TOOLS = [
@@ -116,8 +119,36 @@ export const LOCAL_TOOLS = [
     }
   },
   {
+    name: 'computer_use',
+    description: 'Control the real local desktop mouse/keyboard or capture a screenshot. Requires user approval for mutating actions and only appears when desktop computer use is enabled.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['screenshot', 'left_click', 'right_click', 'double_click', 'move', 'type', 'key', 'scroll', 'drag'],
+          description: 'The computer action to perform.'
+        },
+        x: { type: 'number', description: 'Logical screen x coordinate.' },
+        y: { type: 'number', description: 'Logical screen y coordinate.' },
+        x2: { type: 'number', description: 'Logical destination x coordinate for drag.' },
+        y2: { type: 'number', description: 'Logical destination y coordinate for drag.' },
+        text: { type: 'string', description: 'Text to type for action=type.' },
+        keys: {
+          oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+          description: 'Key or chord for action=key, e.g. "cmd+s" or ["cmd","s"].'
+        },
+        clicks: { type: 'integer', description: 'Scroll notches/click count; capped for safety.' },
+        direction: { type: 'string', enum: ['up', 'down', 'left', 'right'], description: 'Scroll direction.' },
+        button: { type: 'string', enum: ['left', 'right', 'middle'], description: 'Mouse button for actions that support it.' },
+        hold_keys: { type: 'array', items: { type: 'string' }, description: 'Modifier keys to hold during a click or drag.' }
+      },
+      required: ['action']
+    }
+  },
+  {
     name: 'fetch_url',
-    description: 'Fetch the text content of a URL from the internet (e.g. documentation, api references, etc.).',
+    description: 'Fetch and extract clean text from an HTTP(S) URL using the configured in-house crawler.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -128,7 +159,7 @@ export const LOCAL_TOOLS = [
   },
   {
     name: 'web_search',
-    description: 'Search the public web for a query and return top results (title, url, snippet). Useful when fetch_url needs a starting point.',
+    description: 'Search the public web with the configured provider and return normalized results (title, url, snippet). Useful when fetch_url needs a starting point.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -137,6 +168,105 @@ export const LOCAL_TOOLS = [
       },
       required: ['query']
     }
+  },
+  {
+    name: 'research_note',
+    description: 'Record one piece of evidence into the session research ledger: a claim, the sources backing it, whether they support/refute/are unclear about it, and your confidence. Use during evidence-driven research (after web_search / fetch_url) so the final research_brief can cross-check sources and flag conflicts.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        claim: { type: 'string', description: 'The specific factual claim this evidence bears on.' },
+        sources: { type: 'array', items: { type: 'string' }, description: 'URLs or short source descriptions backing the claim.' },
+        stance: { type: 'string', enum: ['support', 'refute', 'unclear'], description: 'Do the sources support, refute, or are unclear about the claim? Default unclear.' },
+        confidence: { type: 'string', enum: ['high', 'medium', 'low'], description: 'Confidence in this finding. Default low.' },
+        note: { type: 'string', description: 'Optional nuance, caveat, or short quote.' }
+      },
+      required: ['claim']
+    }
+  },
+  {
+    name: 'research_brief',
+    description: 'Emit a report-ready markdown research brief from the session ledger: every finding plus an explicit "Uncertainty & conflicts" section (corroborated vs single-source vs conflicting). Optionally set/refine the research question. Save the returned markdown with artifact_write to persist it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'Optional — set or refine the research question shown in the brief header.' }
+      }
+    }
+  },
+  {
+    name: 'list_mcp_resources',
+    description: 'List resources provided by MCP servers. Resources are structured context such as files, schemas, or app data; prefer them over web search when available.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cursor: { type: 'string', description: 'Optional pagination cursor from a previous list_mcp_resources result.' },
+        server: { type: 'string', description: 'Optional MCP server id to list. Use the server value returned by prior resource listings.' }
+      }
+    }
+  },
+  {
+    name: 'list_mcp_resource_templates',
+    description: 'List parameterized resource templates provided by MCP servers.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        cursor: { type: 'string', description: 'Optional pagination cursor from a previous list_mcp_resource_templates result.' },
+        server: { type: 'string', description: 'Optional MCP server id to list. Use the server value returned by prior template listings.' }
+      }
+    }
+  },
+  {
+    name: 'read_mcp_resource',
+    description: 'Read a specific resource from an MCP server by server id and URI.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        server: { type: 'string', description: 'MCP server id returned by list_mcp_resources or list_mcp_resource_templates.' },
+        uri: { type: 'string', description: 'Resource URI to read.' }
+      },
+      required: ['server', 'uri']
+    }
+  },
+  {
+    name: 'mcp_search',
+    description: 'Search the connected MCP tool catalog by keyword (matches tool name, server, and description) and return the best-matching tools, each with a one-line summary. Use this FIRST when MCP progressive discovery is on: the full catalog is hidden to save context, so search for what you need, then run it with mcp_call (or mcp_describe first to see its parameters).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Keywords to match against tool names, servers, and descriptions.' },
+        maxResults: { type: 'integer', description: 'Maximum tools to return. Default 8, max 25.' }
+      },
+      required: ['query']
+    }
+  },
+  {
+    name: 'mcp_describe',
+    description: 'Return the full description and input JSON schema for one or more MCP tools by their exact name (as returned by mcp_search). Call before mcp_call to learn a tool\'s parameters.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        names: { type: 'array', items: { type: 'string' }, description: 'Exact MCP tool name(s) to describe (from mcp_search results).' },
+        name: { type: 'string', description: 'A single MCP tool name (alternative to names).' }
+      }
+    }
+  },
+  {
+    name: 'mcp_call',
+    description: 'Invoke an MCP tool by its exact name (from mcp_search) with the given arguments. Runs the SAME approval and safety checks as calling the tool directly. Use this to actually run a tool you found via mcp_search when progressive discovery has the full catalog hidden.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Exact MCP tool name to call (from mcp_search / mcp_describe).' },
+        args: { type: 'object', description: 'Arguments object for the tool, matching its input schema.' }
+      },
+      required: ['name']
+    }
+  },
+  {
+    name: 'mcp_refresh_catalog',
+    description: 'Re-scan connected MCP servers and return a summary of available tools grouped by server (with counts). Use if a server was just connected or you suspect the catalog changed.',
+    inputSchema: { type: 'object', properties: {} }
   },
   {
     name: 'lsp',
@@ -242,7 +372,7 @@ export const LOCAL_TOOLS = [
       'Create or update a durable ARTIFACT — a self-contained, reusable piece of work the user will want to refer back to, edit, or keep: a design doc, a report, an HTML/SVG mockup, a diagram, a standalone code file. PROMOTE to an artifact (instead of leaving it inline in chat) when the content is substantial (~15+ lines), self-contained, and likely to be iterated or reused; keep short, conversational, or one-off answers inline. ' +
       'OMIT `id` to create a new artifact (needs `title`, `content`, and a `kind`). PASS `id` to GROW an existing artifact in place — every content change is saved as a new VERSION (the user can diff/revert), and passing an id is how a later turn or a sub-agent keeps editing the SAME artifact instead of making a new one. ' +
       'Artifacts are captures of work, NOT applications: keep them single, self-contained pages — no backend, no external network calls. ' +
-      'STYLING (§AV-6): when an artifact is visual (html/svg), honor the project DESIGN SYSTEM if the workspace instruction file (AGENT.md / AGENTS.md / CLAUDE.md, shown in your context) defines a "Design system" section — its palette, typography, and spacing. Precedence: an explicit user request wins over project tokens, which win over your own defaults.',
+      'STYLING (§AV-6): when an artifact is visual (html/svg), honor the project DESIGN SYSTEM if the workspace instruction file (AGENT.md / AGENTS.md / CLAUDE.md / .cursorrules / codex.md, shown in your context) defines a "Design system" section — its palette, typography, and spacing. Precedence: an explicit user request wins over project tokens, which win over your own defaults.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -278,8 +408,11 @@ export const LOCAL_TOOLS = [
   createWaitAgentsTool(),
   createReadAgentTranscriptTool(),
   createCloseAgentTool(),
+  createSendInputTool(),
+  createResumeAgentTool(),
   createRouteTaskTool(),
   createRunWorkflowTool(),
+  createRunWorkflowGraphTool(),
   {
     name: 'ask_user_choice',
     description:
@@ -441,7 +574,7 @@ export const LOCAL_TOOLS = [
   {
     name: 'goal_blocked',
     description:
-      'Mark the active /goal blocked. CALL when no defensible path remains within boundaries (missing data, ambiguous spec, external dependency). Pass a reason and what user input would unblock it. **PRECONDITION for "I don\'t know what X is" blockers: you MUST first have run `list_dir(.)`, at least one `glob_files` / `grep_search` for the term, AND read any `AGENT.md` / `AGENTS.md` / `CLAUDE.md` / `README.md` present in the workspace root. Workspace docs typically point at gitignored peer folders (e.g. `vendor/`, `third_party/`) that contain the answer — blocking purely on a memory miss is rejected.** The `reason` field MUST cite which directories/files you actually checked. CRITICAL: in the SAME assistant message as this tool call, ALSO write the user-visible explanation as prose — what you tried, what you learned, why you stopped, what the user needs to do next. The `reason` / `needed` fields are short audit metadata, NOT the deliverable.',
+      'Mark the active /goal blocked. CALL when no defensible path remains within boundaries (missing data, ambiguous spec, external dependency). Pass a reason and what user input would unblock it. **PRECONDITION for "I don\'t know what X is" blockers: you MUST first have run `list_dir(.)`, at least one `glob_files` / `grep_search` for the term, AND read any `AGENT.md` / `AGENTS.md` / `CLAUDE.md` / `.cursorrules` / `codex.md` / `README.md` present in the workspace root. Workspace docs typically point at gitignored peer folders (e.g. `vendor/`, `third_party/`) that contain the answer — blocking purely on a memory miss is rejected.** The `reason` field MUST cite which directories/files you actually checked. CRITICAL: in the SAME assistant message as this tool call, ALSO write the user-visible explanation as prose — what you tried, what you learned, why you stopped, what the user needs to do next. The `reason` / `needed` fields are short audit metadata, NOT the deliverable.',
     inputSchema: {
       type: 'object',
       properties: {

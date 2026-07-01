@@ -1,0 +1,81 @@
+name: Release — Desktop (signed macOS)
+
+# CP-B — the automated signed + notarized macOS build. Everything code-side is
+# here; the ONLY thing you supply is your Apple Developer signing material as
+# repository secrets (see the `env:` block + build/PACKAGING.md). Trigger it
+# manually (Actions → "Release — Desktop" → Run workflow) or by pushing a
+# `desktop-v*` tag. It builds the per-arch (arm64 + x64) hardened-runtime app,
+# signs it with your Developer ID cert, notarizes it via notarytool (the
+# afterSign hook), and uploads the .dmg/.zip as artifacts. Without the secrets
+# it still runs and produces an un-signed build (the notarize hook fails open),
+# so the pipeline itself is verifiable before you add credentials.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['desktop-v*']
+
+permissions:
+  contents: write # upload release assets when triggered by a tag
+
+concurrency:
+  group: release-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-mac:
+    name: Build signed macOS (arm64 + x64)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Build-only tools kept out of the committed lockfile (heavy, release-only);
+      # --no-save so the deterministic install above stays the source of truth.
+      - name: Install packaging tools
+        run: npm install --no-save --workspace brainrouter-desktop electron-builder@^25 @electron/notarize@^2
+
+      - name: Build workspace deps (types + core)
+        run: npm --prefix brainrouter-desktop run build:deps
+
+      - name: Build + sign + notarize
+        working-directory: brainrouter-desktop
+        env:
+          # Code-signing: a base64-encoded "Developer ID Application" .p12 and its
+          # password. electron-builder imports it into a temporary keychain.
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          # Notarization (read by build/notarize.cjs via notarytool):
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npm run dist:mac
+
+      - name: Verify the packaged build
+        working-directory: brainrouter-desktop
+        run: node scripts/verify-packaged.mjs
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: brainrouter-desktop-macos
+          path: |
+            brainrouter-desktop/dist/*.dmg
+            brainrouter-desktop/dist/*.zip
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release (tag triggers only)
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            brainrouter-desktop/dist/*.dmg
+            brainrouter-desktop/dist/*.zip

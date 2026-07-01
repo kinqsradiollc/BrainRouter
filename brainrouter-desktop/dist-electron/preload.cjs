@@ -4,7 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
  * DESK-3b — the renderer's ONLY capability surface. Agent protocol on one
  * channel; workspace management (main-process dialogs) on invoke channels.
  */
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webFrame } = require('electron');
 contextBridge.exposeInMainWorld('brainrouter', {
     send(command) {
         ipcRenderer.send('agent-command', command);
@@ -33,6 +33,11 @@ contextBridge.exposeInMainWorld('brainrouter', {
     openWorkspace(workspaceRoot) {
         return ipcRenderer.invoke('workspace:open', workspaceRoot);
     },
+    // Open a workspace in a SEPARATE window (git worktrees) — never swaps the
+    // current window's active workspace / projects / chat.
+    openWorkspaceWindow(workspaceRoot) {
+        return ipcRenderer.invoke('workspace:open-window', workspaceRoot);
+    },
     // T1 — workspace trust, backed by the shared CLI store (not localStorage).
     isWorkspaceTrusted(workspaceRoot) {
         return ipcRenderer.invoke('workspace:isTrusted', workspaceRoot);
@@ -55,5 +60,25 @@ contextBridge.exposeInMainWorld('brainrouter', {
     // T1 — cross-workspace dashboard (running tasks + last review gate per recent root).
     globalDashboard() {
         return ipcRenderer.invoke('dashboard:global');
+    },
+    getZoomFactor() {
+        return webFrame.getZoomFactor();
+    },
+    setZoomFactor(factor) {
+        webFrame.setZoomFactor(factor);
+    },
+    computerUse: {
+        checkPermissions() {
+            return ipcRenderer.invoke('computerUse:checkPermissions');
+        },
+        openAccessibilitySettings() {
+            return ipcRenderer.invoke('computerUse:openAccessibilitySettings');
+        },
+        openScreenRecordingSettings() {
+            return ipcRenderer.invoke('computerUse:openScreenRecordingSettings');
+        },
+        setMode(args) {
+            return ipcRenderer.invoke('computerUse:setMode', args);
+        },
     },
 });

@@ -53,6 +53,14 @@ When you are assigned a development task in this codebase, look up the scenario 
 - **[changelog-generator](skills/lifecycle/changelog-generator/SKILL.md)**: Compiling structured release changelogs.
 - **[handover-skill](skills/agent/handover-skill/SKILL.md)**: Summarizing accomplishments in `walkthrough.md`.
 
+### 🏗️ Scenario: Architecture Refactor & Agent Automation
+*Focus: Decomposing the monorepo, enforcing boundaries, and scaling reliable agent runs (Honk-style fleet automation).*
+- **[micro-repo-extraction](skills/codebase/micro-repo-extraction/SKILL.md)**: Carve a subsystem out of a god-package, public-API-first, leaf-first.
+- **[import-boundary-enforcement](skills/codebase/import-boundary-enforcement/SKILL.md)**: Make the layered package graph machine-enforced (ban deep `dist/*` + back-edges).
+- **[bounded-agent-harness](skills/agent/bounded-agent-harness/SKILL.md)**: Reliable output from weak/local models via caps + tool allowlist + forced structured output.
+- **[fleet-migration](skills/agent/fleet-migration/SKILL.md)**: Apply one change across many repos as N isolated, verified PRs.
+- **[verify-loop](skills/qa/verify-loop/SKILL.md)**: Green-gate agent output, re-spawning the worker on failure, before opening a PR.
+
 ---
 
 ## ⚡ Development Workflow Checklists

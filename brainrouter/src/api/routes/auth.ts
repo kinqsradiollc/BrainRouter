@@ -31,14 +31,14 @@ function createRefreshToken(userId: string) {
   return signJwt({ userId, type: "refresh" }, JWT_SECRET, Number.isFinite(refreshExpiry) ? refreshExpiry : 2592000);
 }
 
-function userIdFromEmail(email: string): string {
+async function userIdFromEmail(email: string): Promise<string> {
   const base = email
     .split("@")[0]
     ?.toLowerCase()
     .replace(/[^a-z0-9_]+/g, "_")
     .replace(/^_+|_+$/g, "") || "user";
   let userId = base;
-  while (memoryEngine.getUserById(userId)) {
+  while (await memoryEngine.getUserById(userId)) {
     userId = `${base}_${randomBytes(3).toString("hex")}`;
   }
   return userId;
@@ -54,7 +54,7 @@ authRouter.post("/signin", async (req, res) => {
     return;
   }
 
-  const user = memoryEngine.getUserByEmail(email);
+  const user = await memoryEngine.getUserByEmail(email);
   if (!user || !user.passwordHash) {
     sendError(res, 401, "Invalid email or password");
     return;
@@ -95,20 +95,20 @@ authRouter.post("/signup", async (req, res) => {
     sendError(res, 400, "Display name too long");
     return;
   }
-  if (memoryEngine.getUserByEmail(email)) {
+  if (await memoryEngine.getUserByEmail(email)) {
     sendError(res, 409, "Email already registered");
     return;
   }
 
-  const userId = userIdFromEmail(email);
+  const userId = await userIdFromEmail(email);
   const apiKey = `br_${randomBytes(24).toString("hex")}`;
   const passwordHash = await hashPassword(password);
 
   try {
-    const created = memoryEngine.createUser(userId, apiKey, displayName || userId, false);
-    memoryEngine.updateUserEmail(created.userId, email);
-    memoryEngine.updatePassword(created.userId, passwordHash);
-    const user = memoryEngine.getUserById(created.userId);
+    const created = await memoryEngine.createUser(userId, apiKey, displayName || userId, false);
+    await memoryEngine.updateUserEmail(created.userId, email);
+    await memoryEngine.updatePassword(created.userId, passwordHash);
+    const user = await memoryEngine.getUserById(created.userId);
     if (!user) {
       sendError(res, 500, "Failed to load user after signup");
       return;
@@ -121,7 +121,7 @@ authRouter.post("/signup", async (req, res) => {
   }
 });
 
-authRouter.post("/refresh", (req, res) => {
+authRouter.post("/refresh", async (req, res) => {
   const refreshToken = String(req.body?.refreshToken ?? "");
   if (!refreshToken) {
     sendError(res, 400, "refreshToken is required");
@@ -132,7 +132,7 @@ authRouter.post("/refresh", (req, res) => {
     sendError(res, 401, "Invalid or expired refresh token");
     return;
   }
-  const user = memoryEngine.getUserById(payload.userId);
+  const user = await memoryEngine.getUserById(payload.userId);
   if (!user || user.status === "disabled") {
     sendError(res, 401, "Account not found or disabled");
     return;
@@ -147,8 +147,8 @@ authRouter.post("/signout", (_req, res) => {
   res.json({ success: true });
 });
 
-authRouter.get("/me", requireJwt, (req: AuthedRequest, res) => {
-  const user = memoryEngine.getUserById(req.userId!);
+authRouter.get("/me", requireJwt, async (req: AuthedRequest, res) => {
+  const user = await memoryEngine.getUserById(req.userId!);
   if (!user) {
     sendError(res, 404, "User not found");
     return;
@@ -166,7 +166,7 @@ authRouter.get("/me", requireJwt, (req: AuthedRequest, res) => {
   });
 });
 
-authRouter.put("/me", requireJwt, (req: AuthedRequest, res) => {
+authRouter.put("/me", requireJwt, async (req: AuthedRequest, res) => {
   const displayName = String(req.body?.displayName ?? "").trim();
   if (!displayName) {
     sendError(res, 400, "displayName required");
@@ -176,12 +176,12 @@ authRouter.put("/me", requireJwt, (req: AuthedRequest, res) => {
     sendError(res, 400, "Display name too long");
     return;
   }
-  memoryEngine.updateUserDisplayName(req.userId!, displayName);
+  await memoryEngine.updateUserDisplayName(req.userId!, displayName);
   res.json({ success: true });
 });
 
-authRouter.post("/rotate-key", requireJwt, (req: AuthedRequest, res) => {
+authRouter.post("/rotate-key", requireJwt, async (req: AuthedRequest, res) => {
   const apiKey = `br_${randomBytes(24).toString("hex")}`;
-  memoryEngine.updateUserApiKey(req.userId!, apiKey);
+  await memoryEngine.updateUserApiKey(req.userId!, apiKey);
   res.json({ apiKey });
 });

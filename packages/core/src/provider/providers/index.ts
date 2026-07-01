@@ -9,6 +9,12 @@
  */
 import type { ProviderDefinition } from './definition.js';
 import { openai } from './openai.js';
+import { anthropic } from './anthropic.js';
+import { gemini } from './gemini.js';
+import { openrouter } from './openrouter.js';
+import { zenmux } from './zenmux.js';
+import { groq } from './groq.js';
+import { azure } from './azure.js';
 import { openaiCompatible } from './openai-compatible.js';
 import { opencode } from './opencode.js';
 import { lmstudio } from './lmstudio.js';
@@ -18,9 +24,18 @@ import { deepseek } from './deepseek.js';
 export type { ProviderDefinition } from './definition.js';
 
 export const BUILTIN_PROVIDERS: ProviderDefinition[] = [
+  // Named clouds first (picker order + env-key auto-detect precedence)…
   openai,
+  anthropic,
+  gemini,
+  openrouter,
+  zenmux,
+  groq,
+  azure,
+  // …then the generic OpenAI-compatible option + hosted gateway…
   openaiCompatible,
   opencode,
+  // …then local servers, then hidden tier-ladder-only entries.
   lmstudio,
   ollama,
   deepseek,
@@ -81,3 +96,16 @@ export function isLoopbackEndpoint(endpoint: string | undefined | null): boolean
  *  header but ignores its value (LM Studio / Ollama: "required but ignored").
  *  One shared constant so every surface (chat call, model-list fetch) agrees. */
 export const LOCAL_PLACEHOLDER_KEY = 'local';
+
+/**
+ * Append an Azure-style `api-version` query param to a request URL when the
+ * provider config carries one (the OpenAI-compatible providers that don't need
+ * it leave it blank, so the URL is returned unchanged). Picks the right
+ * separator: `&` when the URL already has a query string, else `?`. Shared by
+ * the chat call (agent) and the model-list fetch (desktop host) so both agree.
+ */
+export function withApiVersion(url: string, apiVersion: string | undefined | null): string {
+  const v = (apiVersion ?? '').trim();
+  if (!v) return url;
+  return url + (url.includes('?') ? '&' : '?') + 'api-version=' + encodeURIComponent(v);
+}

@@ -118,10 +118,11 @@ export interface SessionActions {
   requestStop: () => void;
   switchToWorkspace: (root: string, resumeKey?: string) => void;
   openProject: (root: string, resumeKey?: string) => void;
+  openWorktree: (path: string) => void;
   addProject: () => void;
   toggleProject: (root: string) => void;
   openSettings: (section: SettingsSection) => void;
-  openFile: (path: string) => void;
+  openFile: (path: string, line?: number) => void;
   closeEditorTab: (path: string) => void;
   openUrl: (url: string) => void;
   openCiPanel: () => void;
@@ -193,9 +194,9 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
 
   // T5 — opening a file now lands in the editable Monaco editor. The legacy
   // read-only viewer only remains for compatibility with old/internal state.
-  function openFile(path: string): void {
+  function openFile(path: string, line?: number): void {
     ensurePanel('editor');
-    editor.open(path);
+    editor.open(path, line);
   }
   /** Close an editor tab, confirming first if it has unsaved changes. */
   function closeEditorTab(path: string): void {
@@ -318,6 +319,15 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
       if (trusted) switchToWorkspace(root, resumeKey);
       else setTrustAsk({ root, resume: resumeKey });
     });
+  }
+
+  /** Open a git worktree in a SEPARATE window. A worktree is a sibling checkout
+   *  of the (already-trusted) current repo — opening it must NEVER swap the
+   *  current window's workspace (that wiped the projects list + chat). It's
+   *  sourced from the active repo's `git worktree list`, so we trust it, then
+   *  open a fresh window rooted there; the current window is left untouched. */
+  function openWorktree(wtPath: string): void {
+    void window.brainrouter.trustWorkspace(wtPath).then(() => window.brainrouter.openWorkspaceWindow?.(wtPath));
   }
 
   /** Add project = pick folder → trust dialog right away → open in place.
@@ -495,16 +505,22 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
   const openExternal = (what: string): void => { q('q-open-external', 'action:open-external', { what }); closeSessionMenu(); };
   const openSessionMenu = (e: React.MouseEvent, key: string, opts?: { row?: SessionRow; root?: string }): void => {
     e.preventDefault(); e.stopPropagation();
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     q('q-session-groups', 'action:session-groups'); // refresh the Move-to-group list
+    // A right-click (contextmenu) opens the menu AT the cursor; the ⋮ button
+    // keeps anchoring just below itself. The contextmenu path also clamps Y so
+    // a right-click near the bottom edge doesn't push the menu off-screen.
+    const isContext = e.type === 'contextmenu';
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const x = Math.min(isContext ? e.clientX : r.left, window.innerWidth - 250);
+    const y = isContext ? Math.min(e.clientY, Math.max(8, window.innerHeight - 340)) : r.bottom + 4;
     // WS-UX — row + root let the menu act on a session in a non-active workspace.
-    setSessionMenu({ key, x: Math.min(r.left, window.innerWidth - 250), y: r.bottom + 4, row: opts?.row, root: opts?.root });
+    setSessionMenu({ key, x, y, row: opts?.row, root: opts?.root });
   };
 
   return {
     refreshSession, refreshSidebar, refreshGit, resumeSession, resumeSessionRef, resumeTimerRef,
     openTask, openWorkflow, viewToTop, answerInteraction, requestStop,
-    switchToWorkspace, openProject, addProject, toggleProject,
+    switchToWorkspace, openProject, openWorktree, addProject, toggleProject,
     openSettings, openFile, closeEditorTab, openUrl, openCiPanel, refreshDashboard, openDashboard,
     closeSessionMenu, setMeta, togglePin, toggleComplete, toggleArchive, moveToGroup,
     startRename, commitRename, forkSessionAction, deleteSessionAction, openExternal, openSessionMenu,

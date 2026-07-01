@@ -15,8 +15,15 @@ import {
   sortRequirements, linkCounts, priorityClass,
   requirementProvenance, REQUIREMENT_STATUS_OPTIONS, REQUIREMENT_PRIORITY_OPTIONS,
 } from '../lib/requirements/requirementsView.js';
+import { PM_FRAMEWORKS, type PmFrameworkGroup } from '@kinqs/brainrouter-core/dist/requirement/pmFrameworks.js';
 
-export function RequirementsPanel({ requirements, onCreate, onSetStatus, onSetPriority, onAddCriterion, onSeedPlan, onPromote, onDelete }: {
+const FW_GROUPS: ReadonlyArray<{ id: PmFrameworkGroup; label: string }> = [
+  { id: 'discover', label: 'Discover' },
+  { id: 'structure', label: 'Structure' },
+  { id: 'risk', label: 'Risk' },
+];
+
+export function RequirementsPanel({ requirements, onCreate, onSetStatus, onSetPriority, onAddCriterion, onSeedPlan, onPromote, onDelete, onApplyFramework }: {
   requirements: RequirementRecord[];
   onCreate: (title: string) => void;
   onSetStatus: (id: string, status: RequirementStatus) => void;
@@ -25,6 +32,8 @@ export function RequirementsPanel({ requirements, onCreate, onSetStatus, onSetPr
   onSeedPlan: (id: string) => void;
   onPromote: (id: string) => void;
   onDelete: (id: string) => void;
+  /** §5.1 — inject a PM-framework prompt into the chat composer. */
+  onApplyFramework?: (text: string) => void;
 }): React.ReactElement {
   const [title, setTitle] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -53,6 +62,20 @@ export function RequirementsPanel({ requirements, onCreate, onSetStatus, onSetPr
           <button className="sched-add-btn" onClick={submitCreate}>Add</button>
         </div>
       </div>
+
+      {onApplyFramework ? (
+        <div className="req-frameworks">
+          <div className="req-fw-label">Clarify with a framework — adds a prompt to the composer</div>
+          {FW_GROUPS.map((g) => (
+            <div key={g.id} className="req-fw-group">
+              <span className="req-fw-group-label">{g.label}</span>
+              {PM_FRAMEWORKS.filter((f) => f.group === g.id).map((f) => (
+                <button key={f.id} className="req-fw-btn" title={f.guidance} onClick={() => onApplyFramework(f.composerText)}>{f.label}</button>
+              ))}
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       {sorted.length === 0 ? <div className="empty">No requirements yet. Add one above to anchor a chat to a structured unit of intent.</div> : (
         <>

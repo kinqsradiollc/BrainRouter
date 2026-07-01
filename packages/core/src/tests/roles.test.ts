@@ -16,6 +16,19 @@ test('buildRolePrompt injects the anti-redundancy preamble for every role', () =
   }
 });
 
+test('HONK-H0: the fleet role exists, forces sandbox, and warns about the locked-down env', () => {
+  const fleet = BUILT_IN_ROLES['fleet'];
+  assert.ok(fleet, 'fleet role is registered');
+  assert.equal(fleet.forceSandbox, true, 'fleet role forces the sandbox');
+  assert.equal(fleet.defaultAccess, 'shell', 'fleet executor needs shell to run verify');
+  assert.match(fleet.promptOverlay, /unattended/i);
+  assert.match(fleet.promptOverlay, /network is DENIED|sandbox is ON/i);
+  // No other built-in role forces the sandbox.
+  for (const [name, role] of Object.entries(BUILT_IN_ROLES)) {
+    if (name !== 'fleet') assert.notEqual(role.forceSandbox, true, `${name} must not force the sandbox`);
+  }
+});
+
 test('memory-first opening is conditional, not mandatory (skip when handed context)', () => {
   // The read-mapping roles must no longer say "(mandatory)" — they should skip
   // the memory pass when the parent already handed them a plan/diff/findings.

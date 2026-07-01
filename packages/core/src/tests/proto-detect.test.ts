@@ -1,0 +1,49 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  isPrototypeComplete,
+  reservePrototypePath,
+  isAuthorizedPrototypePath,
+  makePlaceholderToken,
+  findPlaceholderTokens,
+  resolvePlaceholder,
+} from '../prototype/protoDetect.js';
+
+test('isPrototypeComplete: needs </html> AND byte-stability across two polls', () => {
+  const html = '<html><body>hi</body></html>';
+  assert.equal(isPrototypeComplete(null, html), false, 'first poll never completes');
+  assert.equal(isPrototypeComplete('<html><body>hi', html), false, 'still changing');
+  assert.equal(isPrototypeComplete(html, html), true, 'stable + closed → done');
+  assert.equal(isPrototypeComplete('<html><body>partial', '<html><body>partial'), false, 'stable but no </html>');
+  assert.equal(isPrototypeComplete('', ''), false);
+});
+
+test('reservePrototypePath: proto/ segment + sanitized hex', () => {
+  assert.equal(reservePrototypePath(1700000000000, 'a1b2c3d4'), 'proto/prototype-1700000000000-a1b2c3d4.html');
+  // non-hex chars stripped (g-z, punctuation, slashes), capped at 8
+  assert.equal(reservePrototypePath(1, 'XYZ/..!!12345678'), 'proto/prototype-1-12345678.html');
+  assert.match(reservePrototypePath(1, ''), /^proto\/prototype-1-00000000\.html$/);
+});
+
+test('isAuthorizedPrototypePath: .html under proto/, no traversal/absolute/NUL', () => {
+  assert.equal(isAuthorizedPrototypePath('proto/prototype-1-ab.html'), true);
+  assert.equal(isAuthorizedPrototypePath('.brainrouter/requirements/r1/proto/p.htm'), true);
+  assert.equal(isAuthorizedPrototypePath('proto/p.txt'), false, 'not html');
+  assert.equal(isAuthorizedPrototypePath('src/index.html'), false, 'no proto/ segment');
+  assert.equal(isAuthorizedPrototypePath('proto/../secret.html'), false, 'traversal');
+  assert.equal(isAuthorizedPrototypePath('/abs/proto/p.html'), false, 'absolute');
+  assert.equal(isAuthorizedPrototypePath('proto/p.html\x00.js'), false, 'NUL');
+  assert.equal(isAuthorizedPrototypePath(''), false);
+});
+
+test('placeholder tokens: make / find (dedup) / resolve', () => {
+  const tok = makePlaceholderToken('gen_42');
+  assert.equal(tok, 'br-pending-gen://gen_42');
+  const doc = `before ${makePlaceholderToken('a')} mid ${makePlaceholderToken('b')} ${makePlaceholderToken('a')} end`;
+  assert.deepEqual(findPlaceholderTokens(doc), ['a', 'b']); // de-duplicated, order-preserving
+  assert.deepEqual(findPlaceholderTokens('no tokens here'), []);
+  const resolved = resolvePlaceholder(doc, 'a', '[IMG]');
+  assert.ok(!resolved.includes(makePlaceholderToken('a')));
+  assert.ok(resolved.includes('[IMG]'));
+  assert.ok(resolved.includes(makePlaceholderToken('b')), 'only the named id is resolved');
+});

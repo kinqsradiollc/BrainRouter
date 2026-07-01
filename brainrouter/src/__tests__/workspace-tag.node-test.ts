@@ -2,29 +2,13 @@
  * Federation Stage 1 (FED-S1-T3) — workspaceTag round-trips and the
  * NULL-tolerant recall filter.
  *
- * Why node:test (see sqlite-wal.node-test.ts for the long version): the
- * brain's vitest 1.6 cannot resolve `node:sqlite`. Tests that need a
- * real DatabaseSync via SqliteMemoryStore live in `*.node-test.ts` and
- * run via `npm run test:integration`.
+ * Runs under `node --test` against the docker pgvector (see pgTestStore.ts).
  */
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { SqliteMemoryStore } from "../memory/store/sqlite.js";
 import { workspaceTagFromPath } from "@kinqs/brainrouter-types";
-
-function freshDb(label: string): { store: SqliteMemoryStore; cleanup: () => void } {
-  const dir = mkdtempSync(join(tmpdir(), `brainrouter-tag-${label}-`));
-  const store = new SqliteMemoryStore(join(dir, "memory.db"));
-  store.init();
-  return {
-    store,
-    cleanup: () => rmSync(dir, { recursive: true, force: true }),
-  };
-}
+import { createTestStore } from "./helpers/pgTestStore.js";
 
 function makeRecord(overrides: Partial<Record<string, unknown>> & { id: string }): any {
   return {
@@ -73,51 +57,46 @@ test("workspaceTagFromPath returns null for empty input (so callers don't tag a 
   assert.equal(workspaceTagFromPath(undefined), null);
 });
 
-test("upsertCognitive round-trips workspaceTag", () => {
-  const { store, cleanup } = freshDb("upsert");
+test("upsertCognitive round-trips workspaceTag", async () => {
+  const { store, cleanup } = await createTestStore();
   try {
     const tagAlpha = workspaceTagFromPath("/repos/alpha")!;
-    store.upsertCognitive(makeRecord({ id: "rec-alpha", workspaceTag: tagAlpha }) as any);
-    const fetched = store.getMemoryById("u1", "rec-alpha");
+    await store.upsertCognitive(makeRecord({ id: "rec-alpha", workspaceTag: tagAlpha }) as any);
+    const fetched = await store.getMemoryById("u1", "rec-alpha");
     assert.equal(fetched?.workspaceTag, tagAlpha);
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
-test("getWorkspaceTagsByRecordIds returns a Map covering every requested id, NULL when missing or untagged", () => {
-  const { store, cleanup } = freshDb("lookup");
+test("getWorkspaceTagsByRecordIds returns a Map covering every requested id, NULL when missing or untagged", async () => {
+  const { store, cleanup } = await createTestStore();
   try {
     const tagAlpha = workspaceTagFromPath("/repos/alpha")!;
-    store.upsertCognitive(makeRecord({ id: "rec-tagged", workspaceTag: tagAlpha }) as any);
-    store.upsertCognitive(makeRecord({ id: "rec-untagged" }) as any); // workspaceTag undefined → stored as NULL
-    const tags = store.getWorkspaceTagsByRecordIds("u1", ["rec-tagged", "rec-untagged", "rec-missing"]);
+    await store.upsertCognitive(makeRecord({ id: "rec-tagged", workspaceTag: tagAlpha }) as any);
+    await store.upsertCognitive(makeRecord({ id: "rec-untagged" }) as any); // workspaceTag undefined → stored as NULL
+    const tags = await store.getWorkspaceTagsByRecordIds("u1", ["rec-tagged", "rec-untagged", "rec-missing"]);
     assert.equal(tags.get("rec-tagged"), tagAlpha);
     assert.equal(tags.get("rec-untagged"), null);
     assert.equal(tags.get("rec-missing"), null);
     assert.equal(tags.size, 3);
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
-test("ALTER TABLE migration tolerates a second call (no duplicate-column crash on re-boot)", () => {
-  // Open + close + reopen the same DB. Second `init()` re-runs the
-  // ALTER TABLE; the SQLite duplicate-column error must be swallowed
-  // (it indicates the migration already landed) rather than surfaced.
-  const dir = mkdtempSync(join(tmpdir(), "brainrouter-tag-reopen-"));
-  const dbPath = join(dir, "memory.db");
+test("init() tolerates a second call (idempotent migrations, no duplicate-table crash on re-boot)", async () => {
+  // Re-running init() must be a no-op (schema_migrations gates applied
+  // migrations), not re-throw — the Postgres analog of SQLite's re-open
+  // ALTER-TABLE tolerance. Data written before the re-init survives.
+  const { store, cleanup } = await createTestStore();
   try {
-    const a = new SqliteMemoryStore(dbPath);
-    a.init();
-    a.upsertCognitive(makeRecord({ id: "rec-first", workspaceTag: "deadbeefcafebabe" }) as any);
-    // Re-open the same file. If the migration code re-throws on
-    // "duplicate column name", this constructor call would explode.
-    const b = new SqliteMemoryStore(dbPath);
-    b.init();
-    const fetched = b.getMemoryById("u1", "rec-first");
+    await store.upsertCognitive(makeRecord({ id: "rec-first", workspaceTag: "deadbeefcafebabe" }) as any);
+    // Second init() re-applies nothing; must not explode.
+    await store.init();
+    const fetched = await store.getMemoryById("u1", "rec-first");
     assert.equal(fetched?.workspaceTag, "deadbeefcafebabe");
   } finally {
-    rmSync(dir, { recursive: true, force: true });
+    await cleanup();
   }
 });

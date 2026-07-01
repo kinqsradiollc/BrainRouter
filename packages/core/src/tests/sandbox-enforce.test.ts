@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { _resetCliKnobsCache, resolveCliKnobs, setCliKnobOverride } from '../config/config.js';
-import { resolveSandboxConfig } from '../exec/sandbox.js';
+import { resolveSandboxConfig, scopeSecretEnv } from '../exec/sandbox.js';
 
 /**
  * CODEX-SANDBOX-UNATTENDED — a silent / unattended agent (cloud worker,
@@ -67,5 +67,77 @@ test('non-silent + sandbox on + network on → user settings preserved', () => {
   assert.equal(cfg.enabled, true);
   assert.equal(cfg.allowNetwork, true, 'interactive run keeps the user-chosen network setting');
   assert.equal(cfg.enforcedUnattended, false);
+  _resetCliKnobsCache();
+});
+
+// --- HONK-H0: forced enforcement (fleet) + secret-env scoping ---------------
+
+test('HONK-H0: forceEnforce overrides an operator opt-out (sandboxEnforceWhenSilent:false)', () => {
+  _resetCliKnobsCache();
+  setCliKnobOverride({ sandbox: 'off', sandboxNetwork: true, sandboxUnavailable: 'warn', sandboxEnforceWhenSilent: false });
+  // A normal silent child honors the opt-out (unsandboxed)…
+  assert.equal(resolveSandboxConfig(WS, {}, { silent: true }).enabled, false);
+  // …but a fleet child (forceEnforce) is sandboxed + network-denied + fail-closed anyway.
+  const cfg = resolveSandboxConfig(WS, {}, { silent: true, forceEnforce: true });
+  assert.equal(cfg.enabled, true, 'fleet sandbox cannot be opted out');
+  assert.equal(cfg.allowNetwork, false);
+  assert.equal(cfg.unavailableMode, 'deny');
+  assert.equal(cfg.enforcedUnattended, true);
+  _resetCliKnobsCache();
+});
+
+test('HONK-H0: scopeSecrets scrubs secret env on an enforced run; off when not requested', () => {
+  _resetCliKnobsCache();
+  setCliKnobOverride({ sandbox: 'off', sandboxEnforceWhenSilent: true, jobSecretScoping: true });
+  process.env.BR_TEST_OPENAI_API_KEY = 'sk-shouldnotleak123';
+  try {
+    // Fleet/enforced run with scoping → scopedEnv excludes the secret.
+    const scoped = resolveSandboxConfig(WS, {}, { silent: true, forceEnforce: true, scopeSecrets: true });
+    assert.ok(scoped.scopedEnv, 'scopedEnv is set for a scoped enforced run');
+    assert.equal(scoped.scopedEnv!.BR_TEST_OPENAI_API_KEY, undefined, 'secret env scrubbed');
+    assert.equal(scoped.scopedEnv!.PATH, process.env.PATH, 'non-secret env preserved');
+    // A non-scoping silent run inherits the full env (scopedEnv undefined).
+    const unscoped = resolveSandboxConfig(WS, {}, { silent: true });
+    assert.equal(unscoped.scopedEnv, undefined);
+  } finally {
+    delete process.env.BR_TEST_OPENAI_API_KEY;
+    _resetCliKnobsCache();
+  }
+});
+
+test('HONK-H0: jobSecretScoping=false is a global kill switch for scoping', () => {
+  _resetCliKnobsCache();
+  setCliKnobOverride({ sandboxEnforceWhenSilent: true, jobSecretScoping: false });
+  const cfg = resolveSandboxConfig(WS, {}, { silent: true, forceEnforce: true, scopeSecrets: true });
+  assert.equal(cfg.scopedEnv, undefined, 'no scoping when the kill switch is off');
+  _resetCliKnobsCache();
+});
+
+test('HONK-H0: scopeSecretEnv masks secret-shaped vars (incl. real-world shapes), keeps the rest', () => {
+  const env: NodeJS.ProcessEnv = {
+    PATH: '/usr/bin', HOME: '/home/x', LANG: 'en_US.UTF-8', SHELL: '/bin/sh', NORMAL_VAR: 'keepme',
+    OPENAI_API_KEY: 'sk-abc', DATABASE_PASSWORD: 'hunter2', GITHUB_TOKEN: 'ghp_x', MY_SESSION: 'z',
+    // shapes the first cut missed (PGPASSWORD has no underscore; PWD; cred-bearing URLs; AWS id; DSN; JWT)
+    PGPASSWORD: 'hunter2', MYSQL_PWD: 'hunter2', SECRET_KEY_BASE: 'x', AWS_ACCESS_KEY_ID: 'AKIAIOSFODNN7EXAMPLE',
+    DATABASE_URL: 'postgres://app:s3cr3t@db.internal/prod', SENTRY_DSN: 'https://k@o.ingest.sentry.io/1',
+    JWT_BLOB: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N', WEIRD: 'sk-abcdef123456',
+  };
+  const out = scopeSecretEnv(env);
+  for (const keep of ['PATH', 'HOME', 'LANG', 'SHELL', 'NORMAL_VAR']) assert.ok(out[keep], `${keep} preserved`);
+  for (const dropped of ['OPENAI_API_KEY', 'DATABASE_PASSWORD', 'GITHUB_TOKEN', 'MY_SESSION', 'PGPASSWORD',
+    'MYSQL_PWD', 'SECRET_KEY_BASE', 'AWS_ACCESS_KEY_ID', 'DATABASE_URL', 'SENTRY_DSN', 'JWT_BLOB', 'WEIRD']) {
+    assert.equal(out[dropped], undefined, `${dropped} scrubbed (by name or value shape)`);
+  }
+  // Allowlist re-grants a var a job needs — and is CASE-INSENSITIVE.
+  assert.equal(scopeSecretEnv(env, { allow: ['openai_api_key'] }).OPENAI_API_KEY, 'sk-abc', 'allowlist is case-insensitive');
+});
+
+test('HONK-H0: forceEnforce locks down even a NON-silent caller (decoupled from silent)', () => {
+  _resetCliKnobsCache();
+  setCliKnobOverride({ sandbox: 'off', sandboxNetwork: true, sandboxEnforceWhenSilent: false });
+  const cfg = resolveSandboxConfig(WS, {}, { silent: false, forceEnforce: true });
+  assert.equal(cfg.enabled, true, 'forceEnforce forces sandbox regardless of silent');
+  assert.equal(cfg.allowNetwork, false);
+  assert.equal(cfg.enforcedUnattended, true);
   _resetCliKnobsCache();
 });

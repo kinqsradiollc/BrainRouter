@@ -162,6 +162,37 @@ export function createCloseAgentTool() {
   };
 }
 
+export function createSendInputTool() {
+  return {
+    name: 'send_input',
+    description: 'Send a follow-up message to an existing child agent session, reusing its transcript. Blocks for one resumed child turn and returns the new output.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Child agent id returned by spawn_agent, task_agent, delegate_agent, or spawn_agents.' },
+        message: { type: 'string', description: 'Follow-up message to append to the child agent transcript.' },
+        interrupt: { type: 'boolean', description: 'If true and the child is currently running, request an interrupt before sending this message. Default false.' },
+      },
+      required: ['id', 'message'],
+    },
+  };
+}
+
+export function createResumeAgentTool() {
+  return {
+    name: 'resume_agent',
+    description: 'Resume a previously closed, failed, stale, or completed child agent for one more turn. Optionally provide a message; otherwise asks it to continue from its transcript.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Child agent id to resume.' },
+        message: { type: 'string', description: 'Optional resume prompt. Defaults to a concise continue-from-transcript request.' },
+      },
+      required: ['id'],
+    },
+  };
+}
+
 export function createSpawnAgentsTool() {
   return {
     name: 'spawn_agents',
@@ -287,6 +318,22 @@ export function createRunWorkflowTool() {
       },
       // Provide EITHER `plan` (explicit) OR `template`+`templateArgs`.
       required: [],
+    },
+  };
+}
+
+export function createRunWorkflowGraphTool() {
+  return {
+    name: 'run_workflow_graph',
+    description:
+      'Run a saved VISUAL workflow graph (built on the Workflows canvas) by id, in ONE call. The runtime executes the graph node-by-node — AI Agent nodes run as real child agents, Condition/Switch/Filter/Sort/Limit/Aggregate/Loop wire the dataflow, and Sub-workflow nodes call other saved graphs — then returns the graph\'s final output. Use this to invoke a reusable automation the user designed visually, instead of re-orchestrating it by hand. Distinct from `run_workflow` (which takes an inline declarative phase-plan); this one loads a named, saved graph.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'The saved workflow-graph id or name (as shown in the Workflows canvas / workflow list).' },
+        vars: { type: 'object', description: 'Optional run variables, merged over the graph\'s own defaults and available to nodes as {{$vars.*}}.' },
+      },
+      required: ['id'],
     },
   };
 }

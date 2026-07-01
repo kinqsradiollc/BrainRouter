@@ -9,8 +9,8 @@ governanceRouter.use(requireAnyAuth);
 
 const scopeOps = (req: AuthedRequest, requested?: unknown) => scopedUserId(req, requested, "memory operations");
 
-governanceRouter.get("/export", (req: AuthedRequest, res) => {
-  res.json(memoryEngine.exportMemories(req.userId!));
+governanceRouter.get("/export", async (req: AuthedRequest, res) => {
+  res.json(await memoryEngine.exportMemories(req.userId!));
 });
 
 governanceRouter.post("/import", async (req: AuthedRequest, res) => {
@@ -21,10 +21,10 @@ governanceRouter.post("/import", async (req: AuthedRequest, res) => {
   }
 });
 
-governanceRouter.get("/audit", (req: AuthedRequest, res) => {
+governanceRouter.get("/audit", async (req: AuthedRequest, res) => {
   try {
     const pagination = PaginationQuerySchema.parse(req.query);
-    const operations = memoryEngine.getOperationLog(req.userId!, {
+    const operations = await memoryEngine.getOperationLog(req.userId!, {
       cursor: decodeCursor<{ createdAt: string; id: string }>(pagination.cursor),
       limit: pagination.limit + 1,
     });
@@ -38,16 +38,16 @@ governanceRouter.get("/audit", (req: AuthedRequest, res) => {
   }
 });
 
-governanceRouter.get("/governance/diagnostics", (req: AuthedRequest, res) => {
+governanceRouter.get("/governance/diagnostics", async (req: AuthedRequest, res) => {
   try {
-    res.json(memoryEngine.getDiagnostics(scopeOps(req, req.query.userId)));
+    res.json(await memoryEngine.getDiagnostics(scopeOps(req, req.query.userId)));
   } catch (error) {
     sendError(res, errorStatus(error, 400), error instanceof Error ? error.message : "Invalid diagnostics parameters");
   }
 });
 
 // GET /api/operations — Timeline feed (all operation types, paginated)
-governanceRouter.get("/operations", (req: AuthedRequest, res) => {
+governanceRouter.get("/operations", async (req: AuthedRequest, res) => {
   try {
     const pagination = PaginationQuerySchema.parse(req.query);
     const userId = scopeOps(req, req.query.userId);
@@ -57,7 +57,7 @@ governanceRouter.get("/operations", (req: AuthedRequest, res) => {
       createdAfter: typeof req.query.createdAfter === "string" && req.query.createdAfter ? req.query.createdAfter : undefined,
       createdBefore: typeof req.query.createdBefore === "string" && req.query.createdBefore ? req.query.createdBefore : undefined,
     };
-    const operations = memoryEngine.getOperationLog(userId, {
+    const operations = await memoryEngine.getOperationLog(userId, {
       cursor: decodeCursor<{ createdAt: string; id: string }>(pagination.cursor),
       limit: pagination.limit + 1,
     }, filters);

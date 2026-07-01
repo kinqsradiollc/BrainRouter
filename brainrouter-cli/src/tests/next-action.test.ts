@@ -6,7 +6,7 @@ import {
   parseNextActionPlan,
   planWantsFanOut,
   nextActionDirective,
-} from '@kinqs/brainrouter-core/dist/prompt/nextAction.js';
+} from '@kinqs/brainrouter-core/prompt';
 
 test('NEXT-ACTION shouldSkipPlanner skips trivial/social prompts, runs on real tasks', () => {
   for (const p of ['hi', 'thanks', 'ok', 'yes', 'cool', 'sounds good', 'what?']) {

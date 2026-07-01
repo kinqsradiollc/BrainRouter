@@ -17,7 +17,7 @@ export async function detectContradictions(params: {
   // (default 3, tunable) to bound the per-record LLM load.
   const _parsedMaxCand = parseInt(process.env.BRAINROUTER_CONTRADICTION_MAX_CANDIDATES || "", 10);
   const maxCandidates = isNaN(_parsedMaxCand) || _parsedMaxCand < 1 ? 3 : _parsedMaxCand;
-  const candidates = store.searchCognitiveFts(newRecord.userId, newRecord.content, maxCandidates);
+  const candidates = await store.searchCognitiveFts(newRecord.userId, newRecord.content, maxCandidates);
   
   const evaluations: Array<{
     candidate: CognitiveFtsResult;
@@ -42,7 +42,25 @@ export async function detectContradictions(params: {
       const response = await llmRunner.run({
         prompt,
         taskId: `contradiction-check-${newRecord.id}-${candidate.record_id}`,
-        timeoutMs: contradictionTimeoutMs
+        timeoutMs: contradictionTimeoutMs,
+        // STRUCTURED OUTPUT — force the verdict through a schema'd tool call so it
+        // parses consistently across models (see modelRunner.ts). Loose: the
+        // prompt still describes the fields; this just fixes the wrapper shape.
+        tool: {
+          name: "report_contradiction",
+          description: "Report whether the new memory contradicts the candidate, per the prompt's rules.",
+          parameters: {
+            type: "object",
+            properties: {
+              isContradiction: { type: "boolean" },
+              confidence: { type: "number", description: "0..1" },
+              kind: { type: "string", enum: ["temporal_update", "genuine_conflict"] },
+              reason: { type: "string" },
+            },
+            required: ["isContradiction"],
+            additionalProperties: true,
+          },
+        },
       });
 
       // Robust parse: tolerant of role-token leaks / prose / fences (see llm-json.ts).
@@ -67,11 +85,11 @@ export async function detectContradictions(params: {
   for (const ev of evaluations) {
     if (hasTemporalUpdate) {
       console.error(`[BrainRouter] TEMPORAL UPDATE DETECTED (transition): Superseding memory ${ev.candidate.record_id} with new memory ${newRecord.id}`);
-      store.invalidateCognitiveRecord(newRecord.userId, ev.candidate.record_id, newRecord.id);
+      await store.invalidateCognitiveRecord(newRecord.userId, ev.candidate.record_id, newRecord.id);
     } else {
       console.error(`[BrainRouter] CONTRADICTION DETECTED: ${newRecord.id} vs ${ev.candidate.record_id}`);
       
-      store.upsertContradiction({
+      await store.upsertContradiction({
         id: `conflict_${crypto.randomBytes(4).toString("hex")}`,
         userId: newRecord.userId,
         recordIdA: ev.candidate.record_id,

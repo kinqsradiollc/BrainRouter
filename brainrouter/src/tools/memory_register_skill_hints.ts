@@ -53,7 +53,7 @@ export async function handleMemoryRegisterSkillHints(args: unknown) {
     hints = params.hints!;
   }
 
-  memoryEngine.registerSkillHints(skillName, hints, sourceFile);
+  await memoryEngine.registerSkillHints(skillName, hints, sourceFile);
 
   return {
     content: [{

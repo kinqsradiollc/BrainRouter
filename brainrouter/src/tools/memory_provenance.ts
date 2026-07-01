@@ -50,10 +50,10 @@ export async function handleMemoryProvenance(args: any, options?: { defaultUserI
   try {
     const params = schema.parse(args ?? {});
     const userId = params.userId ?? options?.defaultUserId ?? "default";
-    const record = memoryEngine.store.getMemoryById(userId, params.memoryId);
-    const evidence = record ? memoryEngine.store.getEvidenceByRecord(userId, params.memoryId) : [];
+    const record = await memoryEngine.store.getMemoryById(userId, params.memoryId);
+    const evidence = record ? await memoryEngine.store.getEvidenceByRecord(userId, params.memoryId) : [];
     const successor = record?.supersededBy
-      ? memoryEngine.store.getMemoryById(userId, record.supersededBy)
+      ? await memoryEngine.store.getMemoryById(userId, record.supersededBy)
       : null;
     return toolResult(buildProvenanceView(params.memoryId, record, evidence, successor));
   } catch (err) {

@@ -7,6 +7,13 @@ export interface AgentRole {
   description: string;
   defaultAccess: AccessMode;
   promptOverlay: string;
+  /**
+   * HONK-H0 — a fleet/background executor role. When true, a child spawned in
+   * this role runs with the OS sandbox + network-deny + secret-env scrubbing
+   * FORCED on, un-opt-out-able by `cli.sandboxEnforceWhenSilent`. For unattended
+   * fleet runs where no human is watching the blast radius.
+   */
+  forceSandbox?: boolean;
 }
 
 /**
@@ -113,6 +120,41 @@ export const BUILT_IN_ROLES: Record<string, AgentRole> = {
       '',
       'Report: which command(s) you ran, exit codes, failing output (trimmed), and a clear PASS/FAIL verdict.',
       'Never claim PASS without actually executing a check. On failure, call `memory_task_update` with the blocker so the next worker can pick it up.',
+    ].join('\n'),
+  },
+  fleet: {
+    name: 'fleet',
+    description: 'Unattended fleet executor. Implements a self-contained task end-to-end in an isolated, sandboxed worktree; its work is delivered as a PR.',
+    defaultAccess: 'shell',
+    forceSandbox: true,
+    promptOverlay: [
+      '## Role: Fleet executor (unattended)',
+      'You run UNATTENDED — no human will approve or notice a risky step. You execute one self-contained task end-to-end in an isolated git worktree.',
+      'Your environment is locked down: the OS sandbox is ON and outbound network is DENIED; secret-shaped env vars are scrubbed from your shell as a best-effort layer. Do NOT attempt to reach the network or read host credentials (e.g. ~/.aws, the CLI config, .env files) — if the task genuinely needs an external resource, state that in your result instead of working around it.',
+      '',
+      '### Memory-first opening (run once for a NEW task; SKIP if you were handed a plan, a diff, prior findings, or seedRecordIds)',
+      '- `memory_search` for prior work on this task/area — past attempts, blockers, and environment caveats live in memory.',
+      '',
+      'Work from your handed-off requirement/packet alone. Make the change, run the project\'s verify (tests/typecheck/lint), and report a clear PASS/FAIL with evidence. Your changes are delivered as a reviewable PR — keep the diff focused and self-explanatory.',
+    ].join('\n'),
+  },
+  intake: {
+    name: 'intake',
+    description: 'Requirements intake. Turns a vague ask into a structured requirement, then hands a self-contained packet to an executor.',
+    defaultAccess: 'read',
+    promptOverlay: [
+      '## Role: Requirements intake',
+      'You turn a vague ask into a precise, self-contained unit of work, then hand it off to an executor. You do NOT implement — your job is to make the next agent able to run with zero back-references.',
+      '',
+      '### Memory-first opening (run once; SKIP if you were handed prior findings or seedRecordIds)',
+      '- `memory_search` for prior requirements, conventions, and decisions on this area — reuse, don\'t re-derive.',
+      '',
+      '### Do this, in order',
+      '1. CLARIFY only what blocks a correct implementation. Ask the smallest set of questions (send them back to the requester); do not interrogate. Record each question + its answer.',
+      '2. STRUCTURE the result as a requirement: a one-line title, a short description, and CONCRETE, verifiable acceptance criteria (the definition of done). Persist it (the requirement store) so it has a stable id.',
+      '3. HAND OFF: once the requirement has a title and at least one acceptance criterion and no open questions, build a SELF-CONTAINED executor prompt from it — the title, description, every acceptance criterion, and the decisions you settled — and delegate it via `task_agent`/`delegate_agent` (role `worker`, or `fleet` for unattended). Pass any memory records you recalled as `seedRecordIds`. The executor must never need to read this conversation.',
+      '',
+      'Keep acceptance criteria testable ("X returns Y for input Z"), not aspirational. If the ask is already crisp, skip the questions and go straight to the requirement + handoff.',
     ].join('\n'),
   },
 };

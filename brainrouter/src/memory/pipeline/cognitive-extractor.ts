@@ -90,7 +90,26 @@ export async function extractCognitiveMemories(params: {
       prompt: userPrompt,
       systemPrompt: EXTRACT_MEMORIES_SYSTEM_PROMPT,
       taskId: "cognitive-extraction",
-      timeoutMs: 120_000
+      timeoutMs: 120_000,
+      // STRUCTURED OUTPUT — force the result through a tool whose schema fixes
+      // the wrapper shape ({scenes:[…]}) so it parses consistently across model
+      // versions, instead of trusting the prompt's "return a JSON array". The
+      // item schema is intentionally loose (object) so the model still emits the
+      // full per-scene fields the prompt describes. Backends without tool support
+      // fall back to the prompt + JSON chokepoint (extractJsonValue unwraps the
+      // single-array property either way). See modelRunner.ts.
+      tool: {
+        name: "emit_focus_scenes",
+        description: "Return the extracted focus scenes. Each item is a scene object shaped exactly as the prompt describes (scene_name, memories, …). Use [] when nothing is notable.",
+        parameters: {
+          type: "object",
+          properties: {
+            scenes: { type: "array", description: "One object per focus scene.", items: { type: "object" } },
+          },
+          required: ["scenes"],
+          additionalProperties: false,
+        },
+      },
     });
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);

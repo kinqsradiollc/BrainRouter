@@ -41,7 +41,21 @@ export const LOCAL_TOOL_REGISTRY: LocalToolEntry[] = [
   { name: 'grep_search', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'glob_files', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'fetch_url', accessTier: 'read', actionKind: 'network', parallelSafe: true },
-  { name: 'web_search', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'web_search', accessTier: 'read', actionKind: 'network', parallelSafe: true },
+  // §5.2 — research ledger tools persist session state (research.json), like
+  // update_plan / artifact_write: read tier, read_only, serialized (not parallel).
+  { name: 'research_note', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  { name: 'research_brief', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  { name: 'list_mcp_resources', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'list_mcp_resource_templates', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'read_mcp_resource', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  // MCP progressive discovery (§5.4) — search/describe the catalog cheaply, then
+  // call by name through the SAME approval gate as a direct MCP call. mcp_call is
+  // `network` (allowed in every mode, like normal MCP calls); the rest are reads.
+  { name: 'mcp_search', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'mcp_describe', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  { name: 'mcp_call', accessTier: 'read', actionKind: 'network', parallelSafe: false },
+  { name: 'mcp_refresh_catalog', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'lsp', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'update_plan', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'goal_complete', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
@@ -64,6 +78,8 @@ export const LOCAL_TOOL_REGISTRY: LocalToolEntry[] = [
   { name: 'wait_agents', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'read_agent_transcript', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   { name: 'close_agent', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  { name: 'send_input', accessTier: 'read', actionKind: 'child_write', parallelSafe: false },
+  { name: 'resume_agent', accessTier: 'read', actionKind: 'child_write', parallelSafe: false },
   { name: 'route_task', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   // CC-P11.2 — blocking observer; waiting mutates nothing.
   { name: 'wait_until', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
@@ -73,6 +89,8 @@ export const LOCAL_TOOL_REGISTRY: LocalToolEntry[] = [
   { name: 'mark_chapter', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   // WF-TOOL — run_workflow launches a fan-out of child agents (child_write), like spawn_*.
   { name: 'run_workflow', accessTier: 'read', actionKind: 'child_write', parallelSafe: false },
+  // §7 L4 — run_workflow_graph runs a saved visual graph; its agent nodes spawn children (child_write).
+  { name: 'run_workflow_graph', accessTier: 'read', actionKind: 'child_write', parallelSafe: false },
   // §AV-4 — artifact_write persists an Artifact Record (BrainRouter state, not
   // workspace source), so it gates like update_plan / mark_chapter: read tier,
   // read_only action kind, no approval. Not parallel-safe (serialized JSON store).
@@ -91,6 +109,7 @@ export const LOCAL_TOOL_REGISTRY: LocalToolEntry[] = [
   { name: 'apply_patch', accessTier: 'write', actionKind: 'file_edit', parallelSafe: false },
   // --- shell tier: + command execution ------------------------------------
   { name: 'run_command', accessTier: 'shell', actionKind: 'shell', parallelSafe: false },
+  { name: 'computer_use', accessTier: 'shell', actionKind: 'computer', parallelSafe: false },
 ];
 
 const TIER_RANK: Record<AccessMode, number> = { read: 0, write: 1, shell: 2 };
@@ -130,6 +149,18 @@ export const WORKER_THREAD_TOOLS = new Set([
   'wait_worker',
   'read_worker_summary',
   'close_worker',
+]);
+
+/**
+ * The MCP progressive-discovery entry points (§5.4). Registered like any read
+ * tool, but only exposed to the model when `cli.mcpProgressiveDiscovery` is on
+ * (the agent hides them otherwise so default behaviour is unchanged).
+ */
+export const MCP_DISCOVERY_TOOLS = new Set([
+  'mcp_search',
+  'mcp_describe',
+  'mcp_call',
+  'mcp_refresh_catalog',
 ]);
 
 /**

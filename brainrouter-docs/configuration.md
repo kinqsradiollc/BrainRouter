@@ -120,9 +120,11 @@ Why the hard split?
 BRAINROUTER_LLM_API_KEY=sk-...
 ```
 
-That's the minimum for the server. Defaults: OpenAI
-`https://api.openai.com/v1/chat/completions` with `gpt-4o-mini`, no
-embeddings, no reranker, memory store at `~/.brainrouter/memory.db`.
+That's the minimum for the server, plus `BRAINROUTER_DATABASE_URL` — the memory
+store now runs on Postgres + pgvector (SQLite has been removed), so the server
+requires a connection string. Other defaults: OpenAI
+`https://api.openai.com/v1/chat/completions` with `gpt-4o-mini`, no embeddings,
+no reranker.
 
 For the CLI, run `brainrouter` and complete the wizard — it writes
 `~/.config/brainrouter/config.json` with your provider, key, and model.
@@ -483,7 +485,7 @@ no-cross-encoder diversity selector.
 
 | Var | Default | Purpose |
 | --- | --- | --- |
-| `BRAINROUTER_MEMORY_DB` | `~/.brainrouter/memory.db` | SQLite path. |
+| `BRAINROUTER_DATABASE_URL` | _(required)_ | Postgres + pgvector connection string (SQLite removed, ADR-007). `DATABASE_URL` is also accepted. The engine connects + migrates **lazily on first use** and closes the pool on SIGINT/SIGTERM. |
 | `BRAINROUTER_HOME` | `~/.brainrouter` | Per-user state root. Honored by both processes. |
 | `BRAINROUTER_LOCAL_ROOT` | _(unset)_ | Override the local-state root. |
 | `BRAINROUTER_IMPORT_CHUNK_CHARS` | `1500` | Chunk records longer than this on `memory_import` (0.4.14) so recall stages get focused units (child id `${parent}::c{i}`, parent in metadata). `0` disables. |
@@ -569,7 +571,7 @@ the load-bearing ones:
 | `sandboxNetwork` | `false` | Allow outbound network from the sandbox. |
 | `sandboxEnforceWhenSilent` | `true` | Force the sandbox **on** for silent / unattended agents (cloud workers, spawned children, non-interactive runs) even when `sandbox: off`. When enforced, outbound network is denied and a missing sandboxer fails closed (`sandboxUnavailable: deny`), and `background: true` runs are refused (they would escape the sandbox). Set `false` to let unattended shells run with the same posture as interactive ones. Mirrors `cli.hooks.enforceWhenSilent`. |
 | `autoChainMaxFollowups` | `2` | Cap on auto-chained review/verify follow-ups per worker. |
-| `agentMcpToolBudget` | `40` | Cap on MCP tools shown to a child agent per turn (0 = no cap). |
+| `agentMcpToolBudget` | `16` | Cap on MCP tools shown to an agent per turn (0 = no cap). |
 | `workspaceOverride` | _(auto)_ | Override the CLI workspace root. |
 
 ### Requirement to Track automation
@@ -766,7 +768,7 @@ back into the old fail-fast behavior.
 | **Logs** | Stderr passthrough to CLI terminal | In the MCP server's own terminal |
 | **Auth** | Process-local (no key needed) | `Authorization: Bearer <api_key>` |
 
-API keys live in `users.api_key` in `memory.db`. Generate via the
+API keys live in the `users.api_key` column of the Postgres store. Generate via the
 dashboard at `/profile`, or query directly:
 
 ```sql
@@ -786,7 +788,7 @@ workflow artifacts live inside the workspace.
 └── config.json                          # CLI: chat-LLM creds + MCP transport profiles
 
 ~/.brainrouter/                          ← user-global state (override: BRAINROUTER_HOME)
-├── memory.db                            # MCP cognitive memory store
+# cognitive memory now lives in Postgres (BRAINROUTER_DATABASE_URL), not a local file
 ├── mcp-cache/<workspace-hash>/          # MCP-side per-workspace cache
 │   └── active_session.json
 ├── work/<user>/<workspace-hash>/<session>/   # working-memory canvas

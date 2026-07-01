@@ -13,6 +13,7 @@
 import React, { useEffect, useState } from 'react';
 import type { ArtifactRecord, ArtifactKind, ArtifactStatus, AnnotationRecord } from '@kinqs/brainrouter-types';
 import remarkGfm from 'remark-gfm';
+import { inlinePlaceholders } from '@kinqs/brainrouter-core/dist/prototype/placeholderRender.js';
 import { Markdown, MD_COMPONENTS } from '../chat/markdown.js';
 import { Button } from '../components/Button.js';
 import { Chip } from '../components/Badge.js';
@@ -257,7 +258,12 @@ function ArtifactPreview({ art, content }: { art: ArtifactRecord; content: strin
   // (no scripts); the user can explicitly opt a single artifact into running its
   // scripts (still no network — a strict CSP blocks it). Reset on artifact switch.
   const [interactive, setInteractive] = useState(false);
-  useEffect(() => { setInteractive(false); }, [art.id]);
+  // §3 D3 — opt into a process-isolated, src-gated <webview> for an html
+  // prototype (electron only; the main process hardens every attach). Reset on switch.
+  const [webviewMode, setWebviewMode] = useState(false);
+  const webviewRef = React.useRef<{ reload: () => void } | null>(null);
+  const hasWebview = typeof window !== 'undefined' && 'customElements' in window && !!window.customElements.get?.('webview');
+  useEffect(() => { setInteractive(false); setWebviewMode(false); }, [art.id]);
   if (!content.trim()) {
     return <div className="empty">{art.path ? 'Loading preview…' : 'No content to preview.'}</div>;
   }
@@ -286,22 +292,41 @@ function ArtifactPreview({ art, content }: { art: ArtifactRecord; content: strin
     // HTML + SVG render in an EMPTY sandbox iframe: no scripts, forms, top
     // navigation, or same-origin. SVG is wrapped in a minimal centered document.
     if (art.format === 'html' || art.format === 'svg') {
+      // §3 D2 — resolve any `br-pending-gen://` async-placeholder tokens (from an
+      // interactive-prototype turn) into self-contained inline SVGs before render.
+      // Idempotent: artifacts with no tokens are returned unchanged.
+      const resolved = inlinePlaceholders(content);
       // When interactive, inject a strict CSP that permits inline script/style but
       // BLOCKS all network (default-src 'none') — scripts run, exfiltration can't.
       const csp = interactive
         ? `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:">`
         : '';
       const doc = art.format === 'svg'
-        ? `<!doctype html><meta charset="utf-8">${csp}<style>html,body{margin:0;height:100%;display:grid;place-items:center;background:transparent}svg{max-width:100%;max-height:100%}</style>${content}`
+        ? `<!doctype html><meta charset="utf-8">${csp}<style>html,body{margin:0;height:100%;display:grid;place-items:center;background:transparent}svg{max-width:100%;max-height:100%}</style>${resolved}`
         // Inject the network-blocking CSP into <head> when present; otherwise
         // PREPEND it (String.replace returns the unchanged string on no match, so
         // the old `|| (csp + content)` fallback never fired — an interactive
         // artifact with no <head> would then run scripts with NO CSP).
         : (csp
-            ? (/<head[^>]*>/i.test(content)
-                ? content.replace(/<head[^>]*>/i, (m) => m + csp)
-                : csp + content)
-            : content);
+            ? (/<head[^>]*>/i.test(resolved)
+                ? resolved.replace(/<head[^>]*>/i, (m) => m + csp)
+                : csp + resolved)
+            : resolved);
+      // §3 D3 — a process-isolated <webview> for the prototype: scripts run, but a
+      // forced network-blocking CSP + the main-process harden/src-gate keep it
+      // sealed. data:text/html is allowed by the gate. (electron only.)
+      if (art.format === 'html' && webviewMode && hasWebview) {
+        const wvCsp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:">`;
+        const wvDoc = /<head[^>]*>/i.test(resolved) ? resolved.replace(/<head[^>]*>/i, (m) => m + wvCsp) : wvCsp + resolved;
+        return React.createElement('webview', {
+          key: `wv-${art.id}`,
+          ref: webviewRef,
+          className: 'art-html-frame',
+          src: `data:text/html;charset=utf-8,${encodeURIComponent(wvDoc)}`,
+          partition: 'persist:proto-preview',
+          allowpopups: 'false',
+        });
+      }
       // sandbox: locked ('') by default; 'allow-scripts' only after explicit opt-in
       // (never allow-same-origin, so the frame can't reach the parent app).
       return <iframe className="art-html-frame" sandbox={interactive ? 'allow-scripts' : ''} srcDoc={doc} title={`Preview of ${art.title}`} />;
@@ -321,6 +346,15 @@ function ArtifactPreview({ art, content }: { art: ArtifactRecord; content: strin
               <input type="checkbox" checked={interactive} onChange={(e) => setInteractive(e.target.checked)} />
               <span>Enable interactivity{interactive ? ' · scripts on, no network' : ''}</span>
             </label>
+          ) : null}
+          {canInteract && view === 'preview' && art.format === 'html' && hasWebview ? (
+            <label className="art-interactive" title="Render in a process-isolated, src-gated webview (still no network)">
+              <input type="checkbox" checked={webviewMode} onChange={(e) => setWebviewMode(e.target.checked)} />
+              <span>Sandboxed webview</span>
+            </label>
+          ) : null}
+          {webviewMode && hasWebview ? (
+            <button className="art-wv-reload" title="Reload the prototype" onClick={() => webviewRef.current?.reload?.()}>Reload</button>
           ) : null}
         </div>
       ) : null}

@@ -37,8 +37,9 @@ import fs from "node:fs";
 import { Registry } from './registry.js';
 import { resolveRegistryConfig } from './resolver.js';
 import { buildMcpServer } from './transport/mcpServer.js';
+import { recordHttp, routeBucket, renderPrometheus, metricsSnapshot } from './observability/metrics.js';
 
-import { memoryEngine } from './memory/engine.js';
+import { memoryEngine, closeMemoryEngine } from './memory/engine.js';
 import path from 'node:path';
 import { decideMcpAcceptPromotion } from './api/mcpAcceptHeader.js';
 import { usersRouter } from './api/routes/users.js';
@@ -54,6 +55,7 @@ import { authRouter } from './api/routes/auth.js';
 import { chatCompletionsRouter } from './api/routes/chat-completions.js';
 import { governanceRouter } from './api/routes/governance.js';
 import { evidenceRouter } from './api/routes/evidence.js';
+import { fleetRouter } from './api/routes/fleet.js';
 import { hooksRouter } from './api/routes/hooks.js';
 import { workingRouter } from './api/routes/working.js';
 import { skillsRouter } from './api/routes/skills.js';
@@ -93,6 +95,12 @@ const config = resolveRegistryConfig();
 const registry = new Registry(config);
 registry.build();
 
+// ADR-007 Phase 2 (step 3) — the memory engine runs on Postgres, whose init
+// (migrations + vector table + seed-admin) is genuinely async. Await it BEFORE
+// the first store-using call (skill-hint scan, auth lookups, app.listen / stdio
+// connect) so we never serve against an un-migrated database.
+await memoryEngine.ready;
+
 // Auto-scan skills dirs for memory_hints on startup
 const skillsDirsToScan = [
   path.join(config.globalRoot, 'skills'),
@@ -111,7 +119,24 @@ if (USE_HTTP) {
   const warnedUserAgents = new Set<string>();
 
   const app = express();
-  
+
+  // OBSERVABILITY (Phase 4) — time every request and record HTTP metrics on
+  // finish (always on, cheap + in-process). Opt-in structured access log via
+  // BRAINROUTER_HTTP_LOG=on (off by default to keep the server quiet).
+  const httpAccessLog = process.env.BRAINROUTER_HTTP_LOG === "on";
+  app.use((req: Request, res: Response, next: () => void) => {
+    const startedAt = Date.now();
+    res.on("finish", () => {
+      const ms = Date.now() - startedAt;
+      const route = routeBucket(req.method, req.path);
+      recordHttp(route, res.statusCode, ms);
+      if (httpAccessLog) {
+        console.error(JSON.stringify({ t: new Date().toISOString(), lvl: "info", msg: "http", route, status: res.statusCode, ms }));
+      }
+    });
+    next();
+  });
+
   // API-HEADERS-CORS (0.4.9) — security headers + a strict CORS allowlist.
   // BRAINROUTER_CORS_ORIGIN may be a comma-separated list; only listed origins
   // are reflected and only they receive credentials.
@@ -131,6 +156,17 @@ if (USE_HTTP) {
   }
   if (USING_FALLBACK_JWT_SECRET) {
     console.error("[BrainRouter] WARNING: running with generated JWT secret. Set BRAINROUTER_JWT_SECRET in production.");
+  }
+
+  // Metrics — Prometheus text (default) or JSON (`?format=json` / Accept: json).
+  // Gated behind BRAINROUTER_METRICS=on (404 when off) so a publicly-exposed
+  // brain doesn't leak usage counts; operators enable it behind their scraper.
+  if (process.env.BRAINROUTER_METRICS === "on") {
+    app.get('/metrics', (req: Request, res: Response) => {
+      const wantsJson = req.query.format === "json" || (req.headers.accept ?? "").includes("application/json");
+      if (wantsJson) { res.json(metricsSnapshot()); return; }
+      res.type("text/plain; version=0.0.4").send(renderPrometheus());
+    });
   }
 
   // Health check
@@ -153,6 +189,7 @@ if (USE_HTTP) {
   app.use("/api/graph", graphRouter);
   app.use("/api", governanceRouter);
   app.use("/api/evidence", evidenceRouter);
+  app.use("/api/fleet", fleetRouter);
   app.use("/api/hooks", hooksRouter);
   app.use("/api/working", workingRouter);
   app.use("/api/skills", skillsRouter);
@@ -210,7 +247,7 @@ if (USE_HTTP) {
       res.status(401).json({ error: 'API key required. Set Authorization: Bearer <your_api_key>' });
       return;
     }
-    const user = memoryEngine.getUserByApiKey(bearerKey);
+    const user = await memoryEngine.getUserByApiKey(bearerKey);
     if (!user) {
       res.status(403).json({ error: 'Invalid API key' });
       return;
@@ -303,6 +340,10 @@ if (USE_HTTP) {
     shuttingDown = true;
     const hardExit = setTimeout(() => process.exit(0), 700);
     hardExit.unref();
+    // Stop the engine's sweepers/job-runner and close the pg pool so the event
+    // loop drains cleanly (best-effort; the hard deadline above still guarantees
+    // exit if the pool is slow to close).
+    void closeMemoryEngine().catch(() => undefined);
     try { httpServer.closeAllConnections?.(); } catch { /* older Node */ }
     httpServer.close(() => process.exit(0));
   };
@@ -344,7 +385,7 @@ if (USE_HTTP) {
     process.exit(1);
   }
 
-  const user = memoryEngine.getUserByApiKey(stdioApiKey);
+  const user = await memoryEngine.getUserByApiKey(stdioApiKey);
   if (!user) {
     console.error("[BrainRouter] FATAL: The provided BRAINROUTER_API_KEY is invalid. Connection aborted.");
     process.exit(1);

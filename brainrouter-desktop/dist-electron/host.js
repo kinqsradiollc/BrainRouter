@@ -10,6 +10,8 @@
  * Sign in once, configure once — both heads see it.
  */
 import { createBrokerPort, createHostCore } from './hostCore.js';
+import { mergeGithubCliEnv, normalizeGithubCliError } from './ghCli.js';
+import { shellQuoteArg } from './shellQuote.js';
 import { exec, execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -18,15 +20,17 @@ import { InteractionBroker } from '@kinqs/brainrouter-agent-protocol';
 // Deep imports into the CLI's built runtime (no "exports" field = allowed).
 // Extracting a proper @kinqs/brainrouter-agent package is tracked for 0.4.16.
 import { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
-import { loadConfig, saveConfig, getCliKnobs } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { loadConfig, saveConfig, getCliKnobs, _resetCliKnobsCache } from '@kinqs/brainrouter-core/dist/config/config.js';
 // 0.4.15 — named providers + per-sub-agent model routing (pure transforms).
-import { setProvider, removeProvider, setAgentModel } from '@kinqs/brainrouter-core/dist/provider/agentModels.js';
+import { setProvider, removeProvider, setAgentModel, normalizeProviderModels } from '@kinqs/brainrouter-core/dist/provider/agentModels.js';
 import { McpClientPool } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
 import { listTranscripts, loadTranscript, readTranscriptTail, transcriptExists, transcriptSizeBytes, deleteSession, forkSession, appendTranscriptEntry, rewindTranscript } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
 import { readUsageHistory, totalUsage } from '@kinqs/brainrouter-core/dist/usage/usageHistoryStore.js';
 import { classifyForVerification } from '@kinqs/brainrouter-core/dist/agent/verificationGate.js';
 import { resolveWorkspaceGit } from '@kinqs/brainrouter-core/dist/git/workspaceGit.js';
 import { readWorkspaceEntry, isWorkspaceDirectory, listWorkspaceFiles, statWorkspaceEntry, writeWorkspaceEntry } from './fsRead.js';
+import { saveWorkflowGraph, loadWorkflowGraph, listWorkflowGraphs, deleteWorkflowGraph } from '@kinqs/brainrouter-core/dist/workflow/graphStore.js';
+import { writeThreadKey, buildGroundingBlock, pickLocalGrounding } from '@kinqs/brainrouter-core/dist/write/grounding.js';
 import { WorkspaceFileListCache } from './workspaceFileListCache.js';
 import { startWorkspaceWatcher } from './fileWatch.js';
 import { readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups } from '@kinqs/brainrouter-core/dist/session/sessionMetaStore.js';
@@ -42,7 +46,7 @@ import { getStateDir } from '@kinqs/brainrouter-core/dist/storage/store.js';
 import { buildRecap } from '@kinqs/brainrouter-core/dist/session/sessionRecap.js';
 import { collectRunningTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
 import { killBackgroundShell } from '@kinqs/brainrouter-core/dist/exec/backgroundShell.js';
-import { contextWindowFor } from '@kinqs/brainrouter-core/dist/context/contextWindow.js';
+import { contextWindowForBudget } from '@kinqs/brainrouter-core/dist/context/contextWindow.js';
 // DESK-4c — the command/settings surfaces reuse the CLI's own modules so the
 // desktop never drifts from the terminal: same catalog, same preferences
 // file, same hooks store, same transcript tooling.
@@ -60,7 +64,7 @@ import { readGoal, setGoal, clearGoal, pauseGoal, resumeGoal, editGoal, decideGo
 // §goal-autonomy — the kickoff prompt builder (shared with the CLI's /goal).
 import { buildGoalKickoffPrompt } from '@kinqs/brainrouter-core/dist/goal/goalKickoff.js';
 import { PROVIDER_CATALOG } from '@kinqs/brainrouter-core/dist/provider/catalog.js';
-import { LOCAL_PLACEHOLDER_KEY } from '@kinqs/brainrouter-core/dist/provider/providers/index.js';
+import { LOCAL_PLACEHOLDER_KEY, withApiVersion } from '@kinqs/brainrouter-core/dist/provider/providers/index.js';
 import { inferModelReasoningCapabilities, registerModelReasoningCapabilities } from '@kinqs/brainrouter-core/dist/provider/models/reasoning.js';
 import { refreshLmStudioCache } from '@kinqs/brainrouter-core/dist/provider/providers/lmstudio.js';
 import { loadExtensions } from '@kinqs/brainrouter-core/dist/extension/loader.js';
@@ -90,10 +94,21 @@ import { readPlanHistory, recordPlanDecision, linkPlanDecision } from '@kinqs/br
 import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
 import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement, deleteRequirement } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
+import { buildBaseGraph, saveAtlasGraph, readAtlasGraph, atlasGraphStats, atlasWorkspaceTag, enrichAtlasGraph, extractAtlasJson } from '@kinqs/brainrouter-core/dist/atlas/index.js';
+import { callOpenAI } from '@kinqs/brainrouter-core/dist/agent/agent.js';
 import { syncRequirementPlanTrack } from '@kinqs/brainrouter-core/dist/requirement/planTrackSync.js';
-import { ensureProject, getProject, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
-import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/dist/track/githubSync.js';
+import { ensureProject, getProject, getWorkItem, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember, getGithubLinks, setGithubLink } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
+import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfigForWorkspace, listResolvedGithubConfigsForWorkspace, issueToWorkItem } from '@kinqs/brainrouter-core/dist/track/githubSync.js';
 import { scanGitCommitsForTrack } from '@kinqs/brainrouter-core/dist/track/commitScanner.js';
+import { readGitTrackContext, startGitWorkForTrackItem } from '@kinqs/brainrouter-core/dist/track/gitWorkflow.js';
+import { listConnectorCatalog } from '@kinqs/brainrouter-core/dist/connectors/catalog.js';
+import { createConnector, deleteConnector, finishConnectorRun, getConnector, listConnectorRuns, listConnectors, recordConnectorRun, updateConnector } from '@kinqs/brainrouter-core/dist/connectors/connectorStore.js';
+import { exportConnectorDefinitions, importConnectorDefinitions } from '@kinqs/brainrouter-core/dist/connectors/definitionTransfer.js';
+import { runGithubConnectorCheckpoint, runGithubConnectorPermissionSync, validateGithubConnectorAccess } from '@kinqs/brainrouter-core/dist/connectors/githubConnector.js';
+import { countConnectorDocuments, searchConnectorDocuments, upsertConnectorDocuments } from '@kinqs/brainrouter-core/dist/connectors/documentStore.js';
+import { exportConnectorDocumentsForMemory } from '@kinqs/brainrouter-core/dist/connectors/memoryBridge.js';
+import { countConnectorPermissions, listConnectorPermissions, upsertConnectorPermissions } from '@kinqs/brainrouter-core/dist/connectors/permissionStore.js';
+import { retrieveConnectorSlimDocuments } from '@kinqs/brainrouter-core/dist/connectors/slimRetrieval.js';
 /**
  * Strip secrets from the `cli` config before it's sent to the renderer (the
  * snapshot's `cliKnobs` is shown verbatim in Settings → Advanced). The GitHub
@@ -103,12 +118,81 @@ import { scanGitCommitsForTrack } from '@kinqs/brainrouter-core/dist/track/commi
  */
 function scrubCliSecrets(cli) {
     const c = (cli && typeof cli === 'object' ? { ...cli } : {});
+    if (c.webSearch && typeof c.webSearch === 'object') {
+        const webSearch = { ...c.webSearch };
+        if (typeof webSearch.serperApiKey === 'string' && webSearch.serperApiKey)
+            webSearch.serperApiKey = '••••';
+        if (typeof webSearch.braveApiKey === 'string' && webSearch.braveApiKey)
+            webSearch.braveApiKey = '••••';
+        if (webSearch.google && typeof webSearch.google === 'object') {
+            const google = { ...webSearch.google };
+            if (typeof google.apiKey === 'string' && google.apiKey)
+                google.apiKey = '••••';
+            webSearch.google = google;
+        }
+        c.webSearch = webSearch;
+    }
     if (c.track && typeof c.track === 'object') {
         const track = { ...c.track };
         delete track.githubToken;
+        if (Array.isArray(track.githubRepos)) {
+            track.githubRepos = track.githubRepos.map((entry) => {
+                if (!entry || typeof entry !== 'object')
+                    return entry;
+                const clean = { ...entry };
+                delete clean.token;
+                return clean;
+            });
+        }
         c.track = track;
     }
     return c;
+}
+function normalizeTrackGithubRepos(track) {
+    const byRepo = new Map();
+    for (const entry of Array.isArray(track.githubRepos) ? track.githubRepos : []) {
+        const repo = typeof entry?.repo === 'string' ? entry.repo.trim() : '';
+        if (!repo)
+            continue;
+        byRepo.set(repo, {
+            ...byRepo.get(repo),
+            repo,
+            token: typeof entry.token === 'string' && entry.token.trim() ? entry.token.trim() : byRepo.get(repo)?.token,
+            label: typeof entry.label === 'string' && entry.label.trim() ? entry.label.trim() : byRepo.get(repo)?.label,
+        });
+    }
+    const legacyRepo = track.githubRepo?.trim();
+    if (legacyRepo) {
+        const existing = byRepo.get(legacyRepo);
+        const legacyToken = track.githubToken?.trim() || undefined;
+        byRepo.set(legacyRepo, { ...existing, repo: legacyRepo, token: existing?.token ?? legacyToken });
+    }
+    return [...byRepo.values()];
+}
+function syncLegacyTrackGithubFields(track) {
+    const repos = normalizeTrackGithubRepos(track);
+    if (repos.length === 0) {
+        delete track.githubRepo;
+        delete track.githubToken;
+        delete track.githubRepos;
+        delete track.activeGithubRepo;
+        return;
+    }
+    const activeRepo = track.activeGithubRepo?.trim() || track.githubRepo?.trim() || repos[0].repo;
+    const active = repos.find((r) => r.repo === activeRepo) ?? repos[0];
+    track.githubRepos = repos;
+    track.activeGithubRepo = active.repo;
+    track.githubRepo = active.repo;
+    if (active.token)
+        track.githubToken = active.token;
+    else
+        delete track.githubToken;
+}
+function githubIntegrationSnapshot(workspaceRoot) {
+    const cfg = resolveGithubConfigForWorkspace(workspaceRoot);
+    const repos = listResolvedGithubConfigsForWorkspace(workspaceRoot).map((r) => ({ repo: r.repo, hasToken: r.hasToken, tokenSource: r.tokenSource ?? null, active: r.active, label: r.label, connectorId: r.connectorId, source: r.source }));
+    const fresh = loadConfig();
+    return { repo: cfg.repo ?? null, hasToken: !!cfg.token, tokenSource: cfg.tokenSource ?? null, repos, caBundle: fresh.cli?.track?.githubCaBundle ?? null };
 }
 import { isRequirementStatus, isRequirementPriority } from '@kinqs/brainrouter-types';
 // ANNOTATION-RECORDS (0.4.15) — durable feedback records store + markdown
@@ -128,6 +212,44 @@ import { readRun } from '@kinqs/brainrouter-core/dist/workflow/workflowRun.js';
 import { reconcileStaleBackgroundTasks } from '@kinqs/brainrouter-core/dist/background/backgroundReconcile.js';
 import { childSessionKey } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
 import { desktopSessionModePatchFromArgs, mergeSessionModePrefs } from './sessionModeBridge.js';
+function createComputerUseBridge(port) {
+    if (!port)
+        return undefined;
+    let seq = 0;
+    const pending = new Map();
+    const request = (op, action) => {
+        const id = `cu_${++seq}`;
+        port.postMessage({ kind: 'computer-use-request', id, op, ...(action ? { action } : {}) });
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                pending.delete(id);
+                reject(new Error('computer_use timed out waiting for Electron main.'));
+            }, 60_000);
+            pending.set(id, { resolve: (value) => resolve(value), reject, timer });
+        });
+    };
+    return {
+        screenshot: () => request('screenshot'),
+        act: (action) => request('act', action),
+        handleMessage(message) {
+            if (!message || typeof message !== 'object')
+                return false;
+            const msg = message;
+            if (msg.kind !== 'computer-use-response' || typeof msg.id !== 'string')
+                return false;
+            const entry = pending.get(msg.id);
+            if (!entry)
+                return true;
+            pending.delete(msg.id);
+            clearTimeout(entry.timer);
+            if (msg.ok)
+                entry.resolve(msg.result);
+            else
+                entry.reject(new Error(msg.error || 'computer_use failed in Electron main.'));
+            return true;
+        },
+    };
+}
 const TERM_BUF_CAP = 400_000;
 /**
  * DESK-5c — live model list, same endpoint contract as the CLI wizard's
@@ -137,9 +259,17 @@ const TERM_BUF_CAP = 400_000;
  * when no key — the LM Studio/Ollama convention), 5s timeout,
  * `{ data: [{ id }] }` response shape.
  */
-async function fetchEndpointModels(endpoint, apiKey) {
+/** Live model list for an endpoint. Returns the ids plus, on failure, WHY:
+ *  `status` is the HTTP status when the server answered (e.g. 401 = bad key,
+ *  404 = wrong path), `error: 'unreachable'` when the request never landed
+ *  (network / CORS / timeout). The setup dialog uses this to tell a wrong key
+ *  apart from an empty catalog. Models is always an array (empty on failure). */
+async function fetchEndpointModels(endpoint, apiKey, apiVersion) {
     const chat = (endpoint && endpoint.trim()) || 'https://api.openai.com/v1/chat/completions';
-    const modelsUrl = chat.replace(/\/chat\/completions\/?$/, '').replace(/\/$/, '') + '/models';
+    // Azure-style endpoints need an `?api-version=` on /models too — append it via
+    // the same shared helper the chat call uses, so a saved/probed Azure provider
+    // can actually list its deployments.
+    const modelsUrl = withApiVersion(chat.replace(/\/chat\/completions\/?$/, '').replace(/\/$/, '') + '/models', apiVersion);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 5_000);
     try {
@@ -148,7 +278,7 @@ async function fetchEndpointModels(endpoint, apiKey) {
             signal: controller.signal,
         });
         if (!res.ok)
-            return [];
+            return { models: [], status: res.status };
         const body = await res.json();
         const ids = [];
         for (const row of body.data ?? []) {
@@ -163,14 +293,32 @@ async function fetchEndpointModels(endpoint, apiKey) {
         // non-LM-Studio endpoints) so binary on/off models are detected and never
         // sent a graded `low`/`high` they would reject. Best-effort; never blocks.
         await refreshLmStudioCache(chat).catch(() => 0);
-        return [...new Set(ids)].sort();
+        return { models: [...new Set(ids)].sort() };
     }
     catch {
-        return [];
+        return { models: [], error: 'unreachable' };
     }
     finally {
         clearTimeout(timer);
     }
+}
+function endpointKey(endpoint) {
+    return (endpoint ?? '').replace(/\/+$/, '');
+}
+function matchingDefaultProvider(providers, llmCfg) {
+    if (!providers || !llmCfg)
+        return { name: null, modelMatches: false };
+    const entries = Object.entries(providers);
+    const connectionMatches = (p) => p.provider === llmCfg.provider &&
+        endpointKey(p.endpoint) === endpointKey(llmCfg.endpoint) &&
+        p.apiKey === llmCfg.apiKey;
+    const exact = entries.find(([, p]) => connectionMatches(p) && p.model === llmCfg.model);
+    if (exact)
+        return { name: exact[0], modelMatches: true };
+    const connection = entries.find(([, p]) => connectionMatches(p));
+    if (connection)
+        return { name: connection[0], modelMatches: false };
+    return { name: null, modelMatches: false };
 }
 /**
  * DESK-5d — a session's resting state, read from the transcript tail:
@@ -469,6 +617,7 @@ async function main() {
     const send = port
         ? (msg) => port.postMessage(msg)
         : (msg) => console.log(JSON.stringify(msg));
+    const computerUseBridge = createComputerUseBridge(port);
     // Identical boot recipe to `brainrouter chat` (index.ts): config → llm →
     // pool.connectAll(profiles) → Agent. Offline MCP does not block (same
     // semantics as the CLI's non-strict mode).
@@ -480,6 +629,21 @@ async function main() {
         mcpClient.startReconnectSupervisor(); // WS9 — auto-reconnect dropped MCP servers in the background
     }
     catch { /* offline-mode: local tools only, same as the CLI */ }
+    // REMOTE-BRAIN Phase 3d — call a brain Atlas tool via the MCP pool, parsing its
+    // JSON text result. Best-effort: null on any failure so the local artifact path
+    // always remains the fallback.
+    const callBrainAtlas = async (tool, args) => {
+        try {
+            const res = await mcpClient.callTool(tool, args);
+            if (!res || res.isError)
+                return null;
+            const text = res?.content?.[0]?.text;
+            return typeof text === 'string' && text.trim() ? JSON.parse(text) : null;
+        }
+        catch {
+            return null;
+        }
+    };
     // DESK-3 — the approval/choice port: agent asks become interaction-request
     // events; the renderer's dialogs answer them. Shares the hostCore broker so
     // interrupt/shutdown dismiss pending dialogs fail-closed.
@@ -496,6 +660,7 @@ async function main() {
         workspaceRoot,
         launchCwd: workspaceRoot,
         interactionPort: createBrokerPort(broker, (e) => emitPortFor(agent.sessionKey, e)),
+        computerUsePort: computerUseBridge,
     });
     // DESK-5v — the agent the user is currently VIEWING. hostCore keeps a pool of
     // agents (one per running/active session) and tells us which is active via
@@ -524,6 +689,7 @@ async function main() {
             workspaceRoot,
             launchCwd: workspaceRoot,
             interactionPort: createBrokerPort(broker, (e) => emitPortFor(a.sessionKey, e)),
+            computerUsePort: computerUseBridge,
         });
         a.sessionKey = sessionKey;
         return a;
@@ -789,6 +955,10 @@ async function main() {
     const modelsCacheByKey = new Map();
     // DESK-5d — PR state cache (gh is a network call; the sidebar refreshes often).
     let prCache = null;
+    // §session-pr — cached all-states PR rows (number/state/headRefName/isDraft/
+    // mergeable) used to match each session to its PR; ~60s TTL, polled by the
+    // renderer on its existing 25s cadence.
+    let prStatusMapCache = null;
     // Short-lived dedup cache for the FULL agent-continuation read (loadHistory).
     // The context-fill estimate no longer reads this (it uses transcriptSizeBytes),
     // so there's no O(n) token loop here anymore.
@@ -1030,6 +1200,563 @@ async function main() {
         })();
         return created;
     };
+    let ghEnvCache = null;
+    const ghEnv = async () => {
+        const now = Date.now();
+        if (ghEnvCache && now - ghEnvCache.at < 60_000)
+            return ghEnvCache.env;
+        const track = (loadConfig().cli?.track) ?? {};
+        const configuredCA = track.githubCaBundle?.trim() || undefined;
+        const [sslCAInfo, sslCAPath] = await Promise.all([
+            git(['config', '--get', 'http.sslCAInfo'], workspaceRoot),
+            git(['config', '--get', 'http.sslCAPath'], workspaceRoot),
+        ]);
+        const env = mergeGithubCliEnv(process.env, {
+            sslCAInfo: configuredCA || sslCAInfo.trim() || undefined,
+            sslCAPath: sslCAPath.trim() || undefined,
+        });
+        ghEnvCache = { at: now, env };
+        return env;
+    };
+    const ghText = async (args, opts) => new Promise((resolve) => {
+        ghEnv().then((env) => {
+            execFile('gh', args, { cwd: workspaceRoot, env, encoding: 'utf-8', timeout: opts?.timeout ?? 10_000, maxBuffer: opts?.maxBuffer ?? 2_000_000 }, (err, stdout, stderr) => {
+                const stderrText = String(stderr ?? '');
+                resolve({
+                    ok: !err,
+                    stdout: String(stdout ?? ''),
+                    stderr: stderrText,
+                    error: err ? normalizeGithubCliError(stderrText, `gh ${args.slice(0, 2).join(' ')} failed.`) : undefined,
+                });
+            });
+        }).catch((err) => resolve({ ok: false, stdout: '', stderr: String(err instanceof Error ? err.message : err), error: String(err instanceof Error ? err.message : err) }));
+    });
+    const ghJson = async (args, opts) => {
+        const res = await ghText(args, opts);
+        let data;
+        if (res.stdout.trim()) {
+            try {
+                data = JSON.parse(res.stdout);
+            }
+            catch {
+                return { error: 'GitHub CLI returned invalid JSON.' };
+            }
+        }
+        if (!res.ok && !(opts?.allowNonZeroJson && data !== undefined))
+            return { error: res.error ?? 'GitHub CLI command failed.' };
+        if (data !== undefined)
+            return { data };
+        if (!res.ok)
+            return { error: res.error ?? 'GitHub CLI command failed.' };
+        try {
+            return { data: JSON.parse(res.stdout) };
+        }
+        catch {
+            return { error: 'GitHub CLI returned invalid JSON.' };
+        }
+    };
+    const githubApiBase = (connector) => {
+        const raw = typeof connector.config?.baseUrl === 'string' ? connector.config.baseUrl.trim() : '';
+        return (raw || 'https://api.github.com').replace(/\/+$/, '');
+    };
+    const githubStaticToken = (connector) => {
+        if (connector.credential?.mode !== 'static')
+            return {};
+        const ref = connector.credential.ref?.trim();
+        if (!ref)
+            return { error: 'Static GitHub connector credential reference is required.' };
+        const token = process.env[ref]?.trim();
+        if (!token)
+            return { error: `Static GitHub connector credential ${ref} is not available in the host environment.` };
+        return { token };
+    };
+    const githubTokenJson = async (connector, token, apiPath) => {
+        const res = await fetch(`${githubApiBase(connector)}${apiPath}`, {
+            headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: 'application/vnd.github+json',
+                'User-Agent': 'BrainRouter-Desktop',
+            },
+        });
+        if (!res.ok) {
+            let detail = '';
+            try {
+                const body = await res.json();
+                detail = body.message ? `: ${body.message}` : '';
+            }
+            catch {
+                detail = '';
+            }
+            throw new Error(`GitHub API ${res.status}${detail}`);
+        }
+        return await res.json();
+    };
+    const currentGitBranch = async () => {
+        const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'], workspaceRoot)).trim();
+        return branch && branch !== 'HEAD' ? branch : null;
+    };
+    const trackItemForBranch = (branch) => listWorkItems(workspaceRoot).find((item) => item.codeLinks.some((link) => link.kind === 'branch' && link.ref === branch));
+    const readTrackPrStatus = async () => {
+        const branch = await currentGitBranch();
+        const item = branch ? trackItemForBranch(branch) : undefined;
+        const detail = await ghJson(['pr', 'view', '--json', 'number,state,title,url,headRefName,baseRefName,isDraft,mergeable,statusCheckRollup'], { timeout: 8_000 });
+        if (detail.error)
+            return { pr: null, branch, itemKey: item?.key, error: detail.error };
+        return { pr: detail.data ?? null, branch, itemKey: item?.key };
+    };
+    const githubGhValidationClient = () => ({
+        async listRepositories(owner, opts) {
+            const limit = Math.max(1, Math.min(1000, opts?.limit ?? 100));
+            const listed = await ghJson(['repo', 'list', owner, '--limit', String(limit), '--json', 'nameWithOwner'], { timeout: 12_000, maxBuffer: 500_000 });
+            if (listed.error)
+                throw new Error(listed.error);
+            return (listed.data ?? []).map((repo) => repo.nameWithOwner ?? '').filter(Boolean);
+        },
+        async getRepository(repo) {
+            const view = await ghJson(['repo', 'view', repo, '--json', 'nameWithOwner'], { timeout: 10_000, maxBuffer: 500_000 });
+            if (view.error)
+                throw new Error(view.error);
+            return view.data?.nameWithOwner ?? repo;
+        },
+    });
+    const githubTokenValidationClient = (connector, token) => ({
+        async listRepositories(owner, opts) {
+            const limit = Math.max(1, Math.min(100, opts?.limit ?? 100));
+            try {
+                const orgRepos = await githubTokenJson(connector, token, `/orgs/${encodeURIComponent(owner)}/repos?per_page=${limit}`);
+                if (orgRepos.length)
+                    return orgRepos.map((repo) => repo.full_name ?? '').filter(Boolean);
+            }
+            catch {
+                // Fall through to the user endpoint; the owner may be a personal account.
+            }
+            const userRepos = await githubTokenJson(connector, token, `/users/${encodeURIComponent(owner)}/repos?per_page=${limit}`);
+            return userRepos.map((repo) => repo.full_name ?? '').filter(Boolean);
+        },
+        async getRepository(repo) {
+            const data = await githubTokenJson(connector, token, `/repos/${repo.split('/').map(encodeURIComponent).join('/')}`);
+            return data.full_name ?? repo;
+        },
+    });
+    const githubGhPermissionClient = () => ({
+        async listRepositories(owner, opts) {
+            const limit = Math.max(1, Math.min(1000, opts?.limit ?? 100));
+            const listed = await ghJson(['repo', 'list', owner, '--limit', String(limit), '--json', 'nameWithOwner'], { timeout: 20_000, maxBuffer: 4_000_000 });
+            if (listed.error)
+                throw new Error(listed.error);
+            return (listed.data ?? []).map((repo) => repo.nameWithOwner ?? '').filter(Boolean);
+        },
+        async listCollaborators(repo) {
+            const collaborators = await ghJson(['api', `repos/${repo}/collaborators?affiliation=all&per_page=100`], { timeout: 20_000, maxBuffer: 4_000_000 });
+            if (collaborators.error)
+                throw new Error(collaborators.error);
+            return (collaborators.data ?? [])
+                .filter((collaborator) => typeof collaborator.login === 'string' && collaborator.login.trim().length > 0)
+                .map((collaborator) => ({
+                login: collaborator.login,
+                name: collaborator.name,
+                htmlUrl: collaborator.html_url,
+                roleName: collaborator.role_name,
+                permissions: collaborator.permissions,
+            }));
+        },
+    });
+    const githubTokenPermissionClient = (connector, token) => ({
+        async listRepositories(owner, opts) {
+            return githubTokenValidationClient(connector, token).listRepositories(owner, opts);
+        },
+        async listCollaborators(repo) {
+            const collaborators = await githubTokenJson(connector, token, `/repos/${repo.split('/').map(encodeURIComponent).join('/')}/collaborators?affiliation=all&per_page=100`);
+            return collaborators
+                .filter((collaborator) => typeof collaborator.login === 'string' && collaborator.login.trim().length > 0)
+                .map((collaborator) => ({
+                login: collaborator.login,
+                name: collaborator.name,
+                htmlUrl: collaborator.html_url,
+                roleName: collaborator.role_name,
+                permissions: collaborator.permissions,
+            }));
+        },
+    });
+    const validateGithubConnector = async (connectorId) => {
+        const connector = getConnector(workspaceRoot, connectorId);
+        if (!connector)
+            return { ok: false, checked: [], errors: ['Connector not found.'], connector: null };
+        let result;
+        if (connector.credential.mode === 'static') {
+            const credential = githubStaticToken(connector);
+            result = credential.token
+                ? await validateGithubConnectorAccess(connector, githubTokenValidationClient(connector, credential.token))
+                : { ok: false, checked: [], errors: [credential.error ?? 'Static GitHub connector credential is not available.'] };
+        }
+        else {
+            result = await validateGithubConnectorAccess(connector, githubGhValidationClient());
+        }
+        const updated = updateConnector(workspaceRoot, connector.id, {
+            status: result.ok ? 'active' : 'error',
+            lastError: result.ok ? undefined : result.errors[0] ?? 'GitHub connector validation failed.',
+        }) ?? connector;
+        return { ...result, connector: updated };
+    };
+    const githubConnectorClient = () => ({
+        async listRepositories(owner, opts) {
+            const limit = Math.max(1, Math.min(1000, opts?.limit ?? 100));
+            const listed = await ghJson(['repo', 'list', owner, '--limit', String(limit), '--json', 'nameWithOwner'], { timeout: 20_000, maxBuffer: 4_000_000 });
+            if (listed.error)
+                throw new Error(listed.error);
+            return (listed.data ?? []).map((repo) => repo.nameWithOwner ?? '').filter(Boolean);
+        },
+        async listIssues(repo, opts) {
+            const args = ['issue', 'list', '--repo', repo, '--state', 'all', '--limit', '100', '--json', 'number,title,body,state,url,updatedAt,labels,assignees'];
+            if (opts?.since)
+                args.push('--search', `updated:>=${opts.since}`);
+            const issues = await ghJson(args, { timeout: 20_000, maxBuffer: 6_000_000 });
+            if (issues.error)
+                throw new Error(issues.error);
+            return (issues.data ?? []);
+        },
+        async listPullRequests(repo, opts) {
+            const args = ['pr', 'list', '--repo', repo, '--state', 'all', '--limit', '100', '--json', 'number,title,body,state,url,updatedAt,author'];
+            if (opts?.since)
+                args.push('--search', `updated:>=${opts.since}`);
+            const pulls = await ghJson(args, { timeout: 20_000, maxBuffer: 6_000_000 });
+            if (pulls.error)
+                throw new Error(pulls.error);
+            return (pulls.data ?? []);
+        },
+        async listFiles(repo) {
+            const tree = await ghJson(['api', `repos/${repo}/git/trees/HEAD?recursive=1`], { timeout: 20_000, maxBuffer: 10_000_000 });
+            if (tree.error)
+                throw new Error(tree.error);
+            const blobs = (tree.data?.tree ?? []).filter((entry) => entry.type === 'blob' && entry.path).slice(0, 100);
+            const files = [];
+            for (const blob of blobs) {
+                const pathName = blob.path ?? '';
+                const content = await ghJson(['api', `repos/${repo}/contents/${pathName.split('/').map(encodeURIComponent).join('/')}`], { timeout: 10_000, maxBuffer: 2_000_000 });
+                const text = content.data?.encoding === 'base64' && content.data.content
+                    ? Buffer.from(content.data.content.replace(/\s+/g, ''), 'base64').toString('utf8')
+                    : '';
+                files.push({ path: pathName, text: text.slice(0, 100_000), sha: blob.sha, size: blob.size, url: content.data?.html_url ?? blob.url });
+            }
+            return files;
+        },
+    });
+    const indexConnectorMemory = async (connectorId) => {
+        const connector = getConnector(workspaceRoot, connectorId);
+        if (!connector)
+            return { ok: false, records: 0, evidence: 0, operations: 0, error: 'Connector not found.' };
+        const bundle = exportConnectorDocumentsForMemory(workspaceRoot, { connectorId });
+        if (bundle.recordCount === 0)
+            return { ok: true, records: 0, evidence: 0, operations: 0, result: { importedMemories: 0, importedEvidence: 0, importedOperations: 0 } };
+        try {
+            const res = await mcpClient.callTool('memory_import', { data: bundle.data });
+            if (res?.isError) {
+                const text = typeof res.content?.[0]?.text === 'string' ? res.content[0].text : 'memory_import failed.';
+                return { ok: false, records: bundle.recordCount, evidence: bundle.evidenceCount, operations: bundle.operationCount, error: text };
+            }
+            const text = typeof res?.content?.[0]?.text === 'string' ? res.content[0].text : '';
+            const parsed = text.trim() ? JSON.parse(text) : {};
+            return { ok: true, records: bundle.recordCount, evidence: bundle.evidenceCount, operations: bundle.operationCount, result: parsed };
+        }
+        catch (err) {
+            return { ok: false, records: bundle.recordCount, evidence: bundle.evidenceCount, operations: bundle.operationCount, error: err instanceof Error ? err.message : String(err) };
+        }
+    };
+    const runConnector = async (connectorId) => {
+        const connector = getConnector(workspaceRoot, connectorId);
+        if (!connector)
+            return { ok: false, error: 'Connector not found.' };
+        if (connector.source !== 'github')
+            return { ok: false, error: `Connector runtime is not implemented for ${connector.source}.` };
+        const startedAt = new Date().toISOString();
+        const running = recordConnectorRun(workspaceRoot, {
+            connectorId: connector.id,
+            flow: 'checkpoint',
+            status: 'running',
+            startedAt,
+            checkpointBefore: connector.checkpoint,
+        });
+        try {
+            const result = await runGithubConnectorCheckpoint(connector, githubConnectorClient());
+            const persisted = upsertConnectorDocuments(workspaceRoot, result.documents);
+            const run = finishConnectorRun(workspaceRoot, connector.id, running.id, {
+                status: result.failures.length ? 'failed' : 'succeeded',
+                documentsSeen: result.documents.length,
+                documentsIndexed: persisted.length,
+                failures: result.failures.length,
+                error: result.failures[0],
+                checkpointAfter: result.checkpoint,
+            }) ?? running;
+            const memory = await indexConnectorMemory(connector.id);
+            return {
+                ok: result.failures.length === 0,
+                run,
+                connector: getConnector(workspaceRoot, connector.id) ?? null,
+                documents: persisted.slice(0, 20),
+                memory,
+                errors: result.failures,
+            };
+        }
+        catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            const run = finishConnectorRun(workspaceRoot, connector.id, running.id, {
+                status: 'failed',
+                error: msg,
+            }) ?? running;
+            return { ok: false, run, connector: getConnector(workspaceRoot, connector.id) ?? null, error: msg, errors: [msg] };
+        }
+    };
+    const connectorRunsInFlight = new Set();
+    const connectorPollMinutes = (connector) => {
+        const raw = connector.config?.pollMinutes;
+        const value = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : 0;
+        return Number.isFinite(value) && value > 0 ? Math.max(1, Math.floor(value)) : 0;
+    };
+    const connectorDueForScheduledRun = (connector, now) => {
+        if (connector.status !== 'active')
+            return false;
+        if (!connector.flows.includes('checkpoint'))
+            return false;
+        if (connectorRunsInFlight.has(connector.id))
+            return false;
+        const pollMinutes = connectorPollMinutes(connector);
+        if (pollMinutes <= 0)
+            return false;
+        const lastRunMs = connector.lastRunAt ? Date.parse(connector.lastRunAt) : 0;
+        return !Number.isFinite(lastRunMs) || lastRunMs <= 0 || now - lastRunMs >= pollMinutes * 60_000;
+    };
+    const tickConnectorScheduler = () => {
+        const now = Date.now();
+        for (const connector of listConnectors(workspaceRoot, { status: 'active' })) {
+            if (!connectorDueForScheduledRun(connector, now))
+                continue;
+            connectorRunsInFlight.add(connector.id);
+            void runConnector(connector.id)
+                .catch(() => undefined)
+                .finally(() => connectorRunsInFlight.delete(connector.id));
+        }
+    };
+    const connectorSchedulerTimer = setInterval(tickConnectorScheduler, 60_000);
+    connectorSchedulerTimer.unref?.();
+    const connectorSchedulerBootTimer = setTimeout(tickConnectorScheduler, 10_000);
+    connectorSchedulerBootTimer.unref?.();
+    const syncConnectorPermissions = async (connectorId) => {
+        const connector = getConnector(workspaceRoot, connectorId);
+        if (!connector)
+            return { ok: false, error: 'Connector not found.' };
+        if (connector.source !== 'github')
+            return { ok: false, error: `Permission sync is not implemented for ${connector.source}.` };
+        const startedAt = new Date().toISOString();
+        try {
+            const credential = connector.credential.mode === 'static' ? githubStaticToken(connector) : {};
+            if (connector.credential.mode === 'static' && !credential.token)
+                throw new Error(credential.error ?? 'Static GitHub connector credential is not available.');
+            const client = credential.token ? githubTokenPermissionClient(connector, credential.token) : githubGhPermissionClient();
+            const result = await runGithubConnectorPermissionSync(connector, client);
+            const persisted = upsertConnectorPermissions(workspaceRoot, result.permissions);
+            const run = recordConnectorRun(workspaceRoot, {
+                connectorId: connector.id,
+                flow: 'permission-sync',
+                status: result.failures.length ? 'failed' : 'succeeded',
+                startedAt,
+                permissionsSeen: result.permissions.length,
+                permissionsIndexed: persisted.length,
+                failures: result.failures.length,
+                error: result.failures[0],
+                checkpointBefore: connector.checkpoint,
+                checkpointAfter: result.checkpoint,
+            });
+            return {
+                ok: result.failures.length === 0,
+                run,
+                connector: getConnector(workspaceRoot, connector.id) ?? null,
+                permissions: persisted.slice(0, 20),
+                errors: result.failures,
+            };
+        }
+        catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            const run = recordConnectorRun(workspaceRoot, {
+                connectorId: connector.id,
+                flow: 'permission-sync',
+                status: 'failed',
+                startedAt,
+                error: msg,
+                checkpointBefore: connector.checkpoint,
+            });
+            return { ok: false, run, connector: getConnector(workspaceRoot, connector.id) ?? null, error: msg, errors: [msg] };
+        }
+    };
+    const createTrackDraftPr = async (idOrKey) => {
+        const item = getWorkItem(workspaceRoot, idOrKey);
+        if (!item)
+            return { ok: false, items: listWorkItems(workspaceRoot), error: `Unknown work item "${idOrKey}".` };
+        const branch = await currentGitBranch();
+        if (!branch)
+            return { ok: false, items: listWorkItems(workspaceRoot), itemKey: item.key, error: 'No current Git branch.' };
+        const linkedBranch = item.codeLinks.find((link) => link.kind === 'branch')?.ref;
+        if (linkedBranch && linkedBranch !== branch) {
+            return { ok: false, items: listWorkItems(workspaceRoot), branch, itemKey: item.key, error: `Switch to ${linkedBranch} before creating a PR for ${item.key}.` };
+        }
+        const dirty = (await git(['status', '--porcelain', '--', '.'], workspaceRoot)).trim();
+        if (dirty)
+            return { ok: false, items: listWorkItems(workspaceRoot), branch, itemKey: item.key, error: 'Commit or stash local changes before creating a PR.' };
+        const issue = getGithubLinks(workspaceRoot)[item.id];
+        const body = [
+            `Track item: ${item.key}`,
+            item.description?.trim(),
+            issue?.number ? `Fixes #${issue.number}` : undefined,
+            `Branch: ${branch}`,
+        ].filter(Boolean).join('\n\n');
+        const created = await ghText(['pr', 'create', '--draft', '--title', `${item.key}: ${item.title}`, '--body', body], { timeout: 20_000, maxBuffer: 500_000 });
+        if (!created.ok)
+            return { ok: false, items: listWorkItems(workspaceRoot), branch, itemKey: item.key, error: created.error ?? 'GitHub CLI could not create the PR.' };
+        const url = created.stdout.split(/\s+/).find((part) => /^https?:\/\//.test(part)) ?? created.stdout.trim();
+        if (url)
+            linkWorkItem(workspaceRoot, item.id, { codeLinks: [{ kind: 'pull-request', ref: url, label: 'GitHub PR' }] });
+        prCache = null;
+        const status = await readTrackPrStatus();
+        return { ok: true, url, pr: status.pr, branch, itemKey: item.key, items: listWorkItems(workspaceRoot) };
+    };
+    const importTrackIssuesFromGh = async (args) => {
+        const project = ensureProject(workspaceRoot);
+        const limit = Math.min(Math.max(1, Number(args.limit) || 30), 100);
+        const state = args.state === 'all' || args.state === 'closed' ? String(args.state) : 'open';
+        const dryRun = args.dryRun === true;
+        const ghIssues = await ghJson(['issue', 'list', '--state', state, '--limit', String(limit), '--json', 'number,title,body,state,url,labels,assignees'], { timeout: 12_000, maxBuffer: 4_000_000 });
+        if (ghIssues.error)
+            return { direction: 'import', dryRun, imported: [], errors: [ghIssues.error], items: listWorkItems(workspaceRoot) };
+        const imported = [];
+        const errors = [];
+        const links = getGithubLinks(workspaceRoot);
+        const byNumber = new Map();
+        for (const [wid, link] of Object.entries(links))
+            byNumber.set(link.number, wid);
+        for (const raw of ghIssues.data ?? []) {
+            const issue = {
+                ...raw,
+                state: String(raw.state ?? 'open').toLowerCase() === 'closed' ? 'closed' : 'open',
+                html_url: raw.html_url ?? raw.url,
+            };
+            const mapped = issueToWorkItem(issue, project);
+            const existingByKey = mapped.key ? getWorkItem(workspaceRoot, mapped.key) : undefined;
+            const existingById = byNumber.get(issue.number);
+            const existing = existingByKey ?? (existingById ? getWorkItem(workspaceRoot, existingById) : undefined);
+            imported.push({ issueNumber: issue.number, title: issue.title, action: existing ? 'update' : 'create', key: existing?.key ?? mapped.key });
+            if (dryRun)
+                continue;
+            try {
+                if (existing) {
+                    updateWorkItem(workspaceRoot, existing.id, mapped.patch, 'agent');
+                    setGithubLink(workspaceRoot, existing.id, { number: issue.number, url: issue.html_url ?? '' });
+                }
+                else {
+                    const created = createWorkItem(workspaceRoot, { ...mapped.input, actor: 'agent' });
+                    setGithubLink(workspaceRoot, created.id, { number: issue.number, url: issue.html_url ?? '' });
+                }
+            }
+            catch (error) {
+                errors.push(`#${issue.number}: ${error.message}`);
+            }
+        }
+        return { direction: 'import', dryRun, imported, errors, items: listWorkItems(workspaceRoot) };
+    };
+    const mergeCurrentTrackPr = async () => {
+        const status = await readTrackPrStatus();
+        if (!status.pr?.number)
+            return { ok: false, branch: status.branch, itemKey: status.itemKey, items: listWorkItems(workspaceRoot), error: status.error ?? 'No pull request for the current branch.' };
+        if (status.pr.isDraft)
+            return { ok: false, pr: status.pr, branch: status.branch, itemKey: status.itemKey, items: listWorkItems(workspaceRoot), error: 'Mark the pull request ready before merging.' };
+        const merged = await ghText(['pr', 'merge', String(status.pr.number), '--squash', '--delete-branch'], { timeout: 20_000, maxBuffer: 500_000 });
+        if (!merged.ok)
+            return { ok: false, pr: status.pr, branch: status.branch, itemKey: status.itemKey, items: listWorkItems(workspaceRoot), error: merged.error ?? 'GitHub CLI could not merge the PR.' };
+        if (status.itemKey) {
+            const project = getProject(workspaceRoot) ?? ensureProject(workspaceRoot);
+            const done = project.workflowStates.find((state) => state.category === 'done');
+            if (done)
+                transitionWorkItem(workspaceRoot, status.itemKey, done.id, 'user');
+        }
+        prCache = null;
+        return { ok: true, pr: status.pr, branch: status.branch, itemKey: status.itemKey, items: listWorkItems(workspaceRoot) };
+    };
+    const submitTrackPrReview = async (args) => {
+        const status = await readTrackPrStatus();
+        if (!status.pr?.number)
+            return { ok: false, branch: status.branch, itemKey: status.itemKey, error: status.error ?? 'No pull request for the current branch.' };
+        const decision = args.decision === 'approve' || args.decision === 'request-changes' ? args.decision : 'comment';
+        const body = String(args.body ?? '').trim();
+        if (decision === 'comment' && !body)
+            return { ok: false, pr: status.pr, branch: status.branch, itemKey: status.itemKey, error: 'Review comment cannot be empty.' };
+        const flag = decision === 'approve' ? '--approve' : decision === 'request-changes' ? '--request-changes' : '--comment';
+        const cmd = ['pr', 'review', String(status.pr.number), flag];
+        if (body)
+            cmd.push('--body', body);
+        const reviewed = await ghText(cmd, { timeout: 15_000, maxBuffer: 500_000 });
+        if (!reviewed.ok)
+            return { ok: false, pr: status.pr, branch: status.branch, itemKey: status.itemKey, error: reviewed.error ?? 'GitHub CLI could not submit the review.' };
+        return { ok: true, pr: status.pr, branch: status.branch, itemKey: status.itemKey };
+    };
+    const fixCurrentTrackPrChecks = async () => {
+        const status = await readTrackPrStatus();
+        if (!status.pr?.number)
+            return { ok: false, branch: status.branch, itemKey: status.itemKey, error: status.error ?? 'No pull request for the current branch.' };
+        const sessionKey = activeAgent.sessionKey;
+        const task = createBackgroundTask(workspaceRoot, {
+            kind: 'verification',
+            title: `Fix failing checks — PR #${status.pr.number}`,
+            sessionKey,
+            status: 'running',
+        });
+        const fixerKey = `fix-ci:${task.id}`;
+        const created = updateBackgroundTask(workspaceRoot, task.id, { transcript: { kind: 'task', id: task.id, parentSessionKey: fixerKey } }) ?? task;
+        emitTaskEvent('created', created);
+        void (async () => {
+            try {
+                taskProgress(task.id, 'reading-ci', `PR #${status.pr?.number ?? ''}`);
+                const checks = await ghJson(['pr', 'checks', '--json', 'name,state,bucket,link,workflow,startedAt,completedAt'], { timeout: 10_000, maxBuffer: 2_000_000, allowNonZeroJson: true });
+                const runs = await ghJson(['run', 'list', '--limit', '10', '--json', 'databaseId,name,displayTitle,status,conclusion,workflowName,headBranch,event,createdAt,url'], { timeout: 10_000, maxBuffer: 4_000_000 });
+                const failedChecks = (checks.data ?? []).filter((c) => {
+                    const bucket = String(c.bucket ?? c.state ?? '').toLowerCase();
+                    return bucket === 'fail' || bucket === 'failed' || bucket === 'failure' || bucket === 'cancel' || bucket === 'cancelled';
+                });
+                const failedRun = (runs.data ?? []).find((r) => String(r.conclusion ?? '').toLowerCase() === 'failure');
+                let failedLog = '';
+                if (failedRun?.databaseId) {
+                    const log = await ghText(['run', 'view', String(failedRun.databaseId), '--log-failed'], { timeout: 20_000, maxBuffer: 8_000_000 });
+                    failedLog = (log.stdout || log.error || '').slice(-40_000);
+                }
+                const prompt = [
+                    'The current branch has a GitHub pull request with failing CI. Fix the failing checks locally.',
+                    'Do not commit, push, merge, or create a pull request. Make the smallest code changes needed, then stop.',
+                    `PR: #${status.pr?.number} ${status.pr?.title ?? ''}`,
+                    `Branch: ${status.branch ?? status.pr?.headRefName ?? 'current branch'}`,
+                    failedChecks.length ? `Failing checks:\n${failedChecks.map((c) => `- ${c.workflow ? `${c.workflow}: ` : ''}${c.name ?? 'check'} (${c.bucket ?? c.state ?? 'failed'})${c.link ? ` ${c.link}` : ''}`).join('\n')}` : 'Failing checks: not available from gh pr checks.',
+                    failedRun ? `Latest failed run: ${failedRun.workflowName ?? failedRun.name ?? 'run'} ${failedRun.databaseId ?? ''} ${failedRun.url ?? ''}` : 'Latest failed run: not available from gh run list.',
+                    failedLog ? `Failed log excerpt:\n${failedLog}` : '',
+                ].filter(Boolean).join('\n\n');
+                taskProgress(task.id, 'fixing-ci', failedChecks[0]?.name ?? failedRun?.workflowName ?? 'failed checks');
+                const fixer = spawnTaskAgent(fixerKey, 'write');
+                const noop = () => { };
+                const cb = {
+                    onStatusUpdate: (text) => { if (text)
+                        taskProgress(task.id, 'working', text.slice(0, 80)); },
+                    onToolStart: noop, onToolEnd: noop, onAssistantDelta: noop, onAssistantTurnStart: noop,
+                    onAssistantTurnEnd: noop, onReasoningDelta: noop, onUsageUpdate: noop, onPlanUpdate: noop,
+                };
+                await fixer.runTurn(prompt, cb);
+                const changed = (await git(['status', '--short', '--', '.'], workspaceRoot)).split('\n').filter(Boolean);
+                const done = updateBackgroundTask(workspaceRoot, task.id, { status: 'completed', result: { pr: status.pr?.number, changedFiles: changed.length } });
+                if (done)
+                    emitTaskEvent('completed', done);
+            }
+            catch (err) {
+                const failed = updateBackgroundTask(workspaceRoot, task.id, { status: 'failed', error: `Fix CI task failed: ${err instanceof Error ? err.message : err}` });
+                if (failed)
+                    emitTaskEvent('failed', failed);
+            }
+        })();
+        return { ok: true, task: created, pr: status.pr, branch: status.branch, itemKey: status.itemKey };
+    };
     const core = createHostCore({
         agent,
         spawnAgent,
@@ -1069,6 +1796,7 @@ async function main() {
                         firstUserMessage: m.title || s.firstUserMessage, // title overrides the snippet
                         pinned: !!m.pinned, archived: !!m.archived, status: m.status ?? 'active', group: m.group ?? null,
                         forkedFrom: m.forkedFrom ?? null, // DESK-6u — lineage for the fork icon + back-link
+                        branch: m.branch ?? null, // §session-pr — branch this session ran on, for PR-status matching
                     };
                 });
                 // pinned first, then the store's recency order (sessionRows already sorts).
@@ -1091,116 +1819,196 @@ async function main() {
                     return { rows: [], error: err instanceof Error ? err.message : String(err) };
                 }
             },
+            // CONNECTORS — Onyx-like connector lifecycle foundation. These wrappers
+            // expose the core catalog/store to the renderer without making Track Sync
+            // pretend to be the general connector abstraction.
+            'connectors-catalog': () => ({ catalog: listConnectorCatalog() }),
+            'connectors-list': (args) => {
+                const source = typeof args.source === 'string' ? args.source : undefined;
+                const status = typeof args.status === 'string' ? args.status : undefined;
+                return { connectors: listConnectors(workspaceRoot, { source, status }) };
+            },
+            'connector-detail': (args) => {
+                const id = typeof args.id === 'string' ? args.id : '';
+                const connector = id ? getConnector(workspaceRoot, id) : undefined;
+                return connector ? {
+                    connector,
+                    runs: listConnectorRuns(workspaceRoot, id),
+                    documents: searchConnectorDocuments(workspaceRoot, { connectorId: id, limit: 20 }),
+                    permissions: listConnectorPermissions(workspaceRoot, { connectorId: id }).slice(0, 50),
+                } : { connector: null, runs: [], documents: [], permissions: [] };
+            },
+            'connector-documents': (args) => searchConnectorDocuments(workspaceRoot, {
+                connectorId: typeof args.connectorId === 'string' ? args.connectorId : undefined,
+                repository: typeof args.repository === 'string' ? args.repository : undefined,
+                kind: typeof args.kind === 'string' ? args.kind : undefined,
+                query: typeof args.query === 'string' ? args.query : undefined,
+                limit: typeof args.limit === 'number' ? args.limit : undefined,
+            }),
+            'connector-slim-documents': (args) => retrieveConnectorSlimDocuments(workspaceRoot, {
+                connectorId: typeof args.connectorId === 'string' ? args.connectorId : undefined,
+                repository: typeof args.repository === 'string' ? args.repository : undefined,
+                kind: typeof args.kind === 'string' ? args.kind : undefined,
+                query: typeof args.query === 'string' ? args.query : undefined,
+                limit: typeof args.limit === 'number' ? args.limit : undefined,
+                maxSnippetChars: typeof args.maxSnippetChars === 'number' ? args.maxSnippetChars : undefined,
+            }),
+            'connector-permissions': (args) => listConnectorPermissions(workspaceRoot, {
+                connectorId: typeof args.connectorId === 'string' ? args.connectorId : undefined,
+                principalId: typeof args.principalId === 'string' ? args.principalId : undefined,
+                repository: typeof args.repository === 'string' ? args.repository : undefined,
+            }),
+            'action:connector-create': (args) => {
+                try {
+                    const connector = createConnector(workspaceRoot, {
+                        source: args.source,
+                        name: typeof args.name === 'string' ? args.name : '',
+                        description: typeof args.description === 'string' ? args.description : undefined,
+                        config: args.config && typeof args.config === 'object' && !Array.isArray(args.config) ? args.config : undefined,
+                        credential: args.credential && typeof args.credential === 'object' && !Array.isArray(args.credential) ? args.credential : undefined,
+                        flows: Array.isArray(args.flows) ? args.flows : undefined,
+                    });
+                    return { ok: true, connector };
+                }
+                catch (err) {
+                    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+                }
+            },
+            'action:connector-update': (args) => {
+                try {
+                    const id = typeof args.id === 'string' ? args.id : '';
+                    const patch = args.patch && typeof args.patch === 'object' && !Array.isArray(args.patch) ? args.patch : {};
+                    const connector = id ? updateConnector(workspaceRoot, id, patch) : undefined;
+                    return connector ? { ok: true, connector } : { ok: false, error: 'Connector not found.' };
+                }
+                catch (err) {
+                    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+                }
+            },
+            'action:connector-delete': (args) => {
+                const id = typeof args.id === 'string' ? args.id : '';
+                return { ok: id ? deleteConnector(workspaceRoot, id) : false };
+            },
+            'action:connector-export-definitions': (args) => {
+                try {
+                    const connectorIds = Array.isArray(args.connectorIds) ? args.connectorIds.filter((id) => typeof id === 'string') : undefined;
+                    const bundle = exportConnectorDefinitions(workspaceRoot, { connectorIds });
+                    return { ok: true, bundle, json: JSON.stringify(bundle, null, 2) };
+                }
+                catch (err) {
+                    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+                }
+            },
+            'action:connector-import-definitions': (args) => {
+                try {
+                    const input = typeof args.json === 'string' ? args.json : args.bundle;
+                    if (!input)
+                        return { ok: false, error: 'Connector definition JSON is required.' };
+                    const connectors = importConnectorDefinitions(workspaceRoot, input);
+                    return { ok: true, connectors };
+                }
+                catch (err) {
+                    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+                }
+            },
+            'action:connector-record-run': (args) => {
+                try {
+                    const run = recordConnectorRun(workspaceRoot, {
+                        connectorId: typeof args.connectorId === 'string' ? args.connectorId : '',
+                        flow: args.flow,
+                        status: args.status,
+                        documentsSeen: typeof args.documentsSeen === 'number' ? args.documentsSeen : undefined,
+                        documentsIndexed: typeof args.documentsIndexed === 'number' ? args.documentsIndexed : undefined,
+                        permissionsSeen: typeof args.permissionsSeen === 'number' ? args.permissionsSeen : undefined,
+                        permissionsIndexed: typeof args.permissionsIndexed === 'number' ? args.permissionsIndexed : undefined,
+                        failures: typeof args.failures === 'number' ? args.failures : undefined,
+                        error: typeof args.error === 'string' ? args.error : undefined,
+                        checkpointBefore: args.checkpointBefore && typeof args.checkpointBefore === 'object' && !Array.isArray(args.checkpointBefore) ? args.checkpointBefore : undefined,
+                        checkpointAfter: args.checkpointAfter && typeof args.checkpointAfter === 'object' && !Array.isArray(args.checkpointAfter) ? args.checkpointAfter : undefined,
+                    });
+                    return { ok: true, run, connector: getConnector(workspaceRoot, run.connectorId) ?? null };
+                }
+                catch (err) {
+                    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+                }
+            },
+            'action:connector-validate': async (args) => validateGithubConnector(typeof args.id === 'string' ? args.id : ''),
+            'action:connector-run': async (args) => runConnector(typeof args.id === 'string' ? args.id : ''),
+            'action:connector-index-memory': async (args) => indexConnectorMemory(typeof args.id === 'string' ? args.id : ''),
+            'action:connector-sync-permissions': async (args) => syncConnectorPermissions(typeof args.id === 'string' ? args.id : ''),
             // DESK-5d — current branch's PR, for the project-row status chip.
             // Quietly null when gh is missing, unauthenticated, or there is no PR.
             'git-pr': async () => {
                 const now = Date.now();
                 if (prCache && now - prCache.at < 60_000)
                     return { pr: prCache.pr };
-                const pr = await new Promise((resolve) => {
-                    exec('gh pr view --json number,state,title', { cwd: workspaceRoot, timeout: 4_000, maxBuffer: 200_000 }, (err, stdout) => {
-                        if (err) {
-                            resolve(null);
-                            return;
-                        }
-                        try {
-                            const j = JSON.parse(stdout);
-                            resolve(typeof j.number === 'number' ? { number: j.number, state: String(j.state ?? 'OPEN'), title: j.title } : null);
-                        }
-                        catch {
-                            resolve(null);
-                        }
-                    });
-                });
+                const view = await ghJson(['pr', 'view', '--json', 'number,state,title'], { timeout: 4_000, maxBuffer: 200_000 });
+                const j = view.data;
+                const pr = typeof j?.number === 'number' ? { number: j.number, state: String(j.state ?? 'OPEN'), title: j.title } : null;
                 prCache = { at: now, pr };
-                return { pr };
+                return view.error ? { pr, error: view.error } : { pr };
             },
             // T6 — GitHub CI/CD via gh. Read-only except action:git-actions-rerun-failed.
             // execFile (NO shell) + numeric-sanitized run ids + clamped limits. Every
             // call degrades to an empty/null payload when gh is missing/unauthed/no-PR,
             // so the panel shows "not connected" instead of erroring. This is GitHub's
             // real CI truth — the renderer keeps it SEPARATE from the local "tests passed".
-            'git-pr-detail': async () => new Promise((resolve) => {
-                execFile('gh', ['pr', 'view', '--json', 'number,state,title,url,headRefName,baseRefName,author,isDraft,mergeable,statusCheckRollup'], { cwd: workspaceRoot, timeout: 8_000, maxBuffer: 2_000_000 }, (err, stdout) => {
-                    if (err) {
-                        resolve({ pr: null });
-                        return;
-                    }
-                    try {
-                        resolve({ pr: JSON.parse(stdout) });
-                    }
-                    catch {
-                        resolve({ pr: null });
-                    }
-                });
-            }),
-            'git-pr-checks': async () => new Promise((resolve) => {
+            // Every OPEN PR in the repo (not just the current branch's) — powers the
+            // Review panel's "Pull Requests" tab. Includes the body so the panel can
+            // show PR content inline. Degrades to [] when gh is missing/unauthed.
+            'git-pr-list': async () => {
+                const list = await ghJson(['pr', 'list', '--state', 'open', '--limit', '50', '--json', 'number,title,state,url,headRefName,baseRefName,author,isDraft,body,updatedAt'], { timeout: 8_000, maxBuffer: 4_000_000, allowNonZeroJson: true });
+                return list.error ? { prs: [], error: list.error } : { prs: list.data ?? [] };
+            },
+            // §session-pr — a compact ALL-STATES PR list (open + merged + closed) keyed
+            // later by headRefName so the sidebar can show each session's PR status.
+            // Cached ~60s; degrades to [] when gh is missing/unauthed.
+            'git-pr-status-map': async () => {
+                const now = Date.now();
+                if (prStatusMapCache && now - prStatusMapCache.at < 60_000)
+                    return { prs: prStatusMapCache.prs };
+                const list = await ghJson(['pr', 'list', '--state', 'all', '--limit', '50', '--json', 'number,state,headRefName,isDraft,mergeable,url'], { timeout: 12_000, maxBuffer: 4_000_000, allowNonZeroJson: true });
+                const prs = list.data ?? [];
+                prStatusMapCache = { at: now, prs };
+                return list.error ? { prs, error: list.error } : { prs };
+            },
+            'git-pr-detail': async () => {
+                const view = await ghJson(['pr', 'view', '--json', 'number,state,title,url,headRefName,baseRefName,author,isDraft,mergeable,statusCheckRollup'], { timeout: 8_000, maxBuffer: 2_000_000 });
+                return view.error ? { pr: null, error: view.error } : { pr: view.data ?? null };
+            },
+            'git-pr-checks': async () => {
                 // `gh pr checks` exits non-zero when checks are pending/failing but still
                 // prints JSON — capture stdout regardless of the exit code.
-                execFile('gh', ['pr', 'checks', '--json', 'name,state,bucket,link,workflow,startedAt,completedAt'], { cwd: workspaceRoot, timeout: 8_000, maxBuffer: 2_000_000 }, (_err, stdout) => {
-                    try {
-                        resolve({ checks: JSON.parse(stdout) });
-                    }
-                    catch {
-                        resolve({ checks: [] });
-                    }
-                });
-            }),
-            'git-actions-runs': async (args) => new Promise((resolve) => {
+                const checks = await ghJson(['pr', 'checks', '--json', 'name,state,bucket,link,workflow,startedAt,completedAt'], { timeout: 8_000, maxBuffer: 2_000_000, allowNonZeroJson: true });
+                return checks.error ? { checks: [], error: checks.error } : { checks: checks.data ?? [] };
+            },
+            'git-actions-runs': async (args) => {
                 const limit = Math.min(Math.max(1, Number(args.limit) || 20), 50);
-                execFile('gh', ['run', 'list', '--limit', String(limit), '--json', 'databaseId,name,displayTitle,status,conclusion,workflowName,headBranch,event,createdAt,url'], { cwd: workspaceRoot, timeout: 9_000, maxBuffer: 4_000_000 }, (err, stdout) => {
-                    if (err) {
-                        resolve({ runs: [] });
-                        return;
-                    }
-                    try {
-                        resolve({ runs: JSON.parse(stdout) });
-                    }
-                    catch {
-                        resolve({ runs: [] });
-                    }
-                });
-            }),
-            'git-actions-run-detail': async (args) => new Promise((resolve) => {
+                const runs = await ghJson(['run', 'list', '--limit', String(limit), '--json', 'databaseId,name,displayTitle,status,conclusion,workflowName,headBranch,event,createdAt,url'], { timeout: 9_000, maxBuffer: 4_000_000 });
+                return runs.error ? { runs: [], error: runs.error } : { runs: runs.data ?? [] };
+            },
+            'git-actions-run-detail': async (args) => {
                 const id = String(args.id ?? '').replace(/[^0-9]/g, '');
-                if (!id) {
-                    resolve({ run: null });
-                    return;
-                }
-                execFile('gh', ['run', 'view', id, '--json', 'databaseId,name,displayTitle,status,conclusion,jobs,workflowName,headBranch,url,createdAt'], { cwd: workspaceRoot, timeout: 9_000, maxBuffer: 4_000_000 }, (err, stdout) => {
-                    if (err) {
-                        resolve({ run: null });
-                        return;
-                    }
-                    try {
-                        resolve({ run: JSON.parse(stdout) });
-                    }
-                    catch {
-                        resolve({ run: null });
-                    }
-                });
-            }),
-            'git-actions-run-log': async (args) => new Promise((resolve) => {
+                if (!id)
+                    return { run: null, error: 'No run id.' };
+                const run = await ghJson(['run', 'view', id, '--json', 'databaseId,name,displayTitle,status,conclusion,jobs,workflowName,headBranch,url,createdAt'], { timeout: 9_000, maxBuffer: 4_000_000 });
+                return run.error ? { run: null, error: run.error } : { run: run.data ?? null };
+            },
+            'git-actions-run-log': async (args) => {
                 const id = String(args.id ?? '').replace(/[^0-9]/g, '');
-                if (!id) {
-                    resolve({ log: '', error: 'no run id' });
-                    return;
-                }
+                if (!id)
+                    return { log: '', error: 'No run id.' };
                 const flag = args.failedOnly ? '--log-failed' : '--log';
-                execFile('gh', ['run', 'view', id, flag], { cwd: workspaceRoot, timeout: 15_000, maxBuffer: 8_000_000 }, (err, stdout, stderr) => {
-                    resolve({ log: String(stdout ?? '').slice(0, 200_000), error: err ? (String(stderr ?? '').trim() || 'gh run log failed') : undefined });
-                });
-            }),
-            'action:git-actions-rerun-failed': async (args) => new Promise((resolve) => {
+                const log = await ghText(['run', 'view', id, flag], { timeout: 15_000, maxBuffer: 8_000_000 });
+                return { log: log.stdout.slice(0, 200_000), error: log.ok ? undefined : (log.error ?? 'gh run log failed') };
+            },
+            'action:git-actions-rerun-failed': async (args) => {
                 const id = String(args.id ?? '').replace(/[^0-9]/g, '');
-                if (!id) {
-                    resolve({ ok: false, error: 'no run id' });
-                    return;
-                }
-                execFile('gh', ['run', 'rerun', id, '--failed'], { cwd: workspaceRoot, timeout: 10_000, maxBuffer: 200_000 }, (err, _stdout, stderr) => {
-                    resolve(err ? { ok: false, error: String(stderr ?? '').trim() || 'rerun failed' } : { ok: true, id });
-                });
-            }),
+                if (!id)
+                    return { ok: false, error: 'No run id.' };
+                const rerun = await ghText(['run', 'rerun', id, '--failed'], { timeout: 10_000, maxBuffer: 200_000 });
+                return rerun.ok ? { ok: true, id } : { ok: false, error: rerun.error ?? 'Rerun failed.' };
+            },
             'recap': (args) => {
                 const key = typeof args.sessionKey === 'string' ? args.sessionKey : activeAgent.sessionKey;
                 // OOM-safe: recap summarizes recent state — a bounded tail is enough.
@@ -1376,6 +2184,151 @@ async function main() {
             // round-tripping. All escape/symlink/stale guards live in fsRead.ts.
             'file-read': (args) => readWorkspaceEntry(workspaceRoot, typeof args.path === 'string' ? args.path : ''),
             'file-stat': (args) => statWorkspaceEntry(workspaceRoot, typeof args.path === 'string' ? args.path : ''),
+            // §2 Write mode — save a prose file through the same guarded write the
+            // editor uses (writeWorkspaceEntry: escape/symlink/stale guards in fsRead).
+            'write-save': (args) => writeWorkspaceEntry(workspaceRoot, typeof args.path === 'string' ? args.path : '', typeof args.content === 'string' ? args.content : ''),
+            // §2 W3 — Write-mode selection inline AI. A one-shot, read-only model call
+            // (no tools) that polishes / rewrites / continues the selected prose; the
+            // panel reviews the result as an accept/reject diff before it lands.
+            'write-inline-ai': async (args) => {
+                const action = String(args.action ?? 'polish');
+                const text = typeof args.text === 'string' ? args.text : '';
+                if (!text.trim())
+                    return { text: '', error: 'No text selected.' };
+                const llm = llmForSession(activeAgent.sessionKey);
+                if (!llm || (!llm.apiKey && (llm.provider ?? 'openai') === 'openai')) {
+                    return { text: '', error: 'No model configured — set a provider/model (and API key) in Settings.' };
+                }
+                const system = 'You are a precise writing assistant. Return ONLY the revised prose — no preamble, no explanation, no surrounding code fences. Preserve Markdown formatting.';
+                const ask = action === 'continue'
+                    ? 'Continue the following text naturally, matching its voice and style. Return ONLY the continuation (it will be appended directly after the text).'
+                    : action === 'rewrite'
+                        ? 'Rewrite the following text to be clearer and better structured. Preserve the meaning and any Markdown.'
+                        : 'Lightly polish the following text: fix grammar, tighten wording, and improve flow. Preserve the meaning, voice, and any Markdown.';
+                let raw = '';
+                try {
+                    const resp = await callOpenAI(llm, [{ role: 'system', content: system }, { role: 'user', content: `${ask}\n\n---\n${text}` }], [], { effort: 'low' });
+                    raw = resp?.content ?? '';
+                }
+                catch (e) {
+                    return { text: '', error: `Model call failed: ${e instanceof Error ? e.message : String(e)}` };
+                }
+                let revised = raw.trim().replace(/^```[a-zA-Z]*\n?/, '').replace(/\n?```$/, '').trim();
+                if (action === 'continue')
+                    revised = text + (/\s$/.test(text) ? '' : ' ') + revised;
+                return { text: revised };
+            },
+            // §2 W4 — Write-mode ghost-text inline completion. A short, fast, read-only
+            // continuation of the text before the cursor; the editor renders it as a
+            // ghost suggestion (Tab accepts). Empty answer ⇒ no suggestion.
+            'write-ghost-complete': async (args) => {
+                const prefix = typeof args.prefix === 'string' ? args.prefix : '';
+                if (prefix.trim().length < 3)
+                    return { text: '' };
+                const llm = llmForSession(activeAgent.sessionKey);
+                if (!llm || (!llm.apiKey && (llm.provider ?? 'openai') === 'openai'))
+                    return { text: '' };
+                const system = 'You are an inline writing autocomplete. Continue the user\'s text by a few words up to one sentence. Return ONLY the continuation that comes immediately AFTER their text — never repeat their text, no quotes, no preamble. If nothing natural follows, return an empty string.';
+                let raw = '';
+                try {
+                    const resp = await callOpenAI(llm, [{ role: 'system', content: system }, { role: 'user', content: prefix.slice(-2000) }], [], { effort: 'low' });
+                    raw = resp?.content ?? '';
+                }
+                catch {
+                    return { text: '' };
+                }
+                // Keep it short + single-line so the ghost stays unobtrusive.
+                const text = raw.replace(/^\s+/, '').split('\n')[0].slice(0, 160);
+                return { text };
+            },
+            // §2 W5 — Write-mode assistant: a per-workspace thread (writeThreadKey, kept
+            // separate from code chats) grounded on the workspace's prose docs. The
+            // brain's recall is primary when online; here we add a cheap local keyword
+            // grounding over the Markdown files so the answer cites real workspace docs.
+            'write-assistant': async (args) => {
+                const question = typeof args.question === 'string' ? args.question : '';
+                if (!question.trim())
+                    return { text: '', error: 'Ask a question.' };
+                const llm = llmForSession(writeThreadKey(workspaceRoot));
+                if (!llm || (!llm.apiKey && (llm.provider ?? 'openai') === 'openai')) {
+                    return { text: '', error: 'No model configured — set a provider/model (and API key) in Settings.' };
+                }
+                let grounding = '';
+                try {
+                    const listed = await listWorkspaceFilesCached({ limit: 3000 });
+                    const mdPaths = (listed.files ?? [])
+                        .map((f) => (typeof f === 'string' ? f : f.path))
+                        .filter((p) => !!p && /\.(md|markdown|mdx|txt)$/i.test(p))
+                        .slice(0, 60);
+                    const docs = mdPaths
+                        .map((p) => { const r = readWorkspaceEntry(workspaceRoot, p); return { path: p, content: typeof r?.content === 'string' ? r.content : '' }; })
+                        .filter((d) => d.content.trim());
+                    const current = typeof args.currentPath === 'string' ? args.currentPath : undefined;
+                    grounding = buildGroundingBlock(pickLocalGrounding(question, docs, current, 3));
+                }
+                catch { /* grounding is best-effort */ }
+                const system = 'You are a writing assistant for this workspace. Be concise and practical.' +
+                    (grounding ? ' Ground your answer in the provided workspace documents and cite the source path when you rely on one.' : '');
+                const user = grounding ? `${grounding}\n\n---\nQuestion: ${question}` : question;
+                try {
+                    const resp = await callOpenAI(llm, [{ role: 'system', content: system }, { role: 'user', content: user }], [], { effort: 'low' });
+                    return { text: (resp?.content ?? '').trim(), grounded: !!grounding };
+                }
+                catch (e) {
+                    return { text: '', error: `Model call failed: ${e instanceof Error ? e.message : String(e)}` };
+                }
+            },
+            // §7 L4 — visual workflow canvas persistence (graphs under <stateDir>/workflows/).
+            'workflow-list': () => listWorkflowGraphs(workspaceRoot),
+            'workflow-save': (args) => saveWorkflowGraph(workspaceRoot, (args.graph ?? {})),
+            'workflow-load': (args) => loadWorkflowGraph(workspaceRoot, typeof args.id === 'string' ? args.id : ''),
+            'workflow-delete': (args) => ({ ok: deleteWorkflowGraph(workspaceRoot, typeof args.id === 'string' ? args.id : '') }),
+            // §5.9 — customizable keyboard shortcuts: read/persist user overrides in
+            // cli.shortcuts (action id → neutral combo). Both heads read the same file.
+            'shortcuts-get': () => {
+                const cli = loadConfig().cli;
+                return { overrides: (cli?.shortcuts && typeof cli.shortcuts === 'object') ? cli.shortcuts : {} };
+            },
+            'shortcuts-save': (args) => {
+                const raw = (args.overrides && typeof args.overrides === 'object') ? args.overrides : {};
+                const clean = {};
+                for (const [k, v] of Object.entries(raw))
+                    if (typeof v === 'string' && v.trim())
+                        clean[k] = v.trim();
+                const fresh = loadConfig();
+                fresh.cli = { ...(fresh.cli ?? {}), shortcuts: clean };
+                saveConfig(fresh);
+                _resetCliKnobsCache();
+                return { ok: true, overrides: clean };
+            },
+            // §5.3 Memory panel — search the brain memory engine via the MCP tool.
+            // Robust to the loose memory_search shape: structured records when it
+            // returns JSON, otherwise the raw text. Surfaces a clear "is the brain
+            // connected?" error when the MCP isn't available.
+            'memory-search': async (args) => {
+                try {
+                    const result = await mcpClient.callTool('memory_search', { query: typeof args.query === 'string' ? args.query : '' });
+                    const text = typeof result === 'string'
+                        ? result
+                        : (result?.content?.[0]?.text ?? JSON.stringify(result));
+                    try {
+                        const parsed = JSON.parse(text);
+                        const records = Array.isArray(parsed)
+                            ? parsed
+                            : (parsed?.records
+                                ?? parsed?.results
+                                ?? parsed?.memories
+                                ?? []);
+                        return { records, raw: Array.isArray(records) && records.length ? '' : text };
+                    }
+                    catch {
+                        return { records: [], raw: text };
+                    }
+                }
+                catch (e) {
+                    return { records: [], error: e instanceof Error ? e.message : String(e) };
+                }
+            },
             // DESK-4j — branch picker (pattern: branch chip with dropdown in the
             // composer context row). Listing is read-only; checkout runs through
             // the same user-command path as the terminal input.
@@ -1604,19 +2557,37 @@ async function main() {
             // Pull repo collaborators into the roster (role-mapped). Token resolved
             // server-side; never returned to the renderer.
             'track-sync-members': async (a) => {
-                const cfg = resolveGithubConfig(typeof a.repo === 'string' ? a.repo : undefined);
+                const cfg = resolveGithubConfigForWorkspace(workspaceRoot, typeof a.repo === 'string' ? a.repo : undefined);
                 if (!cfg.repo)
-                    return { error: 'No repository configured. Set one in Settings → Integrations → GitHub.' };
+                    return { error: 'No repository configured. Set one in Settings → Connectors → GitHub Track sync.' };
                 if (!cfg.token)
-                    return { error: 'No token. Add one in Settings → Integrations → GitHub.' };
+                    return { error: 'No token. Add one in Settings → Connectors → GitHub Track sync, set GITHUB_TOKEN/GH_TOKEN, or use a static token ref in Settings → Connectors.' };
                 return await importMembersFromGithub(workspaceRoot, { repo: cfg.repo, token: cfg.token, fetchImpl: fetch, dryRun: a.dryRun === true });
             },
             // External sync — GitHub Issues. The token is resolved server-side from
             // config.json/env and NEVER returned to the renderer.
             'track-sync-config': () => {
-                const c = resolveGithubConfig();
-                return { repo: c.repo ?? null, hasToken: !!c.token, tokenSource: c.tokenSource ?? null };
+                return githubIntegrationSnapshot(workspaceRoot);
             },
+            // Git-backed Track workflow — local repository context and branch start,
+            // independent of GitHub tokens. Remote parsing is context only; mutation is
+            // done through local git + Track's codeLinks.
+            'track-git-context': () => readGitTrackContext(workspaceRoot),
+            'track-start-work': (a) => {
+                ensureProject(workspaceRoot);
+                const result = startGitWorkForTrackItem(workspaceRoot, String(a.idOrKey ?? ''), {
+                    branchName: typeof a.branchName === 'string' ? a.branchName : undefined,
+                    createBranch: a.createBranch !== false,
+                    actor: 'user',
+                });
+                return { ...result, items: listWorkItems(workspaceRoot) };
+            },
+            'track-pr-status': async () => readTrackPrStatus(),
+            'track-create-pr': async (a) => createTrackDraftPr(String(a.idOrKey ?? '')),
+            'track-gh-issues-import': async (a) => importTrackIssuesFromGh(a),
+            'track-merge-pr': async () => mergeCurrentTrackPr(),
+            'track-submit-pr-review': async (a) => submitTrackPrReview(a),
+            'track-fix-failing-checks': async () => fixCurrentTrackPrChecks(),
             // BR-123 commit scanner — link commits to items + advance todo→in-progress.
             'track-scan-commits': () => {
                 ensureProject(workspaceRoot);
@@ -1626,16 +2597,129 @@ async function main() {
             'track-sync': async (a) => {
                 const direction = a.direction === 'export' ? 'export' : 'import';
                 const dryRun = a.dryRun !== false; // default to dry-run unless explicitly false
-                const cfg = resolveGithubConfig(typeof a.repo === 'string' ? a.repo : undefined);
+                const cfg = resolveGithubConfigForWorkspace(workspaceRoot, typeof a.repo === 'string' ? a.repo : undefined);
                 if (!cfg.repo)
-                    return { error: 'No repository configured. Set one in Settings → Integrations → GitHub.' };
+                    return { error: 'No repository configured. Set one in Settings → Connectors → GitHub Track sync.' };
                 if (!cfg.token)
-                    return { error: 'No token. Add one in Settings → Integrations → GitHub.' };
+                    return { error: 'No token. Add one in Settings → Connectors → GitHub Track sync, set GITHUB_TOKEN/GH_TOKEN, or use a static token ref in Settings → Connectors.' };
                 const opts = { repo: cfg.repo, token: cfg.token, fetchImpl: fetch, dryRun };
                 return direction === 'export' ? await exportToGithub(workspaceRoot, opts) : await importFromGithub(workspaceRoot, opts);
             },
             // links). Thin wrappers over the CLI's requirementStore (already unit-tested)
             // so the desktop panel and the terminal CLI share the same requirements.json.
+            // ATLAS — the codebase knowledge graph. `atlas-graph` loads the stored
+            // artifact (or null); `atlas-build` runs the deterministic builder, saves,
+            // and returns the fresh graph so the panel renders without a second fetch.
+            // REMOTE-BRAIN Phase 3d — with a remote brain configured (cli.brainUrl),
+            // the brain is the source of truth: pull the stored graph (caching it
+            // locally) and fall back to the local artifact when absent/unreachable.
+            'atlas-graph': async () => {
+                if (getCliKnobs().brainUrl) {
+                    const remote = await callBrainAtlas('atlas_get', { workspaceTag: atlasWorkspaceTag(workspaceRoot) });
+                    if (remote?.found && remote.graph) {
+                        saveAtlasGraph(workspaceRoot, remote.graph);
+                        return remote.graph;
+                    }
+                }
+                return readAtlasGraph(workspaceRoot);
+            },
+            'atlas-build': async () => {
+                const graph = buildBaseGraph(workspaceRoot);
+                saveAtlasGraph(workspaceRoot, graph);
+                // Sync the fresh build up so other clients / the dashboard can serve it.
+                if (getCliKnobs().brainUrl)
+                    await callBrainAtlas('atlas_put', { workspaceTag: atlasWorkspaceTag(workspaceRoot), graph });
+                return { graph, stats: atlasGraphStats(graph) };
+            },
+            // `atlas-enrich` layers LLM understanding (summaries, tags, layers, tour)
+            // onto the base graph using the active session's model. Builds the base
+            // graph first if none exists. Best-effort — degrades, never throws.
+            'atlas-enrich': async () => {
+                let graph = readAtlasGraph(workspaceRoot);
+                if (!graph) {
+                    graph = buildBaseGraph(workspaceRoot);
+                    saveAtlasGraph(workspaceRoot, graph);
+                }
+                const llm = llmForSession(activeAgent.sessionKey);
+                if (!llm || (!llm.apiKey && (llm.provider ?? 'openai') === 'openai')) {
+                    return { error: 'No model configured — set a provider/model (and API key) in Settings before enriching the atlas.' };
+                }
+                const caller = async ({ system, user, signal, tool }) => {
+                    // STRUCTURED OUTPUT — forward the enrich tool as a forced tool_choice so
+                    // output is schema-shaped + consistent across models (mirrors the CLI
+                    // adapter); fall back to message content when the model answers inline.
+                    const tools = tool ? [{ name: tool.name, description: tool.description ?? '', inputSchema: tool.parameters }] : [];
+                    const resp = await callOpenAI(llm, [
+                        { role: 'system', content: system },
+                        { role: 'user', content: user },
+                    ], tools, { effort: 'low', signal, ...(tool ? { tool_choice: { type: 'function', function: { name: tool.name } } } : {}) });
+                    const argsText = resp?.tool_calls?.[0]?.function?.arguments;
+                    if (typeof argsText === 'string' && argsText.trim())
+                        return argsText;
+                    return resp?.content ?? '';
+                };
+                const res = await enrichAtlasGraph(graph, caller);
+                saveAtlasGraph(workspaceRoot, res.graph);
+                if (getCliKnobs().brainUrl)
+                    await callBrainAtlas('atlas_put', { workspaceTag: atlasWorkspaceTag(workspaceRoot), graph: res.graph });
+                return {
+                    graph: res.graph,
+                    stats: atlasGraphStats(res.graph),
+                    enrichResult: { summarized: res.summarized, layers: res.layers, tourSteps: res.tourSteps, batchesFailed: res.batchesFailed },
+                };
+            },
+            // `atlas-explain-change` reviews ONE uncommitted file with the model:
+            // returns a plain-English summary, a risk level, a review checklist, and
+            // concerns — so an engineer can understand an AI edit before committing.
+            'atlas-explain-change': async (a) => {
+                const path = String(a.path ?? '');
+                if (!path)
+                    return { error: 'No file path given.' };
+                const llm = llmForSession(activeAgent.sessionKey);
+                if (!llm || (!llm.apiKey && (llm.provider ?? 'openai') === 'openai')) {
+                    return { error: 'No model configured — set a provider/model (and API key) in Settings.' };
+                }
+                // Working-tree diff vs HEAD; fall back to file content for untracked files.
+                let diff = await git(['diff', '--no-color', 'HEAD', '--', path], workspaceRoot).catch(() => '');
+                if (!diff.trim()) {
+                    let content = '';
+                    try {
+                        content = (await import('node:fs')).readFileSync(`${workspaceRoot}/${path}`, 'utf8');
+                    }
+                    catch {
+                        content = '';
+                    }
+                    diff = content ? `NEW/UNTRACKED FILE ${path}:\n${content.slice(0, 16000)}` : '';
+                }
+                if (!diff.trim())
+                    return { error: 'No diff available for this file.' };
+                const system = 'You are a senior engineer reviewing an AI-generated code change before commit. Be specific and terse. Answer ONLY with JSON, no prose, no fences.';
+                const user = [
+                    `File: ${path}`,
+                    'Review this change and return EXACTLY this JSON shape:',
+                    '{"summary":"1-2 sentences on what changed and why","risk":"low|medium|high","checklist":["what a reviewer should verify", "..."],"concerns":["specific risks/bugs/omissions, [] if none"]}',
+                    '',
+                    'Diff (truncated):',
+                    diff.slice(0, 16000),
+                ].join('\n');
+                let raw = '';
+                try {
+                    const resp = await callOpenAI(llm, [{ role: 'system', content: system }, { role: 'user', content: user }], [], { effort: 'low' });
+                    raw = resp?.content ?? '';
+                }
+                catch (e) {
+                    return { path, error: `Model call failed: ${e instanceof Error ? e.message : String(e)}` };
+                }
+                const parsed = extractAtlasJson(raw);
+                if (!parsed || typeof parsed !== 'object')
+                    return { path, error: 'Could not parse the model response.' };
+                const arr = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string').slice(0, 8) : []);
+                const risk = ['low', 'medium', 'high'].includes(String(parsed.risk)) ? String(parsed.risk) : 'medium';
+                return {
+                    path,
+                    assessment: { summary: typeof parsed.summary === 'string' ? parsed.summary : '', risk, checklist: arr(parsed.checklist), concerns: arr(parsed.concerns) },
+                };
+            },
             'requirement-list': () => listRequirements(workspaceRoot),
             'requirement-create': async (a) => {
                 const created = createRequirement(workspaceRoot, { title: String(a.title ?? ''), sessionKey: activeAgent.sessionKey });
@@ -2075,12 +3159,11 @@ async function main() {
                 const cli = fresh.cli;
                 const mcpStatuses = new Map(mcpClient.getStatuses().map((s) => [s.serverId, s]));
                 const providerEntries = Object.entries(fresh.providers ?? {});
-                const defaultProviderName = providerEntries.find(([, p]) => p.provider === fresh.llm?.provider &&
-                    p.model === fresh.llm?.model &&
-                    (p.endpoint ?? null) === (fresh.llm?.endpoint ?? null) &&
-                    p.apiKey === fresh.llm?.apiKey)?.[0] ?? null;
+                const defaultProviderMatch = matchingDefaultProvider(fresh.providers, fresh.llm);
+                const defaultProviderName = defaultProviderMatch.name;
                 const workspacePrefs = readPreferences(workspaceRoot);
                 const activeMode = resolveActiveMode(workspaceRoot, activeAgent.sessionKey);
+                const connectorItems = listConnectors(workspaceRoot);
                 return {
                     model: fresh.llm?.model ?? llm.model,
                     provider: fresh.llm?.provider ?? llm.provider,
@@ -2093,7 +3176,18 @@ async function main() {
                     sessionMode: getSessionMode(workspaceRoot, activeAgent.sessionKey),
                     modeScope: 'session',
                     cli: scrubCliSecrets(fresh.cli),
-                    integrations: { github: (() => { const g = resolveGithubConfig(); return { repo: g.repo ?? null, hasToken: !!g.token, tokenSource: g.tokenSource ?? null }; })() },
+                    integrations: { github: githubIntegrationSnapshot(workspaceRoot) },
+                    connectors: {
+                        catalog: listConnectorCatalog(),
+                        items: connectorItems,
+                        documentCounts: Object.fromEntries(connectorItems.map((connector) => [connector.id, countConnectorDocuments(workspaceRoot, { connectorId: connector.id })])),
+                        permissionCounts: Object.fromEntries(connectorItems.map((connector) => [connector.id, countConnectorPermissions(workspaceRoot, { connectorId: connector.id })])),
+                        runPreviews: Object.fromEntries(connectorItems.map((connector) => [connector.id, listConnectorRuns(workspaceRoot, connector.id).slice(0, 3)])),
+                        documentPreviews: Object.fromEntries(connectorItems.map((connector) => [
+                            connector.id,
+                            retrieveConnectorSlimDocuments(workspaceRoot, { connectorId: connector.id, limit: 3, maxSnippetChars: 180 }),
+                        ])),
+                    },
                     permissionRules: { allow: cli?.permissions?.allow ?? [], deny: cli?.permissions?.deny ?? [] },
                     hooks: readHooks(workspaceRoot),
                     servers: Object.entries(fresh.servers ?? {}).map(([id, cfg]) => {
@@ -2114,8 +3208,9 @@ async function main() {
                     activeServer: fresh.activeServer ?? null, // WS9 — which brainrouter server is the ACTIVE brain (only one)
                     // §multi-provider — named providers (API KEYS MASKED, never sent to the
                     // renderer) + the per-sub-agent-role model routing.
-                    providers: providerEntries.map(([name, p]) => ({ name, provider: p.provider, model: p.model, endpoint: p.endpoint ?? null, hasKey: !!p.apiKey })),
+                    providers: providerEntries.map(([name, p]) => ({ name, provider: p.provider, model: p.model, endpoint: p.endpoint ?? null, hasKey: !!p.apiKey, models: p.models ?? [], apiVersion: p.apiVersion ?? null })),
                     defaultProviderName,
+                    defaultProviderModelMatches: defaultProviderMatch.modelMatches,
                     agentModels: Object.entries(fresh.agentModels ?? {}).map(([role, a]) => ({ role, provider: a.provider ?? null, model: a.model ?? null })),
                     // The known-provider catalog (same list the CLI wizard picks from) so the
                     // main provider is CHOSEN, not hand-typed — picking one prefills its
@@ -2123,7 +3218,7 @@ async function main() {
                     providerCatalog: PROVIDER_CATALOG.map((p) => ({ id: p.id, label: p.label, endpoint: p.endpoint, local: p.local })),
                     // §settings-completeness — the raw cli.* block so the Advanced section can
                     // show current knob values (no key here; values are config, not secrets).
-                    cliKnobs: (cli ?? {}),
+                    cliKnobs: scrubCliSecrets(cli),
                     // EXTENSIONS — discovered extensions + workspace trust, for the
                     // Settings → Extensions section (toggle/trust refresh this snapshot).
                     extensions: {
@@ -2169,7 +3264,7 @@ async function main() {
                 const sizeEstimate = Math.round(transcriptSizeBytes(workspaceRoot, activeAgent.sessionKey) / 4);
                 const used = Math.max(agentTokens, sizeEstimate);
                 const model = activeAgent.getModel?.() ?? llm.model;
-                const window = contextWindowFor(model) ?? 0;
+                const window = contextWindowForBudget(model);
                 const compactAt = getCliKnobs().autoCompactTokens || 80_000;
                 const limit = compactAt > 0 ? compactAt : window;
                 return { used, window, compactAt, limit, pct: limit > 0 ? Math.min(1, used / limit) : 0 };
@@ -2627,35 +3722,90 @@ async function main() {
                 const next = parsed;
                 // The renderer's view is scrubbed of secrets, so a whole-block save would
                 // wipe the GitHub token. Carry it forward when the incoming JSON omits it.
-                const prevToken = fresh.cli?.track?.githubToken;
+                const prevTrack = fresh.cli?.track;
+                const prevToken = prevTrack?.githubToken;
                 const nextTrack = (next.track && typeof next.track === 'object' ? next.track : undefined);
                 if (prevToken && (!nextTrack || nextTrack.githubToken === undefined)) {
                     next.track = { ...(nextTrack ?? {}), githubToken: prevToken };
                 }
+                const prevRepoTokens = new Map();
+                for (const entry of prevTrack?.githubRepos ?? []) {
+                    if (entry.repo && entry.token)
+                        prevRepoTokens.set(entry.repo, entry.token);
+                }
+                if (prevRepoTokens.size) {
+                    const targetTrack = ((next.track && typeof next.track === 'object') ? next.track : {});
+                    if (Array.isArray(targetTrack.githubRepos)) {
+                        targetTrack.githubRepos = targetTrack.githubRepos.map((entry) => {
+                            const repo = typeof entry?.repo === 'string' ? entry.repo : '';
+                            if (!repo || entry.token !== undefined)
+                                return entry;
+                            const token = prevRepoTokens.get(repo);
+                            return token ? { ...entry, token } : entry;
+                        });
+                    }
+                    else if (!nextTrack || nextTrack.githubRepos === undefined) {
+                        targetTrack.githubRepos = prevTrack?.githubRepos;
+                    }
+                    next.track = targetTrack;
+                }
                 fresh.cli = next;
                 saveConfig(fresh);
+                _resetCliKnobsCache();
                 return { ok: true };
             },
-            // Settings → Integrations: persist the Track GitHub config. The token is
+            // Settings → Connectors: persist the Track GitHub config. The token is
             // write-only (set when non-empty, kept otherwise) and never read back.
             'action:set-track-github': (args) => {
                 const fresh = loadConfig();
                 const cli = (fresh.cli = fresh.cli ?? {});
                 const track = (cli.track = cli.track ?? {});
-                if (typeof args.repo === 'string') {
-                    const r = args.repo.trim();
-                    if (r)
-                        track.githubRepo = r;
+                if (typeof args.caBundle === 'string' || args.caBundle === null) {
+                    const ca = typeof args.caBundle === 'string' ? args.caBundle.trim() : '';
+                    if (ca)
+                        track.githubCaBundle = ca;
                     else
-                        delete track.githubRepo;
+                        delete track.githubCaBundle;
+                    ghEnvCache = null;
                 }
-                if (typeof args.token === 'string' && args.token.trim())
-                    track.githubToken = args.token.trim();
-                if (args.clearToken === true)
+                let repos = normalizeTrackGithubRepos(track);
+                if (typeof args.removeRepo === 'string') {
+                    const removeRepo = args.removeRepo.trim();
+                    const wasActive = track.activeGithubRepo === removeRepo || track.githubRepo === removeRepo;
+                    repos = repos.filter((r) => r.repo !== removeRepo);
+                    if (wasActive) {
+                        delete track.githubToken;
+                        track.activeGithubRepo = repos[0]?.repo;
+                    }
+                }
+                if (typeof args.repo === 'string') {
+                    const repo = args.repo.trim();
+                    if (repo) {
+                        const idx = repos.findIndex((r) => r.repo === repo);
+                        const nextEntry = idx >= 0 ? { ...repos[idx] } : { repo };
+                        if (typeof args.token === 'string' && args.token.trim())
+                            nextEntry.token = args.token.trim();
+                        if (args.clearToken === true) {
+                            delete nextEntry.token;
+                            if (track.githubRepo === repo || track.activeGithubRepo === repo)
+                                delete track.githubToken;
+                        }
+                        if (idx >= 0)
+                            repos[idx] = nextEntry;
+                        else
+                            repos.push(nextEntry);
+                        if (args.makeActive === true || !track.activeGithubRepo)
+                            track.activeGithubRepo = repo;
+                    }
+                }
+                else if (args.clearToken === true) {
                     delete track.githubToken;
+                }
+                track.githubRepos = repos;
+                syncLegacyTrackGithubFields(track);
                 saveConfig(fresh);
-                const cfg = resolveGithubConfig();
-                return { ok: true, repo: cfg.repo ?? null, hasToken: !!cfg.token, tokenSource: cfg.tokenSource ?? null };
+                _resetCliKnobsCache();
+                return { ok: true, ...githubIntegrationSnapshot(workspaceRoot) };
             },
             // §settings-completeness — set ONE cli.* knob (vs set-cli-json's whole-block
             // replace). `value: null` deletes the key (reverts to the default). Shared
@@ -2690,6 +3840,7 @@ async function main() {
                 else
                     cli[key] = args.value;
                 saveConfig(fresh);
+                _resetCliKnobsCache();
                 return { ok: true, key };
             },
             // §multi-provider — add/update a NAMED OpenAI-compatible provider. A blank
@@ -2702,11 +3853,27 @@ async function main() {
                 const fresh = loadConfig();
                 const existing = fresh.providers?.[name];
                 const providerId = typeof args.provider === 'string' && args.provider.trim() ? args.provider.trim() : (existing?.provider ?? 'openai');
+                // §multi-select-models — the renderer sends the checked allowlist. Three
+                // cases on EDIT: omitted (undefined) keeps the existing allowlist; an
+                // explicit array (incl. []) replaces it; [] clears it. normalizeProviderModels
+                // then enforces the invariant "default model ∈ models" (self-healing to
+                // models[0]) so the single default and the allowlist can never disagree.
+                const rawModels = Array.isArray(args.models)
+                    ? args.models.filter((m) => typeof m === 'string')
+                    : undefined;
+                const allowlist = rawModels !== undefined ? rawModels : existing?.models;
+                const rawModel = typeof args.model === 'string' && args.model.trim() ? args.model.trim() : (existing?.model ?? '');
+                const { model, models } = normalizeProviderModels(rawModel, allowlist);
+                // Optional Azure-style api-version: explicit string sets/keeps it, '' clears,
+                // omitted (undefined) preserves the existing value.
+                const apiVersion = typeof args.apiVersion === 'string' ? args.apiVersion.trim() : existing?.apiVersion;
                 const llmCfg = {
                     provider: providerId,
                     apiKey: typeof args.apiKey === 'string' && args.apiKey.trim() ? args.apiKey.trim() : (existing?.apiKey ?? ''),
-                    model: typeof args.model === 'string' && args.model.trim() ? args.model.trim() : (existing?.model ?? ''),
+                    model,
                     endpoint: typeof args.endpoint === 'string' ? (args.endpoint.trim() || PROVIDER_CATALOG.find((p) => p.id === providerId)?.endpoint || undefined) : (existing?.endpoint ?? PROVIDER_CATALOG.find((p) => p.id === providerId)?.endpoint),
+                    ...(models ? { models } : {}),
+                    ...(apiVersion ? { apiVersion } : {}),
                 };
                 if (!llmCfg.model)
                     return { ok: false, error: 'A model is required.' };
@@ -2751,13 +3918,10 @@ async function main() {
                 const provider = typeof args.provider === 'string' ? args.provider.trim() : '';
                 const model = typeof args.model === 'string' ? args.model.trim() : '';
                 const fresh = loadConfig();
-                const defaultProviderName = Object.entries(fresh.providers ?? {}).find(([, p]) => p.provider === fresh.llm?.provider &&
-                    p.model === fresh.llm?.model &&
-                    (p.endpoint ?? null) === (fresh.llm?.endpoint ?? null) &&
-                    p.apiKey === fresh.llm?.apiKey)?.[0];
+                const defaultProviderName = matchingDefaultProvider(fresh.providers, fresh.llm).name ?? undefined;
                 const providerCfg = provider ? fresh.providers?.[provider] : undefined;
                 const duplicatesMain = (!provider && (!model || model === fresh.llm?.model)) ||
-                    (!!provider && provider === defaultProviderName && (!model || model === providerCfg?.model));
+                    (!!provider && provider === defaultProviderName && (!model || model === fresh.llm?.model || model === providerCfg?.model));
                 saveConfig(setAgentModel(fresh, role, duplicatesMain ? {} : { provider, model }));
                 return { ok: true, role, cleared: duplicatesMain };
             },
@@ -2787,10 +3951,31 @@ async function main() {
                     return { models: cached.models, current, provider: provName };
                 // Public/anonymous tier (opencode "public") — list free models with no key.
                 const fallbackKey = PROVIDER_CATALOG.find((p) => p.id === (l.provider ?? '').toLowerCase())?.defaultApiKey ?? '';
-                const models = await fetchEndpointModels(l.endpoint, (l.apiKey && l.apiKey.trim()) ? l.apiKey : fallbackKey);
+                const { models } = await fetchEndpointModels(l.endpoint, (l.apiKey && l.apiKey.trim()) ? l.apiKey : fallbackKey, l.apiVersion);
                 if (models.length)
                     modelsCacheByKey.set(cacheKey, { models, at: now });
                 return { models: models.length ? models : (cached?.models ?? []), current, provider: provName };
+            },
+            // §multi-select-models — probe a provider's GET /models with the DRAFT key
+            // the user just typed in the setup dialog (NOT a saved provider's stored
+            // key), so the dialog can show how many models that key unlocks BEFORE the
+            // provider is saved. Endpoint resolves explicit → catalog(provider id) →
+            // active llm. Deliberately does NOT read or write `modelsCacheByKey` (that
+            // 60s cache is for saved providers / the active llm — a draft-key probe must
+            // never poison it) and never persists config. Reuses the same
+            // fetchEndpointModels contract (5s timeout, Bearer, `local` for blank keys).
+            'list-models-probe': async (a) => {
+                const endpoint = typeof a?.endpoint === 'string' ? a.endpoint.trim() : '';
+                const apiKey = typeof a?.apiKey === 'string' ? a.apiKey : '';
+                const apiVersion = typeof a?.apiVersion === 'string' ? a.apiVersion : '';
+                const provId = typeof a?.provider === 'string' ? a.provider : '';
+                const ep = endpoint || PROVIDER_CATALOG.find((p) => p.id === provId)?.endpoint || loadConfig().llm?.endpoint || '';
+                const { models, status, error } = await fetchEndpointModels(ep || undefined, apiKey, apiVersion);
+                // Surface WHY a probe came back empty so the dialog can validate the key:
+                // a 4xx (esp. 401/403) means the key/endpoint was rejected; 'unreachable'
+                // means the request never landed. A 200 with no models needs no reason.
+                const reason = error ? 'unreachable' : (typeof status === 'number' && status >= 400 ? `http-${status}` : undefined);
+                return { models, count: models.length, provider: provId || null, probe: true, ...(reason ? { error: reason } : {}) };
             },
             // DESK-5c — real terminal sessions (offset-poll streaming).
             'term-open': () => {
@@ -3020,10 +4205,12 @@ async function main() {
                 const what = typeof args.what === 'string' ? args.what : '';
                 const root = workspaceRoot;
                 const sh = (cmd) => new Promise((resolve) => exec(cmd, { cwd: root, timeout: 8_000 }, () => resolve()));
-                const q = (s) => `'${s.replace(/'/g, "'\\''")}'`;
                 const isWin = process.platform === 'win32', isMac = process.platform === 'darwin';
+                // HOTFIX — cmd.exe does NOT strip single quotes, so an arg must be double-
+                // quoted on Windows or the opener silently fails (PR/CI links never opened).
+                const q = (s) => shellQuoteArg(s, isWin);
                 // T6 — open an explicit URL (CI/check/run links). https-only so a malicious
-                // gh payload can't smuggle a file:// or shell-ish scheme; single-quoted.
+                // gh payload can't smuggle a file:// or shell-ish scheme; shell-quoted.
                 const url = typeof args.url === 'string' ? args.url : '';
                 if (url) {
                     if (!/^https:\/\/[^\s'"]+$/.test(url))
@@ -3050,10 +4237,20 @@ async function main() {
                 return { ok: false, what };
             },
         },
-        onShutdown: () => { stopWorkspaceWatcher(); void mcpClient.close?.(); process.exit(0); },
+        onShutdown: () => {
+            clearInterval(connectorSchedulerTimer);
+            clearTimeout(connectorSchedulerBootTimer);
+            stopWorkspaceWatcher();
+            void mcpClient.close?.();
+            process.exit(0);
+        },
     });
     if (port)
-        port.on('message', (e) => { void core.handle(e.data); });
+        port.on('message', (e) => {
+            if (computerUseBridge?.handleMessage(e.data))
+                return;
+            void core.handle(e.data);
+        });
     // DESK-5d/5u — boot announcement. Emitted AFTER the message listener is
     // attached, so a renderer that waits for it can safely start querying. The
     // renderer treats a fresh `session-changed` as "reset surfaces".

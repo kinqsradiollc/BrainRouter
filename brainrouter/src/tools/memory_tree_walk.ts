@@ -71,7 +71,7 @@ export async function handleMemoryTreeWalk(args: any, options?: { defaultUserId?
         return toolResult({ parent });
       }
       default:
-        return toolResult(memoryEngine.treeWalk(userId, params.nodeId, params.kind));
+        return toolResult(await memoryEngine.treeWalk(userId, params.nodeId, params.kind));
     }
   } catch (err) {
     return toolError("memory_tree_walk", err);

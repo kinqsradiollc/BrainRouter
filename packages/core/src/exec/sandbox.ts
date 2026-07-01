@@ -48,6 +48,48 @@ export interface SandboxConfig {
    * Surfaced so the agent can badge the run as "(enforced: unattended)".
    */
   enforcedUnattended?: boolean;
+  /**
+   * HONK-H0 — when set, the scrubbed environment a sandboxed shell runs with
+   * (secret-shaped vars removed). Absent → the command inherits the full env.
+   */
+  scopedEnv?: NodeJS.ProcessEnv;
+}
+
+// HONK-H0 — best-effort secret scrubbing for an unattended/fleet shell's env. This
+// is DEFENSE-IN-DEPTH, not a hermetic barrier: the real containment for fleet runs
+// is the forced sandbox + network-deny. It removes env-borne secrets so a
+// compromised child can't trivially `printenv` the host's keys; it does NOT cover
+// file-borne secrets (e.g. ~/.aws, the CLI config) and the shapes below are not
+// exhaustive. Substring name-matching is intentional (fails CLOSED: over-scrubs a
+// benign var rather than leaking a real one); the operator re-grants specific vars
+// a job needs with cli.jobSecretAllowlist.
+const SECRET_ENV_NAME = /(KEY|TOKEN|SECRET|PASSWORD|PASSWD|\bPWD\b|PWD$|PASSPHRASE|CREDENTIAL|PRIVATE|BEARER|AUTH|SESSION|COOKIE|APIKEY|_DSN)/i;
+const SECRET_ENV_VALUE = new RegExp(
+  [
+    'br_[A-Za-z0-9._-]{8,}', 'sk-[A-Za-z0-9._-]{8,}', 'gh[pousr]_[A-Za-z0-9]{16,}', // BrainRouter / OpenAI / GitHub
+    'AKIA[0-9A-Z]{16}', 'xox[baprs]-[A-Za-z0-9-]{10,}', 'AIza[0-9A-Za-z_-]{20,}', // AWS / Slack / Google
+    '[A-Za-z][A-Za-z0-9+.-]*://[^/\\s:@]+:[^/\\s@]+@', // url with user:password@host (DATABASE_URL/REDIS_URL)
+    'eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}', // JWT
+  ].join('|'),
+);
+
+/**
+ * HONK-H0 — return a copy of `env` with secret-shaped variables removed (best
+ * effort; see SECRET_ENV_NAME). A var is dropped when its NAME contains a secret
+ * keyword or its VALUE matches a known token/credential shape, unless its name is
+ * in `allow` (case-insensitive). Non-secret vars (PATH, HOME, LANG, …) pass
+ * through so the shell still works. Pure — never reads `process.env` itself.
+ */
+export function scopeSecretEnv(env: NodeJS.ProcessEnv, opts?: { allow?: string[] }): NodeJS.ProcessEnv {
+  const allow = new Set((opts?.allow ?? []).map((s) => s.trim().toLowerCase()).filter(Boolean));
+  const out: NodeJS.ProcessEnv = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (allow.has(name.toLowerCase())) { out[name] = value; continue; }
+    if (SECRET_ENV_NAME.test(name)) continue;
+    if (typeof value === 'string' && SECRET_ENV_VALUE.test(value.trim())) continue;
+    out[name] = value;
+  }
+  return out;
 }
 
 /**
@@ -101,7 +143,7 @@ export function detectSandboxDenial(stderr: string): boolean {
 export function resolveSandboxConfig(
   workspaceRoot: string,
   persistedExtras?: { readPaths?: string[]; writePaths?: string[] },
-  opts?: { silent?: boolean; enforceWhenSilent?: boolean },
+  opts?: { silent?: boolean; enforceWhenSilent?: boolean; forceEnforce?: boolean; scopeSecrets?: boolean },
 ): SandboxConfig {
   const knobs = getCliKnobs();
   const cfgReads = knobs.sandboxReadPaths;
@@ -117,12 +159,21 @@ export function resolveSandboxConfig(
   // Callers may pass an already-resolved `enforceWhenSilent` (e.g. the agent
   // captures it at construction) so the decision is stable across the turn;
   // otherwise fall back to the live knob.
+  // HONK-H0 — a fleet/background role passes `forceEnforce` so its sandbox can't
+  // be disabled by an operator's `cli.sandboxEnforceWhenSilent: false` opt-out.
   const enforceWhenSilent = opts?.enforceWhenSilent ?? knobs.sandboxEnforceWhenSilent;
-  const enforcedUnattended = !!opts?.silent && enforceWhenSilent;
+  // `forceEnforce` (fleet) forces the locked-down posture independently of `silent`,
+  // so a future non-silent fleet entry point can't silently bypass it.
+  const enforcedUnattended = (!!opts?.silent && enforceWhenSilent) || !!opts?.forceEnforce;
   const enabled = knobs.sandbox === 'on' || enforcedUnattended;
   const allowNetwork = enforcedUnattended ? false : knobs.sandboxNetwork;
   const unavailableMode: SandboxUnavailableMode = enforcedUnattended ? 'deny' : knobs.sandboxUnavailable;
-  return { enabled, workspaceRoot, readPaths, writePaths, allowNetwork, unavailableMode, enforcedUnattended };
+  // HONK-H0 — scrub secret-shaped env vars from a shell when the caller opts in
+  // (fleet roles do), gated by the `jobSecretScoping` global kill switch and only
+  // for enforced runs. The operator can allowlist specific vars a job needs.
+  const scopeSecrets = !!opts?.scopeSecrets && knobs.jobSecretScoping && enforcedUnattended;
+  const scopedEnv = scopeSecrets ? scopeSecretEnv(process.env, { allow: knobs.jobSecretAllowlist }) : undefined;
+  return { enabled, workspaceRoot, readPaths, writePaths, allowNetwork, unavailableMode, enforcedUnattended, scopedEnv };
 }
 
 export interface SandboxRunResult {
@@ -149,13 +200,13 @@ export async function runShell(command: string, config: SandboxConfig, timeoutMs
   // drifted process.cwd() (and writes test files into ~/.brainrouter).
   const cwd = config.workspaceRoot;
   if (!config.enabled) {
-    return execShell(command, undefined, cwd, timeoutMs, false, 'none', signal);
+    return execShell(command, undefined, cwd, timeoutMs, false, 'none', signal, config.scopedEnv);
   }
 
   if (process.platform === 'darwin') {
     const profilePath = writeMacSandboxProfile(config);
     const wrapped = ['sandbox-exec', '-f', profilePath, '/bin/sh', '-c', command];
-    const r = await execShell(wrapped[0], wrapped.slice(1), cwd, timeoutMs, true, 'sandbox-exec', signal);
+    const r = await execShell(wrapped[0], wrapped.slice(1), cwd, timeoutMs, true, 'sandbox-exec', signal, config.scopedEnv);
     r.sandboxDenied = detectSandboxDenial(r.stderr);
     return r;
   }
@@ -163,13 +214,13 @@ export async function runShell(command: string, config: SandboxConfig, timeoutMs
   if (process.platform === 'linux') {
     if (await binaryAvailable('bwrap')) {
       const args = buildBwrapArgs(config, command);
-      const r = await execShell('bwrap', args, cwd, timeoutMs, true, 'bwrap', signal);
+      const r = await execShell('bwrap', args, cwd, timeoutMs, true, 'bwrap', signal, config.scopedEnv);
       r.sandboxDenied = detectSandboxDenial(r.stderr);
       return r;
     }
     if (await binaryAvailable('firejail')) {
       const args = buildFirejailArgs(config, command);
-      const r = await execShell('firejail', args, cwd, timeoutMs, true, 'firejail', signal);
+      const r = await execShell('firejail', args, cwd, timeoutMs, true, 'firejail', signal, config.scopedEnv);
       r.sandboxDenied = detectSandboxDenial(r.stderr);
       return r;
     }
@@ -206,7 +257,7 @@ async function handleUnavailableSandbox(
       refused: true,
     };
   }
-  const fallback = await execShell(command, undefined, cwd, timeoutMs, false, 'none', signal);
+  const fallback = await execShell(command, undefined, cwd, timeoutMs, false, 'none', signal, config.scopedEnv);
   fallback.notice = verdict.notice;
   return fallback;
 }
@@ -219,6 +270,7 @@ function execShell(
   sandboxed: boolean,
   tool: SandboxRunResult['sandboxTool'],
   signal?: AbortSignal,
+  env?: NodeJS.ProcessEnv,
 ): Promise<SandboxRunResult> {
   return new Promise((resolve) => {
     // DESK-6 — already stopped before we even spawned.
@@ -227,9 +279,11 @@ function execShell(
       return;
     }
     const useShell = !args; // when no args provided, run as a single shell string
+    // HONK-H0 — `env` (when provided) is the secret-scoped environment; undefined
+    // inherits the full process env (the non-enforced default).
     const child = useShell
-      ? spawn(cmd, { cwd, shell: true })
-      : spawn(cmd, args, { cwd });
+      ? spawn(cmd, { cwd, shell: true, env })
+      : spawn(cmd, args, { cwd, env });
     let stdout = '';
     let stderr = '';
     let settled = false;

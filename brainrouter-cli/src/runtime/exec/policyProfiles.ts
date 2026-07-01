@@ -1,4 +1,4 @@
-import type { AccessMode, ExternalDirMode } from '@kinqs/brainrouter-core/dist/exec/execPolicy.js';
+import type { AccessMode, ExternalDirMode } from '@kinqs/brainrouter-core/exec';
 
 /**
  * POLICY-3 (0.4.4) — named, swappable policy presets. Each bundles the safety

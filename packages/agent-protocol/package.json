@@ -1,6 +1,6 @@
 {
   "name": "@kinqs/brainrouter-agent-protocol",
-  "version": "0.4.15",
+  "version": "0.4.16",
   "description": "Typed agent event/command protocol for BrainRouter — the one vocabulary spoken by the CLI's headless mode and the Desktop app's agent host.",
   "type": "module",
   "main": "dist/index.js",
@@ -9,9 +9,11 @@
     "dist"
   ],
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "clean": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test \"dist/**/*.test.js\"",
-    "prepack": "npm run build && find dist -name '*.test.*' -delete"
+    "prepack": "npm run build && node -e \"const fs=require('fs');function w(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=d+'/'+e.name;if(e.isDirectory())w(p);else if(/\\.test\\./.test(e.name))fs.rmSync(p)}}w('dist')\""
   },
   "devDependencies": {
     "typescript": "^5.5.4",

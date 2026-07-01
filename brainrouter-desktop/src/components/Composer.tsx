@@ -5,14 +5,21 @@
  */
 import React, { type Dispatch, type SetStateAction } from 'react';
 import { Icon } from '../icons.js';
+import { ProviderIcon } from './ProviderIcon.js';
+import { ModelIcon } from './ModelIcon.js';
+import { ReasoningSlider } from './ReasoningSlider.js';
 import { SlashPopup } from '../palette.js';
 import { UsageBar } from './UsageBar.js';
 import { ContextRing } from './ContextRing.js';
-import { EFFORT_LEVELS, NON_CHAT_MODEL } from '../constants.js';
+import { NON_CHAT_MODEL } from '../constants.js';
 import { modelCapabilities, capabilityBadges } from '../lib/models/modelCapabilities.js';
+import { reasoningProfileForModel, reasoningPillLabel } from '../lib/models/reasoningProfile.js';
 import type { AttachmentUpload, PopId } from '../types.js';
 import type { DeskCommand, SettingsSection } from '../lib/commands/commands.js';
 import { recognizedCommandToken } from '../lib/composer/slashHighlight.js';
+import { findMentionToken, rankFileMatches, applyMention } from '../lib/composer/mention.js';
+import { hostQuery } from '../lib/hostQuery.js';
+import { usePlatform } from '../lib/shortcuts/shortcuts.js';
 
 export interface ComposerProps {
   draft: string;
@@ -32,11 +39,18 @@ export interface ComposerProps {
   setPop: Dispatch<SetStateAction<PopId>>;
   q: (id: string, name: string, args?: Record<string, unknown>) => void;
   modeLabel: string;
-  execMode: string;
   effort: string;
   info: { workspaceRoot?: string; model?: string };
   branches: { current: string | null; branches: string[]; loading?: boolean };
   endpointModels: string[];
+  // §multi-select-models — the default provider's allowlist. When non-empty the
+  // model menu lists only these (∩ the live endpoint list); empty ⇒ full list.
+  allowedModels?: string[];
+  // §connected-models — every saved provider (name + its allowlist/default), so
+  // the model menu can list and switch to any connected provider, not just the
+  // active endpoint. defaultProviderName marks which one is currently active.
+  connectedProviders?: Array<{ name: string; provider: string; model: string; models?: string[]; endpoint?: string | null }>;
+  defaultProviderName?: string | null;
   modelsLoading: boolean;
   setModelsLoading: (v: boolean) => void;
   modelChoices: string[];
@@ -51,6 +65,10 @@ export interface ComposerProps {
   attachments?: AttachmentUpload[];
   onClearAttachment?: (id: string) => void;
   canSubmit?: boolean;
+  /** vision — pasted screenshots, sent inline to a vision-capable model. */
+  pastedImages?: Array<{ id: string; mediaType: string; dataBase64: string }>;
+  onPasteImages?: (files: File[]) => void;
+  onClearPastedImage?: (id: string) => void;
 }
 
 function formatBytes(size: number): string {
@@ -63,14 +81,57 @@ function formatBytes(size: number): string {
 export function Composer(p: ComposerProps): React.ReactElement {
   const {
     draft, setDraft, running, stopping, submit, requestStop, slashActive, slashMatches, commands,
-    slashSel, setSlashSel, setSlashDismissed, onRunSlash, pop, setPop, q, modeLabel, execMode, effort,
-    info, branches, endpointModels, modelsLoading, setModelsLoading, modelChoices, modelScope, setModelScope,
+    slashSel, setSlashSel, setSlashDismissed, onRunSlash, pop, setPop, q, modeLabel, effort,
+    info, branches, endpointModels, allowedModels, connectedProviders, defaultProviderName, modelsLoading, setModelsLoading, modelChoices, modelScope, setModelScope,
     hasConversation, contextUsage, tokens, openSettings, onAttach, attachments = [], onClearAttachment, canSubmit = false,
+    pastedImages = [], onPasteImages, onClearPastedImage,
   } = p;
+  const { fmt } = usePlatform(); // §shortcuts — OS-correct menu hint glyphs
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
   const mirrorRef = React.useRef<HTMLDivElement | null>(null);
+  const modelMenuRef = React.useRef<HTMLDivElement | null>(null);
   const [dragOver, setDragOver] = React.useState(false);
+  // §5.7 — @-mention: workspace file picker. Self-contained (independent of the
+  // slash system); fetched once, recomputed from the caret on each keystroke.
+  const [mentionFiles, setMentionFiles] = React.useState<string[]>([]);
+  const [mention, setMention] = React.useState<{ token: ReturnType<typeof findMentionToken>; matches: string[] } | null>(null);
+  const [mentionSel, setMentionSel] = React.useState(0);
+  React.useEffect(() => {
+    void hostQuery<{ files?: Array<string | { path?: string }> }>('list-files', { limit: 3000 }).then((r) => {
+      setMentionFiles((r?.files ?? []).map((f) => (typeof f === 'string' ? f : f.path ?? '')).filter(Boolean));
+    });
+  }, []);
+  const recomputeMention = React.useCallback((value: string, caret: number) => {
+    const token = findMentionToken(value, caret);
+    if (!token) { setMention(null); return; }
+    const matches = rankFileMatches(token.query, mentionFiles, 8);
+    setMention(matches.length ? { token, matches } : null);
+    setMentionSel(0);
+  }, [mentionFiles]);
+  const pickMention = React.useCallback((path: string) => {
+    setMention((m) => {
+      if (!m?.token) return null;
+      const ta = textareaRef.current;
+      const caret = ta ? ta.selectionStart : draft.length;
+      const out = applyMention(draft, m.token, caret, path);
+      setDraft(out.text);
+      requestAnimationFrame(() => { const t = textareaRef.current; if (t) { t.focus(); t.setSelectionRange(out.caret, out.caret); } });
+      return null;
+    });
+  }, [draft, setDraft]);
+  const mentionOpen = !!(mention && mention.matches.length && !(slashActive && slashMatches.length));
+  // The model menu opens UPWARD from the composer. A tall menu (several connected
+  // providers) could push its top — the "Models" header + first model — above the
+  // viewport, clipping them. Clamp its height to the room actually above the
+  // trigger so it never overflows the top; it scrolls internally instead.
+  React.useLayoutEffect(() => {
+    if (pop !== 'model') return;
+    const el = modelMenuRef.current;
+    if (!el) return;
+    const bottom = el.getBoundingClientRect().bottom; // bottom-anchored: stable vs height
+    el.style.maxHeight = `${Math.max(220, Math.min(440, Math.floor(bottom - 14)))}px`;
+  }, [pop]);
   const handleFiles = (list: FileList | null): void => {
     if (!list || !onAttach) return;
     const files = Array.from(list);
@@ -97,6 +158,12 @@ export function Composer(p: ComposerProps): React.ReactElement {
   // goes transparent and this mirror paints it instead, with the "/command"
   // token in accent blue so the user sees they're in that command's mode.
   const cmdToken = recognizedCommandToken(draft, slashActive, slashMatches, commands);
+  // reasoning-profiles — the effort control is MODEL-FAMILY aware (graded tiers /
+  // binary On-Off / locked "Always on" / hidden). Reasoning is DECOUPLED from
+  // Fast mode: this slider is the user's explicit choice and stays live; Fast
+  // mode (a Settings toggle) only changes the agentic strategy, not the thinking.
+  const reasoningProfile = reasoningProfileForModel(info.model);
+  const reasoningPill = reasoningPillLabel(reasoningProfile, effort, false);
   return (
     <div className="composer">
       <div
@@ -108,6 +175,25 @@ export function Composer(p: ComposerProps): React.ReactElement {
         {slashActive && slashMatches.length ? (
           <div className="slash-pop">
             <SlashPopup commands={commands} filter={draft} selected={slashSel} onPick={onRunSlash} onHover={setSlashSel} />
+          </div>
+        ) : null}
+        {mentionOpen ? (
+          <div className="mention-pop" role="listbox" aria-label="Workspace files">
+            {mention!.matches.map((f, i) => (
+              <button
+                key={f}
+                type="button"
+                role="option"
+                aria-selected={i === mentionSel}
+                className={`mention-item${i === mentionSel ? ' sel' : ''}`}
+                onMouseEnter={() => setMentionSel(i)}
+                onMouseDown={(e) => { e.preventDefault(); pickMention(f); }}
+              >
+                <Icon name="file" size={12} />
+                <span className="mention-base">{f.slice(f.lastIndexOf('/') + 1)}</span>
+                <span className="mention-path">{f.includes('/') ? f.slice(0, f.lastIndexOf('/')) : ''}</span>
+              </button>
+            ))}
           </div>
         ) : null}
         {attachments.length ? (
@@ -127,6 +213,25 @@ export function Composer(p: ComposerProps): React.ReactElement {
             ))}
           </div>
         ) : null}
+        {pastedImages.length ? (
+          <div className="attachment-strip" aria-label="Pasted images">
+            {pastedImages.map((img) => (
+              <div key={img.id} className="image-chip" title="Pasted image">
+                <img src={`data:${img.mediaType};base64,${img.dataBase64}`} alt="Pasted screenshot" />
+                {onClearPastedImage ? (
+                  <button type="button" className="attachment-clear" aria-label="Remove image" onClick={() => onClearPastedImage(img.id)}>
+                    <Icon name="close" size={11} />
+                  </button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {pastedImages.length && info.model && !modelCapabilities(info.model).vision ? (
+          <div className="vision-warn" role="status">
+            <Icon name="eye" size={12} /> <span>{info.model} may not read images — switch to a vision model.</span>
+          </div>
+        ) : null}
         <div className="input-wrap">
           {cmdToken ? (
             <div ref={mirrorRef} className="input-mirror" aria-hidden="true">
@@ -139,9 +244,25 @@ export function Composer(p: ComposerProps): React.ReactElement {
             rows={1}
             placeholder={stopping ? 'Stopping…' : running ? 'Working…' : 'Message BrainRouter…  ( / for commands )'}
             value={draft}
-            onChange={(e) => { setDraft(e.target.value); setSlashSel(0); setSlashDismissed(false); }}
+            onChange={(e) => { setDraft(e.target.value); setSlashSel(0); setSlashDismissed(false); recomputeMention(e.target.value, e.target.selectionStart); }}
             onScroll={syncMirrorScroll}
+            onPaste={onPasteImages ? (e) => {
+              // §vision — pull any image blobs off the clipboard (a pasted
+              // screenshot) and hand them up; let text paste through untouched.
+              const files = Array.from(e.clipboardData?.items ?? [])
+                .filter((it) => it.kind === 'file' && it.type.startsWith('image/'))
+                .map((it) => it.getAsFile())
+                .filter((f): f is File => !!f);
+              if (files.length) { e.preventDefault(); onPasteImages(files); }
+            } : undefined}
             onKeyDown={(e) => {
+              // §5.7 — @-mention picker keys (gated; never competes with slash).
+              if (mentionOpen && mention) {
+                if (e.key === 'ArrowDown') { e.preventDefault(); setMentionSel((s) => Math.min(s + 1, mention.matches.length - 1)); return; }
+                if (e.key === 'ArrowUp') { e.preventDefault(); setMentionSel((s) => Math.max(s - 1, 0)); return; }
+                if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(mention.matches[Math.min(mentionSel, mention.matches.length - 1)]); return; }
+                if (e.key === 'Escape') { e.preventDefault(); setMention(null); return; }
+              }
               if (slashActive && slashMatches.length) {
                 if (e.key === 'ArrowDown') { e.preventDefault(); setSlashSel((s) => Math.min(s + 1, slashMatches.length - 1)); return; }
                 if (e.key === 'ArrowUp') { e.preventDefault(); setSlashSel((s) => Math.max(s - 1, 0)); return; }
@@ -165,12 +286,12 @@ export function Composer(p: ComposerProps): React.ReactElement {
         ) : null}
         <button className={`input-send icon-btn${running ? ' stop-red' : ''}${stopping ? ' stopping' : ''}`} title={stopping ? 'Stopping…' : running ? 'Stop' : 'Send'}
           onClick={() => running ? requestStop() : submit()}
-          disabled={(!running && !draft.trim() && !canSubmit) || stopping}>{running ? <Icon name="stop" size={14} /> : <Icon name="arrow-up" size={14} />}</button>
+          disabled={(!running && !draft.trim() && !canSubmit && pastedImages.length === 0) || stopping}>{running ? <Icon name="stop" size={14} /> : <Icon name="arrow-up" size={14} />}</button>
         <div className="composer-controls">
           <span className="pop-wrap">
             {pop === 'mode' ? (
               <div className="menu-pop left">
-                <div className="menu-head"><span>Mode</span><span>⇧⌃M</span></div>
+                <div className="menu-head"><span>Mode</span><span>{fmt('Mod+Shift+M')}</span></div>
                 {([['Plan mode', 'planning', 'request', '1'], ['Accept edits', 'fast', 'request', '2'], ['Auto mode', 'fast', 'proceed', '3']] as const).map(([label, em, rp, num]) => (
                   <button key={label} className="menu-item" onClick={() => {
                     q('a-mode', 'action:set-session-mode', { executionMode: em, reviewPolicy: rp });
@@ -220,36 +341,59 @@ export function Composer(p: ComposerProps): React.ReactElement {
             ) : null}
           </span>
           <span className="composer-spacer" />
-          {/* DESK-5q — effort is its OWN control (Codex: Faster → Smarter) */}
-          <span className="pop-wrap">
-            {pop === 'effort' ? (
-              <div className="menu-pop effort-menu">
-                <div className="menu-head"><span>Effort</span><span>Faster → Smarter</span></div>
-                {EFFORT_LEVELS.map((lvl) => (
-                  <button key={lvl} className="menu-item" onClick={() => { q('a-mode', 'action:set-session-mode', { effort: lvl }); setPop(''); }}>
-                    <span className="mi-check">{effort === lvl ? '✓' : ''}</span>{lvl === 'xhigh' ? 'Extra high' : lvl[0].toUpperCase() + lvl.slice(1)}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            <button type="button" className="effort-pill" title="Reasoning effort" onClick={() => setPop(pop === 'effort' ? '' : 'effort')}>
-              {effort === 'xhigh' ? 'Extra high' : effort[0].toUpperCase() + effort.slice(1)}
-            </button>
-          </span>
+          {/* DESK-5q + reasoning-profiles — the effort control adapts to the
+              SELECTED model's family: graded tiers, binary On/Off, a locked
+              "Always on", or nothing for non-reasoning models. Always live
+              (decoupled from Fast mode); only an always-on reasoner locks it. */}
+          {reasoningPill ? (
+            <span className="pop-wrap">
+              {pop === 'effort' && reasoningProfile.options.length ? (
+                <div className="menu-pop effort-menu">
+                  <ReasoningSlider
+                    profile={reasoningProfile}
+                    effort={effort}
+                    onPick={(lvl) => q('a-mode', 'action:set-session-mode', { effort: lvl })}
+                  />
+                </div>
+              ) : null}
+              <button
+                type="button"
+                className="effort-pill"
+                title={reasoningProfile.kind === 'always-on' ? 'This model always reasons' : 'Reasoning effort'}
+                disabled={reasoningProfile.kind === 'always-on'}
+                style={reasoningProfile.kind === 'always-on' ? { opacity: 0.6 } : undefined}
+                onClick={() => { if (reasoningProfile.options.length) setPop(pop === 'effort' ? '' : 'effort'); }}
+              >
+                {reasoningPill}
+              </button>
+            </span>
+          ) : null}
           {/* model selection is now separate from effort */}
           <span className="pop-wrap">
             {pop === 'model' ? (
-              <div className="menu-pop model-menu">
+              <div className="menu-pop model-menu" ref={modelMenuRef}>
                 {(() => {
+                  // §multi-select-models — when the default provider saved an
+                  // allowlist, narrow the live endpoint list to it (∩); an empty
+                  // allowlist falls through to the full list (unchanged behavior).
+                  const allow = allowedModels ?? [];
+                  const base = allow.length ? endpointModels.filter((m) => allow.includes(m)) : endpointModels;
                   // DESK-5l — only models that can actually chat;
                   // embedding/audio/rerank picks broke the session.
-                  const chatModels = endpointModels.filter((m) => !NON_CHAT_MODEL.test(m));
-                  const hidden = endpointModels.length - chatModels.length;
+                  const chatModels = base.filter((m) => !NON_CHAT_MODEL.test(m));
+                  const hidden = base.length - chatModels.length;
                   const listed = [...new Set([...(chatModels.length ? chatModels : []), ...modelChoices])];
+                  // §connected-models — every OTHER saved provider, listing its
+                  // models (the saved allowlist, else its single default) so you can
+                  // switch provider + model right here, not just the active endpoint.
+                  const providerGroups = (connectedProviders ?? [])
+                    .filter((p) => p.name !== (defaultProviderName ?? null))
+                    .map((p) => ({ name: p.name, provider: p.provider, models: ((p.models && p.models.length) ? p.models : (p.model ? [p.model] : [])).filter((m) => !NON_CHAT_MODEL.test(m)) }))
+                    .filter((g) => g.models.length);
                   return (
                     <>
-                      <div className="menu-head"><span>Models{chatModels.length ? ` · ${chatModels.length} on endpoint` : ''}</span><span>⇧⌃I</span></div>
-                      <div className="model-list">
+                      <div className="menu-head"><span>Models{chatModels.length ? ` · ${chatModels.length} on endpoint` : ''}</span><span>{fmt('Mod+Shift+I')}</span></div>
+                      <div className="model-list model-list-endpoint">
                         {modelsLoading && !endpointModels.length ? (
                           <div className="empty" style={{ padding: '4px 9px' }}>Loading models…</div>
                         ) : null}
@@ -266,6 +410,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
                               setPop('');
                             }}>
                               <span className="mi-check">{m === info.model ? '✓' : ''}</span>
+                              <ModelIcon model={m} style={{ marginRight: 6 }} />
                               <span className="model-id">{m}</span>
                               {badges.length ? (
                                 <span className="model-caps">
@@ -280,6 +425,36 @@ export function Composer(p: ComposerProps): React.ReactElement {
                       {hidden > 0 ? (
                         <div className="menu-head"><span>{hidden} non-chat model{hidden === 1 ? '' : 's'} hidden (embeddings, audio…)</span></div>
                       ) : null}
+                      {providerGroups.map((g) => (
+                        <React.Fragment key={g.name}>
+                          <div className="menu-head"><span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><ProviderIcon id={g.provider} size={14} />{g.name}</span></div>
+                          <div className="model-list">
+                            {g.models.map((m) => {
+                              const badges = capabilityBadges(modelCapabilities(m));
+                              return (
+                                <button key={`${g.name}:${m}`} className="menu-item model-item" title={`Use ${m} from ${g.name}${modelScope === 'global' ? '' : ' for this chat only'}`} onClick={() => {
+                                  // Cross-provider pick. The host switches provider per SCOPE:
+                                  // 'global' → sets the shared default; 'session' → a per-chat
+                                  // override (provider+model+endpoint, key resolved host-side) so
+                                  // it never syncs to the other chats.
+                                  window.brainrouter.send({ kind: 'set-model', model: m, providerName: g.name, persist: modelScope === 'global' });
+                                  q('q-snapshot', 'config-snapshot'); q('q-models', 'list-models');
+                                  setPop('');
+                                }}>
+                                  <span className="mi-check">{g.name === defaultProviderName && m === info.model ? '✓' : ''}</span>
+                                  <ModelIcon model={m} style={{ marginRight: 6 }} />
+                                  <span className="model-id">{m}</span>
+                                  {badges.length ? (
+                                    <span className="model-caps">
+                                      {badges.map((b) => <span key={b.key} className={`cap-chip cap-${b.key}`} title={b.title}>{b.label}</span>)}
+                                    </span>
+                                  ) : null}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </React.Fragment>
+                      ))}
                     </>
                   );
                 })()}
@@ -293,19 +468,13 @@ export function Composer(p: ComposerProps): React.ReactElement {
                     {modelScope === 'global' ? 'All chats' : 'This chat only'}
                   </button>
                 </div>
-                <div className="menu-row">
-                  <span>Fast mode</span>
-                  <button className={`switch${execMode === 'fast' ? ' on' : ''}`} onClick={() => {
-                    q('a-mode', 'action:set-session-mode', { executionMode: execMode === 'fast' ? 'planning' : 'fast' });
-                  }} />
-                </div>
               </div>
             ) : null}
             <button type="button" className="model-pill" onClick={() => {
               if (pop !== 'model') { setModelsLoading(true); q('q-models', 'list-models'); }
               setPop(pop === 'model' ? '' : 'model');
             }}>
-              {info.model ?? ''}{execMode === 'fast' ? ' · Fast' : ''}
+              {info.model ?? ''}
             </button>
           </span>
           {/* DESK-5s/5u — click the ring for a full context + usage breakdown. */}

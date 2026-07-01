@@ -8,7 +8,7 @@ const HOME = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tail-home-')
 process.env.BRAINROUTER_HOME = HOME;
 
 const { appendTranscriptEntry, readTranscriptEntries, readTranscriptTail, transcriptExists } =
-  await import('@kinqs/brainrouter-core/dist/session/sessionStore.js');
+  await import('@kinqs/brainrouter-core/session');
 
 const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tail-ws-')));
 const KEY = 'sess:huge';

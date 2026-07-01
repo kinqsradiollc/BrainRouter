@@ -11,7 +11,7 @@ import { getRawCliKnobs } from '../config/config.js';
 
 export type ExecutionMode = 'planning' | 'fast';
 export type ReviewPolicy = 'request' | 'proceed';
-export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh';
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultracode';
 
 export interface Preferences {
   /** When true, every worker spawn is auto-followed by a reviewer pass on the diff. */
@@ -193,15 +193,28 @@ export interface ResolvedEffort {
 
 /**
  * Normalize a raw effort string to a canonical `EffortLevel`, or undefined if
- * unrecognized. `max` is an accepted alias for `xhigh` — they mean the same
- * thing (maximum reasoning depth); we canonicalize to `xhigh` so only one
- * value is ever stored/forwarded. Case-insensitive. Exported for tests.
+ * unrecognized. Case-insensitive. `xhigh`/`max`/`ultracode` are DISTINCT top
+ * tiers (the desktop Claude slider) — `max` is no longer an alias for `xhigh`,
+ * so the slider position persists. They cap to xhigh on the wire + prompt via
+ * `effortToWireLevel`. Exported for tests.
  */
 export function normalizeEffort(raw: unknown): EffortLevel | undefined {
   if (typeof raw !== 'string') return undefined;
   const v = raw.trim().toLowerCase();
-  if (v === 'max' || v === 'xhigh') return 'xhigh';
+  if (v === 'xhigh') return 'xhigh';
+  if (v === 'max') return 'max';
+  if (v === 'ultracode') return 'ultracode';
   return v === 'low' || v === 'medium' || v === 'high' ? v : undefined;
+}
+
+/**
+ * Collapse an EffortLevel to the 4 levels the WIRE (`reasoning_effort`) and the
+ * system-prompt overlay understand. The Claude slider's `max`/`ultracode` tiers
+ * sit ABOVE xhigh in the UI but have no distinct wire value, so they cap to
+ * xhigh here while still persisting distinctly (see `normalizeEffort`).
+ */
+export function effortToWireLevel(effort: EffortLevel): 'low' | 'medium' | 'high' | 'xhigh' {
+  return effort === 'max' || effort === 'ultracode' ? 'xhigh' : effort;
 }
 
 /**

@@ -16,7 +16,7 @@
  */
 
 export type AccessMode = 'read' | 'write' | 'shell';
-export type ActionKind = 'read_only' | 'file_edit' | 'child_write' | 'shell' | 'network' | 'bg';
+export type ActionKind = 'read_only' | 'file_edit' | 'child_write' | 'shell' | 'computer' | 'network' | 'bg';
 export type PolicyDecision = 'allow' | 'ask' | 'deny';
 
 export interface PolicyResult {
@@ -44,6 +44,10 @@ export function decideExecutionPolicy(action: ActionKind, mode: AccessMode): Pol
       return mode === 'shell'
         ? { decision: 'allow', reason: 'access mode "shell" permits command execution' }
         : { decision: 'deny', reason: `command execution requires "shell" mode (current: "${mode}")` };
+    case 'computer':
+      return mode === 'shell'
+        ? { decision: 'allow', reason: 'access mode "shell" permits local computer control' }
+        : { decision: 'deny', reason: `computer control requires "shell" mode (current: "${mode}")` };
     default:
       return { decision: 'deny', reason: `unknown action kind` };
   }
@@ -63,6 +67,8 @@ export function actionKindForTool(name: string): ActionKind {
   switch (name) {
     case 'run_command':
       return 'shell';
+    case 'computer_use':
+      return 'computer';
     case 'write_file':
     case 'edit_file':
     case 'apply_patch':
@@ -75,8 +81,15 @@ export function actionKindForTool(name: string): ActionKind {
     case 'task_agent':
     case 'delegate_agent':
     case 'run_workflow':
+    case 'run_workflow_graph':
+    case 'send_input':
+    case 'resume_agent':
       return 'child_write';
     case 'fetch_url':
+    case 'web_search':
+    // mcp_call proxies a real MCP tool call (not access-mode gated, like other
+    // MCP/recall calls); its handler re-applies the MCP approval gate.
+    case 'mcp_call':
       return 'network';
     default:
       // Observation / planning orchestration tools (wait_*, list_agents,
@@ -93,6 +106,8 @@ const CHILD_SPAWN_TOOLS = new Set([
   'task_agent',
   'delegate_agent',
   'run_workflow',
+  'send_input',
+  'resume_agent',
 ]);
 
 /** True for a tool that launches a child agent / worker. */

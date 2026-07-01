@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SqliteMemoryStore } from "../memory/store/sqlite.js";
-import { MemoryEngine } from "../memory/engine.js";
+import { createTestEngine } from "./helpers/pgTestStore.js";
+import { PostgresMemoryStore } from "../memory/store/postgres/PostgresMemoryStore.js";
 import { MemoryCapturePipeline } from "../memory/capture.js";
 import { redactSensitiveMemoryText } from "../memory/util/redaction.js";
 import { contentHash } from "../memory/pipeline/apply-dedup.js";
@@ -32,50 +32,33 @@ const SECRET_MSG =
 const leaks = (s: string): boolean =>
   s.includes("ghp_abcdef") || s.includes("sk-zzzz") || s.includes("hunter2") || s.includes("10.1.2.3");
 
-function fresh(label: string) {
-  const dir = mkdtempSync(join(tmpdir(), `br-mem23-${label}-`));
-  const prevRunner = process.env.BRAINROUTER_JOB_RUNNER;
-  process.env.BRAINROUTER_JOB_RUNNER = "off";
-  const store = new SqliteMemoryStore(join(dir, "m.db"));
-  store.init();
-  const engine = new MemoryEngine(store);
-  return {
-    store, engine,
-    cleanup: () => {
-      if (prevRunner === undefined) delete process.env.BRAINROUTER_JOB_RUNNER;
-      else process.env.BRAINROUTER_JOB_RUNNER = prevRunner;
-      rmSync(dir, { recursive: true, force: true });
-    },
-  };
-}
-
 /** Capture pipeline with a stub LLM + a huge extract interval, so captureTurn
  * writes sensory + source records but never reaches (LLM) extraction. */
-function stubPipeline(store: SqliteMemoryStore): MemoryCapturePipeline {
+function stubPipeline(store: PostgresMemoryStore): MemoryCapturePipeline {
   const llm = { run: async () => "" } as any;
   const embed = { isReady: () => false, embed: async () => [] } as any;
   return new MemoryCapturePipeline(store, llm, embed, 999);
 }
 
 test("MEM-23 transcript (sensory) messageText is redacted at capture", async () => {
-  const { store, cleanup } = fresh("sensory");
+  const { store, cleanup } = await createTestEngine();
   try {
     await stubPipeline(store).captureTurn({
       userId: "u1",
       sessionKey: "s1",
       messages: [{ role: "user", content: SECRET_MSG, timestamp: 1 }],
     });
-    const sensory = store.getRecentSensoryMessages("u1", "s1", 20);
+    const sensory = await store.getRecentSensoryMessages("u1", "s1", 20);
     assert.ok(sensory.length >= 1, "a sensory record was written");
     assert.ok(sensory.every((r) => !leaks(r.messageText)), "no secret in any sensory record");
     assert.ok(sensory.some((r) => r.messageText.includes("[REDACTED")), "redaction marker present");
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
 test("MEM-23 source chunks are redacted at ingest", async () => {
-  const { store, cleanup } = fresh("source");
+  const { store, cleanup } = await createTestEngine();
   try {
     await stubPipeline(store).captureTurn({
       userId: "u1",
@@ -83,28 +66,28 @@ test("MEM-23 source chunks are redacted at ingest", async () => {
       messages: [{ role: "user", content: SECRET_MSG, timestamp: 1 }],
     });
     // The source doc is keyed by the hash of the REDACTED turn text.
-    const doc = store.getSourceDocumentByHash("u1", contentHash(redactSensitiveMemoryText(SECRET_MSG)));
+    const doc = await store.getSourceDocumentByHash("u1", contentHash(redactSensitiveMemoryText(SECRET_MSG)));
     assert.ok(doc, "a source document was ingested from the turn");
-    const chunks = store.getSourceChunksByDocument(doc!.id);
+    const chunks = await store.getSourceChunksByDocument(doc!.id);
     assert.ok(chunks.length >= 1, "source chunks exist");
     assert.ok(chunks.every((c) => !leaks(c.content)), "no secret in any source chunk");
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
-test("MEM-23 vault export render redacts record markdown", () => {
-  const { engine, cleanup } = fresh("vault");
+test("MEM-23 vault export render redacts record markdown", async () => {
+  const { engine, cleanup } = await createTestEngine();
   const out = mkdtempSync(join(tmpdir(), "br-mem23-vaultout-"));
   try {
-    const rec = engine.upsertEngineeringMemory({ userId: "u1", type: "codebase_fact", content: SECRET_MSG });
-    const res = engine.exportVault("u1", out);
+    const rec = await engine.upsertEngineeringMemory({ userId: "u1", type: "codebase_fact", content: SECRET_MSG });
+    const res = await engine.exportVault("u1", out);
     assert.ok(res.written >= 1, "at least one vault file written");
     const md = readFileSync(join(out, `records/${rec.id}.md`), "utf8");
     assert.ok(!leaks(md), "no secret in the exported markdown");
     assert.ok(md.includes("[REDACTED"), "redaction marker present in the export");
   } finally {
     rmSync(out, { recursive: true, force: true });
-    cleanup();
+    await cleanup();
   }
 });

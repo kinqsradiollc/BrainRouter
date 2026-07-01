@@ -1,7 +1,7 @@
 /**
  * BRAIN-P1 (0.4.1) — async job runner contract.
  *
- * Real store (node:sqlite) → runs under `node --test`. Ticks are driven
+ * Real store (Postgres scratch DB) → runs under `node --test`. Ticks are driven
  * manually (no timer) and executors are injected so the lifecycle is
  * deterministic and independent of the real distillers / LLM.
  *
@@ -15,105 +15,96 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { SqliteMemoryStore } from "../memory/store/sqlite.js";
+import { createTestStore } from "./helpers/pgTestStore.js";
+import type { PostgresMemoryStore } from "../memory/store/postgres/PostgresMemoryStore.js";
 import { MemoryJobRunner } from "../memory/scheduler/runner.js";
 import { enqueueAgentJob } from "../memory/scheduler/jobs.js";
 import { getJobExecutor } from "../memory/scheduler/executors.js";
 
-function freshDb(label: string): { store: SqliteMemoryStore; cleanup: () => void } {
-  const dir = mkdtempSync(join(tmpdir(), `brainrouter-jobrunner-${label}-`));
-  const store = new SqliteMemoryStore(join(dir, "memory.db"));
-  store.init();
-  return { store, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
-}
-
-const ctx = (store: SqliteMemoryStore) => ({ store, llmRunner: { run: async () => "" } as any });
+const ctx = (store: PostgresMemoryStore) => ({ store, llmRunner: { run: async () => "" } as any });
 
 test("runner drains a job through its executor to done with output", async () => {
-  const { store, cleanup } = freshDb("done");
+  const { store, cleanup } = await createTestStore();
   try {
-    const { job } = enqueueAgentJob(store, "identity_distiller", { userId: "u1" });
+    const { job } = await enqueueAgentJob(store, "identity_distiller", { userId: "u1" });
     const runner = new MemoryJobRunner(store, ctx(store), {
       resolveExecutor: () => async (input: any) => ({ ranFor: input.userId }),
     });
     await runner.tick();
-    const after = store.getMemoryJob(job.id)!;
+    const after = (await store.getMemoryJob(job.id))!;
     assert.equal(after.status, "done");
     assert.deepEqual(after.output, { ranFor: "u1" });
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
 test("runner cancels a job whose kind has no executor, with a clear reason", async () => {
-  const { store, cleanup } = freshDb("noexec");
+  const { store, cleanup } = await createTestStore();
   try {
-    const { job } = enqueueAgentJob(store, "cognitive_extractor", { userId: "u1", sensoryIds: ["s1"] });
+    const { job } = await enqueueAgentJob(store, "cognitive_extractor", { userId: "u1", sensoryIds: ["s1"] });
     const runner = new MemoryJobRunner(store, ctx(store), { resolveExecutor: () => undefined });
     await runner.tick();
-    const after = store.getMemoryJob(job.id)!;
+    const after = (await store.getMemoryJob(job.id))!;
     assert.equal(after.status, "cancelled");
     assert.match(after.error ?? "", /no on-demand executor/);
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
 test("runner records a throwing executor as terminal failed (maxAttempts 1)", async () => {
-  const { store, cleanup } = freshDb("throw");
+  const { store, cleanup } = await createTestStore();
   try {
     // Enqueue raw with maxAttempts:1 so the first failure is terminal.
-    const job = store.enqueueMemoryJob({ kind: "identity_distiller", input: { userId: "u1" }, maxAttempts: 1 });
+    const job = await store.enqueueMemoryJob({ kind: "identity_distiller", input: { userId: "u1" }, maxAttempts: 1 });
     const runner = new MemoryJobRunner(store, ctx(store), {
       resolveExecutor: () => async () => {
         throw new Error("executor boom");
       },
     });
     await runner.tick();
-    const after = store.getMemoryJob(job.id)!;
+    const after = (await store.getMemoryJob(job.id))!;
     assert.equal(after.status, "failed");
     assert.equal(after.error, "executor boom");
     assert.equal(after.attempts, 1);
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
 test("runner re-arms a throwing executor while attempts remain (maxAttempts 2)", async () => {
-  const { store, cleanup } = freshDb("rearm");
+  const { store, cleanup } = await createTestStore();
   try {
-    const job = store.enqueueMemoryJob({ kind: "identity_distiller", input: { userId: "u1" }, maxAttempts: 2 });
+    const job = await store.enqueueMemoryJob({ kind: "identity_distiller", input: { userId: "u1" }, maxAttempts: 2 });
     const runner = new MemoryJobRunner(store, ctx(store), {
       resolveExecutor: () => async () => {
         throw new Error("transient");
       },
     });
     await runner.tick();
-    const after = store.getMemoryJob(job.id)!;
+    const after = (await store.getMemoryJob(job.id))!;
     assert.equal(after.status, "pending", "re-armed, not failed (1 < 2 attempts)");
     assert.equal(after.attempts, 1);
     assert.ok(Date.parse(after.runAfter) > Date.now() - 1000, "backoff pushed runAfter forward");
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
 test("maxPerTick bounds the drain", async () => {
-  const { store, cleanup } = freshDb("bound");
+  const { store, cleanup } = await createTestStore();
   try {
-    for (let i = 0; i < 5; i++) enqueueAgentJob(store, "identity_distiller", { userId: `u${i}` });
+    for (let i = 0; i < 5; i++) await enqueueAgentJob(store, "identity_distiller", { userId: `u${i}` });
     const runner = new MemoryJobRunner(store, ctx(store), {
       maxPerTick: 2,
       resolveExecutor: () => async () => ({ ok: true }),
     });
     await runner.tick();
-    assert.equal(store.listMemoryJobs({ kind: "identity_distiller", status: "done" }).length, 2);
-    assert.equal(store.listMemoryJobs({ kind: "identity_distiller", status: "pending" }).length, 3);
+    assert.equal((await store.listMemoryJobs({ kind: "identity_distiller", status: "done" })).length, 2);
+    assert.equal((await store.listMemoryJobs({ kind: "identity_distiller", status: "pending" })).length, 3);
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 

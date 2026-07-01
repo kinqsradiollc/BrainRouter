@@ -1,7 +1,6 @@
 /**
  * Federation Stage 2 (FED-S2-T1+T5) — `active_sessions` store contract.
- * Runs under `node --test` (see sqlite-wal.node-test.ts for the
- * vitest/node:sqlite limitation explanation).
+ * Runs under `node --test` against the docker pgvector (see pgTestStore.ts).
  *
  * Covers:
  *   - Idempotent upsert via `registerActiveSession` — composite PK keeps
@@ -15,26 +14,18 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { SqliteMemoryStore } from "../memory/store/sqlite.js";
-
-function freshDb(label: string): { store: SqliteMemoryStore; cleanup: () => void } {
-  const dir = mkdtempSync(join(tmpdir(), `brainrouter-active-${label}-`));
-  const store = new SqliteMemoryStore(join(dir, "memory.db"));
-  store.init();
-  return { store, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
-}
+import pg from "pg";
+import type { ActiveSessionRecord } from "@kinqs/brainrouter-types";
+import { createTestStore } from "./helpers/pgTestStore.js";
 
 function iso(offsetMs = 0): string {
   return new Date(Date.now() + offsetMs).toISOString();
 }
 
-test("registerActiveSession is idempotent on (sessionKey, userId) and preserves startedAt", () => {
-  const { store, cleanup } = freshDb("upsert");
+test("registerActiveSession is idempotent on (sessionKey, userId) and preserves startedAt", async () => {
+  const { store, cleanup } = await createTestStore();
   try {
-    const first = store.registerActiveSession({
+    const first = await store.registerActiveSession({
       sessionKey: "sk-1",
       userId: "u1",
       clientKind: "brainrouter-cli",
@@ -47,7 +38,7 @@ test("registerActiveSession is idempotent on (sessionKey, userId) and preserves 
 
     // Re-register the same (sessionKey, userId) — clientKind updates,
     // startedAt is preserved.
-    const second = store.registerActiveSession({
+    const second = await store.registerActiveSession({
       sessionKey: "sk-1",
       userId: "u1",
       clientKind: "codex", // client switched
@@ -60,14 +51,14 @@ test("registerActiveSession is idempotent on (sessionKey, userId) and preserves 
     assert.equal(second.clientKind, "codex");
     assert.equal(second.lastHeartbeatAt, "2026-05-28T11:00:00.000Z");
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
-test("composite key keeps two users' sessions separate even on key collision", () => {
-  const { store, cleanup } = freshDb("composite");
+test("composite key keeps two users' sessions separate even on key collision", async () => {
+  const { store, cleanup } = await createTestStore();
   try {
-    store.registerActiveSession({
+    await store.registerActiveSession({
       sessionKey: "shared-key",
       userId: "u1",
       clientKind: "brainrouter-cli",
@@ -76,7 +67,7 @@ test("composite key keeps two users' sessions separate even on key collision", (
       lastHeartbeatAt: iso(),
       metadata: {},
     });
-    store.registerActiveSession({
+    await store.registerActiveSession({
       sessionKey: "shared-key", // same key, different user
       userId: "u2",
       clientKind: "claude-code",
@@ -85,23 +76,23 @@ test("composite key keeps two users' sessions separate even on key collision", (
       lastHeartbeatAt: iso(),
       metadata: {},
     });
-    const u1 = store.listActiveSessions({ userId: "u1", includeStale: true });
-    const u2 = store.listActiveSessions({ userId: "u2", includeStale: true });
+    const u1 = await store.listActiveSessions({ userId: "u1", includeStale: true });
+    const u2 = await store.listActiveSessions({ userId: "u2", includeStale: true });
     assert.equal(u1.length, 1);
     assert.equal(u2.length, 1);
     assert.equal(u1[0].clientKind, "brainrouter-cli");
     assert.equal(u2[0].clientKind, "claude-code");
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
-test("heartbeatActiveSession returns false when row is missing, true after register, and updates usage", () => {
-  const { store, cleanup } = freshDb("hb");
+test("heartbeatActiveSession returns false when row is missing, true after register, and updates usage", async () => {
+  const { store, cleanup } = await createTestStore();
   try {
-    assert.equal(store.heartbeatActiveSession("u1", "ghost", iso()), false);
+    assert.equal(await store.heartbeatActiveSession("u1", "ghost", iso()), false);
 
-    store.registerActiveSession({
+    await store.registerActiveSession({
       sessionKey: "sk-1",
       userId: "u1",
       clientKind: "brainrouter-cli",
@@ -112,7 +103,7 @@ test("heartbeatActiveSession returns false when row is missing, true after regis
     });
 
     const later = iso();
-    const ok = store.heartbeatActiveSession("u1", "sk-1", later, {
+    const ok = await store.heartbeatActiveSession("u1", "sk-1", later, {
       promptTokens: 1500,
       completionTokens: 240,
       totalUsd: 0.041,
@@ -120,7 +111,7 @@ test("heartbeatActiveSession returns false when row is missing, true after regis
     });
     assert.equal(ok, true);
 
-    const [session] = store.listActiveSessions({
+    const [session] = await store.listActiveSessions({
       userId: "u1",
       includeStale: true,
       includeUsage: true,
@@ -129,14 +120,14 @@ test("heartbeatActiveSession returns false when row is missing, true after regis
     assert.equal(session.usage?.promptTokens, 1500);
     assert.equal(session.usage?.totalUsd, 0.041);
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
-test("listActiveSessions default filter excludes stale heartbeats; includeStale surfaces them", () => {
-  const { store, cleanup } = freshDb("stale");
+test("listActiveSessions default filter excludes stale heartbeats; includeStale surfaces them", async () => {
+  const { store, cleanup } = await createTestStore();
   try {
-    store.registerActiveSession({
+    await store.registerActiveSession({
       sessionKey: "sk-fresh",
       userId: "u1",
       clientKind: "brainrouter-cli",
@@ -145,7 +136,7 @@ test("listActiveSessions default filter excludes stale heartbeats; includeStale 
       lastHeartbeatAt: iso(-30_000), // 30 s ago → fresh
       metadata: {},
     });
-    store.registerActiveSession({
+    await store.registerActiveSession({
       sessionKey: "sk-stale",
       userId: "u1",
       clientKind: "codex",
@@ -155,23 +146,23 @@ test("listActiveSessions default filter excludes stale heartbeats; includeStale 
       metadata: {},
     });
 
-    const fresh = store.listActiveSessions({ userId: "u1" });
+    const fresh = await store.listActiveSessions({ userId: "u1" });
     assert.deepEqual(
-      fresh.map((s) => s.sessionKey),
+      fresh.map((s: ActiveSessionRecord) => s.sessionKey),
       ["sk-fresh"],
     );
 
-    const all = store.listActiveSessions({ userId: "u1", includeStale: true });
+    const all = await store.listActiveSessions({ userId: "u1", includeStale: true });
     assert.equal(all.length, 2);
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
-test("listActiveSessions usage field is omitted unless includeUsage:true", () => {
-  const { store, cleanup } = freshDb("usage");
+test("listActiveSessions usage field is omitted unless includeUsage:true", async () => {
+  const { store, cleanup } = await createTestStore();
   try {
-    store.registerActiveSession({
+    await store.registerActiveSession({
       sessionKey: "sk-u",
       userId: "u1",
       clientKind: "brainrouter-cli",
@@ -181,19 +172,19 @@ test("listActiveSessions usage field is omitted unless includeUsage:true", () =>
       metadata: {},
       usage: { promptTokens: 100, totalUsd: 0.01, updatedAt: iso() },
     });
-    const [withoutUsage] = store.listActiveSessions({ userId: "u1" });
+    const [withoutUsage] = await store.listActiveSessions({ userId: "u1" });
     assert.equal(withoutUsage.usage, undefined);
-    const [withUsage] = store.listActiveSessions({ userId: "u1", includeUsage: true });
+    const [withUsage] = await store.listActiveSessions({ userId: "u1", includeUsage: true });
     assert.equal(withUsage.usage?.promptTokens, 100);
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
-test("sweepActiveSessions deletes rows past the threshold and returns the count", () => {
-  const { store, cleanup } = freshDb("sweep");
+test("sweepActiveSessions deletes rows past the threshold and returns the count", async () => {
+  const { store, cleanup } = await createTestStore();
   try {
-    store.registerActiveSession({
+    await store.registerActiveSession({
       sessionKey: "sk-fresh",
       userId: "u1",
       clientKind: "brainrouter-cli",
@@ -202,7 +193,7 @@ test("sweepActiveSessions deletes rows past the threshold and returns the count"
       lastHeartbeatAt: iso(-30_000),
       metadata: {},
     });
-    store.registerActiveSession({
+    await store.registerActiveSession({
       sessionKey: "sk-old",
       userId: "u1",
       clientKind: "codex",
@@ -213,20 +204,20 @@ test("sweepActiveSessions deletes rows past the threshold and returns the count"
     });
 
     // Threshold = 5 min. sk-old (10 min stale) drops; sk-fresh (30 s) stays.
-    const removed = store.sweepActiveSessions(5 * 60_000);
+    const removed = await store.sweepActiveSessions(5 * 60_000);
     assert.equal(removed, 1);
-    const remaining = store.listActiveSessions({ userId: "u1", includeStale: true });
+    const remaining = await store.listActiveSessions({ userId: "u1", includeStale: true });
     assert.equal(remaining.length, 1);
     assert.equal(remaining[0].sessionKey, "sk-fresh");
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
-test("unregisterActiveSession deletes the matched row and is idempotent", () => {
-  const { store, cleanup } = freshDb("unregister");
+test("unregisterActiveSession deletes the matched row and is idempotent", async () => {
+  const { store, cleanup } = await createTestStore();
   try {
-    store.registerActiveSession({
+    await store.registerActiveSession({
       sessionKey: "sk-bye",
       userId: "u1",
       clientKind: "brainrouter-cli",
@@ -236,20 +227,20 @@ test("unregisterActiveSession deletes the matched row and is idempotent", () => 
       metadata: {},
     });
 
-    assert.equal(store.unregisterActiveSession("u1", "sk-bye"), true);
-    assert.equal(store.listActiveSessions({ userId: "u1", includeStale: true }).length, 0);
+    assert.equal(await store.unregisterActiveSession("u1", "sk-bye"), true);
+    assert.equal((await store.listActiveSessions({ userId: "u1", includeStale: true })).length, 0);
 
     // Second call must NOT throw.
-    assert.equal(store.unregisterActiveSession("u1", "sk-bye"), false);
+    assert.equal(await store.unregisterActiveSession("u1", "sk-bye"), false);
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
-test("unregister scoped to (sessionKey, userId) — does not touch sibling user's row", () => {
-  const { store, cleanup } = freshDb("unregister-scoped");
+test("unregister scoped to (sessionKey, userId) — does not touch sibling user's row", async () => {
+  const { store, cleanup } = await createTestStore();
   try {
-    store.registerActiveSession({
+    await store.registerActiveSession({
       sessionKey: "shared",
       userId: "u1",
       clientKind: "brainrouter-cli",
@@ -258,7 +249,7 @@ test("unregister scoped to (sessionKey, userId) — does not touch sibling user'
       lastHeartbeatAt: iso(),
       metadata: {},
     });
-    store.registerActiveSession({
+    await store.registerActiveSession({
       sessionKey: "shared",
       userId: "u2",
       clientKind: "claude-code",
@@ -268,18 +259,20 @@ test("unregister scoped to (sessionKey, userId) — does not touch sibling user'
       metadata: {},
     });
 
-    store.unregisterActiveSession("u1", "shared");
-    assert.equal(store.listActiveSessions({ userId: "u1", includeStale: true }).length, 0);
-    assert.equal(store.listActiveSessions({ userId: "u2", includeStale: true }).length, 1);
+    await store.unregisterActiveSession("u1", "shared");
+    assert.equal((await store.listActiveSessions({ userId: "u1", includeStale: true })).length, 0);
+    assert.equal((await store.listActiveSessions({ userId: "u2", includeStale: true })).length, 1);
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
-test("heartbeat does NOT write to memory_operations (audit volume guard)", () => {
-  const { store, cleanup } = freshDb("audit");
+test("heartbeat does NOT write to memory_operations (audit volume guard)", async () => {
+  const { store, url, cleanup } = await createTestStore();
+  const client = new pg.Client({ connectionString: url });
+  await client.connect();
   try {
-    store.registerActiveSession({
+    await store.registerActiveSession({
       sessionKey: "sk-1",
       userId: "u1",
       clientKind: "brainrouter-cli",
@@ -289,29 +282,29 @@ test("heartbeat does NOT write to memory_operations (audit volume guard)", () =>
       metadata: {},
     });
 
-    const beforeOps = (store as unknown as {
-      db: { prepare(sql: string): { get(...args: unknown[]): unknown } };
-    }).db
-      .prepare("SELECT COUNT(*) as n FROM memory_operations")
-      .get() as { n: number };
+    const countOps = async (): Promise<number> => {
+      const res = await client.query<{ n: string }>(
+        "SELECT COUNT(*)::text AS n FROM memory_operations",
+      );
+      return Number(res.rows[0].n);
+    };
+
+    const beforeOps = await countOps();
 
     // Fire 10 heartbeats.
     for (let i = 0; i < 10; i++) {
-      store.heartbeatActiveSession("u1", "sk-1", iso());
+      await store.heartbeatActiveSession("u1", "sk-1", iso());
     }
 
-    const afterOps = (store as unknown as {
-      db: { prepare(sql: string): { get(...args: unknown[]): unknown } };
-    }).db
-      .prepare("SELECT COUNT(*) as n FROM memory_operations")
-      .get() as { n: number };
+    const afterOps = await countOps();
 
     assert.equal(
-      afterOps.n,
-      beforeOps.n,
+      afterOps,
+      beforeOps,
       "heartbeats must not add operation_log rows — would explode audit volume",
     );
   } finally {
-    cleanup();
+    await client.end().catch(() => undefined);
+    await cleanup();
   }
 });

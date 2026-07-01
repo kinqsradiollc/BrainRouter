@@ -15,12 +15,12 @@ import { useEffect, useRef } from 'react';
 import type React from 'react';
 import type { AgentEvent, AgentEventMessage, InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 import type { AttachmentUpload, PlanItem, ToolItem, ChatRow, ChangesetFile, SessionRow, FleetRow, TaskViewState, WorkflowDetail } from '../../types.js';
-import type { TrackProject, WorkItem, Sprint, AutomationRule, ProjectMember } from '@kinqs/brainrouter-types';
-import type { SyncConfig, SyncResult } from '../../track/TrackView.js';
+import type { TrackProject, WorkItem, Sprint, Module, SavedView, AutomationRule, ProjectMember } from '@kinqs/brainrouter-types';
+import type { GitTrackContext, SyncConfig, SyncResult, TrackPrStatus } from '../../track/TrackView.js';
 import type { SearchHit, ReviewFindingView, GrepHit } from '../../panels/index.js';
 import type { ScheduleRecordView } from '../schedule/scheduleView.js';
 import type { PlanDecisionView } from '../plan/planReviewView.js';
-import type { RequirementRecord, AnnotationRecord, ArtifactRecord } from '@kinqs/brainrouter-types';
+import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph } from '@kinqs/brainrouter-types';
 import type { CommandsCatalog } from '../commands/commands.js';
 import type { ConfigSnapshot, UsageHistory } from '../../settings.js';
 import { parseWorktreeList, type WorktreeEntry } from '../worktree/worktreeParser.js';
@@ -49,6 +49,12 @@ function isWorkspaceScopedReviewQuery(id: string): boolean {
   return WORKSPACE_SCOPED_REVIEW_QUERY_IDS.has(id);
 }
 
+/** Tool enable/disable catalog (the `tool-catalog` query result). */
+export interface ToolCatalog {
+  builtin: Array<{ name: string; description: string; protected: boolean }>;
+  mcp: Array<{ server: string; name: string }>;
+}
+
 export interface AgentEventsCtx {
   setRows: React.Dispatch<React.SetStateAction<ChatRow[]>>;
   setRunning: React.Dispatch<React.SetStateAction<boolean>>;
@@ -71,7 +77,7 @@ export interface AgentEventsCtx {
   // recall are counted here from their events). Reset on session-changed.
   setEfficiency: React.Dispatch<React.SetStateAction<{ compactions: number; droppedMessages: number; memoriesRecalled: number }>>;
   // Track mode data (project + work items + sprints), fed by the host `track-*` queries.
-  setTrack: React.Dispatch<React.SetStateAction<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; automations: AutomationRule[]; members: ProjectMember[]; sync: { config: SyncConfig | null; result: SyncResult | null } }>>;
+  setTrack: React.Dispatch<React.SetStateAction<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; modules: Module[]; views: SavedView[]; automations: AutomationRule[]; members: ProjectMember[]; sync: { config: SyncConfig | null; result: SyncResult | null }; git: GitTrackContext | null; pr: TrackPrStatus | null }>>;
   setInteraction: React.Dispatch<React.SetStateAction<InteractionRequest | null>>;
   setPicked: React.Dispatch<React.SetStateAction<string[]>>;
   setViewKey: React.Dispatch<React.SetStateAction<string>>;
@@ -100,7 +106,11 @@ export interface AgentEventsCtx {
   setBranches: React.Dispatch<React.SetStateAction<BranchesState>>;
   setModelsLoading: React.Dispatch<React.SetStateAction<boolean>>;
   setEndpointModels: React.Dispatch<React.SetStateAction<string[]>>;
+  setToolCatalog: React.Dispatch<React.SetStateAction<ToolCatalog>>;
   setProviderModels: React.Dispatch<React.SetStateAction<Record<string, string[]>>>;
+  setProbedModels: React.Dispatch<React.SetStateAction<string[]>>;
+  setProbeLoading: React.Dispatch<React.SetStateAction<boolean>>;
+  setProbeError: React.Dispatch<React.SetStateAction<string>>;
   setCatalog: React.Dispatch<React.SetStateAction<CommandsCatalog | null>>;
   setSnapshot: React.Dispatch<React.SetStateAction<ConfigSnapshot | null>>;
   setUsageLines: React.Dispatch<React.SetStateAction<string[]>>;
@@ -110,6 +120,11 @@ export interface AgentEventsCtx {
   setRequirements: React.Dispatch<React.SetStateAction<RequirementRecord[]>>;
   setAnnotations: React.Dispatch<React.SetStateAction<AnnotationRecord[]>>;
   setArtifacts: React.Dispatch<React.SetStateAction<ArtifactRecord[]>>;
+  setAtlasGraph: React.Dispatch<React.SetStateAction<AtlasGraph | null>>;
+  setAtlasBuilding: React.Dispatch<React.SetStateAction<boolean>>;
+  setAtlasEnriching: React.Dispatch<React.SetStateAction<boolean>>;
+  setAtlasAssessing: React.Dispatch<React.SetStateAction<string | null>>;
+  setAtlasAssessments: React.Dispatch<React.SetStateAction<Record<string, import('../atlas/atlasView.js').AtlasChangeAssessment>>>;
   setWorktrees: React.Dispatch<React.SetStateAction<WorktreeEntry[]>>;
   setWorktreeDiffs: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   setReviewRunningByWs: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
@@ -186,8 +201,8 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
     setDraft, planFeedbackRef, goalContPendingRef, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
-    setBranches, setModelsLoading, setEndpointModels, setProviderModels, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
-    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
+    setBranches, setModelsLoading, setEndpointModels, setToolCatalog, setProviderModels, setProbedModels, setProbeLoading, setProbeError, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
+    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
     setAtBottom,
@@ -269,7 +284,7 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       if (!isForeground && FOREGROUND_ONLY_KINDS.has(e.kind)) return;
       switch (e.kind) {
         case 'status': setStatusLine(e.text); break;
-        case 'reasoning-delta': setReasoningTail((t) => (t + e.text).slice(-200)); break;
+        case 'reasoning-delta': setReasoningTail((t) => t + e.text); break;
         case 'assistant-turn-start': liveBuf.current = ''; liveFlushPending.current = false; setLiveText(''); break;
         case 'assistant-delta':
           streamedThisTurnRef.current = true;
@@ -446,8 +461,16 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           // branches + git state reload (they were cleared on switch); a same-
           // workspace session change (new chat / switch chat) only needs the
           // light refresh (git is identical across chats in one workspace).
-          if (workspaceChanged(wsMsg.workspaceRoot, prevWs)) refreshSidebar();
-          else refreshSession();
+          if (workspaceChanged(wsMsg.workspaceRoot, prevWs)) {
+            // ATLAS-18 — the Atlas is per-workspace. Drop the previous project's
+            // graph and load the NEW workspace's STORED graph (q-atlas reads, never
+            // regenerates), so its prior enrichment is preserved until the user
+            // explicitly Rebuilds/Enriches. Clear transient + path-keyed state too.
+            setAtlasGraph(null); setAtlasBuilding(false); setAtlasEnriching(false);
+            setAtlasAssessing(null); setAtlasAssessments({});
+            q('q-atlas', 'atlas-graph');
+            refreshSidebar();
+          } else refreshSession();
           break;
         // DESK-5v — turn lifecycle is tracked PER SESSION so a background turn
         // keeps its spinner and lands its result/error in the right chat.
@@ -591,15 +614,30 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
         setProjSessions((prev) => withCachedProjectSessions(prev, root, merged));
       } return;
       case 'q-pr': setPrInfo(((result as { pr?: { number: number; state: string; title?: string } | null })?.pr) ?? null); return;
-      case 'q-ctx': if (result && typeof result === 'object') setContextUsage(result as { used: number; window: number; compactAt: number; limit: number; pct: number }); return;
+      case 'q-ctx': if (result && typeof result === 'object') {
+        const u = result as { used: number; window: number; compactAt: number; limit: number; pct: number };
+        // Auto-compaction must trigger WITHIN the model window — clamp the
+        // threshold to the window so its bar never shows a max larger than the
+        // model window (a knob bigger than the window can never fire: the
+        // provider rejects the request before that many tokens accrue).
+        const compactAt = u.window > 0 ? Math.min(u.compactAt, u.window) : u.compactAt;
+        const limit = compactAt > 0 ? compactAt : u.window;
+        setContextUsage({ ...u, compactAt, limit, pct: limit > 0 ? Math.min(1, u.used / limit) : 0 });
+      } return;
       // TRACK mode — project + work items. Create/transition return the updated list.
       case 'q-track-project': setTrack((t) => ({ ...t, project: (result as TrackProject | null) ?? null })); return;
       case 'q-track-items': case 'q-track-create': case 'q-track-transition':
-      case 'q-track-update-item': case 'q-track-comment': case 'q-track-link': case 'q-track-assign-sprint':
+      case 'q-track-update-item': case 'q-track-comment': case 'q-track-link': case 'q-track-assign-sprint': case 'q-track-assign-module':
         if (Array.isArray(result)) setTrack((t) => ({ ...t, items: result as WorkItem[] }));
         return;
       case 'q-track-sprints': case 'q-track-create-sprint': case 'q-track-sprint-state':
         if (Array.isArray(result)) setTrack((t) => ({ ...t, sprints: result as Sprint[] }));
+        return;
+      case 'q-track-modules': case 'q-track-create-module': case 'q-track-module-update': case 'q-track-module-delete':
+        if (Array.isArray(result)) setTrack((t) => ({ ...t, modules: result as Module[] }));
+        return;
+      case 'q-track-views': case 'q-track-save-view': case 'q-track-delete-view':
+        if (Array.isArray(result)) setTrack((t) => ({ ...t, views: result as SavedView[] }));
         return;
       case 'q-track-automations': case 'q-track-create-automation':
       case 'q-track-update-automation': case 'q-track-delete-automation':
@@ -618,6 +656,64 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       case 'q-track-sync-config':
         if (result && typeof result === 'object') setTrack((t) => ({ ...t, sync: { ...t.sync, config: result as SyncConfig } }));
         return;
+      case 'q-track-git-context':
+        if (result && typeof result === 'object') setTrack((t) => ({ ...t, git: result as GitTrackContext }));
+        return;
+      case 'q-track-start-work': {
+        const r = result as { ok?: boolean; error?: string; branch?: string; items?: WorkItem[]; context?: GitTrackContext } | null;
+        if (Array.isArray(r?.items)) setTrack((t) => ({ ...t, items: r!.items!, git: r!.context ?? t.git }));
+        if (r?.error) setToast(`Git start failed: ${r.error}`);
+        else if (r?.branch) setToast(`Started ${r.branch}.`);
+        return;
+      }
+      case 'q-track-pr-status':
+        if (result && typeof result === 'object') setTrack((t) => ({ ...t, pr: result as TrackPrStatus }));
+        return;
+      case 'q-track-create-pr': {
+        const r = result as { ok?: boolean; error?: string; url?: string; pr?: TrackPrStatus['pr']; branch?: string | null; itemKey?: string; items?: WorkItem[] } | null;
+        if (Array.isArray(r?.items)) setTrack((t) => ({
+          ...t,
+          items: r!.items!,
+          pr: { pr: r!.pr ?? null, branch: r!.branch ?? null, itemKey: r!.itemKey },
+        }));
+        if (r?.error) setToast(`Draft PR failed: ${r.error}`);
+        else if (r?.url) setToast(`Created draft PR: ${r.url}`);
+        return;
+      }
+      case 'q-track-gh-issues': {
+        const r = result as (SyncResult & { items?: WorkItem[] }) | null;
+        if (Array.isArray(r?.items)) setTrack((t) => ({ ...t, items: r!.items!, sync: { ...t.sync, result: r as SyncResult } }));
+        if (r) setToast(`Imported ${r.imported?.length ?? 0} issue(s) via gh${r.errors?.length ? ` · ${r.errors.length} error(s)` : ''}.`);
+        return;
+      }
+      case 'q-track-merge-pr': {
+        const r = result as { ok?: boolean; error?: string; pr?: TrackPrStatus['pr']; branch?: string | null; itemKey?: string; items?: WorkItem[] } | null;
+        if (Array.isArray(r?.items)) setTrack((t) => ({
+          ...t,
+          items: r!.items!,
+          pr: { pr: r!.ok ? null : (r!.pr ?? null), branch: r!.branch ?? null, itemKey: r!.itemKey },
+        }));
+        if (r?.error) setToast(`Merge failed: ${r.error}`);
+        else if (r?.ok) setToast('Pull request merged.');
+        return;
+      }
+      case 'q-track-submit-pr-review': {
+        const r = result as { ok?: boolean; error?: string; pr?: TrackPrStatus['pr']; branch?: string | null; itemKey?: string } | null;
+        if (r) setTrack((t) => ({ ...t, pr: { pr: r.pr ?? t.pr?.pr ?? null, branch: r.branch ?? t.pr?.branch ?? null, itemKey: r.itemKey ?? t.pr?.itemKey } }));
+        if (r?.error) setToast(`Review failed: ${r.error}`);
+        else if (r?.ok) setToast('Pull request review submitted.');
+        return;
+      }
+      case 'q-track-fix-checks': {
+        const r = result as { ok?: boolean; error?: string; pr?: TrackPrStatus['pr']; branch?: string | null; itemKey?: string; task?: { id?: string } } | null;
+        if (r) setTrack((t) => ({ ...t, pr: { pr: r.pr ?? t.pr?.pr ?? null, branch: r.branch ?? t.pr?.branch ?? null, itemKey: r.itemKey ?? t.pr?.itemKey } }));
+        if (r?.error) setToast(`Fix checks failed: ${r.error}`);
+        else if (r?.ok) {
+          setToast('Fix checks task started — see Background tasks.');
+          q('q-fleet', 'fleet');
+        }
+        return;
+      }
       case 'q-track-sync':
         if (result && typeof result === 'object' && !(result as { error?: string }).error) setTrack((t) => ({ ...t, sync: { ...t.sync, result: result as SyncResult } }));
         return;
@@ -728,6 +824,43 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
         }
         return;
       }
+      case 'q-toolcat': {
+        if (result && typeof result === 'object') {
+          const r = result as Partial<ToolCatalog>;
+          setToolCatalog({ builtin: r.builtin ?? [], mcp: r.mcp ?? [] });
+        }
+        return;
+      }
+      // §multi-select-models — a draft-key probe from the Models setup dialog.
+      // Feeds its OWN state (never endpointModels), so it can't race the on-open
+      // model load. An empty list means the key/endpoint unlocked nothing.
+      case 'q-probe': {
+        setProbeLoading(false);
+        const r = (result && typeof result === 'object') ? result as { models?: string[]; error?: string } : { models: [] };
+        const models = r.models ?? [];
+        setProbedModels(models);
+        // error reason (http-401 = bad key, unreachable = CORS/network) takes
+        // precedence so the dialog can validate the key; else generic no-models.
+        setProbeError(models.length ? '' : ((r as { error?: string }).error || 'no-models'));
+        return;
+      }
+      // §multi-provider — visible feedback (banner) for the Models-panel actions,
+      // so creating/removing/defaulting a provider never silently does nothing.
+      case 'a-setprov': {
+        const r = result as { ok?: boolean; name?: string; error?: string } | null;
+        setToast(r && r.ok ? `✓ Connected ${r.name ?? 'provider'}` : `✗ Couldn't save provider${r?.error ? `: ${r.error}` : ''}`);
+        return;
+      }
+      case 'a-rmprov': {
+        const r = result as { ok?: boolean; name?: string; error?: string } | null;
+        setToast(r && r.ok ? `✓ Removed ${r.name ?? 'provider'}` : `✗ Couldn't remove provider${r?.error ? `: ${r.error}` : ''}`);
+        return;
+      }
+      case 'a-setdefault': {
+        const r = result as { ok?: boolean; error?: string } | null;
+        setToast(r && r.ok ? '✓ Default provider updated' : `✗ Couldn't set default${r?.error ? `: ${r.error}` : ''}`);
+        return;
+      }
       case 'q-catalog': if (result && typeof result === 'object') setCatalog(result as CommandsCatalog); return;
       case 'q-snapshot': if (result && typeof result === 'object') setSnapshot(result as ConfigSnapshot); return;
       case 'q-usage': if (Array.isArray(result)) setUsageLines(result as string[]); return;
@@ -738,6 +871,24 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
       // their own ids (q-req-create/q-req-update/q-req-seed) and just trigger a
       // refresh via q-req, except seed/error which surfaces a toast.
       case 'q-req': if (Array.isArray(result)) setRequirements(result as RequirementRecord[]); return;
+      case 'q-atlas': setAtlasGraph(result && typeof result === 'object' && Array.isArray((result as { nodes?: unknown }).nodes) ? (result as AtlasGraph) : null); return;
+      case 'q-atlas-build': { const g = (result as { graph?: AtlasGraph } | null)?.graph ?? null; if (g) setAtlasGraph(g); setAtlasBuilding(false); return; }
+      case 'q-atlas-enrich': {
+        const r = result as { graph?: AtlasGraph; error?: string; enrichResult?: { summarized: number; layers: number; tourSteps: number; batchesFailed: number } } | null;
+        setAtlasEnriching(false);
+        if (r?.error) { setToast(`⚠ ${r.error}`); return; }
+        if (r?.graph) setAtlasGraph(r.graph);
+        const er = r?.enrichResult;
+        if (er) setToast(`✓ Atlas enriched — ${er.summarized} summaries · ${er.layers} layers · ${er.tourSteps} tour`);
+        return;
+      }
+      case 'q-atlas-explain': {
+        const r = result as { path?: string; error?: string; assessment?: import('../atlas/atlasView.js').AtlasChangeAssessment } | null;
+        setAtlasAssessing(null);
+        if (r?.error) { setToast(`⚠ ${r.error}`); return; }
+        if (r?.path && r.assessment) setAtlasAssessments((prev) => ({ ...prev, [r.path as string]: r.assessment! }));
+        return;
+      }
       case 'q-req-create': case 'q-req-update': case 'q-req-seed': {
         const r = result as { error?: string } | null;
         if (r && typeof r === 'object' && typeof r.error === 'string') setToast(`✗ ${r.error}`);

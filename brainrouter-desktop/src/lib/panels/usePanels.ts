@@ -7,7 +7,21 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import type { PanelId } from '../../panels/index.js';
 import { devPanels, devFlag } from '../devFlags.js';
+import { VALID_PANEL_IDS } from '../../constants.js';
 import { clampSideRailWidth, reorderByValue, SIDE_RAIL_MIN } from './sideRailLayout.js';
+
+// Persisted layouts can carry renamed/retired panel ids. The Markdown writing
+// experience ('write' → 'docs') folded into the Editor, so both map to 'editor'.
+// Unknown ids are dropped, and duplicates are collapsed, so an upgrade never
+// leaves a dead or doubled tab.
+const PANEL_ID_ALIASES: Record<string, PanelId> = { write: 'editor', docs: 'editor' };
+const migratePanelId = (id: string): PanelId => (PANEL_ID_ALIASES[id] ?? id) as PanelId;
+const migratePanelIds = (ids: unknown[]): PanelId[] => {
+  const seen = new Set<PanelId>();
+  return ids
+    .map((p) => migratePanelId(String(p)))
+    .filter((p) => VALID_PANEL_IDS.has(p) && !seen.has(p) && (seen.add(p), true));
+};
 
 export interface TermTab { id: number; kind: 'shell' | PanelId }
 
@@ -17,6 +31,9 @@ export interface PanelsApi {
   sidePanelOpen: boolean;
   sideWidth: number;
   sideFullScreen: boolean;
+  /** §panel-drawer — pinned = docked column (today's behavior); unpinned =
+   *  transient overlay drawer that closes on outside-click / Esc. */
+  sidePinned: boolean;
   termDockOpen: boolean;
   termDockHeight: number;
   termTabs: TermTab[];
@@ -26,6 +43,7 @@ export interface PanelsApi {
   setSidePanelOpen: Dispatch<SetStateAction<boolean>>;
   setSideWidth: Dispatch<SetStateAction<number>>;
   setSideFullScreen: Dispatch<SetStateAction<boolean>>;
+  setSidePinned: Dispatch<SetStateAction<boolean>>;
   setTermDockOpen: Dispatch<SetStateAction<boolean>>;
   setTermDockHeight: Dispatch<SetStateAction<number>>;
   setTermTabs: Dispatch<SetStateAction<TermTab[]>>;
@@ -49,7 +67,7 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
     if (saved !== null) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed as PanelId[];
+        if (Array.isArray(parsed)) return migratePanelIds(parsed);
       } catch (e) {
         // ignore
       }
@@ -58,7 +76,7 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
   });
   const [activeSideTab, setActiveSideTab] = useState<PanelId | null>(() => {
     const saved = localStorage.getItem('br-active-side-tab');
-    if (saved !== null && saved !== 'null') return saved as PanelId;
+    if (saved !== null && saved !== 'null') return migratePanelId(saved);
     return devPanels()[0] ?? null;
   });
   const [sidePanelOpen, setSidePanelOpen] = useState(() => {
@@ -69,6 +87,12 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
   // On launch, it starts at its minimum size (SIDE_RAIL_MIN).
   const [sideWidth, setSideWidth] = useState(SIDE_RAIL_MIN);
   const [sideFullScreen, setSideFullScreen] = useState(() => localStorage.getItem('br-side-fullscreen') === '1');
+  // §panel-drawer — default DOCKED (pinned) so the panel is a persistent
+  // resizable column that STAYS PUT when you click elsewhere; unpinning turns it
+  // into an overlay drawer that dismisses on outside-click. A `-v2` key resets
+  // the prior unpinned default (which persisted '0' on first mount) so existing
+  // installs also get the docked behavior unless they explicitly unpin again.
+  const [sidePinned, setSidePinned] = useState(() => localStorage.getItem('br-side-pinned-v2') !== '0');
   const [termDockOpen, setTermDockOpen] = useState(() => {
     const saved = localStorage.getItem('br-dock-open');
     if (saved !== null) return saved === '1';
@@ -87,6 +111,10 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
   useEffect(() => {
     localStorage.setItem('br-side-fullscreen', sideFullScreen ? '1' : '0');
   }, [sideFullScreen]);
+
+  useEffect(() => {
+    localStorage.setItem('br-side-pinned-v2', sidePinned ? '1' : '0');
+  }, [sidePinned]);
 
   useEffect(() => {
     localStorage.setItem('br-side-open', sidePanelOpen ? '1' : '0');
@@ -190,8 +218,8 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
   }
 
   return {
-    sideTabs, activeSideTab, sidePanelOpen, sideWidth, sideFullScreen, termDockOpen, termDockHeight, termTabs, activeTerm,
-    setSideTabs, setActiveSideTab, setSidePanelOpen, setSideWidth, setSideFullScreen, setTermDockOpen, setTermDockHeight, setTermTabs, setActiveTerm,
+    sideTabs, activeSideTab, sidePanelOpen, sideWidth, sideFullScreen, sidePinned, termDockOpen, termDockHeight, termTabs, activeTerm,
+    setSideTabs, setActiveSideTab, setSidePanelOpen, setSideWidth, setSideFullScreen, setSidePinned, setTermDockOpen, setTermDockHeight, setTermTabs, setActiveTerm,
     ensurePanel, closeSideTab, reorderSideTab, togglePanel, openSideView, openBottomDock, addBottomTab, closeBottomTab, resizeTerminal, resetTermDock,
   };
 }

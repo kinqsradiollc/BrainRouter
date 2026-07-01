@@ -75,7 +75,7 @@ test('plan/Track sync: a completed plan item transitions its linked item to done
 
     const result = syncRequirementPlanTrack(workspace, sessionKey);
     const item = listWorkItems(workspace).find((candidate) => candidate.requirementId === requirement.id)!;
-    assert.equal(item.statusCategory, 'done');
+    assert.equal(item.statusCategory, 'completed');
     assert.equal(result.actions.filter((action) => action.kind === 'work-item-completed').length, 1);
   });
 });

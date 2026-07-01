@@ -20,9 +20,14 @@ import {
   type WorkItemComment,
   type WorkItemActivity,
   type StatusCategory,
+  type WorkflowState,
   type CodeLink,
   type Sprint,
   type SprintState,
+  type Module,
+  type ModuleStatus,
+  type SavedView,
+  type TrackLayout,
   type Board,
   type BoardType,
   type BoardColumn,
@@ -32,36 +37,137 @@ import {
   type ProjectMember,
   type ProjectRole,
   type ProjectCapability,
+  type TrackLabel,
   roleCan,
   ROLE_RANK,
   DEFAULT_WORKFLOW_STATES,
   DEFAULT_ISSUE_TYPES,
+  STATUS_CATEGORY_COLORS,
+  colorForLabelName,
 } from '@kinqs/brainrouter-types';
 import { getStateFile, readJsonFile, writeJsonFile } from '../storage/store.js';
 import { parseTrackQuery, matchesTrackQuery } from './query.js';
 
+/**
+ * Snapshot of the GitHub-mirrored fields at the last successful sync. Serves as
+ * the common ancestor ("base") for a 3-way merge, so a two-way sync can tell a
+ * LOCAL edit from a REMOTE edit and only overwrite a field that the *other* side
+ * changed — instead of GitHub always clobbering local (or vice-versa).
+ */
+export interface GithubMirrorSnapshot {
+  title: string;
+  description: string;
+  type: string;
+  priority: string;
+  /** Plain labels only (the synthetic `type:` / `priority:` labels are excluded). */
+  labels: string[];
+  assignees: string[];
+  /** GitHub issue state as a boolean: closed ⇔ a terminal (completed/cancelled) category. */
+  closed: boolean;
+}
+
 /** A recorded link from a work item to an external system's record. */
-export interface ExternalLink { number: number; url: string }
+export interface ExternalLink {
+  number: number;
+  url: string;
+  /** 3-way-merge base captured at the last sync (bidirectional sync). */
+  baseline?: GithubMirrorSnapshot;
+  /** The issue's `updated_at` at the last sync (cheap "did GitHub change?" hint). */
+  githubUpdatedAt?: string;
+  /** ISO timestamp of the last sync. */
+  syncedAt?: string;
+}
 
 interface TrackStore {
   project: TrackProject | null;
   workItems: Record<string, WorkItem>;
   sprints: Record<string, Sprint>;
+  modules: Record<string, Module>;
+  views: Record<string, SavedView>;
   boards: Record<string, Board>;
   automations: Record<string, AutomationRule>;
   /** GitHub issue links, keyed by work-item id (external sync round-trip). */
   githubLinks: Record<string, ExternalLink>;
+  /** Migration marker; bumped whenever the record shapes change (see migrateStore). */
+  schemaVersion?: number;
 }
 
-const EMPTY: TrackStore = { project: null, workItems: {}, sprints: {}, boards: {}, automations: {}, githubLinks: {} };
+const EMPTY: TrackStore = { project: null, workItems: {}, sprints: {}, modules: {}, views: {}, boards: {}, automations: {}, githubLinks: {} };
+
+/**
+ * Current on-disk schema.
+ * v2 = lifecycle groups + urgent/none priority + start/target/completed/archived dates.
+ * v3 = multi-assignee (`assignees`) + the project label registry.
+ */
+const SCHEMA_VERSION = 3;
+
+/** Remap pre-v2 lifecycle groups (3-lane todo/in-progress/done) onto the new groups. */
+const CATEGORY_MIGRATION: Record<string, StatusCategory> = {
+  todo: 'unstarted',
+  'in-progress': 'started',
+  done: 'completed',
+};
+/** Remap pre-v2 priorities (lowest…highest) onto the new urgent…none scale. */
+const PRIORITY_MIGRATION: Record<string, WorkItemPriority> = {
+  lowest: 'low',
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+  highest: 'urgent',
+};
+
+/**
+ * Idempotently bring an on-disk store up to {@link SCHEMA_VERSION}. Remaps the
+ * pre-v2 status categories + priorities, backfills state colors and a default
+ * flag, moves `dueDate`→`targetDate`, recomputes each item's `statusCategory`
+ * from its (remapped) state, and backfills `completedAt`. Returns whether any
+ * change was made so the caller persists exactly once.
+ */
+function migrateStore(store: TrackStore): boolean {
+  if ((store.schemaVersion ?? 1) >= SCHEMA_VERSION) return false;
+  let changed = false;
+  if (store.project) {
+    for (const s of store.project.workflowStates as WorkflowState[]) {
+      const remapped = CATEGORY_MIGRATION[s.category as string];
+      if (remapped && s.category !== remapped) { s.category = remapped; changed = true; }
+      if (!s.color) { s.color = STATUS_CATEGORY_COLORS[s.category] ?? '#94a3b8'; changed = true; }
+    }
+    if (!store.project.workflowStates.some((s) => s.default) && store.project.workflowStates[0]) {
+      store.project.workflowStates[0].default = true; changed = true;
+    }
+    // v3: a label registry, backfilled from the labels already in use.
+    if (!Array.isArray(store.project.labels)) { store.project.labels = []; changed = true; }
+    for (const item of Object.values(store.workItems)) {
+      const bag = item as unknown as Record<string, unknown>;
+      const remapped = PRIORITY_MIGRATION[item.priority as string];
+      if (remapped && remapped !== item.priority) { item.priority = remapped; changed = true; }
+      if (typeof bag.dueDate === 'string' && !bag.targetDate) { bag.targetDate = bag.dueDate; changed = true; }
+      if ('dueDate' in bag) { delete bag.dueDate; changed = true; }
+      const cat = categoryOf(store.project, item.status);
+      if (item.statusCategory !== cat) { item.statusCategory = cat; changed = true; }
+      if (cat === 'completed' && !item.completedAt) { item.completedAt = item.updatedAt; changed = true; }
+      // v3: derive the assignees list from the legacy single `assignee`.
+      if (!Array.isArray(item.assignees)) {
+        item.assignees = item.assignee ? [item.assignee] : []; changed = true;
+      }
+      if (item.assignee !== item.assignees[0]) { item.assignee = item.assignees[0]; changed = true; }
+      for (const name of item.labels ?? []) registerLabel(store.project, name);
+    }
+  }
+  store.schemaVersion = SCHEMA_VERSION;
+  return changed || !!store.project || Object.keys(store.workItems).length > 0;
+}
 
 function trackFile(workspaceRoot: string): string {
   return getStateFile(workspaceRoot, 'track.json');
 }
 function readTrack(workspaceRoot: string): TrackStore {
-  return { ...EMPTY, ...readJsonFile<TrackStore>(trackFile(workspaceRoot), EMPTY) };
+  const store = { ...EMPTY, ...readJsonFile<TrackStore>(trackFile(workspaceRoot), EMPTY) };
+  if (migrateStore(store)) writeJsonFile(trackFile(workspaceRoot), store);
+  return store;
 }
 function writeTrack(workspaceRoot: string, store: TrackStore): void {
+  store.schemaVersion = SCHEMA_VERSION;
   writeJsonFile(trackFile(workspaceRoot), store);
 }
 function shortId(prefix: string): string {
@@ -97,11 +203,20 @@ export const LOCAL_MEMBER_ID = 'you';
 export function ensureProject(workspaceRoot: string, input: EnsureProjectInput = {}): TrackProject {
   const store = readTrack(workspaceRoot);
   if (store.project) {
+    let dirty = false;
     // Backfill members for projects created before A3 (permissions).
     if (!Array.isArray(store.project.members) || store.project.members.length === 0) {
       store.project.members = [{ id: LOCAL_MEMBER_ID, name: 'You', role: 'owner', addedAt: store.project.createdAt }];
-      writeTrack(workspaceRoot, store);
+      dirty = true;
     }
+    // Backfill the label registry (pre-T2 projects) from the labels in use.
+    if (!Array.isArray(store.project.labels)) {
+      store.project.labels = [];
+      const names = new Set(Object.values(store.workItems).flatMap((w) => w.labels ?? []));
+      for (const name of names) registerLabel(store.project, name);
+      dirty = true;
+    }
+    if (dirty) writeTrack(workspaceRoot, store);
     return store.project;
   }
   const ts = nowIso();
@@ -114,6 +229,7 @@ export function ensureProject(workspaceRoot: string, input: EnsureProjectInput =
     workflowStates: [...DEFAULT_WORKFLOW_STATES],
     issueTypes: [...DEFAULT_ISSUE_TYPES],
     components: [],
+    labels: [],
     members: [{ id: LOCAL_MEMBER_ID, name: 'You', role: 'owner', addedAt: ts }],
     createdAt: ts,
     updatedAt: ts,
@@ -138,9 +254,31 @@ export function getProject(workspaceRoot: string): TrackProject | undefined {
   return readTrack(workspaceRoot).project ?? undefined;
 }
 
-/** Resolve a status id to its board/report category (default `todo`). */
+/** Resolve a status id to its lifecycle group (default `backlog`). */
 function categoryOf(project: TrackProject, statusId: string): StatusCategory {
-  return project.workflowStates.find((s) => s.id === statusId)?.category ?? 'todo';
+  return project.workflowStates.find((s) => s.id === statusId)?.category ?? 'backlog';
+}
+
+/** The status id new items default into: the project's `default` state, else the first. */
+function defaultStatusId(project: TrackProject): string {
+  return project.workflowStates.find((s) => s.default)?.id ?? project.workflowStates[0]?.id ?? 'backlog';
+}
+
+/** Register a label name in the project registry if absent (auto-colored). Returns the label. */
+function registerLabel(project: TrackProject, name: string): TrackLabel {
+  const trimmed = name.trim();
+  const existing = project.labels.find((l) => l.name.toLowerCase() === trimmed.toLowerCase());
+  if (existing) return existing;
+  const label: TrackLabel = { id: shortId('lbl'), name: trimmed, color: colorForLabelName(trimmed) };
+  project.labels.push(label);
+  return label;
+}
+
+/** Trim, drop empties, de-dupe an assignee list (order preserved). */
+function normalizeAssignees(list: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const a of list) { const v = a.trim(); if (v && !out.includes(v)) out.push(v); }
+  return out;
 }
 
 // ── Work items ────────────────────────────────────────────────────────────────
@@ -151,15 +289,20 @@ export interface CreateWorkItemInput {
   description?: string;
   status?: string;
   priority?: WorkItemPriority;
+  /** Primary assignee (legacy single field; folded into `assignees`). */
   assignee?: string;
+  /** Multiple assignees (the source of truth). */
+  assignees?: string[];
   reporter?: string;
   labels?: string[];
   components?: string[];
   storyPoints?: number;
-  dueDate?: string;
+  startDate?: string;
+  targetDate?: string;
   parentId?: string;
   epicId?: string;
   sprintId?: string;
+  moduleId?: string;
   sessionKey?: string;
   requirementId?: string;
   codeLinks?: CodeLink[];
@@ -177,7 +320,11 @@ export function createWorkItem(workspaceRoot: string, input: CreateWorkItemInput
   assertCan(workspaceRoot, input.actor ?? 'user', 'create-item');
   const store = readTrack(workspaceRoot);
   const project = store.project!;
-  const status = input.status ?? project.workflowStates[0]?.id ?? 'todo';
+  const status = input.status ?? defaultStatusId(project);
+  const category = categoryOf(project, status);
+  const assignees = normalizeAssignees(input.assignees ?? (input.assignee ? [input.assignee] : []));
+  const labels = input.labels ?? [];
+  for (const name of labels) registerLabel(project, name);
   const n = project.keyCounter;
   project.keyCounter = n + 1;
   project.updatedAt = nowIso();
@@ -189,18 +336,22 @@ export function createWorkItem(workspaceRoot: string, input: CreateWorkItemInput
     title: input.title,
     description: input.description,
     status,
-    statusCategory: categoryOf(project, status),
-    priority: input.priority ?? 'medium',
-    assignee: input.assignee,
+    statusCategory: category,
+    priority: input.priority ?? 'none',
+    assignees,
+    assignee: assignees[0],
     reporter: input.reporter,
     watchers: [],
-    labels: input.labels ?? [],
+    labels,
     components: input.components ?? [],
     storyPoints: input.storyPoints,
-    dueDate: input.dueDate,
+    startDate: input.startDate,
+    targetDate: input.targetDate,
+    completedAt: category === 'completed' ? ts : undefined,
     parentId: input.parentId,
     epicId: input.epicId,
     sprintId: input.sprintId,
+    moduleId: input.moduleId,
     links: [],
     comments: [],
     attachmentIds: [],
@@ -233,6 +384,7 @@ export interface WorkItemFilter {
   statusCategory?: StatusCategory;
   assignee?: string;
   sprintId?: string;
+  moduleId?: string;
   epicId?: string;
   parentId?: string;
   label?: string;
@@ -240,20 +392,24 @@ export interface WorkItemFilter {
   text?: string;
   /** A JQL-style query (see query.ts). A malformed query matches nothing. */
   query?: string;
+  /** Include archived items (excluded by default, matching the default board/list view). */
+  includeArchived?: boolean;
 }
 
-/** List work items (newest first), optionally filtered. */
+/** List work items (newest first), optionally filtered. Archived items are excluded unless asked for. */
 export function listWorkItems(workspaceRoot: string, filter: WorkItemFilter = {}): WorkItem[] {
   const items = Object.values(readTrack(workspaceRoot).workItems);
   const t = filter.text?.toLowerCase();
   const queryPred = filter.query ? parseTrackQuery(filter.query) : undefined;
   return items
     .filter((w) =>
+      (filter.includeArchived || !w.archivedAt) &&
       (filter.type === undefined || w.type === filter.type) &&
       (filter.status === undefined || w.status === filter.status) &&
       (filter.statusCategory === undefined || w.statusCategory === filter.statusCategory) &&
-      (filter.assignee === undefined || w.assignee === filter.assignee) &&
+      (filter.assignee === undefined || w.assignees.includes(filter.assignee)) &&
       (filter.sprintId === undefined || w.sprintId === filter.sprintId) &&
+      (filter.moduleId === undefined || w.moduleId === filter.moduleId) &&
       (filter.epicId === undefined || w.epicId === filter.epicId) &&
       (filter.parentId === undefined || w.parentId === filter.parentId) &&
       (filter.label === undefined || w.labels.includes(filter.label)) &&
@@ -274,13 +430,13 @@ export function findWorkItemsByCodeLink(
   );
 }
 
-/** Fields a caller may patch. Status changes recompute the category. */
+/** Fields a caller may patch. Status changes recompute the category + completedAt. */
 export type UpdateWorkItemPatch = Partial<
   Pick<
     WorkItem,
-    | 'title' | 'description' | 'status' | 'priority' | 'assignee' | 'reporter'
-    | 'labels' | 'components' | 'storyPoints' | 'estimateSeconds' | 'dueDate'
-    | 'parentId' | 'epicId' | 'sprintId' | 'rank'
+    | 'title' | 'description' | 'status' | 'priority' | 'assignee' | 'assignees' | 'reporter'
+    | 'labels' | 'components' | 'storyPoints' | 'estimateSeconds' | 'startDate' | 'targetDate'
+    | 'parentId' | 'epicId' | 'sprintId' | 'moduleId' | 'rank'
   >
 >;
 
@@ -301,8 +457,13 @@ export function updateWorkItem(
   if (!item) return undefined;
   assertCan(workspaceRoot, actor, 'edit-item');
   const ts = nowIso();
+  // Resolve a multi-assignee change from either field (assignees wins; legacy
+  // `assignee` is folded in). `assignee` then mirrors `assignees[0]`.
+  let nextAssignees: string[] | undefined;
+  if (patch.assignees !== undefined) nextAssignees = normalizeAssignees(patch.assignees);
+  else if (patch.assignee !== undefined) nextAssignees = patch.assignee ? normalizeAssignees([patch.assignee]) : [];
   const scalarFields: Array<keyof UpdateWorkItemPatch> = [
-    'title', 'description', 'status', 'priority', 'assignee', 'reporter', 'storyPoints', 'estimateSeconds', 'dueDate', 'parentId', 'epicId', 'sprintId', 'rank',
+    'title', 'description', 'status', 'priority', 'reporter', 'storyPoints', 'estimateSeconds', 'startDate', 'targetDate', 'parentId', 'epicId', 'sprintId', 'moduleId', 'rank',
   ];
   const bag = item as unknown as Record<string, unknown>;
   for (const f of scalarFields) {
@@ -310,8 +471,20 @@ export function updateWorkItem(
       item.activity.push({ at: ts, actor, field: String(f), from: fmt(bag[f]), to: fmt(patch[f]) });
     }
   }
+  if (nextAssignees !== undefined && nextAssignees.join(',') !== item.assignees.join(',')) {
+    item.activity.push({ at: ts, actor, field: 'assignees', from: item.assignees.join(', ') || undefined, to: nextAssignees.join(', ') || undefined });
+  }
+  if (patch.labels !== undefined && store.project) {
+    for (const name of patch.labels) registerLabel(store.project, name);
+  }
   Object.assign(item, patch);
-  if (patch.status !== undefined && store.project) item.statusCategory = categoryOf(store.project, patch.status);
+  if (nextAssignees !== undefined) { item.assignees = nextAssignees; item.assignee = nextAssignees[0]; }
+  if (patch.status !== undefined && store.project) {
+    item.statusCategory = categoryOf(store.project, patch.status);
+    // Auto-manage completedAt as the item enters/leaves a completed state.
+    if (item.statusCategory === 'completed') { if (!item.completedAt) item.completedAt = ts; }
+    else item.completedAt = undefined;
+  }
   item.updatedAt = ts;
   store.workItems[item.id] = item;
   writeTrack(workspaceRoot, store);
@@ -336,18 +509,32 @@ export function transitionWorkItem(workspaceRoot: string, idOrKey: string, toSta
   return getWorkItem(workspaceRoot, item.id) ?? item;
 }
 
-/** Add a comment; returns the updated item. */
-export function addComment(workspaceRoot: string, idOrKey: string, author: string, body: string): WorkItem | undefined {
+/** Optional external provenance for a synced comment (e.g. a GitHub issue comment). */
+export interface CommentExternal { externalSource: string; externalId: string }
+
+/** Add a comment; returns the updated item. `external` tags it as synced (round-trip key). */
+export function addComment(workspaceRoot: string, idOrKey: string, author: string, body: string, external?: CommentExternal): WorkItem | undefined {
   const store = readTrack(workspaceRoot);
   const item = store.workItems[idOrKey] ?? Object.values(store.workItems).find((w) => w.key === idOrKey);
   if (!item) return undefined;
   assertCan(workspaceRoot, author, 'edit-item');
   const ts = nowIso();
-  const comment: WorkItemComment = { id: shortId('cmt'), author, body, createdAt: ts };
+  const comment: WorkItemComment = { id: shortId('cmt'), author, body, createdAt: ts, ...external };
   item.comments.push(comment);
   item.updatedAt = ts;
   writeTrack(workspaceRoot, store);
   return item;
+}
+
+/** Record the external id for a locally-authored comment after it is pushed to GitHub. */
+export function recordCommentSync(workspaceRoot: string, itemId: string, commentId: string, external: CommentExternal): void {
+  const store = readTrack(workspaceRoot);
+  const item = store.workItems[itemId];
+  const comment = item?.comments.find((c) => c.id === commentId);
+  if (!comment) return;
+  comment.externalSource = external.externalSource;
+  comment.externalId = external.externalId;
+  writeTrack(workspaceRoot, store);
 }
 
 export interface LinkWorkItemInput {
@@ -400,6 +587,26 @@ export function deleteWorkItem(workspaceRoot: string, idOrKey: string): boolean 
   return true;
 }
 
+/**
+ * Archive (or, with `archived=false`, restore) a work item. Archived items keep
+ * all their data but drop out of the default board/list views — the soft-delete
+ * counterpart to {@link deleteWorkItem}. Returns the updated item.
+ */
+export function setWorkItemArchived(workspaceRoot: string, idOrKey: string, archived = true, actor = 'user'): WorkItem | undefined {
+  const store = readTrack(workspaceRoot);
+  const item = store.workItems[idOrKey] ?? Object.values(store.workItems).find((w) => w.key === idOrKey);
+  if (!item) return undefined;
+  assertCan(workspaceRoot, actor, 'edit-item');
+  const next = archived ? nowIso() : undefined;
+  if ((item.archivedAt ?? undefined) === next) return item;
+  const ts = nowIso();
+  item.activity.push({ at: ts, actor, field: 'archived', from: fmt(item.archivedAt), to: archived ? 'true' : 'false' });
+  item.archivedAt = next;
+  item.updatedAt = ts;
+  writeTrack(workspaceRoot, store);
+  return item;
+}
+
 // ── Sprints ───────────────────────────────────────────────────────────────────
 
 export interface CreateSprintInput {
@@ -446,7 +653,7 @@ export function sprintVelocity(workspaceRoot: string, sprintId: string): number 
   const store = readTrack(workspaceRoot);
   if (!store.sprints[sprintId]) return undefined;
   return Object.values(store.workItems)
-    .filter((item) => item.sprintId === sprintId && item.statusCategory === 'done')
+    .filter((item) => item.sprintId === sprintId && item.statusCategory === 'completed')
     .reduce((total, item) => total + (item.storyPoints ?? 0), 0);
 }
 
@@ -462,6 +669,141 @@ export function setSprintState(workspaceRoot: string, id: string, state: SprintS
   sprint.updatedAt = nowIso();
   writeTrack(workspaceRoot, store);
   return sprint;
+}
+
+// ── Modules ─────────────────────────────────────────────────────────────────────
+
+export interface CreateModuleInput {
+  name: string;
+  description?: string;
+  status?: ModuleStatus;
+  lead?: string;
+  members?: string[];
+  startDate?: string;
+  targetDate?: string;
+}
+
+export function createModule(workspaceRoot: string, input: CreateModuleInput): Module {
+  ensureProject(workspaceRoot);
+  const store = readTrack(workspaceRoot);
+  const ts = nowIso();
+  const module: Module = {
+    id: shortId('mod'), workspaceRoot, name: input.name, description: input.description,
+    status: input.status ?? 'planned', lead: input.lead, members: input.members ?? [],
+    startDate: input.startDate, targetDate: input.targetDate, createdAt: ts, updatedAt: ts,
+  };
+  store.modules[module.id] = module;
+  writeTrack(workspaceRoot, store);
+  return module;
+}
+
+/** List modules (newest first). Archived modules are excluded unless asked for. */
+export function listModules(workspaceRoot: string, opts: { includeArchived?: boolean } = {}): Module[] {
+  return Object.values(readTrack(workspaceRoot).modules)
+    .filter((m) => opts.includeArchived || !m.archivedAt)
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+}
+
+/** Resolve a module by id or (case-insensitive) name. */
+export function getModule(workspaceRoot: string, idOrName: string): Module | undefined {
+  const store = readTrack(workspaceRoot);
+  const key = idOrName.trim().toLowerCase();
+  return store.modules[idOrName] ?? Object.values(store.modules).find((m) => m.name.toLowerCase() === key);
+}
+
+export type UpdateModulePatch = Partial<Pick<Module, 'name' | 'description' | 'status' | 'lead' | 'members' | 'startDate' | 'targetDate'>>;
+
+export function updateModule(workspaceRoot: string, id: string, patch: UpdateModulePatch): Module | undefined {
+  const store = readTrack(workspaceRoot);
+  const module = store.modules[id] ?? Object.values(store.modules).find((m) => m.name.toLowerCase() === id.trim().toLowerCase());
+  if (!module) return undefined;
+  Object.assign(module, patch);
+  module.updatedAt = nowIso();
+  writeTrack(workspaceRoot, store);
+  return module;
+}
+
+/** Archive (or restore) a module — hides it from the default list; items keep their `moduleId`. */
+export function setModuleArchived(workspaceRoot: string, id: string, archived = true): Module | undefined {
+  const store = readTrack(workspaceRoot);
+  const module = store.modules[id];
+  if (!module) return undefined;
+  module.archivedAt = archived ? nowIso() : undefined;
+  module.updatedAt = nowIso();
+  writeTrack(workspaceRoot, store);
+  return module;
+}
+
+/** Delete a module and clear it from every work item that referenced it. */
+export function deleteModule(workspaceRoot: string, id: string): boolean {
+  const store = readTrack(workspaceRoot);
+  const module = store.modules[id] ?? Object.values(store.modules).find((m) => m.name.toLowerCase() === id.trim().toLowerCase());
+  if (!module) return false;
+  delete store.modules[module.id];
+  for (const item of Object.values(store.workItems)) {
+    if (item.moduleId === module.id) { item.moduleId = undefined; item.updatedAt = nowIso(); }
+  }
+  writeTrack(workspaceRoot, store);
+  return true;
+}
+
+// ── Saved views ─────────────────────────────────────────────────────────────────
+
+export interface SaveViewInput {
+  name: string;
+  layout: TrackLayout;
+  query?: string;
+  filters?: Record<string, string>;
+  groupBy?: string;
+  orderBy?: string;
+}
+
+/** Create or update (by case-insensitive name) a saved view — a filter + layout preset. */
+export function saveView(workspaceRoot: string, input: SaveViewInput): SavedView {
+  ensureProject(workspaceRoot);
+  const store = readTrack(workspaceRoot);
+  const name = input.name.trim();
+  if (!name) throw new Error('View name is required.');
+  const ts = nowIso();
+  const existing = Object.values(store.views).find((v) => v.name.toLowerCase() === name.toLowerCase());
+  const view: SavedView = {
+    id: existing?.id ?? shortId('view'),
+    workspaceRoot,
+    name,
+    layout: input.layout,
+    query: input.query?.trim() || undefined,
+    filters: input.filters && Object.keys(input.filters).length ? input.filters : undefined,
+    groupBy: input.groupBy,
+    orderBy: input.orderBy,
+    createdAt: existing?.createdAt ?? ts,
+    updatedAt: ts,
+  };
+  store.views[view.id] = view;
+  writeTrack(workspaceRoot, store);
+  return view;
+}
+
+/** List saved views (alphabetical by name). */
+export function listViews(workspaceRoot: string): SavedView[] {
+  return Object.values(readTrack(workspaceRoot).views).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Resolve a saved view by id or (case-insensitive) name. */
+export function getView(workspaceRoot: string, idOrName: string): SavedView | undefined {
+  const store = readTrack(workspaceRoot);
+  const key = idOrName.trim().toLowerCase();
+  return store.views[idOrName] ?? Object.values(store.views).find((v) => v.name.toLowerCase() === key);
+}
+
+/** Delete a saved view by id or name. */
+export function deleteView(workspaceRoot: string, idOrName: string): boolean {
+  const store = readTrack(workspaceRoot);
+  const key = idOrName.trim().toLowerCase();
+  const view = store.views[idOrName] ?? Object.values(store.views).find((v) => v.name.toLowerCase() === key);
+  if (!view) return false;
+  delete store.views[view.id];
+  writeTrack(workspaceRoot, store);
+  return true;
 }
 
 // ── Boards ────────────────────────────────────────────────────────────────────
@@ -500,7 +842,7 @@ export function boardView(workspaceRoot: string, boardId: string): Array<{ colum
   const store = readTrack(workspaceRoot);
   const board = store.boards[boardId];
   if (!board) return [];
-  const items = Object.values(store.workItems);
+  const items = Object.values(store.workItems).filter((w) => !w.archivedAt);
   const cols = board.columns.map((c) => ({ column: c.name, items: items.filter((w) => c.stateIds.includes(w.status)) }));
   const mapped = new Set(board.columns.flatMap((c) => c.stateIds));
   const unmapped = items.filter((w) => !mapped.has(w.status));
@@ -565,12 +907,15 @@ function applyAutomationAction(project: TrackProject, item: WorkItem, action: Au
       if (item.priority === (action.value as WorkItem['priority'])) return null;
       item.priority = action.value as WorkItem['priority'];
       return `priority → ${action.value}`;
-    case 'set-assignee':
-      if (item.assignee === (action.value || undefined)) return null;
-      item.assignee = action.value || undefined;
-      return `assignee → ${action.value || 'none'}`;
+    case 'set-assignee': {
+      const next = normalizeAssignees(action.value ? action.value.split(',') : []);
+      if (next.join(',') === item.assignees.join(',')) return null;
+      item.assignees = next; item.assignee = next[0];
+      return `assignee → ${next.join(', ') || 'none'}`;
+    }
     case 'add-label':
       if (item.labels.includes(action.value)) return null;
+      registerLabel(project, action.value);
       item.labels = [...item.labels, action.value];
       return `+label ${action.value}`;
     case 'comment':
@@ -705,6 +1050,69 @@ export function removeMember(workspaceRoot: string, id: string, actor = 'user'):
     throw new Error('Cannot remove the last owner.');
   }
   project.members = project.members.filter((m) => m.id !== id);
+  project.updatedAt = nowIso();
+  writeTrack(workspaceRoot, store);
+  return true;
+}
+
+// ── Label registry ─────────────────────────────────────────────────────────────
+
+/** List the project's labels (alphabetical). */
+export function listLabels(workspaceRoot: string): TrackLabel[] {
+  const project = getProject(workspaceRoot);
+  return project?.labels ? [...project.labels].sort((a, b) => a.name.localeCompare(b.name)) : [];
+}
+
+export interface UpsertLabelInput {
+  name: string;
+  color?: string;
+  description?: string;
+  externalSource?: string;
+  externalId?: string;
+}
+
+/** Create or update (by case-insensitive name) a label in the registry. */
+export function upsertLabel(workspaceRoot: string, input: UpsertLabelInput): TrackLabel {
+  ensureProject(workspaceRoot);
+  const store = readTrack(workspaceRoot);
+  const project = store.project!;
+  const name = input.name.trim();
+  if (!name) throw new Error('Label name is required.');
+  const label = registerLabel(project, name);
+  if (input.color) label.color = input.color;
+  if (input.description !== undefined) label.description = input.description;
+  if (input.externalSource !== undefined) label.externalSource = input.externalSource;
+  if (input.externalId !== undefined) label.externalId = input.externalId;
+  project.updatedAt = nowIso();
+  writeTrack(workspaceRoot, store);
+  return label;
+}
+
+/** Resolve a label by id or (case-insensitive) name. */
+export function getLabel(workspaceRoot: string, idOrName: string): TrackLabel | undefined {
+  const project = getProject(workspaceRoot);
+  const key = idOrName.trim().toLowerCase();
+  return project?.labels.find((l) => l.id === idOrName || l.name.toLowerCase() === key);
+}
+
+/**
+ * Delete a label from the registry and strip its name from every work item.
+ * Returns true if a label was removed.
+ */
+export function deleteLabel(workspaceRoot: string, idOrName: string): boolean {
+  const store = readTrack(workspaceRoot);
+  const project = store.project;
+  if (!project) return false;
+  const key = idOrName.trim().toLowerCase();
+  const label = project.labels.find((l) => l.id === idOrName || l.name.toLowerCase() === key);
+  if (!label) return false;
+  project.labels = project.labels.filter((l) => l.id !== label.id);
+  for (const item of Object.values(store.workItems)) {
+    if (item.labels.some((n) => n.toLowerCase() === label.name.toLowerCase())) {
+      item.labels = item.labels.filter((n) => n.toLowerCase() !== label.name.toLowerCase());
+      item.updatedAt = nowIso();
+    }
+  }
   project.updatedAt = nowIso();
   writeTrack(workspaceRoot, store);
   return true;

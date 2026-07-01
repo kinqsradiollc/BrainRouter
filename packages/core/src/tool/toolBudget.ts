@@ -7,7 +7,7 @@
  * (token overlap with name + description) and keep only the top N. The
  * trimmed tools aren't gone — calling one returns a structured "hidden by
  * budget" error so the model can retry with intent, and the budget is
- * configurable via `cli.agentMcpToolBudget` (default 40).
+ * configurable via `cli.agentMcpToolBudget` (default 16).
  *
  * Also supports per-agent-definition scoping: an agent def may whitelist
  * `toolScope.mcp` and blacklist `disallowedTools`.

@@ -11,10 +11,11 @@ export interface WorkspaceInfo {
 /**
  * Files recognized as a workspace agent-instruction file, in precedence order
  * (first found wins). `AGENT.md` / `AGENTS.md` are the cross-tool standard;
- * `CLAUDE.md` is Claude Code's. Shared by workspace-root detection (below) and
- * instruction loading (`prompt/systemPrompt.loadWorkspaceInstructionSummary`).
+ * `CLAUDE.md`, `.cursorrules`, and `codex.md` cover adjacent agent harnesses.
+ * Shared by workspace-root detection (below) and instruction loading
+ * (`prompt/systemPrompt.loadWorkspaceInstructionSummary`).
  */
-export const INSTRUCTION_FILES = ['AGENT.md', 'AGENTS.md', 'CLAUDE.md'] as const;
+export const INSTRUCTION_FILES = ['AGENT.md', 'AGENTS.md', 'CLAUDE.md', '.cursorrules', 'codex.md'] as const;
 
 const ROOT_MARKERS = [...INSTRUCTION_FILES, '.git'];
 

@@ -7,10 +7,10 @@ import { sendError } from "../../contracts/http.js";
 export const scenesRouter = Router();
 scenesRouter.use(requireAnyAuth);
 
-scenesRouter.get("/", (req: AuthedRequest, res) => {
+scenesRouter.get("/", async (req: AuthedRequest, res) => {
   try {
     const pagination = PaginationQuerySchema.parse(req.query);
-    const scenes = memoryEngine.getTopScenes(
+    const scenes = await memoryEngine.getTopScenes(
       req.userId!,
       pagination.limit + 1,
       decodeCursor<{ heatScore: number; id: string }>(pagination.cursor),
@@ -25,7 +25,7 @@ scenesRouter.get("/", (req: AuthedRequest, res) => {
   }
 });
 
-scenesRouter.delete("/:id", (req: AuthedRequest, res) => {
+scenesRouter.delete("/:id", async (req: AuthedRequest, res) => {
   try {
     const sceneId = req.params.id;
     if (!sceneId) {
@@ -33,7 +33,7 @@ scenesRouter.delete("/:id", (req: AuthedRequest, res) => {
       return;
     }
     const targetId = typeof sceneId === "string" ? sceneId : sceneId[0];
-    memoryEngine.store.deleteContextualFocus(req.userId!, [targetId]);
+    await memoryEngine.store.deleteContextualFocus(req.userId!, [targetId]);
     res.json({ success: true });
   } catch (error) {
     sendError(res, 500, error instanceof Error ? error.message : "Failed to delete scene");

@@ -3,8 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SqliteMemoryStore } from "../memory/store/sqlite.js";
-import { MemoryEngine } from "../memory/engine.js";
+import { createTestEngine } from "./helpers/pgTestStore.js";
 
 /**
  * 0.4.3 (MEM-9) — benchmark_eval self-retrieval harness, end to end on a real
@@ -12,15 +11,16 @@ import { MemoryEngine } from "../memory/engine.js";
  * developer's ~/.brainrouter.
  */
 
-function fresh(label: string) {
-  const dir = mkdtempSync(join(tmpdir(), `brainrouter-bench-${label}-`));
+async function fresh() {
+  const dir = mkdtempSync(join(tmpdir(), `brainrouter-bench-`));
   // Hermetic env: the engine constructor reads the reranker/judge knobs from
   // process.env, so a developer machine with a live reranker endpoint or
   // BRAINROUTER_RELEVANCE_JUDGE_ENABLED=true would otherwise flip the bench
   // into running those modes against real services (skippedModes assertions
   // fail + the test hits live endpoints). Snapshot + clear, restore in cleanup.
+  // (createTestEngine handles BRAINROUTER_JOB_RUNNER; the reranker/judge keys
+  // are still ours to scrub.)
   const HERMETIC_KEYS = [
-    "BRAINROUTER_JOB_RUNNER",
     "BRAINROUTER_RERANKER_ENDPOINT",
     "BRAINROUTER_RERANKER_API_KEY",
     "BRAINROUTER_RERANKER_MODEL",
@@ -28,17 +28,15 @@ function fresh(label: string) {
   ] as const;
   const prevEnv = new Map<string, string | undefined>(HERMETIC_KEYS.map((k) => [k, process.env[k]]));
   for (const k of HERMETIC_KEYS) delete process.env[k];
-  process.env.BRAINROUTER_JOB_RUNNER = "off";
-  const store = new SqliteMemoryStore(join(dir, "memory.db"));
-  store.init();
-  const engine = new MemoryEngine(store);
+  const { store, engine, cleanup: cleanupEngine } = await createTestEngine();
   return {
     store, dir, engine,
-    cleanup: () => {
+    cleanup: async () => {
       for (const [k, v] of prevEnv) {
         if (v === undefined) delete process.env[k];
         else process.env[k] = v;
       }
+      await cleanupEngine();
       rmSync(dir, { recursive: true, force: true });
     },
   };
@@ -47,21 +45,21 @@ function fresh(label: string) {
 const inRange = (n: number) => typeof n === "number" && Number.isFinite(n) && n >= 0 && n <= 1;
 
 test("benchmark: insufficient data (< 3 records) → empty stats, passed, no file", async () => {
-  const { engine, cleanup } = fresh("few");
+  const { engine, cleanup } = await fresh();
   try {
-    engine.upsertEngineeringMemory({ userId: "u1", type: "codebase_fact", content: "only one record about the parser module" });
+    await engine.upsertEngineeringMemory({ userId: "u1", type: "codebase_fact", content: "only one record about the parser module" });
     const r = await engine.runRetrievalBenchmark("u1", { sampleSize: 10 });
     assert.equal(r.sampled, 1);
     assert.deepEqual(r.statsByMode, {});
     assert.equal(r.passed, true);
     assert.equal(r.summaryPath, null);
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
 test("benchmark: runs baseline + lexmmr on real records, valid metrics, writes a summary", async () => {
-  const { engine, dir, cleanup } = fresh("run");
+  const { engine, dir, cleanup } = await fresh();
   // MEM-19: capture the recall knobs to prove the bench no longer mutates them.
   const top0 = process.env.BRAINROUTER_RECALL_TOP_RESULTS;
   const div0 = process.env.BRAINROUTER_RECALL_DIVERSITY;
@@ -73,7 +71,7 @@ test("benchmark: runs baseline + lexmmr on real records, valid metrics, writes a
       "vault export writes a redacted markdown mirror with a hash ledger",
       "the source chunker splits transcripts into citable token-bounded chunks",
     ];
-    for (const content of facts) engine.upsertEngineeringMemory({ userId: "u1", type: "codebase_fact", content });
+    for (const content of facts) await engine.upsertEngineeringMemory({ userId: "u1", type: "codebase_fact", content });
 
     const benchDir = join(dir, "bench-out");
     const r = await engine.runRetrievalBenchmark("u1", { sampleSize: 5, baseDir: benchDir });
@@ -105,27 +103,27 @@ test("benchmark: runs baseline + lexmmr on real records, valid metrics, writes a
 });
 
 test("MEM-25 retrieval benchmark reports per-mode latency", async () => {
-  const { engine, cleanup } = fresh("latency");
+  const { engine, cleanup } = await fresh();
   try {
     for (let i = 0; i < 4; i++) {
-      engine.upsertEngineeringMemory({ userId: "u1", type: "codebase_fact", content: `fact ${i} about the recall pipeline, chunking, and the blackboard reconciler` });
+      await engine.upsertEngineeringMemory({ userId: "u1", type: "codebase_fact", content: `fact ${i} about the recall pipeline, chunking, and the blackboard reconciler` });
     }
     const r = await engine.runRetrievalBenchmark("u1", { sampleSize: 4 });
     assert.ok(r.latencyMsByMode && typeof r.latencyMsByMode.baseline === "number", "baseline latency present");
     assert.ok(r.latencyMsByMode.baseline >= 0, "non-negative latency");
   } finally {
-    cleanup();
+    await cleanup();
   }
 });
 
-test("MEM-25 code-recall benchmark scores symbol isolation + writes a numbers file", () => {
-  const { engine, dir, cleanup } = fresh("coderecall");
+test("MEM-25 code-recall benchmark scores symbol isolation + writes a numbers file", async () => {
+  const { engine, dir, cleanup } = await fresh();
   try {
     const r = engine.runCodeChunkBenchmark({ baseDir: join(dir, "cr") });
     assert.equal(r.expectedSymbols, 8);
     assert.ok(r.symbolRecall >= 0.875, `symbol recall ${r.symbolRecall}`);
     assert.ok(r.summaryPath && existsSync(r.summaryPath), "code-recall numbers file written");
   } finally {
-    cleanup();
+    await cleanup();
   }
 });

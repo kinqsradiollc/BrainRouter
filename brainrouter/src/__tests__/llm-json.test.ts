@@ -16,6 +16,14 @@ describe("extractJsonValue — clean output", () => {
   it("returns an empty array (genuine 'nothing notable')", () => {
     expect(extractJsonValue("[]", { kind: "array" })).toEqual([]);
   });
+  it("kind:array extracts the inner array from a tool-call wrapper object", () => {
+    // Forced tool-calls must wrap the array (function params must be an object),
+    // e.g. {"scenes":[…]}. The balanced-span scan already returns the inner
+    // array, so tool-wrapped output parses with no special handling.
+    expect(extractJsonValue('{"scenes":[{"scene_name":"X","memories":[]}]}', { kind: "array" }))
+      .toEqual([{ scene_name: "X", memories: [] }]);
+    expect(extractJsonValue('{"records":[1,2,3]}', { kind: "array" })).toEqual([1, 2, 3]);
+  });
   it("strips ```json code fences", () => {
     const raw = "```json\n[{\"scene_name\":\"X\",\"memories\":[]}]\n```";
     expect(extractJsonValue(raw, { kind: "array" })).toEqual([{ scene_name: "X", memories: [] }]);

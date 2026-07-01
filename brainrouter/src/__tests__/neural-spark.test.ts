@@ -6,7 +6,7 @@ class MockMemoryStore implements Partial<IMemoryStore> {
   public connections: Array<{ sourceId: string; targetId: string; weight: number; lastActivatedAt: string }> = [];
   public memories = new Map<string, any>();
 
-  public upsertConnection(userId: string, sourceId: string, targetId: string, weight: number): void {
+  public async upsertConnection(userId: string, sourceId: string, targetId: string, weight: number): Promise<void> {
     const existing = this.connections.find(c => c.sourceId === sourceId && c.targetId === targetId);
     if (existing) {
       existing.weight = weight;
@@ -16,27 +16,27 @@ class MockMemoryStore implements Partial<IMemoryStore> {
     }
   }
 
-  public getConnectionsForSource(userId: string, sourceId: string): Array<{ targetId: string; weight: number }> {
+  public async getConnectionsForSource(userId: string, sourceId: string): Promise<Array<{ targetId: string; weight: number }>> {
     return this.connections
       .filter(c => c.sourceId === sourceId)
       .map(c => ({ targetId: c.targetId, weight: c.weight }));
   }
 
-  public strengthenConnectionsBatch(userId: string, pairs: Array<{ source: string; target: string }>, delta: number): void {
+  public async strengthenConnectionsBatch(userId: string, pairs: Array<{ source: string; target: string }>, delta: number): Promise<void> {
     for (const pair of pairs) {
       // Bi-directional
-      this.upsertConnection(userId, pair.source, pair.target, Math.min(1.0, this.getWeight(pair.source, pair.target) + delta));
-      this.upsertConnection(userId, pair.target, pair.source, Math.min(1.0, this.getWeight(pair.target, pair.source) + delta));
+      await this.upsertConnection(userId, pair.source, pair.target, Math.min(1.0, this.getWeight(pair.source, pair.target) + delta));
+      await this.upsertConnection(userId, pair.target, pair.source, Math.min(1.0, this.getWeight(pair.target, pair.source) + delta));
     }
   }
 
-  public decayConnections(userId: string, decayFactor: number): void {
+  public async decayConnections(userId: string, decayFactor: number): Promise<void> {
     for (const conn of this.connections) {
       conn.weight = Math.max(0.0, conn.weight * decayFactor);
     }
   }
 
-  public pruneConnections(userId: string, threshold: number): void {
+  public async pruneConnections(userId: string, threshold: number): Promise<void> {
     this.connections = this.connections.filter(c => c.weight >= threshold);
   }
 
@@ -47,15 +47,15 @@ class MockMemoryStore implements Partial<IMemoryStore> {
 }
 
 describe("Neural Spark Engine & Spreading Activation", () => {
-  it("should propagate potentials to neighbors correctly up to 2 hops", () => {
+  it("should propagate potentials to neighbors correctly up to 2 hops", async () => {
     const store = new MockMemoryStore() as any as IMemoryStore;
     const engine = new NeuralSparkEngine(store);
 
     // Setup network: A -> B -> C
     // Weight A -> B: 0.8
     // Weight B -> C: 0.9
-    store.upsertConnection("user-1", "node-A", "node-B", 0.8);
-    store.upsertConnection("user-1", "node-B", "node-C", 0.9);
+    await store.upsertConnection("user-1", "node-A", "node-B", 0.8);
+    await store.upsertConnection("user-1", "node-B", "node-C", 0.9);
 
     // Initial inputs: node-A starts with potential 1.0 (fired)
     const initialNodes = [
@@ -64,7 +64,7 @@ describe("Neural Spark Engine & Spreading Activation", () => {
       { id: "node-C", potential: 0.0, fired: false },
     ];
 
-    const results = engine.propagateSparks("user-1", initialNodes);
+    const results = await engine.propagateSparks("user-1", initialNodes);
 
     // Node-B potential = 1.0 * 0.8 = 0.8 (since 0.8 >= 0.7, it fires)
     // Node-C potential = 0.8 * 0.9 = 0.72 (since 0.72 >= 0.7, it fires)
@@ -79,19 +79,19 @@ describe("Neural Spark Engine & Spreading Activation", () => {
     expect(nodeC?.potential).toBeCloseTo(0.72);
   });
 
-  it("should respect refractory period and avoid double firing/infinite loops", () => {
+  it("should respect refractory period and avoid double firing/infinite loops", async () => {
     const store = new MockMemoryStore() as any as IMemoryStore;
     const engine = new NeuralSparkEngine(store);
 
     // Cycle network: A -> B -> A
-    store.upsertConnection("user-1", "node-A", "node-B", 0.9);
-    store.upsertConnection("user-1", "node-B", "node-A", 0.9);
+    await store.upsertConnection("user-1", "node-A", "node-B", 0.9);
+    await store.upsertConnection("user-1", "node-B", "node-A", 0.9);
 
     const initialNodes = [
       { id: "node-A", potential: 1.0, fired: false },
     ];
 
-    const results = engine.propagateSparks("user-1", initialNodes);
+    const results = await engine.propagateSparks("user-1", initialNodes);
 
     const nodeA = results.find(n => n.id === "node-A");
     const nodeB = results.find(n => n.id === "node-B");
@@ -102,36 +102,36 @@ describe("Neural Spark Engine & Spreading Activation", () => {
     expect(nodeA?.potential).toBe(1.0);
   });
 
-  it("should strengthen co-cited pairs (Hebbian LTP)", () => {
+  it("should strengthen co-cited pairs (Hebbian LTP)", async () => {
     const store = new MockMemoryStore() as any as IMemoryStore;
     const engine = new NeuralSparkEngine(store);
 
     // Initial connection weight = 0.5
-    store.upsertConnection("user-1", "node-A", "node-B", 0.5);
-    store.upsertConnection("user-1", "node-B", "node-A", 0.5);
+    await store.upsertConnection("user-1", "node-A", "node-B", 0.5);
+    await store.upsertConnection("user-1", "node-B", "node-A", 0.5);
 
     // Co-cite A and B
-    engine.strengthenSpines("user-1", ["node-A", "node-B"]);
+    await engine.strengthenSpines("user-1", ["node-A", "node-B"]);
 
-    const connections = store.getConnectionsForSource("user-1", "node-A");
+    const connections = await store.getConnectionsForSource("user-1", "node-A");
     const abConn = connections.find(c => c.targetId === "node-B");
 
     // LTP step is 0.15, so 0.5 + 0.15 = 0.65
     expect(abConn?.weight).toBeCloseTo(0.65);
   });
 
-  it("should decay weights and prune weak connections (LTD)", () => {
+  it("should decay weights and prune weak connections (LTD)", async () => {
     const store = new MockMemoryStore() as any as IMemoryStore;
     const engine = new NeuralSparkEngine(store);
 
     // node-A -> node-B: weight 0.8 (decays to 0.72)
     // node-A -> node-C: weight 0.1 (decays to 0.09 and gets pruned < 0.10)
-    store.upsertConnection("user-1", "node-A", "node-B", 0.8);
-    store.upsertConnection("user-1", "node-A", "node-C", 0.1);
+    await store.upsertConnection("user-1", "node-A", "node-B", 0.8);
+    await store.upsertConnection("user-1", "node-A", "node-C", 0.1);
 
-    engine.decayAndPrune("user-1");
+    await engine.decayAndPrune("user-1");
 
-    const connections = store.getConnectionsForSource("user-1", "node-A");
+    const connections = await store.getConnectionsForSource("user-1", "node-A");
     const abConn = connections.find(c => c.targetId === "node-B");
     const acConn = connections.find(c => c.targetId === "node-C");
 
@@ -146,14 +146,14 @@ describe("Neural Spark Engine & Spreading Activation", () => {
       delete process.env.BRAINROUTER_NEURAL_SPARK_ENABLED;
     });
 
-    it("returns seed nodes untouched without propagating or firing", () => {
+    it("returns seed nodes untouched without propagating or firing", async () => {
       process.env.BRAINROUTER_NEURAL_SPARK_ENABLED = "false";
       const store = new MockMemoryStore() as any as IMemoryStore;
       const engine = new NeuralSparkEngine(store);
 
       // Same A -> B -> C network that fires through 2 hops when enabled.
-      store.upsertConnection("user-1", "node-A", "node-B", 0.8);
-      store.upsertConnection("user-1", "node-B", "node-C", 0.9);
+      await store.upsertConnection("user-1", "node-A", "node-B", 0.8);
+      await store.upsertConnection("user-1", "node-B", "node-C", 0.9);
 
       const initialNodes = [
         { id: "node-A", potential: 1.0, fired: false },
@@ -161,7 +161,7 @@ describe("Neural Spark Engine & Spreading Activation", () => {
         { id: "node-C", potential: 0.0, fired: false },
       ];
 
-      const results = engine.propagateSparks("user-1", initialNodes);
+      const results = await engine.propagateSparks("user-1", initialNodes);
 
       // Nodes come back exactly as seeded — no neighbor excited, nothing fired.
       expect(results).toBe(initialNodes);
@@ -170,31 +170,31 @@ describe("Neural Spark Engine & Spreading Activation", () => {
       expect(results.find(n => n.id === "node-C")?.potential).toBe(0.0);
     });
 
-    it("does not strengthen co-cited pairs (LTP off)", () => {
+    it("does not strengthen co-cited pairs (LTP off)", async () => {
       process.env.BRAINROUTER_NEURAL_SPARK_ENABLED = "false";
       const store = new MockMemoryStore() as any as IMemoryStore;
       const engine = new NeuralSparkEngine(store);
 
-      store.upsertConnection("user-1", "node-A", "node-B", 0.5);
-      store.upsertConnection("user-1", "node-B", "node-A", 0.5);
+      await store.upsertConnection("user-1", "node-A", "node-B", 0.5);
+      await store.upsertConnection("user-1", "node-B", "node-A", 0.5);
 
-      engine.strengthenSpines("user-1", ["node-A", "node-B"]);
+      await engine.strengthenSpines("user-1", ["node-A", "node-B"]);
 
-      const abConn = store.getConnectionsForSource("user-1", "node-A").find(c => c.targetId === "node-B");
+      const abConn = (await store.getConnectionsForSource("user-1", "node-A")).find(c => c.targetId === "node-B");
       expect(abConn?.weight).toBeCloseTo(0.5); // unchanged
     });
 
-    it("does not decay or prune connections (LTD off)", () => {
+    it("does not decay or prune connections (LTD off)", async () => {
       process.env.BRAINROUTER_NEURAL_SPARK_ENABLED = "false";
       const store = new MockMemoryStore() as any as IMemoryStore;
       const engine = new NeuralSparkEngine(store);
 
-      store.upsertConnection("user-1", "node-A", "node-B", 0.8);
-      store.upsertConnection("user-1", "node-A", "node-C", 0.1); // would be pruned when enabled
+      await store.upsertConnection("user-1", "node-A", "node-B", 0.8);
+      await store.upsertConnection("user-1", "node-A", "node-C", 0.1); // would be pruned when enabled
 
-      engine.decayAndPrune("user-1");
+      await engine.decayAndPrune("user-1");
 
-      const connections = store.getConnectionsForSource("user-1", "node-A");
+      const connections = await store.getConnectionsForSource("user-1", "node-A");
       expect(connections.find(c => c.targetId === "node-B")?.weight).toBeCloseTo(0.8); // not decayed
       expect(connections.find(c => c.targetId === "node-C")?.weight).toBeCloseTo(0.1); // not pruned
     });

@@ -8,7 +8,7 @@
  * the board stays provenance-linked, same as `/requirement`.
  */
 import chalk from 'chalk';
-import { type WorkItem, type WorkItemType, type AutomationTrigger, type AutomationAction, type AutomationActionType, type ProjectRole, isWorkItemType, isWorkItemPriority, isAutomationTrigger, isAutomationActionType, isProjectRole } from '@kinqs/brainrouter-types';
+import { type WorkItem, type WorkItemType, type AutomationTrigger, type AutomationAction, type AutomationActionType, type ProjectRole, type TrackLayout, isWorkItemType, isWorkItemPriority, isAutomationTrigger, isAutomationActionType, isProjectRole, isModuleStatus, isTrackLayout } from '@kinqs/brainrouter-types';
 import {
   ensureProject,
   getProject,
@@ -30,11 +30,22 @@ import {
   addMember,
   updateMemberRole,
   removeMember,
-} from '@kinqs/brainrouter-core/dist/track/trackStore.js';
-import { parseTrackQuery } from '@kinqs/brainrouter-core/dist/track/query.js';
-import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/dist/track/githubSync.js';
-import { scanGitCommitsForTrack } from '@kinqs/brainrouter-core/dist/track/commitScanner.js';
-import { emitAgentEvent } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
+  listLabels,
+  upsertLabel,
+  deleteLabel,
+  createModule,
+  listModules,
+  getModule,
+  updateModule,
+  deleteModule,
+  saveView,
+  listViews,
+  deleteView,
+} from '@kinqs/brainrouter-core/track';
+import { parseTrackQuery } from '@kinqs/brainrouter-core/track';
+import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/track';
+import { scanGitCommitsForTrack } from '@kinqs/brainrouter-core/track';
+import { emitAgentEvent } from '@kinqs/brainrouter-core/memory';
 import type { CommandContext } from './_context.js';
 
 const TYPE_MARK: Record<WorkItemType, string> = { epic: '◆', story: '▣', task: '▸', bug: '✦', 'sub-task': '↳' };
@@ -79,7 +90,7 @@ export async function tryHandleTrackCommand(ctx: CommandContext): Promise<boolea
 
   if (sub === 'create' || sub === 'new') {
     const parsed = parseCreate(rest);
-    if (!parsed.title) { console.log(chalk.red('\nUsage: /track create <title> [--type story|task|bug|epic|sub-task] [--status <id>] [--priority lowest|low|medium|high|highest]\n')); return true; }
+    if (!parsed.title) { console.log(chalk.red('\nUsage: /track create <title> [--type story|task|bug|epic|sub-task] [--status <id>] [--priority urgent|high|medium|low|none]\n')); return true; }
     const item = createWorkItem(ws, { title: parsed.title, type: parsed.type, status: parsed.status, priority: parsed.priority, sessionKey: agent.sessionKey, actor: 'user' });
     console.log(chalk.green(`\n✓ Created ${chalk.cyan(item.key)} ${typeMark(item.type)} ${item.title} `) + chalk.gray(`[${item.status}]\n`));
     await captureTrackNote(ctx, item, 'created');
@@ -113,6 +124,12 @@ export async function tryHandleTrackCommand(ctx: CommandContext): Promise<boolea
   if (sub === 'automations' || sub === 'auto') { handleAutomations(ws, rest); return true; }
 
   if (sub === 'members' || sub === 'member') { await handleMembers(ws, rest); return true; }
+
+  if (sub === 'labels' || sub === 'label') { handleLabels(ws, rest); return true; }
+
+  if (sub === 'modules' || sub === 'module') { handleModules(ws, rest); return true; }
+
+  if (sub === 'views' || sub === 'view') { handleViews(ws, rest); return true; }
 
   if (sub === 'sync') { await handleSync(ws, rest); return true; }
 
@@ -214,6 +231,8 @@ async function handleSync(ws: string, rest: string[]): Promise<void> {
     const creates = rows.filter((r) => r.action === 'create').length;
     const updates = rows.filter((r) => r.action === 'update').length;
     console.log(chalk.green(`${dryRun ? 'Would ' : ''}${direction === 'export' ? 'push' : 'pull'}: ${creates} new, ${updates} updated`) + chalk.gray(` (${rows.length} total)`));
+    const comments = direction === 'export' ? res.comments?.pushed : res.comments?.pulled;
+    if (comments) console.log(chalk.gray(`  comments ${direction === 'export' ? 'pushed' : 'pulled'}: ${comments}`));
     for (const r of rows.slice(0, 20)) {
       const label = 'key' in r ? (r.key ?? '—') : `#${(r as { issueNumber: number }).issueNumber}`;
       console.log(`  ${r.action === 'create' ? chalk.green('+') : chalk.cyan('~')} ${chalk.cyan(String(label).padEnd(8))} ${r.title}`);
@@ -387,7 +406,10 @@ function parseAutomation(tokens: string[]): ParsedAutomation {
 }
 
 function statusTag(w: WorkItem): string {
-  const c = w.statusCategory === 'done' ? chalk.green : w.statusCategory === 'in-progress' ? chalk.cyan : chalk.gray;
+  const c = w.statusCategory === 'completed' ? chalk.green
+    : w.statusCategory === 'cancelled' ? chalk.red
+    : w.statusCategory === 'started' ? chalk.cyan
+    : chalk.gray;
   return c(`[${w.status}]`);
 }
 
@@ -412,10 +434,128 @@ function parseCreate(tokens: string[]): ParsedCreate {
   return out;
 }
 
+/** `/track views [list|save <name> [--layout x] [--query "…"]|rm <name>]` — saved filter+layout presets. */
+function handleViews(ws: string, args: string[]): void {
+  ensureProject(ws);
+  const op = (args[0] ?? 'list').toLowerCase();
+  if (op === 'list') {
+    const views = listViews(ws);
+    if (!views.length) { console.log(chalk.yellow('\nNo saved views. Save one: /track views save <name> --layout board [--query "…"]\n')); return; }
+    console.log('');
+    for (const v of views) console.log(`  ${chalk.cyan(v.name)} ${chalk.gray(`[${v.layout}]`)}${v.query ? chalk.gray(` · ${v.query}`) : ''}`);
+    console.log('');
+    return;
+  }
+  if (op === 'save') {
+    const rest = args.slice(1);
+    let layout: string | undefined;
+    const nameParts: string[] = [];
+    const queryParts: string[] = [];
+    let inQuery = false;
+    for (let i = 0; i < rest.length; i++) {
+      if (rest[i] === '--layout') { layout = rest[++i]; inQuery = false; }
+      else if (rest[i] === '--query') { inQuery = true; }
+      else if (inQuery) queryParts.push(rest[i]);
+      else nameParts.push(rest[i]);
+    }
+    const name = nameParts.join(' ').trim();
+    if (!name) { console.log(chalk.red('\nUsage: /track views save <name> [--layout board|list|spreadsheet|calendar|gantt|…] [--query "<jql>"]\n')); return; }
+    const lay: TrackLayout = isTrackLayout(layout) ? layout : 'board';
+    const v = saveView(ws, { name, layout: lay, query: queryParts.join(' ').trim() || undefined });
+    console.log(chalk.green(`\n✓ Saved view "${v.name}" [${v.layout}]${v.query ? ` · ${v.query}` : ''}\n`));
+    return;
+  }
+  if (op === 'rm' || op === 'remove' || op === 'delete') {
+    const name = args.slice(1).join(' ').trim();
+    if (!name) { console.log(chalk.red('\nUsage: /track views rm <name>\n')); return; }
+    console.log(deleteView(ws, name) ? chalk.green(`\nRemoved view "${name}".\n`) : chalk.yellow(`\nNo view "${name}".\n`));
+    return;
+  }
+  console.log(chalk.yellow(`\nUnknown views op "${op}". Try: list · save · rm\n`));
+}
+
+/** `/track modules [list|create|status|assign|rm]` — feature-sized work groupings. */
+function handleModules(ws: string, args: string[]): void {
+  ensureProject(ws);
+  const op = (args[0] ?? 'list').toLowerCase();
+  if (op === 'list') {
+    const mods = listModules(ws);
+    if (!mods.length) { console.log(chalk.yellow('\nNo modules. Create one: /track modules create <name>\n')); return; }
+    console.log('');
+    for (const m of mods) {
+      const count = listWorkItems(ws, { moduleId: m.id }).length;
+      console.log(`  ${chalk.cyan(m.name)} ${chalk.gray(`[${m.status}]`)}${m.lead ? chalk.gray(` · lead ${m.lead}`) : ''} ${chalk.gray(`· ${count} item(s)`)}`);
+    }
+    console.log('');
+    return;
+  }
+  if (op === 'create') {
+    const name = args.slice(1).join(' ').trim();
+    if (!name) { console.log(chalk.red('\nUsage: /track modules create <name>\n')); return; }
+    const m = createModule(ws, { name });
+    console.log(chalk.green(`\n✓ Module "${m.name}" created [${m.status}]\n`));
+    return;
+  }
+  if (op === 'status') {
+    const [, name, status] = args;
+    if (!name || !isModuleStatus(status)) { console.log(chalk.red('\nUsage: /track modules status <name> <backlog|planned|in-progress|paused|completed|cancelled>\n')); return; }
+    const m = updateModule(ws, name, { status });
+    console.log(m ? chalk.green(`\n${m.name} → [${m.status}]\n`) : chalk.yellow(`\nNo module "${name}".\n`));
+    return;
+  }
+  if (op === 'assign') {
+    const [, key, mod] = args;
+    if (!key || !mod) { console.log(chalk.red('\nUsage: /track modules assign <item-key> <module-name|->\n')); return; }
+    const item = getWorkItem(ws, key);
+    if (!item) { console.log(chalk.red(`\nNo work item "${key}".\n`)); return; }
+    if (mod === '-' || mod === 'none') { updateWorkItem(ws, item.key, { moduleId: undefined }); console.log(chalk.green(`\n${item.key} removed from its module.\n`)); return; }
+    const m = getModule(ws, mod);
+    if (!m) { console.log(chalk.red(`\nNo module "${mod}".\n`)); return; }
+    updateWorkItem(ws, item.key, { moduleId: m.id });
+    console.log(chalk.green(`\n${item.key} → module "${m.name}".\n`));
+    return;
+  }
+  if (op === 'rm' || op === 'remove' || op === 'delete') {
+    const name = args[1];
+    if (!name) { console.log(chalk.red('\nUsage: /track modules rm <name>\n')); return; }
+    console.log(deleteModule(ws, name) ? chalk.green(`\nRemoved module "${name}" (and unassigned its items).\n`) : chalk.yellow(`\nNo module "${name}".\n`));
+    return;
+  }
+  console.log(chalk.yellow(`\nUnknown modules op "${op}". Try: list · create · status · assign · rm\n`));
+}
+
+/** `/track labels [list|color <name> <#hex>|rm <name>]` — the project label registry. */
+function handleLabels(ws: string, args: string[]): void {
+  ensureProject(ws);
+  const op = (args[0] ?? 'list').toLowerCase();
+  if (op === 'list') {
+    const labels = listLabels(ws);
+    if (!labels.length) { console.log(chalk.yellow('\nNo labels yet — they auto-register as you tag work items.\n')); return; }
+    console.log('');
+    for (const l of labels) console.log(`  ${chalk.hex(l.color)('●')} ${l.name}${l.description ? chalk.gray(` — ${l.description}`) : ''}`);
+    console.log('');
+    return;
+  }
+  if (op === 'color' || op === 'set') {
+    const [, name, color] = args;
+    if (!name || !color) { console.log(chalk.red('\nUsage: /track labels color <name> <#hex>\n')); return; }
+    const l = upsertLabel(ws, { name, color });
+    console.log(chalk.green(`\n${chalk.hex(l.color)('●')} ${l.name} → ${l.color}\n`));
+    return;
+  }
+  if (op === 'rm' || op === 'remove' || op === 'delete') {
+    const name = args[1];
+    if (!name) { console.log(chalk.red('\nUsage: /track labels rm <name>\n')); return; }
+    console.log(deleteLabel(ws, name) ? chalk.green(`\nRemoved label "${name}" (and stripped it from items).\n`) : chalk.yellow(`\nNo label "${name}".\n`));
+    return;
+  }
+  console.log(chalk.yellow(`\nUnknown labels op "${op}". Try: list · color · rm\n`));
+}
+
 function printItem(item: WorkItem): void {
   console.log(`\n${chalk.cyan(item.key)} ${typeMark(item.type)} ${chalk.bold(item.title)} ${statusTag(item)}`);
   if (item.description) console.log(chalk.gray(`  ${item.description}`));
-  const meta = [`priority: ${item.priority}`, item.assignee ? `assignee: ${item.assignee}` : '', item.labels.length ? `labels: ${item.labels.join(', ')}` : '', item.sprintId ? `sprint: ${item.sprintId}` : ''].filter(Boolean);
+  const meta = [`priority: ${item.priority}`, item.assignees.length ? `assignees: ${item.assignees.join(', ')}` : '', item.labels.length ? `labels: ${item.labels.join(', ')}` : '', item.sprintId ? `sprint: ${item.sprintId}` : ''].filter(Boolean);
   if (meta.length) console.log(chalk.gray(`  ${meta.join(' · ')}`));
   if (item.codeLinks.length) console.log(chalk.gray(`  code: ${item.codeLinks.map((c) => `${c.kind}:${c.ref}`).join(', ')}`));
   console.log('');
@@ -431,6 +571,9 @@ function printUsage(): void {
   console.log(chalk.gray('  /track show <key>                            Show one work item'));
   console.log(chalk.gray('  /track automations [list|add|rm|on|off]      Trigger→action rules (e.g. bugs → high priority)'));
   console.log(chalk.gray('  /track members [list|add|role|rm]            Project members + roles (owner·admin·member·viewer)'));
+  console.log(chalk.gray('  /track labels [list|color|rm]                Label registry + colors'));
+  console.log(chalk.gray('  /track modules [list|create|status|assign|rm]  Feature-sized work groupings'));
+  console.log(chalk.gray('  /track views [list|save|rm]                  Saved filter + layout presets'));
   console.log(chalk.gray('  /track sync github import|export [--dry-run]  Two-way sync with GitHub Issues'));
   console.log(chalk.gray('  /track commits [--depth N] [--since <when>]   Link commits to items by BR-123 ref + advance todo→in-progress\n'));
 }

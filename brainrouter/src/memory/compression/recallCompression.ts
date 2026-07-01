@@ -27,7 +27,7 @@ export function readRecallCompressionConfig(env: NodeJS.ProcessEnv = process.env
   };
 }
 
-export function applyRecallCompression(
+export async function applyRecallCompression(
   memories: RecalledMemory[],
   options: {
     userId: string;
@@ -35,15 +35,19 @@ export function applyRecallCompression(
     store: CompressionStore;
     config?: RecallCompressionConfig;
   },
-): { memories: RecalledMemory[]; compressedCount: number } {
+): Promise<{ memories: RecalledMemory[]; compressedCount: number }> {
   const config = options.config ?? readRecallCompressionConfig();
   if (!config.enabled) return { memories, compressedCount: 0 };
 
   let compressedCount = 0;
-  const compressedMemories = memories.map((memory) => {
-    if (estimateTokens(memory.content) <= config.minTokens) return memory;
+  const compressedMemories: RecalledMemory[] = [];
+  for (const memory of memories) {
+    if (estimateTokens(memory.content) <= config.minTokens) {
+      compressedMemories.push(memory);
+      continue;
+    }
     try {
-      const result = compress(memory.content, {
+      const result = await compress(memory.content, {
         userId: options.userId,
         store: options.store,
         queryContext: options.query,
@@ -59,13 +63,16 @@ export function applyRecallCompression(
       });
       // A hash-less result here means nothing was offloaded (content too small
       // or not an array) — keep the original memory untouched.
-      if (!result.hash) return memory;
+      if (!result.hash) {
+        compressedMemories.push(memory);
+        continue;
+      }
       compressedCount += 1;
-      return { ...memory, content: result.compressed };
+      compressedMemories.push({ ...memory, content: result.compressed });
     } catch {
-      return memory;
+      compressedMemories.push(memory);
     }
-  });
+  }
   return compressedCount === 0
     ? { memories, compressedCount: 0 }
     : { memories: compressedMemories, compressedCount };

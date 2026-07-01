@@ -114,7 +114,7 @@ async function fetchBriefing(
 
   // 1. Persona (cross-session identity).
   try {
-    const persona = memoryEngine.getPersona(userId);
+    const persona = await memoryEngine.getPersona(userId);
     const personaMd = (persona as any)?.personaMd?.toString().trim();
     if (personaMd) {
       sections.push(`### Who I'm talking to (core identity)\n${personaMd.slice(0, 1600)}`);
@@ -125,7 +125,7 @@ async function fetchBriefing(
 
   // 2. Recent focus scenes.
   try {
-    const scenes = memoryEngine.getTopScenes(userId, 3);
+    const scenes = await memoryEngine.getTopScenes(userId, 3);
     if (Array.isArray(scenes) && scenes.length > 0) {
       const lines: string[] = ["### Recent focus scenes (what they've been working on)"];
       for (const s of scenes) {
@@ -167,7 +167,7 @@ async function fetchBriefing(
   //    what makes "what did we talk about last time?" / "remind me about the
   //    previous bug" actually work; FTS alone misses them.
   try {
-    const recent: any[] = memoryEngine.store.listMemories(userId, { archived: false }, { limit: 8 }) ?? [];
+    const recent: any[] = (await memoryEngine.store.listMemories(userId, { archived: false }, { limit: 8 })) ?? [];
     const deduped = recent.filter((r) => !recalledIds.has((r.recordId ?? "").toString()));
     if (deduped.length > 0) {
       const lines: string[] = ["### Most recent memories (chronological, may or may not match the question)"];
@@ -187,24 +187,24 @@ async function fetchBriefing(
 }
 
 /** Lightweight per-user memory counts for the chat status badge. */
-export function getMemoryStatusForUser(userId: string): {
+export async function getMemoryStatusForUser(userId: string): Promise<{
   cognitive: number;
   scenes: number;
   hasPersona: boolean;
-} {
+}> {
   let cognitive = 0;
   let scenes = 0;
   let hasPersona = false;
   try {
-    const stats = memoryEngine.store?.getMemoryStats?.(userId);
+    const stats = await memoryEngine.store?.getMemoryStats?.(userId);
     if (stats && typeof stats.total === "number") cognitive = stats.total;
   } catch { /* ignore */ }
   try {
-    const list = memoryEngine.getTopScenes(userId, 50) as any[];
+    const list = (await memoryEngine.getTopScenes(userId, 50)) as any[];
     if (Array.isArray(list)) scenes = list.length;
   } catch { /* ignore */ }
   try {
-    const p: any = memoryEngine.getPersona(userId);
+    const p: any = await memoryEngine.getPersona(userId);
     hasPersona = Boolean(p?.personaMd?.trim());
   } catch { /* ignore */ }
   return { cognitive, scenes, hasPersona };
@@ -638,9 +638,9 @@ chatCompletionsRouter.post("/distill", async (req: AuthedRequest, res: Response)
 // already knows about them (cognitive records + scenes + whether persona is
 // distilled). Returning 0/0/false is the honest signal that the LLM truly has
 // no cross-session context to draw on yet.
-chatCompletionsRouter.get("/memory-status", (req: AuthedRequest, res: Response) => {
+chatCompletionsRouter.get("/memory-status", async (req: AuthedRequest, res: Response) => {
   const userId = req.userId!;
-  res.json(getMemoryStatusForUser(userId));
+  res.json(await getMemoryStatusForUser(userId));
 });
 
 // Minimal /v1/models so OpenAI SDK clients that list models don't 404.

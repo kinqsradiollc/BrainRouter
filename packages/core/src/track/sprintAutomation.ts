@@ -53,7 +53,7 @@ export function reconcileSessionSprints(
 
   if (active) {
     const assigned = listWorkItems(workspaceRoot, { sprintId: active.id });
-    if (assigned.length > 0 && assigned.every((item) => item.statusCategory === 'done')) {
+    if (assigned.length > 0 && assigned.every((item) => item.statusCategory === 'completed')) {
       if (propose) {
         actions.push({ kind: 'sprint-complete-suggested', sprintId: active.id, sprintName: active.name });
       } else {
@@ -69,7 +69,7 @@ export function reconcileSessionSprints(
     item.sessionKey === options.sessionKey
     && !!item.requirementId
     && !item.sprintId
-    && item.statusCategory !== 'done',
+    && item.statusCategory !== 'completed',
   );
   if (candidates.length === 0) return actions;
 

@@ -5,16 +5,23 @@
  * every change goes through the `ops` callbacks (host `track-*` queries).
  */
 import React, { useState } from 'react';
-import type { TrackProject, WorkItem, WorkItemPriority, Sprint } from '@kinqs/brainrouter-types';
+import remarkGfm from 'remark-gfm';
+import type { TrackProject, WorkItem, WorkItemPriority, Sprint, Module } from '@kinqs/brainrouter-types';
 import { Icon } from '../icons.js';
 import { TYPE_ICON } from './TrackView.js';
 import type { TrackOps } from './TrackView.js';
 import { TrackDropdown } from './Dropdown.js';
+import { Markdown, MD_COMPONENTS } from '../chat/markdown.js';
 
-const PRIORITIES: WorkItemPriority[] = ['highest', 'high', 'medium', 'low', 'lowest'];
+const PRIORITIES: WorkItemPriority[] = ['urgent', 'high', 'medium', 'low', 'none'];
 
-export function TrackDetail({ item, project, allItems, sprints, ops, onClose }: {
-  item: WorkItem; project: TrackProject | null; allItems: WorkItem[]; sprints: Sprint[]; ops: TrackOps; onClose: () => void;
+/** ISO-8601 → the `YYYY-MM-DD` a <input type="date"> expects (empty when unset). */
+const toDateInput = (iso?: string): string => (iso ? iso.slice(0, 10) : '');
+/** `YYYY-MM-DD` → an ISO-8601 midnight (undefined when cleared). */
+const fromDateInput = (v: string): string | undefined => (v ? new Date(`${v}T00:00:00`).toISOString() : undefined);
+
+export function TrackDetail({ item, project, allItems, sprints, modules, ops, onClose }: {
+  item: WorkItem; project: TrackProject | null; allItems: WorkItem[]; sprints: Sprint[]; modules: Module[]; ops: TrackOps; onClose: () => void;
 }): React.ReactElement {
   const [editTitle, setEditTitle] = useState(false);
   const [title, setTitle] = useState(item.title);
@@ -29,6 +36,7 @@ export function TrackDetail({ item, project, allItems, sprints, ops, onClose }: 
   const states = project?.workflowStates ?? [];
   const subtasks = allItems.filter((w) => w.parentId === item.id);
   const epics = allItems.filter((w) => w.type === 'epic' && w.id !== item.id);
+  const labelColor = (name: string): string | undefined => project?.labels.find((l) => l.name.toLowerCase() === name.toLowerCase())?.color;
 
   const saveTitle = (): void => { if (title.trim() && title !== item.title) ops.update(item.key, { title: title.trim() }); setEditTitle(false); };
   const saveDesc = (): void => { if (desc !== (item.description ?? '')) ops.update(item.key, { description: desc }); setEditDesc(false); };
@@ -59,12 +67,19 @@ export function TrackDetail({ item, project, allItems, sprints, ops, onClose }: 
             <Field label="Priority">
               <TrackDropdown value={item.priority} options={PRIORITIES.map((p) => ({ value: p, label: p }))} onChange={(v) => ops.update(item.key, { priority: v as WorkItemPriority })} />
             </Field>
-            <Field label="Assignee">
-              <input defaultValue={item.assignee ?? ''} placeholder="unassigned" onBlur={(e) => { const v = e.target.value.trim(); if (v !== (item.assignee ?? '')) ops.update(item.key, { assignee: v || undefined }); }} />
+            <Field label="Assignees">
+              <input defaultValue={item.assignees.join(', ')} placeholder="unassigned (comma-separated)" onBlur={(e) => {
+                const next = e.target.value.split(',').map((s) => s.trim()).filter(Boolean);
+                if (next.join(',') !== item.assignees.join(',')) ops.update(item.key, { assignees: next });
+              }} />
             </Field>
             <Field label="Sprint">
               <TrackDropdown value={item.sprintId ?? ''} onChange={(v) => ops.assignSprint(item.key, v || null)}
                 options={[{ value: '', label: '— none —' }, ...sprints.map((s) => ({ value: s.id, label: s.name }))]} />
+            </Field>
+            <Field label="Module">
+              <TrackDropdown value={item.moduleId ?? ''} onChange={(v) => ops.assignModule(item.key, v || null)}
+                options={[{ value: '', label: '— none —' }, ...modules.map((m) => ({ value: m.id, label: m.name }))]} />
             </Field>
             {item.type !== 'epic' ? (
               <Field label="Epic">
@@ -75,24 +90,50 @@ export function TrackDetail({ item, project, allItems, sprints, ops, onClose }: 
             <Field label="Points">
               <input type="number" min={0} defaultValue={item.storyPoints ?? ''} placeholder="—" onBlur={(e) => { const n = e.target.value ? Number(e.target.value) : undefined; if (n !== item.storyPoints) ops.update(item.key, { storyPoints: n }); }} />
             </Field>
+            <Field label="Start date">
+              <input type="date" className="track-date" value={toDateInput(item.startDate)} onChange={(e) => ops.update(item.key, { startDate: fromDateInput(e.target.value) })} />
+            </Field>
+            <Field label="Target date">
+              <input type="date" className="track-date" value={toDateInput(item.targetDate)} onChange={(e) => ops.update(item.key, { targetDate: fromDateInput(e.target.value) })} />
+            </Field>
           </div>
 
           <Field label="Labels">
             <div className="track-detail-labels">
-              {item.labels.map((l) => <span key={l} className="track-label">{l}<button onClick={() => removeLabel(l)}>×</button></span>)}
+              {item.labels.map((l) => <span key={l} className="track-label" style={labelColor(l) ? { borderColor: labelColor(l), color: labelColor(l) } : undefined}>{l}<button onClick={() => removeLabel(l)}>×</button></span>)}
               <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="+ label" onKeyDown={(e) => { if (e.key === 'Enter') addLabel(); }} />
             </div>
           </Field>
 
-          <Section title="Description">
+          <section className="track-detail-section">
+            <div className="track-detail-section-title">
+              <span>Description</span>
+              {!editDesc ? <button className="track-desc-edit-btn" title="Edit description" onClick={() => { setDesc(item.description ?? ''); setEditDesc(true); }}><Icon name="edit" size={11} /> Edit</button> : null}
+            </div>
             {editDesc ? (
-              <textarea className="track-detail-desc-edit" autoFocus value={desc} onChange={(e) => setDesc(e.target.value)} onBlur={saveDesc} placeholder="Add a description…" />
+              <div className="track-detail-desc-editor">
+                <textarea className="track-detail-desc-edit" autoFocus value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Add a description… (Markdown supported)" />
+                <div className="track-desc-edit-actions">
+                  <button className="track-desc-save" onClick={saveDesc}>Save</button>
+                  <button className="track-desc-cancel" onClick={() => { setDesc(item.description ?? ''); setEditDesc(false); }}>Cancel</button>
+                </div>
+              </div>
+            ) : item.description ? (
+              <div className="track-detail-desc md"><Markdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>{item.description}</Markdown></div>
             ) : (
-              <div className="track-detail-desc" onClick={() => { setDesc(item.description ?? ''); setEditDesc(true); }}>{item.description || <span className="track-detail-muted">Add a description…</span>}</div>
+              <div className="track-detail-desc" onClick={() => { setDesc(''); setEditDesc(true); }}><span className="track-detail-muted">Add a description…</span></div>
             )}
-          </Section>
+          </section>
 
           <Section title="Code links">
+            <div className="track-detail-code-actions">
+              <button title="Create or switch to a local Git branch for this work item" onClick={() => ops.startGitWork(item.key)}>
+                <Icon name="branch" size={12} /> Start branch
+              </button>
+              <button title="Create a draft pull request for the linked current branch" onClick={() => ops.createDraftPr(item.key)}>
+                <Icon name="merge" size={12} /> Draft PR
+              </button>
+            </div>
             <div className="track-detail-links">
               {item.codeLinks.map((c, i) => <span key={i} className="track-codelink"><Icon name={c.kind === 'branch' ? 'branch' : c.kind === 'file' ? 'file' : 'commit'} size={11} /> {c.ref}</span>)}
               {item.codeLinks.length === 0 ? <span className="track-detail-muted">No code links.</span> : null}
@@ -110,7 +151,7 @@ export function TrackDetail({ item, project, allItems, sprints, ops, onClose }: 
               <div key={s.id} className="track-subtask"><span className={`track-cat track-cat-${s.statusCategory}`} /><span className="mono tl-key">{s.key}</span><span className="tl-title">{s.title}</span></div>
             ))}
             <div className="track-detail-addsub">
-              <input value={subTitle} onChange={(e) => setSubTitle(e.target.value)} placeholder="+ sub-task" onKeyDown={(e) => { if (e.key === 'Enter' && subTitle.trim()) { ops.create({ title: subTitle.trim(), type: 'sub-task', status: states[0]?.id ?? 'todo' }); setSubTitle(''); } }} />
+              <input value={subTitle} onChange={(e) => setSubTitle(e.target.value)} placeholder="+ sub-task" onKeyDown={(e) => { if (e.key === 'Enter' && subTitle.trim()) { ops.create({ title: subTitle.trim(), type: 'sub-task', status: states[0]?.id ?? 'backlog' }); setSubTitle(''); } }} />
             </div>
           </Section>
 

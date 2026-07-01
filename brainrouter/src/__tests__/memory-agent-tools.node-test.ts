@@ -1,13 +1,16 @@
 /**
  * BRAIN-P1-T4 (0.4.1) — `memory_agent_*` MCP tool integration.
  *
- * Real store (node:sqlite) → runs under `node --test`. The tool
- * handlers talk to the `memoryEngine` singleton, so we point
- * BRAINROUTER_MEMORY_DB at a temp file BEFORE importing them.
+ * The tool handlers talk to the `memoryEngine` SINGLETON (constructed at
+ * import time from the env connection string), so — unlike the helper-based
+ * tests that inject an isolated store — we must provision a scratch Postgres
+ * DATABASE and point `BRAINROUTER_DATABASE_URL` at it BEFORE importing the
+ * engine. Otherwise the singleton binds to the shared dev DB and these
+ * "idle before any jobs" assertions flake on residue from other runs.
  *
  * Covers:
- *   - memory_agent_status returns all 8 registry agents, idle when no
- *     jobs have run, and reflects a pending job afterwards.
+ *   - memory_agent_status returns all registry agents, idle when no jobs
+ *     have run, and reflects a pending job afterwards.
  *   - memory_agent_status with an unknown agentId errors.
  *   - memory_agent_run queues a job (returns jobId + status) and is
  *     idempotent (second identical run returns the same jobId).
@@ -17,20 +20,69 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import pg from "pg";
 
-// Must be set before the engine singleton is constructed on import.
-process.env.BRAINROUTER_MEMORY_DB = join(
-  mkdtempSync(join(tmpdir(), "brainrouter-agent-tools-")),
-  "memory.db",
-);
+// Provision an isolated scratch DATABASE and bind the engine singleton to it
+// BEFORE the dynamic imports below construct it. Mirrors pgTestStore's
+// admin-connect + `CREATE DATABASE` mechanism (kept inline here because the
+// singleton reads the env at import — it can't take an injected store).
+const ADMIN_URL =
+  process.env.BRAINROUTER_TEST_PG_ADMIN_URL ??
+  process.env.BRAINROUTER_DATABASE_URL ??
+  process.env.DATABASE_URL ??
+  "postgres://postgres:postgres@localhost:5432/postgres";
+
+const SCRATCH_DB = `br_test_agenttools_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+
+function scratchUrl(): string {
+  const u = new URL(ADMIN_URL);
+  u.pathname = `/${SCRATCH_DB}`;
+  return u.toString();
+}
+
+{
+  const admin = new pg.Client({ connectionString: ADMIN_URL });
+  await admin.connect();
+  try {
+    await admin.query(`CREATE DATABASE ${SCRATCH_DB}`);
+  } finally {
+    await admin.end().catch(() => undefined);
+  }
+}
+
+// Bind the singleton (and anything it constructs) to the scratch DB. Disable the
+// background job runner so it doesn't race these job-count assertions.
+process.env.BRAINROUTER_DATABASE_URL = scratchUrl();
+process.env.DATABASE_URL = scratchUrl();
+process.env.BRAINROUTER_JOB_RUNNER = "off";
 
 const { handleMemoryAgentStatus } = await import("../tools/memory_agent_status.js");
 const { handleMemoryAgentRun } = await import("../tools/memory_agent_run.js");
 const { handleMemoryJobRetry } = await import("../tools/memory_job_retry.js");
 const { memoryEngine } = await import("../memory/engine.js");
+
+// The Postgres store is genuinely async — wait for migrations / seed-admin
+// before the first store-using call.
+await memoryEngine.ready;
+
+test.after(async () => {
+  // `close` is PostgresMemoryStore-specific (not on IMemoryStore) — drain the
+  // pool so the scratch DB can be dropped without lingering backends.
+  await (memoryEngine.store as Partial<{ close(): Promise<void> }>).close?.().catch(() => undefined);
+  const admin = new pg.Client({ connectionString: ADMIN_URL });
+  try {
+    await admin.connect();
+    await admin.query(
+      `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
+      [SCRATCH_DB],
+    );
+    await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH_DB}`);
+  } catch {
+    /* best-effort cleanup */
+  } finally {
+    await admin.end().catch(() => undefined);
+  }
+});
 
 function parse(result: any): any {
   return JSON.parse(result.content[0].text);
@@ -80,12 +132,12 @@ test("memory_job_retry re-arms a non-running job; errors on a missing job", asyn
   // retry contract covers both `failed` and `cancelled`.
   const queued = parse(await handleMemoryAgentRun({ agentId: "memory_deduper", input: { recordIds: ["r1"] } }));
   const store = memoryEngine.store;
-  const cancelled = store.cancelMemoryJob(queued.jobId)!;
+  const cancelled = (await store.cancelMemoryJob(queued.jobId))!;
   assert.equal(cancelled.status, "cancelled");
 
   const retried = parse(await handleMemoryJobRetry({ jobId: queued.jobId }));
   assert.equal(retried.status, "pending");
-  assert.equal(store.getMemoryJob(queued.jobId)!.attempts, 0);
+  assert.equal((await store.getMemoryJob(queued.jobId))!.attempts, 0);
 
   const missing = await handleMemoryJobRetry({ jobId: "no-such-job" });
   assert.equal(missing.isError, true);

@@ -2,7 +2,7 @@ import readline from 'node:readline';
 import { getAmbientChat } from './ink/ambientChat.js';
 // §ADR-003 — NoTTYError now lives in core (the headless engine throws it too),
 // so the CLI and core share ONE class and instanceof checks stay valid.
-import { NoTTYError, type InteractivePrompter } from '@kinqs/brainrouter-core/dist/agent/prompter.js';
+import { NoTTYError, type InteractivePrompter } from '@kinqs/brainrouter-core/agent';
 
 /**
  * Shared bridge between the REPL's readline interface and modules outside

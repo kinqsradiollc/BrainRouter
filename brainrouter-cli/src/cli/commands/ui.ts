@@ -8,25 +8,23 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import chalk from 'chalk';
 import { spinner as makeSpinner } from '../spinner.js';
-import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/dist/agent/agent.js';
-import { callMcpTool, hasMcpTool } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
-import { listSessions, reconcileStale } from '@kinqs/brainrouter-core/dist/orchestration/orchestrator.js';
-import { readPreferences, resolveEffort, writePreferences, normalizeEffort } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
-import { getSessionMode, resolveActiveMode, setSessionMode } from '@kinqs/brainrouter-core/dist/session/sessionModeStore.js';
-import { setSessionRuntime } from '@kinqs/brainrouter-core/dist/session/sessionRuntimeStore.js';
-import { readPlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
+import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/agent';
+import { callMcpTool, hasMcpTool } from '@kinqs/brainrouter-core/mcp';
+import { listSessions, reconcileStale } from '@kinqs/brainrouter-core/orchestration';
+import { readPreferences, resolveEffort, writePreferences, normalizeEffort, getSessionMode, resolveActiveMode, setSessionMode, setSessionRuntime } from '@kinqs/brainrouter-core/session';
+import { readPlan } from '@kinqs/brainrouter-core/task';
 // initAgentMd usage moved to commands/init.ts (0.3.7 wizard). The
 // legacy /config + /init switch cases here are gone — the dispatcher
 // in repl.ts routes them to the new handlers first. getConfigPath
 // stays in scope because /doctor still surfaces the path.
-import { getConfigPath, saveConfig, setCliKnobOverride, getCliKnobs } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { getConfigPath, saveConfig, setCliKnobOverride, getCliKnobs } from '@kinqs/brainrouter-core/config';
 import { getPolicyProfile, profileNames } from '../../runtime/exec/policyProfiles.js';
 import { describeActiveServer } from './serverStatus.js';
 import { copyToClipboard } from '../../runtime/clipboard.js';
 import type { CommandContext } from './_context.js';
 import { completeWorkspacePath, renderHelp } from '../repl.js';
-import { PROVIDER_CATALOG, findProvider } from '@kinqs/brainrouter-core/dist/provider/catalog.js';
-import { loadApiKeyPrefixesConfig } from '@kinqs/brainrouter-core/dist/config/configLoader.js';
+import { PROVIDER_CATALOG, findProvider } from '@kinqs/brainrouter-core/provider';
+import { loadApiKeyPrefixesConfig } from '@kinqs/brainrouter-core/config';
 import { selectModel } from '../wizard/modelsApi.js';
 import { buildTheme } from '../theme.js';
 import { listFilesystemSkills } from '../../prompt/skillCatalog.js';
@@ -48,7 +46,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         // can tell whether they're 5% or 95% through it. Source +
         // override path live in runtime/contextWindow.ts. Unknown
         // models render "?" rather than a guess.
-        const { formatContextWindow } = await import('@kinqs/brainrouter-core/dist/context/contextWindow.js');
+        const { formatContextWindow } = await import('@kinqs/brainrouter-core/context');
         const ctxLabel = formatContextWindow(llm.model);
         console.log(`  LLM Provider:  ${chalk.green(llm.provider)}`);
         console.log(`  LLM Model:     ${chalk.cyan(llm.model)}${ctxLabel !== '?' ? chalk.gray(` (${ctxLabel} ctx)`) : ''}`);
@@ -61,7 +59,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
         // doesn't carry — currently-loaded? trained for tool use?
         // reasoning modes? format + quantisation. This is the "is my
         // model actually appropriate for the agent loop?" check.
-        const { lookupLmStudioModel } = await import('@kinqs/brainrouter-core/dist/provider/providers/lmstudio.js');
+        const { lookupLmStudioModel } = await import('@kinqs/brainrouter-core/provider');
         const lm = lookupLmStudioModel(llm.model);
         if (lm) {
           const loadedBadge = lm.loaded ? chalk.green('● loaded') : chalk.gray('○ not loaded');
@@ -539,7 +537,7 @@ export async function tryHandleUiCommand(ctx: CommandContext): Promise<boolean> 
     }
     case '/tier':
     {
-      const { resolveTierLadder, currentTier } = await import('@kinqs/brainrouter-core/dist/provider/tierLadder.js');
+      const { resolveTierLadder, currentTier } = await import('@kinqs/brainrouter-core/provider');
       const arg = (args[0] ?? '').toLowerCase();
       const prefs = readPreferences(agent.workspaceRoot);
       const provider = (agent.getLlmConfig?.()?.provider ?? 'openai').toLowerCase();

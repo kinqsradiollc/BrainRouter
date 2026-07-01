@@ -64,18 +64,18 @@ describe("ingestSource (MEM-2)", () => {
     return { store, chunks };
   }
 
-  it("creates a document and its chunks", () => {
+  it("creates a document and its chunks", async () => {
     const { store } = fakeStore();
-    const { document, chunks } = ingestSource(store, { userId: "u", kind: "tool_output", uri: "npm test", hash: "h1", title: "t" } as any, "line one\nline two");
+    const { document, chunks } = await ingestSource(store, { userId: "u", kind: "tool_output", uri: "npm test", hash: "h1", title: "t" } as any, "line one\nline two");
     expect(document.id).toBe("doc1");
     expect(chunks.length).toBeGreaterThan(0);
   });
 
-  it("is idempotent: re-ingesting the same doc reuses existing chunks (no duplication)", () => {
+  it("is idempotent: re-ingesting the same doc reuses existing chunks (no duplication)", async () => {
     const { store } = fakeStore();
     const doc = { userId: "u", kind: "file", uri: "a.ts", hash: "fa", title: "a.ts" } as any;
-    const first = ingestSource(store, doc, "alpha\nbeta");
-    const second = ingestSource(store, doc, "alpha\nbeta");
+    const first = await ingestSource(store, doc, "alpha\nbeta");
+    const second = await ingestSource(store, doc, "alpha\nbeta");
     expect(second.document.id).toBe(first.document.id);
     expect(second.chunks.map((c) => c.id)).toEqual(first.chunks.map((c) => c.id)); // same chunks, not new
   });

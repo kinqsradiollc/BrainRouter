@@ -1,0 +1,56 @@
+# BrainRouter brain + pgvector — a self-contained remote brain for the CLI and
+# the dashboard to connect to (REMOTE-BRAIN Phase 5, ADR-005).
+#
+#   cd deploy/brain && docker compose up -d --build
+#   # → brain on http://localhost:3747  (Streamable-HTTP MCP at /mcp; GET /health)
+#
+# Point a client at it: set `cli.brainUrl` to http://<host>:3747/mcp in the CLI
+# config (and a brain API key in the active profile / BRAINROUTER_API_KEY), or
+# run the dashboard against the same URL. See README.md.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres} # set a real secret before any shared/hosted deploy
+      POSTGRES_DB: ${POSTGRES_DB:-brainrouter}
+    volumes:
+      - brainrouter-pg:/var/lib/postgresql/data
+      - ../postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-brainrouter}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  brain:
+    build:
+      context: ../..
+      dockerfile: deploy/brain/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Wire the brain at the pg service (compose network DNS = service name).
+      BRAINROUTER_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-brainrouter}
+      # REQUIRED in production — else sessions reset on each boot (random secret).
+      BRAINROUTER_JWT_SECRET: ${BRAINROUTER_JWT_SECRET:-}
+      # Seed the first admin (clear after first boot). The API key is printed once in logs.
+      BRAINROUTER_ADMIN_PASSWORD: ${BRAINROUTER_ADMIN_PASSWORD:-}
+      BRAINROUTER_ADMIN_EMAIL: ${BRAINROUTER_ADMIN_EMAIL:-admin@example.com}
+      # Optional: generative LLM for cognitive extraction / atlas enrich.
+      BRAINROUTER_LLM_ENDPOINT: ${BRAINROUTER_LLM_ENDPOINT:-}
+      BRAINROUTER_LLM_API_KEY: ${BRAINROUTER_LLM_API_KEY:-}
+      BRAINROUTER_LLM_MODEL: ${BRAINROUTER_LLM_MODEL:-}
+      # Optional observability: expose Prometheus /metrics.
+      BRAINROUTER_METRICS: ${BRAINROUTER_METRICS:-}
+      # CORS allowlist for a browser dashboard (comma-separated origins).
+      BRAINROUTER_CORS_ORIGIN: ${BRAINROUTER_CORS_ORIGIN:-}
+    ports:
+      - "${BRAINROUTER_PORT:-3747}:3747"
+
+volumes:
+  brainrouter-pg:
+    name: brainrouter-pg

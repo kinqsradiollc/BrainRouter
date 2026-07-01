@@ -8,6 +8,7 @@ import {
   ExplainRecallRequest,
   ExplainRecallResponse,
   ExportMemoriesResponse,
+  FleetSnapshotEntry,
   HookRegisterRequest,
   HookRegisterResponse,
   HookStatusParams,
@@ -160,6 +161,8 @@ export class BrainRouterClient {
 
   // Telemetry & L1/L2 Memory Operations
   getStats() { return this.get<MemoryStatsResponse>("/api/stats"); }
+  // HONK-H3.3 — the dashboard fleet console: client-pushed fleet snapshots, one per host.
+  getFleetSnapshots() { return this.get<{ hosts: FleetSnapshotEntry[] }>("/api/fleet/snapshots"); }
   // 0.4.3 — source documents + chunks (the captured, citable source layer).
   getSources(params?: { limit?: number }) { return this.get<{ documents: Array<SourceDocument & { chunkCount: number }> }>("/api/brain/sources", params); }
   getSourceChunks(documentId: string) { return this.get<{ chunks: SourceChunk[] }>(`/api/brain/sources/${documentId}/chunks`); }
@@ -195,7 +198,7 @@ export class BrainRouterClient {
   getRemoteSessions(params?: { clientKind?: string; workspaceRoot?: string; includeStale?: boolean; includeUsage?: boolean; staleThresholdMs?: number }) {
     return this.get<{ sessions: ActiveSessionRecord[] }>("/api/sessions", params);
   }
-  getContradictions(params?: CursorPaginationParams) { return this.get<ContradictionsResponse>("/api/contradictions", params); }
+  getContradictions(params?: CursorPaginationParams & { status?: "pending" | "resolved" | "dismissed" | "all" }) { return this.get<ContradictionsResponse>("/api/contradictions", params); }
   resolveContradiction(id: string, status: "resolved" | "dismissed") { return this.post<{ success: boolean }>(`/api/contradictions/${id}/resolve`, { status }); }
 
   // Phase 3 — Observability & Recall Explainability

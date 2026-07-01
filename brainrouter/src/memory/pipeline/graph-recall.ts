@@ -5,18 +5,18 @@ import type { IMemoryStore } from "@kinqs/brainrouter-types";
  * Finds matching entities in the query and top Cognitive results, performs a 2-hop
  * BFS traversal, and returns a formatted markdown block of the context.
  */
-export function expandRecallWithGraph(params: {
+export async function expandRecallWithGraph(params: {
   topCognitiveResults: any[];
   query: string;
   userId: string;
   activeSkill?: string;
   store: IMemoryStore;
-}): string {
+}): Promise<string> {
   const { topCognitiveResults, query, userId, activeSkill, store } = params;
 
   try {
     // 1. Fetch all graph nodes for this user to match entities
-    const allNodes = store.getAllGraphNodes(userId);
+    const allNodes = await store.getAllGraphNodes(userId);
     if (allNodes.length === 0) return "";
 
     const combinedText = `${query} ${topCognitiveResults.map(r => r.content || "").join(" ")}`.toLowerCase();
@@ -36,7 +36,7 @@ export function expandRecallWithGraph(params: {
     const unionEdges = new Map<string, any>();
 
     for (const nodeId of matchingNodeIds) {
-      const { nodes, edges } = store.getGraphNeighbors(userId, nodeId, activeSkill, 2);
+      const { nodes, edges } = await store.getGraphNeighbors(userId, nodeId, activeSkill, 2);
       for (const n of nodes) unionNodes.set(n.id, n);
       for (const e of edges) unionEdges.set(e.id, e);
     }

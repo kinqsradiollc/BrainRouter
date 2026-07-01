@@ -1,6 +1,6 @@
 {
   "name": "@kinqs/brainrouter-cli",
-  "version": "0.4.15",
+  "version": "0.4.16",
   "description": "Memory-native terminal coding agent. Talks to the BrainRouter MCP cognitive engine for recall, skills, capture, persona, focus scenes, and contradiction tracking.",
   "type": "module",
   "main": "dist/index.js",
@@ -17,19 +17,20 @@
     "README.md"
   ],
   "scripts": {
-    "clean": "rm -rf dist",
+    "clean": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\"",
     "build": "npm run clean && tsc",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "test": "npm run build && node --test \"dist/**/*.test.js\"",
-    "prepack": "npm run build && find dist -name '*.test.*' -delete",
-    "sync-changelog": "rm -rf changelog && mkdir -p changelog && cp ../brainrouter-changelog/*.md changelog/",
+    "prepack": "npm run build && node -e \"const fs=require('fs');function w(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=d+'/'+e.name;if(e.isDirectory())w(p);else if(/\\.test\\./.test(e.name))fs.rmSync(p)}}w('dist')\"",
+    "sync-changelog": "node -e \"fs.rmSync('changelog',{recursive:true,force:true});fs.mkdirSync('changelog',{recursive:true});for(const f of fs.readdirSync('../brainrouter-changelog'))if(f.endsWith('.md'))fs.copyFileSync('../brainrouter-changelog/'+f,'changelog/'+f)\"",
     "prepublishOnly": "npm run sync-changelog"
   },
   "dependencies": {
-    "@kinqs/brainrouter-core": "^0.4.15",
-    "@kinqs/brainrouter-sdk": "^0.4.15",
-    "@kinqs/brainrouter-types": "^0.4.15",
+    "@kinqs/brainrouter-core": "^0.4.16",
+    "@kinqs/brainrouter-sdk": "^0.4.16",
+    "@kinqs/brainrouter-types": "^0.4.16",
     "@modelcontextprotocol/sdk": "^1.11.0",
     "chalk": "^5.3.0",
     "commander": "^12.1.0",

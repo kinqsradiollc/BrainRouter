@@ -201,27 +201,27 @@ export async function handleMemoryEngineeringTool(name: string, args: unknown, o
           commands: params.commands,
         }));
       }
-      return toolResult({ records });
+      return toolResult({ records: await Promise.all(records) });
     }
     case "memory_debug_trace_search": {
       const params = z.object({ ...baseUser, query: z.string(), limit: z.number().int().min(1).max(100).optional().default(20) }).parse(args);
-      const hits = memoryEngine.searchMemoryRecords(effectiveUserId(params.userId, options?.defaultUserId), params.query, params.limit)
+      const hits = (await memoryEngine.searchMemoryRecords(effectiveUserId(params.userId, options?.defaultUserId), params.query, params.limit))
         .filter((hit) => ["bug_finding", "debug_trace", "fix_summary", "verification_result", "failed_attempt"].includes(hit.type));
       return toolResult(hits);
     }
     case "memory_failed_attempts": {
       const params = z.object({ ...baseUser, query: z.string(), limit: z.number().int().min(1).max(100).optional().default(20) }).parse(args);
-      const hits = memoryEngine.searchMemoryRecords(effectiveUserId(params.userId, options?.defaultUserId), params.query, params.limit)
+      const hits = (await memoryEngine.searchMemoryRecords(effectiveUserId(params.userId, options?.defaultUserId), params.query, params.limit))
         .filter((hit) => hit.type === "failed_attempt");
       return toolResult(hits);
     }
     case "memory_file_history": {
       const params = z.object({ ...baseUser, filePath: z.string(), limit: z.number().int().min(1).max(100).optional().default(20) }).parse(args);
-      return toolResult(memoryEngine.getMemoriesByFilePath(effectiveUserId(params.userId, options?.defaultUserId), params.filePath, params.limit));
+      return toolResult(await memoryEngine.getMemoriesByFilePath(effectiveUserId(params.userId, options?.defaultUserId), params.filePath, params.limit));
     }
     case "memory_task_state": {
       const params = z.object({ ...baseUser, query: z.string().optional().default("task state handover blocked next actions"), limit: z.number().int().min(1).max(100).optional().default(20) }).parse(args ?? {});
-      const hits = memoryEngine.searchMemoryRecords(effectiveUserId(params.userId, options?.defaultUserId), params.query, params.limit)
+      const hits = (await memoryEngine.searchMemoryRecords(effectiveUserId(params.userId, options?.defaultUserId), params.query, params.limit))
         .filter((hit) => ["task_state", "handover_note", "blocked_reason"].includes(hit.type));
       return toolResult(hits);
     }
@@ -260,7 +260,7 @@ export async function handleMemoryEngineeringTool(name: string, args: unknown, o
     }
     case "memory_handover": {
       const params = z.object({ ...baseUser, query: z.string().optional().default("handover task state next actions"), limit: z.number().int().min(1).max(50).optional().default(10) }).parse(args ?? {});
-      const hits = memoryEngine.searchMemoryRecords(effectiveUserId(params.userId, options?.defaultUserId), params.query, params.limit)
+      const hits = (await memoryEngine.searchMemoryRecords(effectiveUserId(params.userId, options?.defaultUserId), params.query, params.limit))
         .filter((hit) => ["task_state", "handover_note", "blocked_reason", "fix_summary", "verification_result"].includes(hit.type));
       return toolResult({
         handover: hits.map((hit) => `- [${hit.type}] ${hit.content}`).join("\n"),

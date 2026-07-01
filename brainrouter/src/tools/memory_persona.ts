@@ -45,7 +45,7 @@ export async function handleMemoryPersona(args: any, options?: { defaultUserId?:
     const { userId } = memoryPersonaSchema.parse(args ?? {});
     const effectiveUserId = userId ?? options?.defaultUserId ?? "default";
 
-    const persona = memoryEngine.getPersona(effectiveUserId);
+    const persona = await memoryEngine.getPersona(effectiveUserId);
     if (!persona) {
       return toolResult({
         userId: effectiveUserId,
@@ -116,7 +116,7 @@ export async function handleMemoryPersonaRefresh(args: any, options?: { defaultU
       });
     }
 
-    const persona = memoryEngine.getPersona(effectiveUserId) as {
+    const persona = (await memoryEngine.getPersona(effectiveUserId)) as {
       personaMd: string;
       cognitiveCountAtGeneration?: number;
       createdTime?: string;

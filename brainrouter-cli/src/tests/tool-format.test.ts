@@ -9,7 +9,7 @@ import {
   classifyDiffLine,
   looksLikeDiff,
 } from '../cli/ink/toolFormat.js';
-import { compactToolOutput } from '@kinqs/brainrouter-core/dist/prompt/toolCompaction.js';
+import { compactToolOutput } from '@kinqs/brainrouter-core/prompt';
 
 // --- stripMcpPrefix ---------------------------------------------------
 

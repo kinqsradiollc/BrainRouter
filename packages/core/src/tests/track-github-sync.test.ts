@@ -1,36 +1,53 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ensureProject, createWorkItem, listWorkItems, getWorkItem, getGithubLinks, listMembers } from '../track/trackStore.js';
+import { ensureProject, createWorkItem, listWorkItems, getWorkItem, getGithubLinks, setGithubLink, updateWorkItem, listMembers, addComment, listLabels, getLabel } from '../track/trackStore.js';
 import {
   workItemToIssue,
   issueToWorkItem,
   keyFromBody,
   exportToGithub,
   importFromGithub,
+  syncBidirectional,
+  snapshotFromItem,
   importMembersFromGithub,
+  listResolvedGithubConfigsForWorkspace,
+  resolveGithubConfigForWorkspace,
   mapCollaboratorRole,
   type GithubIssue,
   type GithubCollaborator,
   type FetchLike,
 } from '../track/githubSync.js';
+import type { WorkItem } from '@kinqs/brainrouter-types';
+import { createConnector } from '../connectors/connectorStore.js';
+import { setCliKnobOverride } from '../config/config.js';
 import { withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 
-/** A scriptable fetch mock: records calls, returns queued responses, fakes issue creation. */
-function mockGithub(initialIssues: GithubIssue[] = [], collaborators: GithubCollaborator[] = []) {
+/** A scriptable fetch mock: records calls, returns queued responses, fakes issue + comment creation. */
+function mockGithub(initialIssues: GithubIssue[] = [], collaborators: GithubCollaborator[] = [], initialComments: Record<number, Array<{ id: number; body?: string; user?: { login: string } }>> = {}) {
   const calls: Array<{ method: string; url: string; body?: unknown }> = [];
   const issues = [...initialIssues];
+  const comments: Record<number, Array<{ id: number; body?: string; user?: { login: string } }>> = { ...initialComments };
   let nextNumber = Math.max(0, ...issues.map((i) => i.number)) + 1;
+  let nextCommentId = 1000;
+  const issueNumberFromUrl = (url: string): number => Number(url.match(/\/issues\/(\d+)\/comments/)?.[1] ?? 0);
   const fetchImpl: FetchLike = async (url, init) => {
     const method = init?.method ?? 'GET';
     const body = init?.body ? JSON.parse(init.body) : undefined;
     calls.push({ method, url, body });
+    // Comment endpoints (must precede the generic issue handlers).
+    if (url.includes('/comments')) {
+      const n = issueNumberFromUrl(url);
+      if (method === 'GET') return resp(200, comments[n] ?? []);
+      if (method === 'POST') { const c = { id: nextCommentId++, body: body.body, user: { login: 'tester' } }; (comments[n] ??= []).push(c); return resp(201, c); }
+      return resp(400, {});
+    }
     if (method === 'GET' && url.includes('/collaborators')) return resp(200, collaborators);
     if (method === 'GET') return resp(200, issues);
     if (method === 'POST') { const created: GithubIssue = { number: nextNumber++, title: body.title, body: body.body, labels: body.labels, state: 'open', html_url: `https://github.com/x/y/issues/${nextNumber - 1}` }; issues.push(created); return resp(201, created); }
     if (method === 'PATCH') return resp(200, { number: 1 });
     return resp(400, {});
   };
-  return { fetchImpl, calls, issues };
+  return { fetchImpl, calls, issues, comments };
   function resp(status: number, json: unknown) { return { ok: status < 400, status, json: async () => json, text: async () => JSON.stringify(json) }; }
 }
 
@@ -78,7 +95,7 @@ test('github export: a done item is closed after creation', async () => {
     const w = createWorkItem(ws, { title: 'Done thing' });
     // move it to a done-category state
     const project = ensureProject(ws);
-    const doneState = project.workflowStates.find((s) => s.category === 'done')!;
+    const doneState = project.workflowStates.find((s) => s.category === 'completed')!;
     createWorkItem(ws, { title: 'open thing' });
     const { transitionWorkItem } = await import('../track/trackStore.js');
     transitionWorkItem(ws, w.key, doneState.id);
@@ -106,7 +123,7 @@ test('github import: creates items from issues, skips PRs, no dupes on re-import
     assert.equal(bug.type, 'bug');
     assert.equal(bug.priority, 'high');
     const closed = items.find((i) => i.title === 'Closed task')!;
-    assert.equal(closed.statusCategory, 'done'); // closed → done category
+    assert.equal(closed.statusCategory, 'completed'); // closed issue → completed category
     // re-import → both UPDATE (matched by recorded link), still only 2 items
     const r2 = await importFromGithub(ws, OPTS(gh.fetchImpl));
     assert.ok(r2.imported!.every((e) => e.action === 'update'));
@@ -170,14 +187,217 @@ test('github members: dry-run reports who would be added but writes nothing', as
 test('github assignee: round-trips work-item assignee ↔ issue assignee', async () => {
   await withTempWorkspaceAsync(async (ws) => {
     const project = ensureProject(ws, { key: 'BR' });
-    const item = createWorkItem(ws, { title: 'Assigned', assignee: 'octo' });
+    const item = createWorkItem(ws, { title: 'Assigned', assignees: ['octo', 'dev1'] });
     const issue = workItemToIssue(item);
-    assert.deepEqual(issue.assignees, ['octo']); // exported as a GitHub assignee
-    // import direction: issue.assignee → work-item assignee
-    const mapped = issueToWorkItem({ number: 7, title: 'X', assignee: { login: 'dev1' }, state: 'open' }, project);
-    assert.equal(mapped.input.assignee, 'dev1');
-    // falls back to the first of `assignees`
+    assert.deepEqual(issue.assignees, ['octo', 'dev1']); // all assignees exported
+    // import direction: issue.assignee + assignees → work-item assignees (deduped)
+    const mapped = issueToWorkItem({ number: 7, title: 'X', assignee: { login: 'dev1' }, assignees: [{ login: 'dev1' }, { login: 'dev2' }], state: 'open' }, project);
+    assert.deepEqual(mapped.input.assignees, ['dev1', 'dev2']);
     const mapped2 = issueToWorkItem({ number: 8, title: 'Y', assignees: [{ login: 'dev2' }], state: 'open' }, project);
-    assert.equal(mapped2.input.assignee, 'dev2');
+    assert.deepEqual(mapped2.input.assignees, ['dev2']);
+  });
+});
+
+test('github config resolver includes repositories from GitHub connectors', () => {
+  const previous = process.env.BR_TEST_GITHUB_TOKEN;
+  process.env.BR_TEST_GITHUB_TOKEN = 'connector-token';
+  try {
+    withTempWorkspace((ws) => {
+      setCliKnobOverride({ track: { githubRepos: [] } } as never);
+      const connector = createConnector(ws, {
+        source: 'github',
+        name: 'BrainRouter repos',
+        config: {
+          owner: 'kinqsradiollc',
+          repositories: ['BrainRouter', 'external/already-qualified'],
+          includeIssues: true,
+        },
+        credential: { mode: 'static', ref: 'BR_TEST_GITHUB_TOKEN' },
+        flows: ['checkpoint'],
+      });
+
+      const rows = listResolvedGithubConfigsForWorkspace(ws);
+      assert.deepEqual(rows.map((row) => row.repo), ['kinqsradiollc/BrainRouter', 'external/already-qualified']);
+      assert.equal(rows[0].active, true);
+      assert.equal(rows[0].source, 'connector');
+      assert.equal(rows[0].label, 'BrainRouter repos');
+      assert.equal(rows[0].connectorId, connector.id);
+      assert.equal(rows[0].hasToken, true);
+      assert.equal(rows[0].tokenSource, 'connector-env');
+
+      const resolved = resolveGithubConfigForWorkspace(ws, 'external/already-qualified');
+      assert.equal(resolved.repo, 'external/already-qualified');
+      assert.equal(resolved.token, 'connector-token');
+      assert.equal(resolved.tokenSource, 'connector-env');
+      assert.equal(resolved.connectorId, connector.id);
+    });
+  } finally {
+    if (previous === undefined) delete process.env.BR_TEST_GITHUB_TOKEN;
+    else process.env.BR_TEST_GITHUB_TOKEN = previous;
+  }
+});
+
+test('github config resolver keeps dynamic connector repos visible without an HTTP token', () => {
+  withTempWorkspace((ws) => {
+    setCliKnobOverride({ track: { githubRepos: [] } } as never);
+    const connector = createConnector(ws, {
+      source: 'github',
+      name: 'GitHub CLI repos',
+      config: { owner: 'octo', repositories: ['app'] },
+      credential: { mode: 'dynamic', ref: 'gh', label: 'GitHub CLI' },
+      flows: ['checkpoint'],
+    });
+
+    const rows = listResolvedGithubConfigsForWorkspace(ws);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].repo, 'octo/app');
+    assert.equal(rows[0].hasToken, false);
+    assert.equal(rows[0].connectorId, connector.id);
+
+    const resolved = resolveGithubConfigForWorkspace(ws, 'octo/app');
+    assert.equal(resolved.repo, 'octo/app');
+    assert.equal(resolved.token, undefined);
+    assert.equal(resolved.connectorId, connector.id);
+  });
+});
+
+test('github comments: local comments push up; remote comments pull down; both id-mapped (no dupes)', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    ensureProject(ws, { key: 'BR' });
+    const w = createWorkItem(ws, { title: 'Discuss' });
+    addComment(ws, w.key, 'you', 'first thought');
+    const gh = mockGithub();
+    // export: creates the issue AND pushes the local comment
+    const exp = await exportToGithub(ws, OPTS(gh.fetchImpl));
+    assert.equal(exp.comments!.pushed, 1);
+    assert.equal(gh.calls.filter((c) => c.method === 'POST' && c.url.includes('/comments')).length, 1);
+    // re-export: the comment now has an externalId → not pushed again
+    const exp2 = await exportToGithub(ws, OPTS(gh.fetchImpl));
+    assert.equal(exp2.comments!.pushed, 0);
+
+    // a NEW remote comment arrives on the same issue
+    const issueNumber = Object.values(getGithubLinks(ws))[0].number;
+    gh.comments[issueNumber].push({ id: 42, body: 'reply from GitHub', user: { login: 'octo' } });
+    const imp = await importFromGithub(ws, OPTS(gh.fetchImpl));
+    assert.equal(imp.comments!.pulled, 1);
+    const after = getWorkItem(ws, w.key)!;
+    assert.ok(after.comments.some((c) => c.body === 'reply from GitHub' && c.author === 'octo' && c.externalId === '42'));
+    // re-import: the pushed-up comment + the pulled-down one are both mapped → no dupes
+    const imp2 = await importFromGithub(ws, OPTS(gh.fetchImpl));
+    assert.equal(imp2.comments!.pulled, 0);
+    assert.equal(getWorkItem(ws, w.key)!.comments.length, 2);
+  });
+});
+
+test('github labels: importing an issue registers its labels with their GitHub colors', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    ensureProject(ws, { key: 'BR' });
+    const gh = mockGithub([
+      { number: 1, title: 'Colored', state: 'open', labels: [{ name: 'bug', color: 'd73a4a' }, { name: 'ui', color: '00ff00' }] },
+    ]);
+    await importFromGithub(ws, OPTS(gh.fetchImpl));
+    assert.equal(getLabel(ws, 'bug')?.color, '#d73a4a'); // GitHub hex gets a "#" prefix
+    assert.equal(getLabel(ws, 'ui')?.color, '#00ff00');
+    assert.equal(getLabel(ws, 'bug')?.externalSource, 'github');
+    assert.ok(listLabels(ws).length >= 2);
+  });
+});
+
+// ── Bidirectional sync (3-way merge) ─────────────────────────────────────────
+
+/** Build a GithubIssue whose snapshot equals the item's CURRENT mirror snapshot. */
+function issueFromItem(item: WorkItem, number: number): GithubIssue {
+  const p = workItemToIssue(item);
+  return {
+    number,
+    title: p.title,
+    body: p.body,
+    labels: p.labels,
+    state: p.state,
+    assignees: p.assignees.map((login) => ({ login })),
+    html_url: `https://github.com/x/y/issues/${number}`,
+    updated_at: '2026-01-01T00:00:00.000Z',
+  };
+}
+
+test('bidi sync: a local-only edit is pushed up (issue PATCHed), local kept, baseline advances', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    ensureProject(ws, { key: 'BR' });
+    const item = createWorkItem(ws, { title: 'Original', type: 'task', priority: 'low', description: 'body' });
+    const issue = issueFromItem(item, 7);
+    // Link with a baseline == the current (pre-edit) snapshot.
+    setGithubLink(ws, item.id, { number: 7, url: issue.html_url!, baseline: snapshotFromItem(item) });
+    updateWorkItem(ws, item.id, { title: 'Local edit' }); // edit ONLY locally
+
+    const gh = mockGithub([issue]);
+    const res = await syncBidirectional(ws, OPTS(gh.fetchImpl));
+
+    const patch = gh.calls.find((c) => c.method === 'PATCH' && /\/issues\/7$/.test(c.url));
+    assert.ok(patch, 'expected an issue PATCH');
+    assert.equal((patch!.body as { title?: string }).title, 'Local edit', 'pushed the new title');
+    assert.equal(getWorkItem(ws, item.id)!.title, 'Local edit', 'local kept');
+    assert.equal(res.conflicts?.length ?? 0, 0);
+    assert.equal(getGithubLinks(ws)[item.id]?.baseline?.title, 'Local edit', 'baseline advanced');
+  });
+});
+
+test('bidi sync: a remote-only edit is pulled down (no push)', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    ensureProject(ws, { key: 'BR' });
+    const item = createWorkItem(ws, { title: 'Original', type: 'task', priority: 'low', description: 'body' });
+    setGithubLink(ws, item.id, { number: 7, url: 'u', baseline: snapshotFromItem(item) });
+    const issue = issueFromItem(item, 7); issue.title = 'Remote edit'; // remote-only change
+
+    const gh = mockGithub([issue]);
+    const res = await syncBidirectional(ws, OPTS(gh.fetchImpl));
+
+    assert.equal(getWorkItem(ws, item.id)!.title, 'Remote edit', 'local pulled');
+    const titlePush = gh.calls.find((c) => c.method === 'PATCH' && /\/issues\/7$/.test(c.url) && (c.body as { title?: string }).title !== undefined);
+    assert.ok(!titlePush, 'no push when only the remote changed');
+    assert.equal(res.conflicts?.length ?? 0, 0);
+  });
+});
+
+test('bidi sync: both sides edit the same field → conflict; neither is clobbered', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    ensureProject(ws, { key: 'BR' });
+    const item = createWorkItem(ws, { title: 'Original', type: 'task', priority: 'low', description: 'body' });
+    setGithubLink(ws, item.id, { number: 7, url: 'u', baseline: snapshotFromItem(item) });
+    updateWorkItem(ws, item.id, { title: 'Local title' });                 // local change
+    const issue = issueFromItem(item, 7); issue.title = 'Remote title';     // remote change
+
+    const gh = mockGithub([issue]);
+    const res = await syncBidirectional(ws, OPTS(gh.fetchImpl));
+
+    assert.deepEqual(res.conflicts, [{ key: item.key, field: 'title' }]);
+    assert.equal(getWorkItem(ws, item.id)!.title, 'Local title', 'local NOT overwritten on conflict');
+    const titlePush = gh.calls.find((c) => c.method === 'PATCH' && /\/issues\/7$/.test(c.url) && (c.body as { title?: string }).title !== undefined);
+    assert.ok(!titlePush, 'remote NOT overwritten on conflict');
+    assert.equal(getGithubLinks(ws)[item.id]?.baseline?.title, 'Original', 'baseline NOT advanced → conflict re-surfaces');
+  });
+});
+
+test('bidi sync: a local item with no link creates a GitHub issue', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    ensureProject(ws, { key: 'BR' });
+    const item = createWorkItem(ws, { title: 'New local', type: 'task', priority: 'none' });
+    const gh = mockGithub([]);
+    const res = await syncBidirectional(ws, OPTS(gh.fetchImpl));
+    assert.equal(res.created?.remote, 1);
+    assert.ok(gh.calls.some((c) => c.method === 'POST' && /\/issues$/.test(c.url)), 'issue POSTed');
+    assert.ok(getGithubLinks(ws)[item.id]?.baseline, 'link + baseline recorded');
+  });
+});
+
+test('bidi sync: a GitHub issue with no link creates a local item', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    ensureProject(ws, { key: 'BR' });
+    const gh = mockGithub([{ number: 42, title: 'From GH', body: 'ghbody', labels: ['type:bug', 'priority:high'], state: 'open', html_url: 'https://github.com/x/y/issues/42', updated_at: '2026-01-01T00:00:00.000Z' }]);
+    const res = await syncBidirectional(ws, OPTS(gh.fetchImpl));
+    assert.equal(res.created?.local, 1);
+    const created = listWorkItems(ws).find((w) => w.title === 'From GH');
+    assert.ok(created, 'local item created');
+    assert.equal(created!.type, 'bug');
+    assert.ok(getGithubLinks(ws)[created!.id]?.baseline, 'baseline recorded');
   });
 });

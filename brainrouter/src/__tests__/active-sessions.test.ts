@@ -44,7 +44,7 @@ describe("session_register tool", () => {
   });
 
   it("mints a fresh sessionKey when none is provided", async () => {
-    vi.mocked(memoryEngine.store.registerActiveSession).mockImplementation((r) => r);
+    vi.mocked(memoryEngine.store.registerActiveSession).mockImplementation(async (r) => r);
     const res = parseToolText<{ session: ActiveSessionRecord }>(
       await handleSessionRegister(
         { clientKind: "brainrouter-cli", workspaceRoot: "/repos/alpha" },
@@ -57,7 +57,7 @@ describe("session_register tool", () => {
   });
 
   it("preserves a client-supplied sessionKey (idempotent re-register)", async () => {
-    vi.mocked(memoryEngine.store.registerActiveSession).mockImplementation((r) => r);
+    vi.mocked(memoryEngine.store.registerActiveSession).mockImplementation(async (r) => r);
     const res = parseToolText<{ session: ActiveSessionRecord }>(
       await handleSessionRegister(
         { sessionKey: "stable-sk", clientKind: "codex" },
@@ -71,7 +71,7 @@ describe("session_register tool", () => {
   });
 
   it("falls back to http-unknown when client doesn't self-identify", async () => {
-    vi.mocked(memoryEngine.store.registerActiveSession).mockImplementation((r) => r);
+    vi.mocked(memoryEngine.store.registerActiveSession).mockImplementation(async (r) => r);
     const res = parseToolText<{ session: ActiveSessionRecord }>(
       await handleSessionRegister({}, { defaultUserId: "u1" }),
     );
@@ -94,7 +94,7 @@ describe("session_heartbeat tool", () => {
   });
 
   it("returns updated:true and the new timestamp on success", async () => {
-    vi.mocked(memoryEngine.store.heartbeatActiveSession).mockReturnValue(true);
+    vi.mocked(memoryEngine.store.heartbeatActiveSession).mockResolvedValue(true);
     const res = parseToolText<{ updated: boolean; at: string }>(
       await handleSessionHeartbeat({ sessionKey: "sk-1" }, { defaultUserId: "u1" }),
     );
@@ -103,7 +103,7 @@ describe("session_heartbeat tool", () => {
   });
 
   it("returns updated:false when no row exists (client should re-register)", async () => {
-    vi.mocked(memoryEngine.store.heartbeatActiveSession).mockReturnValue(false);
+    vi.mocked(memoryEngine.store.heartbeatActiveSession).mockResolvedValue(false);
     const res = parseToolText<{ updated: boolean }>(
       await handleSessionHeartbeat({ sessionKey: "ghost" }, { defaultUserId: "u1" }),
     );
@@ -111,7 +111,7 @@ describe("session_heartbeat tool", () => {
   });
 
   it("passes usage snapshot when provided", async () => {
-    vi.mocked(memoryEngine.store.heartbeatActiveSession).mockReturnValue(true);
+    vi.mocked(memoryEngine.store.heartbeatActiveSession).mockResolvedValue(true);
     await handleSessionHeartbeat(
       {
         sessionKey: "sk-1",
@@ -140,7 +140,7 @@ describe("session_unregister tool", () => {
   });
 
   it("returns deleted:true when the row existed", async () => {
-    vi.mocked(memoryEngine.store.unregisterActiveSession).mockReturnValue(true);
+    vi.mocked(memoryEngine.store.unregisterActiveSession).mockResolvedValue(true);
     const res = parseToolText<{ deleted: boolean }>(
       await handleSessionUnregister({ sessionKey: "sk-1" }, { defaultUserId: "u1" }),
     );
@@ -149,7 +149,7 @@ describe("session_unregister tool", () => {
   });
 
   it("is idempotent — returns deleted:false when no row exists", async () => {
-    vi.mocked(memoryEngine.store.unregisterActiveSession).mockReturnValue(false);
+    vi.mocked(memoryEngine.store.unregisterActiveSession).mockResolvedValue(false);
     const res = parseToolText<{ deleted: boolean }>(
       await handleSessionUnregister({ sessionKey: "ghost" }, { defaultUserId: "u1" }),
     );
@@ -181,7 +181,7 @@ describe("session_list tool", () => {
   });
 
   it("returns the store's session list", async () => {
-    vi.mocked(memoryEngine.store.listActiveSessions).mockReturnValue([
+    vi.mocked(memoryEngine.store.listActiveSessions).mockResolvedValue([
       record({ sessionKey: "sk-1", clientKind: "brainrouter-cli" }),
       record({ sessionKey: "sk-2", clientKind: "claude-code" }),
     ]);
@@ -193,7 +193,7 @@ describe("session_list tool", () => {
   });
 
   it("forwards includeStale + includeUsage filters to the store", async () => {
-    vi.mocked(memoryEngine.store.listActiveSessions).mockReturnValue([]);
+    vi.mocked(memoryEngine.store.listActiveSessions).mockResolvedValue([]);
     await handleSessionList(
       { clientKind: "codex", includeStale: true, includeUsage: true, staleThresholdMs: 60_000 },
       { defaultUserId: "u1" },

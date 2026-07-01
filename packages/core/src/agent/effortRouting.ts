@@ -33,6 +33,6 @@ export function resolveEffortForTurn(
 ): EffortLevel | undefined {
   if (knobs.effortRoutingMode !== 'adaptive') return effort;
   if (classifyTurn(history) !== 'MECHANICAL_CONTINUATION') return effort;
-  if (effort !== 'high' && effort !== 'xhigh') return effort;
+  if (effort !== 'high' && effort !== 'xhigh' && effort !== 'max' && effort !== 'ultracode') return effort;
   return knobs.effortForToolResumeTurns;
 }

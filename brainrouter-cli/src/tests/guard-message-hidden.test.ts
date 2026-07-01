@@ -1,8 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import type { TranscriptEntry } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
-import { exportTranscriptMarkdown } from '@kinqs/brainrouter-core/dist/session/transcriptExport.js';
-import { buildRecap } from '@kinqs/brainrouter-core/dist/session/sessionRecap.js';
+import { exportTranscriptMarkdown, buildRecap, type TranscriptEntry } from '@kinqs/brainrouter-core/session';
 import { buildRewindTimeline } from '../runtime/rewindTimeline.js';
 import { entryKind } from '../orchestration/agentTranscriptView.js';
 

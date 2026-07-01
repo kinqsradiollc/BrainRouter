@@ -7,6 +7,119 @@
  * when the prompt mentions "approve". No-op when the real bridge exists.
  */
 import type { AgentCommand, AgentEvent, AgentEventMessage } from '@kinqs/brainrouter-agent-protocol';
+import type { AtlasGraph, ConnectorCatalogEntry, ConnectorRecord } from '@kinqs/brainrouter-types';
+
+/** A representative synthetic codebase (small commerce app) for browser-only dev. */
+function devFile(path: string, category: 'code' | 'config' | 'docs' | 'infra', complexity: 'simple' | 'moderate' | 'complex', lang = 'typescript') {
+  const name = path.slice(path.lastIndexOf('/') + 1);
+  const type = category === 'config' ? 'config' : category === 'docs' ? 'document' : category === 'infra' ? 'resource' : 'file';
+  return { id: `${type}:${path}`, type, name, filePath: path, language: lang, category, complexity } as AtlasGraph['nodes'][number];
+}
+const DEV_FILES: Array<[string, 'code' | 'config' | 'docs' | 'infra', 'simple' | 'moderate' | 'complex', string?]> = [
+  ['src/gateway/server.ts', 'code', 'moderate'], ['src/gateway/routes.ts', 'code', 'moderate'], ['src/gateway/middleware.ts', 'code', 'simple'],
+  ['src/cart/cart.ts', 'code', 'moderate'], ['src/cart/cartStore.ts', 'code', 'complex'],
+  ['src/catalog/catalog.ts', 'code', 'moderate'], ['src/catalog/search.ts', 'code', 'complex'],
+  ['src/checkout/checkout.ts', 'code', 'complex'], ['src/checkout/orchestrator.ts', 'code', 'complex'],
+  ['src/payment/payment.ts', 'code', 'moderate'], ['src/payment/validate.ts', 'code', 'simple'],
+  ['src/ui/App.tsx', 'code', 'moderate'], ['src/ui/ProductList.tsx', 'code', 'moderate'], ['src/ui/CartView.tsx', 'code', 'simple'],
+  ['src/shared/types.ts', 'code', 'simple'], ['src/shared/http.ts', 'code', 'simple'],
+  ['src/cart/cartStore.test.ts', 'code', 'simple'],
+  // Typed service ports (Wave 3) — each module's facade over its internals.
+  ['src/cart/service.ts', 'code', 'simple'], ['src/catalog/service.ts', 'code', 'simple'],
+  ['src/payment/service.ts', 'code', 'simple'], ['src/checkout/service.ts', 'code', 'moderate'],
+  ['package.json', 'config', 'simple', 'json'], ['tsconfig.json', 'config', 'simple', 'json'], ['Dockerfile', 'infra', 'simple', 'docker'],
+  ['README.md', 'docs', 'simple', 'markdown'],
+];
+const DEV_IMPORTS: Array<[string, string]> = [
+  ['src/gateway/server.ts', 'src/gateway/routes.ts'], ['src/gateway/server.ts', 'src/gateway/middleware.ts'],
+  ['src/gateway/routes.ts', 'src/cart/cart.ts'], ['src/gateway/routes.ts', 'src/catalog/catalog.ts'], ['src/gateway/routes.ts', 'src/checkout/checkout.ts'],
+  ['src/cart/cart.ts', 'src/cart/cartStore.ts'], ['src/cart/cart.ts', 'src/shared/types.ts'],
+  ['src/catalog/catalog.ts', 'src/catalog/search.ts'], ['src/catalog/catalog.ts', 'src/shared/types.ts'],
+  ['src/checkout/checkout.ts', 'src/checkout/orchestrator.ts'], ['src/checkout/orchestrator.ts', 'src/cart/cart.ts'],
+  ['src/checkout/orchestrator.ts', 'src/catalog/catalog.ts'], ['src/checkout/orchestrator.ts', 'src/payment/payment.ts'],
+  ['src/payment/payment.ts', 'src/payment/validate.ts'], ['src/payment/payment.ts', 'src/shared/http.ts'],
+  ['src/ui/App.tsx', 'src/ui/ProductList.tsx'], ['src/ui/App.tsx', 'src/ui/CartView.tsx'], ['src/ui/App.tsx', 'src/shared/http.ts'],
+  ['src/cart/cartStore.ts', 'src/shared/types.ts'], ['src/catalog/search.ts', 'src/shared/types.ts'],
+  ['src/cart/cartStore.test.ts', 'src/cart/cartStore.ts'],
+  // Service ports delegate to their module internals…
+  ['src/cart/service.ts', 'src/cart/cartStore.ts'], ['src/catalog/service.ts', 'src/catalog/catalog.ts'],
+  ['src/payment/service.ts', 'src/payment/payment.ts'],
+  // …and checkout's port composes the cart/catalog/payment services (cross-module).
+  ['src/checkout/service.ts', 'src/cart/service.ts'], ['src/checkout/service.ts', 'src/catalog/service.ts'],
+  ['src/checkout/service.ts', 'src/payment/service.ts'],
+];
+function devAtlasGraph(): AtlasGraph {
+  const nodes = DEV_FILES.map(([p, c, cx, lang]) => devFile(p, c, cx, lang));
+  const id = (p: string): string => nodes.find((n) => n.filePath === p)!.id;
+  const edges: AtlasGraph['edges'] = DEV_IMPORTS.map(([a, b]) => ({ source: id(a), target: id(b), type: 'imports', weight: 0.9 }));
+  // entity (class) + function symbols for the detail card and domain entities
+  const sym: Array<[string, string, 'class' | 'function', string, [number, number]]> = [
+    ['class:src/cart/cartStore.ts:CartStore', 'CartStore', 'class', 'src/cart/cartStore.ts', [8, 74]],
+    ['class:src/catalog/catalog.ts:Product', 'Product', 'class', 'src/catalog/catalog.ts', [3, 22]],
+    ['class:src/catalog/search.ts:SearchIndex', 'SearchIndex', 'class', 'src/catalog/search.ts', [5, 48]],
+    ['class:src/payment/payment.ts:Charge', 'Charge', 'class', 'src/payment/payment.ts', [4, 30]],
+    ['class:src/gateway/server.ts:Server', 'Server', 'class', 'src/gateway/server.ts', [6, 40]],
+    ['class:src/shared/types.ts:Order', 'Order', 'class', 'src/shared/types.ts', [1, 18]],
+    ['function:src/checkout/orchestrator.ts:placeOrder', 'placeOrder', 'function', 'src/checkout/orchestrator.ts', [12, 58]],
+  ];
+  for (const [sid, name, type, filePath, lineRange] of sym) {
+    nodes.push({ id: sid, type, name, filePath, lineRange } as AtlasGraph['nodes'][number]);
+    edges.push({ source: id(filePath), target: sid, type: 'contains' as const, weight: 1 });
+  }
+  return {
+    schemaVersion: 1, kind: 'codebase',
+    project: { name: 'commerce-demo', languages: ['typescript', 'json'], frameworks: ['React'], description: 'A small commerce app for the Atlas panel.', analyzedAt: '2026-06-22T00:00:00Z', totalFiles: DEV_FILES.length },
+    nodes, edges, layers: [], tour: [],
+  };
+}
+
+/** The dev graph with LLM enrichment applied — summaries, tags, layers, tour. */
+function devAtlasEnriched(): AtlasGraph {
+  const g = devAtlasGraph();
+  const sum: Record<string, string> = {
+    'src/gateway/server.ts': 'HTTP gateway entry — boots the server and mounts routes.',
+    'src/gateway/routes.ts': 'Maps HTTP routes to the cart, catalog, and checkout services.',
+    'src/cart/cartStore.ts': 'In-memory cart persistence with add/remove/total.',
+    'src/catalog/search.ts': 'Product search and filtering over the catalog.',
+    'src/checkout/orchestrator.ts': 'Coordinates cart, catalog, and payment to place an order.',
+    'src/payment/payment.ts': 'Simulated card payment processing and validation.',
+    'src/ui/App.tsx': 'Root React component wiring the storefront UI.',
+    'src/shared/types.ts': 'Shared domain types used across services.',
+  };
+  g.nodes = g.nodes.map((n) => (n.filePath && sum[n.filePath] ? { ...n, summary: sum[n.filePath], tags: [n.category ?? 'code'] } : n));
+  const L = (p: string): string => `file:${p}`;
+  g.layers = [
+    { id: 'layer:gateway', name: 'API Gateway', description: 'Inbound HTTP surface and routing.', nodeIds: ['file:src/gateway/server.ts', 'file:src/gateway/routes.ts', 'file:src/gateway/middleware.ts'] },
+    { id: 'layer:cart', name: 'Cart', description: 'Shopping cart state and operations.', nodeIds: [L('src/cart/cart.ts'), L('src/cart/cartStore.ts')] },
+    { id: 'layer:catalog', name: 'Catalog', description: 'Product listing and search.', nodeIds: [L('src/catalog/catalog.ts'), L('src/catalog/search.ts')] },
+    { id: 'layer:checkout', name: 'Checkout & Payment', description: 'Order orchestration and payment.', nodeIds: [L('src/checkout/checkout.ts'), L('src/checkout/orchestrator.ts'), L('src/payment/payment.ts'), L('src/payment/validate.ts')] },
+    { id: 'layer:ui', name: 'Storefront UI', description: 'React storefront components.', nodeIds: [L('src/ui/App.tsx'), L('src/ui/ProductList.tsx'), L('src/ui/CartView.tsx')] },
+    { id: 'layer:shared', name: 'Shared', description: 'Cross-cutting types and helpers.', nodeIds: [L('src/shared/types.ts'), L('src/shared/http.ts')] },
+    { id: 'layer:config', name: 'Config & Docs', description: 'Build config and documentation.', nodeIds: ['config:package.json', 'config:tsconfig.json', 'resource:Dockerfile', 'document:README.md'] },
+  ];
+  g.tour = [
+    { order: 1, title: 'Start at the gateway', description: 'server.ts boots the app and mounts routes.ts.', nodeIds: ['file:src/gateway/server.ts', 'file:src/gateway/routes.ts'] },
+    { order: 2, title: 'Browse the catalog', description: 'catalog.ts + search.ts power product discovery.', nodeIds: [L('src/catalog/catalog.ts'), L('src/catalog/search.ts')] },
+    { order: 3, title: 'The cart', description: 'cartStore.ts holds cart state.', nodeIds: [L('src/cart/cartStore.ts')] },
+    { order: 4, title: 'Checkout flow', description: 'orchestrator.ts coordinates cart, catalog, and payment.', nodeIds: [L('src/checkout/orchestrator.ts'), L('src/payment/payment.ts')] },
+    { order: 5, title: 'The storefront', description: 'App.tsx renders the UI.', nodeIds: [L('src/ui/App.tsx')] },
+  ];
+  // Semantic layer relationships (LLM relationship pass) — labels the Domain
+  // view shows on its inter-layer edges. Only pairs with a real cross-layer
+  // import edge above are labelled.
+  g.layerEdges = [
+    { source: 'layer:gateway', target: 'layer:cart', label: 'routes to' },
+    { source: 'layer:gateway', target: 'layer:catalog', label: 'routes to' },
+    { source: 'layer:gateway', target: 'layer:checkout', label: 'routes to' },
+    { source: 'layer:checkout', target: 'layer:cart', label: 'reads cart from' },
+    { source: 'layer:checkout', target: 'layer:catalog', label: 'looks up in' },
+    { source: 'layer:checkout', target: 'layer:shared', label: 'uses' },
+    { source: 'layer:cart', target: 'layer:shared', label: 'uses' },
+    { source: 'layer:catalog', target: 'layer:shared', label: 'uses' },
+    { source: 'layer:ui', target: 'layer:shared', label: 'calls' },
+  ];
+  return g;
+}
 
 export function installDevBridge(): void {
   if (typeof window === 'undefined' || (window as { brainrouter?: unknown }).brainrouter) return;
@@ -262,10 +375,15 @@ export function installDevBridge(): void {
   type DevPlanDecision = { id: string; verdict: 'approved' | 'changes-requested' | 'revised'; actor?: 'user' | 'auto'; feedback?: string; planSnapshot: DevPlanItem[]; explanation?: string; createdAt: string; linkedMemoryIds: string[] };
   const devPlanState: { items: DevPlanItem[]; explanation?: string } = { items: [{ step: 'Audit the session/context meter logic', status: 'completed' }, { step: 'Reset context + plan on session switch', status: 'in_progress' }], explanation: 'Session-scoped state fix' };
   // TRACK mode mock: a project + work items the board/list renders from.
-  const trackCat = (s: string): string => (s === 'done' ? 'done' : s === 'todo' ? 'todo' : 'in-progress');
+  const trackCat = (s: string): string => (
+    s === 'done' ? 'completed'
+      : s === 'cancelled' ? 'cancelled'
+        : s === 'backlog' ? 'backlog'
+          : s === 'todo' ? 'unstarted'
+            : 'started'); // in-progress / in-review
   const mkItem = (key: string, type: string, title: string, status: string, priority: string, assignee?: string, labels: string[] = []) => ({
     id: `wi_${key}`, key, type, title, status, statusCategory: trackCat(status), priority,
-    assignee, watchers: [], labels, components: [], links: [], comments: [], attachmentIds: [],
+    assignees: assignee ? [assignee] : [], assignee, watchers: [], labels, components: [], links: [], comments: [], attachmentIds: [],
     activity: [{ at: '2026-06-21T00:00:00.000Z', actor: 'user', field: 'created' }],
     workspaceRoot: wsCurrent, linkedMemoryIds: [], codeLinks: [], taskIds: [], artifactIds: [], reviewFindingIds: [],
     createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z',
@@ -274,10 +392,19 @@ export function installDevBridge(): void {
     project: {
       id: 'proj_dev', workspaceRoot: wsCurrent, name: 'BrainRouter', key: 'BR', keyCounter: 8,
       workflowStates: [
-        { id: 'todo', name: 'To Do', category: 'todo' }, { id: 'in-progress', name: 'In Progress', category: 'in-progress' },
-        { id: 'in-review', name: 'In Review', category: 'in-progress' }, { id: 'done', name: 'Done', category: 'done' },
+        { id: 'backlog', name: 'Backlog', category: 'backlog', color: '#94a3b8', default: true },
+        { id: 'todo', name: 'Todo', category: 'unstarted', color: '#64748b' },
+        { id: 'in-progress', name: 'In Progress', category: 'started', color: '#f59e0b' },
+        { id: 'in-review', name: 'In Review', category: 'started', color: '#6366f1' },
+        { id: 'done', name: 'Done', category: 'completed', color: '#22c55e' },
+        { id: 'cancelled', name: 'Cancelled', category: 'cancelled', color: '#9ca3af' },
       ],
       issueTypes: [], components: ['cli', 'desktop', 'memory'],
+      labels: [
+        { id: 'lbl_track', name: 'track', color: '#6366f1' },
+        { id: 'lbl_desktop', name: 'desktop', color: '#3b82f6' },
+        { id: 'lbl_memory', name: 'memory', color: '#a855f7' },
+      ],
       members: [
         { id: 'you', name: 'You', role: 'owner', addedAt: '2026-06-21T00:00:00.000Z' },
         { id: 'anhdang', name: 'Anh Dang', role: 'admin', addedAt: '2026-06-21T00:00:00.000Z' },
@@ -290,9 +417,9 @@ export function installDevBridge(): void {
       mkItem('BR-2', 'story', 'Track data model + durable store', 'done', 'high', 'anhdang', ['track']),
       mkItem('BR-3', 'story', 'Left-sidebar mode switcher', 'in-progress', 'high', 'anhdang', ['desktop']),
       mkItem('BR-4', 'task', 'Track board view (columns + cards)', 'in-review', 'medium', 'anhdang', ['desktop']),
-      mkItem('BR-5', 'bug', 'Reranker timeout under a slow local server', 'done', 'highest', 'bob', ['memory']),
+      mkItem('BR-5', 'bug', 'Reranker timeout under a slow local server', 'done', 'urgent', 'bob', ['memory']),
       mkItem('BR-6', 'task', 'Agent tools for the tracker', 'todo', 'medium'),
-      mkItem('BR-7', 'task', '/track CLI commands', 'todo', 'low'),
+      mkItem('BR-7', 'task', '/track CLI commands', 'backlog', 'low'),
     ],
   };
   let devTrackN = 8;
@@ -301,6 +428,34 @@ export function installDevBridge(): void {
     { id: 'sp_2', workspaceRoot: wsCurrent, name: 'Sprint 2 — Views', state: 'future', createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
   ];
   let devSprintN = 3;
+  const devModules: Record<string, unknown>[] = [
+    { id: 'mod_1', workspaceRoot: wsCurrent, name: 'Recall pipeline', description: 'reranker + RRF blend, graph expansion', status: 'in-progress', lead: 'anhdang', members: ['anhdang', 'bob'], targetDate: '2026-07-12T00:00:00.000Z', createdAt: '2026-06-18T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
+    { id: 'mod_2', workspaceRoot: wsCurrent, name: 'Unified workspace', description: 'Chat · Track · Code modes', status: 'in-progress', lead: 'you', members: ['you', 'anhdang'], targetDate: '2026-07-20T00:00:00.000Z', createdAt: '2026-06-18T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
+    { id: 'mod_3', workspaceRoot: wsCurrent, name: 'Cloud packaging', description: 'server image + remote dashboard', status: 'planned', lead: 'you', members: ['you'], targetDate: '2026-08-01T00:00:00.000Z', createdAt: '2026-06-20T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
+  ];
+  let devModuleN = 4;
+  const devViews: Record<string, unknown>[] = [
+    { id: 'view_1', workspaceRoot: wsCurrent, name: 'My open bugs', layout: 'board', query: 'type = bug', filters: { priority: 'high' }, createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
+    { id: 'view_2', workspaceRoot: wsCurrent, name: 'This month', layout: 'calendar', createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
+  ];
+  let devViewN = 3;
+  // Seed a few module assignments so the preview's progress bars have data.
+  for (const it of devTrack.items) {
+    if (it.key === 'BR-1' || it.key === 'BR-2') it.moduleId = 'mod_2';
+    if (it.key === 'BR-3' || it.key === 'BR-5') it.moduleId = 'mod_1';
+  }
+  // Spread start/target dates across the current month so calendar + gantt have data.
+  {
+    const now = new Date();
+    const mk = (off: number): string => new Date(now.getFullYear(), now.getMonth(), Math.max(1, Math.min(28, now.getDate() + off))).toISOString();
+    const dates: Record<string, [number, number]> = { 'BR-1': [-3, 6], 'BR-2': [-10, -2], 'BR-3': [0, 5], 'BR-4': [2, 9], 'BR-5': [-6, -1], 'BR-6': [4, 12], 'BR-7': [7, 14] };
+    for (const it of devTrack.items) { const d = dates[String(it.key)]; if (d) { it.startDate = mk(d[0]); it.targetDate = mk(d[1]); } }
+  }
+  // A Markdown description on one item so the detail drawer's rendering is visible in preview.
+  {
+    const bug = devTrack.items.find((it) => it.key === 'BR-5');
+    if (bug) bug.description = ['### Summary', 'Reranker **times out** under a slow local server.', '', '### Reproduction steps', '1. Point at a slow OpenAI-compatible endpoint', '2. Run `/recall "…"`', '3. Observe the hang', '', '### Expected', 'Recall degrades gracefully (no hard block).', '', '```shell', 'BRAINROUTER_RECALL_TIMEOUT_MS=8000 brainrouter chat', '```', '', '> See the `request-timeout.ts` chokepoint.'].join('\n');
+  }
   const devFindItem = (k: unknown): Record<string, unknown> | undefined => devTrack.items.find((w) => w.key === k || w.id === k);
   const devAutomations: Record<string, unknown>[] = [
     { id: 'auto_1', name: 'Bugs start high', enabled: true, trigger: 'created', condition: 'type = bug', actions: [{ type: 'set-priority', value: 'high' }], createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
@@ -347,6 +502,14 @@ export function installDevBridge(): void {
   };
   // T7/T6 — mutable permission rules + MCP servers so the Settings editors work in preview.
   const devRules: { allow: string[]; deny: string[] } = { allow: ['run_command(git *)', 'run_command(npm test*)'], deny: ['run_command(rm -rf *)'] };
+  // §multi-provider — MUTABLE provider list so the browser preview actually
+  // reflects create/configure/remove (the real Electron host persists to
+  // config.json; here we keep an in-memory list that config-snapshot reads).
+  const devProviders: Array<{ name: string; provider: string; model: string; endpoint: string | null; hasKey: boolean; models: string[]; apiVersion?: string | null }> = [
+    { name: 'groq', provider: 'groq', model: 'llama-3.3-70b', endpoint: 'https://api.groq.com/openai/v1', hasKey: true, models: ['llama-3.3-70b', 'llama-3.1-405b', 'mixtral-8x7b'] },
+    { name: 'local', provider: 'lmstudio', model: 'qwen2.5-coder-7b', endpoint: 'http://localhost:1234/v1', hasKey: false, models: [] },
+  ];
+  let devDefaultProvider: string | null = 'groq';
   const devCliKnobs: Record<string, unknown> = { autoCompactTokens: 80000, maxToolLoops: 60, recallMode: 'gated', contextCompaction: true, llmTimeoutMs: 120000, automation: { enabled: true, requirements: { enabled: true, autopilot: false }, sync: { enabled: true }, sprints: { enabled: true, autopilot: true } } };
   const devExtensions = {
     trusted: true,
@@ -356,7 +519,78 @@ export function installDevBridge(): void {
       { name: 'prod-guard', version: '2.0.0', source: 'builtin' as const, description: 'Denies run_command against prod hosts', contributes: ['hooks'], enabled: false, blocked: false },
     ],
   };
-  const devGithub: { repo: string | null; hasToken: boolean; tokenSource: string | null } = { repo: 'kinqsradiollc/BrainRouter', hasToken: true, tokenSource: 'config' };
+  const devGithub: {
+    repo: string | null;
+    hasToken: boolean;
+    tokenSource: string | null;
+    repos: Array<{ repo: string; hasToken: boolean; tokenSource: string | null; active: boolean; label?: string | null; source?: string | null; connectorId?: string | null }>;
+    caBundle: string | null;
+  } = {
+    repo: 'kinqsradiollc/BrainRouter',
+    hasToken: true,
+    tokenSource: 'config',
+    repos: [
+      { repo: 'kinqsradiollc/BrainRouter', hasToken: true, tokenSource: 'config', active: true },
+      { repo: 'kubernetes/kubernetes', hasToken: false, tokenSource: null, active: false },
+      { repo: 'kinqsradiollc/brainrouter-desktop', hasToken: true, tokenSource: 'connector-env', active: false, label: 'BrainRouter repos', source: 'connector', connectorId: 'conn_demo_github' },
+    ],
+    caBundle: null,
+  };
+  const devConnectorCatalog: ConnectorCatalogEntry[] = [
+    {
+      source: 'github',
+      title: 'GitHub',
+      description: 'Ingest issues, pull requests, files, and permissions from GitHub.',
+      flows: ['load', 'checkpoint', 'slim', 'permission-sync'],
+      credentialModes: ['static', 'dynamic', 'oauth'],
+      configFields: [
+        { key: 'owner', label: 'Owner or organization', type: 'string', required: true },
+        { key: 'repositories', label: 'Repositories', type: 'string-list' },
+        { key: 'includeIssues', label: 'Include issues', type: 'boolean', defaultValue: true },
+        { key: 'includePullRequests', label: 'Include pull requests', type: 'boolean', defaultValue: true },
+        { key: 'includeFiles', label: 'Include files', type: 'boolean', defaultValue: false },
+        { key: 'pollMinutes', label: 'Auto run minutes', type: 'number' },
+      ],
+      credentialFields: [{ key: 'token', label: 'Access token', type: 'secret', required: true }],
+    },
+    { source: 'gitlab', title: 'GitLab', description: 'Index issues, merge requests, and repository files from GitLab projects or groups.', flows: ['load', 'checkpoint', 'slim'], credentialModes: ['static', 'oauth'], configFields: [{ key: 'owner', label: 'Group or namespace', type: 'string' }, { key: 'projects', label: 'Projects', type: 'string-list' }, { key: 'pollMinutes', label: 'Auto run minutes', type: 'number' }], credentialFields: [{ key: 'token', label: 'GitLab token', type: 'secret', required: true }] },
+    { source: 'slack', title: 'Slack', description: 'Index selected channels, threads, and shared files for team/project recall.', flows: ['checkpoint', 'slim', 'permission-sync', 'event'], credentialModes: ['static', 'oauth'], configFields: [{ key: 'channels', label: 'Channels', type: 'string-list' }, { key: 'includeThreads', label: 'Include threads', type: 'boolean', defaultValue: true }, { key: 'pollMinutes', label: 'Auto run minutes', type: 'number' }], credentialFields: [{ key: 'botToken', label: 'Bot token', type: 'secret', required: true }] },
+    { source: 'google-drive', title: 'Google Drive', description: 'Index Drive folders, shared docs, sheets, and permissions for workspace knowledge.', flows: ['load', 'checkpoint', 'slim', 'permission-sync'], credentialModes: ['oauth', 'static'], configFields: [{ key: 'folderIds', label: 'Folder ids', type: 'string-list' }, { key: 'includeSharedDrives', label: 'Include shared drives', type: 'boolean', defaultValue: true }, { key: 'pollMinutes', label: 'Auto run minutes', type: 'number' }], credentialFields: [{ key: 'serviceAccountJson', label: 'Service account JSON', type: 'secret', required: true }] },
+    { source: 'confluence', title: 'Confluence', description: 'Index Confluence spaces, pages, comments, and page hierarchy.', flows: ['load', 'checkpoint', 'slim', 'permission-sync'], credentialModes: ['static', 'oauth'], configFields: [{ key: 'baseUrl', label: 'Confluence base URL', type: 'string' }, { key: 'spaces', label: 'Spaces', type: 'string-list' }, { key: 'pollMinutes', label: 'Auto run minutes', type: 'number' }], credentialFields: [{ key: 'apiToken', label: 'API token', type: 'secret', required: true }] },
+    { source: 'jira', title: 'Jira', description: 'Index Jira projects, issues, comments, labels, and status metadata.', flows: ['checkpoint', 'slim', 'permission-sync'], credentialModes: ['static', 'oauth'], configFields: [{ key: 'baseUrl', label: 'Jira base URL', type: 'string' }, { key: 'projects', label: 'Projects', type: 'string-list' }, { key: 'jql', label: 'JQL filter', type: 'string' }, { key: 'pollMinutes', label: 'Auto run minutes', type: 'number' }], credentialFields: [{ key: 'apiToken', label: 'API token', type: 'secret', required: true }] },
+    { source: 'filesystem', title: 'Filesystem', description: 'Index local folders, docs, notes, and generated artifacts from the workspace.', flows: ['load', 'checkpoint', 'slim'], credentialModes: ['none'], configFields: [{ key: 'roots', label: 'Folders', type: 'string-list' }, { key: 'includeGlobs', label: 'Include globs', type: 'string-list' }, { key: 'excludeGlobs', label: 'Exclude globs', type: 'string-list' }, { key: 'pollMinutes', label: 'Auto run minutes', type: 'number' }], credentialFields: [] },
+    { source: 'web', title: 'Web', description: 'Index product docs, public sites, sitemap pages, and release notes.', flows: ['load', 'checkpoint', 'slim'], credentialModes: ['none', 'static'], configFields: [{ key: 'baseUrl', label: 'Base URL', type: 'string' }, { key: 'mode', label: 'Scrape mode', type: 'string' }, { key: 'depth', label: 'Max depth', type: 'number' }, { key: 'pollMinutes', label: 'Auto run minutes', type: 'number' }], credentialFields: [{ key: 'headerToken', label: 'Header token', type: 'secret' }] },
+    { source: 'mcp', title: 'MCP Resources', description: 'Index resources exposed by a configured MCP tool server.', flows: ['checkpoint', 'slim', 'event'], credentialModes: ['none'], configFields: [{ key: 'serverId', label: 'MCP server id', type: 'string' }, { key: 'resourceUris', label: 'Resource URIs', type: 'string-list' }, { key: 'pollMinutes', label: 'Auto run minutes', type: 'number' }], credentialFields: [] },
+  ];
+  let devConnectors: ConnectorRecord[] = [
+    {
+      id: 'conn_demo1',
+      source: 'github',
+      name: 'BrainRouter GitHub',
+      status: 'active',
+      config: { owner: 'kinqsradiollc', repositories: ['BrainRouter', 'brainrouter-desktop'], includeIssues: true, includePullRequests: true, includeFiles: false },
+      credential: { mode: 'dynamic', ref: 'gh', label: 'GitHub CLI' },
+      flows: ['load', 'checkpoint', 'slim', 'permission-sync'],
+      workspaceRoot: '/Users/dev/BrainRouter',
+      lastRunAt: new Date(Date.now() - 3600_000).toISOString(),
+      lastSuccessAt: new Date(Date.now() - 3600_000).toISOString(),
+      checkpoint: { cursor: 'demo', documentCount: 3 },
+      createdAt: new Date(Date.now() - 86400_000).toISOString(),
+      updatedAt: new Date(Date.now() - 3600_000).toISOString(),
+    },
+  ];
+  const devConnectorDocuments = [
+    { id: 'github:demo:issue:1', connectorId: 'conn_demo1', source: 'github', kind: 'issue', repository: 'kinqsradiollc/BrainRouter', title: '#1 Demo issue', snippet: 'Demo issue from the GitHub connector.', metadata: { number: 1 } },
+    { id: 'github:demo:pull:2', connectorId: 'conn_demo1', source: 'github', kind: 'pull-request', repository: 'kinqsradiollc/BrainRouter', title: '#2 Demo PR', snippet: 'Demo PR from the GitHub connector.', metadata: { number: 2 } },
+    { id: 'github:demo:file:README.md', connectorId: 'conn_demo1', source: 'github', kind: 'file', repository: 'kinqsradiollc/BrainRouter', title: 'README.md', snippet: '# Demo connector readme.', metadata: { path: 'README.md' } },
+  ];
+  const devSlimDocuments = (connectorId?: string, limit = 20) =>
+    devConnectorDocuments
+      .filter((doc) => !connectorId || doc.connectorId === connectorId)
+      .slice(0, Math.max(1, Math.min(50, limit)))
+      .map((doc) => ({ ...doc, score: 1 }));
+  const devConnectorPermissionCounts: Record<string, number> = { conn_demo1: 2 };
+  const devConnectorRuns: Record<string, Array<{ id: string; connectorId: string; source: string; flow: string; status: string; startedAt: string; completedAt?: string; documentsSeen?: number; documentsIndexed?: number; permissionsSeen?: number; permissionsIndexed?: number; failures?: number }>> = {};
   // WS9 — carry identity/type so the grouped MCP layout (Brains vs Tools) and the
   // single-active-brain affordance render in browser-only dev.
   const devServers: Array<{ id: string; online: boolean; detail?: string; identity?: 'brainrouter' | 'third-party'; type?: 'stdio' | 'http'; url?: string | null; command?: string | null }> = [
@@ -371,10 +605,14 @@ export function installDevBridge(): void {
   // T5 — a tiny in-memory FS so the editor (open/edit/save/stale-write) is
   // exercisable in the browser preview without a real host.
   const devFiles: Record<string, { content: string; mtimeMs: number }> = {
+    'README.md': { content: '# BrainRouter\n\nA **memory-first** AI coding agent.\n\n## Features\n\n- 4-stage recall pipeline\n- Multi-agent orchestration\n- Visual workflow canvas\n\nSee the [getting-started guide](docs/guide.md) or the [website](https://brainrouter.dev).\n\n> Docs mode lets you edit Markdown with a live preview.\n', mtimeMs: 1_000 },
+    'docs/guide.md': { content: '# Getting started\n\nThis opened **in the Docs editor** — not a new window.\n\nBack to the [README](../README.md).\n', mtimeMs: 1_100 },
     'src/memory/recall.ts': { content: 'export function recall(query: string) {\n  // 4-stage pipeline: retrieve -> rerank -> judge -> expand\n  const ranked = rerank(retrieve(query));\n  return expand(judge(ranked));\n}\n', mtimeMs: 1_000 },
     'src/state/completionInbox.ts': { content: '/** Completion inbox - detached workers report back here. */\nimport { randomUUID } from "node:crypto";\n\nexport interface Completion {\n  id: string;\n  parentSessionKey: string;\n  summary: string;\n}\n', mtimeMs: 1_000 },
     'assets/logo.png': { content: 'binary-bytes', mtimeMs: 1_000 },
   };
+  const devWorkflows: Record<string, Record<string, unknown>> = {};
+  const devShortcuts: Record<string, string> = {}; // §5.9 — in-memory shortcut overrides
   const devFileRead = (p: string): unknown => {
     const f = devFiles[p];
     if (!f) return { path: p, kind: 'file', content: '', error: 'ENOENT: no such file (dev bridge)' };
@@ -439,6 +677,30 @@ export function installDevBridge(): void {
     'worktree-create': (a) => { const name = String(a.name ?? ''); const p = `/Users/dev/BrainRouter/.worktrees/${name}`; devWorktrees.push({ path: p, branch: name, detached: false }); return { ok: true, path: p }; },
     'worktree-remove': (a) => { const i = devWorktrees.findIndex((w) => w.path === a.path); if (i >= 0) devWorktrees.splice(i, 1); return { ok: i >= 0 }; },
     // REQUIREMENT-RECORDS — mock the requirementStore wrappers (mutate in-memory).
+    // ATLAS — a small synthetic codebase graph so the Atlas panel renders in
+    // browser-only dev (real builds come from the host's deterministic builder).
+    'atlas-graph': () => devAtlasEnriched(),
+    'atlas-build': () => { const g = devAtlasGraph(); return { graph: g, stats: { files: 20, functions: 1, classes: 1, nodes: g.nodes.length, edges: g.edges.length, layers: 0, enriched: false } }; },
+    'atlas-enrich': () => {
+      const g = devAtlasEnriched();
+      return {
+        graph: g,
+        stats: { files: 7, functions: 5, classes: 2, nodes: g.nodes.length, edges: g.edges.length, layers: g.layers.length, enriched: true },
+        enrichResult: { summarized: g.nodes.filter((n) => n.summary).length, layers: g.layers.length, tourSteps: g.tour.length, relationships: g.layerEdges?.length ?? 0, batchesFailed: 0 },
+      };
+    },
+    'atlas-explain-change': (a) => {
+      const path = String((a as { path?: string }).path ?? '');
+      return {
+        path,
+        assessment: {
+          summary: `This change to ${path.split('/').pop()} adjusts its core logic and updates the call sites it touches.`,
+          risk: path.includes('payment') || path.includes('checkout') ? 'high' : path.includes('search') ? 'medium' : 'low',
+          checklist: ['Confirm the public API/signature is unchanged or all callers updated', 'Check error handling on the new path', 'Verify there is test coverage for this change'],
+          concerns: path.includes('payment') ? ['Touches payment logic — validate amounts and currency handling', 'No test changes detected alongside this edit'] : [],
+        },
+      };
+    },
     'requirement-list': () => [...devRequirements].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     'requirement-create': (a) => {
       const id = `req_dev${++reqSeq}`;
@@ -626,7 +888,13 @@ export function installDevBridge(): void {
       ? { pr: { number: 395, state: 'OPEN', title: 'feat(desktop): DESK-4l — interactive views rail' } }
       : { pr: null }),
     // T6 — GitHub CI/CD mocks (browser preview; real gh runs in the host).
-    'git-pr-detail': () => ({ pr: { number: 446, state: 'OPEN', title: 'feat(desktop): in-app Monaco code editor', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/446', headRefName: 'feat/0.4.15-monaco-editor', baseRefName: 'release/0.4.15', isDraft: false, author: { login: 'anhdang' } } }),
+    'git-pr-list': () => ({ prs: [
+      { number: 630, title: 'feat(desktop): Onyx-style Models panel with key-driven multi-select model fetch', state: 'OPEN', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/630', headRefName: 'feat/models-onyx-providers', baseRefName: 'release/0.4.16', isDraft: false, author: { login: 'luannn010' }, updatedAt: '2026-06-26T14:40:00Z', body: '## What & why\nRedesigns the Desktop Models settings panel to mimic Onyx and makes model setup key-driven.\n\n- LLMConfig gains optional models[] and apiVersion\n- New provider modules: anthropic, gemini, openrouter, zenmux, groq, azure' },
+      { number: 552, title: 'BrainRouter Mobile — Phase 1-2 planning, design system & prototypes', state: 'OPEN', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/552', headRefName: 'brainrouter-mobile', baseRefName: 'main', isDraft: true, author: { login: 'luannn010' }, updatedAt: '2026-06-22T12:02:00Z', body: 'Phase 1-2 planning, a shared design system, and clickable prototypes for the BrainRouter mobile app.' },
+      { number: 517, title: 'feat(desktop): native cross-platform installers (DESK-6 packaging)', state: 'OPEN', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/517', headRefName: 'feat/desktop-packaging', baseRefName: 'release/0.4.16', isDraft: false, author: { login: 'luannn010' }, updatedAt: '2026-06-21T14:28:00Z', body: 'Native cross-platform installers (mac/win/linux) via electron-builder.' },
+      { number: 513, title: 'docs(spec): typed extension API + audited self-update brief', state: 'OPEN', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/513', headRefName: 'docs/typed-extension-api-spec', baseRefName: 'main', isDraft: false, author: { login: 'anhdang' }, updatedAt: '2026-06-21T10:19:00Z', body: 'Spec for a typed extension API and an audited self-update mechanism.' },
+    ] }),
+    'git-pr-detail': () => ({ pr: { number: 446, state: 'OPEN', title: 'feat(desktop): in-app Monaco code editor', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/446', headRefName: 'feat/0.4.15-monaco-editor', baseRefName: 'release/0.4.15', isDraft: false, mergeable: 'MERGEABLE', author: { login: 'anhdang' } } }),
     'git-pr-checks': () => ({ checks: [
       { name: 'Build & Test (Node 22.x)', bucket: 'pass', workflow: 'CI', link: 'https://github.com/kinqsradiollc/BrainRouter/actions/runs/1', startedAt: '2026-06-17T10:00:00Z', completedAt: '2026-06-17T10:03:06Z' },
       { name: 'Lint', bucket: 'pass', workflow: 'CI', startedAt: '2026-06-17T10:00:00Z', completedAt: '2026-06-17T10:00:42Z' },
@@ -766,11 +1034,11 @@ export function installDevBridge(): void {
       return { sessions: 23, turns: 412, activeDays: 64, currentStreak: 3, longestStreak: 11, model: 'claude-opus-4-8', perDay };
     },
     'changed-files': () => [
-      { status: 'M', path: 'src/memory/recall.ts' },
-      { status: 'M', path: 'src/agent/agent.ts' },
-      { status: 'M', path: 'src/cli/ink/ChatApp.tsx' },
-      { status: 'A', path: 'src/state/completionInbox.ts' },
-      { status: '??', path: 'notes/scratch.md' },
+      { status: 'M', path: 'src/checkout/orchestrator.ts' },
+      { status: 'M', path: 'src/payment/payment.ts' },
+      { status: 'A', path: 'src/payment/validate.ts' },
+      { status: 'M', path: 'src/cart/cartStore.ts' },
+      { status: '??', path: 'src/catalog/search.ts' },
     ],
     'list-files': () => ({
       files: [
@@ -787,7 +1055,9 @@ export function installDevBridge(): void {
       workspaceRoot: wsCurrent, gitRoot: '/Users/dev/BrainRouter', repoRelativePath: 'brainrouter-desktop', isSubdir: true,
     }),
     'git-log': () => ({ subjects: ['feat(desktop): DESK-4l — interactive views rail, tabbed bottom terminal', 'feat(desktop): DESK-4k — modern skin', 'feat(desktop): DESK-5c — file tree, real terminal'] }),
-    'context-usage': () => ({ used: devCtxUsed, window: 256_000, compactAt: 80_000, limit: 80_000, pct: Math.min(1, devCtxUsed / 80_000) }),
+    // Models a 128k-window model with a 256k auto-compact knob (knob > window) —
+    // the renderer clamps compactAt down to the window so the two bars share a max.
+    'context-usage': () => ({ used: devCtxUsed, window: 128_000, compactAt: 256_000, limit: 256_000, pct: Math.min(1, devCtxUsed / 256_000) }),
     // End-of-turn changeset — echo the turn's edited paths with plausible per-file
     // +/- so the transcript's "Edited N files" card is exercisable in preview.
     'turn-changeset': (a) => {
@@ -855,6 +1125,39 @@ export function installDevBridge(): void {
       if (sp) sp.state = String(a.state ?? 'future');
       return [...devSprints];
     },
+    'track-modules': () => [...devModules],
+    'track-create-module': (a) => {
+      devModules.unshift({ id: `mod_${devModuleN++}`, workspaceRoot: wsCurrent, name: String(a.name ?? 'Module'), description: a.description ? String(a.description) : undefined, status: 'planned', members: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+      return [...devModules];
+    },
+    'track-module-update': (a) => {
+      const m = devModules.find((x) => x.id === a.id);
+      if (m && a.patch && typeof a.patch === 'object') Object.assign(m, a.patch);
+      return [...devModules];
+    },
+    'track-module-delete': (a) => {
+      const i = devModules.findIndex((x) => x.id === a.id);
+      if (i >= 0) devModules.splice(i, 1);
+      for (const it of devTrack.items) if (it.moduleId === a.id) it.moduleId = undefined;
+      return [...devModules];
+    },
+    'track-assign-module': (a) => {
+      const it = devFindItem(a.idOrKey);
+      if (it) it.moduleId = a.moduleId ? String(a.moduleId) : undefined;
+      return [...devTrack.items];
+    },
+    'track-views': () => [...devViews],
+    'track-save-view': (a) => {
+      const input = (a.input && typeof a.input === 'object' ? a.input : {}) as Record<string, unknown>;
+      const name = String(input.name ?? '').trim();
+      if (name) {
+        const existing = devViews.find((v) => String(v.name).toLowerCase() === name.toLowerCase());
+        const rec = { id: existing?.id ?? `view_${devViewN++}`, workspaceRoot: wsCurrent, name, layout: input.layout ?? 'board', query: input.query || undefined, filters: input.filters || undefined, createdAt: existing?.createdAt ?? new Date().toISOString(), updatedAt: new Date().toISOString() };
+        if (existing) Object.assign(existing, rec); else devViews.push(rec);
+      }
+      return [...devViews];
+    },
+    'track-delete-view': (a) => { const i = devViews.findIndex((v) => v.id === a.id); if (i >= 0) devViews.splice(i, 1); return [...devViews]; },
     'track-automations': () => [...devAutomations],
     'track-create-automation': (a) => {
       devAutomations.push({ id: `auto_${devAutoN++}`, name: String(a.name ?? 'Rule'), enabled: true, trigger: String(a.trigger ?? 'created'), condition: a.condition ? String(a.condition) : undefined, actions: Array.isArray(a.actions) ? a.actions : [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
@@ -890,7 +1193,88 @@ export function installDevBridge(): void {
       if (i >= 0) members.splice(i, 1);
       return [...members];
     },
-    'track-sync-config': () => ({ repo: 'kinqsradiollc/BrainRouter', hasToken: true, tokenSource: 'env' }),
+    'track-git-context': () => ({
+      ok: true,
+      hasGit: true,
+      root: wsCurrent,
+      currentBranch: 'release/0.4.15',
+      remotes: [{ name: 'origin', url: 'git@github.com:kinqsradiollc/BrainRouter.git', githubRepo: 'kinqsradiollc/BrainRouter' }],
+      githubRepo: 'kinqsradiollc/BrainRouter',
+    }),
+    'track-start-work': (a) => {
+      const it = devFindItem(a.idOrKey);
+      const slug = String(it?.title ?? 'work').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'work';
+      const branch = `track/${String(it?.key ?? 'br-0').toLowerCase()}-${slug}`;
+      if (it) {
+        const links = Array.isArray(it.codeLinks) ? it.codeLinks : [];
+        if (!links.some((l) => l && typeof l === 'object' && (l as { kind?: string; ref?: string }).kind === 'branch' && (l as { ref?: string }).ref === branch)) {
+          it.codeLinks = [...links, { kind: 'branch', ref: branch, label: 'kinqsradiollc/BrainRouter' }];
+        }
+        if (it.statusCategory === 'backlog' || it.statusCategory === 'unstarted') { it.status = 'in-progress'; it.statusCategory = 'started'; }
+      }
+      return {
+        ok: !!it,
+        branch,
+        created: true,
+        switched: true,
+        context: {
+          ok: true,
+          hasGit: true,
+          root: wsCurrent,
+          currentBranch: branch,
+          remotes: [{ name: 'origin', url: 'git@github.com:kinqsradiollc/BrainRouter.git', githubRepo: 'kinqsradiollc/BrainRouter' }],
+          githubRepo: 'kinqsradiollc/BrainRouter',
+        },
+        items: [...devTrack.items],
+        error: it ? undefined : `Unknown work item "${String(a.idOrKey ?? '')}".`,
+      };
+    },
+    'track-pr-status': () => ({
+      pr: {
+        number: 42,
+        state: 'OPEN',
+        title: 'BR-3: Streaming retry fix',
+        url: 'https://github.com/kinqsradiollc/BrainRouter/pull/42',
+        headRefName: 'track/br-3-streaming-retry-fix',
+        baseRefName: 'main',
+        isDraft: false,
+        mergeable: 'MERGEABLE',
+        statusCheckRollup: [
+          { name: 'Build & Test', status: 'COMPLETED', conclusion: 'FAILURE' },
+          { name: 'Lint', status: 'COMPLETED', conclusion: 'SUCCESS' },
+          { name: 'e2e', status: 'IN_PROGRESS' },
+        ],
+      },
+      branch: 'track/br-3-streaming-retry-fix',
+      itemKey: 'BR-3',
+    }),
+    'track-create-pr': (a) => {
+      const it = devFindItem(a.idOrKey);
+      const url = `https://github.com/kinqsradiollc/BrainRouter/pull/${42 + devTrackN++}`;
+      if (it) {
+        const links = Array.isArray(it.codeLinks) ? it.codeLinks : [];
+        if (!links.some((l) => l && typeof l === 'object' && (l as { kind?: string; ref?: string }).kind === 'pull-request' && (l as { ref?: string }).ref === url)) {
+          it.codeLinks = [...links, { kind: 'pull-request', ref: url, label: 'GitHub PR' }];
+        }
+      }
+      return {
+        ok: !!it,
+        url,
+        pr: it ? { number: Number(url.split('/').pop()), state: 'OPEN', title: `${String(it.key)}: ${String(it.title)}`, url, isDraft: true, mergeable: 'UNKNOWN', statusCheckRollup: [] } : null,
+        branch: 'track/br-3-streaming-retry-fix',
+        itemKey: it?.key,
+        items: [...devTrack.items],
+        error: it ? undefined : `Unknown work item "${String(a.idOrKey ?? '')}".`,
+      };
+    },
+    'track-merge-pr': () => {
+      const it = devFindItem('BR-3');
+      if (it) { it.status = 'done'; it.statusCategory = 'completed'; }
+      return { ok: true, pr: null, branch: 'track/br-3-streaming-retry-fix', itemKey: 'BR-3', items: [...devTrack.items] };
+    },
+    'track-submit-pr-review': () => ({ ok: true, pr: { number: 42, state: 'OPEN', title: 'BR-3: Streaming retry fix', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/42', headRefName: 'track/br-3-streaming-retry-fix', baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: [] }, branch: 'track/br-3-streaming-retry-fix', itemKey: 'BR-3' }),
+    'track-fix-failing-checks': () => ({ ok: true, task: { id: 'btask_fix_ci' }, pr: { number: 42, state: 'OPEN', title: 'BR-3: Streaming retry fix', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/42', headRefName: 'track/br-3-streaming-retry-fix', baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: [] }, branch: 'track/br-3-streaming-retry-fix', itemKey: 'BR-3' }),
+    'track-sync-config': () => ({ ...devGithub }),
     'track-scan-commits': () => ({ scanned: 12, linked: [{ sha: 'abc1234', key: 'BR-3', workItemKey: 'BR-3' }], transitioned: [{ key: 'BR-3', from: 'todo', to: 'in-progress' }], items: [...devTrack.items] }),
     'track-sync-members': (a) => {
       const members = devTrack.project.members as Record<string, unknown>[];
@@ -906,8 +1290,28 @@ export function installDevBridge(): void {
       }
       return { members: [...members], added, errors: [] };
     },
+    'track-gh-issues-import': () => {
+      const existing = devTrack.items.find((w) => w.key === 'BR-99');
+      if (!existing) devTrack.items.unshift(mkItem('BR-99', 'bug', 'Imported GitHub issue via gh', 'todo', 'high'));
+      return {
+        direction: 'import',
+        dryRun: false,
+        imported: [{ issueNumber: 99, title: 'Imported GitHub issue via gh', action: existing ? 'update' : 'create', key: 'BR-99' }],
+        errors: [],
+        items: [...devTrack.items],
+      };
+    },
     'track-sync': (a) => {
-      const dir = a.direction === 'export' ? 'export' : 'import';
+      const dir = a.direction === 'export' ? 'export' : a.direction === 'sync' ? 'sync' : 'import';
+      if (dir === 'sync') {
+        const first = (devTrack.items as Record<string, unknown>[])[0];
+        return {
+          direction: 'sync', dryRun: a.dryRun !== false,
+          pushed: 2, pulled: 1, created: { local: 1, remote: 1 },
+          conflicts: first ? [{ key: String(first.key), field: 'title' }] : [],
+          errors: [],
+        };
+      }
       const rows = (devTrack.items as Record<string, unknown>[]).slice(0, 5).map((w, i) => (
         dir === 'export'
           ? { key: w.key, title: w.title, action: i % 2 === 0 ? 'create' : 'update' }
@@ -936,6 +1340,48 @@ export function installDevBridge(): void {
     'list-models': (a) => a?.provider
       ? ({ current: '', provider: String(a.provider), models: [`${a.provider}-fast`, `${a.provider}-pro`, `${a.provider}-reasoning`] })
       : ({ current: resolvedModel(activeSession), models: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5', 'gpt-5.5', 'gpt-5.3-codex', 'qwen3-coder-32b', 'deepseek-v4', 'glm-5-air', 'text-embedding-nomic-embed-text-v1.5', 'whisper-large-v3'] }),
+    // §multi-select-models — dev mock of a draft-key /models probe. No real
+    // network: a blank key + blank endpoint unlocks nothing (exercises the
+    // "no models" empty state); otherwise returns a per-provider model set so the
+    // dialog's checkbox list + count badge can be driven in the preview.
+    'list-models-probe': async (a) => {
+      // Browser dev-preview: pull the ACTUAL models the key unlocks — never a
+      // canned list. Most gateways send NO CORS headers (ZenMux, OpenAI, …), so a
+      // direct browser fetch is blocked; we go through the vite dev proxy
+      // (/__brp/models, see vite.config.ts) which fetches server-side with no CORS
+      // — exactly like the Electron app's host. Falls back to a direct fetch for
+      // CORS-friendly endpoints or a production preview without the proxy.
+      const provider = String(a?.provider ?? '') || null;
+      const endpoint = String(a?.endpoint ?? '').trim();
+      const apiKey = String(a?.apiKey ?? '');
+      const apiVersion = String(a?.apiVersion ?? '').trim();
+      if (!endpoint) return { models: [], count: 0, provider, probe: true };
+      // 1) vite dev proxy (server-side fetch, bypasses CORS).
+      try {
+        const pr = await fetch('/__brp/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint, apiKey, apiVersion }) });
+        if (pr.ok) {
+          const j = (await pr.json()) as { models?: string[]; error?: string };
+          const models = j.models ?? [];
+          return { models, count: models.length, provider, probe: true, ...(j.error ? { error: j.error } : {}) };
+        }
+      } catch { /* proxy absent (prod preview) → direct fetch below */ }
+      // 2) direct fetch fallback (CORS-permitting endpoints only).
+      const base = endpoint.replace(/\/chat\/completions\/?$/, '').replace(/\/$/, '') + '/models';
+      const url = apiVersion ? base + (base.includes('?') ? '&' : '?') + 'api-version=' + encodeURIComponent(apiVersion) : base;
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8_000);
+      try {
+        const res = await fetch(url, { headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey.trim() || 'local'}` }, signal: ctrl.signal });
+        if (!res.ok) return { models: [], count: 0, provider, probe: true, error: `http-${res.status}` };
+        const body = (await res.json().catch(() => ({}))) as { data?: Array<{ id?: unknown }> };
+        const ids = [...new Set((Array.isArray(body.data) ? body.data : []).map((r) => (r && typeof r.id === 'string') ? r.id : '').filter(Boolean))].sort();
+        return { models: ids, count: ids.length, provider, probe: true };
+      } catch {
+        return { models: [], count: 0, provider, probe: true, error: 'unreachable' };
+      } finally {
+        clearTimeout(timer);
+      }
+    },
     'term-open': () => { termBuf = '\u001b[1;32mdemo-shell\u001b[0m on \u001b[1;34m/Users/dev/BrainRouter\u001b[0m\r\n$ '; return { id: 'tdemo', shell: '/bin/zsh (demo)' }; },
     'term-write': (a) => {
       const d = String(a.data ?? '');
@@ -962,6 +1408,17 @@ export function installDevBridge(): void {
     }),
     // T5 — editor backend (in-memory): read / stat / guarded save (stale-write).
     'file-read': (a) => devFileRead(String(a.path ?? 'src/memory/recall.ts')),
+    'write-save': (a) => { const p = String(a.path ?? ''); const c = String(a.content ?? ''); if (devFiles[p]) { devFiles[p].content = c; } return { ok: true, path: p }; },
+    'workflow-list': () => Object.values(devWorkflows).map((g) => ({ id: g.id, name: g.name || g.id, updatedAt: g.updatedAt || '' })),
+    'workflow-save': (a) => { const g = (a.graph ?? {}) as Record<string, unknown>; const id = String(g.id || g.name || 'untitled').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64) || 'untitled'; const rec = { ...g, id, updatedAt: new Date().toISOString() }; devWorkflows[id] = rec; return { id, name: g.name || id, updatedAt: rec.updatedAt }; },
+    'workflow-load': (a) => devWorkflows[String(a.id ?? '')] ?? null,
+    'workflow-delete': (a) => { const id = String(a.id ?? ''); const had = !!devWorkflows[id]; delete devWorkflows[id]; return { ok: had }; },
+    'memory-search': (a) => { const q = String(a.query ?? '').toLowerCase(); const all = [{ id: 'mem_recall_blend', type: 'project', source: 'memory_vector', score: 0.91, content: 'Recall blends reranker + RRF (0.6/0.4); never hard-drop candidates.' }, { id: 'mem_no_vendor_refs', type: 'feedback', source: 'memory_keyword', score: 0.79, content: 'No vendor/planning refs in committed code or docs.' }, { id: 'mem_session_scope', type: 'project', source: 'memory_keyword', score: 0.68, content: 'Artifacts/annotations are session-scoped on capture.' }]; return { records: q ? all.filter((r) => r.content.toLowerCase().includes(q) || r.type.includes(q)) : all, raw: '' }; },
+    'write-inline-ai': (a) => { const action = String(a.action ?? 'polish'); const text = String(a.text ?? ''); if (!text.trim()) return { text: '', error: 'No text selected.' }; if (action === 'continue') return { text: text + (/\s$/.test(text) ? '' : ' ') + 'Moreover, this continuation is produced by the dev-bridge stub to exercise the inline assistant.' }; const polished = text.replace(/\bvery\s+/gi, '').replace(/\bgood\b/gi, 'excellent').replace(/\butilize\b/gi, 'use').replace(/[ \t]+/g, ' ').replace(/(^|[.!?]\s+)([a-z])/g, (_m, p, c) => p + (c as string).toUpperCase()).trim(); return { text: polished || text }; },
+    'write-ghost-complete': (a) => { const prefix = String(a.prefix ?? ''); if (prefix.trim().length < 3) return { text: '' }; return { text: /\s$/.test(prefix) ? 'this continuation is from the dev-bridge stub.' : ' — continued by the dev-bridge stub.' }; },
+    'write-assistant': (a) => { const q = String(a.question ?? '').trim(); if (!q) return { text: '', error: 'Ask a question.' }; return { text: `(dev-bridge) On "${q.slice(0, 60)}": ground your prose in README.md — keep the memory-first framing consistent and cite the source doc.`, grounded: true }; },
+    'shortcuts-get': () => { try { return { overrides: JSON.parse(localStorage.getItem('br-dev-shortcuts') || '{}') }; } catch { return { overrides: { ...devShortcuts } }; } },
+    'shortcuts-save': (a) => { const raw = (a.overrides && typeof a.overrides === 'object') ? a.overrides as Record<string, unknown> : {}; const clean: Record<string, string> = {}; for (const [k, v] of Object.entries(raw)) if (typeof v === 'string' && v.trim()) clean[k] = v.trim(); try { localStorage.setItem('br-dev-shortcuts', JSON.stringify(clean)); } catch { /* ignore */ } return { ok: true, overrides: clean }; },
     'file-stat': (a) => { const p = String(a.path ?? ''); const f = devFiles[p]; return f ? { path: p, exists: true, kind: 'file', mtimeMs: f.mtimeMs, size: f.content.length } : { path: p, exists: false }; },
     'action:file-save': (a) => {
       const p = String(a.path ?? ''); const content = String(a.content ?? ''); const f = devFiles[p];
@@ -1006,6 +1463,12 @@ export function installDevBridge(): void {
       // Mock of config/providers.json — the main-provider picker source.
       providerCatalog: [
         { id: 'openai', label: 'OpenAI', endpoint: 'https://api.openai.com/v1', local: false },
+        { id: 'anthropic', label: 'Anthropic (Claude)', endpoint: 'https://api.anthropic.com/v1', local: false },
+        { id: 'gemini', label: 'Google Gemini', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', local: false },
+        { id: 'openrouter', label: 'OpenRouter', endpoint: 'https://openrouter.ai/api/v1', local: false },
+        { id: 'zenmux', label: 'ZenMux', endpoint: 'https://zenmux.ai/api/v1', local: false },
+        { id: 'groq', label: 'Groq', endpoint: 'https://api.groq.com/openai/v1', local: false },
+        { id: 'azure', label: 'Azure OpenAI', endpoint: '', local: false },
         { id: 'openai-compatible', label: 'OpenAI-compatible (custom)', endpoint: '', local: false },
         { id: 'opencode', label: 'opencode (Zen gateway)', endpoint: 'https://opencode.ai/zen/v1', local: false },
         { id: 'lmstudio', label: 'LM Studio (local)', endpoint: 'http://localhost:1234/v1', local: true },
@@ -1015,6 +1478,14 @@ export function installDevBridge(): void {
       cliKnobs: { ...devCliKnobs },
       extensions: { trusted: devExtensions.trusted, items: devExtensions.items.map((e) => ({ ...e })) },
       integrations: { github: { ...devGithub } },
+      connectors: {
+        catalog: devConnectorCatalog.map((entry) => ({ ...entry })),
+        items: devConnectors.map((entry) => ({ ...entry, config: { ...entry.config }, credential: { ...entry.credential }, flows: [...entry.flows] })),
+        documentCounts: Object.fromEntries(devConnectors.map((entry) => [entry.id, Number((entry.checkpoint as { documentCount?: number } | undefined)?.documentCount ?? 0)])),
+        permissionCounts: Object.fromEntries(devConnectors.map((entry) => [entry.id, devConnectorPermissionCounts[entry.id] ?? 0])),
+        runPreviews: Object.fromEntries(devConnectors.map((entry) => [entry.id, devConnectorRuns[entry.id] ?? []])),
+        documentPreviews: Object.fromEntries(devConnectors.map((entry) => [entry.id, devSlimDocuments(entry.id, 3)])),
+      },
       workspacePrefs: { ...prefs },
       sessionMode: { ...(sessionModes[activeSession] ?? {}) },
       modeScope: 'session',
@@ -1025,19 +1496,39 @@ export function installDevBridge(): void {
       ],
       servers: devServers.map((s) => ({ ...s })),
       activeServer: devActiveServer, // WS9 — the single active brain
-      // §multi-provider — named providers + per-sub-agent-role routing.
-      providers: [
-        { name: 'groq', provider: 'groq', model: 'llama-3.3-70b', endpoint: 'https://api.groq.com/openai/v1', hasKey: true },
-        { name: 'local', provider: 'lmstudio', model: 'qwen2.5-coder-7b', endpoint: 'http://localhost:1234/v1', hasKey: false },
-      ],
+      // §multi-provider — named providers (mutable in dev) + per-role routing.
+      providers: devProviders.map((p) => ({ ...p })),
+      defaultProviderName: devDefaultProvider,
+      defaultProviderModelMatches: true,
       agentModels: [
         { role: 'explorer', provider: 'groq', model: null },
         { role: 'reviewer', provider: null, model: 'gpt-5.3-codex' },
       ],
     }),
-    'action:set-provider': (a) => ({ ok: true, name: String(a.name ?? '') }),
-    'action:remove-provider': (a) => ({ ok: true, name: String(a.name ?? '') }),
-    'action:set-default-provider': (a) => ({ ok: true, name: String(a.name ?? '') }),
+    'action:set-provider': (a) => {
+      const name = String(a.name ?? '').trim();
+      if (!/^[a-zA-Z0-9._-]+$/.test(name)) return { ok: false, error: 'Provider name must be letters, digits, . _ - only.' };
+      const models = Array.isArray(a.models) ? a.models.filter((m): m is string => typeof m === 'string' && m.trim().length > 0) : [];
+      const model = String(a.model ?? '').trim() || models[0] || '';
+      if (!model) return { ok: false, error: 'A model is required.' };
+      const entry = { name, provider: String(a.provider ?? '').trim() || 'openai-compatible', model, endpoint: (String(a.endpoint ?? '').trim() || null), hasKey: !!String(a.apiKey ?? '').trim(), models, apiVersion: a.apiVersion ? String(a.apiVersion) : null };
+      const i = devProviders.findIndex((p) => p.name === name);
+      if (i >= 0) devProviders[i] = entry; else devProviders.push(entry);
+      return { ok: true, name };
+    },
+    'action:remove-provider': (a) => {
+      const name = String(a.name ?? '').trim();
+      const i = devProviders.findIndex((p) => p.name === name);
+      if (i >= 0) devProviders.splice(i, 1);
+      if (devDefaultProvider === name) devDefaultProvider = null;
+      return { ok: true, name };
+    },
+    'action:set-default-provider': (a) => {
+      const name = String(a.name ?? '').trim();
+      if (!devProviders.some((p) => p.name === name)) return { ok: false, error: `Unknown provider "${name}".` };
+      devDefaultProvider = name;
+      return { ok: true, name };
+    },
     'action:set-agent-model': (a) => ({ ok: true, role: String(a.role ?? '') }),
     'usage-breakdown': () => [
       'parent      48,213 in · 1,904 out · cache hit 92%',
@@ -1086,10 +1577,192 @@ export function installDevBridge(): void {
     'action:set-pref': (a) => { prefs[String(a.key)] = a.value; return { ...prefs }; },
     'action:set-cli-knob': (a) => { if (a.value === null) delete devCliKnobs[String(a.key)]; else devCliKnobs[String(a.key)] = a.value; return { ok: true, key: String(a.key) }; },
     'action:set-track-github': (a) => {
-      if (typeof a.repo === 'string') devGithub.repo = a.repo.trim() || null;
-      if (typeof a.token === 'string' && a.token.trim()) { devGithub.hasToken = true; devGithub.tokenSource = 'config'; }
-      if (a.clearToken === true) { devGithub.hasToken = false; devGithub.tokenSource = null; }
-      return { ok: true, repo: devGithub.repo, hasToken: devGithub.hasToken, tokenSource: devGithub.tokenSource };
+      if (typeof a.caBundle === 'string' || a.caBundle === null) devGithub.caBundle = typeof a.caBundle === 'string' ? (a.caBundle.trim() || null) : null;
+      if (typeof a.removeRepo === 'string') {
+        const repo = a.removeRepo.trim();
+        devGithub.repos = devGithub.repos.filter((r) => r.repo !== repo);
+        if (devGithub.repo === repo) devGithub.repo = devGithub.repos[0]?.repo ?? null;
+      }
+      if (typeof a.repo === 'string') {
+        const repo = a.repo.trim();
+        if (repo) {
+          let row = devGithub.repos.find((r) => r.repo === repo);
+          if (!row) { row = { repo, hasToken: false, tokenSource: null, active: false, source: 'track' }; devGithub.repos.push(row); }
+          if (typeof a.token === 'string' && a.token.trim()) { row.hasToken = true; row.tokenSource = 'config'; }
+          if (a.clearToken === true) { row.hasToken = false; row.tokenSource = null; }
+          if (a.makeActive === true || !devGithub.repo) {
+            devGithub.repos.forEach((r) => { r.active = r.repo === repo; });
+            devGithub.repo = repo;
+            devGithub.hasToken = row.hasToken;
+            devGithub.tokenSource = row.tokenSource;
+          }
+        }
+      }
+      const active = devGithub.repos.find((r) => r.active) ?? devGithub.repos[0];
+      if (active) {
+        devGithub.repos.forEach((r) => { r.active = r.repo === active.repo; });
+        devGithub.repo = active.repo;
+        devGithub.hasToken = active.hasToken;
+        devGithub.tokenSource = active.tokenSource;
+      } else {
+        devGithub.repo = null;
+        devGithub.hasToken = false;
+        devGithub.tokenSource = null;
+      }
+      return { ok: true, ...devGithub };
+    },
+    'connector-slim-documents': (a) => devSlimDocuments(typeof a.connectorId === 'string' ? a.connectorId : undefined, typeof a.limit === 'number' ? a.limit : 20),
+    'action:connector-create': (a) => {
+      const now = new Date().toISOString();
+      const rec = {
+        id: `conn_demo${devConnectors.length + 1}`,
+        source: a.source === 'github' ? 'github' : 'github',
+        name: typeof a.name === 'string' && a.name.trim() ? a.name.trim() : 'GitHub connector',
+        status: 'active',
+        config: a.config && typeof a.config === 'object' && !Array.isArray(a.config) ? a.config as never : {},
+        credential: a.credential && typeof a.credential === 'object' && !Array.isArray(a.credential) ? a.credential as never : { mode: 'dynamic', ref: 'gh' },
+        flows: Array.isArray(a.flows) ? a.flows as never : ['load', 'checkpoint', 'slim', 'permission-sync'],
+        workspaceRoot: wsCurrent,
+        createdAt: now,
+        updatedAt: now,
+      } as ConnectorRecord;
+      devConnectors = [rec, ...devConnectors];
+      return { ok: true, connector: rec };
+    },
+    'action:connector-update': (a) => {
+      const id = String(a.id ?? '');
+      const patch = a.patch && typeof a.patch === 'object' && !Array.isArray(a.patch) ? a.patch as Partial<ConnectorRecord> : {};
+      let updated: ConnectorRecord | null = null;
+      devConnectors = devConnectors.map((rec) => {
+        if (rec.id !== id) return rec;
+        updated = { ...rec, ...patch, id: rec.id, source: rec.source, workspaceRoot: rec.workspaceRoot, createdAt: rec.createdAt, updatedAt: new Date().toISOString() };
+        return updated;
+      });
+      return updated ? { ok: true, connector: updated } : { ok: false, error: 'Connector not found.' };
+    },
+    'action:connector-delete': (a) => {
+      const id = String(a.id ?? '');
+      const before = devConnectors.length;
+      devConnectors = devConnectors.filter((rec) => rec.id !== id);
+      return { ok: before !== devConnectors.length };
+    },
+    'action:connector-export-definitions': () => {
+      const bundle = {
+        schemaVersion: 1,
+        exportedAt: new Date().toISOString(),
+        connectors: devConnectors.map((connector) => ({
+          source: connector.source,
+          name: connector.name,
+          description: connector.description,
+          config: { ...connector.config },
+          credential: { ...connector.credential },
+          flows: [...connector.flows],
+        })),
+      };
+      return { ok: true, bundle, json: JSON.stringify(bundle, null, 2) };
+    },
+    'action:connector-import-definitions': (a) => {
+      const raw = typeof a.json === 'string' ? a.json : '';
+      if (!raw.trim()) return { ok: false, error: 'Connector definition JSON is required.' };
+      try {
+        const parsed = JSON.parse(raw) as { connectors?: Array<Partial<ConnectorRecord>> };
+        const now = new Date().toISOString();
+        const imported = (parsed.connectors ?? []).map((definition, index) => ({
+          id: `conn_import_${Date.now()}_${index}`,
+          source: definition.source === 'github' ? 'github' : 'github',
+          name: typeof definition.name === 'string' && definition.name.trim() ? definition.name.trim() : 'Imported connector',
+          description: typeof definition.description === 'string' ? definition.description : undefined,
+          status: 'active',
+          config: definition.config && typeof definition.config === 'object' ? { ...definition.config } : {},
+          credential: definition.credential && typeof definition.credential === 'object' ? { ...definition.credential } : { mode: 'none' },
+          flows: Array.isArray(definition.flows) ? definition.flows : ['checkpoint'],
+          workspaceRoot: wsCurrent,
+          createdAt: now,
+          updatedAt: now,
+        })) as ConnectorRecord[];
+        devConnectors = [...imported, ...devConnectors];
+        return { ok: true, connectors: imported };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+    'action:connector-validate': (a) => {
+      const id = String(a.id ?? '');
+      let checked: string[] = [];
+      let updated: ConnectorRecord | null = null;
+      devConnectors = devConnectors.map((rec) => {
+        if (rec.id !== id) return rec;
+        const owner = typeof rec.config.owner === 'string' ? rec.config.owner : 'kinqsradiollc';
+        const repos = Array.isArray(rec.config.repositories) ? rec.config.repositories.filter((repo): repo is string => typeof repo === 'string') : ['BrainRouter'];
+        checked = repos.length ? repos.map((repo) => (repo.includes('/') ? repo : `${owner}/${repo}`)) : [`${owner}/BrainRouter`];
+        updated = { ...rec, status: 'active', lastError: undefined, updatedAt: new Date().toISOString() };
+        return updated;
+      });
+      return updated ? { ok: true, checked, errors: [], connector: updated } : { ok: false, checked: [], errors: ['Connector not found.'], connector: null };
+    },
+    'action:connector-run': (a) => {
+      const id = String(a.id ?? '');
+      const now = new Date().toISOString();
+      let updated: ConnectorRecord | null = null;
+      const runCheckpoint = { highWatermark: now, repositories: [] as unknown[], completedAt: now, documentCount: 3, failureCount: 0 };
+      devConnectors = devConnectors.map((rec) => {
+        if (rec.id !== id) return rec;
+        runCheckpoint.repositories = Array.isArray(rec.config.repositories) ? rec.config.repositories : [];
+        updated = { ...rec, status: 'active', lastRunAt: now, lastSuccessAt: now, lastError: undefined, checkpoint: runCheckpoint, updatedAt: now };
+        return updated;
+      });
+      if (!updated) return { ok: false, error: 'Connector not found.', errors: ['Connector not found.'] };
+      const connector = updated;
+      const run = { id: `crun_demo${Date.now()}`, connectorId: id, source: 'github', flow: 'checkpoint', status: 'succeeded', startedAt: now, completedAt: now, documentsSeen: 3, documentsIndexed: 3, failures: 0 };
+      devConnectorRuns[id] = [run, ...(devConnectorRuns[id] ?? [])].slice(0, 10);
+      return {
+        ok: true,
+        connector,
+        run: { ...run, checkpointAfter: runCheckpoint },
+        documents: [
+          { id: 'github:demo:issue:1', connectorId: id, source: 'github', kind: 'issue', repository: 'kinqsradiollc/BrainRouter', title: '#1 Demo issue', text: 'Demo issue', metadata: { number: 1 } },
+          { id: 'github:demo:pull:2', connectorId: id, source: 'github', kind: 'pull-request', repository: 'kinqsradiollc/BrainRouter', title: '#2 Demo PR', text: 'Demo PR', metadata: { number: 2 } },
+          { id: 'github:demo:file:README.md', connectorId: id, source: 'github', kind: 'file', repository: 'kinqsradiollc/BrainRouter', title: 'README.md', text: '# Demo', metadata: { path: 'README.md' } },
+        ],
+        errors: [],
+      };
+    },
+    'action:connector-index-memory': (a) => {
+      const id = String(a.id ?? '');
+      const connector = devConnectors.find((rec) => rec.id === id);
+      if (!connector) return { ok: false, records: 0, evidence: 0, operations: 0, error: 'Connector not found.' };
+      const records = devSlimDocuments(id, 200).length;
+      return {
+        ok: true,
+        records,
+        evidence: records,
+        operations: records ? 1 : 0,
+        result: { importedMemories: records, importedEvidence: records, importedOperations: records ? 1 : 0 },
+      };
+    },
+    'action:connector-sync-permissions': (a) => {
+      const id = String(a.id ?? '');
+      const now = new Date().toISOString();
+      let updated: ConnectorRecord | null = null;
+      devConnectors = devConnectors.map((rec) => {
+        if (rec.id !== id) return rec;
+        devConnectorPermissionCounts[id] = 2;
+        updated = { ...rec, status: 'active', lastRunAt: now, lastSuccessAt: now, lastError: undefined, checkpoint: { ...(rec.checkpoint ?? {}), permissionSyncedAt: now, permissionCount: 2 }, updatedAt: now };
+        return updated;
+      });
+      if (!updated) return { ok: false, error: 'Connector not found.', errors: ['Connector not found.'] };
+      const run = { id: `crun_perm_demo${Date.now()}`, connectorId: id, source: 'github', flow: 'permission-sync', status: 'succeeded', startedAt: now, completedAt: now, permissionsSeen: 2, permissionsIndexed: 2, failures: 0 };
+      devConnectorRuns[id] = [run, ...(devConnectorRuns[id] ?? [])].slice(0, 10);
+      return {
+        ok: true,
+        connector: updated,
+        run,
+        permissions: [
+          { id: 'github:demo:user:octo', connectorId: id, source: 'github', principalId: 'octo', principalKind: 'user', role: 'admin', repositories: ['kinqsradiollc/BrainRouter'], metadata: {} },
+          { id: 'github:demo:user:dev', connectorId: id, source: 'github', principalId: 'dev', principalKind: 'user', role: 'write', repositories: ['kinqsradiollc/BrainRouter'], metadata: {} },
+        ],
+        errors: [],
+      };
     },
     'action:set-session-mode': (a) => {
       const next = { ...(sessionModes[activeSession] ?? {}) };
@@ -1167,8 +1840,14 @@ export function installDevBridge(): void {
       switch (command.kind) {
         case 'query': {
           const handler = queries[command.name];
-          if (handler) emit({ kind: 'query-result', id: command.id, ok: true, result: handler(command.args ?? {}) }, 30);
-          else emit({ kind: 'query-result', id: command.id, ok: false, error: `Unknown query "${command.name}" (dev bridge)` }, 30);
+          if (handler) {
+            // Await async handlers (e.g. list-models-probe now does a REAL fetch)
+            // so the renderer receives the resolved value, never a pending Promise.
+            // Sync handlers resolve on the next microtask — behavior unchanged.
+            Promise.resolve(handler(command.args ?? {}))
+              .then((result) => emit({ kind: 'query-result', id: command.id, ok: true, result }, 30))
+              .catch((e) => emit({ kind: 'query-result', id: command.id, ok: false, error: String((e as Error)?.message ?? e) }, 30));
+          } else emit({ kind: 'query-result', id: command.id, ok: false, error: `Unknown query "${command.name}" (dev bridge)` }, 30);
           return;
         }
         case 'start-turn': {
@@ -1363,6 +2042,14 @@ export function installDevBridge(): void {
     trustWorkspace: async (root: string) => { trustedRoots.add(root); return { trusted: true }; },
     untrustWorkspace: async (root: string) => { trustedRoots.delete(root); return { trusted: false }; },
     trustedWorkspaces: async () => ({ trusted: [...trustedRoots] }),
+    getZoomFactor(): number {
+      const saved = localStorage.getItem('br-zoom-factor');
+      return saved ? parseFloat(saved) : 1.0;
+    },
+    setZoomFactor(factor: number): void {
+      localStorage.setItem('br-zoom-factor', String(factor));
+      document.body.style.zoom = String(factor);
+    },
   };
 
   // Dev-only — fire a turn event tagged with ANY workspaceRoot (even one not on

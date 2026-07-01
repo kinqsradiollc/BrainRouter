@@ -1,4 +1,5 @@
-import { SqliteMemoryStore } from "./store/sqlite.js";
+import { PostgresMemoryStore } from "./store/postgres/PostgresMemoryStore.js";
+import { pgUrlFromEnv } from "./store/postgres/connection.js";
 import type { StalenessThresholds } from "./lessons/lessonHygiene.js";
 // REFAC-ENGINE-SPLIT (0.4.6) — lesson-domain ops live in lessons/lessonOps.ts;
 // the engine methods below are thin wrappers delegating to them.
@@ -46,11 +47,19 @@ import { hashPassword } from "../api/auth/crypto.js";
 import { getMemoryTypeConfig } from "./config/memory-type-config.js";
 import { redactSensitiveMemoryText } from "./util/redaction.js";
 
-// Configure default path
-const defaultDbPath = process.env.BRAINROUTER_MEMORY_DB || path.join(os.homedir(), ".brainrouter", "memory.db");
-
 export class MemoryEngine {
   public readonly store: IMemoryStore;
+  /**
+   * ADR-007 Phase 2 (step 3) — the awaited init lifecycle. The constructor can't
+   * be async, so it kicks off `#initialize()` and stashes the promise here.
+   * Callers (production startup, tests) MUST `await engine.ready` (or
+   * `engine.init()`) before the first store-using call: with Postgres the store
+   * is genuinely async, so migrations / `initVec` / seed-admin are not done when
+   * the constructor returns. Pipelines created in the constructor only *touch*
+   * the store on use, which is always after readiness, so they're safe to build
+   * eagerly.
+   */
+  public readonly ready: Promise<void>;
   private capturePipeline: MemoryCapturePipeline;
   private recallPipeline: MemoryRecallPipeline;
   /** MEM-19 — kept to query reranker/judge readiness when picking benchmark modes. */
@@ -62,6 +71,8 @@ export class MemoryEngine {
   private sweeperTimer?: NodeJS.Timeout;
   private activeSessionSweeperTimer?: NodeJS.Timeout;
   private sessionInboxSweeperTimer?: NodeJS.Timeout;
+  /** Set by close() so it (and store.close()) run at most once. */
+  private closed = false;
   private jobRunner?: MemoryJobRunner;
   /**
    * Reentrancy guard: setInterval doesn't wait for the previous callback to
@@ -78,20 +89,24 @@ export class MemoryEngine {
     process.env.BRAINROUTER_PERSONA_CACHE_TTL_MS ?? String(60 * 60 * 1000), 10
   );
   
-  constructor(storeOrDbPath: IMemoryStore | string = defaultDbPath) {
-    if (typeof storeOrDbPath === "string") {
-      const dir = path.dirname(storeOrDbPath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      this.store = new SqliteMemoryStore(storeOrDbPath);
+  constructor(store?: IMemoryStore) {
+    // ADR-007 Phase 2 (step 3) — Postgres is the only memory store. A test (or
+    // an embedder) may inject an IMemoryStore; otherwise we build a
+    // PostgresMemoryStore from BRAINROUTER_DATABASE_URL / DATABASE_URL. SQLite is
+    // gone, so a connection string is REQUIRED when no store is injected.
+    if (store) {
+      this.store = store;
     } else {
-      this.store = storeOrDbPath;
+      const url = pgUrlFromEnv();
+      if (!url) {
+        throw new Error(
+          "[BrainRouter] BRAINROUTER_DATABASE_URL (or DATABASE_URL) is required: " +
+            "the memory engine runs on Postgres (SQLite has been removed). " +
+            "Set a Postgres connection string, e.g. postgres://user:pass@host:5432/brainrouter",
+        );
+      }
+      this.store = new PostgresMemoryStore(url);
     }
-    this.store.init();
-    this.ensureSeedAdminUser().catch((err) => {
-      console.error("[BrainRouter] Failed to seed admin user:", err instanceof Error ? err.message : err);
-    });
 
     this.extractionRunner = new ModelLLMRunner(
       process.env.BRAINROUTER_EXTRACTION_MODEL
@@ -145,26 +160,87 @@ export class MemoryEngine {
         : undefined,
     });
 
-    this.store.initVec(embeddingService.getDimensions());
-    if (embeddingService.isReady()) {
-      void this.store.reembedStaleRecords((text) => embeddingService.embed(text)).then((count) => {
-        if (count > 0) {
-          console.error(`[BrainRouter] Re-embedded ${count} stale cognitive vector records.`);
-        }
-      }).catch((err) => {
-        console.error("[BrainRouter] Failed to re-embed stale cognitive vector records:", err instanceof Error ? err.message : err);
-      });
-    }
-    
     this.capturePipeline = new MemoryCapturePipeline(this.store, this.extractionRunner, embeddingService, 1);
     this.recallPipeline = new MemoryRecallPipeline(this.store, embeddingService, rerankerService, relevanceJudge);
     this.rerankerService = rerankerService; // MEM-19 — readiness drives benchmark mode selection
     this.embeddingService = embeddingService; // MEM-VEC — embed-on-import reuse
     this.relevanceJudge = relevanceJudge;
+
+    // ADR-007 Phase 2 (step 3) — single awaited init chain. With Postgres the
+    // store is genuinely async, so migrations + vec init + seed-admin must be
+    // awaited before the first store-using call. Callers `await engine.ready`
+    // (or `engine.init()`); the stale-vector reembed is kicked off in the
+    // background after readiness so it never blocks startup.
+    this.ready = this.#initialize();
+    // Observe the background init promise so a LATE rejection — e.g. the pool
+    // being closed during process / test-suite teardown while `#initialize` is
+    // still inside `initVec` ("Cannot use a pool after calling end on the pool")
+    // — never escapes as an unhandledRejection that crashes an unrelated test.
+    // Callers that explicitly `await engine.ready` (the server bootstrap) still
+    // receive and handle the real error; this only defuses the unobserved path.
+    void this.ready.catch(() => { /* observed: real awaiters of `ready` still see it */ });
+
     this.startExtractionSweeper();
     this.startActiveSessionSweeper();
     this.startSessionInboxSweeper();
     this.startJobRunner();
+  }
+
+  /**
+   * Run the store lifecycle to completion: migrations (`init`) → vector table
+   * (`initVec`) → seed-admin. Then kick off the stale-vector reembed in the
+   * background (best-effort; never part of the awaited readiness so startup
+   * isn't gated on the embedding endpoint). Resolves once the store is ready to
+   * serve.
+   */
+  async #initialize(): Promise<void> {
+    await this.store.init();
+    await this.store.initVec(this.embeddingService.getDimensions());
+    await this.ensureSeedAdminUser().catch((err) => {
+      console.error("[BrainRouter] Failed to seed admin user:", err instanceof Error ? err.message : err);
+    });
+
+    if (this.embeddingService.isReady()) {
+      void this.store
+        .reembedStaleRecords((text) => this.embeddingService.embed(text))
+        .then((count) => {
+          if (count > 0) {
+            console.error(`[BrainRouter] Re-embedded ${count} stale cognitive vector records.`);
+          }
+        })
+        .catch((err) => {
+          console.error("[BrainRouter] Failed to re-embed stale cognitive vector records:", err instanceof Error ? err.message : err);
+        });
+    }
+  }
+
+  /**
+   * Await the engine's init lifecycle. Production startup and tests should call
+   * this (or `await engine.ready`) before the first store-using call. Idempotent
+   * — it just awaits the shared `ready` promise.
+   */
+  public async init(): Promise<void> {
+    await this.ready;
+  }
+
+  /**
+   * Stop all background work (sweepers + job runner) and close the store's
+   * connection pool. Idempotent and safe to call before `ready` settles: it
+   * first awaits the in-flight init (catching any failure) so we never end the
+   * pool mid-`#initialize`. After `close()` the engine must not be reused —
+   * callers go through `getMemoryEngine()` / the `memoryEngine` proxy, which
+   * lazily reconstructs a fresh instance on next use.
+   */
+  public async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    await this.ready.catch(() => { /* let init settle; don't close the pool mid-migration */ });
+    if (this.sweeperTimer) { clearInterval(this.sweeperTimer); this.sweeperTimer = undefined; }
+    if (this.activeSessionSweeperTimer) { clearInterval(this.activeSessionSweeperTimer); this.activeSessionSweeperTimer = undefined; }
+    if (this.sessionInboxSweeperTimer) { clearInterval(this.sessionInboxSweeperTimer); this.sessionInboxSweeperTimer = undefined; }
+    this.jobRunner?.stop();
+    this.jobRunner = undefined;
+    await this.store.close();
   }
 
   /**
@@ -188,7 +264,7 @@ export class MemoryEngine {
           ? parseInt(process.env.BRAINROUTER_JOB_RUNNER_INTERVAL_MS, 10)
           : undefined,
         // 0.4.3 — auto-schedule the maintenance depth agents (own throttle).
-        onTick: () => { this.enqueueScheduledMaintenance(); },
+        onTick: async () => { await this.enqueueScheduledMaintenance(); },
       },
     );
     this.jobRunner.start();
@@ -217,7 +293,7 @@ export class MemoryEngine {
    * keys dedupe in-flight, so re-enqueues are safe. `force` skips the throttle
    * (tests).
    */
-  public enqueueScheduledMaintenance(force = false): { enqueued: Record<string, number>; skipped?: boolean } {
+  public async enqueueScheduledMaintenance(force = false): Promise<{ enqueued: Record<string, number>; skipped?: boolean }> {
     if (process.env.BRAINROUTER_JOB_MAINTENANCE === "off") return { enqueued: {}, skipped: true };
     const MAINTENANCE_INTERVAL_MS = 5 * 60_000;
     const VAULT_MAINTENANCE_EVERY = 12; // ~hourly at the 5-min cadence
@@ -231,24 +307,24 @@ export class MemoryEngine {
     const enqueued: Record<string, number> = { blackboard_reconciler: 0, vault_exporter: 0, tree_sealer: 0 };
     const bb = this.blackboardStore();
     let users: { userId: string }[] = [];
-    try { users = this.store.listUsers(); } catch { users = []; }
+    try { users = await this.store.listUsers(); } catch { users = []; }
     for (const { userId } of users) {
       if (!userId) continue;
-      if (bb && bb.getBlackboardItems(userId, "pending").length > 0) {
-        enqueueAgentJob(this.store, "blackboard_reconciler", { userId });
+      if (bb && (await bb.getBlackboardItems(userId, "pending")).length > 0) {
+        await enqueueAgentJob(this.store, "blackboard_reconciler", { userId });
         enqueued.blackboard_reconciler++;
       }
       if (pass % VAULT_MAINTENANCE_EVERY === 0) {
-        enqueueAgentJob(this.store, "vault_exporter", { userId });
+        await enqueueAgentJob(this.store, "vault_exporter", { userId });
         enqueued.vault_exporter++;
       }
       // 0.4.3 — grow the scene-tree (leaf per mature scene); when a bucket of
       // unsealed leaves fills OR settles, enqueue tree_sealer to seal it into a
       // parent. Wrapped so a tree failure can't abort the rest of the pass.
       try {
-        const tree = this.autobuildSceneTree(userId);
+        const tree = await this.autobuildSceneTree(userId);
         if (tree.sealableBucket) {
-          enqueueAgentJob(this.store, "tree_sealer", { userId, childIds: tree.sealableBucket, kind: parentDomain(SCENE_LEAF_DOMAIN) });
+          await enqueueAgentJob(this.store, "tree_sealer", { userId, childIds: tree.sealableBucket, kind: parentDomain(SCENE_LEAF_DOMAIN) });
           enqueued.tree_sealer++;
         }
       } catch (err: any) {
@@ -259,12 +335,12 @@ export class MemoryEngine {
       // with an early pass for first-run visibility; disable via
       // BRAINROUTER_BENCH_SCHEDULE=off.
       if (benchScheduleEnabled && (pass === 2 || (pass > 0 && pass % BENCH_MAINTENANCE_EVERY === 0))) {
-        enqueueAgentJob(this.store, "benchmark_eval", { userId });
+        await enqueueAgentJob(this.store, "benchmark_eval", { userId });
         enqueued.benchmark_eval = (enqueued.benchmark_eval ?? 0) + 1;
       }
       // BRAIN-P4-T5 — roll accumulated global roots into a higher global digest.
       try {
-        if (this.rollupGlobalTree(userId)) enqueued.global_rollup = (enqueued.global_rollup ?? 0) + 1;
+        if (await this.rollupGlobalTree(userId)) enqueued.global_rollup = (enqueued.global_rollup ?? 0) + 1;
       } catch (err: any) {
         console.error("[BrainRouter] global rollup failed:", err?.message ?? err);
       }
@@ -284,7 +360,7 @@ export class MemoryEngine {
    * leaf per scene_key); capability-detected; gated by
    * BRAINROUTER_TREE_AUTOBUILD=off.
    */
-  public autobuildSceneTree(userId: string): { leafed: number; sealableBucket: string[] | null } {
+  public async autobuildSceneTree(userId: string): Promise<{ leafed: number; sealableBucket: string[] | null }> {
     if (!treeAutobuildEnabled()) return { leafed: 0, sealableBucket: null };
     const store = this.store as any;
     if (
@@ -297,15 +373,15 @@ export class MemoryEngine {
     }
 
     const policy = readTreePolicy();
-    const leafedKeys = new Set<string>(store.getSceneLeafKeys(userId));
-    const scenes = store.getDistinctScenes(userId) as Array<{ sceneName: string; recordCount: number }>;
+    const leafedKeys = new Set<string>(await store.getSceneLeafKeys(userId));
+    const scenes = (await store.getDistinctScenes(userId)) as Array<{ sceneName: string; recordCount: number }>;
     let leafed = 0;
     for (const sc of scenes) {
       if (leafed >= policy.leafPerPass) break;
       if (!sc.sceneName || sc.recordCount < policy.minSceneRecords || leafedKeys.has(sc.sceneName)) continue;
-      const contents = store.getSceneRecordContents(userId, sc.sceneName, 8) as string[];
+      const contents = (await store.getSceneRecordContents(userId, sc.sceneName, 8)) as string[];
       const digest = contents.map((c) => `- ${redactSensitiveMemoryText(c).replace(/\s+/g, " ").slice(0, 160)}`).join("\n");
-      store.appendTreeNode(userId, {
+      await store.appendTreeNode(userId, {
         kind: SCENE_LEAF_DOMAIN, // MEM-20 — scene leaves are topic-domain
         level: 0,
         summaryMd: `Topic: ${topicKeyForScene(sc.sceneName)} · Scene: ${sc.sceneName} (${sc.recordCount} records)\n${digest}`,
@@ -320,7 +396,7 @@ export class MemoryEngine {
     // tree_sealer + tree_digest actually run instead of waiting forever for a
     // full bucket of `sealThreshold`.
     const fetchLimit = Math.max(policy.sealThreshold, 24);
-    const unsealed = store.getUnsealedSceneLeaves(userId, fetchLimit) as Array<{ id: string }>;
+    const unsealed = (await store.getUnsealedSceneLeaves(userId, fetchLimit)) as Array<{ id: string }>;
     const eager = unsealed.length >= policy.sealThreshold;
     const settled = leafed === 0 && unsealed.length >= policy.idleSealFloor;
     const sealableBucket = eager || settled ? unsealed.map((n) => n.id) : null;
@@ -328,17 +404,17 @@ export class MemoryEngine {
   }
 
   private async ensureSeedAdminUser() {
-    const users = this.store.listUsers();
+    const users = await this.store.listUsers();
     if (users.length > 0) return;
     const seededUserId = process.env.BRAINROUTER_DEFAULT_ADMIN_USER_ID ?? "admin";
     const seededEmail = process.env.BRAINROUTER_ADMIN_EMAIL ?? "admin";
     const seededPassword = process.env.BRAINROUTER_ADMIN_PASSWORD?.trim();
     const apiKey = `br_${randomBytes(24).toString("hex")}`;
-    this.store.createUser(seededUserId, apiKey, "Default Admin", true);
-    this.store.updateUserEmail(seededUserId, seededEmail);
+    await this.store.createUser(seededUserId, apiKey, "Default Admin", true);
+    await this.store.updateUserEmail(seededUserId, seededEmail);
     if (seededPassword) {
       const passwordHash = await hashPassword(seededPassword);
-      this.store.updateUserPassword(seededUserId, passwordHash);
+      await this.store.updateUserPassword(seededUserId, passwordHash);
     }
     console.error(`[BrainRouter] Admin seeded. Email: ${seededEmail}  API key (shown once): ${apiKey}`);
   }
@@ -399,7 +475,7 @@ export class MemoryEngine {
         }
       }
 
-      const persona = this.getPersona(params.userId);
+      const persona = await this.getPersona(params.userId);
       if (persona) {
         const existing = result.appendSystemContext ?? "";
         result.appendSystemContext = `<user-persona>\n${persona.personaMd}\n</user-persona>\n\n` + existing;
@@ -412,9 +488,10 @@ export class MemoryEngine {
 
   public getPendingContradictions(
     userId: string,
-    pagination?: CursorPaginationOptions<{ confidence: number; id: string }>
+    pagination?: CursorPaginationOptions<{ confidence: number; id: string }>,
+    statusFilter?: "pending" | "resolved" | "dismissed" | "all"
   ) {
-    return this.store.getPendingContradictions(userId, pagination);
+    return this.store.getPendingContradictions(userId, pagination, statusFilter);
   }
 
   public resolveContradiction(id: string, userId: string, status: 'resolved' | 'dismissed') {
@@ -422,7 +499,7 @@ export class MemoryEngine {
   }
 
   public registerSkillHints(skillName: string, hints: string, sourceFile = "") {
-    this.store.upsertSkillHints(skillName, hints, sourceFile);
+    return this.store.upsertSkillHints(skillName, hints, sourceFile);
   }
 
   public listSkillHints() {
@@ -433,8 +510,8 @@ export class MemoryEngine {
     return spikeSkillActivation({ userId, skillName, store: this.store });
   }
 
-  public getSkillActivations(userId: string) {
-    const raw = this.store.getSkillActivations(userId);
+  public async getSkillActivations(userId: string) {
+    const raw = await this.store.getSkillActivations(userId);
     const now = new Date();
     return raw.map(r => ({
       skillName: r.skillName,
@@ -478,13 +555,13 @@ export class MemoryEngine {
   }
 
   /** Get the current Core Identity for a user, using prompt-level in-memory cache. */
-  public getPersona(userId: string) {
+  public async getPersona(userId: string) {
     const cached = this.personaCache.get(userId);
     if (cached && (Date.now() - cached.cachedAt) < this.PERSONA_CACHE_TTL_MS) {
       return { personaMd: cached.personaMd };
     }
-    
-    const persona = this.store.getCoreIdentity(userId);
+
+    const persona = await this.store.getCoreIdentity(userId);
     if (persona) {
       this.personaCache.set(userId, { personaMd: persona.personaMd, cachedAt: Date.now() });
     }
@@ -497,8 +574,8 @@ export class MemoryEngine {
   }
 
   /** Expose the ability to query the knowledge graph for a user/entity. */
-  public queryGraph(userId: string, entity: string, skillTag?: string, maxHops = 2) {
-    const node = this.store.getGraphNodeByEntity(userId, entity);
+  public async queryGraph(userId: string, entity: string, skillTag?: string, maxHops = 2) {
+    const node = await this.store.getGraphNodeByEntity(userId, entity);
     if (!node) return { nodes: [], edges: [] };
     return this.store.getGraphNeighbors(userId, node.id, skillTag, maxHops);
   }
@@ -510,23 +587,23 @@ export class MemoryEngine {
    * an optional shortest connection path between two entities ("how is A related
    * to B"). Pure compute (graph-analytics.ts); read-only.
    */
-  public graphAnalytics(
+  public async graphAnalytics(
     userId: string,
     opts?: { topN?: number; from?: string; to?: string },
-  ): {
+  ): Promise<{
     nodeCount: number;
     edgeCount: number;
     topCentral: Array<{ entity: string; entityType: string; score: number }>;
     bridges: Array<{ entity: string; entityType: string }>;
     namespaces: Record<string, number>;
     path?: { from: string; to: string; found: boolean; entities: string[] };
-  } {
-    const store = this.store as Partial<{
-      getAllGraphNodes(u: string): GraphNode[];
-      getAllGraphEdges(u: string): GraphEdge[];
+  }> {
+    const store = this.store as unknown as Partial<{
+      getAllGraphNodes(u: string): Promise<GraphNode[]>;
+      getAllGraphEdges(u: string): Promise<GraphEdge[]>;
     }>;
-    const nodes = typeof store.getAllGraphNodes === "function" ? store.getAllGraphNodes(userId) : [];
-    const edges = typeof store.getAllGraphEdges === "function" ? store.getAllGraphEdges(userId) : [];
+    const nodes = typeof store.getAllGraphNodes === "function" ? await store.getAllGraphNodes(userId) : [];
+    const edges = typeof store.getAllGraphEdges === "function" ? await store.getAllGraphEdges(userId) : [];
     const nodeIds = nodes.map((n) => n.id);
     const liteEdges = edges.map((e) => ({ from: e.fromNodeId, to: e.toNodeId }));
     const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -553,48 +630,48 @@ export class MemoryEngine {
     return { nodeCount: nodes.length, edgeCount: edges.length, topCentral, bridges, namespaces, ...(path ? { path } : {}) };
   }
 
-  public createUser(userId: string, apiKey: string, displayName = "", isAdmin = false): UserRecord {
+  public createUser(userId: string, apiKey: string, displayName = "", isAdmin = false): Promise<UserRecord> {
     return this.store.createUser(userId, apiKey, displayName, isAdmin);
   }
 
-  public getUserByApiKey(apiKey: string): UserRecord | null {
+  public getUserByApiKey(apiKey: string): Promise<UserRecord | null> {
     return this.store.getUserByApiKey(apiKey);
   }
 
-  public getUserByEmail(email: string): UserRecord | null {
+  public getUserByEmail(email: string): Promise<UserRecord | null> {
     return this.store.getUserByEmail(email);
   }
 
-  public getUserById(userId: string): UserRecord | null {
+  public getUserById(userId: string): Promise<UserRecord | null> {
     return this.store.getUserById(userId);
   }
 
-  public updatePassword(userId: string, hash: string): void {
-    this.store.updateUserPassword(userId, hash);
+  public updatePassword(userId: string, hash: string): Promise<void> {
+    return this.store.updateUserPassword(userId, hash);
   }
 
-  public updateUserEmail(userId: string, email: string): void {
-    this.store.updateUserEmail(userId, email);
+  public updateUserEmail(userId: string, email: string): Promise<void> {
+    return this.store.updateUserEmail(userId, email);
   }
 
-  public updateUserDisplayName(userId: string, displayName: string): void {
-    this.store.updateUserDisplayName(userId, displayName);
+  public updateUserDisplayName(userId: string, displayName: string): Promise<void> {
+    return this.store.updateUserDisplayName(userId, displayName);
   }
 
-  public updateUserStatus(userId: string, status: "active" | "disabled"): void {
-    this.store.updateUserStatus(userId, status);
+  public updateUserStatus(userId: string, status: "active" | "disabled"): Promise<void> {
+    return this.store.updateUserStatus(userId, status);
   }
 
-  public updateUserApiKey(userId: string, apiKey: string): void {
-    this.store.updateUserApiKey(userId, apiKey);
+  public updateUserApiKey(userId: string, apiKey: string): Promise<void> {
+    return this.store.updateUserApiKey(userId, apiKey);
   }
 
-  public listUsers(pagination?: CursorPaginationOptions<{ createdAt: string; userId: string }>): UserRecord[] {
+  public listUsers(pagination?: CursorPaginationOptions<{ createdAt: string; userId: string }>): Promise<UserRecord[]> {
     return this.store.listUsers(pagination);
   }
 
-  public deleteUser(userId: string): void {
-    this.store.deleteUser(userId);
+  public deleteUser(userId: string): Promise<void> {
+    return this.store.deleteUser(userId);
   }
 
   public listMemories(
@@ -606,16 +683,16 @@ export class MemoryEngine {
   }
 
   public deleteMemory(userId: string, recordId: string) {
-    this.store.archiveCognitiveRecord(userId, recordId);
+    return this.store.archiveCognitiveRecord(userId, recordId);
   }
 
-  public getMemoryById(userId: string, recordId: string) {
-    const memory = this.store.getMemoryById(userId, recordId);
+  public async getMemoryById(userId: string, recordId: string) {
+    const memory = await this.store.getMemoryById(userId, recordId);
     if (!memory) return null;
-    return { memory, evidence: this.store.getEvidenceByRecord(userId, recordId) };
+    return { memory, evidence: await this.store.getEvidenceByRecord(userId, recordId) };
   }
 
-  public upsertEngineeringMemory(params: {
+  public async upsertEngineeringMemory(params: {
     userId: string;
     sessionKey?: string;
     sessionId?: string;
@@ -630,7 +707,7 @@ export class MemoryEngine {
     filePaths?: string[];
     commands?: string[];
     metadata?: Record<string, unknown>;
-  }): CognitiveRecord {
+  }): Promise<CognitiveRecord> {
     const now = new Date().toISOString();
     const config = getMemoryTypeConfig(params.type);
     const record: CognitiveRecord = {
@@ -672,7 +749,7 @@ export class MemoryEngine {
       neverCitedCount: 0,
       archived: false,
     };
-    this.store.upsertCognitive(record);
+    await this.store.upsertCognitive(record);
     return record;
   }
 
@@ -689,7 +766,7 @@ export class MemoryEngine {
     userId: string,
     text: string,
     opts?: { sessionKey?: string; activeSkill?: string; evidence?: string; priority?: number; kind?: string; supersedes?: string | string[] },
-  ): { recordId: string; reinforced: boolean; confidence: number; corroborations: number; supersededIds: string[] } {
+  ): Promise<{ recordId: string; reinforced: boolean; confidence: number; corroborations: number; supersededIds: string[] }> {
     return lessonOps.recordLesson(this, userId, text, opts);
   }
 
@@ -700,7 +777,7 @@ export class MemoryEngine {
    * text check; NO LLM. Returns [] when nothing collides — conservative by
    * design (it won't guess at semantic equivalence like npm≠pnpm).
    */
-  public findLessonConflicts(userId: string, text: string): CognitiveRecord[] {
+  public findLessonConflicts(userId: string, text: string): Promise<CognitiveRecord[]> {
     return lessonOps.findLessonConflicts(this, userId, text);
   }
 
@@ -715,7 +792,7 @@ export class MemoryEngine {
   public sweepStaleLessons(
     userId: string,
     opts?: { apply?: boolean; thresholds?: Partial<StalenessThresholds>; nowMs?: number; limit?: number },
-  ): { candidates: Array<{ recordId: string; reason: string; lastCitedAt: string | null; confidence: number }>; archived: number } {
+  ): Promise<{ candidates: Array<{ recordId: string; reason: string; lastCitedAt: string | null; confidence: number }>; archived: number }> {
     return lessonOps.sweepStaleLessons(this, userId, opts);
   }
 
@@ -731,22 +808,22 @@ export class MemoryEngine {
    * (recoverable expiry — never the merely-stale ones, which may still be valid).
    * Non-code memories (no source provenance) are ignored.
    */
-  public verifyMemories(
+  public async verifyMemories(
     userId: string,
     opts?: { apply?: boolean; limit?: number },
-  ): {
+  ): Promise<{
     total: number;
     fresh: number;
     reanchorable: number;
     archivable: number;
     archived: number;
     sample: Array<{ recordId: string; status: "fresh" | "reanchorable" | "archivable"; filePath: string | null }>;
-  } {
+  }> {
     const store = this.store as Partial<{
-      getRecordSourceChunks(userId: string, recordId: string): SourceChunk[];
-      isRecordSourceStale(userId: string, recordId: string): boolean;
-      hasFreshSourceDocument(userId: string, uri: string): boolean;
-      archiveCognitiveRecord(userId: string, recordId: string): void;
+      getRecordSourceChunks(userId: string, recordId: string): Promise<SourceChunk[]>;
+      isRecordSourceStale(userId: string, recordId: string): Promise<boolean>;
+      hasFreshSourceDocument(userId: string, uri: string): Promise<boolean>;
+      archiveCognitiveRecord(userId: string, recordId: string): Promise<void>;
     }>;
     const result = {
       total: 0, fresh: 0, reanchorable: 0, archivable: 0, archived: 0,
@@ -756,27 +833,31 @@ export class MemoryEngine {
       return result; // store lacks the source-provenance capability
     }
     const limit = Math.max(1, Math.min(5000, opts?.limit ?? 1000));
-    const records = this.store.listMemories(userId, { archived: false }).slice(0, limit);
+    const records = (await this.store.listMemories(userId, { archived: false })).slice(0, limit);
     for (const rec of records) {
-      const chunks = store.getRecordSourceChunks(userId, rec.recordId);
+      const chunks = await store.getRecordSourceChunks(userId, rec.recordId);
       if (!chunks || chunks.length === 0) continue; // not code-anchored
       result.total += 1;
-      if (!store.isRecordSourceStale(userId, rec.recordId)) {
+      if (!(await store.isRecordSourceStale(userId, rec.recordId))) {
         result.fresh += 1;
         continue;
       }
       const uris = [...new Set(chunks.map((c) => c.filePath).filter((u): u is string => !!u))];
       // No freshness check available → never archive on uncertainty (re-anchorable).
-      const hasFresh = typeof store.hasFreshSourceDocument === "function"
-        ? uris.some((u) => store.hasFreshSourceDocument!(userId, u))
-        : true;
+      let hasFresh = true;
+      if (typeof store.hasFreshSourceDocument === "function") {
+        hasFresh = false;
+        for (const u of uris) {
+          if (await store.hasFreshSourceDocument(userId, u)) { hasFresh = true; break; }
+        }
+      }
       if (hasFresh) {
         result.reanchorable += 1;
         if (result.sample.length < 25) result.sample.push({ recordId: rec.recordId, status: "reanchorable", filePath: uris[0] ?? null });
       } else {
         result.archivable += 1;
         if (opts?.apply && typeof store.archiveCognitiveRecord === "function") {
-          store.archiveCognitiveRecord(userId, rec.recordId);
+          await store.archiveCognitiveRecord(userId, rec.recordId);
           result.archived += 1;
         }
         if (result.sample.length < 25) result.sample.push({ recordId: rec.recordId, status: "archivable", filePath: uris[0] ?? null });
@@ -816,7 +897,7 @@ export class MemoryEngine {
     const { skill } = parseSkillResponse(raw);
     if (!skill) return { extracted: false };
 
-    const res = this.recordLesson(userId, skill, {
+    const res = await this.recordLesson(userId, skill, {
       sessionKey: opts.sessionKey,
       activeSkill: opts.activeSkill,
       priority: 82,
@@ -835,7 +916,7 @@ export class MemoryEngine {
     userId: string,
     opts?: { limit?: number; llm?: (params: { prompt: string; systemPrompt?: string; timeoutMs?: number }) => Promise<string> },
   ): Promise<{ reflected: number; insights: string[] }> {
-    const records = this.store.listMemories(userId, { archived: false }).slice(0, Math.max(3, Math.min(50, opts?.limit ?? 25)));
+    const records = (await this.store.listMemories(userId, { archived: false })).slice(0, Math.max(3, Math.min(50, opts?.limit ?? 25)));
     if (records.length < 3) return { reflected: 0, insights: [] };
 
     const { system, user } = buildReflectPrompt(records.map((r) => r.content));
@@ -849,12 +930,12 @@ export class MemoryEngine {
 
     const insights = parseReflectResponse(raw);
     for (const insight of insights) {
-      this.recordLesson(userId, insight, { kind: "insight", priority: 78 });
+      await this.recordLesson(userId, insight, { kind: "insight", priority: 78 });
     }
     return { reflected: insights.length, insights };
   }
 
-  public getMemoriesByFilePath(userId: string, filePath: string, limit = 20): CognitiveRecord[] {
+  public getMemoriesByFilePath(userId: string, filePath: string, limit = 20): Promise<CognitiveRecord[]> {
     return this.store.getMemoriesByFilePath(userId, filePath, limit);
   }
 
@@ -862,14 +943,14 @@ export class MemoryEngine {
     return this.store.searchCognitiveFts(userId, query, limit);
   }
 
-  public updateMemory(userId: string, recordId: string, updates: {
+  public async updateMemory(userId: string, recordId: string, updates: {
     content?: string;
     status?: MemoryStatus;
     confidence?: number;
     verificationStatus?: CognitiveRecord["verificationStatus"];
     note?: string;
   }) {
-    const existing = this.store.getMemoryById(userId, recordId);
+    const existing = await this.store.getMemoryById(userId, recordId);
     if (!existing) return null;
     const now = new Date().toISOString();
     const updated: CognitiveRecord = {
@@ -884,8 +965,8 @@ export class MemoryEngine {
         ? { ...existing.metadata, governanceNote: updates.note, governanceNoteAt: now }
         : existing.metadata,
     };
-    this.store.upsertCognitive(updated, { skipAudit: true });
-    this.store.insertOperation({
+    await this.store.upsertCognitive(updated, { skipAudit: true });
+    await this.store.insertOperation({
       id: randomUUID(),
       userId,
       recordId,
@@ -909,7 +990,7 @@ export class MemoryEngine {
     return this.getMemoryById(userId, recordId);
   }
 
-  public addEvidence(userId: string, recordId: string, evidence: Omit<MemoryEvidence, "id" | "userId" | "recordId" | "observedAt"> & { id?: string; observedAt?: string }) {
+  public async addEvidence(userId: string, recordId: string, evidence: Omit<MemoryEvidence, "id" | "userId" | "recordId" | "observedAt"> & { id?: string; observedAt?: string }) {
     const ev: MemoryEvidence = {
       id: evidence.id ?? randomUUID(),
       userId,
@@ -920,7 +1001,7 @@ export class MemoryEngine {
       observedAt: evidence.observedAt ?? new Date().toISOString(),
       metadata: evidence.metadata ?? {},
     };
-    this.store.insertEvidence(ev);
+    await this.store.insertEvidence(ev);
     return ev;
   }
 
@@ -941,7 +1022,7 @@ export class MemoryEngine {
   }
 
   public async importMemories(userId: string, data: MemoryImport) {
-    const result = this.store.importMemories(userId, data);
+    const result = await this.store.importMemories(userId, data);
     // MEM-VEC (0.4.14) — embed imported records now so they're vector-searchable
     // immediately. Without this, vectors only fill via the background re-embed
     // sweep, which lags far behind a bulk import → vector recall finds nothing
@@ -959,15 +1040,15 @@ export class MemoryEngine {
   }
 
   public governanceDelete(userId: string, recordId: string, reason: string) {
-    this.store.hardDeleteMemory(userId, recordId, reason);
+    return this.store.hardDeleteMemory(userId, recordId, reason);
   }
 
   /**
    * MEM-11 — governance dry-run: preview which active memories a filter would
    * sweep, with counts + a size proxy + a sample, WITHOUT mutating anything.
    */
-  public governancePlan(userId: string, filters: GovernancePlanFilters): GovernancePlanResult {
-    const items = this.store.listMemories(userId, { type: filters.type, archived: false });
+  public async governancePlan(userId: string, filters: GovernancePlanFilters): Promise<GovernancePlanResult> {
+    const items = await this.store.listMemories(userId, { type: filters.type, archived: false });
     return planGovernance(items, filters, Date.now());
   }
 
@@ -977,12 +1058,12 @@ export class MemoryEngine {
    * estimates. Read-only; capability-detected so a partial store mock degrades
    * to an empty plan.
    */
-  public governanceStoragePlan(userId: string): StorageGovernanceResult {
-    const store = this.store as Partial<{ getStorageGovernanceStats(u: string): StorageGovernanceStats }>;
+  public async governanceStoragePlan(userId: string): Promise<StorageGovernanceResult> {
+    const store = this.store as Partial<{ getStorageGovernanceStats(u: string): Promise<StorageGovernanceStats> }>;
     if (typeof store.getStorageGovernanceStats !== "function") {
       return { classes: [], totalEstimatedChars: 0, totalReclaimableChars: 0 };
     }
-    return planStorageGovernance(store.getStorageGovernanceStats(userId));
+    return planStorageGovernance(await store.getStorageGovernanceStats(userId));
   }
 
   // ── Blackboard commit pipeline (MEM-4) ──────────────────────────────────
@@ -991,10 +1072,10 @@ export class MemoryEngine {
   // concrete store, so narrow at runtime (like the source capability).
 
   private blackboardStore(): {
-    stageBlackboardItems(userId: string, items: BlackboardItemInput[]): BlackboardItem[];
-    getBlackboardItem(id: string): BlackboardItem | null;
-    getBlackboardItems(userId: string, status?: BlackboardStatus): BlackboardItem[];
-    updateBlackboardItem(id: string, patch: { status?: BlackboardStatus; score?: number; conflictIds?: string[]; committedRecordId?: string | null }): void;
+    stageBlackboardItems(userId: string, items: BlackboardItemInput[]): Promise<BlackboardItem[]>;
+    getBlackboardItem(id: string): Promise<BlackboardItem | null>;
+    getBlackboardItems(userId: string, status?: BlackboardStatus): Promise<BlackboardItem[]>;
+    updateBlackboardItem(id: string, patch: { status?: BlackboardStatus; score?: number; conflictIds?: string[]; committedRecordId?: string | null }): Promise<void>;
   } | null {
     const s = this.store as any;
     return typeof s.stageBlackboardItems === "function" &&
@@ -1005,22 +1086,22 @@ export class MemoryEngine {
   }
 
   /** MEM-4 — stage extracted candidates for review before they become memory. */
-  public stageBlackboardCandidates(userId: string, items: BlackboardItemInput[]): BlackboardItem[] {
+  public stageBlackboardCandidates(userId: string, items: BlackboardItemInput[]): Promise<BlackboardItem[]> {
     return blackboardOps.stageBlackboardCandidates(this, userId, items);
   }
 
   /** MEM-4 — reconcile all pending items (dedup/score/threshold) and persist the verdicts. */
-  public reconcilePendingBlackboard(userId: string): { reconciled: number; duplicate: number; rejected: number; items: BlackboardItem[] } {
+  public reconcilePendingBlackboard(userId: string): Promise<{ reconciled: number; duplicate: number; rejected: number; items: BlackboardItem[] }> {
     return blackboardOps.reconcilePendingBlackboard(this, userId);
   }
 
   /** MEM-4 — promote a reconciled item to a cognitive record (with audit), linking its source chunk. */
-  public commitBlackboardItem(userId: string, itemId: string): { committed: boolean; recordId?: string; reason?: string } {
+  public commitBlackboardItem(userId: string, itemId: string): Promise<{ committed: boolean; recordId?: string; reason?: string }> {
     return blackboardOps.commitBlackboardItem(this, userId, itemId);
   }
 
   /** MEM-4 — drop an item without committing it. */
-  public rejectBlackboardItem(userId: string, itemId: string): boolean {
+  public rejectBlackboardItem(userId: string, itemId: string): Promise<boolean> {
     return blackboardOps.rejectBlackboardItem(this, userId, itemId);
   }
 
@@ -1028,12 +1109,12 @@ export class MemoryEngine {
    * BLACKBOARD-REVIEW-UX (0.4.5) — un-drop a candidate that was rejected or
    * deduped (`duplicate`) in error: move it back to `pending` for re-review.
    */
-  public restoreBlackboardItem(userId: string, itemId: string): { restored: boolean; reason?: string; status?: BlackboardStatus } {
+  public restoreBlackboardItem(userId: string, itemId: string): Promise<{ restored: boolean; reason?: string; status?: BlackboardStatus }> {
     return blackboardOps.restoreBlackboardItem(this, userId, itemId);
   }
 
   /** MEM-4 — list staged items (optionally by status) for review. */
-  public reviewBlackboard(userId: string, status?: BlackboardStatus): BlackboardItem[] {
+  public reviewBlackboard(userId: string, status?: BlackboardStatus): Promise<BlackboardItem[]> {
     return blackboardOps.reviewBlackboard(this, userId, status);
   }
 
@@ -1044,22 +1125,22 @@ export class MemoryEngine {
   // swappable for an LLM later.
 
   /** MEM-5 — append a leaf (level 0) summarizing some source chunks. */
-  public appendTreeLeaf(userId: string, kind: MemoryTreeKind, summaryMd: string, sourceChunkIds: string[] = [], heatScore = 0): MemoryTreeNode | null {
+  public appendTreeLeaf(userId: string, kind: MemoryTreeKind, summaryMd: string, sourceChunkIds: string[] = [], heatScore = 0): Promise<MemoryTreeNode | null> {
     return treeOps.appendTreeLeaf(this, userId, kind, summaryMd, sourceChunkIds, heatScore);
   }
 
   /** MEM-5 — seal a bucket: roll the given children into a summarized parent. */
-  public summarizeBucket(userId: string, childIds: string[], kind: MemoryTreeKind): MemoryTreeNode | null {
+  public summarizeBucket(userId: string, childIds: string[], kind: MemoryTreeKind): Promise<MemoryTreeNode | null> {
     return treeOps.summarizeBucket(this, userId, childIds, kind);
   }
 
   /** BRAIN-P4-T5 — global rollup digest (matures source → topic → global). */
-  public rollupGlobalTree(userId: string): MemoryTreeNode | null {
+  public rollupGlobalTree(userId: string): Promise<MemoryTreeNode | null> {
     return treeOps.rollupGlobalTree(this, userId);
   }
 
   /** MEM-5 / MEM-8 — walk the tree: a node + its children, or the roots of a kind. */
-  public treeWalk(userId: string, nodeId?: string, kind?: MemoryTreeKind): { node: MemoryTreeNode | null; children: MemoryTreeNode[]; roots?: MemoryTreeNode[] } {
+  public treeWalk(userId: string, nodeId?: string, kind?: MemoryTreeKind): Promise<{ node: MemoryTreeNode | null; children: MemoryTreeNode[]; roots?: MemoryTreeNode[] }> {
     return treeOps.treeWalk(this, userId, nodeId, kind);
   }
 
@@ -1090,7 +1171,7 @@ export class MemoryEngine {
     opts?: { sampleSize?: number; baseDir?: string },
   ): Promise<{ summaryPath: string | null; statsByMode: Record<string, ModeStats>; sampled: number; passed: boolean; skippedModes: string[]; latencyMsByMode: Record<string, number> }> {
     const sampleSize = Math.max(1, Math.min(opts?.sampleSize ?? 20, 100));
-    const sample = this.store.listMemories(userId, { archived: false }).slice(0, sampleSize);
+    const sample = (await this.store.listMemories(userId, { archived: false })).slice(0, sampleSize);
     if (sample.length < 3) {
       return { summaryPath: null, statsByMode: {}, sampled: sample.length, passed: true, skippedModes: [], latencyMsByMode: {} };
     }
@@ -1192,13 +1273,13 @@ export class MemoryEngine {
    * writes into the engine's own store under a dedicated benchmark user so it
    * doesn't touch real memory.
    */
-  public runCodeScaleBenchmark(opts?: {
+  public async runCodeScaleBenchmark(opts?: {
     baseDir?: string;
     userId?: string;
     k?: number;
     clusters?: number;
     perCluster?: number;
-  }): RetrievalMetrics & { summaryPath: string | null } {
+  }): Promise<RetrievalMetrics & { summaryPath: string | null }> {
     const userId = opts?.userId ?? "__codescale_bench__";
     const k = opts?.k ?? 10;
     const fixture = buildCodeScaleFixture({ clusters: opts?.clusters, perCluster: opts?.perCluster });
@@ -1206,15 +1287,16 @@ export class MemoryEngine {
     // Ingest the whole fixture into the code index.
     let repoTokens = 0;
     for (const f of fixture.files) {
-      this.reindexCodeSource(userId, { filePath: f.filePath, content: f.content, language: f.language });
+      await this.reindexCodeSource(userId, { filePath: f.filePath, content: f.content, language: f.language });
       repoTokens += Math.ceil(f.content.length / 4); // ~4 chars/token proxy
     }
 
     // Run find_related per seed, collapse hits to unique files in rank order.
-    const results: RankedQueryResult[] = fixture.queries.map((q) => {
+    const results: RankedQueryResult[] = [];
+    for (const q of fixture.queries) {
       // Seed at the first exported function body (line 5 in the fixture
       // layout); find_related resolves the seed chunk by file:line.
-      const res = this.findRelatedChunks(userId, { filePath: q.seed, line: 5 }, { limit: Math.max(k * 3, 30), includeEdges: true });
+      const res = await this.findRelatedChunks(userId, { filePath: q.seed, line: 5 }, { limit: Math.max(k * 3, 30), includeEdges: true });
       const seen = new Set<string>();
       const ranked: string[] = [];
       let returnedTokens = 0;
@@ -1224,8 +1306,8 @@ export class MemoryEngine {
         returnedTokens += hit.chunk.tokenCount ?? 0;
         if (!seen.has(fp)) { seen.add(fp); ranked.push(fp); }
       }
-      return { query: q.seed, relevant: q.relevant, ranked, returnedTokens };
-    });
+      results.push({ query: q.seed, relevant: q.relevant, ranked, returnedTokens });
+    }
 
     const metrics = withTokenEfficiency(
       computeRetrievalMetrics(results, k),
@@ -1252,7 +1334,7 @@ export class MemoryEngine {
    * the cognitive_source_links (memory_verify / provenance would break). Text is
    * reassembled from the existing ordered chunks. user-scoped. Returns counts.
    */
-  public rechunkSources(userId: string, documentIds: string[]): { rechunked: number; skipped: number; chunksWritten: number } {
+  public async rechunkSources(userId: string, documentIds: string[]): Promise<{ rechunked: number; skipped: number; chunksWritten: number }> {
     const store = this.store as any;
     if (typeof store.getSourceChunksByDocument !== "function" || typeof store.replaceSourceChunks !== "function") {
       return { rechunked: 0, skipped: 0, chunksWritten: 0 };
@@ -1261,15 +1343,15 @@ export class MemoryEngine {
     let skipped = 0;
     let chunksWritten = 0;
     for (const docId of documentIds) {
-      const doc = store.getSourceDocument?.(docId);
+      const doc = await store.getSourceDocument?.(docId);
       if (!doc || doc.userId !== userId) { skipped++; continue; }          // ownership (MEM-14)
-      if (store.isSourceDocumentReferenced(docId)) { skipped++; continue; } // provenance-safe
-      const chunks = store.getSourceChunksByDocument(docId) as SourceChunk[];
+      if (await store.isSourceDocumentReferenced(docId)) { skipped++; continue; } // provenance-safe
+      const chunks = (await store.getSourceChunksByDocument(docId)) as SourceChunk[];
       if (chunks.length === 0) { skipped++; continue; }
       const text = [...chunks].sort((a, b) => a.ordinal - b.ordinal).map((c) => c.content).join("\n");
       const isCode = doc.kind === "file" || doc.kind === "code";
       const fresh = isCode ? chunkCode(text) : chunkSource(text);
-      const written = store.replaceSourceChunks(docId, fresh) as SourceChunk[];
+      const written = (await store.replaceSourceChunks(docId, fresh)) as SourceChunk[];
       rechunked++;
       chunksWritten += written.length;
     }
@@ -1282,7 +1364,7 @@ export class MemoryEngine {
    * live memory (so provenance drill-down never breaks). Capability-detected —
    * the prune lives on SqliteMemoryStore, not IMemoryStore. Returns counts.
    */
-  public pruneTranscriptSources(userId: string, olderThanDays: number): { prunedDocs: number; prunedChunks: number } {
+  public async pruneTranscriptSources(userId: string, olderThanDays: number): Promise<{ prunedDocs: number; prunedChunks: number }> {
     const store = this.store as any;
     if (typeof store.pruneTranscriptSources !== "function") {
       return { prunedDocs: 0, prunedChunks: 0 };
@@ -1298,33 +1380,33 @@ export class MemoryEngine {
    * files are rewritten). Content is redacted before it lands (MEM-13's vault
    * boundary).
    */
-  public exportVault(userId: string, baseDir?: string): { dir: string; written: number; unchanged: number; total: number } {
+  public async exportVault(userId: string, baseDir?: string): Promise<{ dir: string; written: number; unchanged: number; total: number }> {
     const store = this.store as any;
     if (typeof store.upsertVaultExport !== "function" || typeof store.getVaultExports !== "function") {
       return { dir: "", written: 0, unchanged: 0, total: 0 };
     }
     const dir = baseDir ?? path.join(os.homedir(), ".brainrouter", "vault", userId);
-    const ledger = new Map<string, string>(store.getVaultExports(userId).map((e: { path: string; hash: string }) => [e.path, e.hash]));
+    const ledger = new Map<string, string>(((await store.getVaultExports(userId)) as Array<{ path: string; hash: string }>).map((e) => [e.path, e.hash]));
     let written = 0;
     let unchanged = 0;
 
-    const writeIf = (relPath: string, raw: string, kind: "record" | "tree", refId: string): void => {
+    const writeIf = async (relPath: string, raw: string, kind: "record" | "tree", refId: string): Promise<void> => {
       const content = redactSensitiveMemoryText(raw);
       const hash = vaultHash(content);
       if (ledger.get(relPath) === hash) { unchanged++; return; }
       const abs = path.join(dir, relPath);
       fs.mkdirSync(path.dirname(abs), { recursive: true });
       fs.writeFileSync(abs, content, "utf8");
-      store.upsertVaultExport(userId, { path: relPath, hash, kind, refId });
+      await store.upsertVaultExport(userId, { path: relPath, hash, kind, refId });
       written++;
     };
 
-    for (const rec of this.store.listMemories(userId, { archived: false })) {
-      writeIf(`records/${rec.recordId}.md`, renderRecordMarkdown(rec), "record", rec.recordId);
+    for (const rec of await this.store.listMemories(userId, { archived: false })) {
+      await writeIf(`records/${rec.recordId}.md`, renderRecordMarkdown(rec), "record", rec.recordId);
     }
-    const nodes: MemoryTreeNode[] = typeof store.getAllTreeNodes === "function" ? store.getAllTreeNodes(userId) : [];
+    const nodes: MemoryTreeNode[] = typeof store.getAllTreeNodes === "function" ? await store.getAllTreeNodes(userId) : [];
     for (const node of nodes) {
-      writeIf(`tree/${node.id}.md`, renderTreeNodeMarkdown(node), "tree", node.id);
+      await writeIf(`tree/${node.id}.md`, renderTreeNodeMarkdown(node), "tree", node.id);
     }
     return { dir, written, unchanged, total: written + unchanged };
   }
@@ -1334,7 +1416,7 @@ export class MemoryEngine {
    * from, as compact excerpts (for `memory_verify`). Returns [] when the store
    * lacks the source-link capability or the record cites no sources.
    */
-  public getRecordProvenance(userId: string, recordId: string): Array<{
+  public async getRecordProvenance(userId: string, recordId: string): Promise<Array<{
     chunkId: string;
     documentId: string;
     excerpt: string;
@@ -1342,10 +1424,10 @@ export class MemoryEngine {
     symbol: string | null;
     startLine: number | null;
     endLine: number | null;
-  }> {
-    const store = this.store as Partial<{ getRecordSourceChunks(userId: string, id: string): SourceChunk[] }>;
+  }>> {
+    const store = this.store as Partial<{ getRecordSourceChunks(userId: string, id: string): Promise<SourceChunk[]> }>;
     if (typeof store.getRecordSourceChunks !== "function") return [];
-    return store.getRecordSourceChunks(userId, recordId).map((c) => ({
+    return (await store.getRecordSourceChunks(userId, recordId)).map((c) => ({
       chunkId: c.id,
       documentId: c.documentId,
       excerpt: c.content.length > 280 ? `${c.content.slice(0, 280)}…` : c.content,
@@ -1363,29 +1445,29 @@ export class MemoryEngine {
    * Returns null when the store lacks the source capability or the id is
    * unknown.
    */
-  public fetchSourceChunk(
+  public async fetchSourceChunk(
     userId: string,
     chunkId: string,
     neighbors = 0,
-  ): { chunk: SourceChunk; document: SourceDocument | null; neighbors: SourceChunk[] } | null {
+  ): Promise<{ chunk: SourceChunk; document: SourceDocument | null; neighbors: SourceChunk[] } | null> {
     const store = this.store as Partial<{
-      getSourceChunk(id: string): SourceChunk | null;
-      getSourceDocument(id: string): SourceDocument | null;
-      getSourceChunksByDocument(documentId: string): SourceChunk[];
+      getSourceChunk(id: string): Promise<SourceChunk | null>;
+      getSourceDocument(id: string): Promise<SourceDocument | null>;
+      getSourceChunksByDocument(documentId: string): Promise<SourceChunk[]>;
     }>;
     if (typeof store.getSourceChunk !== "function") return null;
-    const chunk = store.getSourceChunk(chunkId);
+    const chunk = await store.getSourceChunk(chunkId);
     if (!chunk) return null;
     const document =
-      typeof store.getSourceDocument === "function" ? store.getSourceDocument(chunk.documentId) : null;
+      typeof store.getSourceDocument === "function" ? await store.getSourceDocument(chunk.documentId) : null;
     // Ownership gate: the chunk's parent document must belong to the caller.
     // (source_chunks/source_documents carry user_id per MEM-14.) Without this a
     // user could fetch any chunk by id — cross-tenant leak.
     if (!document || document.userId !== userId) return null;
     let neighborChunks: SourceChunk[] = [];
     if (neighbors > 0 && typeof store.getSourceChunksByDocument === "function") {
-      neighborChunks = store
-        .getSourceChunksByDocument(chunk.documentId)
+      neighborChunks = (await store
+        .getSourceChunksByDocument(chunk.documentId))
         .filter((c) => c.id !== chunk.id && Math.abs(c.ordinal - chunk.ordinal) <= neighbors);
     }
     return { chunk, document, neighbors: neighborChunks };
@@ -1401,39 +1483,39 @@ export class MemoryEngine {
    * unknown / not owned by the caller. Ranking (MEM-26/27) lives in
    * `rankRelatedChunks` so the scoring stays pure + testable.
    */
-  public findRelatedChunks(
+  public async findRelatedChunks(
     userId: string,
     seed: { chunkId?: string; filePath?: string; line?: number },
     opts?: { limit?: number; sameLanguage?: boolean; maxPerFile?: number; includeEdges?: boolean },
-  ): { found: boolean; seed?: { chunkId: string; filePath: string | null; symbol: string | null }; related: RelatedChunkHit[] } {
+  ): Promise<{ found: boolean; seed?: { chunkId: string; filePath: string | null; symbol: string | null }; related: RelatedChunkHit[] }> {
     const store = this.store as Partial<{
-      getSourceChunk(id: string): SourceChunk | null;
-      getSourceChunkByFileLine(userId: string, filePath: string, line: number): SourceChunk | null;
+      getSourceChunk(id: string): Promise<SourceChunk | null>;
+      getSourceChunkByFileLine(userId: string, filePath: string, line: number): Promise<SourceChunk | null>;
       searchSourceChunksFts(
         userId: string,
         query: string,
         limit: number,
         opts?: { excludeChunkId?: string; excludeDocumentId?: string; filePathLike?: string[] },
-      ): Array<SourceChunk & { ftsRank: number }>;
-      getSourceDocument(id: string): SourceDocument | null;
-      getCodeEdgeNeighbors(userId: string, chunkId: string, direction: "callees" | "callers"): SourceChunk[];
-      getSourceChunksByDocument(documentId: string): SourceChunk[];
-      findImportedDocument(userId: string, candidateBase: string): SourceDocument | null;
+      ): Promise<Array<SourceChunk & { ftsRank: number }>>;
+      getSourceDocument(id: string): Promise<SourceDocument | null>;
+      getCodeEdgeNeighbors(userId: string, chunkId: string, direction: "callees" | "callers"): Promise<SourceChunk[]>;
+      getSourceChunksByDocument(documentId: string): Promise<SourceChunk[]>;
+      findImportedDocument(userId: string, candidateBase: string): Promise<SourceDocument | null>;
     }>;
     if (typeof store.searchSourceChunksFts !== "function") return { found: false, related: [] };
 
     // Resolve the seed chunk (by id, or by file:line span).
     let seedChunk: SourceChunk | null = null;
     if (seed.chunkId && typeof store.getSourceChunk === "function") {
-      seedChunk = store.getSourceChunk(seed.chunkId);
+      seedChunk = await store.getSourceChunk(seed.chunkId);
     } else if (seed.filePath && typeof seed.line === "number" && typeof store.getSourceChunkByFileLine === "function") {
-      seedChunk = store.getSourceChunkByFileLine(userId, seed.filePath, seed.line);
+      seedChunk = await store.getSourceChunkByFileLine(userId, seed.filePath, seed.line);
     }
     if (!seedChunk) return { found: false, related: [] };
 
     // Ownership gate — mirror fetchSourceChunk: the seed's parent document must
     // belong to the caller (the FTS search is already user-scoped for results).
-    const doc = typeof store.getSourceDocument === "function" ? store.getSourceDocument(seedChunk.documentId) : null;
+    const doc = typeof store.getSourceDocument === "function" ? await store.getSourceDocument(seedChunk.documentId) : null;
     if (!doc || doc.userId !== userId) return { found: false, related: [] };
 
     const limit = Math.max(1, Math.min(50, opts?.limit ?? 10));
@@ -1445,10 +1527,10 @@ export class MemoryEngine {
     // surfaced even when the seed has no extractable query terms.
     const edgeHits: RelatedChunkHit[] = [];
     if (opts?.includeEdges !== false && typeof store.getCodeEdgeNeighbors === "function") {
-      for (const c of store.getCodeEdgeNeighbors(userId, seedChunk.id, "callees")) {
+      for (const c of await store.getCodeEdgeNeighbors(userId, seedChunk.id, "callees")) {
         edgeHits.push({ chunk: c, score: 0.97, reason: "graph:callee" });
       }
-      for (const c of store.getCodeEdgeNeighbors(userId, seedChunk.id, "callers")) {
+      for (const c of await store.getCodeEdgeNeighbors(userId, seedChunk.id, "callers")) {
         edgeHits.push({ chunk: c, score: 0.95, reason: "graph:caller" });
       }
     }
@@ -1462,7 +1544,7 @@ export class MemoryEngine {
       typeof store.getSourceChunksByDocument === "function" &&
       typeof store.findImportedDocument === "function"
     ) {
-      const fileChunks = store.getSourceChunksByDocument(seedChunk.documentId);
+      const fileChunks = await store.getSourceChunksByDocument(seedChunk.documentId);
       const specifiers = extractImportSpecifiers(fileChunks.map((c) => c.content).join("\n"));
       const seenDocs = new Set<string>([seedChunk.documentId]);
       let added = 0;
@@ -1470,10 +1552,10 @@ export class MemoryEngine {
         if (added >= 5) break;
         const base = resolveRelativeImport(doc.uri, spec);
         if (!base) continue;
-        const importedDoc = store.findImportedDocument(userId, base);
+        const importedDoc = await store.findImportedDocument(userId, base);
         if (!importedDoc || seenDocs.has(importedDoc.id)) continue;
         seenDocs.add(importedDoc.id);
-        const chunks = store.getSourceChunksByDocument(importedDoc.id);
+        const chunks = await store.getSourceChunksByDocument(importedDoc.id);
         const lead = chunks.find((c) => c.symbol) ?? chunks[0];
         if (lead) { importHits.push({ chunk: lead, score: 0.9, reason: "graph:import" }); added++; }
       }
@@ -1485,7 +1567,7 @@ export class MemoryEngine {
     const lexical = query
       ? rankRelatedChunks(
           seedChunk,
-          store.searchSourceChunksFts(userId, query, limit, { excludeChunkId: seedChunk.id, filePathLike: scope.length ? scope : undefined }),
+          await store.searchSourceChunksFts(userId, query, limit, { excludeChunkId: seedChunk.id, filePathLike: scope.length ? scope : undefined }),
           limit,
           { maxPerFile: opts?.maxPerFile },
         )
@@ -1513,17 +1595,17 @@ export class MemoryEngine {
    * to an exact prior version revives that document instead of duplicating.
    * Callers can cheaply gate this with a size/mtime stat before passing content.
    */
-  public reindexCodeSource(
+  public async reindexCodeSource(
     userId: string,
     input: { filePath: string; content: string; language?: string; title?: string; commitCount90d?: number | null; lastCommitDate?: string | null },
-  ): { status: "fresh" | "reindexed" | "unsupported"; documentId?: string; staleMarked: number; chunks: number } {
+  ): Promise<{ status: "fresh" | "reindexed" | "unsupported"; documentId?: string; staleMarked: number; chunks: number }> {
     const store = this.store as Partial<{
-      lookupDocumentByPathHash(userId: string, uri: string, hash: string): { id: string; stale: boolean } | null;
-      markSourceDocumentsStaleByPath(userId: string, uri: string): number;
-      reviveSourceDocument(documentId: string): void;
-      createSourceDocument(input: any): SourceDocument;
-      addSourceChunks(documentId: string, chunks: any[]): SourceChunk[];
-      setSourceDocumentChurn(documentId: string, commitCount90d: number | null, lastCommitDate: string | null): void;
+      lookupDocumentByPathHash(userId: string, uri: string, hash: string): Promise<{ id: string; stale: boolean } | null>;
+      markSourceDocumentsStaleByPath(userId: string, uri: string): Promise<number>;
+      reviveSourceDocument(documentId: string): Promise<void>;
+      createSourceDocument(input: any): Promise<SourceDocument>;
+      addSourceChunks(documentId: string, chunks: any[]): Promise<SourceChunk[]>;
+      setSourceDocumentChurn(documentId: string, commitCount90d: number | null, lastCommitDate: string | null): Promise<void>;
     }>;
     // B7 (MEM-CHURN) — stamp the captured churn signal onto whichever document
     // this reindex resolves to (fresh / revived / new). NULL when not provided.
@@ -1538,23 +1620,23 @@ export class MemoryEngine {
     }
 
     const hash = createHash("sha1").update(input.content ?? "").digest("hex");
-    const existing = store.lookupDocumentByPathHash(userId, input.filePath, hash);
+    const existing = await store.lookupDocumentByPathHash(userId, input.filePath, hash);
     if (existing && !existing.stale) {
-      stampChurn(existing.id); // churn can change even when content doesn't
+      await stampChurn(existing.id); // churn can change even when content doesn't
       return { status: "fresh", documentId: existing.id, staleMarked: 0, chunks: 0 };
     }
 
-    const staleMarked = store.markSourceDocumentsStaleByPath?.(userId, input.filePath) ?? 0;
+    const staleMarked = (await store.markSourceDocumentsStaleByPath?.(userId, input.filePath)) ?? 0;
 
     // Revert case — this exact content was indexed before (now staled). Revive
     // it rather than duplicate; its chunks + edges are still intact.
     if (existing) {
-      store.reviveSourceDocument?.(existing.id);
-      stampChurn(existing.id);
+      await store.reviveSourceDocument?.(existing.id);
+      await stampChurn(existing.id);
       return { status: "reindexed", documentId: existing.id, staleMarked, chunks: 0 };
     }
 
-    const doc = store.createSourceDocument({
+    const doc = await store.createSourceDocument({
       userId,
       workspaceTag: null,
       kind: "file",
@@ -1562,8 +1644,8 @@ export class MemoryEngine {
       hash,
       title: input.title ?? input.filePath,
     });
-    const stored = store.addSourceChunks(doc.id, chunkCode(input.content ?? "", { filePath: input.filePath, language: input.language }));
-    stampChurn(doc.id);
+    const stored = await store.addSourceChunks(doc.id, chunkCode(input.content ?? "", { filePath: input.filePath, language: input.language }));
+    await stampChurn(doc.id);
     return { status: "reindexed", documentId: doc.id, staleMarked, chunks: stored.length };
   }
 
@@ -1571,7 +1653,7 @@ export class MemoryEngine {
     userId: string,
     pagination?: CursorPaginationOptions<{ createdAt: string; id: string }>,
     filters?: OperationLogFilters
-  ): MemoryOperation[] {
+  ): Promise<MemoryOperation[]> {
     return this.store.getOperationLog(userId, pagination, filters);
   }
 
@@ -1579,21 +1661,21 @@ export class MemoryEngine {
     return this.store.getMemoryStats(userId);
   }
 
-  public getDiagnostics(userId: string): DiagnosticsBundle {
+  public async getDiagnostics(userId: string): Promise<DiagnosticsBundle> {
     const envKeys = Object.keys(process.env)
       .filter((key) => key.startsWith("BRAINROUTER_") || key.includes("API") || key.includes("SECRET"))
       .sort();
-    const recentOperations = this.store.getOperationLog(userId, { limit: 50 });
+    const recentOperations = await this.store.getOperationLog(userId, { limit: 50 });
     const recentErrors = recentOperations
       .filter((op) => /error|degrad|fail/i.test(`${op.operation} ${op.reason} ${JSON.stringify(op.metadata ?? {})}`))
       .slice(0, 10);
 
     return {
       timestamp: new Date().toISOString(),
-      sqliteVersion: this.store.getSqliteVersion(),
+      sqliteVersion: await this.store.getSqliteVersion(),
       nodeVersion: process.version,
       databaseStats: {
-        userStats: this.store.getMemoryStats(userId),
+        userStats: await this.store.getMemoryStats(userId),
       },
       envKeys,
       recentErrors,
@@ -1678,17 +1760,19 @@ export class MemoryEngine {
     );
 
     this.activeSessionSweeperTimer = setInterval(() => {
-      try {
-        const removed = this.store.sweepActiveSessions(olderThanMs);
-        if (removed > 0) {
-          console.error(`[BrainRouter] active_sessions sweeper removed ${removed} stale row(s).`);
+      void (async () => {
+        try {
+          const removed = await this.store.sweepActiveSessions(olderThanMs);
+          if (removed > 0) {
+            console.error(`[BrainRouter] active_sessions sweeper removed ${removed} stale row(s).`);
+          }
+        } catch (err) {
+          console.error(
+            "[BrainRouter] active_sessions sweeper failed:",
+            err instanceof Error ? err.message : err,
+          );
         }
-      } catch (err) {
-        console.error(
-          "[BrainRouter] active_sessions sweeper failed:",
-          err instanceof Error ? err.message : err,
-        );
-      }
+      })();
     }, intervalMs);
     this.activeSessionSweeperTimer.unref?.();
   }
@@ -1719,17 +1803,19 @@ export class MemoryEngine {
       10,
     );
     this.sessionInboxSweeperTimer = setInterval(() => {
-      try {
-        const removed = this.store.sweepSessionInbox(olderThanMs);
-        if (removed > 0) {
-          console.error(`[BrainRouter] session_inbox sweeper removed ${removed} delivered row(s).`);
+      void (async () => {
+        try {
+          const removed = await this.store.sweepSessionInbox(olderThanMs);
+          if (removed > 0) {
+            console.error(`[BrainRouter] session_inbox sweeper removed ${removed} delivered row(s).`);
+          }
+        } catch (err) {
+          console.error(
+            "[BrainRouter] session_inbox sweeper failed:",
+            err instanceof Error ? err.message : err,
+          );
         }
-      } catch (err) {
-        console.error(
-          "[BrainRouter] session_inbox sweeper failed:",
-          err instanceof Error ? err.message : err,
-        );
-      }
+      })();
     }, intervalMs);
     this.sessionInboxSweeperTimer.unref?.();
   }
@@ -1737,7 +1823,7 @@ export class MemoryEngine {
   public async sweepUnextractedBacklog() {
     const olderThanMs = parseInt(process.env.BRAINROUTER_EXTRACTION_SWEEP_MIN_AGE_MS ?? String(2 * 60 * 1000), 10);
     const maxFailures = parseInt(process.env.BRAINROUTER_EXTRACTION_MAX_FAILURES ?? "5", 10);
-    const backlog = this.store.sweepUnextractedBacklog({
+    const backlog = await this.store.sweepUnextractedBacklog({
       olderThanMs: Number.isFinite(olderThanMs) ? olderThanMs : 2 * 60 * 1000,
       maxFailures: Number.isFinite(maxFailures) ? maxFailures : 5,
       minUnextracted: 1,
@@ -1770,15 +1856,15 @@ export class MemoryEngine {
     return isNaN(v) || v <= 0 ? 0 : v;
   })();
 
-  public markCited(userId: string, citedRecordIds: string[], allRecalledRecordIds: string[]) {
+  public async markCited(userId: string, citedRecordIds: string[], allRecalledRecordIds: string[]) {
     if (citedRecordIds.length > 0) {
-      this.store.markCited(userId, citedRecordIds);
+      await this.store.markCited(userId, citedRecordIds);
     }
 
     if (citedRecordIds.length >= 2) {
       try {
         const sparkEngine = new NeuralSparkEngine(this.store);
-        sparkEngine.strengthenSpines(userId, citedRecordIds);
+        await sparkEngine.strengthenSpines(userId, citedRecordIds);
       } catch (err: any) {
         console.error("[BrainRouter] Failed to strengthen spines on citation:", err.message);
       }
@@ -1788,12 +1874,12 @@ export class MemoryEngine {
     const nonCited = allRecalledRecordIds.filter(id => !citedSet.has(id));
 
     if (nonCited.length > 0) {
-      const updated = this.store.incrementNeverCited(userId, nonCited);
+      const updated = await this.store.incrementNeverCited(userId, nonCited);
 
       if (this.ACE_ARCHIVE_THRESHOLD > 0) {
         for (const { recordId, neverCitedCount } of updated) {
           if (neverCitedCount >= this.ACE_ARCHIVE_THRESHOLD) {
-            this.store.archiveCognitiveRecord(userId, recordId);
+            await this.store.archiveCognitiveRecord(userId, recordId);
             console.error(`[BrainRouter] ACE: Auto-archived memory ${recordId} (never_cited_count=${neverCitedCount})`);
           }
         }
@@ -1811,17 +1897,17 @@ export class MemoryEngine {
   // Point-in-Time Search (asOf)
   // ============================
 
-  public searchAsOf(userId: string, query: string, asOf: string, limit = 10): {
+  public async searchAsOf(userId: string, query: string, asOf: string, limit = 10): Promise<{
     memories: Array<{ recordId: string; content: string; type: string; score: number }>;
     asOf: string;
     count: number;
-  } {
+  }> {
     const ts = Date.parse(asOf);
     if (isNaN(ts)) {
       throw new Error(`Invalid asOf timestamp: "${asOf}". Must be a valid ISO 8601 date string.`);
     }
 
-    const results = this.store.searchCognitiveFtsAsOf(userId, query, limit, asOf);
+    const results = await this.store.searchCognitiveFtsAsOf(userId, query, limit, asOf);
     return {
       memories: results.map(r => ({
         recordId: r.record_id,
@@ -1835,5 +1921,45 @@ export class MemoryEngine {
   }
 }
 
-// Singleton export
-export const memoryEngine = new MemoryEngine();
+// ── Lazy singleton export ───────────────────────────────────────────────────
+// Constructing a MemoryEngine opens a Postgres pool and runs `#initialize`
+// (migrations + vec init + seed-admin). Doing that EAGERLY at import time meant
+// merely importing this module (or any brain tool that re-exports it) started a
+// stray pool + background work — wasteful, and the source of teardown races in
+// tests. Construction is now deferred to first use: tools call methods on the
+// `memoryEngine` proxy, which builds the instance on first property access;
+// code paths that never touch it (most tests, which use scratch engines) never
+// open a pool. The proxy keeps the `import { memoryEngine }` call-sites (60+)
+// unchanged. Vitest suites factory-mock this module, so they never see the proxy.
+let _memoryEngine: MemoryEngine | undefined;
+
+/** Get the process-wide memory engine, constructing it on first call. */
+export function getMemoryEngine(): MemoryEngine {
+  return (_memoryEngine ??= new MemoryEngine());
+}
+
+/**
+ * Close + drop the process-wide singleton (graceful shutdown / test teardown).
+ * No-op when it was never constructed, so tests that don't use it pay nothing.
+ * The next `getMemoryEngine()` / proxy access builds a fresh instance.
+ */
+export async function closeMemoryEngine(): Promise<void> {
+  const e = _memoryEngine;
+  if (!e) return;
+  _memoryEngine = undefined;
+  await e.close();
+}
+
+export const memoryEngine: MemoryEngine = new Proxy({} as MemoryEngine, {
+  get(_t, prop) {
+    const e = getMemoryEngine();
+    const value = Reflect.get(e, prop, e);
+    return typeof value === "function" ? (value as (...a: unknown[]) => unknown).bind(e) : value;
+  },
+  set(_t, prop, value) {
+    return Reflect.set(getMemoryEngine(), prop, value as never);
+  },
+  has(_t, prop) {
+    return prop in getMemoryEngine();
+  },
+});

@@ -1,48 +1,37 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { SqliteMemoryStore } from "../memory/store/sqlite.js";
-import { MemoryEngine } from "../memory/engine.js";
+import { createTestStore, createTestEngine } from "./helpers/pgTestStore.js";
+import type { PostgresMemoryStore } from "../memory/store/postgres/PostgresMemoryStore.js";
 import { splitIdentifier, languageScopeFor, fileExtension, extractChunkQueryTerms, pathPriorPenalty, rankRelatedChunks, definedIdentifiers, deriveSeedIdentifiers, codeRerankBoost, extractIntraFileCallEdges, extractImportSpecifiers, resolveRelativeImport } from "../memory/recall/code-retrieval.js";
 import type { SourceChunk } from "@kinqs/brainrouter-types";
 
-function fresh(label: string): { store: SqliteMemoryStore; cleanup: () => void } {
-  const dir = mkdtempSync(join(tmpdir(), `brainrouter-mem29-${label}-`));
-  const store = new SqliteMemoryStore(join(dir, "memory.db"));
-  store.init();
-  return { store, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
-}
-
 /** Seed a small multi-file code corpus that shares the `parseConfig` symbol. */
-function seed(store: SqliteMemoryStore) {
-  const parser = store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/parser.ts", hash: "h1", title: "parser.ts" });
-  const parserChunks = store.addSourceChunks(parser.id, [
+async function seed(store: PostgresMemoryStore) {
+  const parser = await store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/parser.ts", hash: "h1", title: "parser.ts" });
+  const parserChunks = await store.addSourceChunks(parser.id, [
     { content: "export function parseConfig(raw: string) { return JSON.parse(raw); }", tokenCount: 12, filePath: "src/parser.ts", symbol: "parseConfig", startLine: 1, endLine: 3 },
     { content: "export function parseArgs(argv) { /* parse argv tokens */ }", tokenCount: 10, filePath: "src/parser.ts", symbol: "parseArgs", startLine: 5, endLine: 7 },
   ]);
-  const config = store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/config.ts", hash: "h2", title: "config.ts" });
-  const configChunks = store.addSourceChunks(config.id, [
+  const config = await store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/config.ts", hash: "h2", title: "config.ts" });
+  const configChunks = await store.addSourceChunks(config.id, [
     { content: "import { parseConfig } from './parser'; const cfg = parseConfig(text); return cfg;", tokenCount: 14, filePath: "src/config.ts", symbol: "loadConfig", startLine: 1, endLine: 4 },
   ]);
-  const py = store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/util.py", hash: "h3", title: "util.py" });
-  const pyChunks = store.addSourceChunks(py.id, [
+  const py = await store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/util.py", hash: "h3", title: "util.py" });
+  const pyChunks = await store.addSourceChunks(py.id, [
     { content: "def parse_config(raw): return json.loads(raw)", tokenCount: 8, filePath: "src/util.py", symbol: "parse_config", startLine: 1, endLine: 2 },
   ]);
-  const other = store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/ui.ts", hash: "h4", title: "ui.ts" });
-  store.addSourceChunks(other.id, [
+  const other = await store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/ui.ts", hash: "h4", title: "ui.ts" });
+  await store.addSourceChunks(other.id, [
     { content: "export function renderButton(props) { return makeElement('button', props); }", tokenCount: 10, filePath: "src/ui.ts", symbol: "renderButton", startLine: 1, endLine: 3 },
   ]);
   return { seedChunkId: parserChunks[0].id, parserChunks, configChunks, pyChunks };
 }
 
-test("MEM-29 find_related: by chunkId surfaces cross-file matches, excludes the seed + other languages", () => {
-  const { store, cleanup } = fresh("by-id");
+test("MEM-29 find_related: by chunkId surfaces cross-file matches, excludes the seed + other languages", async () => {
+  const { engine, store, cleanup } = await createTestEngine();
   try {
-    const { seedChunkId } = seed(store);
-    const engine = new MemoryEngine(store);
-    const r = engine.findRelatedChunks("u1", { chunkId: seedChunkId });
+    const { seedChunkId } = await seed(store);
+    const r = await engine.findRelatedChunks("u1", { chunkId: seedChunkId });
     assert.equal(r.found, true);
     assert.equal(r.seed?.symbol, "parseConfig");
     const paths = r.related.map((x) => x.chunk.filePath);
@@ -54,49 +43,45 @@ test("MEM-29 find_related: by chunkId surfaces cross-file matches, excludes the 
     // scores normalized 0..1, descending
     for (let i = 1; i < r.related.length; i++) assert.ok(r.related[i - 1].score >= r.related[i].score);
     assert.ok(r.related.every((x) => x.score >= 0 && x.score <= 1));
-  } finally { cleanup(); }
+  } finally { await cleanup(); }
 });
 
-test("MEM-29 find_related: file:line seed resolves the covering chunk", () => {
-  const { store, cleanup } = fresh("by-line");
+test("MEM-29 find_related: file:line seed resolves the covering chunk", async () => {
+  const { engine, store, cleanup } = await createTestEngine();
   try {
-    const { seedChunkId } = seed(store);
-    const engine = new MemoryEngine(store);
-    const r = engine.findRelatedChunks("u1", { filePath: "src/parser.ts", line: 2 });
+    const { seedChunkId } = await seed(store);
+    const r = await engine.findRelatedChunks("u1", { filePath: "src/parser.ts", line: 2 });
     assert.equal(r.found, true);
     assert.equal(r.seed?.chunkId, seedChunkId, "line 2 falls inside the parseConfig chunk (1-3)");
-  } finally { cleanup(); }
+  } finally { await cleanup(); }
 });
 
-test("MEM-29 find_related: sameLanguage:false admits other-language neighbours", () => {
-  const { store, cleanup } = fresh("cross-lang");
+test("MEM-29 find_related: sameLanguage:false admits other-language neighbours", async () => {
+  const { engine, store, cleanup } = await createTestEngine();
   try {
-    const { seedChunkId } = seed(store);
-    const engine = new MemoryEngine(store);
-    const r = engine.findRelatedChunks("u1", { chunkId: seedChunkId }, { sameLanguage: false });
+    const { seedChunkId } = await seed(store);
+    const r = await engine.findRelatedChunks("u1", { chunkId: seedChunkId }, { sameLanguage: false });
     assert.equal(r.found, true);
     assert.ok(r.related.some((x) => x.chunk.filePath === "src/util.py"), "python parse_config now included");
-  } finally { cleanup(); }
+  } finally { await cleanup(); }
 });
 
-test("MEM-29 find_related: ownership gate — another user cannot seed from u1's chunk", () => {
-  const { store, cleanup } = fresh("owner");
+test("MEM-29 find_related: ownership gate — another user cannot seed from u1's chunk", async () => {
+  const { engine, store, cleanup } = await createTestEngine();
   try {
-    const { seedChunkId } = seed(store);
-    const engine = new MemoryEngine(store);
-    const r = engine.findRelatedChunks("intruder", { chunkId: seedChunkId });
+    const { seedChunkId } = await seed(store);
+    const r = await engine.findRelatedChunks("intruder", { chunkId: seedChunkId });
     assert.equal(r.found, false);
     assert.deepEqual(r.related, []);
-  } finally { cleanup(); }
+  } finally { await cleanup(); }
 });
 
-test("MEM-29 find_related: unknown seed → found:false", () => {
-  const { store, cleanup } = fresh("missing");
+test("MEM-29 find_related: unknown seed → found:false", async () => {
+  const { engine, store, cleanup } = await createTestEngine();
   try {
-    seed(store);
-    const engine = new MemoryEngine(store);
-    assert.equal(engine.findRelatedChunks("u1", { chunkId: "nope" }).found, false);
-  } finally { cleanup(); }
+    await seed(store);
+    assert.equal((await engine.findRelatedChunks("u1", { chunkId: "nope" })).found, false);
+  } finally { await cleanup(); }
 });
 
 function chunk(over: Partial<SourceChunk> & { id: string; ftsRank: number }): SourceChunk & { ftsRank: number } {
@@ -191,30 +176,29 @@ test("MEM-28 extractIntraFileCallEdges: edges from referencing chunk → definin
   assert.ok(![...pairs].some((p) => p.split("->")[0] === p.split("->")[1]), "no self edges");
 });
 
-test("MEM-28 find_related: surfaces the seed's callees/callers as graph: hits, leading the result", () => {
-  const { store, cleanup } = fresh("edges");
+test("MEM-28 find_related: surfaces the seed's callees/callers as graph: hits, leading the result", async () => {
+  const { engine, store, cleanup } = await createTestEngine();
   try {
-    const doc = store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/mod.ts", hash: "he", title: "mod.ts" });
-    const chunks = store.addSourceChunks(doc.id, [
+    const doc = await store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/mod.ts", hash: "he", title: "mod.ts" });
+    const chunks = await store.addSourceChunks(doc.id, [
       { content: "export function loadConfig(){ const r = readFile(); return parseConfig(r); }", tokenCount: 12, filePath: "src/mod.ts", symbol: "loadConfig", startLine: 1, endLine: 3 },
       { content: "export function parseConfig(raw){ return JSON.parse(raw); }", tokenCount: 10, filePath: "src/mod.ts", symbol: "parseConfig", startLine: 5, endLine: 7 },
       { content: "export function readFile(){ return fs.readFileSync('x'); }", tokenCount: 9, filePath: "src/mod.ts", symbol: "readFile", startLine: 9, endLine: 11 },
     ]);
-    const engine = new MemoryEngine(store);
     // Seed = loadConfig, which calls parseConfig + readFile (callees).
-    const r = engine.findRelatedChunks("u1", { chunkId: chunks[0].id });
+    const r = await engine.findRelatedChunks("u1", { chunkId: chunks[0].id });
     assert.equal(r.found, true);
     const byId = new Map(r.related.map((x) => [x.chunk.id, x]));
     assert.ok(byId.has(chunks[1].id) && byId.get(chunks[1].id)!.reason.startsWith("graph:"), "parseConfig surfaced as a graph edge");
     assert.ok(byId.has(chunks[2].id) && byId.get(chunks[2].id)!.reason.startsWith("graph:"), "readFile surfaced as a graph edge");
     // Seed = parseConfig → loadConfig is its caller.
-    const r2 = engine.findRelatedChunks("u1", { chunkId: chunks[1].id });
+    const r2 = await engine.findRelatedChunks("u1", { chunkId: chunks[1].id });
     const caller = r2.related.find((x) => x.chunk.id === chunks[0].id);
     assert.ok(caller && caller.reason === "graph:caller", "loadConfig surfaced as a caller");
     // includeEdges:false drops the structural hits.
-    const r3 = engine.findRelatedChunks("u1", { chunkId: chunks[0].id }, { includeEdges: false });
+    const r3 = await engine.findRelatedChunks("u1", { chunkId: chunks[0].id }, { includeEdges: false });
     assert.ok(r3.related.every((x) => !x.reason.startsWith("graph:")), "edges suppressed when includeEdges=false");
-  } finally { cleanup(); }
+  } finally { await cleanup(); }
 });
 
 test("MEM-28b extractImportSpecifiers / resolveRelativeImport", () => {
@@ -226,30 +210,29 @@ test("MEM-28b extractImportSpecifiers / resolveRelativeImport", () => {
   assert.equal(resolveRelativeImport('src/config.ts', 'react'), null); // bare → not local
 });
 
-test("MEM-28b find_related: a seed's relative imports surface the imported file as a graph:import hit", () => {
-  const { store, cleanup } = fresh("imports");
+test("MEM-28b find_related: a seed's relative imports surface the imported file as a graph:import hit", async () => {
+  const { engine, store, cleanup } = await createTestEngine();
   try {
     // parser.ts is imported by config.ts
-    const parser = store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/parser.ts", hash: "hp", title: "parser.ts" });
-    store.addSourceChunks(parser.id, [
+    const parser = await store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/parser.ts", hash: "hp", title: "parser.ts" });
+    await store.addSourceChunks(parser.id, [
       { content: "export function parseConfig(raw){ return JSON.parse(raw); }", tokenCount: 10, filePath: "src/parser.ts", symbol: "parseConfig", startLine: 1, endLine: 3 },
     ]);
-    const config = store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/config.ts", hash: "hc", title: "config.ts" });
-    const cfgChunks = store.addSourceChunks(config.id, [
+    const config = await store.createSourceDocument({ userId: "u1", workspaceTag: null, kind: "file", uri: "src/config.ts", hash: "hc", title: "config.ts" });
+    const cfgChunks = await store.addSourceChunks(config.id, [
       { content: "import { parseConfig } from './parser';", tokenCount: 6, filePath: "src/config.ts", symbol: null, startLine: 1, endLine: 1 },
       { content: "export function loadConfig(text){ return useThing(text); }", tokenCount: 9, filePath: "src/config.ts", symbol: "loadConfig", startLine: 3, endLine: 5 },
     ]);
-    const engine = new MemoryEngine(store);
     // Seed the loadConfig chunk (no lexical overlap with parseConfig) — the
     // import edge should still surface parser.ts.
-    const r = engine.findRelatedChunks("u1", { chunkId: cfgChunks[1].id });
+    const r = await engine.findRelatedChunks("u1", { chunkId: cfgChunks[1].id });
     const imp = r.related.find((x) => x.chunk.filePath === "src/parser.ts");
     assert.ok(imp, "imported file surfaced");
     assert.equal(imp!.reason, "graph:import");
     // includeEdges:false suppresses it
-    const r2 = engine.findRelatedChunks("u1", { chunkId: cfgChunks[1].id }, { includeEdges: false });
+    const r2 = await engine.findRelatedChunks("u1", { chunkId: cfgChunks[1].id }, { includeEdges: false });
     assert.ok(!r2.related.some((x) => x.reason === "graph:import"));
-  } finally { cleanup(); }
+  } finally { await cleanup(); }
 });
 
 test("MEM-29 helpers: splitIdentifier / fileExtension / languageScopeFor / extractChunkQueryTerms", () => {

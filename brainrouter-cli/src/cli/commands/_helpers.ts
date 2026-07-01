@@ -10,9 +10,8 @@
 
 import chalk from 'chalk';
 import { spinner } from '../spinner.js';
-import type { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
-import type { McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
-import { callMcpTool } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
+import type { Agent } from '@kinqs/brainrouter-core/agent';
+import { callMcpTool, type McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
 import { clampPayload, extractMemories, renderMemoryCards } from '../../memory/formatters.js';
 import { buildSkillPrompt, resolveSkill, SLASH_TO_SKILL } from '../../prompt/skillRunner.js';
 
@@ -96,7 +95,7 @@ export function formatTranscriptContent(value: unknown): string {
  * goal_blocked, the budget runs out, or the user interrupts.
  */
 // §ADR-003 — extracted to core so the Desktop host builds the same prompt.
-export { buildGoalKickoffPrompt } from '@kinqs/brainrouter-core/dist/goal/goalKickoff.js';
+export { buildGoalKickoffPrompt } from '@kinqs/brainrouter-core/goal';
 
 /**
  * Resolve a slash-mapped skill (/spec, /feature-dev, /review, /implement-plan)

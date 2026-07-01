@@ -109,7 +109,7 @@ export async function handleMemoryCaptureAnnotation(args: any, options?: { defau
     const params = schema.parse(args ?? {});
     const userId = params.userId ?? options?.defaultUserId ?? "default";
     const prov = provenance(params);
-    const record = memoryEngine.upsertEngineeringMemory({
+    const record = await memoryEngine.upsertEngineeringMemory({
       userId,
       sessionKey: params.sessionKey,
       type: "review_comment",

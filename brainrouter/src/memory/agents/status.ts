@@ -10,8 +10,8 @@
 import type { BrainAgentStatus, IMemoryStore } from "@kinqs/brainrouter-types";
 import { listBrainAgents } from "./registry.js";
 
-export function buildBrainAgentStatuses(store: IMemoryStore, agentId?: string): BrainAgentStatus[] {
-  const byKind = new Map(store.getMemoryJobKindAggregates().map((a) => [a.kind, a]));
+export async function buildBrainAgentStatuses(store: IMemoryStore, agentId?: string): Promise<BrainAgentStatus[]> {
+  const byKind = new Map((await store.getMemoryJobKindAggregates()).map((a) => [a.kind, a]));
   return listBrainAgents()
     .filter((a) => !agentId || a.id === agentId)
     .map((agent) => {

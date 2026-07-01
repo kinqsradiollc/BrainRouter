@@ -1,19 +1,20 @@
 {
   "name": "dashboard",
   "private": true,
-  "version": "0.4.15",
+  "version": "0.4.16",
   "scripts": {
     "dev": "NODE_OPTIONS='--no-deprecation' next dev",
     "build": "next build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "next start",
     "build:cf": "npm --prefix .. run build:packages:dashboard && opennextjs-cloudflare build",
     "cf:preview": "npm run build:cf && opennextjs-cloudflare preview",
     "cf:deploy": "npm run build:cf && wrangler deploy"
   },
   "dependencies": {
-    "@kinqs/brainrouter-hooks": "^0.4.15",
-    "@kinqs/brainrouter-sdk": "^0.4.15",
-    "@kinqs/brainrouter-types": "^0.4.15",
+    "@kinqs/brainrouter-hooks": "^0.4.16",
+    "@kinqs/brainrouter-sdk": "^0.4.16",
+    "@kinqs/brainrouter-types": "^0.4.16",
     "@opennextjs/cloudflare": "^1.19.11",
     "@phosphor-icons/react": "^2.1.10",
     "framer-motion": "^12.39.0",

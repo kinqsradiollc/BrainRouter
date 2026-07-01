@@ -186,4 +186,9 @@ Not every task needs every skill. A bug fix might only need: `debugging-and-erro
 | Ship | [adr-skill](../adr-skill/SKILL.md) | Document the why, not just the what |
 | Ship | [handover-skill](../handover-skill/SKILL.md) | Final walkthrough and handover via walkthrough.md |
 | Ship | [shipping-skill](../../lifecycle/shipping-skill/SKILL.md) | Pre-launch checklist, monitoring, rollback plan |
+| Architect | [micro-repo-extraction](../../codebase/micro-repo-extraction/SKILL.md) | Carve a subsystem out of a god-package, public-API-first, leaf-first |
+| Architect | [import-boundary-enforcement](../../codebase/import-boundary-enforcement/SKILL.md) | Make the layering machine-enforced so it can't silently erode |
+| Agents | [bounded-agent-harness](../bounded-agent-harness/SKILL.md) | Reliable output from weak/local models via caps + allowlist + forced output |
+| Agents | [fleet-migration](../fleet-migration/SKILL.md) | Apply one change across many repos as N verified PRs |
+| Verify | [verify-loop](../../qa/verify-loop/SKILL.md) | Green-gate output; re-spawn the worker on failure before shipping |
 

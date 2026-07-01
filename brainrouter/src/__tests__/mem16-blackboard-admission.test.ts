@@ -63,7 +63,7 @@ afterEach(() => {
 });
 
 describe("MEM-16 admitViaBlackboard", () => {
-  it("admits only survivors: dedups the batch and rejects below-threshold", () => {
+  it("admits only survivors: dedups the batch and rejects below-threshold", async () => {
     const store = new FakeBlackboardStore();
     const pipe = pipeline(store);
     const records = [
@@ -72,7 +72,7 @@ describe("MEM-16 admitViaBlackboard", () => {
       rec("r3", "weak unsupported guess", 0.1), // below 0.3 reject floor
       rec("r4", "Vault export writes a hash ledger", 0.8),
     ];
-    const admission = (pipe as any).admitViaBlackboard("u1", records);
+    const admission = await (pipe as any).admitViaBlackboard("u1", records);
 
     // r1 (winner) + r4 survive; r2 is a duplicate, r3 rejected.
     expect(admission.survivors.map((r: CognitiveRecord) => r.id).sort()).toEqual(["r1", "r4"]);
@@ -84,29 +84,29 @@ describe("MEM-16 admitViaBlackboard", () => {
     expect(store.items.size).toBe(4); // every candidate staged for audit
   });
 
-  it("markCommitted stamps the survivor's blackboard item with the record id", () => {
+  it("markCommitted stamps the survivor's blackboard item with the record id", async () => {
     const store = new FakeBlackboardStore();
     const pipe = pipeline(store);
-    const admission = (pipe as any).admitViaBlackboard("u1", [rec("r1", "A durable fact about chunking", 0.9)]);
-    admission.markCommitted("r1");
+    const admission = await (pipe as any).admitViaBlackboard("u1", [rec("r1", "A durable fact about chunking", 0.9)]);
+    await admission.markCommitted("r1");
     const committed = [...store.items.values()].find((i) => i.status === "committed");
     expect(committed?.committedRecordId).toBe("r1");
   });
 
-  it("fails open when admission is disabled (env off) — no staging, all admitted", () => {
+  it("fails open when admission is disabled (env off) — no staging, all admitted", async () => {
     process.env.BRAINROUTER_BLACKBOARD_ADMISSION = "off";
     const store = new FakeBlackboardStore();
     const pipe = pipeline(store);
     const records = [rec("r1", "a", 0.9), rec("r2", "a", 0.9)];
-    const admission = (pipe as any).admitViaBlackboard("u1", records);
+    const admission = await (pipe as any).admitViaBlackboard("u1", records);
     expect(admission.survivors).toHaveLength(2);
     expect(store.items.size).toBe(0); // gate skipped entirely
   });
 
-  it("fails open when the store lacks the blackboard capability", () => {
+  it("fails open when the store lacks the blackboard capability", async () => {
     const pipe = pipeline({}); // no stage/update methods
     const records = [rec("r1", "x", 0.9)];
-    const admission = (pipe as any).admitViaBlackboard("u1", records);
+    const admission = await (pipe as any).admitViaBlackboard("u1", records);
     expect(admission.survivors).toHaveLength(1);
   });
 });

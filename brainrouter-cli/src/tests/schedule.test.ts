@@ -1,14 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseCron, nextCronFire } from '@kinqs/brainrouter-core/dist/schedule/cronParser.js';
+import { parseCron, nextCronFire } from '@kinqs/brainrouter-core/schedule';
 import { startScheduleTicker } from '../runtime/scheduleTicker.js';
 import {
   addSchedule,
   loadSchedules,
   removeSchedule,
   setScheduleEnabled,
-} from '@kinqs/brainrouter-core/dist/schedule/scheduleStore.js';
+} from '@kinqs/brainrouter-core/schedule';
 import { withTempWorkspace } from './_helpers.js';
 
 // --- Parser --------------------------------------------------------------

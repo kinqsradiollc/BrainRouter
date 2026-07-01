@@ -9,6 +9,7 @@ import path from 'node:path';
 import type { McpClientPool as McpClientWrapper } from '../mcp/mcpPool.js';
 import type { LLMConfig } from '../config/config.js';
 import { getCliKnobs, loadOrInitConfig } from '../config/config.js';
+import { localModelProfileActive } from '../provider/modelFamily.js';
 import { resolveAgentLlm } from '../provider/agentModels.js';
 // MAS-P5-T2: the child-output offload thresholds are now the shared
 // result-handoff constants (single source of truth in runtime/resultHandoff).
@@ -23,11 +24,13 @@ import {
 } from './orchestrator.js';
 import { buildRolePrompt, resolveRole, type AccessMode } from './roles.js';
 import { runWorkflow } from '../workflow/workflowTool.js';
+import { loadWorkflowGraph } from '../workflow/graphStore.js';
+import { runGraph } from '../workflow/graphEngine.js';
 import { countRunningChildren, spawnSlotDecision } from './spawnSlots.js';
 import { ownershipRequirementError } from './ownership.js';
 import { findById, listAll, type Tier } from './agentRegistry.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
-import { appendTranscriptEntry, readTranscriptEntries } from '../session/sessionStore.js';
+import { appendTranscriptEntry, loadTranscript, readTranscriptEntries } from '../session/sessionStore.js';
 import { callMcpTool, childSessionKey } from '../mcp/mcpUtils.js';
 import { readPreferences } from '../session/preferencesStore.js';
 import { resolveAutoChainMode, autoChainRoles } from './autoChain.js';
@@ -52,6 +55,12 @@ export interface OrchestrationContext {
    * child would silently run with elevated permissions.
    */
   parentAccessMode?: AccessMode;
+  /**
+   * HONK-H0 — true when the spawning agent is itself a fleet executor (or has a
+   * fleet ancestor). The locked-down sandbox + secret-scoping posture cascades to
+   * EVERY descendant, so a fleet child can't escape it by spawning a plain worker.
+   */
+  ancestorFleet?: boolean;
   /**
    * Parent OTEL trace context. When set, child agents nest their per-turn
    * spans under the dispatching `spawn_agent` tool span instead of starting
@@ -195,8 +204,11 @@ const ORCHESTRATION_TOOL_NAMES = new Set([
   'wait_agents',
   'read_agent_transcript',
   'close_agent',
+  'send_input',
+  'resume_agent',
   'route_task',
   'run_workflow',
+  'run_workflow_graph',
 ]);
 
 /**
@@ -308,7 +320,7 @@ function parentWaitTimeoutMsFromArgs(args: any): number {
   return Number.isFinite(raw) && raw > 0 ? raw : 0;
 }
 
-export { createSpawnAgentTool, createTaskAgentTool, createDelegateAgentTool, createListAgentsTool, createWaitAgentTool, createReadAgentTranscriptTool, createCloseAgentTool, createSpawnAgentsTool, createWaitAgentsTool, createRouteTaskTool, createRunWorkflowTool } from './agentTools.js';
+export { createSpawnAgentTool, createTaskAgentTool, createDelegateAgentTool, createListAgentsTool, createWaitAgentTool, createReadAgentTranscriptTool, createCloseAgentTool, createSendInputTool, createResumeAgentTool, createSpawnAgentsTool, createWaitAgentsTool, createRouteTaskTool, createRunWorkflowTool, createRunWorkflowGraphTool } from './agentTools.js';
 
 /**
  * MAS-P2-M1: per-turn synthesized `delegate_<agentId>` tools.
@@ -448,6 +460,10 @@ export async function executeOrchestrationTool(
       return handleReadTranscript(args, ctx);
     case 'close_agent':
       return handleClose(args, ctx);
+    case 'send_input':
+      return await handleSendInput(args, ctx);
+    case 'resume_agent':
+      return await handleResumeAgent(args, ctx);
     case 'route_task':
       return await handleRouteTask(args, ctx);
     case 'run_workflow':
@@ -455,6 +471,10 @@ export async function executeOrchestrationTool(
       // very dispatcher as the spawn backend (run_workflow's children go through
       // the same spawn_agents/wait_agents path everything else does).
       return await runWorkflow(args, ctx, { dispatch: executeOrchestrationTool });
+    case 'run_workflow_graph':
+      // §7 L4 — run a saved visual-workflow GRAPH. Agent nodes delegate to the
+      // same task_agent spawn path; sub-workflow nodes load from the same store.
+      return await handleRunWorkflowGraph(args, ctx);
     default:
       throw new Error(`Unknown orchestration tool: ${name}`);
   }
@@ -526,12 +546,51 @@ async function handleRouteTask(args: any, ctx: OrchestrationContext): Promise<st
     mcpClient: ctx.mcpClient,
     mcpToolNames: toolNames,
     sessionKey: ctx.parentSessionKey,
+    // HONK-L6 — bias toward bounded inline tasks when the parent runs a local model.
+    localModel: localModelProfileActive(ctx.llmConfig?.model, getCliKnobs().localModelProfile),
   });
   return JSON.stringify(result, null, 2);
 }
 
 async function handleTaskAgent(args: any, ctx: OrchestrationContext): Promise<string> {
   return await handleSpawn({ ...args, wait: true, timeoutMs: args?.timeoutMs ?? DEFAULT_TASK_AGENT_TIMEOUT_MS }, ctx);
+}
+
+/**
+ * §7 L4 — run a saved visual-workflow graph by id. Each `agent` node delegates to
+ * the same `task_agent` foreground-spawn path (so the graph's AI work is real
+ * child agents, clamped to the parent's access mode), and `subworkflow` nodes load
+ * from the same store (the engine's own depth + recursion guard prevents runaway
+ * nesting). Returns the graph's final output plus a one-line run summary.
+ */
+async function handleRunWorkflowGraph(args: any, ctx: OrchestrationContext): Promise<string> {
+  const id = String(args?.id ?? args?.workflowId ?? '').trim();
+  if (!id) throw new Error('run_workflow_graph requires an `id` — the saved workflow-graph id/name (see the Workflows canvas).');
+  const graph = loadWorkflowGraph(ctx.workspaceRoot, id);
+  if (!graph) throw new Error(`No saved workflow graph "${id}". Build and save one in the Workflows canvas, or check the id with the desktop's workflow list.`);
+
+  // Seed run vars from the caller's `vars` object over the graph's own defaults.
+  const callerVars = args?.vars && typeof args.vars === 'object' && !Array.isArray(args.vars)
+    ? (args.vars as Record<string, unknown>)
+    : {};
+  const seeded = { ...graph, vars: { ...(graph.vars ?? {}), ...callerVars } };
+
+  const result = await runGraph(seeded, {
+    runAgent: async (prompt) => {
+      const out = await handleTaskAgent({ prompt }, ctx);
+      // handleTaskAgent may return raw text or a JSON envelope — surface the text.
+      try {
+        const j = JSON.parse(out) as Record<string, unknown>;
+        if (j && typeof j === 'object') return String(j.output ?? j.raw ?? j.text ?? out);
+      } catch { /* raw text */ }
+      return out;
+    },
+    loadSubWorkflow: async (ref) => loadWorkflowGraph(ctx.workspaceRoot, ref),
+  });
+
+  if (!result.ok) return `Workflow "${id}" failed: ${result.error ?? 'unknown error'}`;
+  const ran = result.order.filter((n) => result.nodes[n]?.status === 'ok').length;
+  return `Workflow "${id}" completed (${ran} node${ran === 1 ? '' : 's'} ran).\n\n${result.finalOutput ?? '(no output node produced text)'}`;
 }
 
 async function handleDelegateAgent(args: any, ctx: OrchestrationContext): Promise<string> {
@@ -877,6 +936,8 @@ async function handleSpawn(args: any, ctx: OrchestrationContext): Promise<string
     roleOverlay: undefined,
     accessMode: access,
     silent: true,
+    forceFleetSandbox: role.forceSandbox || ctx.ancestorFleet, // HONK-H0 — fleet role OR fleet ancestor → locked-down posture
+
     // Children NEED memory: skipping the briefing makes them amnesiac and the
     // parent LLM eventually learns inline work outperforms fan-out. With recall
     // enabled, children join the same cognitive context as the parent.
@@ -1340,6 +1401,174 @@ function handleClose(args: any, ctx: OrchestrationContext): string {
   }
   const next = updateSession(ctx.workspaceRoot, id, patch);
   return JSON.stringify(summarize(next, true), null, 2);
+}
+
+async function handleSendInput(args: any, ctx: OrchestrationContext): Promise<string> {
+  const id = String(args.id ?? '').trim();
+  const message = String(args.message ?? '').trim();
+  if (!id) throw new Error('send_input requires an id.');
+  if (!message) throw new Error('send_input requires a non-empty message.');
+  return await continueChildAgent({ id, message, interrupt: args.interrupt === true }, ctx);
+}
+
+async function handleResumeAgent(args: any, ctx: OrchestrationContext): Promise<string> {
+  const id = String(args.id ?? '').trim();
+  if (!id) throw new Error('resume_agent requires an id.');
+  const message = typeof args.message === 'string' && args.message.trim()
+    ? args.message.trim()
+    : 'Continue from the current child-agent transcript. If the prior task is already complete, summarize the current state and any remaining next step.';
+  return await continueChildAgent({ id, message, interrupt: false }, ctx);
+}
+
+function resolveRecordRole(record: ChildSessionRecord, workspaceRoot: string): {
+  role: ReturnType<typeof resolveRole>;
+  tier?: Tier;
+  toolScope?: { local: string[]; mcp: string[] };
+  disallowedTools?: string[];
+} {
+  const loaded = findById(record.role, workspaceRoot);
+  if (loaded) {
+    return {
+      role: {
+        name: loaded.def.id,
+        description: loaded.def.whenToUse,
+        defaultAccess: loaded.def.defaultAccess,
+        promptOverlay: loaded.def.prompt,
+      },
+      tier: loaded.def.tier,
+      toolScope: loaded.def.toolScope,
+      disallowedTools: loaded.def.disallowedTools,
+    };
+  }
+  return { role: resolveRole(record.role), tier: record.tier };
+}
+
+async function continueChildAgent(
+  input: { id: string; message: string; interrupt: boolean },
+  ctx: OrchestrationContext,
+): Promise<string> {
+  let record = getSession(ctx.workspaceRoot, input.id);
+  if (!record) throw new Error(`No child session with id ${input.id}.`);
+  if (record.childWorkspaceIsolation) {
+    throw new Error(
+      `send_input/resume_agent cannot continue isolated-worktree child ${input.id}. ` +
+      `Its temporary workspace may have been merged or removed; spawn a new child with the needed context instead.`,
+    );
+  }
+
+  const running = runningPromises.get(input.id);
+  if (running) {
+    if (!input.interrupt) {
+      throw new Error(`Child agent ${input.id} is already running. Call wait_agent, or pass interrupt:true to send_input first.`);
+    }
+    runningChildAgents.get(input.id)?.agent.requestInterrupt();
+    await running;
+    record = getSession(ctx.workspaceRoot, input.id);
+    if (!record) throw new Error(`Child session ${input.id} disappeared after interrupt.`);
+  } else if (record.status === 'running' || record.status === 'pending') {
+    throw new Error(`Child agent ${input.id} is marked ${record.status} but has no live task in this process. Wait for it, close it, or restart and resume once it is stale/closed.`);
+  }
+
+  const transcriptRoot = record.childWorkspaceRoot && fs.existsSync(record.childWorkspaceRoot)
+    ? record.childWorkspaceRoot
+    : ctx.workspaceRoot;
+  const childLaunchCwd = record.childLaunchCwd && fs.existsSync(record.childLaunchCwd)
+    ? record.childLaunchCwd
+    : ctx.launchCwd;
+  const childKey = childSessionKey(record.parentSessionKey, record.id);
+  const { role, tier, toolScope, disallowedTools } = resolveRecordRole(record, ctx.workspaceRoot);
+  const basePrompt = buildSystemPrompt({
+    workspaceRoot: transcriptRoot,
+    launchCwd: childLaunchCwd,
+    sessionKey: childKey,
+    instructionSummary: loadWorkspaceInstructionSummary(transcriptRoot),
+  });
+  const childLlm = resolveAgentLlm(loadOrInitConfig(), ctx.llmConfig, role.name);
+  const childAgent = new Agent(ctx.mcpClient, childLlm, {
+    workspaceRoot: transcriptRoot,
+    launchCwd: childLaunchCwd,
+    sessionKey: childKey,
+    roleOverlay: undefined,
+    accessMode: record.access,
+    silent: true,
+    forceFleetSandbox: role.forceSandbox || ctx.ancestorFleet, // HONK-H0 — fleet role OR fleet ancestor → locked-down posture
+    enableRecall: true,
+    systemPromptOverride: buildRolePrompt(role, basePrompt, ''),
+    parentTraceId: ctx.parentTraceId,
+    parentSpanId: ctx.parentSpanId,
+    tier,
+    agentDepth: record.depth ?? 1,
+    ownership: record.parentContext?.ownership ?? null,
+    toolScope,
+    disallowedTools,
+    parentReviewPolicy: ctx.parentReviewPolicy as 'request' | 'proceed' | undefined,
+    parentExecutionMode: ctx.parentExecutionMode as 'planning' | 'fast' | undefined,
+    confirmToolApproval: ctx.confirmToolApproval
+      ? (info) => ctx.confirmToolApproval!({ childId: record!.id, role: role.name, ...info })
+      : undefined,
+  });
+  childAgent.loadHistory(loadTranscript(transcriptRoot, childKey));
+  if (ctx.parentAgentId) childAgent.setParentAgentId(ctx.parentAgentId);
+
+  runningChildAgents.set(record.id, { agent: childAgent, parentSessionKey: ctx.parentSessionKey });
+  updateSession(ctx.workspaceRoot, record.id, { status: 'running', error: undefined });
+  const childToolStarts = new Map<string, number>();
+
+  try {
+    const output = await childAgent.runTurn(input.message, {
+      onStatusUpdate: () => {},
+      onToolStart: (tool, args) => {
+        childToolStarts.set(tool, Date.now());
+        ctx.onChildToolStart?.({ childId: record!.id, role: role.name, tool, args: args ?? {} });
+      },
+      onToolEnd: (tool, result) => {
+        const startedAt = childToolStarts.get(tool);
+        childToolStarts.delete(tool);
+        ctx.onChildToolEnd?.({
+          childId: record!.id,
+          role: role.name,
+          tool,
+          ok: result.success,
+          summary: result.summary,
+          preview: result.preview,
+          durationMs: startedAt ? Date.now() - startedAt : 0,
+        });
+      },
+    });
+    const completedAt = new Date().toISOString();
+    const next = updateSession(ctx.workspaceRoot, record.id, {
+      status: 'completed',
+      completedAt,
+      finalOutput: output,
+      filesRead: childAgent.filesRead,
+      usage: { ...childAgent.sessionUsage },
+    });
+    ctx.recordChildTokens?.(
+      (childAgent.sessionUsage?.promptTokens ?? 0) +
+      (childAgent.sessionUsage?.completionTokens ?? 0),
+    );
+    ctx.onChildComplete?.({
+      childId: record.id,
+      role: role.name,
+      status: 'completed',
+      preview: output.length <= getCliKnobs().agentPreviewChars
+        ? output
+        : extractChildPreview(output, getCliKnobs().agentPreviewChars),
+    });
+    return JSON.stringify({ resumed: true, ...summarize(next, true) }, null, 2);
+  } catch (err: any) {
+    const message = err?.message ?? String(err);
+    const next = updateSession(ctx.workspaceRoot, record.id, {
+      status: 'failed',
+      completedAt: new Date().toISOString(),
+      error: message,
+      finalOutput: `ERROR: ${message}`,
+    });
+    ctx.onChildComplete?.({ childId: record.id, role: role.name, status: 'failed', error: message });
+    return JSON.stringify({ resumed: false, ...summarize(next, true) }, null, 2);
+  } finally {
+    runningChildAgents.delete(record.id);
+  }
 }
 
 async function offloadChildOutput(

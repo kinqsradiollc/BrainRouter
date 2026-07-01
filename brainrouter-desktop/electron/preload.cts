@@ -2,7 +2,7 @@
  * DESK-3b — the renderer's ONLY capability surface. Agent protocol on one
  * channel; workspace management (main-process dialogs) on invoke channels.
  */
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webFrame } = require('electron');
 
 contextBridge.exposeInMainWorld('brainrouter', {
   send(command: unknown): void {
@@ -32,6 +32,11 @@ contextBridge.exposeInMainWorld('brainrouter', {
   openWorkspace(workspaceRoot: string): Promise<{ opened: boolean; needsTrust?: boolean }> {
     return ipcRenderer.invoke('workspace:open', workspaceRoot);
   },
+  // Open a workspace in a SEPARATE window (git worktrees) — never swaps the
+  // current window's active workspace / projects / chat.
+  openWorkspaceWindow(workspaceRoot: string): Promise<{ opened: boolean; needsTrust?: boolean }> {
+    return ipcRenderer.invoke('workspace:open-window', workspaceRoot);
+  },
   // T1 — workspace trust, backed by the shared CLI store (not localStorage).
   isWorkspaceTrusted(workspaceRoot: string): Promise<{ trusted: boolean }> {
     return ipcRenderer.invoke('workspace:isTrusted', workspaceRoot);
@@ -54,5 +59,25 @@ contextBridge.exposeInMainWorld('brainrouter', {
   // T1 — cross-workspace dashboard (running tasks + last review gate per recent root).
   globalDashboard(): Promise<{ workspaces: Array<{ workspaceRoot: string; tasks: Array<Record<string, unknown>>; reviewGate: { status: string; blocked: boolean; reason: string } | null }> }> {
     return ipcRenderer.invoke('dashboard:global');
+  },
+  getZoomFactor(): number {
+    return webFrame.getZoomFactor();
+  },
+  setZoomFactor(factor: number): void {
+    webFrame.setZoomFactor(factor);
+  },
+  computerUse: {
+    checkPermissions(): Promise<unknown> {
+      return ipcRenderer.invoke('computerUse:checkPermissions');
+    },
+    openAccessibilitySettings(): Promise<unknown> {
+      return ipcRenderer.invoke('computerUse:openAccessibilitySettings');
+    },
+    openScreenRecordingSettings(): Promise<unknown> {
+      return ipcRenderer.invoke('computerUse:openScreenRecordingSettings');
+    },
+    setMode(args: { enabled?: boolean; mode?: string }): Promise<unknown> {
+      return ipcRenderer.invoke('computerUse:setMode', args);
+    },
   },
 });

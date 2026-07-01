@@ -19,8 +19,11 @@
 export type ProjectId = string;
 export type WorkItemId = string;
 export type SprintId = string;
+export type ModuleId = string;
 export type BoardId = string;
 export type CommentId = string;
+export type LabelId = string;
+export type SavedViewId = string;
 
 // ── Enums ───────────────────────────────────────────────────────────────────
 
@@ -32,14 +35,21 @@ export type CommentId = string;
 export type WorkItemType = "epic" | "story" | "task" | "bug" | "sub-task";
 
 /**
- * The board/report bucket a workflow state rolls up to. A project may define
- * many named states, but each maps to exactly one category so boards and
- * velocity/flow reports have a stable three-lane model.
+ * The lifecycle group a workflow state rolls up to. A project may define many
+ * named states, but each maps to exactly one group so boards and velocity/flow
+ * reports have a stable model. `triage` is the intake lane; `cancelled` and
+ * `completed` are both terminal (and both close a linked GitHub issue).
  */
-export type StatusCategory = "todo" | "in-progress" | "done";
+export type StatusCategory =
+  | "backlog"
+  | "unstarted"
+  | "started"
+  | "completed"
+  | "cancelled"
+  | "triage";
 
-/** Five-level priority, ordered lowest → highest. */
-export type WorkItemPriority = "lowest" | "low" | "medium" | "high" | "highest";
+/** Priority, ordered urgent (highest) → none (lowest). Default is `none`. */
+export type WorkItemPriority = "urgent" | "high" | "medium" | "low" | "none";
 
 /** Sprint lifecycle. */
 export type SprintState = "future" | "active" | "completed";
@@ -53,14 +63,49 @@ export type WorkItemLinkType =
   | "blocked-by"
   | "relates-to"
   | "duplicates"
-  | "duplicated-by";
+  | "duplicated-by"
+  | "start-before"
+  | "start-after"
+  | "finish-before"
+  | "finish-after"
+  | "implements"
+  | "implemented-by";
 
 /** Kind of code artifact a work item is linked to. */
 export type CodeLinkKind = "branch" | "commit" | "pull-request" | "file";
 
 const WORK_ITEM_TYPES: readonly WorkItemType[] = ["epic", "story", "task", "bug", "sub-task"];
-const STATUS_CATEGORIES: readonly StatusCategory[] = ["todo", "in-progress", "done"];
-const WORK_ITEM_PRIORITIES: readonly WorkItemPriority[] = ["lowest", "low", "medium", "high", "highest"];
+const STATUS_CATEGORIES: readonly StatusCategory[] = ["backlog", "unstarted", "started", "completed", "cancelled", "triage"];
+const WORK_ITEM_PRIORITIES: readonly WorkItemPriority[] = ["urgent", "high", "medium", "low", "none"];
+
+/**
+ * Priority rank for ordering and `priority >`/`<` queries — higher is more
+ * urgent. Shared by the store, the query language, and the desktop sort so the
+ * ordering never drifts between layers.
+ */
+export const PRIORITY_RANK: Record<WorkItemPriority, number> = {
+  urgent: 4,
+  high: 3,
+  medium: 2,
+  low: 1,
+  none: 0,
+};
+
+/**
+ * Terminal lifecycle groups — an item in one of these is "closed" (and a linked
+ * GitHub issue is closed to match). Used by reports and the GitHub state mapping.
+ */
+export const TERMINAL_STATUS_CATEGORIES: readonly StatusCategory[] = ["completed", "cancelled"];
+
+/** Closed/terminal (completed or cancelled) — maps to a closed GitHub issue. */
+export function isTerminalCategory(c: StatusCategory): boolean {
+  return c === "completed" || c === "cancelled";
+}
+
+/** Work has not begun yet (backlog or unstarted) — eligible for "work started" auto-advance. */
+export function isUnstartedCategory(c: StatusCategory): boolean {
+  return c === "backlog" || c === "unstarted";
+}
 const SPRINT_STATES: readonly SprintState[] = ["future", "active", "completed"];
 const BOARD_TYPES: readonly BoardType[] = ["kanban", "scrum"];
 const WORK_ITEM_LINK_TYPES: readonly WorkItemLinkType[] = [
@@ -69,6 +114,12 @@ const WORK_ITEM_LINK_TYPES: readonly WorkItemLinkType[] = [
   "relates-to",
   "duplicates",
   "duplicated-by",
+  "start-before",
+  "start-after",
+  "finish-before",
+  "finish-after",
+  "implements",
+  "implemented-by",
 ];
 const CODE_LINK_KINDS: readonly CodeLinkKind[] = ["branch", "commit", "pull-request", "file"];
 
@@ -102,8 +153,12 @@ export interface WorkflowState {
   id: string;
   /** Human label (e.g. "In Review"). */
   name: string;
-  /** Board/report bucket this state rolls up to. */
+  /** Lifecycle group this state rolls up to. */
   category: StatusCategory;
+  /** Hex swatch shown on boards and status pills. */
+  color: string;
+  /** When true, new items land in this state by default (one per project). */
+  default?: boolean;
 }
 
 /** One configurable issue type for a project. */
@@ -113,6 +168,36 @@ export interface IssueTypeConfig {
   name?: string;
   /** True for `sub-task` and any type that must have a parent. */
   subtask?: boolean;
+}
+
+/**
+ * A first-class label in a project's registry. Work items reference labels by
+ * `name` (in {@link WorkItem.labels}); this registry adds the color (and an
+ * optional description) so chips render consistently and round-trip to GitHub.
+ */
+export interface TrackLabel {
+  id: LabelId;
+  /** Unique, case-insensitive within the project. */
+  name: string;
+  /** Hex swatch. */
+  color: string;
+  description?: string;
+  /** External-system provenance (e.g. a GitHub label), when synced. */
+  externalSource?: string;
+  externalId?: string;
+}
+
+/** A palette new auto-registered labels cycle through (stable by name hash). */
+export const LABEL_PALETTE: readonly string[] = [
+  "#ef4444", "#f59e0b", "#eab308", "#22c55e", "#14b8a6",
+  "#3b82f6", "#6366f1", "#a855f7", "#ec4899", "#64748b",
+];
+
+/** Deterministically pick a palette color for a label name (stable across runs). */
+export function colorForLabelName(name: string): string {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return LABEL_PALETTE[h % LABEL_PALETTE.length];
 }
 
 /**
@@ -136,6 +221,8 @@ export interface TrackProject {
   issueTypes: IssueTypeConfig[];
   /** Component / area labels for grouping work. */
   components: string[];
+  /** Label registry — name → color/description. Auto-grows as items add labels. */
+  labels: TrackLabel[];
   /** Project members + their roles (see {@link ProjectMember}). Seeded with one owner. */
   members: ProjectMember[];
   createdAt: string;
@@ -167,6 +254,10 @@ export interface WorkItemComment {
   body: string;
   createdAt: string;
   updatedAt?: string;
+  /** Origin system when synced (e.g. "github"); absent for locally-authored comments. */
+  externalSource?: string;
+  /** The external system's id for this comment — the round-trip key that prevents dupes. */
+  externalId?: string;
 }
 
 /** One append-only entry in a work item's activity log. */
@@ -200,23 +291,35 @@ export interface WorkItem {
   /** Bucket of `status`, denormalised for boards + reports. */
   statusCategory: StatusCategory;
   priority: WorkItemPriority;
+  /** All assignees (the source of truth). `assignee` mirrors the first of these. */
+  assignees: string[];
+  /** Primary assignee — derived as `assignees[0]`. Kept for back-compat readers. */
   assignee?: string;
   reporter?: string;
   watchers: string[];
+  /** Label names applied to this item; colors live in the project's label registry. */
   labels: string[];
   components: string[];
   /** Story-point estimate (scrum). */
   storyPoints?: number;
   /** Time estimate in seconds (kanban/time-tracking). */
   estimateSeconds?: number;
-  /** ISO-8601 due date. */
-  dueDate?: string;
+  /** ISO-8601 planned start date. */
+  startDate?: string;
+  /** ISO-8601 target/due date. */
+  targetDate?: string;
+  /** ISO-8601 timestamp set automatically when the item enters a `completed` state. */
+  completedAt?: string;
+  /** ISO-8601 timestamp set when the item is archived (hidden from default lists/boards). */
+  archivedAt?: string;
   /** Parent work item, for a `sub-task`. */
   parentId?: WorkItemId;
   /** The epic this item belongs to. */
   epicId?: WorkItemId;
   /** The sprint this item is committed to. */
   sprintId?: SprintId;
+  /** The module (feature grouping) this item belongs to. */
+  moduleId?: ModuleId;
   /** Fractional rank string for stable board/backlog ordering. */
   rank?: string;
   /** Dependencies / relationships to other items. */
@@ -250,7 +353,7 @@ export interface WorkItem {
   updatedAt: string;
 }
 
-// ── Sprints + boards ──────────────────────────────────────────────────────────
+// ── Sprints + modules + boards ─────────────────────────────────────────────────
 
 export interface Sprint {
   id: SprintId;
@@ -267,6 +370,53 @@ export interface Sprint {
   velocity?: number;
   createdAt: string;
   updatedAt: string;
+}
+
+/** A module's delivery state (independent of the work-item lifecycle). */
+export type ModuleStatus = "backlog" | "planned" | "in-progress" | "paused" | "completed" | "cancelled";
+
+const MODULE_STATUSES: readonly ModuleStatus[] = ["backlog", "planned", "in-progress", "paused", "completed", "cancelled"];
+
+export function isModuleStatus(x: unknown): x is ModuleStatus {
+  return typeof x === "string" && (MODULE_STATUSES as readonly string[]).includes(x);
+}
+
+/**
+ * A Module — a feature-sized grouping of work items (a cross-cutting deliverable),
+ * complementary to the time-boxed {@link Sprint}. Items reference it via
+ * {@link WorkItem.moduleId}.
+ */
+export interface Module {
+  id: ModuleId;
+  workspaceRoot: string;
+  name: string;
+  description?: string;
+  status: ModuleStatus;
+  /** Module lead (a username/handle). */
+  lead?: string;
+  /** Contributors (handles). */
+  members: string[];
+  startDate?: string;
+  targetDate?: string;
+  /** Set when archived (hidden from default module lists). */
+  archivedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Structural guard for a {@link Module}. */
+export function isModule(x: unknown): x is Module {
+  if (!x || typeof x !== "object") return false;
+  const m = x as Record<string, unknown>;
+  return (
+    typeof m.id === "string" &&
+    typeof m.workspaceRoot === "string" &&
+    typeof m.name === "string" &&
+    isModuleStatus(m.status) &&
+    Array.isArray(m.members) &&
+    typeof m.createdAt === "string" &&
+    typeof m.updatedAt === "string"
+  );
 }
 
 /** One column on a board, mapping to one or more workflow states. */
@@ -290,6 +440,48 @@ export interface Board {
   filter?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+// ── Saved views ─────────────────────────────────────────────────────────────────
+
+/** The layout a saved view opens in (the Track surface's tabs). */
+export type TrackLayout =
+  | "board" | "list" | "spreadsheet" | "calendar" | "gantt"
+  | "backlog" | "sprint" | "modules" | "roadmap" | "reports";
+
+const TRACK_LAYOUTS: readonly TrackLayout[] = ["board", "list", "spreadsheet", "calendar", "gantt", "backlog", "sprint", "modules", "roadmap", "reports"];
+
+export function isTrackLayout(x: unknown): x is TrackLayout {
+  return typeof x === "string" && (TRACK_LAYOUTS as readonly string[]).includes(x);
+}
+
+/**
+ * A saved filter + layout preset — the user's named lens on the board (Plane
+ * "Views"). Applying one restores the layout, the JQL query, and the facet
+ * filters that were captured when it was saved.
+ */
+export interface SavedView {
+  id: SavedViewId;
+  workspaceRoot: string;
+  name: string;
+  /** The layout tab this view opens in. */
+  layout: TrackLayout;
+  /** JQL-style query string (see the track query language), if any. */
+  query?: string;
+  /** Facet filters captured with the view (e.g. `{ type, status, priority, assignee }`). */
+  filters?: Record<string, string>;
+  /** Optional group-by / order-by field hints. */
+  groupBy?: string;
+  orderBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Structural guard for a {@link SavedView}. */
+export function isSavedView(x: unknown): x is SavedView {
+  if (!x || typeof x !== "object") return false;
+  const v = x as Record<string, unknown>;
+  return typeof v.id === "string" && typeof v.workspaceRoot === "string" && typeof v.name === "string" && isTrackLayout(v.layout) && typeof v.createdAt === "string" && typeof v.updatedAt === "string";
 }
 
 // ── Automation rules ──────────────────────────────────────────────────────────
@@ -430,6 +622,7 @@ export function isWorkItem(x: unknown): x is WorkItem {
     typeof w.status === "string" &&
     isStatusCategory(w.statusCategory) &&
     isWorkItemPriority(w.priority) &&
+    isStringArray(w.assignees) &&
     isStringArray(w.watchers) &&
     isStringArray(w.labels) &&
     isStringArray(w.components) &&
@@ -482,13 +675,28 @@ export function isBoard(x: unknown): x is Board {
 
 // ── Defaults ──────────────────────────────────────────────────────────────────
 
-/** The default workflow a new project starts with (To Do → In Progress → In Review → Done). */
+/**
+ * The default workflow a new project starts with: Backlog → Todo → In Progress
+ * → Done, plus a terminal Cancelled lane. New items default into Backlog.
+ */
 export const DEFAULT_WORKFLOW_STATES: readonly WorkflowState[] = [
-  { id: "todo", name: "To Do", category: "todo" },
-  { id: "in-progress", name: "In Progress", category: "in-progress" },
-  { id: "in-review", name: "In Review", category: "in-progress" },
-  { id: "done", name: "Done", category: "done" },
+  { id: "backlog", name: "Backlog", category: "backlog", color: "#94a3b8", default: true },
+  { id: "todo", name: "Todo", category: "unstarted", color: "#64748b" },
+  { id: "in-progress", name: "In Progress", category: "started", color: "#f59e0b" },
+  { id: "in-review", name: "In Review", category: "started", color: "#6366f1" },
+  { id: "done", name: "Done", category: "completed", color: "#22c55e" },
+  { id: "cancelled", name: "Cancelled", category: "cancelled", color: "#9ca3af" },
 ];
+
+/** Default hex swatch for a lifecycle group (migration backfill + new custom states). */
+export const STATUS_CATEGORY_COLORS: Record<StatusCategory, string> = {
+  backlog: "#94a3b8",
+  unstarted: "#64748b",
+  started: "#f59e0b",
+  completed: "#22c55e",
+  cancelled: "#9ca3af",
+  triage: "#a855f7",
+};
 
 /** The default issue types a new project enables. */
 export const DEFAULT_ISSUE_TYPES: readonly IssueTypeConfig[] = [

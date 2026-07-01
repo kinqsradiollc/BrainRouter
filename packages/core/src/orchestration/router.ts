@@ -52,6 +52,21 @@ interface RouteTaskOptions {
   sessionKey?: string;
   /** When true, skip the memory_recall hop entirely (mostly for tests). */
   skipMemory?: boolean;
+  /** HONK-L6 — bias the tier toward bounded single tasks for local/weak models. */
+  localModel?: boolean;
+}
+
+/**
+ * HONK-L6 — steer local/weak models toward bounded single tasks. A detached
+ * `spawn-worker` (outlives the turn, manages its own lifecycle) is exactly what
+ * weak models botch; unless the long-running cue was STRONG (high confidence),
+ * demote it to a bounded `spawn-inline` task they can actually finish. All other
+ * tiers (answer-direct, direct-tool, spawn-inline) are already bounded — pass
+ * through. Pure + exported for tests.
+ */
+export function biasTierForLocalModel(tier: RouteTier, confidence: number): RouteTier {
+  if (tier === 'spawn-worker' && confidence < 0.8) return 'spawn-inline';
+  return tier;
 }
 
 export async function routeTask(options: RouteTaskOptions): Promise<RouteTaskResult> {
@@ -61,6 +76,12 @@ export async function routeTask(options: RouteTaskOptions): Promise<RouteTaskRes
   }
 
   const baseline = baselineRoute(task);
+  // HONK-L6 — apply the local-model tier bias once; a demotion also drops the
+  // worker-specific recommended tool and annotates the reason.
+  const biasedTier = options.localModel ? biasTierForLocalModel(baseline.tier, baseline.confidence) : baseline.tier;
+  const demoted = biasedTier !== baseline.tier;
+  const recommendedTool = demoted ? null : baseline.recommendedTool;
+  const localNote = demoted ? ' (local-model: bounded inline task instead of a detached worker)' : '';
   const mcpOnline = Boolean(
     options.mcpClient && options.mcpToolNames && hasMcpTool(options.mcpToolNames, 'memory_recall'),
   );
@@ -69,9 +90,9 @@ export async function routeTask(options: RouteTaskOptions): Promise<RouteTaskRes
   if (!mcpOnline || options.skipMemory) {
     return {
       task: clipTask(task),
-      tier: baseline.tier,
-      reason: mcpOnline ? baseline.reason : `${baseline.reason} (no memory hop)`,
-      recommendedTool: baseline.recommendedTool,
+      tier: biasedTier,
+      reason: (mcpOnline ? baseline.reason : `${baseline.reason} (no memory hop)`) + localNote,
+      recommendedTool,
       agentId: baseline.agentId,
       confidence: Math.min(baseline.confidence, OFFLINE_CONFIDENCE_CAP),
       memoryEvidence: [],
@@ -86,9 +107,9 @@ export async function routeTask(options: RouteTaskOptions): Promise<RouteTaskRes
     // memory hop fired but produced nothing actionable.
     return {
       task: clipTask(task),
-      tier: baseline.tier,
-      reason: baseline.reason,
-      recommendedTool: baseline.recommendedTool,
+      tier: biasedTier,
+      reason: baseline.reason + localNote,
+      recommendedTool,
       agentId: baseline.agentId,
       confidence: baseline.confidence,
       memoryEvidence: [],
@@ -97,9 +118,9 @@ export async function routeTask(options: RouteTaskOptions): Promise<RouteTaskRes
 
   return {
     task: clipTask(task),
-    tier: baseline.tier,
-    reason: `${baseline.reason} (memory: ${evidence.length} prior route(s) reinforce this choice)`,
-    recommendedTool: baseline.recommendedTool,
+    tier: biasedTier,
+    reason: `${baseline.reason} (memory: ${evidence.length} prior route(s) reinforce this choice)` + localNote,
+    recommendedTool,
     agentId: baseline.agentId,
     confidence: clamp01(baseline.confidence + MEMORY_BOOST),
     memoryEvidence: evidence,

@@ -9,7 +9,7 @@
 import React, { useState } from 'react';
 import { Icon } from '../icons.js';
 
-export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'dashboard' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'review' | 'requirements' | 'annotations' | 'artifacts' | 'ci';
+export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'dashboard' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'review' | 'requirements' | 'annotations' | 'artifacts' | 'ci' | 'atlas' | 'workflows' | 'memory' | 'prototype';
 
 export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'context', title: 'Context', icon: 'layout-right' },
@@ -29,7 +29,11 @@ export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'requirements', title: 'Requirements', icon: 'tasks' },
   { id: 'annotations', title: 'Annotations', icon: 'review' },
   { id: 'artifacts', title: 'Artifacts', icon: 'file' },
-  { id: 'ci', title: 'CI / Checks', icon: 'check-circle' },
+  { id: 'ci', title: 'PR / Checks', icon: 'check-circle' },
+  { id: 'atlas', title: 'Atlas', icon: 'atlas' },
+  { id: 'workflows', title: 'Workflows', icon: 'bolt' },
+  { id: 'memory', title: 'Memory', icon: 'pin' },
+  { id: 'prototype', title: 'Prototype', icon: 'bolt' },
 ];
 
 const HIDDEN_MANUAL_PANEL_IDS = new Set<PanelId>([

@@ -12,7 +12,7 @@ import {
   detectProviderFromEnv,
   validateApiKey,
   maskApiKey,
-} from '@kinqs/brainrouter-core/dist/provider/catalog.js';
+} from '@kinqs/brainrouter-core/provider';
 import {
   initWizardState,
   reduceWizard,
@@ -22,7 +22,7 @@ import {
   type WizardState,
 } from '../wizard/types.js';
 import { fetchOpenAiCompatibleModels } from '../wizard/modelsApi.js';
-import { McpClientWrapper } from '@kinqs/brainrouter-core/dist/mcp/mcpClient.js';
+import { McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
 import type { ThemeMode } from '../theme.js';
 
 /**

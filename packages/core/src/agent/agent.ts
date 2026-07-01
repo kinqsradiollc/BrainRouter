@@ -12,6 +12,7 @@ import type { McpClientPool as McpClientWrapper } from '../mcp/mcpPool.js';
 import { NoTTYError, HEADLESS_PROMPTER, type InteractivePrompter } from './prompter.js';
 import type { LLMConfig } from '../config/config.js';
 import { getCliKnobs } from '../config/config.js';
+import type { ComputerUsePort } from '@kinqs/brainrouter-agent-protocol';
 import { appendTranscriptEntry, isInternalSessionKey, redactText, readTranscriptEntries } from '../session/sessionStore.js';
 import { recordFileMutation } from '../storage/fileSnapshotStore.js';
 import { isConnectivityError, isRetryableServerError } from '../storage/checkpointStore.js';
@@ -19,7 +20,12 @@ import { reconnectBackoffMs, probeConnectivity, parseRetryAfterMs } from '../mcp
 import { unsynthesizedChildIds, mergePendingChildIds, buildPendingChildStatusHint } from '../util/childResume.js';
 import { isChildSynthesisTool, resultHasChildOutput, looksLikeChildSynthesisPunt } from '../util/synthesisGuard.js';
 import { sanitizeModelArtifacts } from '../util/outputSanitize.js';
-import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
+import { buildPromptLayers, buildSystemPrompt, loadWorkspaceInstructionSummary, type PromptLayers } from '../prompt/systemPrompt.js';
+import {
+  buildAnthropicMessagesPayload, normalizeAnthropicOutput, ANTHROPIC_DEFAULT_MAX_TOKENS,
+  buildGeminiGeneratePayload, normalizeGeminiOutput, nativeRequestSpec,
+  type NativeBuildInput, type NativeOutput, type NativeRequestFormat,
+} from './nativeProviders.js';
 import { formatPlan, readPlan, updatePlan, type PlanState } from '../task/taskStore.js';
 import { createRequirement, getRequirement, linkRequirement, listRequirements, updateRequirement } from '../requirement/requirementStore.js';
 import { detectRequirementShapedPrompt } from '../requirement/requirementDetector.js';
@@ -44,7 +50,7 @@ import {
 } from '../track/trackStore.js';
 import { parseTrackQuery } from '../track/query.js';
 import { createArtifact, updateArtifact, getArtifact, linkArtifact } from '../artifact/artifactStore.js';
-import { isArtifactKind, isArtifactFormat, isCodeLinkKind, isWorkItemType, isWorkItemPriority, type ArtifactKind, type ArtifactFormat, type ArtifactRecord } from '@kinqs/brainrouter-types';
+import { isArtifactKind, isArtifactFormat, isCodeLinkKind, isWorkItemType, isWorkItemPriority, isTerminalCategory, isUnstartedCategory, type ArtifactKind, type ArtifactFormat, type ArtifactRecord } from '@kinqs/brainrouter-types';
 // Auto mode (fast + proceed) has no approval prompt, so the plan history would
 // otherwise never record that a plan was acted on. When the agent establishes a
 // new plan version under auto mode we record an `actor: 'auto'` approval so the
@@ -71,12 +77,16 @@ export { applyPatchEnvelope } from './applyPatch.js';
 // REFAC-TOOLS-MODULE (0.4.6) — tool specs + name normalization live in agent/tools/.
 import { LOCAL_TOOLS } from '../tool/specs.js';
 import { normalizeToolName } from '../tool/names.js';
-import { registryAllowedTools, hideWorkerToolsFor, WORKER_THREAD_TOOLS } from '../tool/registry.js';
+import { registryAllowedTools, hideWorkerToolsFor, WORKER_THREAD_TOOLS, MCP_DISCOVERY_TOOLS } from '../tool/registry.js';
+import { searchMcpCatalog } from '../mcp/discovery.js';
+import { appendEvidence, setQuestion, readLedger } from '../research/researchStore.js';
+import { summarizeLedger, formatBrief } from '../research/evidenceLedger.js';
 import { localToolExecutor, localToolSpecsFromExecutors } from '../tool/executors.js';
 import { assessMcpToolApproval } from './mcpApproval.js';
 export { LOCAL_TOOLS } from '../tool/specs.js';
 export { normalizeToolName } from '../tool/names.js';
 import { applyToolScope, rankAndCapTools } from '../tool/toolBudget.js';
+import { resolveToolVisible } from '../tool/toolPolicy.js';
 import { buildDefaultSourcePlan, buildMemoryBriefing, describeSourcePlan, selectCitedRecordIds, type RecalledRecord } from '../memory/briefing.js';
 import { assessCapturePayload } from '../memory/memoryPolicy.js';
 import {
@@ -97,7 +107,7 @@ import { evaluateDestructiveCommand } from '../exec/destructiveCommandGuard.js';
 import { gitHeadSha } from '../git/workspaceGit.js';
 import { recordDailyUsage } from '../usage/usageHistoryStore.js';
 import { isTelemetryEnabled } from '../telemetry/telemetry.js';
-import { readPreferences, resolveEffort, type EffortLevel } from '../session/preferencesStore.js';
+import { readPreferences, resolveEffort, effortToWireLevel, type EffortLevel } from '../session/preferencesStore.js';
 import { resolveActiveMode } from '../session/sessionModeStore.js';
 import { resolveEffortForTurn } from './effortRouting.js';
 // 0.3.9 — Anthropic native adapter removed (the /v1/messages path landed in
@@ -109,6 +119,7 @@ import { startSpan, traceEvent } from '../telemetry/tracing.js';
 // fingerprint the cache-stable slice of every outbound chat request
 // without rewriting the legacy runTurn message plumbing.
 import { computePrefixFingerprint, computePrefixComponents, accumulatePrefixStability, newPrefixStabilityTally, prefixStabilityRatio, type PrefixComponents, type PrefixStabilityTally } from '../context/contextRegions.js';
+import { contextWindowForBudget } from '../context/contextWindow.js';
 import { decideExecutionPolicy, resolveToolPolicy, externalDirectoryDecision, egressDecision, type ActionKind, type PolicyDecision } from '../exec/execPolicy.js';
 import { isPathWithinRoots } from '../exec/pathPolicy.js';
 import { runPostEditCheck } from '../util/postEditCheck.js';
@@ -135,11 +146,13 @@ import { advanceRunStep, summarizeRun } from '../workflow/workflowRun.js';
 import { spawnWorkerThread, waitWorker } from '../orchestration/workerTools.js';
 // PARITY-E3: runtime model fallback on model-not-found.
 import { isModelNotFoundError, shouldFallbackModel } from '../provider/modelFallback.js';
+import { resolveLocalModelProfile, localModelProfileActive, isLocalModelCoreTool } from '../provider/modelFamily.js';
 // 0.3.9 item 10 — provider-normalised cache-hit accounting.
 import { extractCacheStats } from '../util/cacheStats.js';
 // 0.3.9 item 11 — tool-call repair pipeline (flatten / scavenge /
 // truncation / storm).
 import { ToolCallRepair, type RepairReport } from './repair/index.js';
+import { analyzeSchema, flattenSchema, nestArguments, type JSONSchema } from './repair/flatten.js';
 // 0.3.9 token-tally rework: content-aware estimator. The compaction
 // threshold itself stays a single `BRAINROUTER_AUTO_COMPACT_TOKENS`
 // absolute knob — the model's max context window isn't a good driver
@@ -153,7 +166,7 @@ import {
 import { shrinkOversizedToolResults } from './turnEndShrink.js';
 // 0.3.9 item 13 — model-tier self-escalation.
 import { currentTier, detectNeedsHigh, nextTier, resolveTierLadder, stripNeedsHigh } from '../provider/tierLadder.js';
-import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PLACEHOLDER_KEY } from '../provider/providers/index.js';
+import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PLACEHOLDER_KEY, normalizeProviderEndpoint, withApiVersion } from '../provider/providers/index.js';
 import { DEFAULT_EFFORT_VALUE_MAP } from '../provider/providers/definition.js';
 import type { ProviderDefinition } from '../provider/providers/definition.js';
 import { normalizeModelName, isReasoningModel, isNonReasoningChatModel, isAlwaysOnReasoner, modelSupportsXhighEffort, isBinaryReasoningModel } from '../provider/models/reasoning.js';
@@ -182,9 +195,13 @@ import {
   looksLikeDeferredToolPromise,
   mentionsImminentToolWork,
 } from './toolCallRecovery.js';
+import { fetchAndExtract } from '../websearch/crawler.js';
+import { buildSearchProvider } from '../websearch/factory.js';
+import { evaluateDestructiveAction, isComputerActionMutating, validateComputerAction } from './computerUse.js';
 
 const execPromise = promisify(exec);
 const DEFAULT_CHILD_DRAIN_TIMEOUT_MS = 30_000;
+const MAX_COMPUTER_ACTIONS_PER_TURN = 20;
 
 function parseJsonObject(text: string): any | undefined {
   try {
@@ -462,7 +479,7 @@ export interface ChatCompletionPayload {
       parameters: Record<string, any>;
     };
   }>;
-  tool_choice?: 'auto';
+  tool_choice?: 'auto' | { type: 'function'; function: { name: string } };
   /**
    * OpenAI Chat Completions reasoning slot — accepted by gpt-5 / o-series.
    * Only set when the user has chosen a non-default `/effort` AND the
@@ -479,6 +496,33 @@ export interface ChatCompletionPayload {
   reasoning?: { effort: string };
 }
 
+export interface ResponsesPayload {
+  model: string;
+  instructions?: string;
+  input: any[];
+  tools?: Array<{
+    type: 'function';
+    name: string;
+    description: string;
+    parameters: Record<string, any>;
+    strict: boolean;
+  }>;
+  tool_choice?: 'auto' | { type: 'function'; name: string };
+  reasoning?: { effort: string };
+  max_output_tokens?: number;
+  store: false;
+  include: string[];
+  parallel_tool_calls?: boolean;
+  prompt_cache_key?: string;
+  client_metadata?: Record<string, string>;
+}
+
+interface PromptLayeredMessage {
+  role: 'system';
+  content: string;
+  promptLayers?: PromptLayers;
+}
+
 export interface AgentOptions {
   workspaceRoot: string;
   launchCwd: string;
@@ -486,6 +530,11 @@ export interface AgentOptions {
   roleOverlay?: string;
   accessMode?: AccessMode;
   silent?: boolean;
+  /**
+   * HONK-H0 — fleet/background executor: force the sandbox + network-deny +
+   * secret-env scrubbing on, un-opt-out-able by `cli.sandboxEnforceWhenSilent`.
+   */
+  forceFleetSandbox?: boolean;
   systemPromptOverride?: string;
   /** When true (default for silent children: false), pre-turn memory recall runs even in silent mode. */
   enableRecall?: boolean;
@@ -536,6 +585,8 @@ export interface AgentOptions {
     confirm(req: { title: string; detail?: string; dangerous?: boolean; tool?: string }): Promise<boolean>;
     choice(req: { question: string; header: string; options: Array<{ label: string; description: string }>; multiSelect?: boolean }): Promise<string[] | null>;
   };
+  /** Desktop-only native computer control capability. Omitted in CLI/headless runtimes. */
+  computerUsePort?: ComputerUsePort;
   /**
    * §ADR-003 — the interactive prompt surface (TTY yes/no + choice picker).
    * The CLI injects its readline/ink-backed prompter; headless hosts (Desktop,
@@ -761,6 +812,7 @@ export class Agent {
   // opaque file-writing shell command (path unknown → can't be ruled docs-only).
   private filesWrittenThisTurn: string[] = [];
   private shellWroteThisTurn = false;
+  private computerActionsThisTurn = 0;
   // DESK-2 / CC-P1.5 — cooperative turn interrupt. Set by requestInterrupt()
   // (desktop Stop button / TUI Esc); checked at every LLM-call and tool
   // boundary so a long multi-tool turn stops at the next seam instead of
@@ -798,6 +850,7 @@ export class Agent {
    * resets, which matters for the concurrent shared-process test runner).
    */
   private readonly sandboxEnforceWhenSilent: boolean;
+  private readonly forceFleetSandbox: boolean;
   private enableRecall: boolean;
   private systemPromptOverride?: string;
   /**
@@ -833,12 +886,16 @@ export class Agent {
   /** MAS-P4-T1 per-agent tool scope (from the agent def); undefined = no filter. */
   private toolScope?: { local: string[]; mcp: string[] };
   private disallowedTools: string[];
+  /** HONK-L3 — built-in tools whose schema was flattened for a local model THIS
+   *  turn; their args are re-nested at dispatch via `nestArguments`. */
+  private flattenedToolNames = new Set<string>();
   /** MAS-P4-T1 — MCP tools trimmed by the budget this turn (model-facing names). */
   private lastBudgetHiddenTools = new Set<string>();
   /** 0.4.x-5 — per-child reasoning-effort override; falls back to session /effort. */
   private effortOverride?: EffortLevel;
   private confirmToolApproval?: AgentOptions['confirmToolApproval'];
   private interactionPort?: AgentOptions['interactionPort'];
+  private computerUsePort?: ComputerUsePort;
   // §ADR-003 — injected interactive prompter (default = headless/no-TTY stub).
   private prompter: InteractivePrompter;
   // DESK-5n — parent's review stance, for the silent-child Auto-mode bypass.
@@ -863,6 +920,7 @@ export class Agent {
     this.accessMode = options.accessMode ?? 'shell';
     this.silent = options.silent ?? false;
     this.sandboxEnforceWhenSilent = getCliKnobs().sandboxEnforceWhenSilent;
+    this.forceFleetSandbox = options.forceFleetSandbox ?? false;
     // Children default to no recall (their seed context already covers the parent's recall).
     // Parents (non-silent) always recall.
     this.enableRecall = options.enableRecall ?? !this.silent;
@@ -877,6 +935,7 @@ export class Agent {
     this.agentDepth = options.agentDepth ?? 0;
     this.confirmToolApproval = options.confirmToolApproval;
     this.interactionPort = options.interactionPort;
+    this.computerUsePort = options.computerUsePort;
     this.prompter = options.prompter ?? HEADLESS_PROMPTER;
     this.parentReviewPolicy = options.parentReviewPolicy;
     this.parentExecutionMode = options.parentExecutionMode;
@@ -1034,6 +1093,76 @@ export class Agent {
   }
 
   /**
+   * §5.4 — the MCP tool-call approval gate, shared by the main MCP dispatch path
+   * and the `mcp_call` discovery tool so neither can bypass it. Throws if the
+   * call requires approval and it is rejected (or a silent session has no parent
+   * approver). `args` is shown to a parent approver in silent sessions.
+   */
+  private async approveMcpToolCall(
+    name: string,
+    descriptor: any,
+    args: Record<string, any>,
+  ): Promise<void> {
+    const mcpApproval = assessMcpToolApproval(name, descriptor);
+    if (!mcpApproval.requiresApproval) return;
+    if (this.silent) {
+      if (!this.confirmToolApproval) {
+        throw new Error(`MCP tool "${name}" requires approval but this silent session has no parent approver: ${mcpApproval.reason}.`);
+      }
+      const approved = await this.confirmToolApproval({
+        tool: name,
+        arguments: args,
+        reason: mcpApproval.reason,
+        dangerous: mcpApproval.dangerous,
+      });
+      if (!approved) {
+        throw new Error(`MCP tool "${name}" rejected by parent approval.`);
+      }
+    } else if (this.interactionPort) {
+      const uiApproved = await this.interactionPort.confirm({
+        title: 'MCP tool approval',
+        detail: `${name} — ${mcpApproval.reason}`,
+        dangerous: mcpApproval.dangerous,
+        tool: name,
+      });
+      if (!uiApproved) {
+        throw new Error(`MCP tool "${name}" rejected by user.`);
+      }
+    } else {
+      const approved = await this.prompter.askYesNo(
+        `${chalk.yellow('⚠️  MCP tool approval request:')} ${chalk.cyan(name)}${mcpApproval.dangerous ? chalk.red(' (potentially destructive)') : ''}\nReason: ${mcpApproval.reason}\nAllow MCP tool call? (y/N) `,
+        false,
+      );
+      if (!approved) {
+        throw new Error(`MCP tool "${name}" rejected by user.`);
+      }
+    }
+  }
+
+  /**
+   * §5.4 — the live, model-visible MCP catalog (listTools + the same visibility
+   * filter the per-turn assembly uses), for the discovery tools. Empty on error.
+   */
+  private async visibleMcpToolList(): Promise<any[]> {
+    try {
+      const res = await this.mcpClient.listTools();
+      return (res.tools || []).filter((t: any) => this.isModelVisibleMcpTool(t));
+    } catch {
+      return [];
+    }
+  }
+
+  /** §5.4 — resolve a visible MCP tool by its exact namespaced name or bare name. */
+  private async findVisibleMcpTool(target: string): Promise<any | undefined> {
+    const want = target.trim();
+    if (!want) return undefined;
+    const tools = await this.visibleMcpToolList();
+    return tools.find((t: any) =>
+      String(t?.name ?? '') === want ||
+      String(t?.__rawName ?? this.rawMcpToolName(String(t?.name ?? ''))) === want);
+  }
+
+  /**
    * MAS-P4-T1 — the most recent user message text, used to rank MCP tools by
    * relevance when the catalog exceeds the budget. Empty string when there's
    * no user turn yet (the cap then keeps the first N in stable order).
@@ -1057,7 +1186,7 @@ export class Agent {
     return registryAllowedTools(this.accessMode);
   }
 
-  async runTurn(prompt: string, callbacks: RunTurnCallbacks, opts?: { hiddenPrompt?: boolean }): Promise<string> {
+  async runTurn(prompt: string, callbacks: RunTurnCallbacks, opts?: { hiddenPrompt?: boolean; images?: Array<{ mediaType: string; dataBase64: string }> }): Promise<string> {
     if (!this.initialized) {
       await this.bootstrapSession(callbacks);
     }
@@ -1068,6 +1197,7 @@ export class Agent {
     this.verifiedThisTurn = false;
     this.filesWrittenThisTurn = [];
     this.shellWroteThisTurn = false;
+    this.computerActionsThisTurn = 0;
     this.interruptRequested = false;
     // DESK-6 — fresh abort controller per turn (AFTER the reset), so a stale
     // pre-turn abort can never poison this turn's first LLM call.
@@ -1144,12 +1274,54 @@ export class Agent {
     // depth-0, non-worker orchestrator should SEE them (workers can't spawn
     // workers; a child owns none) — hide the surface from everyone else.
     const hideWorkerTools = hideWorkerToolsFor(this.agentDepth, this.tier);
-    const filteredLocalTools = localToolSpecsFromExecutors().filter(
-      (t) =>
+    const cliKnobs = getCliKnobs();
+    const hideComputerUse =
+      !cliKnobs.computerUse.enabled ||
+      !this.computerUsePort ||
+      this.silent ||
+      !!cliKnobs.brainUrl;
+    // §5.4 — when progressive discovery is OFF (default) the discovery entry
+    // points stay hidden; when ON they're exposed and the full MCP catalog is
+    // collapsed below so the model searches for tools instead of carrying them all.
+    const mcpDiscoveryOn = cliKnobs.mcpProgressiveDiscovery;
+    // HONK-L2 — for local/weak models, pin the built-in surface to the core
+    // allowlist and hide the long tail (a small surface is what they handle
+    // reliably). Strong/unknown models are untouched. Orchestration tools are
+    // added separately, so delegation is unaffected.
+    const localToolScope = localModelProfileActive(this.llmConfig.model, cliKnobs.localModelProfile);
+    // Per-tool user overrides (cli.toolOverrides). Force-on re-enables a tool the
+    // L2 allowlist / budget hid; force-off hides a non-protected tool. Hard gates
+    // (access tier, capability) are NEVER bypassed by an override.
+    const toolOverrides = cliKnobs.toolOverrides;
+    const overrideForceOnNames = new Set(Object.keys(toolOverrides).filter((k) => toolOverrides[k] === true));
+    const overrideForceOffNames = Object.keys(toolOverrides).filter((k) => toolOverrides[k] === false);
+    let filteredLocalTools = localToolSpecsFromExecutors().filter((t) => {
+      // HARD gates first — a user override can never escalate past these.
+      const hardVisible =
         allowed.has(t.name) &&
         !MODEL_HIDDEN_TOOLS.has(t.name) &&
-        !(hideWorkerTools && WORKER_THREAD_TOOLS.has(t.name)),
-    );
+        !(hideWorkerTools && WORKER_THREAD_TOOLS.has(t.name)) &&
+        !(hideComputerUse && t.name === 'computer_use') &&
+        !(!mcpDiscoveryOn && MCP_DISCOVERY_TOOLS.has(t.name));
+      if (!hardVisible) return false;
+      // SOFT gate = the local-model L2 allowlist; the override flips it.
+      const softVisible = !(localToolScope && !isLocalModelCoreTool(t.name));
+      return resolveToolVisible(t.name, softVisible, toolOverrides);
+    });
+    // HONK-L3 — for local models, flatten deep/wide tool schemas (the dormant,
+    // tested repair pass) so they stop dropping nested args; `nestArguments` at
+    // dispatch (executeLocalTool) reverses it. Returns NEW spec objects so the
+    // shared registry schemas are never mutated. No-op for strong models, and
+    // for tools whose schema isn't deep/wide enough to benefit.
+    this.flattenedToolNames = new Set<string>();
+    if (localToolScope) {
+      filteredLocalTools = filteredLocalTools.map((t) => {
+        const schema = t.inputSchema as JSONSchema | undefined;
+        if (!analyzeSchema(schema).shouldFlatten || !schema) return t;
+        this.flattenedToolNames.add(t.name);
+        return { ...t, inputSchema: flattenSchema(schema) };
+      });
+    }
     // Multi-MCP parity: expose every connected third-party MCP tool and the
     // model-safe BrainRouter MCP tools in one turn, using the pool's
     // `mcp_<serverId>_<tool>` namespaces. BrainRouter's auto-pipeline/admin
@@ -1162,21 +1334,46 @@ export class Agent {
     // one returns a structured "hidden by budget" hint instead of a bare
     // unknown-tool error.
     this.lastBudgetHiddenTools = new Set();
-    if (this.toolScope || this.disallowedTools.length > 0) {
+    if (this.toolScope || this.disallowedTools.length > 0 || overrideForceOffNames.length > 0) {
       visibleMcpTools = applyToolScope(visibleMcpTools, {
         allow: this.toolScope?.mcp,
-        disallow: this.disallowedTools,
+        // cli.toolOverrides force-off applies to MCP tools by their namespaced name.
+        disallow: [...this.disallowedTools, ...overrideForceOffNames],
       });
     }
-    const toolBudget = getCliKnobs().agentMcpToolBudget;
-    if (toolBudget > 0 && visibleMcpTools.length > toolBudget) {
-      const taskText = this.latestUserText();
-      const { kept, hidden } = rankAndCapTools(visibleMcpTools, taskText, toolBudget);
-      for (const t of hidden) {
-        this.lastBudgetHiddenTools.add(String(t?.name ?? ''));
+    // Snapshot the user-force-on MCP tools so the discovery/budget step below can't
+    // hide them — captured AFTER scope filtering (force-on never overrides force-off
+    // or the agent-def allowlist).
+    const forceOnMcpTools = visibleMcpTools.filter((t: any) => overrideForceOnNames.has(String(t?.name ?? '')));
+    if (mcpDiscoveryOn && visibleMcpTools.length > 0) {
+      // Progressive discovery: hide the full catalog; the model reaches it via
+      // mcp_search / mcp_describe / mcp_call (which run the same approval gate).
+      const collapsed = visibleMcpTools.length;
+      visibleMcpTools = [];
+      callbacks.onStatusUpdate(`MCP progressive discovery: ${collapsed} catalog tools hidden — use mcp_search / mcp_call.`);
+    } else {
+      const toolBudget = cliKnobs.agentMcpToolBudget;
+      if (toolBudget > 0 && visibleMcpTools.length > toolBudget) {
+        const taskText = this.latestUserText();
+        const { kept, hidden } = rankAndCapTools(visibleMcpTools, taskText, toolBudget);
+        for (const t of hidden) {
+          this.lastBudgetHiddenTools.add(String(t?.name ?? ''));
+        }
+        visibleMcpTools = kept;
+        callbacks.onStatusUpdate(`Tool budget: showing ${kept.length}/${kept.length + hidden.length} MCP tools (most task-relevant).`);
       }
-      visibleMcpTools = kept;
-      callbacks.onStatusUpdate(`Tool budget: showing ${kept.length}/${kept.length + hidden.length} MCP tools (most task-relevant).`);
+    }
+    // cli.toolOverrides force-on: re-add any user-enabled MCP tool the
+    // progressive-discovery hide or the budget trim removed.
+    if (forceOnMcpTools.length > 0) {
+      const present = new Set(visibleMcpTools.map((t: any) => String(t?.name ?? '')));
+      for (const t of forceOnMcpTools) {
+        const n = String(t?.name ?? '');
+        if (!present.has(n)) {
+          visibleMcpTools.push(t);
+          this.lastBudgetHiddenTools.delete(n);
+        }
+      }
     }
     // MAS-P2-M1: synthesize one `delegate_<agentId>` tool per active
     // agent definition. Rebuilt every turn so a workspace agent JSON
@@ -1197,12 +1394,14 @@ export class Agent {
 
     // Auto-compact pre-turn check.
     //
-    // Threshold: `BRAINROUTER_AUTO_COMPACT_TOKENS` (default 80_000). Single
-    // absolute knob — the model's max context window is NOT used as the
-    // driver because (a) hitting 75% of a 1M-context model still costs
-    // real money and the user might want to compact much earlier, (b)
-    // smaller models with tight windows are better served by a hard
-    // ceiling the user explicitly set.
+    // Threshold: `cli.autoCompactTokens` (default 80_000). An absolute knob —
+    // the model's max context window is NOT the driver because (a) hitting 75%
+    // of a 1M-context model still costs real money and the user might want to
+    // compact much earlier, (b) smaller models with tight windows are better
+    // served by a hard ceiling the user explicitly set. BUT the knob is clamped
+    // DOWN to ~90% of the model window: a knob larger than the window can never
+    // fire (the provider rejects the request before that many tokens accrue), so
+    // compaction must trigger within the window, leaving output headroom.
     //
     // Token-count source (the actual correction in 0.3.9):
     //   1. `lastSeenPromptTokens` — the authoritative `usage.prompt_tokens`
@@ -1214,7 +1413,8 @@ export class Agent {
     //      code dumps don't drift the count by 2–4× as the old
     //      `text.length / 4` proxy did.
     if (!this.silent) {
-      const autoCompactThreshold = getCliKnobs().autoCompactTokens;
+      const windowCap = Math.floor(contextWindowForBudget(this.getModel()) * 0.9);
+      const autoCompactThreshold = Math.min(getCliKnobs().autoCompactTokens, windowCap);
       const promptTokens = this.lastSeenPromptTokens !== undefined && this.lastSeenPromptTokens > 0
         ? this.lastSeenPromptTokens
         : estimateChatHistoryTokens(this.chatHistory as any);
@@ -1256,6 +1456,7 @@ export class Agent {
       const extDeny = await this.runExtensionHooks('user-prompt-submit', { args: { prompt } });
       if (extDeny) return `Prompt blocked by user-prompt-submit hook: ${extDeny}`;
       const submitResults = runHooks(this.workspaceRoot, 'user-prompt-submit', { payload: { prompt } });
+      const injectedContext: string[] = [];
       for (const r of submitResults) {
         const d = parseHookDecision(r.stdout);
         const denied = d?.decision === 'deny' || (!d && r.exitCode !== 0);
@@ -1263,6 +1464,14 @@ export class Agent {
           const reason = d?.reason?.trim() || (r.stderr || r.stdout || '').toString().trim() || `Hook ${r.hook.id} blocked this prompt`;
           return `Prompt blocked by user-prompt-submit hook: ${reason}`;
         }
+        // A non-denying hook may INJECT extra context for the model (e.g. a
+        // policy reminder, ticket metadata) via {"additionalContext":"…"}.
+        if (typeof d?.additionalContext === 'string' && d.additionalContext.trim()) {
+          injectedContext.push(d.additionalContext.trim());
+        }
+      }
+      if (injectedContext.length > 0) {
+        prompt = `${prompt}\n\n[hook context]\n${injectedContext.join('\n')}`;
       }
     }
 
@@ -1351,7 +1560,12 @@ export class Agent {
       }
     }
 
-    const userMsg = { role: 'user', content: prompt };
+    const userMsg: { role: string; content: string; images?: Array<{ mediaType: string; dataBase64: string }> } = { role: 'user', content: prompt };
+    // vision — pasted/attached images ride as a SIDECAR on the user message so
+    // `content` stays a string (every token-tally / transcript / compaction path
+    // keeps working); the payload builders inline them per provider at request
+    // time. The durable transcript (recorded above) stays text-only by design.
+    if (opts?.images?.length) userMsg.images = opts.images;
     this.chatHistory.push(userMsg);
     // The durable transcript record for this user message was already written
     // at the top of runTurn (so it survives a mid-turn failure); here we only
@@ -1385,7 +1599,11 @@ export class Agent {
     // → write tasks) can easily eat 10-15 iterations. 20 was too tight and
     // caused workflows to abort mid-architect. Cap defaults to 60 and is
     // overridable via BRAINROUTER_MAX_TOOL_LOOPS for very heavy workflows.
-    const maxLoops = Math.max(5, getCliKnobs().maxToolLoops);
+    // HONK-L1/L7 — clamp the turn-loop caps for local/weak model families (a tight
+    // bounded harness, not more prompt, is what makes them reliable). Passthrough
+    // for strong/unknown models, so this is a no-op for the common case.
+    const harnessCaps = resolveLocalModelProfile(this.llmConfig.model, getCliKnobs().localModelProfile, getCliKnobs());
+    const maxLoops = Math.max(5, harnessCaps.maxToolLoops);
     let finalAnswer = '';
     // Stalled-preamble guardrail counter — see the `looksLikeStalledPreamble`
     // branch below. Bounded so a model that ONLY emits preambles can't keep
@@ -1460,7 +1678,7 @@ export class Agent {
     // different files is real work, not a loop (the identical-args guard below
     // still catches writing the SAME file over and over).
     const recentToolSequences: string[] = [];
-    const TOOL_SEQUENCE_GUARD_LIMIT = Math.max(3, getCliKnobs().repeatToolSequenceLimit);
+    const TOOL_SEQUENCE_GUARD_LIMIT = Math.max(3, harnessCaps.repeatToolSequenceLimit);
     const sequenceGuardExempt = new Set(getCliKnobs().repeatSequenceExemptTools);
     const spawnedChildIdsThisTurn = new Set<string>();
     const waitedChildIdsThisTurn = new Set<string>();
@@ -1469,6 +1687,7 @@ export class Agent {
       parentSessionKey: this.sessionKey,
       interruptSignal: this.turnAbort?.signal, // DESK-6 — Stop unblocks child waits
       parentAccessMode: this.accessMode,
+      ancestorFleet: this.forceFleetSandbox, // HONK-H0 — cascade fleet lockdown to descendants
       // Thread the parent's trace context so child agents nest their
       // per-turn spans under THIS turn instead of starting a fresh
       // trace tree. Lets observability backends reconstruct fan-out.
@@ -1599,8 +1818,10 @@ export class Agent {
         // request's reasoning_effort slot — no restart needed. Resolve from
         // the ACTIVE SESSION (session override > workspace pref/config) so a
         // per-chat `/effort` sticks to that chat. A spawned child with a
-        // per-run effort override (0.4.x-5) uses that instead.
-        const selectedEffort = this.effortOverride ?? resolveActiveMode(this.workspaceRoot, this.sessionKey).effort;
+        // per-run effort override (0.4.x-5) uses that instead. `fast` execution
+        // mode forces the model's MINIMUM reasoning (Fast = minimal reasoning).
+        const activeMode = resolveActiveMode(this.workspaceRoot, this.sessionKey);
+        const selectedEffort = effortForTurnSelection(activeMode, this.llmConfig.model, this.effortOverride);
         const effort = resolveEffortForTurn(selectedEffort, this.chatHistory, getCliKnobs());
         // TIER A: stream when the UI is listening for deltas, AND the
         // user hasn't disabled it. Streaming opts in only when a delta
@@ -2208,7 +2429,7 @@ export class Agent {
           const docsOnly = verificationDecision === 'report-docs-only';
           const content = docsOnly
             ? buildDocsOnlyVerificationNote(this.filesWrittenThisTurn)
-            : buildVerificationNudge();
+            : buildVerificationNudge({ local: localModelProfileActive(this.llmConfig.model, getCliKnobs().localModelProfile) });
           const guardMsg = { role: 'user', content };
           this.chatHistory.push(guardMsg);
           this.recordTranscript({ ...guardMsg, name: 'guard' });
@@ -2599,18 +2820,22 @@ export class Agent {
             // workflow → token blow-up, with no human to approve it. Phase work
             // is done DIRECTLY (or via plain spawn_agents, depth-capped); only a
             // top-level, user-facing agent may launch a workflow.
-            if (name === 'run_workflow' && this.silent) {
+            // Both the declarative `run_workflow` and the saved-graph
+            // `run_workflow_graph` fan out child agents, so they share the
+            // nest-block + cost-confirm gate.
+            const isWorkflowLaunch = name === 'run_workflow' || name === 'run_workflow_graph';
+            if (isWorkflowLaunch && this.silent) {
               isError = true;
               resultText =
-                'run_workflow is not available to a spawned/child agent — nested workflows are blocked ' +
+                `${name} is not available to a spawned/child agent — nested workflows are blocked ` +
                 '(they recurse and run unattended). Do this work directly with the regular tools ' +
                 '(read_file, write_file, edit_file, run_command), or use spawn_agents for genuinely ' +
                 'independent sub-tasks.';
-              summary = 'nested run_workflow blocked';
-            } else if (name === 'run_workflow' && !(await this.confirmRunWorkflowLaunch(args))) {
+              summary = `nested ${name} blocked`;
+            } else if (isWorkflowLaunch && !(await this.confirmRunWorkflowLaunch(args))) {
               isError = true;
               resultText =
-                'run_workflow declined — the workflow launch was not approved (workflows fan out ' +
+                `${name} declined — the workflow launch was not approved (workflows fan out ` +
                 'multiple agents and cost more tokens). Proceed with the regular tools (spawn_agents, ' +
                 'run_command, …) or ask the user to approve the workflow.';
               summary = 'workflow launch declined';
@@ -2658,41 +2883,7 @@ export class Agent {
             // key the poller/registry actually used (otherwise the read
             // misses the federation-key inbox and comes back empty).
             const mcpArgs = applyFederationIdentity(name, args, this.federationSessionKey) as Record<string, any>;
-            const mcpApproval = assessMcpToolApproval(name, mcpToolByName.get(name));
-            if (mcpApproval.requiresApproval) {
-              if (this.silent) {
-                if (!this.confirmToolApproval) {
-                  throw new Error(`MCP tool "${name}" requires approval but this silent session has no parent approver: ${mcpApproval.reason}.`);
-                }
-                const approved = await this.confirmToolApproval({
-                  tool: name,
-                  arguments: mcpArgs,
-                  reason: mcpApproval.reason,
-                  dangerous: mcpApproval.dangerous,
-                });
-                if (!approved) {
-                  throw new Error(`MCP tool "${name}" rejected by parent approval.`);
-                }
-              } else if (this.interactionPort) {
-                const uiApproved = await this.interactionPort.confirm({
-                  title: 'MCP tool approval',
-                  detail: `${name} — ${mcpApproval.reason}`,
-                  dangerous: mcpApproval.dangerous,
-                  tool: name,
-                });
-                if (!uiApproved) {
-                  throw new Error(`MCP tool "${name}" rejected by user.`);
-                }
-              } else {
-                const approved = await this.prompter.askYesNo(
-                  `${chalk.yellow('⚠️  MCP tool approval request:')} ${chalk.cyan(name)}${mcpApproval.dangerous ? chalk.red(' (potentially destructive)') : ''}\nReason: ${mcpApproval.reason}\nAllow MCP tool call? (y/N) `,
-                  false,
-                );
-                if (!approved) {
-                  throw new Error(`MCP tool "${name}" rejected by user.`);
-                }
-              }
-            }
+            await this.approveMcpToolCall(name, mcpToolByName.get(name), mcpArgs);
             const mcpRes = await this.mcpClient.callTool(name, mcpArgs, { signal: this.turnAbort?.signal });
             if (mcpRes.isError) {
               isError = true;
@@ -2759,10 +2950,19 @@ export class Agent {
           session_key: this.sessionKey,
         }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
         if (this.hookAdvisoryActive()) {
-          runHooks(this.workspaceRoot, 'post-tool', {
+          const postResults = runHooks(this.workspaceRoot, 'post-tool', {
             tool: name,
             payload: { args, ok: !isError, summary, resultPreview: resultText.slice(0, 1000) },
           });
+          // A post-tool hook may REPLACE the model-visible result text and/or
+          // mark it an error (redact secrets, fail on a lint/policy breach).
+          // Applied before the result is clamped + handed to the LLM below.
+          for (const r of postResults) {
+            const d = parseHookDecision(r.stdout);
+            if (!d) continue;
+            if (typeof d.updatedOutput === 'string') resultText = d.updatedOutput;
+            if (d.isError === true) isError = true;
+          }
           void this.runExtensionHooks('post-tool', { tool: name, args });
         }
 
@@ -2995,7 +3195,13 @@ export class Agent {
     if (!this.silent && isTelemetryEnabled()) {
       try {
         recordDailyUsage(
-          { promptTokens: this.lastTurnUsage.promptTokens, completionTokens: this.lastTurnUsage.completionTokens, calls: this.lastTurnUsage.calls },
+          {
+            promptTokens: this.lastTurnUsage.promptTokens,
+            completionTokens: this.lastTurnUsage.completionTokens,
+            calls: this.lastTurnUsage.calls,
+            cachedTokens: this.lastTurnUsage.cachedTokens,
+            missedTokens: this.lastTurnUsage.missedTokens,
+          },
           Date.now(),
         );
       } catch { /* observability only */ }
@@ -3031,6 +3237,9 @@ export class Agent {
   }
 
   private async executeLocalTool(name: string, args: Record<string, any>): Promise<string> {
+    // HONK-L3 — re-nest args the local model emitted against a flattened schema
+    // (dot-notation keys → nested objects) before any executor sees them.
+    if (this.flattenedToolNames.has(name)) args = nestArguments(args);
     const executor = localToolExecutor(name);
     if (executor) {
       return executor.handle({
@@ -3331,8 +3540,13 @@ export class Agent {
           // they are refused whenever the sandbox is active: either the user
           // turned it on, or this is a silent/unattended agent where the
           // sandbox is enforced regardless of the global knob.
+          // HONK-H0 — a fleet/background executor's `forceFleetSandbox` also makes
+          // the detached (unsandboxed) background path off-limits, so it can't be
+          // used to escape the forced sandbox + network-deny the foreground path
+          // applies — even when the operator opted out of silent enforcement.
           const sandboxActive =
-            getCliKnobs().sandbox === 'on' || (this.silent && this.sandboxEnforceWhenSilent);
+            getCliKnobs().sandbox === 'on' ||
+            (this.silent && (this.sandboxEnforceWhenSilent || this.forceFleetSandbox));
           if (sandboxActive) {
             return 'Background run_command is not supported while the sandbox is active (v1) — run it foreground or disable the sandbox.';
           }
@@ -3347,7 +3561,7 @@ export class Agent {
         const sandboxConfig = resolveSandboxConfig(
           this.workspaceRoot,
           { readPaths: prefs.sandboxReadPaths, writePaths: prefs.sandboxWritePaths },
-          { silent: this.silent, enforceWhenSilent: this.sandboxEnforceWhenSilent },
+          { silent: this.silent, enforceWhenSilent: this.sandboxEnforceWhenSilent, forceEnforce: this.forceFleetSandbox, scopeSecrets: this.forceFleetSandbox },
         );
         const result = await runShell(cmd, sandboxConfig, undefined, this.turnAbort?.signal);
         // WS5 — remember commits WE authored this session, so a later
@@ -3366,6 +3580,52 @@ export class Agent {
         const notice = result.notice ? `${result.notice}\n` : '';
         return `${notice}${sandboxBadge}Exit Code: ${result.exitCode}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`;
       }
+      case 'computer_use': {
+        if (!getCliKnobs().computerUse.enabled) return 'computer_use is disabled. Set cli.computerUse.enabled=true to enable it.';
+        if (!this.computerUsePort) return 'computer_use is unavailable in this runtime.';
+        if (this.silent) return 'computer_use denied: silent child agents cannot control the desktop.';
+        if (getCliKnobs().brainUrl) return 'computer_use denied: remote-brain sessions cannot control the local desktop.';
+        if (this.computerActionsThisTurn >= MAX_COMPUTER_ACTIONS_PER_TURN) {
+          return `computer_use denied: per-turn action cap (${MAX_COMPUTER_ACTIONS_PER_TURN}) reached.`;
+        }
+        const validation = validateComputerAction(args);
+        if (!validation.ok) return `computer_use invalid action: ${validation.error}`;
+        const action = validation.action;
+        this.computerActionsThisTurn += 1;
+
+        if (action.action === 'screenshot') {
+          try {
+            const image = await this.computerUsePort.screenshot();
+            return JSON.stringify({
+              success: true,
+              action: 'screenshot',
+              image,
+              note: 'Screenshot captured at full logical resolution.',
+            }, null, 2);
+          } catch (err: any) {
+            return JSON.stringify({
+              success: false,
+              action: 'screenshot',
+              permissionDenied: /permission|screen recording|accessibility/i.test(String(err?.message ?? err)),
+              error: err?.message ?? String(err),
+            }, null, 2);
+          }
+        }
+
+        const destructive = evaluateDestructiveAction(action, { userIntent: this.lastUserPrompt });
+        const activeMode = resolveActiveMode(this.workspaceRoot, this.sessionKey);
+        const shouldAsk = destructive.dangerous || (isComputerActionMutating(action.action) && activeMode.executionMode !== 'fast');
+        if (shouldAsk) {
+          const detail = `${JSON.stringify(action, null, 2)}${destructive.reason ? `\n\n${destructive.reason}` : ''}`;
+          const approved = this.interactionPort
+            ? await this.interactionPort.confirm({ title: 'Allow computer control?', detail, dangerous: destructive.dangerous, tool: 'computer_use' })
+            : await this.prompter.askYesNo(`${detail}\nAllow computer control? (y/N) `, false);
+          if (!approved) return 'computer_use rejected by user.';
+        }
+
+        const result = await this.computerUsePort.act(action);
+        return JSON.stringify({ action: action.action, ...result }, null, 2);
+      }
       case 'fetch_url': {
         const url = args.url;
         // POLICY-3 — per-host egress allowlist (empty = unrestricted).
@@ -3373,41 +3633,129 @@ export class Agent {
         if (egress.decision === 'deny') {
           return `fetch_url blocked by egress policy: ${egress.reason}.`;
         }
-        try {
-          // DESK-6 — abort on Stop OR a 30s ceiling (this fetch had neither).
-          const fetchUrlSignal = AbortSignal.any([
-            AbortSignal.timeout(30_000),
-            ...(this.turnAbort?.signal ? [this.turnAbort.signal] : []),
-          ]);
-          const res = await fetch(url, {
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (compatible; BrainRouterCLI/0.3.8)'
-            },
-            signal: fetchUrlSignal,
-          });
-          if (!res.ok) {
-            throw new Error(`Failed to fetch URL: ${res.status} ${res.statusText}`);
-          }
-          const text = await res.text();
-          if (url.includes('.html') || text.includes('<html') || text.includes('<!DOCTYPE html')) {
-            const cleanText = text
-              .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-              .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
-              .replace(/<[^>]+>/g, ' ')
-              .replace(/\s+/g, ' ')
-              .trim();
-            return cleanText.slice(0, 15000);
-          }
-          return text.slice(0, 15000);
-        } catch (err: any) {
-          return `Failed to fetch URL ${url}: ${err.message}`;
-        }
+        const knobs = getCliKnobs();
+        const result = await fetchAndExtract(String(url), {
+          ...knobs.webSearch.crawler,
+          signal: this.turnAbort?.signal,
+        });
+        return JSON.stringify(result, null, 2);
       }
       case 'web_search': {
         const query = String(args.query ?? '').trim();
         if (!query) throw new Error('web_search requires a non-empty query.');
-        const maxResults = Math.max(1, Math.min(10, Number(args.maxResults ?? 5)));
-        return await runWebSearch(query, maxResults);
+        const knobs = getCliKnobs();
+        const maxResults = Math.max(1, Math.min(10, Number(args.maxResults ?? knobs.webSearch.maxResults)));
+        try {
+          const provider = buildSearchProvider(knobs);
+          const results = await provider.search(query, maxResults, this.turnAbort?.signal);
+          return JSON.stringify(results.slice(0, maxResults), null, 2);
+        } catch (err: any) {
+          return `web_search failed: ${err?.message ?? err}`;
+        }
+      }
+      case 'research_note': {
+        const claim = String(args.claim ?? '').trim();
+        if (!claim) throw new Error('research_note requires a non-empty `claim`.');
+        const sources = Array.isArray(args.sources) ? args.sources.map((s: any) => String(s)) : [];
+        const stance = ['support', 'refute', 'unclear'].includes(String(args.stance))
+          ? (String(args.stance) as 'support' | 'refute' | 'unclear')
+          : undefined;
+        const confidence = ['high', 'medium', 'low'].includes(String(args.confidence))
+          ? (String(args.confidence) as 'high' | 'medium' | 'low')
+          : undefined;
+        const note = typeof args.note === 'string' ? args.note : undefined;
+        const ledger = appendEvidence(this.workspaceRoot, this.sessionKey, { claim, sources, stance, confidence, note });
+        const s = summarizeLedger(ledger);
+        return `Recorded. Ledger: ${s.total} finding${s.total === 1 ? '' : 's'} (${s.corroborated} corroborated, ${s.conflicting} conflicting, ${s.singleSource} single-source).`;
+      }
+      case 'research_brief': {
+        if (typeof args.question === 'string' && args.question.trim()) {
+          setQuestion(this.workspaceRoot, this.sessionKey, args.question);
+        }
+        const ledger = readLedger(this.workspaceRoot, this.sessionKey);
+        if (!ledger) return 'No research ledger yet — record evidence with research_note first.';
+        return formatBrief(ledger);
+      }
+      case 'list_mcp_resources': {
+        const client = this.mcpClient as any;
+        if (typeof client.listResources !== 'function') {
+          throw new Error('MCP resources are not supported by the active MCP client.');
+        }
+        const result = await client.listResources({
+          cursor: typeof args.cursor === 'string' && args.cursor.trim() ? args.cursor.trim() : undefined,
+          server: typeof args.server === 'string' && args.server.trim() ? args.server.trim() : undefined,
+        }, { signal: this.turnAbort?.signal });
+        return JSON.stringify(result, null, 2);
+      }
+      case 'list_mcp_resource_templates': {
+        const client = this.mcpClient as any;
+        if (typeof client.listResourceTemplates !== 'function') {
+          throw new Error('MCP resource templates are not supported by the active MCP client.');
+        }
+        const result = await client.listResourceTemplates({
+          cursor: typeof args.cursor === 'string' && args.cursor.trim() ? args.cursor.trim() : undefined,
+          server: typeof args.server === 'string' && args.server.trim() ? args.server.trim() : undefined,
+        }, { signal: this.turnAbort?.signal });
+        return JSON.stringify(result, null, 2);
+      }
+      case 'read_mcp_resource': {
+        const client = this.mcpClient as any;
+        if (typeof client.readResource !== 'function') {
+          throw new Error('MCP resource reads are not supported by the active MCP client.');
+        }
+        const server = String(args.server ?? '').trim();
+        const uri = String(args.uri ?? '').trim();
+        if (!server) throw new Error('read_mcp_resource requires a server.');
+        if (!uri) throw new Error('read_mcp_resource requires a uri.');
+        const result = await client.readResource({ server, uri }, { signal: this.turnAbort?.signal });
+        return JSON.stringify(result, null, 2);
+      }
+      case 'mcp_search': {
+        const query = String(args.query ?? '').trim();
+        if (!query) throw new Error('mcp_search requires a non-empty `query`.');
+        const maxResults = Math.max(1, Math.min(25, Number(args.maxResults ?? 8)));
+        const tools = await this.visibleMcpToolList();
+        const matches = searchMcpCatalog(tools, query, maxResults);
+        return JSON.stringify({ query, count: matches.length, tools: matches }, null, 2);
+      }
+      case 'mcp_describe': {
+        const names: string[] = Array.isArray(args.names)
+          ? args.names.map((n: any) => String(n))
+          : args.name != null ? [String(args.name)] : [];
+        if (names.length === 0) throw new Error('mcp_describe requires `name` or `names`.');
+        const out: Array<Record<string, unknown>> = [];
+        for (const target of names) {
+          const tool = await this.findVisibleMcpTool(target);
+          if (!tool) {
+            out.push({ name: target, error: 'not found or not an available MCP tool' });
+            continue;
+          }
+          out.push({ name: String(tool.name), description: tool.description ?? '', inputSchema: tool.inputSchema ?? {} });
+        }
+        return JSON.stringify(out, null, 2);
+      }
+      case 'mcp_call': {
+        const target = String(args.name ?? '').trim();
+        if (!target) throw new Error('mcp_call requires a tool `name` (use mcp_search to find one).');
+        const tool = await this.findVisibleMcpTool(target);
+        if (!tool) throw new Error(`mcp_call: "${target}" is not an available MCP tool. Use mcp_search to find the exact name.`);
+        const callArgs = args.args && typeof args.args === 'object' && !Array.isArray(args.args)
+          ? (args.args as Record<string, any>)
+          : {};
+        const toolName = String(tool.name);
+        const mcpArgs = applyFederationIdentity(toolName, callArgs, this.federationSessionKey) as Record<string, any>;
+        await this.approveMcpToolCall(toolName, tool, mcpArgs);
+        const mcpRes = await this.mcpClient.callTool(toolName, mcpArgs, { signal: this.turnAbort?.signal });
+        return extractToolText(mcpRes);
+      }
+      case 'mcp_refresh_catalog': {
+        const tools = await this.visibleMcpToolList();
+        const byServer: Record<string, number> = {};
+        for (const t of tools) {
+          const server = String(t?.__serverId ?? this.serverIdFromMcpToolName(String(t?.name ?? '')) ?? 'unknown');
+          byServer[server] = (byServer[server] ?? 0) + 1;
+        }
+        return JSON.stringify({ totalTools: tools.length, servers: byServer }, null, 2);
       }
       case 'lsp': {
         // CLI-19 — semantic navigation via a language server.
@@ -3457,6 +3805,7 @@ export class Agent {
           parentAccessMode: this.accessMode,
           spawnerDepth: this.agentDepth,
           effortOverride: this.effortOverride,
+          ancestorFleet: this.forceFleetSandbox, // HONK-H0 — cascade fleet lockdown
         });
         return JSON.stringify({ id: worker.id, status: worker.status, goal: worker.goal });
       }
@@ -3945,7 +4294,12 @@ export class Agent {
       workspaceRoot: this.workspaceRoot,
       lastUserMessage,
     });
-    const next: any[] = [this.createSystemMessage(), { role: 'system', content: renderCompactSystemMessage(result.summary) }];
+    const compactSystemMessage = renderCompactSystemMessage(result.summary);
+    const systemMessage = this.createSystemMessage();
+    const next: any[] = [systemMessage];
+    if (!appendDeveloperPromptLayer(systemMessage, compactSystemMessage)) {
+      next.push({ role: 'system', content: compactSystemMessage });
+    }
     if (lastUserMessage) next.push({ role: 'user', content: lastUserMessage });
     this.chatHistory = next;
     this.initialized = true;
@@ -4060,6 +4414,7 @@ export class Agent {
       parentAccessMode: this.accessMode,
       spawnerDepth: this.agentDepth,
       effortOverride: this.effortOverride,
+      ancestorFleet: this.forceFleetSandbox, // HONK-H0 — cascade fleet lockdown
     });
     return { id: worker.id, status: worker.status, goal: worker.goal };
   }
@@ -4531,7 +4886,7 @@ export class Agent {
     // have been seen yet, leave it undefined — `buildSystemPrompt` treats
     // that as "assume brain online" for back-compat.
     const connectedMcpTools = this.lastKnownMcpTools?.map((t) => t.name);
-    const base = this.systemPromptOverride ?? buildSystemPrompt({
+    const promptContext = {
       workspaceRoot: this.workspaceRoot,
       launchCwd: this.launchCwd,
       sessionKey: this.sessionKey,
@@ -4544,14 +4899,18 @@ export class Agent {
       // child override) still wins when set.
       executionMode: activeMode.executionMode,
       reviewPolicy: activeMode.reviewPolicy,
-      effort: this.effortOverride ?? activeMode.effort,
+      effort: effortToWireLevel(this.effortOverride ?? activeMode.effort),
       connectedMcpTools,
       // Drive `modelFamilyOverlay`: weaker / OS / free-tier models
       // (Nemotron, Kimi, Llama, Qwen, Mistral, gpt-oss, DeepSeek, …)
       // pick up an aggressive Beast-mode reinforcement block; strong
       // families (claude-*, gpt-4/5, o-series, gemini-2.5) get no overlay.
       model: this.llmConfig.model,
-    });
+      // §5.7 — durable user house-style block (cli.codePromptPrefix).
+      codePromptPrefix: getCliKnobs().codePromptPrefix,
+    };
+    const generatedLayers = this.systemPromptOverride ? undefined : buildPromptLayers(promptContext);
+    const base = this.systemPromptOverride ?? buildSystemPrompt(promptContext);
     const parts = [base];
     if (this.roleOverlay) parts.push(this.roleOverlay);
     // Goal text used to be appended here AND re-pushed as a per-turn
@@ -4562,10 +4921,15 @@ export class Agent {
     // final-budget wrap-up directive). `runTurn` re-injects it via
     // `formatGoalBlock` immediately before the user message is appended,
     // so even first-turn-after-`/resume` sees the goal.
-    return {
+    const content = appendVerbositySteering(parts.join('\n\n'), getCliKnobs().verbositySteeringLevel);
+    const msg: PromptLayeredMessage = {
       role: 'system',
-      content: appendVerbositySteering(parts.join('\n\n'), getCliKnobs().verbositySteeringLevel),
+      content,
     };
+    if (generatedLayers && !this.roleOverlay && getCliKnobs().verbositySteeringLevel === 0) {
+      msg.promptLayers = generatedLayers;
+    }
+    return msg;
   }
 
   /** Create one draft requirement from a high-confidence user implementation request. */
@@ -4803,7 +5167,7 @@ export class Agent {
     const action = String(args.action ?? '');
     if (action === 'transition') {
       const item = trackGetWorkItem(this.workspaceRoot, String(args.key ?? ''));
-      if (item?.statusCategory === 'done' && String(args.toStatus ?? '') === item.status) {
+      if (item?.statusCategory === 'completed' && String(args.toStatus ?? '') === item.status) {
         this.autoLinkDoneTrackItem(item, callbacks);
       }
       return 0;
@@ -4812,7 +5176,7 @@ export class Agent {
 
     const project = trackGetProject(this.workspaceRoot) ?? trackEnsureProject(this.workspaceRoot);
     const inProgress = project.workflowStates.find((state) => state.id === 'in-progress')
-      ?? project.workflowStates.find((state) => state.category === 'in-progress');
+      ?? project.workflowStates.find((state) => state.category === 'started');
     const review = project.workflowStates.find((state) => state.id === 'in-review') ?? inProgress;
     if (!inProgress || !review) return 0;
 
@@ -4821,8 +5185,8 @@ export class Agent {
       if (!codeLink || !isCodeLinkKind(codeLink.kind) || typeof codeLink.ref !== 'string' || !codeLink.ref.trim()) continue;
       const target = codeLink.kind === 'pull-request' ? review : inProgress;
       for (const item of trackFindWorkItemsByCodeLink(this.workspaceRoot, { kind: codeLink.kind, ref: codeLink.ref })) {
-        if (item.statusCategory === 'done' || item.status === target.id) continue;
-        if (codeLink.kind !== 'pull-request' && item.statusCategory !== 'todo') continue;
+        if (isTerminalCategory(item.statusCategory) || item.status === target.id) continue;
+        if (codeLink.kind !== 'pull-request' && !isUnstartedCategory(item.statusCategory)) continue;
         const moved = trackTransitionWorkItem(this.workspaceRoot, item.id, target.id, 'agent');
         if (!moved) continue;
         advanced += 1;
@@ -5214,68 +5578,6 @@ export class Agent {
 }
 
 /**
- * Run a web search via DuckDuckGo's Instant Answer API. No API key required.
- *
- * This is a thin, dependency-free default. For production-grade results, users
- * can configure an upstream search provider (Brave / Tavily / SerpAPI) and
- * point `BRAINROUTER_WEB_SEARCH_ENDPOINT` at it — when set, we POST the query
- * and expect `{ results: [{title, url, snippet}] }`.
- */
-async function runWebSearch(query: string, maxResults: number): Promise<string> {
-  const customEndpoint = getCliKnobs().webSearchEndpoint?.trim();
-  if (customEndpoint) {
-    try {
-      const res = await fetch(customEndpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, maxResults }),
-      });
-      if (res.ok) {
-        const body = await res.json() as any;
-        if (Array.isArray(body?.results)) {
-          return JSON.stringify(body.results.slice(0, maxResults), null, 2);
-        }
-      }
-    } catch {
-      // fall through to DuckDuckGo fallback
-    }
-  }
-
-  try {
-    const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-    const res = await fetch(url, { headers: { 'User-Agent': 'BrainRouterCLI/0.3.8' } });
-    if (!res.ok) {
-      return `web_search failed: DuckDuckGo returned ${res.status} ${res.statusText}.`;
-    }
-    const data = await res.json() as any;
-    const results: Array<{ title: string; url: string; snippet: string }> = [];
-    if (data?.AbstractURL && data?.AbstractText) {
-      results.push({ title: data.Heading ?? query, url: data.AbstractURL, snippet: data.AbstractText });
-    }
-    const topics = Array.isArray(data?.RelatedTopics) ? data.RelatedTopics : [];
-    for (const t of topics) {
-      if (results.length >= maxResults) break;
-      if (t.FirstURL && t.Text) {
-        results.push({ title: t.Text.split(' - ')[0] ?? t.Text, url: t.FirstURL, snippet: t.Text });
-      } else if (Array.isArray(t?.Topics)) {
-        for (const inner of t.Topics) {
-          if (results.length >= maxResults) break;
-          if (inner.FirstURL && inner.Text) {
-            results.push({ title: inner.Text.split(' - ')[0] ?? inner.Text, url: inner.FirstURL, snippet: inner.Text });
-          }
-        }
-      }
-    }
-    if (results.length === 0) {
-      return `web_search returned no results for "${query}". DuckDuckGo Instant Answer is best for factual queries; configure BRAINROUTER_WEB_SEARCH_ENDPOINT for a full search backend.`;
-    }
-    return JSON.stringify(results.slice(0, maxResults), null, 2);
-  } catch (err: any) {
-    return `web_search failed: ${err?.message ?? err}`;
-  }
-}
-
-/**
  * Apply a Begin/End-envelope patch:
  *
  *   *** Begin Patch
@@ -5341,6 +5643,12 @@ export function getToolSummary(name: string, args: Record<string, any>, result: 
       return `fetched content from ${args.url}`;
     case 'web_search':
       try { return `${JSON.parse(result).length} web results for "${args.query}"`; } catch { return `searched web for "${args.query}"`; }
+    case 'list_mcp_resources':
+      try { return `${JSON.parse(result).resources?.length ?? 0} MCP resources`; } catch { return 'listed MCP resources'; }
+    case 'list_mcp_resource_templates':
+      try { return `${JSON.parse(result).resourceTemplates?.length ?? 0} MCP resource templates`; } catch { return 'listed MCP resource templates'; }
+    case 'read_mcp_resource':
+      return `read MCP resource ${args.server}:${args.uri}`;
     case 'apply_patch':
       try { return `applied ${JSON.parse(result).applied.length} file ops`; } catch { return 'applied patch'; }
     case 'update_plan':
@@ -5355,6 +5663,10 @@ export function getToolSummary(name: string, args: Record<string, any>, result: 
       try { return `${JSON.parse(result).entries?.length || 0} transcript entries`; } catch { return 'read transcript'; }
     case 'close_agent':
       return `closed agent ${args.id}`;
+    case 'send_input':
+      return `sent input to agent ${args.id}`;
+    case 'resume_agent':
+      return `resumed agent ${args.id}`;
     default:
       return `${name} executed`;
   }
@@ -5505,6 +5817,121 @@ export function activeProviderDef(config: LLMConfig): ProviderDefinition | undef
   return findProviderByEndpoint(config.endpoint) ?? PROVIDER_REGISTRY.get((config.provider ?? '').toLowerCase());
 }
 
+function binaryEffortValueMapFor(def: ProviderDefinition | undefined): ProviderDefinition['binaryEffortValueMap'] | undefined {
+  if (def?.binaryEffortValueMap) return def.binaryEffortValueMap;
+  return undefined;
+}
+
+export type LlmRequestFormat = 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate';
+
+function modelSupportsResponsesFormat(model: string | undefined): boolean {
+  const id = normalizeModelName(model ?? '');
+  return (
+    /^gpt-[0-9]/.test(id) ||
+    /^o[134](-|$)/.test(id) ||
+    /^chatgpt-/.test(id)
+  );
+}
+
+export function resolveRequestFormat(config: LLMConfig, effectiveEndpoint?: string): LlmRequestFormat {
+  const def = activeProviderDef(config);
+  const providerId = (def?.id ?? config.provider ?? '').toLowerCase();
+  // PER-PROVIDER WIRE-FORMAT OVERRIDE — user-set in config.json under
+  // `cli.providerRequestFormat[<providerId>]`. Validated subset of literals
+  // (see `resolveCliKnobs → normalizeProviderRequestFormat`); an unknown
+  // provider key is a no-op, so adding overrides for new providers never
+  // throws and an obsolete provider id is silently ignored.
+  const override = getCliKnobs().providerRequestFormat[providerId];
+  const builtIn = def?.requestFormat ?? 'chat-completions';
+  const allowedFormat = override ?? builtIn;
+  // NATIVE (non-OpenAI-compatible) formats are an explicit opt-in — honor them
+  // directly. They carry their own URL/headers/payload (see nativeProviders.ts)
+  // and bypass the Responses/Chat gating below entirely.
+  if (allowedFormat === 'anthropic-messages' || allowedFormat === 'gemini-generate') return allowedFormat;
+  if (allowedFormat !== 'responses') return 'chat-completions';
+  const builtInEndpoint = def?.endpoint;
+  const endpoint = effectiveEndpoint || config.endpoint || builtInEndpoint || 'https://api.openai.com/v1';
+  // When the user EXPLICITLY chose Responses for this provider, trust their
+  // endpoint assertion (they are responsible for it accepting /responses). Do
+  // NOT gate this by OpenAI-family model names: Responses-capable gateways can
+  // route non-OpenAI ids such as `google/gemma-4-12b`.
+  if (override === 'responses') return 'responses';
+  // Built-in Responses defaults are still provider/model conservative.
+  if (!modelSupportsResponsesFormat(config.model)) return 'chat-completions';
+  // When falling back to the BUILT-IN default, still require the endpoint
+  // to be the canonical one — otherwise `provider:'openai'` + a non-OpenAI
+  // endpoint (OpenRouter-shaped, an OpenAI-compatible gateway, ...) gets
+  // silently misrouted to /responses and 404s.
+  if (override === undefined && builtInEndpoint
+      && normalizeProviderEndpoint(endpoint) !== normalizeProviderEndpoint(builtInEndpoint)) {
+    return 'chat-completions';
+  }
+  return 'responses';
+}
+
+function normalizeProviderUsage(usage: any): { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; [k: string]: unknown } | undefined {
+  if (!usage || typeof usage !== 'object') return undefined;
+  if (typeof usage.prompt_tokens === 'number' || typeof usage.completion_tokens === 'number') return usage;
+
+  const normalized: Record<string, unknown> = { ...usage };
+  if (typeof usage.input_tokens === 'number') normalized.prompt_tokens = usage.input_tokens;
+  if (typeof usage.output_tokens === 'number') normalized.completion_tokens = usage.output_tokens;
+  if (usage.input_tokens_details && typeof usage.input_tokens_details === 'object') {
+    normalized.prompt_tokens_details = usage.input_tokens_details;
+  }
+  return normalized;
+}
+
+function normalizeResponsesOutput(data: any, endpoint: string, model: string) {
+  if (data && typeof data === 'object' && data.error) {
+    const errMsg = typeof data.error === 'string'
+      ? data.error
+      : (data.error.message ?? JSON.stringify(data.error).slice(0, 400));
+    throw new Error(`LLM endpoint returned an error envelope (HTTP 200): ${errMsg}`);
+  }
+  if (!Array.isArray(data?.output)) {
+    throw new Error(
+      `LLM endpoint returned no Responses output. ` +
+      `Model "${model}" at ${endpoint} may not support /responses, may need chat/completions, or be misconfigured. ` +
+      `Response body: ${JSON.stringify(data).slice(0, 600)}`,
+    );
+  }
+
+  const textParts: string[] = [];
+  const toolCalls: any[] = [];
+  for (const item of data.output) {
+    if (item?.type === 'message' && Array.isArray(item.content)) {
+      for (const part of item.content) {
+        if (part?.type === 'output_text' && typeof part.text === 'string') textParts.push(part.text);
+        else if (part?.type === 'refusal' && typeof part.refusal === 'string') textParts.push(part.refusal);
+        else if (part?.type === 'text' && typeof part.text === 'string') textParts.push(part.text);
+      }
+      continue;
+    }
+    if (item?.type === 'function_call') {
+      toolCalls.push({
+        id: item.call_id ?? item.id,
+        type: 'function',
+        function: {
+          name: item.name ?? '',
+          arguments: typeof item.arguments === 'string' ? item.arguments : stringifyContent(item.arguments ?? {}),
+        },
+      });
+    }
+  }
+
+  return {
+    content: typeof data.output_text === 'string' && data.output_text.length > 0
+      ? data.output_text
+      : textParts.join(''),
+    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+    usage: normalizeProviderUsage(data.usage),
+    finishReason: data.status === 'incomplete'
+      ? (data.incomplete_details?.reason ?? 'incomplete')
+      : undefined,
+  };
+}
+
 /**
  * Decide the literal `reasoning_effort` wire value (or null to omit) for the
  * active provider + model. Mechanism + accepted values differ per provider AND
@@ -5512,8 +5939,7 @@ export function activeProviderDef(config: LLMConfig): ProviderDefinition | undef
  * name → capability) instead of one global transform:
  *   1. effort unset or the CLI default 'medium' → omit (the prompt overlay is
  *      also empty at medium, so wire + prompt agree).
- *   2. provider's reasoningEffort mode is not 'param' → omit (LM Studio's
- *      chat-completions ignores the field; others may reject it).
+ *   2. provider's reasoningEffort mode is not 'param' → omit.
  *   3. always-on reasoners (DeepSeek `deepseek-reasoner`) and non-reasoning
  *      `*-chat` variants (OpenAI/gateways ERROR on those) → omit, on EVERY
  *      provider.
@@ -5521,15 +5947,22 @@ export function activeProviderDef(config: LLMConfig): ProviderDefinition | undef
  *      non-reasoning model) only send for detected reasoning models; every other
  *      OpenAI-compatible provider defaults to 'any' (accept-and-ignore), so the
  *      field works for reasoning models we have no name pattern for.
- *   5. map the EffortLevel through the provider's effortValueMap (default OpenAI
+ *   5. binary `on`/`off` model metadata is only honored when the provider
+ *      explicitly declares that wire vocabulary; otherwise provider rules win
+ *      so no endpoint receives invalid `reasoning_effort: "on"`.
+ *   6. map the EffortLevel through the provider's effortValueMap (default OpenAI
  *      map: low→low, high→high, xhigh→high). `null` in the map = omit on purpose.
- *   6. model-aware `xhigh`: the default caps xhigh→high, but models that natively
+ *   7. model-aware `xhigh`: the default caps xhigh→high, but models that natively
  *      accept `xhigh` (gpt-5.1-codex-max, gpt-5.2+, gpt-5.4/5.5) keep it — don't
  *      silently degrade them. Providers that map xhigh to their own token
  *      (deepseek `max`, opencode `xhigh`) are untouched.
  */
 export function resolveWireEffort(config: LLMConfig, effort: EffortLevel | undefined): string | null {
   if (!effort || effort === 'medium') return null;
+  // Claude's extended UI tiers (max, ultracode) have no distinct reasoning_effort
+  // value (the field tops at xhigh), so they cap to xhigh on the wire. They still
+  // persist distinctly so the slider remembers its position.
+  const lvl = effortToWireLevel(effort);
   const def = activeProviderDef(config);
   if ((def?.reasoningEffort ?? 'param') !== 'param') return null;
   const model = normalizeModelName(config.model);
@@ -5540,18 +5973,56 @@ export function resolveWireEffort(config: LLMConfig, effort: EffortLevel | undef
   // server ignores it when N/A) so effort works for unlisted reasoning models.
   if ((def?.effortModelGate ?? 'any') === 'reasoning-only' && !isReasoningModel(model)) return null;
   // Binary on/off model (advertises only `on`/`off` via /models): collapse any
-  // graded request to `on` — sending `low`/`high` would be rejected and the
-  // endpoint would fall back to `on` anyway (and warn). `medium` already
-  // returned null above, so it omits the field and the model uses its default.
-  if (isBinaryReasoningModel(model)) return 'on';
+  // graded request only when the active provider accepts binary effort literals.
+  // Provider rules are authoritative because the capability registry is keyed by
+  // model id, while wire vocabularies are provider-specific.
+  if (isBinaryReasoningModel(model)) {
+    const binaryMap = binaryEffortValueMapFor(def);
+    const binaryMapped = binaryMap?.[lvl];
+    if (binaryMapped === null) return null;
+    if (typeof binaryMapped === 'string' && binaryMapped.trim()) return binaryMapped;
+  }
   const map = def?.effortValueMap ?? DEFAULT_EFFORT_VALUE_MAP;
-  const mapped = map[effort];
+  const mapped = map[lvl];
   if (mapped === null) return null;             // explicit omit for this level
-  let wire = mapped ?? (effort === 'xhigh' ? 'high' : effort); // undefined → conservative default
-  if (effort === 'xhigh' && wire === 'high' && modelSupportsXhighEffort(model)) {
+  let wire = mapped ?? (lvl === 'xhigh' ? 'high' : lvl); // undefined → conservative default
+  if (lvl === 'xhigh' && wire === 'high' && modelSupportsXhighEffort(model)) {
     wire = 'xhigh';                             // capable model — pass xhigh through, don't degrade
   }
   return wire;
+}
+
+/**
+ * Fast = minimal reasoning. The LOWEST reasoning level a model supports: graded
+ * reasoners dial down to `low` (still reasons, just minimally); non-reasoning,
+ * always-on (`deepseek-reasoner`), and binary on/off models collapse to `medium`,
+ * which OMITS the reasoning_effort field (off / model default) — see
+ * resolveWireEffort. Lets the "Fast" toggle "just go fast" on any model family
+ * without the user re-picking an effort. Mirrors the renderer's reasoningProfile.
+ */
+export function minimalReasoningEffort(model: string | undefined): EffortLevel {
+  if (isReasoningModel(model) && !isAlwaysOnReasoner(model) && !isBinaryReasoningModel(model)) {
+    return 'low';
+  }
+  return 'medium';
+}
+
+/**
+ * Pick the reasoning effort for a turn. Reasoning effort is DECOUPLED from
+ * executionMode: it is the user's explicit choice (the composer's model-aware
+ * reasoning slider), independent of Fast mode. Fast mode now only affects the
+ * agentic strategy (direct answers / minimal planning), not how hard the model
+ * thinks. A per-run override (a spawned child's fixed effort) still wins.
+ * `minimalReasoningEffort` is retained (and unit-tested) for callers that want
+ * to dial a model to its floor explicitly. Pure + isolated.
+ */
+export function effortForTurnSelection(
+  mode: { effort: EffortLevel; executionMode?: string },
+  _model: string | undefined,
+  override: EffortLevel | undefined,
+): EffortLevel {
+  if (override) return override;
+  return mode.effort;
 }
 
 export interface BuildPayloadOptions {
@@ -5559,6 +6030,258 @@ export interface BuildPayloadOptions {
   effort?: EffortLevel;
   /** DESK-6 — abort the in-flight request the instant the user presses Stop. */
   signal?: AbortSignal;
+  /**
+   * Tool-choice override. Default (when `tools` are present) is `'auto'`; pass a
+   * specific function to FORCE structured output (the model must call it), e.g.
+   * `{ type: 'function', function: { name: 'emit_layers' } }`.
+   */
+  tool_choice?: 'auto' | { type: 'function'; function: { name: string } };
+}
+
+function stripTaggedContent(content: any): any {
+  return typeof content === 'string' && TAG_MARKER_RE.test(content)
+    ? content.replace(TAG_MARKER_RE, '')
+    : content;
+}
+
+function stringifyContent(content: any): string {
+  const stripped = stripTaggedContent(content);
+  if (typeof stripped === 'string') return stripped;
+  try {
+    return JSON.stringify(stripped);
+  } catch {
+    return String(stripped ?? '');
+  }
+}
+
+function hasPromptLayers(message: any): message is PromptLayeredMessage & { promptLayers: PromptLayers } {
+  return (
+    !!message &&
+    message.role === 'system' &&
+    message.promptLayers &&
+    typeof message.promptLayers.instructions === 'string' &&
+    Array.isArray(message.promptLayers.developer) &&
+    typeof message.promptLayers.environment === 'string'
+  );
+}
+
+function appendDeveloperPromptLayer(message: any, content: string): boolean {
+  if (!hasPromptLayers(message)) return false;
+  const rendered = content.trim();
+  if (!rendered) return true;
+  message.content = [stringifyContent(message.content), rendered].filter(Boolean).join('\n\n');
+  message.promptLayers = {
+    ...message.promptLayers,
+    developer: [...message.promptLayers.developer, rendered],
+  };
+  return true;
+}
+
+function promptLayerInputParts(layers: PromptLayers): Array<{ type: 'input_text'; text: string }> {
+  return [layers.instructions, ...layers.developer]
+    .map((text) => text.trim())
+    .filter(Boolean)
+    .map((text) => ({ type: 'input_text' as const, text }));
+}
+
+function promptLayerSystemContent(layers: PromptLayers): string {
+  return promptLayerInputParts(layers).map((part) => part.text).join('\n\n');
+}
+
+function expandPromptLayersForChatCompletions(messages: any[]): any[] {
+  const first = messages[0];
+  const systemParts: string[] = [];
+  const out: any[] = [];
+  let rest = messages;
+
+  if (hasPromptLayers(first)) {
+    const systemContent = [
+      promptLayerSystemContent(first.promptLayers),
+      first.promptLayers.environment.trim(),
+    ].filter(Boolean).join('\n\n');
+    if (systemContent) systemParts.push(systemContent);
+    rest = messages.slice(1);
+  } else if (first?.role === 'system' || first?.role === 'developer') {
+    const systemContent = stringifyContent(first.content).trim();
+    if (systemContent) systemParts.push(systemContent);
+    rest = messages.slice(1);
+  }
+
+  for (const message of rest) {
+    if (message?.role === 'system' || message?.role === 'developer') {
+      const systemContent = stringifyContent(message.content).trim();
+      if (systemContent) systemParts.push(systemContent);
+      continue;
+    }
+    out.push(message);
+  }
+
+  if (systemParts.length > 0) {
+    out.unshift({ role: 'system', content: systemParts.join('\n\n') });
+  }
+  return out;
+}
+
+function mapChatCompletionMessage(m: any): any {
+  if (m.role === 'tool') {
+    return {
+      role: 'tool',
+      tool_call_id: m.tool_call_id,
+      name: m.name,
+      content: stringifyContent(m.content),
+    };
+  }
+  if (m.role === 'assistant') {
+    const out: any = { role: 'assistant', content: m.content || null };
+    if (m.tool_calls) out.tool_calls = m.tool_calls;
+    return out;
+  }
+  if (m.role === 'developer') {
+    return {
+      role: 'system',
+      content: stripTaggedContent(m.content),
+    };
+  }
+  const text = stripTaggedContent(m.content);
+  // vision — a user message carrying pasted images becomes MULTI-PART content
+  // (OpenAI `image_url` data-URLs). OpenAI-compatible endpoints read these
+  // directly; the native Anthropic/Gemini adapters translate the image_url
+  // parts into their own image blocks. Non-vision endpoints ignore them.
+  if (Array.isArray(m.images) && m.images.length > 0) {
+    const parts: any[] = [];
+    if (text) parts.push({ type: 'text', text });
+    for (const img of m.images) {
+      if (img?.dataBase64 && img?.mediaType) {
+        parts.push({ type: 'image_url', image_url: { url: `data:${img.mediaType};base64,${img.dataBase64}` } });
+      }
+    }
+    if (parts.length > 0) return { role: m.role, content: parts };
+  }
+  return {
+    role: m.role,
+    content: text,
+  };
+}
+
+function inputTextContent(text: string): Array<{ type: 'input_text'; text: string }> {
+  return [{ type: 'input_text', text }];
+}
+
+function outputTextContent(text: string): Array<{ type: 'output_text'; text: string }> {
+  return [{ type: 'output_text', text }];
+}
+
+function buildResponsesInput(messages: any[]): { instructions?: string; input: any[] } {
+  const first = messages[0];
+  const input: any[] = [];
+  let instructions: string | undefined;
+  let rest = messages;
+
+  if (hasPromptLayers(first)) {
+    instructions = first.promptLayers.instructions.trim() || undefined;
+    const content = first.promptLayers.developer
+      .map((text) => text.trim())
+      .filter(Boolean)
+      .map((text) => ({ type: 'input_text' as const, text }));
+    if (content.length > 0) {
+      input.push({
+        type: 'message',
+        role: 'developer',
+        content,
+      });
+    }
+    if (first.promptLayers.environment.trim()) {
+      input.push({
+        type: 'message',
+        role: 'user',
+        content: inputTextContent(first.promptLayers.environment),
+      });
+    }
+    rest = messages.slice(1);
+  } else if (first?.role === 'system' || first?.role === 'developer') {
+    instructions = stringifyContent(first.content).trim() || undefined;
+    rest = messages.slice(1);
+  }
+
+  for (const message of rest) {
+    const role = message?.role;
+    if (role === 'tool') {
+      input.push({
+        type: 'function_call_output',
+        call_id: String(message.tool_call_id ?? message.name ?? ''),
+        output: stringifyContent(message.content),
+      });
+      continue;
+    }
+
+    if (role === 'assistant') {
+      const content = typeof message.content === 'string' ? message.content : '';
+      if (content.trim()) {
+        input.push({
+          type: 'message',
+          role: 'assistant',
+          content: outputTextContent(content),
+        });
+      }
+      if (Array.isArray(message.tool_calls)) {
+        for (const call of message.tool_calls) {
+          const fn = call?.function ?? {};
+          input.push({
+            type: 'function_call',
+            call_id: String(call?.id ?? ''),
+            name: String(fn.name ?? ''),
+            arguments: typeof fn.arguments === 'string' ? fn.arguments : stringifyContent(fn.arguments ?? {}),
+          });
+        }
+      }
+      continue;
+    }
+
+    if (role === 'system' || role === 'developer') {
+      input.push({
+        type: 'message',
+        role: 'developer',
+        content: inputTextContent(stringifyContent(message.content)),
+      });
+      continue;
+    }
+
+    if (role === 'user') {
+      const content: any[] = inputTextContent(stringifyContent(message.content));
+      // vision — the Responses API takes images as `input_image` parts (data-URL).
+      if (Array.isArray(message.images)) {
+        for (const img of message.images) {
+          if (img?.dataBase64 && img?.mediaType) {
+            content.push({ type: 'input_image', image_url: `data:${img.mediaType};base64,${img.dataBase64}` });
+          }
+        }
+      }
+      input.push({ type: 'message', role, content });
+    }
+  }
+
+  return { instructions, input };
+}
+
+function buildChatToolSpecs(tools: any[]): NonNullable<ChatCompletionPayload['tools']> {
+  return tools.map(t => ({
+    type: 'function',
+    function: {
+      name: t.name,
+      description: t.description || '',
+      parameters: t.inputSchema || { type: 'object', properties: {} },
+    },
+  }));
+}
+
+function buildResponsesToolSpecs(tools: any[]): NonNullable<ResponsesPayload['tools']> {
+  return tools.map(t => ({
+    type: 'function',
+    name: t.name,
+    description: t.description || '',
+    parameters: t.inputSchema || { type: 'object', properties: {} },
+    strict: false,
+  }));
 }
 
 export function buildChatCompletionPayload(
@@ -5567,29 +6290,7 @@ export function buildChatCompletionPayload(
   tools: any[],
   options: BuildPayloadOptions = {},
 ): ChatCompletionPayload {
-  const stripTag = (content: any) =>
-    typeof content === 'string' && TAG_MARKER_RE.test(content)
-      ? content.replace(TAG_MARKER_RE, '')
-      : content;
-  const mappedMessages = messages.map(m => {
-    if (m.role === 'tool') {
-      return {
-        role: 'tool',
-        tool_call_id: m.tool_call_id,
-        name: m.name,
-        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
-      };
-    }
-    if (m.role === 'assistant') {
-      const out: any = { role: 'assistant', content: m.content || null };
-      if (m.tool_calls) out.tool_calls = m.tool_calls;
-      return out;
-    }
-    return {
-      role: m.role,
-      content: stripTag(m.content),
-    };
-  });
+  const mappedMessages = expandPromptLayersForChatCompletions(messages).map(mapChatCompletionMessage);
 
   const body: ChatCompletionPayload = {
     model: config.model,
@@ -5597,15 +6298,9 @@ export function buildChatCompletionPayload(
   };
 
   if (tools.length > 0) {
-    body.tools = tools.map(t => ({
-      type: 'function',
-      function: {
-        name: t.name,
-        description: t.description || '',
-        parameters: t.inputSchema || { type: 'object', properties: {} }
-      }
-    }));
-    body.tool_choice = 'auto';
+    body.tools = buildChatToolSpecs(tools);
+    // Default 'auto'; callers can force a specific function (structured output).
+    body.tool_choice = options.tool_choice ?? 'auto';
   }
 
   // Forward reasoning_effort PROVIDER-AWARELY (see resolveWireEffort): only for
@@ -5634,6 +6329,95 @@ export function buildChatCompletionPayload(
   return body;
 }
 
+export function buildResponsesPayload(
+  config: LLMConfig,
+  messages: any[],
+  tools: any[],
+  options: BuildPayloadOptions = {},
+): ResponsesPayload {
+  const { instructions, input } = buildResponsesInput(messages);
+  const body: ResponsesPayload = {
+    model: config.model,
+    input,
+    store: false,
+    include: [],
+  };
+  if (instructions) body.instructions = instructions;
+
+  if (tools.length > 0) {
+    body.tools = buildResponsesToolSpecs(tools);
+    const choice = options.tool_choice ?? 'auto';
+    body.tool_choice = choice === 'auto'
+      ? 'auto'
+      : { type: 'function', name: choice.function.name };
+    body.parallel_tool_calls = true;
+  }
+
+  const wireEffort = resolveWireEffort(config, options.effort);
+  if (wireEffort !== null) {
+    body.reasoning = { effort: wireEffort };
+  }
+
+  const maxOutput = getCliKnobs().maxOutputTokens;
+  if (typeof maxOutput === 'number' && maxOutput > 0) {
+    body.max_output_tokens = Math.floor(maxOutput);
+  }
+
+  return body;
+}
+
+function stripReasoningEffortFromBody(body: any): any | undefined {
+  if (!body || typeof body !== 'object') return undefined;
+  const hasFlat = Object.prototype.hasOwnProperty.call(body, 'reasoning_effort');
+  const hasNested = body.reasoning &&
+    typeof body.reasoning === 'object' &&
+    Object.prototype.hasOwnProperty.call(body.reasoning, 'effort');
+  if (!hasFlat && !hasNested) return undefined;
+
+  const next = { ...body };
+  delete next.reasoning_effort;
+  if (hasNested) {
+    const reasoning = { ...next.reasoning };
+    delete reasoning.effort;
+    if (Object.keys(reasoning).length > 0) next.reasoning = reasoning;
+    else delete next.reasoning;
+  }
+  return next;
+}
+
+function isInvalidReasoningEffortError(status: number, body: string): boolean {
+  if (status !== 400) return false;
+  return /(reasoning[_\-. ]?effort|reasoning\.effort)/i.test(body) &&
+    /(invalid|unsupported|not supported|supported values|possible values|unknown|unrecognized)/i.test(body);
+}
+
+/**
+ * HONK-L4 — drop `tools`/`tool_choice` for the retry. Returns a cloned body
+ * without them, or `undefined` when the body never carried tools (so the caller
+ * skips the retry). This is the "must replicate the drop-and-retry" safety net:
+ * some local/OSS endpoints (and a few OpenAI-compatible gateways) 400 on tools or
+ * a forced `tool_choice` they don't implement; rather than hard-fail the turn we
+ * resend without them and let the model answer in plain content.
+ */
+export function stripToolsFromBody(body: any): any | undefined {
+  if (!body || typeof body !== 'object') return undefined;
+  const hasTools = Object.prototype.hasOwnProperty.call(body, 'tools') && Array.isArray(body.tools) && body.tools.length > 0;
+  const hasChoice = Object.prototype.hasOwnProperty.call(body, 'tool_choice');
+  if (!hasTools && !hasChoice) return undefined;
+  const next = { ...body };
+  delete next.tools;
+  delete next.tool_choice;
+  // Responses-format payloads carry tools under the same keys; covered above.
+  return next;
+}
+
+/** A 400/404/422 whose body blames `tools` / `tool_choice` / `function` support. */
+export function isToolsUnsupportedError(status: number, body: string): boolean {
+  if (status !== 400 && status !== 404 && status !== 422) return false;
+  return /(tool_choice|tool[_\-. ]?call|\btools\b|function[_\-. ]?call|functions?)/i.test(body) &&
+    /(invalid|unsupported|not supported|no(t)? (support|implement)|unknown|unrecognized|does not support|cannot|unexpected|not allowed|unavailable)/i.test(body);
+}
+
 /**
  * DESK-6 — sentinel thrown when an in-flight LLM call is aborted because the
  * USER pressed Stop (not a timeout / connectivity blip). The resilient loop
@@ -5658,6 +6442,110 @@ function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+/**
+ * Translate the agent's internal messages/tools into the input a native
+ * (non-OpenAI) provider builder expects. Reuses the SAME proven normalization
+ * the chat-completions path uses (`expandPromptLayersForChatCompletions` +
+ * `mapChatCompletionMessage`), then peels the leading system message off as the
+ * provider `system` text. Keeping this here means `nativeProviders.ts` only ever
+ * sees OpenAI-clean messages and stays a pure shape-translator.
+ */
+function buildNativeInput(
+  format: NativeRequestFormat,
+  config: LLMConfig,
+  messages: any[],
+  tools: any[],
+  options: BuildPayloadOptions,
+): NativeBuildInput {
+  const mapped = expandPromptLayersForChatCompletions(messages).map(mapChatCompletionMessage);
+  let system = '';
+  let rest = mapped;
+  if (mapped[0]?.role === 'system') {
+    system = String(mapped[0].content ?? '');
+    rest = mapped.slice(1);
+  }
+  const maxOutput = getCliKnobs().maxOutputTokens;
+  const userMax = typeof maxOutput === 'number' && maxOutput > 0 ? Math.floor(maxOutput) : undefined;
+  // Anthropic REQUIRES max_tokens; fall back to the conservative default. Gemini
+  // has its own server default, so only forward an explicit user cap.
+  const maxTokens = format === 'anthropic-messages' ? (userMax ?? ANTHROPIC_DEFAULT_MAX_TOKENS) : userMax;
+  return {
+    model: config.model,
+    system,
+    messages: rest,
+    tools: tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
+    toolChoice: options.tool_choice,
+    maxTokens,
+  };
+}
+
+/**
+ * Issue ONE native-format LLM call (Anthropic Messages / Gemini generateContent)
+ * and return the same `{ content, toolCalls?, usage?, finishReason? }` shape as
+ * `callOpenAI`. Mirrors `callOpenAI`'s timeout / abort / semaphore / Retry-After
+ * handling so the resilient loop classifies failures identically. The OpenAI and
+ * Responses paths are untouched — this only runs when a provider is opted into a
+ * native format via `cli.providerRequestFormat`.
+ */
+async function callNativeProvider(
+  format: NativeRequestFormat,
+  config: LLMConfig,
+  endpoint: string,
+  apiKey: string,
+  messages: any[],
+  tools: any[],
+  options: BuildPayloadOptions,
+): Promise<NativeOutput> {
+  const buildInput = buildNativeInput(format, config, messages, tools, options);
+  const body = format === 'anthropic-messages'
+    ? buildAnthropicMessagesPayload(buildInput)
+    : buildGeminiGeneratePayload(buildInput);
+  const { url, headers } = nativeRequestSpec(format, endpoint, config.model, apiKey);
+
+  const prefixFingerprint = computePrefixFingerprint(messages, tools);
+  traceEvent('llm_call.prefix_fingerprint', {
+    model: config.model,
+    endpoint,
+    requestFormat: format,
+    prefixFingerprint,
+    promptMessages: buildInput.messages.length,
+    toolCount: tools.length,
+  });
+
+  const timeoutMs = getCliKnobs().llmTimeoutMs;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const fetchSignal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
+  const release = await acquireLLMSlot();
+  let res: Response;
+  try {
+    res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: fetchSignal });
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      if (options.signal?.aborted) throw new InterruptError();
+      throw new Error(`LLM request timed out after ${timeoutMs}ms. Check that ${endpoint} answers ${format} requests for model "${config.model}".`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+    release();
+  }
+
+  if (!res.ok) {
+    const errText = await res.text();
+    const apiErr: any = new Error(`${format} API error: ${res.status} ${res.statusText} - ${errText}`);
+    apiErr.status = res.status;
+    const retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'));
+    if (retryAfterMs !== undefined) apiErr.retryAfterMs = retryAfterMs;
+    throw apiErr;
+  }
+
+  const data = await res.json() as any;
+  return format === 'anthropic-messages'
+    ? normalizeAnthropicOutput(data, endpoint, config.model)
+    : normalizeGeminiOutput(data, endpoint, config.model);
+}
+
 export async function callOpenAI(
   config: LLMConfig,
   messages: any[],
@@ -5671,8 +6559,10 @@ export async function callOpenAI(
   // We then re-append `/chat/completions` below, producing a duplicate
   // `/chat/completions/chat/completions` and a 404. Strip the suffix
   // defensively so both shapes (full URL or base URL) work.
-  const rawEndpoint = config.endpoint || 'https://api.openai.com/v1';
+  const initialDef = activeProviderDef(config);
+  const rawEndpoint = config.endpoint || initialDef?.endpoint || 'https://api.openai.com/v1';
   const endpoint = rawEndpoint.replace(/\/+$/, '').replace(/\/chat\/completions$/, '');
+  const effectiveConfig: LLMConfig = { ...config, endpoint };
   // Key resolution is CONFIG-DRIVEN, not env-driven: BrainRouter reads the key
   // from config.apiKey (the config knob). Standard provider env vars are imported
   // into config ONCE at load time (config.ts → backfillApiKeyFromEnv), so we never
@@ -5681,7 +6571,7 @@ export async function callOpenAI(
   // public/anonymous tier (opencode "public") supplies a last-resort key; a local
   // server accepts a throwaway bearer. Locality comes from the provider's `local`
   // flag first, then a loopback-endpoint check (covers a custom local gateway).
-  const def = activeProviderDef(config);
+  const def = activeProviderDef(effectiveConfig);
   let apiKey = config.apiKey || '';
   const isLocal = (def?.local ?? false) || isLoopbackEndpoint(endpoint);
   if (!apiKey && !isLocal && def?.defaultApiKey) apiKey = def.defaultApiKey;
@@ -5692,7 +6582,14 @@ export async function callOpenAI(
     apiKey = LOCAL_PLACEHOLDER_KEY;
   }
 
-  const body = buildChatCompletionPayload(config, messages, tools, options);
+  const requestFormat = resolveRequestFormat(effectiveConfig, endpoint);
+  // NATIVE formats carry their own URL/headers/payload — hand off and return.
+  if (requestFormat === 'anthropic-messages' || requestFormat === 'gemini-generate') {
+    return callNativeProvider(requestFormat, effectiveConfig, endpoint, apiKey, messages, tools, options);
+  }
+  const body = requestFormat === 'responses'
+    ? buildResponsesPayload(effectiveConfig, messages, tools, options)
+    : buildChatCompletionPayload(effectiveConfig, messages, tools, options);
 
   // 0.3.9 item 8 — emit the cache-stable prefix fingerprint for this
   // request. When tracing is disabled this resolves to a no-op
@@ -5704,8 +6601,9 @@ export async function callOpenAI(
   traceEvent('llm_call.prefix_fingerprint', {
     model: config.model,
     endpoint,
+    requestFormat,
     prefixFingerprint,
-    promptMessages: body.messages.length,
+    promptMessages: requestFormat === 'responses' ? (body as ResponsesPayload).input.length : (body as ChatCompletionPayload).messages.length,
     toolCount: body.tools?.length ?? 0,
   });
 
@@ -5716,48 +6614,76 @@ export async function callOpenAI(
     headers['Authorization'] = `Bearer ${apiKey}`;
   }
 
-  const timeoutMs = getCliKnobs().llmTimeoutMs;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  // DESK-6 — abort on EITHER the timeout OR the user's Stop signal; the catch
-  // disambiguates so a Stop never masquerades as a (retryable) timeout.
-  const fetchSignal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
+  const requestUrl = withApiVersion(`${endpoint}/${requestFormat === 'responses' ? 'responses' : 'chat/completions'}`, config.apiVersion);
+  const postBody = async (requestBody: any): Promise<Response> => {
+    const timeoutMs = getCliKnobs().llmTimeoutMs;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    // DESK-6 — abort on EITHER the timeout OR the user's Stop signal; the catch
+    // disambiguates so a Stop never masquerades as a (retryable) timeout.
+    const fetchSignal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
 
-  // Gate every chat LLM call through the process-wide semaphore. This
-  // prevents a fan-out of N parallel children from firing N simultaneous
-  // requests at the backend — the same condition that was unloading the
-  // local LM Studio model. The MCP child has its own matching semaphore;
-  // both consume the BRAINROUTER_LLM_MAX_CONCURRENT budget on the same
-  // backend instance.
-  const release = await acquireLLMSlot();
-  let res: Response;
-  try {
-    res = await fetch(`${endpoint}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: fetchSignal,
-    });
-  } catch (err: any) {
-    release();
-    if (err?.name === 'AbortError') {
-      if (options.signal?.aborted) throw new InterruptError();
-      throw new Error(`LLM request timed out after ${timeoutMs}ms. Check that ${endpoint} is running and that model "${config.model}" can answer chat/completions requests with tools enabled.`);
+    // Gate every chat LLM call through the process-wide semaphore. This
+    // prevents a fan-out of N parallel children from firing N simultaneous
+    // requests at the backend — the same condition that was unloading the
+    // local LM Studio model. The MCP child has its own matching semaphore;
+    // both consume the BRAINROUTER_LLM_MAX_CONCURRENT budget on the same
+    // backend instance.
+    const release = await acquireLLMSlot();
+    try {
+      return await fetch(requestUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestBody),
+        signal: fetchSignal,
+      });
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        if (options.signal?.aborted) throw new InterruptError();
+        throw new Error(`LLM request timed out after ${timeoutMs}ms. Check that ${endpoint} is running and that model "${config.model}" can answer ${requestFormat} requests with tools enabled.`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeout);
+      // Release once the headers are back; reading the body is local work that
+      // doesn't need to block other LLM callers from starting.
+      release();
     }
-    throw err;
-  } finally {
-    clearTimeout(timeout);
-  }
+  };
 
-  // Release once the headers are back; reading the body is local work that
-  // doesn't need to block other LLM callers from starting.
-  release();
-
+  let res = await postBody(body);
   if (!res.ok) {
     const errText = await res.text();
+    let retryBody = isInvalidReasoningEffortError(res.status, errText)
+      ? stripReasoningEffortFromBody(body)
+      : undefined;
+    let retryKind = retryBody ? 'reasoning_effort' : '';
+    // HONK-L4 — if the endpoint rejected tools/tool_choice, drop them and retry
+    // (degrade to a plain-content answer) instead of hard-failing the turn.
+    if (!retryBody && isToolsUnsupportedError(res.status, errText)) {
+      retryBody = stripToolsFromBody(body);
+      if (retryBody) retryKind = 'tools_unsupported';
+    }
+    if (retryBody) {
+      traceEvent(retryKind === 'tools_unsupported' ? 'llm_call.tools_unsupported_retry' : 'llm_call.reasoning_effort_retry', {
+        model: config.model,
+        endpoint,
+        requestFormat,
+        status: res.status,
+      });
+      res = await postBody(retryBody);
+      if (res.ok) {
+        const retryData = await res.json() as any;
+        if (requestFormat === 'responses') {
+          return normalizeResponsesOutput(retryData, endpoint, config.model);
+        }
+        return normalizeChatCompletionOutput(retryData, endpoint, config.model);
+      }
+    }
     // RECONNECT — attach the structured status + any `Retry-After` so the resilient
     // loop classifies it (429/5xx → reconnect) and honors the server's backoff.
-    const apiErr: any = new Error(`OpenAI API error: ${res.status} ${res.statusText} - ${errText}`);
+    const finalErrText = retryBody ? await res.text() : errText;
+    const apiErr: any = new Error(`OpenAI API error: ${res.status} ${res.statusText} - ${finalErrText}`);
     apiErr.status = res.status;
     const retryAfterMs = parseRetryAfterMs(res.headers.get('retry-after'));
     if (retryAfterMs !== undefined) apiErr.retryAfterMs = retryAfterMs;
@@ -5765,7 +6691,14 @@ export async function callOpenAI(
   }
 
   const data = await res.json() as any;
+  if (requestFormat === 'responses') {
+    return normalizeResponsesOutput(data, endpoint, config.model);
+  }
 
+  return normalizeChatCompletionOutput(data, endpoint, config.model);
+}
+
+function normalizeChatCompletionOutput(data: any, endpoint: string, model: string) {
   // Defensive response-shape parsing. Some endpoints (LM Studio with certain
   // models, OpenRouter on specific upstream errors, local vLLM under load,
   // gpt-oss reasoning models with a non-standard envelope) return a 200 OK
@@ -5784,7 +6717,7 @@ export async function callOpenAI(
   if (!Array.isArray(data?.choices) || data.choices.length === 0) {
     throw new Error(
       `LLM endpoint returned no choices. ` +
-      `Model "${config.model}" at ${endpoint} may not support chat/completions, ` +
+      `Model "${model}" at ${endpoint} may not support chat/completions, ` +
       `may need a different request shape (reasoning/harmony format?), or be misconfigured. ` +
       `Response body: ${JSON.stringify(data).slice(0, 600)}`,
     );
@@ -5842,8 +6775,10 @@ export async function callOpenAIStream(
     onReasoningDelta?: (text: string) => void;
   } = {},
 ) {
-  const rawEndpoint = config.endpoint || 'https://api.openai.com/v1';
+  const initialDef = activeProviderDef(config);
+  const rawEndpoint = config.endpoint || initialDef?.endpoint || 'https://api.openai.com/v1';
   const endpoint = rawEndpoint.replace(/\/+$/, '').replace(/\/chat\/completions$/, '');
+  const effectiveConfig: LLMConfig = { ...config, endpoint };
   // Key resolution is CONFIG-DRIVEN, not env-driven: BrainRouter reads the key
   // from config.apiKey (the config knob). Standard provider env vars are imported
   // into config ONCE at load time (config.ts → backfillApiKeyFromEnv), so we never
@@ -5852,7 +6787,7 @@ export async function callOpenAIStream(
   // public/anonymous tier (opencode "public") supplies a last-resort key; a local
   // server accepts a throwaway bearer. Locality comes from the provider's `local`
   // flag first, then a loopback-endpoint check (covers a custom local gateway).
-  const def = activeProviderDef(config);
+  const def = activeProviderDef(effectiveConfig);
   let apiKey = config.apiKey || '';
   const isLocal = (def?.local ?? false) || isLoopbackEndpoint(endpoint);
   if (!apiKey && !isLocal && def?.defaultApiKey) apiKey = def.defaultApiKey;
@@ -5863,9 +6798,22 @@ export async function callOpenAIStream(
     apiKey = LOCAL_PLACEHOLDER_KEY;
   }
 
-  const body: any = buildChatCompletionPayload(config, messages, tools, options);
+  const requestFormat = resolveRequestFormat(effectiveConfig, endpoint);
+  // NATIVE formats don't stream here — issue the non-streaming native call and
+  // surface its text as a single delta so the UI still paints. (Provider-native
+  // SSE is a future enhancement; correctness first while these are opt-in.)
+  if (requestFormat === 'anthropic-messages' || requestFormat === 'gemini-generate') {
+    const result = await callNativeProvider(requestFormat, effectiveConfig, endpoint, apiKey, messages, tools, options);
+    if (result.content) handlers.onTextDelta?.(result.content);
+    return result;
+  }
+  const body: any = requestFormat === 'responses'
+    ? buildResponsesPayload(effectiveConfig, messages, tools, options)
+    : buildChatCompletionPayload(effectiveConfig, messages, tools, options);
   body.stream = true;
-  body.stream_options = { include_usage: true };
+  if (requestFormat === 'chat-completions') {
+    body.stream_options = { include_usage: true };
+  }
 
   // 0.3.9 item 8 — fingerprint the cache-stable prefix for this stream
   // call too. Item 10 will correlate this with the SSE-final usage row
@@ -5874,8 +6822,9 @@ export async function callOpenAIStream(
   traceEvent('llm_call.prefix_fingerprint', {
     model: config.model,
     endpoint,
+    requestFormat,
     prefixFingerprint: streamPrefixFingerprint,
-    promptMessages: body.messages.length,
+    promptMessages: requestFormat === 'responses' ? body.input.length : body.messages.length,
     toolCount: body.tools?.length ?? 0,
     stream: true,
   });
@@ -5886,43 +6835,75 @@ export async function callOpenAIStream(
   };
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 
-  const timeoutMs = getCliKnobs().llmTimeoutMs;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  // DESK-6 — abort on timeout OR the user's Stop; disambiguate in the catch.
-  const fetchSignal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
+  const requestUrl = withApiVersion(`${endpoint}/${requestFormat === 'responses' ? 'responses' : 'chat/completions'}`, config.apiVersion);
+  const openStreamRequest = async (requestBody: any): Promise<{ res: Response; finish: () => void }> => {
+    const timeoutMs = getCliKnobs().llmTimeoutMs;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    // DESK-6 — abort on timeout OR the user's Stop; disambiguate in the catch.
+    const fetchSignal = options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal;
 
-  const release = await acquireLLMSlot();
-  let res: Response;
-  try {
-    res = await fetch(`${endpoint}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: fetchSignal,
-    });
-  } catch (err: any) {
-    release();
-    clearTimeout(timeout);
-    if (err?.name === 'AbortError') {
-      if (options.signal?.aborted) throw new InterruptError();
-      throw new Error(`LLM stream request timed out after ${timeoutMs}ms.`);
+    const release = await acquireLLMSlot();
+    try {
+      const res = await fetch(requestUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestBody),
+        signal: fetchSignal,
+      });
+      return {
+        res,
+        finish: () => {
+          release();
+          clearTimeout(timeout);
+        },
+      };
+    } catch (err: any) {
+      release();
+      clearTimeout(timeout);
+      if (err?.name === 'AbortError') {
+        if (options.signal?.aborted) throw new InterruptError();
+        throw new Error(`LLM stream request timed out after ${timeoutMs}ms.`);
+      }
+      throw err;
     }
-    throw err;
-  }
+  };
 
-  if (!res.ok || !res.body) {
-    release();
-    clearTimeout(timeout);
-    const errText = res.body ? await res.text() : '';
-    throw new Error(`OpenAI API error (stream): ${res.status} ${res.statusText} - ${errText}`);
+  let attempt = await openStreamRequest(body);
+  if (!attempt.res.ok || !attempt.res.body) {
+    const errText = attempt.res.body ? await attempt.res.text() : '';
+    const retryBody = isInvalidReasoningEffortError(attempt.res.status, errText)
+      ? stripReasoningEffortFromBody(body)
+      : undefined;
+    attempt.finish();
+    if (retryBody) {
+      traceEvent('llm_call.reasoning_effort_retry', {
+        model: config.model,
+        endpoint,
+        requestFormat,
+        status: attempt.res.status,
+        stream: true,
+      });
+      attempt = await openStreamRequest(retryBody);
+      if (!attempt.res.ok || !attempt.res.body) {
+        const retryErrText = attempt.res.body ? await attempt.res.text() : '';
+        const status = attempt.res.status;
+        const statusText = attempt.res.statusText;
+        attempt.finish();
+        throw new Error(`OpenAI API error (stream): ${status} ${statusText} - ${retryErrText}`);
+      }
+    } else {
+      throw new Error(`OpenAI API error (stream): ${attempt.res.status} ${attempt.res.statusText} - ${errText}`);
+    }
   }
+  const res = attempt.res;
 
   // Accumulators that match the non-streaming response shape.
   let content = '';
   let reasoning = '';
   const toolCallsByIndex = new Map<number, { id?: string; type?: string; function: { name: string; arguments: string } }>();
   let usage: { prompt_tokens?: number; completion_tokens?: number } | undefined;
+  let finalResponse: any;
   // `length` ⇒ the provider truncated the stream at its token cap. The last
   // non-empty finish_reason in the stream wins.
   let finishReason: string | undefined;
@@ -5953,6 +6934,85 @@ export async function callOpenAIStream(
           if (payload === '[DONE]') continue;
           let frameJson: any;
           try { frameJson = JSON.parse(payload); } catch { continue; }
+          if (requestFormat === 'responses') {
+            if (frameJson?.type === 'error') {
+              const message = frameJson.error?.message ?? frameJson.message ?? JSON.stringify(frameJson).slice(0, 400);
+              throw new Error(`OpenAI Responses stream error: ${message}`);
+            }
+            if (frameJson?.type === 'response.output_text.delta' && typeof frameJson.delta === 'string') {
+              content += frameJson.delta;
+              handlers.onTextDelta?.(frameJson.delta);
+              continue;
+            }
+            if (frameJson?.type === 'response.refusal.delta' && typeof frameJson.delta === 'string') {
+              content += frameJson.delta;
+              handlers.onTextDelta?.(frameJson.delta);
+              continue;
+            }
+            if (typeof frameJson?.type === 'string' && frameJson.type.includes('reasoning') && typeof frameJson.delta === 'string') {
+              reasoning += frameJson.delta;
+              handlers.onReasoningDelta?.(frameJson.delta);
+              continue;
+            }
+            if (frameJson?.type === 'response.output_item.added' && frameJson.item?.type === 'function_call') {
+              const idx = typeof frameJson.output_index === 'number' ? frameJson.output_index : toolCallsByIndex.size;
+              toolCallsByIndex.set(idx, {
+                id: frameJson.item.call_id ?? frameJson.item.id,
+                type: 'function',
+                function: {
+                  name: frameJson.item.name ?? '',
+                  arguments: typeof frameJson.item.arguments === 'string' ? frameJson.item.arguments : '',
+                },
+              });
+              continue;
+            }
+            if (frameJson?.type === 'response.function_call_arguments.delta') {
+              const idx = typeof frameJson.output_index === 'number' ? frameJson.output_index : 0;
+              const acc = toolCallsByIndex.get(idx) ?? { type: 'function', function: { name: '', arguments: '' } };
+              if (typeof frameJson.delta === 'string') acc.function.arguments += frameJson.delta;
+              toolCallsByIndex.set(idx, acc);
+              continue;
+            }
+            if (frameJson?.type === 'response.function_call_arguments.done') {
+              const idx = typeof frameJson.output_index === 'number' ? frameJson.output_index : 0;
+              const acc = toolCallsByIndex.get(idx) ?? { type: 'function', function: { name: '', arguments: '' } };
+              const item = frameJson.item;
+              if (item?.call_id || item?.id) acc.id = item.call_id ?? item.id;
+              if (item?.name) acc.function.name = item.name;
+              if (typeof frameJson.arguments === 'string') acc.function.arguments = frameJson.arguments;
+              else if (typeof item?.arguments === 'string') acc.function.arguments = item.arguments;
+              toolCallsByIndex.set(idx, acc);
+              continue;
+            }
+            if (frameJson?.type === 'response.output_item.done' && frameJson.item?.type === 'function_call') {
+              const idx = typeof frameJson.output_index === 'number' ? frameJson.output_index : 0;
+              toolCallsByIndex.set(idx, {
+                id: frameJson.item.call_id ?? frameJson.item.id,
+                type: 'function',
+                function: {
+                  name: frameJson.item.name ?? '',
+                  arguments: typeof frameJson.item.arguments === 'string' ? frameJson.item.arguments : '',
+                },
+              });
+              continue;
+            }
+            if (frameJson?.type === 'response.completed' || frameJson?.type === 'response.done') {
+              finalResponse = frameJson.response;
+              usage = normalizeProviderUsage(frameJson.response?.usage) as typeof usage;
+              continue;
+            }
+            if (frameJson?.type === 'response.incomplete') {
+              finalResponse = frameJson.response;
+              usage = normalizeProviderUsage(frameJson.response?.usage) as typeof usage;
+              finishReason = frameJson.response?.incomplete_details?.reason ?? 'incomplete';
+              continue;
+            }
+            if (frameJson?.type === 'response.failed') {
+              const message = frameJson.response?.error?.message ?? JSON.stringify(frameJson.response?.error ?? frameJson).slice(0, 400);
+              throw new Error(`OpenAI Responses stream failed: ${message}`);
+            }
+            continue;
+          }
           if (frameJson?.usage) {
             usage = {
               prompt_tokens: frameJson.usage.prompt_tokens,
@@ -5992,14 +7052,23 @@ export async function callOpenAIStream(
       }
     }
   } finally {
-    release();
-    clearTimeout(timeout);
+    attempt.finish();
   }
 
   const toolCalls = [...toolCallsByIndex.entries()]
     .sort((a, b) => a[0] - b[0])
     .map(([, v]) => ({ id: v.id, type: v.type ?? 'function', function: v.function }))
     .filter((tc) => tc.function.name); // drop incomplete entries
+
+  if (requestFormat === 'responses' && finalResponse && (!content || toolCalls.length === 0)) {
+    const normalized = normalizeResponsesOutput(finalResponse, endpoint, config.model);
+    if (!content && normalized.content) content = normalized.content;
+    if (toolCalls.length === 0 && normalized.toolCalls?.length) {
+      toolCalls.push(...normalized.toolCalls);
+    }
+    usage = (usage ?? normalized.usage) as typeof usage;
+    finishReason = finishReason ?? normalized.finishReason;
+  }
 
   return {
     content,

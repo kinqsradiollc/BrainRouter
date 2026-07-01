@@ -93,7 +93,7 @@ export const memoryGovernanceToolSchemas = [
     },
   },
   {
-    name: "memory_verify",
+    name: "memory_verify_anchors",
     description: "Reconcile code-anchored memories against the CURRENT source index. Classifies each anchored memory as fresh, re-anchorable (its file changed — a reindex can refresh the anchor), or archivable (its source file is gone → confirmed-dead). Read-only by default; apply=true archives ONLY the confirmed-dead ones (recoverable expiry, not deletion). Returns counts + a sample. Non-code memories are ignored.",
     inputSchema: {
       type: "object",
@@ -198,7 +198,7 @@ export async function handleMemoryGovernanceTool(name: string, args: unknown, op
   switch (name) {
     case "memory_get": {
       const params = z.object({ ...baseUser, recordId: z.string() }).parse(args);
-      return toolResult(memoryEngine.getMemoryById(effectiveUserId(params.userId, options?.defaultUserId), params.recordId));
+      return toolResult(await memoryEngine.getMemoryById(effectiveUserId(params.userId, options?.defaultUserId), params.recordId));
     }
     case "memory_update": {
       const params = z.object({
@@ -210,7 +210,7 @@ export async function handleMemoryGovernanceTool(name: string, args: unknown, op
         verificationStatus: verificationSchema.optional(),
         note: z.string().optional(),
       }).parse(args);
-      return toolResult(memoryEngine.updateMemory(effectiveUserId(params.userId, options?.defaultUserId), params.recordId, params));
+      return toolResult(await memoryEngine.updateMemory(effectiveUserId(params.userId, options?.defaultUserId), params.recordId, params));
     }
     case "memory_evidence_add": {
       const params = z.object({
@@ -221,15 +221,15 @@ export async function handleMemoryGovernanceTool(name: string, args: unknown, op
         excerpt: z.string().optional().default(""),
         metadata: z.record(z.unknown()).optional().default({}),
       }).parse(args);
-      return toolResult(memoryEngine.addEvidence(effectiveUserId(params.userId, options?.defaultUserId), params.recordId, params));
+      return toolResult(await memoryEngine.addEvidence(effectiveUserId(params.userId, options?.defaultUserId), params.recordId, params));
     }
     case "memory_evidence_get": {
       const params = z.object({ ...baseUser, recordId: z.string() }).parse(args);
-      return toolResult(memoryEngine.getEvidence(effectiveUserId(params.userId, options?.defaultUserId), params.recordId));
+      return toolResult(await memoryEngine.getEvidence(effectiveUserId(params.userId, options?.defaultUserId), params.recordId));
     }
     case "memory_export": {
       const params = z.object(baseUser).parse(args ?? {});
-      return toolResult(memoryEngine.exportMemories(effectiveUserId(params.userId, options?.defaultUserId)));
+      return toolResult(await memoryEngine.exportMemories(effectiveUserId(params.userId, options?.defaultUserId)));
     }
     case "memory_import": {
       const params = z.object({ ...baseUser, data: importEnvelopeSchema }).parse(args);
@@ -237,7 +237,7 @@ export async function handleMemoryGovernanceTool(name: string, args: unknown, op
     }
     case "memory_governance_delete": {
       const params = z.object({ ...baseUser, recordId: z.string(), reason: z.string().min(1) }).parse(args);
-      memoryEngine.governanceDelete(effectiveUserId(params.userId, options?.defaultUserId), params.recordId, params.reason);
+      await memoryEngine.governanceDelete(effectiveUserId(params.userId, options?.defaultUserId), params.recordId, params.reason);
       return toolResult({ success: true });
     }
     case "memory_governance_plan": {
@@ -253,22 +253,22 @@ export async function handleMemoryGovernanceTool(name: string, args: unknown, op
       const cognitive =
         params.scope === "storage"
           ? undefined
-          : memoryEngine.governancePlan(uid, {
+          : await memoryEngine.governancePlan(uid, {
               type: params.type,
               olderThanDays: params.olderThanDays,
               uncitedOnly: params.uncitedOnly,
             });
-      const storage = params.scope === "cognitive" ? undefined : memoryEngine.governanceStoragePlan(uid);
+      const storage = params.scope === "cognitive" ? undefined : await memoryEngine.governanceStoragePlan(uid);
       // Back-compat: a bare cognitive plan returns its result unchanged.
       return toolResult(params.scope === "cognitive" ? cognitive : { scope: params.scope, cognitive, storage });
     }
-    case "memory_verify": {
+    case "memory_verify_anchors": {
       const params = z.object({
         ...baseUser,
         apply: z.boolean().optional().default(false),
         limit: z.number().int().min(1).max(5000).optional(),
       }).parse(args ?? {});
-      return toolResult(memoryEngine.verifyMemories(effectiveUserId(params.userId, options?.defaultUserId), {
+      return toolResult(await memoryEngine.verifyMemories(effectiveUserId(params.userId, options?.defaultUserId), {
         apply: params.apply,
         limit: params.limit,
       }));
@@ -279,14 +279,14 @@ export async function handleMemoryGovernanceTool(name: string, args: unknown, op
         limit: z.number().int().min(1).max(200).optional().default(50),
         cursor: z.object({ createdAt: z.string(), id: z.string() }).optional(),
       }).parse(args ?? {});
-      return toolResult(memoryEngine.getOperationLog(effectiveUserId(params.userId, options?.defaultUserId), {
+      return toolResult(await memoryEngine.getOperationLog(effectiveUserId(params.userId, options?.defaultUserId), {
         limit: params.limit,
         cursor: params.cursor,
       }));
     }
     case "memory_diagnostics": {
       const params = z.object(baseUser).parse(args ?? {});
-      return toolResult(memoryEngine.getDiagnostics(effectiveUserId(params.userId, options?.defaultUserId)));
+      return toolResult(await memoryEngine.getDiagnostics(effectiveUserId(params.userId, options?.defaultUserId)));
     }
     default:
       throw new Error(`Unknown governance tool: ${name}`);

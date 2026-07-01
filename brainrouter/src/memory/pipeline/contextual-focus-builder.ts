@@ -12,7 +12,7 @@ async function canonicalizeFocusNames(params: {
   llmRunner: LLMRunner;
 }) {
   const { userId, store, llmRunner } = params;
-  const sceneNames = store.getDistinctSceneNames(userId);
+  const sceneNames = await store.getDistinctSceneNames(userId);
   if (sceneNames.length < 2) return;
 
   try {
@@ -21,6 +21,18 @@ async function canonicalizeFocusNames(params: {
       systemPrompt: FOCUS_SCENE_CLUSTER_SYSTEM_PROMPT,
       taskId: "focus-scene-clustering",
       timeoutMs: 45_000,
+      // STRUCTURED OUTPUT — wrap the cluster array in a tool schema (function
+      // params must be an object); the JSON chokepoint unwraps it. See modelRunner.ts.
+      tool: {
+        name: "emit_scene_clusters",
+        description: "Return the focus-scene clusters as described in the prompt. Use [] when nothing clusters.",
+        parameters: {
+          type: "object",
+          properties: { clusters: { type: "array", items: { type: "object" } } },
+          required: ["clusters"],
+          additionalProperties: false,
+        },
+      },
     });
 
     // Robust parse: tolerant of role-token leaks / prose / fences (see llm-json.ts).
@@ -34,7 +46,7 @@ async function canonicalizeFocusNames(params: {
 
       for (const alias of aliases) {
         if (alias === canonical) continue;
-        store.renameFocusInCognitiveRecords(userId, alias, canonical);
+        await store.renameFocusInCognitiveRecords(userId, alias, canonical);
       }
     }
   } catch (err) {
@@ -56,9 +68,9 @@ export async function distillFocusScenes(params: {
   await canonicalizeFocusNames({ userId, store, llmRunner });
 
   // Decay all existing heat scores (each distillation cycle = time passing)
-  store.decayContextualFocusHeatScores(userId);
+  await store.decayContextualFocusHeatScores(userId);
 
-  const sceneNames = store.getDistinctSceneNames(userId);
+  const sceneNames = await store.getDistinctSceneNames(userId);
   if (sceneNames.length === 0) {
     return { focusDistilled: 0, sceneNames: [] };
   }
@@ -67,10 +79,10 @@ export async function distillFocusScenes(params: {
   const distilled: string[] = [];
 
   // Fetch existing focus scenes up-front so the prompt can avoid near-duplicates
-  const existingFocusNames = store.getTopContextualFocus(userId, 50).map(s => s.sceneName);
+  const existingFocusNames = (await store.getTopContextualFocus(userId, 50)).map(s => s.sceneName);
 
   for (const sceneName of sceneNames) {
-    const cognitives = store.getCognitivesByFocus(userId, sceneName, 30);
+    const cognitives = await store.getCognitivesByFocus(userId, sceneName, 30);
     if (cognitives.length === 0) continue;
 
     let summaryMd: string;
@@ -86,7 +98,7 @@ export async function distillFocusScenes(params: {
       continue;
     }
 
-    const existing = store.getContextualFocusByName(userId, sceneName);
+    const existing = await store.getContextualFocusByName(userId, sceneName);
     const record: ContextualFocusRecord = {
       id: existing?.id ?? `focus_${crypto.randomBytes(6).toString("hex")}`,
       userId,
@@ -98,7 +110,7 @@ export async function distillFocusScenes(params: {
       updatedTime: now,
     };
 
-    store.upsertContextualFocus(record);
+    await store.upsertContextualFocus(record);
     distilled.push(sceneName);
   }
 
@@ -112,11 +124,11 @@ export async function distillFocusScenes(params: {
 async function mergeFocusScenes(params: { userId: string; store: IMemoryStore; llmRunner: LLMRunner }) {
   const { userId, store, llmRunner } = params;
   
-  const focusCount = store.getContextualFocusCount(userId);
+  const focusCount = await store.getContextualFocusCount(userId);
   if (focusCount < MAX_FOCUS_SCENES) return;
 
   const overflow = focusCount - MAX_FOCUS_SCENES + 1;
-  const coldScenes = store.getColdContextualFocus(userId, overflow + 3);
+  const coldScenes = await store.getColdContextualFocus(userId, overflow + 3);
   
   if (coldScenes.length < 2) return;
 
@@ -140,8 +152,8 @@ async function mergeFocusScenes(params: { userId: string; store: IMemoryStore; l
   }
 
   const now = new Date().toISOString();
-  const existingArchive = store.getContextualFocusByName(userId, archiveSceneName);
-  
+  const existingArchive = await store.getContextualFocusByName(userId, archiveSceneName);
+
   const record: ContextualFocusRecord = {
     id: existingArchive?.id ?? `focus_${crypto.randomBytes(6).toString("hex")}`,
     userId,
@@ -153,10 +165,10 @@ async function mergeFocusScenes(params: { userId: string; store: IMemoryStore; l
     updatedTime: now,
   };
 
-  store.upsertContextualFocus(record);
-  
+  await store.upsertContextualFocus(record);
+
   const idsToDelete = scenesToMerge.map(s => s.id);
-  store.deleteContextualFocus(userId, idsToDelete);
+  await store.deleteContextualFocus(userId, idsToDelete);
   
   console.error(`[BrainRouter] Focus auto-merge: merged ${idsToDelete.length} cold focus scenes into "${archiveSceneName}".`);
 }
