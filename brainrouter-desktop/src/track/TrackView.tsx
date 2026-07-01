@@ -5,7 +5,8 @@
  * bar, and a work-item detail drawer. Reads project/items/sprints from App state
  * (fed by host `track-*` queries) and mutates through the `ops` callbacks.
  */
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { TrackProject, WorkItem, WorkItemType, WorkItemPriority, Sprint, SprintState, Module, ModuleStatus, AutomationRule, AutomationTrigger, AutomationAction, AutomationActionType, ProjectMember, ProjectRole, ProjectCapability } from '@kinqs/brainrouter-types';
 import { roleCan } from '../lib/track/permissions.js';
 import { parseTrackQuery } from '../lib/track/query.js';
@@ -91,12 +92,15 @@ export interface TrackViewProps {
   onOpenRail?: () => void;
 }
 
-type TrackTab = 'board' | 'list' | 'backlog' | 'sprint' | 'modules' | 'roadmap' | 'reports' | 'automation' | 'members' | 'sync';
+type TrackTab = 'board' | 'list' | 'spreadsheet' | 'calendar' | 'gantt' | 'backlog' | 'sprint' | 'modules' | 'roadmap' | 'reports' | 'automation' | 'members' | 'sync';
 interface Filter { type?: WorkItemType; statusCategory?: string; priority?: WorkItemPriority; assignee?: string; text?: string }
 
 const TABS: Array<{ id: TrackTab; label: string; icon: string }> = [
   { id: 'board', label: 'Board', icon: 'layout' },
   { id: 'list', label: 'List', icon: 'tasks' },
+  { id: 'spreadsheet', label: 'Sheet', icon: 'tasks' },
+  { id: 'calendar', label: 'Calendar', icon: 'panels' },
+  { id: 'gantt', label: 'Gantt', icon: 'chart' },
   { id: 'backlog', label: 'Backlog', icon: 'panels' },
   { id: 'sprint', label: 'Sprint', icon: 'bolt' },
   { id: 'modules', label: 'Modules', icon: 'panels' },
@@ -198,7 +202,7 @@ export function TrackView({ project, items, sprints, modules, automations, membe
                 </div>
                 <div className="track-col-body">
                   {composing === s.id ? <Compose draft={draft} setDraft={setDraft} onAdd={() => submitNew(s.id)} onCancel={() => setComposing(null)} /> : null}
-                  {col.map((w) => <Card key={w.id} item={w} labelColors={labelColors} onOpen={() => setSelectedKey(w.key)} onDragStart={() => setDragKey(w.key)} onDragEnd={() => { setDragKey(null); setOverCol(null); }} dragging={dragKey === w.key} />)}
+                  {col.map((w) => <Card key={w.id} item={w} states={states} labelColors={labelColors} onOpen={() => setSelectedKey(w.key)} onTransition={(st) => ops.transition(w.key, st)} onDragStart={() => setDragKey(w.key)} onDragEnd={() => { setDragKey(null); setOverCol(null); }} dragging={dragKey === w.key} />)}
                   {col.length === 0 && composing !== s.id ? <div className="track-col-empty">{dragKey ? 'Drop here' : '—'}</div> : null}
                 </div>
               </section>
@@ -207,6 +211,12 @@ export function TrackView({ project, items, sprints, modules, automations, membe
         </div>
       ) : tab === 'list' ? (
         <ListView items={filtered} states={states} onOpen={(w) => setSelectedKey(w.key)} />
+      ) : tab === 'spreadsheet' ? (
+        <SpreadsheetView items={filtered} states={states} onOpen={(w) => setSelectedKey(w.key)} />
+      ) : tab === 'calendar' ? (
+        <CalendarView items={filtered} onOpen={(w) => setSelectedKey(w.key)} />
+      ) : tab === 'gantt' ? (
+        <GanttView items={filtered} onOpen={(w) => setSelectedKey(w.key)} />
       ) : tab === 'backlog' ? (
         <BacklogView items={filtered} sprints={sprints} ops={ops} onOpen={(w) => setSelectedKey(w.key)} />
       ) : tab === 'sprint' ? (
@@ -279,6 +289,127 @@ function ModulesView({ modules, items, ops }: { modules: Module[]; items: WorkIt
   );
 }
 
+// ── T4b layouts: spreadsheet · calendar · gantt ────────────────────────────────
+
+const fmtDate = (d?: string): string => (d ? new Date(d).toLocaleDateString() : '—');
+
+function SpreadsheetView({ items, states, onOpen }: { items: WorkItem[]; states: TrackProject['workflowStates']; onOpen: (w: WorkItem) => void }): React.ReactElement {
+  const stateName = (id: string): string => states.find((s) => s.id === id)?.name ?? id;
+  return (
+    <div className="track-sheet-wrap">
+      <table className="track-sheet">
+        <thead><tr>
+          <th>Key</th><th>Type</th><th>Title</th><th>Status</th><th>Priority</th><th>Assignees</th><th>Labels</th><th>Pts</th><th>Start</th><th>Target</th>
+        </tr></thead>
+        <tbody>
+          {items.map((w) => (
+            <tr key={w.id} onClick={() => onOpen(w)}>
+              <td className="mono">{w.key}</td>
+              <td><Icon name={TYPE_ICON[w.type]} size={12} /> {w.type}</td>
+              <td className="track-sheet-title">{w.title}</td>
+              <td><span className={`track-cat track-cat-${w.statusCategory}`} /> {stateName(w.status)}</td>
+              <td><span className={`track-pri pri-${w.priority}`} /> {w.priority}</td>
+              <td>{w.assignees.join(', ') || '—'}</td>
+              <td>{w.labels.join(', ') || '—'}</td>
+              <td>{w.storyPoints ?? '—'}</td>
+              <td>{fmtDate(w.startDate)}</td>
+              <td>{fmtDate(w.targetDate)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {items.length === 0 ? <div className="track-empty">No items.</div> : null}
+    </div>
+  );
+}
+
+function CalendarView({ items, onOpen }: { items: WorkItem[]; onOpen: (w: WorkItem) => void }): React.ReactElement {
+  const [month, setMonth] = useState(() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() }; });
+  const first = new Date(month.y, month.m, 1);
+  const daysInMonth = new Date(month.y, month.m + 1, 0).getDate();
+  const byDay = new Map<number, WorkItem[]>();
+  const unscheduled: WorkItem[] = [];
+  for (const w of items) {
+    if (!w.targetDate) { unscheduled.push(w); continue; }
+    const d = new Date(w.targetDate);
+    if (d.getFullYear() === month.y && d.getMonth() === month.m) {
+      if (!byDay.has(d.getDate())) byDay.set(d.getDate(), []);
+      byDay.get(d.getDate())!.push(w);
+    }
+  }
+  const cells: Array<number | null> = [];
+  for (let i = 0; i < first.getDay(); i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  const prev = (): void => setMonth((c) => (c.m === 0 ? { y: c.y - 1, m: 11 } : { y: c.y, m: c.m - 1 }));
+  const next = (): void => setMonth((c) => (c.m === 11 ? { y: c.y + 1, m: 0 } : { y: c.y, m: c.m + 1 }));
+  const today = new Date();
+  const isToday = (d: number): boolean => d === today.getDate() && month.m === today.getMonth() && month.y === today.getFullYear();
+  return (
+    <div className="track-cal">
+      <div className="track-cal-head">
+        <button className="track-cal-nav" onClick={prev} title="Previous month"><Icon name="arrow-left" size={14} /></button>
+        <span className="track-cal-month">{first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</span>
+        <button className="track-cal-nav" onClick={next} title="Next month"><Icon name="arrow-right" size={14} /></button>
+      </div>
+      <div className="track-cal-grid">
+        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => <div key={d} className="track-cal-dow">{d}</div>)}
+        {cells.map((d, i) => (
+          <div key={i} className={`track-cal-cell${d === null ? ' empty' : ''}${d && isToday(d) ? ' today' : ''}`}>
+            {d !== null ? (
+              <>
+                <span className="track-cal-num">{d}</span>
+                {(byDay.get(d) ?? []).map((w) => (
+                  <button key={w.id} className={`track-cal-item pri-${w.priority}`} title={`${w.key} · ${w.title}`} onClick={() => onOpen(w)}>{w.key} {w.title}</button>
+                ))}
+              </>
+            ) : null}
+          </div>
+        ))}
+      </div>
+      {unscheduled.length ? (
+        <div className="track-cal-unsched">
+          <span className="track-cal-unsched-label">No target date ({unscheduled.length})</span>
+          {unscheduled.slice(0, 12).map((w) => <button key={w.id} className="track-cal-item" onClick={() => onOpen(w)}>{w.key} {w.title}</button>)}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function GanttView({ items, onOpen }: { items: WorkItem[]; onOpen: (w: WorkItem) => void }): React.ReactElement {
+  const dated = items.filter((w) => w.startDate || w.targetDate);
+  if (!dated.length) return <div className="track-empty">No items with a start or target date. Set dates to see a timeline.</div>;
+  const times = dated.flatMap((w) => [w.startDate, w.targetDate].filter(Boolean).map((d) => new Date(d as string).getTime()));
+  const min = Math.min(...times);
+  let max = Math.max(...times);
+  if (max === min) max = min + 7 * 864e5;
+  const span = max - min;
+  const pct = (t: number): number => ((t - min) / span) * 100;
+  const rows = [...dated].sort((a, b) => new Date(a.startDate ?? a.targetDate as string).getTime() - new Date(b.startDate ?? b.targetDate as string).getTime());
+  return (
+    <div className="track-gantt">
+      <div className="track-gantt-rows">
+        {rows.map((w) => {
+          const s = new Date(w.startDate ?? w.targetDate as string).getTime();
+          const e = new Date(w.targetDate ?? w.startDate as string).getTime();
+          const left = pct(Math.min(s, e));
+          const width = Math.max(1.5, pct(Math.max(s, e)) - left);
+          return (
+            <div key={w.id} className="track-gantt-row" onClick={() => onOpen(w)}>
+              <div className="track-gantt-label"><span className="mono">{w.key}</span> {w.title}</div>
+              <div className="track-gantt-track">
+                <div className={`track-gantt-bar track-cat-${w.statusCategory}`} style={{ left: `${left}%`, width: `${width}%` }}
+                  title={`${fmtDate(w.startDate)} → ${fmtDate(w.targetDate)}`} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="track-gantt-axis"><span>{new Date(min).toLocaleDateString()}</span><span>{new Date(max).toLocaleDateString()}</span></div>
+    </div>
+  );
+}
+
 function FilterChip({ label, value, options, onPick }: { label: string; value?: string; options: string[]; onPick: (v: string | undefined) => void }): React.ReactElement {
   const [open, setOpen] = useState(false);
   return (
@@ -304,7 +435,56 @@ function Compose({ draft, setDraft, onAdd, onCancel }: { draft: string; setDraft
   );
 }
 
-function Card({ item, onOpen, onDragStart, onDragEnd, dragging, labelColors }: { item: WorkItem; onOpen: () => void; onDragStart: () => void; onDragEnd: () => void; dragging: boolean; labelColors?: Map<string, string> }): React.ReactElement {
+/**
+ * The per-card "…" kebab menu. It's a real button (portaled menu on click) —
+ * NOT a drag handle — so clicking opens actions while dragging still works from
+ * the card body. `stopPropagation` keeps a click off the card's open-detail
+ * handler, and `onMouseDown`/`draggable=false` keep it from starting a drag.
+ */
+function CardMenu({ item, states, onOpen, onTransition }: { item: WorkItem; states: TrackProject['workflowStates']; onOpen: () => void; onTransition: (status: string) => void }): React.ReactElement {
+  const [open, setOpen] = useState(false);
+  const [rect, setRect] = useState<{ left: number; top: number; bottom: number } | null>(null);
+  const ref = useRef<HTMLButtonElement>(null);
+  const toggle = (e: React.MouseEvent): void => {
+    e.stopPropagation();
+    const el = ref.current;
+    if (el) { const r = el.getBoundingClientRect(); setRect({ left: r.left, top: r.top, bottom: r.bottom }); }
+    setOpen((o) => !o);
+  };
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent): void => { const t = e.target as HTMLElement; if (!ref.current?.contains(t) && !t.closest?.('.track-card-menu')) setOpen(false); };
+    const close = (): void => setOpen(false);
+    document.addEventListener('mousedown', onDoc);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => { document.removeEventListener('mousedown', onDoc); window.removeEventListener('scroll', close, true); window.removeEventListener('resize', close); };
+  }, [open]);
+  const width = 190;
+  const flipUp = rect ? (window.innerHeight - rect.bottom) < 280 && rect.top > (window.innerHeight - rect.bottom) : false;
+  return (
+    <>
+      <button type="button" ref={ref} className="track-card-grip" title="More actions" draggable={false}
+        onClick={toggle} onMouseDown={(e) => e.stopPropagation()} onDragStart={(e) => e.preventDefault()}>
+        <Icon name="dots" size={13} />
+      </button>
+      {open && rect ? createPortal(
+        <div className="track-card-menu" style={{ position: 'fixed', left: Math.min(rect.left, window.innerWidth - width - 8), width, ...(flipUp ? { bottom: window.innerHeight - rect.top + 4 } : { top: rect.bottom + 4 }) }}>
+          <button type="button" className="track-card-menu-item" onClick={(e) => { e.stopPropagation(); onOpen(); setOpen(false); }}>Open details</button>
+          <div className="track-card-menu-sep" />
+          <div className="track-card-menu-head">Move to</div>
+          {states.map((s) => (
+            <button type="button" key={s.id} className={`track-card-menu-item${s.id === item.status ? ' active' : ''}`}
+              onClick={(e) => { e.stopPropagation(); if (s.id !== item.status) onTransition(s.id); setOpen(false); }}>
+              <span className={`track-cat track-cat-${s.category}`} /><span>{s.name}</span>
+            </button>
+          ))}
+        </div>, document.body) : null}
+    </>
+  );
+}
+
+function Card({ item, states, onOpen, onTransition, onDragStart, onDragEnd, dragging, labelColors }: { item: WorkItem; states: TrackProject['workflowStates']; onOpen: () => void; onTransition: (status: string) => void; onDragStart: () => void; onDragEnd: () => void; dragging: boolean; labelColors?: Map<string, string> }): React.ReactElement {
   return (
     <div className={`track-card${dragging ? ' dragging' : ''}`} onClick={onOpen} draggable
       onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', item.key); onDragStart(); }}
@@ -313,7 +493,7 @@ function Card({ item, onOpen, onDragStart, onDragEnd, dragging, labelColors }: {
         <span className={`track-type track-type-${item.type}`}><Icon name={TYPE_ICON[item.type]} size={11} /></span>
         <span className="track-card-key mono">{item.key}</span>
         <span className={`track-pri pri-${item.priority}`} title={`Priority: ${item.priority}`} />
-        <span className="track-card-grip" title="Drag to another column"><Icon name="dots" size={13} /></span>
+        <CardMenu item={item} states={states} onOpen={onOpen} onTransition={onTransition} />
       </div>
       <div className="track-card-title">{item.title}</div>
       {(item.assignees.length || item.labels.length) ? (
@@ -414,7 +594,7 @@ function SprintView({ items, sprints, states, ops, onOpen }: { items: WorkItem[]
               onDrop={() => { if (dragKey) { const w = items.find((x) => x.key === dragKey); if (w && w.status !== s.id) ops.transition(dragKey, s.id); } setDragKey(null); setOverCol(null); }}>
               <div className="track-col-head"><span className={`track-cat track-cat-${s.category}`} /><span className="track-col-name">{s.name}</span><span className="track-col-count">{col.length}</span></div>
               <div className="track-col-body">
-                {col.map((w) => <Card key={w.id} item={w} onOpen={() => onOpen(w)} onDragStart={() => setDragKey(w.key)} onDragEnd={() => { setDragKey(null); setOverCol(null); }} dragging={dragKey === w.key} />)}
+                {col.map((w) => <Card key={w.id} item={w} states={states} onOpen={() => onOpen(w)} onTransition={(st) => ops.transition(w.key, st)} onDragStart={() => setDragKey(w.key)} onDragEnd={() => { setDragKey(null); setOverCol(null); }} dragging={dragKey === w.key} />)}
                 {col.length === 0 ? <div className="track-col-empty">{dragKey ? 'Drop here' : '—'}</div> : null}
               </div>
             </section>
