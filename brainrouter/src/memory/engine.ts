@@ -499,7 +499,7 @@ export class MemoryEngine {
   }
 
   public registerSkillHints(skillName: string, hints: string, sourceFile = "") {
-    this.store.upsertSkillHints(skillName, hints, sourceFile);
+    return this.store.upsertSkillHints(skillName, hints, sourceFile);
   }
 
   public listSkillHints() {
