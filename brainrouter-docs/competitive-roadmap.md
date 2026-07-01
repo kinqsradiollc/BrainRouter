@@ -6,6 +6,8 @@
 
 # BrainRouter: What to Steal from Claude Code / Codex — Sequenced Roadmap
 
+> **Release status (2026-07-01): 0.4.16 shipped and published to npm.** This release closed most of Phases 0–3: the **Jira/Plane-class Track board** with **bidirectional 3-way GitHub Issues sync** (#6, delivered GitHub-first), the **cloud/async fleet-automation program (Honk)** — durable fleet queue + runner, isolated-worktree codemod→PR executor, MCP `fleet_run`/`fleet_status`, CLI `brainrouter fleet`, PR-emitting build loop, and a hardened un-opt-out-able sandbox for unattended roles (#3/#4/#7 core) — plus the **PostgreSQL + pgvector** memory store, the **remote-brain runtime** (transport + atlas-as-service + tenancy + cloud packaging), the **core public-API boundary refactor**, and the full desktop **unified workspace** (Write mode, prototypes, visual workflows, Memory panel, tray, shortcuts, tool policy). **Next up:** perfect the first-class **GitHub connector** (single source of truth, repo-picker, real OAuth device-flow) — planned in `GITHUB_CONNECTORS_IMPLEMENTATION_PLAN.md`. VS Code (#8) and multi-tracker sync beyond GitHub (#6 Jira/Linear) remain open.
+
 > **Owner decisions (2026-06-21):** Building **Phase 1 now** — #3 hooks, #4 sandbox, #5 commit-scanner. **#6** (multi-tracker sync) → **GitHub-only; deferred** (saved for later if a Jira/Linear customer materializes). **#7** (cloud/async agents) → **skipped for now** (revisit when the async model is clearer). #8 (VS Code) + Phase 0 (publish/market) remain open.
 >
 > Investigation correction: the hooks layer (`hooksStore.ts`) and sandbox (`exec/sandbox.ts`) are **more complete than the roadmap assumed** — both already work; #3/#4 are *enforcement-when-unattended + config surface*, not green-field.
