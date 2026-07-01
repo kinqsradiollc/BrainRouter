@@ -87,7 +87,7 @@ import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kin
 import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement, deleteRequirement, type RequirementPatch } from '@kinqs/brainrouter-core/requirement';
 import { buildBaseGraph, saveAtlasGraph, readAtlasGraph, atlasGraphStats, atlasWorkspaceTag, enrichAtlasGraph, extractAtlasJson, type AtlasLlmCaller } from '@kinqs/brainrouter-core/atlas';
 import { syncRequirementPlanTrack } from '@kinqs/brainrouter-core/requirement';
-import { ensureProject, getProject, getWorkItem, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, createModule, listModules, updateModule, deleteModule, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember, getGithubLinks, setGithubLink, type CreateWorkItemInput, type UpdateWorkItemPatch, type UpdateModulePatch, type AutomationPatch } from '@kinqs/brainrouter-core/track';
+import { ensureProject, getProject, getWorkItem, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, createModule, listModules, updateModule, deleteModule, saveView, listViews, deleteView, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember, getGithubLinks, setGithubLink, type CreateWorkItemInput, type UpdateWorkItemPatch, type UpdateModulePatch, type AutomationPatch } from '@kinqs/brainrouter-core/track';
 import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfigForWorkspace, listResolvedGithubConfigsForWorkspace, issueToWorkItem, type GithubIssue } from '@kinqs/brainrouter-core/track';
 import { scanGitCommitsForTrack } from '@kinqs/brainrouter-core/track';
 import { readGitTrackContext, startGitWorkForTrackItem } from '@kinqs/brainrouter-core/track';
@@ -2511,6 +2511,14 @@ async function main(): Promise<void> {
         updateWorkItem(workspaceRoot, String(a.idOrKey ?? ''), { moduleId: a.moduleId ? String(a.moduleId) : undefined }, 'user');
         return listWorkItems(workspaceRoot);
       },
+      // Saved views — filter + layout presets.
+      'track-views': () => { ensureProject(workspaceRoot); return listViews(workspaceRoot); },
+      'track-save-view': (a) => {
+        const input = (a.input && typeof a.input === 'object' ? a.input : {}) as Parameters<typeof saveView>[1];
+        if (input.name && input.layout) saveView(workspaceRoot, input);
+        return listViews(workspaceRoot);
+      },
+      'track-delete-view': (a) => { deleteView(workspaceRoot, String(a.id ?? '')); return listViews(workspaceRoot); },
       // Automation rules — trigger → action over the project board.
       'track-automations': () => { ensureProject(workspaceRoot); return listAutomations(workspaceRoot); },
       'track-create-automation': (a) => {

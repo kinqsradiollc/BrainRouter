@@ -434,6 +434,11 @@ export function installDevBridge(): void {
     { id: 'mod_3', workspaceRoot: wsCurrent, name: 'Cloud packaging', description: 'server image + remote dashboard', status: 'planned', lead: 'you', members: ['you'], targetDate: '2026-08-01T00:00:00.000Z', createdAt: '2026-06-20T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
   ];
   let devModuleN = 4;
+  const devViews: Record<string, unknown>[] = [
+    { id: 'view_1', workspaceRoot: wsCurrent, name: 'My open bugs', layout: 'board', query: 'type = bug', filters: { priority: 'high' }, createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
+    { id: 'view_2', workspaceRoot: wsCurrent, name: 'This month', layout: 'calendar', createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
+  ];
+  let devViewN = 3;
   // Seed a few module assignments so the preview's progress bars have data.
   for (const it of devTrack.items) {
     if (it.key === 'BR-1' || it.key === 'BR-2') it.moduleId = 'mod_2';
@@ -1136,6 +1141,18 @@ export function installDevBridge(): void {
       if (it) it.moduleId = a.moduleId ? String(a.moduleId) : undefined;
       return [...devTrack.items];
     },
+    'track-views': () => [...devViews],
+    'track-save-view': (a) => {
+      const input = (a.input && typeof a.input === 'object' ? a.input : {}) as Record<string, unknown>;
+      const name = String(input.name ?? '').trim();
+      if (name) {
+        const existing = devViews.find((v) => String(v.name).toLowerCase() === name.toLowerCase());
+        const rec = { id: existing?.id ?? `view_${devViewN++}`, workspaceRoot: wsCurrent, name, layout: input.layout ?? 'board', query: input.query || undefined, filters: input.filters || undefined, createdAt: existing?.createdAt ?? new Date().toISOString(), updatedAt: new Date().toISOString() };
+        if (existing) Object.assign(existing, rec); else devViews.push(rec);
+      }
+      return [...devViews];
+    },
+    'track-delete-view': (a) => { const i = devViews.findIndex((v) => v.id === a.id); if (i >= 0) devViews.splice(i, 1); return [...devViews]; },
     'track-automations': () => [...devAutomations],
     'track-create-automation': (a) => {
       devAutomations.push({ id: `auto_${devAutoN++}`, name: String(a.name ?? 'Rule'), enabled: true, trigger: String(a.trigger ?? 'created'), condition: a.condition ? String(a.condition) : undefined, actions: Array.isArray(a.actions) ? a.actions : [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });

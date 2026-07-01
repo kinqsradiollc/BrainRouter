@@ -8,7 +8,7 @@
  * the board stays provenance-linked, same as `/requirement`.
  */
 import chalk from 'chalk';
-import { type WorkItem, type WorkItemType, type AutomationTrigger, type AutomationAction, type AutomationActionType, type ProjectRole, isWorkItemType, isWorkItemPriority, isAutomationTrigger, isAutomationActionType, isProjectRole, isModuleStatus } from '@kinqs/brainrouter-types';
+import { type WorkItem, type WorkItemType, type AutomationTrigger, type AutomationAction, type AutomationActionType, type ProjectRole, type TrackLayout, isWorkItemType, isWorkItemPriority, isAutomationTrigger, isAutomationActionType, isProjectRole, isModuleStatus, isTrackLayout } from '@kinqs/brainrouter-types';
 import {
   ensureProject,
   getProject,
@@ -38,6 +38,9 @@ import {
   getModule,
   updateModule,
   deleteModule,
+  saveView,
+  listViews,
+  deleteView,
 } from '@kinqs/brainrouter-core/track';
 import { parseTrackQuery } from '@kinqs/brainrouter-core/track';
 import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfig } from '@kinqs/brainrouter-core/track';
@@ -125,6 +128,8 @@ export async function tryHandleTrackCommand(ctx: CommandContext): Promise<boolea
   if (sub === 'labels' || sub === 'label') { handleLabels(ws, rest); return true; }
 
   if (sub === 'modules' || sub === 'module') { handleModules(ws, rest); return true; }
+
+  if (sub === 'views' || sub === 'view') { handleViews(ws, rest); return true; }
 
   if (sub === 'sync') { await handleSync(ws, rest); return true; }
 
@@ -429,6 +434,46 @@ function parseCreate(tokens: string[]): ParsedCreate {
   return out;
 }
 
+/** `/track views [list|save <name> [--layout x] [--query "…"]|rm <name>]` — saved filter+layout presets. */
+function handleViews(ws: string, args: string[]): void {
+  ensureProject(ws);
+  const op = (args[0] ?? 'list').toLowerCase();
+  if (op === 'list') {
+    const views = listViews(ws);
+    if (!views.length) { console.log(chalk.yellow('\nNo saved views. Save one: /track views save <name> --layout board [--query "…"]\n')); return; }
+    console.log('');
+    for (const v of views) console.log(`  ${chalk.cyan(v.name)} ${chalk.gray(`[${v.layout}]`)}${v.query ? chalk.gray(` · ${v.query}`) : ''}`);
+    console.log('');
+    return;
+  }
+  if (op === 'save') {
+    const rest = args.slice(1);
+    let layout: string | undefined;
+    const nameParts: string[] = [];
+    const queryParts: string[] = [];
+    let inQuery = false;
+    for (let i = 0; i < rest.length; i++) {
+      if (rest[i] === '--layout') { layout = rest[++i]; inQuery = false; }
+      else if (rest[i] === '--query') { inQuery = true; }
+      else if (inQuery) queryParts.push(rest[i]);
+      else nameParts.push(rest[i]);
+    }
+    const name = nameParts.join(' ').trim();
+    if (!name) { console.log(chalk.red('\nUsage: /track views save <name> [--layout board|list|spreadsheet|calendar|gantt|…] [--query "<jql>"]\n')); return; }
+    const lay: TrackLayout = isTrackLayout(layout) ? layout : 'board';
+    const v = saveView(ws, { name, layout: lay, query: queryParts.join(' ').trim() || undefined });
+    console.log(chalk.green(`\n✓ Saved view "${v.name}" [${v.layout}]${v.query ? ` · ${v.query}` : ''}\n`));
+    return;
+  }
+  if (op === 'rm' || op === 'remove' || op === 'delete') {
+    const name = args.slice(1).join(' ').trim();
+    if (!name) { console.log(chalk.red('\nUsage: /track views rm <name>\n')); return; }
+    console.log(deleteView(ws, name) ? chalk.green(`\nRemoved view "${name}".\n`) : chalk.yellow(`\nNo view "${name}".\n`));
+    return;
+  }
+  console.log(chalk.yellow(`\nUnknown views op "${op}". Try: list · save · rm\n`));
+}
+
 /** `/track modules [list|create|status|assign|rm]` — feature-sized work groupings. */
 function handleModules(ws: string, args: string[]): void {
   ensureProject(ws);
@@ -528,6 +573,7 @@ function printUsage(): void {
   console.log(chalk.gray('  /track members [list|add|role|rm]            Project members + roles (owner·admin·member·viewer)'));
   console.log(chalk.gray('  /track labels [list|color|rm]                Label registry + colors'));
   console.log(chalk.gray('  /track modules [list|create|status|assign|rm]  Feature-sized work groupings'));
+  console.log(chalk.gray('  /track views [list|save|rm]                  Saved filter + layout presets'));
   console.log(chalk.gray('  /track sync github import|export [--dry-run]  Two-way sync with GitHub Issues'));
   console.log(chalk.gray('  /track commits [--depth N] [--since <when>]   Link commits to items by BR-123 ref + advance todo→in-progress\n'));
 }

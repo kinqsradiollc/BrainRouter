@@ -441,6 +441,26 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .track-card-menu-item .track-cat { border-radius: 3px; }
 .track-card-menu-head { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-faint); padding: 4px 9px 2px; }
 .track-card-menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }
+/* Header Views control (saved filter+layout presets) */
+.track-views { margin-left: auto; }
+.track-views-btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); background: transparent; color: var(--text); font-size: 12px; padding: 5px 10px; border-radius: 7px; cursor: pointer; }
+.track-views-btn:hover { background: var(--surface-2); }
+.track-views-count { background: var(--surface-2); color: var(--text-faint); border-radius: 99px; padding: 0 6px; font-size: 10.5px; }
+.track-views-menu { z-index: 320; background: rgba(24,27,34,0.97); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 5px; box-shadow: 0 14px 40px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 1px; animation: ddIn .12s ease-out; }
+.track-views-head { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-faint); padding: 4px 9px; }
+.track-views-empty { font-size: 12px; color: var(--text-faint); padding: 6px 9px; }
+.track-views-item { display: flex; align-items: center; gap: 2px; }
+.track-views-apply { flex: 1; display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left; border: none; background: transparent; color: var(--text); font-size: 12.5px; padding: 6px 9px; border-radius: 6px; cursor: pointer; }
+.track-views-apply:hover { background: var(--surface-2); }
+.track-views-layout { font-size: 10.5px; color: var(--text-faint); text-transform: capitalize; }
+.track-views-del { border: none; background: transparent; color: var(--text-faint); font-size: 14px; cursor: pointer; padding: 0 6px; border-radius: 5px; }
+.track-views-del:hover { color: var(--err); }
+.track-views-sep { height: 1px; background: var(--border); margin: 4px 2px; }
+.track-views-add { text-align: left; border: none; background: transparent; color: var(--accent); font-size: 12.5px; padding: 6px 9px; border-radius: 6px; cursor: pointer; }
+.track-views-add:hover { background: var(--surface-2); }
+.track-views-save { display: flex; gap: 5px; padding: 3px; }
+.track-views-save input { flex: 1; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 5px 8px; font-size: 12.5px; }
+.track-views-save button { border: 1px solid var(--border); background: transparent; color: var(--text); border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
 /* Drop target — the column the dragged card is over. */
 .track-col.drag-over { border-color: var(--accent); }
 .track-col.drag-over .track-col-body { background: var(--accent-soft); border-radius: 0 0 12px 12px; }

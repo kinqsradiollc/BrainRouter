@@ -7,7 +7,7 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { TrackProject, WorkItem, WorkItemType, WorkItemPriority, Sprint, SprintState, Module, ModuleStatus, AutomationRule, AutomationTrigger, AutomationAction, AutomationActionType, ProjectMember, ProjectRole, ProjectCapability } from '@kinqs/brainrouter-types';
+import type { TrackProject, WorkItem, WorkItemType, WorkItemPriority, Sprint, SprintState, Module, ModuleStatus, SavedView, TrackLayout, AutomationRule, AutomationTrigger, AutomationAction, AutomationActionType, ProjectMember, ProjectRole, ProjectCapability } from '@kinqs/brainrouter-types';
 import { roleCan } from '../lib/track/permissions.js';
 import { parseTrackQuery } from '../lib/track/query.js';
 import { TrackDropdown } from './Dropdown.js';
@@ -57,6 +57,8 @@ export interface TrackOps {
   createModule: (name: string, description?: string) => void;
   updateModule: (id: string, patch: Partial<Module>) => void;
   deleteModule: (id: string) => void;
+  saveView: (input: { name: string; layout: TrackLayout; query?: string; filters?: Record<string, string> }) => void;
+  deleteView: (id: string) => void;
   createAutomation: (input: { name: string; trigger: AutomationTrigger; condition?: string; actions: AutomationAction[] }) => void;
   updateAutomation: (id: string, patch: Partial<AutomationRule>) => void;
   deleteAutomation: (id: string) => void;
@@ -81,6 +83,7 @@ export interface TrackViewProps {
   items: WorkItem[];
   sprints: Sprint[];
   modules: Module[];
+  views: SavedView[];
   automations: AutomationRule[];
   members: ProjectMember[];
   sync: { config: SyncConfig | null; result: SyncResult | null };
@@ -111,7 +114,7 @@ const TABS: Array<{ id: TrackTab; label: string; icon: string }> = [
   { id: 'sync', label: 'Sync', icon: 'refresh' },
 ];
 
-export function TrackView({ project, items, sprints, modules, automations, members, sync, git, pr, ops, railOpen = true, onOpenRail }: TrackViewProps): React.ReactElement {
+export function TrackView({ project, items, sprints, modules, views, automations, members, sync, git, pr, ops, railOpen = true, onOpenRail }: TrackViewProps): React.ReactElement {
   const [tab, setTab] = useState<TrackTab>('board');
   const [filter, setFilter] = useState<Filter>({});
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -148,6 +151,26 @@ export function TrackView({ project, items, sprints, modules, automations, membe
     setDraft(''); setComposing(null);
   };
 
+  const applyView = (v: SavedView): void => {
+    setTab(v.layout as TrackTab);
+    setFilter({
+      type: (v.filters?.type as WorkItemType) || undefined,
+      statusCategory: v.filters?.status,
+      priority: (v.filters?.priority as WorkItemPriority) || undefined,
+      assignee: v.filters?.assignee,
+      text: v.query,
+    });
+  };
+  const saveCurrentView = (name: string): void => {
+    const filters: Record<string, string> = {};
+    if (filter.type) filters.type = filter.type;
+    if (filter.statusCategory) filters.status = filter.statusCategory;
+    if (filter.priority) filters.priority = filter.priority;
+    if (filter.assignee) filters.assignee = filter.assignee;
+    const layout: TrackLayout = (['automation', 'members', 'sync'] as string[]).includes(tab) ? 'board' : (tab as TrackLayout);
+    ops.saveView({ name, layout, query: filter.text, filters });
+  };
+
   const assignees = useMemo(() => [...new Set(items.flatMap((w) => w.assignees))], [items]);
   // name → color from the project's label registry (for colored chips).
   const labelColors = useMemo(() => {
@@ -165,6 +188,7 @@ export function TrackView({ project, items, sprints, modules, automations, membe
           <span className="track-name">{project?.name ?? 'Project'}</span>
           <span className="track-count">{items.length} item{items.length === 1 ? '' : 's'}</span>
         </div>
+        <ViewsMenu views={views} onApply={applyView} onSave={saveCurrentView} onDelete={(id) => ops.deleteView(id)} />
       </header>
       <div className="track-tabbar">
         {TABS.map((tb) => (
@@ -481,6 +505,54 @@ function CardMenu({ item, states, onOpen, onTransition }: { item: WorkItem; stat
           ))}
         </div>, document.body) : null}
     </>
+  );
+}
+
+/** Header "Views" control — apply a saved filter+layout preset, save the current one, or delete. */
+function ViewsMenu({ views, onApply, onSave, onDelete }: { views: SavedView[]; onApply: (v: SavedView) => void; onSave: (name: string) => void; onDelete: (id: string) => void }): React.ReactElement {
+  const [open, setOpen] = useState(false);
+  const [rect, setRect] = useState<{ bottom: number; right: number } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [name, setName] = useState('');
+  const ref = useRef<HTMLButtonElement>(null);
+  const toggle = (): void => { const el = ref.current; if (el) { const r = el.getBoundingClientRect(); setRect({ bottom: r.bottom, right: r.right }); } setOpen((o) => !o); setSaving(false); };
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent): void => { const t = e.target as HTMLElement; if (!ref.current?.contains(t) && !t.closest?.('.track-views-menu')) setOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+  const submit = (): void => { const n = name.trim(); if (n) { onSave(n); setName(''); setSaving(false); setOpen(false); } };
+  const width = 250;
+  return (
+    <div className="track-views">
+      <button type="button" ref={ref} className="track-views-btn" onClick={toggle}>
+        <Icon name="panels" size={12} /> Views{views.length ? <span className="track-views-count">{views.length}</span> : null} <Icon name="chev-down" size={10} />
+      </button>
+      {open && rect ? createPortal(
+        <div className="track-views-menu" style={{ position: 'fixed', top: rect.bottom + 5, left: Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8)), width }}>
+          <div className="track-views-head">Saved views</div>
+          {views.length === 0 ? <div className="track-views-empty">None yet — save the current filter + layout.</div>
+            : views.map((v) => (
+              <div key={v.id} className="track-views-item">
+                <button type="button" className="track-views-apply" onClick={() => { onApply(v); setOpen(false); }}>
+                  <span className="track-views-name">{v.name}</span><span className="track-views-layout">{v.layout}</span>
+                </button>
+                <button type="button" className="track-views-del" title="Delete view" onClick={() => onDelete(v.id)}>×</button>
+              </div>
+            ))}
+          <div className="track-views-sep" />
+          {saving ? (
+            <div className="track-views-save">
+              <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="View name"
+                onKeyDown={(e) => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') setSaving(false); }} />
+              <button type="button" onClick={submit}>Save</button>
+            </div>
+          ) : (
+            <button type="button" className="track-views-add" onClick={() => setSaving(true)}>＋ Save current view</button>
+          )}
+        </div>, document.body) : null}
+    </div>
   );
 }
 
