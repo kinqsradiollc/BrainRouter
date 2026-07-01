@@ -26,6 +26,8 @@ import {
   type SprintState,
   type Module,
   type ModuleStatus,
+  type SavedView,
+  type TrackLayout,
   type Board,
   type BoardType,
   type BoardColumn,
@@ -54,6 +56,7 @@ interface TrackStore {
   workItems: Record<string, WorkItem>;
   sprints: Record<string, Sprint>;
   modules: Record<string, Module>;
+  views: Record<string, SavedView>;
   boards: Record<string, Board>;
   automations: Record<string, AutomationRule>;
   /** GitHub issue links, keyed by work-item id (external sync round-trip). */
@@ -62,7 +65,7 @@ interface TrackStore {
   schemaVersion?: number;
 }
 
-const EMPTY: TrackStore = { project: null, workItems: {}, sprints: {}, modules: {}, boards: {}, automations: {}, githubLinks: {} };
+const EMPTY: TrackStore = { project: null, workItems: {}, sprints: {}, modules: {}, views: {}, boards: {}, automations: {}, githubLinks: {} };
 
 /**
  * Current on-disk schema.
@@ -713,6 +716,65 @@ export function deleteModule(workspaceRoot: string, id: string): boolean {
   for (const item of Object.values(store.workItems)) {
     if (item.moduleId === module.id) { item.moduleId = undefined; item.updatedAt = nowIso(); }
   }
+  writeTrack(workspaceRoot, store);
+  return true;
+}
+
+// ── Saved views ─────────────────────────────────────────────────────────────────
+
+export interface SaveViewInput {
+  name: string;
+  layout: TrackLayout;
+  query?: string;
+  filters?: Record<string, string>;
+  groupBy?: string;
+  orderBy?: string;
+}
+
+/** Create or update (by case-insensitive name) a saved view — a filter + layout preset. */
+export function saveView(workspaceRoot: string, input: SaveViewInput): SavedView {
+  ensureProject(workspaceRoot);
+  const store = readTrack(workspaceRoot);
+  const name = input.name.trim();
+  if (!name) throw new Error('View name is required.');
+  const ts = nowIso();
+  const existing = Object.values(store.views).find((v) => v.name.toLowerCase() === name.toLowerCase());
+  const view: SavedView = {
+    id: existing?.id ?? shortId('view'),
+    workspaceRoot,
+    name,
+    layout: input.layout,
+    query: input.query?.trim() || undefined,
+    filters: input.filters && Object.keys(input.filters).length ? input.filters : undefined,
+    groupBy: input.groupBy,
+    orderBy: input.orderBy,
+    createdAt: existing?.createdAt ?? ts,
+    updatedAt: ts,
+  };
+  store.views[view.id] = view;
+  writeTrack(workspaceRoot, store);
+  return view;
+}
+
+/** List saved views (alphabetical by name). */
+export function listViews(workspaceRoot: string): SavedView[] {
+  return Object.values(readTrack(workspaceRoot).views).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Resolve a saved view by id or (case-insensitive) name. */
+export function getView(workspaceRoot: string, idOrName: string): SavedView | undefined {
+  const store = readTrack(workspaceRoot);
+  const key = idOrName.trim().toLowerCase();
+  return store.views[idOrName] ?? Object.values(store.views).find((v) => v.name.toLowerCase() === key);
+}
+
+/** Delete a saved view by id or name. */
+export function deleteView(workspaceRoot: string, idOrName: string): boolean {
+  const store = readTrack(workspaceRoot);
+  const key = idOrName.trim().toLowerCase();
+  const view = store.views[idOrName] ?? Object.values(store.views).find((v) => v.name.toLowerCase() === key);
+  if (!view) return false;
+  delete store.views[view.id];
   writeTrack(workspaceRoot, store);
   return true;
 }

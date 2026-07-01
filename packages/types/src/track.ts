@@ -23,6 +23,7 @@ export type ModuleId = string;
 export type BoardId = string;
 export type CommentId = string;
 export type LabelId = string;
+export type SavedViewId = string;
 
 // ── Enums ───────────────────────────────────────────────────────────────────
 
@@ -439,6 +440,48 @@ export interface Board {
   filter?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+// ── Saved views ─────────────────────────────────────────────────────────────────
+
+/** The layout a saved view opens in (the Track surface's tabs). */
+export type TrackLayout =
+  | "board" | "list" | "spreadsheet" | "calendar" | "gantt"
+  | "backlog" | "sprint" | "modules" | "roadmap" | "reports";
+
+const TRACK_LAYOUTS: readonly TrackLayout[] = ["board", "list", "spreadsheet", "calendar", "gantt", "backlog", "sprint", "modules", "roadmap", "reports"];
+
+export function isTrackLayout(x: unknown): x is TrackLayout {
+  return typeof x === "string" && (TRACK_LAYOUTS as readonly string[]).includes(x);
+}
+
+/**
+ * A saved filter + layout preset — the user's named lens on the board (Plane
+ * "Views"). Applying one restores the layout, the JQL query, and the facet
+ * filters that were captured when it was saved.
+ */
+export interface SavedView {
+  id: SavedViewId;
+  workspaceRoot: string;
+  name: string;
+  /** The layout tab this view opens in. */
+  layout: TrackLayout;
+  /** JQL-style query string (see the track query language), if any. */
+  query?: string;
+  /** Facet filters captured with the view (e.g. `{ type, status, priority, assignee }`). */
+  filters?: Record<string, string>;
+  /** Optional group-by / order-by field hints. */
+  groupBy?: string;
+  orderBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Structural guard for a {@link SavedView}. */
+export function isSavedView(x: unknown): x is SavedView {
+  if (!x || typeof x !== "object") return false;
+  const v = x as Record<string, unknown>;
+  return typeof v.id === "string" && typeof v.workspaceRoot === "string" && typeof v.name === "string" && isTrackLayout(v.layout) && typeof v.createdAt === "string" && typeof v.updatedAt === "string";
 }
 
 // ── Automation rules ──────────────────────────────────────────────────────────
