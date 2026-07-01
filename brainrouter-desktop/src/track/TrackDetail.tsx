@@ -5,13 +5,20 @@
  * every change goes through the `ops` callbacks (host `track-*` queries).
  */
 import React, { useState } from 'react';
+import remarkGfm from 'remark-gfm';
 import type { TrackProject, WorkItem, WorkItemPriority, Sprint, Module } from '@kinqs/brainrouter-types';
 import { Icon } from '../icons.js';
 import { TYPE_ICON } from './TrackView.js';
 import type { TrackOps } from './TrackView.js';
 import { TrackDropdown } from './Dropdown.js';
+import { Markdown, MD_COMPONENTS } from '../chat/markdown.js';
 
 const PRIORITIES: WorkItemPriority[] = ['urgent', 'high', 'medium', 'low', 'none'];
+
+/** ISO-8601 → the `YYYY-MM-DD` a <input type="date"> expects (empty when unset). */
+const toDateInput = (iso?: string): string => (iso ? iso.slice(0, 10) : '');
+/** `YYYY-MM-DD` → an ISO-8601 midnight (undefined when cleared). */
+const fromDateInput = (v: string): string | undefined => (v ? new Date(`${v}T00:00:00`).toISOString() : undefined);
 
 export function TrackDetail({ item, project, allItems, sprints, modules, ops, onClose }: {
   item: WorkItem; project: TrackProject | null; allItems: WorkItem[]; sprints: Sprint[]; modules: Module[]; ops: TrackOps; onClose: () => void;
@@ -83,6 +90,12 @@ export function TrackDetail({ item, project, allItems, sprints, modules, ops, on
             <Field label="Points">
               <input type="number" min={0} defaultValue={item.storyPoints ?? ''} placeholder="—" onBlur={(e) => { const n = e.target.value ? Number(e.target.value) : undefined; if (n !== item.storyPoints) ops.update(item.key, { storyPoints: n }); }} />
             </Field>
+            <Field label="Start date">
+              <input type="date" className="track-date" value={toDateInput(item.startDate)} onChange={(e) => ops.update(item.key, { startDate: fromDateInput(e.target.value) })} />
+            </Field>
+            <Field label="Target date">
+              <input type="date" className="track-date" value={toDateInput(item.targetDate)} onChange={(e) => ops.update(item.key, { targetDate: fromDateInput(e.target.value) })} />
+            </Field>
           </div>
 
           <Field label="Labels">
@@ -92,13 +105,25 @@ export function TrackDetail({ item, project, allItems, sprints, modules, ops, on
             </div>
           </Field>
 
-          <Section title="Description">
+          <section className="track-detail-section">
+            <div className="track-detail-section-title">
+              <span>Description</span>
+              {!editDesc ? <button className="track-desc-edit-btn" title="Edit description" onClick={() => { setDesc(item.description ?? ''); setEditDesc(true); }}><Icon name="edit" size={11} /> Edit</button> : null}
+            </div>
             {editDesc ? (
-              <textarea className="track-detail-desc-edit" autoFocus value={desc} onChange={(e) => setDesc(e.target.value)} onBlur={saveDesc} placeholder="Add a description…" />
+              <div className="track-detail-desc-editor">
+                <textarea className="track-detail-desc-edit" autoFocus value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Add a description… (Markdown supported)" />
+                <div className="track-desc-edit-actions">
+                  <button className="track-desc-save" onClick={saveDesc}>Save</button>
+                  <button className="track-desc-cancel" onClick={() => { setDesc(item.description ?? ''); setEditDesc(false); }}>Cancel</button>
+                </div>
+              </div>
+            ) : item.description ? (
+              <div className="track-detail-desc md"><Markdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>{item.description}</Markdown></div>
             ) : (
-              <div className="track-detail-desc" onClick={() => { setDesc(item.description ?? ''); setEditDesc(true); }}>{item.description || <span className="track-detail-muted">Add a description…</span>}</div>
+              <div className="track-detail-desc" onClick={() => { setDesc(''); setEditDesc(true); }}><span className="track-detail-muted">Add a description…</span></div>
             )}
-          </Section>
+          </section>
 
           <Section title="Code links">
             <div className="track-detail-code-actions">

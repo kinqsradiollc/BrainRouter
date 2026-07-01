@@ -451,6 +451,11 @@ export function installDevBridge(): void {
     const dates: Record<string, [number, number]> = { 'BR-1': [-3, 6], 'BR-2': [-10, -2], 'BR-3': [0, 5], 'BR-4': [2, 9], 'BR-5': [-6, -1], 'BR-6': [4, 12], 'BR-7': [7, 14] };
     for (const it of devTrack.items) { const d = dates[String(it.key)]; if (d) { it.startDate = mk(d[0]); it.targetDate = mk(d[1]); } }
   }
+  // A Markdown description on one item so the detail drawer's rendering is visible in preview.
+  {
+    const bug = devTrack.items.find((it) => it.key === 'BR-5');
+    if (bug) bug.description = ['### Summary', 'Reranker **times out** under a slow local server.', '', '### Reproduction steps', '1. Point at a slow OpenAI-compatible endpoint', '2. Run `/recall "…"`', '3. Observe the hang', '', '### Expected', 'Recall degrades gracefully (no hard block).', '', '```shell', 'BRAINROUTER_RECALL_TIMEOUT_MS=8000 brainrouter chat', '```', '', '> See the `request-timeout.ts` chokepoint.'].join('\n');
+  }
   const devFindItem = (k: unknown): Record<string, unknown> | undefined => devTrack.items.find((w) => w.key === k || w.id === k);
   const devAutomations: Record<string, unknown>[] = [
     { id: 'auto_1', name: 'Bugs start high', enabled: true, trigger: 'created', condition: 'type = bug', actions: [{ type: 'set-priority', value: 'high' }], createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
