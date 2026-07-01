@@ -25,7 +25,7 @@ function parseBool(value: unknown): boolean | undefined {
   return undefined;
 }
 
-sessionsRouter.get("/", (req: AuthedRequest, res) => {
+sessionsRouter.get("/", async (req: AuthedRequest, res) => {
   const clientKind = typeof req.query.clientKind === "string" ? req.query.clientKind : undefined;
   const workspaceRoot =
     typeof req.query.workspaceRoot === "string" ? req.query.workspaceRoot : undefined;
@@ -33,7 +33,7 @@ sessionsRouter.get("/", (req: AuthedRequest, res) => {
   const includeUsage = parseBool(req.query.includeUsage);
   const staleThresholdMs =
     typeof req.query.staleThresholdMs === "string" ? Number(req.query.staleThresholdMs) : undefined;
-  const sessions = memoryEngine.store.listActiveSessions({
+  const sessions = await memoryEngine.store.listActiveSessions({
     userId: req.userId!,
     clientKind,
     workspaceRoot,

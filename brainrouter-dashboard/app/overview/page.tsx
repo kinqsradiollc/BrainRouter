@@ -106,7 +106,7 @@ export default function Page() {
         <motion.div className="grid" variants={containerVariants} style={{ display: "grid", gap: "20px" }}>
           <StatCard title="Total Cognitive Records" value={data?.total ?? "0"} />
           <StatCard title="Archived Records" value={data?.archived ?? "0"} />
-          <StatCard title="Citation Rate" value={data ? `${(data.citationRate * 100).toFixed(1)}%` : "0.0%"} />
+          <StatCard title="Citation Rate" value={typeof data?.citationRate === "number" ? `${(data.citationRate * 100).toFixed(1)}%` : "0.0%"} />
           <StatCard title="Last Memory Recall" value={formattedDate} />
         </motion.div>
 

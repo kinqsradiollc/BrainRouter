@@ -166,7 +166,7 @@ authRouter.get("/me", requireJwt, async (req: AuthedRequest, res) => {
   });
 });
 
-authRouter.put("/me", requireJwt, (req: AuthedRequest, res) => {
+authRouter.put("/me", requireJwt, async (req: AuthedRequest, res) => {
   const displayName = String(req.body?.displayName ?? "").trim();
   if (!displayName) {
     sendError(res, 400, "displayName required");
@@ -176,12 +176,12 @@ authRouter.put("/me", requireJwt, (req: AuthedRequest, res) => {
     sendError(res, 400, "Display name too long");
     return;
   }
-  memoryEngine.updateUserDisplayName(req.userId!, displayName);
+  await memoryEngine.updateUserDisplayName(req.userId!, displayName);
   res.json({ success: true });
 });
 
-authRouter.post("/rotate-key", requireJwt, (req: AuthedRequest, res) => {
+authRouter.post("/rotate-key", requireJwt, async (req: AuthedRequest, res) => {
   const apiKey = `br_${randomBytes(24).toString("hex")}`;
-  memoryEngine.updateUserApiKey(req.userId!, apiKey);
+  await memoryEngine.updateUserApiKey(req.userId!, apiKey);
   res.json({ apiKey });
 });

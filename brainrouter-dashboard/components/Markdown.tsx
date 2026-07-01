@@ -32,6 +32,11 @@ import rehypeKatex from "rehype-katex";
  * instead of getting silently rendered as math.
  */
 function normalizeLatexDelimiters(md: string): string {
+  // Guard against undefined/non-string children (e.g. a persona/scene field
+  // that hasn't been consolidated yet, or an API response that arrives thinner
+  // than the type claims). Without this, `md.split(...)` throws and white-screens
+  // the whole page instead of rendering nothing.
+  if (typeof md !== "string") return "";
   // Math environments KaTeX renders when inside `$$...$$`. Listed here so
   // standalone `\begin{align}...\end{align}` blocks get auto-wrapped.
   const mathEnvs = "equation|align|gather|multline|eqnarray|alignat|flalign";
@@ -54,7 +59,7 @@ function normalizeLatexDelimiters(md: string): string {
     .join("");
 }
 
-export function Markdown({ children }: { children: string }) {
+export function Markdown({ children }: { children: string | null | undefined }) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkMath]}

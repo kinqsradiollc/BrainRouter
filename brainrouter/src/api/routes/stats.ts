@@ -5,6 +5,6 @@ import { requireAnyAuth, type AuthedRequest } from "../middleware/auth.js";
 export const statsRouter = Router();
 statsRouter.use(requireAnyAuth);
 
-statsRouter.get("/", (req: AuthedRequest, res) => {
-  res.json(memoryEngine.getStats(req.userId!));
+statsRouter.get("/", async (req: AuthedRequest, res) => {
+  res.json(await memoryEngine.getStats(req.userId!));
 });

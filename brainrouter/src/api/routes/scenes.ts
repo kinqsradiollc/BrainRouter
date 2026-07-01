@@ -25,7 +25,7 @@ scenesRouter.get("/", async (req: AuthedRequest, res) => {
   }
 });
 
-scenesRouter.delete("/:id", (req: AuthedRequest, res) => {
+scenesRouter.delete("/:id", async (req: AuthedRequest, res) => {
   try {
     const sceneId = req.params.id;
     if (!sceneId) {
@@ -33,7 +33,7 @@ scenesRouter.delete("/:id", (req: AuthedRequest, res) => {
       return;
     }
     const targetId = typeof sceneId === "string" ? sceneId : sceneId[0];
-    memoryEngine.store.deleteContextualFocus(req.userId!, [targetId]);
+    await memoryEngine.store.deleteContextualFocus(req.userId!, [targetId]);
     res.json({ success: true });
   } catch (error) {
     sendError(res, 500, error instanceof Error ? error.message : "Failed to delete scene");

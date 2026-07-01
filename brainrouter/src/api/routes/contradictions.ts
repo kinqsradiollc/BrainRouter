@@ -9,13 +9,18 @@ import { sendError } from "../../contracts/http.js";
 export const contradictionsRouter = Router();
 contradictionsRouter.use(requireAnyAuth);
 
+const CONTRADICTION_STATUS_FILTERS = ["pending", "resolved", "dismissed", "all"] as const;
+
 contradictionsRouter.get("/", async (req: AuthedRequest, res) => {
   try {
     const pagination = PaginationQuerySchema.parse(req.query);
+    const statusFilter = CONTRADICTION_STATUS_FILTERS.includes(req.query.status as never)
+      ? (req.query.status as (typeof CONTRADICTION_STATUS_FILTERS)[number])
+      : "pending";
     const contradictions = await memoryEngine.getPendingContradictions(req.userId!, {
       cursor: decodeCursor<{ confidence: number; id: string }>(pagination.cursor),
       limit: pagination.limit + 1,
-    });
+    }, statusFilter);
     const page = pageItems(contradictions, pagination.limit, (contradiction) => ({
       confidence: contradiction.confidence,
       id: contradiction.id,
@@ -32,9 +37,9 @@ contradictionsRouter.post(
     params: z.object({ id: z.string().min(1) }),
     body: z.object({ status: z.enum(["resolved", "dismissed"]).optional() }),
   }),
-  (req: AuthedRequest, res) => {
+  async (req: AuthedRequest, res) => {
     const status = req.body?.status === "dismissed" ? "dismissed" : "resolved";
-    memoryEngine.resolveContradiction(String(req.params.id), req.userId!, status);
+    await memoryEngine.resolveContradiction(String(req.params.id), req.userId!, status);
     res.json({ success: true });
   },
 );

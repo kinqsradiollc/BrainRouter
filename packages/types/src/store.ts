@@ -282,7 +282,7 @@ export interface IMemoryStore {
     confidence: number;
     createdTime?: string;
   }): Promise<void>;
-  getPendingContradictions(userId: string, pagination?: CursorPaginationOptions<{ confidence: number; id: string }>): Promise<ContradictionRecord[]>;
+  getPendingContradictions(userId: string, pagination?: CursorPaginationOptions<{ confidence: number; id: string }>, statusFilter?: "pending" | "resolved" | "dismissed" | "all"): Promise<ContradictionRecord[]>;
   resolveContradiction(id: string, userId: string, status: "resolved" | "dismissed"): Promise<void>;
   upsertSkillHints(skillName: string, hints: string, sourceFile?: string): Promise<void>;
   listSkillHints(): Promise<SkillHintsRecord[]>;
