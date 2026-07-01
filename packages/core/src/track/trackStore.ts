@@ -78,6 +78,9 @@ export interface ExternalLink {
   syncedAt?: string;
 }
 
+/** The workspace's active GitHub sync target: which connector + which repo. */
+export interface GithubSyncTarget { connectorId: string; repo: string }
+
 interface TrackStore {
   project: TrackProject | null;
   workItems: Record<string, WorkItem>;
@@ -88,6 +91,16 @@ interface TrackStore {
   automations: Record<string, AutomationRule>;
   /** GitHub issue links, keyed by work-item id (external sync round-trip). */
   githubLinks: Record<string, ExternalLink>;
+  /**
+   * Connector-first sync target (connector Phase 0). When set, Track sync
+   * resolves its repo + credential through THIS connector — the legacy global
+   * `cli.track.github*` knobs are only a fallback for workspaces that haven't
+   * migrated. Per-workspace on purpose: connectors are workspace-scoped, so a
+   * global pointer would dangle in every other workspace.
+   */
+  githubSyncTarget?: GithubSyncTarget;
+  /** One-time marker for the legacy cli.track.github* → connector migration. */
+  githubMigratedAt?: string;
   /** Migration marker; bumped whenever the record shapes change (see migrateStore). */
   schemaVersion?: number;
 }
@@ -1131,5 +1144,29 @@ export function setGithubLink(workspaceRoot: string, workItemId: string, link: E
   if (!store.githubLinks) store.githubLinks = {};
   if (link) store.githubLinks[workItemId] = link;
   else delete store.githubLinks[workItemId];
+  writeTrack(workspaceRoot, store);
+}
+
+/** The workspace's connector-first GitHub sync target, if one has been chosen. */
+export function getGithubSyncTarget(workspaceRoot: string): GithubSyncTarget | undefined {
+  return readTrack(workspaceRoot).githubSyncTarget;
+}
+
+/** Set (or clear, with `null`) which connector + repo this workspace syncs with. */
+export function setGithubSyncTarget(workspaceRoot: string, target: GithubSyncTarget | null): void {
+  const store = readTrack(workspaceRoot);
+  if (target) store.githubSyncTarget = { connectorId: target.connectorId, repo: target.repo };
+  else delete store.githubSyncTarget;
+  writeTrack(workspaceRoot, store);
+}
+
+/** One-time legacy-migration marker (see githubMigrate.ts). */
+export function getGithubMigratedAt(workspaceRoot: string): string | undefined {
+  return readTrack(workspaceRoot).githubMigratedAt;
+}
+
+export function markGithubMigrated(workspaceRoot: string, at = nowIso()): void {
+  const store = readTrack(workspaceRoot);
+  store.githubMigratedAt = at;
   writeTrack(workspaceRoot, store);
 }

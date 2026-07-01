@@ -88,7 +88,7 @@ import { listRequirements, getRequirement, createRequirement, updateRequirement,
 import { buildBaseGraph, saveAtlasGraph, readAtlasGraph, atlasGraphStats, atlasWorkspaceTag, enrichAtlasGraph, extractAtlasJson, type AtlasLlmCaller } from '@kinqs/brainrouter-core/atlas';
 import { syncRequirementPlanTrack } from '@kinqs/brainrouter-core/requirement';
 import { ensureProject, getProject, getWorkItem, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, createModule, listModules, updateModule, deleteModule, saveView, listViews, deleteView, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember, getGithubLinks, setGithubLink, type CreateWorkItemInput, type UpdateWorkItemPatch, type UpdateModulePatch, type AutomationPatch } from '@kinqs/brainrouter-core/track';
-import { exportToGithub, importFromGithub, syncBidirectional, importMembersFromGithub, resolveGithubConfigForWorkspace, listResolvedGithubConfigsForWorkspace, issueToWorkItem, type GithubIssue } from '@kinqs/brainrouter-core/track';
+import { exportToGithub, importFromGithub, syncBidirectional, importMembersFromGithub, resolveGithubConfigForWorkspace, listResolvedGithubConfigsForWorkspace, issueToWorkItem, migrateTrackGithubToConnector, setGithubSyncTarget, type GithubIssue } from '@kinqs/brainrouter-core/track';
 import { scanGitCommitsForTrack } from '@kinqs/brainrouter-core/track';
 import { readGitTrackContext, startGitWorkForTrackItem } from '@kinqs/brainrouter-core/track';
 import { listConnectorCatalog } from '@kinqs/brainrouter-core/connectors';
@@ -185,11 +185,11 @@ function syncLegacyTrackGithubFields(track: TrackGithubConfig): void {
   else delete track.githubToken;
 }
 
-function githubIntegrationSnapshot(workspaceRoot: string): { repo: string | null; hasToken: boolean; tokenSource: string | null; repos: Array<{ repo: string; hasToken: boolean; tokenSource: string | null; active: boolean; label?: string; connectorId?: string; source?: string }>; caBundle: string | null } {
+function githubIntegrationSnapshot(workspaceRoot: string): { repo: string | null; hasToken: boolean; tokenSource: string | null; repos: Array<{ repo: string; hasToken: boolean; tokenSource: string | null; active: boolean; label?: string; connectorId?: string; source?: string }>; caBundle: string | null; error?: string } {
   const cfg = resolveGithubConfigForWorkspace(workspaceRoot);
   const repos = listResolvedGithubConfigsForWorkspace(workspaceRoot).map((r) => ({ repo: r.repo, hasToken: r.hasToken, tokenSource: r.tokenSource ?? null, active: r.active, label: r.label, connectorId: r.connectorId, source: r.source }));
   const fresh = loadConfig() as { cli?: { track?: TrackGithubConfig } };
-  return { repo: cfg.repo ?? null, hasToken: !!cfg.token, tokenSource: cfg.tokenSource ?? null, repos, caBundle: fresh.cli?.track?.githubCaBundle ?? null };
+  return { repo: cfg.repo ?? null, hasToken: !!cfg.token, tokenSource: cfg.tokenSource ?? null, repos, caBundle: fresh.cli?.track?.githubCaBundle ?? null, ...(cfg.error ? { error: cfg.error } : {}) };
 }
 import { isRequirementStatus, isRequirementPriority, type RequirementRecord } from '@kinqs/brainrouter-types';
 // ANNOTATION-RECORDS (0.4.15) — durable feedback records store + markdown
@@ -2556,14 +2556,28 @@ async function main(): Promise<void> {
       // Pull repo collaborators into the roster (role-mapped). Token resolved
       // server-side; never returned to the renderer.
       'track-sync-members': async (a) => {
+        migrateTrackGithubToConnector(workspaceRoot);
         const cfg = resolveGithubConfigForWorkspace(workspaceRoot, typeof a.repo === 'string' ? a.repo : undefined);
-        if (!cfg.repo) return { error: 'No repository configured. Set one in Settings → Connectors → GitHub Track sync.' };
-        if (!cfg.token) return { error: 'No token. Add one in Settings → Connectors → GitHub Track sync, set GITHUB_TOKEN/GH_TOKEN, or use a static token ref in Settings → Connectors.' };
+        if (cfg.error) return { error: cfg.error };
+        if (!cfg.repo) return { error: 'No repository configured. Configure a GitHub connector in Settings → Connectors → GitHub.' };
+        if (!cfg.token) return { error: 'No token. Add one to the GitHub connector in Settings → Connectors, or set GITHUB_TOKEN/GH_TOKEN.' };
         return await importMembersFromGithub(workspaceRoot, { repo: cfg.repo, token: cfg.token, fetchImpl: fetch as never, dryRun: a.dryRun === true });
       },
       // External sync — GitHub Issues. The token is resolved server-side from
-      // config.json/env and NEVER returned to the renderer.
+      // config.json/env and NEVER returned to the renderer. The lazy migration
+      // adopts any legacy cli.track.github* config into the workspace's
+      // connector the first time the Sync surface is opened (idempotent).
       'track-sync-config': () => {
+        migrateTrackGithubToConnector(workspaceRoot);
+        return githubIntegrationSnapshot(workspaceRoot);
+      },
+      // Connector Phase 0 — choose which (connector, repo) this workspace syncs
+      // with. `null`/missing connectorId clears the target (back to legacy).
+      'track-set-github-target': (a) => {
+        const connectorId = typeof a.connectorId === 'string' ? a.connectorId.trim() : '';
+        const repo = typeof a.repo === 'string' ? a.repo.trim() : '';
+        if (connectorId && repo) setGithubSyncTarget(workspaceRoot, { connectorId, repo });
+        else setGithubSyncTarget(workspaceRoot, null);
         return githubIntegrationSnapshot(workspaceRoot);
       },
       // Git-backed Track workflow — local repository context and branch start,
@@ -2594,9 +2608,11 @@ async function main(): Promise<void> {
       'track-sync': async (a) => {
         const direction = a.direction === 'export' ? 'export' : a.direction === 'sync' ? 'sync' : 'import';
         const dryRun = a.dryRun !== false; // default to dry-run unless explicitly false
+        migrateTrackGithubToConnector(workspaceRoot);
         const cfg = resolveGithubConfigForWorkspace(workspaceRoot, typeof a.repo === 'string' ? a.repo : undefined);
-        if (!cfg.repo) return { error: 'No repository configured. Set one in Settings → Connectors → GitHub Track sync.' };
-        if (!cfg.token) return { error: 'No token. Add one in Settings → Connectors → GitHub Track sync, set GITHUB_TOKEN/GH_TOKEN, or use a static token ref in Settings → Connectors.' };
+        if (cfg.error) return { error: cfg.error };
+        if (!cfg.repo) return { error: 'No repository configured. Configure a GitHub connector in Settings → Connectors → GitHub.' };
+        if (!cfg.token) return { error: 'No token. Add one to the GitHub connector in Settings → Connectors, or set GITHUB_TOKEN/GH_TOKEN.' };
         const opts = { repo: cfg.repo, token: cfg.token, fetchImpl: fetch as never, dryRun };
         if (direction === 'export') return await exportToGithub(workspaceRoot, opts);
         if (direction === 'sync') return await syncBidirectional(workspaceRoot, opts);

@@ -4,6 +4,7 @@
 // internal service layer (service.ts) stays unexported.
 export * from './commitScanner.js';
 export * from './gitWorkflow.js';
+export * from './githubMigrate.js';
 export * from './githubSync.js';
 export * from './query.js';
 export * from './sprintAutomation.js';
