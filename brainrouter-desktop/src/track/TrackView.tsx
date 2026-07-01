@@ -412,10 +412,13 @@ function CalendarView({ items, onOpen }: { items: WorkItem[]; onOpen: (w: WorkIt
 }
 
 function GanttView({ items, onOpen }: { items: WorkItem[]; onOpen: (w: WorkItem) => void }): React.ReactElement {
-  const dated = items.filter((w) => w.startDate || w.targetDate);
+  const toTime = (iso?: string): number => (iso ? isoToLocalDate(iso).getTime() : NaN);
+  // Keep only items with at least one PARSEABLE date. A truthy-but-malformed
+  // date string yields NaN, and a single NaN would poison Math.min/max and
+  // blank the entire chart — so filter to finite times, not just truthiness.
+  const dated = items.filter((w) => Number.isFinite(toTime(w.startDate)) || Number.isFinite(toTime(w.targetDate)));
   if (!dated.length) return <div className="track-empty">No items with a start or target date. Set dates to see a timeline.</div>;
-  const toTime = (iso: string): number => isoToLocalDate(iso).getTime();
-  const times = dated.flatMap((w) => [w.startDate, w.targetDate].filter(Boolean).map((d) => toTime(d as string)));
+  const times = dated.flatMap((w) => [w.startDate, w.targetDate].map(toTime)).filter(Number.isFinite);
   let min = Math.min(...times);
   let max = Math.max(...times);
   if (max === min) max = min + 7 * 864e5;
@@ -424,11 +427,23 @@ function GanttView({ items, onOpen }: { items: WorkItem[]; onOpen: (w: WorkItem)
   min -= pad; max += pad;
   const span = max - min;
   const pct = (t: number): number => ((t - min) / span) * 100;
-  const rows = [...dated].sort((a, b) => toTime(a.startDate ?? a.targetDate as string) - toTime(b.startDate ?? b.targetDate as string));
+  // Each row's start/end, coerced so one missing/bad date falls back to the other.
+  const rowSpan = (w: WorkItem): { s: number; e: number } => {
+    let s = toTime(w.startDate); let e = toTime(w.targetDate);
+    if (!Number.isFinite(s)) s = e;
+    if (!Number.isFinite(e)) e = s;
+    return { s, e };
+  };
+  const rows = [...dated].sort((a, b) => rowSpan(a).s - rowSpan(b).s);
   // Five evenly-spaced scale ticks — they line up with the 25%-band gridlines
   // drawn behind every row so the timeline reads as a grid, not floating bars.
   const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => min + f * span);
-  const now = Date.now();
+  // Normalize "now" to today's LOCAL midnight so it lines up with the bar
+  // times (also local midnights). Comparing a wall-clock `now` against a
+  // midnight-derived `max` hid the marker for most of the day whenever today
+  // was the latest date on the chart.
+  const todayMid = new Date(); todayMid.setHours(0, 0, 0, 0);
+  const now = todayMid.getTime();
   const todayPct = now >= min && now <= max ? pct(now) : null;
   const tickLabel = (t: number): string => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   return (
@@ -444,8 +459,7 @@ function GanttView({ items, onOpen }: { items: WorkItem[]; onOpen: (w: WorkItem)
       </div>
       <div className="track-gantt-rows">
         {rows.map((w) => {
-          const s = toTime(w.startDate ?? w.targetDate as string);
-          const e = toTime(w.targetDate ?? w.startDate as string);
+          const { s, e } = rowSpan(w);
           const left = pct(Math.min(s, e));
           const width = Math.max(2.5, pct(Math.max(s, e)) - left);
           return (
