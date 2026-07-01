@@ -48,8 +48,35 @@ import {
 import { getStateFile, readJsonFile, writeJsonFile } from '../storage/store.js';
 import { parseTrackQuery, matchesTrackQuery } from './query.js';
 
+/**
+ * Snapshot of the GitHub-mirrored fields at the last successful sync. Serves as
+ * the common ancestor ("base") for a 3-way merge, so a two-way sync can tell a
+ * LOCAL edit from a REMOTE edit and only overwrite a field that the *other* side
+ * changed — instead of GitHub always clobbering local (or vice-versa).
+ */
+export interface GithubMirrorSnapshot {
+  title: string;
+  description: string;
+  type: string;
+  priority: string;
+  /** Plain labels only (the synthetic `type:` / `priority:` labels are excluded). */
+  labels: string[];
+  assignees: string[];
+  /** GitHub issue state as a boolean: closed ⇔ a terminal (completed/cancelled) category. */
+  closed: boolean;
+}
+
 /** A recorded link from a work item to an external system's record. */
-export interface ExternalLink { number: number; url: string }
+export interface ExternalLink {
+  number: number;
+  url: string;
+  /** 3-way-merge base captured at the last sync (bidirectional sync). */
+  baseline?: GithubMirrorSnapshot;
+  /** The issue's `updated_at` at the last sync (cheap "did GitHub change?" hint). */
+  githubUpdatedAt?: string;
+  /** ISO timestamp of the last sync. */
+  syncedAt?: string;
+}
 
 interface TrackStore {
   project: TrackProject | null;

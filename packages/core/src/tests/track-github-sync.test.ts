@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ensureProject, createWorkItem, listWorkItems, getWorkItem, getGithubLinks, listMembers, addComment, listLabels, getLabel } from '../track/trackStore.js';
+import { ensureProject, createWorkItem, listWorkItems, getWorkItem, getGithubLinks, setGithubLink, updateWorkItem, listMembers, addComment, listLabels, getLabel } from '../track/trackStore.js';
 import {
   workItemToIssue,
   issueToWorkItem,
   keyFromBody,
   exportToGithub,
   importFromGithub,
+  syncBidirectional,
+  snapshotFromItem,
   importMembersFromGithub,
   listResolvedGithubConfigsForWorkspace,
   resolveGithubConfigForWorkspace,
@@ -15,6 +17,7 @@ import {
   type GithubCollaborator,
   type FetchLike,
 } from '../track/githubSync.js';
+import type { WorkItem } from '@kinqs/brainrouter-types';
 import { createConnector } from '../connectors/connectorStore.js';
 import { setCliKnobOverride } from '../config/config.js';
 import { withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
@@ -297,5 +300,104 @@ test('github labels: importing an issue registers its labels with their GitHub c
     assert.equal(getLabel(ws, 'ui')?.color, '#00ff00');
     assert.equal(getLabel(ws, 'bug')?.externalSource, 'github');
     assert.ok(listLabels(ws).length >= 2);
+  });
+});
+
+// ── Bidirectional sync (3-way merge) ─────────────────────────────────────────
+
+/** Build a GithubIssue whose snapshot equals the item's CURRENT mirror snapshot. */
+function issueFromItem(item: WorkItem, number: number): GithubIssue {
+  const p = workItemToIssue(item);
+  return {
+    number,
+    title: p.title,
+    body: p.body,
+    labels: p.labels,
+    state: p.state,
+    assignees: p.assignees.map((login) => ({ login })),
+    html_url: `https://github.com/x/y/issues/${number}`,
+    updated_at: '2026-01-01T00:00:00.000Z',
+  };
+}
+
+test('bidi sync: a local-only edit is pushed up (issue PATCHed), local kept, baseline advances', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    ensureProject(ws, { key: 'BR' });
+    const item = createWorkItem(ws, { title: 'Original', type: 'task', priority: 'low', description: 'body' });
+    const issue = issueFromItem(item, 7);
+    // Link with a baseline == the current (pre-edit) snapshot.
+    setGithubLink(ws, item.id, { number: 7, url: issue.html_url!, baseline: snapshotFromItem(item) });
+    updateWorkItem(ws, item.id, { title: 'Local edit' }); // edit ONLY locally
+
+    const gh = mockGithub([issue]);
+    const res = await syncBidirectional(ws, OPTS(gh.fetchImpl));
+
+    const patch = gh.calls.find((c) => c.method === 'PATCH' && /\/issues\/7$/.test(c.url));
+    assert.ok(patch, 'expected an issue PATCH');
+    assert.equal((patch!.body as { title?: string }).title, 'Local edit', 'pushed the new title');
+    assert.equal(getWorkItem(ws, item.id)!.title, 'Local edit', 'local kept');
+    assert.equal(res.conflicts?.length ?? 0, 0);
+    assert.equal(getGithubLinks(ws)[item.id]?.baseline?.title, 'Local edit', 'baseline advanced');
+  });
+});
+
+test('bidi sync: a remote-only edit is pulled down (no push)', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    ensureProject(ws, { key: 'BR' });
+    const item = createWorkItem(ws, { title: 'Original', type: 'task', priority: 'low', description: 'body' });
+    setGithubLink(ws, item.id, { number: 7, url: 'u', baseline: snapshotFromItem(item) });
+    const issue = issueFromItem(item, 7); issue.title = 'Remote edit'; // remote-only change
+
+    const gh = mockGithub([issue]);
+    const res = await syncBidirectional(ws, OPTS(gh.fetchImpl));
+
+    assert.equal(getWorkItem(ws, item.id)!.title, 'Remote edit', 'local pulled');
+    const titlePush = gh.calls.find((c) => c.method === 'PATCH' && /\/issues\/7$/.test(c.url) && (c.body as { title?: string }).title !== undefined);
+    assert.ok(!titlePush, 'no push when only the remote changed');
+    assert.equal(res.conflicts?.length ?? 0, 0);
+  });
+});
+
+test('bidi sync: both sides edit the same field → conflict; neither is clobbered', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    ensureProject(ws, { key: 'BR' });
+    const item = createWorkItem(ws, { title: 'Original', type: 'task', priority: 'low', description: 'body' });
+    setGithubLink(ws, item.id, { number: 7, url: 'u', baseline: snapshotFromItem(item) });
+    updateWorkItem(ws, item.id, { title: 'Local title' });                 // local change
+    const issue = issueFromItem(item, 7); issue.title = 'Remote title';     // remote change
+
+    const gh = mockGithub([issue]);
+    const res = await syncBidirectional(ws, OPTS(gh.fetchImpl));
+
+    assert.deepEqual(res.conflicts, [{ key: item.key, field: 'title' }]);
+    assert.equal(getWorkItem(ws, item.id)!.title, 'Local title', 'local NOT overwritten on conflict');
+    const titlePush = gh.calls.find((c) => c.method === 'PATCH' && /\/issues\/7$/.test(c.url) && (c.body as { title?: string }).title !== undefined);
+    assert.ok(!titlePush, 'remote NOT overwritten on conflict');
+    assert.equal(getGithubLinks(ws)[item.id]?.baseline?.title, 'Original', 'baseline NOT advanced → conflict re-surfaces');
+  });
+});
+
+test('bidi sync: a local item with no link creates a GitHub issue', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    ensureProject(ws, { key: 'BR' });
+    const item = createWorkItem(ws, { title: 'New local', type: 'task', priority: 'none' });
+    const gh = mockGithub([]);
+    const res = await syncBidirectional(ws, OPTS(gh.fetchImpl));
+    assert.equal(res.created?.remote, 1);
+    assert.ok(gh.calls.some((c) => c.method === 'POST' && /\/issues$/.test(c.url)), 'issue POSTed');
+    assert.ok(getGithubLinks(ws)[item.id]?.baseline, 'link + baseline recorded');
+  });
+});
+
+test('bidi sync: a GitHub issue with no link creates a local item', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    ensureProject(ws, { key: 'BR' });
+    const gh = mockGithub([{ number: 42, title: 'From GH', body: 'ghbody', labels: ['type:bug', 'priority:high'], state: 'open', html_url: 'https://github.com/x/y/issues/42', updated_at: '2026-01-01T00:00:00.000Z' }]);
+    const res = await syncBidirectional(ws, OPTS(gh.fetchImpl));
+    assert.equal(res.created?.local, 1);
+    const created = listWorkItems(ws).find((w) => w.title === 'From GH');
+    assert.ok(created, 'local item created');
+    assert.equal(created!.type, 'bug');
+    assert.ok(getGithubLinks(ws)[created!.id]?.baseline, 'baseline recorded');
   });
 });

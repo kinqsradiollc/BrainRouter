@@ -88,7 +88,7 @@ import { listRequirements, getRequirement, createRequirement, updateRequirement,
 import { buildBaseGraph, saveAtlasGraph, readAtlasGraph, atlasGraphStats, atlasWorkspaceTag, enrichAtlasGraph, extractAtlasJson, type AtlasLlmCaller } from '@kinqs/brainrouter-core/atlas';
 import { syncRequirementPlanTrack } from '@kinqs/brainrouter-core/requirement';
 import { ensureProject, getProject, getWorkItem, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, createModule, listModules, updateModule, deleteModule, saveView, listViews, deleteView, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember, getGithubLinks, setGithubLink, type CreateWorkItemInput, type UpdateWorkItemPatch, type UpdateModulePatch, type AutomationPatch } from '@kinqs/brainrouter-core/track';
-import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfigForWorkspace, listResolvedGithubConfigsForWorkspace, issueToWorkItem, type GithubIssue } from '@kinqs/brainrouter-core/track';
+import { exportToGithub, importFromGithub, syncBidirectional, importMembersFromGithub, resolveGithubConfigForWorkspace, listResolvedGithubConfigsForWorkspace, issueToWorkItem, type GithubIssue } from '@kinqs/brainrouter-core/track';
 import { scanGitCommitsForTrack } from '@kinqs/brainrouter-core/track';
 import { readGitTrackContext, startGitWorkForTrackItem } from '@kinqs/brainrouter-core/track';
 import { listConnectorCatalog } from '@kinqs/brainrouter-core/connectors';
@@ -2592,13 +2592,15 @@ async function main(): Promise<void> {
         return { ...r, items: listWorkItems(workspaceRoot) };
       },
       'track-sync': async (a) => {
-        const direction = a.direction === 'export' ? 'export' : 'import';
+        const direction = a.direction === 'export' ? 'export' : a.direction === 'sync' ? 'sync' : 'import';
         const dryRun = a.dryRun !== false; // default to dry-run unless explicitly false
         const cfg = resolveGithubConfigForWorkspace(workspaceRoot, typeof a.repo === 'string' ? a.repo : undefined);
         if (!cfg.repo) return { error: 'No repository configured. Set one in Settings → Connectors → GitHub Track sync.' };
         if (!cfg.token) return { error: 'No token. Add one in Settings → Connectors → GitHub Track sync, set GITHUB_TOKEN/GH_TOKEN, or use a static token ref in Settings → Connectors.' };
         const opts = { repo: cfg.repo, token: cfg.token, fetchImpl: fetch as never, dryRun };
-        return direction === 'export' ? await exportToGithub(workspaceRoot, opts) : await importFromGithub(workspaceRoot, opts);
+        if (direction === 'export') return await exportToGithub(workspaceRoot, opts);
+        if (direction === 'sync') return await syncBidirectional(workspaceRoot, opts);
+        return await importFromGithub(workspaceRoot, opts);
       },
       // links). Thin wrappers over the CLI's requirementStore (already unit-tested)
       // so the desktop panel and the terminal CLI share the same requirements.json.

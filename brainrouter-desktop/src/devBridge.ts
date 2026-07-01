@@ -1302,7 +1302,16 @@ export function installDevBridge(): void {
       };
     },
     'track-sync': (a) => {
-      const dir = a.direction === 'export' ? 'export' : 'import';
+      const dir = a.direction === 'export' ? 'export' : a.direction === 'sync' ? 'sync' : 'import';
+      if (dir === 'sync') {
+        const first = (devTrack.items as Record<string, unknown>[])[0];
+        return {
+          direction: 'sync', dryRun: a.dryRun !== false,
+          pushed: 2, pulled: 1, created: { local: 1, remote: 1 },
+          conflicts: first ? [{ key: String(first.key), field: 'title' }] : [],
+          errors: [],
+        };
+      }
       const rows = (devTrack.items as Record<string, unknown>[]).slice(0, 5).map((w, i) => (
         dir === 'export'
           ? { key: w.key, title: w.title, action: i % 2 === 0 ? 'create' : 'update' }
