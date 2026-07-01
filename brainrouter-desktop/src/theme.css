@@ -389,6 +389,12 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 /* ── Track mode — the main board surface ────────────────────────────────────── */
 .track { display: flex; flex-direction: column; min-width: 0; min-height: 0; flex: 1; background: var(--bg); }
 .track-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; padding-right: 200px; border-bottom: 1px solid var(--border); -webkit-app-region: drag; }
+/* When the sidebar is collapsed the Track header sits at the window's left edge,
+   where the macOS traffic lights live — reserve room for them + the reopen
+   button (mirrors .center.no-rail .chat-head). The reopen button is only in the
+   DOM while collapsed, so :has() scopes this to exactly that state. */
+[data-os="mac"] .track-head:has(.track-rail-open) { padding-left: 84px; }
+.track-head .track-rail-open { -webkit-app-region: no-drag; }
 .track-head > * { -webkit-app-region: no-drag; }
 .track-title { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
 .track-key { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--accent); background: var(--accent-soft); padding: 2px 8px; border-radius: 6px; }
