@@ -46,6 +46,11 @@ jobs:
       - name: Build workspace deps (types + core)
         run: npm --prefix brainrouter-desktop run build:deps
 
+      # electron-builder rejects node_modules symlinks that escape the app dir
+      # (npm-workspace @kinqs/* links) — replace them with real copies first.
+      - name: Dereference workspace deps for packaging
+        run: node brainrouter-desktop/build/dereference-workspace-deps.mjs
+
       - name: Build + sign + notarize
         working-directory: brainrouter-desktop
         env:
