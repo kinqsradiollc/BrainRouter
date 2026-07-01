@@ -1213,8 +1213,10 @@ async function main(): Promise<void> {
   const ghEnv = async (): Promise<NodeJS.ProcessEnv> => {
     const now = Date.now();
     if (ghEnvCache && now - ghEnvCache.at < 60_000) return ghEnvCache.env;
-    const track = ((loadConfig() as { cli?: { track?: TrackGithubConfig } }).cli?.track) ?? {};
-    const configuredCA = track.githubCaBundle?.trim() || undefined;
+    const cli = (loadConfig() as { cli?: { track?: TrackGithubConfig; github?: { caBundle?: string } } }).cli ?? {};
+    // Global home first (cli.github.caBundle); the old track-scoped knob stays a
+    // read fallback so existing configs keep working.
+    const configuredCA = cli.github?.caBundle?.trim() || cli.track?.githubCaBundle?.trim() || undefined;
     const [sslCAInfo, sslCAPath] = await Promise.all([
       git(['config', '--get', 'http.sslCAInfo'], workspaceRoot),
       git(['config', '--get', 'http.sslCAPath'], workspaceRoot),
@@ -1265,6 +1267,14 @@ async function main(): Promise<void> {
     if (connector.credential?.mode !== 'static') return {};
     const ref = connector.credential.ref?.trim();
     if (!ref) return { error: 'Static GitHub connector credential reference is required.' };
+    // `config:track` — the migrated-legacy scheme (connector Phase 0): the token
+    // still lives in cli.track.githubToken until the Phase 3 keychain move.
+    if (ref === 'config:track') {
+      const track = ((loadConfig() as { cli?: { track?: TrackGithubConfig } }).cli?.track) ?? {};
+      const token = track.githubToken?.trim();
+      if (!token) return { error: 'The migrated GitHub token is no longer in config.json. Re-add a token in Settings → Connectors → GitHub.' };
+      return { token };
+    }
     const token = process.env[ref]?.trim();
     if (!token) return { error: `Static GitHub connector credential ${ref} is not available in the host environment.` };
     return { token };
@@ -2605,6 +2615,66 @@ async function main(): Promise<void> {
         const r = scanGitCommitsForTrack(workspaceRoot, {});
         return { ...r, items: listWorkItems(workspaceRoot) };
       },
+      // Connector Phase 1 — repo discovery for the picker. Both queries resolve
+      // the CONNECTOR's credential (static token → REST; dynamic/oauth → gh CLI)
+      // and never return the token itself.
+      'github-connector-orgs': async (a) => {
+        const connector = getConnector(workspaceRoot, typeof a.connectorId === 'string' ? a.connectorId : '');
+        if (!connector) return { viewer: null, orgs: [], errors: ['Connector not found.'] };
+        try {
+          if (connector.credential.mode === 'static') {
+            const cred = githubStaticToken(connector);
+            if (!cred.token) return { viewer: null, orgs: [], errors: [cred.error ?? 'No credential.'] };
+            const viewer = await githubTokenJson<{ login?: string }>(connector, cred.token, '/user');
+            const orgs = await githubTokenJson<Array<{ login?: string; description?: string | null }>>(connector, cred.token, '/user/orgs?per_page=100');
+            return { viewer: viewer.login ? { login: viewer.login } : null, orgs: orgs.map((o) => ({ login: o.login ?? '', description: o.description ?? undefined })).filter((o) => o.login), errors: [] };
+          }
+          const viewer = await ghJson<{ login?: string }>(['api', 'user'], { timeout: 12_000 });
+          if (viewer.error) return { viewer: null, orgs: [], errors: [viewer.error] };
+          const orgs = await ghJson<Array<{ login?: string; description?: string | null }>>(['api', 'user/orgs?per_page=100'], { timeout: 12_000, maxBuffer: 1_000_000 });
+          return {
+            viewer: viewer.data?.login ? { login: viewer.data.login } : null,
+            orgs: (orgs.data ?? []).map((o) => ({ login: o.login ?? '', description: o.description ?? undefined })).filter((o) => o.login),
+            errors: orgs.error ? [orgs.error] : [],
+          };
+        } catch (e) {
+          const msg = String((e as Error).message ?? e);
+          return { viewer: null, orgs: [], errors: [/403|429|rate/i.test(msg) ? 'GitHub API rate limited — try again in a few minutes.' : msg] };
+        }
+      },
+      'github-connector-repos': async (a) => {
+        const connector = getConnector(workspaceRoot, typeof a.connectorId === 'string' ? a.connectorId : '');
+        const org = typeof a.org === 'string' ? a.org.trim() : '';
+        const viewerLogin = typeof a.viewerLogin === 'string' ? a.viewerLogin.trim() : '';
+        const page = Number.isFinite(Number(a.page)) && Number(a.page) > 0 ? Math.floor(Number(a.page)) : 1;
+        if (!connector || !org) return { repos: [], nextPage: null, errors: [connector ? 'Missing org.' : 'Connector not found.'] };
+        type RestRepo = { full_name?: string; private?: boolean; archived?: boolean; fork?: boolean; description?: string | null; pushed_at?: string };
+        const mapRepos = (list: RestRepo[]) => list
+          .map((r) => ({ nameWithOwner: r.full_name ?? '', isPrivate: !!r.private, isArchived: !!r.archived, isFork: !!r.fork, description: r.description ?? undefined, pushedAt: r.pushed_at ?? undefined }))
+          .filter((r) => r.nameWithOwner);
+        // The viewer's personal namespace lists via /user/repos (owner affiliation);
+        // organizations via /orgs/{org}/repos.
+        const apiPath = org === viewerLogin
+          ? `/user/repos?affiliation=owner&per_page=100&page=${page}&sort=pushed`
+          : `/orgs/${encodeURIComponent(org)}/repos?type=all&per_page=100&page=${page}&sort=pushed`;
+        try {
+          if (connector.credential.mode === 'static') {
+            const cred = githubStaticToken(connector);
+            if (!cred.token) return { repos: [], nextPage: null, errors: [cred.error ?? 'No credential.'] };
+            const list = await githubTokenJson<RestRepo[]>(connector, cred.token, apiPath);
+            const repos = mapRepos(list);
+            return { repos, nextPage: list.length === 100 ? page + 1 : null, errors: [] };
+          }
+          const list = await ghJson<RestRepo[]>(['api', apiPath.replace(/^\//, '')], { timeout: 20_000, maxBuffer: 4_000_000 });
+          if (list.error) return { repos: [], nextPage: null, errors: [list.error] };
+          const repos = mapRepos(list.data ?? []);
+          return { repos, nextPage: (list.data ?? []).length === 100 ? page + 1 : null, errors: [] };
+        } catch (e) {
+          const msg = String((e as Error).message ?? e);
+          const rateLimited = /403|429|rate/i.test(msg);
+          return { repos: [], nextPage: null, rateLimited, errors: [rateLimited ? 'GitHub API rate limited — try again in a few minutes.' : msg] };
+        }
+      },
       'track-sync': async (a) => {
         const direction = a.direction === 'export' ? 'export' : a.direction === 'sync' ? 'sync' : 'import';
         const dryRun = a.dryRun !== false; // default to dry-run unless explicitly false
@@ -3648,14 +3718,40 @@ async function main(): Promise<void> {
       // Settings → Connectors: persist the Track GitHub config. The token is
       // write-only (set when non-empty, kept otherwise) and never read back.
       'action:set-track-github': (args) => {
-        const fresh = loadConfig() as { cli?: { track?: TrackGithubConfig } };
+        const fresh = loadConfig() as { cli?: { track?: TrackGithubConfig; github?: { caBundle?: string } } };
         const cli = (fresh.cli = fresh.cli ?? {});
         const track = (cli.track = cli.track ?? {});
         if (typeof args.caBundle === 'string' || args.caBundle === null) {
+          // CA bundle's home is the global cli.github block (it applies to every
+          // GitHub surface); writing here also clears the legacy track-scoped copy.
           const ca = typeof args.caBundle === 'string' ? args.caBundle.trim() : '';
-          if (ca) track.githubCaBundle = ca;
-          else delete track.githubCaBundle;
+          const github = (cli.github = cli.github ?? {});
+          if (ca) github.caBundle = ca;
+          else delete github.caBundle;
+          delete track.githubCaBundle;
           ghEnvCache = null;
+        }
+        // Connector Phase 1 — target-scoped save: pick the workspace's sync
+        // target and (optionally) attach a pasted token to that connector. The
+        // token value stays in cli.track.githubToken (write-only storage, the
+        // `config:track` scheme) until Phase 3 moves it into the OS keychain.
+        if (typeof args.targetConnectorId === 'string' && typeof args.targetRepo === 'string' && args.targetConnectorId.trim() && args.targetRepo.trim()) {
+          const connectorId = args.targetConnectorId.trim();
+          const repo = args.targetRepo.trim();
+          if (typeof args.token === 'string' && args.token.trim()) {
+            track.githubToken = args.token.trim();
+            const conn = getConnector(workspaceRoot, connectorId);
+            if (conn) {
+              updateConnector(workspaceRoot, connectorId, {
+                credential: { mode: 'static', ref: 'config:track', label: 'Track token', hasSecret: true },
+              });
+            }
+          }
+          setGithubSyncTarget(workspaceRoot, { connectorId, repo });
+          syncLegacyTrackGithubFields(track);
+          saveConfig(fresh as never);
+          _resetCliKnobsCache();
+          return { ok: true, ...githubIntegrationSnapshot(workspaceRoot) };
         }
         let repos = normalizeTrackGithubRepos(track);
         if (typeof args.removeRepo === 'string') {

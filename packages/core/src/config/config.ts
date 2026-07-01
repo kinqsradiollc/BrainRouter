@@ -598,6 +598,15 @@ export interface CliKnobs {
    */
   telemetry?: { enabled?: boolean };
   /**
+   * Global GitHub settings shared by every GitHub surface (connector ingest,
+   * Track sync, gh CLI wrappers). `caBundle` is a trusted-certificate path for
+   * corporate TLS interception (passed to gh as SSL_CERT_FILE — moved here from
+   * `track.githubCaBundle`, which remains a read fallback). `oauthClientId`
+   * overrides the OAuth device-flow app id (GitHub Enterprise / self-registered
+   * apps; connector Phase 2).
+   */
+  github?: { caBundle?: string; oauthClientId?: string };
+  /**
    * TRACK external sync (0.4.15). GitHub Issues bridge config. `repo` is
    * "owner/name"; `token` is a PAT with `repo`/`issues` scope (falls back to
    * the standard `GITHUB_TOKEN` / `GH_TOKEN` env when omitted, like the gh
