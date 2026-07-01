@@ -21,7 +21,7 @@ const looksLikeQuery = (s: string): boolean => /[=~<>]|(\s(and|or|in)\s)/i.test(
 export interface SyncRepoConfig { repo: string; hasToken: boolean; tokenSource: string | null; active?: boolean; label?: string | null; source?: string | null; connectorId?: string | null }
 export interface SyncConfig { repo: string | null; hasToken: boolean; tokenSource: string | null; repos?: SyncRepoConfig[]; caBundle?: string | null }
 export interface SyncRow { key?: string; issueNumber?: number; title: string; action: 'create' | 'update' }
-export interface SyncResult { direction: 'export' | 'import'; dryRun: boolean; exported?: SyncRow[]; imported?: SyncRow[]; errors: string[] }
+export interface SyncResult { direction: 'export' | 'import' | 'sync'; dryRun: boolean; exported?: SyncRow[]; imported?: SyncRow[]; pushed?: number; pulled?: number; created?: { local: number; remote: number }; conflicts?: Array<{ key: string; field: string }>; errors: string[] }
 export interface GitTrackRemote { name: string; url: string; githubRepo?: string }
 export interface GitTrackContext {
   ok: boolean;
@@ -66,7 +66,7 @@ export interface TrackOps {
   updateMemberRole: (id: string, role: ProjectRole) => void;
   removeMember: (id: string) => void;
   syncMembers: () => void;
-  sync: (direction: 'import' | 'export', dryRun: boolean) => void;
+  sync: (direction: 'import' | 'export' | 'sync', dryRun: boolean) => void;
   importGhIssues: () => void;
   scanCommits: () => void;
   refreshGit: () => void;
@@ -939,7 +939,7 @@ function MembersView({ members, ops }: { members: ProjectMember[]; ops: TrackOps
   );
 }
 
-type SyncBusy = 'import' | 'export' | 'gh-import' | 'scan' | 'refresh-git' | null;
+type SyncBusy = 'import' | 'export' | 'sync' | 'gh-import' | 'scan' | 'refresh-git' | null;
 
 function SyncView({ sync, git, ops }: { sync: { config: SyncConfig | null; result: SyncResult | null }; git: GitTrackContext | null; ops: TrackOps }): React.ReactElement {
   const [busy, setBusy] = useState<SyncBusy>(null);
@@ -952,7 +952,7 @@ function SyncView({ sync, git, ops }: { sync: { config: SyncConfig | null; resul
   // Clear the busy spinner whenever a fresh result lands.
   React.useEffect(() => { setBusy(null); }, [result, git]);
 
-  const run = (direction: 'import' | 'export', dryRun: boolean): void => {
+  const run = (direction: 'import' | 'export' | 'sync', dryRun: boolean): void => {
     if (!configured) return;
     setBusy(direction);
     ops.sync(direction, dryRun);
@@ -1034,24 +1034,55 @@ function SyncView({ sync, git, ops }: { sync: { config: SyncConfig | null; resul
             <button className={`track-sync-go${busy === 'import' ? ' is-busy' : ''}`} disabled={!configured || !!busy} onClick={() => run('import', false)}>{busy === 'import' ? <span className="spinner sm" /> : null}{busy === 'import' ? 'Importing' : 'Import'}</button>
           </div>
         </div>
+        <div className="track-sync-act track-sync-act-wide">
+          <div className="track-sync-act-head"><Icon name="refresh" size={13} /> Sync ⇅ Both ways</div>
+          <div className="track-sync-act-sub">Reconcile both sides — pushes local edits up, pulls GitHub edits down, and flags anything changed on both without overwriting either.</div>
+          <div className="track-sync-btns">
+            <button className="track-sync-dry" disabled={!configured || !!busy} onClick={() => run('sync', true)}>Dry-run</button>
+            <button className={`track-sync-go${busy === 'sync' ? ' is-busy' : ''}`} disabled={!configured || !!busy} onClick={() => run('sync', false)}>{busy === 'sync' ? <span className="spinner sm" /> : null}{busy === 'sync' ? 'Syncing' : 'Sync both'}</button>
+          </div>
+        </div>
       </div>
 
       {result ? (
         <div className="track-sync-result">
-          <div className="track-sync-result-head">
-            {result.dryRun ? <span className="track-sync-badge dry">Dry-run</span> : <span className="track-sync-badge live">Applied</span>}
-            {result.direction === 'export' ? 'Export' : 'Import'} — {rows.filter((r) => r.action === 'create').length} new, {rows.filter((r) => r.action === 'update').length} updated
-          </div>
-          <div className="track-sync-rows">
-            {rows.map((r, i) => (
-              <div key={i} className="track-sync-row">
-                <span className={`track-sync-act-tag ${r.action}`}>{r.action === 'create' ? '+ new' : '~ upd'}</span>
-                <span className="mono tl-key">{r.key ?? (r.issueNumber ? `#${r.issueNumber}` : '—')}</span>
-                <span className="tl-title">{r.title}</span>
+          {result.direction === 'sync' ? (
+            <>
+              <div className="track-sync-result-head">
+                {result.dryRun ? <span className="track-sync-badge dry">Dry-run</span> : <span className="track-sync-badge live">Applied</span>}
+                Two-way sync — {result.pushed ?? 0} pushed, {result.pulled ?? 0} pulled, {(result.created?.remote ?? 0)} new issues, {(result.created?.local ?? 0)} new items
               </div>
-            ))}
-            {rows.length === 0 ? <div className="track-col-empty">Nothing to sync.</div> : null}
-          </div>
+              {result.conflicts?.length ? (
+                <div className="track-sync-rows">
+                  <div className="track-sync-conflict-label">{result.conflicts.length} conflict{result.conflicts.length === 1 ? '' : 's'} — changed on both sides; kept local, left GitHub. Reconcile the field, then sync again.</div>
+                  {result.conflicts.map((c, i) => (
+                    <div key={i} className="track-sync-row">
+                      <span className="track-sync-act-tag conflict">conflict</span>
+                      <span className="mono tl-key">{c.key}</span>
+                      <span className="tl-title">{c.field}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : <div className="track-col-empty">In sync — nothing to reconcile.</div>}
+            </>
+          ) : (
+            <>
+              <div className="track-sync-result-head">
+                {result.dryRun ? <span className="track-sync-badge dry">Dry-run</span> : <span className="track-sync-badge live">Applied</span>}
+                {result.direction === 'export' ? 'Export' : 'Import'} — {rows.filter((r) => r.action === 'create').length} new, {rows.filter((r) => r.action === 'update').length} updated
+              </div>
+              <div className="track-sync-rows">
+                {rows.map((r, i) => (
+                  <div key={i} className="track-sync-row">
+                    <span className={`track-sync-act-tag ${r.action}`}>{r.action === 'create' ? '+ new' : '~ upd'}</span>
+                    <span className="mono tl-key">{r.key ?? (r.issueNumber ? `#${r.issueNumber}` : '—')}</span>
+                    <span className="tl-title">{r.title}</span>
+                  </div>
+                ))}
+                {rows.length === 0 ? <div className="track-col-empty">Nothing to sync.</div> : null}
+              </div>
+            </>
+          )}
           {result.errors.length ? (
             <div className="track-sync-errors">{result.errors.map((e, i) => <div key={i}>{e}</div>)}</div>
           ) : null}

@@ -30,6 +30,7 @@ import {
   LOCAL_MEMBER_ID,
   type CreateWorkItemInput,
   type UpdateWorkItemPatch,
+  type GithubMirrorSnapshot,
 } from './trackStore.js';
 import { getRawCliKnobs } from '../config/config.js';
 import { listConnectors } from '../connectors/connectorStore.js';
@@ -50,6 +51,8 @@ export interface GithubIssue {
   /** The assigned user(s). `assignee` is the legacy single field. */
   assignee?: GithubUser | null;
   assignees?: GithubUser[];
+  /** ISO-8601 last-modified time; recorded as a cheap "did GitHub change?" hint. */
+  updated_at?: string;
   /** Present on PRs — used to filter them out of the issues list. */
   pull_request?: unknown;
 }
@@ -180,12 +183,18 @@ export interface SyncOptions {
 export interface ExportPlanEntry { key: string; title: string; action: 'create' | 'update'; issueNumber?: number }
 export interface ImportPlanEntry { issueNumber: number; title: string; action: 'create' | 'update'; key?: string }
 export interface SyncResult {
-  direction: 'export' | 'import';
+  direction: 'export' | 'import' | 'sync';
   dryRun: boolean;
   exported?: ExportPlanEntry[];
   imported?: ImportPlanEntry[];
   /** Comment-sync tallies (G1): pushed = local→GitHub, pulled = GitHub→local. */
   comments?: { pushed: number; pulled: number };
+  /** Bidirectional-sync tallies: fields pushed up / pulled down, items created each side. */
+  pushed?: number;
+  pulled?: number;
+  created?: { local: number; remote: number };
+  /** Fields that changed on BOTH sides since the last sync — surfaced, never clobbered. */
+  conflicts?: Array<{ key: string; field: string }>;
   errors: string[];
 }
 
@@ -523,6 +532,246 @@ export async function importFromGithub(workspaceRoot: string, opts: SyncOptions)
     }
   }
   return { direction: 'import', dryRun: opts.dryRun ?? false, imported: plan, comments: { pushed: 0, pulled }, errors };
+}
+
+// ── Bidirectional sync (3-way merge) ─────────────────────────────────────────
+
+// `type` is create-only (updateWorkItem can't change it), so it is snapshotted
+// for the record but NOT reconciled — the rest are the GitHub-mirrored fields.
+const MERGE_FIELDS = ['title', 'description', 'priority', 'closed', 'labels', 'assignees'] as const;
+type MergeField = typeof MERGE_FIELDS[number];
+
+const sortedSet = (a: string[]): string[] => [...new Set(a)].sort();
+const sameSet = (a: string[], b: string[]): boolean => {
+  const sa = sortedSet(a), sb = sortedSet(b);
+  return sa.length === sb.length && sa.every((v, i) => v === sb[i]);
+};
+const plainLabels = (labels: string[]): string[] =>
+  sortedSet(labels.filter((l) => !l.startsWith('type:') && !l.startsWith('priority:')));
+
+function eqField(f: MergeField, a: GithubMirrorSnapshot, b: GithubMirrorSnapshot): boolean {
+  return f === 'labels' || f === 'assignees' ? sameSet(a[f], b[f]) : a[f] === b[f];
+}
+
+/** The local work item as a GitHub-mirror snapshot. */
+export function snapshotFromItem(item: WorkItem): GithubMirrorSnapshot {
+  return {
+    title: item.title,
+    description: item.description ?? '',
+    type: item.type,
+    priority: item.priority,
+    labels: plainLabels(item.labels),
+    assignees: sortedSet(item.assignees),
+    closed: isTerminalCategory(item.statusCategory),
+  };
+}
+
+/** A GitHub issue as a mirror snapshot. */
+export function snapshotFromIssue(issue: GithubIssue): GithubMirrorSnapshot {
+  const names = labelNames(issue.labels);
+  const typeLabel = names.find((n) => n.startsWith('type:'))?.slice('type:'.length);
+  const priLabel = names.find((n) => n.startsWith('priority:'))?.slice('priority:'.length);
+  return {
+    title: issue.title,
+    description: (issue.body ?? '').replace(MARKER_RE, '').trim(),
+    type: isWorkItemType(typeLabel) ? typeLabel : 'task',
+    priority: isWorkItemPriority(priLabel) ? priLabel : 'none',
+    labels: plainLabels(names),
+    assignees: sortedSet(issueAssignees(issue)),
+    closed: issue.state === 'closed',
+  };
+}
+
+interface MergeOutcome {
+  /** Remote-only field changes to write to the LOCAL item. */
+  pull: Partial<GithubMirrorSnapshot>;
+  /** True when a field changed only locally → the GitHub issue must be updated. */
+  push: boolean;
+  conflicts: MergeField[];
+  /** The reconciled snapshot to persist as the next baseline (conflict fields kept at base). */
+  merged: GithubMirrorSnapshot;
+}
+
+/**
+ * 3-way merge one linked pair. Base is the last-synced snapshot; with no base
+ * (first reconcile of a pre-existing link) REMOTE is treated as base, so a local
+ * value that differs from remote counts as a local edit (pushed up) — biasing
+ * to never silently lose local work.
+ */
+function mergePair(base: GithubMirrorSnapshot | undefined, local: GithubMirrorSnapshot, remote: GithubMirrorSnapshot): MergeOutcome {
+  const b = base ?? remote;
+  const pull: Partial<GithubMirrorSnapshot> = {};
+  const conflicts: MergeField[] = [];
+  // Index-write through plain records — a union-keyed property can't be written
+  // to directly (its write type narrows to `never`).
+  const merged = { ...local } as unknown as Record<string, unknown>;
+  const bRec = b as unknown as Record<string, unknown>;
+  const remoteRec = remote as unknown as Record<string, unknown>;
+  const pullRec = pull as unknown as Record<string, unknown>;
+  let push = false;
+  for (const f of MERGE_FIELDS) {
+    const localChanged = !eqField(f, local, b);
+    const remoteChanged = !eqField(f, remote, b);
+    if (localChanged && remoteChanged && !eqField(f, local, remote)) {
+      conflicts.push(f);
+      merged[f] = bRec[f];
+    } else if (remoteChanged) {
+      pullRec[f] = remoteRec[f];
+      merged[f] = remoteRec[f];
+    } else if (localChanged) {
+      push = true;
+    }
+  }
+  return { pull, push, conflicts, merged: merged as unknown as GithubMirrorSnapshot };
+}
+
+function snapshotToPatch(p: Partial<GithubMirrorSnapshot>, project: TrackProject): UpdateWorkItemPatch & { labels?: string[] } {
+  const patch: UpdateWorkItemPatch & { labels?: string[] } = {};
+  if (p.title !== undefined) patch.title = p.title;
+  if (p.description !== undefined) patch.description = p.description || undefined;
+  if (p.priority !== undefined && isWorkItemPriority(p.priority)) patch.priority = p.priority;
+  if (p.labels !== undefined) patch.labels = p.labels;
+  if (p.assignees !== undefined) patch.assignees = p.assignees;
+  if (p.closed !== undefined) patch.status = statusForCategory(project, p.closed ? 'completed' : 'unstarted');
+  return patch;
+}
+
+function snapshotToIssuePayload(snap: GithubMirrorSnapshot, key: string): GithubIssuePayload {
+  return {
+    title: snap.title,
+    body: `${snap.description ? `${snap.description}\n\n` : ''}${keyMarker(key)}`,
+    labels: [`type:${snap.type}`, `priority:${snap.priority}`, ...snap.labels],
+    assignees: snap.assignees,
+    state: snap.closed ? 'closed' : 'open',
+  };
+}
+
+/**
+ * Two-way reconcile in one pass: push local-only edits up, pull GitHub-only
+ * edits down, create missing items on either side, and SURFACE (never clobber)
+ * fields that changed on both sides. The per-link baseline snapshot is what lets
+ * it tell a local edit from a remote edit — the fix for "pulling from GitHub
+ * wipes my local changes".
+ */
+export async function syncBidirectional(workspaceRoot: string, opts: SyncOptions): Promise<SyncResult> {
+  const project = ensureProject(workspaceRoot);
+  const errors: string[] = [];
+  const conflicts: Array<{ key: string; field: string }> = [];
+  let pushed = 0, pulled = 0, createdLocal = 0, createdRemote = 0;
+
+  let issues: GithubIssue[] = [];
+  try {
+    const res = await opts.fetchImpl(`${apiRoot(opts)}/issues?state=all&per_page=100`, { headers: ghHeaders(opts.token) });
+    if (!res.ok) return { direction: 'sync', dryRun: opts.dryRun ?? false, errors: [`list failed (HTTP ${res.status})`] };
+    issues = ((await res.json()) as GithubIssue[]).filter((i) => !i.pull_request);
+  } catch (e) {
+    return { direction: 'sync', dryRun: opts.dryRun ?? false, errors: [(e as Error).message] };
+  }
+
+  const links = getGithubLinks(workspaceRoot);
+  const itemIdByNumber = new Map<number, string>();
+  for (const [wid, link] of Object.entries(links)) itemIdByNumber.set(link.number, wid);
+  const handled = new Set<string>();
+  const stamp = new Date().toISOString();
+
+  // 1. Reconcile every GitHub issue against its linked (or key-matched) local item.
+  for (const issue of issues) {
+    try {
+      for (const l of labelColors(issue.labels)) {
+        if (l.color) upsertLabel(workspaceRoot, { name: l.name, color: l.color, externalSource: 'github' });
+      }
+      const keyFromMarker = keyFromBody(issue.body);
+      const linkedId = itemIdByNumber.get(issue.number);
+      const item = (linkedId ? getWorkItem(workspaceRoot, linkedId) : undefined)
+        ?? (keyFromMarker ? getWorkItem(workspaceRoot, keyFromMarker) : undefined);
+
+      if (!item) {
+        if (opts.dryRun) { createdLocal++; continue; }
+        const mapped = issueToWorkItem(issue, project);
+        const created = createWorkItem(workspaceRoot, { ...mapped.input, actor: 'agent' });
+        setGithubLink(workspaceRoot, created.id, {
+          number: issue.number, url: issue.html_url ?? '',
+          baseline: snapshotFromIssue(issue), githubUpdatedAt: issue.updated_at, syncedAt: stamp,
+        });
+        handled.add(created.id);
+        createdLocal++;
+        pulled += await pullComments(workspaceRoot, opts, created.id, issue.number, errors);
+        continue;
+      }
+
+      handled.add(item.id);
+      const outcome = mergePair(links[item.id]?.baseline, snapshotFromItem(item), snapshotFromIssue(issue));
+
+      if (opts.dryRun) {
+        if (Object.keys(outcome.pull).length) pulled++;
+        if (outcome.push && !outcome.conflicts.length) pushed++;
+        conflicts.push(...outcome.conflicts.map((f) => ({ key: item.key, field: f })));
+        continue;
+      }
+
+      // Pull remote-only field changes (always safe — only the remote moved).
+      if (Object.keys(outcome.pull).length) {
+        updateWorkItem(workspaceRoot, item.id, snapshotToPatch(outcome.pull, project), 'agent');
+        pulled += Object.keys(outcome.pull).length;
+      }
+
+      if (outcome.conflicts.length) {
+        // Leave GitHub + the conflicting local fields untouched and DON'T advance
+        // the baseline, so the conflict re-surfaces until the user reconciles.
+        conflicts.push(...outcome.conflicts.map((f) => ({ key: item.key, field: f })));
+      } else {
+        if (outcome.push) {
+          const res = await opts.fetchImpl(`${apiRoot(opts)}/issues/${issue.number}`, {
+            method: 'PATCH', headers: ghHeaders(opts.token), body: JSON.stringify(snapshotToIssuePayload(outcome.merged, item.key)),
+          });
+          if (!res.ok) errors.push(`${item.key}: push failed (HTTP ${res.status})`);
+          else pushed += 1;
+        }
+        setGithubLink(workspaceRoot, item.id, {
+          number: issue.number, url: issue.html_url ?? links[item.id]?.url ?? '',
+          baseline: outcome.merged, githubUpdatedAt: issue.updated_at, syncedAt: stamp,
+        });
+      }
+
+      pushed += await pushComments(workspaceRoot, opts, item, issue.number, errors);
+      pulled += await pullComments(workspaceRoot, opts, item.id, issue.number, errors);
+    } catch (e) {
+      errors.push(`#${issue.number}: ${(e as Error).message}`);
+    }
+  }
+
+  // 2. Local items with no GitHub issue yet → create the issue (export path).
+  for (const item of listWorkItems(workspaceRoot)) {
+    if (handled.has(item.id) || links[item.id]) continue;
+    if (opts.dryRun) { createdRemote++; continue; }
+    try {
+      const payload = workItemToIssue(item);
+      const res = await opts.fetchImpl(`${apiRoot(opts)}/issues`, {
+        method: 'POST', headers: ghHeaders(opts.token),
+        body: JSON.stringify({ title: payload.title, body: payload.body, labels: payload.labels, assignees: payload.assignees }),
+      });
+      if (!res.ok) { errors.push(`${item.key}: create failed (HTTP ${res.status})`); continue; }
+      const created = (await res.json()) as GithubIssue;
+      if (payload.state === 'closed') {
+        await opts.fetchImpl(`${apiRoot(opts)}/issues/${created.number}`, {
+          method: 'PATCH', headers: ghHeaders(opts.token), body: JSON.stringify({ state: 'closed' }),
+        });
+      }
+      setGithubLink(workspaceRoot, item.id, {
+        number: created.number, url: created.html_url ?? '',
+        baseline: snapshotFromItem(item), githubUpdatedAt: created.updated_at, syncedAt: stamp,
+      });
+      createdRemote++;
+      pushed += await pushComments(workspaceRoot, opts, item, created.number, errors);
+    } catch (e) {
+      errors.push(`${item.key}: ${(e as Error).message}`);
+    }
+  }
+
+  return {
+    direction: 'sync', dryRun: opts.dryRun ?? false,
+    pushed, pulled, created: { local: createdLocal, remote: createdRemote }, conflicts, errors,
+  };
 }
 
 // ── Members from GitHub collaborators ─────────────────────────────────────────

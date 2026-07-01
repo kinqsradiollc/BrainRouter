@@ -374,7 +374,7 @@ export function App(): React.ReactElement {
     updateMemberRole: (id: string, role: ProjectRole) => q('q-track-update-member-role', 'track-update-member-role', { id, role }),
     removeMember: (id: string) => q('q-track-remove-member', 'track-remove-member', { id }),
     syncMembers: () => q('q-track-sync-members', 'track-sync-members', {}),
-    sync: (direction: 'import' | 'export', dryRun: boolean) => {
+    sync: (direction: 'import' | 'export' | 'sync', dryRun: boolean) => {
       q('q-track-sync', 'track-sync', { direction, dryRun });
       // A real run can create/modify items — refresh the board shortly after.
       if (!dryRun) window.setTimeout(() => { q('q-track-items', 'track-items'); }, 600);
