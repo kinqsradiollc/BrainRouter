@@ -32,7 +32,7 @@ export async function handleMemoryContradictions(args: unknown, options?: { defa
       throw new Error('contradictionId and resolutionStatus are required when action is "resolve"');
     }
     
-    memoryEngine.resolveContradiction(contradictionId, effectiveUserId, resolutionStatus);
+    await memoryEngine.resolveContradiction(contradictionId, effectiveUserId, resolutionStatus);
     
     return {
       content: [

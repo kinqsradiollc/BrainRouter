@@ -9,7 +9,11 @@ import { PageHeader } from "../../components/PageHeader";
 
 export default function SkillsPage() {
   const client = useMemo(() => getClient(), []);
-  const { data: activations, error, loading, refresh } = useSkillActivations(client);
+  const { data, error, loading, refresh } = useSkillActivations(client);
+  // The endpoint returns an array; guard so a thinner-than-typed response
+  // (e.g. an error object) degrades to the empty state instead of throwing
+  // `activations.map is not a function`.
+  const activations = Array.isArray(data) ? data : [];
 
   return (
     <AuthGuard>

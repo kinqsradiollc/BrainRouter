@@ -33,8 +33,8 @@ memoriesRouter.get("/", async (req: AuthedRequest, res) => {
   }
 });
 
-memoriesRouter.get("/:recordId", (req: AuthedRequest, res) => {
-  const result = memoryEngine.getMemoryById(req.userId!, String(req.params.recordId));
+memoriesRouter.get("/:recordId", async (req: AuthedRequest, res) => {
+  const result = await memoryEngine.getMemoryById(req.userId!, String(req.params.recordId));
   if (!result) {
     sendError(res, 404, "Memory not found");
     return;
@@ -42,7 +42,7 @@ memoriesRouter.get("/:recordId", (req: AuthedRequest, res) => {
   res.json(result);
 });
 
-memoriesRouter.patch("/:recordId", (req: AuthedRequest, res) => {
+memoriesRouter.patch("/:recordId", async (req: AuthedRequest, res) => {
   try {
     const body = z.object({
       content: z.string().optional(),
@@ -55,7 +55,7 @@ memoriesRouter.patch("/:recordId", (req: AuthedRequest, res) => {
       sendError(res, 400, "Content too long");
       return;
     }
-    const result = memoryEngine.updateMemory(req.userId!, String(req.params.recordId), body);
+    const result = await memoryEngine.updateMemory(req.userId!, String(req.params.recordId), body);
     if (!result) {
       sendError(res, 404, "Memory not found");
       return;
@@ -66,7 +66,7 @@ memoriesRouter.patch("/:recordId", (req: AuthedRequest, res) => {
   }
 });
 
-memoriesRouter.post("/:recordId/evidence", (req: AuthedRequest, res) => {
+memoriesRouter.post("/:recordId/evidence", async (req: AuthedRequest, res) => {
   try {
     const body = z.object({
       kind: z.enum(["file", "command", "url", "test", "benchmark", "memory", "other"]),
@@ -74,23 +74,23 @@ memoriesRouter.post("/:recordId/evidence", (req: AuthedRequest, res) => {
       excerpt: z.string().optional().default(""),
       metadata: z.record(z.unknown()).optional().default({}),
     }).parse(req.body ?? {});
-    const evidence = memoryEngine.addEvidence(req.userId!, String(req.params.recordId), body);
+    const evidence = await memoryEngine.addEvidence(req.userId!, String(req.params.recordId), body);
     res.status(201).json({ evidence });
   } catch (error) {
     sendError(res, 400, error instanceof Error ? error.message : "Invalid request body");
   }
 });
 
-memoriesRouter.get("/:recordId/evidence", (req: AuthedRequest, res) => {
-  res.json({ evidence: memoryEngine.getEvidence(req.userId!, String(req.params.recordId)) });
+memoriesRouter.get("/:recordId/evidence", async (req: AuthedRequest, res) => {
+  res.json({ evidence: await memoryEngine.getEvidence(req.userId!, String(req.params.recordId)) });
 });
 
-memoriesRouter.delete("/:id", (req: AuthedRequest, res) => {
+memoriesRouter.delete("/:id", async (req: AuthedRequest, res) => {
   const reason = typeof req.body?.reason === "string" ? req.body.reason : "";
   if (reason) {
-    memoryEngine.governanceDelete(req.userId!, String(req.params.id), reason);
+    await memoryEngine.governanceDelete(req.userId!, String(req.params.id), reason);
   } else {
-    memoryEngine.deleteMemory(req.userId!, String(req.params.id));
+    await memoryEngine.deleteMemory(req.userId!, String(req.params.id));
   }
   res.json({ success: true });
 });

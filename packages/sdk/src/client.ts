@@ -198,7 +198,7 @@ export class BrainRouterClient {
   getRemoteSessions(params?: { clientKind?: string; workspaceRoot?: string; includeStale?: boolean; includeUsage?: boolean; staleThresholdMs?: number }) {
     return this.get<{ sessions: ActiveSessionRecord[] }>("/api/sessions", params);
   }
-  getContradictions(params?: CursorPaginationParams) { return this.get<ContradictionsResponse>("/api/contradictions", params); }
+  getContradictions(params?: CursorPaginationParams & { status?: "pending" | "resolved" | "dismissed" | "all" }) { return this.get<ContradictionsResponse>("/api/contradictions", params); }
   resolveContradiction(id: string, status: "resolved" | "dismissed") { return this.post<{ success: boolean }>(`/api/contradictions/${id}/resolve`, { status }); }
 
   // Phase 3 — Observability & Recall Explainability

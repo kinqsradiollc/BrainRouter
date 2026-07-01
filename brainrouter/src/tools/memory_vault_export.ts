@@ -36,7 +36,7 @@ export async function handleMemoryVaultExport(args: any, options?: { defaultUser
   try {
     const params = schema.parse(args ?? {});
     const userId = params.userId ?? options?.defaultUserId ?? "default";
-    return toolResult(memoryEngine.exportVault(userId, params.dir));
+    return toolResult(await memoryEngine.exportVault(userId, params.dir));
   } catch (err) {
     return toolError("memory_vault_export", err);
   }

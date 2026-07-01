@@ -32,7 +32,7 @@ usersRouter.get("/", async (req, res) => {
   }
 });
 
-usersRouter.post("/", (req: AuthedRequest, res) => {
+usersRouter.post("/", async (req: AuthedRequest, res) => {
   const userId = String(req.body?.userId ?? "").trim();
   if (!userId) {
     sendError(res, 400, "userId is required");
@@ -42,14 +42,14 @@ usersRouter.post("/", (req: AuthedRequest, res) => {
   const isAdmin = Boolean(req.body?.isAdmin);
   const apiKey = `br_${randomBytes(24).toString("hex")}`;
   try {
-    const user = memoryEngine.createUser(userId, apiKey, displayName, isAdmin);
+    const user = await memoryEngine.createUser(userId, apiKey, displayName, isAdmin);
     res.status(201).json({ user });
   } catch (error: any) {
     sendError(res, 400, error?.message ?? "Failed to create user");
   }
 });
 
-usersRouter.put("/:id/status", (req: AuthedRequest, res) => {
+usersRouter.put("/:id/status", async (req: AuthedRequest, res) => {
   const userId = String(req.params.id);
   const status = req.body?.status === "disabled" ? "disabled" : req.body?.status === "active" ? "active" : null;
   if (!status) {
@@ -60,28 +60,28 @@ usersRouter.put("/:id/status", (req: AuthedRequest, res) => {
     sendError(res, 400, "Cannot disable the current admin user");
     return;
   }
-  memoryEngine.updateUserStatus(userId, status);
+  await memoryEngine.updateUserStatus(userId, status);
   res.json({ success: true });
 });
 
-usersRouter.post("/:id/reset-key", (req, res) => {
+usersRouter.post("/:id/reset-key", async (req, res) => {
   const userId = String(req.params.id);
-  const user = memoryEngine.getUserById(userId);
+  const user = await memoryEngine.getUserById(userId);
   if (!user) {
     sendError(res, 404, "User not found");
     return;
   }
   const apiKey = `br_${randomBytes(24).toString("hex")}`;
-  memoryEngine.updateUserApiKey(userId, apiKey);
+  await memoryEngine.updateUserApiKey(userId, apiKey);
   res.json({ apiKey });
 });
 
-usersRouter.delete("/:id", (req: AuthedRequest, res) => {
+usersRouter.delete("/:id", async (req: AuthedRequest, res) => {
   const userId = String(req.params.id);
   if (userId === req.userId) {
     sendError(res, 400, "Cannot delete the current admin user");
     return;
   }
-  memoryEngine.deleteUser(userId);
+  await memoryEngine.deleteUser(userId);
   res.json({ success: true });
 });

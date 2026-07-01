@@ -114,7 +114,7 @@ async function fetchBriefing(
 
   // 1. Persona (cross-session identity).
   try {
-    const persona = memoryEngine.getPersona(userId);
+    const persona = await memoryEngine.getPersona(userId);
     const personaMd = (persona as any)?.personaMd?.toString().trim();
     if (personaMd) {
       sections.push(`### Who I'm talking to (core identity)\n${personaMd.slice(0, 1600)}`);
@@ -125,7 +125,7 @@ async function fetchBriefing(
 
   // 2. Recent focus scenes.
   try {
-    const scenes = memoryEngine.getTopScenes(userId, 3);
+    const scenes = await memoryEngine.getTopScenes(userId, 3);
     if (Array.isArray(scenes) && scenes.length > 0) {
       const lines: string[] = ["### Recent focus scenes (what they've been working on)"];
       for (const s of scenes) {
@@ -204,7 +204,7 @@ export async function getMemoryStatusForUser(userId: string): Promise<{
     if (Array.isArray(list)) scenes = list.length;
   } catch { /* ignore */ }
   try {
-    const p: any = memoryEngine.getPersona(userId);
+    const p: any = await memoryEngine.getPersona(userId);
     hasPersona = Boolean(p?.personaMd?.trim());
   } catch { /* ignore */ }
   return { cognitive, scenes, hasPersona };

@@ -201,7 +201,7 @@ export async function handleMemoryEngineeringTool(name: string, args: unknown, o
           commands: params.commands,
         }));
       }
-      return toolResult({ records });
+      return toolResult({ records: await Promise.all(records) });
     }
     case "memory_debug_trace_search": {
       const params = z.object({ ...baseUser, query: z.string(), limit: z.number().int().min(1).max(100).optional().default(20) }).parse(args);
@@ -217,7 +217,7 @@ export async function handleMemoryEngineeringTool(name: string, args: unknown, o
     }
     case "memory_file_history": {
       const params = z.object({ ...baseUser, filePath: z.string(), limit: z.number().int().min(1).max(100).optional().default(20) }).parse(args);
-      return toolResult(memoryEngine.getMemoriesByFilePath(effectiveUserId(params.userId, options?.defaultUserId), params.filePath, params.limit));
+      return toolResult(await memoryEngine.getMemoriesByFilePath(effectiveUserId(params.userId, options?.defaultUserId), params.filePath, params.limit));
     }
     case "memory_task_state": {
       const params = z.object({ ...baseUser, query: z.string().optional().default("task state handover blocked next actions"), limit: z.number().int().min(1).max(100).optional().default(20) }).parse(args ?? {});

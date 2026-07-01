@@ -9,8 +9,8 @@ governanceRouter.use(requireAnyAuth);
 
 const scopeOps = (req: AuthedRequest, requested?: unknown) => scopedUserId(req, requested, "memory operations");
 
-governanceRouter.get("/export", (req: AuthedRequest, res) => {
-  res.json(memoryEngine.exportMemories(req.userId!));
+governanceRouter.get("/export", async (req: AuthedRequest, res) => {
+  res.json(await memoryEngine.exportMemories(req.userId!));
 });
 
 governanceRouter.post("/import", async (req: AuthedRequest, res) => {
@@ -38,9 +38,9 @@ governanceRouter.get("/audit", async (req: AuthedRequest, res) => {
   }
 });
 
-governanceRouter.get("/governance/diagnostics", (req: AuthedRequest, res) => {
+governanceRouter.get("/governance/diagnostics", async (req: AuthedRequest, res) => {
   try {
-    res.json(memoryEngine.getDiagnostics(scopeOps(req, req.query.userId)));
+    res.json(await memoryEngine.getDiagnostics(scopeOps(req, req.query.userId)));
   } catch (error) {
     sendError(res, errorStatus(error, 400), error instanceof Error ? error.message : "Invalid diagnostics parameters");
   }

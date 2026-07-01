@@ -34,9 +34,11 @@ const cardVariants = {
 
 export default function ContradictionsPage() {
   const client = useMemo(() => getClient(), []);
-  const { contradictions, refresh, loadMore, hasMore, isFetchingMore } = useContradictions(client);
   const [filter, setFilter] = useState<"pending" | "resolved" | "all">("pending");
-  const filteredContradictions = contradictions.filter((item) => filter === "all" ? true : item.status === filter);
+  // The server filters by status (the "resolved"/"all" tabs would otherwise be
+  // empty — the endpoint only ever returned pending rows). Changing `filter`
+  // re-runs the fetch via the hook's dependency on it.
+  const { contradictions: filteredContradictions, refresh, loadMore, hasMore, isFetchingMore } = useContradictions(client, filter);
 
   return (
     <AuthGuard>

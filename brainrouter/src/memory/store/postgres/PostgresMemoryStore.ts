@@ -853,9 +853,13 @@ export class PostgresMemoryStore implements IMemoryStore {
     );
   }
 
-  public async getPendingContradictions(userId: string, pagination?: CursorPaginationOptions<{ confidence: number; id: string }>): Promise<ContradictionRecord[]> {
-    const where = ["c.user_id = ?", "c.status = 'pending'"];
+  public async getPendingContradictions(userId: string, pagination?: CursorPaginationOptions<{ confidence: number; id: string }>, statusFilter: "pending" | "resolved" | "dismissed" | "all" = "pending"): Promise<ContradictionRecord[]> {
+    const where = ["c.user_id = ?"];
     const args: any[] = [userId];
+    if (statusFilter !== "all") {
+      where.push("c.status = ?");
+      args.push(statusFilter);
+    }
     if (pagination?.cursor) {
       where.push("(c.confidence < ? OR (c.confidence = ? AND c.id > ?))");
       args.push(pagination.cursor.confidence, pagination.cursor.confidence, pagination.cursor.id);

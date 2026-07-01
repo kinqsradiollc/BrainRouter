@@ -488,9 +488,10 @@ export class MemoryEngine {
 
   public getPendingContradictions(
     userId: string,
-    pagination?: CursorPaginationOptions<{ confidence: number; id: string }>
+    pagination?: CursorPaginationOptions<{ confidence: number; id: string }>,
+    statusFilter?: "pending" | "resolved" | "dismissed" | "all"
   ) {
-    return this.store.getPendingContradictions(userId, pagination);
+    return this.store.getPendingContradictions(userId, pagination, statusFilter);
   }
 
   public resolveContradiction(id: string, userId: string, status: 'resolved' | 'dismissed') {
@@ -498,7 +499,7 @@ export class MemoryEngine {
   }
 
   public registerSkillHints(skillName: string, hints: string, sourceFile = "") {
-    this.store.upsertSkillHints(skillName, hints, sourceFile);
+    return this.store.upsertSkillHints(skillName, hints, sourceFile);
   }
 
   public listSkillHints() {
@@ -682,7 +683,7 @@ export class MemoryEngine {
   }
 
   public deleteMemory(userId: string, recordId: string) {
-    this.store.archiveCognitiveRecord(userId, recordId);
+    return this.store.archiveCognitiveRecord(userId, recordId);
   }
 
   public async getMemoryById(userId: string, recordId: string) {
@@ -989,7 +990,7 @@ export class MemoryEngine {
     return this.getMemoryById(userId, recordId);
   }
 
-  public addEvidence(userId: string, recordId: string, evidence: Omit<MemoryEvidence, "id" | "userId" | "recordId" | "observedAt"> & { id?: string; observedAt?: string }) {
+  public async addEvidence(userId: string, recordId: string, evidence: Omit<MemoryEvidence, "id" | "userId" | "recordId" | "observedAt"> & { id?: string; observedAt?: string }) {
     const ev: MemoryEvidence = {
       id: evidence.id ?? randomUUID(),
       userId,
@@ -1000,7 +1001,7 @@ export class MemoryEngine {
       observedAt: evidence.observedAt ?? new Date().toISOString(),
       metadata: evidence.metadata ?? {},
     };
-    this.store.insertEvidence(ev);
+    await this.store.insertEvidence(ev);
     return ev;
   }
 
@@ -1039,7 +1040,7 @@ export class MemoryEngine {
   }
 
   public governanceDelete(userId: string, recordId: string, reason: string) {
-    this.store.hardDeleteMemory(userId, recordId, reason);
+    return this.store.hardDeleteMemory(userId, recordId, reason);
   }
 
   /**
