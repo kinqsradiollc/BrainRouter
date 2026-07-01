@@ -586,12 +586,20 @@ function ConnectorSettings({ connectors, githubIntegration, onGithubSave, onActi
         <div className="connector-catalog">
           {connectors.catalog.map((entry) => {
             const configured = connectors.items.filter((item) => item.source === entry.source).length;
+            // Only GitHub has a runtime today; the rest are catalog-only placeholders.
             const ready = entry.source === 'github';
             return (
-              <button key={entry.source} type="button" className={`connector-source-card${entry.source === selectedSource ? ' active' : ''}`} onClick={() => { setSelectedSource(entry.source); setEditorOpen(true); }}>
+              <button
+                key={entry.source}
+                type="button"
+                disabled={!ready}
+                title={ready ? undefined : `${entry.title} connector — coming soon`}
+                className={`connector-source-card${entry.source === selectedSource ? ' active' : ''}${ready ? '' : ' is-soon'}`}
+                onClick={ready ? () => { setSelectedSource(entry.source); setEditorOpen(true); } : undefined}
+              >
                 <span className="connector-source-top">
                   <span className="connector-source-title">{entry.title}</span>
-                  <span className={`connector-source-badge${ready ? ' ready' : ''}`}>{ready ? 'runtime' : 'catalog'}</span>
+                  <span className={`connector-source-badge${ready ? ' ready' : ' soon'}`}>{ready ? 'runtime' : 'Coming soon'}</span>
                 </span>
                 <span className="connector-source-desc">{entry.description}</span>
                 <span className="connector-source-meta">{entry.flows.join(' · ')}{configured ? ` · ${configured} configured` : ''}</span>
@@ -711,7 +719,7 @@ function ConnectorSettings({ connectors, githubIntegration, onGithubSave, onActi
               options={[
                 { value: 'dynamic', label: 'GitHub CLI', detail: 'uses gh auth' },
                 { value: 'static', label: 'Token reference', detail: 'env/config/keychain ref' },
-                { value: 'oauth', label: 'OAuth account', detail: 'future OAuth flow' },
+                { value: 'oauth', label: 'OAuth account', detail: 'Coming soon', disabled: true },
               ]}
               onChange={(v) => {
                 if (v === 'none' || v === 'static' || v === 'dynamic' || v === 'oauth') setCredentialMode(v);

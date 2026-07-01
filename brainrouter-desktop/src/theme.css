@@ -206,6 +206,10 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .connector-source-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; font-size: 13px; }
 .connector-source-badge { flex: none; padding: 2px 6px; border-radius: 5px; color: var(--text-dim); background: var(--ov-06); border: 1px solid var(--border); font-size: 9.5px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; }
 .connector-source-badge.ready { color: var(--ok, #3fb950); background: rgba(63, 185, 80, 0.12); border-color: rgba(63, 185, 80, 0.22); }
+.connector-source-badge.soon { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); border-color: color-mix(in srgb, var(--warn) 24%, transparent); }
+/* Catalog-only sources (no runtime yet): greyed, non-interactive "coming soon". */
+.connector-source-card.is-soon { opacity: .5; cursor: default; }
+.connector-source-card.is-soon:hover { border-color: var(--border); background: color-mix(in srgb, var(--raised) 56%, transparent); transform: none; }
 .connector-source-desc { color: var(--text-dim); font-size: 12px; line-height: 1.38; }
 .connector-source-meta { margin-top: auto; color: var(--text-faint); font-size: 10.5px; line-height: 1.35; }
 .connector-configured-grid .provider-card { min-height: 118px; gap: 7px; }
