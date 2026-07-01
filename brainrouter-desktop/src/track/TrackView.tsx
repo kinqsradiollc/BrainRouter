@@ -317,6 +317,17 @@ function ModulesView({ modules, items, ops }: { modules: Module[]; items: WorkIt
 
 const fmtDate = (d?: string): string => (d ? new Date(d).toLocaleDateString() : '—');
 
+// Track dates are conceptually plain calendar dates. They're stored as ISO
+// strings, but a UTC-midnight value (e.g. a deadline the agent set as
+// "2026-07-01") parsed via `new Date()` in a timezone behind UTC lands on the
+// PREVIOUS day — so an item due today would show on yesterday's cell. Read the
+// Y/M/D straight off the ISO date portion so an item always sits on the day it
+// names, regardless of the viewer's timezone. Returns a local Date at that day.
+const isoToLocalDate = (iso: string): Date => {
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
+  return new Date(y, (m || 1) - 1, d || 1);
+};
+
 function SpreadsheetView({ items, states, onOpen }: { items: WorkItem[]; states: TrackProject['workflowStates']; onOpen: (w: WorkItem) => void }): React.ReactElement {
   const stateName = (id: string): string => states.find((s) => s.id === id)?.name ?? id;
   return (
@@ -355,7 +366,7 @@ function CalendarView({ items, onOpen }: { items: WorkItem[]; onOpen: (w: WorkIt
   const unscheduled: WorkItem[] = [];
   for (const w of items) {
     if (!w.targetDate) { unscheduled.push(w); continue; }
-    const d = new Date(w.targetDate);
+    const d = isoToLocalDate(w.targetDate);
     if (d.getFullYear() === month.y && d.getMonth() === month.m) {
       if (!byDay.has(d.getDate())) byDay.set(d.getDate(), []);
       byDay.get(d.getDate())!.push(w);
@@ -403,33 +414,54 @@ function CalendarView({ items, onOpen }: { items: WorkItem[]; onOpen: (w: WorkIt
 function GanttView({ items, onOpen }: { items: WorkItem[]; onOpen: (w: WorkItem) => void }): React.ReactElement {
   const dated = items.filter((w) => w.startDate || w.targetDate);
   if (!dated.length) return <div className="track-empty">No items with a start or target date. Set dates to see a timeline.</div>;
-  const times = dated.flatMap((w) => [w.startDate, w.targetDate].filter(Boolean).map((d) => new Date(d as string).getTime()));
-  const min = Math.min(...times);
+  const toTime = (iso: string): number => isoToLocalDate(iso).getTime();
+  const times = dated.flatMap((w) => [w.startDate, w.targetDate].filter(Boolean).map((d) => toTime(d as string)));
+  let min = Math.min(...times);
   let max = Math.max(...times);
   if (max === min) max = min + 7 * 864e5;
+  // Pad the range so bars at the extremes aren't flush against the edges.
+  const pad = (max - min) * 0.04;
+  min -= pad; max += pad;
   const span = max - min;
   const pct = (t: number): number => ((t - min) / span) * 100;
-  const rows = [...dated].sort((a, b) => new Date(a.startDate ?? a.targetDate as string).getTime() - new Date(b.startDate ?? b.targetDate as string).getTime());
+  const rows = [...dated].sort((a, b) => toTime(a.startDate ?? a.targetDate as string) - toTime(b.startDate ?? b.targetDate as string));
+  // Five evenly-spaced scale ticks — they line up with the 25%-band gridlines
+  // drawn behind every row so the timeline reads as a grid, not floating bars.
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => min + f * span);
+  const now = Date.now();
+  const todayPct = now >= min && now <= max ? pct(now) : null;
+  const tickLabel = (t: number): string => new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   return (
     <div className="track-gantt">
+      <div className="track-gantt-scale">
+        <div className="track-gantt-scale-spacer" />
+        <div className="track-gantt-scale-track">
+          {ticks.map((t, i) => (
+            <span key={i} className="track-gantt-tick" style={{ left: `${pct(t)}%` }}>{tickLabel(t)}</span>
+          ))}
+          {todayPct !== null ? <span className="track-gantt-tick today" style={{ left: `${todayPct}%` }}>Today</span> : null}
+        </div>
+      </div>
       <div className="track-gantt-rows">
         {rows.map((w) => {
-          const s = new Date(w.startDate ?? w.targetDate as string).getTime();
-          const e = new Date(w.targetDate ?? w.startDate as string).getTime();
+          const s = toTime(w.startDate ?? w.targetDate as string);
+          const e = toTime(w.targetDate ?? w.startDate as string);
           const left = pct(Math.min(s, e));
-          const width = Math.max(1.5, pct(Math.max(s, e)) - left);
+          const width = Math.max(2.5, pct(Math.max(s, e)) - left);
           return (
             <div key={w.id} className="track-gantt-row" onClick={() => onOpen(w)}>
               <div className="track-gantt-label"><span className="mono">{w.key}</span> {w.title}</div>
               <div className="track-gantt-track">
+                {todayPct !== null ? <div className="track-gantt-today" style={{ left: `${todayPct}%` }} /> : null}
                 <div className={`track-gantt-bar track-cat-${w.statusCategory}`} style={{ left: `${left}%`, width: `${width}%` }}
-                  title={`${fmtDate(w.startDate)} → ${fmtDate(w.targetDate)}`} />
+                  title={`${w.key} · ${fmtDate(w.startDate)} → ${fmtDate(w.targetDate)}`}>
+                  <span className="track-gantt-bar-label">{w.title}</span>
+                </div>
               </div>
             </div>
           );
         })}
       </div>
-      <div className="track-gantt-axis"><span>{new Date(min).toLocaleDateString()}</span><span>{new Date(max).toLocaleDateString()}</span></div>
     </div>
   );
 }
