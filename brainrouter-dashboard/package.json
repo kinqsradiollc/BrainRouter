@@ -7,7 +7,7 @@
     "build": "next build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "next start",
-    "build:cf": "npm --prefix .. run build:packages && opennextjs-cloudflare build",
+    "build:cf": "npm --prefix .. run build:packages:dashboard && opennextjs-cloudflare build",
     "cf:preview": "npm run build:cf && opennextjs-cloudflare preview",
     "cf:deploy": "npm run build:cf && wrangler deploy"
   },
