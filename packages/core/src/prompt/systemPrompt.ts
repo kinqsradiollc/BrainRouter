@@ -401,9 +401,27 @@ const INSTRUCTIONS_TAIL: readonly string[] = [
   '- If the model / endpoint can\'t use tools, say so and continue with the best direct answer.',
 ];
 
+// The model has no inherent notion of "today" — without this it dates work
+// (Track deadlines, changelog stamps, "N days ago" reasoning) off its training
+// cutoff. Stamp the machine-local date at prompt-build time. Local parts (not
+// toISOString) so a UTC offset can't roll the day forward/back.
+function todayStamp(now: Date = new Date()): string {
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  let weekday = '';
+  try {
+    weekday = now.toLocaleDateString('en-US', { weekday: 'long' });
+  } catch {
+    // Locale data unavailable in a stripped runtime — the ISO date is enough.
+  }
+  return weekday ? `${weekday}, ${y}-${m}-${d}` : `${y}-${m}-${d}`;
+}
+
 function runtimeContextLines(context: SystemPromptContext): string[] {
   return [
     '# Runtime Context',
+    `- Current date: ${todayStamp()} — treat this as today; do not infer the date from training data.`,
     `- Workspace root: ${context.workspaceRoot}`,
     `- Launch directory: ${context.launchCwd}`,
     `- BrainRouter sessionKey: ${context.sessionKey}`,
