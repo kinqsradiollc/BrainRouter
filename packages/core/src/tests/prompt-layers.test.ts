@@ -10,6 +10,10 @@ const baseCtx: SystemPromptContext = {
   instructionSummary: 'Use AGENT.md.\n- build: npm run build',
   connectedMcpTools: ['memory_recall', 'read_file'],
   model: 'qwen3-coder',
+  // Pin the clock so the flat prompt and the layered prompt stamp the SAME
+  // "Current date" line — otherwise the two builders each call new Date() and
+  // the parity check can flake across a local-midnight boundary.
+  nowMs: 1_781_827_200_000,
 };
 
 test('buildPromptLayers: instructions layer holds the stable identity + tool guidance only', () => {

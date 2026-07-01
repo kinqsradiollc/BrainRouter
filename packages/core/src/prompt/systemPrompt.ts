@@ -60,6 +60,14 @@ export interface SystemPromptContext {
    * every turn. Empty / undefined emits no overlay.
    */
   codePromptPrefix?: string;
+  /**
+   * Optional wall-clock (ms) to stamp as "Current date" in the runtime context.
+   * Defaults to `new Date()` at build time. Injectable so a single request that
+   * builds both wire shapes — or a test — stamps ONE date, instead of each
+   * builder calling `new Date()` independently (which could disagree across a
+   * midnight boundary).
+   */
+  nowMs?: number;
 }
 
 function personalityOverlay(style: SystemPromptContext['personality']): string {
@@ -401,9 +409,28 @@ const INSTRUCTIONS_TAIL: readonly string[] = [
   '- If the model / endpoint can\'t use tools, say so and continue with the best direct answer.',
 ];
 
+// The model has no inherent notion of "today" — without this it dates work
+// (Track deadlines, changelog stamps, "N days ago" reasoning) off its training
+// cutoff. Stamp the machine-local date at prompt-build time. Local parts (not
+// toISOString) so a UTC offset can't roll the day forward/back.
+function todayStamp(nowMs?: number): string {
+  const now = nowMs !== undefined ? new Date(nowMs) : new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  let weekday = '';
+  try {
+    weekday = now.toLocaleDateString('en-US', { weekday: 'long' });
+  } catch {
+    // Locale data unavailable in a stripped runtime — the ISO date is enough.
+  }
+  return weekday ? `${weekday}, ${y}-${m}-${d}` : `${y}-${m}-${d}`;
+}
+
 function runtimeContextLines(context: SystemPromptContext): string[] {
   return [
     '# Runtime Context',
+    `- Current date: ${todayStamp(context.nowMs)} — treat this as today; do not infer the date from training data.`,
     `- Workspace root: ${context.workspaceRoot}`,
     `- Launch directory: ${context.launchCwd}`,
     `- BrainRouter sessionKey: ${context.sessionKey}`,
