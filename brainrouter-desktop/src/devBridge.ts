@@ -439,6 +439,13 @@ export function installDevBridge(): void {
     if (it.key === 'BR-1' || it.key === 'BR-2') it.moduleId = 'mod_2';
     if (it.key === 'BR-3' || it.key === 'BR-5') it.moduleId = 'mod_1';
   }
+  // Spread start/target dates across the current month so calendar + gantt have data.
+  {
+    const now = new Date();
+    const mk = (off: number): string => new Date(now.getFullYear(), now.getMonth(), Math.max(1, Math.min(28, now.getDate() + off))).toISOString();
+    const dates: Record<string, [number, number]> = { 'BR-1': [-3, 6], 'BR-2': [-10, -2], 'BR-3': [0, 5], 'BR-4': [2, 9], 'BR-5': [-6, -1], 'BR-6': [4, 12], 'BR-7': [7, 14] };
+    for (const it of devTrack.items) { const d = dates[String(it.key)]; if (d) { it.startDate = mk(d[0]); it.targetDate = mk(d[1]); } }
+  }
   const devFindItem = (k: unknown): Record<string, unknown> | undefined => devTrack.items.find((w) => w.key === k || w.id === k);
   const devAutomations: Record<string, unknown>[] = [
     { id: 'auto_1', name: 'Bugs start high', enabled: true, trigger: 'created', condition: 'type = bug', actions: [{ type: 'set-priority', value: 'high' }], createdAt: '2026-06-21T00:00:00.000Z', updatedAt: '2026-06-21T00:00:00.000Z' },
