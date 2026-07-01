@@ -42,15 +42,33 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "target": [
-        { "target": "dmg", "arch": ["arm64", "x64"] },
-        { "target": "zip", "arch": ["arm64", "x64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
       ]
     },
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
-    }
+    },
+    "electronVersion": "33.4.11"
   },
   "dependencies": {
     "@dagrejs/dagre": "^3.0.0",
@@ -83,5 +101,6 @@
     "tsx": "^4.7.0",
     "typescript": "^5.5.4",
     "vite": "^5.4.6"
-  }
+  },
+  "author": "kinqsradio"
 }
