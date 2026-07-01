@@ -31,7 +31,7 @@ import rehypeKatex from "rehype-katex";
  * LaTeX source example embedded in a code fence stays a code example
  * instead of getting silently rendered as math.
  */
-function normalizeLatexDelimiters(md: string): string {
+function normalizeLatexDelimiters(md: string | null | undefined): string {
   // Guard against undefined/non-string children (e.g. a persona/scene field
   // that hasn't been consolidated yet, or an API response that arrives thinner
   // than the type claims). Without this, `md.split(...)` throws and white-screens
