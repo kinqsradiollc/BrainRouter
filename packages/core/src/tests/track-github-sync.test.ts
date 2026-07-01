@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ensureProject, createWorkItem, listWorkItems, getWorkItem, getGithubLinks, setGithubLink, updateWorkItem, listMembers, addComment, listLabels, getLabel } from '../track/trackStore.js';
+import { ensureProject, createWorkItem, listWorkItems, getWorkItem, getGithubLinks, setGithubLink, updateWorkItem, listMembers, addComment, listLabels, getLabel, getGithubSyncTarget, setGithubSyncTarget } from '../track/trackStore.js';
+import { migrateTrackGithubToConnector } from '../track/githubMigrate.js';
 import {
   workItemToIssue,
   issueToWorkItem,
@@ -399,5 +400,123 @@ test('bidi sync: a GitHub issue with no link creates a local item', async () => 
     assert.ok(created, 'local item created');
     assert.equal(created!.type, 'bug');
     assert.ok(getGithubLinks(ws)[created!.id]?.baseline, 'baseline recorded');
+  });
+});
+
+// ── Connector Phase 0: source of truth + migration ───────────────────────────
+
+test('phase0: two connectors owning the same repo BOTH appear (no silent drop)', () => {
+  withTempWorkspace((ws) => {
+    ensureProject(ws, { key: 'BR' });
+    const a = createConnector(ws, { source: 'github', name: 'Alice GitHub', config: { repositories: ['acme/core'] }, credential: { mode: 'dynamic' } });
+    const b = createConnector(ws, { source: 'github', name: 'Bob GitHub', config: { repositories: ['acme/core'] }, credential: { mode: 'dynamic' } });
+    const rows = listResolvedGithubConfigsForWorkspace(ws).filter((r) => r.repo === 'acme/core');
+    assert.equal(rows.length, 2, 'one row per connector identity');
+    assert.deepEqual(new Set(rows.map((r) => r.connectorId)), new Set([a.id, b.id]));
+  });
+});
+
+test('phase0: githubSyncTarget drives resolution (connector-first)', () => {
+  withTempWorkspace((ws) => {
+    ensureProject(ws, { key: 'BR' });
+    process.env.PHASE0_TEST_TOKEN = 'tok-conn';
+    try {
+      const conn = createConnector(ws, { source: 'github', name: 'Work GitHub', config: { repositories: ['acme/app', 'acme/site'] }, credential: { mode: 'static', ref: 'PHASE0_TEST_TOKEN' } });
+      setGithubSyncTarget(ws, { connectorId: conn.id, repo: 'acme/site' });
+      const cfg = resolveGithubConfigForWorkspace(ws);
+      assert.equal(cfg.repo, 'acme/site');
+      assert.equal(cfg.token, 'tok-conn');
+      assert.equal(cfg.tokenSource, 'connector-env');
+      assert.equal(cfg.connectorId, conn.id);
+      assert.equal(cfg.error, undefined);
+      // The target row is the active one in the summary list.
+      const active = listResolvedGithubConfigsForWorkspace(ws).find((r) => r.active);
+      assert.equal(active?.repo, 'acme/site');
+      assert.equal(active?.connectorId, conn.id);
+    } finally {
+      delete process.env.PHASE0_TEST_TOKEN;
+    }
+  });
+});
+
+test('phase0: missing target connector → explicit error, no silent fallback', () => {
+  withTempWorkspace((ws) => {
+    ensureProject(ws, { key: 'BR' });
+    setCliKnobOverride({ track: { githubRepo: 'legacy/repo', githubToken: 'legacy-token' } } as never);
+    try {
+      setGithubSyncTarget(ws, { connectorId: 'conn_gone', repo: 'acme/app' });
+      const cfg = resolveGithubConfigForWorkspace(ws);
+      assert.ok(cfg.error, 'expected an explicit error');
+      assert.equal(cfg.repo, undefined, 'must NOT fall back to the legacy repo');
+      // Explicit args still work (CLI --repo/--token override).
+      const forced = resolveGithubConfigForWorkspace(ws, 'legacy/repo', 'cli-token');
+      assert.equal(forced.repo, 'legacy/repo');
+      assert.equal(forced.token, 'cli-token');
+    } finally {
+      setCliKnobOverride({ track: {} } as never);
+    }
+  });
+});
+
+test('phase0: config:track credential scheme reads the legacy token (per-repo first)', () => {
+  withTempWorkspace((ws) => {
+    ensureProject(ws, { key: 'BR' });
+    setCliKnobOverride({ track: { githubToken: 'global-token', githubRepos: [{ repo: 'acme/special', token: 'special-token' }] } } as never);
+    try {
+      const conn = createConnector(ws, { source: 'github', name: 'Migrated', config: { repositories: ['acme/special', 'acme/other'] }, credential: { mode: 'static', ref: 'config:track' } });
+      setGithubSyncTarget(ws, { connectorId: conn.id, repo: 'acme/special' });
+      const special = resolveGithubConfigForWorkspace(ws);
+      assert.equal(special.token, 'special-token', 'per-repo legacy token wins');
+      assert.equal(special.tokenSource, 'config');
+      setGithubSyncTarget(ws, { connectorId: conn.id, repo: 'acme/other' });
+      const other = resolveGithubConfigForWorkspace(ws);
+      assert.equal(other.token, 'global-token', 'falls back to the global legacy token');
+    } finally {
+      setCliKnobOverride({ track: {} } as never);
+    }
+  });
+});
+
+test('phase0: migration adopts legacy knobs into a connector, idempotently', () => {
+  withTempWorkspace((ws) => {
+    ensureProject(ws, { key: 'BR' });
+    setCliKnobOverride({ track: { githubRepo: 'acme/app', githubToken: 'legacy-token', githubRepos: [{ repo: 'acme/app' }, { repo: 'acme/site' }], activeGithubRepo: 'acme/site' } } as never);
+    try {
+      const r1 = migrateTrackGithubToConnector(ws);
+      assert.equal(r1.migrated, true);
+      assert.ok(r1.connectorId);
+      assert.equal(r1.repo, 'acme/site', 'legacy active repo carries over');
+      const target = getGithubSyncTarget(ws);
+      assert.deepEqual(target, { connectorId: r1.connectorId, repo: 'acme/site' });
+      // The migrated connector resolves the legacy token via config:track.
+      const cfg = resolveGithubConfigForWorkspace(ws);
+      assert.equal(cfg.repo, 'acme/site');
+      assert.equal(cfg.token, 'legacy-token');
+      assert.equal(cfg.tokenSource, 'config');
+      // Second run is a no-op.
+      const r2 = migrateTrackGithubToConnector(ws);
+      assert.equal(r2.migrated, false);
+      assert.equal(r2.reason, 'already migrated');
+    } finally {
+      setCliKnobOverride({ track: {} } as never);
+    }
+  });
+});
+
+test('phase0: migration declines when legacy config has multiple distinct tokens', () => {
+  withTempWorkspace((ws) => {
+    ensureProject(ws, { key: 'BR' });
+    setCliKnobOverride({ track: { githubRepos: [{ repo: 'acme/a', token: 'tok-a' }, { repo: 'acme/b', token: 'tok-b' }] } } as never);
+    try {
+      const r = migrateTrackGithubToConnector(ws);
+      assert.equal(r.migrated, false);
+      assert.match(r.reason, /multiple distinct/);
+      assert.equal(getGithubSyncTarget(ws), undefined, 'no target guessed');
+      // Legacy resolution still works untouched.
+      const cfg = resolveGithubConfigForWorkspace(ws, 'acme/a');
+      assert.equal(cfg.token, 'tok-a');
+    } finally {
+      setCliKnobOverride({ track: {} } as never);
+    }
   });
 });

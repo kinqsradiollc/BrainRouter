@@ -28,6 +28,7 @@ import {
   recordCommentSync,
   upsertLabel,
   LOCAL_MEMBER_ID,
+  getGithubSyncTarget,
   type CreateWorkItemInput,
   type UpdateWorkItemPatch,
   type GithubMirrorSnapshot,
@@ -204,7 +205,18 @@ export interface GithubRepoConfig {
   label?: string;
 }
 export type GithubTokenSource = 'config' | 'env' | 'connector-env';
-export interface ResolvedGithubConfig { repo?: string; token?: string; tokenSource?: GithubTokenSource; connectorId?: string }
+export interface ResolvedGithubConfig {
+  repo?: string;
+  token?: string;
+  tokenSource?: GithubTokenSource;
+  connectorId?: string;
+  /**
+   * Set when the workspace's chosen sync target can't be resolved (connector
+   * removed/paused). Callers surface this instead of silently falling back to
+   * some other repo — a sync against the wrong repo is worse than no sync.
+   */
+  error?: string;
+}
 export interface ResolvedGithubRepoSummary {
   repo: string;
   hasToken: boolean;
@@ -219,7 +231,8 @@ function envGithubToken(): string | undefined {
   return process.env.GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim() || undefined;
 }
 
-function normalizeGithubRepos(knobs: NonNullable<ReturnType<typeof getRawCliKnobs>['track']>): GithubRepoConfig[] {
+/** Legacy `cli.track.github*` knob entries, normalized (also used by githubMigrate). */
+export function normalizeGithubRepos(knobs: NonNullable<ReturnType<typeof getRawCliKnobs>['track']>): GithubRepoConfig[] {
   const byRepo = new Map<string, GithubRepoConfig>();
   const add = (entry: unknown): void => {
     if (!entry || typeof entry !== 'object') return;
@@ -277,78 +290,135 @@ export function resolveGithubConfig(repoArg?: string, tokenArg?: string): Resolv
 
 interface ConnectorGithubRepoConfig extends GithubRepoConfig {
   connectorId: string;
-  tokenSource?: 'connector-env';
+  tokenSource?: GithubTokenSource;
 }
 
-function connectorToken(connector: ConnectorRecord): string | undefined {
-  if (connector.credential?.mode !== 'static') return undefined;
+/**
+ * Resolve a connector's static credential for a given repo. `credential.ref`
+ * schemes:
+ *   - `config:track` — the migrated-legacy scheme: the token still lives in the
+ *     global `cli.track.*` knobs (per-repo entry token, else `githubToken`).
+ *     Phase 3 moves this into the OS keychain; until then the plaintext stays
+ *     exactly where it already was — no new exposure.
+ *   - anything else — a host environment variable name (original behavior).
+ */
+function connectorToken(connector: ConnectorRecord, repo?: string): { token?: string; source?: GithubTokenSource } {
+  if (connector.credential?.mode !== 'static') return {};
   const ref = connector.credential.ref?.trim();
-  return ref ? process.env[ref]?.trim() || undefined : undefined;
+  if (!ref) return {};
+  if (ref === 'config:track') {
+    const knobs = getRawCliKnobs().track ?? {};
+    const entry = repo ? normalizeGithubRepos(knobs).find((r) => r.repo === repo) : undefined;
+    const token = entry?.token?.trim() || knobs.githubToken?.trim() || undefined;
+    return token ? { token, source: 'config' } : {};
+  }
+  const token = process.env[ref]?.trim();
+  return token ? { token, source: 'connector-env' } : {};
 }
 
+/**
+ * Every (connector, repo) pair configured in this workspace. Deliberately NOT
+ * deduplicated by repo name: two connectors (two identities) may both own
+ * `acme/core`, and dropping one silently made the second connector look dead.
+ * Callers disambiguate with `connectorId`.
+ */
 function connectorGithubRepos(workspaceRoot: string): ConnectorGithubRepoConfig[] {
-  const byRepo = new Map<string, ConnectorGithubRepoConfig>();
+  const rows: ConnectorGithubRepoConfig[] = [];
   for (const connector of listConnectors(workspaceRoot, { source: 'github' })) {
     if (connector.status === 'deleting' || connector.status === 'paused') continue;
     const owner = typeof connector.config.owner === 'string' ? connector.config.owner.trim().replace(/^\/+|\/+$/g, '') : '';
     const rawRepos = Array.isArray(connector.config.repositories)
       ? connector.config.repositories.filter((repo): repo is string => typeof repo === 'string' && repo.trim().length > 0)
       : [];
+    // Empty repositories = "all under the owner" (ingest-only); Track sync needs
+    // an explicit target repo, so those connectors contribute no rows here.
     if (rawRepos.length === 0) continue;
-    const token = connectorToken(connector);
+    const seen = new Set<string>();
     for (const rawRepo of rawRepos) {
       const repoName = rawRepo.trim().replace(/^\/+|\/+$/g, '');
       const repo = repoName.includes('/') ? repoName : (owner ? `${owner}/${repoName}` : '');
-      if (!repo) continue;
-      const existing = byRepo.get(repo);
-      if (existing?.token) continue;
-      byRepo.set(repo, {
+      if (!repo || seen.has(repo)) continue;
+      seen.add(repo);
+      const cred = connectorToken(connector, repo);
+      rows.push({
         repo,
         label: connector.name,
         connectorId: connector.id,
-        token: token ?? existing?.token,
-        tokenSource: token ? 'connector-env' : existing?.tokenSource,
+        token: cred.token,
+        tokenSource: cred.source,
       });
     }
   }
-  return [...byRepo.values()];
+  return rows;
 }
 
 export function listResolvedGithubConfigsForWorkspace(workspaceRoot: string): ResolvedGithubRepoSummary[] {
+  const target = getGithubSyncTarget(workspaceRoot);
   const trackRows = listResolvedGithubConfigs().map((row): ResolvedGithubRepoSummary => ({ ...row, source: 'track' }));
-  const byRepo = new Map<string, ResolvedGithubRepoSummary>();
-  for (const row of trackRows) byRepo.set(row.repo, row);
+  const connectorRows = connectorGithubRepos(workspaceRoot);
 
-  for (const entry of connectorGithubRepos(workspaceRoot)) {
-    const existing = byRepo.get(entry.repo);
-    const connectorRow: ResolvedGithubRepoSummary = {
+  // One row per (connector, repo) pair. A legacy track row merges into a
+  // connector row only when there is exactly ONE connector offering that repo
+  // (the migrated / single-identity case); with two identities on the same
+  // repo, each keeps its own row so the picker can disambiguate.
+  const rows: ResolvedGithubRepoSummary[] = [];
+  const connectorsByRepo = new Map<string, ConnectorGithubRepoConfig[]>();
+  for (const entry of connectorRows) {
+    const list = connectorsByRepo.get(entry.repo) ?? [];
+    list.push(entry);
+    connectorsByRepo.set(entry.repo, list);
+  }
+  const mergedTrackRepos = new Set<string>();
+  for (const entry of connectorRows) {
+    const track = trackRows.find((row) => row.repo === entry.repo);
+    const mergeTrack = !!track && (connectorsByRepo.get(entry.repo)?.length ?? 0) === 1;
+    if (mergeTrack) mergedTrackRepos.add(entry.repo);
+    rows.push({
       repo: entry.repo,
-      hasToken: !!entry.token,
-      tokenSource: entry.token ? entry.tokenSource : undefined,
+      hasToken: !!entry.token || (mergeTrack ? track!.hasToken : false),
+      tokenSource: entry.token ? entry.tokenSource : (mergeTrack ? track!.tokenSource : undefined),
       active: false,
       label: entry.label,
       connectorId: entry.connectorId,
       source: 'connector',
-    };
-    if (!existing) {
-      byRepo.set(entry.repo, connectorRow);
-      continue;
-    }
-    byRepo.set(entry.repo, {
-      ...existing,
-      hasToken: existing.hasToken || !!entry.token,
-      tokenSource: existing.hasToken ? existing.tokenSource : (entry.token ? entry.tokenSource : existing.tokenSource),
-      label: existing.label ?? entry.label,
-      connectorId: existing.connectorId ?? entry.connectorId,
     });
   }
+  for (const row of trackRows) {
+    if (!mergedTrackRepos.has(row.repo) && !connectorsByRepo.has(row.repo)) rows.push(row);
+  }
 
-  const rows = [...byRepo.values()];
-  if (!rows.some((row) => row.active) && rows.length > 0) rows[0] = { ...rows[0], active: true };
-  return rows;
+  // Active: the workspace's chosen (connector, repo) target wins; otherwise the
+  // legacy active repo; otherwise the first row.
+  let activeIdx = target
+    ? rows.findIndex((row) => row.connectorId === target.connectorId && row.repo === target.repo)
+    : -1;
+  if (activeIdx < 0) activeIdx = rows.findIndex((row) => row.source === 'track' && row.active);
+  if (activeIdx < 0 && !target) activeIdx = rows.findIndex((row) => row.active);
+  if (activeIdx < 0 && rows.length > 0) activeIdx = 0;
+  return rows.map((row, i) => ({ ...row, active: i === activeIdx }));
 }
 
 export function resolveGithubConfigForWorkspace(workspaceRoot: string, repoArg?: string, tokenArg?: string): ResolvedGithubConfig {
+  // Connector-first: when this workspace chose a sync target, that connector is
+  // authoritative. A missing/paused connector is an explicit error — syncing
+  // against whatever else happens to be configured risks writing issues to the
+  // wrong repo. Explicit args still override (CLI --repo/--token).
+  const target = getGithubSyncTarget(workspaceRoot);
+  if (target && !repoArg && !tokenArg) {
+    const rows = connectorGithubRepos(workspaceRoot).filter((entry) => entry.connectorId === target.connectorId);
+    if (rows.length === 0) {
+      return { error: 'The GitHub connector this workspace syncs with was removed or paused. Pick a repo in Settings → Connectors → GitHub.' };
+    }
+    const row = rows.find((entry) => entry.repo === target.repo) ?? rows[0];
+    const token = row.token || envGithubToken();
+    return {
+      repo: row.repo,
+      token,
+      tokenSource: row.token ? row.tokenSource : (token ? 'env' : undefined),
+      connectorId: target.connectorId,
+    };
+  }
+
   const base = resolveGithubConfig(repoArg, tokenArg);
   if (base.repo && base.token) return base;
 
