@@ -1,4 +1,4 @@
-import type { ProviderDefinition } from './definition.js';
+import type { ProviderDefinition } from '../definition.js';
 
 /** Ollama — a LOCAL OpenAI-compatible server (its OpenAI shim lives at
  *  `/v1`; model tags come from `/v1/models`). A blank API key is fine. */

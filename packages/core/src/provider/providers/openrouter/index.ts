@@ -1,4 +1,4 @@
-import type { ProviderDefinition } from './definition.js';
+import type { ProviderDefinition } from '../definition.js';
 
 /** OpenRouter — an OpenAI-compatible gateway that fronts many model providers
  *  under one `/api/v1` base (model list from `/api/v1/models`). One key, many

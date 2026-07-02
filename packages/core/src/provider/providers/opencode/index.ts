@@ -1,4 +1,4 @@
-import type { ProviderDefinition } from './definition.js';
+import type { ProviderDefinition } from '../definition.js';
 
 /** opencode — opencode's hosted "Zen" OpenAI-compatible gateway. Endpoint is a
  *  sensible default; correct the base URL for your account/plan if it differs. */

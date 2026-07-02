@@ -16,7 +16,7 @@ import {
   lmStudioCacheSnapshot,
   lookupLmStudioModel,
   refreshLmStudioCache,
-} from '../provider/providers/lmstudio.js';
+} from '../provider/providers/lmstudio/index.js';
 
 // Real LM Studio /api/v1/models payload (trimmed from the user's example).
 const SAMPLE_PAYLOAD = {
