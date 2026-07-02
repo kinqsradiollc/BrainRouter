@@ -1112,8 +1112,12 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .file-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 7px; font-family: var(--mono); font-size: 12px; color: var(--text-dim); cursor: pointer; transition: all 0.15s ease; }
 .file-row:hover { background: var(--ov-06); color: var(--text); transform: translateX(2px); }
 .file-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex: 1; min-width: 0; }
-.fstat { width: 20px; flex: none; color: var(--warn); font-weight: 600; }
-.fstat.s-A { color: var(--ok); } .fstat.s-D { color: var(--warn); } .fstat.s-u { color: var(--text-faint); }
+/* Git status marker — a small tinted chip instead of a bare letter, so M/A/D/?
+   read as status at a glance and align in a fixed gutter. */
+.fstat { flex: none; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border-radius: 5px; font-weight: 700; font-size: 10.5px; color: var(--warn); background: color-mix(in srgb, var(--warn) 15%, transparent); }
+.fstat.s-A { color: var(--ok); background: color-mix(in srgb, var(--ok) 15%, transparent); }
+.fstat.s-D { color: var(--err); background: color-mix(in srgb, var(--err) 15%, transparent); }
+.fstat.s-u { color: var(--text-faint); background: var(--ov-06); }
 
 .pathbar { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); padding: 4px 2px 8px; border-bottom: 1px solid var(--border); margin-bottom: 6px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex: none; }
 .code { font-family: var(--mono); font-size: 12px; line-height: 1.55; }
