@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { tryHandleOrchestrationCommand } from '../cli/commands/orchestration.js';
+import { tryHandleOrchestrationCommand } from '../cli/commands/orchestration/index.js';
 
 function toolResult(payload: unknown) {
   return { isError: false, content: [{ type: 'text', text: JSON.stringify(payload) }] };

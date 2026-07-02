@@ -9,7 +9,7 @@ import {
   parseConfigArgs,
   readAutomationKnob,
   WIRE_FORMAT_OPTIONS,
-} from '../cli/commands/config.js';
+} from '../cli/commands/config/index.js';
 
 const emptyConfig = (): any => ({ activeServer: '', servers: {} });
 

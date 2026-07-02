@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { callMcpTool, childSessionKey, extractToolText, safeJsonParse } from '@kinqs/brainrouter-core/mcp';
 import { createSession, getSession, listSessions, updateSession, executeOrchestrationTool } from '@kinqs/brainrouter-core/orchestration';
-import { normalizeSkillsList } from '../cli/commands/workflow.js';
+import { normalizeSkillsList } from '../cli/commands/workflow/index.js';
 import { withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 
 test('McpClientWrapper.isConnected is false before connect', async () => {

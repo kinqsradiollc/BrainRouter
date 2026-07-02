@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildReviewPrompt } from '../cli/commands/reviewPrompt.js';
+import { buildReviewPrompt } from '../cli/commands/reviewPrompt/index.js';
 import { capText } from '../runtime/gitContext.js';
 
 const base = {

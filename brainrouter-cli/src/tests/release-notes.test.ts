@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { runReleaseNotes } from '../cli/commands/releaseNotes.js';
+import { runReleaseNotes } from '../cli/commands/releaseNotes/index.js';
 
 function withFixtureDir<T>(files: Record<string, string>, fn: (dir: string) => T): T {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-changelog-'));

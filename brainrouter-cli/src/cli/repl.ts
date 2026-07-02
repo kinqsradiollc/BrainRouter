@@ -9,27 +9,27 @@ import type { ReplContext } from './commands/_context.js';
 // Category dispatch — extracted slash-command handlers. Each module exports
 // a tryHandleX(ctx) that returns true iff it matched the command. Walked
 // in order; first match wins, no match falls through to the legacy switch.
-import { tryHandleMemoryCommand } from './commands/memory.js';
-import { tryHandleUiCommand } from './commands/ui.js';
-import { tryHandleWorkflowCommand } from './commands/workflow.js';
-import { tryHandleObsCommand } from './commands/obs.js';
-import { tryHandleBrainCommand } from './commands/brain.js';
-import { tryHandleOrchestrationCommand } from './commands/orchestration.js';
-import { tryHandleSessionCommand } from './commands/session.js';
-import { tryHandleGuardCommand } from './commands/guard.js';
-import { tryHandleExtensionCommand } from './commands/extension.js';
-import { tryHandleMcpCommand } from './commands/mcp.js';
-import { tryHandleInitCommand } from './commands/init.js';
-import { tryHandleConfigCommand } from './commands/config.js';
-import { tryHandleLoginCommand } from './commands/login.js';
-import { tryHandleScheduleCommand } from './commands/schedule.js';
-import { tryHandleReleaseNotesCommand } from './commands/releaseNotes.js';
-import { tryHandleRequirementCommand } from './commands/requirement.js';
-import { tryHandleTrackCommand } from './commands/track.js';
-import { tryHandleAnnotationCommand } from './commands/annotation.js';
-import { tryHandleArtifactCommand } from './commands/artifact.js';
-import { tryHandleAtlasCommand } from './commands/atlas.js';
-import { tryHandleAttachmentCommand } from './commands/attachment.js';
+import { tryHandleMemoryCommand } from './commands/memory/index.js';
+import { tryHandleUiCommand } from './commands/ui/index.js';
+import { tryHandleWorkflowCommand } from './commands/workflow/index.js';
+import { tryHandleObsCommand } from './commands/obs/index.js';
+import { tryHandleBrainCommand } from './commands/brain/index.js';
+import { tryHandleOrchestrationCommand } from './commands/orchestration/index.js';
+import { tryHandleSessionCommand } from './commands/session/index.js';
+import { tryHandleGuardCommand } from './commands/guard/index.js';
+import { tryHandleExtensionCommand } from './commands/extension/index.js';
+import { tryHandleMcpCommand } from './commands/mcp/index.js';
+import { tryHandleInitCommand } from './commands/init/index.js';
+import { tryHandleConfigCommand } from './commands/config/index.js';
+import { tryHandleLoginCommand } from './commands/login/index.js';
+import { tryHandleScheduleCommand } from './commands/schedule/index.js';
+import { tryHandleReleaseNotesCommand } from './commands/releaseNotes/index.js';
+import { tryHandleRequirementCommand } from './commands/requirement/index.js';
+import { tryHandleTrackCommand } from './commands/track/index.js';
+import { tryHandleAnnotationCommand } from './commands/annotation/index.js';
+import { tryHandleArtifactCommand } from './commands/artifact/index.js';
+import { tryHandleAtlasCommand } from './commands/atlas/index.js';
+import { tryHandleAttachmentCommand } from './commands/attachment/index.js';
 import { loadCustomCommands, findCustomCommand, expandCommandBody } from '../runtime/customCommands.js';
 
 /**

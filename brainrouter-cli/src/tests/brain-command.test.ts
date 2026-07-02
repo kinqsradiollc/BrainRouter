@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { tryHandleBrainCommand } from '../cli/commands/brain.js';
+import { tryHandleBrainCommand } from '../cli/commands/brain/index.js';
 
 function toolResult(payload: unknown) {
   return { isError: false, content: [{ type: 'text', text: JSON.stringify(payload) }] };
