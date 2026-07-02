@@ -66,6 +66,10 @@ export const LOCAL_TOOL_REGISTRY: LocalToolEntry[] = [
   // can manage the board in any mode (the code-aware differentiator).
   { name: 'track_query', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   { name: 'track_update', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  // Connectors — listing configured connectors is a read of workspace state
+  // (connectors.json); running one is shell-tier (network I/O + memory writes),
+  // registered further below with the command-execution surface.
+  { name: 'connector_list', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
   // Orchestration surface (added dynamically as specs, but access-gated here).
   // NB: child-spawn action kind is resolved per-call from the requested child
   // `access` (REVIEW-FIX); `child_write` is the name-only default they share.
@@ -110,6 +114,11 @@ export const LOCAL_TOOL_REGISTRY: LocalToolEntry[] = [
   // --- shell tier: + command execution ------------------------------------
   { name: 'run_command', accessTier: 'shell', actionKind: 'shell', parallelSafe: false },
   { name: 'computer_use', accessTier: 'shell', actionKind: 'computer', parallelSafe: false },
+  // connector_run performs network ingestion + memory writes, so it's gated to
+  // shell tier (exposure) like command execution; its ActionKind is `network`
+  // (the same not-mode-gated kind as fetch_url / MCP calls) so it can execute
+  // once exposed. Never parallel-safe (serialized connector-store writes).
+  { name: 'connector_run', accessTier: 'shell', actionKind: 'network', parallelSafe: false },
 ];
 
 const TIER_RANK: Record<AccessMode, number> = { read: 0, write: 1, shell: 2 };

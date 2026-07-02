@@ -14,5 +14,6 @@ export * from './googleConnectors.js';
 export * from './memoryBridge.js';
 export * from './mcpConnector.js';
 export * from './permissionStore.js';
+export * from './runCheckpoint.js';
 export * from './slimRetrieval.js';
 export * from './webConnector.js';

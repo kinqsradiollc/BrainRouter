@@ -88,7 +88,10 @@ import { readGitTrackContext, startGitWorkForTrackItem } from '@kinqs/brainroute
 import { listConnectorCatalog } from '@kinqs/brainrouter-core/connectors';
 import { createConnector, deleteConnector, finishConnectorRun, getConnector, listConnectorRuns, listConnectors, recordConnectorRun, updateConnector } from '@kinqs/brainrouter-core/connectors';
 import { exportConnectorDefinitions, importConnectorDefinitions } from '@kinqs/brainrouter-core/connectors';
-import { confluenceTokenClient, fetchWebClient, gmailTokenClient, gitlabTokenClient, googleDriveTokenClient, jiraTokenClient, linearTokenClient, nodeFsClient, notionTokenClient, runMcpConnectorCheckpoint, runConfluenceConnectorCheckpoint, runFilesystemConnectorCheckpoint, runGmailConnectorCheckpoint, runGithubConnectorCheckpoint, runGithubConnectorPermissionSync, runGitlabConnectorCheckpoint, runGoogleDriveConnectorCheckpoint, runJiraConnectorCheckpoint, runLinearConnectorCheckpoint, runNotionConnectorCheckpoint, runSlackConnectorCheckpoint, runWebConnectorCheckpoint, slackTokenClient, validateGithubConnectorAccess, } from '@kinqs/brainrouter-core/connectors';
+import { 
+// Per-source checkpoint runtimes + token/client factories now live behind
+// core's shared `buildCheckpointRunner` (the host's switch delegates to it).
+buildCheckpointRunner, runGithubConnectorPermissionSync, validateGithubConnectorAccess, } from '@kinqs/brainrouter-core/connectors';
 import { countConnectorDocuments, searchConnectorDocuments, upsertConnectorDocuments } from '@kinqs/brainrouter-core/connectors';
 import { exportConnectorDocumentsForMemory } from '@kinqs/brainrouter-core/connectors';
 import { countConnectorPermissions, listConnectorPermissions, upsertConnectorPermissions } from '@kinqs/brainrouter-core/connectors';
@@ -1367,33 +1370,9 @@ async function main() {
             return { error: `${label} connector credential ${ref} is not available in the host environment.` };
         return { token };
     };
-    const connectorConfigString = (connector, key) => {
-        const value = connector.config[key];
-        return typeof value === 'string' ? value.trim() : '';
-    };
-    const requireConnectorConfig = (connector, key, label) => {
-        const value = connectorConfigString(connector, key);
-        if (!value)
-            throw new Error(`${label} connector config ${key} is required.`);
-        return value;
-    };
-    const filesystemConnectorForHost = (connector) => {
-        const rawRoots = Array.isArray(connector.config.roots)
-            ? connector.config.roots.filter((root) => typeof root === 'string')
-            : [];
-        return {
-            ...connector,
-            config: {
-                ...connector.config,
-                roots: rawRoots.map((root) => {
-                    const trimmed = root.trim();
-                    if (!trimmed)
-                        return trimmed;
-                    return path.isAbsolute(trimmed) ? trimmed : path.resolve(workspaceRoot, trimmed);
-                }).filter(Boolean),
-            },
-        };
-    };
+    // `connectorConfigString` / `requireConnectorConfig` / `filesystemConnectorForHost`
+    // moved into core's shared runner (`buildCheckpointRunner`), which now performs
+    // per-source config validation + relative-root resolution for the host too.
     const mcpConnectorClient = () => ({
         async listResources(opts) {
             const limit = Math.max(1, Math.min(500, Math.floor(opts.limit ?? 100)));
@@ -1446,73 +1425,19 @@ async function main() {
             };
         },
     });
-    const runConnectorCheckpoint = async (connector) => {
-        switch (connector.source) {
-            case 'github':
-                return await runGithubConnectorCheckpoint(connector, githubConnectorClient());
-            case 'filesystem':
-                return await runFilesystemConnectorCheckpoint(filesystemConnectorForHost(connector), nodeFsClient());
-            case 'web': {
-                const cred = connectorEnvToken(connector, 'Web');
-                if (cred.error)
-                    throw new Error(cred.error);
-                return await runWebConnectorCheckpoint(connector, fetchWebClient({ headerToken: cred.token }));
-            }
-            case 'gitlab': {
-                const cred = connectorEnvToken(connector, 'GitLab');
-                if (!cred.token)
-                    throw new Error(cred.error ?? 'GitLab connector requires a static token credential.');
-                const hostUrl = typeof connector.config.hostUrl === 'string' ? connector.config.hostUrl : undefined;
-                return await runGitlabConnectorCheckpoint(connector, gitlabTokenClient(cred.token, hostUrl));
-            }
-            case 'slack': {
-                const cred = connectorEnvToken(connector, 'Slack');
-                if (!cred.token)
-                    throw new Error(cred.error ?? 'Slack connector requires a static token credential.');
-                return await runSlackConnectorCheckpoint(connector, slackTokenClient(cred.token));
-            }
-            case 'jira': {
-                const cred = connectorEnvToken(connector, 'Jira');
-                if (!cred.token)
-                    throw new Error(cred.error ?? 'Jira connector requires a static token credential.');
-                return await runJiraConnectorCheckpoint(connector, jiraTokenClient(cred.token, requireConnectorConfig(connector, 'baseUrl', 'Jira')));
-            }
-            case 'confluence': {
-                const cred = connectorEnvToken(connector, 'Confluence');
-                if (!cred.token)
-                    throw new Error(cred.error ?? 'Confluence connector requires a static token credential.');
-                return await runConfluenceConnectorCheckpoint(connector, confluenceTokenClient(cred.token, requireConnectorConfig(connector, 'baseUrl', 'Confluence')));
-            }
-            case 'notion': {
-                const cred = connectorEnvToken(connector, 'Notion');
-                if (!cred.token)
-                    throw new Error(cred.error ?? 'Notion connector requires a static token credential.');
-                return await runNotionConnectorCheckpoint(connector, notionTokenClient(cred.token));
-            }
-            case 'linear': {
-                const cred = connectorEnvToken(connector, 'Linear');
-                if (!cred.token)
-                    throw new Error(cred.error ?? 'Linear connector requires a static token credential.');
-                return await runLinearConnectorCheckpoint(connector, linearTokenClient(cred.token));
-            }
-            case 'mcp':
-                return await runMcpConnectorCheckpoint(connector, mcpConnectorClient());
-            case 'google-drive': {
-                const cred = connectorEnvToken(connector, 'Google Drive');
-                if (!cred.token)
-                    throw new Error(cred.error ?? 'Google Drive connector requires a static token credential.');
-                return await runGoogleDriveConnectorCheckpoint(connector, googleDriveTokenClient(cred.token));
-            }
-            case 'gmail': {
-                const cred = connectorEnvToken(connector, 'Gmail');
-                if (!cred.token)
-                    throw new Error(cred.error ?? 'Gmail connector requires a static token credential.');
-                return await runGmailConnectorCheckpoint(connector, gmailTokenClient(cred.token));
-            }
-            default:
-                throw new Error(`Connector runtime is not implemented for ${connector.source}.`);
-        }
-    };
+    // Connector checkpoint runtime — DELEGATES to core's shared `buildCheckpointRunner`
+    // (the single per-source switch now lives in packages/core so the agent/CLI/MCP
+    // share it). The host contributes only what core can't build alone: its
+    // keychain/gh-CLI-aware GitHub client, its connected MCP client, its static
+    // env-token resolver, and the workspace root (for relative filesystem roots).
+    // `filesystemConnectorForHost`'s root resolution is now performed inside the
+    // shared runner via `workspaceRoot`, so behavior is unchanged for all 12 sources.
+    const runConnectorCheckpoint = buildCheckpointRunner({
+        githubClient: () => githubConnectorClient(),
+        mcpClient: () => mcpConnectorClient(),
+        envToken: (connector, label) => connectorEnvToken(connector, label),
+        workspaceRoot,
+    });
     const githubTokenJson = async (connector, token, apiPath) => {
         const res = await fetch(`${githubApiBase(connector)}${apiPath}`, {
             headers: {

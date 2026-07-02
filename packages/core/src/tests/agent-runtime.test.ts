@@ -624,6 +624,7 @@ import { executeOrchestrationTool } from '../orchestration/tools.js';
 import { clearGoal, readGoal, setGoal } from '../goal/goalStore.js';
 import { makeAgent, withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 import { listArtifacts } from '../artifact/artifactStore.js';
+import { createConnector } from '../connectors/connectorStore.js';
 
 test('compactHistory: stores compacted state in prompt layers without chat developer roles', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
@@ -743,6 +744,53 @@ test('artifact_write tool: creates then grows an artifact by id (versioned, edit
     assert.equal(a.sessionKey, 'session:test');
     // updating a missing id throws
     await assert.rejects(() => agent.executeLocalTool('artifact_write', { id: 'art_00000000', content: 'x' }));
+  });
+});
+
+test('connector_list tool: returns configured connectors for the workspace', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const agent: any = makeAgent(workspace);
+    const created = createConnector(workspace, {
+      source: 'filesystem',
+      name: 'FS',
+      config: { roots: ['docs'] },
+      credential: { mode: 'none' },
+      flows: ['checkpoint'],
+    });
+    const out = await agent.executeLocalTool('connector_list', {});
+    const rows = JSON.parse(out) as Array<{ id: string; source: string; status: string; lastRunAt: string | null; lastError: string | null }>;
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].id, created.id);
+    assert.equal(rows[0].source, 'filesystem');
+    assert.equal(rows[0].status, 'active');
+    assert.equal(rows[0].lastRunAt, null);
+    // source filter
+    const empty = JSON.parse(await agent.executeLocalTool('connector_list', { source: 'github' })) as unknown[];
+    assert.equal(empty.length, 0);
+  });
+});
+
+test('connector_run tool: oauth github with no keychain client reports the desktop-only guidance (no memory import)', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const agent: any = makeAgent(workspace);
+    const created = createConnector(workspace, {
+      source: 'github',
+      name: 'GH',
+      config: { owner: 'kinqsradiollc' },
+      credential: { mode: 'oauth', ref: 'gh' },
+      flows: ['checkpoint'],
+    });
+    const out = await agent.executeLocalTool('connector_run', { connectorId: created.id });
+    assert.match(out, /ran with failures/);
+    assert.match(out, /run it from BrainRouter Desktop/);
+    assert.match(out, /imported to memory: 0/);
+  });
+});
+
+test('connector_run tool: requires a connectorId', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const agent: any = makeAgent(workspace);
+    await assert.rejects(() => agent.executeLocalTool('connector_run', {}), /requires a `connectorId`/);
   });
 });
 
