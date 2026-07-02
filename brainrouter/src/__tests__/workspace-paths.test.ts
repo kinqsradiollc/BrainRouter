@@ -5,8 +5,8 @@ import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getBrainrouterHome } from "../brainrouter-home.js";
 import { getSafeWorkspacePath, isForeignAbsolutePath } from "../resolver.js";
-import { getMemoryConsolidationDir, resolveConsolidationWorkspace } from "../tools/memory_consolidate_paths.js";
-import { handleMemoryResolveSession } from "../tools/memory_resolve_session.js";
+import { getMemoryConsolidationDir, resolveConsolidationWorkspace } from "../tools/sources/memory_consolidate_paths.js";
+import { handleMemoryResolveSession } from "../tools/sessions/memory_resolve_session.js";
 
 function mcpCacheFile(workspacePath: string, name: string): string {
   const hash = createHash("sha256").update(workspacePath).digest("hex").slice(0, 12);

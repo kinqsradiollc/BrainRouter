@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveDelegationPeer, buildDelegationPacket } from "../tools/delegation-helpers.js";
+import { resolveDelegationPeer, buildDelegationPacket } from "../tools/sessions/delegation-helpers.js";
 
 const S = (sessionKey: string, clientKind: string, lastHeartbeatAt: string) => ({
   sessionKey,

@@ -15,7 +15,7 @@ import {
   handleSessionSend,
   handleSessionInboxRead,
   handleSessionInboxAck,
-} from "../tools/session_inbox.js";
+} from "../tools/sessions/session_inbox.js";
 
 function parseToolText<T>(result: any): T {
   return JSON.parse(result.content[0].text);

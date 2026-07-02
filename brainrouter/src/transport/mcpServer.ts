@@ -16,89 +16,90 @@ import { recordToolCall } from '../observability/metrics.js';
 import { VERSION } from '../version.js';
 import { memoryEngine } from '../memory/engine.js';
 
-// Import tools
-import { listSkills, listSkillsSchema } from '../tools/list_skills.js';
-import { getSkill, getSkillSchema } from '../tools/get_skill.js';
-import { searchSkills, searchSkillsSchema } from '../tools/search_skills.js';
-import { getPersona, getPersonaSchema } from '../tools/get_persona.js';
-import { getReference, getReferenceSchema } from '../tools/get_reference.js';
-import { listTemplateDocs, listTemplateDocsSchema } from '../tools/list_template_docs.js';
-import { getTemplateDoc, getTemplateDocSchema } from '../tools/get_template_doc.js';
-import { createSkill, createSkillSchema } from '../tools/create_skill.js';
-import { updateSkill, updateSkillSchema } from '../tools/update_skill.js';
-import { memoryCaptureTurnToolSchema, handleMemoryCaptureTurn } from '../tools/memory_capture_turn.js';
-import { memoryRecallToolSchema, handleMemoryRecall } from '../tools/memory_recall.js';
+// Import tools — grouped per domain; each barrel re-exports its modules' public
+// surface (schemas + handlers). See tools/<domain>/index.ts.
 import {
-  memoryPersonaToolSchema,
-  handleMemoryPersona,
-  memoryPersonaRefreshToolSchema,
-  handleMemoryPersonaRefresh,
-} from '../tools/memory_persona.js';
+  listSkills, listSkillsSchema,
+  getSkill, getSkillSchema,
+  searchSkills, searchSkillsSchema,
+  createSkill, createSkillSchema,
+  updateSkill, updateSkillSchema,
+  memoryRegisterSkillHintsToolSchema, handleMemoryRegisterSkillHints,
+  memoryExtractSkillToolSchema, handleMemoryExtractSkill,
+} from '../tools/skills/index.js';
 import {
-  sessionRegisterToolSchema,
-  handleSessionRegister,
-  sessionHeartbeatToolSchema,
-  handleSessionHeartbeat,
-  sessionUnregisterToolSchema,
-  handleSessionUnregister,
-  sessionListToolSchema,
-  handleSessionList,
-} from '../tools/active_sessions.js';
+  getPersona, getPersonaSchema,
+  getReference, getReferenceSchema,
+  listTemplateDocs, listTemplateDocsSchema,
+  getTemplateDoc, getTemplateDocSchema,
+} from '../tools/docs/index.js';
 import {
-  sessionSendToolSchema,
-  handleSessionSend,
-  sessionInboxReadToolSchema,
-  handleSessionInboxRead,
-  sessionInboxAckToolSchema,
-  handleSessionInboxAck,
-} from '../tools/session_inbox.js';
+  memoryRecallToolSchema, handleMemoryRecall,
+  memorySearchToolSchema, handleMemorySearch,
+  memoryRetrieveToolSchema, handleMemoryRetrieve,
+  memoryFindRelatedToolSchema, handleMemoryFindRelated,
+  memoryGraphQueryToolSchema, handleMemoryGraphQuery,
+  memoryGraphAnalyticsToolSchema, handleMemoryGraphAnalytics,
+} from '../tools/recall/index.js';
 import {
-  sessionDelegateTaskToolSchema,
-  handleSessionDelegateTask,
-  sessionDelegationsToolSchema,
-  handleSessionDelegations,
-} from '../tools/session_delegate_task.js';
-import { memorySearchToolSchema, handleMemorySearch } from '../tools/memory_search.js';
-import { memoryContradictionsToolSchema, handleMemoryContradictions } from '../tools/memory_contradictions.js';
-import { memoryRegisterSkillHintsToolSchema, handleMemoryRegisterSkillHints } from '../tools/memory_register_skill_hints.js';
-import { memoryResolveSessionToolSchema, handleMemoryResolveSession } from '../tools/memory_resolve_session.js';
-import { memoryGraphQueryToolSchema, handleMemoryGraphQuery } from '../tools/memory_graph_query.js';
-import { memoryMarkCitedToolSchema, handleMemoryMarkCited } from '../tools/memory_mark_cited.js';
-import { memoryGovernanceToolSchemas, handleMemoryGovernanceTool } from '../tools/memory-governance.js';
-import { memoryEngineeringToolSchemas, handleMemoryEngineeringTool } from '../tools/memory-engineering.js';
-import { memoryExplainToolSchema, handleMemoryExplainRecall } from '../tools/memory-explain.js';
-import { memoryHookToolSchemas, handleMemoryHookTool } from '../tools/memory-hooks.js';
-import { memoryWorkingToolSchemas, handleMemoryWorkingTool } from '../tools/memory-working.js';
-import { memoryConsolidateToolSchema, handleMemoryConsolidate } from '../tools/memory_consolidate.js';
-import { memoryAgentStatusToolSchema, handleMemoryAgentStatus } from '../tools/memory_agent_status.js';
-import { memoryProvenanceToolSchema, handleMemoryProvenance } from '../tools/memory_provenance.js';
-import { memoryFetchSourceChunkToolSchema, handleMemoryFetchSourceChunk } from '../tools/memory_fetch_source_chunk.js';
-import { memoryFindRelatedToolSchema, handleMemoryFindRelated } from '../tools/memory_find_related.js';
-import { memoryReindexSourceToolSchema, handleMemoryReindexSource } from '../tools/memory_reindex_source.js';
-import { memoryRecordLessonToolSchema, handleMemoryRecordLesson } from '../tools/memory_record_lesson.js';
-import { memoryCreateRequirementToolSchema, handleMemoryCreateRequirement } from '../tools/memory_create_requirement.js';
-import { memoryCaptureArtifactToolSchema, handleMemoryCaptureArtifact } from '../tools/memory_capture_artifact.js';
-import { atlasPutToolSchema, handleAtlasPut, atlasGetToolSchema, handleAtlasGet, atlasListToolSchema, handleAtlasList, atlasQueryToolSchema, handleAtlasQuery, atlasImpactToolSchema, handleAtlasImpact, atlasEnrichToolSchema, handleAtlasEnrich } from '../tools/atlas_graph.js';
-import { fleetSnapshotPutToolSchema, handleFleetSnapshotPut, fleetSnapshotGetToolSchema, handleFleetSnapshotGet } from '../tools/fleet_snapshot.js';
-import { memoryCaptureAnnotationToolSchema, handleMemoryCaptureAnnotation } from '../tools/memory_capture_annotation.js';
-import { memoryExtractSkillToolSchema, handleMemoryExtractSkill } from '../tools/memory_extract_skill.js';
-import { memoryGraphAnalyticsToolSchema, handleMemoryGraphAnalytics } from '../tools/memory_graph_analytics.js';
-import { memoryReflectToolSchema, handleMemoryReflect } from '../tools/memory_reflect.js';
-import { memoryBlackboardReviewToolSchema, handleMemoryBlackboardReview } from '../tools/memory_blackboard.js';
-import { memoryTreeWalkToolSchema, handleMemoryTreeWalk } from '../tools/memory_tree_walk.js';
-import { memoryVaultExportToolSchema, handleMemoryVaultExport } from '../tools/memory_vault_export.js';
-import { memoryPruneSourcesToolSchema, handleMemoryPruneSources } from '../tools/memory_prune_sources.js';
-import { memoryAgentRunToolSchema, handleMemoryAgentRun } from '../tools/memory_agent_run.js';
-import { memoryJobRetryToolSchema, handleMemoryJobRetry } from '../tools/memory_job_retry.js';
-import { memoryCompressToolSchema, handleMemoryCompress } from '../tools/memory_compress.js';
-import { memoryRetrieveToolSchema, handleMemoryRetrieve } from '../tools/memory_retrieve.js';
-import { memoryStatsToolSchema, handleMemoryStats } from '../tools/memory_stats.js';
+  memoryCaptureTurnToolSchema, handleMemoryCaptureTurn,
+  memoryCaptureArtifactToolSchema, handleMemoryCaptureArtifact,
+  memoryCaptureAnnotationToolSchema, handleMemoryCaptureAnnotation,
+  memoryRecordLessonToolSchema, handleMemoryRecordLesson,
+  memoryCreateRequirementToolSchema, handleMemoryCreateRequirement,
+} from '../tools/capture/index.js';
 import {
-  connectorListToolSchema,
-  handleConnectorList,
-  connectorRunToolSchema,
-  handleConnectorRun,
-} from '../tools/connectors.js';
+  memoryGovernanceToolSchemas, handleMemoryGovernanceTool,
+  memoryEngineeringToolSchemas, handleMemoryEngineeringTool,
+  memoryExplainToolSchema, handleMemoryExplainRecall,
+  memoryHookToolSchemas, handleMemoryHookTool,
+  memoryContradictionsToolSchema, handleMemoryContradictions,
+  memoryMarkCitedToolSchema, handleMemoryMarkCited,
+  memoryProvenanceToolSchema, handleMemoryProvenance,
+  memoryReflectToolSchema, handleMemoryReflect,
+} from '../tools/governance/index.js';
+import {
+  sessionRegisterToolSchema, handleSessionRegister,
+  sessionHeartbeatToolSchema, handleSessionHeartbeat,
+  sessionUnregisterToolSchema, handleSessionUnregister,
+  sessionListToolSchema, handleSessionList,
+  sessionSendToolSchema, handleSessionSend,
+  sessionInboxReadToolSchema, handleSessionInboxRead,
+  sessionInboxAckToolSchema, handleSessionInboxAck,
+  sessionDelegateTaskToolSchema, handleSessionDelegateTask,
+  sessionDelegationsToolSchema, handleSessionDelegations,
+  memoryResolveSessionToolSchema, handleMemoryResolveSession,
+} from '../tools/sessions/index.js';
+import {
+  memoryAgentStatusToolSchema, handleMemoryAgentStatus,
+  memoryAgentRunToolSchema, handleMemoryAgentRun,
+  memoryJobRetryToolSchema, handleMemoryJobRetry,
+  memoryBlackboardReviewToolSchema, handleMemoryBlackboardReview,
+} from '../tools/agents/index.js';
+import {
+  memoryConsolidateToolSchema, handleMemoryConsolidate,
+  memoryFetchSourceChunkToolSchema, handleMemoryFetchSourceChunk,
+  memoryReindexSourceToolSchema, handleMemoryReindexSource,
+  memoryPruneSourcesToolSchema, handleMemoryPruneSources,
+  memoryVaultExportToolSchema, handleMemoryVaultExport,
+} from '../tools/sources/index.js';
+import {
+  memoryPersonaToolSchema, handleMemoryPersona,
+  memoryPersonaRefreshToolSchema, handleMemoryPersonaRefresh,
+  memoryWorkingToolSchemas, handleMemoryWorkingTool,
+  memoryCompressToolSchema, handleMemoryCompress,
+  memoryTreeWalkToolSchema, handleMemoryTreeWalk,
+  memoryStatsToolSchema, handleMemoryStats,
+} from '../tools/working/index.js';
+import {
+  atlasPutToolSchema, handleAtlasPut, atlasGetToolSchema, handleAtlasGet,
+  atlasListToolSchema, handleAtlasList, atlasQueryToolSchema, handleAtlasQuery,
+  atlasImpactToolSchema, handleAtlasImpact, atlasEnrichToolSchema, handleAtlasEnrich,
+  fleetSnapshotPutToolSchema, handleFleetSnapshotPut,
+  fleetSnapshotGetToolSchema, handleFleetSnapshotGet,
+  connectorListToolSchema, handleConnectorList,
+  connectorRunToolSchema, handleConnectorRun,
+} from '../tools/atlas/index.js';
 
 const STDIO_DEFAULT_USER_ID = process.env.BRAINROUTER_USER_ID ?? "default";
 

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { getSafeWorkspacePath } from "../resolver.js";
 import { getWorkingMemoryDir } from "../memory/working/offload.js";
-import { handleMemoryResolveSession } from "../tools/memory_resolve_session.js";
+import { handleMemoryResolveSession } from "../tools/sessions/memory_resolve_session.js";
 
 const foreignWorkspacePath = process.argv[2] ?? "c:\\Users\\Miu\\Desktop\\Tung\\review paper 1";
 const pollutedPath = path.resolve(foreignWorkspacePath);

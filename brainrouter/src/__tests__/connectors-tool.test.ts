@@ -8,7 +8,7 @@ import {
   connectorRunToolSchema,
   handleConnectorList,
   handleConnectorRun,
-} from '../tools/connectors.js';
+} from '../tools/atlas/connectors.js';
 
 // These tests exercise the MCP connector tools OFFLINE: connector_list reads the
 // file-based connector store, and connector_run's failure path (oauth github with
