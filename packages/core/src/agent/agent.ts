@@ -154,6 +154,7 @@ import { waitUntilCondition } from '../util/waitUntil.js';
 import { startBackgroundShell, readBackgroundOutput } from '../exec/backgroundShell.js';
 import { CHAPTER_ENTRY_NAME, chapterEntryContent } from '../session/chapterMarks.js';
 import { classifyForVerification, commandWritesFiles, decideVerification, buildVerificationNudge, buildDocsOnlyVerificationNote } from './verificationGate.js';
+import { resolveToolBudget, isBudgetCheckpoint, buildBudgetCheckpoint, buildBudgetCeilingMessage } from './turnBudget.js';
 import { getCurrentWorkflow } from '../workflow/workflowArtifacts.js';
 import { advanceRunStep, summarizeRun } from '../workflow/workflowRun.js';
 import { spawnWorkerThread, waitWorker } from '../orchestration/workerTools.js';
@@ -1608,16 +1609,20 @@ export class Agent {
     }
 
     let loopCount = 0;
-    // The agent should be allowed to FINISH the task, weak model or strong —
-    // the blunt per-turn tool-call count is not the runaway safety (the
-    // repeat-sequence + storm guards below are). So the cap is generous
-    // (default 250; local models 150) and exists only to backstop a genuine
-    // runaway; raise it further with `cli.maxToolLoops` in config.json.
-    // HONK-L1/L7 — clamp the turn-loop caps for local/weak model families (a tight
+    // ADAPTIVE TOOL BUDGET — the agent should be allowed to FINISH the task,
+    // weak model or strong. `maxToolLoops` is NOT a task limiter, it's a
+    // checkpoint WINDOW: when the agent has made a full window of tool calls
+    // without a final answer, we inject a self-assessment prompt that forces it
+    // to DECIDE whether the user's request is complete and either finish or keep
+    // looping (bounded by hardCeiling). The repeat-sequence + storm guards below
+    // remain the degenerate-loop safety. Window default 250 / local 150; tune
+    // with `cli.maxToolLoops`.
+    // HONK-L1/L7 — clamp the window for local/weak model families (a tight
     // bounded harness, not more prompt, is what makes them reliable). Passthrough
     // for strong/unknown models, so this is a no-op for the common case.
     const harnessCaps = resolveLocalModelProfile(this.llmConfig.model, getCliKnobs().localModelProfile, getCliKnobs());
-    const maxLoops = Math.max(5, harnessCaps.maxToolLoops);
+    const { window: budgetWindow, hardCeiling: maxLoops } = resolveToolBudget(harnessCaps.maxToolLoops);
+    let budgetCheckpointsFired = 0;
     let finalAnswer = '';
     // Stalled-preamble guardrail counter — see the `looksLikeStalledPreamble`
     // branch below. Bounded so a model that ONLY emits preambles can't keep
@@ -1815,6 +1820,18 @@ export class Agent {
         this.recordTranscript(interruptMsg);
         callbacks.onStatusUpdate('Interrupted');
         return note;
+      }
+      // ADAPTIVE TOOL BUDGET checkpoint — the agent just completed a full budget
+      // window without a final answer. Force it to self-assess (finish or keep
+      // looping) instead of silently cutting off. Injected as a user turn so the
+      // NEXT LLM call reads it and decides; bounded by MAX_BUDGET_EXTENSIONS.
+      if (isBudgetCheckpoint(loopCount, budgetWindow, budgetCheckpointsFired)) {
+        budgetCheckpointsFired += 1;
+        const used = loopCount - 1;
+        const checkpointMsg = { role: 'user', content: buildBudgetCheckpoint(used, maxLoops - used) };
+        this.chatHistory.push(checkpointMsg);
+        this.recordTranscript({ ...checkpointMsg, name: 'guard' });
+        callbacks.onStatusUpdate(`Tool-budget checkpoint at ${used} calls — reassessing whether to continue`);
       }
       callbacks.onStatusUpdate(`Thinking (turn ${loopCount})...`);
 
@@ -3144,10 +3161,7 @@ export class Agent {
     // skipped every turn that hit the loop limit or returned no prose.
     if (!exitedCleanly) {
       this.lastTurnHitLoopLimit = true;
-      finalAnswer =
-        `I reached this turn's tool-call budget (${maxLoops}) before finishing. ` +
-        `Use \`/continue\` to pick up where I left off (drain pending children, finish writing artifacts), ` +
-        `\`/agents\` to see what's running, or raise \`cli.maxToolLoops\` in config.json for very heavy workflows.`;
+      finalAnswer = buildBudgetCeilingMessage(maxLoops);
     } else if (!finalAnswer.trim()) {
       if (this.lastGoalTransition && this.lastTurnToolCalls > 0) {
         // The model fired goal_complete / goal_blocked but skipped the
