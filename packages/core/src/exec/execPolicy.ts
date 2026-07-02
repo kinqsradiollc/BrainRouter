@@ -90,6 +90,9 @@ export function actionKindForTool(name: string): ActionKind {
     // mcp_call proxies a real MCP tool call (not access-mode gated, like other
     // MCP/recall calls); its handler re-applies the MCP approval gate.
     case 'mcp_call':
+    // connector_run does network ingestion + memory writes; its shell-tier
+    // exposure (registry) gates WHO sees it, `network` lets it execute once seen.
+    case 'connector_run':
       return 'network';
     default:
       // Observation / planning orchestration tools (wait_*, list_agents,

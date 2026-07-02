@@ -93,6 +93,12 @@ import { memoryJobRetryToolSchema, handleMemoryJobRetry } from '../tools/memory_
 import { memoryCompressToolSchema, handleMemoryCompress } from '../tools/memory_compress.js';
 import { memoryRetrieveToolSchema, handleMemoryRetrieve } from '../tools/memory_retrieve.js';
 import { memoryStatsToolSchema, handleMemoryStats } from '../tools/memory_stats.js';
+import {
+  connectorListToolSchema,
+  handleConnectorList,
+  connectorRunToolSchema,
+  handleConnectorRun,
+} from '../tools/connectors.js';
 
 const STDIO_DEFAULT_USER_ID = process.env.BRAINROUTER_USER_ID ?? "default";
 
@@ -100,6 +106,9 @@ export // ─── Server factory ───────────────
 function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; isAdmin?: boolean }): Server {
   const defaultUserId = options?.defaultUserId ?? STDIO_DEFAULT_USER_ID;
   const isAdmin = options?.isAdmin ?? false;
+  // Connectors are workspace-scoped file state (connectors.json under the
+  // BrainRouter home). Use the resolved local workspace root; fall back to cwd.
+  const connectorWorkspaceRoot = registry.getLocalRoot() ?? process.cwd();
   const server = new Server(
     { name: 'brainrouter-mcp-server', version: VERSION },
     { capabilities: { tools: {} } }
@@ -285,6 +294,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       atlasEnrichToolSchema,
       fleetSnapshotPutToolSchema,
       fleetSnapshotGetToolSchema,
+      connectorListToolSchema,
+      connectorRunToolSchema,
     ],
   }));
 
@@ -435,6 +446,10 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           return await handleMemoryRetrieve(request.params.arguments, { defaultUserId });
         case 'memory_stats':
           return await handleMemoryStats(request.params.arguments, { defaultUserId });
+        case 'connector_list':
+          return await handleConnectorList(request.params.arguments, { workspaceRoot: connectorWorkspaceRoot });
+        case 'connector_run':
+          return await handleConnectorRun(request.params.arguments, { workspaceRoot: connectorWorkspaceRoot, defaultUserId });
         default:
           throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
       }

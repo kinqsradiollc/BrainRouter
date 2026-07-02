@@ -328,3 +328,128 @@ function maxIso(values: Array<string | undefined>): string {
   if (valid.length === 0) return new Date().toISOString();
   return valid.sort((a, b) => a.localeCompare(b))[valid.length - 1];
 }
+
+export interface GithubTokenClientOptions {
+  /** REST API base — defaults to https://api.github.com (override for GitHub Enterprise). */
+  apiBase?: string;
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
+  maxFiles?: number;
+}
+
+/**
+ * Static-token GitHub connector client (REST via fetch) — the keychain-free
+ * path the chat/CLI/MCP agent uses when a github connector runs in `static`
+ * credential mode. The desktop host keeps its own gh-CLI/keychain client; both
+ * satisfy the same `GithubConnectorClient` interface. Never logs the token.
+ */
+export function githubTokenClient(token: string, options?: GithubTokenClientOptions): GithubConnectorClient {
+  const trimmed = token.trim();
+  if (!trimmed) throw new Error('GitHub token is required.');
+  const fetcher = options?.fetchImpl ?? fetch;
+  const timeoutMs = Math.max(1, options?.timeoutMs ?? 30_000);
+  const apiBase = (options?.apiBase?.trim() || 'https://api.github.com').replace(/\/+$/, '');
+  const maxFiles = Math.max(1, Math.min(500, Math.floor(options?.maxFiles ?? 100)));
+
+  const request = async <T>(apiPath: string): Promise<T> => {
+    const res = await fetcher(`${apiBase}${apiPath}`, {
+      headers: {
+        Authorization: `Bearer ${trimmed}`,
+        Accept: 'application/vnd.github+json',
+        'User-Agent': 'BrainRouter-Agent',
+      },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) {
+      let detail = '';
+      try {
+        const body = await res.json() as { message?: string };
+        detail = body?.message ? `: ${body.message}` : '';
+      } catch {
+        detail = '';
+      }
+      throw new Error(`GitHub API ${res.status}${detail}`);
+    }
+    return await res.json() as T;
+  };
+
+  const encodeRepo = (repo: string): string => repo.split('/').map(encodeURIComponent).join('/');
+
+  return {
+    async listRepositories(owner, opts) {
+      const limit = Math.max(1, Math.min(1000, opts?.limit ?? 100));
+      const perPage = Math.min(100, limit);
+      // Try the user endpoint first, then fall back to the org endpoint — the
+      // config usually pins explicit `repositories`, so this only runs when it
+      // doesn't. Both return `{ full_name }`.
+      const collect = async (apiPath: string): Promise<string[]> => {
+        const rows = await request<Array<{ full_name?: string }>>(apiPath);
+        return rows.map((row) => row.full_name ?? '').filter(Boolean);
+      };
+      try {
+        return (await collect(`/users/${encodeURIComponent(owner)}/repos?per_page=${perPage}&sort=updated`)).slice(0, limit);
+      } catch {
+        return (await collect(`/orgs/${encodeURIComponent(owner)}/repos?per_page=${perPage}&sort=updated`)).slice(0, limit);
+      }
+    },
+    async listIssues(repo, opts) {
+      const since = opts?.since ? `&since=${encodeURIComponent(opts.since)}` : '';
+      const rows = await request<Array<Record<string, unknown>>>(
+        `/repos/${encodeRepo(repo)}/issues?state=all&per_page=100${since}`,
+      );
+      // The issues endpoint also returns PRs; drop anything with pull_request.
+      return rows
+        .filter((row) => !('pull_request' in row))
+        .map((row) => ({
+          number: Number(row.number ?? 0),
+          title: typeof row.title === 'string' ? row.title : '',
+          body: typeof row.body === 'string' ? row.body : null,
+          state: typeof row.state === 'string' ? row.state : undefined,
+          url: typeof row.html_url === 'string' ? row.html_url : undefined,
+          updatedAt: typeof row.updated_at === 'string' ? row.updated_at : undefined,
+          labels: Array.isArray(row.labels)
+            ? row.labels.map((label) => (label && typeof label === 'object' ? { name: (label as { name?: string }).name } : String(label)))
+            : [],
+          assignees: Array.isArray(row.assignees)
+            ? row.assignees.map((assignee) => ({ login: (assignee as { login?: string })?.login }))
+            : [],
+        }));
+    },
+    async listPullRequests(repo) {
+      const rows = await request<Array<Record<string, unknown>>>(
+        `/repos/${encodeRepo(repo)}/pulls?state=all&per_page=100&sort=updated&direction=desc`,
+      );
+      return rows.map((row) => ({
+        number: Number(row.number ?? 0),
+        title: typeof row.title === 'string' ? row.title : '',
+        body: typeof row.body === 'string' ? row.body : null,
+        state: typeof row.state === 'string' ? row.state : undefined,
+        url: typeof row.html_url === 'string' ? row.html_url : undefined,
+        updatedAt: typeof row.updated_at === 'string' ? row.updated_at : undefined,
+        author: { login: (row.user as { login?: string })?.login },
+      }));
+    },
+    async listFiles(repo) {
+      const tree = await request<{ tree?: Array<{ path?: string; type?: string; sha?: string; size?: number }> }>(
+        `/repos/${encodeRepo(repo)}/git/trees/HEAD?recursive=1`,
+      );
+      const blobs = (tree.tree ?? []).filter((entry) => entry.type === 'blob' && entry.path).slice(0, maxFiles);
+      const files: GithubConnectorFile[] = [];
+      for (const blob of blobs) {
+        const pathName = blob.path ?? '';
+        try {
+          const content = await request<{ content?: string; encoding?: string; html_url?: string }>(
+            `/repos/${encodeRepo(repo)}/contents/${pathName.split('/').map(encodeURIComponent).join('/')}`,
+          );
+          const text = content.encoding === 'base64' && content.content
+            ? Buffer.from(content.content.replace(/\s+/g, ''), 'base64').toString('utf8')
+            : '';
+          files.push({ path: pathName, text: text.slice(0, 100_000), sha: blob.sha, size: blob.size, url: content.html_url });
+        } catch {
+          // Skip individual unreadable files rather than failing the whole repo.
+        }
+      }
+      return files;
+    },
+  };
+}

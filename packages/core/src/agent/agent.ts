@@ -50,6 +50,19 @@ import {
 } from '../track/trackStore.js';
 import { parseTrackQuery } from '../track/query.js';
 import { createArtifact, updateArtifact, getArtifact, linkArtifact } from '../artifact/artifactStore.js';
+// Connectors — agent-callable list/run parity (ingest → memory). The runtime
+// switch + full orchestration live in core's shared runner; the agent supplies
+// only a static-token GitHub client (no keychain) + its own MCP client for the
+// `mcp` source, then imports the resulting docs via `memory_import`.
+import {
+  listConnectors,
+  runConnectorCheckpointCore,
+  exportConnectorDocumentsForMemory,
+  githubTokenClient,
+  defaultEnvTokenResolver,
+  type McpConnectorClient,
+  type McpConnectorResource,
+} from '../connectors/index.js';
 import { isArtifactKind, isArtifactFormat, isCodeLinkKind, isWorkItemType, isWorkItemPriority, isTerminalCategory, isUnstartedCategory, type ArtifactKind, type ArtifactFormat, type ArtifactRecord } from '@kinqs/brainrouter-types';
 // Auto mode (fast + proceed) has no approval prompt, so the plan history would
 // otherwise never record that a plan was acted on. When the agent establishes a
@@ -3250,6 +3263,67 @@ export class Agent {
     return this.executeLocalToolLegacy(name, args);
   }
 
+  /**
+   * Adapt the agent's MCP client into the `McpConnectorClient` the `mcp`
+   * connector source needs (listResources / readResource). Returns `undefined`
+   * when the active MCP client can't read resources, so the shared runner emits
+   * a clear "no MCP client" error instead of crashing.
+   */
+  private agentMcpConnectorClient(): McpConnectorClient | undefined {
+    const client = this.mcpClient as any;
+    if (typeof client.listResources !== 'function' || typeof client.readResource !== 'function') {
+      return undefined;
+    }
+    const signal = () => this.turnAbort?.signal;
+    return {
+      listResources: async (opts) => {
+        const limit = Math.max(1, Math.min(500, Math.floor(opts.limit ?? 100)));
+        if (opts.resourceUris?.length) {
+          if (!opts.serverId) throw new Error('MCP connector config serverId is required when resourceUris are configured.');
+          return opts.resourceUris.slice(0, limit).map((uri) => ({ server: opts.serverId, uri }));
+        }
+        const resources: McpConnectorResource[] = [];
+        let cursor: string | undefined;
+        do {
+          const result = await client.listResources({ server: opts.serverId, cursor }, { signal: signal() });
+          const rows = Array.isArray(result?.resources) ? result.resources : [];
+          for (const row of rows) {
+            if (!row || typeof row !== 'object') continue;
+            const r = row as Record<string, unknown>;
+            const uri = typeof r.uri === 'string' ? r.uri : '';
+            if (!uri) continue;
+            resources.push({
+              server: typeof r.server === 'string' ? r.server : opts.serverId,
+              uri,
+              name: typeof r.name === 'string' ? r.name : undefined,
+              description: typeof r.description === 'string' ? r.description : undefined,
+              mimeType: typeof r.mimeType === 'string' ? r.mimeType : undefined,
+            });
+            if (resources.length >= limit) break;
+          }
+          cursor = typeof result?.nextCursor === 'string' ? result.nextCursor : undefined;
+        } while (cursor && resources.length < limit);
+        return resources;
+      },
+      readResource: async (resource) => {
+        if (!resource.server) throw new Error(`MCP resource ${resource.uri} has no server id.`);
+        const result = await client.readResource({ server: resource.server, uri: resource.uri }, { signal: signal() });
+        const contents = Array.isArray(result?.contents) ? result.contents : [];
+        return {
+          contents: contents.map((content: unknown) => {
+            const row = content && typeof content === 'object' ? content as Record<string, unknown> : {};
+            return {
+              uri: typeof row.uri === 'string' ? row.uri : undefined,
+              text: typeof row.text === 'string' ? row.text : undefined,
+              blob: typeof row.blob === 'string' ? row.blob : undefined,
+              mimeType: typeof row.mimeType === 'string' ? row.mimeType : undefined,
+            };
+          }),
+        };
+      },
+    };
+  }
+
   private async executeLocalToolLegacy(name: string, args: Record<string, any>): Promise<string> {
     // Bind path resolution to this agent's workspace, never to process.cwd().
     // The Agent might have been constructed with a workspace different from
@@ -4046,6 +4120,75 @@ export class Agent {
           return `Completed ${sprint.name} (velocity: ${velocity}).`;
         }
         return `Unknown track_update action "${action}". Use create · transition · comment · link · sprint-create · assign-sprint · batch-transition · sprint-start · sprint-complete.`;
+      }
+      case 'connector_list': {
+        const source = typeof args.source === 'string' && args.source.trim() ? args.source.trim() : undefined;
+        const status = typeof args.status === 'string' && args.status.trim() ? args.status.trim() : undefined;
+        const connectors = listConnectors(this.workspaceRoot, {
+          source: source as never,
+          status: status as never,
+        }).map((connector) => ({
+          id: connector.id,
+          source: connector.source,
+          status: connector.status,
+          lastRunAt: connector.lastRunAt ?? null,
+          lastError: connector.lastError ?? null,
+        }));
+        return JSON.stringify(connectors, null, 2);
+      }
+      case 'connector_run': {
+        const connectorId = typeof args.connectorId === 'string' ? args.connectorId.trim() : '';
+        if (!connectorId) throw new Error('connector_run requires a `connectorId` (see connector_list).');
+        // Agent deps: static/dynamic-token GitHub client (NO keychain — oauth
+        // github without a token throws the desktop-only guidance in the runner),
+        // the agent's own MCP client for the `mcp` source, and env-token creds.
+        const runResult = await runConnectorCheckpointCore(this.workspaceRoot, connectorId, {
+          envToken: defaultEnvTokenResolver,
+          githubClient: (connector) => {
+            const cred = defaultEnvTokenResolver(connector, 'GitHub');
+            if (!cred.token) return undefined; // → runner throws the OAuth/keychain guidance
+            const apiBase = typeof connector.config.baseUrl === 'string' ? connector.config.baseUrl : undefined;
+            return githubTokenClient(cred.token, { apiBase });
+          },
+          mcpClient: () => this.agentMcpConnectorClient(),
+        });
+        // Import the freshly-persisted documents into memory so future recall can
+        // cite them — mirror the host's `indexConnectorMemory` via `memory_import`.
+        let importedRecords = 0;
+        let importError: string | undefined;
+        if (runResult.documents.length > 0) {
+          try {
+            // Omit sessionKey (mirror the desktop host): connector documents are
+            // workspace knowledge, not session-scoped, so future recall in any
+            // session can cite them.
+            const bundle = exportConnectorDocumentsForMemory(this.workspaceRoot, { connectorId });
+            if (bundle.recordCount > 0) {
+              const res = await this.mcpClient.callTool('memory_import', { data: bundle.data }, { signal: this.turnAbort?.signal });
+              if ((res as { isError?: boolean })?.isError) {
+                const text = (res as { content?: Array<{ text?: string }> })?.content?.[0]?.text;
+                importError = typeof text === 'string' ? text : 'memory_import failed.';
+              } else {
+                importedRecords = bundle.recordCount;
+              }
+            }
+          } catch (err) {
+            importError = err instanceof Error ? err.message : String(err);
+          }
+        }
+        const lines = [
+          `Connector ${connectorId}: ${runResult.ok ? 'ran' : 'ran with failures'}.`,
+          `Documents seen: ${runResult.run.documentsSeen ?? runResult.documents.length}; persisted: ${runResult.documents.length}; imported to memory: ${importedRecords}.`,
+        ];
+        // Failures are already source-sanitized by the runtimes (repo/channel +
+        // HTTP status, never tokens). Cap the list so a broad failure set can't
+        // flood the transcript.
+        if (runResult.failures.length) {
+          lines.push(`Failures (${runResult.failures.length}):`);
+          for (const failure of runResult.failures.slice(0, 10)) lines.push(`  - ${failure}`);
+          if (runResult.failures.length > 10) lines.push(`  … and ${runResult.failures.length - 10} more.`);
+        }
+        if (importError) lines.push(`Memory import error: ${importError}`);
+        return lines.join('\n');
       }
       case 'artifact_write': {
         // §AV-4 — in-band artifact authoring. With `id` it grows an EXISTING

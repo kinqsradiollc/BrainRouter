@@ -547,6 +547,28 @@ export const LOCAL_TOOLS = [
     }
   },
   {
+    name: 'connector_list',
+    description: 'List the connectors configured for this workspace (GitHub, filesystem, web, Slack, Jira, Confluence, Notion, Linear, GitLab, Google Drive, Gmail, MCP). Read-only. Returns each connector\'s id, source, status, when it last ran, and its last error (if any). Use it to discover what you can ingest before calling connector_run.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        source: { type: 'string', description: 'Optional: filter to one source (e.g. "github", "filesystem", "web").' },
+        status: { type: 'string', enum: ['active', 'paused', 'error', 'deleting'], description: 'Optional: filter by connector status.' }
+      }
+    }
+  },
+  {
+    name: 'connector_run',
+    description: 'Run one connector\'s ingest → memory checkpoint: fetch new documents from the source, persist them, and import them into memory so future recall can cite them. Does network I/O and writes memory — shell access is required. Credentials are read only from the workspace connector config (static environment-token mode); connectors using OAuth/keychain credentials must be run from BrainRouter Desktop. Returns a summary of documents seen/indexed and any (sanitized) failures.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        connectorId: { type: 'string', description: 'The connector id to run (from connector_list).' }
+      },
+      required: ['connectorId']
+    }
+  },
+  {
     name: 'workflow_progress',
     description: 'Report progress on the active durable workflow run (PARITY-W1) so `/workflows` shows live status and progress survives a restart. Call with status="running" when you START a numbered step and status="done" (or "failed"/"skipped") when you finish it. `step` is a short id matching the step you are on (e.g. "triage", "review", "implement", "verify", "apply"). Safe no-op when no workflow is active — only the multi-agent commands (/review, /simplify, /feature-dev, /spec, /implement-plan) bind one.',
     inputSchema: {
