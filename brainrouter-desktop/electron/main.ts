@@ -6,7 +6,11 @@
  * Security posture unchanged: contextIsolation on, typed preload only,
  * senderFrame + shape validation on every inbound command.
  */
-import { app, BrowserWindow, dialog, ipcMain, utilityProcess, type UtilityProcess } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell, utilityProcess, type UtilityProcess } from 'electron';
+// Connector Phase 2 — OAuth device flow + keychain secrets live in MAIN
+// (safeStorage is unavailable in a utilityProcess); hosts read over the port.
+import { requestDeviceCode, pollOnce, type DeviceCodeGrant } from './githubOauth.js';
+import { getSecret, setSecret, deleteSecret, hasSecret, secretStorageMode } from './secretStore.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -84,6 +88,81 @@ async function handleComputerUseRequest(wp: WinPool, host: UtilityProcess, reque
     host.postMessage({ kind: 'computer-use-response', id: request.id, ok: true, result });
   } catch (err) {
     host.postMessage({ kind: 'computer-use-response', id: request.id, ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+// ── Connector Phase 2: keychain secrets (host → main) ─────────────────────────
+// safeStorage only exists in the main process; the agent host requests values
+// over its parent port (mirroring the computer-use bridge). Only `get` is
+// exposed to hosts — writes happen exclusively through the OAuth flow below.
+
+type SecretRequest = { kind: 'secret-request'; id: string; op: 'get'; key: string };
+
+function isSecretRequest(value: unknown): value is SecretRequest {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  return v.kind === 'secret-request' && typeof v.id === 'string' && v.op === 'get' && typeof v.key === 'string';
+}
+
+function handleSecretRequest(host: UtilityProcess, request: SecretRequest): void {
+  try {
+    const value = getSecret(app.getPath('userData'), request.key);
+    host.postMessage({ kind: 'secret-response', id: request.id, ok: true, value });
+  } catch (err) {
+    host.postMessage({ kind: 'secret-response', id: request.id, ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+// ── Connector Phase 2: GitHub OAuth device flow (renderer-invoked) ────────────
+// One pending grant per connector. The renderer drives the poll cadence with
+// the interval we return; the token never leaves the main process — on success
+// it goes straight into the keychain-backed secret store.
+const pendingOauthGrants = new Map<string, { clientId: string; grant: DeviceCodeGrant }>();
+
+async function handleGhOauth(payload: { op?: string; connectorId?: string; clientId?: string }): Promise<Record<string, unknown>> {
+  const connectorId = typeof payload.connectorId === 'string' ? payload.connectorId : '';
+  if (!connectorId) return { error: 'connectorId is required.' };
+  const secretKey = `connector:${connectorId}:github-oauth`;
+  switch (payload.op) {
+    case 'start': {
+      const clientId = typeof payload.clientId === 'string' ? payload.clientId.trim() : '';
+      if (!clientId) return { error: 'No OAuth client id configured. Set cli.github.oauthClientId in Settings → Advanced (register a GitHub OAuth App with device flow enabled).' };
+      try {
+        const grant = await requestDeviceCode(clientId);
+        pendingOauthGrants.set(connectorId, { clientId, grant });
+        void shell.openExternal(grant.verificationUri).catch(() => { /* headless — the renderer shows the URL */ });
+        return { userCode: grant.userCode, verificationUri: grant.verificationUri, intervalSec: grant.intervalSec, expiresAtMs: grant.expiresAtMs };
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+    case 'poll': {
+      const entry = pendingOauthGrants.get(connectorId);
+      if (!entry) return { status: 'error', error: 'No authorization in progress for this connector.' };
+      const result = await pollOnce(entry.clientId, entry.grant, {});
+      if (result.status === 'pending') {
+        entry.grant.intervalSec = result.nextIntervalSec;
+        return { status: 'pending', nextIntervalSec: result.nextIntervalSec, expiresAtMs: entry.grant.expiresAtMs };
+      }
+      pendingOauthGrants.delete(connectorId);
+      if (result.status === 'authorized') {
+        const stored = setSecret(app.getPath('userData'), secretKey, result.accessToken);
+        return { status: 'authorized', scope: result.scope, storageMode: stored.mode };
+      }
+      if (result.status === 'error') return { status: 'error', error: result.message };
+      return { status: result.status };
+    }
+    case 'cancel':
+      pendingOauthGrants.delete(connectorId);
+      return { ok: true };
+    case 'disconnect':
+      pendingOauthGrants.delete(connectorId);
+      deleteSecret(app.getPath('userData'), secretKey);
+      return { ok: true };
+    case 'status':
+      return { hasToken: hasSecret(app.getPath('userData'), secretKey), storageMode: secretStorageMode() };
+    default:
+      return { error: `Unknown gh-oauth op "${String(payload.op)}".` };
   }
 }
 
@@ -175,6 +254,10 @@ function spawnHost(wp: WinPool, workspaceRoot: string): UtilityProcess {
     if (wp.win.isDestroyed()) return;
     if (isComputerUseRequest(msg)) {
       void handleComputerUseRequest(wp, host, msg);
+      return;
+    }
+    if (isSecretRequest(msg)) {
+      handleSecretRequest(host, msg);
       return;
     }
     if (msg && typeof msg === 'object') {
@@ -394,6 +477,10 @@ app.whenReady().then(() => {
   // T1 — trust persistence lives in the shared CLI store (not renderer
   // localStorage), so CLI + desktop agree and it survives reinstalls.
   ipcMain.handle('workspace:isTrusted', (_e, root: unknown) => ({ trusted: typeof root === 'string' && isWorkspaceTrusted(root) }));
+  // Connector Phase 2 — GitHub OAuth device flow (start/poll/cancel/disconnect/
+  // status). Tokens never reach the renderer; success writes the keychain store.
+  ipcMain.handle('gh-oauth', (_e, payload: unknown) =>
+    handleGhOauth((payload && typeof payload === 'object' ? payload : {}) as { op?: string; connectorId?: string; clientId?: string }));
   ipcMain.handle('workspace:trust', (_e, root: unknown) => { if (typeof root === 'string') trustWorkspace(root); return { trusted: true }; });
   ipcMain.handle('workspace:untrust', (_e, root: unknown) => { if (typeof root === 'string') untrustWorkspace(root); return { trusted: false }; });
   ipcMain.handle('workspace:trustedList', () => ({ trusted: listTrustedWorkspaces() }));

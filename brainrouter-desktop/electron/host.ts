@@ -250,6 +250,48 @@ function createComputerUseBridge(port: ParentPortLike | undefined): ComputerUseB
   };
 }
 
+type SecretBridge = {
+  get(key: string): Promise<string | undefined>;
+  handleMessage(message: unknown): boolean;
+};
+
+/**
+ * Connector Phase 2 — keychain secrets live in Electron MAIN (safeStorage is
+ * unavailable in a utilityProcess), so the host requests values over the
+ * parent port, mirroring the computer-use request/response bridge. Values
+ * never travel further than this process — nothing secret reaches the renderer.
+ */
+function createSecretBridge(port: ParentPortLike | undefined): SecretBridge | undefined {
+  if (!port) return undefined;
+  let seq = 0;
+  const pending = new Map<string, { resolve: (value: string | undefined) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  return {
+    get(key: string): Promise<string | undefined> {
+      const id = `sec_${++seq}`;
+      port.postMessage({ kind: 'secret-request', id, op: 'get', key });
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          reject(new Error('Secret lookup timed out waiting for Electron main.'));
+        }, 10_000);
+        pending.set(id, { resolve, reject, timer });
+      });
+    },
+    handleMessage(message: unknown): boolean {
+      if (!message || typeof message !== 'object') return false;
+      const msg = message as { kind?: string; id?: string; ok?: boolean; value?: string; error?: string };
+      if (msg.kind !== 'secret-response' || typeof msg.id !== 'string') return false;
+      const entry = pending.get(msg.id);
+      if (!entry) return true;
+      pending.delete(msg.id);
+      clearTimeout(entry.timer);
+      if (msg.ok) entry.resolve(msg.value);
+      else entry.reject(new Error(msg.error || 'Secret lookup failed in Electron main.'));
+      return true;
+    },
+  };
+}
+
 /**
  * DESK-5c — real terminal sessions: a persistent interactive shell per
  * terminal panel (default shell on mac/linux, PowerShell on Windows),
@@ -618,6 +660,7 @@ async function main(): Promise<void> {
     ? (msg: unknown) => port.postMessage(msg)
     : (msg: unknown) => console.log(JSON.stringify(msg));
   const computerUseBridge = createComputerUseBridge(port);
+  const secretBridge = createSecretBridge(port);
 
   // Identical boot recipe to `brainrouter chat` (index.ts): config → llm →
   // pool.connectAll(profiles) → Agent. Offline MCP does not block (same
@@ -1278,6 +1321,26 @@ async function main(): Promise<void> {
     const token = process.env[ref]?.trim();
     if (!token) return { error: `Static GitHub connector credential ${ref} is not available in the host environment.` };
     return { token };
+  };
+
+  /**
+   * Connector Phase 2 — mode-aware credential resolution. `static` resolves
+   * locally (env / config:track); `oauth` fetches the device-flow token from
+   * the MAIN process keychain over the secret bridge. Never returns to the
+   * renderer.
+   */
+  const githubConnectorToken = async (connector: { id: string; credential?: { mode?: string; ref?: string } }): Promise<{ token?: string; error?: string }> => {
+    if (connector.credential?.mode === 'oauth') {
+      if (!secretBridge) return { error: 'Keychain access requires the Electron app (dev host has no secret bridge).' };
+      try {
+        const token = await secretBridge.get(`connector:${connector.id}:github-oauth`);
+        if (!token) return { error: 'No OAuth token stored for this connector — connect the GitHub account in Settings → Connectors.' };
+        return { token };
+      } catch (e) {
+        return { error: String((e as Error).message ?? e) };
+      }
+    }
+    return githubStaticToken(connector);
   };
 
   const githubTokenJson = async <T,>(connector: { config?: Record<string, unknown> }, token: string, apiPath: string): Promise<T> => {
@@ -2622,8 +2685,8 @@ async function main(): Promise<void> {
         const connector = getConnector(workspaceRoot, typeof a.connectorId === 'string' ? a.connectorId : '');
         if (!connector) return { viewer: null, orgs: [], errors: ['Connector not found.'] };
         try {
-          if (connector.credential.mode === 'static') {
-            const cred = githubStaticToken(connector);
+          if (connector.credential.mode === 'static' || connector.credential.mode === 'oauth') {
+            const cred = await githubConnectorToken(connector);
             if (!cred.token) return { viewer: null, orgs: [], errors: [cred.error ?? 'No credential.'] };
             const viewer = await githubTokenJson<{ login?: string }>(connector, cred.token, '/user');
             const orgs = await githubTokenJson<Array<{ login?: string; description?: string | null }>>(connector, cred.token, '/user/orgs?per_page=100');
@@ -2658,8 +2721,8 @@ async function main(): Promise<void> {
           ? `/user/repos?affiliation=owner&per_page=100&page=${page}&sort=pushed`
           : `/orgs/${encodeURIComponent(org)}/repos?type=all&per_page=100&page=${page}&sort=pushed`;
         try {
-          if (connector.credential.mode === 'static') {
-            const cred = githubStaticToken(connector);
+          if (connector.credential.mode === 'static' || connector.credential.mode === 'oauth') {
+            const cred = await githubConnectorToken(connector);
             if (!cred.token) return { repos: [], nextPage: null, errors: [cred.error ?? 'No credential.'] };
             const list = await githubTokenJson<RestRepo[]>(connector, cred.token, apiPath);
             const repos = mapRepos(list);
@@ -4186,6 +4249,7 @@ async function main(): Promise<void> {
 
   if (port) port.on('message', (e) => {
     if (computerUseBridge?.handleMessage(e.data)) return;
+    if (secretBridge?.handleMessage(e.data)) return;
     void core.handle(e.data);
   });
 
