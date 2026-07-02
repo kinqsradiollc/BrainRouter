@@ -1138,6 +1138,11 @@ export function useAgentEvents(ctx: AgentEventsCtx): void {
           }, 600);
         } else if (r.notice) {
           setRows((rows) => [...rows, { id: rid(), kind: 'status', text: r.notice!, ts: Date.now() }]);
+          // Terminal action (complete / blocked / usage_limited / halt): the
+          // goal's stored status just changed, so refresh the pinned banner —
+          // otherwise it stays stuck on "working" even though goal.json is done.
+          // (Previously only /goal commands refreshed the banner.)
+          q('q-goal', 'goal-state');
         }
         return;
       }

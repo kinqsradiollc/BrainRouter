@@ -38,7 +38,13 @@ const REDIRECT_WRITE = /(^|[^0-9>&])>>?\s*(?!&|\/dev\/null\b)[\w./~-]/;
 /** True iff a `run_command` shell string clearly writes files. Pure. */
 export function commandWritesFiles(command: string): boolean {
   const cmd = command ?? '';
-  return WRITE_COMMAND.test(cmd) || REDIRECT_WRITE.test(cmd);
+  // Blank out single-/double-quoted arguments first, so a `>` or a write-verb
+  // that lives INSIDE a quoted pattern (e.g. `grep 'a > b' *.ts`,
+  // `grep -rn "rm -rf" src`) is not mistaken for a real redirect / mutation.
+  // A read-only investigation that greps for such strings must not trip the
+  // verification guardrail.
+  const unquoted = cmd.replace(/'[^']*'/g, "''").replace(/"[^"]*"/g, '""');
+  return WRITE_COMMAND.test(unquoted) || REDIRECT_WRITE.test(unquoted);
 }
 
 export const EDIT_TOOLS = new Set(['edit_file', 'write_file', 'apply_patch']);

@@ -2399,6 +2399,10 @@ export class Agent {
         if (
           deliverableGuardFired < DELIVERABLE_GUARD_MAX &&
           this.lastTurnToolCalls > 0 &&
+          // A turn that just completed/blocked the goal is terminal — the model
+          // delivered its proof via goal_complete. Don't nudge it to "deliver"
+          // again (that produced the spurious post-completion guardrail turns).
+          !this.lastGoalTransition &&
           typeof response.content === 'string'
         ) {
           const deferral = classifyDeferral(response.content);
@@ -2418,7 +2422,10 @@ export class Agent {
         // never reaches here, and a workspace/session switch doesn't run a turn,
         // so neither can trip it. A docs/config-only change isn't asked to run a
         // check — it's asked to SAY no verification was required.
-        const verificationDecision = decideVerification({
+        // Skip entirely on a goal-completing/blocking turn — the goal is done,
+        // and demanding a build/test after goal_complete is the false-positive
+        // the user saw ("you wrote files this turn" on a read-only turn).
+        const verificationDecision = this.lastGoalTransition ? 'none' : decideVerification({
           filesWritten: this.filesWrittenThisTurn,
           shellWroteUnknown: this.shellWroteThisTurn,
           verified: this.verifiedThisTurn,
