@@ -1595,10 +1595,11 @@ export class Agent {
     }
 
     let loopCount = 0;
-    // Multi-agent workflows (explorers → wait → architect → wait → write spec
-    // → write tasks) can easily eat 10-15 iterations. 20 was too tight and
-    // caused workflows to abort mid-architect. Cap defaults to 60 and is
-    // overridable via BRAINROUTER_MAX_TOOL_LOOPS for very heavy workflows.
+    // The agent should be allowed to FINISH the task, weak model or strong —
+    // the blunt per-turn tool-call count is not the runaway safety (the
+    // repeat-sequence + storm guards below are). So the cap is generous
+    // (default 250; local models 150) and exists only to backstop a genuine
+    // runaway; raise it further with `cli.maxToolLoops` in config.json.
     // HONK-L1/L7 — clamp the turn-loop caps for local/weak model families (a tight
     // bounded harness, not more prompt, is what makes them reliable). Passthrough
     // for strong/unknown models, so this is a no-op for the common case.
@@ -3131,9 +3132,9 @@ export class Agent {
     if (!exitedCleanly) {
       this.lastTurnHitLoopLimit = true;
       finalAnswer =
-        `I could not finish before the tool-call loop limit of ${maxLoops} was reached. ` +
+        `I reached this turn's tool-call budget (${maxLoops}) before finishing. ` +
         `Use \`/continue\` to pick up where I left off (drain pending children, finish writing artifacts), ` +
-        `\`/agents\` to see what's running, or set BRAINROUTER_MAX_TOOL_LOOPS to a higher number.`;
+        `\`/agents\` to see what's running, or raise \`cli.maxToolLoops\` in config.json for very heavy workflows.`;
     } else if (!finalAnswer.trim()) {
       if (this.lastGoalTransition && this.lastTurnToolCalls > 0) {
         // The model fired goal_complete / goal_blocked but skipped the

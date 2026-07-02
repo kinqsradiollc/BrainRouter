@@ -1175,7 +1175,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
       : 0,
     stormWindow: c.stormWindow ?? 6,
     stormThreshold: c.stormThreshold ?? 4,
-    maxToolLoops: c.maxToolLoops ?? 60,
+    maxToolLoops: c.maxToolLoops ?? 250,
     localModelProfile: c.localModelProfile === 'on' || c.localModelProfile === 'off' ? c.localModelProfile : 'auto',
     repeatToolSequenceLimit: c.repeatToolSequenceLimit ?? 12,
     repeatSequenceExemptTools: Array.isArray(c.repeatSequenceExemptTools)

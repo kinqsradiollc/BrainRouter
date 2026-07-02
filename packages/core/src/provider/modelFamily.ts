@@ -132,7 +132,11 @@ export interface ResolvedHarnessCaps extends HarnessCaps {
 
 /** Ceilings applied to a local model (L1). Each is a MAX, never a floor. */
 const LOCAL_CEILINGS: HarnessCaps = {
-  maxToolLoops: 24,
+  // A weak model should still be allowed to FINISH a real multi-step task —
+  // the blunt loop count is not what keeps it reliable; the repeat-sequence and
+  // storm guards below (which detect degenerate spinning) are. So this ceiling
+  // is generous, not tight: it only backstops a genuine runaway.
+  maxToolLoops: 150,
   repeatToolSequenceLimit: 6,
   stormThreshold: 3,
   agentMcpToolBudget: 8,
