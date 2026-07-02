@@ -1,4 +1,4 @@
-import type { ProviderDefinition } from './definition.js';
+import type { ProviderDefinition } from '../definition.js';
 
 /** Azure OpenAI — endpoint is PER-RESOURCE, so (like `openai-compatible`) the
  *  base URL is left EMPTY and the user supplies their own, e.g.

@@ -1,4 +1,4 @@
-import type { ProviderDefinition } from './definition.js';
+import type { ProviderDefinition } from '../definition.js';
 
 /** OpenAI-compatible — the GENERIC provider for any `/v1` endpoint that isn't a
  *  named built-in (gateways, self-hosted, vLLM, LiteLLM, OpenRouter, a cloud

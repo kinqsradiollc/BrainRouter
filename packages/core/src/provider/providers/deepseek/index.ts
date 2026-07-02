@@ -1,4 +1,4 @@
-import type { ProviderDefinition } from './definition.js';
+import type { ProviderDefinition } from '../definition.js';
 
 /** DeepSeek — HIDDEN from the picker (`pickerVisible:false`). DeepSeek is reached
  *  through the OpenAI-compatible flow (pick OpenAI, point the endpoint at

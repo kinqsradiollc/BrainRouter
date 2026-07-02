@@ -8,5 +8,5 @@ export * from './tierLadder.js';
 export * from './agentModels.js';
 export * from './modelFamily.js';
 export * from './providers/index.js';
-export * from './providers/lmstudio.js';
+export * from './providers/lmstudio/index.js';
 export * from './models/reasoning.js';

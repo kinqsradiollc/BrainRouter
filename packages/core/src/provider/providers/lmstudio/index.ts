@@ -1,5 +1,5 @@
-import type { ProviderDefinition } from './definition.js';
-import { registerModelReasoningCapabilities } from '../models/reasoning.js';
+import type { ProviderDefinition } from '../definition.js';
+import { registerModelReasoningCapabilities } from '../../models/reasoning.js';
 
 /** Best-effort tracing, LAZILY imported so the provider layer keeps NO static
  *  dependency on the telemetry/config layer. That matters because `tracing`
@@ -8,7 +8,7 @@ import { registerModelReasoningCapabilities } from '../models/reasoning.js';
  *  lmstudio → tracing → config). Deferring it to call-time keeps `providers/`
  *  a low-level data layer. Fire-and-forget; failures are swallowed. */
 function traceEvent(event: string, data: Record<string, unknown>): void {
-  void import('../../telemetry/tracing.js')
+  void import('../../../telemetry/tracing.js')
     .then((m) => m.traceEvent(event, data))
     .catch(() => { /* tracing is optional */ });
 }

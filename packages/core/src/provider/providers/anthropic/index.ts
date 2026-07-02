@@ -1,4 +1,4 @@
-import type { ProviderDefinition } from './definition.js';
+import type { ProviderDefinition } from '../definition.js';
 
 /** Anthropic (Claude) — reached over Anthropic's OpenAI-compatible surface at
  *  `https://api.anthropic.com/v1` (`callOpenAI` appends `/chat/completions`; the

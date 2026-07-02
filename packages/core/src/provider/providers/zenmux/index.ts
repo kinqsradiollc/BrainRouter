@@ -1,4 +1,4 @@
-import type { ProviderDefinition } from './definition.js';
+import type { ProviderDefinition } from '../definition.js';
 
 /** ZenMux — an OpenAI-compatible model gateway (zenmux.ai) fronting many
  *  upstream providers under one `/api/v1` base (model list from

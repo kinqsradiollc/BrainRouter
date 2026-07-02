@@ -21,7 +21,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { loadModelsConfig } from '../config/configLoader.js';
-import { lookupLmStudioModel } from '../provider/providers/lmstudio.js';
+import { lookupLmStudioModel } from '../provider/providers/lmstudio/index.js';
 
 let cachedOverride: Record<string, number> | undefined;
 

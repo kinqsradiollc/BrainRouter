@@ -1,4 +1,4 @@
-import type { ProviderDefinition } from './definition.js';
+import type { ProviderDefinition } from '../definition.js';
 
 /** Groq — fast cloud inference over an OpenAI-compatible API at
  *  `https://api.groq.com/openai/v1` (model list from `/openai/v1/models`).

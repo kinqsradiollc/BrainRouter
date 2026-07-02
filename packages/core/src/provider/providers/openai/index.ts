@@ -1,4 +1,4 @@
-import { DEFAULT_EFFORT_VALUE_MAP, type ProviderDefinition } from './definition.js';
+import { DEFAULT_EFFORT_VALUE_MAP, type ProviderDefinition } from '../definition.js';
 
 /** OpenAI — the canonical cloud provider. Any OpenAI-compatible `/v1` endpoint
  *  can also be reached via the `openai-compatible` provider. */

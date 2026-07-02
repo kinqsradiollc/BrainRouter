@@ -1,4 +1,4 @@
-import type { ProviderDefinition } from './definition.js';
+import type { ProviderDefinition } from '../definition.js';
 
 /** Google Gemini — reached over Gemini's OpenAI-compatible endpoint
  *  (`/v1beta/openai`; `callOpenAI` appends `/chat/completions`, and the model
