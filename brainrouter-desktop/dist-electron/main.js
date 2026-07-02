@@ -6,24 +6,28 @@
  * Security posture unchanged: contextIsolation on, typed preload only,
  * senderFrame + shape validation on every inbound command.
  */
-import { app, BrowserWindow, dialog, ipcMain, utilityProcess } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell, utilityProcess } from 'electron';
+// Connector Phase 2 — OAuth device flow + keychain secrets live in MAIN
+// (safeStorage is unavailable in a utilityProcess); hosts read over the port.
+import { requestDeviceCode, pollOnce } from './githubOauth.js';
+import { getSecret, setSecret, deleteSecret, hasSecret, secretStorageMode } from './secretStore.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isAgentCommand } from '@kinqs/brainrouter-agent-protocol';
-import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace, listTrustedWorkspaces } from '@kinqs/brainrouter-core/dist/workspace/workspaceTrust.js';
-import { listTranscripts } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
-import { getStateDir } from '@kinqs/brainrouter-core/dist/storage/store.js';
+import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace, listTrustedWorkspaces } from '@kinqs/brainrouter-core/workspace';
+import { listTranscripts } from '@kinqs/brainrouter-core/session';
+import { getStateDir } from '@kinqs/brainrouter-core/storage';
 // T1 — global dashboard disk reads (no live host needed): running tasks + last
 // review gate per recent workspace.
-import { collectDashboardTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
-import { pidAlive, reconcileStaleBackgroundTasks } from '@kinqs/brainrouter-core/dist/background/backgroundReconcile.js';
-import { reconcileBackgroundTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTaskStore.js';
-import { recordTelemetry } from '@kinqs/brainrouter-core/dist/telemetry/telemetry.js';
-import { TELEMETRY_EVENTS } from '@kinqs/brainrouter-core/dist/telemetry/contracts.js';
-import { getLatestReview } from '@kinqs/brainrouter-core/dist/review/reviewStore.js';
-import { reviewGate } from '@kinqs/brainrouter-core/dist/review/reviewModel.js';
-import { loadConfig, saveConfig, _resetCliKnobsCache } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { collectDashboardTasks } from '@kinqs/brainrouter-core/background';
+import { pidAlive, reconcileStaleBackgroundTasks } from '@kinqs/brainrouter-core/background';
+import { reconcileBackgroundTasks } from '@kinqs/brainrouter-core/background';
+import { recordTelemetry } from '@kinqs/brainrouter-core/telemetry';
+import { TELEMETRY_EVENTS } from '@kinqs/brainrouter-core/telemetry';
+import { getLatestReview } from '@kinqs/brainrouter-core/review';
+import { reviewGate } from '@kinqs/brainrouter-core/review';
+import { loadConfig, saveConfig, _resetCliKnobsCache } from '@kinqs/brainrouter-core/config';
 import { emptyPool, planActivate, applyActivate, setRunning, removeEntry, } from './hostPoolPolicy.js';
 import { isAllowedNavigation, allowedOriginFor } from './windowSecurity.js';
 import { addOpened, noteActivity, reorderWorkspace } from './recents.js';
@@ -62,6 +66,77 @@ async function handleComputerUseRequest(wp, host, request) {
     }
     catch (err) {
         host.postMessage({ kind: 'computer-use-response', id: request.id, ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+}
+function isSecretRequest(value) {
+    if (!value || typeof value !== 'object')
+        return false;
+    const v = value;
+    return v.kind === 'secret-request' && typeof v.id === 'string' && v.op === 'get' && typeof v.key === 'string';
+}
+function handleSecretRequest(host, request) {
+    try {
+        const value = getSecret(app.getPath('userData'), request.key);
+        host.postMessage({ kind: 'secret-response', id: request.id, ok: true, value });
+    }
+    catch (err) {
+        host.postMessage({ kind: 'secret-response', id: request.id, ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+}
+// ── Connector Phase 2: GitHub OAuth device flow (renderer-invoked) ────────────
+// One pending grant per connector. The renderer drives the poll cadence with
+// the interval we return; the token never leaves the main process — on success
+// it goes straight into the keychain-backed secret store.
+const pendingOauthGrants = new Map();
+async function handleGhOauth(payload) {
+    const connectorId = typeof payload.connectorId === 'string' ? payload.connectorId : '';
+    if (!connectorId)
+        return { error: 'connectorId is required.' };
+    const secretKey = `connector:${connectorId}:github-oauth`;
+    switch (payload.op) {
+        case 'start': {
+            const clientId = typeof payload.clientId === 'string' ? payload.clientId.trim() : '';
+            if (!clientId)
+                return { error: 'No OAuth client id configured. Set cli.github.oauthClientId in Settings → Advanced (register a GitHub OAuth App with device flow enabled).' };
+            try {
+                const grant = await requestDeviceCode(clientId);
+                pendingOauthGrants.set(connectorId, { clientId, grant });
+                void shell.openExternal(grant.verificationUri).catch(() => { });
+                return { userCode: grant.userCode, verificationUri: grant.verificationUri, intervalSec: grant.intervalSec, expiresAtMs: grant.expiresAtMs };
+            }
+            catch (err) {
+                return { error: err instanceof Error ? err.message : String(err) };
+            }
+        }
+        case 'poll': {
+            const entry = pendingOauthGrants.get(connectorId);
+            if (!entry)
+                return { status: 'error', error: 'No authorization in progress for this connector.' };
+            const result = await pollOnce(entry.clientId, entry.grant, {});
+            if (result.status === 'pending') {
+                entry.grant.intervalSec = result.nextIntervalSec;
+                return { status: 'pending', nextIntervalSec: result.nextIntervalSec, expiresAtMs: entry.grant.expiresAtMs };
+            }
+            pendingOauthGrants.delete(connectorId);
+            if (result.status === 'authorized') {
+                const stored = setSecret(app.getPath('userData'), secretKey, result.accessToken);
+                return { status: 'authorized', scope: result.scope, storageMode: stored.mode };
+            }
+            if (result.status === 'error')
+                return { status: 'error', error: result.message };
+            return { status: result.status };
+        }
+        case 'cancel':
+            pendingOauthGrants.delete(connectorId);
+            return { ok: true };
+        case 'disconnect':
+            pendingOauthGrants.delete(connectorId);
+            deleteSecret(app.getPath('userData'), secretKey);
+            return { ok: true };
+        case 'status':
+            return { hasToken: hasSecret(app.getPath('userData'), secretKey), storageMode: secretStorageMode() };
+        default:
+            return { error: `Unknown gh-oauth op "${String(payload.op)}".` };
     }
 }
 function readRecents() {
@@ -164,6 +239,10 @@ function spawnHost(wp, workspaceRoot) {
             return;
         if (isComputerUseRequest(msg)) {
             void handleComputerUseRequest(wp, host, msg);
+            return;
+        }
+        if (isSecretRequest(msg)) {
+            handleSecretRequest(host, msg);
             return;
         }
         if (msg && typeof msg === 'object') {
@@ -432,6 +511,9 @@ app.whenReady().then(() => {
     // T1 — trust persistence lives in the shared CLI store (not renderer
     // localStorage), so CLI + desktop agree and it survives reinstalls.
     ipcMain.handle('workspace:isTrusted', (_e, root) => ({ trusted: typeof root === 'string' && isWorkspaceTrusted(root) }));
+    // Connector Phase 2 — GitHub OAuth device flow (start/poll/cancel/disconnect/
+    // status). Tokens never reach the renderer; success writes the keychain store.
+    ipcMain.handle('gh-oauth', (_e, payload) => handleGhOauth((payload && typeof payload === 'object' ? payload : {})));
     ipcMain.handle('workspace:trust', (_e, root) => { if (typeof root === 'string')
         trustWorkspace(root); return { trusted: true }; });
     ipcMain.handle('workspace:untrust', (_e, root) => { if (typeof root === 'string')

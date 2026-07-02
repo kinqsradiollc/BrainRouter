@@ -9,7 +9,7 @@
  * (reusing the tested `isAuthorizedPrototypePath`). Anything else is refused.
  */
 import path from 'node:path';
-import { isAuthorizedPrototypePath } from '@kinqs/brainrouter-core/dist/prototype/protoDetect.js';
+import { isAuthorizedPrototypePath } from '@kinqs/brainrouter-core/prototype';
 /** Mutate a webview's webPreferences into the locked-down shape (defence in depth). */
 export function hardenWebviewPreferences(prefs) {
     delete prefs.preload;

@@ -56,6 +56,11 @@ contextBridge.exposeInMainWorld('brainrouter', {
   reorderWorkspace(dragged: string, target: string): Promise<{ recents: string[] }> {
     return ipcRenderer.invoke('workspace:reorder', dragged, target);
   },
+  // Connector Phase 2 — GitHub OAuth device flow, brokered by MAIN (tokens
+  // never reach the renderer; only user_code/status/metadata come back).
+  ghOauth(payload: { op: 'start' | 'poll' | 'cancel' | 'disconnect' | 'status'; connectorId: string; clientId?: string }): Promise<Record<string, unknown>> {
+    return ipcRenderer.invoke('gh-oauth', payload);
+  },
   // T1 — cross-workspace dashboard (running tasks + last review gate per recent root).
   globalDashboard(): Promise<{ workspaces: Array<{ workspaceRoot: string; tasks: Array<Record<string, unknown>>; reviewGate: { status: string; blocked: boolean; reason: string } | null }> }> {
     return ipcRenderer.invoke('dashboard:global');

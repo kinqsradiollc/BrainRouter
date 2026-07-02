@@ -94,12 +94,25 @@ import { readGitTrackContext, startGitWorkForTrackItem } from '@kinqs/brainroute
 import { listConnectorCatalog } from '@kinqs/brainrouter-core/connectors';
 import { createConnector, deleteConnector, finishConnectorRun, getConnector, listConnectorRuns, listConnectors, recordConnectorRun, updateConnector } from '@kinqs/brainrouter-core/connectors';
 import { exportConnectorDefinitions, importConnectorDefinitions } from '@kinqs/brainrouter-core/connectors';
-import { runGithubConnectorCheckpoint, runGithubConnectorPermissionSync, validateGithubConnectorAccess, type GithubConnectorClient, type GithubConnectorPermissionClient, type GithubConnectorValidationClient } from '@kinqs/brainrouter-core/connectors';
+import {
+  fetchWebClient,
+  gitlabTokenClient,
+  nodeFsClient,
+  runFilesystemConnectorCheckpoint,
+  runGithubConnectorCheckpoint,
+  runGithubConnectorPermissionSync,
+  runGitlabConnectorCheckpoint,
+  runWebConnectorCheckpoint,
+  validateGithubConnectorAccess,
+  type GithubConnectorClient,
+  type GithubConnectorPermissionClient,
+  type GithubConnectorValidationClient,
+} from '@kinqs/brainrouter-core/connectors';
 import { countConnectorDocuments, searchConnectorDocuments, upsertConnectorDocuments } from '@kinqs/brainrouter-core/connectors';
 import { exportConnectorDocumentsForMemory } from '@kinqs/brainrouter-core/connectors';
 import { countConnectorPermissions, listConnectorPermissions, upsertConnectorPermissions } from '@kinqs/brainrouter-core/connectors';
 import { retrieveConnectorSlimDocuments } from '@kinqs/brainrouter-core/connectors';
-import type { WorkItemType, SprintState, CodeLink, AutomationTrigger, AutomationAction, ProjectRole, ConnectorFlow, ConnectorSource } from '@kinqs/brainrouter-types';
+import type { WorkItemType, SprintState, CodeLink, AutomationTrigger, AutomationAction, ProjectRole, ConnectorFlow, ConnectorRecord, ConnectorSource } from '@kinqs/brainrouter-types';
 
 /**
  * Strip secrets from the `cli` config before it's sent to the renderer (the
@@ -245,6 +258,48 @@ function createComputerUseBridge(port: ParentPortLike | undefined): ComputerUseB
       clearTimeout(entry.timer);
       if (msg.ok) entry.resolve(msg.result);
       else entry.reject(new Error(msg.error || 'computer_use failed in Electron main.'));
+      return true;
+    },
+  };
+}
+
+type SecretBridge = {
+  get(key: string): Promise<string | undefined>;
+  handleMessage(message: unknown): boolean;
+};
+
+/**
+ * Connector Phase 2 — keychain secrets live in Electron MAIN (safeStorage is
+ * unavailable in a utilityProcess), so the host requests values over the
+ * parent port, mirroring the computer-use request/response bridge. Values
+ * never travel further than this process — nothing secret reaches the renderer.
+ */
+function createSecretBridge(port: ParentPortLike | undefined): SecretBridge | undefined {
+  if (!port) return undefined;
+  let seq = 0;
+  const pending = new Map<string, { resolve: (value: string | undefined) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  return {
+    get(key: string): Promise<string | undefined> {
+      const id = `sec_${++seq}`;
+      port.postMessage({ kind: 'secret-request', id, op: 'get', key });
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          reject(new Error('Secret lookup timed out waiting for Electron main.'));
+        }, 10_000);
+        pending.set(id, { resolve, reject, timer });
+      });
+    },
+    handleMessage(message: unknown): boolean {
+      if (!message || typeof message !== 'object') return false;
+      const msg = message as { kind?: string; id?: string; ok?: boolean; value?: string; error?: string };
+      if (msg.kind !== 'secret-response' || typeof msg.id !== 'string') return false;
+      const entry = pending.get(msg.id);
+      if (!entry) return true;
+      pending.delete(msg.id);
+      clearTimeout(entry.timer);
+      if (msg.ok) entry.resolve(msg.value);
+      else entry.reject(new Error(msg.error || 'Secret lookup failed in Electron main.'));
       return true;
     },
   };
@@ -618,6 +673,7 @@ async function main(): Promise<void> {
     ? (msg: unknown) => port.postMessage(msg)
     : (msg: unknown) => console.log(JSON.stringify(msg));
   const computerUseBridge = createComputerUseBridge(port);
+  const secretBridge = createSecretBridge(port);
 
   // Identical boot recipe to `brainrouter chat` (index.ts): config → llm →
   // pool.connectAll(profiles) → Agent. Offline MCP does not block (same
@@ -1213,8 +1269,10 @@ async function main(): Promise<void> {
   const ghEnv = async (): Promise<NodeJS.ProcessEnv> => {
     const now = Date.now();
     if (ghEnvCache && now - ghEnvCache.at < 60_000) return ghEnvCache.env;
-    const track = ((loadConfig() as { cli?: { track?: TrackGithubConfig } }).cli?.track) ?? {};
-    const configuredCA = track.githubCaBundle?.trim() || undefined;
+    const cli = (loadConfig() as { cli?: { track?: TrackGithubConfig; github?: { caBundle?: string } } }).cli ?? {};
+    // Global home first (cli.github.caBundle); the old track-scoped knob stays a
+    // read fallback so existing configs keep working.
+    const configuredCA = cli.github?.caBundle?.trim() || cli.track?.githubCaBundle?.trim() || undefined;
     const [sslCAInfo, sslCAPath] = await Promise.all([
       git(['config', '--get', 'http.sslCAInfo'], workspaceRoot),
       git(['config', '--get', 'http.sslCAPath'], workspaceRoot),
@@ -1265,9 +1323,86 @@ async function main(): Promise<void> {
     if (connector.credential?.mode !== 'static') return {};
     const ref = connector.credential.ref?.trim();
     if (!ref) return { error: 'Static GitHub connector credential reference is required.' };
+    // `config:track` — the migrated-legacy scheme (connector Phase 0): the token
+    // still lives in cli.track.githubToken until the Phase 3 keychain move.
+    if (ref === 'config:track') {
+      const track = ((loadConfig() as { cli?: { track?: TrackGithubConfig } }).cli?.track) ?? {};
+      const token = track.githubToken?.trim();
+      if (!token) return { error: 'The migrated GitHub token is no longer in config.json. Re-add a token in Settings → Connectors → GitHub.' };
+      return { token };
+    }
     const token = process.env[ref]?.trim();
     if (!token) return { error: `Static GitHub connector credential ${ref} is not available in the host environment.` };
     return { token };
+  };
+
+  /**
+   * Connector Phase 2 — mode-aware credential resolution. `static` resolves
+   * locally (env / config:track); `oauth` fetches the device-flow token from
+   * the MAIN process keychain over the secret bridge. Never returns to the
+   * renderer.
+   */
+  const githubConnectorToken = async (connector: { id: string; credential?: { mode?: string; ref?: string } }): Promise<{ token?: string; error?: string }> => {
+    if (connector.credential?.mode === 'oauth') {
+      if (!secretBridge) return { error: 'Keychain access requires the Electron app (dev host has no secret bridge).' };
+      try {
+        const token = await secretBridge.get(`connector:${connector.id}:github-oauth`);
+        if (!token) return { error: 'No OAuth token stored for this connector — connect the GitHub account in Settings → Connectors.' };
+        return { token };
+      } catch (e) {
+        return { error: String((e as Error).message ?? e) };
+      }
+    }
+    return githubStaticToken(connector);
+  };
+
+  const connectorEnvToken = (connector: { credential?: { mode?: string; ref?: string } }, label: string): { token?: string; error?: string } => {
+    if (!connector.credential || connector.credential.mode === 'none') return {};
+    if (connector.credential.mode !== 'static') return { error: `${label} connector currently supports static environment-token credentials only.` };
+    const ref = connector.credential.ref?.trim();
+    if (!ref) return { error: `${label} connector credential reference is required.` };
+    const token = process.env[ref]?.trim();
+    if (!token) return { error: `${label} connector credential ${ref} is not available in the host environment.` };
+    return { token };
+  };
+
+  const filesystemConnectorForHost = (connector: ConnectorRecord): ConnectorRecord => {
+    const rawRoots = Array.isArray(connector.config.roots)
+      ? connector.config.roots.filter((root): root is string => typeof root === 'string')
+      : [];
+    return {
+      ...connector,
+      config: {
+        ...connector.config,
+        roots: rawRoots.map((root) => {
+          const trimmed = root.trim();
+          if (!trimmed) return trimmed;
+          return path.isAbsolute(trimmed) ? trimmed : path.resolve(workspaceRoot, trimmed);
+        }).filter(Boolean),
+      },
+    };
+  };
+
+  const runConnectorCheckpoint = async (connector: ConnectorRecord) => {
+    switch (connector.source) {
+      case 'github':
+        return await runGithubConnectorCheckpoint(connector, githubConnectorClient());
+      case 'filesystem':
+        return await runFilesystemConnectorCheckpoint(filesystemConnectorForHost(connector), nodeFsClient());
+      case 'web': {
+        const cred = connectorEnvToken(connector, 'Web');
+        if (cred.error) throw new Error(cred.error);
+        return await runWebConnectorCheckpoint(connector, fetchWebClient({ headerToken: cred.token }));
+      }
+      case 'gitlab': {
+        const cred = connectorEnvToken(connector, 'GitLab');
+        if (!cred.token) throw new Error(cred.error ?? 'GitLab connector requires a static token credential.');
+        const hostUrl = typeof connector.config.hostUrl === 'string' ? connector.config.hostUrl : undefined;
+        return await runGitlabConnectorCheckpoint(connector, gitlabTokenClient(cred.token, hostUrl));
+      }
+      default:
+        throw new Error(`Connector runtime is not implemented for ${connector.source}.`);
+    }
   };
 
   const githubTokenJson = async <T,>(connector: { config?: Record<string, unknown> }, token: string, apiPath: string): Promise<T> => {
@@ -1471,7 +1606,6 @@ async function main(): Promise<void> {
   const runConnector = async (connectorId: string): Promise<{ ok: boolean; run?: unknown; connector?: unknown | null; documents?: unknown[]; memory?: unknown; errors?: string[]; error?: string }> => {
     const connector = getConnector(workspaceRoot, connectorId);
     if (!connector) return { ok: false, error: 'Connector not found.' };
-    if (connector.source !== 'github') return { ok: false, error: `Connector runtime is not implemented for ${connector.source}.` };
     const startedAt = new Date().toISOString();
     const running = recordConnectorRun(workspaceRoot, {
       connectorId: connector.id,
@@ -1481,7 +1615,7 @@ async function main(): Promise<void> {
       checkpointBefore: connector.checkpoint,
     });
     try {
-      const result = await runGithubConnectorCheckpoint(connector, githubConnectorClient());
+      const result = await runConnectorCheckpoint(connector);
       const persisted = upsertConnectorDocuments(workspaceRoot, result.documents);
       const run = finishConnectorRun(workspaceRoot, connector.id, running.id, {
         status: result.failures.length ? 'failed' : 'succeeded',
@@ -2605,6 +2739,66 @@ async function main(): Promise<void> {
         const r = scanGitCommitsForTrack(workspaceRoot, {});
         return { ...r, items: listWorkItems(workspaceRoot) };
       },
+      // Connector Phase 1 — repo discovery for the picker. Both queries resolve
+      // the CONNECTOR's credential (static token → REST; dynamic/oauth → gh CLI)
+      // and never return the token itself.
+      'github-connector-orgs': async (a) => {
+        const connector = getConnector(workspaceRoot, typeof a.connectorId === 'string' ? a.connectorId : '');
+        if (!connector) return { viewer: null, orgs: [], errors: ['Connector not found.'] };
+        try {
+          if (connector.credential.mode === 'static' || connector.credential.mode === 'oauth') {
+            const cred = await githubConnectorToken(connector);
+            if (!cred.token) return { viewer: null, orgs: [], errors: [cred.error ?? 'No credential.'] };
+            const viewer = await githubTokenJson<{ login?: string }>(connector, cred.token, '/user');
+            const orgs = await githubTokenJson<Array<{ login?: string; description?: string | null }>>(connector, cred.token, '/user/orgs?per_page=100');
+            return { viewer: viewer.login ? { login: viewer.login } : null, orgs: orgs.map((o) => ({ login: o.login ?? '', description: o.description ?? undefined })).filter((o) => o.login), errors: [] };
+          }
+          const viewer = await ghJson<{ login?: string }>(['api', 'user'], { timeout: 12_000 });
+          if (viewer.error) return { viewer: null, orgs: [], errors: [viewer.error] };
+          const orgs = await ghJson<Array<{ login?: string; description?: string | null }>>(['api', 'user/orgs?per_page=100'], { timeout: 12_000, maxBuffer: 1_000_000 });
+          return {
+            viewer: viewer.data?.login ? { login: viewer.data.login } : null,
+            orgs: (orgs.data ?? []).map((o) => ({ login: o.login ?? '', description: o.description ?? undefined })).filter((o) => o.login),
+            errors: orgs.error ? [orgs.error] : [],
+          };
+        } catch (e) {
+          const msg = String((e as Error).message ?? e);
+          return { viewer: null, orgs: [], errors: [/403|429|rate/i.test(msg) ? 'GitHub API rate limited — try again in a few minutes.' : msg] };
+        }
+      },
+      'github-connector-repos': async (a) => {
+        const connector = getConnector(workspaceRoot, typeof a.connectorId === 'string' ? a.connectorId : '');
+        const org = typeof a.org === 'string' ? a.org.trim() : '';
+        const viewerLogin = typeof a.viewerLogin === 'string' ? a.viewerLogin.trim() : '';
+        const page = Number.isFinite(Number(a.page)) && Number(a.page) > 0 ? Math.floor(Number(a.page)) : 1;
+        if (!connector || !org) return { repos: [], nextPage: null, errors: [connector ? 'Missing org.' : 'Connector not found.'] };
+        type RestRepo = { full_name?: string; private?: boolean; archived?: boolean; fork?: boolean; description?: string | null; pushed_at?: string };
+        const mapRepos = (list: RestRepo[]) => list
+          .map((r) => ({ nameWithOwner: r.full_name ?? '', isPrivate: !!r.private, isArchived: !!r.archived, isFork: !!r.fork, description: r.description ?? undefined, pushedAt: r.pushed_at ?? undefined }))
+          .filter((r) => r.nameWithOwner);
+        // The viewer's personal namespace lists via /user/repos (owner affiliation);
+        // organizations via /orgs/{org}/repos.
+        const apiPath = org === viewerLogin
+          ? `/user/repos?affiliation=owner&per_page=100&page=${page}&sort=pushed`
+          : `/orgs/${encodeURIComponent(org)}/repos?type=all&per_page=100&page=${page}&sort=pushed`;
+        try {
+          if (connector.credential.mode === 'static' || connector.credential.mode === 'oauth') {
+            const cred = await githubConnectorToken(connector);
+            if (!cred.token) return { repos: [], nextPage: null, errors: [cred.error ?? 'No credential.'] };
+            const list = await githubTokenJson<RestRepo[]>(connector, cred.token, apiPath);
+            const repos = mapRepos(list);
+            return { repos, nextPage: list.length === 100 ? page + 1 : null, errors: [] };
+          }
+          const list = await ghJson<RestRepo[]>(['api', apiPath.replace(/^\//, '')], { timeout: 20_000, maxBuffer: 4_000_000 });
+          if (list.error) return { repos: [], nextPage: null, errors: [list.error] };
+          const repos = mapRepos(list.data ?? []);
+          return { repos, nextPage: (list.data ?? []).length === 100 ? page + 1 : null, errors: [] };
+        } catch (e) {
+          const msg = String((e as Error).message ?? e);
+          const rateLimited = /403|429|rate/i.test(msg);
+          return { repos: [], nextPage: null, rateLimited, errors: [rateLimited ? 'GitHub API rate limited — try again in a few minutes.' : msg] };
+        }
+      },
       'track-sync': async (a) => {
         const direction = a.direction === 'export' ? 'export' : a.direction === 'sync' ? 'sync' : 'import';
         const dryRun = a.dryRun !== false; // default to dry-run unless explicitly false
@@ -3648,14 +3842,40 @@ async function main(): Promise<void> {
       // Settings → Connectors: persist the Track GitHub config. The token is
       // write-only (set when non-empty, kept otherwise) and never read back.
       'action:set-track-github': (args) => {
-        const fresh = loadConfig() as { cli?: { track?: TrackGithubConfig } };
+        const fresh = loadConfig() as { cli?: { track?: TrackGithubConfig; github?: { caBundle?: string } } };
         const cli = (fresh.cli = fresh.cli ?? {});
         const track = (cli.track = cli.track ?? {});
         if (typeof args.caBundle === 'string' || args.caBundle === null) {
+          // CA bundle's home is the global cli.github block (it applies to every
+          // GitHub surface); writing here also clears the legacy track-scoped copy.
           const ca = typeof args.caBundle === 'string' ? args.caBundle.trim() : '';
-          if (ca) track.githubCaBundle = ca;
-          else delete track.githubCaBundle;
+          const github = (cli.github = cli.github ?? {});
+          if (ca) github.caBundle = ca;
+          else delete github.caBundle;
+          delete track.githubCaBundle;
           ghEnvCache = null;
+        }
+        // Connector Phase 1 — target-scoped save: pick the workspace's sync
+        // target and (optionally) attach a pasted token to that connector. The
+        // token value stays in cli.track.githubToken (write-only storage, the
+        // `config:track` scheme) until Phase 3 moves it into the OS keychain.
+        if (typeof args.targetConnectorId === 'string' && typeof args.targetRepo === 'string' && args.targetConnectorId.trim() && args.targetRepo.trim()) {
+          const connectorId = args.targetConnectorId.trim();
+          const repo = args.targetRepo.trim();
+          if (typeof args.token === 'string' && args.token.trim()) {
+            track.githubToken = args.token.trim();
+            const conn = getConnector(workspaceRoot, connectorId);
+            if (conn) {
+              updateConnector(workspaceRoot, connectorId, {
+                credential: { mode: 'static', ref: 'config:track', label: 'Track token', hasSecret: true },
+              });
+            }
+          }
+          setGithubSyncTarget(workspaceRoot, { connectorId, repo });
+          syncLegacyTrackGithubFields(track);
+          saveConfig(fresh as never);
+          _resetCliKnobsCache();
+          return { ok: true, ...githubIntegrationSnapshot(workspaceRoot) };
         }
         let repos = normalizeTrackGithubRepos(track);
         if (typeof args.removeRepo === 'string') {
@@ -3718,6 +3938,18 @@ async function main(): Promise<void> {
         saveConfig(fresh as never);
         _resetCliKnobsCache();
         return { ok: true, key };
+      },
+      'action:set-github-oauth-client-id': (args) => {
+        const fresh = loadConfig() as { cli?: { github?: { oauthClientId?: string; caBundle?: string } } };
+        const cli = (fresh.cli = fresh.cli ?? {});
+        const github = (cli.github = cli.github ?? {});
+        const clientId = typeof args.clientId === 'string' ? args.clientId.trim() : '';
+        if (clientId) github.oauthClientId = clientId;
+        else delete github.oauthClientId;
+        if (!github.oauthClientId && !github.caBundle) delete cli.github;
+        saveConfig(fresh as never);
+        _resetCliKnobsCache();
+        return { ok: true };
       },
       // §multi-provider — add/update a NAMED OpenAI-compatible provider. A blank
       // apiKey on an UPDATE keeps the existing key (so the renderer never has to
@@ -4090,6 +4322,7 @@ async function main(): Promise<void> {
 
   if (port) port.on('message', (e) => {
     if (computerUseBridge?.handleMessage(e.data)) return;
+    if (secretBridge?.handleMessage(e.data)) return;
     void core.handle(e.data);
   });
 

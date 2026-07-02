@@ -411,6 +411,43 @@ test('set-model persist:true saves the GLOBAL default (not per-session)', async 
     assert.deepEqual(session, [], 'did NOT write a per-session override');
     assert.deepEqual(cleared, ['sess-test'], 'cleared stale per-session model override for the active chat');
 });
+test('set-model providerName + persist:false → cross-provider PER-SESSION (rebuild LLM, full session override, no global)', async () => {
+    const { send } = collect();
+    const global = [];
+    const sessionLlms = [];
+    const rebuilt = [];
+    const agent = modelAgent('sess-test');
+    agent.setLLMConfig = (c) => { rebuilt.push(c); };
+    const core = createHostCore({
+        agent, send,
+        persistModel: (m) => global.push(m),
+        persistProviderModel: (n, m) => global.push(`${n}:${m}`),
+        setSessionModel: () => global.push('WRONG-session-model'),
+        setSessionLlm: (k, patch) => sessionLlms.push([k, patch]),
+        resolveProviderLlm: (_name, model) => ({ provider: 'anthropic', apiKey: 'sk-x', model, endpoint: 'https://api.anthropic.com' }),
+    });
+    await core.handle({ kind: 'set-model', model: 'claude-opus-4-8', persist: false, providerName: 'my-anthropic' });
+    assert.equal(rebuilt[0]?.provider, 'anthropic', 'rebuilt the active agent with the provider config');
+    assert.equal(rebuilt[0]?.apiKey, 'sk-x', 'incl. the resolved key (main-process only)');
+    assert.deepEqual(sessionLlms, [['sess-test', { provider: 'anthropic', model: 'claude-opus-4-8', endpoint: 'https://api.anthropic.com' }]], 'wrote the FULL session override (no secret)');
+    assert.deepEqual(global, [], 'never touched the global default → no sync to other sessions');
+});
+test('set-model providerName + persist:true → cross-provider GLOBAL default (persistProviderModel + clears session)', async () => {
+    const { send } = collect();
+    const globalProv = [];
+    const cleared = [];
+    const agent = modelAgent('sess-test');
+    agent.setLLMConfig = () => { };
+    const core = createHostCore({
+        agent, send,
+        persistProviderModel: (n, m) => globalProv.push([n, m]),
+        clearSessionModel: (k) => cleared.push(k),
+        resolveProviderLlm: (_name, model) => ({ provider: 'anthropic', apiKey: 'sk-x', model, endpoint: 'e' }),
+    });
+    await core.handle({ kind: 'set-model', model: 'claude-opus-4-8', persist: true, providerName: 'my-anthropic' });
+    assert.deepEqual(globalProv, [['my-anthropic', 'claude-opus-4-8']], 'set the GLOBAL default from the connection');
+    assert.deepEqual(cleared, ['sess-test'], 'cleared the per-session override');
+});
 test('a spawned/focused session restores its stored per-session model', async () => {
     const { out, send } = collect();
     const agent = modelAgent('sess-test');

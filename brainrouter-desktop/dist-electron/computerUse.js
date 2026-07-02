@@ -1,5 +1,5 @@
 import { BrowserWindow, desktopCapturer, screen } from 'electron';
-import { expandChordKeys } from '@kinqs/brainrouter-core/dist/agent/computerUse.js';
+import { expandChordKeys } from '@kinqs/brainrouter-core/agent';
 import { checkComputerUsePermissions } from './computerUsePermissions.js';
 import { loadLibnut } from './computerUseLibnut.js';
 function sleep(ms) {
