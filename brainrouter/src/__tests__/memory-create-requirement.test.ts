@@ -10,7 +10,7 @@ import { memoryEngine } from "../memory/engine.js";
 import {
   handleMemoryCreateRequirement,
   memoryCreateRequirementToolSchema,
-} from "../tools/memory_create_requirement.js";
+} from "../tools/capture/memory_create_requirement.js";
 
 function parseToolText<T>(result: any): T {
   return JSON.parse(result.content[0].text);

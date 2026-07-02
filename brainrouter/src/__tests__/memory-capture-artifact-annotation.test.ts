@@ -7,8 +7,8 @@ vi.mock("../memory/engine.js", () => ({
 }));
 
 import { memoryEngine } from "../memory/engine.js";
-import { handleMemoryCaptureArtifact, memoryCaptureArtifactToolSchema } from "../tools/memory_capture_artifact.js";
-import { handleMemoryCaptureAnnotation, memoryCaptureAnnotationToolSchema } from "../tools/memory_capture_annotation.js";
+import { handleMemoryCaptureArtifact, memoryCaptureArtifactToolSchema } from "../tools/capture/memory_capture_artifact.js";
+import { handleMemoryCaptureAnnotation, memoryCaptureAnnotationToolSchema } from "../tools/capture/memory_capture_annotation.js";
 
 function parseToolText<T>(result: any): T {
   return JSON.parse(result.content[0].text);

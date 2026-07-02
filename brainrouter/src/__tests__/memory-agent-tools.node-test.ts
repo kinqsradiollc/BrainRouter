@@ -56,9 +56,9 @@ process.env.BRAINROUTER_DATABASE_URL = scratchUrl();
 process.env.DATABASE_URL = scratchUrl();
 process.env.BRAINROUTER_JOB_RUNNER = "off";
 
-const { handleMemoryAgentStatus } = await import("../tools/memory_agent_status.js");
-const { handleMemoryAgentRun } = await import("../tools/memory_agent_run.js");
-const { handleMemoryJobRetry } = await import("../tools/memory_job_retry.js");
+const { handleMemoryAgentStatus } = await import("../tools/agents/memory_agent_status.js");
+const { handleMemoryAgentRun } = await import("../tools/agents/memory_agent_run.js");
+const { handleMemoryJobRetry } = await import("../tools/agents/memory_job_retry.js");
 const { memoryEngine } = await import("../memory/engine.js");
 
 // The Postgres store is genuinely async — wait for migrations / seed-admin

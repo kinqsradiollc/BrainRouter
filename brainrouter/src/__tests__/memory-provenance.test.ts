@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildProvenanceView } from "../tools/provenance-view.js";
+import { buildProvenanceView } from "../tools/governance/provenance-view.js";
 import type { CognitiveRecord, MemoryEvidence } from "@kinqs/brainrouter-types";
 
 function rec(over: Partial<CognitiveRecord>): CognitiveRecord {
