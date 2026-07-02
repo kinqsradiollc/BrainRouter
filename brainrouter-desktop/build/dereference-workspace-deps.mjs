@@ -28,8 +28,10 @@ for (const entry of fs.readdirSync(scopeDir)) {
   const pkgJson = path.join(target, 'package.json');
   const dist = path.join(target, 'dist');
   if (!fs.existsSync(pkgJson) || !fs.existsSync(dist)) {
-    console.error(`[dereference-workspace-deps] ${entry}: missing package.json or dist/ at ${target} — run the workspace builds first`);
-    process.exit(1);
+    // Not part of the desktop's dependency closure (e.g. the CLI workspace) —
+    // electron-builder never visits it, so an unbuilt package is fine to skip.
+    console.log(`[dereference-workspace-deps] ${entry}: no dist build — skipping (not a packaged dep)`);
+    continue;
   }
   fs.rmSync(linkPath);
   fs.mkdirSync(linkPath, { recursive: true });
