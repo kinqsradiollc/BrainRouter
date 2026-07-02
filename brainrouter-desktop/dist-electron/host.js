@@ -88,7 +88,7 @@ import { readGitTrackContext, startGitWorkForTrackItem } from '@kinqs/brainroute
 import { listConnectorCatalog } from '@kinqs/brainrouter-core/connectors';
 import { createConnector, deleteConnector, finishConnectorRun, getConnector, listConnectorRuns, listConnectors, recordConnectorRun, updateConnector } from '@kinqs/brainrouter-core/connectors';
 import { exportConnectorDefinitions, importConnectorDefinitions } from '@kinqs/brainrouter-core/connectors';
-import { fetchWebClient, gitlabTokenClient, nodeFsClient, runFilesystemConnectorCheckpoint, runGithubConnectorCheckpoint, runGithubConnectorPermissionSync, runGitlabConnectorCheckpoint, runWebConnectorCheckpoint, validateGithubConnectorAccess, } from '@kinqs/brainrouter-core/connectors';
+import { confluenceTokenClient, fetchWebClient, gmailTokenClient, gitlabTokenClient, googleDriveTokenClient, jiraTokenClient, linearTokenClient, nodeFsClient, notionTokenClient, runMcpConnectorCheckpoint, runConfluenceConnectorCheckpoint, runFilesystemConnectorCheckpoint, runGmailConnectorCheckpoint, runGithubConnectorCheckpoint, runGithubConnectorPermissionSync, runGitlabConnectorCheckpoint, runGoogleDriveConnectorCheckpoint, runJiraConnectorCheckpoint, runLinearConnectorCheckpoint, runNotionConnectorCheckpoint, runSlackConnectorCheckpoint, runWebConnectorCheckpoint, slackTokenClient, validateGithubConnectorAccess, } from '@kinqs/brainrouter-core/connectors';
 import { countConnectorDocuments, searchConnectorDocuments, upsertConnectorDocuments } from '@kinqs/brainrouter-core/connectors';
 import { exportConnectorDocumentsForMemory } from '@kinqs/brainrouter-core/connectors';
 import { countConnectorPermissions, listConnectorPermissions, upsertConnectorPermissions } from '@kinqs/brainrouter-core/connectors';
@@ -1367,6 +1367,16 @@ async function main() {
             return { error: `${label} connector credential ${ref} is not available in the host environment.` };
         return { token };
     };
+    const connectorConfigString = (connector, key) => {
+        const value = connector.config[key];
+        return typeof value === 'string' ? value.trim() : '';
+    };
+    const requireConnectorConfig = (connector, key, label) => {
+        const value = connectorConfigString(connector, key);
+        if (!value)
+            throw new Error(`${label} connector config ${key} is required.`);
+        return value;
+    };
     const filesystemConnectorForHost = (connector) => {
         const rawRoots = Array.isArray(connector.config.roots)
             ? connector.config.roots.filter((root) => typeof root === 'string')
@@ -1384,6 +1394,58 @@ async function main() {
             },
         };
     };
+    const mcpConnectorClient = () => ({
+        async listResources(opts) {
+            const limit = Math.max(1, Math.min(500, Math.floor(opts.limit ?? 100)));
+            if (opts.resourceUris?.length) {
+                if (!opts.serverId)
+                    throw new Error('MCP connector config serverId is required when resourceUris are configured.');
+                return opts.resourceUris.slice(0, limit).map((uri) => ({ server: opts.serverId, uri }));
+            }
+            const resources = [];
+            let cursor;
+            do {
+                const result = await mcpClient.listResources({ server: opts.serverId, cursor });
+                const rows = Array.isArray(result.resources) ? result.resources : [];
+                for (const row of rows) {
+                    if (!row || typeof row !== 'object')
+                        continue;
+                    const r = row;
+                    const uri = typeof r.uri === 'string' ? r.uri : '';
+                    if (!uri)
+                        continue;
+                    resources.push({
+                        server: typeof r.server === 'string' ? r.server : opts.serverId,
+                        uri,
+                        name: typeof r.name === 'string' ? r.name : undefined,
+                        description: typeof r.description === 'string' ? r.description : undefined,
+                        mimeType: typeof r.mimeType === 'string' ? r.mimeType : undefined,
+                    });
+                    if (resources.length >= limit)
+                        break;
+                }
+                cursor = typeof result.nextCursor === 'string' ? result.nextCursor : undefined;
+            } while (cursor && resources.length < limit);
+            return resources;
+        },
+        async readResource(resource) {
+            if (!resource.server)
+                throw new Error(`MCP resource ${resource.uri} has no server id.`);
+            const result = await mcpClient.readResource({ server: resource.server, uri: resource.uri });
+            const contents = Array.isArray(result.contents) ? result.contents : [];
+            return {
+                contents: contents.map((content) => {
+                    const row = content && typeof content === 'object' ? content : {};
+                    return {
+                        uri: typeof row.uri === 'string' ? row.uri : undefined,
+                        text: typeof row.text === 'string' ? row.text : undefined,
+                        blob: typeof row.blob === 'string' ? row.blob : undefined,
+                        mimeType: typeof row.mimeType === 'string' ? row.mimeType : undefined,
+                    };
+                }),
+            };
+        },
+    });
     const runConnectorCheckpoint = async (connector) => {
         switch (connector.source) {
             case 'github':
@@ -1402,6 +1464,50 @@ async function main() {
                     throw new Error(cred.error ?? 'GitLab connector requires a static token credential.');
                 const hostUrl = typeof connector.config.hostUrl === 'string' ? connector.config.hostUrl : undefined;
                 return await runGitlabConnectorCheckpoint(connector, gitlabTokenClient(cred.token, hostUrl));
+            }
+            case 'slack': {
+                const cred = connectorEnvToken(connector, 'Slack');
+                if (!cred.token)
+                    throw new Error(cred.error ?? 'Slack connector requires a static token credential.');
+                return await runSlackConnectorCheckpoint(connector, slackTokenClient(cred.token));
+            }
+            case 'jira': {
+                const cred = connectorEnvToken(connector, 'Jira');
+                if (!cred.token)
+                    throw new Error(cred.error ?? 'Jira connector requires a static token credential.');
+                return await runJiraConnectorCheckpoint(connector, jiraTokenClient(cred.token, requireConnectorConfig(connector, 'baseUrl', 'Jira')));
+            }
+            case 'confluence': {
+                const cred = connectorEnvToken(connector, 'Confluence');
+                if (!cred.token)
+                    throw new Error(cred.error ?? 'Confluence connector requires a static token credential.');
+                return await runConfluenceConnectorCheckpoint(connector, confluenceTokenClient(cred.token, requireConnectorConfig(connector, 'baseUrl', 'Confluence')));
+            }
+            case 'notion': {
+                const cred = connectorEnvToken(connector, 'Notion');
+                if (!cred.token)
+                    throw new Error(cred.error ?? 'Notion connector requires a static token credential.');
+                return await runNotionConnectorCheckpoint(connector, notionTokenClient(cred.token));
+            }
+            case 'linear': {
+                const cred = connectorEnvToken(connector, 'Linear');
+                if (!cred.token)
+                    throw new Error(cred.error ?? 'Linear connector requires a static token credential.');
+                return await runLinearConnectorCheckpoint(connector, linearTokenClient(cred.token));
+            }
+            case 'mcp':
+                return await runMcpConnectorCheckpoint(connector, mcpConnectorClient());
+            case 'google-drive': {
+                const cred = connectorEnvToken(connector, 'Google Drive');
+                if (!cred.token)
+                    throw new Error(cred.error ?? 'Google Drive connector requires a static token credential.');
+                return await runGoogleDriveConnectorCheckpoint(connector, googleDriveTokenClient(cred.token));
+            }
+            case 'gmail': {
+                const cred = connectorEnvToken(connector, 'Gmail');
+                if (!cred.token)
+                    throw new Error(cred.error ?? 'Gmail connector requires a static token credential.');
+                return await runGmailConnectorCheckpoint(connector, gmailTokenClient(cred.token));
             }
             default:
                 throw new Error(`Connector runtime is not implemented for ${connector.source}.`);

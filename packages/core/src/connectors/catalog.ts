@@ -83,7 +83,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorCatalogEntry[] = [
     source: 'slack',
     title: 'Slack',
     description: 'Index selected channels, threads, and shared files for team/project recall.',
-    flows: ['checkpoint', 'slim', 'permission-sync', 'event'],
+    flows: ['checkpoint', 'slim'],
     credentialModes: ['static', 'oauth'],
     configFields: [
       listField('channels', 'Channels', 'Optional channel names or ids. Empty means all accessible channels.'),
@@ -97,22 +97,22 @@ export const CONNECTOR_CATALOG: readonly ConnectorCatalogEntry[] = [
   {
     source: 'google-drive',
     title: 'Google Drive',
-    description: 'Index Drive folders, shared docs, sheets, and permissions for workspace knowledge.',
-    flows: ['load', 'checkpoint', 'slim', 'permission-sync'],
-    credentialModes: ['oauth', 'static'],
+    description: 'Index Drive folders, shared docs, and sheets for workspace knowledge.',
+    flows: ['load', 'checkpoint', 'slim'],
+    credentialModes: ['static', 'oauth'],
     configFields: [
       listField('folderIds', 'Folder ids', 'Optional Drive folder ids. Empty means all accessible Drive files.'),
       boolField('includeSharedDrives', 'Include shared drives', true),
       boolField('includeSheets', 'Include spreadsheets', true),
       numberField('pollMinutes', 'Auto run minutes', 'Optional background polling cadence in minutes.'),
     ],
-    credentialFields: [secretField('serviceAccountJson', 'Service account JSON', 'Service-account JSON or OAuth account reference.')],
+    credentialFields: [secretField('token', 'Access token', 'Google OAuth access token or account reference.')],
   },
   {
     source: 'confluence',
     title: 'Confluence',
     description: 'Index Confluence spaces, pages, comments, and page hierarchy.',
-    flows: ['load', 'checkpoint', 'slim', 'permission-sync'],
+    flows: ['load', 'checkpoint', 'slim'],
     credentialModes: ['static', 'oauth'],
     configFields: [
       textField('baseUrl', 'Confluence base URL', 'Cloud or Data Center base URL.'),
@@ -126,7 +126,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorCatalogEntry[] = [
     source: 'jira',
     title: 'Jira',
     description: 'Index Jira projects, issues, comments, labels, and status metadata.',
-    flows: ['checkpoint', 'slim', 'permission-sync'],
+    flows: ['checkpoint', 'slim'],
     credentialModes: ['static', 'oauth'],
     configFields: [
       textField('baseUrl', 'Jira base URL', 'Cloud or Data Center base URL.'),
@@ -169,7 +169,7 @@ export const CONNECTOR_CATALOG: readonly ConnectorCatalogEntry[] = [
     source: 'mcp',
     title: 'MCP Resources',
     description: 'Index resources exposed by a configured MCP tool server.',
-    flows: ['checkpoint', 'slim', 'event'],
+    flows: ['checkpoint', 'slim'],
     credentialModes: ['none'],
     configFields: [
       textField('serverId', 'MCP server id', 'Configured MCP server profile to read resources from.'),
@@ -381,12 +381,12 @@ export const CONNECTOR_CATALOG: readonly ConnectorCatalogEntry[] = [
     title: 'Gmail',
     description: 'Index Gmail threads and messages.',
     flows: ['load', 'checkpoint', 'slim'],
-    credentialModes: ['oauth'],
+    credentialModes: ['static', 'oauth'],
     configFields: [
       textField('query', 'Search query', 'Optional Gmail search query (e.g. label:work). Empty means the inbox.'),
       numberField('pollMinutes', 'Auto run minutes', 'Optional background polling cadence in minutes.'),
     ],
-    credentialFields: [secretField('token', 'OAuth account', 'Google OAuth account reference with Gmail read scope.')],
+    credentialFields: [secretField('token', 'Access token', 'Google OAuth access token with Gmail read scope.')],
   },
   {
     source: 's3',
