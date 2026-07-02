@@ -13,7 +13,7 @@ import {
 import { analyzeSchema, flattenSchema, nestArguments, type JSONSchema } from '../agent/repair/flatten.js';
 
 const BASE: HarnessCaps = {
-  maxToolLoops: 60,
+  maxToolLoops: 250,
   repeatToolSequenceLimit: 12,
   stormThreshold: 4,
   agentMcpToolBudget: 16,
@@ -48,7 +48,7 @@ test('resolveLocalModelProfile: off is always a passthrough', () => {
 test('resolveLocalModelProfile: auto clamps a local family but passes strong/unknown through', () => {
   const local = resolveLocalModelProfile('qwen2.5-coder-7b', 'auto', BASE);
   assert.equal(local.active, true);
-  assert.equal(local.maxToolLoops, 24);
+  assert.equal(local.maxToolLoops, 150);
   assert.equal(local.repeatToolSequenceLimit, 6);
   assert.equal(local.stormThreshold, 3);
   assert.equal(local.agentMcpToolBudget, 8);
@@ -56,7 +56,7 @@ test('resolveLocalModelProfile: auto clamps a local family but passes strong/unk
 
   const strong = resolveLocalModelProfile('claude-opus-4-8', 'auto', BASE);
   assert.equal(strong.active, false);
-  assert.equal(strong.maxToolLoops, 60, 'strong model untouched');
+  assert.equal(strong.maxToolLoops, 250, 'strong model untouched');
 
   const unknown = resolveLocalModelProfile('frontier-x', 'auto', BASE);
   assert.equal(unknown.active, false, 'unknown model not clamped');
@@ -65,7 +65,7 @@ test('resolveLocalModelProfile: auto clamps a local family but passes strong/unk
 test('resolveLocalModelProfile: on always clamps, regardless of family', () => {
   const r = resolveLocalModelProfile('claude-opus-4-8', 'on', BASE);
   assert.equal(r.active, true);
-  assert.equal(r.maxToolLoops, 24);
+  assert.equal(r.maxToolLoops, 150);
 });
 
 test('resolveLocalModelProfile: clamp is a ceiling — never loosens an already-tighter user setting', () => {

@@ -2975,7 +2975,7 @@ test('runTurn loop-limit turn still rolls usage into session totals + counts the
       });
       // Sanity: we really hit the loop limit (not a clean exit).
       assert.equal(agent.lastTurnHitLoopLimit, true);
-      assert.match(answer, /tool-call loop limit/);
+      assert.match(answer, /tool-call budget/);
       // The regression itself: a `return` used to fire on the loop-limit path
       // BEFORE these accumulated, so the most expensive turns vanished from
       // session totals. maxLoops=5 → ≥5 LLM calls at 10 prompt tokens each.
