@@ -445,7 +445,20 @@ function splitConnectorRepos(value: string): string[] {
   return value.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean);
 }
 
-const CHECKPOINT_RUNTIME_SOURCES = new Set<ConnectorRecord['source']>(['github', 'filesystem', 'web', 'gitlab']);
+const CHECKPOINT_RUNTIME_SOURCES = new Set<ConnectorRecord['source']>([
+  'github',
+  'filesystem',
+  'web',
+  'gitlab',
+  'slack',
+  'jira',
+  'confluence',
+  'notion',
+  'linear',
+  'mcp',
+  'google-drive',
+  'gmail',
+]);
 
 type GithubOauthState =
   | { status: 'idle'; hasToken?: boolean; storageMode?: string }

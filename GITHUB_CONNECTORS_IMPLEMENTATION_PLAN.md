@@ -2,16 +2,17 @@
 
 Release target: `release/0.4.17`
 
-Status: implemented through GitHub Phase 2 plus real core runtimes for Filesystem, Web, and GitLab. Phase 3 hardening remains.
+Status: GitHub Phase 2 is merged into `release/0.4.17`. The follow-up runtime-expansion branch adds real checkpoint runtimes for the currently enabled connector set beyond GitHub/GitLab/Filesystem/Web.
 
 ## Current Branch / PR State
 
 | Item | Status | Notes |
 |---|---|---|
-| `release/0.4.17` | Phase 0 landed | Contains connector-as-source-of-truth for GitHub Track sync via PR #742. |
-| `feat/connector-phase1-repo-picker` | Included in Phase 2 branch | Adds host repo discovery queries and target-scoped Track save plumbing. No separate PR exists. |
-| `feat/connector-phase2-oauth-host` | Active integration branch | Contains Phase 1 + Phase 2 host/keychain OAuth work, plus this UI/runtime wiring. |
-| PR #744 `feat/connector-runtimes-fs-web-gitlab` | Merged locally into Phase 2 | Adds core checkpoint runtimes and offline tests for Filesystem, Web, and GitLab. If Phase 2 is pushed, #744 can be closed or treated as superseded. |
+| `release/0.4.17` | Phase 0-2 landed | PR #742, PR #744, and PR #746 are merged. |
+| `feat/connector-phase1-repo-picker` | Included in PR #746 | Adds host repo discovery queries and target-scoped Track save plumbing. No separate PR is needed. |
+| `feat/connector-phase2-oauth-host` / PR #746 | Merged | GitHub OAuth device flow, host/keychain token resolution, and Phase 1 UI/runtime wiring. |
+| PR #744 `feat/connector-runtimes-fs-web-gitlab` | Merged | Included through PR #746 merge history; GitHub shows it as merged. |
+| `codex/connector-runtime-expansion` | In progress | Adds the non-GitHub runtime expansion described below. |
 
 ## Implemented
 
@@ -51,7 +52,14 @@ Status: implemented through GitHub Phase 2 plus real core runtimes for Filesyste
 | Filesystem | Yes | Yes | Relative roots are resolved against the workspace in Desktop; core still validates absolute roots. |
 | Web | Yes | Yes | Same-origin crawl, optional static header token from env ref. |
 | GitLab | Yes | Yes | Issues and merge requests through static token env ref; file ingest is explicitly unsupported for now. |
-| Slack, Google Drive, Jira, Confluence, and catalog-only sources | Catalog only | No | Stay greyed until real runners and auth flows exist. |
+| Slack | Yes | Yes | Channels, messages, and thread replies through a static env bot token. Permission/event flows are not advertised. |
+| Jira | Yes | Yes | Issues and comments through a static env token plus `baseUrl`. Permission sync is not advertised. |
+| Confluence | Yes | Yes | Pages, body text, and comments through a static env token plus `baseUrl`. Permission sync is not advertised. |
+| Notion | Yes | Yes | Database/search pages, page block text, and optional comments through a static env token. |
+| Linear | Yes | Yes | Issues, state/team/assignee metadata, and comments through a static env API key. |
+| MCP Resources | Yes | Yes | Reads MCP resources through the existing host MCP pool; explicit URI lists require `serverId`. Event flow is not advertised. |
+| Google Drive | Yes | Yes | Files, Google Docs export, optional Sheets export, and text-like downloads through a static Google access token. Permission sync is not advertised. |
+| Gmail | Yes | Yes | Message search/list, full-message fetch, header extraction, and text/html body decoding through a static Google access token. |
 
 ## Remaining Work
 
@@ -73,22 +81,23 @@ Status: implemented through GitHub Phase 2 plus real core runtimes for Filesyste
   - `oauth` and keychain-backed `static` are the multi-account paths
 - Consider GitHub App installation identity as a future connector mode.
 
-### Non-GitHub Future Connectors
+### Remaining Catalog-Only Connectors
 
-- Implement generic OAuth brokers per provider before enabling non-GitHub OAuth modes.
-- Add real runners for Slack, Google Drive, Jira, Confluence, Notion, Linear, and the remaining catalog sources only when each has:
+- Implement generic OAuth brokers per provider before enabling non-GitHub OAuth modes as a runnable credential path.
+- Keep catalog-only sources greyed until each has:
   - credential resolution
   - checkpoint semantics
   - offline tests
   - Desktop run wiring
   - error sanitization
+- Remaining catalog-only sources after this branch: Asana, ClickUp, Discord, Teams, Dropbox, SharePoint, HubSpot, Salesforce, Zendesk, Airtable, Bitbucket, GitBook, Discourse, S3, Gong, and Fireflies.
 
 ## Merge Recommendation
 
-1. Push the updated `feat/connector-phase2-oauth-host` branch.
-2. Use it as the single integration PR into `release/0.4.17`.
-3. Close or supersede PR #744 after confirming its files are present in the integration PR.
-4. Do not merge catalog-only OAuth enablement for non-GitHub connectors until provider-specific OAuth brokers exist.
+1. Keep PR #746 merged as the 0.4.17 GitHub connector base.
+2. Ship `codex/connector-runtime-expansion` as a follow-up PR into `release/0.4.17`.
+3. Do not expose a source in the Desktop ready set unless it has a real checkpoint runner, credential resolution, offline tests, and host wiring.
+4. Do not treat provider OAuth labels as runnable for non-GitHub sources until provider-specific brokers exist; ready non-GitHub sources currently use static env-token references.
 
 ## Verification
 
@@ -100,6 +109,7 @@ npm run build -w @kinqs/brainrouter-core
 npm run typecheck -w brainrouter-desktop
 npm run build:electron -w brainrouter-desktop
 node --test packages/core/dist/tests/filesystem-connector.test.js packages/core/dist/tests/web-connector.test.js packages/core/dist/tests/gitlab-connector.test.js packages/core/dist/tests/github-connector.test.js packages/core/dist/tests/track-github-sync.test.js brainrouter-desktop/dist-electron/githubOauth.test.js brainrouter-desktop/dist-electron/secretStore.test.js
+node --test packages/core/dist/tests/api-source-connectors.test.js packages/core/dist/tests/google-connectors.test.js packages/core/dist/tests/mcp-connector.test.js packages/core/dist/tests/filesystem-connector.test.js packages/core/dist/tests/web-connector.test.js packages/core/dist/tests/gitlab-connector.test.js packages/core/dist/tests/github-connector.test.js
 npm run build -w brainrouter-desktop
 git diff --check
 ```
@@ -107,7 +117,7 @@ git diff --check
 Result:
 
 - TypeScript build/typecheck passed.
-- Focused connector/OAuth tests passed: 66/66.
+- Focused connector/OAuth tests passed. Current runtime-expansion connector suite passes 50/50; GitHub/OAuth regression suite passes 34/34.
 - Desktop production build passed.
 - Vite emitted the existing large-chunk warning only.
 - `git diff --check` passed.
