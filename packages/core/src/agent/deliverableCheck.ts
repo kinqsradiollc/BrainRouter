@@ -50,7 +50,11 @@ export function classifyDeferral(text: string): DeferralKind | null {
 
   // Trailing question — the message ENDS asking, not delivering. (A '?' that
   // is merely quoted/mid-tail doesn't count; we require it to close the text.)
-  if (/\?\s*$/.test(trimmed)) return 'question';
+  // A report that ENDS on a Markdown table row is a deliverable, not a
+  // deferral — a '?' inside such a row (or the row's pipes) must not trip this.
+  const lastLine = trimmed.slice(trimmed.lastIndexOf('\n') + 1).trim();
+  const endsOnTableRow = lastLine.startsWith('|') || /\|.*\|/.test(lastLine);
+  if (/\?\s*$/.test(trimmed) && !endsOnTableRow) return 'question';
 
   if (OFFER_PHRASES.some((re) => re.test(tail))) return 'offer';
 

@@ -3505,7 +3505,14 @@ async function main(): Promise<void> {
         // (~4 bytes/token) — O(1), no content read, no cache dependency. The
         // agent's authoritative prompt_tokens takes over once a turn runs.
         const sizeEstimate = Math.round(transcriptSizeBytes(workspaceRoot, activeAgent.sessionKey) / 4);
-        const used = Math.max(agentTokens, sizeEstimate);
+        // Use the transcript-byte estimate ONLY as a fallback while the agent
+        // hasn't loaded history yet (lazy resume → agentTokens ≈ 0). It must NOT
+        // be a Math.max floor: the transcript file is append-only and never
+        // shrinks on compaction, so a max() would permanently pin the ring at
+        // 100% once the file grows past the window — auto-compact could never
+        // free it. Once a turn has run, agentTokens (authoritative prompt_tokens
+        // or a content estimate of the COMPACTED history) is the truth.
+        const used = agentTokens > 0 ? agentTokens : sizeEstimate;
         const model = activeAgent.getModel?.() ?? llm.model;
         const window = contextWindowForBudget(model);
         const compactAt = getCliKnobs().autoCompactTokens || 80_000;

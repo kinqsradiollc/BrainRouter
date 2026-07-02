@@ -31,6 +31,23 @@ test('classifyDeferral: substantive endings pass clean', () => {
   assert.equal(classifyDeferral(''), null);
 });
 
+test('classifyDeferral: a report ending on a Markdown table row is a deliverable, not a question', () => {
+  // The investigation-report false positive: the message ends with a table
+  // whose last cell happens to contain a '?'. That's the deliverable, not the
+  // model deferring — it must NOT be classified as a trailing question.
+  const report = [
+    '## Root causes',
+    '',
+    '| Bug | File | Fix |',
+    '|-----|------|-----|',
+    '| Banner stuck | useAgentEvents.ts:1124 | refresh goalState |',
+    '| Which first? | — | your call? |',
+  ].join('\n');
+  assert.equal(classifyDeferral(report), null);
+  // A plain trailing question still trips it.
+  assert.equal(classifyDeferral('Here is the summary. Which bug should I fix first?'), 'question');
+});
+
 test('buildDeliverableCorrection: names the deferral kind and demands the result', () => {
   const c = buildDeliverableCorrection('offer', 'let me know if…');
   assert.match(c, /deliverable guardrail/i);
