@@ -19,96 +19,80 @@ import path from 'node:path';
 import { InteractionBroker } from '@kinqs/brainrouter-agent-protocol';
 // Deep imports into the CLI's built runtime (no "exports" field = allowed).
 // Extracting a proper @kinqs/brainrouter-agent package is tracked for 0.4.16.
-import { Agent } from '@kinqs/brainrouter-core/dist/agent/agent.js';
-import { loadConfig, saveConfig, getCliKnobs, _resetCliKnobsCache } from '@kinqs/brainrouter-core/dist/config/config.js';
+import { Agent, classifyForVerification, callOpenAI } from '@kinqs/brainrouter-core/agent';
+import { loadConfig, saveConfig, getCliKnobs, _resetCliKnobsCache, applyRuleEdit } from '@kinqs/brainrouter-core/config';
 // 0.4.15 — named providers + per-sub-agent model routing (pure transforms).
-import { setProvider, removeProvider, setAgentModel, normalizeProviderModels } from '@kinqs/brainrouter-core/dist/provider/agentModels.js';
-import { McpClientPool } from '@kinqs/brainrouter-core/dist/mcp/mcpPool.js';
-import { listTranscripts, loadTranscript, readTranscriptTail, transcriptExists, transcriptSizeBytes, deleteSession, forkSession, appendTranscriptEntry, rewindTranscript } from '@kinqs/brainrouter-core/dist/session/sessionStore.js';
-import { readUsageHistory, totalUsage } from '@kinqs/brainrouter-core/dist/usage/usageHistoryStore.js';
-import { classifyForVerification } from '@kinqs/brainrouter-core/dist/agent/verificationGate.js';
-import { resolveWorkspaceGit } from '@kinqs/brainrouter-core/dist/git/workspaceGit.js';
+import { setProvider, removeProvider, setAgentModel, normalizeProviderModels, PROVIDER_CATALOG, LOCAL_PLACEHOLDER_KEY, withApiVersion, inferModelReasoningCapabilities, registerModelReasoningCapabilities, refreshLmStudioCache } from '@kinqs/brainrouter-core/provider';
+import { McpClientPool, childSessionKey } from '@kinqs/brainrouter-core/mcp';
+import { listTranscripts, loadTranscript, readTranscriptTail, transcriptExists, transcriptSizeBytes, deleteSession, forkSession, appendTranscriptEntry, rewindTranscript, readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups, getSessionRuntime, setSessionRuntime, resolveSessionLlmConfig, getSessionMode, setSessionMode, resolveActiveMode, buildRecap, readPreferences, writePreferences, searchTranscript, exportTranscriptMarkdown, exportTranscriptJson, exportFileName, listChapters } from '@kinqs/brainrouter-core/session';
+import { readUsageHistory, totalUsage } from '@kinqs/brainrouter-core/usage';
+import { resolveWorkspaceGit } from '@kinqs/brainrouter-core/git';
 import { readWorkspaceEntry, isWorkspaceDirectory, listWorkspaceFiles, statWorkspaceEntry, writeWorkspaceEntry } from './fsRead.js';
-import { saveWorkflowGraph, loadWorkflowGraph, listWorkflowGraphs, deleteWorkflowGraph } from '@kinqs/brainrouter-core/dist/workflow/graphStore.js';
-import { writeThreadKey, buildGroundingBlock, pickLocalGrounding } from '@kinqs/brainrouter-core/dist/write/grounding.js';
+import { saveWorkflowGraph, loadWorkflowGraph, listWorkflowGraphs, deleteWorkflowGraph } from '@kinqs/brainrouter-core/workflow';
+import { writeThreadKey, buildGroundingBlock, pickLocalGrounding } from '@kinqs/brainrouter-core/write';
 import { WorkspaceFileListCache } from './workspaceFileListCache.js';
 import { startWorkspaceWatcher } from './fileWatch.js';
-import { readSessionMetaAll, getSessionMeta, setSessionMeta, removeSessionMeta, listSessionGroups } from '@kinqs/brainrouter-core/dist/session/sessionMetaStore.js';
-import { getSessionRuntime, setSessionRuntime, resolveSessionLlmConfig } from '@kinqs/brainrouter-core/dist/session/sessionRuntimeStore.js';
-import { getSessionMode, setSessionMode, resolveActiveMode } from '@kinqs/brainrouter-core/dist/session/sessionModeStore.js';
-import { loadSchedules, addSchedule, removeSchedule, setScheduleEnabled } from '@kinqs/brainrouter-core/dist/schedule/scheduleStore.js';
-import { parseCron, nextCronFire } from '@kinqs/brainrouter-core/dist/schedule/cronParser.js';
-import { applyRuleEdit } from '@kinqs/brainrouter-core/dist/config/permissionRules.js';
-import { parseReviewFindings, REVIEW_OUTPUT_CONTRACT, stripReasoning } from '@kinqs/brainrouter-core/dist/review/reviewFindings.js';
-import { hashDiff, reviewGate, staleIfDiffChanged, isFindingStatus } from '@kinqs/brainrouter-core/dist/review/reviewModel.js';
-import { getLatestReview, saveReview, updateReviewFinding } from '@kinqs/brainrouter-core/dist/review/reviewStore.js';
-import { getStateDir } from '@kinqs/brainrouter-core/dist/storage/store.js';
-import { buildRecap } from '@kinqs/brainrouter-core/dist/session/sessionRecap.js';
-import { collectRunningTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
-import { killBackgroundShell } from '@kinqs/brainrouter-core/dist/exec/backgroundShell.js';
-import { contextWindowForBudget } from '@kinqs/brainrouter-core/dist/context/contextWindow.js';
+import { loadSchedules, addSchedule, removeSchedule, setScheduleEnabled } from '@kinqs/brainrouter-core/schedule';
+import { parseCron, nextCronFire } from '@kinqs/brainrouter-core/schedule';
+import { parseReviewFindings, REVIEW_OUTPUT_CONTRACT, stripReasoning } from '@kinqs/brainrouter-core/review';
+import { hashDiff, reviewGate, staleIfDiffChanged, isFindingStatus } from '@kinqs/brainrouter-core/review';
+import { getLatestReview, saveReview, updateReviewFinding } from '@kinqs/brainrouter-core/review';
+import { getStateDir } from '@kinqs/brainrouter-core/storage';
+import { collectRunningTasks } from '@kinqs/brainrouter-core/background';
+import { killBackgroundShell } from '@kinqs/brainrouter-core/exec';
+import { contextWindowForBudget } from '@kinqs/brainrouter-core/context';
 // DESK-4c — the command/settings surfaces reuse the CLI's own modules so the
 // desktop never drifts from the terminal: same catalog, same preferences
 // file, same hooks store, same transcript tooling.
-import { SLASH_COMMANDS, HELP_CATEGORIES } from '@kinqs/brainrouter-core/dist/command/catalog.js';
-import { validateCatalogParity } from '@kinqs/brainrouter-core/dist/command/parity.js';
-import { readPreferences, writePreferences } from '@kinqs/brainrouter-core/dist/session/preferencesStore.js';
-import { readHooks, setHookEnabled } from '@kinqs/brainrouter-core/dist/hooks/hooksStore.js';
-import { searchTranscript } from '@kinqs/brainrouter-core/dist/session/transcriptSearch.js';
-import { exportTranscriptMarkdown, exportTranscriptJson, exportFileName } from '@kinqs/brainrouter-core/dist/session/transcriptExport.js';
-import { listChapters } from '@kinqs/brainrouter-core/dist/session/chapterMarks.js';
-import { buildUsageBreakdown } from '@kinqs/brainrouter-core/dist/util/usageBreakdown.js';
+import { SLASH_COMMANDS, HELP_CATEGORIES } from '@kinqs/brainrouter-core/command';
+import { validateCatalogParity } from '@kinqs/brainrouter-core/command';
+import { readHooks, setHookEnabled } from '@kinqs/brainrouter-core/hooks';
+import { buildUsageBreakdown } from '@kinqs/brainrouter-core/util';
 // DESK-5 — the command bridge dispatches REPL-only commands against the SAME
 // stores the terminal CLI uses. No parallel state: /goal here is /goal there.
-import { readGoal, setGoal, clearGoal, pauseGoal, resumeGoal, editGoal, decideGoalContinuation, buildGoalContinuationPrompt, goalCorrectiveNotice, tickGoalIteration, usageLimitGoal, formatBudget } from '@kinqs/brainrouter-core/dist/goal/goalStore.js';
+import { readGoal, setGoal, clearGoal, pauseGoal, resumeGoal, editGoal, decideGoalContinuation, buildGoalContinuationPrompt, goalCorrectiveNotice, tickGoalIteration, usageLimitGoal, formatBudget, buildGoalKickoffPrompt } from '@kinqs/brainrouter-core/goal';
 // §goal-autonomy — the kickoff prompt builder (shared with the CLI's /goal).
-import { buildGoalKickoffPrompt } from '@kinqs/brainrouter-core/dist/goal/goalKickoff.js';
-import { PROVIDER_CATALOG } from '@kinqs/brainrouter-core/dist/provider/catalog.js';
-import { LOCAL_PLACEHOLDER_KEY, withApiVersion } from '@kinqs/brainrouter-core/dist/provider/providers/index.js';
-import { inferModelReasoningCapabilities, registerModelReasoningCapabilities } from '@kinqs/brainrouter-core/dist/provider/models/reasoning.js';
-import { refreshLmStudioCache } from '@kinqs/brainrouter-core/dist/provider/providers/lmstudio.js';
-import { loadExtensions } from '@kinqs/brainrouter-core/dist/extension/loader.js';
-import { listExtensions } from '@kinqs/brainrouter-core/dist/extension/manifest.js';
-import { isExtensionEnabled, setExtensionEnabled } from '@kinqs/brainrouter-core/dist/extension/extensionStore.js';
-import { extensionContributionSummary } from '@kinqs/brainrouter-core/dist/extension/registry.js';
-import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace } from '@kinqs/brainrouter-core/dist/workspace/workspaceTrust.js';
-import { readPlan, formatPlan, seedPlanFromRequirement, updatePlan } from '@kinqs/brainrouter-core/dist/task/taskStore.js';
+import { loadExtensions } from '@kinqs/brainrouter-core/extension';
+import { listExtensions } from '@kinqs/brainrouter-core/extension';
+import { isExtensionEnabled, setExtensionEnabled } from '@kinqs/brainrouter-core/extension';
+import { extensionContributionSummary } from '@kinqs/brainrouter-core/extension';
+import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace } from '@kinqs/brainrouter-core/workspace';
+import { readPlan, formatPlan, seedPlanFromRequirement, updatePlan } from '@kinqs/brainrouter-core/task';
 // DURABLE BACKGROUND TASKS (0.4.15 workflow gaps) — plan-revision + review work
 // runs as visible, file-backed tasks (shared with the CLI store) so progress +
 // transcript survive workspace/session switches and host reload.
-import { createBackgroundTask, updateBackgroundTask, appendTaskProgress, listBackgroundTasks, getBackgroundTask, linkBackgroundTaskMemory, currentPhase, reconcileBackgroundTasks, } from '@kinqs/brainrouter-core/dist/background/backgroundTaskStore.js';
-import { collectDurableRunningTasks } from '@kinqs/brainrouter-core/dist/background/backgroundTasks.js';
-import { pidAlive } from '@kinqs/brainrouter-core/dist/background/backgroundReconcile.js';
+import { createBackgroundTask, updateBackgroundTask, appendTaskProgress, listBackgroundTasks, getBackgroundTask, linkBackgroundTaskMemory, currentPhase, reconcileBackgroundTasks, } from '@kinqs/brainrouter-core/background';
+import { collectDurableRunningTasks } from '@kinqs/brainrouter-core/background';
+import { pidAlive } from '@kinqs/brainrouter-core/background';
 // ATTACHMENTS (0.4.15 workflow gaps) — ingest files (drag/drop + picker) into
 // durable attachment records, shared with the CLI `/attach` store.
-import { ingestAttachment, attachmentContextMarkdown } from '@kinqs/brainrouter-core/dist/attachment/ingest.js';
-import { listAttachments, getAttachment, linkAttachmentMemory } from '@kinqs/brainrouter-core/dist/attachment/attachmentStore.js';
+import { ingestAttachment, attachmentContextMarkdown } from '@kinqs/brainrouter-core/attachment';
+import { listAttachments, getAttachment, linkAttachmentMemory } from '@kinqs/brainrouter-core/attachment';
 // TELEMETRY (0.4.15 workflow gaps) — local-first task/review/upload lifecycle.
-import { recordTelemetry } from '@kinqs/brainrouter-core/dist/telemetry/telemetry.js';
-import { TELEMETRY_EVENTS } from '@kinqs/brainrouter-core/dist/telemetry/contracts.js';
+import { recordTelemetry } from '@kinqs/brainrouter-core/telemetry';
+import { TELEMETRY_EVENTS } from '@kinqs/brainrouter-core/telemetry';
 // §7 PLAN REVIEW — durable plan approval + version history (per-session decision
 // log that snapshots the plan). Shared with the CLI's /plan approve·request-changes·
 // history; the desktop panel reads/records through these thin wrappers — no
 // parallel store. A best-effort memory note is captured + linked, mirroring the CLI.
-import { readPlanHistory, recordPlanDecision, linkPlanDecision } from '@kinqs/brainrouter-core/dist/task/planHistoryStore.js';
-import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kinqs/brainrouter-core/dist/memory/memoryEvents.js';
+import { readPlanHistory, recordPlanDecision, linkPlanDecision } from '@kinqs/brainrouter-core/task';
+import { emitAgentEvent, emitArtifactCapture, emitAnnotationCapture } from '@kinqs/brainrouter-core/memory';
 // REQUIREMENT-RECORDS — Requirement Records store (shared with the CLI).
-import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement, deleteRequirement } from '@kinqs/brainrouter-core/dist/requirement/requirementStore.js';
-import { buildBaseGraph, saveAtlasGraph, readAtlasGraph, atlasGraphStats, atlasWorkspaceTag, enrichAtlasGraph, extractAtlasJson } from '@kinqs/brainrouter-core/dist/atlas/index.js';
-import { callOpenAI } from '@kinqs/brainrouter-core/dist/agent/agent.js';
-import { syncRequirementPlanTrack } from '@kinqs/brainrouter-core/dist/requirement/planTrackSync.js';
-import { ensureProject, getProject, getWorkItem, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember, getGithubLinks, setGithubLink } from '@kinqs/brainrouter-core/dist/track/trackStore.js';
-import { exportToGithub, importFromGithub, importMembersFromGithub, resolveGithubConfigForWorkspace, listResolvedGithubConfigsForWorkspace, issueToWorkItem } from '@kinqs/brainrouter-core/dist/track/githubSync.js';
-import { scanGitCommitsForTrack } from '@kinqs/brainrouter-core/dist/track/commitScanner.js';
-import { readGitTrackContext, startGitWorkForTrackItem } from '@kinqs/brainrouter-core/dist/track/gitWorkflow.js';
-import { listConnectorCatalog } from '@kinqs/brainrouter-core/dist/connectors/catalog.js';
-import { createConnector, deleteConnector, finishConnectorRun, getConnector, listConnectorRuns, listConnectors, recordConnectorRun, updateConnector } from '@kinqs/brainrouter-core/dist/connectors/connectorStore.js';
-import { exportConnectorDefinitions, importConnectorDefinitions } from '@kinqs/brainrouter-core/dist/connectors/definitionTransfer.js';
-import { runGithubConnectorCheckpoint, runGithubConnectorPermissionSync, validateGithubConnectorAccess } from '@kinqs/brainrouter-core/dist/connectors/githubConnector.js';
-import { countConnectorDocuments, searchConnectorDocuments, upsertConnectorDocuments } from '@kinqs/brainrouter-core/dist/connectors/documentStore.js';
-import { exportConnectorDocumentsForMemory } from '@kinqs/brainrouter-core/dist/connectors/memoryBridge.js';
-import { countConnectorPermissions, listConnectorPermissions, upsertConnectorPermissions } from '@kinqs/brainrouter-core/dist/connectors/permissionStore.js';
-import { retrieveConnectorSlimDocuments } from '@kinqs/brainrouter-core/dist/connectors/slimRetrieval.js';
+import { listRequirements, getRequirement, createRequirement, updateRequirement, linkRequirement, deleteRequirement } from '@kinqs/brainrouter-core/requirement';
+import { buildBaseGraph, saveAtlasGraph, readAtlasGraph, atlasGraphStats, atlasWorkspaceTag, enrichAtlasGraph, extractAtlasJson } from '@kinqs/brainrouter-core/atlas';
+import { syncRequirementPlanTrack } from '@kinqs/brainrouter-core/requirement';
+import { ensureProject, getProject, getWorkItem, listWorkItems, createWorkItem, transitionWorkItem, updateWorkItem, addComment, linkWorkItem, createSprint, listSprints, setSprintState, createModule, listModules, updateModule, deleteModule, saveView, listViews, deleteView, listAutomations, createAutomation, updateAutomation, deleteAutomation, listMembers, addMember, updateMemberRole, removeMember, getGithubLinks, setGithubLink } from '@kinqs/brainrouter-core/track';
+import { exportToGithub, importFromGithub, syncBidirectional, importMembersFromGithub, resolveGithubConfigForWorkspace, listResolvedGithubConfigsForWorkspace, issueToWorkItem, migrateTrackGithubToConnector, setGithubSyncTarget } from '@kinqs/brainrouter-core/track';
+import { scanGitCommitsForTrack } from '@kinqs/brainrouter-core/track';
+import { readGitTrackContext, startGitWorkForTrackItem } from '@kinqs/brainrouter-core/track';
+import { listConnectorCatalog } from '@kinqs/brainrouter-core/connectors';
+import { createConnector, deleteConnector, finishConnectorRun, getConnector, listConnectorRuns, listConnectors, recordConnectorRun, updateConnector } from '@kinqs/brainrouter-core/connectors';
+import { exportConnectorDefinitions, importConnectorDefinitions } from '@kinqs/brainrouter-core/connectors';
+import { fetchWebClient, gitlabTokenClient, nodeFsClient, runFilesystemConnectorCheckpoint, runGithubConnectorCheckpoint, runGithubConnectorPermissionSync, runGitlabConnectorCheckpoint, runWebConnectorCheckpoint, validateGithubConnectorAccess, } from '@kinqs/brainrouter-core/connectors';
+import { countConnectorDocuments, searchConnectorDocuments, upsertConnectorDocuments } from '@kinqs/brainrouter-core/connectors';
+import { exportConnectorDocumentsForMemory } from '@kinqs/brainrouter-core/connectors';
+import { countConnectorPermissions, listConnectorPermissions, upsertConnectorPermissions } from '@kinqs/brainrouter-core/connectors';
+import { retrieveConnectorSlimDocuments } from '@kinqs/brainrouter-core/connectors';
 /**
  * Strip secrets from the `cli` config before it's sent to the renderer (the
  * snapshot's `cliKnobs` is shown verbatim in Settings → Advanced). The GitHub
@@ -192,25 +176,25 @@ function githubIntegrationSnapshot(workspaceRoot) {
     const cfg = resolveGithubConfigForWorkspace(workspaceRoot);
     const repos = listResolvedGithubConfigsForWorkspace(workspaceRoot).map((r) => ({ repo: r.repo, hasToken: r.hasToken, tokenSource: r.tokenSource ?? null, active: r.active, label: r.label, connectorId: r.connectorId, source: r.source }));
     const fresh = loadConfig();
-    return { repo: cfg.repo ?? null, hasToken: !!cfg.token, tokenSource: cfg.tokenSource ?? null, repos, caBundle: fresh.cli?.track?.githubCaBundle ?? null };
+    return { repo: cfg.repo ?? null, hasToken: !!cfg.token, tokenSource: cfg.tokenSource ?? null, repos, caBundle: fresh.cli?.track?.githubCaBundle ?? null, ...(cfg.error ? { error: cfg.error } : {}) };
 }
 import { isRequirementStatus, isRequirementPriority } from '@kinqs/brainrouter-types';
 // ANNOTATION-RECORDS (0.4.15) — durable feedback records store + markdown
 // export (shared with the CLI). Thin wrappers below keep all business logic in
 // the CLI store; the desktop panel only reads/mutates through these endpoints.
-import { listAnnotations, getAnnotation, createAnnotation, setStatus as setAnnotationStatus, addComment as addAnnotationComment, linkAnnotation } from '@kinqs/brainrouter-core/dist/annotation/annotationStore.js';
-import { annotationsToMarkdown } from '@kinqs/brainrouter-core/dist/annotation/annotationExport.js';
+import { listAnnotations, getAnnotation, createAnnotation, setStatus as setAnnotationStatus, addComment as addAnnotationComment, linkAnnotation } from '@kinqs/brainrouter-core/annotation';
+import { annotationsToMarkdown } from '@kinqs/brainrouter-core/annotation';
 import { isAnnotationStatus, isAnnotationTargetKind, isAnnotationSeverity, isAnchorStale } from '@kinqs/brainrouter-types';
 // ARTIFACT-RECORDS (0.4.15) — durable Artifact Records store (shared with the
 // CLI). Thin wrappers below keep all business logic in the CLI store; the
 // desktop panel only reads/mutates/previews through these endpoints.
-import { listArtifacts, createArtifact, updateArtifact, getArtifact, linkArtifact, revertArtifact } from '@kinqs/brainrouter-core/dist/artifact/artifactStore.js';
+import { listArtifacts, createArtifact, updateArtifact, getArtifact, linkArtifact, revertArtifact } from '@kinqs/brainrouter-core/artifact';
 import { isArtifactKind, isArtifactStatus, isArtifactFormat } from '@kinqs/brainrouter-types';
-import { listWorkers, readWorkerSummary, readWorkerTranscript, readWorkerMeta } from '@kinqs/brainrouter-core/dist/worker/workerStore.js';
-import { listSessions } from '@kinqs/brainrouter-core/dist/orchestration/orchestrator.js';
-import { readRun } from '@kinqs/brainrouter-core/dist/workflow/workflowRun.js';
-import { reconcileStaleBackgroundTasks } from '@kinqs/brainrouter-core/dist/background/backgroundReconcile.js';
-import { childSessionKey } from '@kinqs/brainrouter-core/dist/mcp/mcpUtils.js';
+import { listWorkers, readWorkerSummary, readWorkerTranscript, readWorkerMeta } from '@kinqs/brainrouter-core/worker';
+import { listSessions } from '@kinqs/brainrouter-core/orchestration';
+import { localToolSpecsFromExecutors, isProtectedCoreTool } from '@kinqs/brainrouter-core/tool';
+import { readRun } from '@kinqs/brainrouter-core/workflow';
+import { reconcileStaleBackgroundTasks } from '@kinqs/brainrouter-core/background';
 import { desktopSessionModePatchFromArgs, mergeSessionModePrefs } from './sessionModeBridge.js';
 function createComputerUseBridge(port) {
     if (!port)
@@ -246,6 +230,48 @@ function createComputerUseBridge(port) {
                 entry.resolve(msg.result);
             else
                 entry.reject(new Error(msg.error || 'computer_use failed in Electron main.'));
+            return true;
+        },
+    };
+}
+/**
+ * Connector Phase 2 — keychain secrets live in Electron MAIN (safeStorage is
+ * unavailable in a utilityProcess), so the host requests values over the
+ * parent port, mirroring the computer-use request/response bridge. Values
+ * never travel further than this process — nothing secret reaches the renderer.
+ */
+function createSecretBridge(port) {
+    if (!port)
+        return undefined;
+    let seq = 0;
+    const pending = new Map();
+    return {
+        get(key) {
+            const id = `sec_${++seq}`;
+            port.postMessage({ kind: 'secret-request', id, op: 'get', key });
+            return new Promise((resolve, reject) => {
+                const timer = setTimeout(() => {
+                    pending.delete(id);
+                    reject(new Error('Secret lookup timed out waiting for Electron main.'));
+                }, 10_000);
+                pending.set(id, { resolve, reject, timer });
+            });
+        },
+        handleMessage(message) {
+            if (!message || typeof message !== 'object')
+                return false;
+            const msg = message;
+            if (msg.kind !== 'secret-response' || typeof msg.id !== 'string')
+                return false;
+            const entry = pending.get(msg.id);
+            if (!entry)
+                return true;
+            pending.delete(msg.id);
+            clearTimeout(entry.timer);
+            if (msg.ok)
+                entry.resolve(msg.value);
+            else
+                entry.reject(new Error(msg.error || 'Secret lookup failed in Electron main.'));
             return true;
         },
     };
@@ -618,6 +644,7 @@ async function main() {
         ? (msg) => port.postMessage(msg)
         : (msg) => console.log(JSON.stringify(msg));
     const computerUseBridge = createComputerUseBridge(port);
+    const secretBridge = createSecretBridge(port);
     // Identical boot recipe to `brainrouter chat` (index.ts): config → llm →
     // pool.connectAll(profiles) → Agent. Offline MCP does not block (same
     // semantics as the CLI's non-strict mode).
@@ -672,7 +699,31 @@ async function main() {
         llm = fresh.llm ?? llm;
         return llm;
     };
-    const llmForSession = (sessionKey) => resolveSessionLlmConfig(loadGlobalLlm(), workspaceRoot, sessionKey);
+    const llmForSession = (sessionKey) => {
+        const base = loadGlobalLlm();
+        const resolved = resolveSessionLlmConfig(base, workspaceRoot, sessionKey);
+        // A session can run a DIFFERENT provider than the global default; the session
+        // runtime stores provider/model/endpoint but never a secret, so the global
+        // apiKey would be wrong. Resolve the chosen provider's key from the saved
+        // connections (match by provider + endpoint, then provider alone).
+        if (resolved.provider !== base.provider || (resolved.endpoint ?? '') !== (base.endpoint ?? '')) {
+            const conns = Object.values(loadConfig().providers ?? {});
+            const match = conns.find((p) => p.provider === resolved.provider && (p.endpoint ?? '') === (resolved.endpoint ?? '')) ??
+                conns.find((p) => p.provider === resolved.provider);
+            if (match?.apiKey)
+                return { ...resolved, apiKey: match.apiKey, endpoint: resolved.endpoint ?? match.endpoint };
+        }
+        return resolved;
+    };
+    // Item 10 / per-session provider — resolve a named saved connection to a full
+    // LLM config (incl. its apiKey, main-process only). Used to (re)build the active
+    // agent when the user picks a model from another provider.
+    const resolveProviderLlm = (providerName, model) => {
+        const p = loadConfig().providers?.[providerName];
+        if (!p)
+            return undefined;
+        return { provider: p.provider, apiKey: p.apiKey, model: model || p.model, endpoint: p.endpoint };
+    };
     const syncActiveSessionLlm = (base = loadGlobalLlm()) => {
         const next = resolveSessionLlmConfig(base, workspaceRoot, activeAgent.sessionKey);
         activeAgent.setLLMConfig(next);
@@ -1205,8 +1256,10 @@ async function main() {
         const now = Date.now();
         if (ghEnvCache && now - ghEnvCache.at < 60_000)
             return ghEnvCache.env;
-        const track = (loadConfig().cli?.track) ?? {};
-        const configuredCA = track.githubCaBundle?.trim() || undefined;
+        const cli = loadConfig().cli ?? {};
+        // Global home first (cli.github.caBundle); the old track-scoped knob stays a
+        // read fallback so existing configs keep working.
+        const configuredCA = cli.github?.caBundle?.trim() || cli.track?.githubCaBundle?.trim() || undefined;
         const [sslCAInfo, sslCAPath] = await Promise.all([
             git(['config', '--get', 'http.sslCAInfo'], workspaceRoot),
             git(['config', '--get', 'http.sslCAPath'], workspaceRoot),
@@ -1265,10 +1318,94 @@ async function main() {
         const ref = connector.credential.ref?.trim();
         if (!ref)
             return { error: 'Static GitHub connector credential reference is required.' };
+        // `config:track` — the migrated-legacy scheme (connector Phase 0): the token
+        // still lives in cli.track.githubToken until the Phase 3 keychain move.
+        if (ref === 'config:track') {
+            const track = (loadConfig().cli?.track) ?? {};
+            const token = track.githubToken?.trim();
+            if (!token)
+                return { error: 'The migrated GitHub token is no longer in config.json. Re-add a token in Settings → Connectors → GitHub.' };
+            return { token };
+        }
         const token = process.env[ref]?.trim();
         if (!token)
             return { error: `Static GitHub connector credential ${ref} is not available in the host environment.` };
         return { token };
+    };
+    /**
+     * Connector Phase 2 — mode-aware credential resolution. `static` resolves
+     * locally (env / config:track); `oauth` fetches the device-flow token from
+     * the MAIN process keychain over the secret bridge. Never returns to the
+     * renderer.
+     */
+    const githubConnectorToken = async (connector) => {
+        if (connector.credential?.mode === 'oauth') {
+            if (!secretBridge)
+                return { error: 'Keychain access requires the Electron app (dev host has no secret bridge).' };
+            try {
+                const token = await secretBridge.get(`connector:${connector.id}:github-oauth`);
+                if (!token)
+                    return { error: 'No OAuth token stored for this connector — connect the GitHub account in Settings → Connectors.' };
+                return { token };
+            }
+            catch (e) {
+                return { error: String(e.message ?? e) };
+            }
+        }
+        return githubStaticToken(connector);
+    };
+    const connectorEnvToken = (connector, label) => {
+        if (!connector.credential || connector.credential.mode === 'none')
+            return {};
+        if (connector.credential.mode !== 'static')
+            return { error: `${label} connector currently supports static environment-token credentials only.` };
+        const ref = connector.credential.ref?.trim();
+        if (!ref)
+            return { error: `${label} connector credential reference is required.` };
+        const token = process.env[ref]?.trim();
+        if (!token)
+            return { error: `${label} connector credential ${ref} is not available in the host environment.` };
+        return { token };
+    };
+    const filesystemConnectorForHost = (connector) => {
+        const rawRoots = Array.isArray(connector.config.roots)
+            ? connector.config.roots.filter((root) => typeof root === 'string')
+            : [];
+        return {
+            ...connector,
+            config: {
+                ...connector.config,
+                roots: rawRoots.map((root) => {
+                    const trimmed = root.trim();
+                    if (!trimmed)
+                        return trimmed;
+                    return path.isAbsolute(trimmed) ? trimmed : path.resolve(workspaceRoot, trimmed);
+                }).filter(Boolean),
+            },
+        };
+    };
+    const runConnectorCheckpoint = async (connector) => {
+        switch (connector.source) {
+            case 'github':
+                return await runGithubConnectorCheckpoint(connector, githubConnectorClient());
+            case 'filesystem':
+                return await runFilesystemConnectorCheckpoint(filesystemConnectorForHost(connector), nodeFsClient());
+            case 'web': {
+                const cred = connectorEnvToken(connector, 'Web');
+                if (cred.error)
+                    throw new Error(cred.error);
+                return await runWebConnectorCheckpoint(connector, fetchWebClient({ headerToken: cred.token }));
+            }
+            case 'gitlab': {
+                const cred = connectorEnvToken(connector, 'GitLab');
+                if (!cred.token)
+                    throw new Error(cred.error ?? 'GitLab connector requires a static token credential.');
+                const hostUrl = typeof connector.config.hostUrl === 'string' ? connector.config.hostUrl : undefined;
+                return await runGitlabConnectorCheckpoint(connector, gitlabTokenClient(cred.token, hostUrl));
+            }
+            default:
+                throw new Error(`Connector runtime is not implemented for ${connector.source}.`);
+        }
     };
     const githubTokenJson = async (connector, token, apiPath) => {
         const res = await fetch(`${githubApiBase(connector)}${apiPath}`, {
@@ -1466,8 +1603,6 @@ async function main() {
         const connector = getConnector(workspaceRoot, connectorId);
         if (!connector)
             return { ok: false, error: 'Connector not found.' };
-        if (connector.source !== 'github')
-            return { ok: false, error: `Connector runtime is not implemented for ${connector.source}.` };
         const startedAt = new Date().toISOString();
         const running = recordConnectorRun(workspaceRoot, {
             connectorId: connector.id,
@@ -1477,7 +1612,7 @@ async function main() {
             checkpointBefore: connector.checkpoint,
         });
         try {
-            const result = await runGithubConnectorCheckpoint(connector, githubConnectorClient());
+            const result = await runConnectorCheckpoint(connector);
             const persisted = upsertConnectorDocuments(workspaceRoot, result.documents);
             const run = finishConnectorRun(workspaceRoot, connector.id, running.id, {
                 status: result.failures.length ? 'failed' : 'succeeded',
@@ -1672,7 +1807,7 @@ async function main() {
             return { ok: false, pr: status.pr, branch: status.branch, itemKey: status.itemKey, items: listWorkItems(workspaceRoot), error: merged.error ?? 'GitHub CLI could not merge the PR.' };
         if (status.itemKey) {
             const project = getProject(workspaceRoot) ?? ensureProject(workspaceRoot);
-            const done = project.workflowStates.find((state) => state.category === 'done');
+            const done = project.workflowStates.find((state) => state.category === 'completed');
             if (done)
                 transitionWorkItem(workspaceRoot, status.itemKey, done.id, 'user');
         }
@@ -1782,6 +1917,26 @@ async function main() {
         getSessionModel: (sessionKey) => getSessionRuntime(workspaceRoot, sessionKey).model || undefined,
         setSessionModel: (sessionKey, model) => { setSessionRuntime(workspaceRoot, sessionKey, { model }); },
         clearSessionModel: (sessionKey) => { setSessionRuntime(workspaceRoot, sessionKey, { model: '' }); },
+        // Per-session provider+model: write the full runtime override (no secret) so a
+        // chat can run a different provider than the global default.
+        setSessionLlm: (sessionKey, patch) => { setSessionRuntime(workspaceRoot, sessionKey, patch); },
+        // Resolve a saved connection (by name) to a full LLM config — used to rebuild
+        // the active agent when a cross-provider model is picked.
+        resolveProviderLlm: (providerName, model) => resolveProviderLlm(providerName, model),
+        // Full per-session LLM (provider/model/endpoint + resolved key) for the active
+        // chat — used to rebuild the agent on a session switch.
+        resolveSessionLlm: (sessionKey) => llmForSession(sessionKey),
+        // GLOBAL default from a named connection + a chosen model (config.json).
+        persistProviderModel: (providerName, model) => {
+            const fresh = loadConfig();
+            const p = fresh.providers?.[providerName];
+            if (!p)
+                return;
+            fresh.llm = { provider: p.provider, apiKey: p.apiKey, model: model || p.model, endpoint: p.endpoint };
+            saveConfig(fresh);
+            llm = fresh.llm;
+            modelsCacheByKey.delete('');
+        },
         queries: {
             // Read-only surfaces — same pure modules the TUI commands use.
             // DESK-6m — sidebar sessions merged with their UI meta (title override,
@@ -2520,6 +2675,30 @@ async function main() {
                 setSprintState(workspaceRoot, String(a.id ?? ''), String(a.state ?? 'future'));
                 return listSprints(workspaceRoot);
             },
+            // Modules — feature-sized groupings of work items.
+            'track-modules': () => { ensureProject(workspaceRoot); return listModules(workspaceRoot); },
+            'track-create-module': (a) => {
+                createModule(workspaceRoot, { name: String(a.name ?? 'Module'), description: a.description ? String(a.description) : undefined });
+                return listModules(workspaceRoot);
+            },
+            'track-module-update': (a) => {
+                updateModule(workspaceRoot, String(a.id ?? ''), (a.patch && typeof a.patch === 'object' ? a.patch : {}));
+                return listModules(workspaceRoot);
+            },
+            'track-module-delete': (a) => { deleteModule(workspaceRoot, String(a.id ?? '')); return listModules(workspaceRoot); },
+            'track-assign-module': (a) => {
+                updateWorkItem(workspaceRoot, String(a.idOrKey ?? ''), { moduleId: a.moduleId ? String(a.moduleId) : undefined }, 'user');
+                return listWorkItems(workspaceRoot);
+            },
+            // Saved views — filter + layout presets.
+            'track-views': () => { ensureProject(workspaceRoot); return listViews(workspaceRoot); },
+            'track-save-view': (a) => {
+                const input = (a.input && typeof a.input === 'object' ? a.input : {});
+                if (input.name && input.layout)
+                    saveView(workspaceRoot, input);
+                return listViews(workspaceRoot);
+            },
+            'track-delete-view': (a) => { deleteView(workspaceRoot, String(a.id ?? '')); return listViews(workspaceRoot); },
             // Automation rules — trigger → action over the project board.
             'track-automations': () => { ensureProject(workspaceRoot); return listAutomations(workspaceRoot); },
             'track-create-automation': (a) => {
@@ -2557,16 +2736,33 @@ async function main() {
             // Pull repo collaborators into the roster (role-mapped). Token resolved
             // server-side; never returned to the renderer.
             'track-sync-members': async (a) => {
+                migrateTrackGithubToConnector(workspaceRoot);
                 const cfg = resolveGithubConfigForWorkspace(workspaceRoot, typeof a.repo === 'string' ? a.repo : undefined);
+                if (cfg.error)
+                    return { error: cfg.error };
                 if (!cfg.repo)
-                    return { error: 'No repository configured. Set one in Settings → Connectors → GitHub Track sync.' };
+                    return { error: 'No repository configured. Configure a GitHub connector in Settings → Connectors → GitHub.' };
                 if (!cfg.token)
-                    return { error: 'No token. Add one in Settings → Connectors → GitHub Track sync, set GITHUB_TOKEN/GH_TOKEN, or use a static token ref in Settings → Connectors.' };
+                    return { error: 'No token. Add one to the GitHub connector in Settings → Connectors, or set GITHUB_TOKEN/GH_TOKEN.' };
                 return await importMembersFromGithub(workspaceRoot, { repo: cfg.repo, token: cfg.token, fetchImpl: fetch, dryRun: a.dryRun === true });
             },
             // External sync — GitHub Issues. The token is resolved server-side from
-            // config.json/env and NEVER returned to the renderer.
+            // config.json/env and NEVER returned to the renderer. The lazy migration
+            // adopts any legacy cli.track.github* config into the workspace's
+            // connector the first time the Sync surface is opened (idempotent).
             'track-sync-config': () => {
+                migrateTrackGithubToConnector(workspaceRoot);
+                return githubIntegrationSnapshot(workspaceRoot);
+            },
+            // Connector Phase 0 — choose which (connector, repo) this workspace syncs
+            // with. `null`/missing connectorId clears the target (back to legacy).
+            'track-set-github-target': (a) => {
+                const connectorId = typeof a.connectorId === 'string' ? a.connectorId.trim() : '';
+                const repo = typeof a.repo === 'string' ? a.repo.trim() : '';
+                if (connectorId && repo)
+                    setGithubSyncTarget(workspaceRoot, { connectorId, repo });
+                else
+                    setGithubSyncTarget(workspaceRoot, null);
                 return githubIntegrationSnapshot(workspaceRoot);
             },
             // Git-backed Track workflow — local repository context and branch start,
@@ -2594,16 +2790,90 @@ async function main() {
                 const r = scanGitCommitsForTrack(workspaceRoot, {});
                 return { ...r, items: listWorkItems(workspaceRoot) };
             },
+            // Connector Phase 1 — repo discovery for the picker. Both queries resolve
+            // the CONNECTOR's credential (static token → REST; dynamic/oauth → gh CLI)
+            // and never return the token itself.
+            'github-connector-orgs': async (a) => {
+                const connector = getConnector(workspaceRoot, typeof a.connectorId === 'string' ? a.connectorId : '');
+                if (!connector)
+                    return { viewer: null, orgs: [], errors: ['Connector not found.'] };
+                try {
+                    if (connector.credential.mode === 'static' || connector.credential.mode === 'oauth') {
+                        const cred = await githubConnectorToken(connector);
+                        if (!cred.token)
+                            return { viewer: null, orgs: [], errors: [cred.error ?? 'No credential.'] };
+                        const viewer = await githubTokenJson(connector, cred.token, '/user');
+                        const orgs = await githubTokenJson(connector, cred.token, '/user/orgs?per_page=100');
+                        return { viewer: viewer.login ? { login: viewer.login } : null, orgs: orgs.map((o) => ({ login: o.login ?? '', description: o.description ?? undefined })).filter((o) => o.login), errors: [] };
+                    }
+                    const viewer = await ghJson(['api', 'user'], { timeout: 12_000 });
+                    if (viewer.error)
+                        return { viewer: null, orgs: [], errors: [viewer.error] };
+                    const orgs = await ghJson(['api', 'user/orgs?per_page=100'], { timeout: 12_000, maxBuffer: 1_000_000 });
+                    return {
+                        viewer: viewer.data?.login ? { login: viewer.data.login } : null,
+                        orgs: (orgs.data ?? []).map((o) => ({ login: o.login ?? '', description: o.description ?? undefined })).filter((o) => o.login),
+                        errors: orgs.error ? [orgs.error] : [],
+                    };
+                }
+                catch (e) {
+                    const msg = String(e.message ?? e);
+                    return { viewer: null, orgs: [], errors: [/403|429|rate/i.test(msg) ? 'GitHub API rate limited — try again in a few minutes.' : msg] };
+                }
+            },
+            'github-connector-repos': async (a) => {
+                const connector = getConnector(workspaceRoot, typeof a.connectorId === 'string' ? a.connectorId : '');
+                const org = typeof a.org === 'string' ? a.org.trim() : '';
+                const viewerLogin = typeof a.viewerLogin === 'string' ? a.viewerLogin.trim() : '';
+                const page = Number.isFinite(Number(a.page)) && Number(a.page) > 0 ? Math.floor(Number(a.page)) : 1;
+                if (!connector || !org)
+                    return { repos: [], nextPage: null, errors: [connector ? 'Missing org.' : 'Connector not found.'] };
+                const mapRepos = (list) => list
+                    .map((r) => ({ nameWithOwner: r.full_name ?? '', isPrivate: !!r.private, isArchived: !!r.archived, isFork: !!r.fork, description: r.description ?? undefined, pushedAt: r.pushed_at ?? undefined }))
+                    .filter((r) => r.nameWithOwner);
+                // The viewer's personal namespace lists via /user/repos (owner affiliation);
+                // organizations via /orgs/{org}/repos.
+                const apiPath = org === viewerLogin
+                    ? `/user/repos?affiliation=owner&per_page=100&page=${page}&sort=pushed`
+                    : `/orgs/${encodeURIComponent(org)}/repos?type=all&per_page=100&page=${page}&sort=pushed`;
+                try {
+                    if (connector.credential.mode === 'static' || connector.credential.mode === 'oauth') {
+                        const cred = await githubConnectorToken(connector);
+                        if (!cred.token)
+                            return { repos: [], nextPage: null, errors: [cred.error ?? 'No credential.'] };
+                        const list = await githubTokenJson(connector, cred.token, apiPath);
+                        const repos = mapRepos(list);
+                        return { repos, nextPage: list.length === 100 ? page + 1 : null, errors: [] };
+                    }
+                    const list = await ghJson(['api', apiPath.replace(/^\//, '')], { timeout: 20_000, maxBuffer: 4_000_000 });
+                    if (list.error)
+                        return { repos: [], nextPage: null, errors: [list.error] };
+                    const repos = mapRepos(list.data ?? []);
+                    return { repos, nextPage: (list.data ?? []).length === 100 ? page + 1 : null, errors: [] };
+                }
+                catch (e) {
+                    const msg = String(e.message ?? e);
+                    const rateLimited = /403|429|rate/i.test(msg);
+                    return { repos: [], nextPage: null, rateLimited, errors: [rateLimited ? 'GitHub API rate limited — try again in a few minutes.' : msg] };
+                }
+            },
             'track-sync': async (a) => {
-                const direction = a.direction === 'export' ? 'export' : 'import';
+                const direction = a.direction === 'export' ? 'export' : a.direction === 'sync' ? 'sync' : 'import';
                 const dryRun = a.dryRun !== false; // default to dry-run unless explicitly false
+                migrateTrackGithubToConnector(workspaceRoot);
                 const cfg = resolveGithubConfigForWorkspace(workspaceRoot, typeof a.repo === 'string' ? a.repo : undefined);
+                if (cfg.error)
+                    return { error: cfg.error };
                 if (!cfg.repo)
-                    return { error: 'No repository configured. Set one in Settings → Connectors → GitHub Track sync.' };
+                    return { error: 'No repository configured. Configure a GitHub connector in Settings → Connectors → GitHub.' };
                 if (!cfg.token)
-                    return { error: 'No token. Add one in Settings → Connectors → GitHub Track sync, set GITHUB_TOKEN/GH_TOKEN, or use a static token ref in Settings → Connectors.' };
+                    return { error: 'No token. Add one to the GitHub connector in Settings → Connectors, or set GITHUB_TOKEN/GH_TOKEN.' };
                 const opts = { repo: cfg.repo, token: cfg.token, fetchImpl: fetch, dryRun };
-                return direction === 'export' ? await exportToGithub(workspaceRoot, opts) : await importFromGithub(workspaceRoot, opts);
+                if (direction === 'export')
+                    return await exportToGithub(workspaceRoot, opts);
+                if (direction === 'sync')
+                    return await syncBidirectional(workspaceRoot, opts);
+                return await importFromGithub(workspaceRoot, opts);
             },
             // links). Thin wrappers over the CLI's requirementStore (already unit-tested)
             // so the desktop panel and the terminal CLI share the same requirements.json.
@@ -3761,12 +4031,38 @@ async function main() {
                 const cli = (fresh.cli = fresh.cli ?? {});
                 const track = (cli.track = cli.track ?? {});
                 if (typeof args.caBundle === 'string' || args.caBundle === null) {
+                    // CA bundle's home is the global cli.github block (it applies to every
+                    // GitHub surface); writing here also clears the legacy track-scoped copy.
                     const ca = typeof args.caBundle === 'string' ? args.caBundle.trim() : '';
+                    const github = (cli.github = cli.github ?? {});
                     if (ca)
-                        track.githubCaBundle = ca;
+                        github.caBundle = ca;
                     else
-                        delete track.githubCaBundle;
+                        delete github.caBundle;
+                    delete track.githubCaBundle;
                     ghEnvCache = null;
+                }
+                // Connector Phase 1 — target-scoped save: pick the workspace's sync
+                // target and (optionally) attach a pasted token to that connector. The
+                // token value stays in cli.track.githubToken (write-only storage, the
+                // `config:track` scheme) until Phase 3 moves it into the OS keychain.
+                if (typeof args.targetConnectorId === 'string' && typeof args.targetRepo === 'string' && args.targetConnectorId.trim() && args.targetRepo.trim()) {
+                    const connectorId = args.targetConnectorId.trim();
+                    const repo = args.targetRepo.trim();
+                    if (typeof args.token === 'string' && args.token.trim()) {
+                        track.githubToken = args.token.trim();
+                        const conn = getConnector(workspaceRoot, connectorId);
+                        if (conn) {
+                            updateConnector(workspaceRoot, connectorId, {
+                                credential: { mode: 'static', ref: 'config:track', label: 'Track token', hasSecret: true },
+                            });
+                        }
+                    }
+                    setGithubSyncTarget(workspaceRoot, { connectorId, repo });
+                    syncLegacyTrackGithubFields(track);
+                    saveConfig(fresh);
+                    _resetCliKnobsCache();
+                    return { ok: true, ...githubIntegrationSnapshot(workspaceRoot) };
                 }
                 let repos = normalizeTrackGithubRepos(track);
                 if (typeof args.removeRepo === 'string') {
@@ -3842,6 +4138,21 @@ async function main() {
                 saveConfig(fresh);
                 _resetCliKnobsCache();
                 return { ok: true, key };
+            },
+            'action:set-github-oauth-client-id': (args) => {
+                const fresh = loadConfig();
+                const cli = (fresh.cli = fresh.cli ?? {});
+                const github = (cli.github = cli.github ?? {});
+                const clientId = typeof args.clientId === 'string' ? args.clientId.trim() : '';
+                if (clientId)
+                    github.oauthClientId = clientId;
+                else
+                    delete github.oauthClientId;
+                if (!github.oauthClientId && !github.caBundle)
+                    delete cli.github;
+                saveConfig(fresh);
+                _resetCliKnobsCache();
+                return { ok: true };
             },
             // §multi-provider — add/update a NAMED OpenAI-compatible provider. A blank
             // apiKey on an UPDATE keeps the existing key (so the renderer never has to
@@ -3933,6 +4244,32 @@ async function main() {
             // pickers are ALWAYS endpoint-driven, never a hand-written list. With no
             // arg this lists the active llm's models; `{ provider }` lists a named
             // provider's (the key is resolved HERE so it never leaves the host).
+            // Tool enable/disable catalog — the built-in agent tools (with their
+            // protected flag) + the connected MCP tools, so Settings can render a toggle
+            // per tool. The current on/off state is read from cli.toolOverrides in the
+            // config snapshot; this just enumerates what exists.
+            'tool-catalog': async () => {
+                const builtin = localToolSpecsFromExecutors().map((t) => ({
+                    name: t.name,
+                    description: typeof t.description === 'string' ? t.description : '',
+                    protected: isProtectedCoreTool(t.name),
+                }));
+                let mcp = [];
+                try {
+                    const res = (await mcpClient.listTools());
+                    mcp = (res.tools ?? [])
+                        .map((t) => String(t?.name ?? ''))
+                        .filter(Boolean)
+                        .map((full) => {
+                        const m = full.match(/^mcp_([^_]+)_/);
+                        return { server: m ? m[1] : 'mcp', name: full };
+                    });
+                }
+                catch {
+                    mcp = [];
+                }
+                return { builtin, mcp };
+            },
             'list-models': async (a) => {
                 const fresh = loadConfig();
                 llm = fresh.llm ?? llm;
@@ -4248,6 +4585,8 @@ async function main() {
     if (port)
         port.on('message', (e) => {
             if (computerUseBridge?.handleMessage(e.data))
+                return;
+            if (secretBridge?.handleMessage(e.data))
                 return;
             void core.handle(e.data);
         });

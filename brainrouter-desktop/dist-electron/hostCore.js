@@ -20,8 +20,8 @@
  * switch requested mid-turn — because one agent can't safely run two turns.
  */
 import { createCallbackBridge, InteractionBroker, isAgentCommand, } from '@kinqs/brainrouter-agent-protocol';
-import { subscribeCompletions, pendingCompletionCount, peekCompletions } from '@kinqs/brainrouter-core/dist/session/completionInbox.js';
-import { buildChildResumePrompt } from '@kinqs/brainrouter-core/dist/util/childResume.js';
+import { subscribeCompletions, pendingCompletionCount, peekCompletions } from '@kinqs/brainrouter-core/session';
+import { buildChildResumePrompt } from '@kinqs/brainrouter-core/util';
 /**
  * A brand-new chat's transcript isn't written to disk until its first turn, so
  * its `<workspaceHash>:new-…` key has no transcript yet. Resuming such a key
@@ -224,12 +224,19 @@ export function createHostCore(input) {
         // old session; clear it before retargeting so a fresh chat cannot ingest the
         // previous transcript on its first turn.
         rt.pendingHistoryKey = undefined;
-        // Item 10 — restore this session's per-session model override (if any) so a
-        // resumed/backgrounded chat keeps the model it was set to, independent of the
+        // Item 10 — restore this session's per-session runtime (if any) so a resumed/
+        // backgrounded chat keeps the provider+model it was set to, independent of the
         // global default and of whatever the previous agent in this slot was using.
-        const sessModel = input.getSessionModel?.(targetKey);
-        if (sessModel)
-            rt.agent.setModel?.(sessModel);
+        // Prefer the full LLM (handles a cross-provider override + its key); fall back
+        // to the model string alone.
+        const sessLlm = input.resolveSessionLlm?.(targetKey);
+        if (sessLlm)
+            rt.agent.setLLMConfig?.(sessLlm);
+        else {
+            const sessModel = input.getSessionModel?.(targetKey);
+            if (sessModel)
+                rt.agent.setModel?.(sessModel);
+        }
         const loaded = init(rt);
         pool.set(targetKey, rt);
         setActive(targetKey);
@@ -321,13 +328,23 @@ export function createHostCore(input) {
             }
             case 'set-model': {
                 const a = pool.get(activeKey)?.agent;
-                a?.setModel?.(cmd.model);
                 // Item 10 — persist:true → GLOBAL default (config.json, shared with the
                 // CLI). persist:false → THIS SESSION ONLY (sessionRuntimeStore), so it
                 // survives a respawn for this chat without changing every other chat.
+                // A `providerName` means a CROSS-PROVIDER pick: rebuild the agent's whole
+                // LLM (provider/model/endpoint/key) and write the full session override
+                // (never the global default unless persist) — so it never syncs to others.
+                const full = cmd.providerName ? input.resolveProviderLlm?.(cmd.providerName, cmd.model) : undefined;
+                if (full)
+                    a?.setLLMConfig?.(full);
+                else
+                    a?.setModel?.(cmd.model);
                 if (cmd.persist) {
                     try {
-                        input.persistModel?.(cmd.model);
+                        if (cmd.providerName)
+                            input.persistProviderModel?.(cmd.providerName, cmd.model);
+                        else
+                            input.persistModel?.(cmd.model);
                     }
                     catch (err) {
                         emit({ kind: 'status', text: `Model switched for this session, but persisting failed: ${err instanceof Error ? err.message : err}` });
@@ -338,6 +355,13 @@ export function createHostCore(input) {
                         input.clearSessionModel?.(activeKey);
                     }
                     catch { /* global model still persisted */ }
+                }
+                else if (cmd.providerName) {
+                    // Per-session cross-provider override (provider/model/endpoint, no secret).
+                    try {
+                        input.setSessionLlm?.(activeKey, { provider: full?.provider, model: cmd.model, endpoint: full?.endpoint });
+                    }
+                    catch { /* in-memory set already applied */ }
                 }
                 else {
                     try {

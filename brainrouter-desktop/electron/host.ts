@@ -94,12 +94,25 @@ import { readGitTrackContext, startGitWorkForTrackItem } from '@kinqs/brainroute
 import { listConnectorCatalog } from '@kinqs/brainrouter-core/connectors';
 import { createConnector, deleteConnector, finishConnectorRun, getConnector, listConnectorRuns, listConnectors, recordConnectorRun, updateConnector } from '@kinqs/brainrouter-core/connectors';
 import { exportConnectorDefinitions, importConnectorDefinitions } from '@kinqs/brainrouter-core/connectors';
-import { runGithubConnectorCheckpoint, runGithubConnectorPermissionSync, validateGithubConnectorAccess, type GithubConnectorClient, type GithubConnectorPermissionClient, type GithubConnectorValidationClient } from '@kinqs/brainrouter-core/connectors';
+import {
+  fetchWebClient,
+  gitlabTokenClient,
+  nodeFsClient,
+  runFilesystemConnectorCheckpoint,
+  runGithubConnectorCheckpoint,
+  runGithubConnectorPermissionSync,
+  runGitlabConnectorCheckpoint,
+  runWebConnectorCheckpoint,
+  validateGithubConnectorAccess,
+  type GithubConnectorClient,
+  type GithubConnectorPermissionClient,
+  type GithubConnectorValidationClient,
+} from '@kinqs/brainrouter-core/connectors';
 import { countConnectorDocuments, searchConnectorDocuments, upsertConnectorDocuments } from '@kinqs/brainrouter-core/connectors';
 import { exportConnectorDocumentsForMemory } from '@kinqs/brainrouter-core/connectors';
 import { countConnectorPermissions, listConnectorPermissions, upsertConnectorPermissions } from '@kinqs/brainrouter-core/connectors';
 import { retrieveConnectorSlimDocuments } from '@kinqs/brainrouter-core/connectors';
-import type { WorkItemType, SprintState, CodeLink, AutomationTrigger, AutomationAction, ProjectRole, ConnectorFlow, ConnectorSource } from '@kinqs/brainrouter-types';
+import type { WorkItemType, SprintState, CodeLink, AutomationTrigger, AutomationAction, ProjectRole, ConnectorFlow, ConnectorRecord, ConnectorSource } from '@kinqs/brainrouter-types';
 
 /**
  * Strip secrets from the `cli` config before it's sent to the renderer (the
@@ -1343,6 +1356,55 @@ async function main(): Promise<void> {
     return githubStaticToken(connector);
   };
 
+  const connectorEnvToken = (connector: { credential?: { mode?: string; ref?: string } }, label: string): { token?: string; error?: string } => {
+    if (!connector.credential || connector.credential.mode === 'none') return {};
+    if (connector.credential.mode !== 'static') return { error: `${label} connector currently supports static environment-token credentials only.` };
+    const ref = connector.credential.ref?.trim();
+    if (!ref) return { error: `${label} connector credential reference is required.` };
+    const token = process.env[ref]?.trim();
+    if (!token) return { error: `${label} connector credential ${ref} is not available in the host environment.` };
+    return { token };
+  };
+
+  const filesystemConnectorForHost = (connector: ConnectorRecord): ConnectorRecord => {
+    const rawRoots = Array.isArray(connector.config.roots)
+      ? connector.config.roots.filter((root): root is string => typeof root === 'string')
+      : [];
+    return {
+      ...connector,
+      config: {
+        ...connector.config,
+        roots: rawRoots.map((root) => {
+          const trimmed = root.trim();
+          if (!trimmed) return trimmed;
+          return path.isAbsolute(trimmed) ? trimmed : path.resolve(workspaceRoot, trimmed);
+        }).filter(Boolean),
+      },
+    };
+  };
+
+  const runConnectorCheckpoint = async (connector: ConnectorRecord) => {
+    switch (connector.source) {
+      case 'github':
+        return await runGithubConnectorCheckpoint(connector, githubConnectorClient());
+      case 'filesystem':
+        return await runFilesystemConnectorCheckpoint(filesystemConnectorForHost(connector), nodeFsClient());
+      case 'web': {
+        const cred = connectorEnvToken(connector, 'Web');
+        if (cred.error) throw new Error(cred.error);
+        return await runWebConnectorCheckpoint(connector, fetchWebClient({ headerToken: cred.token }));
+      }
+      case 'gitlab': {
+        const cred = connectorEnvToken(connector, 'GitLab');
+        if (!cred.token) throw new Error(cred.error ?? 'GitLab connector requires a static token credential.');
+        const hostUrl = typeof connector.config.hostUrl === 'string' ? connector.config.hostUrl : undefined;
+        return await runGitlabConnectorCheckpoint(connector, gitlabTokenClient(cred.token, hostUrl));
+      }
+      default:
+        throw new Error(`Connector runtime is not implemented for ${connector.source}.`);
+    }
+  };
+
   const githubTokenJson = async <T,>(connector: { config?: Record<string, unknown> }, token: string, apiPath: string): Promise<T> => {
     const res = await fetch(`${githubApiBase(connector)}${apiPath}`, {
       headers: {
@@ -1544,7 +1606,6 @@ async function main(): Promise<void> {
   const runConnector = async (connectorId: string): Promise<{ ok: boolean; run?: unknown; connector?: unknown | null; documents?: unknown[]; memory?: unknown; errors?: string[]; error?: string }> => {
     const connector = getConnector(workspaceRoot, connectorId);
     if (!connector) return { ok: false, error: 'Connector not found.' };
-    if (connector.source !== 'github') return { ok: false, error: `Connector runtime is not implemented for ${connector.source}.` };
     const startedAt = new Date().toISOString();
     const running = recordConnectorRun(workspaceRoot, {
       connectorId: connector.id,
@@ -1554,7 +1615,7 @@ async function main(): Promise<void> {
       checkpointBefore: connector.checkpoint,
     });
     try {
-      const result = await runGithubConnectorCheckpoint(connector, githubConnectorClient());
+      const result = await runConnectorCheckpoint(connector);
       const persisted = upsertConnectorDocuments(workspaceRoot, result.documents);
       const run = finishConnectorRun(workspaceRoot, connector.id, running.id, {
         status: result.failures.length ? 'failed' : 'succeeded',
@@ -3877,6 +3938,18 @@ async function main(): Promise<void> {
         saveConfig(fresh as never);
         _resetCliKnobsCache();
         return { ok: true, key };
+      },
+      'action:set-github-oauth-client-id': (args) => {
+        const fresh = loadConfig() as { cli?: { github?: { oauthClientId?: string; caBundle?: string } } };
+        const cli = (fresh.cli = fresh.cli ?? {});
+        const github = (cli.github = cli.github ?? {});
+        const clientId = typeof args.clientId === 'string' ? args.clientId.trim() : '';
+        if (clientId) github.oauthClientId = clientId;
+        else delete github.oauthClientId;
+        if (!github.oauthClientId && !github.caBundle) delete cli.github;
+        saveConfig(fresh as never);
+        _resetCliKnobsCache();
+        return { ok: true };
       },
       // §multi-provider — add/update a NAMED OpenAI-compatible provider. A blank
       // apiKey on an UPDATE keeps the existing key (so the renderer never has to

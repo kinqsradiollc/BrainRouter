@@ -12,6 +12,7 @@ import { Icon } from './icons.js';
 import type { ConnectorCatalogEntry, ConnectorDefinitionBundle, ConnectorRecord, ConnectorRunRecord } from '@kinqs/brainrouter-types';
 import { ProviderIcon } from './components/ProviderIcon.js';
 import { ShortcutsReference } from './components/ShortcutsReference.js';
+import { bridgeQuery } from './lib/bridgeQuery.js';
 import { PERMISSION_MODES, policyForMode, nearestMode } from '@kinqs/brainrouter-core/dist/session/permissionModes.js';
 
 interface ConnectorSlimPreview {
@@ -204,7 +205,7 @@ function KnobValue({ value, onChange }: { value: unknown; onChange: (v: unknown)
  *  hand-edited JSON blob. Saves the whole block via the existing set-cli-json. */
 // WS11 — knobs that have a dedicated structured editor elsewhere (Permissions,
 // Workflow automation, Models, Connectors). Never shown as raw JSON here.
-const DEDICATED_KNOBS = new Set(['permissions', 'automation', 'track', 'providers', 'agentModels', 'providerRequestFormat']);
+const DEDICATED_KNOBS = new Set(['permissions', 'automation', 'track', 'github', 'providers', 'agentModels', 'providerRequestFormat']);
 // WS11 — internal/safety knobs (loop & storm guards, sandbox internals, scheduler
 // ticks, offload tuning): non-obvious to hand-edit and rarely needed, so hidden
 // from the default list. Still settable via `/config` or the raw disclosure.
@@ -321,6 +322,15 @@ function KnobNumber({ value, onSave, placeholder }: { value: unknown; onSave: (v
     onChange={(e) => setV(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />;
 }
 
+function KnobText({ value, onSave, placeholder }: { value: unknown; onSave: (v: string | null) => void; placeholder?: string }): React.ReactElement {
+  const cur = typeof value === 'string' ? value : '';
+  const [v, setV] = useState(cur);
+  React.useEffect(() => setV(cur), [cur]);
+  const commit = (): void => { const t = v.trim(); onSave(t || null); };
+  return <input className="ctl mono" style={{ minWidth: 260 }} value={v} placeholder={placeholder ?? ''}
+    onChange={(e) => setV(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} spellCheck={false} />;
+}
+
 type ChoiceOption = { value: string; label: string; detail?: string; disabled?: boolean };
 
 function ChoiceControl({ value, options, onChange, placeholder = 'Select' }: {
@@ -435,9 +445,181 @@ function splitConnectorRepos(value: string): string[] {
   return value.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean);
 }
 
-function ConnectorSettings({ connectors, githubIntegration, onGithubSave, onAction, refreshSnapshot }: {
+const CHECKPOINT_RUNTIME_SOURCES = new Set<ConnectorRecord['source']>(['github', 'filesystem', 'web', 'gitlab']);
+
+type GithubOauthState =
+  | { status: 'idle'; hasToken?: boolean; storageMode?: string }
+  | { status: 'starting' }
+  | { status: 'pending'; userCode: string; verificationUri: string; intervalSec: number; expiresAtMs: number }
+  | { status: 'authorized'; scope?: string; storageMode?: string }
+  | { status: 'error'; error: string };
+
+interface GithubOrgRow {
+  login: string;
+  description?: string;
+}
+
+interface GithubRepoRow {
+  nameWithOwner: string;
+  isPrivate?: boolean;
+  isArchived?: boolean;
+  isFork?: boolean;
+  description?: string;
+  pushedAt?: string;
+}
+
+interface GithubOrgsResult {
+  viewer?: { login?: string } | null;
+  orgs?: GithubOrgRow[];
+  errors?: string[];
+}
+
+interface GithubReposResult {
+  repos?: GithubRepoRow[];
+  nextPage?: number | null;
+  rateLimited?: boolean;
+  errors?: string[];
+}
+
+function GithubRepoPicker({ connector, value, onChange }: {
+  connector: ConnectorRecord | undefined;
+  value: string[];
+  onChange: (next: string[]) => void;
+}): React.ReactElement {
+  const selected = new Set(value);
+  const [open, setOpen] = useState(false);
+  const [viewerLogin, setViewerLogin] = useState('');
+  const [orgs, setOrgs] = useState<GithubOrgRow[]>([]);
+  const [orgError, setOrgError] = useState('');
+  const [loadingOrgs, setLoadingOrgs] = useState(false);
+  const [activeOrg, setActiveOrg] = useState('');
+  const [repoPages, setRepoPages] = useState<Record<string, { repos: GithubRepoRow[]; nextPage: number | null; error?: string; loading?: boolean }>>({});
+  const [repoSearch, setRepoSearch] = useState('');
+  const [includePrivate, setIncludePrivate] = useState(true);
+  const [includeArchived, setIncludeArchived] = useState(false);
+  const [includeForks, setIncludeForks] = useState(false);
+
+  const connectorId = connector?.id ?? '';
+  const loadOrgs = React.useCallback(async () => {
+    if (!connectorId) return;
+    setLoadingOrgs(true);
+    setOrgError('');
+    try {
+      const result = await bridgeQuery<GithubOrgsResult>('github-connector-orgs', { connectorId });
+      const viewer = result.viewer?.login ?? '';
+      const rows = [...(viewer ? [{ login: viewer, description: 'Personal repositories' }] : []), ...(result.orgs ?? [])]
+        .filter((row, index, arr) => row.login && arr.findIndex((candidate) => candidate.login === row.login) === index);
+      setViewerLogin(viewer);
+      setOrgs(rows);
+      setActiveOrg((cur) => cur || rows[0]?.login || '');
+      setOrgError((result.errors ?? []).join('\n'));
+    } catch (err) {
+      setOrgError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoadingOrgs(false);
+    }
+  }, [connectorId]);
+
+  const loadRepos = React.useCallback(async (org: string, page?: number) => {
+    if (!connectorId || !org) return;
+    const nextPage = page ?? repoPages[org]?.nextPage ?? 1;
+    setRepoPages((cur) => ({ ...cur, [org]: { repos: cur[org]?.repos ?? [], nextPage: cur[org]?.nextPage ?? nextPage, loading: true } }));
+    try {
+      const result = await bridgeQuery<GithubReposResult>('github-connector-repos', { connectorId, org, viewerLogin, page: nextPage });
+      setRepoPages((cur) => {
+        const prior = cur[org]?.repos ?? [];
+        const merged = [...prior];
+        for (const repo of result.repos ?? []) {
+          if (!merged.some((existing) => existing.nameWithOwner === repo.nameWithOwner)) merged.push(repo);
+        }
+        return { ...cur, [org]: { repos: merged, nextPage: result.nextPage ?? null, error: (result.errors ?? []).join('\n'), loading: false } };
+      });
+    } catch (err) {
+      setRepoPages((cur) => ({ ...cur, [org]: { repos: cur[org]?.repos ?? [], nextPage: cur[org]?.nextPage ?? null, error: err instanceof Error ? err.message : String(err), loading: false } }));
+    }
+  }, [connectorId, repoPages, viewerLogin]);
+
+  React.useEffect(() => {
+    if (!open || !connectorId || orgs.length) return;
+    void loadOrgs();
+  }, [open, connectorId, orgs.length, loadOrgs]);
+
+  React.useEffect(() => {
+    if (!open || !activeOrg || repoPages[activeOrg]) return;
+    void loadRepos(activeOrg, 1);
+  }, [open, activeOrg, repoPages, loadRepos]);
+
+  const toggle = (repo: string): void => {
+    const next = new Set(selected);
+    if (next.has(repo)) next.delete(repo);
+    else next.add(repo);
+    onChange([...next].sort());
+  };
+
+  const current = activeOrg ? repoPages[activeOrg] : undefined;
+  const q = repoSearch.trim().toLowerCase();
+  const filtered = (current?.repos ?? []).filter((repo) => {
+    if (!includePrivate && repo.isPrivate) return false;
+    if (!includeArchived && repo.isArchived) return false;
+    if (!includeForks && repo.isFork) return false;
+    if (!q) return true;
+    return `${repo.nameWithOwner} ${repo.description ?? ''}`.toLowerCase().includes(q);
+  });
+
+  return (
+    <div style={{ display: 'grid', gap: 8, minWidth: 320 }}>
+      <div className="gh-repo-list">
+        {value.length === 0 ? <div className="empty">No repositories selected.</div> : value.map((repo) => (
+          <div key={repo} className="gh-repo-row active">
+            <span className="gh-repo-name mono">{repo}</span>
+            <button type="button" className="gh-row-btn danger" onClick={() => toggle(repo)}>Remove</button>
+          </div>
+        ))}
+      </div>
+      {!connector ? <div className="set-desc">Save this GitHub connector before choosing repositories.</div> : null}
+      {connector ? <button type="button" className="btn" onClick={() => setOpen((v) => !v)}>{open ? 'Hide repo picker' : 'Choose repos'}</button> : null}
+      {open && connector ? (
+        <div className="gh-repo-list">
+          <div className="gh-token-row">
+            <input className="ctl" value={repoSearch} onChange={(e) => setRepoSearch(e.target.value)} placeholder="Search repositories" />
+            <button type="button" className="gh-token-clear" disabled={loadingOrgs} onClick={() => { setOrgs([]); setRepoPages({}); void loadOrgs(); }}>Refresh</button>
+          </div>
+          <div className="connector-toggles">
+            <label><input type="checkbox" checked={includePrivate} onChange={(e) => setIncludePrivate(e.target.checked)} /> Private</label>
+            <label><input type="checkbox" checked={includeArchived} onChange={(e) => setIncludeArchived(e.target.checked)} /> Archived</label>
+            <label><input type="checkbox" checked={includeForks} onChange={(e) => setIncludeForks(e.target.checked)} /> Forks</label>
+          </div>
+          {orgError ? <div className="pc-host" style={{ color: 'var(--warn)' }}>{orgError}</div> : null}
+          <div className="choice-menu" style={{ position: 'static', display: 'flex', flexWrap: 'wrap', gap: 4, maxHeight: 'none', boxShadow: 'none', border: '1px solid var(--border)' }}>
+            {orgs.map((org) => (
+              <button key={org.login} type="button" className={`choice-option${activeOrg === org.login ? ' selected' : ''}`} onClick={() => setActiveOrg(org.login)}>
+                <span>{org.login}</span>
+              </button>
+            ))}
+            {loadingOrgs ? <span className="set-desc" style={{ padding: '6px 8px' }}>Loading...</span> : null}
+          </div>
+          {current?.error ? <div className="pc-host" style={{ color: 'var(--warn)' }}>{current.error}</div> : null}
+          {filtered.map((repo) => (
+            <label key={repo.nameWithOwner} className="gh-repo-row" style={{ cursor: 'pointer' }}>
+              <input type="checkbox" checked={selected.has(repo.nameWithOwner)} onChange={() => toggle(repo.nameWithOwner)} />
+              <span className="gh-repo-name mono">{repo.nameWithOwner}</span>
+              {repo.isPrivate ? <span className="gh-repo-pill">private</span> : null}
+              {repo.isArchived ? <span className="gh-repo-pill">archived</span> : null}
+              {repo.isFork ? <span className="gh-repo-pill">fork</span> : null}
+            </label>
+          ))}
+          {current?.loading ? <div className="set-desc">Loading repositories...</div> : null}
+          {current?.nextPage ? <button type="button" className="btn" disabled={current.loading} onClick={() => void loadRepos(activeOrg, current.nextPage ?? 1)}>Load more</button> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ConnectorSettings({ connectors, githubIntegration, githubOauthClientId, onGithubSave, onAction, refreshSnapshot }: {
   connectors: NonNullable<ConfigSnapshot['connectors']>;
   githubIntegration: GithubIntegrationSnapshot;
+  githubOauthClientId: string;
   onGithubSave: (args: GithubSaveArgs) => void;
   onAction: (id: string, name: string, args?: Record<string, unknown>) => void;
   refreshSnapshot: () => void;
@@ -461,6 +643,7 @@ function ConnectorSettings({ connectors, githubIntegration, onGithubSave, onActi
   const [genericCredentialRef, setGenericCredentialRef] = useState('');
   const [genericConfig, setGenericConfig] = useState<Record<string, string | boolean>>({});
   const [definitionJson, setDefinitionJson] = useState('');
+  const [oauthState, setOauthState] = useState<GithubOauthState>({ status: 'idle' });
   // Connector config moved out of the inline panel into a modal (matching the
   // Models provider dialog): a catalog card / "Configure" opens this editor.
   const [editorOpen, setEditorOpen] = useState(false);
@@ -484,6 +667,16 @@ function ConnectorSettings({ connectors, githubIntegration, onGithubSave, onActi
   }, [firstGithub?.id, firstGithub?.updatedAt]);
 
   React.useEffect(() => {
+    if (!firstGithub?.id || !window.brainrouter.ghOauth) {
+      setOauthState({ status: 'idle' });
+      return;
+    }
+    void window.brainrouter.ghOauth({ op: 'status', connectorId: firstGithub.id })
+      .then((res) => setOauthState({ status: 'idle', hasToken: res.hasToken === true, storageMode: typeof res.storageMode === 'string' ? res.storageMode : undefined }))
+      .catch((err) => setOauthState({ status: 'error', error: err instanceof Error ? err.message : String(err) }));
+  }, [firstGithub?.id, firstGithub?.credential.mode, firstGithub?.updatedAt]);
+
+  React.useEffect(() => {
     if (!selectedEntry || selectedEntry.source === 'github') return;
     setGenericName(`${selectedEntry.title} connector`);
     setGenericCredentialMode(selectedEntry.credentialModes[0] ?? 'none');
@@ -494,11 +687,13 @@ function ConnectorSettings({ connectors, githubIntegration, onGithubSave, onActi
     ])));
   }, [selectedEntry?.source]);
 
+  const selectedGithubRepos = splitConnectorRepos(repos);
   const saveGithubConnector = (): void => {
     const poll = Number(pollMinutes);
+    const ownerHint = owner.trim() || selectedGithubRepos[0]?.split('/')[0] || '';
     const config = {
-      owner: owner.trim(),
-      repositories: splitConnectorRepos(repos),
+      owner: ownerHint,
+      repositories: selectedGithubRepos,
       includeIssues,
       includePullRequests: includePrs,
       includeFiles,
@@ -507,9 +702,9 @@ function ConnectorSettings({ connectors, githubIntegration, onGithubSave, onActi
     };
     const credential = {
       mode: credentialMode,
-      ref: credentialRef.trim() || (credentialMode === 'dynamic' ? 'gh' : undefined),
-      label: credentialMode === 'dynamic' ? 'GitHub CLI' : undefined,
-      hasSecret: credentialMode === 'static',
+      ref: credentialMode === 'oauth' ? 'github-oauth' : credentialRef.trim() || (credentialMode === 'dynamic' ? 'gh' : undefined),
+      label: credentialMode === 'dynamic' ? 'GitHub CLI' : credentialMode === 'oauth' ? 'GitHub OAuth' : undefined,
+      hasSecret: credentialMode === 'static' || (credentialMode === 'oauth' && (oauthState.status === 'authorized' || (oauthState.status === 'idle' && oauthState.hasToken === true))),
     };
     if (firstGithub) {
       onAction('a-connector-update', 'action:connector-update', {
@@ -527,7 +722,80 @@ function ConnectorSettings({ connectors, githubIntegration, onGithubSave, onActi
     }
     setTimeout(refreshSnapshot, 120);
   };
-  const canSave = Boolean(github && owner.trim() && (includeIssues || includePrs || includeFiles));
+  const canSave = Boolean(github && (owner.trim() || selectedGithubRepos.length) && (includeIssues || includePrs || includeFiles));
+
+  const markGithubOauthCredential = (hasSecret: boolean): void => {
+    if (!firstGithub) return;
+    onAction('a-connector-update', 'action:connector-update', {
+      id: firstGithub.id,
+      patch: { credential: { mode: 'oauth', ref: 'github-oauth', label: 'GitHub OAuth', hasSecret } },
+    });
+    setCredentialMode('oauth');
+    setCredentialRef('github-oauth');
+    setTimeout(refreshSnapshot, 120);
+  };
+
+  const startGithubOauth = async (): Promise<void> => {
+    if (!firstGithub) {
+      setOauthState({ status: 'error', error: 'Save the GitHub connector before connecting OAuth.' });
+      return;
+    }
+    if (!window.brainrouter.ghOauth) {
+      setOauthState({ status: 'error', error: 'GitHub OAuth requires the Electron app.' });
+      return;
+    }
+    if (!githubOauthClientId.trim()) {
+      setOauthState({ status: 'error', error: 'Set cli.github.oauthClientId in Advanced before connecting OAuth.' });
+      return;
+    }
+    setOauthState({ status: 'starting' });
+    const res = await window.brainrouter.ghOauth({ op: 'start', connectorId: firstGithub.id, clientId: githubOauthClientId.trim() });
+    if (typeof res.error === 'string') {
+      setOauthState({ status: 'error', error: res.error });
+      return;
+    }
+    setOauthState({
+      status: 'pending',
+      userCode: String(res.userCode ?? ''),
+      verificationUri: String(res.verificationUri ?? 'https://github.com/login/device'),
+      intervalSec: Number(res.intervalSec) > 0 ? Number(res.intervalSec) : 5,
+      expiresAtMs: Number(res.expiresAtMs) || Date.now() + 15 * 60_000,
+    });
+  };
+
+  const cancelGithubOauth = async (): Promise<void> => {
+    if (firstGithub?.id && window.brainrouter.ghOauth) await window.brainrouter.ghOauth({ op: 'cancel', connectorId: firstGithub.id }).catch(() => undefined);
+    setOauthState({ status: 'idle' });
+  };
+
+  const disconnectGithubOauth = async (): Promise<void> => {
+    if (firstGithub?.id && window.brainrouter.ghOauth) await window.brainrouter.ghOauth({ op: 'disconnect', connectorId: firstGithub.id }).catch(() => undefined);
+    markGithubOauthCredential(false);
+    setOauthState({ status: 'idle', hasToken: false });
+  };
+
+  React.useEffect(() => {
+    if (oauthState.status !== 'pending' || !firstGithub?.id || !window.brainrouter.ghOauth) return;
+    const delay = Math.max(1, oauthState.intervalSec) * 1000;
+    const timer = window.setTimeout(() => {
+      void window.brainrouter.ghOauth?.({ op: 'poll', connectorId: firstGithub.id }).then((res) => {
+        if (res.status === 'pending') {
+          setOauthState((cur) => cur.status === 'pending'
+            ? { ...cur, intervalSec: Number(res.nextIntervalSec) > 0 ? Number(res.nextIntervalSec) : cur.intervalSec, expiresAtMs: Number(res.expiresAtMs) || cur.expiresAtMs }
+            : cur);
+          return;
+        }
+        if (res.status === 'authorized') {
+          markGithubOauthCredential(true);
+          setOauthState({ status: 'authorized', scope: typeof res.scope === 'string' ? res.scope : undefined, storageMode: typeof res.storageMode === 'string' ? res.storageMode : undefined });
+          return;
+        }
+        setOauthState({ status: 'error', error: typeof res.error === 'string' ? res.error : `OAuth ${String(res.status ?? 'failed')}.` });
+      }).catch((err) => setOauthState({ status: 'error', error: err instanceof Error ? err.message : String(err) }));
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [oauthState, firstGithub?.id]);
+
   const saveGenericConnector = (): void => {
     if (!selectedEntry || selectedEntry.source === 'github') return;
     const config = Object.fromEntries(selectedEntry.configFields.map((field) => {
@@ -586,8 +854,7 @@ function ConnectorSettings({ connectors, githubIntegration, onGithubSave, onActi
         <div className="connector-catalog">
           {connectors.catalog.map((entry) => {
             const configured = connectors.items.filter((item) => item.source === entry.source).length;
-            // Only GitHub has a runtime today; the rest are catalog-only placeholders.
-            const ready = entry.source === 'github';
+            const ready = CHECKPOINT_RUNTIME_SOURCES.has(entry.source);
             return (
               <button
                 key={entry.source}
@@ -644,7 +911,7 @@ function ConnectorSettings({ connectors, githubIntegration, onGithubSave, onActi
                   setTimeout(refreshSnapshot, 120);
                 }}>{connector.status === 'paused' ? 'Resume' : 'Pause'}</button>
                 {connector.source === 'github' ? <button className="btn" onClick={() => { onAction('a-connector-validate', 'action:connector-validate', { id: connector.id }); setTimeout(refreshSnapshot, 700); }}>Validate</button> : null}
-                {connector.source === 'github' ? <button className="btn" onClick={() => { onAction('a-connector-run', 'action:connector-run', { id: connector.id }); setTimeout(refreshSnapshot, 1200); }}>Run</button> : null}
+                {CHECKPOINT_RUNTIME_SOURCES.has(connector.source) ? <button className="btn" onClick={() => { onAction('a-connector-run', 'action:connector-run', { id: connector.id }); setTimeout(refreshSnapshot, 1200); }}>Run</button> : null}
                 <button className="btn" disabled={(connectors.documentCounts?.[connector.id] ?? 0) === 0} title="Send stored connector documents to the active BrainRouter memory server for recall" onClick={() => { onAction('a-connector-index-memory', 'action:connector-index-memory', { id: connector.id }); setTimeout(refreshSnapshot, 700); }}>Index memory</button>
                 {connector.source === 'github' ? <button className="btn" onClick={() => { onAction('a-connector-sync-permissions', 'action:connector-sync-permissions', { id: connector.id }); setTimeout(refreshSnapshot, 1200); }}>Sync permissions</button> : null}
                 <button className="btn danger" onClick={() => { onAction('a-connector-delete', 'action:connector-delete', { id: connector.id }); setTimeout(refreshSnapshot, 120); }}>Remove</button>
@@ -692,16 +959,19 @@ function ConnectorSettings({ connectors, githubIntegration, onGithubSave, onActi
             {selectedEntry.source === 'github' ? (
         <>
           <div className="set-h2" style={{ marginTop: 2 }}>GitHub source</div>
-          <div className="set-desc" style={{ marginBottom: 8 }}>Configure one owner/org, many repositories, or leave repositories empty to cover all accessible repositories under that owner.</div>
+          <div className="set-desc" style={{ marginBottom: 8 }}>Configure a GitHub identity and the repositories it can index for memory and Track sync.</div>
           {!github ? <div className="empty">GitHub is not available in the connector catalog.</div> : null}
           <Row title="Name" desc="Local display name for this connector instance.">
             <input className="ctl" value={name} onChange={(e) => setName(e.target.value)} placeholder="GitHub connector" />
           </Row>
-          <Row title="Owner / organization" desc="GitHub owner, user, or organization.">
+          <Row title="Owner / organization" desc="Optional hint. Used when no repositories are selected.">
             <input className="ctl mono" value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="owner-or-org" spellCheck={false} autoCapitalize="off" />
           </Row>
-          <Row title="Repositories" desc="Optional. One repo name per line or comma-separated. Empty means every accessible repo under the owner.">
-            <textarea className="ctl mono" rows={3} value={repos} onChange={(e) => setRepos(e.target.value)} placeholder={'BrainRouter\nbrainrouter-desktop'} spellCheck={false} />
+          <Row title="Repositories" desc="Tick repositories from the connected account. Empty means every accessible repo under the owner hint.">
+            <GithubRepoPicker connector={firstGithub} value={selectedGithubRepos} onChange={(next) => {
+              setRepos(next.join('\n'));
+              if (!owner.trim() && next[0]?.includes('/')) setOwner(next[0].split('/')[0]);
+            }} />
           </Row>
           <Row title="Content" desc="Choose what the connector ingests for memory and recall.">
             <div className="connector-toggles">
@@ -713,22 +983,45 @@ function ConnectorSettings({ connectors, githubIntegration, onGithubSave, onActi
           <Row title="Auto run" desc="Optional polling cadence in minutes. Blank disables background connector runs.">
             <input className="ctl mono" type="number" min={1} step={1} value={pollMinutes} onChange={(e) => setPollMinutes(e.target.value)} placeholder="disabled" />
           </Row>
-          <Row title="Credential provider" desc="Dynamic uses the GitHub CLI account. Static reads a token from the named host environment variable.">
+          <Row title="Credential provider" desc="Dynamic uses the GitHub CLI account. Static reads an environment token. OAuth stores a per-connector token in the OS keychain.">
             <ChoiceControl
               value={credentialMode}
               options={[
                 { value: 'dynamic', label: 'GitHub CLI', detail: 'uses gh auth' },
                 { value: 'static', label: 'Token reference', detail: 'env/config/keychain ref' },
-                { value: 'oauth', label: 'OAuth account', detail: 'Coming soon', disabled: true },
+                { value: 'oauth', label: 'OAuth account', detail: 'device flow' },
               ]}
               onChange={(v) => {
                 if (v === 'none' || v === 'static' || v === 'dynamic' || v === 'oauth') setCredentialMode(v);
               }}
             />
           </Row>
-          {credentialMode !== 'dynamic' ? (
-            <Row title="Credential reference" desc="Environment variable name for static tokens, or OAuth account id for future OAuth flows.">
+          {credentialMode === 'static' ? (
+            <Row title="Credential reference" desc="Environment variable name for static tokens.">
               <input className="ctl mono" value={credentialRef} onChange={(e) => setCredentialRef(e.target.value)} placeholder="GITHUB_TOKEN" spellCheck={false} />
+            </Row>
+          ) : null}
+          {credentialMode === 'oauth' ? (
+            <Row title="OAuth account" desc={oauthState.status === 'idle' && oauthState.hasToken ? `Token stored via ${oauthState.storageMode ?? 'keychain'}.` : 'Device-flow authorization stores the token in the OS keychain.'}>
+              <div style={{ display: 'grid', gap: 8, minWidth: 300 }}>
+                {oauthState.status === 'pending' ? (
+                  <div className="gh-int-status ok">
+                    <span className="gh-int-dot" />
+                    <span>Code <b className="mono">{oauthState.userCode}</b> · expires {new Date(oauthState.expiresAtMs).toLocaleTimeString()}</span>
+                  </div>
+                ) : oauthState.status === 'authorized' ? (
+                  <div className="gh-int-status ok"><span className="gh-int-dot" />Connected{oauthState.scope ? ` · ${oauthState.scope}` : ''}</div>
+                ) : oauthState.status === 'error' ? (
+                  <div className="pc-host" style={{ color: 'var(--warn)' }}>{oauthState.error}</div>
+                ) : null}
+                {oauthState.status === 'pending' ? <span className="set-desc mono">{oauthState.verificationUri}</span> : null}
+                <span className="pc-actions">
+                  {oauthState.status === 'pending'
+                    ? <button type="button" className="btn" onClick={() => void cancelGithubOauth()}>Cancel</button>
+                    : <button type="button" className="btn" disabled={!firstGithub || oauthState.status === 'starting'} onClick={() => void startGithubOauth()}>{oauthState.status === 'starting' ? 'Starting...' : (oauthState.status === 'idle' && oauthState.hasToken ? 'Reconnect' : 'Connect')}</button>}
+                  {oauthState.status === 'idle' && oauthState.hasToken ? <button type="button" className="btn danger" onClick={() => void disconnectGithubOauth()}>Disconnect</button> : null}
+                </span>
+              </div>
             </Row>
           ) : null}
           <Row title="GitHub Enterprise URL" desc="Optional API base URL for GitHub Enterprise.">
@@ -759,7 +1052,7 @@ function ConnectorSettings({ connectors, githubIntegration, onGithubSave, onActi
           <Row title="Credential provider" desc="Credential handling is source-specific. Runtime execution is enabled as connector runners are added.">
             <ChoiceControl
               value={genericCredentialMode}
-              options={selectedEntry.credentialModes.map((mode) => ({ value: mode, label: mode === 'none' ? 'None' : mode === 'static' ? 'Token reference' : mode === 'oauth' ? 'OAuth account' : 'Dynamic' }))}
+              options={selectedEntry.credentialModes.map((mode) => ({ value: mode, label: mode === 'none' ? 'None' : mode === 'static' ? 'Token reference' : mode === 'oauth' ? 'OAuth account' : 'Dynamic', detail: mode === 'oauth' ? 'Coming soon' : undefined, disabled: mode === 'oauth' }))}
               onChange={setGenericCredentialMode}
             />
           </Row>
@@ -980,7 +1273,10 @@ export function SettingsDialog(props: {
   const ks = (key: string, dflt: string): string => String(knobs[key] ?? dflt);
   const telemetryOn = (knobs.telemetry as { enabled?: boolean } | undefined)?.enabled !== false;
   const github = snapshot?.integrations?.github ?? { repo: null, hasToken: false, tokenSource: null, repos: [], caBundle: null };
+  const githubCli = (snapshot?.cli?.github && typeof snapshot.cli.github === 'object' ? snapshot.cli.github : {}) as { oauthClientId?: string };
+  const githubOauthClientId = typeof githubCli.oauthClientId === 'string' ? githubCli.oauthClientId : '';
   const saveGithub = (args: GithubSaveArgs): void => { props.onAction('a-gh', 'action:set-track-github', args); setTimeout(refreshSnapshot, 100); };
+  const saveGithubOauthClientId = (clientId: string | null): void => { props.onAction('a-gh-oauth-client', 'action:set-github-oauth-client-id', { clientId: clientId ?? '' }); setTimeout(refreshSnapshot, 100); };
 
   const filteredCommands = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -1738,6 +2034,7 @@ export function SettingsDialog(props: {
         <ConnectorSettings
           connectors={snapshot?.connectors ?? { catalog: [], items: [] }}
           githubIntegration={github}
+          githubOauthClientId={githubOauthClientId}
           onGithubSave={saveGithub}
           onAction={props.onAction}
           refreshSnapshot={refreshSnapshot}
@@ -1791,6 +2088,11 @@ export function SettingsDialog(props: {
             </Row>
             <Row title="Update check" desc="Check for new BrainRouter versions on launch (cli.updateCheck).">
               <Toggle on={ks('updateCheck', 'true') !== 'false' && knobs.updateCheck !== false} onChange={(v) => setKnob('updateCheck', v)} />
+            </Row>
+
+            <div className="set-h2">GitHub</div>
+            <Row title="OAuth client ID" desc="GitHub OAuth App client id with device flow enabled (cli.github.oauthClientId).">
+              <KnobText value={githubOauthClientId} onSave={saveGithubOauthClientId} placeholder="Iv1..." />
             </Row>
 
             <div className="set-h2">Keyboard shortcuts</div>

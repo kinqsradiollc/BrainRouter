@@ -57,6 +57,11 @@ contextBridge.exposeInMainWorld('brainrouter', {
     reorderWorkspace(dragged, target) {
         return ipcRenderer.invoke('workspace:reorder', dragged, target);
     },
+    // Connector Phase 2 — GitHub OAuth device flow, brokered by MAIN (tokens
+    // never reach the renderer; only user_code/status/metadata come back).
+    ghOauth(payload) {
+        return ipcRenderer.invoke('gh-oauth', payload);
+    },
     // T1 — cross-workspace dashboard (running tasks + last review gate per recent root).
     globalDashboard() {
         return ipcRenderer.invoke('dashboard:global');

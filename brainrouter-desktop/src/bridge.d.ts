@@ -28,6 +28,8 @@ declare global {
       markActivity?(workspaceRoot: string, reason: string): Promise<{ ok: boolean }>;
       /** Explicit user drag/drop ordering for projects. */
       reorderWorkspace?(dragged: string, target: string): Promise<{ recents: string[] }>;
+      /** GitHub OAuth device flow brokered by Electron main. Tokens never reach the renderer. */
+      ghOauth?(payload: { op: 'start' | 'poll' | 'cancel' | 'disconnect' | 'status'; connectorId: string; clientId?: string }): Promise<Record<string, unknown>>;
       /** T1 — cross-workspace dashboard: running tasks + last review gate per recent root. */
       globalDashboard?(): Promise<{ workspaces: Array<{ workspaceRoot: string; tasks: Array<Record<string, unknown>>; reviewGate: { status: string; blocked: boolean; reason: string } | null }> }>;
       getZoomFactor?(): number;
