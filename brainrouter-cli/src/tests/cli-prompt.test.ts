@@ -275,7 +275,7 @@ test('LOCAL_TOOLS registers ask_user_choice with the expected schema shape', () 
 // cover the skip-if-plan-exists guard, which is filesystem-driven (no MCP).
 
 test('grill-me skip guard: fires when the current workflow has a spec.md', async () => {
-  const { shouldSkipGrillMe } = await import('../cli/commands/workflow.js');
+  const { shouldSkipGrillMe } = await import('../cli/commands/workflow/index.js');
   withTempWorkspace((workspace) => {
     const meta = createWorkflow(workspace, { title: 'auth rewrite', kind: 'spec' });
     const specAbs = path.join(getWorkflowDir(workspace, meta.slug), ARTIFACT.spec);
@@ -290,7 +290,7 @@ test('grill-me skip guard: fires when the current workflow has a spec.md', async
 });
 
 test('grill-me skip guard: stays quiet when no workflow is bound or spec.md is absent', async () => {
-  const { shouldSkipGrillMe } = await import('../cli/commands/workflow.js');
+  const { shouldSkipGrillMe } = await import('../cli/commands/workflow/index.js');
   withTempWorkspace((workspace) => {
     // No workflow bound yet → proceed.
     assert.equal(shouldSkipGrillMe(workspace, false).skip, false);
@@ -303,7 +303,7 @@ test('grill-me skip guard: stays quiet when no workflow is bound or spec.md is a
 });
 
 test('grill-me skip guard: --force bypasses even when a spec.md is present', async () => {
-  const { shouldSkipGrillMe } = await import('../cli/commands/workflow.js');
+  const { shouldSkipGrillMe } = await import('../cli/commands/workflow/index.js');
   withTempWorkspace((workspace) => {
     const meta = createWorkflow(workspace, { title: 'follow-up', kind: 'spec' });
     fs.writeFileSync(path.join(getWorkflowDir(workspace, meta.slug), ARTIFACT.spec), '# Spec\n');

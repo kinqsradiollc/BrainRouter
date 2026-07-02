@@ -8,7 +8,7 @@ import {
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { tryHandleOrchestrationCommand } from '../cli/commands/orchestration.js';
+import { tryHandleOrchestrationCommand } from '../cli/commands/orchestration/index.js';
 import { readPreferences } from '@kinqs/brainrouter-core/session';
 
 test('isAutoChainMode validates the enum', () => {

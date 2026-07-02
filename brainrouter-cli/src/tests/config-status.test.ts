@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { selfHealConfig, type Config } from '@kinqs/brainrouter-core/config';
-import { describeActiveServer } from '../cli/commands/serverStatus.js';
+import { describeActiveServer } from '../cli/commands/serverStatus/index.js';
 
 /**
  * Regression cover for GitHub issue #59 (`/status` crash:

@@ -8,7 +8,7 @@ import {
   evaluateDelegationGate,
   isDelegationPolicy,
 } from '@kinqs/brainrouter-core/orchestration';
-import { tryHandleOrchestrationCommand } from '../cli/commands/orchestration.js';
+import { tryHandleOrchestrationCommand } from '../cli/commands/orchestration/index.js';
 import { readPreferences } from '@kinqs/brainrouter-core/session';
 
 test('isDelegationPolicy validates the enum', () => {

@@ -8,7 +8,7 @@ const HOME = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'model-sync-h
 process.env.HOME = HOME;
 process.env.BRAINROUTER_HOME = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'model-sync-br-')));
 
-const { tryHandleUiCommand } = await import('../cli/commands/ui.js');
+const { tryHandleUiCommand } = await import('../cli/commands/ui/index.js');
 const { getSessionRuntime, setSessionRuntime } = await import('@kinqs/brainrouter-core/session');
 
 function withMutedConsole(fn: () => Promise<void>): Promise<void> {
