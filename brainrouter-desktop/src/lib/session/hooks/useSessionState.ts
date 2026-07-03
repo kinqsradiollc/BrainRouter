@@ -8,9 +8,9 @@
  * (render JSX, useAgentEvents ctx, action hooks) keep compiling unchanged.
  */
 import { useRef, useState } from 'react';
-import type { ChatRow, SessionRow, FleetRow, TaskViewState, WorkflowDetail } from '../../types.js';
-import type { ProjectSessionsByRoot } from './projectSessionsView.js';
-import { loadExpandedProjects } from './expandedProjectsStore.js';
+import type { ChatRow, SessionRow, FleetRow, TaskViewState, WorkflowDetail } from '../../../types.js';
+import type { ProjectSessionsByRoot } from '../workspaces/projectSessionsView.js';
+import { loadExpandedProjects } from '../workspaces/expandedProjectsStore.js';
 
 export interface SessionState {
   viewKey: string;

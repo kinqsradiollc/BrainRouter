@@ -10,21 +10,21 @@
  */
 import { useRef } from 'react';
 import type { InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
-import type { ChatRow, SessionRow, FleetRow, TaskViewState, WorkflowDetail } from '../../types.js';
-import type { SettingsSection } from '../commands/commands.js';
-import type { WorkspaceDash } from '../workspace/dashboard.js';
-import type { EditorApi } from '../editor/useEditor.js';
-import type { CiApi } from '../ci/useCi.js';
-import { rid } from '../rid.js';
+import type { ChatRow, SessionRow, FleetRow, TaskViewState, WorkflowDetail } from '../../../types.js';
+import type { SettingsSection } from '../../commands/commands.js';
+import type { WorkspaceDash } from '../../workspace/dashboard.js';
+import type { EditorApi } from '../../editor/useEditor.js';
+import type { CiApi } from '../../ci/useCi.js';
+import { rid } from '../../rid.js';
 import {
   PROJECT_SESSION_STALE_MS,
   loadingProjectSessions,
   normalizeProjectSessionsResult,
   projectSessionsNeedRefresh,
   type ProjectSessionsByRoot,
-} from './projectSessionsView.js';
-import { withExpanded } from './expandedProjectsStore.js';
-import { sessionRowsCacheKey } from './sessionCache.js';
+} from '../workspaces/projectSessionsView.js';
+import { withExpanded } from '../workspaces/expandedProjectsStore.js';
+import { sessionRowsCacheKey } from '../list/sessionCache.js';
 
 export interface SessionActionsCtx {
   q: (id: string, name: string, args?: Record<string, unknown>) => void;
@@ -62,7 +62,7 @@ export interface SessionActionsCtx {
   setSessions: React.Dispatch<React.SetStateAction<SessionRow[]>>;
   setRunning: React.Dispatch<React.SetStateAction<boolean>>;
   setInteraction: React.Dispatch<React.SetStateAction<InteractionRequest | null>>;
-  setSearchHits: React.Dispatch<React.SetStateAction<import('../../panels/index.js').SearchHit[] | null>>;
+  setSearchHits: React.Dispatch<React.SetStateAction<import('../../../panels/index.js').SearchHit[] | null>>;
   setViewKey: React.Dispatch<React.SetStateAction<string>>;
   setTaskView: React.Dispatch<React.SetStateAction<TaskViewState | null>>;
   setWorkflowView: React.Dispatch<React.SetStateAction<WorkflowDetail | null>>;
@@ -80,8 +80,8 @@ export interface SessionActionsCtx {
   setTokens: React.Dispatch<React.SetStateAction<{ promptTokens: number; completionTokens: number; turns: number } | null>>;
   setContextUsage: React.Dispatch<React.SetStateAction<{ used: number; window: number; compactAt: number; limit: number; pct: number } | null>>;
   setGateBlock: React.Dispatch<React.SetStateAction<{ kind: 'commit' | 'push'; msg?: string; reason: string; status: string } | null>>;
-  setLastPlan: React.Dispatch<React.SetStateAction<{ items: import('../../types.js').PlanItem[]; explanation?: string } | null>>;
-  setPlanHistory: React.Dispatch<React.SetStateAction<import('../plan/planReviewView.js').PlanDecisionView[]>>;
+  setLastPlan: React.Dispatch<React.SetStateAction<{ items: import('../../../types.js').PlanItem[]; explanation?: string } | null>>;
+  setPlanHistory: React.Dispatch<React.SetStateAction<import('../../plan/planReviewView.js').PlanDecisionView[]>>;
   setFleet: React.Dispatch<React.SetStateAction<FleetRow[]>>;
   setLiveChildren: React.Dispatch<React.SetStateAction<Record<string, { childId: string; role: string; tool?: string; startedAt: number }>>>;
   setRecentTasks: React.Dispatch<React.SetStateAction<FleetRow[]>>;
@@ -98,7 +98,7 @@ export interface SessionActionsCtx {
   setGlobalBoards: React.Dispatch<React.SetStateAction<WorkspaceDash[] | null>>;
   pendingGitRef: React.MutableRefObject<{ kind: 'commit' | 'push'; msg?: string; root: string } | null>;
   // collaborators
-  ensurePanel: (id: import('../../panels/index.js').PanelId) => void;
+  ensurePanel: (id: import('../../../panels/index.js').PanelId) => void;
   resetTermDock: () => void;
   editor: EditorApi;
   ci: CiApi;

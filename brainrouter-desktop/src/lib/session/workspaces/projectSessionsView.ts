@@ -1,5 +1,5 @@
-import type { SessionRow } from '../../types.js';
-import { moreLabel, showToggle, toggleVisible } from './sessionPagination.js';
+import type { SessionRow } from '../../../types.js';
+import { moreLabel, showToggle, toggleVisible } from '../list/sessionPagination.js';
 
 export const PROJECT_SESSION_BASE = 6;
 export const PROJECT_SESSION_PAGE = 10;

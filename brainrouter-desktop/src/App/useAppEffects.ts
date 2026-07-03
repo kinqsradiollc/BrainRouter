@@ -10,12 +10,12 @@ import { useEffect, useRef } from 'react';
 import type React from 'react';
 import { hostQuery } from '../lib/hostQuery.js';
 import { detectOS, captureCombo } from '../lib/shortcuts/shortcuts.js';
-import { saveExpandedProjects } from '../lib/session/expandedProjectsStore.js';
+import { saveExpandedProjects } from '../lib/session/workspaces/expandedProjectsStore.js';
 import { GIT_VISIBLE_POLL_MS, gitPollRefreshDue, gitRefreshDue } from '../lib/git/gitFreshness.js';
 import type { WorkspaceDash } from '../lib/workspace/dashboard.js';
 import type { PanelId } from '../panels/index.js';
 import type { SessionRow, TaskViewState, WorkflowDetail } from '../types.js';
-import type { ProjectSessionsByRoot } from '../lib/session/projectSessionsView.js';
+import type { ProjectSessionsByRoot } from '../lib/session/workspaces/projectSessionsView.js';
 import type { SettingsSection } from '../lib/commands/commands.js';
 
 type Query = (id: string, name: string, args?: Record<string, unknown>) => void;

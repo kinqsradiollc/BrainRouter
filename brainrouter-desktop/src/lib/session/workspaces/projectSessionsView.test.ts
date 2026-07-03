@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import type { SessionRow } from '../../types.js';
+import type { SessionRow } from '../../../types.js';
 import {
   PROJECT_SESSION_BASE,
   filterProjectSessions,

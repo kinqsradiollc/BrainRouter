@@ -9,7 +9,7 @@ import React, { useMemo, useState, type Dispatch, type SetStateAction } from 're
 import { Icon } from '../icons.js';
 import { SessionStatus } from './SessionStatus.js';
 import { fmtAge } from '../lib/format.js';
-import { toggleVisible, moreLabel, showToggle } from '../lib/session/sessionPagination.js';
+import { toggleVisible, moreLabel, showToggle } from '../lib/session/list/sessionPagination.js';
 import {
   PROJECT_SESSION_BASE,
   filterProjectSessions,
@@ -19,7 +19,7 @@ import {
   shouldShowProjectToggle,
   visibleProjectSessions as visibleOtherProjectSessions,
   type ProjectSessionsByRoot,
-} from '../lib/session/projectSessionsView.js';
+} from '../lib/session/workspaces/projectSessionsView.js';
 import type { SessionRow } from '../types.js';
 import type { PanelId } from '../panels/Panel.js';
 

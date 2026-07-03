@@ -6,8 +6,8 @@
  * verbatim from App.tsx.
  */
 import { useMemo } from 'react';
-import type { SessionRow } from '../../types.js';
-import { sidebarProjectRoots } from './projectSessionsView.js';
+import type { SessionRow } from '../../../types.js';
+import { sidebarProjectRoots } from '../workspaces/projectSessionsView.js';
 
 export interface SessionSidebarInput {
   sessions: SessionRow[];

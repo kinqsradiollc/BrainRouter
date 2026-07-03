@@ -5,13 +5,13 @@
  * unchanged. Returned as a bundle the shell spreads back into local consts.
  */
 import React from 'react';
-import { mergeOptimistic } from '../lib/session/sessionOrder.js';
-import { withCachedProjectSessions } from '../lib/session/projectSessionsView.js';
+import { mergeOptimistic } from '../lib/session/list/sessionOrder.js';
+import { withCachedProjectSessions } from '../lib/session/workspaces/projectSessionsView.js';
 import { runCommand, resolveSlashInput, type CmdCtx, type DeskCommand } from '../lib/commands/commands.js';
 import { buildPromptWithAttachments, readyAttachments } from '../lib/attachments/attachmentPrompt.js';
 import type { AttachmentUpload, ChatRow, SessionRow } from '../types.js';
 import type { PanelId } from '../panels/index.js';
-import type { ProjectSessionsByRoot } from '../lib/session/projectSessionsView.js';
+import type { ProjectSessionsByRoot } from '../lib/session/workspaces/projectSessionsView.js';
 
 type Query = (id: string, name: string, args?: Record<string, unknown>) => void;
 

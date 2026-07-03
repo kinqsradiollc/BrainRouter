@@ -12,7 +12,7 @@ import {
   isStaleWorkspaceEvent, isBlockedDuringPendingWorkspaceSwitch, nextActiveWorkspace,
   workspaceChanged, parseQueryId, nextRunningWorkspaces,
 } from '../../workspace/workspaceEvents.js';
-import { sessionRowsCacheKey } from '../../session/sessionCache.js';
+import { sessionRowsCacheKey } from '../../session/list/sessionCache.js';
 import { fileFromSummary } from '../../format.js';
 import { FOREGROUND_ONLY_KINDS } from '../../../constants.js';
 import { rid } from '../../rid.js';

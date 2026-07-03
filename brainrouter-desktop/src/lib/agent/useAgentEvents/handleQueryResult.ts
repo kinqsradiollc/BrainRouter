@@ -15,9 +15,9 @@ import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph } 
 import type { CommandsCatalog } from '../../commands/commands.js';
 import type { ConfigSnapshot, UsageHistory } from '../../../settings.js';
 import { parseWorktreeList } from '../../worktree/worktreeParser.js';
-import { mergeOptimistic, dropPending } from '../../session/sessionOrder.js';
-import { normalizeProjectSessionsResult, withCachedProjectSessions } from '../../session/projectSessionsView.js';
-import { shouldApplyTaskTranscript, shouldApplyWorkflowDetail } from '../../session/taskTranscriptRouting.js';
+import { mergeOptimistic, dropPending } from '../../session/list/sessionOrder.js';
+import { normalizeProjectSessionsResult, withCachedProjectSessions } from '../../session/workspaces/projectSessionsView.js';
+import { shouldApplyTaskTranscript, shouldApplyWorkflowDetail } from '../../session/routing/taskTranscriptRouting.js';
 import { setEntry, shouldProceedGate } from '../../review/reviewWorkspace.js';
 import { parseQueryId, isStaleQueryResult } from '../../workspace/workspaceEvents.js';
 import { fmt, download } from '../../format.js';
