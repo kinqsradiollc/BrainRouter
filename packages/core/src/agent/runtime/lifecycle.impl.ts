@@ -2,26 +2,26 @@
 // out of agent.ts (god-file breakdown). Byte-identical bodies; each is a free
 // function bound to `this: Agent`, and the class keeps thin delegators. Kept as
 // an `.impl` module (internal wiring, not public surface).
-import { Agent } from './agent.js';
-import type { RunTurnCallbacks, LastBriefingDetails } from './agent.js';
-import type { PromptLayeredMessage } from './llmTransport.js';
-import { getCliKnobs } from '../config/config.js';
-import { extensionHookHandlers } from '../extension/registry.js';
-import { readGoal, formatGoalBlock } from '../goal/store/goalStore.js';
-import { callMcpTool } from '../mcp/mcpUtils.js';
-import { decideAnchorAction, hashBriefingContent, wrapMidSessionRefresh } from '../memory/anchorPin.js';
-import { buildDefaultSourcePlan, buildMemoryBriefing, describeSourcePlan } from '../memory/briefing.js';
-import { countEntityTokens as countEntityTokensFromText, decideMemoryBriefing, resolveRecallMode as resolveRecallModeFromEnv, type BriefingDecision } from '../memory/briefingTriggers.js';
-import { emitAgentEvent } from '../memory/memoryEvents.js';
-import { buildPromptLayers, buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
-import { appendVerbositySteering } from '../prompt/steering/verbositySteering.js';
-import { syncRequirementPlanTrack } from '../requirement/sync/planTrackSync.js';
-import { detectRequirementShapedPrompt } from '../requirement/records/requirementDetector.js';
-import { createRequirement, getRequirement, linkRequirement, listRequirements, updateRequirement } from '../requirement/records/requirementStore.js';
-import { effortToWireLevel, readPreferences } from '../session/preferences/preferencesStore.js';
-import { resolveActiveMode } from '../session/state/sessionModeStore.js';
-import { readPlan } from '../task/taskStore.js';
-import { reconcileSessionSprints } from '../track/automation/index.js';
+import { Agent } from '../agent.js';
+import type { RunTurnCallbacks, LastBriefingDetails } from '../agent.js';
+import type { PromptLayeredMessage } from '../transport/llmTransport.js';
+import { getCliKnobs } from '../../config/config.js';
+import { extensionHookHandlers } from '../../extension/registry.js';
+import { readGoal, formatGoalBlock } from '../../goal/store/goalStore.js';
+import { callMcpTool } from '../../mcp/mcpUtils.js';
+import { decideAnchorAction, hashBriefingContent, wrapMidSessionRefresh } from '../../memory/anchorPin.js';
+import { buildDefaultSourcePlan, buildMemoryBriefing, describeSourcePlan } from '../../memory/briefing.js';
+import { countEntityTokens as countEntityTokensFromText, decideMemoryBriefing, resolveRecallMode as resolveRecallModeFromEnv, type BriefingDecision } from '../../memory/briefingTriggers.js';
+import { emitAgentEvent } from '../../memory/memoryEvents.js';
+import { buildPromptLayers, buildSystemPrompt, loadWorkspaceInstructionSummary } from '../../prompt/systemPrompt.js';
+import { appendVerbositySteering } from '../../prompt/steering/verbositySteering.js';
+import { syncRequirementPlanTrack } from '../../requirement/sync/planTrackSync.js';
+import { detectRequirementShapedPrompt } from '../../requirement/records/requirementDetector.js';
+import { createRequirement, getRequirement, linkRequirement, listRequirements, updateRequirement } from '../../requirement/records/requirementStore.js';
+import { effortToWireLevel, readPreferences } from '../../session/preferences/preferencesStore.js';
+import { resolveActiveMode } from '../../session/state/sessionModeStore.js';
+import { readPlan } from '../../task/taskStore.js';
+import { reconcileSessionSprints } from '../../track/automation/index.js';
 import {
   ensureProject as trackEnsureProject,
   getProject as trackGetProject,
@@ -30,7 +30,7 @@ import {
   getWorkItem as trackGetWorkItem,
   transitionWorkItem as trackTransitionWorkItem,
   linkWorkItem as trackLinkWorkItem,
-} from '../track/trackStore.js';
+} from '../../track/trackStore.js';
 import { isCodeLinkKind, isTerminalCategory, isUnstartedCategory } from '@kinqs/brainrouter-types';
 
 export async function bootstrapSession(this: Agent, callbacks: RunTurnCallbacks): Promise<void> {
@@ -158,7 +158,7 @@ export function hookAdvisoryActive(this: Agent): boolean {
    */
 export async function runExtensionHooks(
     this: Agent,
-    event: import('../hooks/hooksStore.js').HookEvent,
+    event: import('../../hooks/hooksStore.js').HookEvent,
     ctx: { tool?: string; args?: Record<string, unknown> } = {},
   ): Promise<string | null> {
     const handlers = extensionHookHandlers(event);

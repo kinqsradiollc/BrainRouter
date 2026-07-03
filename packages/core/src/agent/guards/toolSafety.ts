@@ -1,5 +1,5 @@
-import { getCliKnobs } from '../config/config.js';
-import { registryParallelSafeLocal } from '../tool/registry/registry.js';
+import { getCliKnobs } from '../../config/config.js';
+import { registryParallelSafeLocal } from '../../tool/registry/registry.js';
 
 // 0.3.8-R4 — Single source of truth for which tool calls are safe to
 // dispatch concurrently within one LLM response.

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { looksLikeStalledPreamble, looksLikeDeferredToolPromise, mentionsImminentToolWork, stripLeadingAck } from '../agent/toolCallRecovery.js';
+import { looksLikeStalledPreamble, looksLikeDeferredToolPromise, mentionsImminentToolWork, stripLeadingAck } from '../agent/guards/toolCallRecovery.js';
 
 // The exact phrasing that slipped through the guard (gpt-5.3-codex):
 const STALL = 'Absolutely — I\'ll run the full deep sweep now (lint, strict types, audits, and runtime smoke paths) and return a prioritized bug list with exact file paths.';

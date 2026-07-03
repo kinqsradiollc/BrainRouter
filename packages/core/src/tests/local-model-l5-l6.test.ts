@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { biasTierForLocalModel, routeTask } from '../orchestration/delegation/router.js';
-import { buildVerificationNudge } from '../agent/verificationGate.js';
+import { buildVerificationNudge } from '../agent/guards/verificationGate.js';
 
 // ---- L6: router tier bias ----
 

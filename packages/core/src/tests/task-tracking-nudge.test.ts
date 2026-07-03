@@ -4,7 +4,7 @@ import {
   shouldNudgeTaskTracking,
   buildTaskTrackingNudge,
   TASK_NUDGE_TOOLCALL_THRESHOLD,
-} from '../agent/taskTrackingNudge.js';
+} from '../agent/guards/taskTrackingNudge.js';
 
 test('shouldNudgeTaskTracking: multi-step + no plan + not yet nudged → true', () => {
   assert.equal(shouldNudgeTaskTracking({

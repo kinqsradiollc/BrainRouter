@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyTurn, resolveEffortForTurn } from '../agent/effortRouting.js';
+import { classifyTurn, resolveEffortForTurn } from '../agent/support/effortRouting.js';
 
 test('classifyTurn distinguishes new asks, mechanical tool continuations, and errors', () => {
   assert.equal(classifyTurn([{ role: 'user', content: 'Review this change.' }]), 'NEW_USER_ASK');

@@ -4,18 +4,18 @@
 // payload builders, and the callOpenAI / callOpenAIStream network calls. Pure
 // module functions; the Agent class imports these back and re-exports the public
 // ones so the agent.ts surface is unchanged.
-import type { LLMConfig } from '../config/config.js';
-import { getCliKnobs } from '../config/config.js';
-import { isReasoningModel, isNonReasoningChatModel, isAlwaysOnReasoner, modelSupportsXhighEffort, isBinaryReasoningModel, normalizeModelName } from '../provider/models/reasoning.js';
-import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PLACEHOLDER_KEY, normalizeProviderEndpoint, withApiVersion } from '../provider/providers/index.js';
-import { DEFAULT_EFFORT_VALUE_MAP } from '../provider/providers/definition.js';
-import type { ProviderDefinition } from '../provider/providers/definition.js';
-import { effortToWireLevel, type EffortLevel } from '../session/preferences/preferencesStore.js';
-import type { PromptLayers } from '../prompt/systemPrompt.js';
-import { computePrefixFingerprint } from '../context/contextRegions.js';
-import { traceEvent } from '../telemetry/tracing/tracing.js';
-import { acquireLLMSlot } from '../util/concurrency/llmSemaphore.js';
-import { parseRetryAfterMs } from '../mcp/reconnect/reconnect.js';
+import type { LLMConfig } from '../../config/config.js';
+import { getCliKnobs } from '../../config/config.js';
+import { isReasoningModel, isNonReasoningChatModel, isAlwaysOnReasoner, modelSupportsXhighEffort, isBinaryReasoningModel, normalizeModelName } from '../../provider/models/reasoning.js';
+import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PLACEHOLDER_KEY, normalizeProviderEndpoint, withApiVersion } from '../../provider/providers/index.js';
+import { DEFAULT_EFFORT_VALUE_MAP } from '../../provider/providers/definition.js';
+import type { ProviderDefinition } from '../../provider/providers/definition.js';
+import { effortToWireLevel, type EffortLevel } from '../../session/preferences/preferencesStore.js';
+import type { PromptLayers } from '../../prompt/systemPrompt.js';
+import { computePrefixFingerprint } from '../../context/contextRegions.js';
+import { traceEvent } from '../../telemetry/tracing/tracing.js';
+import { acquireLLMSlot } from '../../util/concurrency/llmSemaphore.js';
+import { parseRetryAfterMs } from '../../mcp/reconnect/reconnect.js';
 import {
   buildAnthropicMessagesPayload, normalizeAnthropicOutput, ANTHROPIC_DEFAULT_MAX_TOKENS,
   buildGeminiGeneratePayload, normalizeGeminiOutput, nativeRequestSpec,

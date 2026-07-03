@@ -22,9 +22,9 @@
  * message, then re-warms on every subsequent turn. Net win.
  */
 
-import { compactToolOutput } from '../prompt/compaction/toolCompaction.js';
-import { getCliKnobs } from '../config/config.js';
-import { attachCompactedResultHandoff, ResultCache } from '../util/result/resultHandoff.js';
+import { compactToolOutput } from '../../prompt/compaction/toolCompaction.js';
+import { getCliKnobs } from '../../config/config.js';
+import { attachCompactedResultHandoff, ResultCache } from '../../util/result/resultHandoff.js';
 
 /** Default cap. Overridable via BRAINROUTER_TURN_END_RESULT_CAP_TOKENS. */
 export const TURN_END_RESULT_CAP_TOKENS = 3000;
