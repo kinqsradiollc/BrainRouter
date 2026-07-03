@@ -1,7 +1,7 @@
 import { execSync } from 'node:child_process';
 import { readPreferences } from '@kinqs/brainrouter-core/session';
 import { resolveTierLadder, currentTier } from '@kinqs/brainrouter-core/provider';
-import { isKnownSegment, renderSegments } from '../../statusline.js';
+import { isKnownSegment, renderSegments } from '../../view/statusline.js';
 import type { RunChatContext } from './context.js';
 
 /**

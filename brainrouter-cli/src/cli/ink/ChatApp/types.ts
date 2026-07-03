@@ -4,7 +4,7 @@
 // ChatApp.tsx for back-compat with existing importers.
 import type React from 'react';
 import type { SlashCommandDef } from '../SlashPalette.js';
-import type { BannerInputs } from '../../banner.js';
+import type { BannerInputs } from '../../view/banner.js';
 
 // --- Public props ------------------------------------------------------
 

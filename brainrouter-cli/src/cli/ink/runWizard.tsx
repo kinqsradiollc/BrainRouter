@@ -8,7 +8,7 @@ import type { McpPick } from '../wizard/types.js';
 import { writePreferences } from '@kinqs/brainrouter-core/session';
 import { loadOrInitConfig, saveConfig, type Config } from '@kinqs/brainrouter-core/config';
 import { initAgentMd } from '../../prompt/initAgentMd.js';
-import { NoTTYError } from '../cliPrompt.js';
+import { NoTTYError } from '../prompt/cliPrompt.js';
 import { resetStdinForReadline } from './stdinHandoff.js';
 import { renderWithResizeClear } from './renderWithResizeClear.js';
 

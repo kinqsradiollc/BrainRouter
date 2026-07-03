@@ -7,7 +7,7 @@ import { costUsd } from '../runtime/reporting/pricing.js';
 import { setKnownMcpServerIds } from '../cli/ink/toolFormat.js';
 import type { ServerConfig } from '@kinqs/brainrouter-core/config';
 import { Agent } from '@kinqs/brainrouter-core/agent';
-import { cliPrompter } from '../cli/cliPrompt.js';
+import { cliPrompter } from '../cli/prompt/cliPrompt.js';
 import { applyWorkspaceRoot, findWorkspaceRoot } from '@kinqs/brainrouter-core/workspace';
 import { DEFAULT_LLM } from './shared.js';
 

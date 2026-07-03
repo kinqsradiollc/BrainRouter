@@ -21,7 +21,7 @@
  */
 
 import chalk from 'chalk';
-import type { InboxTextMessage } from '../runtime/federation/federationRegistration.js';
+import type { InboxTextMessage } from '../../runtime/federation/federationRegistration.js';
 
 const BANNER_WIDTH = 80;
 

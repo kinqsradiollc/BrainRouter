@@ -5,7 +5,7 @@ import chalk from 'chalk';
 import type { CommandContext } from '../_context.js';
 import { getConfigPath } from '@kinqs/brainrouter-core/config';
 import { maskApiKey } from '@kinqs/brainrouter-core/provider';
-import type { Theme } from '../../theme.js';
+import type { Theme } from '../../theme/theme.js';
 import { pickFromList } from './shared.js';
 
 export async function showRawConfigPanel(ctx: CommandContext, theme: Theme): Promise<void> {

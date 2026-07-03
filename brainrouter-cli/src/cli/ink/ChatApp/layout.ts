@@ -4,7 +4,7 @@
 // isolation (scrollback-layout.test.ts, ink-chat.test.ts) and re-exported from
 // ChatApp.tsx for back-compat with existing importers.
 import { renderMarkdown } from '../markdownRender.js';
-import { resolveTheme } from '../../theme.js';
+import { resolveTheme } from '../../theme/theme.js';
 import { VERSION } from '@kinqs/brainrouter-core/version';
 import type { SlashCommandDef } from '../SlashPalette.js';
 import type { ScrollbackEntry, VisibleSlice } from './types.js';

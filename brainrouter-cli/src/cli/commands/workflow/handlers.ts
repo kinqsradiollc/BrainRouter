@@ -7,7 +7,7 @@
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import chalk from 'chalk';
-import { spinner as makeSpinner } from '../../spinner.js';
+import { spinner as makeSpinner } from '../../prompt/spinner.js';
 import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/agent';
 import { callMcpTool } from '@kinqs/brainrouter-core/mcp';
 import { listSessions, reconcileStale } from '@kinqs/brainrouter-core/orchestration';
@@ -15,7 +15,7 @@ import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, lis
 import { readRun, summarizeRun, formatRunGlyphs, formatDuration, stepGlyph, reconcileStaleRuns, summarizePhases, formatPhaseGlyphs } from '@kinqs/brainrouter-core/workflow';
 import { buildWorkflowRunKickoff, parseTemplateArgs, renderPhaseTimelineLines } from '../workflowLaunch/index.js';
 import { clearGoal, completeGoal, editGoal, formatBudget, GoalConflictError, type GoalStatus, GoalTooLongError, GOAL_TEXT_MAX_CHARS, pauseGoal, readGoal, resumeGoal, setGoal, setGoalBudget, setGoalTokenBudget, type Goal } from '@kinqs/brainrouter-core/goal';
-import { askYesNo } from '../../cliPrompt.js';
+import { askYesNo } from '../../prompt/cliPrompt.js';
 import { DEFAULT_REVIEW_ROSTER, DEFAULT_REVIEW_THRESHOLD } from '@kinqs/brainrouter-core/review';
 import { hashDiff, reviewGate } from '@kinqs/brainrouter-core/review';
 import { getLatestReview } from '@kinqs/brainrouter-core/review';

@@ -5,17 +5,17 @@ import type { Agent } from '@kinqs/brainrouter-core/agent';
 import type { Config } from '@kinqs/brainrouter-core/config';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import type { WorkspaceInfo } from '@kinqs/brainrouter-core/workspace';
-import { resolveTheme } from '../theme.js';
-import { buildBannerInputs } from '../banner.js';
+import { resolveTheme } from '../theme/theme.js';
+import { buildBannerInputs } from '../view/banner.js';
 import { readPreferences } from '@kinqs/brainrouter-core/session';
 import { runHooks } from '@kinqs/brainrouter-core/hooks';
 import { InputQueue } from '../../runtime/input/inputQueue.js';
 import { endTurnCheckpoint, queueOfflinePrompt, readRecoverable, clearOfflineQueue, shouldAutoReplayOffline } from '@kinqs/brainrouter-core/storage';
 import { type McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
-import { setActiveReadline } from '../cliPrompt.js';
+import { setActiveReadline } from '../prompt/cliPrompt.js';
 import { ChatApp, type ChatController } from './ChatApp.js';
 import type { SlashCommandDef } from './SlashPalette.js';
-import { lookupSlashDescription, SLASH_COMMANDS } from '../repl.js';
+import { lookupSlashDescription, SLASH_COMMANDS } from '../prompt/repl.js';
 import { setAmbientChat } from './ambientChat.js';
 import { renderWithResizeClear } from './renderWithResizeClear.js';
 import { createReadlineShim } from './runChat/readlineShim.js';
@@ -241,7 +241,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           // in persistent scrollback ABOVE the composer. Any messages
           // that arrived during the startup gap replay on swap.
           if (federation) {
-            void import('../incomingBanner.js').then(({ formatIncomingBanner }) => {
+            void import('../view/incomingBanner.js').then(({ formatIncomingBanner }) => {
               federation.setOnInboxText((messages) => {
                 for (const m of messages) {
                   ctrl.push.notice(formatIncomingBanner(m), 'info');

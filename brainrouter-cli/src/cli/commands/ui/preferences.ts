@@ -27,7 +27,7 @@ export async function tryHandleUiPreferencesCommand(ctx: CommandContext): Promis
     {
       const prefs = readPreferences(agent.workspaceRoot);
       const arg = args.join(' ').trim();
-      const { SEGMENT_NAMES, isKnownSegment } = await import('../../statusline.js');
+      const { SEGMENT_NAMES, isKnownSegment } = await import('../../view/statusline.js');
       if (!arg) {
         console.log(chalk.bold('\nStatusline'));
         console.log(`  Current: ${chalk.cyan(prefs.statusline)}`);

@@ -4,7 +4,7 @@ import { readPlan } from '@kinqs/brainrouter-core/task';
 import { getCurrentWorkflow } from '@kinqs/brainrouter-core/workflow';
 import { resolveActiveMode } from '@kinqs/brainrouter-core/session';
 import { activeRun, formatActivePhase } from '@kinqs/brainrouter-core/workflow';
-import { costUsd } from '../runtime/reporting/pricing.js';
+import { costUsd } from '../../runtime/reporting/pricing.js';
 
 /**
  * Status-line segment renderers. Each segment is a pure-ish function from

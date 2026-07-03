@@ -12,7 +12,7 @@ import { readPreferences, resolveEffort, writePreferences, normalizeEffort, getS
 import { PROVIDER_CATALOG, findProvider } from '@kinqs/brainrouter-core/provider';
 import { loadApiKeyPrefixesConfig } from '@kinqs/brainrouter-core/config';
 import { selectModel } from '../../wizard/modelsApi.js';
-import { buildTheme } from '../../theme.js';
+import { buildTheme } from '../../theme/theme.js';
 import type { CommandContext } from '../_context.js';
 
 export async function tryHandleUiModelCommand(ctx: CommandContext): Promise<boolean> {

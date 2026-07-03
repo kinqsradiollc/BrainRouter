@@ -1,4 +1,4 @@
-import { type Theme } from '../../theme.js';
+import { type Theme } from '../../theme/theme.js';
 
 /**
  * Internal picker primitive — purpose-built for the wizard / `/config` /

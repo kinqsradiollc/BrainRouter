@@ -1,6 +1,6 @@
 import type readline from 'node:readline';
 import chalk from 'chalk';
-import { buildTheme, type Theme } from './theme.js';
+import { buildTheme, type Theme } from '../theme/index.js';
 
 /**
  * 0.3.7 — slash-command autosuggest popup.

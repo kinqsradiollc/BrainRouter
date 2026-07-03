@@ -1,5 +1,5 @@
 import { type Step } from '../../wizard/types.js';
-import type { ThemeMode } from '../../theme.js';
+import type { ThemeMode } from '../../theme/theme.js';
 
 export const TOTAL_STEPS = 6;
 

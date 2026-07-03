@@ -6,7 +6,7 @@ import { listSessions, type ChildSessionRecord } from '@kinqs/brainrouter-core/o
 import type { RecalledRecord } from '@kinqs/brainrouter-core/memory';
 import { readPreferences, resolveEffort, type EffortLevel, type ExecutionMode, type ReviewPolicy, getSessionMode, resolveActiveMode } from '@kinqs/brainrouter-core/session';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
-import { BOX, type Theme } from './theme.js';
+import { BOX, type Theme } from '../theme/index.js';
 import { formatContextWindow } from '@kinqs/brainrouter-core/context';
 
 /**

@@ -1,4 +1,4 @@
-import { buildTheme } from '../../theme.js';
+import { buildTheme } from '../../theme/theme.js';
 import { type PromptTextOptions, type PromptTextResult } from './types.js';
 import { renderFrame } from './frame-render.js';
 import { runFramedInput } from './frame-runtime.js';

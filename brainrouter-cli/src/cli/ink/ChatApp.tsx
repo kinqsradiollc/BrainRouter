@@ -10,8 +10,8 @@ import { TuiRouterProvider, useTuiRouter, type TuiRoute } from './TuiRouter.js';
 import { GridWorkspace } from './layouts/GridWorkspace.js';
 import { Sidebar } from './components/Sidebar.js';
 import { WelcomeView } from './views/WelcomeView.js';
-import type { BannerInputs } from '../banner.js';
-import { resolveTheme } from '../theme.js';
+import type { BannerInputs } from '../view/banner.js';
+import { resolveTheme } from '../theme/theme.js';
 import { TuiHeader } from './components/TuiHeader.js';
 import { FooterStatus } from './FooterStatus.js';
 

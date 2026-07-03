@@ -17,10 +17,10 @@ import {
   type ExecutionMode,
   type ReviewPolicy,
 } from '@kinqs/brainrouter-core/session';
-import { isKnownSegment, SEGMENT_NAMES } from '../../statusline.js';
+import { isKnownSegment, SEGMENT_NAMES } from '../../view/statusline.js';
 import { selectModel } from '../../wizard/modelsApi.js';
 import type { PickerRow } from '../../ink/runPicker.js';
-import type { Theme } from '../../theme.js';
+import type { Theme } from '../../theme/theme.js';
 import {
   pickFromList, promptText, themeFor, shortenEndpoint, findDefaultProviderName,
   setDefaultProvider, subagentRoleLabel, setAgentModelNormalized, ensureWebSearchConfig,

@@ -9,7 +9,7 @@
  */
 
 import chalk from 'chalk';
-import { spinner } from '../spinner.js';
+import { spinner } from '../prompt/spinner.js';
 import type { Agent } from '@kinqs/brainrouter-core/agent';
 import { callMcpTool, type McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
 import { clampPayload, extractMemories, renderMemoryCards } from '../../memory/formatters.js';

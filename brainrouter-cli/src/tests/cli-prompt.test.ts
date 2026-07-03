@@ -11,7 +11,7 @@ import {
   reducePicker,
   renderPicker,
   setActiveReadline,
-} from '../cli/cliPrompt.js';
+} from '../cli/prompt/cliPrompt.js';
 import { ARTIFACT, createWorkflow, getWorkflowDir } from '@kinqs/brainrouter-core/workflow';
 import { withTempWorkspace } from './_helpers.js';
 

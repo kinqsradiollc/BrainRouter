@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import chalk from 'chalk';
-import { spinner as makeSpinner } from '../../spinner.js';
+import { spinner as makeSpinner } from '../../prompt/spinner.js';
 import { callMcpTool } from '@kinqs/brainrouter-core/mcp';
 import { extractMemories, renderMemoryCards } from '../../../memory/formatters.js';
 import { consolidateMemories } from '../../../memory/consolidation.js';

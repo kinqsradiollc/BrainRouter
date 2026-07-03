@@ -17,12 +17,12 @@
  */
 
 import chalk from 'chalk';
-import { spinner as makeSpinner } from '../../spinner.js';
+import { spinner as makeSpinner } from '../../prompt/spinner.js';
 import type { CommandContext } from '../_context.js';
 import { saveConfig } from '@kinqs/brainrouter-core/config';
 import { resolveIdentityFromConfig, selectMcpServerIds } from '@kinqs/brainrouter-core/mcp';
-import { buildBannerInputs, renderBanner } from '../../banner.js';
-import { resolveTheme } from '../../theme.js';
+import { buildBannerInputs, renderBanner } from '../../view/banner.js';
+import { resolveTheme } from '../../theme/theme.js';
 import { runMcpInstall } from '../mcpInstall/index.js';
 
 export async function tryHandleMcpCommand(ctx: CommandContext): Promise<boolean> {

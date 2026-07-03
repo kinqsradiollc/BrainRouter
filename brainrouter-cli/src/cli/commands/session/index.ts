@@ -7,14 +7,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
-import { spinner as makeSpinner } from '../../spinner.js';
+import { spinner as makeSpinner } from '../../prompt/spinner.js';
 import { marked } from 'marked';
 import { listTranscripts, loadTranscript, exportTranscriptMarkdown, exportTranscriptJson, exportFileName, type ExportFormat, searchTranscript, formatMatches, buildRecap, listChapters, formatChapters } from '@kinqs/brainrouter-core/session';
 import { readPlan } from '@kinqs/brainrouter-core/task';
 import { buildRewindTimeline, truncateAtTurn } from '../../../runtime/observability/rewindTimeline.js';
 import { planRestore, readFileMutations } from '@kinqs/brainrouter-core/storage';
 import { readGoal, resumeGoal } from '@kinqs/brainrouter-core/goal';
-import { askYesNo } from '../../cliPrompt.js';
+import { askYesNo } from '../../prompt/cliPrompt.js';
 import { buildGoalKickoffPrompt } from '../_helpers.js';
 import type { CommandContext } from '../_context.js';
 

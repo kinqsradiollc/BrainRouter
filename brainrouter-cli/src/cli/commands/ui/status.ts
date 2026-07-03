@@ -7,7 +7,7 @@
  */
 
 import chalk from 'chalk';
-import { spinner as makeSpinner } from '../../spinner.js';
+import { spinner as makeSpinner } from '../../prompt/spinner.js';
 import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/agent';
 import { callMcpTool, hasMcpTool } from '@kinqs/brainrouter-core/mcp';
 import { listSessions, reconcileStale } from '@kinqs/brainrouter-core/orchestration';
@@ -255,9 +255,9 @@ export async function tryHandleUiStatusCommand(ctx: CommandContext): Promise<boo
     }
     case '/where':
     {
-      const { gatherWhereInputs, renderWhere } = await import('../../whereView.js');
-      const { resolveDisplayedMcpState } = await import('../../banner.js');
-      const { resolveTheme } = await import('../../theme.js');
+      const { gatherWhereInputs, renderWhere } = await import('../../view/whereView.js');
+      const { resolveDisplayedMcpState } = await import('../../view/banner.js');
+      const { resolveTheme } = await import('../../theme/theme.js');
       const theme = resolveTheme(agent.workspaceRoot);
       const displayedMcp = resolveDisplayedMcpState(config, mcpClient as any);
       const briefing = agent.getLastBriefing();

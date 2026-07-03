@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { Config } from '@kinqs/brainrouter-core/config';
 import { type Goal, formatBudget, readGoal } from '@kinqs/brainrouter-core/goal';
 import { getCurrentWorkflow, getLastUsedWorkflow } from '@kinqs/brainrouter-core/workflow';
-import { BOX, type Theme } from './theme.js';
+import { BOX, type Theme } from '../theme/index.js';
 import { VERSION } from '@kinqs/brainrouter-core/version';
 
 /**

@@ -6,7 +6,7 @@ import {
   type WizardDraft,
   type WizardState,
 } from '../../wizard/types.js';
-import type { ThemeMode } from '../../theme.js';
+import type { ThemeMode } from '../../theme/theme.js';
 import { ACCENT } from './shared.js';
 import {
   WelcomeStep,

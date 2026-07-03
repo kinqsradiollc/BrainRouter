@@ -19,7 +19,7 @@ import {
   type WizardState,
 } from '../../wizard/types.js';
 import { fetchOpenAiCompatibleModels } from '../../wizard/modelsApi.js';
-import type { ThemeMode } from '../../theme.js';
+import type { ThemeMode } from '../../theme/theme.js';
 import { progressBadge } from './shared.js';
 import { formatMcpForBadge, probeMcp } from './mcpProbe.js';
 

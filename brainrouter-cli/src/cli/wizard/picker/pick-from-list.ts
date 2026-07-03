@@ -1,4 +1,4 @@
-import { buildTheme, type Theme } from '../../theme.js';
+import { buildTheme, type Theme } from '../../theme/theme.js';
 import { type PickerRow, type PickFromListOptions, type PickFromListResult } from './types.js';
 import { renderFrame, formatBodyRow, visibleLength } from './frame-render.js';
 import { runFramedInput } from './frame-runtime.js';

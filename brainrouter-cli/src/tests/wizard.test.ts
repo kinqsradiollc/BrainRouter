@@ -18,7 +18,7 @@ import {
   normalizeProviderEndpoint,
   LOCAL_PLACEHOLDER_KEY,
 } from '@kinqs/brainrouter-core/provider';
-import { initPickerState, reducePicker } from '../cli/cliPrompt.js';
+import { initPickerState, reducePicker } from '../cli/prompt/cliPrompt.js';
 
 // --- Step ordering -----------------------------------------------------
 

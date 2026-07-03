@@ -1,4 +1,4 @@
-import { type Theme } from '../../theme.js';
+import { type Theme } from '../../theme/theme.js';
 import { type PickerRow } from './types.js';
 
 // --- Frame renderer ----------------------------------------------------
