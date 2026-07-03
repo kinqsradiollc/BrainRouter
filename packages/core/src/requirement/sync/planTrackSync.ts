@@ -1,11 +1,11 @@
-import { getRequirement, linkRequirement, listRequirements, updateRequirement } from './requirementStore.js';
-import { readPlan, seedPlanFromRequirement, type PlanItem } from '../task/taskStore.js';
+import { getRequirement, linkRequirement, listRequirements, updateRequirement } from '../records/requirementStore.js';
+import { readPlan, seedPlanFromRequirement, type PlanItem } from '../../task/taskStore.js';
 import {
   createWorkItem,
   linkWorkItem,
   listWorkItems,
   transitionWorkItem,
-} from '../track/trackStore.js';
+} from '../../track/trackStore.js';
 
 export type PlanTrackSyncAction =
   | {

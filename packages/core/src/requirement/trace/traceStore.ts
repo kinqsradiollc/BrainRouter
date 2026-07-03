@@ -9,7 +9,7 @@
  * the actual logic lives in the pure `trace.ts` functions this wraps.
  */
 
-import { getSessionStateFile, readJsonFile, writeJsonFile } from '../storage/store.js';
+import { getSessionStateFile, readJsonFile, writeJsonFile } from '../../storage/store.js';
 import {
   snapshotTrace,
   diffTrace,

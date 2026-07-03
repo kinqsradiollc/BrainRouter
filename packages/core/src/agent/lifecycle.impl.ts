@@ -15,9 +15,9 @@ import { countEntityTokens as countEntityTokensFromText, decideMemoryBriefing, r
 import { emitAgentEvent } from '../memory/memoryEvents.js';
 import { buildPromptLayers, buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
 import { appendVerbositySteering } from '../prompt/steering/verbositySteering.js';
-import { syncRequirementPlanTrack } from '../requirement/planTrackSync.js';
-import { detectRequirementShapedPrompt } from '../requirement/requirementDetector.js';
-import { createRequirement, getRequirement, linkRequirement, listRequirements, updateRequirement } from '../requirement/requirementStore.js';
+import { syncRequirementPlanTrack } from '../requirement/sync/planTrackSync.js';
+import { detectRequirementShapedPrompt } from '../requirement/records/requirementDetector.js';
+import { createRequirement, getRequirement, linkRequirement, listRequirements, updateRequirement } from '../requirement/records/requirementStore.js';
 import { effortToWireLevel, readPreferences } from '../session/preferencesStore.js';
 import { resolveActiveMode } from '../session/sessionModeStore.js';
 import { readPlan } from '../task/taskStore.js';

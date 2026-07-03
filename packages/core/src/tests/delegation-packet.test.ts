@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { RequirementRecord } from '@kinqs/brainrouter-types';
-import { buildDelegationPacket, requirementReadyForHandoff } from '../requirement/delegationPacket.js';
+import { buildDelegationPacket, requirementReadyForHandoff } from '../requirement/delegation/delegationPacket.js';
 
 function req(over: Partial<RequirementRecord> = {}): RequirementRecord {
   return {

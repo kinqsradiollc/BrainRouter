@@ -24,7 +24,7 @@
  */
 
 import type { RequirementRecord } from '@kinqs/brainrouter-types';
-import type { PlanState } from '../task/taskStore.js';
+import type { PlanState } from '../../task/taskStore.js';
 
 // ---------------------------------------------------------------------------
 // Normalized model (format-agnostic — fed from records OR markdown)

@@ -27,9 +27,9 @@ import {
   type NativeBuildInput, type NativeOutput, type NativeRequestFormat,
 } from './nativeProviders.js';
 import { formatPlan, readPlan, updatePlan, type PlanState } from '../task/taskStore.js';
-import { createRequirement, getRequirement, linkRequirement, listRequirements, updateRequirement } from '../requirement/requirementStore.js';
-import { detectRequirementShapedPrompt } from '../requirement/requirementDetector.js';
-import { syncRequirementPlanTrack } from '../requirement/planTrackSync.js';
+import { createRequirement, getRequirement, linkRequirement, listRequirements, updateRequirement } from '../requirement/records/requirementStore.js';
+import { detectRequirementShapedPrompt } from '../requirement/records/requirementDetector.js';
+import { syncRequirementPlanTrack } from '../requirement/sync/planTrackSync.js';
 import { reconcileSessionSprints } from '../track/sprintAutomation.js';
 import {
   ensureProject as trackEnsureProject,

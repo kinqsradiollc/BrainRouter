@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createRequirementService, RequirementService } from '../requirement/service.js';
-import { readRequirementsAll, getRequirement, listRequirements } from '../requirement/requirementStore.js';
+import { createRequirementService, RequirementService } from '../requirement/records/service.js';
+import { readRequirementsAll, getRequirement, listRequirements } from '../requirement/records/requirementStore.js';
 
 test('RequirementService is a per-workspace facade — delegates to the requirement store', () => {
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'req-svc-'));

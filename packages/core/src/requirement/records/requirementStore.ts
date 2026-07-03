@@ -17,7 +17,7 @@ import {
   type RequirementPriority,
   type ClarifyingQA,
 } from '@kinqs/brainrouter-types';
-import { getStateFile, readJsonFile, writeJsonFile } from '../storage/store.js';
+import { getStateFile, readJsonFile, writeJsonFile } from '../../storage/store.js';
 
 type RequirementStore = Record<string, RequirementRecord>;
 
