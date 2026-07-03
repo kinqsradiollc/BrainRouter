@@ -5,9 +5,9 @@
  * git/review state + handlers and passes them through.
  */
 import React, { type Dispatch, type SetStateAction } from 'react';
-import { Icon } from '../icons.js';
-import { setEntry } from '../lib/review/reviewWorkspace.js';
-import type { ReviewFindingView, PanelId } from '../panels/index.js';
+import { Icon } from '../../icons.js';
+import { setEntry } from '../../lib/review/reviewWorkspace.js';
+import type { ReviewFindingView, PanelId } from '../../panels/index.js';
 
 type ReviewView = { findings: ReviewFindingView[]; summary: string; files: number };
 type GateBlock = { kind: 'commit' | 'push'; msg?: string; reason: string; status: string };

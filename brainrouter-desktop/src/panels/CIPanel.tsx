@@ -6,7 +6,7 @@
  */
 import React, { useEffect, useRef, useState } from 'react';
 import { Icon } from '../icons.js';
-import { Button } from '../components/Button.js';
+import { Button } from '../components/primitives/Button.js';
 import { summarizeChecks, ciStatusLabel, checkClass, runClass, ciDuration, type CheckRow } from '../lib/ci/ciFormat.js';
 import type { CiApi } from '../lib/ci/useCi.js';
 import { summarizePrReadiness } from '../lib/track/prReadiness.js';

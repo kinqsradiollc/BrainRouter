@@ -8,7 +8,7 @@
  */
 import React, { useState } from 'react';
 import { Icon } from '../icons.js';
-import { Button } from '../components/Button.js';
+import { Button } from '../components/primitives/Button.js';
 import {
   planHistoryRows, planApprovalState, approvalLabel, isEmptyDiff,
   type PlanDecisionView,

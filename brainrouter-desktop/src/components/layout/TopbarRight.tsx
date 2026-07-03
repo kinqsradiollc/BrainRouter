@@ -5,12 +5,12 @@
  * See the placement comment at the call site for why this must be the LAST child of .main.
  */
 import React, { type Dispatch, type SetStateAction } from 'react';
-import { Icon } from '../icons.js';
-import type { PopId } from '../types.js';
-import type { SettingsSection } from '../lib/commands/commands.js';
-import { sideRailFullscreenTitle } from '../lib/panels/sideRailLayout.js';
-import { VIEW_MENU } from '../constants.js';
-import type { PanelId } from '../panels/index.js';
+import { Icon } from '../../icons.js';
+import type { PopId } from '../../types.js';
+import type { SettingsSection } from '../../lib/commands/commands.js';
+import { sideRailFullscreenTitle } from '../../lib/panels/sideRailLayout.js';
+import { VIEW_MENU } from '../../constants.js';
+import type { PanelId } from '../../panels/index.js';
 
 export interface TopbarRightProps {
   /** Workspace mode — Environment/terminal are Code-only; side views also apply to Track. */

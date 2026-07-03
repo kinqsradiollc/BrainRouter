@@ -6,8 +6,8 @@
  * the pick commits on release.
  */
 import React from 'react';
-import type { ReasoningProfile, EffortLevel } from '../lib/models/reasoningProfile.js';
-import { sliderIndexForEffort, effortAtSliderFraction } from '../lib/models/reasoningProfile.js';
+import type { ReasoningProfile, EffortLevel } from '../../lib/models/reasoningProfile.js';
+import { sliderIndexForEffort, effortAtSliderFraction } from '../../lib/models/reasoningProfile.js';
 
 interface Props {
   profile: ReasoningProfile;

@@ -5,7 +5,7 @@
  * (not just a one-off command-output line). Mirrors the CLI's goal lifecycle.
  */
 import React, { useState } from 'react';
-import { Icon } from '../icons.js';
+import { Icon } from '../../icons.js';
 
 export type GoalStatus = 'active' | 'paused' | 'complete' | 'blocked' | 'usage_limited';
 

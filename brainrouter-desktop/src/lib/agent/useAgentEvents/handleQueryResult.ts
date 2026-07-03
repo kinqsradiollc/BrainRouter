@@ -627,11 +627,11 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
       }
       case 'q-goal':
         // GOAL-BANNER — the structured active goal for the pinned banner (null = none).
-        setGoalState((result ?? null) as import('../../../components/GoalBanner.js').GoalRecord | null);
+        setGoalState((result ?? null) as import('../../../components/chat/GoalBanner.js').GoalRecord | null);
         return;
       case 'a-goal-edit': {
         const r = result as { ok?: boolean; goal?: unknown; error?: string } | null;
-        if (r && r.ok && r.goal) setGoalState(r.goal as import('../../../components/GoalBanner.js').GoalRecord);
+        if (r && r.ok && r.goal) setGoalState(r.goal as import('../../../components/chat/GoalBanner.js').GoalRecord);
         else if (r && r.error) setToast(r.error);
         return;
       }

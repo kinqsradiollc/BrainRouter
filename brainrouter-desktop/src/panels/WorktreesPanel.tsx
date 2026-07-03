@@ -6,7 +6,7 @@
 import React, { useState } from 'react';
 import { Icon } from '../icons.js';
 import { DiffView } from './diff.js';
-import { Button } from '../components/Button.js';
+import { Button } from '../components/primitives/Button.js';
 import { type WorktreeEntry } from '../lib/worktree/worktreeParser.js';
 
 export function WorktreesPanel({ worktrees, diffs, onCreate, onRemove, onOpen, onDiff }: {

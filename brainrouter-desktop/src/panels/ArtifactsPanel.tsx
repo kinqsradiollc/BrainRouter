@@ -15,8 +15,8 @@ import type { ArtifactRecord, ArtifactKind, ArtifactStatus, AnnotationRecord } f
 import remarkGfm from 'remark-gfm';
 import { inlinePlaceholders } from '@kinqs/brainrouter-core/dist/prototype/placeholderRender.js';
 import { Markdown, MD_COMPONENTS } from '../chat/markdown.js';
-import { Button } from '../components/Button.js';
-import { Chip } from '../components/Badge.js';
+import { Button } from '../components/primitives/Button.js';
+import { Chip } from '../components/primitives/Badge.js';
 import {
   sortArtifacts, artifactCounts, kindLabel, statusClass,
   ARTIFACT_KIND_OPTIONS, ARTIFACT_STATUS_OPTIONS,

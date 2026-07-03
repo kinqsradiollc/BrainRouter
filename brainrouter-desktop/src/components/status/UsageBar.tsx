@@ -1,6 +1,6 @@
 /** DESK-5s — one labeled progress bar for the context/usage popover. */
 import React from 'react';
-import { fmtTokens } from '../lib/format.js';
+import { fmtTokens } from '../../lib/format.js';
 
 export function UsageBar({ label, value, total, suffix, tone = 'var(--accent)' }: {
   label: string; value: number; total: number; suffix?: string; tone?: string;

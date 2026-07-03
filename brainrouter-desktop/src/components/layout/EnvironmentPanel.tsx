@@ -6,13 +6,13 @@
  * column (never an overlay) gated by `envAnim` (useClosable).
  */
 import React, { type Dispatch, type SetStateAction } from 'react';
-import { Icon } from '../icons.js';
-import { fmtElapsed } from '../lib/format.js';
-import { summarizeChecks, ciStatusLabel } from '../lib/ci/ciFormat.js';
-import type { CiApi } from '../lib/ci/useCi.js';
-import type { FleetRow, PopId } from '../types.js';
-import type { PanelId } from '../panels/Panel.js';
-import type { SettingsSection } from '../lib/commands/commands.js';
+import { Icon } from '../../icons.js';
+import { fmtElapsed } from '../../lib/format.js';
+import { summarizeChecks, ciStatusLabel } from '../../lib/ci/ciFormat.js';
+import type { CiApi } from '../../lib/ci/useCi.js';
+import type { FleetRow, PopId } from '../../types.js';
+import type { PanelId } from '../../panels/Panel.js';
+import type { SettingsSection } from '../../lib/commands/commands.js';
 
 type GitInfo = { repo: string; branch: string | null; insertions: number; deletions: number; gitRoot?: string | null; repoRelativePath?: string; isSubdir?: boolean } | null;
 

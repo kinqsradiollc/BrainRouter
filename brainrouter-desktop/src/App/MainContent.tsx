@@ -8,12 +8,12 @@
 import React from 'react';
 import { Icon } from '../icons.js';
 import { TrackView } from '../track/TrackView.js';
-import { ChatThread } from '../components/ChatThread.js';
-import { Composer } from '../components/Composer.js';
-import { EnvironmentPanel } from '../components/EnvironmentPanel.js';
-import { ViewsRail } from '../components/ViewsRail.js';
-import { TerminalDock } from '../components/TerminalDock.js';
-import { TopbarRight } from '../components/TopbarRight.js';
+import { ChatThread } from '../components/chat/ChatThread.js';
+import { Composer } from '../components/chat/Composer.js';
+import { EnvironmentPanel } from '../components/layout/EnvironmentPanel.js';
+import { ViewsRail } from '../components/layout/ViewsRail.js';
+import { TerminalDock } from '../components/layout/TerminalDock.js';
+import { TopbarRight } from '../components/layout/TopbarRight.js';
 import type { PanelId } from '../panels/index.js';
 import type { AttachmentUpload, FleetRow } from '../types.js';
 import type { useCi } from '../lib/ci/useCi.js';

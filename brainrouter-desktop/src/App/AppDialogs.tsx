@@ -7,9 +7,9 @@
 import React from 'react';
 import { CommandPalette } from '../palette.js';
 import { SettingsDialog, type ConfigSnapshot, type UsageHistory } from '../settings.js';
-import { InteractionDialogs } from '../components/InteractionDialogs.js';
-import { ExportAndMenuDialogs } from '../components/ExportAndMenuDialogs.js';
-import { InfoAndGateDialogs } from '../components/InfoAndGateDialogs.js';
+import { InteractionDialogs } from '../components/dialogs/InteractionDialogs.js';
+import { ExportAndMenuDialogs } from '../components/dialogs/ExportAndMenuDialogs.js';
+import { InfoAndGateDialogs } from '../components/dialogs/InfoAndGateDialogs.js';
 import { runCommand, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from '../lib/commands/commands.js';
 import type { PopId, SessionRow } from '../types.js';
 import type { PanelId } from '../panels/index.js';

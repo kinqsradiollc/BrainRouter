@@ -5,8 +5,8 @@
  * state and all the action handlers, passed through as props.
  */
 import React, { type Dispatch, type SetStateAction } from 'react';
-import { Icon } from '../icons.js';
-import type { PopId, SessionRow } from '../types.js';
+import { Icon } from '../../icons.js';
+import type { PopId, SessionRow } from '../../types.js';
 
 export interface ExportAndMenuDialogsProps {
   pop: PopId;

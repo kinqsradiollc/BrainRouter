@@ -11,7 +11,7 @@
 import React, { useMemo, useState } from 'react';
 import { wireBadge, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
 import { Icon } from './icons.js';
-import { ShortcutsReference } from './components/ShortcutsReference.js';
+import { ShortcutsReference } from './components/dialogs/ShortcutsReference.js';
 import { Row, Toggle, Select, ChoiceControl, KnobNumber, KnobText } from './settings/controls.js';
 import { PermissionModeCards } from './settings/PermissionModeCards.js';
 import { ComputerUseSettings } from './settings/ComputerUseSettings.js';

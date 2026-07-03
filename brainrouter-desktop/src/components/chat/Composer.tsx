@@ -4,22 +4,22 @@
  * owns all state and passes it through (the popovers/menus are inline as before).
  */
 import React, { type Dispatch, type SetStateAction } from 'react';
-import { Icon } from '../icons.js';
-import { ProviderIcon } from './ProviderIcon.js';
-import { ModelIcon } from './ModelIcon.js';
-import { ReasoningSlider } from './ReasoningSlider.js';
-import { SlashPopup } from '../palette.js';
-import { UsageBar } from './UsageBar.js';
-import { ContextRing } from './ContextRing.js';
-import { NON_CHAT_MODEL } from '../constants.js';
-import { modelCapabilities, capabilityBadges } from '../lib/models/modelCapabilities.js';
-import { reasoningProfileForModel, reasoningPillLabel } from '../lib/models/reasoningProfile.js';
-import type { AttachmentUpload, PopId } from '../types.js';
-import type { DeskCommand, SettingsSection } from '../lib/commands/commands.js';
-import { recognizedCommandToken } from '../lib/composer/slashHighlight.js';
-import { findMentionToken, rankFileMatches, applyMention } from '../lib/composer/mention.js';
-import { hostQuery } from '../lib/hostQuery.js';
-import { usePlatform } from '../lib/shortcuts/shortcuts.js';
+import { Icon } from '../../icons.js';
+import { ProviderIcon } from '../model/ProviderIcon.js';
+import { ModelIcon } from '../model/ModelIcon.js';
+import { ReasoningSlider } from '../model/ReasoningSlider.js';
+import { SlashPopup } from '../../palette.js';
+import { UsageBar } from '../status/UsageBar.js';
+import { ContextRing } from '../status/ContextRing.js';
+import { NON_CHAT_MODEL } from '../../constants.js';
+import { modelCapabilities, capabilityBadges } from '../../lib/models/modelCapabilities.js';
+import { reasoningProfileForModel, reasoningPillLabel } from '../../lib/models/reasoningProfile.js';
+import type { AttachmentUpload, PopId } from '../../types.js';
+import type { DeskCommand, SettingsSection } from '../../lib/commands/commands.js';
+import { recognizedCommandToken } from '../../lib/composer/slashHighlight.js';
+import { findMentionToken, rankFileMatches, applyMention } from '../../lib/composer/mention.js';
+import { hostQuery } from '../../lib/hostQuery.js';
+import { usePlatform } from '../../lib/shortcuts/shortcuts.js';
 
 export interface ComposerProps {
   draft: string;

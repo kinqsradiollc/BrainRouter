@@ -6,10 +6,10 @@
  * handlers and the renderSessionNode closure, passed through as props.
  */
 import React, { useMemo, useState, type Dispatch, type SetStateAction } from 'react';
-import { Icon } from '../icons.js';
-import { SessionStatus } from './SessionStatus.js';
-import { fmtAge } from '../lib/format.js';
-import { toggleVisible, moreLabel, showToggle } from '../lib/session/list/sessionPagination.js';
+import { Icon } from '../../icons.js';
+import { SessionStatus } from '../status/SessionStatus.js';
+import { fmtAge } from '../../lib/format.js';
+import { toggleVisible, moreLabel, showToggle } from '../../lib/session/list/sessionPagination.js';
 import {
   PROJECT_SESSION_BASE,
   filterProjectSessions,
@@ -19,9 +19,9 @@ import {
   shouldShowProjectToggle,
   visibleProjectSessions as visibleOtherProjectSessions,
   type ProjectSessionsByRoot,
-} from '../lib/session/workspaces/projectSessionsView.js';
-import type { SessionRow } from '../types.js';
-import type { PanelId } from '../panels/Panel.js';
+} from '../../lib/session/workspaces/projectSessionsView.js';
+import type { SessionRow } from '../../types.js';
+import type { PanelId } from '../../panels/Panel.js';
 
 export interface SidebarProps {
   railAnim: { mounted: boolean; closing: boolean };

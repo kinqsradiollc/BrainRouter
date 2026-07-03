@@ -6,8 +6,8 @@
  * resolution come from the shared `lib/shortcuts` registry.
  */
 import React, { useState, useEffect, useCallback } from 'react';
-import { SHORTCUT_AREAS, usePlatform, captureCombo, resolveShortcutOverrides } from '../lib/shortcuts/shortcuts.js';
-import { hostQuery } from '../lib/hostQuery.js';
+import { SHORTCUT_AREAS, usePlatform, captureCombo, resolveShortcutOverrides } from '../../lib/shortcuts/shortcuts.js';
+import { hostQuery } from '../../lib/hostQuery.js';
 
 export function ShortcutsReference(): React.ReactElement {
   const { os, fmt } = usePlatform();

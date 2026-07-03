@@ -5,9 +5,9 @@
  * a normally-completed chat.
  */
 import React from 'react';
-import type { SessionRow } from '../types.js';
-import { Icon } from '../icons.js';
-import { prStatusLabel, type PrStatus, type PrStatusRow } from '../lib/ci/prStatus.js';
+import type { SessionRow } from '../../types.js';
+import { Icon } from '../../icons.js';
+import { prStatusLabel, type PrStatus, type PrStatusRow } from '../../lib/ci/prStatus.js';
 
 export function SessionStatus({ s, working }: { s: SessionRow; working?: boolean }): React.ReactElement {
   if (working) return <span className="st"><span className="spinner sm" /></span>;

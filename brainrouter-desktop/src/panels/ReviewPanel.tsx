@@ -8,7 +8,7 @@
  */
 import React, { useState } from 'react';
 import { DiffView } from './diff.js';
-import { Button } from '../components/Button.js';
+import { Button } from '../components/primitives/Button.js';
 import { findingRows } from '../lib/review/reviewCode.js';
 import { GATE_LABEL, type ReviewFindingView, type ReviewGateView } from './reviewShared.js';
 

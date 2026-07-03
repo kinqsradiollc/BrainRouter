@@ -5,7 +5,7 @@
  * own local state so the composed shell stays thin; render is unchanged.
  */
 import React, { useRef, useState } from 'react';
-import { ProviderIcon } from '../components/ProviderIcon.js';
+import { ProviderIcon } from '../components/model/ProviderIcon.js';
 import { Row, ChoiceControl, ComboInput } from './controls.js';
 import { WireFormatSelect } from './controls.js';
 import {

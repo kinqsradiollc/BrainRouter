@@ -7,7 +7,7 @@
 import React from 'react';
 import { Icon } from '../icons.js';
 import { MessageRow } from '../chat/MessageRow.js';
-import { SessionStatus, PrStatusIcon } from '../components/SessionStatus.js';
+import { SessionStatus, PrStatusIcon } from '../components/status/SessionStatus.js';
 import { prStatusFor } from '../lib/ci/prStatus.js';
 import { fmtAge } from '../lib/format.js';
 import type { ChatRow, SessionRow } from '../types.js';

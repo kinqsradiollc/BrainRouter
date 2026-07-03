@@ -4,11 +4,11 @@
  * state (via usePanels) and the panel-body renderer, passed through as props.
  */
 import React, { type Dispatch, type SetStateAction } from 'react';
-import { Icon } from '../icons.js';
-import { TerminalPanel, PANEL_DEFS, type PanelId } from '../panels/index.js';
-import { VIEW_MENU } from '../constants.js';
-import type { TermTab } from '../lib/panels/usePanels.js';
-import type { PopId } from '../types.js';
+import { Icon } from '../../icons.js';
+import { TerminalPanel, PANEL_DEFS, type PanelId } from '../../panels/index.js';
+import { VIEW_MENU } from '../../constants.js';
+import type { TermTab } from '../../lib/panels/usePanels.js';
+import type { PopId } from '../../types.js';
 
 type GitInfo = { repo: string; branch: string | null; insertions: number; deletions: number; gitRoot?: string | null; repoRelativePath?: string; isSubdir?: boolean } | null;
 

@@ -6,18 +6,18 @@
  * Extracted verbatim from App.tsx; the App owns all state, refs, and handlers.
  */
 import React, { useState, type Dispatch, type SetStateAction } from 'react';
-import { Icon } from '../icons.js';
+import { Icon } from '../../icons.js';
 import remarkGfm from 'remark-gfm';
-import { Markdown, MD_COMPONENTS } from '../chat/markdown.js';
-import { WorkflowCard } from '../chat/WorkflowCard.js';
-import { ChangeSummary } from '../chat/ChangeSummary.js';
+import { Markdown, MD_COMPONENTS } from '../../chat/markdown.js';
+import { WorkflowCard } from '../../chat/WorkflowCard.js';
+import { ChangeSummary } from '../../chat/ChangeSummary.js';
 import { HomeView } from './HomeView.js';
-import { WorkElapsed } from './WorkElapsed.js';
+import { WorkElapsed } from '../status/WorkElapsed.js';
 import { GoalBanner, type GoalRecord } from './GoalBanner.js';
-import type { ChatRow, TaskViewState, WorkflowDetail, SessionRow } from '../types.js';
+import type { ChatRow, TaskViewState, WorkflowDetail, SessionRow } from '../../types.js';
 import type { InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
-import type { ConfigSnapshot } from '../settings.js';
-import type { PanelId } from '../panels/Panel.js';
+import type { ConfigSnapshot } from '../../settings.js';
+import type { PanelId } from '../../panels/Panel.js';
 
 type GitInfo = { repo: string; branch: string | null; insertions: number; deletions: number; gitRoot?: string | null; repoRelativePath?: string; isSubdir?: boolean } | null;
 type TaskView = TaskViewState | null;

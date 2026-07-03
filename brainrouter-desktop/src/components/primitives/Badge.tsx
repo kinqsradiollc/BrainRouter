@@ -6,7 +6,7 @@
  * `className="req-link-chip"` strings. Native span props pass through.
  */
 import React from 'react';
-import { chipClass } from '../lib/ui/controlClass.js';
+import { chipClass } from '../../lib/ui/controlClass.js';
 
 export function Chip({ className, ...rest }: React.HTMLAttributes<HTMLSpanElement>): React.ReactElement {
   return <span className={chipClass(className)} {...rest} />;

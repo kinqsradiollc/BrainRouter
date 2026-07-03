@@ -7,7 +7,7 @@
  * placeholder so every row still aligns. Used in the composer's model menu.
  */
 import React from 'react';
-import { modelFamily } from '../lib/models/modelFamily.js';
+import { modelFamily } from '../../lib/models/modelFamily.js';
 import openaiSvg from '@lobehub/icons-static-svg/icons/openai.svg?raw';
 import claudeSvg from '@lobehub/icons-static-svg/icons/claude.svg?raw';
 import geminiSvg from '@lobehub/icons-static-svg/icons/gemini.svg?raw';

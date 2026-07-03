@@ -6,7 +6,7 @@
  * All native button props (onClick/disabled/title/type/…) pass straight through.
  */
 import React from 'react';
-import { buttonClass, type ButtonVariant } from '../lib/ui/controlClass.js';
+import { buttonClass, type ButtonVariant } from '../../lib/ui/controlClass.js';
 
 export function Button({ variant = 'default', className, type = 'button', ...rest }:
   React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: ButtonVariant }): React.ReactElement {

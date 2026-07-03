@@ -51,7 +51,7 @@ export interface AgentEventsCtx {
   setLiveChildren: React.Dispatch<React.SetStateAction<Record<string, { childId: string; role: string; tool?: string; startedAt: number }>>>;
   setFinishedTasks: React.Dispatch<React.SetStateAction<Array<{ id: string; label: string; status: string }>>>;
   setLastPlan: React.Dispatch<React.SetStateAction<{ items: PlanItem[]; explanation?: string } | null>>;
-  setGoalState: React.Dispatch<React.SetStateAction<import('../../../components/GoalBanner.js').GoalRecord | null>>;
+  setGoalState: React.Dispatch<React.SetStateAction<import('../../../components/chat/GoalBanner.js').GoalRecord | null>>;
   setPlanHistory: React.Dispatch<React.SetStateAction<PlanDecisionView[]>>;
   setTokens: React.Dispatch<React.SetStateAction<{ promptTokens: number; completionTokens: number; turns: number; cachedTokens?: number } | null>>;
   // LIVE per-call usage for the in-flight turn (cleared at turn-start/end) so the

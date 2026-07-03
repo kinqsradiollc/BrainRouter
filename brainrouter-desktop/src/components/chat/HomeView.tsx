@@ -1,7 +1,7 @@
 /** DESK-4d — the greeting/home view shown on an empty session. */
 import React from 'react';
-import { fmtAge } from '../lib/format.js';
-import { sendReleaseNotes } from '../lib/releaseNotes.js';
+import { fmtAge } from '../../lib/format.js';
+import { sendReleaseNotes } from '../../lib/releaseNotes.js';
 
 export function HomeView({ username, stats, tab, setTab, range, setRange, model, provider, repo, recents, onResume }: {
   username?: string;

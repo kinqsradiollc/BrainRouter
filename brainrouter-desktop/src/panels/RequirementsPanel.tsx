@@ -9,8 +9,8 @@
  */
 import React, { useState } from 'react';
 import type { RequirementRecord, RequirementStatus, RequirementPriority } from '@kinqs/brainrouter-types';
-import { Button } from '../components/Button.js';
-import { Chip } from '../components/Badge.js';
+import { Button } from '../components/primitives/Button.js';
+import { Chip } from '../components/primitives/Badge.js';
 import {
   sortRequirements, linkCounts, priorityClass,
   requirementProvenance, REQUIREMENT_STATUS_OPTIONS, REQUIREMENT_PRIORITY_OPTIONS,

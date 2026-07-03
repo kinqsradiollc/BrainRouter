@@ -5,10 +5,10 @@
  * state (usePanels) and the panel-body renderer, passed through as props.
  */
 import React, { useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import { Icon } from '../icons.js';
-import { PANEL_DEFS, type PanelId } from '../panels/index.js';
-import { clampSideRailWidth, sideRailClassName } from '../lib/panels/sideRailLayout.js';
-import { usePlatform } from '../lib/shortcuts/shortcuts.js';
+import { Icon } from '../../icons.js';
+import { PANEL_DEFS, type PanelId } from '../../panels/index.js';
+import { clampSideRailWidth, sideRailClassName } from '../../lib/panels/sideRailLayout.js';
+import { usePlatform } from '../../lib/shortcuts/shortcuts.js';
 
 function setQuietDragImage(e: React.DragEvent<HTMLElement>): void {
   const canvas = document.createElement('canvas');
