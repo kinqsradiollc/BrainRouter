@@ -2,6 +2,7 @@
 // `@kinqs/brainrouter-core/review` instead of deep `dist/review/*.js` paths,
 // keeping the subsystem's file layout internal. Full public surface; the
 // internal service layer (service.ts) stays unexported.
+export * from './critic.js';
 export * from './reviewFindings.js';
 export * from './reviewModel.js';
 export * from './reviewStore.js';

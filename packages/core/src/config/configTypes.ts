@@ -63,6 +63,24 @@ export interface LLMConfig {
 }
 
 /**
+ * MC-D3 — one named LLM profile (`cli.llmProfiles.<name>`). Only `model` is
+ * required; the other fields overlay the base `llm` config / session stance
+ * when the profile is activated. The base provider + API key always carry
+ * over — a profile is a preset, not a credential store.
+ */
+export interface LlmProfileConfig {
+  /** Model id the profile switches to (required — a profile without one is dropped). */
+  model: string;
+  /** Optional endpoint override (e.g. a different OpenAI-compatible gateway). */
+  endpoint?: string;
+  /** Optional reasoning depth applied to the session on activation. */
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+  /** Optional Fast-mode preference. Only honored by the user-driven `/profile use`
+   *  (never by the agent's `switch_model` — an agent must not loosen approvals). */
+  fast?: boolean;
+}
+
+/**
  * CLI behaviour knobs. All previously-env-only flags live here so
  * `~/.config/brainrouter/config.json` is the single source of CLI
  * truth — no more `.env` file to chase. Every field is optional;
@@ -263,6 +281,29 @@ export interface PluginsCliKnobs {
  *  Native formats are opt-in via `cli.providerRequestFormat`. */
 export type ProviderWireFormat = 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate';
 
+/**
+ * MC-A1 — runtime-plane backend selector values. `process` (default) is
+ * today's in-process host execution; `worktree` is reserved for the
+ * git-worktree isolated backend (MC-A2). Lives here (not in `runtime/`) so the
+ * config layer never imports upward.
+ */
+export type RuntimeBackendKind = 'process' | 'worktree';
+
+/** MC-A1 — `cli.runtime` block: which runtime backend hosts agent runs. */
+export interface RuntimeCliKnobs {
+  /** Runtime backend for agent conversations. Default 'process' (in-process,
+   *  exactly today's behavior). Invalid values resolve to 'process'. */
+  backend?: RuntimeBackendKind;
+  /** Cap on concurrently LIVE runtime instances before LRU parking (MC-A4).
+   *  Default 0 = no cap (nothing is ever evicted). */
+  maxLive?: number;
+}
+
+/** MC-A1 — validated knob values (see `RuntimeBackendKind`). */
+export function normalizeRuntimeBackend(value: unknown): RuntimeBackendKind {
+  return value === 'worktree' ? 'worktree' : 'process';
+}
+
 export interface CliKnobs {
   // ---- planning / orchestration -----------------------------------------
   /**
@@ -413,6 +454,22 @@ export interface CliKnobs {
   /** CC-CONFIG-A3 — when true, reject any model not in `availableModels`. Default false. */
   enforceAvailableModels?: boolean;
   /**
+   * MC-D3 — NAMED LLM PROFILES: reusable model presets layered over the base
+   * `llm` config. A profile carries a model (required) plus an optional
+   * endpoint / reasoning depth / Fast-mode preference. `/profile use <name>`
+   * (or `cli.activeLlmProfile`) overlays one onto the base LLM at boot, and —
+   * when 2+ profiles exist — the agent is offered a `switch_model` tool so it
+   * can move itself to a stronger/cheaper preset mid-task (the explicit
+   * sibling of the first-line tier self-escalation marker). Empty/absent
+   * (default) = feature inert: no overlay, no tool.
+   */
+  llmProfiles?: Record<string, LlmProfileConfig>;
+  /**
+   * MC-D3 — name of the profile overlaid on the base `llm` config at startup.
+   * Must name an entry in `llmProfiles`; unknown/blank (default) = no overlay.
+   */
+  activeLlmProfile?: string;
+  /**
    * CC-CONFIG-A4 — semver range gate against the running BrainRouter version
    * (`packages/core/src/version`). When the current version is BELOW
    * `requiredMinimumVersion` or ABOVE `requiredMaximumVersion` a warning is
@@ -450,6 +507,16 @@ export interface CliKnobs {
    * runaway prompt can't compose an unbounded instruction block. Default 5.
    */
   skillsStackMax?: number;
+  /**
+   * MC-E2 — keyword-triggered JIT skill injection. When a SKILL.md declares
+   * `triggers: [word, ...]` (or `keywords:`) in its frontmatter, a plain user
+   * prompt containing one of those words (case-insensitive, word-boundary
+   * match) injects that skill's body into the turn exactly like an explicit
+   * /skill invocation, alongside the recall-prewarm path. Default true —
+   * additive: nothing ever fires unless a skill declares triggers. Set false
+   * to disable the hard keyword→inject path entirely.
+   */
+  skillsKeywordTriggers?: boolean;
   /**
    * CC-UX-E2 — render GFM task-list items (`- [ ]` / `- [x]`) as checkbox
    * glyphs (☐ / ☑) in the CLI markdown renderer instead of the literal
@@ -612,6 +679,26 @@ export interface CliKnobs {
    * the agent's work before it can merge. Set false to open ready-for-review PRs.
    */
   buildLoopPrDraft?: boolean;
+  /**
+   * MC-D1 — optional build-loop CRITIC gate. Disabled by default (zero behavior
+   * change). When enabled, after a `/build` run's Verify passes, a cheap-tier
+   * LLM critic scores P(task actually complete) ∈ [0,1] with a structured
+   * diagnostic taxonomy; a score below `threshold` feeds the diagnostics back
+   * as bounded refinement rounds (reusing the build loop's repair mechanics,
+   * at most `maxRefinementIterations`), then the merge gate proceeds with the
+   * best-scored result. The final score/diagnostics are recorded on the run.
+   */
+  critic?: {
+    /** Master switch. Default false. */
+    enabled?: boolean;
+    /** Acceptance score in [0,1]. Default 0.7. */
+    threshold?: number;
+    /** Max refinement rounds when below threshold. Default 2 (clamped 0..8). */
+    maxRefinementIterations?: number;
+    /** Explicit critic model. Empty (default) = the per-role model config
+     *  (`agentModels.critic`, falling back to the session model). */
+    model?: string;
+  };
   /** PARITY-W3 — ring the terminal bell on an idle background-completion notice. Default false. */
   notifyBell?: boolean;
   /** Child-drain timeout in ms. Default 30000. */
@@ -670,6 +757,12 @@ export interface CliKnobs {
   /** PLUGIN-MARKETPLACE P1 — plugin enable map + registry override. Default
    *  `{ enabled: {} }` (nothing enabled). Skipped entirely under `safeMode`. */
   plugins?: PluginsCliKnobs;
+
+  // ---- runtime plane (MC-A1) --------------------------------------------
+  /** Which runtime backend hosts agent conversations. Default
+   *  `{ backend: 'process', maxLive: 0 }` — exactly today's in-process
+   *  behavior; isolated backends are strictly opt-in. */
+  runtime?: RuntimeCliKnobs;
 
   // ---- tier escalation --------------------------------------------------
   /** Tier ladder override — when set, beats the provider built-in. */
@@ -938,6 +1031,10 @@ export interface ResolvedCliKnobs {
   /** CC-CONFIG-A3 — resolved available-models allowlist (validated, deduped). */
   availableModels: string[];
   enforceAvailableModels: boolean;
+  /** MC-D3 — validated named LLM profiles (blank names / model-less entries dropped). */
+  llmProfiles: Record<string, LlmProfileConfig>;
+  /** MC-D3 — active profile name; '' when unset or not among `llmProfiles`. */
+  activeLlmProfile: string;
   /** CC-CONFIG-A4 — resolved version-range gate ('' = unset). */
   requiredMinimumVersion: string;
   requiredMaximumVersion: string;
@@ -950,6 +1047,8 @@ export interface ResolvedCliKnobs {
   skillsHideBundled: boolean;
   /** CC-SKILLS-D1 — max stacked `/skill` tokens per prompt (clamped 1..5). */
   skillsStackMax: number;
+  /** MC-E2 — keyword-triggered JIT skill injection kill-switch (default true). */
+  skillsKeywordTriggers: boolean;
   /** CC-UX-E2 — render GFM task-list checkboxes (☐ / ☑) in the CLI renderer. */
   markdownCheckboxes: boolean;
   mcpTimeoutMs: number;
@@ -974,6 +1073,9 @@ export interface ResolvedCliKnobs {
   buildLoopEmitPr: boolean;
   buildLoopPrBaseBranch: string;
   buildLoopPrDraft: boolean;
+  /** MC-D1 — validated critic-gate knobs: enabled defaults false; threshold
+   *  falls back to 0.7 outside [0,1]; iterations clamped 0..8 (default 2). */
+  critic: { enabled: boolean; threshold: number; maxRefinementIterations: number; model: string };
   notifyBell: boolean;
   childDrainTimeoutMs: number;
   offloadRetentionMs: number;
@@ -1021,6 +1123,9 @@ export interface ResolvedCliKnobs {
      *  notice on session start. Default false. */
     autoUpdateCheck: boolean;
   };
+  /** MC-A1 — validated runtime-plane knobs: backend falls back to 'process';
+   *  `maxLive` clamped ≥ 0 (0 = no live-instance cap). */
+  runtime: { backend: RuntimeBackendKind; maxLive: number };
   tierLadder?: { flash?: string; standard?: string; pro?: string };
   contextCompaction: boolean;
   childAgentTimeoutMs: number;

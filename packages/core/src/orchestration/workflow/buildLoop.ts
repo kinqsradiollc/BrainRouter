@@ -18,6 +18,7 @@ import { emitPrFromPatch, derivePrTitle, derivePrBody } from '../../git/prEmit.j
 import { parsePatchFiles, planSynthesisMerge, type WorktreeChangeSet } from './mergeGate.js';
 import { normalizePhasePlan, type PhasePlan } from './phasePlan.js';
 import type { PhasePlanExecution } from './phaseOrchestrator.js';
+import type { CriticDiagnostic, CriticResult } from '../../review/critic.js';
 
 export interface BuildLoopPrOutcome {
   ok: boolean;
@@ -153,6 +154,151 @@ export async function repairUntilGreen(
     };
   }
   return { execution, attempts, green: isGreen(execution) };
+}
+
+/** Pure: the execution's Verify phase verdict (no verify phase ⇒ green),
+ *  shared by the repair loop, the critic gate, and the final merge gate. */
+export function executionVerifyGreen(execution: PhasePlanExecution): boolean {
+  const verify = execution.phases.find((p) => p.id === 'verify');
+  return verify ? verifyLooksGreen(verify.output) : true;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// MC-D1 — critic gate + bounded iterative refinement
+// ──────────────────────────────────────────────────────────────────────────
+
+/** MC-D1 — the critic gate's recorded outcome (persisted on the run record). */
+export interface CriticGateOutcome {
+  /** The score of the execution the gate proceeded with (the best seen). */
+  score: number;
+  threshold: number;
+  /** Refinement rounds actually run (0 when the first score passed). */
+  iterations: number;
+  /** True when the final score met the threshold. */
+  accepted: boolean;
+  diagnostics: CriticDiagnostic[];
+}
+
+/** MC-D1 — pure gate predicate: the critic runs only when explicitly enabled
+ *  AND the build already passed the existing verify gate (the critic layers a
+ *  graded signal ON TOP of pass/fail — it never overrides a red verify). */
+export function shouldRunCriticGate(knobs: { enabled: boolean }, verifyGreen: boolean): boolean {
+  return knobs.enabled === true && verifyGreen;
+}
+
+/**
+ * MC-D1 — one refinement round's plan: Implement→Verify→Review in the SAME
+ * shared worktree (mirrors {@link buildRepairPlan}), with the critic's
+ * diagnostics fed to the worker as a concrete punch list. Static shape, so it
+ * always normalizes. Pure.
+ */
+export function buildCriticRefinePlan(diagnostics: CriticDiagnostic[], score: number, attempt: number): PhasePlan {
+  const punchList = diagnostics.length
+    ? diagnostics.map((d) => `- [${d.category}] ${d.detail}`).join('\n')
+    : '- (no specific diagnostics — re-check the task requirements end to end)';
+  const { plan } = normalizePhasePlan({
+    title: `build-refine-${attempt}`,
+    phases: [
+      {
+        id: 'implement',
+        title: 'Refine',
+        agents: [{
+          role: 'worker',
+          access: 'write',
+          prompt: `A completion critic scored the build ${score.toFixed(2)}/1.00 on refinement round ${attempt} and reported these gaps:\n\n${punchList}\n\nYou are in the worktree with the earlier changes intact. Address each diagnostic concretely (add the missing tests, finish the incomplete pieces, cover the unaddressed requirements). Keep edits minimal and scoped. Report what you changed per diagnostic.`,
+        }],
+      },
+      {
+        id: 'verify',
+        title: 'Verify',
+        agents: [{
+          role: 'verifier',
+          access: 'shell',
+          prompt: `What was just changed:\n\n{{input}}\n\nRe-run the project's build + the smallest useful test/typecheck set. Report a clear PASS/FAIL with evidence (commands, exit codes, trimmed failing output).`,
+        }],
+        inputFrom: ['implement'],
+        dependsOn: ['implement'],
+      },
+      {
+        id: 'review',
+        title: 'Review',
+        agents: [{
+          role: 'reviewer',
+          access: 'read',
+          prompt: `The changes so far:\n\n{{input}}\n\nReview for correctness, regressions, and missed requirements. Findings-first, severity-ordered (blocker / major / minor / nit).`,
+        }],
+        inputFrom: ['implement'],
+        dependsOn: ['implement'],
+      },
+    ],
+  });
+  // The static shape above always normalizes; the non-null assertion documents that.
+  return plan!;
+}
+
+export interface CriticRefineResult {
+  /** The execution the gate proceeds with — the BEST-scored one seen. */
+  execution: PhasePlanExecution;
+  /** Null when the critic never produced a verdict (fail-open: gate is a no-op). */
+  outcome: CriticGateOutcome | null;
+}
+
+/**
+ * MC-D1 — bounded critique-and-refine. Score the finished execution; while the
+ * score is below `threshold` and rounds remain, run a refinement plan built from
+ * the diagnostics (via `runPlan`, which executes in the build's shared worktree),
+ * splice its Implement/Verify/Review outputs over the execution (mirroring
+ * {@link repairUntilGreen}) and re-score. NEVER exceeds `maxIterations` rounds;
+ * then proceeds with the best-scored execution seen. Fail-open contract:
+ *   - first score unavailable (`score` → null) ⇒ untouched execution, null outcome;
+ *   - a mid-loop scoring failure stops the loop, keeping the best so far;
+ *   - a refinement that turns Verify red is discarded (the merge gate would
+ *     block it) and the loop stops with the best green result.
+ * The scorer and runner are injected, so this is unit-testable with fakes.
+ */
+export async function refineUntilAccepted(
+  initial: PhasePlanExecution,
+  opts: { threshold: number; maxIterations: number },
+  score: (exec: PhasePlanExecution) => Promise<CriticResult | null>,
+  runPlan: (plan: PhasePlan) => Promise<PhasePlanExecution>,
+): Promise<CriticRefineResult> {
+  const first = await score(initial);
+  if (!first) return { execution: initial, outcome: null };
+
+  let best: { execution: PhasePlanExecution; result: CriticResult } = { execution: initial, result: first };
+  let current = best;
+  let iterations = 0;
+  const maxIterations = Math.max(0, Math.floor(opts.maxIterations));
+
+  while (current.result.score < opts.threshold && iterations < maxIterations) {
+    iterations++;
+    const refined = await runPlan(buildCriticRefinePlan(current.result.diagnostics, current.result.score, iterations));
+    const byId = new Map(refined.phases.map((p) => [p.id, p] as const));
+    const nextExec: PhasePlanExecution = {
+      ...current.execution,
+      phases: current.execution.phases.map((p) => byId.get(p.id) ?? p),
+      status: refined.status,
+    };
+    if (!executionVerifyGreen(nextExec)) break; // refinement regressed verify — keep the best green result
+    const nextResult = await score(nextExec);
+    if (!nextResult) { // critic went unavailable mid-loop — proceed with the best so far
+      current = { execution: nextExec, result: current.result };
+      break;
+    }
+    current = { execution: nextExec, result: nextResult };
+    if (nextResult.score > best.result.score) best = current;
+  }
+
+  return {
+    execution: best.execution,
+    outcome: {
+      score: best.result.score,
+      threshold: opts.threshold,
+      iterations,
+      accepted: best.result.score >= opts.threshold,
+      diagnostics: best.result.diagnostics,
+    },
+  };
 }
 
 /** A review that flags a `blocker` finding blocks the auto-merge. Neutralizes the

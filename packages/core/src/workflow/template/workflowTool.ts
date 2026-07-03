@@ -12,6 +12,7 @@
  * fake runner.
  */
 
+import { execFileSync } from 'node:child_process';
 import type { OrchestrationContext } from '../../orchestration/tools.js';
 import { normalizePhasePlan, type PhasePlan } from '../../orchestration/workflow/phasePlan.js';
 import { buildTemplatePlan } from './workflowTemplates.js';
@@ -24,10 +25,21 @@ import {
   type PhaseExecution,
   type PhasePlanExecution,
 } from '../../orchestration/workflow/phaseOrchestrator.js';
-import { ensurePhaseRun, advanceRunPhase, finishRun, readRun, type RunPhaseStatus } from '../run/workflowRun.js';
-import { getCliKnobs } from '../../config/config.js';
+import { ensurePhaseRun, advanceRunPhase, finishRun, readRun, recordRunCritic, type RunPhaseStatus } from '../run/workflowRun.js';
+import { getCliKnobs, loadOrInitConfig } from '../../config/config.js';
+import { resolveAgentLlm } from '../../provider/agentModels.js';
 import { prepareSharedWorktree, worktreePatchFile } from '../../worktree/worktreeIsolation.js';
-import { finalizeBuildLoop, finalizeFanOutBuild, repairUntilGreen, type FanOutSlice } from '../../orchestration/workflow/buildLoop.js';
+import {
+  finalizeBuildLoop,
+  finalizeFanOutBuild,
+  repairUntilGreen,
+  refineUntilAccepted,
+  shouldRunCriticGate,
+  executionVerifyGreen,
+  type CriticGateOutcome,
+  type FanOutSlice,
+} from '../../orchestration/workflow/buildLoop.js';
+import { runCritic, type CriticInput, type CriticResult } from '../../review/critic.js';
 
 /** The orchestration tool dispatcher (`executeOrchestrationTool`), injected to
  *  avoid a circular import and to let tests substitute a fake. */
@@ -278,6 +290,30 @@ export async function runWorkflow(
     if (repaired.attempts > 0) buildRepairs = { attempts: repaired.attempts, green: repaired.green };
   }
 
+  // MC-D1 — OPTIONAL critic gate, layered AFTER the existing verify gate passes.
+  // Disabled by default (`cli.critic.enabled`). When on, a cheap-tier critic
+  // scores P(task actually complete); below `cli.critic.threshold` its
+  // diagnostics are fed back as bounded refinement rounds (same shared-worktree
+  // mechanics as the P5 repair loop), then the merge gate proceeds with the
+  // best-scored result and the verdict is recorded on the run ledger. Fail-open:
+  // no critic verdict ⇒ behave exactly as if the gate were disabled.
+  const criticKnobs = getCliKnobs().critic;
+  let criticGate: CriticGateOutcome | undefined;
+  if (buildLoop && shouldRunCriticGate(criticKnobs, executionVerifyGreen(execution))) {
+    const refined = await refineUntilAccepted(
+      execution,
+      { threshold: criticKnobs.threshold, maxIterations: criticKnobs.maxRefinementIterations },
+      (exec) => scoreBuildExecution(exec, plan, buildLoop.workspaceRoot, ctx, criticKnobs.model),
+      (p) => executePhasePlan(p, runner, hooks),
+    );
+    execution = refined.execution;
+    if (refined.outcome) {
+      criticGate = refined.outcome;
+      try { recordRunCritic(ws, slug, criticGate); }
+      catch { /* ledger write is best-effort — never block the merge gate */ }
+    }
+  }
+
   // BUILD-LOOP P2 — gate + merge the shared worktree (or preserve it as a patch).
   const buildMerge = buildLoop ? finalizeBuildLoop(ws, slug, buildLoop, execution) : undefined;
   // BUILD-LOOP P2.5 — fan-out: cross-worktree synthesis gate over the held slices.
@@ -293,10 +329,50 @@ export async function runWorkflow(
       ...(buildMerge ? { buildMerge } : {}),
       ...(fanOutMerge ? { fanOutMerge } : {}),
       ...(buildRepairs ? { buildRepairs } : {}),
+      ...(criticGate ? { critic: criticGate } : {}),
     },
     null,
     2,
   );
+}
+
+/** MC-D1 — a bounded `git` change summary of the build's shared worktree
+ *  (diff stat + short status), for the critic's evidence. Best-effort: any git
+ *  failure returns '' and the critic prompt says "(no diff available)". */
+function worktreeDiffSummary(worktreeRoot: string): string {
+  const git = (args: string[]): string => {
+    try {
+      return execFileSync('git', args, { cwd: worktreeRoot, encoding: 'utf8', timeout: 15_000, maxBuffer: 4 * 1024 * 1024 }).trim();
+    } catch {
+      return '';
+    }
+  };
+  const stat = git(['diff', '--stat', 'HEAD']);
+  const status = git(['status', '--short']);
+  return [stat, status && `Working tree (git status --short):\n${status}`].filter(Boolean).join('\n\n');
+}
+
+/** MC-D1 — score one finished build execution: assemble the critic's evidence
+ *  (task, worktree diff, verify output, implement report) and run the critic on
+ *  the cheap tier (per-role `critic` model config; `cli.critic.model` overrides). */
+async function scoreBuildExecution(
+  exec: PhasePlanExecution,
+  plan: PhasePlan,
+  worktreeRoot: string,
+  ctx: OrchestrationContext,
+  modelOverride: string,
+): Promise<CriticResult | null> {
+  const phaseOutput = (id: string) => exec.phases.find((p) => p.id === id)?.output ?? '';
+  const implementPrompt = plan.phases.find((p) => p.id === 'implement')?.agents?.[0]?.prompt ?? '';
+  const input: CriticInput = {
+    task: [plan.title, implementPrompt].filter(Boolean).join('\n\n'),
+    diffSummary: worktreeDiffSummary(worktreeRoot),
+    testOutput: phaseOutput('verify'),
+    transcriptTail: phaseOutput('implement'),
+  };
+  let llm = resolveAgentLlm(loadOrInitConfig(), ctx.llmConfig, 'critic');
+  if (modelOverride) llm = { ...llm, model: modelOverride };
+  return runCritic(input, { llm });
 }
 
 const MAX_PERSISTED_OUTPUT = 8000;

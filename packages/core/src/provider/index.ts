@@ -6,6 +6,7 @@
 export * from './catalog.js';
 export * from './tierLadder.js';
 export * from './agentModels.js';
+export * from './llmProfiles.js';
 export * from './modelFamily.js';
 export * from './modelFallback.js';
 export * from './modelPolicy.js';

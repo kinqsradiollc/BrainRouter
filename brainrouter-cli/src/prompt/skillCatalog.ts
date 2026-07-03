@@ -26,6 +26,14 @@ export interface SkillListItem {
   shadowedBy?: string[];
   /** CC-SKILLS-D2 — `<scope>:<name>` disambiguated label for display. */
   qualifiedName?: string;
+  /**
+   * MC-E2 — hard keyword triggers declared in the SKILL.md frontmatter
+   * (`triggers: [word, ...]` and/or `keywords: [...]`). A DORMANT skill whose
+   * trigger word appears in a plain user prompt (case-insensitive,
+   * word-boundary) is injected into the turn like an explicit /skill
+   * invocation. Absent/empty when the skill declares no triggers.
+   */
+  triggers?: string[];
 }
 
 const WORKSPACE_SKILL_ROOTS = ['skills', '.brainrouter/skills'];
@@ -58,6 +66,9 @@ export function listFilesystemSkills(workspaceRoot: string): SkillListItem[] {
           scope,
           source: 'filesystem',
           qualifiedName: `${scope}:${parsed.name}`,
+          // MC-E2 — surface declared keyword triggers so the dispatch path
+          // can arm dormant skills without re-reading every SKILL.md.
+          ...(parsed.triggers.length ? { triggers: parsed.triggers } : {}),
         });
       } else {
         // A same-named skill in a LOWER-precedence root — record it as shadowed
@@ -174,7 +185,7 @@ function findSkillFiles(root: string): string[] {
   return results;
 }
 
-function parseSkillFile(filePath: string): { name: string; description?: string } | undefined {
+function parseSkillFile(filePath: string): { name: string; description?: string; triggers: string[] } | undefined {
   let raw: string;
   try { raw = fs.readFileSync(filePath, 'utf8'); } catch { return undefined; }
 
@@ -183,7 +194,7 @@ function parseSkillFile(filePath: string): { name: string; description?: string 
   const name = readYamlScalar(block, 'name') ?? path.basename(path.dirname(filePath));
   const description = readYamlScalar(block, 'description') ?? firstParagraph(raw);
   if (!name) return undefined;
-  return { name, description };
+  return { name, description, triggers: parseSkillTriggersFrontmatter(raw) };
 }
 
 function readYamlScalar(block: string, key: string): string | undefined {
@@ -239,6 +250,70 @@ export function parseDisallowedToolsFrontmatter(raw: string): string[] {
     }
   }
   return [...new Set(out)];
+}
+
+/**
+ * MC-E2 — parse the keyword-trigger list from SKILL.md frontmatter. Both
+ * `triggers:` and `keywords:` are accepted (and merged) so authors can use
+ * either name. Accepts the flow form (`triggers: [deploy, rollback]`) and the
+ * block form:
+ *   triggers:
+ *     - deploy
+ *     - rollback
+ * Items are comma-separated (NOT whitespace-split) so multi-word phrases like
+ * `hot fix` survive as one trigger. Returns a trimmed list de-duped
+ * case-insensitively (first spelling wins); empty when neither key is present.
+ * Pure — no filesystem access.
+ */
+export function parseSkillTriggersFrontmatter(raw: string): string[] {
+  const block = extractFrontmatterBlock(raw);
+  if (!block) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const key of ['triggers', 'keywords']) {
+    for (const value of readYamlList(block, key)) {
+      const dedupeKey = value.toLowerCase();
+      if (!seen.has(dedupeKey)) {
+        seen.add(dedupeKey);
+        out.push(value);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * MC-E2 — read a YAML list value (flow `key: [a, b]` or block `- item` form)
+ * from a frontmatter block. Comma-separated only, so items may contain spaces.
+ */
+function readYamlList(block: string, key: string): string[] {
+  const lines = block.split(/\r?\n/);
+  const idx = lines.findIndex((l) => new RegExp(`^${key}\\s*:`).test(l));
+  if (idx < 0) return [];
+  const inline = lines[idx].replace(new RegExp(`^${key}\\s*:`), '').trim();
+  const out: string[] = [];
+  const pushItems = (s: string) => {
+    for (const item of s.replace(/^\[|\]$/g, '').split(',')) {
+      const t = item.trim().replace(/^['"]|['"]$/g, '').trim();
+      if (t) out.push(t);
+    }
+  };
+  if (inline) {
+    pushItems(inline);
+  } else {
+    // Block form: consume `  - value` lines until the next top-level key.
+    for (let i = idx + 1; i < lines.length; i++) {
+      const line = lines[i];
+      if (/^\s*-\s+/.test(line)) {
+        pushItems(line.replace(/^\s*-\s+/, ''));
+      } else if (line.trim() === '') {
+        continue;
+      } else {
+        break; // next top-level key
+      }
+    }
+  }
+  return out;
 }
 
 function firstParagraph(raw: string): string | undefined {

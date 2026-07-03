@@ -340,6 +340,19 @@ export const LOCAL_TOOLS = [
     }
   },
   {
+    name: 'switch_model',
+    description:
+      'Switch THIS session to a named LLM profile (a saved model preset) for all subsequent model calls — e.g. move to a stronger profile for a hard design/debugging stretch, or a cheaper/faster one for mechanical edits. Only offered when the install has 2+ named profiles configured. Pass the exact profile name; an unknown name returns the configured list. The switch applies from the next model call onward and persists for the rest of the session.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        profile: { type: 'string', description: 'Exact name of the target LLM profile (from the configured profiles).' },
+        reason: { type: 'string', description: 'Optional one-line reason for the switch (surfaced to the user).' }
+      },
+      required: ['profile']
+    }
+  },
+  {
     name: 'mark_chapter',
     description: 'Mark the start of a new chapter when the work shifts to a meaningfully different phase (exploration -> implementation -> verification, or a topic pivot). Sparingly — a typical session has 3-8 chapters. The user browses them with /chapters.',
     inputSchema: {

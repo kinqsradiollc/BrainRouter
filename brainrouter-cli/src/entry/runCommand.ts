@@ -1,5 +1,6 @@
 import type { Command } from 'commander';
-import { loadConfig, getCliKnobs, setCliKnobOverride, type LLMConfig } from '@kinqs/brainrouter-core/config';
+import { loadConfig, getCliKnobs, setCliKnobOverride, resolveCliKnobs, type LLMConfig } from '@kinqs/brainrouter-core/config';
+import { applyActiveLlmProfile } from '@kinqs/brainrouter-core/provider';
 import { resolveSessionLlmConfig } from '@kinqs/brainrouter-core/session';
 import { McpClientPool, selectMcpServerIds } from '@kinqs/brainrouter-core/mcp';
 import { formatJsonlEvent, memoryRunEvent, isOffloadTool, type RunEvent } from '../runtime/reporting/jsonlEvents.js';
@@ -112,7 +113,9 @@ export function registerRunCommand(program: Command): void {
         targetServers[id] = cloned;
       }
 
-      let llm: LLMConfig = { ...(config.llm ?? DEFAULT_LLM) };
+      // MC-D3 — active named LLM profile overlays the base llm config (inert
+      // when unset); --model / --session overrides still win below.
+      let llm: LLMConfig = applyActiveLlmProfile(resolveCliKnobs(config), { ...(config.llm ?? DEFAULT_LLM) });
       if (options.model) llm.model = options.model;
       else if (options.session) llm = resolveSessionLlmConfig(llm, workspace.workspaceRoot, options.session);
 

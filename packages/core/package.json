@@ -111,6 +111,10 @@
       "types": "./dist/review/index.d.ts",
       "default": "./dist/review/index.js"
     },
+    "./runtime": {
+      "types": "./dist/runtime/index.d.ts",
+      "default": "./dist/runtime/index.js"
+    },
     "./schedule": {
       "types": "./dist/schedule/index.d.ts",
       "default": "./dist/schedule/index.js"

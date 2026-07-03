@@ -9,7 +9,10 @@ import {
   parseStackedSkillTokens,
   resolveStackedSkills,
   buildStackedSkillPrompt,
+  matchTriggeredSkills,
+  type TriggeredSkillHit,
 } from '../../../prompt/skillRunner.js';
+import { listFilesystemSkills } from '../../../prompt/skillCatalog.js';
 import { captureConsoleOutput } from '../terminal/consoleCapture.js';
 import type { PushScrollback } from '../ChatApp.js';
 import type { RunChatContext } from './context.js';
@@ -191,12 +194,18 @@ export function createOnSubmit(ctx: RunChatContext): (text: string, push: PushSc
       if (!(SLASH_COMMANDS as readonly string[]).includes(command) && !ctx.isProcessing) {
         const stacked = parseStackedSkillTokens(text);
         if (stacked.skills.length >= 2) {
-          const { resolved, disallowedTools } = await resolveStackedSkills(mcpClient, stacked.skills, agent.workspaceRoot)
+          // MC-E2 — keyword triggers COMPOSE with an explicit stack: dormant
+          // skills whose trigger word appears in the remaining input fill the
+          // stack's leftover slots (same skillsStackMax cap, explicit first).
+          const triggered = scanKeywordTriggers(stacked.rest, agent.workspaceRoot, stacked.skills);
+          const names = [...stacked.skills, ...triggered.map((h) => h.name)];
+          const { resolved, disallowedTools } = await resolveStackedSkills(mcpClient, names, agent.workspaceRoot)
             .catch(() => ({ resolved: [], disallowedTools: [] as string[] }));
           if (resolved.length >= 1) {
             agent.activeSkill = resolved[0].name;
             agent.activeSkillDisallowedTools = disallowedTools;
             push.notice(`Stacked skills: ${resolved.map((s) => s.name).join(' → ')}${disallowedTools.length ? `  (disallowed: ${disallowedTools.join(', ')})` : ''}`, 'info');
+            noticeSkillReady(push, triggered, resolved.map((s) => s.name));
             const prompt = buildStackedSkillPrompt(resolved, { input: stacked.rest });
             await ctx.runChatTurn(prompt);
             return;
@@ -220,6 +229,50 @@ export function createOnSubmit(ctx: RunChatContext): (text: string, push: PushSc
       return;
     }
 
+    // MC-E2 — keyword-triggered JIT skill injection on a PLAIN prompt: a
+    // dormant skill whose declared trigger word appears in the prompt is
+    // injected into the turn exactly like an explicit /skill invocation
+    // (same stacked-skill composition path, same cap). Kill-switch:
+    // `cli.skillsKeywordTriggers`. Best-effort — any failure falls back to
+    // the plain turn untouched.
+    const triggered = scanKeywordTriggers(text, agent.workspaceRoot);
+    if (triggered.length) {
+      const { resolved, disallowedTools } = await resolveStackedSkills(mcpClient, triggered.map((h) => h.name), agent.workspaceRoot)
+        .catch(() => ({ resolved: [], disallowedTools: [] as string[] }));
+      if (resolved.length >= 1) {
+        agent.activeSkill = resolved[0].name;
+        agent.activeSkillDisallowedTools = disallowedTools;
+        noticeSkillReady(push, triggered, resolved.map((s) => s.name));
+        await ctx.runChatTurn(buildStackedSkillPrompt(resolved, { input: text }));
+        return;
+      }
+    }
+
     await ctx.runChatTurn(text);
   };
+}
+
+/**
+ * MC-E2 — scan a prompt for the keyword triggers of dormant skills. Reads the
+ * filesystem skill catalog (which carries each skill's declared
+ * `triggers:`/`keywords:` frontmatter) and applies the word-boundary matcher.
+ * The `cli.skillsKeywordTriggers` kill-switch and the shared stack cap are
+ * enforced inside `matchTriggeredSkills`. Never throws — trigger scanning is
+ * additive and must not break prompt dispatch.
+ */
+function scanKeywordTriggers(prompt: string, workspaceRoot: string, exclude: string[] = []): TriggeredSkillHit[] {
+  try {
+    if (!getCliKnobs().skillsKeywordTriggers) return [];
+    return matchTriggeredSkills(prompt, listFilesystemSkills(workspaceRoot), { exclude });
+  } catch {
+    return [];
+  }
+}
+
+/** MC-E2 — surface what fired: `Skill Ready: <name> (trigger: <word>)`. */
+function noticeSkillReady(push: PushScrollback, hits: TriggeredSkillHit[], resolvedNames: string[]): void {
+  const resolved = new Set(resolvedNames);
+  for (const hit of hits) {
+    if (resolved.has(hit.name)) push.notice(`Skill Ready: ${hit.name} (trigger: ${hit.trigger})`, 'info');
+  }
 }

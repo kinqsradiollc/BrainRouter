@@ -147,6 +147,12 @@ test('A6 resolveCliKnobs: skillsHideBundled default off, env override wins', () 
   }
 });
 
+test('MC-E2 resolveCliKnobs: skillsKeywordTriggers defaults true (additive), false = kill-switch', () => {
+  assert.equal(resolveCliKnobs(cfg({})).skillsKeywordTriggers, true);
+  assert.equal(resolveCliKnobs(cfg({ skillsKeywordTriggers: true })).skillsKeywordTriggers, true);
+  assert.equal(resolveCliKnobs(cfg({ skillsKeywordTriggers: false })).skillsKeywordTriggers, false);
+});
+
 test('E2 resolveCliKnobs: markdownCheckboxes defaults true, false honored', () => {
   assert.equal(resolveCliKnobs(cfg({})).markdownCheckboxes, true);
   assert.equal(resolveCliKnobs(cfg({ markdownCheckboxes: true })).markdownCheckboxes, true);
