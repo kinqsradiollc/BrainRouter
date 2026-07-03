@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { getBrainrouterHome } from '../storage/store.js';
+import { getBrainrouterHome } from '../../storage/store.js';
 import { isTelemetryEvent, type TelemetryEvent } from './contracts.js';
 import type { TelemetrySink } from './telemetryPort.js';
 

@@ -119,7 +119,7 @@ import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } 
 import { evaluateDestructiveCommand } from '../exec/destructiveCommandGuard.js';
 import { gitHeadSha } from '../git/workspaceGit.js';
 import { recordDailyUsage } from '../usage/usageHistoryStore.js';
-import { isTelemetryEnabled } from '../telemetry/telemetry.js';
+import { isTelemetryEnabled } from '../telemetry/recorder/telemetry.js';
 import { readPreferences, resolveEffort, effortToWireLevel, type EffortLevel } from '../session/preferencesStore.js';
 import { resolveActiveMode } from '../session/sessionModeStore.js';
 import { resolveEffortForTurn } from './effortRouting.js';
@@ -127,7 +127,7 @@ import { resolveEffortForTurn } from './effortRouting.js';
 // 0.3.8 but never delivered enough cache-hit headroom or stability to justify
 // the second provider dispatch). Anthropic models can still be reached through
 // OpenAI-compatible gateways (OpenRouter, Together, etc.) on the OpenAI path.
-import { startSpan, traceEvent } from '../telemetry/tracing.js';
+import { startSpan, traceEvent } from '../telemetry/tracing/tracing.js';
 // 0.3.9 item 8 — cache-first context regions. The helper here lets us
 // fingerprint the cache-stable slice of every outbound chat request
 // without rewriting the legacy runTurn message plumbing.

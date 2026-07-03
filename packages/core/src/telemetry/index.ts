@@ -2,8 +2,8 @@
 // `@kinqs/brainrouter-core/telemetry` instead of deep `dist/telemetry/*.js` paths,
 // keeping the subsystem's file layout internal. Full public surface; the
 // internal service layer (service.ts) stays unexported.
-export * from './contracts.js';
-export * from './fileTelemetryAdapter.js';
-export * from './telemetry.js';
-export * from './telemetryPort.js';
-export * from './tracing.js';
+export * from './events/contracts.js';
+export * from './events/fileTelemetryAdapter.js';
+export * from './recorder/telemetry.js';
+export * from './events/telemetryPort.js';
+export * from './tracing/tracing.js';

@@ -29,7 +29,7 @@ import { resolveActiveMode } from '../session/sessionModeStore.js';
 import { isInternalSessionKey } from '../session/sessionStore.js';
 import { isConnectivityError, isRetryableServerError } from '../storage/checkpointStore.js';
 import { readPlan } from '../task/taskStore.js';
-import { startSpan, traceEvent } from '../telemetry/tracing.js';
+import { startSpan, traceEvent } from '../telemetry/tracing/tracing.js';
 import { localToolSpecsFromExecutors } from '../tool/executors.js';
 import { normalizeToolName } from '../tool/names.js';
 import { registryAllowedTools, hideWorkerToolsFor, WORKER_THREAD_TOOLS, MCP_DISCOVERY_TOOLS } from '../tool/registry.js';
@@ -60,7 +60,7 @@ import {
 import { isParallelSafe, parallelExecutionEnabled } from './toolSafety.js';
 import { resolveToolBudget, isBudgetCheckpoint, buildBudgetCheckpoint, buildBudgetCeilingMessage } from './turnBudget.js';
 import { classifyForVerification, commandWritesFiles, decideVerification, buildVerificationNudge, buildDocsOnlyVerificationNote } from './verificationGate.js';
-import { isTelemetryEnabled } from '../telemetry/telemetry.js';
+import { isTelemetryEnabled } from '../telemetry/recorder/telemetry.js';
 import { recordDailyUsage } from '../usage/usageHistoryStore.js';
 import { shrinkOversizedToolResults } from './turnEndShrink.js';
 import { getToolSummary, getToolPreview } from './toolSummary.js';

@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { getRawCliKnobs } from '../config/config.js';
-import type { TelemetryEvent } from './contracts.js';
-import type { TelemetrySink } from './telemetryPort.js';
-import { createFileTelemetrySink } from './fileTelemetryAdapter.js';
+import { getRawCliKnobs } from '../../config/config.js';
+import type { TelemetryEvent } from '../events/contracts.js';
+import type { TelemetrySink } from '../events/telemetryPort.js';
+import { createFileTelemetrySink } from '../events/fileTelemetryAdapter.js';
 
 /**
  * Telemetry service — the only surface callsites should touch. Wraps a

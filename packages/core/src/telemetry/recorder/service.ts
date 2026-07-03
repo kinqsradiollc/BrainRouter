@@ -8,8 +8,8 @@
 import {
   setTelemetrySink, isTelemetryEnabled, recordTelemetry, exportTelemetry,
 } from "./telemetry.js";
-import type { TelemetrySink } from "./telemetryPort.js";
-import type { TelemetryEvent } from "./contracts.js";
+import type { TelemetrySink } from "../events/telemetryPort.js";
+import type { TelemetryEvent } from "../events/contracts.js";
 
 /** Input accepted by {@link ITelemetryService.record} — the recorder's exact shape. */
 export type TelemetryInput = Parameters<typeof recordTelemetry>[0];

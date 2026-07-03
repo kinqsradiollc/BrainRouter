@@ -15,8 +15,8 @@ import { attachmentDir, createAttachment, safeAttachmentName } from './attachmen
 import { detectKind } from './detect.js';
 import { sniffImage } from './imageMeta.js';
 import { extractPdf } from './pdfText.js';
-import { recordTelemetry } from '../telemetry/telemetry.js';
-import { TELEMETRY_EVENTS } from '../telemetry/contracts.js';
+import { recordTelemetry } from '../telemetry/recorder/telemetry.js';
+import { TELEMETRY_EVENTS } from '../telemetry/events/contracts.js';
 import type { AttachmentRecord } from '@kinqs/brainrouter-types';
 
 /** Cap on extracted text persisted per attachment. */

@@ -26,7 +26,7 @@ import { emitAgentEvent } from '../memory/memoryEvents.js';
 import { resolveActiveMode } from '../session/sessionModeStore.js';
 import { readTranscriptEntries } from '../session/sessionStore.js';
 import { estimateChatHistoryTokens } from '../util/tokenEstimate.js';
-import { traceEvent } from '../telemetry/tracing.js';
+import { traceEvent } from '../telemetry/tracing/tracing.js';
 import { sanitizeToolCallPairing } from './toolCallRecovery.js';
 import { appendDeveloperPromptLayer } from './llmTransport.js';
 

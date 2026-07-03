@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { getCliKnobs } from '../config/config.js';
-import { redactText } from '../session/sessionStore.js';
+import { getCliKnobs } from '../../config/config.js';
+import { redactText } from '../../session/sessionStore.js';
 
 /**
  * Lightweight tracing in OTEL-flavored JSONL.

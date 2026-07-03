@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isTelemetryEvent, type TelemetryEvent } from './contracts.js';
-import type { TelemetrySink } from './telemetryPort.js';
+import { isTelemetryEvent, type TelemetryEvent } from '../events/contracts.js';
+import type { TelemetrySink } from '../events/telemetryPort.js';
 import {
   clearTelemetry,
   exportTelemetry,

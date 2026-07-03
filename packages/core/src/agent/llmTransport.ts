@@ -13,7 +13,7 @@ import type { ProviderDefinition } from '../provider/providers/definition.js';
 import { effortToWireLevel, type EffortLevel } from '../session/preferencesStore.js';
 import type { PromptLayers } from '../prompt/systemPrompt.js';
 import { computePrefixFingerprint } from '../context/contextRegions.js';
-import { traceEvent } from '../telemetry/tracing.js';
+import { traceEvent } from '../telemetry/tracing/tracing.js';
 import { acquireLLMSlot } from '../util/llmSemaphore.js';
 import { parseRetryAfterMs } from '../mcp/reconnect.js';
 import {
