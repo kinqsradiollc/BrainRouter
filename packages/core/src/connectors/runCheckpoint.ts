@@ -57,8 +57,8 @@ import {
   type GithubConnectorClient,
   type McpConnectorClient,
 } from './index.js';
-import { finishConnectorRun, getConnector, recordConnectorRun } from './connectorStore.js';
-import { upsertConnectorDocuments } from './documentStore.js';
+import { finishConnectorRun, getConnector, recordConnectorRun } from './stores/connectorStore.js';
+import { upsertConnectorDocuments } from './stores/documentStore.js';
 
 /** The shared checkpoint result shape every `run<Source>ConnectorCheckpoint` returns. */
 export interface CheckpointResult {

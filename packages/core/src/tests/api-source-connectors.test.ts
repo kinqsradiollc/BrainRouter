@@ -15,7 +15,7 @@ import {
   type LinearConnectorClient,
   type NotionConnectorClient,
   type SlackConnectorClient,
-} from '../connectors/apiSourceConnectors.js';
+} from '../connectors/sources/apiSourceConnectors.js';
 
 function connector(patch: Partial<ConnectorRecord> = {}): ConnectorRecord {
   return {

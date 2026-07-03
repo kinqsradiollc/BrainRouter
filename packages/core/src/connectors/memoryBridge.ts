@@ -8,7 +8,7 @@ import type {
   MemoryType,
 } from '@kinqs/brainrouter-types';
 import { workspaceTagFromPath } from '@kinqs/brainrouter-types';
-import { searchConnectorDocuments, type ConnectorDocumentSearchFilter } from './documentStore.js';
+import { searchConnectorDocuments, type ConnectorDocumentSearchFilter } from './stores/documentStore.js';
 
 export interface ConnectorMemoryExportOptions extends ConnectorDocumentSearchFilter {
   userId?: string;

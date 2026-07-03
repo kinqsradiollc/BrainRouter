@@ -1,5 +1,5 @@
 import type { ConnectorDocument, ConnectorDocumentRecord, ConnectorSource } from '@kinqs/brainrouter-types';
-import { searchConnectorDocuments, type ConnectorDocumentSearchFilter } from './documentStore.js';
+import { searchConnectorDocuments, type ConnectorDocumentSearchFilter } from './stores/documentStore.js';
 
 export interface ConnectorSlimRetrievalOptions extends ConnectorDocumentSearchFilter {
   maxSnippetChars?: number;

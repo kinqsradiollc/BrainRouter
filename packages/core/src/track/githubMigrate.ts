@@ -21,7 +21,7 @@
  * keep the legacy path until they pick a target in Settings.
  */
 import { getRawCliKnobs } from '../config/config.js';
-import { listConnectors, createConnector, updateConnector } from '../connectors/connectorStore.js';
+import { listConnectors, createConnector, updateConnector } from '../connectors/stores/connectorStore.js';
 import { normalizeGithubRepos } from './githubSync.js';
 import { getGithubMigratedAt, markGithubMigrated, getGithubSyncTarget, setGithubSyncTarget } from './trackStore.js';
 

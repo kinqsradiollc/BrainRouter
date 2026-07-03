@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { ConnectorDocument } from '@kinqs/brainrouter-types';
 import { retrieveConnectorSlimDocuments } from '../connectors/slimRetrieval.js';
-import { upsertConnectorDocuments } from '../connectors/documentStore.js';
+import { upsertConnectorDocuments } from '../connectors/stores/documentStore.js';
 import { withTempWorkspace } from './_helpers.js';
 
 function doc(input: Partial<ConnectorDocument> & Pick<ConnectorDocument, 'id' | 'connectorId' | 'kind' | 'title' | 'text'>): ConnectorDocument {

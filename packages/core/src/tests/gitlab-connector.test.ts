@@ -6,7 +6,7 @@ import {
   gitlabTokenClient,
   runGitlabConnectorCheckpoint,
   type GitlabConnectorClient,
-} from '../connectors/gitlabConnector.js';
+} from '../connectors/sources/gitlabConnector.js';
 
 function connector(overrides?: Partial<ConnectorRecord>): ConnectorRecord {
   return {

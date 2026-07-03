@@ -3,7 +3,7 @@ import type {
   ConnectorDefinitionBundle,
   ConnectorRecord,
 } from '@kinqs/brainrouter-types';
-import { createConnector, listConnectors } from './connectorStore.js';
+import { createConnector, listConnectors } from './stores/connectorStore.js';
 
 export function exportConnectorDefinitions(
   workspaceRoot: string,

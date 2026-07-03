@@ -6,7 +6,7 @@ import {
   connectorMemoryId,
   exportConnectorDocumentsForMemory,
 } from '../connectors/memoryBridge.js';
-import { upsertConnectorDocuments } from '../connectors/documentStore.js';
+import { upsertConnectorDocuments } from '../connectors/stores/documentStore.js';
 import { withTempWorkspace } from './_helpers.js';
 
 function doc(overrides: Partial<ConnectorDocument>): ConnectorDocument {

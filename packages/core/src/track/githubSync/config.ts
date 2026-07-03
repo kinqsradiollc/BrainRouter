@@ -7,7 +7,7 @@
  * engine takes the resolved repo/token as plain arguments.
  */
 import { getRawCliKnobs } from '../../config/config.js';
-import { listConnectors } from '../../connectors/connectorStore.js';
+import { listConnectors } from '../../connectors/stores/connectorStore.js';
 import type { ConnectorRecord } from '@kinqs/brainrouter-types';
 import { getGithubSyncTarget } from '../trackStore.js';
 import type {

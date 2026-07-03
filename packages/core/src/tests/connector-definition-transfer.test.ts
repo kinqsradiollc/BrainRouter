@@ -4,7 +4,7 @@ import {
   createConnector,
   listConnectors,
   recordConnectorRun,
-} from '../connectors/connectorStore.js';
+} from '../connectors/stores/connectorStore.js';
 import {
   exportConnectorDefinitions,
   importConnectorDefinitions,

@@ -1,5 +1,5 @@
 import type { ConnectorDocument, ConnectorDocumentRecord } from '@kinqs/brainrouter-types';
-import { getStateFile, readJsonFile, writeJsonFile } from '../storage/store.js';
+import { getStateFile, readJsonFile, writeJsonFile } from '../../storage/store.js';
 
 type ConnectorDocumentStoreFile = Record<string, ConnectorDocumentRecord>;
 
