@@ -508,6 +508,16 @@ export interface CliKnobs {
    */
   skillsStackMax?: number;
   /**
+   * MC-E2 — keyword-triggered JIT skill injection. When a SKILL.md declares
+   * `triggers: [word, ...]` (or `keywords:`) in its frontmatter, a plain user
+   * prompt containing one of those words (case-insensitive, word-boundary
+   * match) injects that skill's body into the turn exactly like an explicit
+   * /skill invocation, alongside the recall-prewarm path. Default true —
+   * additive: nothing ever fires unless a skill declares triggers. Set false
+   * to disable the hard keyword→inject path entirely.
+   */
+  skillsKeywordTriggers?: boolean;
+  /**
    * CC-UX-E2 — render GFM task-list items (`- [ ]` / `- [x]`) as checkbox
    * glyphs (☐ / ☑) in the CLI markdown renderer instead of the literal
    * `[ ]` / `[x]` text. Default true (a pure display nicety; the underlying
@@ -1037,6 +1047,8 @@ export interface ResolvedCliKnobs {
   skillsHideBundled: boolean;
   /** CC-SKILLS-D1 — max stacked `/skill` tokens per prompt (clamped 1..5). */
   skillsStackMax: number;
+  /** MC-E2 — keyword-triggered JIT skill injection kill-switch (default true). */
+  skillsKeywordTriggers: boolean;
   /** CC-UX-E2 — render GFM task-list checkboxes (☐ / ☑) in the CLI renderer. */
   markdownCheckboxes: boolean;
   mcpTimeoutMs: number;

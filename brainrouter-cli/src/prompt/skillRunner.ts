@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { McpClient } from '@kinqs/brainrouter-core/mcp';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
-import { skillSearchRoots, parseDisallowedToolsFrontmatter } from './skillCatalog.js';
+import { skillSearchRoots, parseDisallowedToolsFrontmatter, type SkillListItem } from './skillCatalog.js';
 
 export interface SkillResolution {
   name: string;
@@ -118,6 +118,58 @@ export function parseStackedSkillTokens(
   const overflow = skills.slice(hardCap).map((s) => `/${s}`);
   const rest = [...overflow, ...tokens.slice(i)].join(' ').trim();
   return { skills: kept, rest };
+}
+
+/** MC-E2 — a dormant skill armed by a keyword hit in the user prompt. */
+export interface TriggeredSkillHit {
+  name: string;
+  /** The declared trigger word/phrase that fired (as spelled in SKILL.md). */
+  trigger: string;
+}
+
+/**
+ * MC-E2 — scan a user prompt for the keyword triggers of DORMANT skills.
+ * A skill fires when one of its declared `triggers:`/`keywords:` words appears
+ * in the prompt as a whole word (case-insensitive, word-boundary — `plan`
+ * matches "Plan the rollout" but NOT "airplane" or "planning"). At most one
+ * hit per skill (the first matching trigger wins), skills already invoked
+ * explicitly are excluded via `opts.exclude`, and the TOTAL of
+ * excluded + triggered skills is capped at the same stacked-skill limit
+ * (`cli.skillsStackMax`, hard max 5) so a trigger storm can't compose an
+ * unbounded instruction block.
+ *
+ * Kill-switch: `cli.skillsKeywordTriggers` (default true). Pure — no
+ * filesystem access; callers pass the catalog (e.g. `listFilesystemSkills`).
+ */
+export function matchTriggeredSkills(
+  prompt: string,
+  skills: ReadonlyArray<Pick<SkillListItem, 'name' | 'triggers'>>,
+  opts: { exclude?: string[]; cap?: number; enabled?: boolean } = {},
+): TriggeredSkillHit[] {
+  const enabled = opts.enabled ?? getCliKnobs().skillsKeywordTriggers;
+  if (!enabled) return [];
+  if (!prompt.trim()) return [];
+  const cap = Math.min(5, Math.max(1, opts.cap ?? getCliKnobs().skillsStackMax ?? 5));
+  const taken = new Set((opts.exclude ?? []).map((n) => n.toLowerCase()));
+  const hits: TriggeredSkillHit[] = [];
+  for (const skill of skills) {
+    if (taken.size >= cap) break; // explicit + triggered share one budget
+    if (!skill.triggers?.length) continue; // dormant only when triggers declared
+    if (taken.has(skill.name.toLowerCase())) continue; // already invoked/triggered
+    const trigger = skill.triggers.find((t) => triggerMatchesPrompt(prompt, t));
+    if (trigger === undefined) continue;
+    taken.add(skill.name.toLowerCase());
+    hits.push({ name: skill.name, trigger });
+  }
+  return hits;
+}
+
+/** MC-E2 — case-insensitive whole-word/phrase match (no substring hits). */
+function triggerMatchesPrompt(prompt: string, trigger: string): boolean {
+  const word = trigger.trim();
+  if (!word) return false;
+  const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${escaped}\\b`, 'i').test(prompt);
 }
 
 /**
