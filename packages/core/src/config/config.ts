@@ -578,6 +578,14 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     buildLoopEmitPr: c.buildLoopEmitPr === true,
     buildLoopPrBaseBranch: (c.buildLoopPrBaseBranch ?? '').trim(),
     buildLoopPrDraft: c.buildLoopPrDraft !== false,
+    // MC-D1 — critic gate: OFF by default; threshold validated to [0,1];
+    // refinement rounds hard-capped so a misconfig can never loop unbounded.
+    critic: {
+      enabled: c.critic?.enabled === true,
+      threshold: unitInterval(c.critic?.threshold, 0.7),
+      maxRefinementIterations: clampInt(c.critic?.maxRefinementIterations, 0, 8, 2),
+      model: typeof c.critic?.model === 'string' ? c.critic.model.trim() : '',
+    },
     notifyBell: c.notifyBell ?? false,
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,
     offloadRetentionMs: c.offloadRetentionMs ?? 1_800_000,

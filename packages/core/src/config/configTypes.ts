@@ -635,6 +635,26 @@ export interface CliKnobs {
    * the agent's work before it can merge. Set false to open ready-for-review PRs.
    */
   buildLoopPrDraft?: boolean;
+  /**
+   * MC-D1 — optional build-loop CRITIC gate. Disabled by default (zero behavior
+   * change). When enabled, after a `/build` run's Verify passes, a cheap-tier
+   * LLM critic scores P(task actually complete) ∈ [0,1] with a structured
+   * diagnostic taxonomy; a score below `threshold` feeds the diagnostics back
+   * as bounded refinement rounds (reusing the build loop's repair mechanics,
+   * at most `maxRefinementIterations`), then the merge gate proceeds with the
+   * best-scored result. The final score/diagnostics are recorded on the run.
+   */
+  critic?: {
+    /** Master switch. Default false. */
+    enabled?: boolean;
+    /** Acceptance score in [0,1]. Default 0.7. */
+    threshold?: number;
+    /** Max refinement rounds when below threshold. Default 2 (clamped 0..8). */
+    maxRefinementIterations?: number;
+    /** Explicit critic model. Empty (default) = the per-role model config
+     *  (`agentModels.critic`, falling back to the session model). */
+    model?: string;
+  };
   /** PARITY-W3 — ring the terminal bell on an idle background-completion notice. Default false. */
   notifyBell?: boolean;
   /** Child-drain timeout in ms. Default 30000. */
@@ -1003,6 +1023,9 @@ export interface ResolvedCliKnobs {
   buildLoopEmitPr: boolean;
   buildLoopPrBaseBranch: string;
   buildLoopPrDraft: boolean;
+  /** MC-D1 — validated critic-gate knobs: enabled defaults false; threshold
+   *  falls back to 0.7 outside [0,1]; iterations clamped 0..8 (default 2). */
+  critic: { enabled: boolean; threshold: number; maxRefinementIterations: number; model: string };
   notifyBell: boolean;
   childDrainTimeoutMs: number;
   offloadRetentionMs: number;

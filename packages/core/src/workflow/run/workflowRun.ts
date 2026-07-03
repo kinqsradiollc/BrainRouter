@@ -53,6 +53,20 @@ export interface WorkflowRun {
   /** WF-RESUME (0.4.8) — the serialized PhasePlan, so an interrupted run can be
    *  re-loaded and resumed from its failed/interrupted phase. Set on creation. */
   planJson?: string;
+  /** MC-D1 — the critic gate's final verdict for a `build` run (absent when the
+   *  gate is disabled or produced no verdict). Additive + optional. */
+  critic?: WorkflowRunCritic;
+}
+
+/** MC-D1 — the persisted critic-gate outcome on a build run's ledger. */
+export interface WorkflowRunCritic {
+  /** P(task actually complete) of the result the merge gate proceeded with. */
+  score: number;
+  threshold: number;
+  /** Refinement rounds actually run. */
+  iterations: number;
+  accepted: boolean;
+  diagnostics: Array<{ category: string; detail: string }>;
 }
 
 /** Status of one phase in a runtime-driven (PhasePlan) workflow run. */
@@ -490,6 +504,20 @@ export function advanceRunPhase(
     status: computePhaseRunStatus(phases),
     updatedAt: now,
   });
+}
+
+/** MC-D1 — persist the critic gate's final score/diagnostics onto the run
+ *  record (no-op when the run doesn't exist). Best-effort, like the phase
+ *  ledger writes — the caller never blocks the merge gate on this. */
+export function recordRunCritic(
+  workspaceRoot: string,
+  slug: string,
+  critic: WorkflowRunCritic,
+  now = new Date().toISOString(),
+): WorkflowRun | null {
+  const run = readRun(workspaceRoot, slug);
+  if (!run) return null;
+  return writeRun(workspaceRoot, { ...run, critic, updatedAt: now });
 }
 
 export function listRuns(workspaceRoot: string): WorkflowRun[] {
