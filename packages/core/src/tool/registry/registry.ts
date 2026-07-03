@@ -1,5 +1,5 @@
-import type { AccessMode, ActionKind } from '../exec/execPolicy.js';
-import { extensionToolEntries } from '../extension/registry.js';
+import type { AccessMode, ActionKind } from '../../exec/execPolicy.js';
+import { extensionToolEntries } from '../../extension/registry.js';
 
 /**
  * CODEX-TOOL-REGISTRY (0.4.7) — one declarative contract per access-gated tool.

@@ -20,7 +20,7 @@ import {
   createRouteTaskTool,
   createRunWorkflowTool,
   createRunWorkflowGraphTool,
-} from '../orchestration/tools.js';
+} from '../../orchestration/tools.js';
 
 export const LOCAL_TOOLS = [
   {

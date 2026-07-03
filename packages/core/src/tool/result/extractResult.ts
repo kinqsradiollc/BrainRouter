@@ -11,7 +11,7 @@
  * a thin lookup against the session {@link ResultCache}.
  */
 
-import type { ResultCache } from "../util/resultHandoff.js";
+import type { ResultCache } from "../../util/resultHandoff.js";
 
 export const EXTRACT_RESULT_MAX_CHARS = 4000;
 export const EXTRACT_RESULT_CONTEXT_LINES = 2;

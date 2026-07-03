@@ -6,8 +6,8 @@
  * AT a tier, it cannot bypass the tier), a provider is a normal
  * `ProviderDefinition`, a hook is the in-process analogue of a shell hook.
  */
-import type { LocalToolExecutor, LocalToolSpec, LocalToolInvocation, ToolExposure } from '../tool/executors.js';
-import type { LocalToolEntry } from '../tool/registry.js';
+import type { LocalToolExecutor, LocalToolSpec, LocalToolInvocation, ToolExposure } from '../tool/registry/executors.js';
+import type { LocalToolEntry } from '../tool/registry/registry.js';
 import type { AccessMode, ActionKind } from '../exec/execPolicy.js';
 import type { ProviderDefinition } from '../provider/providers/definition.js';
 import {

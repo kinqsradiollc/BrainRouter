@@ -38,8 +38,8 @@ import { resolveActiveMode } from '../session/sessionModeStore.js';
 import { formatPlan, updatePlan, readPlan } from '../task/taskStore.js';
 import { isTelemetryEnabled } from '../telemetry/recorder/telemetry.js';
 import { traceEvent } from '../telemetry/tracing/tracing.js';
-import { localToolExecutor } from '../tool/executors.js';
-import { runExtractResult } from '../tool/extractResult.js';
+import { localToolExecutor } from '../tool/registry/executors.js';
+import { runExtractResult } from '../tool/result/extractResult.js';
 import { parseTrackQuery } from '../track/query.js';
 import {
   ensureProject as trackEnsureProject,

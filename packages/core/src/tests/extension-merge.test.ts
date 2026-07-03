@@ -6,8 +6,8 @@ import {
   extensionHookHandlers,
   registerExtensionHook,
 } from '../extension/registry.js';
-import { registryAllowedTools, effectiveToolRegistry } from '../tool/registry.js';
-import { localToolExecutor } from '../tool/executors.js';
+import { registryAllowedTools, effectiveToolRegistry } from '../tool/registry/registry.js';
+import { localToolExecutor } from '../tool/registry/executors.js';
 import { PROVIDER_CATALOG, refreshProviderCatalog } from '../provider/catalog.js';
 
 const readTool = {

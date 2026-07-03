@@ -88,18 +88,18 @@ import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from './app
 export { isPathInside, resolveWorkspacePath, matchGlob, globFiles } from './workspaceFs.js';
 export { applyPatchEnvelope } from './applyPatch.js';
 // REFAC-TOOLS-MODULE (0.4.6) — tool specs + name normalization live in agent/tools/.
-import { LOCAL_TOOLS } from '../tool/specs.js';
-import { normalizeToolName } from '../tool/names.js';
-import { registryAllowedTools, hideWorkerToolsFor, WORKER_THREAD_TOOLS, MCP_DISCOVERY_TOOLS } from '../tool/registry.js';
+import { LOCAL_TOOLS } from '../tool/specs/specs.js';
+import { normalizeToolName } from '../tool/specs/names.js';
+import { registryAllowedTools, hideWorkerToolsFor, WORKER_THREAD_TOOLS, MCP_DISCOVERY_TOOLS } from '../tool/registry/registry.js';
 import { searchMcpCatalog } from '../mcp/discovery.js';
 import { appendEvidence, setQuestion, readLedger } from '../research/researchStore.js';
 import { summarizeLedger, formatBrief } from '../research/evidenceLedger.js';
-import { localToolExecutor, localToolSpecsFromExecutors } from '../tool/executors.js';
+import { localToolExecutor, localToolSpecsFromExecutors } from '../tool/registry/executors.js';
 import { assessMcpToolApproval } from './mcpApproval.js';
-export { LOCAL_TOOLS } from '../tool/specs.js';
-export { normalizeToolName } from '../tool/names.js';
-import { applyToolScope, rankAndCapTools } from '../tool/toolBudget.js';
-import { resolveToolVisible } from '../tool/toolPolicy.js';
+export { LOCAL_TOOLS } from '../tool/specs/specs.js';
+export { normalizeToolName } from '../tool/specs/names.js';
+import { applyToolScope, rankAndCapTools } from '../tool/policy/toolBudget.js';
+import { resolveToolVisible } from '../tool/policy/toolPolicy.js';
 import { buildDefaultSourcePlan, buildMemoryBriefing, describeSourcePlan, selectCitedRecordIds, type RecalledRecord } from '../memory/briefing.js';
 import { assessCapturePayload } from '../memory/memoryPolicy.js';
 import {
@@ -141,7 +141,7 @@ import { gitChurnSignal } from '../git/gitChurn.js';
 // MAS-P5-T2: progressive result handoff — large tool results become a
 // preview + resultRef the model expands via extract_result.
 import { ResultCache, makeResultHandoff, formatHandoffForModel, attachCompactedResultHandoff } from '../util/resultHandoff.js';
-import { runExtractResult } from '../tool/extractResult.js';
+import { runExtractResult } from '../tool/result/extractResult.js';
 // MAS-P5-T3 part 2: persistent worker threads.
 import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../worker/workerStore.js';
 import { drainCompletions, acknowledgeCompletions, formatCompletionFeedback } from '../session/completionInbox.js';

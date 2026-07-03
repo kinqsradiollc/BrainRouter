@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { rankAndCapTools, applyToolScope, toolRelevanceScore } from '../tool/toolBudget.js';
+import { rankAndCapTools, applyToolScope, toolRelevanceScore } from '../tool/policy/toolBudget.js';
 
 const T = (name: string, description = '') => ({ name, description });
 

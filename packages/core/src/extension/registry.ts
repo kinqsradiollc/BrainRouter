@@ -8,8 +8,8 @@
  * Imports are TYPE-ONLY (no value import from tool/provider/hooks) so this stays
  * a leaf and never forms an import cycle with the registries that consume it.
  */
-import type { LocalToolExecutor } from '../tool/executors.js';
-import type { LocalToolEntry } from '../tool/registry.js';
+import type { LocalToolExecutor } from '../tool/registry/executors.js';
+import type { LocalToolEntry } from '../tool/registry/registry.js';
 import type { ProviderDefinition } from '../provider/providers/definition.js';
 import type { HookEvent } from '../hooks/hooksStore.js';
 
