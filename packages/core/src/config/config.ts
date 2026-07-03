@@ -332,6 +332,8 @@ function resolvePluginsKnobs(input: unknown): ResolvedCliKnobs['plugins'] {
   let allowedMarketplaces: string[] = [];
   let blockedMarketplaces: string[] = [];
   let allowManagedHooksOnly = false;
+  let publishRepo = '';
+  let autoUpdateCheck = false;
   if (input && typeof input === 'object' && !Array.isArray(input)) {
     const obj = input as Record<string, unknown>;
     if (obj.enabled && typeof obj.enabled === 'object' && !Array.isArray(obj.enabled)) {
@@ -346,8 +348,10 @@ function resolvePluginsKnobs(input: unknown): ResolvedCliKnobs['plugins'] {
     allowedMarketplaces = resolveStringList(obj.allowedMarketplaces);
     blockedMarketplaces = resolveStringList(obj.blockedMarketplaces);
     allowManagedHooksOnly = obj.allowManagedHooksOnly === true;
+    if (typeof obj.publishRepo === 'string') publishRepo = obj.publishRepo.trim();
+    autoUpdateCheck = obj.autoUpdateCheck === true;
   }
-  return { enabled, registryUrl, marketplaces, approved, allowedMarketplaces, blockedMarketplaces, allowManagedHooksOnly };
+  return { enabled, registryUrl, marketplaces, approved, allowedMarketplaces, blockedMarketplaces, allowManagedHooksOnly, publishRepo, autoUpdateCheck };
 }
 
 function unitInterval(value: unknown, fallback: number): number {

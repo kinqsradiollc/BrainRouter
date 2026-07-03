@@ -14,3 +14,9 @@ export * from './marketplace.js';
 export * from './integrity.js';
 export * from './registry.js';
 export * from './trust.js';
+// PLUGIN-MARKETPLACE P5 — publish + auto-update + per-plugin project config.
+export * from './installed.js';
+export * from './publish.js';
+export * from './update.js';
+export * from './autoUpdate.js';
+export * from './localConfig.js';

@@ -242,6 +242,20 @@ export interface PluginsCliKnobs {
   allowedMarketplaces?: string[];
   blockedMarketplaces?: string[];
   allowManagedHooksOnly?: boolean;
+  /**
+   * PLUGIN-MARKETPLACE P5 — the community registry repo `brainrouter plugin
+   * publish` opens a PR against (`owner/repo` or a git url). Empty/unset ⇒
+   * `publish` writes the registry-entry JSON to stdout + a local file and prints
+   * `gh` instructions instead of hard-requiring a repo.
+   */
+  publishRepo?: string;
+  /**
+   * PLUGIN-MARKETPLACE P5 — when true, a SESSION-START check compares installed
+   * plugin versions against the hosted registry's `version`/`lastUpdated` and
+   * surfaces an "updates available" notice. It NEVER auto-installs. Default
+   * false (off) — additive + inert.
+   */
+  autoUpdateCheck?: boolean;
 }
 
 /** Per-provider generation wire format. The two OpenAI shapes plus the native
@@ -1000,6 +1014,12 @@ export interface ResolvedCliKnobs {
     allowedMarketplaces: string[];
     blockedMarketplaces: string[];
     allowManagedHooksOnly: boolean;
+    /** PLUGIN-MARKETPLACE P5 — community registry repo for `plugin publish`
+     *  (empty = unset → stdout + local file + gh instructions). */
+    publishRepo: string;
+    /** PLUGIN-MARKETPLACE P5 — surface (never install) an "updates available"
+     *  notice on session start. Default false. */
+    autoUpdateCheck: boolean;
   };
   tierLadder?: { flash?: string; standard?: string; pro?: string };
   contextCompaction: boolean;

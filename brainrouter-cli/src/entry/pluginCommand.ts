@@ -11,6 +11,8 @@
  *   brainrouter plugin remove <name>      — uninstall a plugin
  *   brainrouter plugin search <q>         — search the hosted registry (P3)
  *   brainrouter plugin trust <name>       — approve a plugin's shell/MCP capabilities (P3)
+ *   brainrouter plugin publish [dir]      — validate + build a registry entry + PR/gh instructions (P5)
+ *   brainrouter plugin update [name]      — re-resolve source + atomic-swap a newer version (P5, --all)
  *
  * A plugin FEEDS the existing subsystems (skills / agents / commands / hooks /
  * mcp / connectors / workflows) — no parallel runtime. `--workspace` targets the
@@ -24,7 +26,7 @@ import chalk from 'chalk';
 export function registerPluginCommand(program: Command): void {
   program
     .command('plugin <action> [target]')
-    .description('Plugins: init | install | list | info | validate | enable | disable | remove | search <q> | trust <name>')
+    .description('Plugins: init | install | list | info | validate | enable | disable | remove | search <q> | trust <name> | publish [dir] | update [name]')
     .option('--workspace', 'Target the committable workspace scope (default: user scope)')
     .option('--force', 'Overwrite an existing install (install)')
     .option('--ref <ref>', 'git ref (branch/tag/commit) for a git source (install)')
@@ -34,6 +36,7 @@ export function registerPluginCommand(program: Command): void {
     .option('--shell', 'Approve a plugin\'s command hooks (trust)')
     .option('--mcp', 'Approve a plugin\'s MCP command-servers (trust)')
     .option('--revoke', 'Revoke instead of grant (trust)')
+    .option('--all', 'Update every installed plugin (update)')
     .option('--json', 'Machine-readable output')
     .action(async (action, target, options) => {
       const plugin = await import('@kinqs/brainrouter-core/plugin');
@@ -213,8 +216,52 @@ export function registerPluginCommand(program: Command): void {
           return;
         }
 
+        case 'publish': {
+          // P5 — validate + hash + build a registry entry, then emit PR/gh instructions
+          // (or write a local file + gh instructions when no publishRepo is configured).
+          const dir = (target && String(target).trim()) || workspaceRoot;
+          const { loadOrInitConfig } = await import('@kinqs/brainrouter-core/config');
+          const publishRepo = loadOrInitConfig().cli?.plugins?.publishRepo;
+          const res = plugin.planPublish(dir, { publishRepo });
+          if (!res.ok) return fail(res.error);
+          const { plan } = res;
+          // Always write the entry to a local file so the user has an artifact to attach.
+          const write = plugin.writeRegistryEntryFile(plan);
+          if (options.json) { process.stdout.write(JSON.stringify({ ...plan, localFileWritten: write.ok }) + '\n'); return; }
+          console.log(chalk.bold(`Registry entry for "${plan.name}":`));
+          console.log(plan.entryJson);
+          console.log(chalk.gray(`\nintegrity: ${plan.integrity}`));
+          for (const w of plan.warnings) console.log(chalk.yellow(`  ! ${w}`));
+          if (write.ok) console.log(chalk.green(`\nWrote ${plan.localFile}`));
+          console.log('');
+          for (const line of plan.instructions) console.log(line.startsWith('#') ? chalk.gray(line) : line);
+          return;
+        }
+
+        case 'update': {
+          // P5 — re-resolve installed plugin(s) from install.json, atomic-swap a newer
+          // version, preserving enabled + consent state. `--all` or no target = all.
+          const { loadOrInitConfig } = await import('@kinqs/brainrouter-core/config');
+          const config = loadOrInitConfig();
+          const name = options.all ? undefined : (target ? String(target) : undefined);
+          const results = plugin.updatePlugins({ name, workspaceRoot, config });
+          if (options.json) { process.stdout.write(JSON.stringify(results) + '\n'); return; }
+          if (results.length === 0) { console.log(chalk.gray('No plugins installed.')); return; }
+          for (const r of results) {
+            if (!r.ok) { console.log(chalk.red(`✗ ${r.name} — ${r.error ?? 'update failed'}`)); process.exitCode = 1; continue; }
+            if (r.updated) {
+              const from = r.fromVersion ?? (r.fromRevision ? r.fromRevision.slice(0, 8) : '?');
+              const to = r.toVersion ?? (r.toRevision ? r.toRevision.slice(0, 8) : '?');
+              console.log(chalk.green(`✓ ${r.name} — updated ${from} → ${to} (${r.scope}, enabled state preserved)`));
+            } else {
+              console.log(chalk.gray(`= ${r.name} — already up to date (${r.scope})`));
+            }
+          }
+          return;
+        }
+
         default:
-          return fail(`Unknown plugin action "${act}". Use: init | install | list | info | validate | enable | disable | remove | search | trust.`);
+          return fail(`Unknown plugin action "${act}". Use: init | install | list | info | validate | enable | disable | remove | search | trust | publish | update.`);
       }
     });
 }
