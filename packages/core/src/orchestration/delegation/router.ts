@@ -26,9 +26,9 @@
  * at 0.6.
  */
 
-import type { McpClientPool } from '../mcp/mcpPool.js';
-import { callMcpTool, hasMcpTool } from '../mcp/mcpUtils.js';
-import { inferRoleFromTask } from './tools.js';
+import type { McpClientPool } from '../../mcp/mcpPool.js';
+import { callMcpTool, hasMcpTool } from '../../mcp/mcpUtils.js';
+import { inferRoleFromTask } from '../tools.js';
 
 export type RouteTier = 'answer-direct' | 'direct-tool' | 'spawn-inline' | 'spawn-worker';
 

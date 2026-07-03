@@ -16,7 +16,7 @@ import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../hooks
 import { runHooks, parseHookDecision } from '../hooks/hooksStore.js';
 import { extractToolText } from '../mcp/mcpUtils.js';
 import { reconnectBackoffMs, probeConnectivity } from '../mcp/reconnect/reconnect.js';
-import { listAll as listAgentDefinitions } from '../orchestration/agentRegistry.js';
+import { listAll as listAgentDefinitions } from '../orchestration/agents/agentRegistry.js';
 import { executeOrchestrationTool, isOrchestrationToolName, synthesizeDelegateTools, OrchestrationContext } from '../orchestration/tools.js';
 import { buildFanOutHint, shouldSuggestFanOut } from '../prompt/planning/breadthHint.js';
 import { buildNextActionMessages, parseNextActionPlan, nextActionDirective, planWantsFanOut, shouldSkipPlanner } from '../prompt/planning/nextAction.js';

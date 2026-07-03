@@ -18,7 +18,7 @@
  * + headless fail-closed handling lives in the spawn path.
  */
 
-import type { AccessMode } from "./roles.js";
+import type { AccessMode } from "../roles/roles.js";
 
 export type DelegationPolicy = "auto" | "ask-before-spawn" | "ask-before-write-child" | "no-children";
 

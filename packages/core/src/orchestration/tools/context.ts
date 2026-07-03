@@ -5,8 +5,8 @@
 // this is a near-no-op type swap.
 import type { McpClientPool as McpClientWrapper } from '../../mcp/mcpPool.js';
 import type { LLMConfig } from '../../config/config.js';
-import type { AccessMode } from '../roles.js';
-import type { Tier } from '../agentRegistry.js';
+import type { AccessMode } from '../roles/roles.js';
+import type { Tier } from '../agents/agentRegistry.js';
 
 export interface OrchestrationContext {
   workspaceRoot: string;

@@ -10,8 +10,8 @@
  * Pure (no I/O) so it unit-tests without the orchestration runtime.
  */
 
-import { parseChildOutput } from "./outputContracts.js";
-import { mergeAndFilterFindings, renderReviewReport, type ReviewFinding, type ReviewSynthesis } from "../review/reviewSynthesis.js";
+import { parseChildOutput } from "../roles/outputContracts.js";
+import { mergeAndFilterFindings, renderReviewReport, type ReviewFinding, type ReviewSynthesis } from "../../review/reviewSynthesis.js";
 
 export interface SynthChild {
   id: string;

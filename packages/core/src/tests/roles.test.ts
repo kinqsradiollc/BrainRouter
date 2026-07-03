@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { BUILT_IN_ROLES, buildRolePrompt, PRIOR_WORK_PREAMBLE } from '../orchestration/roles.js';
+import { BUILT_IN_ROLES, buildRolePrompt, PRIOR_WORK_PREAMBLE } from '../orchestration/roles/roles.js';
 
 // MAS-NOREDUN — every role prompt must carry the "build on prior work, don't
 // re-derive" directive so a fan-out child reads deltas, not the whole tree.

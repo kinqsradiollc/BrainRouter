@@ -26,7 +26,7 @@ import {
   renderPrompt,
 } from './phasePlan.js';
 import { synthesizePhase, type SynthChild, type SynthesisRollup } from './synthesis.js';
-import type { ReviewSynthesis } from '../review/reviewSynthesis.js';
+import type { ReviewSynthesis } from '../../review/reviewSynthesis.js';
 
 const PHASE_OUTPUT_SEP = '\n\n---\n\n';
 

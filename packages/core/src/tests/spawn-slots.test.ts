@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isLiveChild, countLiveChildren, countRunningChildren, spawnSlotDecision } from '../orchestration/spawnSlots.js';
+import { isLiveChild, countLiveChildren, countRunningChildren, spawnSlotDecision } from '../orchestration/session/spawnSlots.js';
 
 test('CODEX-AGENT-LIFECYCLE isLiveChild: only pending/running count as live', () => {
   assert.equal(isLiveChild({ status: 'pending' }), true);

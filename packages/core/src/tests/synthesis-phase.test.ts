@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { extractReviewFindings, synthesizePhase } from '../orchestration/synthesis.js';
-import type { SynthChild } from '../orchestration/synthesis.js';
+import { extractReviewFindings, synthesizePhase } from '../orchestration/workflow/synthesis.js';
+import type { SynthChild } from '../orchestration/workflow/synthesis.js';
 
 const child = (id: string, finalOutput: string, role = 'reviewer'): SynthChild => ({ id, role, status: 'completed', finalOutput });
 

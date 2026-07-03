@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { resolveWorkspacePath } from './workspaceFs.js';
-import { ownershipWriteViolation } from '../orchestration/ownership.js';
+import { ownershipWriteViolation } from '../orchestration/ownership/ownership.js';
 
 /**
  * `apply_patch` envelope parser + applier.

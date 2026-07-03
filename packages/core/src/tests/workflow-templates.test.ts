@@ -4,9 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { buildTemplatePlan, WORKFLOW_TEMPLATES } from '../workflow/template/workflowTemplates.js';
-import { normalizePhasePlan } from '../orchestration/phasePlan.js';
+import { normalizePhasePlan } from '../orchestration/workflow/phasePlan.js';
 import { runWorkflow } from '../workflow/template/workflowTool.js';
-import type { PhaseRunner } from '../orchestration/phaseOrchestrator.js';
+import type { PhaseRunner } from '../orchestration/workflow/phaseOrchestrator.js';
 import { readRun } from '../workflow/run/workflowRun.js';
 
 function tmpWs(): string {

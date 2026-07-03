@@ -6,9 +6,9 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { withTempWorkspaceAsync } from './_helpers.js';
 import { prepareChildWorkspace, removeChildWorktree, reconcileOrphanWorktrees, applyPatchFile, prepareSharedWorktree, isSharedWorktreeOf, sharedWorktreeLaunchCwd, mergeBackLine } from '../worktree/worktreeIsolation.js';
-import { finalizeBuildLoop, finalizeFanOutBuild, verifyLooksGreen, reviewHasBlocker } from '../orchestration/buildLoop.js';
+import { finalizeBuildLoop, finalizeFanOutBuild, verifyLooksGreen, reviewHasBlocker } from '../orchestration/workflow/buildLoop.js';
 import { executeOrchestrationTool, trackedPromiseFor } from '../orchestration/tools.js';
-import { getSession, pruneWorktreePatches } from '../orchestration/orchestrator.js';
+import { getSession, pruneWorktreePatches } from '../orchestration/session/orchestrator.js';
 import { getStateDir, getBrainrouterHome } from '../storage/store.js';
 import { setCliKnobOverride, _resetCliKnobsCache, getCliKnobs } from '../config/config.js';
 

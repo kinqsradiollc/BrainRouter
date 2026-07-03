@@ -12,7 +12,7 @@
  * plan. The user's "review each repo → synthesize" maps directly to `review-wide`.
  */
 
-import type { PhasePlan } from '../../orchestration/phasePlan.js';
+import type { PhasePlan } from '../../orchestration/workflow/phasePlan.js';
 
 export interface TemplateResult {
   plan: PhasePlan | null;

@@ -16,7 +16,7 @@
  * No I/O, no spawning — that's WF-ENGINE.
  */
 
-import type { AccessMode } from './roles.js';
+import type { AccessMode } from '../roles/roles.js';
 
 /** How a phase aggregates its children's outputs before the next phase. */
 export type PhaseSynthesis = 'role-rollup' | 'review-merge' | 'none';

@@ -14,13 +14,13 @@
  * pretending to resume mid-turn. Re-spawn with the same goal to continue.
  */
 
-import { Agent } from '../agent/agent.js';
-import type { McpClientPool } from '../mcp/mcpPool.js';
-import type { LLMConfig } from '../config/config.js';
-import { loadOrInitConfig } from '../config/config.js';
-import { resolveAgentLlm } from '../provider/agentModels.js';
-import { resolveRole, type AccessMode } from './roles.js';
-import type { EffortLevel } from '../session/preferences/preferencesStore.js';
+import { Agent } from '../../agent/agent.js';
+import type { McpClientPool } from '../../mcp/mcpPool.js';
+import type { LLMConfig } from '../../config/config.js';
+import { loadOrInitConfig } from '../../config/config.js';
+import { resolveAgentLlm } from '../../provider/agentModels.js';
+import { resolveRole, type AccessMode } from '../roles/roles.js';
+import type { EffortLevel } from '../../session/preferences/preferencesStore.js';
 import {
   createWorker,
   readWorkerMeta,
@@ -28,9 +28,9 @@ import {
   appendWorkerTranscript,
   writeWorkerSummary,
   type WorkerMeta,
-} from '../worker/workerStore.js';
-import { enqueueCompletion } from '../session/completion/completionInbox.js';
-import { registerInterruptibleAgent, unregisterInterruptibleAgent } from './tools.js';
+} from '../../worker/workerStore.js';
+import { enqueueCompletion } from '../../session/completion/completionInbox.js';
+import { registerInterruptibleAgent, unregisterInterruptibleAgent } from '../tools.js';
 
 /** In-process worker runs, keyed by worker id. */
 const runningWorkers = new Map<string, Promise<void>>();

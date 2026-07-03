@@ -4,8 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { runWorkflow, resumeWorkflow } from '../workflow/template/workflowTool.js';
-import { executePhasePlan, type PhaseRunner } from '../orchestration/phaseOrchestrator.js';
-import { normalizePhasePlan } from '../orchestration/phasePlan.js';
+import { executePhasePlan, type PhaseRunner } from '../orchestration/workflow/phaseOrchestrator.js';
+import { normalizePhasePlan } from '../orchestration/workflow/phasePlan.js';
 import { ensurePhaseRun, advanceRunPhase, readRun } from '../workflow/run/workflowRun.js';
 
 function tmpWs(): string {

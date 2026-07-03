@@ -23,13 +23,13 @@ import { DELEGATE_TOOL_PREFIX, resolveDelegateAgentId, isOrchestrationToolName, 
 import { DEFAULT_TASK_AGENT_TIMEOUT_MS, inferRoleFromTask, clampAccess, extractChildPreview } from './tools/helpers.js';
 import { trackedPromiseFor, childAgentsFor, registerInterruptibleAgent, unregisterInterruptibleAgent } from './tools/registry.js';
 import type { OrchestrationContext } from './tools/context.js';
-import { resolveRole, type AccessMode } from './roles.js';
-import { ownershipRequirementError } from './ownership.js';
-import { listAll } from './agentRegistry.js';
+import { resolveRole, type AccessMode } from './roles/roles.js';
+import { ownershipRequirementError } from './ownership/ownership.js';
+import { listAll } from './agents/agentRegistry.js';
 import { runWorkflow } from '../workflow/template/workflowTool.js';
 import { loadWorkflowGraph } from '../workflow/graph/graphStore.js';
 import { runGraph } from '../workflow/graph/graphEngine.js';
-import { routeTask } from './router.js';
+import { routeTask } from './delegation/router.js';
 import { localModelProfileActive } from '../provider/modelFamily.js';
 import { getCliKnobs } from '../config/config.js';
 
@@ -266,4 +266,4 @@ export {
   createRouteTaskTool,
   createRunWorkflowTool,
   createRunWorkflowGraphTool,
-} from './agentTools.js';
+} from './agents/agentTools.js';

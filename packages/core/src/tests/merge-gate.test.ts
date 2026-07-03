@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePatchFiles, findCrossWorktreeOverlaps, planSynthesisMerge } from '../orchestration/mergeGate.js';
+import { parsePatchFiles, findCrossWorktreeOverlaps, planSynthesisMerge } from '../orchestration/workflow/mergeGate.js';
 
 const PATCH = `diff --git a/src/a.ts b/src/a.ts
 index 111..222 100644

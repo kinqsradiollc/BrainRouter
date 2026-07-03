@@ -10,7 +10,7 @@
  * (the real-pid `isAlive` is injectable).
  */
 import { listWorkers, staleWorkerIds, updateWorkerMeta } from '../worker/workerStore.js';
-import { listSessions, updateSession } from '../orchestration/orchestrator.js';
+import { listSessions, updateSession } from '../orchestration/session/orchestrator.js';
 import { listRuns, finishRun, staleRunSlugs } from '../workflow/run/workflowRun.js';
 
 /**
