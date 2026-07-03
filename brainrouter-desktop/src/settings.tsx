@@ -12,15 +12,15 @@ import React, { useMemo, useState } from 'react';
 import { wireBadge, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
 import { Icon } from './icons.js';
 import { ShortcutsReference } from './components/dialogs/ShortcutsReference.js';
-import { Row, Toggle, Select, ChoiceControl, KnobNumber, KnobText } from './settings/controls.js';
-import { PermissionModeCards } from './settings/PermissionModeCards.js';
-import { ComputerUseSettings } from './settings/ComputerUseSettings.js';
-import { CliConfigEditor } from './settings/CliConfigEditor.js';
-import { ConnectorSettings } from './settings/ConnectorSettings.js';
-import { McpServersSection } from './settings/McpServersSection.js';
-import { ModelsSection } from './settings/ModelsSection.js';
-import { UsageHeatmap } from './settings/UsageHeatmap.js';
-import { NAV, type ConfigSnapshot, type GithubSaveArgs, type UsageHistory } from './settings/types.js';
+import { Row, Toggle, Select, ChoiceControl, KnobNumber, KnobText } from './settings/shared/controls.js';
+import { PermissionModeCards } from './settings/permissions/PermissionModeCards.js';
+import { ComputerUseSettings } from './settings/permissions/ComputerUseSettings.js';
+import { CliConfigEditor } from './settings/cli/CliConfigEditor.js';
+import { ConnectorSettings } from './settings/connectors/ConnectorSettings.js';
+import { McpServersSection } from './settings/connectors/McpServersSection.js';
+import { ModelsSection } from './settings/models/ModelsSection.js';
+import { UsageHeatmap } from './settings/usage/UsageHeatmap.js';
+import { NAV, type ConfigSnapshot, type GithubSaveArgs, type UsageHistory } from './settings/shared/types.js';
 
 // §public-surface — types consumed by App.tsx and the agent/composer hooks are
 // re-exported so importers keep resolving them from `./settings.js` unchanged.
@@ -29,7 +29,7 @@ export type {
   GithubRepoSnapshot,
   GithubIntegrationSnapshot,
   UsageHistory,
-} from './settings/types.js';
+} from './settings/shared/types.js';
 
 export function SettingsDialog(props: {
   open: boolean;

@@ -1,5 +1,5 @@
 import React from 'react';
-import type { UsageHistory } from './types.js';
+import type { UsageHistory } from '../shared/types.js';
 
 /** GitHub-contributions-style grid: one square per UTC day, columns are weeks
  *  (aligned on weekday), brightness scales with that day's token volume. Themed

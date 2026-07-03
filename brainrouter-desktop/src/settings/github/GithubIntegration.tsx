@@ -2,8 +2,8 @@
  * back; the host only reports whether one is set). Saves to config.json
  * cli.track.* via action:set-track-github, replacing any need for a .env. */
 import React, { useState } from 'react';
-import { Row } from './controls.js';
-import type { GithubIntegrationSnapshot, GithubSaveArgs } from './types.js';
+import { Row } from '../shared/controls.js';
+import type { GithubIntegrationSnapshot, GithubSaveArgs } from '../shared/types.js';
 
 export function GithubIntegration({ gh, onSave }: { gh: GithubIntegrationSnapshot; onSave: (args: GithubSaveArgs) => void }): React.ReactElement {
   const repos = gh.repos?.length ? gh.repos : (gh.repo ? [{ repo: gh.repo, hasToken: gh.hasToken, tokenSource: gh.tokenSource, active: true }] : []);

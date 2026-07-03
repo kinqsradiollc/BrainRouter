@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Row, Toggle, ChoiceControl } from './controls.js';
+import { Row, Toggle, ChoiceControl } from '../shared/controls.js';
 
 export function ComputerUseSettings({ knobs, refreshSnapshot }: { knobs: Record<string, unknown>; refreshSnapshot: () => void }): React.ReactElement {
   const cfg = (knobs.computerUse && typeof knobs.computerUse === 'object' ? knobs.computerUse : {}) as { enabled?: boolean; mode?: string };

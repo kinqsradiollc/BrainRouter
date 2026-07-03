@@ -2,9 +2,9 @@
  *  knob is a typed row (toggle / number / text) with add + remove, instead of a
  *  hand-edited JSON blob. Saves the whole block via the existing set-cli-json. */
 import React, { useState } from 'react';
-import { Icon } from '../icons.js';
-import { KnobValue } from './controls.js';
-import { DEDICATED_KNOBS, INTERNAL_KNOBS } from './types.js';
+import { Icon } from '../../icons.js';
+import { KnobValue } from '../shared/controls.js';
+import { DEDICATED_KNOBS, INTERNAL_KNOBS } from '../shared/types.js';
 
 export function CliConfigEditor({ cli, onSave }: { cli: Record<string, unknown>; onSave: (next: Record<string, unknown>) => void }): React.ReactElement {
   const [draft, setDraft] = useState<Record<string, unknown>>(() => ({ ...cli }));

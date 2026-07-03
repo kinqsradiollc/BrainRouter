@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import type { ConnectorRecord } from '@kinqs/brainrouter-types';
-import { bridgeQuery } from '../lib/bridgeQuery.js';
-import type { GithubOrgRow, GithubRepoRow, GithubOrgsResult, GithubReposResult } from './types.js';
+import { bridgeQuery } from '../../lib/bridgeQuery.js';
+import type { GithubOrgRow, GithubRepoRow, GithubOrgsResult, GithubReposResult } from '../shared/types.js';
 
 export function GithubRepoPicker({ connector, value, onChange }: {
   connector: ConnectorRecord | undefined;

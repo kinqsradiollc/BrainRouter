@@ -5,9 +5,9 @@
  * own local state so the composed shell stays thin; render is unchanged.
  */
 import React, { useRef, useState } from 'react';
-import { ProviderIcon } from '../components/model/ProviderIcon.js';
-import { Row, ChoiceControl, ComboInput } from './controls.js';
-import { WireFormatSelect } from './controls.js';
+import { ProviderIcon } from '../../components/model/ProviderIcon.js';
+import { Row, ChoiceControl, ComboInput } from '../shared/controls.js';
+import { WireFormatSelect } from '../shared/controls.js';
 import {
   SUBAGENT_ROLES,
   SUBAGENT_ROLE_LABELS,
@@ -16,7 +16,7 @@ import {
   type ChoiceOption,
   type ConfigSnapshot,
   type WireFormatOverride,
-} from './types.js';
+} from '../shared/types.js';
 
 export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }: {
   snapshot: ConfigSnapshot | null;

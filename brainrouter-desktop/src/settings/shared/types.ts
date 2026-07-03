@@ -3,7 +3,7 @@
  * from settings.tsx so each section component can import the same contracts
  * without a cycle back through the composed shell.
  */
-import type { SettingsSection } from '../lib/commands/commands.js';
+import type { SettingsSection } from '../../lib/commands/commands.js';
 import type { ConnectorCatalogEntry, ConnectorRecord, ConnectorRunRecord } from '@kinqs/brainrouter-types';
 
 export interface ConnectorSlimPreview {

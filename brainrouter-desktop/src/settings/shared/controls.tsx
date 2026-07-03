@@ -4,7 +4,7 @@
  * settings.tsx byte-for-byte so every section renders identical controls.
  */
 import React, { useState } from 'react';
-import { Icon } from '../icons.js';
+import { Icon } from '../../icons.js';
 import type { ChoiceOption, WireFormatOverride } from './types.js';
 
 export function Row({ title, desc, children }: { title: React.ReactNode; desc?: React.ReactNode; children?: React.ReactNode }): React.ReactElement {

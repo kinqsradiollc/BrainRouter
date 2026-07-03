@@ -1,10 +1,10 @@
 import React, { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ConnectorDefinitionBundle, ConnectorRecord } from '@kinqs/brainrouter-types';
-import { Icon } from '../icons.js';
-import { Row, ChoiceControl } from './controls.js';
-import { GithubIntegration } from './GithubIntegration.js';
-import { GithubRepoPicker } from './GithubRepoPicker.js';
+import { Icon } from '../../icons.js';
+import { Row, ChoiceControl } from '../shared/controls.js';
+import { GithubIntegration } from '../github/GithubIntegration.js';
+import { GithubRepoPicker } from '../github/GithubRepoPicker.js';
 import {
   connectorConfigString,
   connectorConfigList,
@@ -14,7 +14,7 @@ import {
   type GithubIntegrationSnapshot,
   type GithubSaveArgs,
   type GithubOauthState,
-} from './types.js';
+} from '../shared/types.js';
 
 export function ConnectorSettings({ connectors, githubIntegration, githubOauthClientId, onGithubSave, onAction, refreshSnapshot }: {
   connectors: NonNullable<ConfigSnapshot['connectors']>;

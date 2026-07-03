@@ -5,9 +5,9 @@
  * add-server draft state; render is unchanged.
  */
 import React, { useState } from 'react';
-import { Icon } from '../icons.js';
-import { Row, ChoiceControl } from './controls.js';
-import type { ConfigSnapshot } from './types.js';
+import { Icon } from '../../icons.js';
+import { Row, ChoiceControl } from '../shared/controls.js';
+import type { ConfigSnapshot } from '../shared/types.js';
 
 export function McpServersSection({ snapshot, onAction, refreshSnapshot }: {
   snapshot: ConfigSnapshot | null;
