@@ -171,7 +171,7 @@ export async function tryHandleMemoryCommand(ctx: CommandContext): Promise<boole
       // CLI-10 — `/verify detect` reports the project profile + the verify
       // recipe it would run (read-only; sandbox-run + LSP diagnostics later).
       if (id === 'detect') {
-        const { detectProjectProfile, formatProjectProfiles } = await import('../../../runtime/projectProfile.js');
+        const { detectProjectProfile, formatProjectProfiles } = await import('../../../runtime/verify/projectProfile.js');
         let entries: string[] = [];
         try { entries = fs.readdirSync(agent.workspaceRoot); } catch { /* ignore */ }
         console.log(chalk.bold('\n🔎 Verify — project profile'));
@@ -184,8 +184,8 @@ export async function tryHandleMemoryCommand(ctx: CommandContext): Promise<boole
       // CLI-10 — `/verify run [build|test|lint]` runs the detected recipe step
       // in the workspace and reports pass/fail + tail output.
       if (id === 'run') {
-        const { detectProjectProfile } = await import('../../../runtime/projectProfile.js');
-        const { runVerifyRecipe, formatRecipeResult } = await import('../../../runtime/verifyRunner.js');
+        const { detectProjectProfile } = await import('../../../runtime/verify/projectProfile.js');
+        const { runVerifyRecipe, formatRecipeResult } = await import('../../../runtime/verify/verifyRunner.js');
         const cp = await import('node:child_process');
         const step = ((args[1] as 'build' | 'test' | 'lint') || 'test');
         let entries: string[] = [];
@@ -213,7 +213,7 @@ export async function tryHandleMemoryCommand(ctx: CommandContext): Promise<boole
       // smoke command, writes artifacts to a run dir, and reports what it
       // produced. Infrastructure-agnostic (cli.browserSmoke template).
       if (id === 'browser') {
-        const { runBrowserSmoke, formatBrowserSmokeResult } = await import('../../../runtime/browserVerify.js');
+        const { runBrowserSmoke, formatBrowserSmokeResult } = await import('../../../runtime/verify/browserVerify.js');
         const cp = await import('node:child_process');
         const template = getCliKnobs().browserSmoke;
         const url = args[1] || 'http://localhost:3000';

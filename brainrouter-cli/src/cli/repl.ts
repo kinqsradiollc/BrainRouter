@@ -30,7 +30,7 @@ import { tryHandleAnnotationCommand } from './commands/annotation/index.js';
 import { tryHandleArtifactCommand } from './commands/artifact/index.js';
 import { tryHandleAtlasCommand } from './commands/atlas/index.js';
 import { tryHandleAttachmentCommand } from './commands/attachment/index.js';
-import { loadCustomCommands, findCustomCommand, expandCommandBody } from '../runtime/customCommands.js';
+import { loadCustomCommands, findCustomCommand, expandCommandBody } from '../runtime/commands/customCommands.js';
 
 /**
  * All slash commands the REPL recognizes. Used for tab autocomplete and for

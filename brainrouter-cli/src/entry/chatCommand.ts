@@ -207,7 +207,7 @@ export function registerChatCommand(program: Command): void {
       // chat session and rotates per-launch) so clean restarts refresh
       // the registry row instead of stacking ghosts.
       const { attachFederation, resolveFederationSessionKey } = await import(
-        '../runtime/federationRegistration.js'
+        '../runtime/federation/federationRegistration.js'
       );
       const federationKey = resolveFederationSessionKey(workspace.workspaceRoot);
       agent.setFederationSessionKey(federationKey);

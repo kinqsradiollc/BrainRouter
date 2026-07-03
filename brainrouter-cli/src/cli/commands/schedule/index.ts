@@ -16,7 +16,7 @@
  */
 
 import chalk from 'chalk';
-import { parseInterval } from '../../../runtime/loopRunner.js';
+import { parseInterval } from '../../../runtime/background/loopRunner.js';
 import { parseCron, nextCronFire } from '@kinqs/brainrouter-core/schedule';
 import {
   addSchedule,

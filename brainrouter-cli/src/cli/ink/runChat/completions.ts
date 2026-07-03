@@ -2,7 +2,7 @@ import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import { listSessions } from '@kinqs/brainrouter-core/orchestration';
 import { listWorkers } from '@kinqs/brainrouter-core/worker';
 import { listRuns } from '@kinqs/brainrouter-core/workflow';
-import { newlyTerminal, formatCompletionNotice, type CompletionItem } from '../../../runtime/completionNotices.js';
+import { newlyTerminal, formatCompletionNotice, type CompletionItem } from '../../../runtime/background/completionNotices.js';
 import type { RunChatContext } from './context.js';
 
 /**

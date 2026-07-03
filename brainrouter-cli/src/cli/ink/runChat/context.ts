@@ -1,6 +1,6 @@
 import type { Agent } from '@kinqs/brainrouter-core/agent';
 import type { Config } from '@kinqs/brainrouter-core/config';
-import { InputQueue } from '../../../runtime/inputQueue.js';
+import { InputQueue } from '../../../runtime/input/inputQueue.js';
 import type { ChatController } from '../ChatApp.js';
 import type { createReadlineShim } from './readlineShim.js';
 
@@ -46,7 +46,7 @@ export interface RunChatContext {
   childRefreshTimer: ReturnType<typeof setInterval> | null;
   lastChildCount: number;
   refreshTickN: number;
-  scheduleTicker: import('../../../runtime/scheduleTicker.js').ScheduleTickerHandle | null;
+  scheduleTicker: import('../../../runtime/background/scheduleTicker.js').ScheduleTickerHandle | null;
 
   // --- helper functions (assigned after construction) ---
   isQuiet: () => boolean;
@@ -58,7 +58,7 @@ export interface RunChatContext {
   getRunningWorkerCount: () => number;
   getRunningWorkflowCount: () => number;
   refreshBackgroundTasks: () => void;
-  collectTerminalCompletions: () => import('../../../runtime/completionNotices.js').CompletionItem[];
+  collectTerminalCompletions: () => import('../../../runtime/background/completionNotices.js').CompletionItem[];
   notifyIdleCompletions: () => void;
   cancelChildResume: () => boolean;
   scheduleGoalContinuation: (afterPrompt: string, afterAnswer: string) => void;

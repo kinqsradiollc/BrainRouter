@@ -9,7 +9,7 @@ import { resolveTheme } from '../theme.js';
 import { buildBannerInputs } from '../banner.js';
 import { readPreferences } from '@kinqs/brainrouter-core/session';
 import { runHooks } from '@kinqs/brainrouter-core/hooks';
-import { InputQueue } from '../../runtime/inputQueue.js';
+import { InputQueue } from '../../runtime/input/inputQueue.js';
 import { endTurnCheckpoint, queueOfflinePrompt, readRecoverable, clearOfflineQueue, shouldAutoReplayOffline } from '@kinqs/brainrouter-core/storage';
 import { type McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
 import { setActiveReadline } from '../cliPrompt.js';
@@ -72,7 +72,7 @@ export interface RunChatOptions {
    * persistent scrollback ABOVE the composer instead of as raw stdout
    * writes that Ink stomps on the next redraw.
    */
-  federation?: import('../../runtime/federationRegistration.js').FederationHandle | null;
+  federation?: import('../../runtime/federation/federationRegistration.js').FederationHandle | null;
 }
 
 export async function runChat(opts: RunChatOptions): Promise<void> {
@@ -279,7 +279,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
           if (getCliKnobs().updateCheck) {
             (async () => {
               try {
-                const { checkForUpdate, formatUpdateBanner } = await import('../../runtime/updateCheck.js');
+                const { checkForUpdate, formatUpdateBanner } = await import('../../runtime/update/updateCheck.js');
                 const upd = await checkForUpdate();
                 if (upd?.behind && ctx.controller) {
                   const banner = formatUpdateBanner(upd.current, upd.latest, upd.command);

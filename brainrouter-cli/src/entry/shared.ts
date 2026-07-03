@@ -18,7 +18,7 @@ export const DEFAULT_LLM: LLMConfig = { provider: 'openai', model: 'gpt-4o-mini'
 // the brain being reachable); returns a small status for the caller to log.
 export async function pushFleetSnapshotToBrain(summary: unknown): Promise<{ ok: boolean; error?: string }> {
   try {
-    const { fleetSnapshotPushArgs } = await import('../runtime/fleetCommand.js');
+    const { fleetSnapshotPushArgs } = await import('../runtime/fleet/fleetCommand.js');
     const config = loadConfig();
     if (!config.servers || Object.keys(config.servers).length === 0) return { ok: false, error: 'no MCP server configured' };
     const targetIds = selectMcpServerIds(config.servers, config.activeServer, undefined);

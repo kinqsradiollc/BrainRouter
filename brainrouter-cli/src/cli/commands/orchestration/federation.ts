@@ -7,7 +7,7 @@
 
 import chalk from 'chalk';
 import { callMcpTool } from '@kinqs/brainrouter-core/mcp';
-import { formatInboxPane } from '../../../runtime/inboxView.js';
+import { formatInboxPane } from '../../../runtime/federation/inboxView.js';
 import { readTranscriptEntries, appendTranscriptEntry } from '@kinqs/brainrouter-core/session';
 import { readGoal, setGoal, pauseGoal } from '@kinqs/brainrouter-core/goal';
 import { buildHandoffPacket, resolveHandoffTarget, type HandoffPacket } from '../../../orchestration/handoff.js';

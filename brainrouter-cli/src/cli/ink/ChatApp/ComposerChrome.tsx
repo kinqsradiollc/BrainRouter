@@ -9,9 +9,9 @@ import TextInput from 'ink-text-input';
 import Spinner from 'ink-spinner';
 import { SlashPalettePanel } from '../SlashPalettePanel.js';
 import { FooterStatus } from '../FooterStatus.js';
-import { searchHistory } from '../../../runtime/inputHistory.js';
+import { searchHistory } from '../../../runtime/input/inputHistory.js';
 import type { SlashCommandDef } from '../SlashPalette.js';
-import type { FlagDef } from '../../../runtime/slashFlags.js';
+import type { FlagDef } from '../../../runtime/input/slashFlags.js';
 import type { FooterState } from './types.js';
 
 export interface ComposerChromeProps {

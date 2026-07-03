@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { shouldAutoExtractSkill, buildSessionSummary } from '../runtime/autoSkill.js';
+import { shouldAutoExtractSkill, buildSessionSummary } from '../runtime/commands/autoSkill.js';
 
 test('MEM-33b shouldAutoExtractSkill: needs enabled + enough tool calls + a substantive answer', () => {
   const big = 'x'.repeat(60);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runVerifyRecipe, formatRecipeResult } from '../runtime/verifyRunner.js';
+import { runVerifyRecipe, formatRecipeResult } from '../runtime/verify/verifyRunner.js';
 
 const recipe = { build: 'npm run build', test: 'npm test', lint: 'npm run lint' };
 

@@ -9,7 +9,7 @@ import { listExtensions } from '@kinqs/brainrouter-core/extension';
 import { isExtensionEnabled, setExtensionEnabled } from '@kinqs/brainrouter-core/extension';
 import { loadExtensions } from '@kinqs/brainrouter-core/extension';
 import { extensionContributionSummary } from '@kinqs/brainrouter-core/extension';
-import { runAuditedUpdate } from '../../../runtime/updateApply.js';
+import { runAuditedUpdate } from '../../../runtime/update/updateApply.js';
 
 export async function tryHandleExtensionCommand(ctx: CommandContext): Promise<boolean> {
   const { command, args, agent } = ctx;

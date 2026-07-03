@@ -16,7 +16,7 @@ export function registerFleetCommand(program: Command): void {
     .option('--push', 'Push the snapshot to the brain for the dashboard console (drain)')
     .option('--json', 'Machine-readable output')
     .action(async (action, options) => {
-      const { parseRepoList, buildMigrationSpec, validateRunArgs, formatFleetStatus } = await import('../runtime/fleetCommand.js');
+      const { parseRepoList, buildMigrationSpec, validateRunArgs, formatFleetStatus } = await import('../runtime/fleet/fleetCommand.js');
       const fleet = await import('@kinqs/brainrouter-core/fleet');
       const act = String(action ?? 'status').toLowerCase();
 

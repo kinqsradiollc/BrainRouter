@@ -11,7 +11,7 @@ import { spinner as makeSpinner } from '../../spinner.js';
 import { marked } from 'marked';
 import { listTranscripts, loadTranscript, exportTranscriptMarkdown, exportTranscriptJson, exportFileName, type ExportFormat, searchTranscript, formatMatches, buildRecap, listChapters, formatChapters } from '@kinqs/brainrouter-core/session';
 import { readPlan } from '@kinqs/brainrouter-core/task';
-import { buildRewindTimeline, truncateAtTurn } from '../../../runtime/rewindTimeline.js';
+import { buildRewindTimeline, truncateAtTurn } from '../../../runtime/observability/rewindTimeline.js';
 import { planRestore, readFileMutations } from '@kinqs/brainrouter-core/storage';
 import { readGoal, resumeGoal } from '@kinqs/brainrouter-core/goal';
 import { askYesNo } from '../../cliPrompt.js';

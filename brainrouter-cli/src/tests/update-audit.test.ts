@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseAuditJson, decideUpdate, runAuditedUpdate } from '../runtime/updateApply.js';
-import type { UpdateCheckResult } from '../runtime/updateCheck.js';
+import { parseAuditJson, decideUpdate, runAuditedUpdate } from '../runtime/update/updateApply.js';
+import type { UpdateCheckResult } from '../runtime/update/updateCheck.js';
 
 const behind: UpdateCheckResult = { current: '0.4.14', latest: '0.4.15', behind: true, command: 'npm i -g x@latest' };
 

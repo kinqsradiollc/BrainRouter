@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { exportTranscriptMarkdown, buildRecap, type TranscriptEntry } from '@kinqs/brainrouter-core/session';
-import { buildRewindTimeline } from '../runtime/rewindTimeline.js';
+import { buildRewindTimeline } from '../runtime/observability/rewindTimeline.js';
 import { entryKind } from '../orchestration/agentTranscriptView.js';
 
 /**

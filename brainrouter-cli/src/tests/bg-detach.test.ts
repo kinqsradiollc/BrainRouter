@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveBackgroundTarget, describeStopOutcome } from '../runtime/bgDetach.js';
+import { resolveBackgroundTarget, describeStopOutcome } from '../runtime/background/bgDetach.js';
 
 const workers = [
   { id: 'wkr_abc', status: 'running', role: 'worker' },

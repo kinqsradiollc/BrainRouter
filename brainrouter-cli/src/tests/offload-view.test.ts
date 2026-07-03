@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatOffloadList, formatOffloadGraph } from '../runtime/offloadView.js';
+import { formatOffloadList, formatOffloadGraph } from '../runtime/observability/offloadView.js';
 
 test('CLI-14 formatOffloadList: empty → friendly message', () => {
   assert.match(formatOffloadList([]).join('\n'), /No offloads/);

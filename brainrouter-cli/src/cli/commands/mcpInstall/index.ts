@@ -10,7 +10,7 @@
 
 import chalk from 'chalk';
 import type { Config } from '@kinqs/brainrouter-core/config';
-import { displayPath, getVendor, listVendors, renderSnippet, VENDORS } from '../../../runtime/vendorSnippets.js';
+import { displayPath, getVendor, listVendors, renderSnippet, VENDORS } from '../../../runtime/platform/vendorSnippets.js';
 
 export interface RenderResult {
   ok: boolean;
