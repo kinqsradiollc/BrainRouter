@@ -11,9 +11,14 @@
 // MC-A4 adds the runtime MANAGER: LRU parking under `cli.runtime.maxLive`,
 // resume-by-id (in-process, worktree re-attach, process re-host), and boot
 // reconcile of records a dead process left live-ish.
+// MC-A6 adds WORKSPACE ARCHIVES: worktree dispose writes a durable
+// patch + tarball + manifest under the runtime archives root
+// (`cli.runtime.archiveOnDispose`), resumable via `resumeFromArchive` and
+// bounded by `listArchives`/`pruneArchives` (`cli.runtime.archiveKeep`).
 export * from './runtimeTypes.js';
 export * from './registry.js';
 export * from './backends/process.js';
 export * from './backends/worktree.js';
 export * from './state/runtimeStateStore.js';
 export * from './manager.js';
+export * from './archive.js';

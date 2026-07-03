@@ -648,9 +648,15 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     // MC-A1 — runtime plane. Backend validates to 'process' (today's in-process
     // execution) so a typo can never silently opt into an isolated backend;
     // maxLive 0 = no live-instance cap (LRU parking arrives with MC-A4).
+    // MC-A6 — archive knobs: archiveOnDispose defaults ON (anything but an
+    // explicit `false` keeps the safety net); archiveMaxMB caps the tarball
+    // payload (disk is constrained); archiveKeep bounds pruneArchives().
     runtime: {
       backend: normalizeRuntimeBackend(c.runtime?.backend),
       maxLive: clampInt(c.runtime?.maxLive, 0, 256, 0),
+      archiveOnDispose: c.runtime?.archiveOnDispose !== false,
+      archiveMaxMB: clampInt(c.runtime?.archiveMaxMB, 1, 1024, 64),
+      archiveKeep: clampInt(c.runtime?.archiveKeep, 0, 500, 20),
     },
     tierLadder: c.tierLadder,
     contextCompaction: c.contextCompaction ?? true,

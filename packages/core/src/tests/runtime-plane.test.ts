@@ -200,13 +200,21 @@ test('MC-A1 runtimeStateStore: create/read/update/list/remove round-trip', () =>
 // cli.runtime knob resolution + hydration
 // ---------------------------------------------------------------------------
 
+const RUNTIME_KNOB_DEFAULTS = {
+  backend: 'process',
+  maxLive: 0,
+  archiveOnDispose: true,
+  archiveMaxMB: 64,
+  archiveKeep: 20,
+};
+
 test('MC-A1 cli.runtime knob: defaults, validation, clamping', () => {
   // Absent block → safe defaults.
-  assert.deepEqual(resolveCliKnobs(cfg({})).runtime, { backend: 'process', maxLive: 0 });
+  assert.deepEqual(resolveCliKnobs(cfg({})).runtime, RUNTIME_KNOB_DEFAULTS);
   // Valid values pass through.
   assert.deepEqual(
     resolveCliKnobs(cfg({ runtime: { backend: 'worktree', maxLive: 3 } })).runtime,
-    { backend: 'worktree', maxLive: 3 },
+    { ...RUNTIME_KNOB_DEFAULTS, backend: 'worktree', maxLive: 3 },
   );
   // Invalid backend → 'process' (never silently isolates or crashes).
   assert.equal(resolveCliKnobs(cfg({ runtime: { backend: 'container' } })).runtime.backend, 'process');
@@ -219,9 +227,20 @@ test('MC-A1 cli.runtime knob: defaults, validation, clamping', () => {
   assert.equal(normalizeRuntimeBackend('worktree'), 'worktree');
   assert.equal(normalizeRuntimeBackend('anything-else'), 'process');
   assert.equal(normalizeRuntimeBackend(undefined), 'process');
+  // MC-A6 — archive knobs: archiveOnDispose defaults ON, only an explicit
+  // `false` turns it off (junk stays safe); MB/keep clamp to sane ranges.
+  assert.equal(resolveCliKnobs(cfg({ runtime: { archiveOnDispose: false } })).runtime.archiveOnDispose, false);
+  assert.equal(resolveCliKnobs(cfg({ runtime: { archiveOnDispose: 'nope' } })).runtime.archiveOnDispose, true);
+  assert.equal(resolveCliKnobs(cfg({ runtime: { archiveMaxMB: 128 } })).runtime.archiveMaxMB, 128);
+  assert.equal(resolveCliKnobs(cfg({ runtime: { archiveMaxMB: 0 } })).runtime.archiveMaxMB, 1);
+  assert.equal(resolveCliKnobs(cfg({ runtime: { archiveMaxMB: 999_999 } })).runtime.archiveMaxMB, 1024);
+  assert.equal(resolveCliKnobs(cfg({ runtime: { archiveMaxMB: 'big' } })).runtime.archiveMaxMB, 64);
+  assert.equal(resolveCliKnobs(cfg({ runtime: { archiveKeep: 5 } })).runtime.archiveKeep, 5);
+  assert.equal(resolveCliKnobs(cfg({ runtime: { archiveKeep: -3 } })).runtime.archiveKeep, 0);
+  assert.equal(resolveCliKnobs(cfg({ runtime: { archiveKeep: 'lots' } })).runtime.archiveKeep, 20);
 });
 
 test('MC-A1 cli.runtime knob: hydrates into config.json with safe defaults', () => {
   const { config } = hydrateCliDefaults({ activeServer: '', servers: {} } as any);
-  assert.deepEqual((config.cli as any)?.runtime, { backend: 'process', maxLive: 0 });
+  assert.deepEqual((config.cli as any)?.runtime, RUNTIME_KNOB_DEFAULTS);
 });

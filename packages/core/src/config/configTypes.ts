@@ -297,6 +297,19 @@ export interface RuntimeCliKnobs {
   /** Cap on concurrently LIVE runtime instances before LRU parking (MC-A4).
    *  Default 0 = no cap (nothing is ever evicted). */
   maxLive?: number;
+  /** MC-A6 — write a durable workspace archive (git-delta patch + tarball of
+   *  changed files + manifest) when a throwaway `worktree` runtime is
+   *  disposed. Default true — worktree runtimes are teardown-by-design, so
+   *  their uncommitted work is preserved unless the user opts out. */
+  archiveOnDispose?: boolean;
+  /** MC-A6 — cap (in MB) on the changed-file payload packed into an
+   *  archive's tarball. Oversize payloads skip the tarball (the git-delta
+   *  patch is still captured) and note it in the manifest — the host disk is
+   *  a constrained resource. Default 64, clamped 1..1024. */
+  archiveMaxMB?: number;
+  /** MC-A6 — how many archives `pruneArchives()` keeps (newest first).
+   *  Default 20; 0 = no count-based pruning. */
+  archiveKeep?: number;
 }
 
 /** MC-A1 — validated knob values (see `RuntimeBackendKind`). */
@@ -1124,8 +1137,17 @@ export interface ResolvedCliKnobs {
     autoUpdateCheck: boolean;
   };
   /** MC-A1 — validated runtime-plane knobs: backend falls back to 'process';
-   *  `maxLive` clamped ≥ 0 (0 = no live-instance cap). */
-  runtime: { backend: RuntimeBackendKind; maxLive: number };
+   *  `maxLive` clamped ≥ 0 (0 = no live-instance cap). MC-A6 adds the
+   *  workspace-archive knobs: `archiveOnDispose` (default true),
+   *  `archiveMaxMB` (tarball payload cap, clamped 1..1024, default 64) and
+   *  `archiveKeep` (prune keeps newest N, default 20; 0 = no count prune). */
+  runtime: {
+    backend: RuntimeBackendKind;
+    maxLive: number;
+    archiveOnDispose: boolean;
+    archiveMaxMB: number;
+    archiveKeep: number;
+  };
   tierLadder?: { flash?: string; standard?: string; pro?: string };
   contextCompaction: boolean;
   childAgentTimeoutMs: number;
