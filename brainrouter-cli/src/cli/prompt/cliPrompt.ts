@@ -1,5 +1,5 @@
 import readline from 'node:readline';
-import { getAmbientChat } from '../ink/ambientChat.js';
+import { getAmbientChat } from '../ink/chat/ambientChat.js';
 // §ADR-003 — NoTTYError now lives in core (the headless engine throws it too),
 // so the CLI and core share ONE class and instanceof checks stay valid.
 import { NoTTYError, type InteractivePrompter } from '@kinqs/brainrouter-core/agent';
@@ -359,7 +359,7 @@ export function askChoice(
 }
 
 async function runInkYesNo(question: string, defaultValue: boolean): Promise<boolean> {
-  const { runPicker } = await import('../ink/runPicker.js');
+  const { runPicker } = await import('../ink/prompt/runPicker.js');
   const result = await runPicker({
     title: question,
     badge: 'Confirm',
@@ -379,7 +379,7 @@ async function runInkChoice(
   options: ChoiceOption[],
   opts: AskChoiceOptions,
 ): Promise<string | string[]> {
-  const { runPicker } = await import('../ink/runPicker.js');
+  const { runPicker } = await import('../ink/prompt/runPicker.js');
   const rows = options.map((option, i) => ({
     id: `choice:${i}`,
     label: option.label,

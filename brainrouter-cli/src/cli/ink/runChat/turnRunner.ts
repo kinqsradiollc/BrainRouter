@@ -5,7 +5,7 @@ import { shouldAutoExtractSkill, buildSessionSummary } from '../../../runtime/co
 import { callMcpTool } from '@kinqs/brainrouter-core/mcp';
 import { toolPairKey } from '../../../runtime/observability/toolPairing.js';
 import { expandMentions } from '../../../memory/mentions.js';
-import { formatToolCall } from '../toolFormat.js';
+import { formatToolCall } from '../text/toolFormat.js';
 import type { RunChatContext } from './context.js';
 
 /**

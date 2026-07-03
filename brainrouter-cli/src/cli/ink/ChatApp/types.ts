@@ -3,7 +3,7 @@
 // imported by hooks/sub-components/tests without any cycle. Re-exported from
 // ChatApp.tsx for back-compat with existing importers.
 import type React from 'react';
-import type { SlashCommandDef } from '../SlashPalette.js';
+import type { SlashCommandDef } from '../prompt/SlashPalette.js';
 import type { BannerInputs } from '../../view/banner.js';
 
 // --- Public props ------------------------------------------------------

@@ -1,10 +1,10 @@
 import React from 'react';
 import { Picker, type PickerProps, type PickerResult, type PickerRow } from './Picker.js';
 import { TextField, type TextFieldProps, type TextFieldResult } from './TextField.js';
-import { NoTTYError } from '../prompt/cliPrompt.js';
-import { resetStdinForReadline, snapshotStdinListeners } from './stdinHandoff.js';
-import { getAmbientChat } from './ambientChat.js';
-import { renderWithResizeClear } from './renderWithResizeClear.js';
+import { NoTTYError } from '../../prompt/cliPrompt.js';
+import { resetStdinForReadline, snapshotStdinListeners } from '../terminal/stdinHandoff.js';
+import { getAmbientChat } from '../chat/ambientChat.js';
+import { renderWithResizeClear } from '../terminal/renderWithResizeClear.js';
 
 /**
  * One-shot Ink mount helpers. Used by `/config`, `/login`, and any

@@ -1,7 +1,7 @@
 import React from 'react';
 import { SlashPalette, type SlashCommandDef, type SlashPaletteResult } from './SlashPalette.js';
-import { resetStdinForReadline, snapshotStdinListeners } from './stdinHandoff.js';
-import { renderWithResizeClear } from './renderWithResizeClear.js';
+import { resetStdinForReadline, snapshotStdinListeners } from '../terminal/stdinHandoff.js';
+import { renderWithResizeClear } from '../terminal/renderWithResizeClear.js';
 
 /**
  * Mount the slash palette Ink app and await the user's selection.

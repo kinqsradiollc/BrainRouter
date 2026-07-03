@@ -1,8 +1,8 @@
 import React from 'react';
 import { Box, Text } from 'ink';
-import { effortIndicator } from './reasoningWindow.js';
+import { effortIndicator } from '../text/reasoningWindow.js';
 import { formatContextWindow } from '@kinqs/brainrouter-core/context';
-import type { FooterState } from './ChatApp.js';
+import type { FooterState } from '../ChatApp.js';
 
 /**
  * REFAC-CHATAPP-SPLIT part 3 (0.4.6) — the footer status line, extracted

@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Box, Text, useApp, useInput } from 'ink';
 import TextInput from 'ink-text-input';
-import { useTerminalSize } from './useTerminalSize.js';
+import { useTerminalSize } from '../terminal/useTerminalSize.js';
 
 /**
  * Claude-code-style slash command palette.

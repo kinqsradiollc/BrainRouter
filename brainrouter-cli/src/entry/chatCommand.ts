@@ -6,13 +6,13 @@ import { resolveSessionLlmConfig } from '@kinqs/brainrouter-core/session';
 import { McpClientPool, selectMcpServerIds, applyBrainUrlOverride, probeBrainHealth, embeddedBrainId } from '@kinqs/brainrouter-core/mcp';
 import { VERSION } from '@kinqs/brainrouter-core/version';
 import { loadExtensions } from '@kinqs/brainrouter-core/extension';
-import { setKnownMcpServerIds } from '../cli/ink/toolFormat.js';
+import { setKnownMcpServerIds } from '../cli/ink/text/toolFormat.js';
 import type { ServerConfig } from '@kinqs/brainrouter-core/config';
 import { Agent } from '@kinqs/brainrouter-core/agent';
 import { cliPrompter } from '../cli/prompt/cliPrompt.js';
 import { runChat } from '../cli/ink/runChat.js';
 import { applyWorkspaceRoot, findWorkspaceRoot } from '@kinqs/brainrouter-core/workspace';
-import { runWizard, isOnboarded } from '../cli/ink/runWizard.js';
+import { runWizard, isOnboarded } from '../cli/ink/wizard/runWizard.js';
 import { DEFAULT_LLM } from './shared.js';
 
 export function registerChatCommand(program: Command): void {

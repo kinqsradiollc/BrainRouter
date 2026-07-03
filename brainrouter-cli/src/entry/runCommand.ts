@@ -4,7 +4,7 @@ import { resolveSessionLlmConfig } from '@kinqs/brainrouter-core/session';
 import { McpClientPool, selectMcpServerIds } from '@kinqs/brainrouter-core/mcp';
 import { formatJsonlEvent, memoryRunEvent, isOffloadTool, type RunEvent } from '../runtime/reporting/jsonlEvents.js';
 import { costUsd } from '../runtime/reporting/pricing.js';
-import { setKnownMcpServerIds } from '../cli/ink/toolFormat.js';
+import { setKnownMcpServerIds } from '../cli/ink/text/toolFormat.js';
 import type { ServerConfig } from '@kinqs/brainrouter-core/config';
 import { Agent } from '@kinqs/brainrouter-core/agent';
 import { cliPrompter } from '../cli/prompt/cliPrompt.js';

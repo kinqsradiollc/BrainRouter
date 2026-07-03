@@ -2,15 +2,15 @@ import React from 'react';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { WizardApp } from './WizardApp.js';
-import type { WizardState, WizardDraft } from '../wizard/types.js';
-import type { McpPick } from '../wizard/types.js';
+import { WizardApp } from '../WizardApp.js';
+import type { WizardState, WizardDraft } from '../../wizard/types.js';
+import type { McpPick } from '../../wizard/types.js';
 import { writePreferences } from '@kinqs/brainrouter-core/session';
 import { loadOrInitConfig, saveConfig, type Config } from '@kinqs/brainrouter-core/config';
-import { initAgentMd } from '../../prompt/initAgentMd.js';
-import { NoTTYError } from '../prompt/cliPrompt.js';
-import { resetStdinForReadline } from './stdinHandoff.js';
-import { renderWithResizeClear } from './renderWithResizeClear.js';
+import { initAgentMd } from '../../../prompt/initAgentMd.js';
+import { NoTTYError } from '../../prompt/cliPrompt.js';
+import { resetStdinForReadline } from '../terminal/stdinHandoff.js';
+import { renderWithResizeClear } from '../terminal/renderWithResizeClear.js';
 
 const ONBOARDED_MARKER = path.join(os.homedir(), '.config', 'brainrouter', '.onboarded');
 

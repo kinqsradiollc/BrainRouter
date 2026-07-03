@@ -10,7 +10,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { shouldHideCursor, shouldUseAltScreen } from '../cli/ink/renderWithResizeClear.js';
+import { shouldHideCursor, shouldUseAltScreen } from '../cli/ink/terminal/renderWithResizeClear.js';
 import { _resetCliKnobsCache, setCliKnobOverride } from '@kinqs/brainrouter-core/config';
 
 function fakeTty(): NodeJS.WriteStream {

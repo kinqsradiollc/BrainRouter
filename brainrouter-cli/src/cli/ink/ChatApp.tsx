@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Box, useApp } from 'ink';
-export { ScrollbackRow } from './ScrollbackRow.js';
+export { ScrollbackRow } from './chat/ScrollbackRow.js';
 import { type BackgroundTask } from '@kinqs/brainrouter-core/background';
-import { useTerminalSize } from './useTerminalSize.js';
-import { getFileIndex, matchFiles, extractAtToken } from './fileIndex.js';
+import { useTerminalSize } from './terminal/useTerminalSize.js';
+import { getFileIndex, matchFiles, extractAtToken } from './chat/fileIndex.js';
 import { appendHistory, LIVE } from '../../runtime/input/inputHistory.js';
 import { flagSuggestions } from '../../runtime/input/slashFlags.js';
 import { TuiRouterProvider, useTuiRouter, type TuiRoute } from './TuiRouter.js';
@@ -13,7 +13,7 @@ import { WelcomeView } from './views/WelcomeView.js';
 import type { BannerInputs } from '../view/banner.js';
 import { resolveTheme } from '../theme/theme.js';
 import { TuiHeader } from './components/TuiHeader.js';
-import { FooterStatus } from './FooterStatus.js';
+import { FooterStatus } from './chat/FooterStatus.js';
 
 // REFAC-CHATAPP-SPLIT (0.4.17) — this file was a ~1.4k-line god component
 // (types + the entire ChatAppContent hooks/keybindings/render + a pile of pure
@@ -93,7 +93,7 @@ export {
   effortIndicator,
   tailReasoning,
   buildReasoningWindow,
-} from './reasoningWindow.js';
+} from './text/reasoningWindow.js';
 
 // --- Internal-only imports (component wiring) -------------------------
 

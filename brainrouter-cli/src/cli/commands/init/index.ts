@@ -1,7 +1,7 @@
 import chalk from 'chalk';
 import type { CommandContext } from '../_context.js';
 import { initAgentMd } from '../../../prompt/initAgentMd.js';
-import { runWizard } from '../../ink/runWizard.js';
+import { runWizard } from '../../ink/wizard/runWizard.js';
 
 /**
  * `/init` slash command — 0.3.7 redesign.

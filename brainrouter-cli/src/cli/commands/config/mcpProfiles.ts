@@ -6,7 +6,7 @@ import chalk from 'chalk';
 import type { CommandContext } from '../_context.js';
 import { saveConfig, type ServerConfig } from '@kinqs/brainrouter-core/config';
 import { maskApiKey } from '@kinqs/brainrouter-core/provider';
-import type { PickerRow } from '../../ink/runPicker.js';
+import type { PickerRow } from '../../ink/prompt/runPicker.js';
 import type { Theme } from '../../theme/theme.js';
 import {
   pickFromList, promptText, themeFor, parseKeyValueLines, formatKeyValueLines,

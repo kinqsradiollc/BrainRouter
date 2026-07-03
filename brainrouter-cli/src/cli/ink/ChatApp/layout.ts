@@ -3,10 +3,10 @@
 // component state — just text/width math + markdown measurement. Unit-tested in
 // isolation (scrollback-layout.test.ts, ink-chat.test.ts) and re-exported from
 // ChatApp.tsx for back-compat with existing importers.
-import { renderMarkdown } from '../markdownRender.js';
+import { renderMarkdown } from '../text/markdownRender.js';
 import { resolveTheme } from '../../theme/theme.js';
 import { VERSION } from '@kinqs/brainrouter-core/version';
-import type { SlashCommandDef } from '../SlashPalette.js';
+import type { SlashCommandDef } from '../prompt/SlashPalette.js';
 import type { ScrollbackEntry, VisibleSlice } from './types.js';
 
 export function seedScrollback(workspaceRoot: string | undefined, offline: string | undefined, hint: string): ScrollbackEntry[] {

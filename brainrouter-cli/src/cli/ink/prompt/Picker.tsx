@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Box, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import { Frame } from './Frame.js';
-import { useTerminalSize } from './useTerminalSize.js';
+import { useTerminalSize } from '../terminal/useTerminalSize.js';
 
 /**
  * Arrow-key picker built on Ink.

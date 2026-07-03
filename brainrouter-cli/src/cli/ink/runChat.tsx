@@ -14,10 +14,10 @@ import { endTurnCheckpoint, queueOfflinePrompt, readRecoverable, clearOfflineQue
 import { type McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
 import { setActiveReadline } from '../prompt/cliPrompt.js';
 import { ChatApp, type ChatController } from './ChatApp.js';
-import type { SlashCommandDef } from './SlashPalette.js';
+import type { SlashCommandDef } from './prompt/SlashPalette.js';
 import { lookupSlashDescription, SLASH_COMMANDS } from '../prompt/repl.js';
-import { setAmbientChat } from './ambientChat.js';
-import { renderWithResizeClear } from './renderWithResizeClear.js';
+import { setAmbientChat } from './chat/ambientChat.js';
+import { renderWithResizeClear } from './terminal/renderWithResizeClear.js';
 import { createReadlineShim } from './runChat/readlineShim.js';
 import { createGitHubPRDetector } from './runChat/prDetector.js';
 import type { RunChatContext } from './runChat/context.js';

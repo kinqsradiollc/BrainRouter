@@ -9,9 +9,9 @@
 import { useInput } from 'ink';
 import { historyPrev, historyNext, searchHistory, LIVE } from '../../../runtime/input/inputHistory.js';
 import { applyFlagCompletion } from '../../../runtime/input/slashFlags.js';
-import { applyAtCompletion } from '../fileIndex.js';
+import { applyAtCompletion } from '../chat/fileIndex.js';
 import { type TuiRoute } from '../TuiRouter.js';
-import type { SlashCommandDef } from '../SlashPalette.js';
+import type { SlashCommandDef } from '../prompt/SlashPalette.js';
 import type { FlagDef } from '../../../runtime/input/slashFlags.js';
 import type { PushScrollback } from './types.js';
 

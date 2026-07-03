@@ -5,7 +5,7 @@ import type { CommandContext } from '../_context.js';
 import { saveConfig, type LLMConfig } from '@kinqs/brainrouter-core/config';
 import { setAgentModel } from '@kinqs/brainrouter-core/provider';
 import { readPreferences } from '@kinqs/brainrouter-core/session';
-import { runPicker, runTextField } from '../../ink/runPicker.js';
+import { runPicker, runTextField } from '../../ink/prompt/runPicker.js';
 import { buildTheme, type Theme } from '../../theme/theme.js';
 
 export const pickFromList = runPicker;

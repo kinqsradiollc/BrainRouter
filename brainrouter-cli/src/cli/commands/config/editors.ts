@@ -19,7 +19,7 @@ import {
 } from '@kinqs/brainrouter-core/session';
 import { isKnownSegment, SEGMENT_NAMES } from '../../view/statusline.js';
 import { selectModel } from '../../wizard/modelsApi.js';
-import type { PickerRow } from '../../ink/runPicker.js';
+import type { PickerRow } from '../../ink/prompt/runPicker.js';
 import type { Theme } from '../../theme/theme.js';
 import {
   pickFromList, promptText, themeFor, shortenEndpoint, findDefaultProviderName,

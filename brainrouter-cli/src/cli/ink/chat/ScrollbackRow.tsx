@@ -1,8 +1,8 @@
 import React from 'react';
 import { Box, Text } from 'ink';
-import { renderMarkdown } from './markdownRender.js';
-import { classifyDiffLine, looksLikeDiff } from './toolFormat.js';
-import type { ScrollbackEntry } from './ChatApp.js';
+import { renderMarkdown } from '../text/markdownRender.js';
+import { classifyDiffLine, looksLikeDiff } from '../text/toolFormat.js';
+import type { ScrollbackEntry } from '../ChatApp.js';
 
 function formatTime(date: Date | string): string {
   const d = new Date(date);

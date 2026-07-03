@@ -7,10 +7,10 @@ import React from 'react';
 import { Box, Text } from 'ink';
 import TextInput from 'ink-text-input';
 import Spinner from 'ink-spinner';
-import { SlashPalettePanel } from '../SlashPalettePanel.js';
-import { FooterStatus } from '../FooterStatus.js';
+import { SlashPalettePanel } from '../prompt/SlashPalettePanel.js';
+import { FooterStatus } from '../chat/FooterStatus.js';
 import { searchHistory } from '../../../runtime/input/inputHistory.js';
-import type { SlashCommandDef } from '../SlashPalette.js';
+import type { SlashCommandDef } from '../prompt/SlashPalette.js';
 import type { FlagDef } from '../../../runtime/input/slashFlags.js';
 import type { FooterState } from './types.js';
 
