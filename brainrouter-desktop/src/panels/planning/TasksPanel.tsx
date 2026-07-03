@@ -7,7 +7,7 @@
  * active workspace's running tasks.
  */
 import React from 'react';
-import type { FleetRow } from '../types.js';
+import type { FleetRow } from '../../types.js';
 
 export interface FinishedTask { id: string; label: string; status: string }
 

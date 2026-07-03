@@ -23,7 +23,7 @@ import {
 } from '@kinqs/brainrouter-core/dist/workflow/graph/graph.js';
 import { runGraph, type GraphRunResult } from '@kinqs/brainrouter-core/dist/workflow/graph/graphEngine.js';
 import type { SavedWorkflowMeta } from '@kinqs/brainrouter-core/dist/workflow/graph/graphStore.js';
-import { hostQuery } from '../lib/hostQuery.js';
+import { hostQuery } from '../../lib/hostQuery.js';
 
 /**
  * Visual workflow canvas (§7 L1) — an n8n-style node editor over the L2 graph

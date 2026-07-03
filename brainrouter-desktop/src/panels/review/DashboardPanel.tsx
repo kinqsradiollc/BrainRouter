@@ -6,8 +6,8 @@
  * polls and replaces state; rows have stable keys).
  */
 import React from 'react';
-import { Icon } from '../icons.js';
-import { fmtElapsed } from '../lib/format.js';
+import { Icon } from '../../icons.js';
+import { fmtElapsed } from '../../lib/format.js';
 import {
   DASH_TABS,
   countByTab,
@@ -18,8 +18,8 @@ import {
   type DashTab,
   type DashTask,
   type WorkspaceDash,
-} from '../lib/workspace/dashboard.js';
-import { GATE_LABEL } from './reviewShared.js';
+} from '../../lib/workspace/dashboard.js';
+import { GATE_LABEL } from '../reviewShared.js';
 
 const TAB_LABEL: Record<DashTab, string> = { running: 'Running', finished: 'Finished', failed: 'Failed/Stale', workflows: 'Workflows', agents: 'Agents', bash: 'Bash' };
 

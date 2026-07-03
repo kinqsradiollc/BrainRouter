@@ -10,12 +10,12 @@
  */
 import React, { useState } from 'react';
 import type { AnnotationRecord, AnnotationStatus, AnnotationTargetKind } from '@kinqs/brainrouter-types';
-import { Button } from '../components/primitives/Button.js';
-import { Chip } from '../components/primitives/Badge.js';
+import { Button } from '../../components/primitives/Button.js';
+import { Chip } from '../../components/primitives/Badge.js';
 import {
   sortAnnotations, annotationCounts, severityClass, statusClass, anchorLabel, annotationLinkCounts,
   ANNOTATION_STATUS_OPTIONS, ANNOTATION_TARGET_KIND_OPTIONS,
-} from '../lib/annotations/annotationsView.js';
+} from '../../lib/annotations/annotationsView.js';
 
 // §6 — the host augments each record with a transient `stale` flag (computed by
 // re-hashing the anchored lines), so the panel works with this row shape.

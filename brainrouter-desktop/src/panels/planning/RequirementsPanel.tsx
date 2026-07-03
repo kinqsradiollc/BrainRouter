@@ -9,12 +9,12 @@
  */
 import React, { useState } from 'react';
 import type { RequirementRecord, RequirementStatus, RequirementPriority } from '@kinqs/brainrouter-types';
-import { Button } from '../components/primitives/Button.js';
-import { Chip } from '../components/primitives/Badge.js';
+import { Button } from '../../components/primitives/Button.js';
+import { Chip } from '../../components/primitives/Badge.js';
 import {
   sortRequirements, linkCounts, priorityClass,
   requirementProvenance, REQUIREMENT_STATUS_OPTIONS, REQUIREMENT_PRIORITY_OPTIONS,
-} from '../lib/requirements/requirementsView.js';
+} from '../../lib/requirements/requirementsView.js';
 import { PM_FRAMEWORKS, type PmFrameworkGroup } from '@kinqs/brainrouter-core/dist/requirement/frameworks/pmFrameworks.js';
 
 const FW_GROUPS: ReadonlyArray<{ id: PmFrameworkGroup; label: string }> = [

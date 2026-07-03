@@ -1,6 +1,6 @@
 /** The Search session panel: searches the persisted transcript — same as /find in the CLI. */
 import React, { useState } from 'react';
-import { Icon } from '../icons.js';
+import { Icon } from '../../icons.js';
 
 export interface SearchHit { index: number; role: string; snippet: string }
 

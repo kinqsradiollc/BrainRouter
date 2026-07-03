@@ -14,27 +14,27 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type OnMount } from '@monaco-editor/react';
-import { Icon } from '../icons.js';
-import { installMonaco } from '../lib/editor/monacoEnv.js';
-import { isDirty, type EditorTab } from '../lib/editor/editorModel.js';
-import { MARKDOWN_FILE } from '../lib/docs/markdownExport.js';
+import { Icon } from '../../icons.js';
+import { installMonaco } from '../../lib/editor/monacoEnv.js';
+import { isDirty, type EditorTab } from '../../lib/editor/editorModel.js';
+import { MARKDOWN_FILE } from '../../lib/docs/markdownExport.js';
 import {
   MarkdownPreview, WritingAssistant, ReviewOverlay,
   registerMarkdownGhost, setActiveMarkdownModel,
   ACTION_LABEL, type InlineAction,
-} from './editor/markdownMode.js';
-import { BarMenu } from './editor/BarMenu.js';
+} from '../editor/markdownMode.js';
+import { BarMenu } from '../editor/BarMenu.js';
 import {
   editorBreadcrumbs,
   editorStatusItems,
   parseEditorViewPrefs,
   serializeEditorPref,
   type EditorCursor,
-} from '../lib/editor/editorView.js';
-import { type EditorPaneId } from './EditorPanel/editorPaneHelpers.js';
-import { EditorPane } from './EditorPanel/EditorPane.js';
-import { EditorTabStrip } from './EditorPanel/EditorTabStrip.js';
-import { useMarkdownMode } from './EditorPanel/useMarkdownMode.js';
+} from '../../lib/editor/editorView.js';
+import { type EditorPaneId } from '../EditorPanel/editorPaneHelpers.js';
+import { EditorPane } from '../EditorPanel/EditorPane.js';
+import { EditorTabStrip } from '../EditorPanel/EditorTabStrip.js';
+import { useMarkdownMode } from '../EditorPanel/useMarkdownMode.js';
 
 installMonaco();
 

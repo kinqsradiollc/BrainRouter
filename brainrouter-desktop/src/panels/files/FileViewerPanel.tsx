@@ -1,7 +1,7 @@
 /** The File panel: a read-only, syntax-highlighted view of one opened file. */
 import React from 'react';
-import { Icon } from '../icons.js';
-import { CodeBlock, langForPath } from './code.js';
+import { Icon } from '../../icons.js';
+import { CodeBlock, langForPath } from '../code.js';
 
 export function FileViewerPanel({ view }: {
   view: { path: string; content: string; error?: string } | null;

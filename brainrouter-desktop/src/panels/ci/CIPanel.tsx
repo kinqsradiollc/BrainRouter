@@ -5,12 +5,12 @@
  * never conflated with the app's local "tests passed".
  */
 import React, { useEffect, useRef, useState } from 'react';
-import { Icon } from '../icons.js';
-import { Button } from '../components/primitives/Button.js';
-import { summarizeChecks, ciStatusLabel, checkClass, runClass, ciDuration, type CheckRow } from '../lib/ci/ciFormat.js';
-import type { CiApi } from '../lib/ci/useCi.js';
-import { summarizePrReadiness } from '../lib/track/prReadiness.js';
-import type { TrackPrStatus } from '../track/TrackView.js';
+import { Icon } from '../../icons.js';
+import { Button } from '../../components/primitives/Button.js';
+import { summarizeChecks, ciStatusLabel, checkClass, runClass, ciDuration, type CheckRow } from '../../lib/ci/ciFormat.js';
+import type { CiApi } from '../../lib/ci/useCi.js';
+import { summarizePrReadiness } from '../../lib/track/prReadiness.js';
+import type { TrackPrStatus } from '../../track/TrackView.js';
 
 type PrBusy = 'refresh' | 'review' | 'fix-checks' | 'merge' | null;
 type TrackPrOps = {

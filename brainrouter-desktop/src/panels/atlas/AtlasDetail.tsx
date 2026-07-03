@@ -9,8 +9,8 @@
  */
 import React from "react";
 import type { AtlasGraph } from "@kinqs/brainrouter-types";
-import { atlasNodeColor, atlasNodeFacts, atlasImpact } from "../lib/atlas/atlasView.js";
-import { Icon } from "../icons.js";
+import { atlasNodeColor, atlasNodeFacts, atlasImpact } from "../../lib/atlas/atlasView.js";
+import { Icon } from "../../icons.js";
 
 export interface AtlasDetailProps {
   graph: AtlasGraph;

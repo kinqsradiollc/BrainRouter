@@ -7,13 +7,13 @@
  * CLI's planHistoryStore over the host endpoints — no parallel state.
  */
 import React, { useState } from 'react';
-import { Icon } from '../icons.js';
-import { Button } from '../components/primitives/Button.js';
+import { Icon } from '../../icons.js';
+import { Button } from '../../components/primitives/Button.js';
 import {
   planHistoryRows, planApprovalState, approvalLabel, isEmptyDiff,
   type PlanDecisionView,
-} from '../lib/plan/planReviewView.js';
-import type { PlanItem } from '../types.js';
+} from '../../lib/plan/planReviewView.js';
+import type { PlanItem } from '../../types.js';
 
 export function PlanPanel({ plan, history, onApprove, onRequestChanges, onAnnotateStep }: {
   plan: { items: PlanItem[]; explanation?: string } | null;

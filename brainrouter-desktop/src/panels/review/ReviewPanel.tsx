@@ -7,10 +7,10 @@
  * push stay blocked until critical/high findings are resolved.
  */
 import React, { useState } from 'react';
-import { DiffView } from './diff.js';
-import { Button } from '../components/primitives/Button.js';
-import { findingRows } from '../lib/review/reviewCode.js';
-import { GATE_LABEL, type ReviewFindingView, type ReviewGateView } from './reviewShared.js';
+import { DiffView } from '../diff.js';
+import { Button } from '../../components/primitives/Button.js';
+import { findingRows } from '../../lib/review/reviewCode.js';
+import { GATE_LABEL, type ReviewFindingView, type ReviewGateView } from '../reviewShared.js';
 
 /** §2 — line-numbered code frame: red problem/removed, green suggested/added,
  *  neutral context — reusing the shared diff-line classification (reviewCode). */

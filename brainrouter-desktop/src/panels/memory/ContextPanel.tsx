@@ -8,7 +8,7 @@
  * value is derived from App state — this component performs no fetches.
  */
 import React from 'react';
-import { Icon } from '../icons.js';
+import { Icon } from '../../icons.js';
 
 export interface ContextPanelProps {
   hostUp: boolean;

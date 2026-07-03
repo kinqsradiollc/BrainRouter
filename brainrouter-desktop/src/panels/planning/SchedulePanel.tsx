@@ -4,8 +4,8 @@
  * the CLI `/schedule`). Pure view logic lives in lib/schedule/scheduleView.
  */
 import React, { useState } from 'react';
-import { Icon } from '../icons.js';
-import { partitionSchedules, describeSchedule, relTime, type ScheduleRecordView } from '../lib/schedule/scheduleView.js';
+import { Icon } from '../../icons.js';
+import { partitionSchedules, describeSchedule, relTime, type ScheduleRecordView } from '../../lib/schedule/scheduleView.js';
 
 export function SchedulePanel({ schedules, now, onAdd, onRemove, onToggle }: {
   schedules: ScheduleRecordView[];

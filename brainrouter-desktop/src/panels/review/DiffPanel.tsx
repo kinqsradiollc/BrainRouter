@@ -5,10 +5,10 @@
  * explicit "without review" bypass appears instead.
  */
 import React, { useState } from 'react';
-import { Icon } from '../icons.js';
-import { DiffView } from './diff.js';
-import { commitBlocked } from '../lib/review/reviewGateUi.js';
-import { GATE_LABEL, type ReviewGateView } from './reviewShared.js';
+import { Icon } from '../../icons.js';
+import { DiffView } from '../diff.js';
+import { commitBlocked } from '../../lib/review/reviewGateUi.js';
+import { GATE_LABEL, type ReviewGateView } from '../reviewShared.js';
 
 export function DiffPanel({ gitInfo, changed, diff, onPick, onBack, onOpenFile, onGit, onGitBypass, gitBusy, reviewGate, onReview, findingsByFile, scrollToLine }: {
   gitInfo: { repo: string; branch: string | null; insertions: number; deletions: number } | null;

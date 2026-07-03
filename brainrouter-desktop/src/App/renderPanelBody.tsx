@@ -23,11 +23,11 @@ import type { AtlasChangeAssessment } from '../lib/atlas/atlasView.js';
 import { buildTrackOps } from './trackOps.js';
 
 // Monaco is ~5MB — lazy-load the editor panel so it only loads when first opened.
-const EditorPanel = lazy(() => import('../panels/EditorPanel.js').then((m) => ({ default: m.EditorPanel })));
+const EditorPanel = lazy(() => import('../panels/editing/EditorPanel.js').then((m) => ({ default: m.EditorPanel })));
 // CI + Dashboard are optional panels rarely opened on load — lazy so they stay
 // out of the initial bundle / first paint.
-const CIPanel = lazy(() => import('../panels/CIPanel.js').then((m) => ({ default: m.CIPanel })));
-const DashboardPanel = lazy(() => import('../panels/DashboardPanel.js').then((m) => ({ default: m.DashboardPanel })));
+const CIPanel = lazy(() => import('../panels/ci/CIPanel.js').then((m) => ({ default: m.CIPanel })));
+const DashboardPanel = lazy(() => import('../panels/review/DashboardPanel.js').then((m) => ({ default: m.DashboardPanel })));
 
 type Query = (id: string, name: string, args?: Record<string, unknown>) => void;
 

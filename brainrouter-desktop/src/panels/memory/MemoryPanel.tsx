@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { hostQuery } from '../lib/hostQuery.js';
+import { hostQuery } from '../../lib/hostQuery.js';
 
 /**
  * MEMORY PANEL (§5.3) — a first-class desktop surface for the brain memory

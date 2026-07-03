@@ -16,15 +16,15 @@ import React from "react";
 import { ReactFlow, Background, Controls, ControlButton, MiniMap } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type { AtlasGraph } from "@kinqs/brainrouter-types";
-import type { AtlasChangeAssessment } from "../lib/atlas/atlasView.js";
-import { ATLAS_CATEGORY_COLORS } from "../lib/atlas/atlasView.js";
+import type { AtlasChangeAssessment } from "../../lib/atlas/atlasView.js";
+import { ATLAS_CATEGORY_COLORS } from "../../lib/atlas/atlasView.js";
 import { ATLAS_NODE_TYPES } from "./AtlasNodes.js";
 import { AtlasDetail } from "./AtlasDetail.js";
-import { Icon } from "../icons.js";
-import { useAtlasGraph } from "./AtlasPanel/useAtlasGraph.js";
-import { fileColor } from "./AtlasPanel/atlasModel.js";
-import { AtlasInsights } from "./AtlasPanel/AtlasInsights.js";
-import { AtlasTour } from "./AtlasPanel/AtlasTour.js";
+import { Icon } from "../../icons.js";
+import { useAtlasGraph } from "../AtlasPanel/useAtlasGraph.js";
+import { fileColor } from "../AtlasPanel/atlasModel.js";
+import { AtlasInsights } from "../AtlasPanel/AtlasInsights.js";
+import { AtlasTour } from "../AtlasPanel/AtlasTour.js";
 
 export interface AtlasPanelProps {
   graph: AtlasGraph | null;

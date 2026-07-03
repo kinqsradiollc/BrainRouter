@@ -14,13 +14,13 @@ import React, { useEffect, useState } from 'react';
 import type { ArtifactRecord, ArtifactKind, ArtifactStatus, AnnotationRecord } from '@kinqs/brainrouter-types';
 import remarkGfm from 'remark-gfm';
 import { inlinePlaceholders } from '@kinqs/brainrouter-core/dist/prototype/placeholderRender.js';
-import { Markdown, MD_COMPONENTS } from '../chat/markdown.js';
-import { Button } from '../components/primitives/Button.js';
-import { Chip } from '../components/primitives/Badge.js';
+import { Markdown, MD_COMPONENTS } from '../../chat/markdown.js';
+import { Button } from '../../components/primitives/Button.js';
+import { Chip } from '../../components/primitives/Badge.js';
 import {
   sortArtifacts, artifactCounts, kindLabel, statusClass,
   ARTIFACT_KIND_OPTIONS, ARTIFACT_STATUS_OPTIONS,
-} from '../lib/artifacts/artifactsView.js';
+} from '../../lib/artifacts/artifactsView.js';
 
 const KIND_FILTER: Array<'' | ArtifactKind> = ['', ...ARTIFACT_KIND_OPTIONS];
 const STATUS_FILTER: Array<'' | ArtifactStatus> = ['', ...ARTIFACT_STATUS_OPTIONS];

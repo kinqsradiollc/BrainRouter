@@ -3,7 +3,7 @@
  * git file list, with a filter box that flips into a `?text` content-search.
  */
 import React, { useMemo, useState } from 'react';
-import { Icon } from '../icons.js';
+import { Icon } from '../../icons.js';
 
 export interface GrepHit { file: string; line: number; snippet: string }
 
