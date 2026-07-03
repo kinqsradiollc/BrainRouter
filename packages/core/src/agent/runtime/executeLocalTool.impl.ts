@@ -7,6 +7,7 @@ import path from 'node:path';
 import chalk from 'chalk';
 import type { Agent } from '../agent.js';
 import { NoTTYError } from '../support/prompter.js';
+import { runHooks } from '../../hooks/hooksStore.js';
 import { getCliKnobs } from '../../config/config.js';
 import { createArtifact, updateArtifact, getArtifact } from '../../artifact/artifactStore.js';
 
@@ -1086,6 +1087,17 @@ export async function executeLocalToolLegacy(this: Agent, name: string, args: Re
         // spec — the DESK-3 UI dialog path when a port is attached, else the
         // TTY picker.
         const askOne = async (spec: { question: string; header: string; options: Array<{ label: string; description: string }>; multiSelect: boolean }): Promise<string | string[]> => {
+          // CC-hooks parity — the agent is about to BLOCK awaiting the user's
+          // choice: fire `notification-agent-needs-input` so a user can wire a
+          // desktop/OS notifier (the terminal is likely backgrounded). Advisory
+          // and best-effort — a failing notifier must never break the picker.
+          if (this.hookNotifyActive()) {
+            try {
+              runHooks(this.workspaceRoot, 'notification-agent-needs-input', {
+                payload: { sessionKey: this.sessionKey, question: spec.question, header: spec.header, optionLabels: spec.options.map((o) => o.label) },
+              });
+            } catch { /* advisory */ }
+          }
           if (this.interactionPort) {
             const labels = await this.interactionPort.choice({
               question: spec.question, header: spec.header, options: spec.options, multiSelect: spec.multiSelect,

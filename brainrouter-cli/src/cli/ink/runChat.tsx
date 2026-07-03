@@ -8,7 +8,8 @@ import type { WorkspaceInfo } from '@kinqs/brainrouter-core/workspace';
 import { resolveTheme } from '../theme/theme.js';
 import { buildBannerInputs } from '../view/banner.js';
 import { readPreferences } from '@kinqs/brainrouter-core/session';
-import { runHooks } from '@kinqs/brainrouter-core/hooks';
+import { runHooks, parseSessionStartDirectives } from '@kinqs/brainrouter-core/hooks';
+import { setSessionMeta } from '@kinqs/brainrouter-core/session';
 import { InputQueue } from '../../runtime/input/inputQueue.js';
 import { endTurnCheckpoint, queueOfflinePrompt, readRecoverable, clearOfflineQueue, shouldAutoReplayOffline } from '@kinqs/brainrouter-core/storage';
 import { type McpClientPool as McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
@@ -82,9 +83,25 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
   // hooks.json but never actually executed — silent dead config. Hooks
   // run synchronously with a 5s timeout (see hooksStore.runHooks).
   try {
-    runHooks(agent.workspaceRoot, 'session-start', {
+    const startResults = runHooks(agent.workspaceRoot, 'session-start', {
       payload: { sessionKey: agent.sessionKey, model: (agent as any).llmConfig?.model },
     });
+    // CC-hooks parity — a session-start hook's structured output may RENAME the
+    // session ({"sessionTitle":"…"}) and/or request a skill rescan
+    // ({"reloadSkills":true}). Title is applied via the same per-session meta
+    // store the desktop's Rename uses; the reload flag is advisory (skills are
+    // read from disk on demand) so we just note it in the boot log.
+    const directives = parseSessionStartDirectives(startResults);
+    if (directives.sessionTitle) {
+      try { setSessionMeta(agent.workspaceRoot, agent.sessionKey, { title: directives.sessionTitle }); } catch { /* best-effort rename */ }
+    }
+    if (directives.reloadSkills) {
+      // Skill roots (`skills/` + `.brainrouter/skills`) are re-scanned from disk
+      // on every catalog read, so there is no in-memory cache to bust here — the
+      // rescan takes effect on the next skill lookup. Surface it so the request
+      // isn't silently ignored.
+      try { (agent as any).skillsReloadRequested = true; } catch { /* advisory flag */ }
+    }
   } catch { /* hook errors must not block the REPL boot */ }
   const theme = resolveTheme(agent.workspaceRoot);
   // Boxed banner is disabled as it is no longer needed (kept here for reference)

@@ -15,7 +15,7 @@ import { classifyShellCommand } from '../../exec/policy/shellClassifier.js';
 import { recordDenial } from '../../exec/runtime/recentDenials.js';
 import { readGoal, formatGoalBlock } from '../../goal/store/goalStore.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../../hooks/hookifyStore.js';
-import { runHooks, parseHookDecision } from '../../hooks/hooksStore.js';
+import { runHooks, parseHookDecision, collectStopAdditionalContext } from '../../hooks/hooksStore.js';
 import { extractToolText } from '../../mcp/mcpUtils.js';
 import { reconnectBackoffMs, probeConnectivity } from '../../mcp/reconnect/reconnect.js';
 import { listAll as listAgentDefinitions } from '../../orchestration/agents/agentRegistry.js';
@@ -80,6 +80,13 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     }
     this.lastTurnUsage = { promptTokens: 0, completionTokens: 0, calls: 0, cachedTokens: 0, missedTokens: 0 };
     this.lastTurnToolCalls = 0;
+    // CC-hooks parity — drain any additionalContext a prior `stop` /
+    // `subagent-stop` hook (or a child's subagent-stop) asked to inject back
+    // into the model on THIS turn. Read-and-clear so it fires exactly once.
+    if (this.pendingStopContext && this.pendingStopContext.trim()) {
+      prompt = `${prompt}\n\n[stop-hook context]\n${this.pendingStopContext.trim()}`;
+      this.pendingStopContext = undefined;
+    }
     // CC-P6.5 — per-turn verification tracking (mutated workspace? ran a check?).
     this.mutatedThisTurn = false;
     this.verifiedThisTurn = false;
@@ -2103,6 +2110,34 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       runHooks(this.workspaceRoot, 'post-turn', {
         payload: { prompt, answerPreview: finalAnswer.slice(0, 1000), tokens: this.lastTurnUsage },
       });
+    }
+    // CC-hooks parity — the `stop` (top-level) / `subagent-stop` (silent worker)
+    // event, and the completion notification. These fire on the `hookNotifyActive`
+    // gate (enabled + not safe-mode) so they ALSO run for unattended/background
+    // workers — the whole point of `subagent-stop` + `agent_completed` is to tap
+    // into silent runs. A `stop` hook may return {"additionalContext":"…"}; we
+    // STORE it on `pendingStopContext` for injection into the model on the next
+    // turn (top-level) or for the parent to read after a child's drain.
+    if (this.hookNotifyActive()) {
+      try {
+        const stopEvent = this.silent ? 'subagent-stop' : 'stop';
+        const stopResults = runHooks(this.workspaceRoot, stopEvent, {
+          payload: { prompt, answerPreview: finalAnswer.slice(0, 1000), tokens: this.lastTurnUsage },
+        });
+        const extra = collectStopAdditionalContext(stopResults);
+        if (extra) {
+          this.pendingStopContext = this.pendingStopContext
+            ? `${this.pendingStopContext}\n${extra}`
+            : extra;
+        }
+      } catch { /* stop hooks are advisory — never break the turn */ }
+      // Completion notification, so a user can wire a desktop/OS notifier
+      // (`terminal-notifier`, `osascript`, a webhook curl).
+      try {
+        runHooks(this.workspaceRoot, 'notification-agent-completed', {
+          payload: { sessionKey: this.sessionKey, silent: this.silent, answerPreview: finalAnswer.slice(0, 200) },
+        });
+      } catch { /* advisory */ }
     }
     turnSpan.end({
       outcome: exitedCleanly ? 'ok' : 'loop_limit',

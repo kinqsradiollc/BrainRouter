@@ -252,6 +252,7 @@ import {
   createSystemMessage as createSystemMessageImpl,
   hookEnforceActive as hookEnforceActiveImpl,
   hookAdvisoryActive as hookAdvisoryActiveImpl,
+  hookNotifyActive as hookNotifyActiveImpl,
   runExtensionHooks as runExtensionHooksImpl,
   autoCaptureRequirement as autoCaptureRequirementImpl,
   autoSynchronizeRequirementPlanTrack as autoSynchronizeRequirementPlanTrackImpl,
@@ -1369,6 +1370,14 @@ export class Agent {
   /** Last user prompt (post-mention-expansion). Used by `/continue` to resume after a loop-limit abort. */
   public lastUserPrompt = '';
 
+  /**
+   * CC-hooks parity — additionalContext a `stop` / `subagent-stop` hook asked
+   * to inject back into the model on the NEXT turn. Drained (read + cleared)
+   * at the top of `runTurn` and appended to the incoming prompt. A parent that
+   * spawns a child can also seed this from the child's subagent-stop output.
+   */
+  public pendingStopContext: string | undefined = undefined;
+
   /** True when the most recent turn hit the loop-limit ceiling before producing a final answer. */
   public lastTurnHitLoopLimit = false;
 
@@ -1504,6 +1513,10 @@ export class Agent {
 
   public hookAdvisoryActive(): boolean {
     return hookAdvisoryActiveImpl.call(this);
+  }
+
+  public hookNotifyActive(): boolean {
+    return hookNotifyActiveImpl.call(this);
   }
 
   public async runExtensionHooks(

@@ -1,5 +1,6 @@
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import { readPreferences } from '@kinqs/brainrouter-core/session';
+import { runHooks, applyMessageDisplayHooks } from '@kinqs/brainrouter-core/hooks';
 import { beginTurnCheckpoint, endTurnCheckpoint, queueOfflinePrompt, isConnectivityError } from '@kinqs/brainrouter-core/storage';
 import { shouldAutoExtractSkill, buildSessionSummary } from '../../../runtime/commands/autoSkill.js';
 import { callMcpTool } from '@kinqs/brainrouter-core/mcp';
@@ -333,13 +334,32 @@ export function installTurnRunner(ctx: RunChatContext): void {
       // it through marked-terminal unless `raw: true` is set. Honors the
       // user's rawScrollback preference exactly like the readline path.
       const prefsForRender = readPreferences(agent.workspaceRoot);
-      controller.push.assistant(answer, {
-        raw: prefsForRender.rawScrollback === true,
-        durationMs: elapsed,
-        tokensIn: u.promptTokens,
-        tokensOut: u.completionTokens,
-        calls: u.calls,
-      });
+      // CC-hooks parity — message-display hook. A user hook may TRANSFORM the
+      // about-to-display assistant text ({"updatedOutput":"…"}) or HIDE it
+      // ({"decision":"deny"}). No-op when the hooks system is off or no
+      // message-display hook is registered (runHooks returns []). Best-effort:
+      // a throwing hook must never drop the assistant's answer.
+      let displayText = answer;
+      let displayHidden = false;
+      if (getCliKnobs().hooks.enabled && !getCliKnobs().safeMode) {
+        try {
+          const outcome = applyMessageDisplayHooks(
+            answer,
+            runHooks(agent.workspaceRoot, 'message-display', { payload: { text: answer } }),
+          );
+          displayText = outcome.text;
+          displayHidden = outcome.hidden;
+        } catch { /* hook failure never hides the real answer */ }
+      }
+      if (!displayHidden) {
+        controller.push.assistant(displayText, {
+          raw: prefsForRender.rawScrollback === true,
+          durationMs: elapsed,
+          tokensIn: u.promptTokens,
+          tokensOut: u.completionTokens,
+          calls: u.calls,
+        });
+      }
       const warning = agent.takeContradictionWarning();
       if (warning) {
         controller.push.memory('warn', `Memory: ${warning}`);

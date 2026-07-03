@@ -84,7 +84,13 @@ export async function tryHandleGuardCommand(ctx: CommandContext): Promise<boolea
       if (sub === 'add') {
         const event = args[1] as HookEvent | undefined;
         const command = args.slice(2).join(' ').trim();
-        const validEvents: HookEvent[] = ['pre-turn', 'post-turn', 'pre-tool', 'post-tool', 'session-start', 'session-end'];
+        const validEvents: HookEvent[] = [
+          'pre-turn', 'post-turn', 'pre-tool', 'post-tool', 'session-start', 'session-end',
+          'user-prompt-submit', 'pre-compact',
+          // CC-hooks parity (0.4.17)
+          'message-display', 'stop', 'subagent-stop',
+          'notification-agent-needs-input', 'notification-agent-completed',
+        ];
         if (!event || !validEvents.includes(event) || !command) {
           console.log(chalk.red(`\nUsage: /hooks add <${validEvents.join('|')}> <shell-command>\n`));
           return true;

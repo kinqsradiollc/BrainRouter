@@ -197,6 +197,20 @@ export function hookAdvisoryActive(this: Agent): boolean {
   }
 
   /**
+   * NOTIFY/STOP hook events (stop, subagent-stop, notification-*) — CC-hooks
+   * parity. Unlike advisory events these run for SILENT/unattended agents too:
+   * the whole point of `subagent-stop` + the completion/needs-input
+   * notifications is to tap into background workers so a user can wire a
+   * desktop/OS notifier. Gated only on the master `enabled` switch (and safe
+   * mode). Cheap when no hooks are registered — `runHooks` no-ops.
+   */
+export function hookNotifyActive(this: Agent): boolean {
+    const knobs = getCliKnobs();
+    if (knobs.safeMode) return false; // CC-CONFIG-A1
+    return knobs.hooks.enabled;
+  }
+
+  /**
    * EXTENSION-HOOKS — run the typed in-process handlers an extension registered
    * for `event` (the code analogue of shell hooks). For deny events (pre-tool /
    * user-prompt-submit) it returns the deny reason if any handler refuses; for
