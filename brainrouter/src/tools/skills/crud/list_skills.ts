@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import type { Registry } from '../../registry.js';
-import type { SkillScope } from '../../types.js';
+import type { Registry } from '../../../registry.js';
+import type { SkillScope } from '../../../types.js';
 
 export const listSkillsSchema = z.object({
   category: z.string().optional(),

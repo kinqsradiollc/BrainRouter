@@ -2,9 +2,9 @@ import { z } from 'zod';
 import { readFileSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { mkdirSync } from 'fs';
-import type { Registry } from '../../registry.js';
-import { updateSkillSection } from '../../writer.js';
-import type { SkillSection } from '../../types.js';
+import type { Registry } from '../../../registry.js';
+import { updateSkillSection } from '../../../writer.js';
+import type { SkillSection } from '../../../types.js';
 
 export const updateSkillSchema = z.object({
   name: z.string(),

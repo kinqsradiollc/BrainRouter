@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import type { Registry } from '../../registry.js';
-import { scaffoldSkill } from '../../writer.js';
+import type { Registry } from '../../../registry.js';
+import { scaffoldSkill } from '../../../writer.js';
 
 export const createSkillSchema = z.object({
   name: z.string(),

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { memoryEngine } from "../../memory/engine.js";
+import { memoryEngine } from "../../../memory/engine.js";
 
 /**
  * MEM-33 (0.4.4) — `memory_extract_skill`: distill a reusable SOP/skill from a

@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import type { Registry } from '../../registry.js';
-import type { SkillScope } from '../../types.js';
+import type { Registry } from '../../../registry.js';
+import type { SkillScope } from '../../../types.js';
 
 export const searchSkillsSchema = z.object({
   query: z.string(),

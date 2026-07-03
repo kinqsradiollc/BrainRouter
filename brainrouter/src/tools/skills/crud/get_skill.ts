@@ -1,9 +1,9 @@
 import { z } from 'zod';
 import { readFileSync } from 'fs';
 import { dirname, normalize, resolve } from 'path';
-import type { Registry } from '../../registry.js';
-import { loadSkillSection } from '../../loader.js';
-import type { SkillSection } from '../../types.js';
+import type { Registry } from '../../../registry.js';
+import { loadSkillSection } from '../../../loader.js';
+import type { SkillSection } from '../../../types.js';
 
 export const getSkillSchema = z.object({
   name: z.string(),
