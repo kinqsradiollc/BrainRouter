@@ -17,7 +17,7 @@ import {
   recordConnectorRun,
   setConnectorStatus,
   updateConnector,
-} from '../connectors/connectorStore.js';
+} from '../connectors/store/connectorStore.js';
 import { withTempWorkspace } from './_helpers.js';
 
 test('connector catalog exposes GitHub with Onyx-like flows', () => {

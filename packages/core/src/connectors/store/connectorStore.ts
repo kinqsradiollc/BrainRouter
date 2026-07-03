@@ -11,8 +11,8 @@ import type {
   ConnectorStatus,
 } from '@kinqs/brainrouter-types';
 import { isConnectorFlow, isConnectorSource } from '@kinqs/brainrouter-types';
-import { getStateFile, readJsonFile, writeJsonFile } from '../storage/store.js';
-import { connectorSupportsFlow, getConnectorCatalogEntry } from './catalog.js';
+import { getStateFile, readJsonFile, writeJsonFile } from '../../storage/store.js';
+import { connectorSupportsFlow, getConnectorCatalogEntry } from '../catalog.js';
 import { deleteConnectorDocuments } from './documentStore.js';
 import { deleteConnectorPermissions } from './permissionStore.js';
 

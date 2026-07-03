@@ -624,7 +624,7 @@ import { executeOrchestrationTool } from '../orchestration/tools.js';
 import { clearGoal, readGoal, setGoal } from '../goal/store/goalStore.js';
 import { makeAgent, withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 import { listArtifacts } from '../artifact/artifactStore.js';
-import { createConnector } from '../connectors/connectorStore.js';
+import { createConnector } from '../connectors/store/connectorStore.js';
 
 test('compactHistory: stores compacted state in prompt layers without chat developer roles', async () => {
   await withTempWorkspaceAsync(async (workspace) => {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ConnectorRecord } from '@kinqs/brainrouter-types';
-import { runMcpConnectorCheckpoint, type McpConnectorClient } from '../connectors/mcpConnector.js';
+import { runMcpConnectorCheckpoint, type McpConnectorClient } from '../connectors/sources/mcpConnector.js';
 
 function connector(patch: Partial<ConnectorRecord> = {}): ConnectorRecord {
   return {

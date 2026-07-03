@@ -5,10 +5,10 @@ import {
   buildCheckpointRunner,
   defaultEnvTokenResolver,
   runConnectorCheckpointCore,
-} from '../connectors/runCheckpoint.js';
-import { createConnector } from '../connectors/connectorStore.js';
-import type { GithubConnectorClient } from '../connectors/githubConnector.js';
-import type { McpConnectorClient } from '../connectors/mcpConnector.js';
+} from '../connectors/runtime/runCheckpoint.js';
+import { createConnector } from '../connectors/store/connectorStore.js';
+import type { GithubConnectorClient } from '../connectors/sources/githubConnector.js';
+import type { McpConnectorClient } from '../connectors/sources/mcpConnector.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
 
 function connector(overrides?: Partial<ConnectorRecord>): ConnectorRecord {

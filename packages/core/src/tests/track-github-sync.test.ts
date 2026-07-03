@@ -19,7 +19,7 @@ import {
   type FetchLike,
 } from '../track/githubSync.js';
 import type { WorkItem } from '@kinqs/brainrouter-types';
-import { createConnector } from '../connectors/connectorStore.js';
+import { createConnector } from '../connectors/store/connectorStore.js';
 import { setCliKnobOverride } from '../config/config.js';
 import { withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 
