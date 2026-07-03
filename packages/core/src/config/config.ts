@@ -314,6 +314,50 @@ function resolveWebSearchKnobs(input: WebSearchCliKnobs | undefined): ResolvedWe
   };
 }
 
+/** Trim + drop empties + dedupe (order-preserving) a raw string list; non-array → []. */
+function sanitizeStringList(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of input) {
+    if (typeof raw !== 'string') continue;
+    const v = raw.trim();
+    if (!v || seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+  }
+  return out;
+}
+
+/**
+ * CC-CONFIG-A2 — resolve the ORDERED fallback chain. Sanitizes `fallbackModels`,
+ * caps it at 3, then appends the legacy single `fallbackModel` (if any) at the end
+ * for back-compat — deduped, so declaring it in both never double-tries. The result
+ * is the exact sequence `runTurn` walks on a model-not-found / retryable error.
+ */
+function resolveFallbackModels(list: unknown, legacy: string | null | undefined): string[] {
+  const chain = sanitizeStringList(list).slice(0, 3);
+  const legacyTrimmed = (legacy ?? '').trim();
+  if (legacyTrimmed && !chain.includes(legacyTrimmed)) chain.push(legacyTrimmed);
+  return chain;
+}
+
+/**
+ * Resolve a boolean knob where an environment variable may FORCE it on/off from
+ * any shell (troubleshooting toggles the user can flip without editing config.json).
+ * The env var wins when set to a recognized truthy/falsy token; otherwise the
+ * config value (or `false`) applies.
+ */
+function resolveBoolWithEnv(configValue: boolean | undefined, envName: string): boolean {
+  const raw = process.env[envName];
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    const v = raw.trim().toLowerCase();
+    if (v === '1' || v === 'true' || v === 'yes' || v === 'on') return true;
+    if (v === '0' || v === 'false' || v === 'no' || v === 'off') return false;
+  }
+  return configValue === true;
+}
+
 export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
   const c = cfg?.cli ?? {};
   const automation = c.automation ?? {};
@@ -391,6 +435,17 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     confirmRunWorkflow: c.confirmRunWorkflow ?? true,
     effort: c.effort ?? 'medium',
     fallbackModel: c.fallbackModel ?? null,
+    fallbackModels: resolveFallbackModels(c.fallbackModels, c.fallbackModel),
+    availableModels: sanitizeStringList(c.availableModels),
+    enforceAvailableModels: c.enforceAvailableModels === true,
+    requiredMinimumVersion: typeof c.requiredMinimumVersion === 'string' ? c.requiredMinimumVersion.trim() : '',
+    requiredMaximumVersion: typeof c.requiredMaximumVersion === 'string' ? c.requiredMaximumVersion.trim() : '',
+    enforceVersionRange: c.enforceVersionRange === true,
+    // CC-CONFIG-A1 — env override wins (opt-in troubleshooting from any shell).
+    safeMode: resolveBoolWithEnv(c.safeMode, 'BRAINROUTER_SAFE_MODE'),
+    attribution: { sessionUrl: c.attribution?.sessionUrl !== false },
+    // CC-CONFIG-A6 — env override wins.
+    skillsHideBundled: resolveBoolWithEnv(c.skillsHideBundled, 'BRAINROUTER_HIDE_BUNDLED_SKILLS'),
     mcpTimeoutMs: c.mcpTimeoutMs ?? 60_000,
     brainUrl: c.brainUrl ?? null,
     sandbox: c.sandbox ?? 'off',

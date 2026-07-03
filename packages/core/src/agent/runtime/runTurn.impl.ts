@@ -21,7 +21,7 @@ import { executeOrchestrationTool, isOrchestrationToolName, synthesizeDelegateTo
 import { buildFanOutHint, shouldSuggestFanOut } from '../../prompt/planning/breadthHint.js';
 import { buildNextActionMessages, parseNextActionPlan, nextActionDirective, planWantsFanOut, shouldSkipPlanner } from '../../prompt/planning/nextAction.js';
 import { compactToolOutput } from '../../prompt/compaction/toolCompaction.js';
-import { isModelNotFoundError, shouldFallbackModel } from '../../provider/modelFallback.js';
+import { isModelNotFoundError, nextFallbackModel, shouldFallbackModel } from '../../provider/modelFallback.js';
 import { resolveLocalModelProfile, localModelProfileActive, isLocalModelCoreTool } from '../../provider/modelFamily.js';
 import { currentTier, detectNeedsHigh, nextTier, resolveTierLadder, stripNeedsHigh } from '../../provider/tierLadder.js';
 import { drainCompletions, formatCompletionFeedback } from '../../session/completion/completionInbox.js';
@@ -876,14 +876,19 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           }
         } else if (
           isModelNotFoundError(message) &&
-          shouldFallbackModel(this.llmConfig.model, getCliKnobs().fallbackModel, this.triedModelFallback)
+          (() => {
+            // CC-CONFIG-A2: walk the ORDERED fallback chain (which already appends
+            // the legacy single `cli.fallbackModel` last for back-compat). The
+            // per-turn `triedModels` set ensures we never re-try a dead candidate,
+            // so a model-not-found cascades through each fallback until one works.
+            this.triedModels.add((this.llmConfig.model ?? '').trim());
+            return nextFallbackModel(this.llmConfig.model, getCliKnobs().fallbackModels, this.triedModels) !== null;
+          })()
         ) {
-          // PARITY-E3: the primary model isn't available at this endpoint.
-          // Switch to cli.fallbackModel for the rest of the session and
-          // retry ONCE (the triedModelFallback flag prevents a loop).
           const from = this.llmConfig.model;
-          const fallback = getCliKnobs().fallbackModel as string;
+          const fallback = nextFallbackModel(from, getCliKnobs().fallbackModels, this.triedModels) as string;
           this.triedModelFallback = true;
+          this.triedModels.add(fallback);
           this.setModel(fallback);
           callbacks.onStatusUpdate(`Model "${from}" unavailable — falling back to ${fallback}...`);
           try {

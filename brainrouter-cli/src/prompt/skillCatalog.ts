@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 
 const requireFromHere = createRequire(import.meta.url);
 
@@ -16,7 +17,12 @@ const WORKSPACE_SKILL_ROOTS = ['skills', '.brainrouter/skills'];
 
 export function listFilesystemSkills(workspaceRoot: string): SkillListItem[] {
   const seen = new Map<string, SkillListItem>();
-  for (const root of skillSearchRoots(workspaceRoot)) {
+  const knobs = getCliKnobs();
+  // CC-CONFIG-A1 — safe mode loads NO skills at all (isolate a bad skill).
+  if (knobs.safeMode) return [];
+  // CC-CONFIG-A6 — optionally hide BUNDLED skills (shipped with the install),
+  // leaving only workspace-authored skill roots (skills/, .brainrouter/skills).
+  for (const root of skillSearchRoots(workspaceRoot, { includeBundled: !knobs.skillsHideBundled })) {
     if (!fs.existsSync(root)) continue;
     const scope = inferRootScope(root, workspaceRoot);
     for (const filePath of findSkillFiles(root)) {
@@ -53,15 +59,24 @@ export function sortSkills(a: SkillListItem, b: SkillListItem): number {
   return (a.category ?? '').localeCompare(b.category ?? '') || a.name.localeCompare(b.name);
 }
 
-export function skillSearchRoots(workspaceRoot: string): string[] {
+export function skillSearchRoots(
+  workspaceRoot: string,
+  opts: { includeBundled?: boolean } = {},
+): string[] {
+  const includeBundled = opts.includeBundled !== false;
   const roots: string[] = [];
   for (const sub of WORKSPACE_SKILL_ROOTS) roots.push(path.join(workspaceRoot, sub));
 
-  const mcpPkgDir = resolveInstalledMcpPackageDir();
-  if (mcpPkgDir) {
-    roots.push(path.join(mcpPkgDir, 'skills'));
-    const monorepoRoot = path.dirname(mcpPkgDir);
-    roots.push(path.join(monorepoRoot, 'skills'));
+  // BUNDLED skill roots ship with the install (MCP package dir + the monorepo's
+  // top-level `skills/`). CC-CONFIG-A6 lets a user hide these, keeping only the
+  // workspace-authored roots above.
+  if (includeBundled) {
+    const mcpPkgDir = resolveInstalledMcpPackageDir();
+    if (mcpPkgDir) {
+      roots.push(path.join(mcpPkgDir, 'skills'));
+      const monorepoRoot = path.dirname(mcpPkgDir);
+      roots.push(path.join(monorepoRoot, 'skills'));
+    }
   }
 
   return [...new Set(roots.map((root) => path.resolve(root)))];

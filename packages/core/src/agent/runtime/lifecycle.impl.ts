@@ -6,6 +6,8 @@ import { Agent } from '../agent.js';
 import type { RunTurnCallbacks, LastBriefingDetails } from '../agent.js';
 import type { PromptLayeredMessage } from '../transport/llmTransport.js';
 import { getCliKnobs } from '../../config/config.js';
+import { assertModelAllowed, checkVersionRange } from '../../provider/modelPolicy.js';
+import { VERSION } from '../../version.js';
 import { extensionHookHandlers } from '../../extension/registry.js';
 import { readGoal, formatGoalBlock } from '../../goal/store/goalStore.js';
 import { callMcpTool } from '../../mcp/mcpUtils.js';
@@ -35,10 +37,17 @@ import { isCodeLinkKind, isTerminalCategory, isUnstartedCategory } from '@kinqs/
 
 export async function bootstrapSession(this: Agent, callbacks: RunTurnCallbacks): Promise<void> {
     if (this.silent) {
+      // Silent children inherit the parent's (already-gated) model — skip the
+      // interactive startup policy so a role-model override / worker never
+      // re-trips a gate the parent already cleared.
       this.chatHistory = [this.createSystemMessage()];
       this.initialized = true;
       return;
     }
+    // CC-CONFIG-A4/A3 — startup gates (version range + model allowlist). Run
+    // before any session/briefing work so a managed/enforced install refuses
+    // early with a clear message (or warns when not enforced).
+    enforceStartupPolicy.call(this, callbacks);
     callbacks.onStatusUpdate('Resolving BrainRouter session...');
     const resolved = await callMcpTool<{ sessionKey?: string }>(this.mcpClient, 'memory_resolve_session', {
       workspacePath: this.workspaceRoot,
@@ -51,6 +60,38 @@ export async function bootstrapSession(this: Agent, callbacks: RunTurnCallbacks)
 
     this.chatHistory = [this.createSystemMessage()];
     this.initialized = true;
+  }
+
+/**
+ * CC-CONFIG-A3/A4 — enforce the startup policy knobs against the running version
+ * and the configured model:
+ *
+ *  - Version range (`requiredMinimumVersion` / `requiredMaximumVersion`): when the
+ *    running BrainRouter version falls outside the bounds, WARN by default or, when
+ *    `enforceVersionRange` is set (a managed install), THROW to refuse the boot.
+ *  - Model allowlist (`availableModels` + `enforceAvailableModels`): when enforced
+ *    and the active model is not on the list, THROW with a clear message.
+ *
+ * Pure over `getCliKnobs()` + `VERSION`; surfaces warnings via `onStatusUpdate`.
+ */
+export function enforceStartupPolicy(this: Agent, callbacks: RunTurnCallbacks): void {
+    const knobs = getCliKnobs();
+    const range = checkVersionRange(VERSION, knobs.requiredMinimumVersion, knobs.requiredMaximumVersion);
+    if (!range.ok && range.message) {
+      if (knobs.enforceVersionRange) {
+        throw new Error(`${range.message} (cli.enforceVersionRange is on — refusing to start.)`);
+      }
+      callbacks.onStatusUpdate(`⚠ ${range.message}`);
+    }
+    const modelError = assertModelAllowed(
+      this.llmConfig.model,
+      knobs.availableModels,
+      knobs.enforceAvailableModels,
+      'This install',
+    );
+    if (modelError) {
+      throw new Error(modelError);
+    }
   }
 
   /**
@@ -141,13 +182,18 @@ export function createSystemMessage(this: Agent) {
    * just the interactive session. Cheap when no hooks are defined (no exec).
    */
 export function hookEnforceActive(this: Agent): boolean {
-    const h = getCliKnobs().hooks;
+    const knobs = getCliKnobs();
+    // CC-CONFIG-A1 — safe mode disables all lifecycle hooks (isolating a bad hook).
+    if (knobs.safeMode) return false;
+    const h = knobs.hooks;
     return h.enabled && (!this.silent || h.enforceWhenSilent);
   }
 
   /** ADVISORY hook events (pre/post-turn, post-tool, pre-compact) stay interactive-only. */
 export function hookAdvisoryActive(this: Agent): boolean {
-    return getCliKnobs().hooks.enabled && !this.silent;
+    const knobs = getCliKnobs();
+    if (knobs.safeMode) return false; // CC-CONFIG-A1
+    return knobs.hooks.enabled && !this.silent;
   }
 
   /**
@@ -479,6 +525,15 @@ export async function injectRecallContext(this: Agent, prompt: string, mcpTools:
     if (!this.enableRecall) {
       resetBriefing({ decision: 'skip', reasons: [this.silent ? 'silent agent (child)' : 'recall disabled'] });
       callbacks.onMemoryEvent?.({ kind: 'skipped', reason: this.silent ? 'silent agent (child)' : 'recall disabled' });
+      return;
+    }
+
+    // CC-CONFIG-A1 — SAFE MODE skips the memory briefing entirely (troubleshooting
+    // a bad briefing / recall pipeline). The model can still pull memory itself if
+    // the brain is connected; this only suppresses the automatic injection.
+    if (getCliKnobs().safeMode) {
+      resetBriefing({ decision: 'skip', reasons: ['safe mode (cli.safeMode)'] });
+      callbacks.onMemoryEvent?.({ kind: 'skipped', reason: 'safe mode' });
       return;
     }
 

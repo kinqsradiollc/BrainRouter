@@ -308,6 +308,52 @@ export interface CliKnobs {
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultracode';
   /** PARITY-E3 — model to fall back to when the primary model is unavailable. */
   fallbackModel?: string | null;
+  /**
+   * CC-CONFIG-A2 — ORDERED fallback chain (up to 3) tried in sequence when the
+   * primary model is unavailable (model-not-found / retryable provider error).
+   * Supersedes the single `fallbackModel` (which stays honored, appended last for
+   * back-compat). Empty/absent (default) = no chain; only `fallbackModel` applies.
+   */
+  fallbackModels?: string[];
+  /**
+   * CC-CONFIG-A3 — the set of models this install may use. Empty/absent (default)
+   * = no restriction. When `enforceAvailableModels` is true a model outside this
+   * list is rejected at agent init AND Fast-mode refuses to switch to it.
+   */
+  availableModels?: string[];
+  /** CC-CONFIG-A3 — when true, reject any model not in `availableModels`. Default false. */
+  enforceAvailableModels?: boolean;
+  /**
+   * CC-CONFIG-A4 — semver range gate against the running BrainRouter version
+   * (`packages/core/src/version`). When the current version is BELOW
+   * `requiredMinimumVersion` or ABOVE `requiredMaximumVersion` a warning is
+   * surfaced at startup; when `enforceVersionRange` is true it refuses to run.
+   * Empty/absent (default) = no version gate.
+   */
+  requiredMinimumVersion?: string;
+  requiredMaximumVersion?: string;
+  /** CC-CONFIG-A4 — refuse (vs warn) when outside the required version range. Default false. */
+  enforceVersionRange?: boolean;
+  /**
+   * CC-CONFIG-A1 — SAFE MODE (troubleshooting). When true, the agent boots WITHOUT
+   * memory briefing, skills, lifecycle hooks, and custom (non-brain) MCP servers —
+   * a minimal harness to isolate a misbehaving briefing/skill/hook/MCP. Also
+   * settable per-launch via `--safe-mode` / `BRAINROUTER_SAFE_MODE`. Default false.
+   */
+  safeMode?: boolean;
+  /**
+   * CC-CONFIG-A5 — provenance/attribution controls for generated commit + PR bodies.
+   * `sessionUrl` (default true): include the BrainRouter provenance/session footer.
+   * Set false to omit it (private repos / clean history).
+   */
+  attribution?: { sessionUrl?: boolean };
+  /**
+   * CC-CONFIG-A6 — hide BUNDLED skills (those shipping with the BrainRouter
+   * install) from skill listings, leaving only workspace-authored skills
+   * (`skills/`, `.brainrouter/skills`). Also settable via
+   * `BRAINROUTER_HIDE_BUNDLED_SKILLS`. Default false.
+   */
+  skillsHideBundled?: boolean;
 
   // ---- MCP plumbing -----------------------------------------------------
   /** MCP call timeout in ms. Default 60000. */
@@ -759,6 +805,22 @@ export interface ResolvedCliKnobs {
   confirmRunWorkflow: boolean;
   effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultracode';
   fallbackModel: string | null;
+  /** CC-CONFIG-A2 — resolved ORDERED fallback chain (validated, capped at 3, deduped;
+   *  `fallbackModel` appended last for back-compat). */
+  fallbackModels: string[];
+  /** CC-CONFIG-A3 — resolved available-models allowlist (validated, deduped). */
+  availableModels: string[];
+  enforceAvailableModels: boolean;
+  /** CC-CONFIG-A4 — resolved version-range gate ('' = unset). */
+  requiredMinimumVersion: string;
+  requiredMaximumVersion: string;
+  enforceVersionRange: boolean;
+  /** CC-CONFIG-A1 — safe/troubleshooting mode. */
+  safeMode: boolean;
+  /** CC-CONFIG-A5 — provenance footer controls for commit/PR bodies. */
+  attribution: { sessionUrl: boolean };
+  /** CC-CONFIG-A6 — hide bundled skills from listings. */
+  skillsHideBundled: boolean;
   mcpTimeoutMs: number;
   /** REMOTE-BRAIN — remote brain HTTP endpoint, or null for the embedded default. */
   brainUrl: string | null;

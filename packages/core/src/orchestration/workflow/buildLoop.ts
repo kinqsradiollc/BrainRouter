@@ -270,7 +270,7 @@ export function finalizeBuildLoop(
       slug,
       runToken,
       title: derivePrTitle(slug, phaseOutput('implement')),
-      body: derivePrBody({ slug, verifyGreen, changedFiles: cleanup.changedFiles ?? 0, reviewOutput: phaseOutput('review') }),
+      body: derivePrBody({ slug, verifyGreen, changedFiles: cleanup.changedFiles ?? 0, reviewOutput: phaseOutput('review'), attributionSessionUrl: getCliKnobs().attribution.sessionUrl }),
       baseBranch: getCliKnobs().buildLoopPrBaseBranch,
       draft: getCliKnobs().buildLoopPrDraft,
     });

@@ -619,6 +619,9 @@ export class Agent {
   public readonly resultCache = new ResultCache(getCliKnobs().offloadRetentionMs, getCliKnobs().offloadMaxEntries);
   /** PARITY-E3: set once we've switched to cli.fallbackModel this turn. */
   public triedModelFallback = false;
+  /** CC-CONFIG-A2: models already attempted this turn (primary + each fallback tried),
+   *  so the ordered fallback chain cascades without re-trying a dead model. */
+  public triedModels = new Set<string>();
   public initialized = false;
   public recalledRecordIds: string[] = [];
   public recalledRecords: RecalledRecord[] = [];
