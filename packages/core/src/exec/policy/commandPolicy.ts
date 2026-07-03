@@ -24,7 +24,7 @@
  *    execution mode exactly as before).
  */
 
-import { isDangerousCommand } from './dangerousCommand.js';
+import { isDangerousCommand } from '../guard/dangerousCommand.js';
 
 export type SegmentClass = 'allowlisted' | 'safe' | 'dangerous' | 'unknown';
 

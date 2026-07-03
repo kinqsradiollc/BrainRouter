@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decideExecutionPolicy, actionKindForTool } from '../exec/execPolicy.js';
+import { decideExecutionPolicy, actionKindForTool } from '../exec/policy/execPolicy.js';
 import { evaluateDestructiveAction, expandChordKeys, validateComputerAction } from '../agent/computerUse.js';
 
 test('computer_use validation accepts safe actions and normalizes bounded fields', () => {

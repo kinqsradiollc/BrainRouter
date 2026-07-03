@@ -14,7 +14,7 @@
  * run_command handler and turns a `block` into a refusal (silent agents) or a
  * confirm (attended). Per-segment so `a && git reset --hard` is caught.
  */
-import { splitCommandSegments } from './commandPolicy.js';
+import { splitCommandSegments } from '../policy/commandPolicy.js';
 
 export interface DestructiveContext {
   /** The turn's user-intent text (the prompt). A destructive command the user

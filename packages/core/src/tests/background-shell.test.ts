@@ -8,7 +8,7 @@ import {
   killBackgroundShell,
   killAllBackgroundShells,
   __resetBackgroundShells,
-} from '../exec/backgroundShell.js';
+} from '../exec/runtime/backgroundShell.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
 import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
 

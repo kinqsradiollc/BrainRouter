@@ -15,7 +15,7 @@
  * mapping is unit-testable and shared verbatim by CLI and desktop.
  */
 
-import type { AccessMode, ExternalDirMode } from '../exec/execPolicy.js';
+import type { AccessMode, ExternalDirMode } from '../exec/policy/execPolicy.js';
 import type { ExecutionMode, ReviewPolicy } from './preferencesStore.js';
 
 export type FriendlyPermissionMode =

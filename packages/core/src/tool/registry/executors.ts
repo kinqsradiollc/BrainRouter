@@ -1,4 +1,4 @@
-import type { AccessMode, ActionKind } from '../../exec/execPolicy.js';
+import type { AccessMode, ActionKind } from '../../exec/policy/execPolicy.js';
 import { LOCAL_TOOLS } from '../specs/specs.js';
 import { LOCAL_TOOL_REGISTRY, registryEntry } from './registry.js';
 import { extensionExecutor, extensionExecutors } from '../../extension/registry.js';

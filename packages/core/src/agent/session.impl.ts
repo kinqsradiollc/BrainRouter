@@ -10,7 +10,7 @@ import { getCliKnobs } from '../config/config.js';
 import type { AccessMode } from '../orchestration/roles.js';
 import { childAgentsFor } from '../orchestration/tools.js';
 import { spawnWorkerThread } from '../orchestration/workerTools.js';
-import type { ActionKind, PolicyDecision } from '../exec/execPolicy.js';
+import type { ActionKind, PolicyDecision } from '../exec/policy/execPolicy.js';
 import type { PlanState } from '../task/taskStore.js';
 import { readPlan } from '../task/taskStore.js';
 import { recordPlanDecision, readPlanHistory, linkPlanDecision, planStepSignature } from '../task/planHistoryStore.js';

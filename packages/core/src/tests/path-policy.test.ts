@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { isPathWithinRoots, assertPathWithinRoots, PathPolicyError, isInsideRoot } from '../exec/pathPolicy.js';
+import { isPathWithinRoots, assertPathWithinRoots, PathPolicyError, isInsideRoot } from '../exec/policy/pathPolicy.js';
 
 test('MEM-36 isInsideRoot: nesting + self, rejects .. escape and absolute siblings', () => {
   assert.equal(isInsideRoot('/a/b', '/a/b'), true);

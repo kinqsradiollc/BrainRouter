@@ -18,11 +18,11 @@ import {
   githubTokenClient, defaultEnvTokenResolver,
   type McpConnectorClient, type McpConnectorResource,
 } from '../connectors/index.js';
-import { startBackgroundShell, readBackgroundOutput } from '../exec/backgroundShell.js';
-import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../exec/dangerousCommand.js';
-import { evaluateDestructiveCommand } from '../exec/destructiveCommandGuard.js';
-import { decideExecutionPolicy, egressDecision } from '../exec/execPolicy.js';
-import { resolveSandboxConfig, runShell } from '../exec/sandbox.js';
+import { startBackgroundShell, readBackgroundOutput } from '../exec/runtime/backgroundShell.js';
+import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../exec/guard/dangerousCommand.js';
+import { evaluateDestructiveCommand } from '../exec/guard/destructiveCommandGuard.js';
+import { decideExecutionPolicy, egressDecision } from '../exec/policy/execPolicy.js';
+import { resolveSandboxConfig, runShell } from '../exec/runtime/sandbox.js';
 import { gitHeadSha } from '../git/workspaceGit.js';
 import { readGoal, blockGoal, completeGoal } from '../goal/store/goalStore.js';
 import { searchMcpCatalog } from '../mcp/discovery.js';

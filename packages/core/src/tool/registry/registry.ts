@@ -1,4 +1,4 @@
-import type { AccessMode, ActionKind } from '../../exec/execPolicy.js';
+import type { AccessMode, ActionKind } from '../../exec/policy/execPolicy.js';
 import { extensionToolEntries } from '../../extension/registry.js';
 
 /**

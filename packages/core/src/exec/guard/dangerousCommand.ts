@@ -18,7 +18,7 @@
  * — do not remove existing entries without a replacement.
  */
 
-import { evaluateCommandPolicy } from './commandPolicy.js';
+import { evaluateCommandPolicy } from '../policy/commandPolicy.js';
 
 const DANGEROUS_PATTERNS: RegExp[] = [
   // Recursive / forced deletions

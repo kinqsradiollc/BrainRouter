@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Agent } from '../agent/agent.js';
-import { runShell } from '../exec/sandbox.js';
+import { runShell } from '../exec/runtime/sandbox.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
 
 test('DESK-6 runShell SIGKILLs a long command the instant the signal aborts', async () => {

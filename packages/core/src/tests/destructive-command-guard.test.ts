@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluateDestructiveCommand, extractIacTarget } from '../exec/destructiveCommandGuard.js';
+import { evaluateDestructiveCommand, extractIacTarget } from '../exec/guard/destructiveCommandGuard.js';
 
 // WS5 — block destructive git/IaC commands unless the user explicitly asked.
 

@@ -16,7 +16,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { getStateDir } from '../storage/store.js';
+import { getStateDir } from '../../storage/store.js';
 
 export type BgShellStatus = 'running' | 'done' | 'failed';
 

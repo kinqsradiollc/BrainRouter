@@ -4,7 +4,7 @@
  * registry functions. Stateless (no workspace binding), like the exec service.
  * No logic moved or removed.
  */
-import type { AccessMode } from "../../exec/execPolicy.js";
+import type { AccessMode } from "../../exec/policy/execPolicy.js";
 import {
   effectiveToolRegistry, registryAllowedTools, registryParallelSafeLocal,
   hideWorkerToolsFor, registryEntry, type LocalToolEntry,

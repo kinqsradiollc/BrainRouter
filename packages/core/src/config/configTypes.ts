@@ -6,7 +6,7 @@
  * split out of config.ts so the loader/resolver logic reads cleanly. Re-exported
  * from ../config/config.js, so every importer of these types is unchanged.
  */
-import type { ExternalDirMode } from '../exec/execPolicy.js';
+import type { ExternalDirMode } from '../exec/policy/execPolicy.js';
 
 export interface ServerConfig {
   type: 'stdio' | 'http';
