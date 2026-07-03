@@ -17,6 +17,10 @@ export interface SessionRuntime {
   brainProfile?: string;
   /** Additive third-party MCP profile ids enabled for this session. */
   mcpProfiles?: string[];
+  /** MC-D3 — the named LLM profile (cli.llmProfiles) this session switched to,
+   *  recorded by `switch_model` / `/profile use` alongside the concrete
+   *  model/endpoint overrides so `/profile` can label the active preset. */
+  llmProfile?: string;
 }
 
 /** Fully-resolved runtime for a session (no optional provider/model). */
@@ -48,7 +52,7 @@ export function setSessionRuntime(workspaceRoot: string, sessionKey: string, pat
   const all = readSessionRuntimeAll(workspaceRoot);
   const next: SessionRuntime = { ...(all[sessionKey] ?? {}), ...patch };
   if (next.mcpProfiles && next.mcpProfiles.length === 0) delete next.mcpProfiles;
-  for (const k of ['provider', 'model', 'endpoint', 'brainProfile'] as const) {
+  for (const k of ['provider', 'model', 'endpoint', 'brainProfile', 'llmProfile'] as const) {
     if (next[k] == null || next[k] === '') delete next[k];
   }
   if (Object.keys(next).length === 0) delete all[sessionKey];

@@ -36,7 +36,9 @@ import { appendEvidence, setQuestion, readLedger } from '../../research/research
 import { CHAPTER_ENTRY_NAME, chapterEntryContent } from '../../session/transcript/chapterMarks.js';
 import { acknowledgeCompletions } from '../../session/completion/completionInbox.js';
 import { readPreferences } from '../../session/preferences/preferencesStore.js';
-import { resolveActiveMode } from '../../session/state/sessionModeStore.js';
+import { resolveActiveMode, setSessionMode } from '../../session/state/sessionModeStore.js';
+import { setSessionRuntime } from '../../session/state/sessionRuntimeStore.js';
+import { resolveProfileSwitch } from '../../provider/llmProfiles.js';
 import { formatPlan, updatePlan, readPlan } from '../../task/taskStore.js';
 import { isTelemetryEnabled } from '../../telemetry/recorder/telemetry.js';
 import { traceEvent } from '../../telemetry/tracing/tracing.js';
@@ -675,6 +677,50 @@ export async function executeLocalToolLegacy(this: Agent, name: string, args: Re
         const marker = { role: 'system', name: CHAPTER_ENTRY_NAME, content: chapterEntryContent(title, summary) };
         this.recordTranscript(marker);
         return JSON.stringify({ marked: true, title, note: 'Chapter recorded — the user can browse with /chapters.' });
+      }
+      case 'switch_model': {
+        // MC-D3 — agent-initiated switch to a named LLM profile: the explicit
+        // sibling of the first-line tier self-escalation marker. Validated
+        // against the configured profiles + the availableModels enforcement
+        // gate (always enforced in Fast mode, mirroring `/model`). On success
+        // the live LLM config is overlaid immediately — every subsequent model
+        // call this turn and after uses the new profile — and the choice is
+        // persisted to the session runtime so a resumed session keeps it.
+        // Deliberately NOT applied here: a profile's `fast` preference (an
+        // agent must never loosen its own approval posture).
+        const knobs = getCliKnobs();
+        const inFastMode = resolveActiveMode(this.workspaceRoot, this.sessionKey).executionMode === 'fast';
+        const result = resolveProfileSwitch(String(args.profile ?? ''), knobs.llmProfiles, this.llmConfig, {
+          availableModels: knobs.availableModels,
+          enforceAvailableModels: knobs.enforceAvailableModels,
+          fastMode: inFastMode,
+        });
+        if (!result.ok) return JSON.stringify({ switched: false, error: result.error });
+        const before = this.llmConfig.model;
+        this.llmConfig = result.llm;
+        try {
+          setSessionRuntime(this.workspaceRoot, this.sessionKey, {
+            model: result.llm.model,
+            endpoint: result.profile.endpoint ?? '',
+            llmProfile: result.name,
+          });
+          if (result.profile.reasoningEffort) {
+            setSessionMode(this.workspaceRoot, this.sessionKey, { effort: result.profile.reasoningEffort });
+          }
+        } catch { /* persistence is best-effort; the live switch already applied */ }
+        traceEvent('model.profile_switch', {
+          from: before,
+          to: result.llm.model,
+          profile: result.name,
+          reason: typeof args.reason === 'string' && args.reason.trim() ? args.reason.trim() : null,
+        });
+        return JSON.stringify({
+          switched: true,
+          profile: result.name,
+          from: before,
+          to: result.llm.model,
+          note: 'Applies from the next model call onward in this session.',
+        });
       }
       case 'task_output': {
         // CC-P11.1 — incremental output of a background run_command.

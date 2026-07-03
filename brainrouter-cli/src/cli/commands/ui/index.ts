@@ -7,7 +7,7 @@
  * returns true as soon as one matches `ctx.command`.
  *
  *   status.ts       /status /workspace /policy /doctor /where
- *   model.ts        /model /effort /tier
+ *   model.ts        /model /effort /tier /profile
  *   preferences.ts  /vim /statusline /theme /title /personality /raw /quiet /experimental /keymap
  *   info.ts         /copy /apps /plugins /mention /ide /help
  */

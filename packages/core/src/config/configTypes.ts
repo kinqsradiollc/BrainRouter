@@ -63,6 +63,24 @@ export interface LLMConfig {
 }
 
 /**
+ * MC-D3 — one named LLM profile (`cli.llmProfiles.<name>`). Only `model` is
+ * required; the other fields overlay the base `llm` config / session stance
+ * when the profile is activated. The base provider + API key always carry
+ * over — a profile is a preset, not a credential store.
+ */
+export interface LlmProfileConfig {
+  /** Model id the profile switches to (required — a profile without one is dropped). */
+  model: string;
+  /** Optional endpoint override (e.g. a different OpenAI-compatible gateway). */
+  endpoint?: string;
+  /** Optional reasoning depth applied to the session on activation. */
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'xhigh';
+  /** Optional Fast-mode preference. Only honored by the user-driven `/profile use`
+   *  (never by the agent's `switch_model` — an agent must not loosen approvals). */
+  fast?: boolean;
+}
+
+/**
  * CLI behaviour knobs. All previously-env-only flags live here so
  * `~/.config/brainrouter/config.json` is the single source of CLI
  * truth — no more `.env` file to chase. Every field is optional;
@@ -435,6 +453,22 @@ export interface CliKnobs {
   availableModels?: string[];
   /** CC-CONFIG-A3 — when true, reject any model not in `availableModels`. Default false. */
   enforceAvailableModels?: boolean;
+  /**
+   * MC-D3 — NAMED LLM PROFILES: reusable model presets layered over the base
+   * `llm` config. A profile carries a model (required) plus an optional
+   * endpoint / reasoning depth / Fast-mode preference. `/profile use <name>`
+   * (or `cli.activeLlmProfile`) overlays one onto the base LLM at boot, and —
+   * when 2+ profiles exist — the agent is offered a `switch_model` tool so it
+   * can move itself to a stronger/cheaper preset mid-task (the explicit
+   * sibling of the first-line tier self-escalation marker). Empty/absent
+   * (default) = feature inert: no overlay, no tool.
+   */
+  llmProfiles?: Record<string, LlmProfileConfig>;
+  /**
+   * MC-D3 — name of the profile overlaid on the base `llm` config at startup.
+   * Must name an entry in `llmProfiles`; unknown/blank (default) = no overlay.
+   */
+  activeLlmProfile?: string;
   /**
    * CC-CONFIG-A4 — semver range gate against the running BrainRouter version
    * (`packages/core/src/version`). When the current version is BELOW
@@ -987,6 +1021,10 @@ export interface ResolvedCliKnobs {
   /** CC-CONFIG-A3 — resolved available-models allowlist (validated, deduped). */
   availableModels: string[];
   enforceAvailableModels: boolean;
+  /** MC-D3 — validated named LLM profiles (blank names / model-less entries dropped). */
+  llmProfiles: Record<string, LlmProfileConfig>;
+  /** MC-D3 — active profile name; '' when unset or not among `llmProfiles`. */
+  activeLlmProfile: string;
   /** CC-CONFIG-A4 — resolved version-range gate ('' = unset). */
   requiredMinimumVersion: string;
   requiredMaximumVersion: string;

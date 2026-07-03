@@ -2,14 +2,14 @@
  * AUTO-EXTRACTED from cli/repl.ts as part of the slash-command split.
  * Hand-tune imports if the compiler complains.
  *
- * Model / reasoning-depth / tier UI commands split out of ui/index.ts:
- *   /model /effort /tier
+ * Model / reasoning-depth / tier / profile UI commands split out of ui/index.ts:
+ *   /model /effort /tier /profile
  */
 
 import chalk from 'chalk';
-import { saveConfig, getCliKnobs } from '@kinqs/brainrouter-core/config';
-import { assertModelAllowed } from '@kinqs/brainrouter-core/provider';
-import { readPreferences, resolveEffort, writePreferences, normalizeEffort, getSessionMode, resolveActiveMode, setSessionMode, setSessionRuntime } from '@kinqs/brainrouter-core/session';
+import { saveConfig, getCliKnobs, sanitizeLlmProfiles, type LlmProfileConfig } from '@kinqs/brainrouter-core/config';
+import { assertModelAllowed, overlayLlmProfile } from '@kinqs/brainrouter-core/provider';
+import { readPreferences, resolveEffort, writePreferences, normalizeEffort, getSessionMode, resolveActiveMode, setSessionMode, setSessionRuntime, getSessionRuntime } from '@kinqs/brainrouter-core/session';
 import { PROVIDER_CATALOG, findProvider } from '@kinqs/brainrouter-core/provider';
 import { loadApiKeyPrefixesConfig } from '@kinqs/brainrouter-core/config';
 import { selectModel } from '../../wizard/modelsApi.js';
@@ -110,6 +110,133 @@ export async function tryHandleUiModelCommand(ctx: CommandContext): Promise<bool
       console.log(chalk.green(`\n✓ Model switched: ${chalk.gray(previous)} → ${chalk.cyan(result.model)}`));
       if (sessionOnly) console.log(chalk.gray('  Scope: this session only — not saved to config.json.'));
       console.log(chalk.gray(`  Source: ${sourceTag}\n`));
+      return true;
+    }
+    case '/profile':
+    {
+      // MC-D3 — named LLM profiles (cli.llmProfiles): saved model/endpoint/
+      // effort presets layered over the base llm config. Subcommands:
+      //   list · use <name> · save <name> (snapshot current) · delete <name>
+      // With 2+ profiles the agent is also offered the switch_model tool.
+      const sub = (args[0] ?? 'list').toLowerCase();
+      const nameArg = (args[1] ?? '').trim();
+      const profiles = sanitizeLlmProfiles(config.cli?.llmProfiles);
+      const names = Object.keys(profiles).sort();
+      const sessionProfile = agent.sessionKey
+        ? (getSessionRuntime(agent.workspaceRoot, agent.sessionKey).llmProfile ?? '')
+        : '';
+      const globalActive = typeof config.cli?.activeLlmProfile === 'string' ? config.cli.activeLlmProfile.trim() : '';
+      const activeName = (sessionProfile && profiles[sessionProfile]) ? sessionProfile
+        : (globalActive && profiles[globalActive]) ? globalActive : '';
+
+      if (sub === 'list' || sub === '') {
+        if (names.length === 0) {
+          console.log(chalk.bold('\nNo LLM profiles configured.'));
+          console.log(chalk.gray('  Save the current model as one:  /profile save <name>'));
+          console.log(chalk.gray('  Or edit cli.llmProfiles in ~/.config/brainrouter/config.json.'));
+          console.log(chalk.gray('  With 2+ profiles the agent can move itself between them via switch_model.\n'));
+          return true;
+        }
+        console.log(chalk.bold(`\nLLM profiles (${names.length}):`));
+        for (const n of names) {
+          const p = profiles[n];
+          const marker = n === activeName ? chalk.green('● ') : '  ';
+          const extras = [
+            p.endpoint ? `endpoint=${p.endpoint}` : '',
+            p.reasoningEffort ? `effort=${p.reasoningEffort}` : '',
+            p.fast ? 'fast' : '',
+          ].filter(Boolean).join(' · ');
+          console.log(`  ${marker}${chalk.cyan(n.padEnd(16))} ${p.model}${extras ? chalk.gray(`  (${extras})`) : ''}`);
+        }
+        console.log(chalk.gray(`\n  Active: ${activeName || '(none — base llm config)'}${sessionProfile && profiles[sessionProfile] ? ' (this session)' : ''}`));
+        console.log(chalk.gray('  /profile use <name> · save <name> · delete <name>'));
+        console.log(chalk.gray(`  Agent switch_model tool: ${names.length >= 2 ? 'offered (2+ profiles)' : 'hidden (needs 2+ profiles)'}\n`));
+        return true;
+      }
+
+      if (sub === 'use') {
+        if (!nameArg) { console.log(chalk.red('\nUsage: /profile use <name>\n')); return true; }
+        const profile = profiles[nameArg];
+        if (!profile) {
+          console.log(chalk.red(`\n✗ Unknown profile "${nameArg}". Configured: ${names.join(', ') || '(none)'}\n`));
+          return true;
+        }
+        // Same allowlist gate as /model — enforced installs and Fast mode
+        // must not switch to an unsanctioned model via a profile either.
+        const knobs = getCliKnobs();
+        const inFastMode = resolveActiveMode(agent.workspaceRoot, agent.sessionKey).executionMode === 'fast';
+        const gate = assertModelAllowed(
+          profile.model,
+          knobs.availableModels,
+          knobs.enforceAvailableModels || inFastMode,
+          inFastMode ? 'Fast mode' : 'This install',
+        );
+        if (gate) { console.log(chalk.red(`\n✗ ${gate}\n`)); return true; }
+        const previous = agent.getModel();
+        const baseLlm = agent.getLlmConfig?.() ?? { provider: 'openai', apiKey: '', ...(config.llm ?? {}), model: previous };
+        const next = overlayLlmProfile(baseLlm, profile);
+        if (agent.setLLMConfig) agent.setLLMConfig(next);
+        else agent.setModel(next.model);
+        // Persist: global active pointer; clear stale per-session model/endpoint
+        // overrides (mirrors /model's global path) and label the session.
+        config.cli = { ...(config.cli ?? {}), activeLlmProfile: nameArg };
+        saveConfig(config);
+        if (agent.sessionKey) {
+          setSessionRuntime(agent.workspaceRoot, agent.sessionKey, { model: '', endpoint: '', llmProfile: nameArg });
+          if (profile.reasoningEffort) setSessionMode(agent.workspaceRoot, agent.sessionKey, { effort: profile.reasoningEffort });
+          if (profile.fast === true) setSessionMode(agent.workspaceRoot, agent.sessionKey, { executionMode: 'fast' });
+        } else if (profile.reasoningEffort) {
+          writePreferences(agent.workspaceRoot, { effort: profile.reasoningEffort });
+        }
+        const applied = [
+          `model ${chalk.gray(previous)} → ${chalk.cyan(next.model)}`,
+          profile.endpoint ? `endpoint → ${profile.endpoint}` : '',
+          profile.reasoningEffort ? `effort → ${profile.reasoningEffort}` : '',
+          profile.fast ? 'mode → fast' : '',
+        ].filter(Boolean).join(', ');
+        console.log(chalk.green(`\n✓ Profile "${nameArg}" active: ${applied}\n`));
+        return true;
+      }
+
+      if (sub === 'save') {
+        if (!nameArg) { console.log(chalk.red('\nUsage: /profile save <name>\n')); return true; }
+        const active = resolveActiveMode(agent.workspaceRoot, agent.sessionKey);
+        const snapshot: LlmProfileConfig = { model: agent.getModel() };
+        const endpoint = agent.getLlmConfig?.()?.endpoint ?? config.llm?.endpoint;
+        if (endpoint) snapshot.endpoint = endpoint;
+        if (active.effort === 'low' || active.effort === 'medium' || active.effort === 'high' || active.effort === 'xhigh') {
+          snapshot.reasoningEffort = active.effort;
+        }
+        if (active.executionMode === 'fast') snapshot.fast = true;
+        const existing = !!profiles[nameArg];
+        config.cli = { ...(config.cli ?? {}), llmProfiles: { ...(config.cli?.llmProfiles ?? {}), [nameArg]: snapshot } };
+        saveConfig(config);
+        const total = Object.keys(sanitizeLlmProfiles(config.cli.llmProfiles)).length;
+        console.log(chalk.green(`\n✓ Profile "${nameArg}" ${existing ? 'updated' : 'saved'} (model=${snapshot.model}${snapshot.endpoint ? `, endpoint=${snapshot.endpoint}` : ''}${snapshot.reasoningEffort ? `, effort=${snapshot.reasoningEffort}` : ''}${snapshot.fast ? ', fast' : ''}).`));
+        console.log(chalk.gray(`  ${total >= 2 ? 'The agent can now switch profiles itself via switch_model.' : 'Save a second profile to offer the agent the switch_model tool.'}\n`));
+        return true;
+      }
+
+      if (sub === 'delete' || sub === 'remove' || sub === 'rm') {
+        if (!nameArg) { console.log(chalk.red('\nUsage: /profile delete <name>\n')); return true; }
+        if (!profiles[nameArg] && !(config.cli?.llmProfiles && nameArg in config.cli.llmProfiles)) {
+          console.log(chalk.red(`\n✗ Unknown profile "${nameArg}". Configured: ${names.join(', ') || '(none)'}\n`));
+          return true;
+        }
+        const remaining = { ...(config.cli?.llmProfiles ?? {}) };
+        delete remaining[nameArg];
+        config.cli = { ...(config.cli ?? {}), llmProfiles: remaining };
+        // Don't leave a dangling active pointer at a deleted profile.
+        if ((config.cli.activeLlmProfile ?? '').trim() === nameArg) config.cli.activeLlmProfile = '';
+        saveConfig(config);
+        if (agent.sessionKey && getSessionRuntime(agent.workspaceRoot, agent.sessionKey).llmProfile === nameArg) {
+          setSessionRuntime(agent.workspaceRoot, agent.sessionKey, { llmProfile: '' });
+        }
+        console.log(chalk.green(`\n✓ Profile "${nameArg}" deleted. ${Object.keys(sanitizeLlmProfiles(remaining)).length} remaining.\n`));
+        return true;
+      }
+
+      console.log(chalk.red(`\nUnknown subcommand "${sub}". Usage: /profile [list|use <name>|save <name>|delete <name>]\n`));
       return true;
     }
     case '/effort':

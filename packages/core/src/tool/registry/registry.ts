@@ -91,6 +91,11 @@ export const LOCAL_TOOL_REGISTRY: LocalToolEntry[] = [
   { name: 'task_output', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   // CC-P12.3 — transcript chapter marker (writes session state, not workspace).
   { name: 'mark_chapter', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  // MC-D3 — agent-initiated switch to a named LLM profile. Mutates session
+  // state only (the active model preset), so it gates like update_plan:
+  // read tier, read_only kind, serialized. Exposure is further runtime-gated
+  // in Agent.runTurn to installs with 2+ configured `cli.llmProfiles`.
+  { name: 'switch_model', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
   // WF-TOOL — run_workflow launches a fan-out of child agents (child_write), like spawn_*.
   { name: 'run_workflow', accessTier: 'read', actionKind: 'child_write', parallelSafe: false },
   // §7 L4 — run_workflow_graph runs a saved visual graph; its agent nodes spawn children (child_write).

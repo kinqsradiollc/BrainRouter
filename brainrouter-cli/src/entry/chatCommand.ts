@@ -4,6 +4,7 @@ import chalk from 'chalk';
 import { loadConfig, getConfigPath, setCliKnobOverride, hydrateConfigDefaultsOnDisk, resolveCliKnobs, type LLMConfig } from '@kinqs/brainrouter-core/config';
 import { resolveSessionLlmConfig } from '@kinqs/brainrouter-core/session';
 import { McpClientPool, selectMcpServerIds, applyBrainUrlOverride, probeBrainHealth, embeddedBrainId } from '@kinqs/brainrouter-core/mcp';
+import { applyActiveLlmProfile } from '@kinqs/brainrouter-core/provider';
 import { VERSION } from '@kinqs/brainrouter-core/version';
 import { loadExtensions } from '@kinqs/brainrouter-core/extension';
 import { setKnownMcpServerIds } from '../cli/ink/text/toolFormat.js';
@@ -165,7 +166,11 @@ export function registerChatCommand(program: Command): void {
         config.servers[id] = cloned;
       }
 
-      const llm: LLMConfig = { ...(config.llm ?? DEFAULT_LLM) };
+      // MC-D3 — overlay the active named LLM profile (cli.activeLlmProfile →
+      // cli.llmProfiles) onto the base llm config. Inert when unset; an
+      // explicit --model and per-session runtime overrides still win.
+      const bootKnobs = resolveCliKnobs(config);
+      const llm: LLMConfig = applyActiveLlmProfile(bootKnobs, { ...(config.llm ?? DEFAULT_LLM) });
 
       if (options.model) {
         llm.model = options.model;

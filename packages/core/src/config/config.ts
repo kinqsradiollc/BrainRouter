@@ -17,6 +17,7 @@ import type {
   ProviderWireFormat,
   MarketplaceSource,
   PluginCapabilityConsent,
+  LlmProfileConfig,
 } from './configTypes.js';
 import { normalizeRuntimeBackend } from './configTypes.js';
 
@@ -462,8 +463,39 @@ function clampInt(value: number | undefined, min: number, max: number, fallback:
   return Math.min(max, Math.max(min, n));
 }
 
+/**
+ * MC-D3 — validate the raw `cli.llmProfiles` map: trim names, drop blank names
+ * and entries without a usable `model`, normalize the optional fields (endpoint
+ * trimmed; reasoningEffort restricted to the documented union; `fast` only kept
+ * when explicitly true). Exported so the CLI `/profile` command validates the
+ * same way the resolver does.
+ */
+export function sanitizeLlmProfiles(raw: unknown): Record<string, LlmProfileConfig> {
+  const out: Record<string, LlmProfileConfig> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
+    const key = (name ?? '').trim();
+    if (!key || !value || typeof value !== 'object') continue;
+    const p = value as Partial<LlmProfileConfig>;
+    const model = typeof p.model === 'string' ? p.model.trim() : '';
+    if (!model) continue;
+    const entry: LlmProfileConfig = { model };
+    if (typeof p.endpoint === 'string' && p.endpoint.trim()) entry.endpoint = p.endpoint.trim();
+    if (p.reasoningEffort === 'low' || p.reasoningEffort === 'medium' || p.reasoningEffort === 'high' || p.reasoningEffort === 'xhigh') {
+      entry.reasoningEffort = p.reasoningEffort;
+    }
+    if (p.fast === true) entry.fast = true;
+    out[key] = entry;
+  }
+  return out;
+}
+
 export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
   const c = cfg?.cli ?? {};
+  // MC-D3 — validated profiles; the active pointer only survives when it names one.
+  const llmProfiles = sanitizeLlmProfiles(c.llmProfiles);
+  const activeLlmProfileRaw = typeof c.activeLlmProfile === 'string' ? c.activeLlmProfile.trim() : '';
+  const activeLlmProfile = llmProfiles[activeLlmProfileRaw] ? activeLlmProfileRaw : '';
   const automation = c.automation ?? {};
   const requirementsAutomation = automation.requirements ?? {};
   const autoCreateThreshold = unitInterval(requirementsAutomation.autoCreateThreshold, 0.7);
@@ -542,6 +574,8 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     fallbackModels: resolveFallbackModels(c.fallbackModels, c.fallbackModel),
     availableModels: sanitizeStringList(c.availableModels),
     enforceAvailableModels: c.enforceAvailableModels === true,
+    llmProfiles,
+    activeLlmProfile,
     requiredMinimumVersion: typeof c.requiredMinimumVersion === 'string' ? c.requiredMinimumVersion.trim() : '',
     requiredMaximumVersion: typeof c.requiredMaximumVersion === 'string' ? c.requiredMaximumVersion.trim() : '',
     enforceVersionRange: c.enforceVersionRange === true,

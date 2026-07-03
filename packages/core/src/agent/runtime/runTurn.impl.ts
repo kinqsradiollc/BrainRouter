@@ -26,6 +26,7 @@ import { compactToolOutput } from '../../prompt/compaction/toolCompaction.js';
 import { isModelNotFoundError, nextFallbackModel, shouldFallbackModel } from '../../provider/modelFallback.js';
 import { resolveLocalModelProfile, localModelProfileActive, isLocalModelCoreTool } from '../../provider/modelFamily.js';
 import { currentTier, detectNeedsHigh, nextTier, resolveTierLadder, stripNeedsHigh } from '../../provider/tierLadder.js';
+import { switchModelToolAvailable } from '../../provider/llmProfiles.js';
 import { drainCompletions, formatCompletionFeedback } from '../../session/completion/completionInbox.js';
 import { resolveActiveMode } from '../../session/state/sessionModeStore.js';
 import { isInternalSessionKey } from '../../session/transcript/sessionStore.js';
@@ -175,6 +176,11 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       !this.computerUsePort ||
       this.silent ||
       !!cliKnobs.brainUrl;
+    // MC-D3 — switch_model is offered ONLY when the install has 2+ named LLM
+    // profiles (cli.llmProfiles): with 0–1 there is nothing to switch between,
+    // so the surface stays hidden and default behavior is unchanged.
+    const llmProfileNames = Object.keys(cliKnobs.llmProfiles ?? {}).sort();
+    const hideSwitchModel = !switchModelToolAvailable(cliKnobs.llmProfiles);
     // §5.4 — when progressive discovery is OFF (default) the discovery entry
     // points stay hidden; when ON they're exposed and the full MCP catalog is
     // collapsed below so the model searches for tools instead of carrying them all.
@@ -203,12 +209,22 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         !MODEL_HIDDEN_TOOLS.has(t.name) &&
         !(hideWorkerTools && WORKER_THREAD_TOOLS.has(t.name)) &&
         !(hideComputerUse && t.name === 'computer_use') &&
+        !(hideSwitchModel && t.name === 'switch_model') &&
         !(!mcpDiscoveryOn && MCP_DISCOVERY_TOOLS.has(t.name));
       if (!hardVisible) return false;
       // SOFT gate = the local-model L2 allowlist; the override flips it.
       const softVisible = !(localToolScope && !isLocalModelCoreTool(t.name));
       return resolveToolVisible(t.name, softVisible, toolOverrides);
     });
+    // MC-D3 — when switch_model is offered, append the concrete profile names to
+    // its description so the model can pick a valid target without guessing.
+    // New spec object (like the flatten pass below) so the shared registry
+    // schema is never mutated.
+    if (!hideSwitchModel) {
+      filteredLocalTools = filteredLocalTools.map((t) => t.name === 'switch_model'
+        ? { ...t, description: `${t.description} Configured profiles: ${llmProfileNames.join(', ')}.` }
+        : t);
+    }
     // HONK-L3 — for local models, flatten deep/wide tool schemas (the dormant,
     // tested repair pass) so they stop dropping nested args; `nestArguments` at
     // dispatch (executeLocalTool) reverses it. Returns NEW spec objects so the
