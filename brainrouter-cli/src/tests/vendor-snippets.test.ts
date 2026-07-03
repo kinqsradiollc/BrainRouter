@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { VENDORS, displayPath, getVendor, listVendors, renderSnippet } from '../runtime/vendorSnippets.js';
+import { VENDORS, displayPath, getVendor, listVendors, renderSnippet } from '../runtime/platform/vendorSnippets.js';
 import { runMcpInstall } from '../cli/commands/mcpInstall/index.js';
 import type { Config } from '@kinqs/brainrouter-core/config';
 

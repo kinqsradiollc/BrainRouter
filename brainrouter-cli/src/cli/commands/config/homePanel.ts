@@ -7,8 +7,8 @@ import type { CommandContext } from '../_context.js';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import { listProviderNames, describeAgentModel, SUBAGENT_ROLES } from '@kinqs/brainrouter-core/provider';
 import { readPreferences, resolveEffort } from '@kinqs/brainrouter-core/session';
-import { buildTheme } from '../../theme.js';
-import type { PickerRow } from '../../ink/runPicker.js';
+import { buildTheme } from '../../theme/theme.js';
+import type { PickerRow } from '../../ink/prompt/runPicker.js';
 import { pickFromList, findDefaultProviderName } from './shared.js';
 import {
   editDefaultProvider, editProviders, editWebSearch, editAgentModels, editTheme,

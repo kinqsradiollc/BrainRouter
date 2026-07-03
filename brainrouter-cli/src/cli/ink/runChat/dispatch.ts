@@ -3,8 +3,8 @@ import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import { readPreferences } from '@kinqs/brainrouter-core/session';
 import { resolveSandboxConfig, runShell } from '@kinqs/brainrouter-core/exec';
 import { parseBangCommand, parseNoteCommand } from '../../../runtime/exec/bangCommand.js';
-import { handleSlashCommand } from '../../repl.js';
-import { captureConsoleOutput } from '../consoleCapture.js';
+import { handleSlashCommand } from '../../prompt/repl.js';
+import { captureConsoleOutput } from '../terminal/consoleCapture.js';
 import type { PushScrollback } from '../ChatApp.js';
 import type { RunChatContext } from './context.js';
 

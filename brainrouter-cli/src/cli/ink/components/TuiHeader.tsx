@@ -1,6 +1,6 @@
 import React from 'react';
 import { Box, Text } from 'ink';
-import type { Theme } from '../../theme.js';
+import type { Theme } from '../../theme/theme.js';
 import { VERSION } from '@kinqs/brainrouter-core/version';
 
 interface TuiHeaderProps {

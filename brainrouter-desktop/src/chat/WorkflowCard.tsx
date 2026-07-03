@@ -6,7 +6,7 @@
 import React from 'react';
 import type { WorkflowDetail } from '../types.js';
 import { fmtTokens, fmtDur, wfStatusClass } from '../lib/format.js';
-import { WorkElapsed } from '../components/WorkElapsed.js';
+import { WorkElapsed } from '../components/status/WorkElapsed.js';
 
 export function WorkflowCard({ wf, onBack }: { wf: WorkflowDetail; onBack: () => void }): React.ReactElement {
   const started = new Date(wf.startedAt).getTime();

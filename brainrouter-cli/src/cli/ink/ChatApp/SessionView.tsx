@@ -4,13 +4,13 @@
 // streaming assistant row. Presentational only (props in, JSX out); no state.
 import React from 'react';
 import { Box, Text } from 'ink';
-import { ScrollbackRow } from '../ScrollbackRow.js';
+import { ScrollbackRow } from '../chat/ScrollbackRow.js';
 import {
   REASONING_TAIL_CHARS,
   REASONING_VISIBLE_LINES,
   tailReasoning,
   buildReasoningWindow,
-} from '../reasoningWindow.js';
+} from '../text/reasoningWindow.js';
 import type { ScrollbackEntry, VisibleSlice } from './types.js';
 
 export interface SessionViewProps {

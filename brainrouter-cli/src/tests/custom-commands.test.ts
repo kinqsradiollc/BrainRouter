@@ -9,7 +9,7 @@ import {
   loadCustomCommands,
   findCustomCommand,
   customCommandsDir,
-} from '../runtime/customCommands.js';
+} from '../runtime/commands/customCommands.js';
 
 test('parseCustomCommand: frontmatter description + body', () => {
   const def = parseCustomCommand('sec-review.md', '---\ndescription: Security review\n---\nReview the diff: $ARGUMENTS\n');

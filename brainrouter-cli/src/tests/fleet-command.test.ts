@@ -1,7 +1,7 @@
 /** HONK-H4 — `brainrouter fleet` command helpers (pure). */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseRepoList, buildMigrationSpec, validateRunArgs, formatFleetStatus, fleetSnapshotPushArgs } from '../runtime/fleetCommand.js';
+import { parseRepoList, buildMigrationSpec, validateRunArgs, formatFleetStatus, fleetSnapshotPushArgs } from '../runtime/fleet/fleetCommand.js';
 import type { FleetSummary, FleetLockRecord } from '@kinqs/brainrouter-core/fleet';
 
 test('parseRepoList splits, trims, de-dups, and resolves to absolute paths', () => {

@@ -8,8 +8,8 @@
 import chalk from 'chalk';
 import { collectRunningTasks, formatBackgroundTasks, summarizeTasks } from '@kinqs/brainrouter-core/background';
 import { getSession, listSessions, reconcileStale, updateSession } from '@kinqs/brainrouter-core/orchestration';
-import { resolveBackgroundTarget, describeStopOutcome } from '../../../runtime/bgDetach.js';
-import { getLoopState, stopLoop } from '../../../runtime/loopRunner.js';
+import { resolveBackgroundTarget, describeStopOutcome } from '../../../runtime/background/bgDetach.js';
+import { getLoopState, stopLoop } from '../../../runtime/background/loopRunner.js';
 import { listWorkers, closeWorker } from '@kinqs/brainrouter-core/worker';
 import type { CommandContext } from '../_context.js';
 import { renderWorkerSnapshot } from './_shared.js';

@@ -15,9 +15,9 @@ import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph } 
 import type { CommandsCatalog } from '../../commands/commands.js';
 import type { ConfigSnapshot, UsageHistory } from '../../../settings.js';
 import { parseWorktreeList } from '../../worktree/worktreeParser.js';
-import { mergeOptimistic, dropPending } from '../../session/sessionOrder.js';
-import { normalizeProjectSessionsResult, withCachedProjectSessions } from '../../session/projectSessionsView.js';
-import { shouldApplyTaskTranscript, shouldApplyWorkflowDetail } from '../../session/taskTranscriptRouting.js';
+import { mergeOptimistic, dropPending } from '../../session/list/sessionOrder.js';
+import { normalizeProjectSessionsResult, withCachedProjectSessions } from '../../session/workspaces/projectSessionsView.js';
+import { shouldApplyTaskTranscript, shouldApplyWorkflowDetail } from '../../session/routing/taskTranscriptRouting.js';
 import { setEntry, shouldProceedGate } from '../../review/reviewWorkspace.js';
 import { parseQueryId, isStaleQueryResult } from '../../workspace/workspaceEvents.js';
 import { fmt, download } from '../../format.js';
@@ -627,11 +627,11 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
       }
       case 'q-goal':
         // GOAL-BANNER — the structured active goal for the pinned banner (null = none).
-        setGoalState((result ?? null) as import('../../../components/GoalBanner.js').GoalRecord | null);
+        setGoalState((result ?? null) as import('../../../components/chat/GoalBanner.js').GoalRecord | null);
         return;
       case 'a-goal-edit': {
         const r = result as { ok?: boolean; goal?: unknown; error?: string } | null;
-        if (r && r.ok && r.goal) setGoalState(r.goal as import('../../../components/GoalBanner.js').GoalRecord);
+        if (r && r.ok && r.goal) setGoalState(r.goal as import('../../../components/chat/GoalBanner.js').GoalRecord);
         else if (r && r.error) setToast(r.error);
         return;
       }

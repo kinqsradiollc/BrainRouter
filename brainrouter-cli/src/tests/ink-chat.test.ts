@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { captureConsoleOutput } from '../cli/ink/consoleCapture.js';
+import { captureConsoleOutput } from '../cli/ink/terminal/consoleCapture.js';
 import { filterPaletteCommands, tailReasoning, REASONING_TAIL_CHARS, buildReasoningWindow, REASONING_VISIBLE_LINES, effortIndicator } from '../cli/ink/ChatApp.js';
 
 test('effortIndicator: every effort level (incl. xhigh + max alias) has a glyph', () => {

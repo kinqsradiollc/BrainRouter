@@ -16,7 +16,7 @@ import {
   type ExecutionMode,
   type ReviewPolicy,
 } from '@kinqs/brainrouter-core/session';
-import { isKnownSegment } from '../../statusline.js';
+import { isKnownSegment } from '../../view/statusline.js';
 import {
   TRUE_WORDS, FALSE_WORDS, ensureWebSearchConfig, findDefaultProviderName,
   setDefaultProvider, type ConfigKeyHandler,

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { __test } from '../cli/wizard/picker.js';
-import { buildTheme } from '../cli/theme.js';
+import { buildTheme } from '../cli/theme/theme.js';
 
 // All tests target the pure helpers exposed via `__test`. The
 // interactive runtime side (`pickFromList`, `promptText`) is wired to

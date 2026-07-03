@@ -6,13 +6,13 @@ import { resolveSessionLlmConfig } from '@kinqs/brainrouter-core/session';
 import { McpClientPool, selectMcpServerIds, applyBrainUrlOverride, probeBrainHealth, embeddedBrainId } from '@kinqs/brainrouter-core/mcp';
 import { VERSION } from '@kinqs/brainrouter-core/version';
 import { loadExtensions } from '@kinqs/brainrouter-core/extension';
-import { setKnownMcpServerIds } from '../cli/ink/toolFormat.js';
+import { setKnownMcpServerIds } from '../cli/ink/text/toolFormat.js';
 import type { ServerConfig } from '@kinqs/brainrouter-core/config';
 import { Agent } from '@kinqs/brainrouter-core/agent';
-import { cliPrompter } from '../cli/cliPrompt.js';
+import { cliPrompter } from '../cli/prompt/cliPrompt.js';
 import { runChat } from '../cli/ink/runChat.js';
 import { applyWorkspaceRoot, findWorkspaceRoot } from '@kinqs/brainrouter-core/workspace';
-import { runWizard, isOnboarded } from '../cli/ink/runWizard.js';
+import { runWizard, isOnboarded } from '../cli/ink/wizard/runWizard.js';
 import { DEFAULT_LLM } from './shared.js';
 
 export function registerChatCommand(program: Command): void {
@@ -207,7 +207,7 @@ export function registerChatCommand(program: Command): void {
       // chat session and rotates per-launch) so clean restarts refresh
       // the registry row instead of stacking ghosts.
       const { attachFederation, resolveFederationSessionKey } = await import(
-        '../runtime/federationRegistration.js'
+        '../runtime/federation/federationRegistration.js'
       );
       const federationKey = resolveFederationSessionKey(workspace.workspaceRoot);
       agent.setFederationSessionKey(federationKey);
@@ -221,7 +221,7 @@ export function registerChatCommand(program: Command): void {
         // is the only kind we surface in 0.4.0, other kinds stay in the
         // inbox for Stage 4 / multi-agent Phase 2 consumers.
         onInboxText: async (messages) => {
-          const { renderIncomingMessages } = await import('../cli/incomingBanner.js');
+          const { renderIncomingMessages } = await import('../cli/view/incomingBanner.js');
           renderIncomingMessages(messages);
         },
       });

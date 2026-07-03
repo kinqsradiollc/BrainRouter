@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { BgRunRegistry, formatBgRuns } from '../runtime/bgRuns.js';
+import { BgRunRegistry, formatBgRuns } from '../runtime/background/bgRuns.js';
 
 test('CLI-4 BgRunRegistry: lifecycle running → done/failed/stopped', () => {
   const reg = new BgRunRegistry();

@@ -50,9 +50,9 @@ vi.mock("../memory/engine.js", () => ({
 
 async function createServer() {
   const [{ workingRouter }, { hooksRouter }, { scenesRouter }] = await Promise.all([
-    import("../api/routes/working.js"),
-    import("../api/routes/hooks.js"),
-    import("../api/routes/scenes.js"),
+    import("../api/routes/memory/working.js"),
+    import("../api/routes/agent/hooks.js"),
+    import("../api/routes/memory/scenes.js"),
   ]);
   const app = express();
   app.use(express.json());

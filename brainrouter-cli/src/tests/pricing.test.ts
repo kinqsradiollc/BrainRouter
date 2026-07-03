@@ -7,7 +7,7 @@ import {
   costUsd,
   formatCostBadge,
   pricingFor,
-} from '../runtime/pricing.js';
+} from '../runtime/reporting/pricing.js';
 
 test('pricingFor returns the built-in row for known models', () => {
   // 0.3.9 removed the Anthropic built-ins. Use the OpenAI / DeepSeek

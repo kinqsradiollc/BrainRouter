@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { filterAndSort, scoreSlashCommand, type SlashCommand } from '../cli/slashSuggest.js';
+import { filterAndSort, scoreSlashCommand, type SlashCommand } from '../cli/prompt/slashSuggest.js';
 
 const COMMANDS: SlashCommand[] = [
   { cmd: '/help',    description: 'Get help with commands' },

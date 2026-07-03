@@ -1,5 +1,5 @@
 import readline from 'node:readline';
-import { getActiveReadline, setActiveReadline } from '../../cliPrompt.js';
+import { getActiveReadline, setActiveReadline } from '../../prompt/cliPrompt.js';
 
 // --- Module-level shared state ----------------------------------------
 

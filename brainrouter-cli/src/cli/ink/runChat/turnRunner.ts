@@ -1,11 +1,11 @@
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import { readPreferences } from '@kinqs/brainrouter-core/session';
 import { beginTurnCheckpoint, endTurnCheckpoint, queueOfflinePrompt, isConnectivityError } from '@kinqs/brainrouter-core/storage';
-import { shouldAutoExtractSkill, buildSessionSummary } from '../../../runtime/autoSkill.js';
+import { shouldAutoExtractSkill, buildSessionSummary } from '../../../runtime/commands/autoSkill.js';
 import { callMcpTool } from '@kinqs/brainrouter-core/mcp';
-import { toolPairKey } from '../../../runtime/toolPairing.js';
+import { toolPairKey } from '../../../runtime/observability/toolPairing.js';
 import { expandMentions } from '../../../memory/mentions.js';
-import { formatToolCall } from '../toolFormat.js';
+import { formatToolCall } from '../text/toolFormat.js';
 import type { RunChatContext } from './context.js';
 
 /**
@@ -68,7 +68,7 @@ export function installTurnRunner(ctx: RunChatContext): void {
     // formatted call (`Read(src/foo.ts)`) instead of just the bare name.
     // The map key is the LLM tool_call id when present (so parallel same-name calls
     // pair to their OWN start row), falling back to the tool name when a provider
-    // omits ids. See runtime/toolPairing.ts (toolPairKey).
+    // omits ids. See runtime/observability/toolPairing.ts (toolPairKey).
     const toolStartTimes = new Map<string, number>();
     const toolArgsSnapshot = new Map<string, Record<string, any>>();
     // In-flight LOCAL tool calls, so a parallel batch shows ALL of them running

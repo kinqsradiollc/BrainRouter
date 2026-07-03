@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseInterval, isLoopRunning, startLoop, stopLoop, getLoopState } from '../runtime/loopRunner.js';
+import { parseInterval, isLoopRunning, startLoop, stopLoop, getLoopState } from '../runtime/background/loopRunner.js';
 import { resolveSandboxConfig, decideUnavailableSandbox, detectSandboxDenial, isDangerousCommand, resolveRunCommandApproval } from '@kinqs/brainrouter-core/exec';
 import { startSpan, traceEnabled } from '@kinqs/brainrouter-core/telemetry';
 

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { renderIncomingMessages } from '../cli/incomingBanner.js';
+import { renderIncomingMessages } from '../cli/view/incomingBanner.js';
 
 function stripAnsi(s: string): string {
   return s.replace(/\x1b\[[0-9;]*m/g, '');

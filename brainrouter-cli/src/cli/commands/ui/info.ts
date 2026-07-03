@@ -9,8 +9,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import chalk from 'chalk';
-import { copyToClipboard } from '../../../runtime/clipboard.js';
-import { completeWorkspacePath, renderHelp } from '../../repl.js';
+import { copyToClipboard } from '../../../runtime/platform/clipboard.js';
+import { completeWorkspacePath, renderHelp } from '../../prompt/repl.js';
 import { listFilesystemSkills } from '../../../prompt/skillCatalog.js';
 import type { CommandContext } from '../_context.js';
 

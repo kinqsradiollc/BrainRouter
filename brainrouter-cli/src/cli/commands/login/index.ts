@@ -3,10 +3,10 @@ import type { CommandContext } from '../_context.js';
 import { saveConfig, type ServerConfig } from '@kinqs/brainrouter-core/config';
 import { McpClientWrapper } from '@kinqs/brainrouter-core/mcp';
 import { maskApiKey } from '@kinqs/brainrouter-core/provider';
-import { runPicker, runTextField } from '../../ink/runPicker.js';
+import { runPicker, runTextField } from '../../ink/prompt/runPicker.js';
 const pickFromList = runPicker;
 const promptText = runTextField;
-import { buildTheme, type Theme } from '../../theme.js';
+import { buildTheme, type Theme } from '../../theme/theme.js';
 import { readPreferences } from '@kinqs/brainrouter-core/session';
 import { editLlm, promptBrainrouterApiKey } from '../config/index.js';
 

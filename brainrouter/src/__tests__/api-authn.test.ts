@@ -20,7 +20,7 @@ vi.mock("../memory/engine.js", () => ({
 
 import { jwtSecretBootError, JWT_SECRET, bearerFrom } from "../api/middleware/auth.js";
 import type { AuthedRequest } from "../api/middleware/auth.js";
-import { authRouter } from "../api/routes/auth.js";
+import { authRouter } from "../api/routes/identity/auth.js";
 import { signJwt } from "../api/auth/crypto.js";
 
 describe("API-AUTHN — bearerFrom (shared header extraction)", () => {

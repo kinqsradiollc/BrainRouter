@@ -15,19 +15,19 @@ import type { TrackProject, WorkItem, WorkItemType, WorkItemPriority, Sprint, Mo
 import { parseTrackQuery } from '../lib/track/query.js';
 import { Icon } from '../icons.js';
 import { TrackDetail } from './TrackDetail.js';
-import { PRIORITY_RANK, type SyncConfig, type SyncResult, type GitTrackContext, type TrackPrStatus, type TrackOps } from './TrackView/types.js';
-import { looksLikeQuery, FilterChip, Compose, Card, ViewsMenu } from './TrackView/helpers.js';
-import { SpreadsheetView, CalendarView, GanttView } from './TrackView/LayoutViews.js';
-import { ListView, BacklogView, SprintView, RoadmapView } from './TrackView/ListViews.js';
-import { ModulesView, ReportsView } from './TrackView/PanelViews.js';
-import { AutomationView } from './TrackView/AutomationView.js';
-import { MembersView } from './TrackView/MembersView.js';
-import { SyncView } from './TrackView/SyncView.js';
+import { PRIORITY_RANK, type SyncConfig, type SyncResult, type GitTrackContext, type TrackPrStatus, type TrackOps } from './TrackView/shared/types.js';
+import { looksLikeQuery, FilterChip, Compose, Card, ViewsMenu } from './TrackView/shared/helpers.js';
+import { SpreadsheetView, CalendarView, GanttView } from './TrackView/views/LayoutViews.js';
+import { ListView, BacklogView, SprintView, RoadmapView } from './TrackView/views/ListViews.js';
+import { ModulesView, ReportsView } from './TrackView/views/PanelViews.js';
+import { AutomationView } from './TrackView/views/AutomationView.js';
+import { MembersView } from './TrackView/views/MembersView.js';
+import { SyncView } from './TrackView/views/SyncView.js';
 
 // Re-export the module's public surface so `./TrackView.js` importers are
 // unaffected by the split.
-export { TYPE_ICON, PRIORITY_RANK } from './TrackView/types.js';
-export type { SyncRepoConfig, SyncConfig, SyncRow, SyncResult, GitTrackRemote, GitTrackContext, TrackPrStatus, TrackOps } from './TrackView/types.js';
+export { TYPE_ICON, PRIORITY_RANK } from './TrackView/shared/types.js';
+export type { SyncRepoConfig, SyncConfig, SyncRow, SyncResult, GitTrackRemote, GitTrackContext, TrackPrStatus, TrackOps } from './TrackView/shared/types.js';
 
 export interface TrackViewProps {
   project: TrackProject | null;

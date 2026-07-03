@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { callOpenAIStream } from '@kinqs/brainrouter-core/agent';
-import { extractAtToken, applyAtCompletion, getFileIndex, matchFiles } from '../cli/ink/fileIndex.js';
+import { extractAtToken, applyAtCompletion, getFileIndex, matchFiles } from '../cli/ink/chat/fileIndex.js';
 
 /**
  * Spin up a tiny TCP server that pretends to be the OpenAI chat-completions

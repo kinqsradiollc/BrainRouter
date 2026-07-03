@@ -5,7 +5,7 @@ import {
   cosineSim,
   isDuplicate,
   type DedupCandidate,
-} from "../memory/pipeline/apply-dedup.js";
+} from "../memory/pipeline/cognitive/apply-dedup.js";
 
 describe("AUG-A2 apply-time dedup", () => {
   it("resolveDedupMode defaults to off; accepts strict|fuzzy only", () => {

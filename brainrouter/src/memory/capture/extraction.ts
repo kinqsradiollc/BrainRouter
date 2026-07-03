@@ -1,15 +1,15 @@
 import type { CognitiveExtractionStatus } from "@kinqs/brainrouter-types";
-import { extractCognitiveMemories } from "../pipeline/cognitive-extractor.js";
-import { deduplicateMemories } from "../pipeline/cognitive-dedup.js";
-import { detectContradictions } from "../pipeline/cognitive-contradiction.js";
-import { buildGraphFromCognitive } from "../pipeline/graph-builder.js";
-import { distillFocusScenes } from "../pipeline/contextual-focus-builder.js";
-import { distillCoreIdentity } from "../pipeline/identity-distiller.js";
-import { detectFocusShift } from "../pipeline/focus-direction-shift.js";
+import { extractCognitiveMemories } from "../pipeline/cognitive/cognitive-extractor.js";
+import { deduplicateMemories } from "../pipeline/cognitive/cognitive-dedup.js";
+import { detectContradictions } from "../pipeline/cognitive/cognitive-contradiction.js";
+import { buildGraphFromCognitive } from "../pipeline/graph/graph-builder.js";
+import { distillFocusScenes } from "../pipeline/focus/contextual-focus-builder.js";
+import { distillCoreIdentity } from "../pipeline/identity/identity-distiller.js";
+import { detectFocusShift } from "../pipeline/focus/focus-direction-shift.js";
 import { shouldRunFocusDistill, shouldRunIdentityDistill } from "../scheduler.js";
 import { runAsJob } from "../scheduler/runner.js";
-import { resolveDedupMode, contentHash, isDuplicate, type DedupCandidate } from "../pipeline/apply-dedup.js";
-import { NeuralSparkEngine } from "../pipeline/neural-spark.js";
+import { resolveDedupMode, contentHash, isDuplicate, type DedupCandidate } from "../pipeline/cognitive/apply-dedup.js";
+import { NeuralSparkEngine } from "../pipeline/skill/neural-spark.js";
 import { CapturePersistence } from "./persistence.js";
 
 /**

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { searchHistory } from '../runtime/inputHistory.js';
+import { searchHistory } from '../runtime/input/inputHistory.js';
 
 const H = ['fix the bug', 'npm run build', 'fix the tests', 'git status', 'Fix typo in readme'];
 

@@ -3,9 +3,9 @@ import { Box, Text } from 'ink';
 import Spinner from 'ink-spinner';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Frame } from '../Frame.js';
-import { Picker, type PickerResult, type PickerRow } from '../Picker.js';
-import { TextField } from '../TextField.js';
+import { Frame } from '../prompt/Frame.js';
+import { Picker, type PickerResult, type PickerRow } from '../prompt/Picker.js';
+import { TextField } from '../prompt/TextField.js';
 import {
   PROVIDER_CATALOG,
   type ProviderEntry,
@@ -19,7 +19,7 @@ import {
   type WizardState,
 } from '../../wizard/types.js';
 import { fetchOpenAiCompatibleModels } from '../../wizard/modelsApi.js';
-import type { ThemeMode } from '../../theme.js';
+import type { ThemeMode } from '../../theme/theme.js';
 import { progressBadge } from './shared.js';
 import { formatMcpForBadge, probeMcp } from './mcpProbe.js';
 

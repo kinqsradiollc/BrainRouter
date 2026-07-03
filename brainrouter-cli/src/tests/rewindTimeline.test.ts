@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { previewText, buildRewindTimeline, truncateAtTurn } from '../runtime/rewindTimeline.js';
+import { previewText, buildRewindTimeline, truncateAtTurn } from '../runtime/observability/rewindTimeline.js';
 import type { TranscriptEntry } from '@kinqs/brainrouter-core/session';
 
 const u = (text: string, ts: string): TranscriptEntry => ({ role: 'user', content: text, timestamp: ts });

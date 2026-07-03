@@ -1,4 +1,4 @@
-import { startScheduleTicker } from '../../../runtime/scheduleTicker.js';
+import { startScheduleTicker } from '../../../runtime/background/scheduleTicker.js';
 import type { RunChatContext } from './context.js';
 
 /**

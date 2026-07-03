@@ -7,12 +7,12 @@
 // inline `useInput` callback; only the closed-over state/setters/refs are now
 // passed in via a params bag so the precedence is explicit and testable.
 import { useInput } from 'ink';
-import { historyPrev, historyNext, searchHistory, LIVE } from '../../../runtime/inputHistory.js';
-import { applyFlagCompletion } from '../../../runtime/slashFlags.js';
-import { applyAtCompletion } from '../fileIndex.js';
+import { historyPrev, historyNext, searchHistory, LIVE } from '../../../runtime/input/inputHistory.js';
+import { applyFlagCompletion } from '../../../runtime/input/slashFlags.js';
+import { applyAtCompletion } from '../chat/fileIndex.js';
 import { type TuiRoute } from '../TuiRouter.js';
-import type { SlashCommandDef } from '../SlashPalette.js';
-import type { FlagDef } from '../../../runtime/slashFlags.js';
+import type { SlashCommandDef } from '../prompt/SlashPalette.js';
+import type { FlagDef } from '../../../runtime/input/slashFlags.js';
 import type { PushScrollback } from './types.js';
 
 export interface ChatInputParams {

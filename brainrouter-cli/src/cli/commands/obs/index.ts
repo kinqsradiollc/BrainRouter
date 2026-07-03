@@ -9,9 +9,9 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import chalk from 'chalk';
 import { listSessions } from '@kinqs/brainrouter-core/orchestration';
-import { formatContextReport } from '../../../runtime/contextReport.js';
-import { formatMemoryDecisions } from '../../../runtime/memoryDecisionView.js';
-import { formatOffloadList, formatOffloadGraph, type OffloadStep } from '../../../runtime/offloadView.js';
+import { formatContextReport } from '../../../runtime/observability/contextReport.js';
+import { formatMemoryDecisions } from '../../../runtime/observability/memoryDecisionView.js';
+import { formatOffloadList, formatOffloadGraph, type OffloadStep } from '../../../runtime/observability/offloadView.js';
 import { contextWindowFor } from '@kinqs/brainrouter-core/context';
 import { readPreferences, readTranscriptEntries } from '@kinqs/brainrouter-core/session';
 import { getStateFile } from '@kinqs/brainrouter-core/storage';
@@ -209,10 +209,10 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
 
       // 0.3.9 item 14 — cost panel. Per-turn USD, session USD, and the
       // cache-savings line. Costs are computed from the active model's
-      // built-in pricing row (`runtime/pricing.ts`), overridable via
+      // built-in pricing row (`runtime/reporting/pricing.ts`), overridable via
       // `~/.config/brainrouter/pricing.json` for users who want exact
       // billing parity with their actual contract.
-      const { buildCostSummary, costUsd } = await import('../../../runtime/pricing.js');
+      const { buildCostSummary, costUsd } = await import('../../../runtime/reporting/pricing.js');
       const costModel = agent.getModel();
       // COST-CHILDREN — the SESSION cost INCLUDES child agents (a fan-out is often the
       // bulk of the spend, yet was invisible here). Their usage records carry no

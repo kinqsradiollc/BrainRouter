@@ -42,23 +42,20 @@ import { recordHttp, routeBucket, renderPrometheus, metricsSnapshot } from './ob
 import { memoryEngine, closeMemoryEngine } from './memory/engine.js';
 import path from 'node:path';
 import { decideMcpAcceptPromotion } from './api/mcpAcceptHeader.js';
-import { usersRouter } from './api/routes/users.js';
-import { memoriesRouter } from './api/routes/memories.js';
-import { scenesRouter } from './api/routes/scenes.js';
-import { personaRouter } from './api/routes/persona.js';
-import { sessionsRouter } from './api/routes/sessions.js';
-import { contradictionsRouter } from './api/routes/contradictions.js';
-import { statsRouter } from './api/routes/stats.js';
-import { brainRouter } from './api/routes/brain.js';
-import { graphRouter } from './api/routes/graph.js';
-import { authRouter } from './api/routes/auth.js';
+import { authRouter, usersRouter, sessionsRouter } from './api/routes/identity/index.js';
+import {
+  memoriesRouter,
+  contradictionsRouter,
+  evidenceRouter,
+  graphRouter,
+  scenesRouter,
+  personaRouter,
+  statsRouter,
+  skillsRouter,
+  workingRouter,
+} from './api/routes/memory/index.js';
+import { brainRouter, fleetRouter, hooksRouter, governanceRouter } from './api/routes/agent/index.js';
 import { chatCompletionsRouter } from './api/routes/chat-completions.js';
-import { governanceRouter } from './api/routes/governance.js';
-import { evidenceRouter } from './api/routes/evidence.js';
-import { fleetRouter } from './api/routes/fleet.js';
-import { hooksRouter } from './api/routes/hooks.js';
-import { workingRouter } from './api/routes/working.js';
-import { skillsRouter } from './api/routes/skills.js';
 import { USING_FALLBACK_JWT_SECRET, IS_PRODUCTION, jwtSecretBootError } from './api/middleware/auth.js';
 import { securityHeaders, corsMiddleware } from './api/middleware/securityHeaders.js';
 import { resolveJsonBodyLimit, payloadTooLargeHandler } from './api/bodyLimit.js';

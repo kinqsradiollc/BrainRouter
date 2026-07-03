@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { renderMarkdown, unwrapMarkdownFences, preserveAnsiAcrossNewlines, extractMarkdownSegments, fitColumns, renderTable } from '../cli/ink/markdownRender.js';
+import { renderMarkdown, unwrapMarkdownFences, preserveAnsiAcrossNewlines, extractMarkdownSegments, fitColumns, renderTable } from '../cli/ink/text/markdownRender.js';
 
 const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
 const displayWidth = (s: string) => [...stripAnsi(s)].length;

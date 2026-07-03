@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { appendHistory, historyPrev, historyNext, LIVE } from '../runtime/inputHistory.js';
-import { flagSuggestions, applyFlagCompletion, COMMAND_FLAGS } from '../runtime/slashFlags.js';
+import { appendHistory, historyPrev, historyNext, LIVE } from '../runtime/input/inputHistory.js';
+import { flagSuggestions, applyFlagCompletion, COMMAND_FLAGS } from '../runtime/input/slashFlags.js';
 
 // ── inputHistory ───────────────────────────────────────────────────────────
 

@@ -16,7 +16,7 @@ import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph } 
 import type { CommandsCatalog } from '../../commands/commands.js';
 import type { ConfigSnapshot, UsageHistory } from '../../../settings.js';
 import { type WorktreeEntry } from '../../worktree/worktreeParser.js';
-import { type ProjectSessionsByRoot } from '../../session/projectSessionsView.js';
+import { type ProjectSessionsByRoot } from '../../session/workspaces/projectSessionsView.js';
 
 export type InfoState = { sessionKey?: string; model?: string; workspaceRoot?: string; username?: string };
 export type GitInfoState = { repo: string; branch: string | null; insertions: number; deletions: number; gitRoot?: string | null; repoRelativePath?: string; isSubdir?: boolean } | null;
@@ -51,7 +51,7 @@ export interface AgentEventsCtx {
   setLiveChildren: React.Dispatch<React.SetStateAction<Record<string, { childId: string; role: string; tool?: string; startedAt: number }>>>;
   setFinishedTasks: React.Dispatch<React.SetStateAction<Array<{ id: string; label: string; status: string }>>>;
   setLastPlan: React.Dispatch<React.SetStateAction<{ items: PlanItem[]; explanation?: string } | null>>;
-  setGoalState: React.Dispatch<React.SetStateAction<import('../../../components/GoalBanner.js').GoalRecord | null>>;
+  setGoalState: React.Dispatch<React.SetStateAction<import('../../../components/chat/GoalBanner.js').GoalRecord | null>>;
   setPlanHistory: React.Dispatch<React.SetStateAction<PlanDecisionView[]>>;
   setTokens: React.Dispatch<React.SetStateAction<{ promptTokens: number; completionTokens: number; turns: number; cachedTokens?: number } | null>>;
   // LIVE per-call usage for the in-flight turn (cleared at turn-start/end) so the

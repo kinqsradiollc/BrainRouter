@@ -20,7 +20,7 @@ import {
   operationRowToRecord,
   pg,
 } from "../converters.js";
-import { expandImportRecord, readImportChunkChars } from "../../../pipeline/chunk-import.js";
+import { expandImportRecord, readImportChunkChars } from "../../../pipeline/ingest/chunk-import.js";
 import type { Executor } from "./executor.js";
 import { upsertCognitiveMeta, replaceFileIndexTx } from "./cognitiveQueries.js";
 

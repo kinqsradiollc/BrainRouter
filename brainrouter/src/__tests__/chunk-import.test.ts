@@ -5,7 +5,7 @@ import {
   expandImportRecord,
   readImportChunkChars,
   IMPORT_CHUNK_DEFAULT_CHARS,
-} from "../memory/pipeline/chunk-import.js";
+} from "../memory/pipeline/ingest/chunk-import.js";
 
 describe("chunkContent", () => {
   it("returns content unchanged when within budget or disabled", () => {

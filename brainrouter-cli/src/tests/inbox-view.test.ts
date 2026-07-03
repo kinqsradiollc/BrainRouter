@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { groupInboxByKind, formatInboxPane } from '../runtime/inboxView.js';
+import { groupInboxByKind, formatInboxPane } from '../runtime/federation/inboxView.js';
 
 const msgs = [
   { id: 'a1', fromSessionKey: 'sess-aaaa', kind: 'text', payload: { text: 'hello there' }, createdAt: 't' },

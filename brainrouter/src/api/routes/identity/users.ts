@@ -1,0 +1,87 @@
+import { Router } from "express";
+import { randomBytes } from "node:crypto";
+import { memoryEngine } from "../../../memory/engine.js";
+import { requireJwt, requireAdmin, type AuthedRequest } from "../../middleware/auth.js";
+import { decodeCursor, pageItems, PaginationQuerySchema } from "../../pagination.js";
+import { sendError } from "../../../contracts/http.js";
+
+export const usersRouter = Router();
+usersRouter.use(requireJwt, requireAdmin);
+
+usersRouter.get("/", async (req, res) => {
+  try {
+    const pagination = PaginationQuerySchema.parse(req.query);
+    const users = (await memoryEngine.listUsers({
+      cursor: decodeCursor<{ createdAt: string; userId: string }>(pagination.cursor),
+      limit: pagination.limit + 1,
+    })).map((u) => ({
+      userId: u.userId,
+      displayName: u.displayName,
+      email: u.email,
+      isAdmin: u.isAdmin,
+      status: u.status,
+      createdAt: u.createdAt,
+    }));
+    const page = pageItems(users, pagination.limit, (user) => ({
+      createdAt: user.createdAt,
+      userId: user.userId,
+    }));
+    res.json({ users: page.items, nextCursor: page.nextCursor, limit: pagination.limit, hasMore: Boolean(page.nextCursor) });
+  } catch (error) {
+    sendError(res, 400, error instanceof Error ? error.message : "Invalid pagination parameters");
+  }
+});
+
+usersRouter.post("/", async (req: AuthedRequest, res) => {
+  const userId = String(req.body?.userId ?? "").trim();
+  if (!userId) {
+    sendError(res, 400, "userId is required");
+    return;
+  }
+  const displayName = String(req.body?.displayName ?? "").trim();
+  const isAdmin = Boolean(req.body?.isAdmin);
+  const apiKey = `br_${randomBytes(24).toString("hex")}`;
+  try {
+    const user = await memoryEngine.createUser(userId, apiKey, displayName, isAdmin);
+    res.status(201).json({ user });
+  } catch (error: any) {
+    sendError(res, 400, error?.message ?? "Failed to create user");
+  }
+});
+
+usersRouter.put("/:id/status", async (req: AuthedRequest, res) => {
+  const userId = String(req.params.id);
+  const status = req.body?.status === "disabled" ? "disabled" : req.body?.status === "active" ? "active" : null;
+  if (!status) {
+    sendError(res, 400, "status must be active or disabled");
+    return;
+  }
+  if (userId === req.userId && status === "disabled") {
+    sendError(res, 400, "Cannot disable the current admin user");
+    return;
+  }
+  await memoryEngine.updateUserStatus(userId, status);
+  res.json({ success: true });
+});
+
+usersRouter.post("/:id/reset-key", async (req, res) => {
+  const userId = String(req.params.id);
+  const user = await memoryEngine.getUserById(userId);
+  if (!user) {
+    sendError(res, 404, "User not found");
+    return;
+  }
+  const apiKey = `br_${randomBytes(24).toString("hex")}`;
+  await memoryEngine.updateUserApiKey(userId, apiKey);
+  res.json({ apiKey });
+});
+
+usersRouter.delete("/:id", async (req: AuthedRequest, res) => {
+  const userId = String(req.params.id);
+  if (userId === req.userId) {
+    sendError(res, 400, "Cannot delete the current admin user");
+    return;
+  }
+  await memoryEngine.deleteUser(userId);
+  res.json({ success: true });
+});

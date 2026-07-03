@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatJsonlEvent, memoryRunEvent, isOffloadTool, JSONL_SCHEMA_VERSION, RUN_EVENT_TYPES, type RunEvent } from '../runtime/jsonlEvents.js';
+import { formatJsonlEvent, memoryRunEvent, isOffloadTool, JSONL_SCHEMA_VERSION, RUN_EVENT_TYPES, type RunEvent } from '../runtime/reporting/jsonlEvents.js';
 
 test('CLI-7 formatJsonlEvent: single line, parseable, carries v + ts + type', () => {
   const line = formatJsonlEvent({ type: 'tool_end', name: 'read_file', ok: true, summary: 'ok' }, '2026-05-30T00:00:00Z');

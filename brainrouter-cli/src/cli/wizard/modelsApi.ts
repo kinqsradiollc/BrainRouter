@@ -1,5 +1,5 @@
-import { runPicker, type PickerRow } from '../ink/runPicker.js';
-import type { Theme } from '../theme.js';
+import { runPicker, type PickerRow } from '../ink/prompt/runPicker.js';
+import type { Theme } from '../theme/theme.js';
 import {
   inferModelReasoningCapabilities,
   registerModelReasoningCapabilities,

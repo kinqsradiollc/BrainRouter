@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { detectProjectProfile, formatProjectProfiles } from '../runtime/projectProfile.js';
+import { detectProjectProfile, formatProjectProfiles } from '../runtime/verify/projectProfile.js';
 
 test('CLI-10 detectProjectProfile: node from package.json', () => {
   const p = detectProjectProfile(['package.json', 'README.md']);

@@ -1,0 +1,248 @@
+/**
+ * App shell — composer + attachment handlers (submit, AI PR review, file
+ * attachments, pasted-image staging, header rename). Extracted from App.tsx
+ * verbatim; every value they close over is passed on `ctx`, so behavior is
+ * unchanged. Returned as a bundle the shell spreads back into local consts.
+ */
+import React from 'react';
+import { mergeOptimistic } from '../../lib/session/list/sessionOrder.js';
+import { withCachedProjectSessions } from '../../lib/session/workspaces/projectSessionsView.js';
+import { runCommand, resolveSlashInput, type CmdCtx, type DeskCommand } from '../../lib/commands/commands.js';
+import { buildPromptWithAttachments, readyAttachments } from '../../lib/attachments/attachmentPrompt.js';
+import type { AttachmentUpload, ChatRow, SessionRow } from '../../types.js';
+import type { PanelId } from '../../panels/index.js';
+import type { ProjectSessionsByRoot } from '../../lib/session/workspaces/projectSessionsView.js';
+
+type Query = (id: string, name: string, args?: Record<string, unknown>) => void;
+
+export interface AppHandlersCtx {
+  q: Query;
+  draft: string;
+  setDraft: (d: string) => void;
+  attachmentUploads: AttachmentUpload[];
+  setAttachmentUploads: React.Dispatch<React.SetStateAction<AttachmentUpload[]>>;
+  pastedImages: Array<{ id: string; mediaType: string; dataBase64: string }>;
+  setPastedImages: React.Dispatch<React.SetStateAction<Array<{ id: string; mediaType: string; dataBase64: string }>>>;
+  running: boolean;
+  stopping: boolean;
+  setToast: (t: string) => void;
+  commands: DeskCommand[];
+  cmdCtx: CmdCtx;
+  runBridge: (cmd: string, argText?: string) => void;
+  sessionKeyRef: React.MutableRefObject<string | undefined>;
+  setRows: (val: ChatRow[] | ((prev: ChatRow[]) => ChatRow[])) => void;
+  lastPromptRef: React.MutableRefObject<string>;
+  goalContPendingRef: React.MutableRefObject<string | null>;
+  setRunning: (v: boolean) => void;
+  setSessionRunning: (key: string, running: boolean) => void;
+  info: { sessionKey?: string; workspaceRoot?: string };
+  setTurnStart: (t: number) => void;
+  turnFailsRef: React.MutableRefObject<number>;
+  branches: { current: string | null };
+  pendingSessionsRef: React.MutableRefObject<SessionRow[]>;
+  setSessions: React.Dispatch<React.SetStateAction<SessionRow[]>>;
+  sessionsRef: React.MutableRefObject<SessionRow[]>;
+  setProjSessions: React.Dispatch<React.SetStateAction<ProjectSessionsByRoot>>;
+  activeWsRef: React.MutableRefObject<string | null>;
+  workspaces: { current: string | null };
+  refreshSession: () => void;
+  ensurePanel: (id: PanelId) => void;
+  viewKey: string;
+}
+
+export interface AppHandlers {
+  submit: (override?: string) => void;
+  reviewPrWithAi: (pr: { number: number; title?: string; headRefName?: string; baseRefName?: string }) => void;
+  attachFiles: (files: File[]) => void;
+  addPastedImages: (files: File[]) => void;
+  renameCurrentSession: (title: string) => void;
+}
+
+export function useAppHandlers(ctx: AppHandlersCtx): AppHandlers {
+  const {
+    q, draft, setDraft, attachmentUploads, setAttachmentUploads, pastedImages, setPastedImages,
+    running, stopping, setToast, commands, cmdCtx, runBridge, sessionKeyRef, setRows, lastPromptRef,
+    goalContPendingRef, setRunning, setSessionRunning, info, setTurnStart, turnFailsRef, branches,
+    pendingSessionsRef, setSessions, sessionsRef, setProjSessions, activeWsRef, workspaces, refreshSession,
+    ensurePanel, viewKey,
+  } = ctx;
+
+  function submit(override?: string): void {
+    const typedPrompt = (override ?? draft).trim();
+    const pendingAttachments = attachmentUploads.filter((a) => a.status === 'reading' || a.status === 'attaching');
+    const failedAttachments = attachmentUploads.filter((a) => a.status === 'failed');
+    const attached = readyAttachments(attachmentUploads);
+    const imagesToSend = pastedImages.map((p) => ({ mediaType: p.mediaType, dataBase64: p.dataBase64 }));
+    if (running || stopping) return;
+    if (!typedPrompt && attached.length === 0 && imagesToSend.length === 0) return;
+    if (pendingAttachments.length > 0) {
+      setToast(pendingAttachments.length === 1 ? `Still attaching ${pendingAttachments[0].name}…` : `Still attaching ${pendingAttachments.length} files…`);
+      return;
+    }
+    if (failedAttachments.length > 0) {
+      setToast(failedAttachments.length === 1 ? `Remove failed attachment ${failedAttachments[0].name} before sending.` : 'Remove failed attachments before sending.');
+      return;
+    }
+    // §vision — an image-only send (no typed text, no file attachments) gets a
+    // sensible default question so the model has something to answer about it.
+    const promptText = typedPrompt || (imagesToSend.length > 0 && attached.length === 0 ? "What's in this image?" : typedPrompt);
+    const prompt = buildPromptWithAttachments(promptText, attached);
+    const displayPrompt = typedPrompt
+      || (attached.length === 1 ? `Use attached file: ${attached[0].name}`
+        : attached.length > 1 ? `Use ${attached.length} attached files`
+        : imagesToSend.length === 1 ? 'Pasted an image'
+        : `Pasted ${imagesToSend.length} images`);
+    // T8 — a slash command is NEVER sent to the LLM. Route it through the
+    // command registry: bridge runs against the CLI stores, known commands run
+    // their wire (panel/settings/native/cli fallback), and an UNKNOWN slash
+    // surfaces a command-output card instead of becoming a chat prompt.
+    const slash = resolveSlashInput(typedPrompt, commands);
+    if (slash.kind !== 'not-slash') {
+      if (attached.length > 0 || imagesToSend.length > 0) {
+        setToast('Attachments and images are sent with chat messages, not slash commands.');
+        return;
+      }
+      setDraft('');
+      if (slash.kind === 'bridge') runBridge(slash.cmd, slash.args);
+      else if (slash.kind === 'command') runCommand(slash.command, cmdCtx);
+      else {
+        const nowTs = Date.now();
+        const stableCmdId = `${sessionKeyRef.current ?? 'global'}-cmd-out-${nowTs}-${typedPrompt.slice(0, 32).replace(/[^a-zA-Z0-9]/g, '_')}`;
+        setRows((r) => [...r, { id: stableCmdId, kind: 'cmd-out', cmd: typedPrompt,
+          lines: [`Unknown command \`${slash.base}\` — type \`/\` to browse commands, or run it in the terminal CLI.`], ts: nowTs }]);
+      }
+      return;
+    }
+    lastPromptRef.current = typedPrompt;
+    // §goal-autonomy — a real user message preempts any queued goal continuation.
+    goalContPendingRef.current = null;
+    const nowTs = Date.now();
+    const stableId = `${sessionKeyRef.current ?? 'global'}-user-${nowTs}-${displayPrompt.slice(0, 32).replace(/[^a-zA-Z0-9]/g, '_')}`;
+    setRows((r) => [...r, { id: stableId, kind: 'user', text: displayPrompt, ts: nowTs }]);
+    if (!override) setDraft('');
+    if (attached.length > 0) setAttachmentUploads((prev) => prev.filter((a) => !attached.some((sent) => sent.id === a.id)));
+    if (imagesToSend.length > 0) setPastedImages([]);
+    setRunning(true);
+    // DESK-5v — mark THIS session running so its spinner survives a switch away.
+    setSessionRunning(sessionKeyRef.current ?? info.sessionKey ?? '', true);
+    setTurnStart(Date.now());
+    turnFailsRef.current = 0;
+    // DESK-6t — show this chat in "Projects" IMMEDIATELY (optimistic row), so a
+    // brand-new chat doesn't stay invisible in the sidebar until the turn ends.
+    // refreshSession() shortly after reconciles it with the host-backed row.
+    const sk = sessionKeyRef.current ?? info.sessionKey;
+    if (sk) {
+      // §session-pr — record the branch this session is running on so the sidebar
+      // can show its live PR status; persisted via session meta + mirrored on the
+      // optimistic row for an immediate icon.
+      if (branches.current) q('q-session-branch', 'action:session-meta', { sessionKey: sk, patch: { branch: branches.current } });
+      const optimistic: SessionRow = { sessionKey: sk, firstUserMessage: displayPrompt, modifiedAt: new Date().toISOString(), turnCount: 1, lastRole: 'user', branch: branches.current ?? null };
+      // Wave 2 — track it as pending so subsequent list-sessions refreshes MERGE
+      // it (instead of replacing it away) until the host transcript confirms it.
+      if (!pendingSessionsRef.current.some((s) => s.sessionKey === sk)) pendingSessionsRef.current = [optimistic, ...pendingSessionsRef.current];
+      setSessions((prev) => mergeOptimistic(prev.filter((s) => s.sessionKey !== sk), [optimistic]));
+      sessionsRef.current = mergeOptimistic(sessionsRef.current.filter((s) => s.sessionKey !== sk), [optimistic]);
+      setProjSessions((prev) => {
+        const root = activeWsRef.current ?? info.workspaceRoot ?? workspaces.current;
+        if (!root) return prev;
+        const rows = mergeOptimistic((prev[root]?.rows ?? []).filter((s) => s.sessionKey !== sk), [optimistic]);
+        return withCachedProjectSessions(prev, root, rows);
+      });
+      setTimeout(() => refreshSession(), 400);
+    }
+    window.brainrouter.send({ kind: 'start-turn', prompt, ...(imagesToSend.length ? { images: imagesToSend } : {}) });
+  }
+
+  // AI PR review — kick the agent to review a PR on an ISOLATED git worktree so
+  // the user's working tree stays untouched. The agent creates the worktree with
+  // its own shell, reads the diff, works the code-review checklist, gives a
+  // verdict, and cleans up. Reuses the normal turn flow via submit(override).
+  const reviewPrWithAi = (pr: { number: number; title?: string; headRefName?: string; baseRefName?: string }): void => {
+    if (running || stopping) {
+      setToast('Finish the current turn before starting an AI review.');
+      return;
+    }
+    const base = pr.baseRefName ? `\`${pr.baseRefName}\`` : 'the base branch';
+    const head = pr.headRefName ? `\`${pr.headRefName}\`` : 'the PR branch';
+    const wt = `.worktrees/pr-${pr.number}`;
+    const prompt = [
+      `Review pull request #${pr.number}${pr.title ? ` ("${pr.title}")` : ''} — ${head} → ${base}.`,
+      `Do the review on an ISOLATED git worktree so my working tree stays untouched:`,
+      `1. Check out the PR head into a worktree: \`git fetch origin pull/${pr.number}/head\` then \`git worktree add --detach ${wt} FETCH_HEAD\`.`,
+      `2. Read the change in context: \`gh pr diff ${pr.number}\` for the diff, then open the changed files under \`${wt}\`.`,
+      `3. Work the review checklist: what is this change trying to achieve; does it actually achieve that (read the code, not the description); are there tests and did they actually validate the change; does it break existing functionality (check callers + adjacent behavior); do you genuinely understand what the feature does.`,
+      `4. Give a clear verdict — approve or request changes — with specific \`file:line\` references for each point.`,
+      `When finished, clean up: \`git worktree remove --force ${wt}\`.`,
+    ].join('\n');
+    submit(prompt);
+  };
+
+  // §5 — attach dropped/picked files: read each as base64 in the renderer and
+  // ingest into a durable attachment record (the host preserves the original,
+  // extracts text/metadata, links to memory) as a visible 'attachment' task.
+  const attachFiles = (files: File[]): void => {
+    const batch = files.slice(0, 8); // bound a stray multi-select
+    const uploads = batch.map((file) => ({
+      id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      name: file.name,
+      size: file.size,
+      status: 'reading' as const,
+    }));
+    if (uploads.length) setAttachmentUploads((prev) => [...prev, ...uploads]);
+    batch.forEach((file, index) => {
+      const upload = uploads[index];
+      const reader = new FileReader();
+      reader.onload = () => {
+        const out = reader.result;
+        if (typeof out !== 'string') {
+          setAttachmentUploads((prev) => prev.map((u) => u.id === upload.id ? { ...u, status: 'failed', detail: 'Could not read this file.' } : u));
+          setToast(`✗ Could not read ${file.name}`);
+          return;
+        }
+        const base64 = out.includes(',') ? out.slice(out.indexOf(',') + 1) : out;
+        setAttachmentUploads((prev) => prev.map((u) => u.id === upload.id ? { ...u, status: 'attaching' } : u));
+        q(`q-attach:${upload.id}`, 'attachment-ingest', { name: file.name, dataBase64: base64 });
+      };
+      reader.onerror = () => {
+        setAttachmentUploads((prev) => prev.map((u) => u.id === upload.id ? { ...u, status: 'failed', detail: 'Could not read this file.' } : u));
+        setToast(`✗ Could not read ${file.name}`);
+      };
+      reader.readAsDataURL(file);
+    });
+    if (batch.length) {
+      setToast(batch.length === 1 ? `Attaching ${batch[0].name}…` : `Attaching ${batch.length} files…`);
+      ensurePanel('tasks');
+    }
+  };
+
+  // §vision — read pasted images as base64 and stage them for the next send (a
+  // vision model receives them inline via start-turn `images`). Size-guarded and
+  // capped; these bypass the text-extracting attachment pipeline by design.
+  const addPastedImages = (files: File[]): void => {
+    const imgs = files.filter((f) => f.type.startsWith('image/')).slice(0, 6);
+    imgs.forEach((file) => {
+      if (file.size > 12 * 1024 * 1024) { setToast(`Image too large (max 12 MB): ${file.name || 'pasted image'}`); return; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const out = reader.result;
+        if (typeof out !== 'string') { setToast('✗ Could not read pasted image'); return; }
+        const base64 = out.includes(',') ? out.slice(out.indexOf(',') + 1) : out;
+        const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+        setPastedImages((prev) => [...prev, { id, mediaType: file.type || 'image/png', dataBase64: base64 }]);
+      };
+      reader.onerror = () => setToast('✗ Could not read pasted image');
+      reader.readAsDataURL(file);
+    });
+  };
+
+  // header rename — persist a new title for the currently-viewed session via the
+  // SAME host write the sidebar's rename uses (action:session-meta → title). The
+  // header drives this from its own local edit state (see ChatThread), so it
+  // never collides with the sidebar's inline-rename input.
+  const renameCurrentSession = (title: string): void => {
+    const t = title.trim();
+    if (viewKey && t) q('q-session-meta', 'action:session-meta', { sessionKey: viewKey, patch: { title: t } });
+  };
+
+  return { submit, reviewPrWithAi, attachFiles, addPastedImages, renameCurrentSession };
+}

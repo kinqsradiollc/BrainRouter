@@ -8,7 +8,7 @@ import {
   truncateOneLine,
   classifyDiffLine,
   looksLikeDiff,
-} from '../cli/ink/toolFormat.js';
+} from '../cli/ink/text/toolFormat.js';
 import { compactToolOutput } from '@kinqs/brainrouter-core/prompt';
 
 // --- stripMcpPrefix ---------------------------------------------------
