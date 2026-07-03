@@ -149,7 +149,7 @@ test('MC-A1 agentTurnExecutor: one-line delegation to Agent.runTurn (prompt + hi
 test('MC-A1 resolveRuntime: explicit + defaulted kind → process backend; unknown normalizes to process', async () => {
   await withTempWorkspaceAsync(async (ws) => {
     const executeTurn = async () => 'ok';
-    assert.deepEqual(availableRuntimeBackends(), ['process']);
+    assert.deepEqual([...availableRuntimeBackends()].sort(), ['process', 'worktree']);
     assert.equal(resolveRuntime({ executeTurn }, 'process').kind, 'process');
     // Unknown strings validate to 'process' (knob semantics — never a crash).
     assert.equal(resolveRuntime({ executeTurn }, 'container-someday').kind, 'process');
@@ -161,8 +161,10 @@ test('MC-A1 resolveRuntime: explicit + defaulted kind → process backend; unkno
   });
 });
 
-test('MC-A1 resolveRuntime: worktree is a valid knob value but has no backend until MC-A2', () => {
-  assert.throws(() => resolveRuntime({ executeTurn: async () => 'ok' }, 'worktree'), /not available yet/);
+test('MC-A2 resolveRuntime: worktree resolves to the isolated worktree backend', () => {
+  // (MC-A1 shipped 'worktree' as a valid-but-unregistered knob value; MC-A2
+  // registers the backend, so resolving it now succeeds.)
+  assert.equal(resolveRuntime({ executeTurn: async () => 'ok' }, 'worktree').kind, 'worktree');
 });
 
 // ---------------------------------------------------------------------------

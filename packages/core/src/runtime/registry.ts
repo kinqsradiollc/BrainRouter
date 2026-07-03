@@ -3,10 +3,9 @@
  *
  * `resolveRuntime(kind, options)` is the single place callers obtain a
  * runtime instance. The kind defaults from the `cli.runtime.backend` knob
- * (config.json — never an env var), which validates to `'process'` today;
- * `'worktree'` is a reserved knob value whose backend lands with MC-A2, so
- * resolving it before then fails with a clear error instead of silently
- * falling back to a non-isolated runtime.
+ * (config.json — never an env var). A VALID kind without a registered
+ * backend fails with a clear error instead of silently falling back to a
+ * non-isolated runtime.
  */
 
 import { getCliKnobs } from '../config/config.js';
@@ -14,6 +13,7 @@ import { normalizeRuntimeBackend } from '../config/configTypes.js';
 import type { RuntimeBackendKind } from '../config/configTypes.js';
 import type { IAgentRuntime, RuntimeTurnExecutor } from './runtimeTypes.js';
 import { createProcessRuntime } from './backends/process.js';
+import { createWorktreeRuntime } from './backends/worktree.js';
 
 export interface ResolveRuntimeOptions {
   /** Turn-execution seam handed to the backend (production: `agentTurnExecutor(agent)`). */
@@ -34,8 +34,11 @@ export function availableRuntimeBackends(): RuntimeBackendKind[] {
   return [...factories.keys()];
 }
 
-// The one backend that exists in MC-A1. `worktree` registers in MC-A2.
+// Built-in backends: `process` (MC-A1 — in-process host execution, the
+// default) and `worktree` (MC-A2 — isolated git-worktree runtime, opt-in via
+// `cli.runtime.backend`).
 registerRuntimeBackend('process', (options) => createProcessRuntime({ executeTurn: options.executeTurn }));
+registerRuntimeBackend('worktree', (options) => createWorktreeRuntime({ executeTurn: options.executeTurn }));
 
 /**
  * Obtain a runtime for `kind` (default: the `cli.runtime.backend` knob).

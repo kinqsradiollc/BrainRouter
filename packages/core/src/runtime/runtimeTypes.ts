@@ -41,6 +41,10 @@ export type RuntimeStatus =
 export interface RuntimeSpec {
   /** Absolute workspace root the agent operates in. */
   workspaceRoot: string;
+  /** Launch cwd within the workspace (defaults to `workspaceRoot`). Isolated
+   *  backends map it into their tree — same semantics as the child launch cwd
+   *  orchestration resolves for isolated children (MC-A2). */
+  launchCwd?: string;
   /** Session key of the conversation this runtime hosts. */
   sessionKey: string;
   /** Optional role hint (orchestration role the hosted agent plays). */

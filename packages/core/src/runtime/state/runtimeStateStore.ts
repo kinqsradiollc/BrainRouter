@@ -19,6 +19,18 @@ import { randomUUID } from 'node:crypto';
 import { getStateDir } from '../../storage/store.js';
 import type { RuntimeBackendKind, RuntimeStatus } from '../runtimeTypes.js';
 
+/**
+ * MC-A2 — where a `worktree`-backed instance lives on disk. Persisted so a
+ * PARKED runtime survives its owning process and can be re-attached by path
+ * (`attachWorktreeRuntime`), and so a future boot reconcile can find it.
+ */
+export interface RuntimeWorktreeRef {
+  /** Repo root the worktree was carved from (where `git worktree remove` runs). */
+  sourceRoot: string;
+  /** Absolute path of the provisioned worktree. */
+  worktreeRoot: string;
+}
+
 export interface RuntimeInstanceRecord {
   id: string;
   backend: RuntimeBackendKind;
@@ -27,6 +39,8 @@ export interface RuntimeInstanceRecord {
   status: RuntimeStatus;
   /** OS pid that owns the live run (stale reconciliation across restarts). */
   pid: number | null;
+  /** MC-A2 — set for `worktree` instances once provisioning succeeds. */
+  worktree?: RuntimeWorktreeRef | null;
   createdAt: string;
   updatedAt: string;
 }
