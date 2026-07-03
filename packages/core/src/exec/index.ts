@@ -10,4 +10,6 @@ export * from './policy/execPolicy.js';
 export * from './runtime/sandbox.js';
 export * from './policy/pathPolicy.js';
 export * from './policy/permissionRules.js';
+export * from './policy/shellClassifier.js';
+export * from './runtime/recentDenials.js';
 export * from './runtime/backgroundShell.js';

@@ -11,7 +11,7 @@ export const SLASH_COMMANDS = [
   '/spec', '/feature-dev', '/grill-me', '/review', '/review-auto', '/simplify', '/implement-plan', '/skill', '/workflow', '/workflows', '/approve', '/requirement', '/track', '/annotation', '/artifact', '/atlas', '/attach',
   '/memory', '/recall', '/briefing', '/refresh-memory', '/scenes', '/working', '/forget', '/brain', '/blackboard',
   '/init', '/login', '/sessions', '/export-chat', '/find', '/recap', '/chapters', '/resume', '/rewind', '/model', '/mcp',
-  '/goal', '/copy', '/fork', '/rename', '/permissions', '/hooks', '/hookify', '/loop', '/schedule',
+  '/goal', '/copy', '/fork', '/rename', '/permissions', '/recent-denials', '/hooks', '/hookify', '/loop', '/schedule',
   '/continue', '/auto-review', '/auto-chain', '/vim', '/statusline', '/quiet', '/release-notes',
   '/handover', '/explain', '/trace', '/failed', '/verify', '/audit',
   '/export', '/import', '/persona', '/skill-hints', '/diagnostics',
@@ -165,6 +165,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
     title: 'Guardrails & Permissions',
     entries: [
       { cmd: '/permissions [read|write|shell]', desc: 'View or set agent access mode' },
+      { cmd: '/recent-denials [n]', desc: 'List the last N tool denials (tool + reason + time) this session' },
       { cmd: '/mode [planning|fast]', desc: 'Session execution stance (planning asks, fast skips per-call y/N for safe commands)' },
       { cmd: '/review-policy [request|proceed]', desc: 'How the agent treats multi-file approval gates' },
       { cmd: '/yolo [on|off]', desc: 'Alias for `/mode fast` + `/review-policy proceed`' },

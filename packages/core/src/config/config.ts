@@ -459,6 +459,9 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     // CODEX-APPROVAL-GUARD — drop over-broad prefixes (bare `git`/`bash`/`sudo`/…)
     // so a too-permissive config.json entry can never auto-approve everything.
     commandAllowlist: sanitizeCommandAllowlist(c.commandAllowlist ?? []).allowed,
+    // CC-SAFETY-B1 — classify-all-shell posture. Default 'off' (back-compat).
+    autoClassifyShell: c.autoClassifyShell === 'on' || c.autoClassifyShell === 'strict' ? c.autoClassifyShell : 'off',
+    autoClassifyShellEnforceWhenSilent: c.autoClassifyShellEnforceWhenSilent !== false,
     childWorkspaceIsolation: c.childWorkspaceIsolation ?? 'auto',
     worktreeRoot: c.worktreeRoot ?? '',
     buildLoop: c.buildLoop ?? 'escalate',

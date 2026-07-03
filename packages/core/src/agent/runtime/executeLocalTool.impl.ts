@@ -23,6 +23,7 @@ import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } 
 import { evaluateDestructiveCommand } from '../../exec/guard/destructiveCommandGuard.js';
 import { decideExecutionPolicy, egressDecision } from '../../exec/policy/execPolicy.js';
 import { resolveSandboxConfig, runShell } from '../../exec/runtime/sandbox.js';
+import { recordDenial } from '../../exec/runtime/recentDenials.js';
 import { gitHeadSha } from '../../git/workspaceGit.js';
 import { readGoal, blockGoal, completeGoal } from '../../goal/store/goalStore.js';
 import { searchMcpCatalog } from '../../mcp/discovery/discovery.js';
@@ -236,13 +237,20 @@ export async function executeLocalToolLegacy(this: Agent, name: string, args: Re
             agentAuthoredCommits: this.agentAuthoredCommits,
           });
           if (verdict.decision === 'block') {
+            // CC-SAFETY-B2 — the destructive-command guard's reason flows into the
+            // session's recent-denials ring (best-effort) so `/recent-denials` can
+            // surface WHY the command was blocked.
+            const recordBlocked = () => {
+              try { recordDenial(this.workspaceRoot, this.sessionKey, 'run_command', `${verdict.rule}: ${verdict.reason}`); } catch { /* best-effort */ }
+            };
             if (this.silent || (!this.interactionPort && !this.prompter)) {
+              recordBlocked();
               return `Command blocked (${verdict.rule}): ${verdict.reason}`;
             }
             const approved = this.interactionPort
               ? await this.interactionPort.confirm({ title: 'Run destructive command?', detail: `${cmd}\n\n${verdict.reason}`, dangerous: true, tool: 'run_command' })
               : await this.prompter.askYesNo(`${verdict.reason}\nRun it anyway? (y/N) `, false);
-            if (!approved) return `Command blocked (${verdict.rule}): ${verdict.reason}`;
+            if (!approved) { recordBlocked(); return `Command blocked (${verdict.rule}): ${verdict.reason}`; }
             destructiveOverride = true; // user explicitly authorized — skip the redundant approval below
           }
         }

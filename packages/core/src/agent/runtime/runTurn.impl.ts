@@ -11,6 +11,8 @@ import { contextWindowForBudget } from '../../context/contextWindow.js';
 import { resolveToolPolicy, externalDirectoryDecision } from '../../exec/policy/execPolicy.js';
 import { isPathWithinRoots } from '../../exec/policy/pathPolicy.js';
 import { evaluatePermissionRules, primaryArgText } from '../../exec/policy/permissionRules.js';
+import { classifyShellCommand } from '../../exec/policy/shellClassifier.js';
+import { recordDenial } from '../../exec/runtime/recentDenials.js';
 import { readGoal, formatGoalBlock } from '../../goal/store/goalStore.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../../hooks/hookifyStore.js';
 import { runHooks, parseHookDecision } from '../../hooks/hooksStore.js';
@@ -1674,13 +1676,45 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           // a silent child can't answer fails closed. This closes the gap where
           // spawn/delegate/worker dispatches bypassed the access-mode gate.
           {
+            // CC-SAFETY-B2 — record any denial into the bounded, session-scoped
+            // recent-denials ring so `/recent-denials` can surface WHY the agent
+            // kept getting blocked. Best-effort; never breaks the gate.
+            const denyAndRecord = (reason: string): never => {
+              try { recordDenial(this.workspaceRoot, this.sessionKey, name, reason); } catch { /* best-effort */ }
+              throw new Error(reason);
+            };
             // CC-P3.2 — declarative cli.permissions rules run FIRST: a deny match
             // blocks outright; an allow match downgrades an `ask` below (it never
             // overrides a mode-based deny — rules can't escalate read mode).
             const ruleDecision = evaluatePermissionRules(
-              getCliKnobs().permissions, name, primaryArgText(name, args as Record<string, unknown> | null));
+              getCliKnobs().permissions, name, primaryArgText(name, args as Record<string, unknown> | null),
+              { workspace: this.workspaceRoot });
             if (ruleDecision === 'deny') {
-              throw new Error(`Tool "${name}" denied: matched a cli.permissions deny rule.`);
+              denyAndRecord(`Tool "${name}" denied: matched a cli.permissions deny rule.`);
+            }
+            // CC-SAFETY-B1 — classify-all-shell: when enabled, route EVERY
+            // run_command through the safety classifier at the gate (not just the
+            // ones a downstream heuristic catches). 'on' asks/denies on a risky
+            // verdict; 'strict' denies unless whitelisted. Silent sessions can't
+            // answer a prompt, so an 'ask' verdict fails closed there.
+            if (name === 'run_command') {
+              const knobs = getCliKnobs();
+              if (knobs.autoClassifyShell !== 'off') {
+                const cmd = String((args as { command?: unknown } | null)?.command ?? '');
+                const verdict = classifyShellCommand(cmd, {
+                  mode: knobs.autoClassifyShell,
+                  silent: this.silent,
+                  enforceWhenSilent: knobs.autoClassifyShellEnforceWhenSilent,
+                  allowlist: knobs.commandAllowlist,
+                  destructiveContext: { userIntent: this.lastUserPrompt },
+                });
+                if (verdict.decision === 'deny') {
+                  denyAndRecord(`Tool "${name}" denied by autoClassifyShell (${verdict.rule}): ${verdict.reason}`);
+                }
+                if (verdict.decision === 'ask' && this.silent) {
+                  denyAndRecord(`Tool "${name}" flagged by autoClassifyShell but this session can't prompt (fail-closed) (${verdict.rule}): ${verdict.reason}`);
+                }
+              }
             }
             const policy = resolveToolPolicy(name, this.accessMode, args as Record<string, unknown> | null);
             if (ruleDecision === 'allow' && policy.decision === 'ask') {
@@ -1698,10 +1732,10 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
               callbacks.onApproval?.({ tool: name, action: policy.action, decision: policy.decision, reason: policy.reason });
             }
             if (policy.decision === 'deny') {
-              throw new Error(`Tool "${name}" denied by execution policy: ${policy.reason}.`);
+              denyAndRecord(`Tool "${name}" denied by execution policy: ${policy.reason}.`);
             }
             if (policy.decision === 'ask' && this.silent) {
-              throw new Error(`Tool "${name}" requires approval but this session can't prompt (fail-closed): ${policy.reason}.`);
+              denyAndRecord(`Tool "${name}" requires approval but this session can't prompt (fail-closed): ${policy.reason}.`);
             }
             // POLICY-3 — external-directory gate: a file write whose target
             // escapes the workspace is governed by the profile's
@@ -1711,10 +1745,10 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
               const target = path.resolve(this.workspaceRoot, args.path);
               const ext = externalDirectoryDecision(target, this.workspaceRoot, getCliKnobs().externalDirWrites, isPathWithinRoots);
               if (ext.decision === 'deny') {
-                throw new Error(`Tool "${name}" denied: ${ext.reason}.`);
+                denyAndRecord(`Tool "${name}" denied: ${ext.reason}.`);
               }
               if (ext.decision === 'ask' && this.silent) {
-                throw new Error(`Tool "${name}" requires approval (external write) but this session can't prompt: ${ext.reason}.`);
+                denyAndRecord(`Tool "${name}" requires approval (external write) but this session can't prompt: ${ext.reason}.`);
               }
             }
           }

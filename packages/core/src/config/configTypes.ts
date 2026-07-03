@@ -417,6 +417,26 @@ export interface CliKnobs {
    */
   commandAllowlist?: string[];
   /**
+   * CC-SAFETY-B1 — route EVERY `run_command` / shell call through the safety
+   * classifier (the destructive-command guard + the approval resolver) via a
+   * pre-tool gate, not just the ones that happen to hit a heuristic:
+   *   - `'off'`    (default) — no extra gate; existing behavior unchanged.
+   *   - `'on'`     — classify every shell call; a destructive/dangerous verdict
+   *                  asks (attended) or is denied (silent) as usual.
+   *   - `'strict'` — DENY every shell call unless it matches `commandAllowlist`
+   *                  (the whitelist). The strictest posture for unattended runs.
+   * Honors `enforceWhenSilent` (see `autoClassifyShellEnforceWhenSilent`): when a
+   * human is watching, `'on'`/`'strict'` may relax to advisory; when nobody is,
+   * the classification is enforced.
+   */
+  autoClassifyShell?: 'off' | 'on' | 'strict';
+  /**
+   * CC-SAFETY-B1 — enforce `autoClassifyShell` even in a silent/unattended
+   * session (default `true`, mirroring `hooks.enforceWhenSilent`). When `false`,
+   * an attended session may downgrade a classifier deny to an advisory prompt.
+   */
+  autoClassifyShellEnforceWhenSilent?: boolean;
+  /**
    * CODEX-WORKTREE-ISOLATION — filesystem isolation for spawned write/shell
    * children. Default `auto`: creates a detached git worktree when the parent
    * workspace is inside a git repo, and falls back to the shared root otherwise
@@ -833,6 +853,8 @@ export interface ResolvedCliKnobs {
   jobSecretScoping: boolean;
   jobSecretAllowlist: string[];
   commandAllowlist: string[];
+  autoClassifyShell: 'off' | 'on' | 'strict';
+  autoClassifyShellEnforceWhenSilent: boolean;
   childWorkspaceIsolation: 'off' | 'auto' | 'git-worktree';
   worktreeRoot: string;
   buildLoop: 'off' | 'escalate' | 'always';
