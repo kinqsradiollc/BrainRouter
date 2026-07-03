@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { extractSymbols } from '../atlas/extract.js';
-import { buildBaseGraph } from '../atlas/buildGraph.js';
-import { validateAtlasGraph } from '../atlas/validate.js';
+import { extractSymbols } from '../atlas/pipeline/extract.js';
+import { buildBaseGraph } from '../atlas/pipeline/buildGraph.js';
+import { validateAtlasGraph } from '../atlas/pipeline/validate.js';
 import { isAtlasGraph } from '@kinqs/brainrouter-types';
 
 test('ATLAS-2 extractSymbols: TypeScript functions, classes, imports', () => {

@@ -6,11 +6,11 @@
  * functions. No logic moved or removed.
  */
 import type { AtlasGraph } from "@kinqs/brainrouter-types";
-import { atlasGraphFile, saveAtlasGraph, readAtlasGraph, atlasGraphStats } from "./atlasStore.js";
-import { buildBaseGraph, type BuildOptions } from "./buildGraph.js";
-import { scanWorkspace, type ScanOptions, type ScanResult } from "./scan.js";
-import { enrichAtlasGraph, type AtlasLlmCaller, type EnrichOptions, type EnrichResult } from "./enrich.js";
-import { validateAtlasGraph, type AtlasValidation } from "./validate.js";
+import { atlasGraphFile, saveAtlasGraph, readAtlasGraph, atlasGraphStats } from "../store/atlasStore.js";
+import { buildBaseGraph, type BuildOptions } from "../pipeline/buildGraph.js";
+import { scanWorkspace, type ScanOptions, type ScanResult } from "../pipeline/scan.js";
+import { enrichAtlasGraph, type AtlasLlmCaller, type EnrichOptions, type EnrichResult } from "../enrich/enrich.js";
+import { validateAtlasGraph, type AtlasValidation } from "../pipeline/validate.js";
 
 /** Aggregate returned by {@link IAtlasService.stats}. */
 export type AtlasGraphStats = ReturnType<typeof atlasGraphStats>;

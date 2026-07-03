@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { isServicePortPath, moduleForServicePath, detectServicePorts } from '../atlas/servicePorts.js';
-import { buildBaseGraph } from '../atlas/buildGraph.js';
+import { isServicePortPath, moduleForServicePath, detectServicePorts } from '../atlas/service/servicePorts.js';
+import { buildBaseGraph } from '../atlas/pipeline/buildGraph.js';
 
 test('isServicePortPath matches service.ts/gateway.ts but not test files', () => {
   assert.equal(isServicePortPath('packages/core/src/exec/service.ts'), true);

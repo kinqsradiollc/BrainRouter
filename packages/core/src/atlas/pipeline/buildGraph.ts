@@ -22,7 +22,7 @@ import {
   type AtlasNode,
   type AtlasNodeType,
 } from "@kinqs/brainrouter-types";
-import { gitHeadSha } from "../git/workspaceGit.js";
+import { gitHeadSha } from "../../git/workspaceGit.js";
 import { scanWorkspace, type ScanOptions } from "./scan.js";
 import { extractSymbols } from "./extract.js";
 

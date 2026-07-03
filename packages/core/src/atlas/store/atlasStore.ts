@@ -8,7 +8,7 @@
  */
 import { createHash } from "node:crypto";
 import { isAtlasGraph, type AtlasGraph } from "@kinqs/brainrouter-types";
-import { getStateFile, readJsonFile, writeJsonFile } from "../storage/store.js";
+import { getStateFile, readJsonFile, writeJsonFile } from "../../storage/store.js";
 
 /** Absolute path to the workspace's Atlas graph artifact. */
 export function atlasGraphFile(workspaceRoot: string): string {
