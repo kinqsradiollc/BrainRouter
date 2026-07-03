@@ -6,7 +6,7 @@ import {
   shrinkOversizedToolResults,
 } from '../agent/turnEndShrink.js';
 import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
-import { ResultCache } from '../util/resultHandoff.js';
+import { ResultCache } from '../util/result/resultHandoff.js';
 
 test('shrinkOversizedToolResults is a no-op when nothing exceeds the cap', () => {
   const history = [

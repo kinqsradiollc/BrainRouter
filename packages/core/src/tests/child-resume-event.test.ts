@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { shouldResumeOnChildComplete } from '../util/childResume.js';
+import { shouldResumeOnChildComplete } from '../util/agentloop/childResume.js';
 
 const base = {
   exited: false,

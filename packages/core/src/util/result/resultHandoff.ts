@@ -20,7 +20,7 @@
  * clock.
  */
 
-import { estimateTokens } from "./tokenEstimate.js";
+import { estimateTokens } from "../tokens/tokenEstimate.js";
 
 /** ~6k chars ≈ 1.5k tokens — small reports stay inline, big blobs hand off. */
 export const RESULT_HANDOFF_THRESHOLD_CHARS = 6000;

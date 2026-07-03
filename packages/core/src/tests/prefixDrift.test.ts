@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { snapshotPrefix, diffPrefixSnapshots, shortHash } from '../util/prefixDrift.js';
+import { snapshotPrefix, diffPrefixSnapshots, shortHash } from '../util/tokens/prefixDrift.js';
 import { ImmutablePrefix } from '../context/contextRegions.js';
 
 const tool = (name: string) => ({ type: 'function' as const, function: { name, description: '', parameters: {} } });

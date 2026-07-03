@@ -10,7 +10,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { AtlasFileCategory } from "@kinqs/brainrouter-types";
-import { fileExtension } from "../../util/autoReindex.js";
+import { fileExtension } from "../../util/indexing/autoReindex.js";
 
 export interface ScannedFile {
   /** Workspace-relative POSIX path. */

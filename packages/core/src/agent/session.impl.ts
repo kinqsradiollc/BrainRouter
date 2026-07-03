@@ -17,7 +17,7 @@ import { recordPlanDecision, readPlanHistory, linkPlanDecision, planStepSignatur
 import { type PrefixComponents, computePrefixComponents, computePrefixFingerprint, accumulatePrefixStability, prefixStabilityRatio } from '../context/contextRegions.js';
 import { contextWindowForBudget } from '../context/contextWindow.js';
 import { recordFileMutation } from '../storage/fileSnapshotStore.js';
-import { shouldReindex, reindexSignature, languageHint, type ReindexGate } from '../util/autoReindex.js';
+import { shouldReindex, reindexSignature, languageHint, type ReindexGate } from '../util/indexing/autoReindex.js';
 import { gitChurnSignal } from '../git/gitChurn.js';
 import { renderCompactSystemMessage, runCompaction } from '../prompt/compaction/compactor.js';
 import { runHooks } from '../hooks/hooksStore.js';
@@ -25,7 +25,7 @@ import { callMcpTool } from '../mcp/mcpUtils.js';
 import { emitAgentEvent } from '../memory/memoryEvents.js';
 import { resolveActiveMode } from '../session/state/sessionModeStore.js';
 import { readTranscriptEntries } from '../session/transcript/sessionStore.js';
-import { estimateChatHistoryTokens } from '../util/tokenEstimate.js';
+import { estimateChatHistoryTokens } from '../util/tokens/tokenEstimate.js';
 import { traceEvent } from '../telemetry/tracing/tracing.js';
 import { sanitizeToolCallPairing } from './toolCallRecovery.js';
 import { appendDeveloperPromptLayer } from './llmTransport.js';

@@ -58,10 +58,10 @@ import {
   sprintVelocity as trackSprintVelocity,
 } from '../track/trackStore.js';
 import { recordDailyUsage } from '../usage/usageHistoryStore.js';
-import { applyFederationIdentity } from '../util/federationIdentity.js';
-import { runPostEditCheck } from '../util/postEditCheck.js';
-import { estimateTokens as estimateTokensContentAware } from '../util/tokenEstimate.js';
-import { waitUntilCondition } from '../util/waitUntil.js';
+import { applyFederationIdentity } from '../util/agentloop/federationIdentity.js';
+import { runPostEditCheck } from '../util/agentloop/postEditCheck.js';
+import { estimateTokens as estimateTokensContentAware } from '../util/tokens/tokenEstimate.js';
+import { waitUntilCondition } from '../util/agentloop/waitUntil.js';
 import { fetchAndExtract } from '../websearch/crawler.js';
 import { buildSearchProvider } from '../websearch/factory.js';
 import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../worker/workerStore.js';

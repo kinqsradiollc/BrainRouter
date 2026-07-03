@@ -17,9 +17,9 @@ import { appendTranscriptEntry, isInternalSessionKey, redactText, readTranscript
 import { recordFileMutation } from '../storage/fileSnapshotStore.js';
 import { isConnectivityError, isRetryableServerError } from '../storage/checkpointStore.js';
 import { reconnectBackoffMs, probeConnectivity, parseRetryAfterMs } from '../mcp/reconnect/reconnect.js';
-import { unsynthesizedChildIds, mergePendingChildIds, buildPendingChildStatusHint } from '../util/childResume.js';
-import { isChildSynthesisTool, resultHasChildOutput, looksLikeChildSynthesisPunt } from '../util/synthesisGuard.js';
-import { sanitizeModelArtifacts } from '../util/outputSanitize.js';
+import { unsynthesizedChildIds, mergePendingChildIds, buildPendingChildStatusHint } from '../util/agentloop/childResume.js';
+import { isChildSynthesisTool, resultHasChildOutput, looksLikeChildSynthesisPunt } from '../util/agentloop/synthesisGuard.js';
+import { sanitizeModelArtifacts } from '../util/agentloop/outputSanitize.js';
 import { buildPromptLayers, buildSystemPrompt, loadWorkspaceInstructionSummary, type PromptLayers } from '../prompt/systemPrompt.js';
 import {
   buildAnthropicMessagesPayload, normalizeAnthropicOutput, ANTHROPIC_DEFAULT_MAX_TOKENS,
@@ -109,8 +109,8 @@ import {
   type BriefingDecision,
 } from '../memory/briefingTriggers.js';
 import { callMcpTool, extractToolText } from '../mcp/mcpUtils.js';
-import { applyFederationIdentity } from '../util/federationIdentity.js';
-import { acquireLLMSlot } from '../util/llmSemaphore.js';
+import { applyFederationIdentity } from '../util/agentloop/federationIdentity.js';
+import { acquireLLMSlot } from '../util/concurrency/llmSemaphore.js';
 import { blockGoal, completeGoal, formatGoalBlock, readGoal } from '../goal/store/goalStore.js';
 import { runHooks, parseHookDecision } from '../hooks/hooksStore.js';
 import { extensionHookHandlers } from '../extension/registry.js';
@@ -135,12 +135,12 @@ import { computePrefixFingerprint, computePrefixComponents, accumulatePrefixStab
 import { contextWindowForBudget } from '../context/contextWindow.js';
 import { decideExecutionPolicy, resolveToolPolicy, externalDirectoryDecision, egressDecision, type ActionKind, type PolicyDecision } from '../exec/policy/execPolicy.js';
 import { isPathWithinRoots } from '../exec/policy/pathPolicy.js';
-import { runPostEditCheck } from '../util/postEditCheck.js';
-import { shouldReindex, reindexSignature, languageHint, type ReindexGate } from '../util/autoReindex.js';
+import { runPostEditCheck } from '../util/agentloop/postEditCheck.js';
+import { shouldReindex, reindexSignature, languageHint, type ReindexGate } from '../util/indexing/autoReindex.js';
 import { gitChurnSignal } from '../git/gitChurn.js';
 // MAS-P5-T2: progressive result handoff — large tool results become a
 // preview + resultRef the model expands via extract_result.
-import { ResultCache, makeResultHandoff, formatHandoffForModel, attachCompactedResultHandoff } from '../util/resultHandoff.js';
+import { ResultCache, makeResultHandoff, formatHandoffForModel, attachCompactedResultHandoff } from '../util/result/resultHandoff.js';
 import { runExtractResult } from '../tool/result/extractResult.js';
 // MAS-P5-T3 part 2: persistent worker threads.
 import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../worker/workerStore.js';
@@ -150,7 +150,7 @@ import { classifyDenial, formatDenialResult } from './denialMessage.js';
 import { evaluatePermissionRules, primaryArgText } from '../exec/policy/permissionRules.js';
 import { shouldNudgeTaskTracking, buildTaskTrackingNudge } from './taskTrackingNudge.js';
 import { truncateFullRead } from './readTruncation.js';
-import { waitUntilCondition } from '../util/waitUntil.js';
+import { waitUntilCondition } from '../util/agentloop/waitUntil.js';
 import { startBackgroundShell, readBackgroundOutput } from '../exec/runtime/backgroundShell.js';
 import { CHAPTER_ENTRY_NAME, chapterEntryContent } from '../session/transcript/chapterMarks.js';
 import { classifyForVerification, commandWritesFiles, decideVerification, buildVerificationNudge, buildDocsOnlyVerificationNote } from './verificationGate.js';
@@ -162,7 +162,7 @@ import { spawnWorkerThread, waitWorker } from '../orchestration/workerTools.js';
 import { isModelNotFoundError, shouldFallbackModel } from '../provider/modelFallback.js';
 import { resolveLocalModelProfile, localModelProfileActive, isLocalModelCoreTool } from '../provider/modelFamily.js';
 // 0.3.9 item 10 — provider-normalised cache-hit accounting.
-import { extractCacheStats } from '../util/cacheStats.js';
+import { extractCacheStats } from '../util/tokens/cacheStats.js';
 // 0.3.9 item 11 — tool-call repair pipeline (flatten / scavenge /
 // truncation / storm).
 import { ToolCallRepair, type RepairReport } from './repair/index.js';
@@ -175,7 +175,7 @@ import { analyzeSchema, flattenSchema, nestArguments, type JSONSchema } from './
 import {
   estimateTokens as estimateTokensContentAware,
   estimateChatHistoryTokens,
-} from '../util/tokenEstimate.js';
+} from '../util/tokens/tokenEstimate.js';
 // 0.3.9 item 12 — turn-end tool-result auto-shrink.
 import { shrinkOversizedToolResults } from './turnEndShrink.js';
 // 0.3.9 item 13 — model-tier self-escalation.

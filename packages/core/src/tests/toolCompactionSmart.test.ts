@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { _resetCliKnobsCache, resolveCliKnobs, setCliKnobOverride } from '../config/config.js';
-import { attachCompactedResultHandoff, ResultCache } from '../util/resultHandoff.js';
+import { attachCompactedResultHandoff, ResultCache } from '../util/result/resultHandoff.js';
 import { compactToolOutput } from '../prompt/compaction/toolCompaction.js';
 import { runExtractResult } from '../tool/result/extractResult.js';
 

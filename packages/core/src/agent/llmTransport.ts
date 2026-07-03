@@ -14,7 +14,7 @@ import { effortToWireLevel, type EffortLevel } from '../session/preferences/pref
 import type { PromptLayers } from '../prompt/systemPrompt.js';
 import { computePrefixFingerprint } from '../context/contextRegions.js';
 import { traceEvent } from '../telemetry/tracing/tracing.js';
-import { acquireLLMSlot } from '../util/llmSemaphore.js';
+import { acquireLLMSlot } from '../util/concurrency/llmSemaphore.js';
 import { parseRetryAfterMs } from '../mcp/reconnect/reconnect.js';
 import {
   buildAnthropicMessagesPayload, normalizeAnthropicOutput, ANTHROPIC_DEFAULT_MAX_TOKENS,

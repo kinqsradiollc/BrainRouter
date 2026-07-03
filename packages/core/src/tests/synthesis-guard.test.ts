@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isChildSynthesisTool, resultHasChildOutput, looksLikeChildSynthesisPunt } from '../util/synthesisGuard.js';
+import { isChildSynthesisTool, resultHasChildOutput, looksLikeChildSynthesisPunt } from '../util/agentloop/synthesisGuard.js';
 
 test('MAR-3 isChildSynthesisTool: child-result tools only', () => {
   for (const n of ['task_agent', 'wait_agent', 'wait_agents', 'delegate_explorer', 'delegate_reviewer']) {

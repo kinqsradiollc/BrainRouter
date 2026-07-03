@@ -24,7 +24,7 @@
 
 import { compactToolOutput } from '../prompt/compaction/toolCompaction.js';
 import { getCliKnobs } from '../config/config.js';
-import { attachCompactedResultHandoff, ResultCache } from '../util/resultHandoff.js';
+import { attachCompactedResultHandoff, ResultCache } from '../util/result/resultHandoff.js';
 
 /** Default cap. Overridable via BRAINROUTER_TURN_END_RESULT_CAP_TOKENS. */
 export const TURN_END_RESULT_CAP_TOKENS = 3000;

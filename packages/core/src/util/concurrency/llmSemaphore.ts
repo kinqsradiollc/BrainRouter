@@ -22,7 +22,7 @@
  * queue background extraction.
  */
 
-import { getCliKnobs } from '../config/config.js';
+import { getCliKnobs } from '../../config/config.js';
 
 function resolveCap(): number {
   const parsed = getCliKnobs().llmMaxConcurrent;
