@@ -246,6 +246,19 @@ import {
 import { countConnectorDocuments, searchConnectorDocuments } from '@kinqs/brainrouter-core/connectors';
 import { countConnectorPermissions, listConnectorPermissions } from '@kinqs/brainrouter-core/connectors';
 import { retrieveConnectorSlimDocuments } from '@kinqs/brainrouter-core/connectors';
+// PLUGIN-MARKETPLACE P4-desktop — the Marketplace UI's read/mutation surface.
+// Delegates to the shared core plugin runtime (fs/git in the host, never the
+// renderer). Search/install/enable/remove/consent all live in pluginBridge.ts.
+import {
+  listInstalledPlugins,
+  searchRegistryPlugins,
+  pluginConsentSummary,
+  installPluginFromRegistry,
+  installPluginFromSource,
+  setPluginEnabledBridge,
+  setPluginConsentBridge,
+  removePluginBridge,
+} from './pluginBridge.js';
 import type { WorkItemType, SprintState, CodeLink, AutomationTrigger, AutomationAction, ProjectRole, ConnectorFlow, ConnectorRecord, ConnectorSource } from '@kinqs/brainrouter-types';
 
 import { isRequirementStatus, isRequirementPriority } from '@kinqs/brainrouter-types';
@@ -457,6 +470,78 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         } catch (err) {
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
+      },
+      // PLUGIN-MARKETPLACE P4-desktop — the Marketplace panel's endpoints. Reads
+      // (list installed / search registry / consent summary) plus the mutating
+      // install / enable / disable / remove / trust actions, all delegating to
+      // the shared core plugin runtime through pluginBridge.ts.
+      'plugin-list': async () => {
+        try {
+          return await listInstalledPlugins(workspaceRoot);
+        } catch (err) {
+          return { plugins: [], skippedForSafeMode: false, errors: [err instanceof Error ? err.message : String(err)] };
+        }
+      },
+      'plugin-search': async (args) => {
+        try {
+          const res = await searchRegistryPlugins(typeof args.query === 'string' ? args.query : '', {
+            category: typeof args.category === 'string' && args.category ? args.category : undefined,
+            tag: typeof args.tag === 'string' && args.tag ? args.tag : undefined,
+            limit: typeof args.limit === 'number' ? args.limit : undefined,
+          });
+          if (!res.ok) return { ok: false, hits: [], error: res.error };
+          return { ok: true, hits: res.hits, fromCache: res.fromCache };
+        } catch (err) {
+          return { ok: false, hits: [], error: err instanceof Error ? err.message : String(err) };
+        }
+      },
+      'plugin-consent': async (args) => {
+        try {
+          const name = typeof args.name === 'string' ? args.name : '';
+          if (!name) return { ok: false, error: 'plugin name is required' };
+          const scope = args.scope === 'workspace' ? 'workspace' : 'user';
+          const action = args.action === 'enable' ? 'enable' : 'install';
+          const res = await pluginConsentSummary(name, workspaceRoot, scope);
+          // Echo the pending action/scope back so the renderer can pair the
+          // returned disclosure with the button the user clicked.
+          if (res.ok) return { ok: true, summary: res.summary, action, scope };
+          return res;
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      },
+      'action:plugin-install': (args) => {
+        try {
+          const scope = args.scope === 'workspace' ? 'workspace' : 'user';
+          const force = args.force === true;
+          if (typeof args.source === 'string' && args.source.trim()) {
+            return installPluginFromSource(args.source.trim(), { scope, workspaceRoot, ref: typeof args.ref === 'string' ? args.ref : undefined, force });
+          }
+          const name = typeof args.name === 'string' ? args.name.trim() : '';
+          if (!name) return { ok: false, error: 'plugin name or source is required' };
+          return installPluginFromRegistry(name, { scope, workspaceRoot, force });
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      },
+      'action:plugin-enable': (args) => {
+        const name = typeof args.name === 'string' ? args.name : '';
+        if (!name) return { ok: false, error: 'plugin name is required' };
+        return setPluginEnabledBridge(name, args.enabled !== false);
+      },
+      'action:plugin-consent-set': (args) => {
+        const name = typeof args.name === 'string' ? args.name : '';
+        if (!name) return { ok: false, error: 'plugin name is required' };
+        return setPluginConsentBridge(name, {
+          shell: typeof args.shell === 'boolean' ? args.shell : undefined,
+          mcp: typeof args.mcp === 'boolean' ? args.mcp : undefined,
+        });
+      },
+      'action:plugin-remove': (args) => {
+        const name = typeof args.name === 'string' ? args.name : '';
+        if (!name) return { ok: false, error: 'plugin name is required' };
+        const scope = args.scope === 'workspace' ? 'workspace' : 'user';
+        return removePluginBridge(name, { scope, workspaceRoot });
       },
       'action:connector-record-run': (args) => {
         try {

@@ -115,6 +115,7 @@ export const NAV: Array<{ section: SettingsSection; icon: string; title: string;
   { section: 'connectors', icon: 'bolt', title: 'MCP Servers', group: 'Settings' },
   { section: 'tools', icon: 'gear', title: 'Tools', group: 'Settings' },
   { section: 'data-connectors', icon: 'branch', title: 'Connectors', group: 'Settings' },
+  { section: 'marketplace', icon: 'plug', title: 'Marketplace', group: 'Settings' },
   { section: 'advanced', icon: 'gear', title: 'Advanced', group: 'Settings' },
   { section: 'observability', icon: 'chart', title: 'Usage', group: 'Settings' },
   { section: 'appearance', icon: 'palette', title: 'Appearance', group: 'Desktop app' },

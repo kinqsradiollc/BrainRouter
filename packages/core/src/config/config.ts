@@ -15,6 +15,8 @@ import type {
   ResolvedWebSearchKnobs,
   WebSearchProviderName,
   ProviderWireFormat,
+  MarketplaceSource,
+  PluginCapabilityConsent,
 } from './configTypes.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'brainrouter');
@@ -256,6 +258,100 @@ function normalizeToolOverrides(input: unknown): Record<string, boolean> {
     if (key && typeof rawValue === 'boolean') out[key] = rawValue;
   }
   return out;
+}
+
+/**
+ * PLUGIN-MARKETPLACE P1/P2 — reduce raw `cli.plugins` to a validated view.
+ * `enabled` keeps only string→boolean pairs (kebab-case names are trimmed,
+ * case preserved); non-object input → `{}`. `registryUrl` trimmed; `''` = unset.
+ * `marketplaces` keeps only well-formed sources (a non-empty `name` + `source`
+ * + a recognized `sourceType`); malformed entries are dropped fail-safe.
+ */
+const MARKETPLACE_SOURCE_TYPES: readonly MarketplaceSource['sourceType'][] = ['git', 'local', 'http'];
+
+function resolveMarketplaceSources(input: unknown): MarketplaceSource[] {
+  if (!Array.isArray(input)) return [];
+  const out: MarketplaceSource[] = [];
+  const seen = new Set<string>();
+  for (const raw of input) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const obj = raw as Record<string, unknown>;
+    const name = typeof obj.name === 'string' ? obj.name.trim() : '';
+    const source = typeof obj.source === 'string' ? obj.source.trim() : '';
+    const sourceType = typeof obj.sourceType === 'string' ? (obj.sourceType.trim() as MarketplaceSource['sourceType']) : undefined;
+    if (!name || !source || !sourceType || !MARKETPLACE_SOURCE_TYPES.includes(sourceType)) continue;
+    if (seen.has(name)) continue; // first wins on duplicate names
+    seen.add(name);
+    const entry: MarketplaceSource = { name, sourceType, source };
+    if (typeof obj.ref === 'string' && obj.ref.trim()) entry.ref = obj.ref.trim();
+    if (Array.isArray(obj.sparsePaths)) {
+      const paths = obj.sparsePaths.filter((p): p is string => typeof p === 'string' && !!p.trim()).map((p) => p.trim());
+      if (paths.length) entry.sparsePaths = paths;
+    }
+    if (typeof obj.lastRevision === 'string' && obj.lastRevision.trim()) entry.lastRevision = obj.lastRevision.trim();
+    if (typeof obj.lastUpdated === 'string' && obj.lastUpdated.trim()) entry.lastUpdated = obj.lastUpdated.trim();
+    out.push(entry);
+  }
+  return out;
+}
+
+function resolveStringList(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of input) {
+    if (typeof raw !== 'string') continue;
+    const t = raw.trim();
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+  }
+  return out;
+}
+
+function resolveApprovedMap(input: unknown): Record<string, PluginCapabilityConsent> {
+  const out: Record<string, PluginCapabilityConsent> = {};
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return out;
+  for (const [rawKey, rawVal] of Object.entries(input as Record<string, unknown>)) {
+    const key = typeof rawKey === 'string' ? rawKey.trim() : '';
+    if (!key || !rawVal || typeof rawVal !== 'object' || Array.isArray(rawVal)) continue;
+    const v = rawVal as Record<string, unknown>;
+    const consent: PluginCapabilityConsent = {};
+    if (v.shell === true) consent.shell = true;
+    if (v.mcp === true) consent.mcp = true;
+    if (consent.shell || consent.mcp) out[key] = consent;
+  }
+  return out;
+}
+
+function resolvePluginsKnobs(input: unknown): ResolvedCliKnobs['plugins'] {
+  const enabled: Record<string, boolean> = {};
+  let registryUrl = '';
+  let marketplaces: MarketplaceSource[] = [];
+  let approved: Record<string, PluginCapabilityConsent> = {};
+  let allowedMarketplaces: string[] = [];
+  let blockedMarketplaces: string[] = [];
+  let allowManagedHooksOnly = false;
+  let publishRepo = '';
+  let autoUpdateCheck = false;
+  if (input && typeof input === 'object' && !Array.isArray(input)) {
+    const obj = input as Record<string, unknown>;
+    if (obj.enabled && typeof obj.enabled === 'object' && !Array.isArray(obj.enabled)) {
+      for (const [rawKey, rawValue] of Object.entries(obj.enabled as Record<string, unknown>)) {
+        const key = typeof rawKey === 'string' ? rawKey.trim() : '';
+        if (key && typeof rawValue === 'boolean') enabled[key] = rawValue;
+      }
+    }
+    if (typeof obj.registryUrl === 'string') registryUrl = obj.registryUrl.trim();
+    marketplaces = resolveMarketplaceSources(obj.marketplaces);
+    approved = resolveApprovedMap(obj.approved);
+    allowedMarketplaces = resolveStringList(obj.allowedMarketplaces);
+    blockedMarketplaces = resolveStringList(obj.blockedMarketplaces);
+    allowManagedHooksOnly = obj.allowManagedHooksOnly === true;
+    if (typeof obj.publishRepo === 'string') publishRepo = obj.publishRepo.trim();
+    autoUpdateCheck = obj.autoUpdateCheck === true;
+  }
+  return { enabled, registryUrl, marketplaces, approved, allowedMarketplaces, blockedMarketplaces, allowManagedHooksOnly, publishRepo, autoUpdateCheck };
 }
 
 function unitInterval(value: unknown, fallback: number): number {
@@ -502,6 +598,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
       enabled: c.computerUse?.enabled ?? false,
       mode: c.computerUse?.mode?.trim() || 'smart_approve',
     },
+    plugins: resolvePluginsKnobs(c.plugins),
     tierLadder: c.tierLadder,
     contextCompaction: c.contextCompaction ?? true,
     updateCheck: c.updateCheck ?? true,

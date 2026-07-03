@@ -15,6 +15,7 @@ import type { PlanDecisionView } from '../../plan/planReviewView.js';
 import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph } from '@kinqs/brainrouter-types';
 import type { CommandsCatalog } from '../../commands/commands.js';
 import type { ConfigSnapshot, UsageHistory } from '../../../settings.js';
+import type { MarketplaceState } from '../../../settings/marketplace/index.js';
 import { type WorktreeEntry } from '../../worktree/worktreeParser.js';
 import { type ProjectSessionsByRoot } from '../../session/workspaces/projectSessionsView.js';
 
@@ -99,6 +100,8 @@ export interface AgentEventsCtx {
   setSnapshot: React.Dispatch<React.SetStateAction<ConfigSnapshot | null>>;
   setUsageLines: React.Dispatch<React.SetStateAction<string[]>>;
   setUsageHistory: React.Dispatch<React.SetStateAction<UsageHistory | null>>;
+  /** PLUGIN-MARKETPLACE P4-desktop — Marketplace panel state (installed / hits / consent). */
+  setMarket: React.Dispatch<React.SetStateAction<MarketplaceState>>;
   setSearchHits: React.Dispatch<React.SetStateAction<SearchHit[] | null>>;
   setSchedules: React.Dispatch<React.SetStateAction<ScheduleRecordView[]>>;
   setRequirements: React.Dispatch<React.SetStateAction<RequirementRecord[]>>;

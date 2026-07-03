@@ -16,6 +16,7 @@ import { buildCommandList, runCommand, type CmdCtx, type CommandsCatalog, type D
 import { tagQueryId } from './lib/workspace/workspaceEvents.js';
 import { duplicateTitleKeys } from './lib/session/list/sessionDisplay.js';
 import { type ConfigSnapshot, type UsageHistory } from './settings.js';
+import type { MarketplaceState } from './settings/marketplace/index.js';
 import { installDevBridge } from './devBridge.js';
 import type { AttachmentUpload, PlanItem, ChatRow, FleetRow, PopId } from './types.js';
 import type { PlanDecisionView } from './lib/plan/planReviewView.js';
@@ -120,6 +121,9 @@ export function App(): React.ReactElement {
   const [snapshot, setSnapshot] = useState<ConfigSnapshot | null>(null);
   const [usageLines, setUsageLines] = useState<string[]>([]);
   const [usageHistory, setUsageHistory] = useState<UsageHistory | null>(null); // WS10 — cross-session heatmap
+  // PLUGIN-MARKETPLACE P4-desktop — the Marketplace panel's data slice (installed
+  // plugins + registry search hits + the pending consent disclosure).
+  const [market, setMarket] = useState<MarketplaceState>({ installed: null, hits: null, searching: false, error: '', consent: null });
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settings, setSettings] = useState<{ open: boolean; section: SettingsSection }>({ open: false, section: 'general' });
   const [infoDialog, setInfoDialog] = useState<{ title: string; body: string } | null>(null);
@@ -350,6 +354,7 @@ export function App(): React.ReactElement {
     setDraft, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
     setBranches, setModelsLoading, setEndpointModels, setToolCatalog, setProviderModels, setProbedModels, setProbeLoading, setProbeError, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
+    setMarket,
     setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
@@ -525,6 +530,7 @@ export function App(): React.ReactElement {
         endpointModels={endpointModels} providerModels={providerModels} probedModels={probedModels}
         probeLoading={probeLoading} probeError={probeError} setProbeLoading={setProbeLoading}
         setProbeError={setProbeError} setProbedModels={setProbedModels} toolCatalog={toolCatalog}
+        market={market}
         execMode={execMode} codeFont={codeFont} setCodeFont={setCodeFont} theme={theme} setTheme={setTheme}
         chatWidth={chatWidth} setChatWidth={setChatWidth} chatSize={chatSize} setChatSize={setChatSize}
         accent={accent} setAccent={setAccent}

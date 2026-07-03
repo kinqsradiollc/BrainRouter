@@ -13,6 +13,8 @@ import { registerRunCommand } from './entry/runCommand.js';
 import { registerLoginCommand, registerConfigCommand } from './entry/authConfigCommands.js';
 import { registerAgentsCommand } from './entry/agentsCommand.js';
 import { registerFleetCommand } from './entry/fleetCommand.js';
+import { registerPluginCommand } from './entry/pluginCommand.js';
+import { registerMarketplaceCommand } from './entry/marketplaceCommand.js';
 
 const program = new Command();
 
@@ -27,5 +29,7 @@ registerLoginCommand(program);
 registerConfigCommand(program);
 registerAgentsCommand(program);
 registerFleetCommand(program);
+registerPluginCommand(program);
+registerMarketplaceCommand(program);
 
 program.parse(process.argv);

@@ -14,6 +14,7 @@ import type { PlanDecisionView } from '../../plan/planReviewView.js';
 import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph } from '@kinqs/brainrouter-types';
 import type { CommandsCatalog } from '../../commands/commands.js';
 import type { ConfigSnapshot, UsageHistory } from '../../../settings.js';
+import type { InstalledPluginView, RegistrySearchHit, ConsentSummaryView } from '../../../settings/marketplace/index.js';
 import { parseWorktreeList } from '../../worktree/worktreeParser.js';
 import { mergeOptimistic, dropPending } from '../../session/list/sessionOrder.js';
 import { normalizeProjectSessionsResult, withCachedProjectSessions } from '../../session/workspaces/projectSessionsView.js';
@@ -32,6 +33,7 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
     setDraft, planFeedbackRef, goalContPendingRef, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
     setBranches, setModelsLoading, setEndpointModels, setToolCatalog, setProviderModels, setProbedModels, setProbeLoading, setProbeError, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
+    setMarket,
     setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
@@ -379,6 +381,49 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
       case 'q-snapshot': if (result && typeof result === 'object') setSnapshot(result as ConfigSnapshot); return;
       case 'q-usage': if (Array.isArray(result)) setUsageLines(result as string[]); return;
       case 'q-usage-hist': if (result && typeof result === 'object') setUsageHistory(result as UsageHistory); return;
+      // PLUGIN-MARKETPLACE P4-desktop — Marketplace panel results. The host does
+      // all fs/git work; these just fold the returned data into the market slice.
+      case 'q-plugin-list': {
+        const r = result as { plugins?: InstalledPluginView[]; errors?: string[] } | null;
+        setMarket((m) => ({ ...m, installed: Array.isArray(r?.plugins) ? r!.plugins! : [] }));
+        return;
+      }
+      case 'q-plugin-search': {
+        const r = result as { ok?: boolean; hits?: RegistrySearchHit[]; error?: string } | null;
+        setMarket((m) => ({ ...m, searching: false, hits: Array.isArray(r?.hits) ? r!.hits! : [], error: r?.ok === false ? (r.error ?? 'registry unavailable') : '' }));
+        return;
+      }
+      case 'q-plugin-consent': {
+        // The host echoes the pending action/scope alongside the disclosure so we
+        // can pair the summary with the button the user clicked (install/enable).
+        const r = result as { ok?: boolean; summary?: ConsentSummaryView; action?: 'install' | 'enable'; scope?: 'user' | 'workspace'; error?: string } | null;
+        if (r?.ok && r.summary) {
+          setMarket((m) => ({ ...m, consent: { plugin: r.summary!.name, scope: r.scope ?? 'user', action: r.action ?? 'install', summary: r.summary! } }));
+        } else if (r?.error) {
+          setToast(`✗ ${r.error}`);
+        }
+        return;
+      }
+      case 'plugin-consent-close': setMarket((m) => ({ ...m, consent: null, consentRequest: null })); return;
+      case 'a-plugin-install': {
+        const r = result as { ok?: boolean; name?: string; error?: string } | null;
+        setMarket((m) => ({ ...m, consent: null }));
+        setToast(r?.ok ? `✓ Installed ${r.name ?? 'plugin'}` : `✗ Install failed${r?.error ? `: ${r.error}` : ''}`);
+        return;
+      }
+      case 'a-plugin-enable': {
+        const r = result as { ok?: boolean; error?: string } | null;
+        setMarket((m) => ({ ...m, consent: null }));
+        if (r && r.ok === false) setToast(`✗ ${r.error ?? 'Could not update the plugin.'}`);
+        return;
+      }
+      case 'a-plugin-remove': {
+        const r = result as { ok?: boolean; error?: string } | null;
+        setToast(r?.ok ? '✓ Plugin removed.' : `✗ Remove failed${r?.error ? `: ${r.error}` : ''}`);
+        return;
+      }
+      case 'a-plugin-consent-set': return; // silent — the panel refreshes the installed list
+      case 'a-plugin-consent-close': setMarket((m) => ({ ...m, consent: null })); return;
       case 'q-search': if (Array.isArray(result)) setSearchHits(result as SearchHit[]); return;
       case 'q-schedule': if (Array.isArray(result)) setSchedules(result as ScheduleRecordView[]); return;
       // REQUIREMENT-RECORDS — the list populates the slice; create/update/seed use
