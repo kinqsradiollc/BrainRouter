@@ -9,7 +9,7 @@
  * a thin, swappable `spawnSync` helper so the scan logic is unit-testable.
  */
 import { spawnSync } from 'node:child_process';
-import { getProject, ensureProject, getWorkItem, linkWorkItem, transitionWorkItem } from './trackStore.js';
+import { getProject, ensureProject, getWorkItem, linkWorkItem, transitionWorkItem } from '../trackStore.js';
 import { isUnstartedCategory, type TrackProject } from '@kinqs/brainrouter-types';
 
 export interface ScannedCommit { sha: string; subject: string; body?: string }

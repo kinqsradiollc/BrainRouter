@@ -13,7 +13,7 @@ import {
   setSprintState,
   transitionWorkItem,
 } from '../track/trackStore.js';
-import { reconcileSessionSprints } from '../track/sprintAutomation.js';
+import { reconcileSessionSprints } from '../track/automation/sprintAutomation.js';
 import { withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 
 test('sprint automation: threshold creates one future sprint and assigns current-session items', () => {

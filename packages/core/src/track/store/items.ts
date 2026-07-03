@@ -21,7 +21,7 @@ import {
 import { ensureProject, getProject } from './project.js';
 import { assertCan } from './members.js';
 import { runAutomations } from './automations.js';
-import { parseTrackQuery } from '../query.js';
+import { parseTrackQuery } from '../query/query.js';
 import type {
   CreateWorkItemInput,
   WorkItemFilter,

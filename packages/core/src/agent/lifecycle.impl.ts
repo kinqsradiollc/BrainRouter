@@ -21,7 +21,7 @@ import { createRequirement, getRequirement, linkRequirement, listRequirements, u
 import { effortToWireLevel, readPreferences } from '../session/preferences/preferencesStore.js';
 import { resolveActiveMode } from '../session/state/sessionModeStore.js';
 import { readPlan } from '../task/taskStore.js';
-import { reconcileSessionSprints } from '../track/sprintAutomation.js';
+import { reconcileSessionSprints } from '../track/automation/index.js';
 import {
   ensureProject as trackEnsureProject,
   getProject as trackGetProject,

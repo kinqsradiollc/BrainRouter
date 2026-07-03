@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createTrackService, TrackService } from '../track/service.js';
+import { createTrackService, TrackService } from '../track/service/service.js';
 import { getProject, getWorkItem, listWorkItems } from '../track/trackStore.js';
 
 test('TrackService is a per-workspace facade — delegates to the track store', () => {

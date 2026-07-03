@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { isUnstartedCategory, type WorkItem, type TrackProject } from '@kinqs/brainrouter-types';
-import { ensureProject, getProject, getWorkItem, linkWorkItem, transitionWorkItem } from './trackStore.js';
+import { ensureProject, getProject, getWorkItem, linkWorkItem, transitionWorkItem } from '../trackStore.js';
 
 export interface GitCommandResult {
   ok: boolean;

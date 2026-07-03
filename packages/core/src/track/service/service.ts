@@ -10,7 +10,7 @@ import {
   ensureProject, getProject, createWorkItem, getWorkItem, listWorkItems,
   findWorkItemsByCodeLink, updateWorkItem, transitionWorkItem,
   type EnsureProjectInput, type CreateWorkItemInput, type WorkItemFilter, type UpdateWorkItemPatch,
-} from "./trackStore.js";
+} from "../trackStore.js";
 
 /** The Track work-item store contract, scoped to one workspace. */
 export interface ITrackService {

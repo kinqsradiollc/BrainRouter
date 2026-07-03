@@ -6,7 +6,7 @@ import {
   sprintVelocity,
   updateSprint,
   updateWorkItem,
-} from './trackStore.js';
+} from '../trackStore.js';
 
 export type SprintAutomationAction =
   | { kind: 'sprint-created'; sprintId: string; sprintName: string }

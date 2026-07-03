@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ensureProject, createWorkItem, listWorkItems, getWorkItem, getGithubLinks, setGithubLink, updateWorkItem, listMembers, addComment, listLabels, getLabel, getGithubSyncTarget, setGithubSyncTarget } from '../track/trackStore.js';
-import { migrateTrackGithubToConnector } from '../track/githubMigrate.js';
+import { migrateTrackGithubToConnector } from '../track/github/githubMigrate.js';
 import {
   workItemToIssue,
   issueToWorkItem,

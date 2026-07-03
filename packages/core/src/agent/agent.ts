@@ -30,7 +30,7 @@ import { formatPlan, readPlan, updatePlan, type PlanState } from '../task/taskSt
 import { createRequirement, getRequirement, linkRequirement, listRequirements, updateRequirement } from '../requirement/records/requirementStore.js';
 import { detectRequirementShapedPrompt } from '../requirement/records/requirementDetector.js';
 import { syncRequirementPlanTrack } from '../requirement/sync/planTrackSync.js';
-import { reconcileSessionSprints } from '../track/sprintAutomation.js';
+import { reconcileSessionSprints } from '../track/automation/index.js';
 import {
   ensureProject as trackEnsureProject,
   getProject as trackGetProject,
@@ -48,7 +48,7 @@ import {
   updateSprint as trackUpdateSprint,
   sprintVelocity as trackSprintVelocity,
 } from '../track/trackStore.js';
-import { parseTrackQuery } from '../track/query.js';
+import { parseTrackQuery } from '../track/query/index.js';
 import { createArtifact, updateArtifact, getArtifact, linkArtifact } from '../artifact/artifactStore.js';
 // Connectors — agent-callable list/run parity (ingest → memory). The runtime
 // switch + full orchestration live in core's shared runner; the agent supplies

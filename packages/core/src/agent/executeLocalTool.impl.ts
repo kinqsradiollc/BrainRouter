@@ -40,7 +40,7 @@ import { isTelemetryEnabled } from '../telemetry/recorder/telemetry.js';
 import { traceEvent } from '../telemetry/tracing/tracing.js';
 import { localToolExecutor } from '../tool/registry/executors.js';
 import { runExtractResult } from '../tool/result/extractResult.js';
-import { parseTrackQuery } from '../track/query.js';
+import { parseTrackQuery } from '../track/query/index.js';
 import {
   ensureProject as trackEnsureProject,
   getProject as trackGetProject,
