@@ -95,32 +95,39 @@ function migrateLegacyWorkspaceState(workspaceRoot: string, newRoot: string): vo
       process.stderr.write(`brainrouter: migrated legacy state from ${legacyRoot} to ${newRoot}\n`);
     }
     // Now neutralize the legacy directory so the agent's list_dir / read_file
-    // don't see stale state in the workspace tree. Anything that ISN'T a
-    // workflows/ folder is moved to .brainrouter.migrated/. If only
-    // workflows/ remains, the workspace-local .brainrouter/ stays as the
-    // canonical home for committable artifacts.
-    const archiveRoot = path.join(abs, '.brainrouter.migrated');
+    // don't see stale state in the workspace tree. The important state has
+    // already been rescue-copied into the new home above (guaranteed by the
+    // marker check), so anything that ISN'T a workflows/ folder is DELETED
+    // outright — we no longer create a `.brainrouter.migrated/` archive in
+    // the project tree. If only workflows/ remains, the workspace-local
+    // .brainrouter/ stays as the canonical home for committable artifacts.
     const entries = fs.readdirSync(legacyRoot, { withFileTypes: true });
-    let archivedAny = false;
+    let removedAny = false;
     for (const entry of entries) {
       if (entry.name === 'workflows') continue;
       const from = path.join(legacyRoot, entry.name);
-      const to = path.join(archiveRoot, entry.name);
       try {
-        fs.mkdirSync(archiveRoot, { recursive: true });
-        if (!fs.existsSync(to)) {
-          fs.renameSync(from, to);
-          archivedAny = true;
-        } else {
-          // Already archived from a prior run — just remove the stale copy.
-          fs.rmSync(from, { recursive: true, force: true });
-        }
+        fs.rmSync(from, { recursive: true, force: true });
+        removedAny = true;
       } catch {
-        // best-effort: skip files we can't rename
+        // best-effort: skip files we can't remove
       }
     }
-    if (archivedAny) {
-      process.stderr.write(`brainrouter: archived legacy in-workspace state to ${archiveRoot} (safe to delete after verifying)\n`);
+    if (removedAny) {
+      process.stderr.write(`brainrouter: removed legacy in-workspace state under ${legacyRoot} (rescued to ${newRoot})\n`);
+    }
+    // One-time SWEEP: older builds archived legacy state into a
+    // `<ws>/.brainrouter.migrated/` folder. Now that the rescue-copy has run
+    // and the marker exists (migration complete), delete any such stale
+    // archive so pre-existing ones from older builds also disappear.
+    try {
+      const staleArchive = path.join(abs, '.brainrouter.migrated');
+      if (fs.existsSync(staleArchive) && fs.existsSync(markerFile)) {
+        fs.rmSync(staleArchive, { recursive: true, force: true });
+        process.stderr.write(`brainrouter: swept stale archive ${staleArchive}\n`);
+      }
+    } catch {
+      // best-effort sweep
     }
     // If the workspace-local `.brainrouter/` is now completely empty (no
     // `workflows/` to preserve), remove the empty shell so the user

@@ -483,8 +483,8 @@ test('sessionStore: legacy transcripts/<encoded>.jsonl remains discoverable', as
   });
 });
 
-test('cliState: migration neutralizes the legacy <workspace>/.brainrouter (preserves workflows/)', async () => {
-  const { getStateDir } = await import('../storage/store.js');
+test('cliState: migration neutralizes the legacy <workspace>/.brainrouter (rescues to home, deletes in place, no archive)', async () => {
+  const { getStateDir, getWorkspaceStateRoot } = await import('../storage/store.js');
   withTempWorkspace((workspace) => {
     const legacy = path.join(workspace, '.brainrouter');
     fs.mkdirSync(path.join(legacy, 'cli'), { recursive: true });
@@ -495,11 +495,34 @@ test('cliState: migration neutralizes the legacy <workspace>/.brainrouter (prese
 
     getStateDir(workspace); // triggers migration
 
-    // Legacy cli/ and hooks/ archived; workflows/ kept in workspace.
+    // Legacy cli/ and hooks/ deleted in place; workflows/ kept in workspace.
     assert.equal(fs.existsSync(path.join(legacy, 'cli')), false);
     assert.equal(fs.existsSync(path.join(legacy, 'hooks')), false);
     assert.equal(fs.existsSync(path.join(legacy, 'workflows', 'feat-x', 'spec.md')), true);
-    assert.equal(fs.existsSync(path.join(workspace, '.brainrouter.migrated', 'cli', 'tasks.json')), true);
+    // The rescued state lives in the user-global home, NOT in an in-workspace archive.
+    const home = getWorkspaceStateRoot(workspace);
+    assert.equal(fs.existsSync(path.join(home, 'cli', 'tasks.json')), true);
+    // No `.brainrouter.migrated` archive is ever created in the project tree.
+    assert.equal(fs.existsSync(path.join(workspace, '.brainrouter.migrated')), false);
+  });
+});
+
+test('cliState: migration sweeps a pre-existing stale <workspace>/.brainrouter.migrated archive', async () => {
+  const { getStateDir } = await import('../storage/store.js');
+  withTempWorkspace((workspace) => {
+    // Simulate an older build that left an archive folder behind.
+    const staleArchive = path.join(workspace, '.brainrouter.migrated');
+    fs.mkdirSync(path.join(staleArchive, 'cli'), { recursive: true });
+    fs.writeFileSync(path.join(staleArchive, 'cli', 'tasks.json'), JSON.stringify({ items: [] }));
+    // A legacy tree must exist for the migration body to run at all.
+    const legacy = path.join(workspace, '.brainrouter');
+    fs.mkdirSync(path.join(legacy, 'cli'), { recursive: true });
+    fs.writeFileSync(path.join(legacy, 'cli', 'tasks.json'), JSON.stringify({ items: [] }));
+
+    getStateDir(workspace); // triggers migration + sweep
+
+    // The stale archive is gone after migration completes.
+    assert.equal(fs.existsSync(staleArchive), false);
   });
 });
 
