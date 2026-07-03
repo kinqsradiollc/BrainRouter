@@ -8,26 +8,26 @@ import React, { Suspense, lazy } from 'react';
 import {
   DiffPanel, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
   RequirementsPanel, AnnotationsPanel, ArtifactsPanel, AtlasPanel, WorkflowsPanel, MemoryPanel, PrototypePanel, TasksPanel, TerminalPanel, ToolsPanel, ContextPanel, type PanelId, type SearchHit, type ReviewFindingView, type GrepHit, type FinishedTask,
-} from '../panels/index.js';
+} from '../../panels/index.js';
 import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph } from '@kinqs/brainrouter-types';
-import type { TrackPrStatus } from '../track/TrackView.js';
-import type { ScheduleRecordView } from '../lib/schedule/scheduleView.js';
-import { setEntry } from '../lib/review/reviewWorkspace.js';
-import type { PlanItem, FleetRow } from '../types.js';
-import type { PlanDecisionView } from '../lib/plan/planReviewView.js';
-import type { GitState } from '../lib/git/useGitState.js';
-import type { useEditor } from '../lib/editor/useEditor.js';
-import type { useCi } from '../lib/ci/useCi.js';
-import { type DashTab, type DashTask, type WorkspaceDash } from '../lib/workspace/dashboard.js';
-import type { AtlasChangeAssessment } from '../lib/atlas/atlasView.js';
-import { buildTrackOps } from './trackOps.js';
+import type { TrackPrStatus } from '../../track/TrackView.js';
+import type { ScheduleRecordView } from '../../lib/schedule/scheduleView.js';
+import { setEntry } from '../../lib/review/reviewWorkspace.js';
+import type { PlanItem, FleetRow } from '../../types.js';
+import type { PlanDecisionView } from '../../lib/plan/planReviewView.js';
+import type { GitState } from '../../lib/git/useGitState.js';
+import type { useEditor } from '../../lib/editor/useEditor.js';
+import type { useCi } from '../../lib/ci/useCi.js';
+import { type DashTab, type DashTask, type WorkspaceDash } from '../../lib/workspace/dashboard.js';
+import type { AtlasChangeAssessment } from '../../lib/atlas/atlasView.js';
+import { buildTrackOps } from '../track/trackOps.js';
 
 // Monaco is ~5MB — lazy-load the editor panel so it only loads when first opened.
-const EditorPanel = lazy(() => import('../panels/editing/EditorPanel.js').then((m) => ({ default: m.EditorPanel })));
+const EditorPanel = lazy(() => import('../../panels/editing/EditorPanel.js').then((m) => ({ default: m.EditorPanel })));
 // CI + Dashboard are optional panels rarely opened on load — lazy so they stay
 // out of the initial bundle / first paint.
-const CIPanel = lazy(() => import('../panels/ci/CIPanel.js').then((m) => ({ default: m.CIPanel })));
-const DashboardPanel = lazy(() => import('../panels/review/DashboardPanel.js').then((m) => ({ default: m.DashboardPanel })));
+const CIPanel = lazy(() => import('../../panels/ci/CIPanel.js').then((m) => ({ default: m.CIPanel })));
+const DashboardPanel = lazy(() => import('../../panels/review/DashboardPanel.js').then((m) => ({ default: m.DashboardPanel })));
 
 type Query = (id: string, name: string, args?: Record<string, unknown>) => void;
 

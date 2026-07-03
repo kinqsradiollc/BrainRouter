@@ -5,14 +5,14 @@
  * can pass them as props unchanged (the rendered output is identical).
  */
 import React from 'react';
-import { Icon } from '../icons.js';
-import { MessageRow } from '../chat/MessageRow.js';
-import { SessionStatus, PrStatusIcon } from '../components/status/SessionStatus.js';
-import { prStatusFor } from '../lib/ci/prStatus.js';
-import { fmtAge } from '../lib/format.js';
-import type { ChatRow, SessionRow } from '../types.js';
-import type { PanelId } from '../panels/index.js';
-import type { useCi } from '../lib/ci/useCi.js';
+import { Icon } from '../../icons.js';
+import { MessageRow } from '../../chat/MessageRow.js';
+import { SessionStatus, PrStatusIcon } from '../../components/status/SessionStatus.js';
+import { prStatusFor } from '../../lib/ci/prStatus.js';
+import { fmtAge } from '../../lib/format.js';
+import type { ChatRow, SessionRow } from '../../types.js';
+import type { PanelId } from '../../panels/index.js';
+import type { useCi } from '../../lib/ci/useCi.js';
 
 type Query = (id: string, name: string, args?: Record<string, unknown>) => void;
 

@@ -35,15 +35,10 @@ import { sessionRowsCacheKey } from './lib/session/list/sessionCache.js';
 import { useSessionActions } from './lib/session/hooks/useSessionActions.js';
 import { Sidebar } from './components/layout/Sidebar.js';
 import type { GoalRecord } from './components/chat/GoalBanner.js';
-import { useZoom } from './App/useZoom.js';
-import { buildTrackOps } from './App/trackOps.js';
-import { useAppHandlers } from './App/useAppHandlers.js';
-import { useAppEffects } from './App/useAppEffects.js';
-import { useDashboardTasks } from './App/useDashboardTasks.js';
-import { buildRenderPanelBody } from './App/renderPanelBody.js';
-import { buildRenderSessionNode, buildRenderRow } from './App/renderHelpers.js';
-import { AppDialogs } from './App/AppDialogs.js';
-import { MainContent } from './App/MainContent.js';
+import { useZoom, useAppHandlers, useAppEffects, useDashboardTasks } from './App/hooks/index.js';
+import { buildTrackOps } from './App/track/index.js';
+import { buildRenderPanelBody, buildRenderSessionNode, buildRenderRow } from './App/render/index.js';
+import { AppDialogs, MainContent } from './App/layout/index.js';
 
 installDevBridge();
 

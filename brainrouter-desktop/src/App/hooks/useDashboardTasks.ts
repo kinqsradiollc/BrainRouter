@@ -5,10 +5,10 @@
  * action. Extracted from App.tsx verbatim; bodies + deps are unchanged.
  */
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { workspaceRunCounts, runningWorkspaceSet } from '../lib/workspace/runningIndicators.js';
-import { type DashTask, type WorkspaceDash } from '../lib/workspace/dashboard.js';
-import type { FleetRow } from '../types.js';
-import type { GitState } from '../lib/git/useGitState.js';
+import { workspaceRunCounts, runningWorkspaceSet } from '../../lib/workspace/runningIndicators.js';
+import { type DashTask, type WorkspaceDash } from '../../lib/workspace/dashboard.js';
+import type { FleetRow } from '../../types.js';
+import type { GitState } from '../../lib/git/useGitState.js';
 
 interface LiveChild { childId: string; role: string; tool?: string; startedAt: number }
 
