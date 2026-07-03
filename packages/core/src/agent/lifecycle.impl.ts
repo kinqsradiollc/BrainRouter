@@ -7,7 +7,7 @@ import type { RunTurnCallbacks, LastBriefingDetails } from './agent.js';
 import type { PromptLayeredMessage } from './llmTransport.js';
 import { getCliKnobs } from '../config/config.js';
 import { extensionHookHandlers } from '../extension/registry.js';
-import { readGoal, formatGoalBlock } from '../goal/goalStore.js';
+import { readGoal, formatGoalBlock } from '../goal/store/goalStore.js';
 import { callMcpTool } from '../mcp/mcpUtils.js';
 import { decideAnchorAction, hashBriefingContent, wrapMidSessionRefresh } from '../memory/anchorPin.js';
 import { buildDefaultSourcePlan, buildMemoryBriefing, describeSourcePlan } from '../memory/briefing.js';

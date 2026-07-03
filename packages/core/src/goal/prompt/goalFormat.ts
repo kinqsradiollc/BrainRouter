@@ -1,6 +1,6 @@
-import type { Goal } from './goalModel.js';
-import { formatBudget } from './goalModel.js';
-import { goalIsOnFinalBudgetTurn } from './goalBudget.js';
+import type { Goal } from '../model/goalModel.js';
+import { formatBudget } from '../model/goalModel.js';
+import { goalIsOnFinalBudgetTurn } from '../budget/goalBudget.js';
 
 /**
  * Wrap-up directive folded into the goal-anchor block when the goal is on

@@ -3,7 +3,7 @@
  * command helpers so the headless engine + the Desktop host can build the same
  * goal-loop prompt without importing the CLI's interactive command layer.
  */
-import type { Goal } from './goalStore.js';
+import type { Goal } from '../store/goalStore.js';
 
 /** The hidden prompt that kicks off (or resumes) an autonomous `/goal` turn. */
 export function buildGoalKickoffPrompt(

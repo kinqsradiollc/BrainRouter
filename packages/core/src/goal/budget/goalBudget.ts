@@ -1,4 +1,4 @@
-import type { Goal } from './goalModel.js';
+import type { Goal } from '../model/goalModel.js';
 
 /**
  * True iff scheduling ONE MORE iteration would still fit inside BOTH the

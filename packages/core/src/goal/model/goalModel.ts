@@ -1,4 +1,4 @@
-import { getStateFile, getSessionStateFile } from '../storage/store.js';
+import { getStateFile, getSessionStateFile } from '../../storage/store.js';
 
 /**
  * Persistent goal / continuation contract for the agent. A goal is not just

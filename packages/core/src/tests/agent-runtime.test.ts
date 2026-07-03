@@ -621,7 +621,7 @@ test('callOpenAIStream: retries once without reasoning effort when the stream en
   }
 });
 import { executeOrchestrationTool } from '../orchestration/tools.js';
-import { clearGoal, readGoal, setGoal } from '../goal/goalStore.js';
+import { clearGoal, readGoal, setGoal } from '../goal/store/goalStore.js';
 import { makeAgent, withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 import { listArtifacts } from '../artifact/artifactStore.js';
 import { createConnector } from '../connectors/connectorStore.js';
@@ -986,7 +986,7 @@ test('Agent.runTurn pushes the goal-anchor system message as the single owner of
     );
     // Now drive the anchor injection directly — same code path as
     // `agent.ts:680` inside `runTurn`.
-    const { formatGoalBlock, readGoal } = await import('../goal/goalStore.js');
+    const { formatGoalBlock, readGoal } = await import('../goal/store/goalStore.js');
     const goal = readGoal(workspace, agent.sessionKey);
     assert.ok(goal, 'precondition: setGoal succeeded');
     (agent as any).replaceTaggedSystemMessage('goal-anchor', formatGoalBlock(goal!));

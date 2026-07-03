@@ -111,7 +111,7 @@ import {
 import { callMcpTool, extractToolText } from '../mcp/mcpUtils.js';
 import { applyFederationIdentity } from '../util/federationIdentity.js';
 import { acquireLLMSlot } from '../util/llmSemaphore.js';
-import { blockGoal, completeGoal, formatGoalBlock, readGoal } from '../goal/goalStore.js';
+import { blockGoal, completeGoal, formatGoalBlock, readGoal } from '../goal/store/goalStore.js';
 import { runHooks, parseHookDecision } from '../hooks/hooksStore.js';
 import { extensionHookHandlers } from '../extension/registry.js';
 import { resolveSandboxConfig, runShell } from '../exec/sandbox.js';

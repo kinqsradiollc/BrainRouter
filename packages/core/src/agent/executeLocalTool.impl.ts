@@ -24,7 +24,7 @@ import { evaluateDestructiveCommand } from '../exec/destructiveCommandGuard.js';
 import { decideExecutionPolicy, egressDecision } from '../exec/execPolicy.js';
 import { resolveSandboxConfig, runShell } from '../exec/sandbox.js';
 import { gitHeadSha } from '../git/workspaceGit.js';
-import { readGoal, blockGoal, completeGoal } from '../goal/goalStore.js';
+import { readGoal, blockGoal, completeGoal } from '../goal/store/goalStore.js';
 import { searchMcpCatalog } from '../mcp/discovery.js';
 import { extractToolText } from '../mcp/mcpUtils.js';
 import { ownershipWriteViolation } from '../orchestration/ownership.js';

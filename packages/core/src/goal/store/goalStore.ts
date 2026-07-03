@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { getStateDir, getStateFile, readJsonFile, writeJsonFile } from '../storage/store.js';
+import { getStateDir, getStateFile, readJsonFile, writeJsonFile } from '../../storage/store.js';
 import {
   DEFAULT_GOAL_BUDGET,
   GOAL_TEXT_MAX_CHARS,
@@ -10,7 +10,7 @@ import {
   type Goal,
   type GoalBudget,
   type GoalStatus,
-} from './goalModel.js';
+} from '../model/goalModel.js';
 
 /**
  * Persistent goal / continuation store for the agent. This module owns the
@@ -26,10 +26,10 @@ import {
 
 // Re-export the extracted subsystem so the public surface of
 // `goal/goalStore.js` is unchanged after the split.
-export * from './goalModel.js';
-export * from './goalBudget.js';
-export * from './goalFormat.js';
-export * from './goalContinuation.js';
+export * from '../model/goalModel.js';
+export * from '../budget/goalBudget.js';
+export * from '../prompt/goalFormat.js';
+export * from '../prompt/goalContinuation.js';
 
 function normalize(raw: Partial<Goal> | null | undefined): Goal | null {
   if (!raw || !raw.text || raw.text === '') return null;

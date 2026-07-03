@@ -11,7 +11,7 @@ import { contextWindowForBudget } from '../context/contextWindow.js';
 import { resolveToolPolicy, externalDirectoryDecision } from '../exec/execPolicy.js';
 import { isPathWithinRoots } from '../exec/pathPolicy.js';
 import { evaluatePermissionRules, primaryArgText } from '../exec/permissionRules.js';
-import { readGoal, formatGoalBlock } from '../goal/goalStore.js';
+import { readGoal, formatGoalBlock } from '../goal/store/goalStore.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../hooks/hookifyStore.js';
 import { runHooks, parseHookDecision } from '../hooks/hooksStore.js';
 import { extractToolText } from '../mcp/mcpUtils.js';

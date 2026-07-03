@@ -2,12 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { clearGoal, formatGoalBlock, pauseGoal, readGoal, resumeGoal, setGoal } from '../goal/goalStore.js';
+import { clearGoal, formatGoalBlock, pauseGoal, readGoal, resumeGoal, setGoal } from '../goal/store/goalStore.js';
 import { Agent } from '../agent/agent.js';
 import { withTempWorkspace } from './_helpers.js';
 
 test('formatBudget renders the unlimited default as "unlimited" and explicit numbers as-is', async () => {
-  const { formatBudget, DEFAULT_GOAL_BUDGET, UNLIMITED_BUDGET_THRESHOLD } = await import('../goal/goalStore.js');
+  const { formatBudget, DEFAULT_GOAL_BUDGET, UNLIMITED_BUDGET_THRESHOLD } = await import('../goal/store/goalStore.js');
   assert.equal(formatBudget(DEFAULT_GOAL_BUDGET), 'unlimited');
   assert.equal(formatBudget(UNLIMITED_BUDGET_THRESHOLD), 'unlimited');
   assert.equal(formatBudget(UNLIMITED_BUDGET_THRESHOLD - 1), String(UNLIMITED_BUDGET_THRESHOLD - 1));
@@ -18,7 +18,7 @@ test('formatBudget renders the unlimited default as "unlimited" and explicit num
 });
 
 test('goalHasBudgetLeft returns true forever when default budget is in effect (effectively unlimited)', async () => {
-  const { goalHasBudgetLeft, DEFAULT_GOAL_BUDGET } = await import('../goal/goalStore.js');
+  const { goalHasBudgetLeft, DEFAULT_GOAL_BUDGET } = await import('../goal/store/goalStore.js');
   // Simulate a long-running goal that's done 50,000 iterations — default budget should still permit more.
   const goal: any = {
     text: 'long-running goal',
@@ -82,7 +82,7 @@ test('goalStore: set/read/clear round-trip and formatGoalBlock includes outcome 
 });
 
 test('goalStore: setGoal rejects text longer than GOAL_TEXT_MAX_CHARS', async () => {
-  const { GoalTooLongError, GOAL_TEXT_MAX_CHARS } = await import('../goal/goalStore.js');
+  const { GoalTooLongError, GOAL_TEXT_MAX_CHARS } = await import('../goal/store/goalStore.js');
   withTempWorkspace((workspace) => {
     // At-cap input is accepted.
     const atCap = 'x'.repeat(GOAL_TEXT_MAX_CHARS);
@@ -102,7 +102,7 @@ test('goalStore: setGoal rejects text longer than GOAL_TEXT_MAX_CHARS', async ()
 });
 
 test('goalStore: lifecycle helpers — pause, resume, complete, blocked, budget, tick', async () => {
-  const { pauseGoal, resumeGoal, completeGoal, blockGoal, setGoalBudget, tickGoalIteration } = await import('../goal/goalStore.js');
+  const { pauseGoal, resumeGoal, completeGoal, blockGoal, setGoalBudget, tickGoalIteration } = await import('../goal/store/goalStore.js');
   withTempWorkspace((workspace) => {
     const sessionKey = 'brainrouter-cli:test:main';
     setGoal(workspace, 'reach the moon', sessionKey);
@@ -161,7 +161,7 @@ test('goalStore: per-session goals are isolated from each other', () => {
 });
 
 test('goalStore: setGoal throws GoalConflictError when overwriting an active goal without force', async () => {
-  const { GoalConflictError, completeGoal } = await import('../goal/goalStore.js');
+  const { GoalConflictError, completeGoal } = await import('../goal/store/goalStore.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:conflict';
     setGoal(workspace, 'first goal', sk);
@@ -189,7 +189,7 @@ test('goalStore: GoalConflictError message reflects the actual existing status',
   // Copilot review noted that the prior message hardcoded "already active"
   // even when the existing goal was paused / blocked / usage_limited,
   // misleading users via the REPL's catch path. Verify status-aware wording.
-  const { GoalConflictError, pauseGoal, blockGoal, usageLimitGoal } = await import('../goal/goalStore.js');
+  const { GoalConflictError, pauseGoal, blockGoal, usageLimitGoal } = await import('../goal/store/goalStore.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:conflict-msg';
     setGoal(workspace, 'first', sk);
@@ -286,7 +286,7 @@ test('goalStore: formatGoalBlock auto-detects final-budget turn from goal state 
 });
 
 test('goalStore: buildGoalContinuationPrompt references the anchor instead of echoing the goal text (9d)', async () => {
-  const { buildGoalContinuationPrompt } = await import('../goal/goalStore.js');
+  const { buildGoalContinuationPrompt } = await import('../goal/store/goalStore.js');
   const goal = {
     text: 'ship the auth refactor', setAt: '', status: 'active' as const,
     startedAt: '', updatedAt: '', budget: { maxIterations: 10, iterationsUsed: 3 },
@@ -308,7 +308,7 @@ test('goalStore: buildGoalContinuationPrompt references the anchor instead of ec
 });
 
 test('goalStore: token budget tracking + usage_limited transition', async () => {
-  const { setGoalTokenBudget, addGoalTokens, usageLimitGoal, goalHasBudgetLeft, goalIsOnFinalBudgetTurn } = await import('../goal/goalStore.js');
+  const { setGoalTokenBudget, addGoalTokens, usageLimitGoal, goalHasBudgetLeft, goalIsOnFinalBudgetTurn } = await import('../goal/store/goalStore.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:tokens';
     const g0 = setGoal(workspace, 'finish auth refactor', sk);
@@ -348,7 +348,7 @@ test('goalStore: token budget tracking + usage_limited transition', async () => 
 });
 
 test('goalStore: editGoal unified update changes text/status/budget/tokens in one call', async () => {
-  const { editGoal } = await import('../goal/goalStore.js');
+  const { editGoal } = await import('../goal/store/goalStore.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:edit';
     setGoal(workspace, 'initial outcome', sk);
@@ -421,7 +421,7 @@ test('goalStore: session A goal does not leak into session B (regression for cro
 // -----------------------------------------------------------------------
 
 test('resolveGoalScope: always returns session scope when sessionKey is provided (workflow priority removed)', async () => {
-  const { resolveGoalScope } = await import('../goal/goalStore.js');
+  const { resolveGoalScope } = await import('../goal/store/goalStore.js');
   const { createWorkflow } = await import('../workflow/workflowArtifacts.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:scope-session-always';
@@ -445,7 +445,7 @@ test('resolveGoalScope: always returns session scope when sessionKey is provided
 });
 
 test('resolveGoalScope: falls back to legacy when no sessionKey', async () => {
-  const { resolveGoalScope } = await import('../goal/goalStore.js');
+  const { resolveGoalScope } = await import('../goal/store/goalStore.js');
   withTempWorkspace((workspace) => {
     const legacyScope = resolveGoalScope(workspace);
     assert.equal(legacyScope.scope, 'legacy');
@@ -651,7 +651,7 @@ test('9d-bugfix: clearSessionWorkflow unbinds the session without touching the w
 });
 
 test('decideGoalContinuation: stop / continue / corrective / halt / usage-limited', async () => {
-  const { decideGoalContinuation } = await import('../goal/goalStore.js');
+  const { decideGoalContinuation } = await import('../goal/store/goalStore.js');
   const base = {
     text: 'do x', setAt: 'a', startedAt: 'a', updatedAt: 'a', status: 'active' as const,
     budget: { maxIterations: 10, iterationsUsed: 2 },

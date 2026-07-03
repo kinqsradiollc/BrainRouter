@@ -1,6 +1,6 @@
-import type { Goal } from './goalModel.js';
-import { formatBudget } from './goalModel.js';
-import { goalHasBudgetLeft } from './goalBudget.js';
+import type { Goal } from '../model/goalModel.js';
+import { formatBudget } from '../model/goalModel.js';
+import { goalHasBudgetLeft } from '../budget/goalBudget.js';
 
 /**
  * Drift / ready check used by the goal-continuation prompt. Compressed
