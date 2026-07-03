@@ -10,7 +10,7 @@ import { isReasoningModel, isNonReasoningChatModel, isAlwaysOnReasoner, modelSup
 import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PLACEHOLDER_KEY, normalizeProviderEndpoint, withApiVersion } from '../provider/providers/index.js';
 import { DEFAULT_EFFORT_VALUE_MAP } from '../provider/providers/definition.js';
 import type { ProviderDefinition } from '../provider/providers/definition.js';
-import { effortToWireLevel, type EffortLevel } from '../session/preferencesStore.js';
+import { effortToWireLevel, type EffortLevel } from '../session/preferences/preferencesStore.js';
 import type { PromptLayers } from '../prompt/systemPrompt.js';
 import { computePrefixFingerprint } from '../context/contextRegions.js';
 import { traceEvent } from '../telemetry/tracing/tracing.js';

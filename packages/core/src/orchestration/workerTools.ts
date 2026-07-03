@@ -20,7 +20,7 @@ import type { LLMConfig } from '../config/config.js';
 import { loadOrInitConfig } from '../config/config.js';
 import { resolveAgentLlm } from '../provider/agentModels.js';
 import { resolveRole, type AccessMode } from './roles.js';
-import type { EffortLevel } from '../session/preferencesStore.js';
+import type { EffortLevel } from '../session/preferences/preferencesStore.js';
 import {
   createWorker,
   readWorkerMeta,
@@ -29,7 +29,7 @@ import {
   writeWorkerSummary,
   type WorkerMeta,
 } from '../worker/workerStore.js';
-import { enqueueCompletion } from '../session/completionInbox.js';
+import { enqueueCompletion } from '../session/completion/completionInbox.js';
 import { registerInterruptibleAgent, unregisterInterruptibleAgent } from './tools.js';
 
 /** In-process worker runs, keyed by worker id. */

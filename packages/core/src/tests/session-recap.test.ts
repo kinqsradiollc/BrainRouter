@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildRecap } from '../session/sessionRecap.js';
-import type { TranscriptEntry } from '../session/sessionStore.js';
+import { buildRecap } from '../session/transcript/sessionRecap.js';
+import type { TranscriptEntry } from '../session/transcript/sessionStore.js';
 
 const T = (role: string, content: unknown, extra: Partial<TranscriptEntry> = {}): TranscriptEntry =>
   ({ role, content, timestamp: '2026-06-10T04:00:00.000Z', ...extra });

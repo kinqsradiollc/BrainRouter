@@ -6,7 +6,7 @@
  * per-chat context menu (Pin / Mark completed / Rename / Move to group /
  * Archive) reads and writes. Absent entries mean "default" (active, ungrouped).
  */
-import { getStateFile, readJsonFile, writeJsonFile } from '../storage/store.js';
+import { getStateFile, readJsonFile, writeJsonFile } from '../../storage/store.js';
 
 export type SessionStatus = 'active' | 'completed';
 

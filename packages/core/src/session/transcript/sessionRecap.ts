@@ -6,7 +6,7 @@
  * layer renders the lines.
  */
 import type { TranscriptEntry } from './sessionStore.js';
-import type { PlanState } from '../task/taskStore.js';
+import type { PlanState } from '../../task/taskStore.js';
 
 export interface RecapInput {
   entries: TranscriptEntry[];

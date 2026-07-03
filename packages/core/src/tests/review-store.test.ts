@@ -4,7 +4,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getLatestReview, saveReview, updateReviewFinding, clearReview } from '../review/reviewStore.js';
-import { appendTranscriptEntry, isInternalSessionKey, listTranscripts } from '../session/sessionStore.js';
+import { appendTranscriptEntry, isInternalSessionKey, listTranscripts } from '../session/transcript/sessionStore.js';
 import type { ReviewRun } from '../review/reviewModel.js';
 
 /** A real temp home AND a real temp workspace dir (getStateFile resolves the

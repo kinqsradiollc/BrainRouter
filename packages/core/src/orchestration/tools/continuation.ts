@@ -6,7 +6,7 @@ import { getSession, updateSession, type ChildSessionRecord } from '../orchestra
 import { buildRolePrompt, resolveRole } from '../roles.js';
 import { findById, type Tier } from '../agentRegistry.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../../prompt/systemPrompt.js';
-import { loadTranscript } from '../../session/sessionStore.js';
+import { loadTranscript } from '../../session/transcript/sessionStore.js';
 import { childSessionKey } from '../../mcp/mcpUtils.js';
 import type { OrchestrationContext } from './context.js';
 import { runningChildAgents, runningPromises } from './registry.js';

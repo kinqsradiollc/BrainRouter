@@ -13,7 +13,7 @@ import { NoTTYError, HEADLESS_PROMPTER, type InteractivePrompter } from './promp
 import type { LLMConfig } from '../config/config.js';
 import { getCliKnobs } from '../config/config.js';
 import type { ComputerUsePort } from '@kinqs/brainrouter-agent-protocol';
-import { appendTranscriptEntry, isInternalSessionKey, redactText, readTranscriptEntries } from '../session/sessionStore.js';
+import { appendTranscriptEntry, isInternalSessionKey, redactText, readTranscriptEntries } from '../session/transcript/sessionStore.js';
 import { recordFileMutation } from '../storage/fileSnapshotStore.js';
 import { isConnectivityError, isRetryableServerError } from '../storage/checkpointStore.js';
 import { reconnectBackoffMs, probeConnectivity, parseRetryAfterMs } from '../mcp/reconnect/reconnect.js';
@@ -120,8 +120,8 @@ import { evaluateDestructiveCommand } from '../exec/guard/destructiveCommandGuar
 import { gitHeadSha } from '../git/workspaceGit.js';
 import { recordDailyUsage } from '../usage/usageHistoryStore.js';
 import { isTelemetryEnabled } from '../telemetry/recorder/telemetry.js';
-import { readPreferences, resolveEffort, effortToWireLevel, type EffortLevel } from '../session/preferencesStore.js';
-import { resolveActiveMode } from '../session/sessionModeStore.js';
+import { readPreferences, resolveEffort, effortToWireLevel, type EffortLevel } from '../session/preferences/preferencesStore.js';
+import { resolveActiveMode } from '../session/state/sessionModeStore.js';
 import { resolveEffortForTurn } from './effortRouting.js';
 // 0.3.9 — Anthropic native adapter removed (the /v1/messages path landed in
 // 0.3.8 but never delivered enough cache-hit headroom or stability to justify
@@ -144,7 +144,7 @@ import { ResultCache, makeResultHandoff, formatHandoffForModel, attachCompactedR
 import { runExtractResult } from '../tool/result/extractResult.js';
 // MAS-P5-T3 part 2: persistent worker threads.
 import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../worker/workerStore.js';
-import { drainCompletions, acknowledgeCompletions, formatCompletionFeedback } from '../session/completionInbox.js';
+import { drainCompletions, acknowledgeCompletions, formatCompletionFeedback } from '../session/completion/completionInbox.js';
 import { classifyDeferral, buildDeliverableCorrection } from './deliverableCheck.js';
 import { classifyDenial, formatDenialResult } from './denialMessage.js';
 import { evaluatePermissionRules, primaryArgText } from '../exec/policy/permissionRules.js';
@@ -152,7 +152,7 @@ import { shouldNudgeTaskTracking, buildTaskTrackingNudge } from './taskTrackingN
 import { truncateFullRead } from './readTruncation.js';
 import { waitUntilCondition } from '../util/waitUntil.js';
 import { startBackgroundShell, readBackgroundOutput } from '../exec/runtime/backgroundShell.js';
-import { CHAPTER_ENTRY_NAME, chapterEntryContent } from '../session/chapterMarks.js';
+import { CHAPTER_ENTRY_NAME, chapterEntryContent } from '../session/transcript/chapterMarks.js';
 import { classifyForVerification, commandWritesFiles, decideVerification, buildVerificationNudge, buildDocsOnlyVerificationNote } from './verificationGate.js';
 import { resolveToolBudget, isBudgetCheckpoint, buildBudgetCheckpoint, buildBudgetCeilingMessage } from './turnBudget.js';
 import { getCurrentWorkflow } from '../workflow/run/workflowArtifacts.js';

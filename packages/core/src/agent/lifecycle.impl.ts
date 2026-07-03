@@ -18,8 +18,8 @@ import { appendVerbositySteering } from '../prompt/steering/verbositySteering.js
 import { syncRequirementPlanTrack } from '../requirement/sync/planTrackSync.js';
 import { detectRequirementShapedPrompt } from '../requirement/records/requirementDetector.js';
 import { createRequirement, getRequirement, linkRequirement, listRequirements, updateRequirement } from '../requirement/records/requirementStore.js';
-import { effortToWireLevel, readPreferences } from '../session/preferencesStore.js';
-import { resolveActiveMode } from '../session/sessionModeStore.js';
+import { effortToWireLevel, readPreferences } from '../session/preferences/preferencesStore.js';
+import { resolveActiveMode } from '../session/state/sessionModeStore.js';
 import { readPlan } from '../task/taskStore.js';
 import { reconcileSessionSprints } from '../track/sprintAutomation.js';
 import {

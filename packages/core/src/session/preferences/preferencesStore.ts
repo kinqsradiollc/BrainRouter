@@ -1,5 +1,5 @@
-import { getStateFile, readJsonFile, writeJsonFile } from '../storage/store.js';
-import { getRawCliKnobs } from '../config/config.js';
+import { getStateFile, readJsonFile, writeJsonFile } from '../../storage/store.js';
+import { getRawCliKnobs } from '../../config/config.js';
 
 /**
  * Per-workspace runtime preferences that don't justify their own file.

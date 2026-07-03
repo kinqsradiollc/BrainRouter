@@ -23,8 +23,8 @@ import { renderCompactSystemMessage, runCompaction } from '../prompt/compaction/
 import { runHooks } from '../hooks/hooksStore.js';
 import { callMcpTool } from '../mcp/mcpUtils.js';
 import { emitAgentEvent } from '../memory/memoryEvents.js';
-import { resolveActiveMode } from '../session/sessionModeStore.js';
-import { readTranscriptEntries } from '../session/sessionStore.js';
+import { resolveActiveMode } from '../session/state/sessionModeStore.js';
+import { readTranscriptEntries } from '../session/transcript/sessionStore.js';
 import { estimateChatHistoryTokens } from '../util/tokenEstimate.js';
 import { traceEvent } from '../telemetry/tracing/tracing.js';
 import { sanitizeToolCallPairing } from './toolCallRecovery.js';

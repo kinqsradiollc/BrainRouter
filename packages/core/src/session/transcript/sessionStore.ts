@@ -7,7 +7,7 @@ import {
   getStateDir,
   getSessionStateDir,
   isPathInside,
-} from '../storage/store.js';
+} from '../../storage/store.js';
 import { canRewindTo, entriesAfterRewind } from './rewind.js';
 
 export interface TranscriptEntry {

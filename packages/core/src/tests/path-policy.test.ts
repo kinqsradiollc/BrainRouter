@@ -48,7 +48,7 @@ test('MEM-36 assertPathWithinRoots: throws PathPolicyError outside, returns real
 
 test('MEM-36 trace redaction: secret-shaped values are scrubbed from exported attributes', async () => {
   // redactText is the scrubber tracing.ts applies to the export body.
-  const { redactText } = await import('../session/sessionStore.js');
+  const { redactText } = await import('../session/transcript/sessionStore.js');
   const body = JSON.stringify({ attributes: { prompt: 'use OPENAI_API_KEY=sk-secret123 to call', tool: 'read_file' } });
   const scrubbed = redactText(body);
   assert.ok(!scrubbed.includes('sk-secret123'), 'secret value removed');

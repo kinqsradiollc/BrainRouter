@@ -1,11 +1,11 @@
-import { getStateFile, readJsonFile, writeJsonFile } from '../storage/store.js';
+import { getStateFile, readJsonFile, writeJsonFile } from '../../storage/store.js';
 import {
   readPreferences,
   resolveEffort,
   type EffortLevel,
   type ExecutionMode,
   type ReviewPolicy,
-} from './preferencesStore.js';
+} from '../preferences/preferencesStore.js';
 
 /**
  * Per-session execution stance: which `executionMode` / `reviewPolicy` /

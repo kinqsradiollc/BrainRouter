@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Agent } from '../agent/agent.js';
-import { setSessionMode } from '../session/sessionModeStore.js';
+import { setSessionMode } from '../session/state/sessionModeStore.js';
 import { readPlanHistory } from '../task/planHistoryStore.js';
 import { setCliKnobOverride } from '../config/config.js';
 import { withTempWorkspaceAsync } from './_helpers.js';

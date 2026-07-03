@@ -6,7 +6,7 @@ import {
   policyForMode,
   nearestMode,
   type FriendlyPermissionMode,
-} from '../session/permissionModes.js';
+} from '../session/preferences/permissionModes.js';
 
 const ALL_IDS: FriendlyPermissionMode[] = ['read-only', 'workspace-write', 'ask-each', 'sensitive-ask', 'full-access'];
 

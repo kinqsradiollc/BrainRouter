@@ -1,4 +1,4 @@
-import type { EffortLevel } from '../session/preferencesStore.js';
+import type { EffortLevel } from '../session/preferences/preferencesStore.js';
 
 export type TurnClassification = 'NEW_USER_ASK' | 'MECHANICAL_CONTINUATION' | 'ERROR_CONTINUATION';
 

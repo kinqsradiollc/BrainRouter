@@ -7,7 +7,7 @@ import { Agent } from '../agent/agent.js';
 import { executeOrchestrationTool, type OrchestrationContext } from '../orchestration/tools.js';
 import { createSession, getSession, updateSession } from '../orchestration/orchestrator.js';
 import { childSessionKey } from '../mcp/mcpUtils.js';
-import { appendTranscriptEntry } from '../session/sessionStore.js';
+import { appendTranscriptEntry } from '../session/transcript/sessionStore.js';
 
 function ctx(workspace: string): OrchestrationContext {
   return {

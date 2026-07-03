@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   setSessionMeta, getSessionMeta, removeSessionMeta, listSessionGroups, readSessionMetaAll,
-} from '../session/sessionMetaStore.js';
-import { appendTranscriptEntry, listTranscripts, deleteSession, forkSession, readTranscriptEntries } from '../session/sessionStore.js';
+} from '../session/state/sessionMetaStore.js';
+import { appendTranscriptEntry, listTranscripts, deleteSession, forkSession, readTranscriptEntries } from '../session/transcript/sessionStore.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
 
 test('DESK-6m sessionMeta: set merges + prunes defaults; remove clears', async () => {
