@@ -358,6 +358,13 @@ function resolveBoolWithEnv(configValue: boolean | undefined, envName: string): 
   return configValue === true;
 }
 
+/** Coerce a config value to an int in [min,max]; NaN / unset / OOR → fallback. */
+function clampInt(value: number | undefined, min: number, max: number, fallback: number): number {
+  const n = typeof value === 'number' ? Math.floor(value) : NaN;
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
 export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
   const c = cfg?.cli ?? {};
   const automation = c.automation ?? {};
@@ -446,6 +453,8 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     attribution: { sessionUrl: c.attribution?.sessionUrl !== false },
     // CC-CONFIG-A6 — env override wins.
     skillsHideBundled: resolveBoolWithEnv(c.skillsHideBundled, 'BRAINROUTER_HIDE_BUNDLED_SKILLS'),
+    // CC-SKILLS-D1 — clamp to 1..5; NaN / unset / out-of-range → the default 5.
+    skillsStackMax: clampInt(c.skillsStackMax, 1, 5, 5),
     mcpTimeoutMs: c.mcpTimeoutMs ?? 60_000,
     brainUrl: c.brainUrl ?? null,
     sandbox: c.sandbox ?? 'off',

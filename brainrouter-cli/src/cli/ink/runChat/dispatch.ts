@@ -2,8 +2,14 @@ import type readline from 'node:readline';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import { readPreferences } from '@kinqs/brainrouter-core/session';
 import { resolveSandboxConfig, runShell } from '@kinqs/brainrouter-core/exec';
+import { SLASH_COMMANDS } from '@kinqs/brainrouter-core/command';
 import { parseBangCommand, parseNoteCommand } from '../../../runtime/exec/bangCommand.js';
 import { handleSlashCommand } from '../../prompt/repl.js';
+import {
+  parseStackedSkillTokens,
+  resolveStackedSkills,
+  buildStackedSkillPrompt,
+} from '../../../prompt/skillRunner.js';
 import { captureConsoleOutput } from '../terminal/consoleCapture.js';
 import type { PushScrollback } from '../ChatApp.js';
 import type { RunChatContext } from './context.js';
@@ -177,6 +183,27 @@ export function createOnSubmit(ctx: RunChatContext): (text: string, push: PushSc
       const parts = text.trim().split(/\s+/);
       const command = parts[0].toLowerCase();
       const args = parts.slice(1);
+      // CC-SKILLS-D1 — STACKED skill invocation: a run of 2+ leading `/skill`
+      // tokens whose HEAD is not a real slash command (`/a /b do X`) composes
+      // those skills' bodies into a multi-phase prompt ahead of the input. A
+      // genuine single command (`/spec do X`) or a known command head falls
+      // through to the normal dispatcher untouched.
+      if (!(SLASH_COMMANDS as readonly string[]).includes(command) && !ctx.isProcessing) {
+        const stacked = parseStackedSkillTokens(text);
+        if (stacked.skills.length >= 2) {
+          const { resolved, disallowedTools } = await resolveStackedSkills(mcpClient, stacked.skills, agent.workspaceRoot)
+            .catch(() => ({ resolved: [], disallowedTools: [] as string[] }));
+          if (resolved.length >= 1) {
+            agent.activeSkill = resolved[0].name;
+            agent.activeSkillDisallowedTools = disallowedTools;
+            push.notice(`Stacked skills: ${resolved.map((s) => s.name).join(' → ')}${disallowedTools.length ? `  (disallowed: ${disallowedTools.join(', ')})` : ''}`, 'info');
+            const prompt = buildStackedSkillPrompt(resolved, { input: stacked.rest });
+            await ctx.runChatTurn(prompt);
+            return;
+          }
+          push.notice(`No known skills matched: ${stacked.skills.map((s) => '/' + s).join(' ')}`, 'warn');
+        }
+      }
       // C2 — `/queue` is handled inline so it works mid-turn (the slash
       // dispatcher itself is fine to run while a turn is in flight).
       if (command === '/queue') { ctx.handleQueueCommand(args); return; }

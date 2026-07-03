@@ -141,6 +141,12 @@ export async function runSkillByName(
     }
     loader.succeed(chalk.green(`Skill loaded: ${skillName} (${skill.source})`));
     prompt = buildSkillPrompt(skill, { input: userInput, orchestration });
+    // CC-SKILLS-D3 — apply the skill's `disallowed-tools` for this turn (cleared
+    // by turnRunner alongside activeSkill once the turn settles).
+    agent.activeSkillDisallowedTools = skill.disallowedTools ?? [];
+    if (agent.activeSkillDisallowedTools.length > 0) {
+      console.log(chalk.gray(`  Disallowed tools this turn: ${agent.activeSkillDisallowedTools.join(', ')}`));
+    }
   } catch (err: any) {
     loader.fail(chalk.red(`Failed to resolve skill "${skillName}": ${err.message}`));
     return;

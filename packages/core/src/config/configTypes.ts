@@ -354,6 +354,13 @@ export interface CliKnobs {
    * `BRAINROUTER_HIDE_BUNDLED_SKILLS`. Default false.
    */
   skillsHideBundled?: boolean;
+  /**
+   * CC-SKILLS-D1 — max number of leading `/skill` tokens that a single prompt
+   * may stack (`/a /b do X` composes a.SKILL.md then b.SKILL.md before the
+   * user input). Hard-capped at 5 in the resolver regardless of config so a
+   * runaway prompt can't compose an unbounded instruction block. Default 5.
+   */
+  skillsStackMax?: number;
 
   // ---- MCP plumbing -----------------------------------------------------
   /** MCP call timeout in ms. Default 60000. */
@@ -841,6 +848,8 @@ export interface ResolvedCliKnobs {
   attribution: { sessionUrl: boolean };
   /** CC-CONFIG-A6 — hide bundled skills from listings. */
   skillsHideBundled: boolean;
+  /** CC-SKILLS-D1 — max stacked `/skill` tokens per prompt (clamped 1..5). */
+  skillsStackMax: number;
   mcpTimeoutMs: number;
   /** REMOTE-BRAIN — remote brain HTTP endpoint, or null for the embedded default. */
   brainUrl: string | null;

@@ -772,6 +772,14 @@ export class Agent {
    */
   public activeSkill?: string;
   /**
+   * CC-SKILLS-D3 — per-turn tool blacklist declared by the active skill's
+   * `disallowed-tools` frontmatter. Merged into the same disallow path as the
+   * role/agent-def `disallowedTools` for the turn the skill runs, then cleared
+   * (like `activeSkill`) once the turn settles. Empty when no skill is active
+   * or the active skill declares no disallowed tools.
+   */
+  public activeSkillDisallowedTools: string[] = [];
+  /**
    * Parent trace context (set by spawn_agent for child agents). When present,
    * the per-turn span uses these as its trace/parent so OTEL viewers can
    * stitch the fan-out tree together. Top-level (REPL) agents leave these

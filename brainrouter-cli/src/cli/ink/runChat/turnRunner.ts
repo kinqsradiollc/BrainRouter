@@ -402,6 +402,8 @@ export function installTurnRunner(ctx: RunChatContext): void {
       controller.push.setPhase('idle');
       controller.push.setStatus('');
       agent.activeSkill = undefined;
+      // CC-SKILLS-D3 — the skill's per-turn tool blacklist is cleared with it.
+      agent.activeSkillDisallowedTools = [];
       agent.refreshSystemPrompt();
       ctx.refreshFooter();
       // If background children survived the parent turn (delegate_agent

@@ -11,15 +11,34 @@ export interface SkillListItem {
   category?: string;
   description?: string;
   source?: 'mcp' | 'filesystem';
+  /**
+   * CC-SKILLS-D2 — set when the SAME skill name was found in more than one
+   * BrainRouter skill root. `true` on the entry that WON precedence (the one
+   * actually loaded). The shadowed copies are surfaced via `shadowedBy`.
+   */
+  collides?: boolean;
+  /**
+   * CC-SKILLS-D2 — scopes of the lower-precedence roots this entry shadows,
+   * e.g. `['bundled']` when a workspace skill hides a bundled one of the same
+   * name. Empty/undefined when there is no collision.
+   */
+  shadowedBy?: string[];
+  /** CC-SKILLS-D2 — `<scope>:<name>` disambiguated label for display. */
+  qualifiedName?: string;
 }
 
 const WORKSPACE_SKILL_ROOTS = ['skills', '.brainrouter/skills'];
 
 export function listFilesystemSkills(workspaceRoot: string): SkillListItem[] {
-  const seen = new Map<string, SkillListItem>();
   const knobs = getCliKnobs();
   // CC-CONFIG-A1 — safe mode loads NO skills at all (isolate a bad skill).
   if (knobs.safeMode) return [];
+  // First entry per name WINS (roots are ordered workspace → local → bundled),
+  // consistent with resolveSkill's precedence. CC-SKILLS-D2: we no longer drop
+  // the shadowed copies silently — we record the collision so the /skills
+  // listing can render `<scope>:<name>` and mark what's hidden.
+  const winners = new Map<string, SkillListItem>();
+  const shadowScopes = new Map<string, string[]>();
   // CC-CONFIG-A6 — optionally hide BUNDLED skills (shipped with the install),
   // leaving only workspace-authored skill roots (skills/, .brainrouter/skills).
   for (const root of skillSearchRoots(workspaceRoot, { includeBundled: !knobs.skillsHideBundled })) {
@@ -30,18 +49,32 @@ export function listFilesystemSkills(workspaceRoot: string): SkillListItem[] {
       if (!parsed) continue;
       const rel = path.relative(root, filePath);
       const category = rel.split(path.sep)[0] || 'uncategorized';
-      if (!seen.has(parsed.name)) {
-        seen.set(parsed.name, {
+      if (!winners.has(parsed.name)) {
+        winners.set(parsed.name, {
           name: parsed.name,
           category,
           description: parsed.description,
           scope,
           source: 'filesystem',
+          qualifiedName: `${scope}:${parsed.name}`,
         });
+      } else {
+        // A same-named skill in a LOWER-precedence root — record it as shadowed
+        // (dedupe scopes so two bundled roots don't list `bundled` twice).
+        const list = shadowScopes.get(parsed.name) ?? [];
+        if (!list.includes(scope)) list.push(scope);
+        shadowScopes.set(parsed.name, list);
       }
     }
   }
-  return Array.from(seen.values()).sort(sortSkills);
+  for (const [name, hidden] of shadowScopes) {
+    const winner = winners.get(name);
+    if (winner) {
+      winner.collides = true;
+      winner.shadowedBy = hidden;
+    }
+  }
+  return Array.from(winners.values()).sort(sortSkills);
 }
 
 export function mergeSkillLists(primary: SkillListItem[], fallback: SkillListItem[]): SkillListItem[] {
@@ -91,20 +124,22 @@ function resolveInstalledMcpPackageDir(): string | undefined {
   }
 }
 
+/**
+ * CC-SKILLS-D2 — label a skill root by BrainRouter scope so collisions can be
+ * displayed as `<scope>:<name>`. Precedence high→low mirrors the search order:
+ *   workspace  — `<ws>/skills`            (author's top-level skills)
+ *   local      — `<ws>/.brainrouter/skills` (workspace-private overrides)
+ *   bundled    — everything shipped with the install (MCP pkg + monorepo root)
+ */
 function inferRootScope(root: string, workspaceRoot: string): string {
   const resolvedWorkspace = path.resolve(workspaceRoot);
   const resolvedRoot = path.resolve(root);
+  if (resolvedRoot === path.join(resolvedWorkspace, '.brainrouter', 'skills')) return 'local';
   if (resolvedRoot.startsWith(path.join(resolvedWorkspace, '.brainrouter'))) return 'local';
-  if (isBrainRouterRepoRoot(path.dirname(resolvedRoot))) return 'global';
-  return resolvedRoot.startsWith(resolvedWorkspace) ? 'local' : 'global';
-}
-
-function isBrainRouterRepoRoot(root: string): boolean {
-  return (
-    fs.existsSync(path.join(root, 'brainrouter', 'package.json')) &&
-    fs.existsSync(path.join(root, 'brainrouter-cli', 'package.json')) &&
-    fs.existsSync(path.join(root, 'skills'))
-  );
+  if (resolvedRoot === path.join(resolvedWorkspace, 'skills')) return 'workspace';
+  // Any other root (installed MCP package `skills/`, monorepo root `skills/`)
+  // is a bundled/shipped root, whether or not it happens to sit above the ws.
+  return 'bundled';
 }
 
 function findSkillFiles(root: string): string[] {
@@ -140,6 +175,55 @@ function readYamlScalar(block: string, key: string): string | undefined {
   const match = block.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'));
   if (!match?.[1]) return undefined;
   return match[1].trim().replace(/^['"]|['"]$/g, '');
+}
+
+/** Extract the raw YAML frontmatter block (between the `---` fences), or ''. */
+export function extractFrontmatterBlock(raw: string): string {
+  return raw.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? '';
+}
+
+/**
+ * CC-SKILLS-D3 — parse a `disallowed-tools` list from SKILL.md frontmatter.
+ * Accepts both the flow form (`disallowed-tools: [run_command, write_file]`)
+ * and the block form:
+ *   disallowed-tools:
+ *     - run_command
+ *     - write_file
+ * Also tolerates comma/space-separated inline values. Returns a de-duped,
+ * trimmed list (empty when the key is absent). Pure — no filesystem access.
+ */
+export function parseDisallowedToolsFrontmatter(raw: string): string[] {
+  const block = extractFrontmatterBlock(raw);
+  if (!block) return [];
+  const lines = block.split(/\r?\n/);
+  const idx = lines.findIndex((l) => /^disallowed-tools\s*:/.test(l));
+  if (idx < 0) return [];
+  const header = lines[idx];
+  const inline = header.replace(/^disallowed-tools\s*:/, '').trim();
+  const out: string[] = [];
+  const pushTokens = (s: string) => {
+    for (const tok of s.replace(/^\[|\]$/g, '').split(/[,\s]+/)) {
+      const t = tok.trim().replace(/^['"]|['"]$/g, '');
+      if (t) out.push(t);
+    }
+  };
+  if (inline) {
+    pushTokens(inline);
+  } else {
+    // Block form: consume subsequent `  - value` lines until the indentation
+    // drops back to a new top-level key.
+    for (let i = idx + 1; i < lines.length; i++) {
+      const line = lines[i];
+      if (/^\s*-\s+/.test(line)) {
+        pushTokens(line.replace(/^\s*-\s+/, ''));
+      } else if (line.trim() === '') {
+        continue;
+      } else {
+        break; // next top-level key
+      }
+    }
+  }
+  return [...new Set(out)];
 }
 
 function firstParagraph(raw: string): string | undefined {

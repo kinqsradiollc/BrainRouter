@@ -190,10 +190,16 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     const toolOverrides = cliKnobs.toolOverrides;
     const overrideForceOnNames = new Set(Object.keys(toolOverrides).filter((k) => toolOverrides[k] === true));
     const overrideForceOffNames = Object.keys(toolOverrides).filter((k) => toolOverrides[k] === false);
+    // CC-SKILLS-D3 — the active skill's `disallowed-tools` frontmatter blacklists
+    // apply for THIS turn on top of the role/agent-def `disallowedTools`. Computed
+    // here so it filters BOTH local tools (below) and MCP tools (further down).
+    const effectiveDisallowed = [...this.disallowedTools, ...this.activeSkillDisallowedTools];
+    const disallowedLocalSet = new Set(effectiveDisallowed);
     let filteredLocalTools = localToolSpecsFromExecutors().filter((t) => {
       // HARD gates first — a user override can never escalate past these.
       const hardVisible =
         allowed.has(t.name) &&
+        !disallowedLocalSet.has(t.name) &&
         !MODEL_HIDDEN_TOOLS.has(t.name) &&
         !(hideWorkerTools && WORKER_THREAD_TOOLS.has(t.name)) &&
         !(hideComputerUse && t.name === 'computer_use') &&
@@ -229,11 +235,11 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // one returns a structured "hidden by budget" hint instead of a bare
     // unknown-tool error.
     this.lastBudgetHiddenTools = new Set();
-    if (this.toolScope || this.disallowedTools.length > 0 || overrideForceOffNames.length > 0) {
+    if (this.toolScope || effectiveDisallowed.length > 0 || overrideForceOffNames.length > 0) {
       visibleMcpTools = applyToolScope(visibleMcpTools, {
         allow: this.toolScope?.mcp,
         // cli.toolOverrides force-off applies to MCP tools by their namespaced name.
-        disallow: [...this.disallowedTools, ...overrideForceOffNames],
+        disallow: [...effectiveDisallowed, ...overrideForceOffNames],
       });
     }
     // Snapshot the user-force-on MCP tools so the discovery/budget step below can't

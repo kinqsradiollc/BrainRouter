@@ -24,7 +24,7 @@ import { appendTranscriptEntry } from '@kinqs/brainrouter-core/session';
 import { recordPlanDecision, readPlanHistory, diffSnapshots } from '@kinqs/brainrouter-core/task';
 import { getLoopState, parseInterval, startLoop, stopLoop } from '../../../runtime/background/loopRunner.js';
 import type { CommandContext } from '../_context.js';
-import { SLASH_TO_SKILL } from '../../../prompt/skillRunner.js';
+import { SLASH_TO_SKILL, scaffoldSkill } from '../../../prompt/skillRunner.js';
 import { listFilesystemSkills, mergeSkillLists, skillSearchRoots } from '../../../prompt/skillCatalog.js';
 import { buildGoalKickoffPrompt, runSkillByName, runSkillCommand } from '../_helpers.js';
 import { collectReviewDiff } from '../../../runtime/platform/gitContext.js';
@@ -84,7 +84,15 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
             for (const skill of skillsList) {
               const category = skill.category ? `${skill.category}/` : '';
               const suffix = verbose && skill.description ? ` - ${skill.description}` : '';
-              console.log(`  • ${chalk.cyan(`${category}${skill.name}`)} (${chalk.gray(skill.scope ?? 'unknown')})${suffix}`);
+              // CC-SKILLS-D2 — when the same name lives in multiple BrainRouter
+              // roots, show the winning `<scope>:<name>` and note what it shadows.
+              const label = skill.collides
+                ? chalk.cyan(`${category}${skill.scope}:${skill.name}`)
+                : chalk.cyan(`${category}${skill.name}`);
+              const shadow = skill.collides && skill.shadowedBy?.length
+                ? chalk.yellow(` (shadows ${skill.shadowedBy.join(', ')})`)
+                : '';
+              console.log(`  • ${label} (${chalk.gray(skill.scope ?? 'unknown')})${shadow}${suffix}`);
             }
             if (mcpSkills && skillsList.length > mcpSkills.length) {
               console.log(chalk.gray(`  Showing ${skillsList.length} skills (${mcpSkills.length} from MCP, ${skillsList.length - mcpSkills.length} filled from local files).`));
@@ -887,8 +895,32 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
     {
       const skillName = args[0];
       const userInput = args.slice(1).join(' ').trim();
+      // CC-SKILLS-D4 — `/skill init <name>` scaffolds a new SKILL.md under the
+      // workspace's OWN local skill root (.brainrouter/skills/<name>/SKILL.md).
+      if (skillName === 'init') {
+        const newName = args[1];
+        if (!newName) {
+          console.log(chalk.red('\nUsage: /skill init <name>\n'));
+          return true;
+        }
+        try {
+          const res = scaffoldSkill(agent.workspaceRoot, newName, { force: args.includes('--force') });
+          if (res.created) {
+            console.log(chalk.green(`\n✓ Scaffolded skill "${newName}" at`));
+            console.log(`  ${chalk.gray(res.path)}`);
+            console.log(chalk.gray('  Edit SKILL.md, then run it with `/skill ' + newName + '` (no restart needed).\n'));
+          } else {
+            console.log(chalk.yellow(`\nSkill "${newName}" already exists at`));
+            console.log(`  ${chalk.gray(res.path)}`);
+            console.log(chalk.gray('  Pass --force to overwrite.\n'));
+          }
+        } catch (e: any) {
+          console.log(chalk.red(`\n${e?.message ?? e}\n`));
+        }
+        return true;
+      }
       if (!skillName) {
-        console.log(chalk.red('\nUsage: /skill <skill-name> [input]\n'));
+        console.log(chalk.red('\nUsage: /skill <skill-name> [input]  |  /skill init <name>\n'));
         console.log(chalk.gray('Mapped slash commands:'));
         for (const [slash, name] of Object.entries(SLASH_TO_SKILL)) {
           console.log(`  ${chalk.cyan(slash.padEnd(18))} → ${chalk.green(name)}`);
