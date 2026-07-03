@@ -263,6 +263,29 @@ export interface PluginsCliKnobs {
  *  Native formats are opt-in via `cli.providerRequestFormat`. */
 export type ProviderWireFormat = 'responses' | 'chat-completions' | 'anthropic-messages' | 'gemini-generate';
 
+/**
+ * MC-A1 — runtime-plane backend selector values. `process` (default) is
+ * today's in-process host execution; `worktree` is reserved for the
+ * git-worktree isolated backend (MC-A2). Lives here (not in `runtime/`) so the
+ * config layer never imports upward.
+ */
+export type RuntimeBackendKind = 'process' | 'worktree';
+
+/** MC-A1 — `cli.runtime` block: which runtime backend hosts agent runs. */
+export interface RuntimeCliKnobs {
+  /** Runtime backend for agent conversations. Default 'process' (in-process,
+   *  exactly today's behavior). Invalid values resolve to 'process'. */
+  backend?: RuntimeBackendKind;
+  /** Cap on concurrently LIVE runtime instances before LRU parking (MC-A4).
+   *  Default 0 = no cap (nothing is ever evicted). */
+  maxLive?: number;
+}
+
+/** MC-A1 — validated knob values (see `RuntimeBackendKind`). */
+export function normalizeRuntimeBackend(value: unknown): RuntimeBackendKind {
+  return value === 'worktree' ? 'worktree' : 'process';
+}
+
 export interface CliKnobs {
   // ---- planning / orchestration -----------------------------------------
   /**
@@ -671,6 +694,12 @@ export interface CliKnobs {
    *  `{ enabled: {} }` (nothing enabled). Skipped entirely under `safeMode`. */
   plugins?: PluginsCliKnobs;
 
+  // ---- runtime plane (MC-A1) --------------------------------------------
+  /** Which runtime backend hosts agent conversations. Default
+   *  `{ backend: 'process', maxLive: 0 }` — exactly today's in-process
+   *  behavior; isolated backends are strictly opt-in. */
+  runtime?: RuntimeCliKnobs;
+
   // ---- tier escalation --------------------------------------------------
   /** Tier ladder override — when set, beats the provider built-in. */
   tierLadder?: { flash?: string; standard?: string; pro?: string };
@@ -1021,6 +1050,9 @@ export interface ResolvedCliKnobs {
      *  notice on session start. Default false. */
     autoUpdateCheck: boolean;
   };
+  /** MC-A1 — validated runtime-plane knobs: backend falls back to 'process';
+   *  `maxLive` clamped ≥ 0 (0 = no live-instance cap). */
+  runtime: { backend: RuntimeBackendKind; maxLive: number };
   tierLadder?: { flash?: string; standard?: string; pro?: string };
   contextCompaction: boolean;
   childAgentTimeoutMs: number;

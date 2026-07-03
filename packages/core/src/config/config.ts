@@ -18,6 +18,7 @@ import type {
   MarketplaceSource,
   PluginCapabilityConsent,
 } from './configTypes.js';
+import { normalizeRuntimeBackend } from './configTypes.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'brainrouter');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
@@ -599,6 +600,13 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
       mode: c.computerUse?.mode?.trim() || 'smart_approve',
     },
     plugins: resolvePluginsKnobs(c.plugins),
+    // MC-A1 — runtime plane. Backend validates to 'process' (today's in-process
+    // execution) so a typo can never silently opt into an isolated backend;
+    // maxLive 0 = no live-instance cap (LRU parking arrives with MC-A4).
+    runtime: {
+      backend: normalizeRuntimeBackend(c.runtime?.backend),
+      maxLive: clampInt(c.runtime?.maxLive, 0, 256, 0),
+    },
     tierLadder: c.tierLadder,
     contextCompaction: c.contextCompaction ?? true,
     updateCheck: c.updateCheck ?? true,
