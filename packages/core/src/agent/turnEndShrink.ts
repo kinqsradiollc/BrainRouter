@@ -22,7 +22,7 @@
  * message, then re-warms on every subsequent turn. Net win.
  */
 
-import { compactToolOutput } from '../prompt/toolCompaction.js';
+import { compactToolOutput } from '../prompt/compaction/toolCompaction.js';
 import { getCliKnobs } from '../config/config.js';
 import { attachCompactedResultHandoff, ResultCache } from '../util/resultHandoff.js';
 

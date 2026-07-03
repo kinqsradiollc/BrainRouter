@@ -19,7 +19,7 @@ import { contextWindowForBudget } from '../context/contextWindow.js';
 import { recordFileMutation } from '../storage/fileSnapshotStore.js';
 import { shouldReindex, reindexSignature, languageHint, type ReindexGate } from '../util/autoReindex.js';
 import { gitChurnSignal } from '../git/gitChurn.js';
-import { renderCompactSystemMessage, runCompaction } from '../prompt/compactor.js';
+import { renderCompactSystemMessage, runCompaction } from '../prompt/compaction/compactor.js';
 import { runHooks } from '../hooks/hooksStore.js';
 import { callMcpTool } from '../mcp/mcpUtils.js';
 import { emitAgentEvent } from '../memory/memoryEvents.js';

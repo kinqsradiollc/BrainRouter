@@ -1,4 +1,4 @@
-import { getCliKnobs } from '../config/config.js';
+import { getCliKnobs } from '../../config/config.js';
 
 export interface ToolCompactionInput {
   toolName: string;

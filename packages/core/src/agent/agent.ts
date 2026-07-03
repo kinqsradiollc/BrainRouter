@@ -192,11 +192,11 @@ import {
   wrapMidSessionRefresh,
 } from '../memory/anchorPin.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../hooks/hookifyStore.js';
-import { renderCompactSystemMessage, runCompaction } from '../prompt/compactor.js';
-import { compactToolOutput } from '../prompt/toolCompaction.js';
-import { appendVerbositySteering } from '../prompt/verbositySteering.js';
-import { buildFanOutHint, shouldSuggestFanOut } from '../prompt/breadthHint.js';
-import { buildNextActionMessages, parseNextActionPlan, nextActionDirective, planWantsFanOut, shouldSkipPlanner } from '../prompt/nextAction.js';
+import { renderCompactSystemMessage, runCompaction } from '../prompt/compaction/compactor.js';
+import { compactToolOutput } from '../prompt/compaction/toolCompaction.js';
+import { appendVerbositySteering } from '../prompt/steering/verbositySteering.js';
+import { buildFanOutHint, shouldSuggestFanOut } from '../prompt/planning/breadthHint.js';
+import { buildNextActionMessages, parseNextActionPlan, nextActionDirective, planWantsFanOut, shouldSkipPlanner } from '../prompt/planning/nextAction.js';
 import { isParallelSafe, parallelExecutionEnabled } from './toolSafety.js';
 import { shouldRunFanOutFollowThroughGuard } from './fanOutFollowThroughGuard.js';
 import {

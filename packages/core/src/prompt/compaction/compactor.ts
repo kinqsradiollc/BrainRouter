@@ -1,6 +1,6 @@
-import type { LLMConfig } from '../config/config.js';
-import { getCliKnobs } from '../config/config.js';
-import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PLACEHOLDER_KEY } from '../provider/providers/index.js';
+import type { LLMConfig } from '../../config/config.js';
+import { getCliKnobs } from '../../config/config.js';
+import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PLACEHOLDER_KEY } from '../../provider/providers/index.js';
 
 /**
  * Conversation compaction for long sessions.

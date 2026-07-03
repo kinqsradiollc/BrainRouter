@@ -14,7 +14,7 @@ import { buildDefaultSourcePlan, buildMemoryBriefing, describeSourcePlan } from 
 import { countEntityTokens as countEntityTokensFromText, decideMemoryBriefing, resolveRecallMode as resolveRecallModeFromEnv, type BriefingDecision } from '../memory/briefingTriggers.js';
 import { emitAgentEvent } from '../memory/memoryEvents.js';
 import { buildPromptLayers, buildSystemPrompt, loadWorkspaceInstructionSummary } from '../prompt/systemPrompt.js';
-import { appendVerbositySteering } from '../prompt/verbositySteering.js';
+import { appendVerbositySteering } from '../prompt/steering/verbositySteering.js';
 import { syncRequirementPlanTrack } from '../requirement/planTrackSync.js';
 import { detectRequirementShapedPrompt } from '../requirement/requirementDetector.js';
 import { createRequirement, getRequirement, linkRequirement, listRequirements, updateRequirement } from '../requirement/requirementStore.js';
