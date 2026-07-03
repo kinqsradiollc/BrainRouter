@@ -69,7 +69,7 @@ import { isArtifactKind, isArtifactFormat, isCodeLinkKind, isWorkItemType, isWor
 // new plan version under auto mode we record an `actor: 'auto'` approval so the
 // history stays complete + consistent with explicit approvals.
 import { recordPlanDecision, readPlanHistory, linkPlanDecision, planStepSignature } from '../task/planHistoryStore.js';
-import type { AccessMode } from '../orchestration/roles.js';
+import type { AccessMode } from '../orchestration/registry/roles.js';
 import {
   executeOrchestrationTool,
   isOrchestrationToolName,
@@ -77,10 +77,10 @@ import {
   childAgentsFor,
   type OrchestrationContext,
 } from '../orchestration/tools.js';
-import { getSession } from '../orchestration/orchestrator.js';
+import { getSession } from '../orchestration/session/orchestrator.js';
 import { emitAgentEvent, emitArtifactCapture } from '../memory/memoryEvents.js';
-import { listAll as listAgentDefinitions } from '../orchestration/agentRegistry.js';
-import { ownershipWriteViolation } from '../orchestration/ownership.js';
+import { listAll as listAgentDefinitions } from '../orchestration/registry/agentRegistry.js';
+import { ownershipWriteViolation } from '../orchestration/delegation/ownership.js';
 // REFAC-APPLY-PATCH-MODULE (0.4.6) — workspace-fs primitives + apply_patch live
 // in their own modules now; imported here and re-exported below for back-compat.
 import { IGNORED_DIRS, isPathInside, resolveWorkspacePath, matchGlob, globFiles, grepSearch } from './workspaceFs.js';
@@ -157,7 +157,7 @@ import { classifyForVerification, commandWritesFiles, decideVerification, buildV
 import { resolveToolBudget, isBudgetCheckpoint, buildBudgetCheckpoint, buildBudgetCeilingMessage } from './turnBudget.js';
 import { getCurrentWorkflow } from '../workflow/workflowArtifacts.js';
 import { advanceRunStep, summarizeRun } from '../workflow/workflowRun.js';
-import { spawnWorkerThread, waitWorker } from '../orchestration/workerTools.js';
+import { spawnWorkerThread, waitWorker } from '../orchestration/workers/workerTools.js';
 // PARITY-E3: runtime model fallback on model-not-found.
 import { isModelNotFoundError, shouldFallbackModel } from '../provider/modelFallback.js';
 import { resolveLocalModelProfile, localModelProfileActive, isLocalModelCoreTool } from '../provider/modelFamily.js';

@@ -11,10 +11,10 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { removeChildWorktree, applyPatchFile, type ChildWorktreeIsolation } from '../worktree/worktreeIsolation.js';
-import { getStateDir } from '../storage/store.js';
-import { getCliKnobs } from '../config/config.js';
-import { emitPrFromPatch, derivePrTitle, derivePrBody } from '../git/prEmit.js';
+import { removeChildWorktree, applyPatchFile, type ChildWorktreeIsolation } from '../../worktree/worktreeIsolation.js';
+import { getStateDir } from '../../storage/store.js';
+import { getCliKnobs } from '../../config/config.js';
+import { emitPrFromPatch, derivePrTitle, derivePrBody } from '../../git/prEmit.js';
 import { parsePatchFiles, planSynthesisMerge, type WorktreeChangeSet } from './mergeGate.js';
 import { normalizePhasePlan, type PhasePlan } from './phasePlan.js';
 import type { PhasePlanExecution } from './phaseOrchestrator.js';

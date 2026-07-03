@@ -3,8 +3,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 // MAS-P5-T4: enabled packs contribute agent defs as their own tier.
-import { listPacks } from '../pack/packs.js';
-import { readPackState, isPackEnabled } from '../pack/packStore.js';
+import { listPacks } from '../../pack/packs.js';
+import { readPackState, isPackEnabled } from '../../pack/packStore.js';
 
 export type Tier = 'chat' | 'reasoning' | 'worker';
 export type AccessMode = 'read' | 'write' | 'shell';
@@ -39,8 +39,9 @@ export interface LoadedDefinition {
   filePath: string;
 }
 
-// Resolved at import time from dist/orchestration/agentRegistry.js → ../../agents
-const BUILTIN_AGENTS_DIR = fileURLToPath(new URL('../../agents', import.meta.url));
+// Resolved at import time from dist/orchestration/registry/agentRegistry.js →
+// ../../../agents (the package-root `agents/` dir, a sibling of `dist/`).
+const BUILTIN_AGENTS_DIR = fileURLToPath(new URL('../../../agents', import.meta.url));
 
 function getUserAgentsDir(): string {
   const home = process.env.BRAINROUTER_HOME ?? path.join(os.homedir(), '.config', 'brainrouter');

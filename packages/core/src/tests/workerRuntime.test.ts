@@ -14,7 +14,7 @@ import {
   readWorkerMeta,
   type WorkerMeta,
 } from '../worker/workerStore.js';
-import { spawnWorkerThread, waitWorker } from '../orchestration/workerTools.js';
+import { spawnWorkerThread, waitWorker } from '../orchestration/workers/workerTools.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
 
 function ws(): { dir: string; cleanup: () => void } {

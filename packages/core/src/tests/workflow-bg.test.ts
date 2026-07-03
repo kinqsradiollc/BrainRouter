@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { runWorkflow } from '../workflow/workflowTool.js';
-import type { PhaseRunner } from '../orchestration/phaseOrchestrator.js';
+import type { PhaseRunner } from '../orchestration/workflow/phaseOrchestrator.js';
 import { ensurePhaseRun, advanceRunPhase, readRun } from '../workflow/workflowRun.js';
 import { collectRunningTasks } from '../background/backgroundTasks.js';
 

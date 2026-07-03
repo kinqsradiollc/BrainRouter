@@ -2135,7 +2135,7 @@ test('orchestration: task_agent wait timeout returns envelope without failing th
       assert.equal(result.childStatus, 'running');
       assert.match(result.id, /^agent-/);
       await new Promise((resolve) => setTimeout(resolve, 150));
-      const { getSession } = await import('../orchestration/orchestrator.js');
+      const { getSession } = await import('../orchestration/session/orchestrator.js');
       const record = getSession(workspace, result.id);
       assert.equal(record?.status, 'completed');
       assert.match(record?.finalOutput ?? '', /too late|never reached/);
@@ -2176,7 +2176,7 @@ test('orchestration: background child timeout arg does not kill the child', asyn
       );
       const result = JSON.parse(raw);
       await new Promise((resolve) => setTimeout(resolve, 150));
-      const { getSession } = await import('../orchestration/orchestrator.js');
+      const { getSession } = await import('../orchestration/session/orchestrator.js');
       const record = getSession(workspace, result.id);
       assert.equal(record?.status, 'completed');
       assert.equal(record?.error, undefined);

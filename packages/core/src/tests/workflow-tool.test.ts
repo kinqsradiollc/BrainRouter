@@ -10,7 +10,7 @@ import {
   runWorkflow,
   type OrchestrationDispatch,
 } from '../workflow/workflowTool.js';
-import type { PhaseRunner } from '../orchestration/phaseOrchestrator.js';
+import type { PhaseRunner } from '../orchestration/workflow/phaseOrchestrator.js';
 import { readRun } from '../workflow/workflowRun.js';
 
 function tmpWs(): string {

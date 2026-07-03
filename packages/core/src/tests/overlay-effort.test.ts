@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createSpawnAgentTool } from '../orchestration/tools.js';
-import { createSession, updateSession, listSessions } from '../orchestration/orchestrator.js';
+import { createSession, updateSession, listSessions } from '../orchestration/session/orchestrator.js';
 
 test('spawn_agent schema exposes overlay (string) + effort (low|medium|high|xhigh)', () => {
   const props = (createSpawnAgentTool().inputSchema as any).properties;

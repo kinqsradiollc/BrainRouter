@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createOrchestrationService, OrchestrationService } from '../orchestration/service.js';
-import { listSessions, getSession, formatSessionSummary } from '../orchestration/orchestrator.js';
+import { createOrchestrationService, OrchestrationService } from '../orchestration/session/service.js';
+import { listSessions, getSession, formatSessionSummary } from '../orchestration/session/orchestrator.js';
 
 test('OrchestrationService is a per-workspace facade — delegates to the session store', () => {
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-svc-'));

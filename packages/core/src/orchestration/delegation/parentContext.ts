@@ -27,7 +27,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import type { AccessMode } from './roles.js';
+import type { AccessMode } from '../registry/roles.js';
 
 export interface ParentExecutionContextSnapshot {
   /** UUID of the parent session that spawned this child. */

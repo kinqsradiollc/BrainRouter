@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { aggregateChildUsage } from '../orchestration/childAccounting.js';
-import { createSession, updateSession, listSessions } from '../orchestration/orchestrator.js';
+import { aggregateChildUsage } from '../orchestration/accounting/childAccounting.js';
+import { createSession, updateSession, listSessions } from '../orchestration/session/orchestrator.js';
 
 test('aggregateChildUsage sums tokens/calls/offload and ignores usage-less entries', () => {
   const totals = aggregateChildUsage([

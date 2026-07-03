@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { withTempWorkspace } from './_helpers.js';
-import { loadRegistry, findById, listAll, type AgentDefinition } from '../orchestration/agentRegistry.js';
+import { loadRegistry, findById, listAll, type AgentDefinition } from '../orchestration/registry/agentRegistry.js';
 
 test('built-in registry loads all canonical roles', () => {
   const defs = loadRegistry();

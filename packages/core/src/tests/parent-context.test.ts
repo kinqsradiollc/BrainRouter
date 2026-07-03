@@ -4,7 +4,7 @@ import {
   buildParentExecutionContextSnapshot,
   formatSnapshotForHuman,
   type ParentExecutionContextSnapshot,
-} from '../orchestration/parentContext.js';
+} from '../orchestration/delegation/parentContext.js';
 
 /**
  * MAS-P2-M3 — ParentExecutionContextSnapshot tests.

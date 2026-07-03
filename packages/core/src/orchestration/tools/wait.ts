@@ -1,7 +1,7 @@
-import { formatSessionSummary, getSession, listSessions, updateSession, type ChildSessionRecord } from '../orchestrator.js';
+import { formatSessionSummary, getSession, listSessions, updateSession, type ChildSessionRecord } from '../session/orchestrator.js';
 import { readTranscriptEntries } from '../../session/sessionStore.js';
 import { childSessionKey } from '../../mcp/mcpUtils.js';
-import { aggregateChildUsage } from '../childAccounting.js';
+import { aggregateChildUsage } from '../accounting/childAccounting.js';
 import { acknowledgeCompletions } from '../../session/completionInbox.js';
 import { removeChildWorktree, worktreePatchFile } from '../../worktree/worktreeIsolation.js';
 import type { OrchestrationContext } from './context.js';

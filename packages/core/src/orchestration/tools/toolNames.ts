@@ -1,4 +1,4 @@
-import type { AccessMode } from '../roles.js';
+import type { AccessMode } from '../registry/roles.js';
 
 export const DELEGATE_TOOL_PREFIX = 'delegate_';
 

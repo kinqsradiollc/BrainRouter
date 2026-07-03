@@ -1,7 +1,7 @@
 /** HONK-L5 (verify-loop nudge) + L6 (router tier bias) for local models. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { biasTierForLocalModel, routeTask } from '../orchestration/router.js';
+import { biasTierForLocalModel, routeTask } from '../orchestration/routing/router.js';
 import { buildVerificationNudge } from '../agent/verificationGate.js';
 
 // ---- L6: router tier bias ----

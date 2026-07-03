@@ -14,7 +14,7 @@
  * (it owns the LLMConfig); everything here is unit-testable with no I/O.
  */
 
-import { normalizePhasePlan, type PhasePlan } from '../orchestration/phasePlan.js';
+import { normalizePhasePlan, type PhasePlan } from '../orchestration/workflow/phasePlan.js';
 
 export type NextActionStrategy = 'answer-direct' | 'investigate' | 'fan-out' | 'workflow' | 'build';
 

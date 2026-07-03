@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { getStateDir, getStateFile, readJsonFile, writeJsonFile } from '../storage/store.js';
-import { resolveRole, type AccessMode } from './roles.js';
-import type { Tier } from './agentRegistry.js';
+import { getStateDir, getStateFile, readJsonFile, writeJsonFile } from '../../storage/store.js';
+import { resolveRole, type AccessMode } from '../registry/roles.js';
+import type { Tier } from '../registry/agentRegistry.js';
 
 export type ChildStatus = 'pending' | 'running' | 'completed' | 'failed' | 'stale' | 'closed';
 
@@ -47,7 +47,7 @@ export interface ChildSessionRecord {
    * post-hoc; the child also receives a copy as its first transcript
    * entry. See `orchestration/parentContext.ts`.
    */
-  parentContext?: import('./parentContext.js').ParentExecutionContextSnapshot;
+  parentContext?: import('../delegation/parentContext.js').ParentExecutionContextSnapshot;
   /** MAS-P4-T4 — follow-up roles auto-chained after this worker (e.g. ['reviewer','verifier']). */
   autoChainFollowups?: string[];
   /** 0.4.x-1 — true when spawned with an operator overlay (a bespoke one-off agent). */
