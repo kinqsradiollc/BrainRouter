@@ -10,8 +10,8 @@ import {
   attachmentDir, safeAttachmentName, createAttachment, getAttachment, listAttachments,
   updateAttachment, linkAttachmentMemory,
   type CreateAttachmentInput, type AttachmentFilter, type AttachmentPatch,
-} from "./attachmentStore.js";
-import { ingestAttachment, attachmentContextMarkdown, type IngestAttachmentInput } from "./ingest.js";
+} from "./store/attachmentStore.js";
+import { ingestAttachment, attachmentContextMarkdown, type IngestAttachmentInput } from "./ingest/ingest.js";
 
 /** Ingest input minus `workspaceRoot` (the service supplies it). */
 export type IngestInput = Omit<IngestAttachmentInput, "workspaceRoot">;

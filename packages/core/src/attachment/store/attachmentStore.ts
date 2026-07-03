@@ -17,7 +17,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { getStateDir, getStateFile, readJsonFile, writeJsonFile } from '../storage/store.js';
+import { getStateDir, getStateFile, readJsonFile, writeJsonFile } from '../../storage/store.js';
 import type { AttachmentKind, AttachmentRecord } from '@kinqs/brainrouter-types';
 
 interface AttachmentFile {

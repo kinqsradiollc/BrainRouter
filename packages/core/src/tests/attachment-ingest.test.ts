@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isAttachmentRecord } from '@kinqs/brainrouter-types';
-import { ingestAttachment, attachmentContextMarkdown } from '../attachment/ingest.js';
-import { getAttachment, listAttachments, linkAttachmentMemory } from '../attachment/attachmentStore.js';
+import { ingestAttachment, attachmentContextMarkdown } from '../attachment/ingest/ingest.js';
+import { getAttachment, listAttachments, linkAttachmentMemory } from '../attachment/store/attachmentStore.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
 
 test('ingestAttachment: text file → record, preserved blob, extracted text, memory link', async () => {

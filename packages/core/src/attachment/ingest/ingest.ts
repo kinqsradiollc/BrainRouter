@@ -11,12 +11,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto, { randomUUID } from 'node:crypto';
-import { attachmentDir, createAttachment, safeAttachmentName } from './attachmentStore.js';
-import { detectKind } from './detect.js';
-import { sniffImage } from './imageMeta.js';
-import { extractPdf } from './pdfText.js';
-import { recordTelemetry } from '../telemetry/recorder/telemetry.js';
-import { TELEMETRY_EVENTS } from '../telemetry/events/contracts.js';
+import { attachmentDir, createAttachment, safeAttachmentName } from '../store/attachmentStore.js';
+import { detectKind } from '../format/detect.js';
+import { sniffImage } from '../format/imageMeta.js';
+import { extractPdf } from '../format/pdfText.js';
+import { recordTelemetry } from '../../telemetry/recorder/telemetry.js';
+import { TELEMETRY_EVENTS } from '../../telemetry/events/contracts.js';
 import type { AttachmentRecord } from '@kinqs/brainrouter-types';
 
 /** Cap on extracted text persisted per attachment. */
