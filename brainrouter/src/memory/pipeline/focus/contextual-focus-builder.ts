@@ -1,9 +1,9 @@
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
 import type { LLMRunner, ContextualFocusRecord } from "@kinqs/brainrouter-types";
-import { FOCUS_SCENE_SYSTEM_PROMPT, formatFocusScenePrompt } from "../prompts/focus-scene.js";
-import { FOCUS_SCENE_CLUSTER_SYSTEM_PROMPT, formatFocusSceneClusterPrompt } from "../prompts/focus-scene-cluster.js";
-import { MAX_FOCUS_SCENES } from "../scheduler.js";
-import { extractJsonValue } from "../util/llm-json.js";
+import { FOCUS_SCENE_SYSTEM_PROMPT, formatFocusScenePrompt } from "../../prompts/focus-scene.js";
+import { FOCUS_SCENE_CLUSTER_SYSTEM_PROMPT, formatFocusSceneClusterPrompt } from "../../prompts/focus-scene-cluster.js";
+import { MAX_FOCUS_SCENES } from "../../scheduler.js";
+import { extractJsonValue } from "../../util/llm-json.js";
 import crypto from "node:crypto";
 
 async function canonicalizeFocusNames(params: {

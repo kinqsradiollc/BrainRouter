@@ -4,11 +4,11 @@ import type { EmbeddingService } from "../store/embedding.js";
 import type { RerankerService } from "../store/reranker.js";
 import { rerankerMaxDocChars } from "../store/reranker.js";
 import type { RelevanceJudgeService } from "../store/relevance-judge.js";
-import { expandRecallWithGraph } from "../pipeline/graph-recall.js";
-import { detectPrewarmSkills, buildPrewarmBlock } from "../pipeline/skill-prewarm.js";
+import { expandRecallWithGraph } from "../pipeline/graph/graph-recall.js";
+import { detectPrewarmSkills, buildPrewarmBlock } from "../pipeline/skill/skill-prewarm.js";
 import { detectTaskIntent, extractFilePathHints, getMemoryTypeConfig } from "../config/memory-type-config.js";
 import { randomUUID } from "node:crypto";
-import { NeuralSparkEngine } from "../pipeline/neural-spark.js";
+import { NeuralSparkEngine } from "../pipeline/skill/neural-spark.js";
 import { gatherRecordRefs, formatRefHint, type RecordRefsStore } from "../util/recall-refs.js";
 import { isExternalTimeoutError } from "../llm/llm-response.js";
 import {

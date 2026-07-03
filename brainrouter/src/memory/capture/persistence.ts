@@ -4,7 +4,7 @@ import { recordInlineJob } from "../scheduler/runner.js";
 import { redactSensitiveMemoryText } from "../util/redaction.js";
 import { ingestSource, type SourceIngestStore } from "../source/ingest.js";
 import { attributeRecordToChunks, readProvenanceConfig, type AttributableChunk } from "../source/attribution.js";
-import { contentHash } from "../pipeline/apply-dedup.js";
+import { contentHash } from "../pipeline/cognitive/apply-dedup.js";
 import { CaptureBase } from "./base.js";
 import { MIN_SOURCE_CHARS, type ProvenanceStore, type BlackboardAdmissionStore } from "./types.js";
 

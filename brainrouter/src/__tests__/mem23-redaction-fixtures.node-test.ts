@@ -7,7 +7,7 @@ import { createTestEngine } from "./helpers/pgTestStore.js";
 import { PostgresMemoryStore } from "../memory/store/postgres/PostgresMemoryStore.js";
 import { MemoryCapturePipeline } from "../memory/capture.js";
 import { redactSensitiveMemoryText } from "../memory/util/redaction.js";
-import { contentHash } from "../memory/pipeline/apply-dedup.js";
+import { contentHash } from "../memory/pipeline/cognitive/apply-dedup.js";
 
 /**
  * MEM-23 (0.4.4) — redaction regression fixtures. Feeds credential-shaped text

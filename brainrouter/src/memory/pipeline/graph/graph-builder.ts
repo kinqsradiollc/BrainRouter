@@ -1,7 +1,7 @@
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
 import type { LLMRunner, CognitiveRecord, GraphNode, GraphEdge } from "@kinqs/brainrouter-types";
-import { GRAPH_EXTRACTION_SYSTEM_PROMPT, formatGraphExtractionPrompt } from "../prompts/graph-extraction.js";
-import { extractJsonValue } from "../util/llm-json.js";
+import { GRAPH_EXTRACTION_SYSTEM_PROMPT, formatGraphExtractionPrompt } from "../../prompts/graph-extraction.js";
+import { extractJsonValue } from "../../util/llm-json.js";
 import crypto from "node:crypto";
 
 /**

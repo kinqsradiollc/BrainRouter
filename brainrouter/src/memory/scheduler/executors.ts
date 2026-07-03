@@ -18,8 +18,8 @@
  */
 
 import type { IMemoryStore, LLMRunner } from "@kinqs/brainrouter-types";
-import { distillCoreIdentity } from "../pipeline/identity-distiller.js";
-import { distillFocusScenes } from "../pipeline/contextual-focus-builder.js";
+import { distillCoreIdentity } from "../pipeline/identity/identity-distiller.js";
+import { distillFocusScenes } from "../pipeline/focus/contextual-focus-builder.js";
 import { digestTreeNodes } from "../tree/digest.js";
 import { enqueueAgentJob } from "./jobs.js";
 

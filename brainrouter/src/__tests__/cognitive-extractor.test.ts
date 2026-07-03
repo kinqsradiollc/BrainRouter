@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractCognitiveMemories } from "../memory/pipeline/cognitive-extractor.js";
+import { extractCognitiveMemories } from "../memory/pipeline/cognitive/cognitive-extractor.js";
 import type { LLMRunner, SensoryRecord } from "@kinqs/brainrouter-types";
 
 function makeMessage(messageText: string): SensoryRecord {

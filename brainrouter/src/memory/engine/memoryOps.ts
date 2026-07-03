@@ -18,8 +18,8 @@ import { getMemoryTypeConfig } from "../config/memory-type-config.js";
 import { redactSensitiveMemoryText } from "../util/redaction.js";
 import { buildSkillExtractionPrompt, parseSkillResponse } from "../skills/skill-extract.js";
 import { buildReflectPrompt, parseReflectResponse } from "../util/reflect.js";
-import { decayPotential } from "../pipeline/skill-prewarm.js";
-import { NeuralSparkEngine } from "../pipeline/neural-spark.js";
+import { decayPotential } from "../pipeline/skill/skill-prewarm.js";
+import { NeuralSparkEngine } from "../pipeline/skill/neural-spark.js";
 import { pageRank, articulationPoints, shortestPath, namespaceOverview } from "../graph/graph-analytics.js";
 
 /**

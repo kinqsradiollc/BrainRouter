@@ -4,7 +4,7 @@ import { createTestStore } from "./helpers/pgTestStore.js";
 import type { PostgresMemoryStore } from "../memory/store/postgres/PostgresMemoryStore.js";
 import { MemoryCapturePipeline } from "../memory/capture.js";
 import { redactSensitiveMemoryText } from "../memory/util/redaction.js";
-import { contentHash } from "../memory/pipeline/apply-dedup.js";
+import { contentHash } from "../memory/pipeline/cognitive/apply-dedup.js";
 
 // extractEveryNTurns set absurdly high so cognitive extraction never fires —
 // this isolates the MEM-2′ source-ingest path. The LLM / embedding deps are

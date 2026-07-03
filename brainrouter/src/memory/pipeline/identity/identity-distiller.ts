@@ -1,6 +1,6 @@
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
 import type { LLMRunner, CoreIdentityRecord } from "@kinqs/brainrouter-types";
-import { CORE_IDENTITY_SYSTEM_PROMPT, formatCoreIdentityPrompt } from "../prompts/core-identity.js";
+import { CORE_IDENTITY_SYSTEM_PROMPT, formatCoreIdentityPrompt } from "../../prompts/core-identity.js";
 
 /**
  * Core Identity Distillation Pipeline

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
-import { NeuralSparkEngine } from "../memory/pipeline/neural-spark.js";
+import { NeuralSparkEngine } from "../memory/pipeline/skill/neural-spark.js";
 
 class MockMemoryStore implements Partial<IMemoryStore> {
   public connections: Array<{ sourceId: string; targetId: string; weight: number; lastActivatedAt: string }> = [];
