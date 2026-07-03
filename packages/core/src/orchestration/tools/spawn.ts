@@ -7,19 +7,19 @@ import {
   listSessions,
   updateSession,
   type ChildSessionRecord,
-} from '../orchestrator.js';
-import { buildRolePrompt, resolveRole, type AccessMode } from '../roles.js';
-import { countRunningChildren, spawnSlotDecision } from '../spawnSlots.js';
-import { findById, listAll, type Tier } from '../agentRegistry.js';
+} from '../session/orchestrator.js';
+import { buildRolePrompt, resolveRole, type AccessMode } from '../roles/roles.js';
+import { countRunningChildren, spawnSlotDecision } from '../session/spawnSlots.js';
+import { findById, listAll, type Tier } from '../agents/agentRegistry.js';
 import { buildSystemPrompt, loadWorkspaceInstructionSummary } from '../../prompt/systemPrompt.js';
-import { appendTranscriptEntry } from '../../session/sessionStore.js';
+import { appendTranscriptEntry } from '../../session/transcript/sessionStore.js';
 import { callMcpTool, childSessionKey } from '../../mcp/mcpUtils.js';
-import { readPreferences } from '../../session/preferencesStore.js';
-import { resolveAutoChainMode, autoChainRoles } from '../autoChain.js';
-import { resolveDelegationPolicy, evaluateDelegationGate } from '../delegationPolicy.js';
-import { buildParentExecutionContextSnapshot } from '../parentContext.js';
-import { enqueueCompletion } from '../../session/completionInbox.js';
-import { getOutputContract } from '../outputContracts.js';
+import { readPreferences } from '../../session/preferences/preferencesStore.js';
+import { resolveAutoChainMode, autoChainRoles } from '../delegation/autoChain.js';
+import { resolveDelegationPolicy, evaluateDelegationGate } from '../delegation/delegationPolicy.js';
+import { buildParentExecutionContextSnapshot } from '../delegation/parentContext.js';
+import { enqueueCompletion } from '../../session/completion/completionInbox.js';
+import { getOutputContract } from '../roles/outputContracts.js';
 import { emitAgentRouteFeedback, emitAgentEvent, agentOutputEvent, type RouteOutcome } from '../../memory/memoryEvents.js';
 import { prepareChildWorkspace, removeChildWorktree, isSharedWorktreeOf, sharedWorktreeLaunchCwd, mergeBackLine, worktreePatchFile, type WorktreeHoldReason, type ChildWorkspaceResolution } from '../../worktree/worktreeIsolation.js';
 import type { OrchestrationContext } from './context.js';

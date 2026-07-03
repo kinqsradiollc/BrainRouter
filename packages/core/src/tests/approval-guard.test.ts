@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isOverBroadCommandPrefix, sanitizeCommandAllowlist } from '../exec/approvalGuard.js';
+import { isOverBroadCommandPrefix, sanitizeCommandAllowlist } from '../exec/guard/approvalGuard.js';
 
 test('CODEX-APPROVAL-GUARD rejects shells, interpreters, escalators, and wrappers', () => {
   for (const p of ['sh', 'bash', 'zsh', 'python', 'python3', 'node', 'ruby', 'perl', 'sudo', 'su', 'env', 'osascript', 'xargs', 'npx', 'eval', 'exec']) {

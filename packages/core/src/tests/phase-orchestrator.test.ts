@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizePhasePlan, type PhaseAgentSpec, type WorkflowPhase } from '../orchestration/phasePlan.js';
+import { normalizePhasePlan, type PhaseAgentSpec, type WorkflowPhase } from '../orchestration/workflow/phasePlan.js';
 import {
   executePhasePlan,
   type PhaseRunner,
   type PhaseChildResult,
-} from '../orchestration/phaseOrchestrator.js';
+} from '../orchestration/workflow/phaseOrchestrator.js';
 
 /** A fake runner: records (phaseId, agents) per call and returns canned results. */
 function recordingRunner(
@@ -176,7 +176,7 @@ test('executePhasePlan: fires onPhaseStart/onPhaseComplete hooks per phase in or
 
 // MAS-READMANIFEST (B2/C3) — files a phase's children read are forwarded to the
 // next phase's prompts so it reads deltas, not the whole tree cold.
-import { renderReadManifest } from '../orchestration/phaseOrchestrator.js';
+import { renderReadManifest } from '../orchestration/workflow/phaseOrchestrator.js';
 
 test('renderReadManifest: empty → empty; populated → an attributed block', () => {
   assert.equal(renderReadManifest(new Map()), '');

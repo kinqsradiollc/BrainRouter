@@ -5,7 +5,7 @@ import {
   describeContractForPrompt,
   getOutputContract,
   parseChildOutput,
-} from '../orchestration/outputContracts.js';
+} from '../orchestration/roles/outputContracts.js';
 
 /**
  * MAS-P2-M5 — output-contract scaffolding tests.

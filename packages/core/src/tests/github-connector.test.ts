@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { ConnectorRecord } from '@kinqs/brainrouter-types';
-import { runGithubConnectorCheckpoint, runGithubConnectorPermissionSync, validateGithubConnectorAccess, type GithubConnectorClient, type GithubConnectorPermissionClient, type GithubConnectorValidationClient } from '../connectors/githubConnector.js';
+import { runGithubConnectorCheckpoint, runGithubConnectorPermissionSync, validateGithubConnectorAccess, type GithubConnectorClient, type GithubConnectorPermissionClient, type GithubConnectorValidationClient } from '../connectors/sources/githubConnector.js';
 
 function connector(overrides?: Partial<ConnectorRecord>): ConnectorRecord {
   return {

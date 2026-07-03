@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildUsageBreakdown, type ActorUsage } from '../util/usageBreakdown.js';
+import { buildUsageBreakdown, type ActorUsage } from '../util/tokens/usageBreakdown.js';
 
 const PARENT = { promptTokens: 50_000, completionTokens: 4_000, calls: 20, turns: 5, cachedTokens: 40_000, missedTokens: 10_000 };
 

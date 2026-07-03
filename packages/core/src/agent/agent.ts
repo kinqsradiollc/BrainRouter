@@ -9,28 +9,28 @@ import chalk from 'chalk';
 // getIdentity / getServerName / close), so existing call sites stay
 // unchanged. Single-server setups become a degenerate pool of one.
 import type { McpClientPool as McpClientWrapper } from '../mcp/mcpPool.js';
-import { NoTTYError, HEADLESS_PROMPTER, type InteractivePrompter } from './prompter.js';
+import { NoTTYError, HEADLESS_PROMPTER, type InteractivePrompter } from './support/prompter.js';
 import type { LLMConfig } from '../config/config.js';
 import { getCliKnobs } from '../config/config.js';
 import type { ComputerUsePort } from '@kinqs/brainrouter-agent-protocol';
-import { appendTranscriptEntry, isInternalSessionKey, redactText, readTranscriptEntries } from '../session/sessionStore.js';
+import { appendTranscriptEntry, isInternalSessionKey, redactText, readTranscriptEntries } from '../session/transcript/sessionStore.js';
 import { recordFileMutation } from '../storage/fileSnapshotStore.js';
 import { isConnectivityError, isRetryableServerError } from '../storage/checkpointStore.js';
-import { reconnectBackoffMs, probeConnectivity, parseRetryAfterMs } from '../mcp/reconnect.js';
-import { unsynthesizedChildIds, mergePendingChildIds, buildPendingChildStatusHint } from '../util/childResume.js';
-import { isChildSynthesisTool, resultHasChildOutput, looksLikeChildSynthesisPunt } from '../util/synthesisGuard.js';
-import { sanitizeModelArtifacts } from '../util/outputSanitize.js';
+import { reconnectBackoffMs, probeConnectivity, parseRetryAfterMs } from '../mcp/reconnect/reconnect.js';
+import { unsynthesizedChildIds, mergePendingChildIds, buildPendingChildStatusHint } from '../util/agentloop/childResume.js';
+import { isChildSynthesisTool, resultHasChildOutput, looksLikeChildSynthesisPunt } from '../util/agentloop/synthesisGuard.js';
+import { sanitizeModelArtifacts } from '../util/agentloop/outputSanitize.js';
 import { buildPromptLayers, buildSystemPrompt, loadWorkspaceInstructionSummary, type PromptLayers } from '../prompt/systemPrompt.js';
 import {
   buildAnthropicMessagesPayload, normalizeAnthropicOutput, ANTHROPIC_DEFAULT_MAX_TOKENS,
   buildGeminiGeneratePayload, normalizeGeminiOutput, nativeRequestSpec,
   type NativeBuildInput, type NativeOutput, type NativeRequestFormat,
-} from './nativeProviders.js';
+} from './transport/nativeProviders.js';
 import { formatPlan, readPlan, updatePlan, type PlanState } from '../task/taskStore.js';
-import { createRequirement, getRequirement, linkRequirement, listRequirements, updateRequirement } from '../requirement/requirementStore.js';
-import { detectRequirementShapedPrompt } from '../requirement/requirementDetector.js';
-import { syncRequirementPlanTrack } from '../requirement/planTrackSync.js';
-import { reconcileSessionSprints } from '../track/sprintAutomation.js';
+import { createRequirement, getRequirement, linkRequirement, listRequirements, updateRequirement } from '../requirement/records/requirementStore.js';
+import { detectRequirementShapedPrompt } from '../requirement/records/requirementDetector.js';
+import { syncRequirementPlanTrack } from '../requirement/sync/planTrackSync.js';
+import { reconcileSessionSprints } from '../track/automation/index.js';
 import {
   ensureProject as trackEnsureProject,
   getProject as trackGetProject,
@@ -48,7 +48,7 @@ import {
   updateSprint as trackUpdateSprint,
   sprintVelocity as trackSprintVelocity,
 } from '../track/trackStore.js';
-import { parseTrackQuery } from '../track/query.js';
+import { parseTrackQuery } from '../track/query/index.js';
 import { createArtifact, updateArtifact, getArtifact, linkArtifact } from '../artifact/artifactStore.js';
 // Connectors — agent-callable list/run parity (ingest → memory). The runtime
 // switch + full orchestration live in core's shared runner; the agent supplies
@@ -69,7 +69,7 @@ import { isArtifactKind, isArtifactFormat, isCodeLinkKind, isWorkItemType, isWor
 // new plan version under auto mode we record an `actor: 'auto'` approval so the
 // history stays complete + consistent with explicit approvals.
 import { recordPlanDecision, readPlanHistory, linkPlanDecision, planStepSignature } from '../task/planHistoryStore.js';
-import type { AccessMode } from '../orchestration/roles.js';
+import type { AccessMode } from '../orchestration/roles/roles.js';
 import {
   executeOrchestrationTool,
   isOrchestrationToolName,
@@ -77,29 +77,29 @@ import {
   childAgentsFor,
   type OrchestrationContext,
 } from '../orchestration/tools.js';
-import { getSession } from '../orchestration/orchestrator.js';
+import { getSession } from '../orchestration/session/orchestrator.js';
 import { emitAgentEvent, emitArtifactCapture } from '../memory/memoryEvents.js';
-import { listAll as listAgentDefinitions } from '../orchestration/agentRegistry.js';
-import { ownershipWriteViolation } from '../orchestration/ownership.js';
+import { listAll as listAgentDefinitions } from '../orchestration/agents/agentRegistry.js';
+import { ownershipWriteViolation } from '../orchestration/ownership/ownership.js';
 // REFAC-APPLY-PATCH-MODULE (0.4.6) — workspace-fs primitives + apply_patch live
 // in their own modules now; imported here and re-exported below for back-compat.
-import { IGNORED_DIRS, isPathInside, resolveWorkspacePath, matchGlob, globFiles, grepSearch } from './workspaceFs.js';
-import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from './applyPatch.js';
-export { isPathInside, resolveWorkspacePath, matchGlob, globFiles } from './workspaceFs.js';
-export { applyPatchEnvelope } from './applyPatch.js';
+import { IGNORED_DIRS, isPathInside, resolveWorkspacePath, matchGlob, globFiles, grepSearch } from './fs/workspaceFs.js';
+import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from './fs/applyPatch.js';
+export { isPathInside, resolveWorkspacePath, matchGlob, globFiles } from './fs/workspaceFs.js';
+export { applyPatchEnvelope } from './fs/applyPatch.js';
 // REFAC-TOOLS-MODULE (0.4.6) — tool specs + name normalization live in agent/tools/.
-import { LOCAL_TOOLS } from '../tool/specs.js';
-import { normalizeToolName } from '../tool/names.js';
-import { registryAllowedTools, hideWorkerToolsFor, WORKER_THREAD_TOOLS, MCP_DISCOVERY_TOOLS } from '../tool/registry.js';
-import { searchMcpCatalog } from '../mcp/discovery.js';
+import { LOCAL_TOOLS } from '../tool/specs/specs.js';
+import { normalizeToolName } from '../tool/specs/names.js';
+import { registryAllowedTools, hideWorkerToolsFor, WORKER_THREAD_TOOLS, MCP_DISCOVERY_TOOLS } from '../tool/registry/registry.js';
+import { searchMcpCatalog } from '../mcp/discovery/discovery.js';
 import { appendEvidence, setQuestion, readLedger } from '../research/researchStore.js';
 import { summarizeLedger, formatBrief } from '../research/evidenceLedger.js';
-import { localToolExecutor, localToolSpecsFromExecutors } from '../tool/executors.js';
-import { assessMcpToolApproval } from './mcpApproval.js';
-export { LOCAL_TOOLS } from '../tool/specs.js';
-export { normalizeToolName } from '../tool/names.js';
-import { applyToolScope, rankAndCapTools } from '../tool/toolBudget.js';
-import { resolveToolVisible } from '../tool/toolPolicy.js';
+import { localToolExecutor, localToolSpecsFromExecutors } from '../tool/registry/executors.js';
+import { assessMcpToolApproval } from './guards/mcpApproval.js';
+export { LOCAL_TOOLS } from '../tool/specs/specs.js';
+export { normalizeToolName } from '../tool/specs/names.js';
+import { applyToolScope, rankAndCapTools } from '../tool/policy/toolBudget.js';
+import { resolveToolVisible } from '../tool/policy/toolPolicy.js';
 import { buildDefaultSourcePlan, buildMemoryBriefing, describeSourcePlan, selectCitedRecordIds, type RecalledRecord } from '../memory/briefing.js';
 import { assessCapturePayload } from '../memory/memoryPolicy.js';
 import {
@@ -109,60 +109,60 @@ import {
   type BriefingDecision,
 } from '../memory/briefingTriggers.js';
 import { callMcpTool, extractToolText } from '../mcp/mcpUtils.js';
-import { applyFederationIdentity } from '../util/federationIdentity.js';
-import { acquireLLMSlot } from '../util/llmSemaphore.js';
-import { blockGoal, completeGoal, formatGoalBlock, readGoal } from '../goal/goalStore.js';
+import { applyFederationIdentity } from '../util/agentloop/federationIdentity.js';
+import { acquireLLMSlot } from '../util/concurrency/llmSemaphore.js';
+import { blockGoal, completeGoal, formatGoalBlock, readGoal } from '../goal/store/goalStore.js';
 import { runHooks, parseHookDecision } from '../hooks/hooksStore.js';
 import { extensionHookHandlers } from '../extension/registry.js';
-import { resolveSandboxConfig, runShell } from '../exec/sandbox.js';
-import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../exec/dangerousCommand.js';
-import { evaluateDestructiveCommand } from '../exec/destructiveCommandGuard.js';
+import { resolveSandboxConfig, runShell } from '../exec/runtime/sandbox.js';
+import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../exec/guard/dangerousCommand.js';
+import { evaluateDestructiveCommand } from '../exec/guard/destructiveCommandGuard.js';
 import { gitHeadSha } from '../git/workspaceGit.js';
 import { recordDailyUsage } from '../usage/usageHistoryStore.js';
-import { isTelemetryEnabled } from '../telemetry/telemetry.js';
-import { readPreferences, resolveEffort, effortToWireLevel, type EffortLevel } from '../session/preferencesStore.js';
-import { resolveActiveMode } from '../session/sessionModeStore.js';
-import { resolveEffortForTurn } from './effortRouting.js';
+import { isTelemetryEnabled } from '../telemetry/recorder/telemetry.js';
+import { readPreferences, resolveEffort, effortToWireLevel, type EffortLevel } from '../session/preferences/preferencesStore.js';
+import { resolveActiveMode } from '../session/state/sessionModeStore.js';
+import { resolveEffortForTurn } from './support/effortRouting.js';
 // 0.3.9 — Anthropic native adapter removed (the /v1/messages path landed in
 // 0.3.8 but never delivered enough cache-hit headroom or stability to justify
 // the second provider dispatch). Anthropic models can still be reached through
 // OpenAI-compatible gateways (OpenRouter, Together, etc.) on the OpenAI path.
-import { startSpan, traceEvent } from '../telemetry/tracing.js';
+import { startSpan, traceEvent } from '../telemetry/tracing/tracing.js';
 // 0.3.9 item 8 — cache-first context regions. The helper here lets us
 // fingerprint the cache-stable slice of every outbound chat request
 // without rewriting the legacy runTurn message plumbing.
 import { computePrefixFingerprint, computePrefixComponents, accumulatePrefixStability, newPrefixStabilityTally, prefixStabilityRatio, type PrefixComponents, type PrefixStabilityTally } from '../context/contextRegions.js';
 import { contextWindowForBudget } from '../context/contextWindow.js';
-import { decideExecutionPolicy, resolveToolPolicy, externalDirectoryDecision, egressDecision, type ActionKind, type PolicyDecision } from '../exec/execPolicy.js';
-import { isPathWithinRoots } from '../exec/pathPolicy.js';
-import { runPostEditCheck } from '../util/postEditCheck.js';
-import { shouldReindex, reindexSignature, languageHint, type ReindexGate } from '../util/autoReindex.js';
+import { decideExecutionPolicy, resolveToolPolicy, externalDirectoryDecision, egressDecision, type ActionKind, type PolicyDecision } from '../exec/policy/execPolicy.js';
+import { isPathWithinRoots } from '../exec/policy/pathPolicy.js';
+import { runPostEditCheck } from '../util/agentloop/postEditCheck.js';
+import { shouldReindex, reindexSignature, languageHint, type ReindexGate } from '../util/indexing/autoReindex.js';
 import { gitChurnSignal } from '../git/gitChurn.js';
 // MAS-P5-T2: progressive result handoff — large tool results become a
 // preview + resultRef the model expands via extract_result.
-import { ResultCache, makeResultHandoff, formatHandoffForModel, attachCompactedResultHandoff } from '../util/resultHandoff.js';
-import { runExtractResult } from '../tool/extractResult.js';
+import { ResultCache, makeResultHandoff, formatHandoffForModel, attachCompactedResultHandoff } from '../util/result/resultHandoff.js';
+import { runExtractResult } from '../tool/result/extractResult.js';
 // MAS-P5-T3 part 2: persistent worker threads.
 import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../worker/workerStore.js';
-import { drainCompletions, acknowledgeCompletions, formatCompletionFeedback } from '../session/completionInbox.js';
-import { classifyDeferral, buildDeliverableCorrection } from './deliverableCheck.js';
-import { classifyDenial, formatDenialResult } from './denialMessage.js';
-import { evaluatePermissionRules, primaryArgText } from '../exec/permissionRules.js';
-import { shouldNudgeTaskTracking, buildTaskTrackingNudge } from './taskTrackingNudge.js';
-import { truncateFullRead } from './readTruncation.js';
-import { waitUntilCondition } from '../util/waitUntil.js';
-import { startBackgroundShell, readBackgroundOutput } from '../exec/backgroundShell.js';
-import { CHAPTER_ENTRY_NAME, chapterEntryContent } from '../session/chapterMarks.js';
-import { classifyForVerification, commandWritesFiles, decideVerification, buildVerificationNudge, buildDocsOnlyVerificationNote } from './verificationGate.js';
-import { resolveToolBudget, isBudgetCheckpoint, buildBudgetCheckpoint, buildBudgetCeilingMessage } from './turnBudget.js';
-import { getCurrentWorkflow } from '../workflow/workflowArtifacts.js';
-import { advanceRunStep, summarizeRun } from '../workflow/workflowRun.js';
-import { spawnWorkerThread, waitWorker } from '../orchestration/workerTools.js';
+import { drainCompletions, acknowledgeCompletions, formatCompletionFeedback } from '../session/completion/completionInbox.js';
+import { classifyDeferral, buildDeliverableCorrection } from './guards/deliverableCheck.js';
+import { classifyDenial, formatDenialResult } from './guards/denialMessage.js';
+import { evaluatePermissionRules, primaryArgText } from '../exec/policy/permissionRules.js';
+import { shouldNudgeTaskTracking, buildTaskTrackingNudge } from './guards/taskTrackingNudge.js';
+import { truncateFullRead } from './fs/readTruncation.js';
+import { waitUntilCondition } from '../util/agentloop/waitUntil.js';
+import { startBackgroundShell, readBackgroundOutput } from '../exec/runtime/backgroundShell.js';
+import { CHAPTER_ENTRY_NAME, chapterEntryContent } from '../session/transcript/chapterMarks.js';
+import { classifyForVerification, commandWritesFiles, decideVerification, buildVerificationNudge, buildDocsOnlyVerificationNote } from './guards/verificationGate.js';
+import { resolveToolBudget, isBudgetCheckpoint, buildBudgetCheckpoint, buildBudgetCeilingMessage } from './guards/turnBudget.js';
+import { getCurrentWorkflow } from '../workflow/run/workflowArtifacts.js';
+import { advanceRunStep, summarizeRun } from '../workflow/run/workflowRun.js';
+import { spawnWorkerThread, waitWorker } from '../orchestration/agents/workerTools.js';
 // PARITY-E3: runtime model fallback on model-not-found.
 import { isModelNotFoundError, shouldFallbackModel } from '../provider/modelFallback.js';
 import { resolveLocalModelProfile, localModelProfileActive, isLocalModelCoreTool } from '../provider/modelFamily.js';
 // 0.3.9 item 10 — provider-normalised cache-hit accounting.
-import { extractCacheStats } from '../util/cacheStats.js';
+import { extractCacheStats } from '../util/tokens/cacheStats.js';
 // 0.3.9 item 11 — tool-call repair pipeline (flatten / scavenge /
 // truncation / storm).
 import { ToolCallRepair, type RepairReport } from './repair/index.js';
@@ -175,16 +175,16 @@ import { analyzeSchema, flattenSchema, nestArguments, type JSONSchema } from './
 import {
   estimateTokens as estimateTokensContentAware,
   estimateChatHistoryTokens,
-} from '../util/tokenEstimate.js';
+} from '../util/tokens/tokenEstimate.js';
 // 0.3.9 item 12 — turn-end tool-result auto-shrink.
-import { shrinkOversizedToolResults } from './turnEndShrink.js';
+import { shrinkOversizedToolResults } from './guards/turnEndShrink.js';
 // 0.3.9 item 13 — model-tier self-escalation.
 import { currentTier, detectNeedsHigh, nextTier, resolveTierLadder, stripNeedsHigh } from '../provider/tierLadder.js';
 import { PROVIDER_REGISTRY, findProviderByEndpoint, isLoopbackEndpoint, LOCAL_PLACEHOLDER_KEY, normalizeProviderEndpoint, withApiVersion } from '../provider/providers/index.js';
 import { DEFAULT_EFFORT_VALUE_MAP } from '../provider/providers/definition.js';
 import type { ProviderDefinition } from '../provider/providers/definition.js';
 import { normalizeModelName, isReasoningModel, isNonReasoningChatModel, isAlwaysOnReasoner, modelSupportsXhighEffort, isBinaryReasoningModel } from '../provider/models/reasoning.js';
-import { isSequenceGuardExempt, buildSequenceSignature } from './repeatGuard.js';
+import { isSequenceGuardExempt, buildSequenceSignature } from './guards/repeatGuard.js';
 // 0.3.9 item 9 — prefix-pinned memory briefing policy.
 import {
   decideAnchorAction,
@@ -192,13 +192,13 @@ import {
   wrapMidSessionRefresh,
 } from '../memory/anchorPin.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../hooks/hookifyStore.js';
-import { renderCompactSystemMessage, runCompaction } from '../prompt/compactor.js';
-import { compactToolOutput } from '../prompt/toolCompaction.js';
-import { appendVerbositySteering } from '../prompt/verbositySteering.js';
-import { buildFanOutHint, shouldSuggestFanOut } from '../prompt/breadthHint.js';
-import { buildNextActionMessages, parseNextActionPlan, nextActionDirective, planWantsFanOut, shouldSkipPlanner } from '../prompt/nextAction.js';
-import { isParallelSafe, parallelExecutionEnabled } from './toolSafety.js';
-import { shouldRunFanOutFollowThroughGuard } from './fanOutFollowThroughGuard.js';
+import { renderCompactSystemMessage, runCompaction } from '../prompt/compaction/compactor.js';
+import { compactToolOutput } from '../prompt/compaction/toolCompaction.js';
+import { appendVerbositySteering } from '../prompt/steering/verbositySteering.js';
+import { buildFanOutHint, shouldSuggestFanOut } from '../prompt/planning/breadthHint.js';
+import { buildNextActionMessages, parseNextActionPlan, nextActionDirective, planWantsFanOut, shouldSkipPlanner } from '../prompt/planning/nextAction.js';
+import { isParallelSafe, parallelExecutionEnabled } from './guards/toolSafety.js';
+import { shouldRunFanOutFollowThroughGuard } from './guards/fanOutFollowThroughGuard.js';
 import {
   dedupeToolCalls,
   parseArgumentsOrError,
@@ -208,10 +208,10 @@ import {
   looksLikeStalledPreamble,
   looksLikeDeferredToolPromise,
   mentionsImminentToolWork,
-} from './toolCallRecovery.js';
+} from './guards/toolCallRecovery.js';
 import { fetchAndExtract } from '../websearch/crawler.js';
 import { buildSearchProvider } from '../websearch/factory.js';
-import { evaluateDestructiveAction, isComputerActionMutating, validateComputerAction } from './computerUse.js';
+import { evaluateDestructiveAction, isComputerActionMutating, validateComputerAction } from './fs/computerUse.js';
 
 const execPromise = promisify(exec);
 const DEFAULT_CHILD_DRAIN_TIMEOUT_MS = 30_000;
@@ -225,11 +225,11 @@ import {
   parseChildDrainTimeouts,
   formatChildDrainTimeoutAnswer,
   summarizeWaitedChildOutputs,
-} from './childObservation.js';
+} from './support/childObservation.js';
 // Tool-result presentation + LLM transport layers moved to sibling modules
 // (god-file breakdown). Imported back for the Agent class's own use; the public
 // re-exports live further down so agent.ts's surface stays unchanged.
-import { getToolSummary, getToolPreview } from './toolSummary.js';
+import { getToolSummary, getToolPreview } from './support/toolSummary.js';
 import {
   activeProviderDef,
   effortForTurnSelection,
@@ -239,13 +239,13 @@ import {
   isInterrupt,
   abortableDelay,
   appendDeveloperPromptLayer,
-} from './llmTransport.js';
+} from './transport/llmTransport.js';
 // Giant method bodies (runTurn / executeLocalToolLegacy) moved to sibling impl
 // modules (god-file breakdown); the class methods above delegate to these with
 // `this` bound. Kept as `.impl` files because they are internal wiring, not part
 // of the agent public surface.
-import { runTurn as runTurnImpl } from './runTurn.impl.js';
-import { executeLocalToolLegacy as executeLocalToolLegacyImpl } from './executeLocalTool.impl.js';
+import { runTurn as runTurnImpl } from './runtime/runTurn.impl.js';
+import { executeLocalToolLegacy as executeLocalToolLegacyImpl } from './runtime/executeLocalTool.impl.js';
 import {
   bootstrapSession as bootstrapSessionImpl,
   ensureInitialized as ensureInitializedImpl,
@@ -261,7 +261,7 @@ import {
   autoLinkDoneTrackItem as autoLinkDoneTrackItemImpl,
   captureTrackAutomationEvent as captureTrackAutomationEventImpl,
   injectRecallContext as injectRecallContextImpl,
-} from './lifecycle.impl.js';
+} from './runtime/lifecycle.impl.js';
 import {
   compactHistory as compactHistoryImpl,
   requestInterrupt as requestInterruptImpl,
@@ -284,7 +284,7 @@ import {
   setAccessMode as setAccessModeImpl,
   getPolicyAudit as getPolicyAuditImpl,
   loadHistory as loadHistoryImpl,
-} from './session.impl.js';
+} from './runtime/session.impl.js';
 
 export interface RunTurnCallbacks {
   onStatusUpdate: (status: string) => void;
@@ -426,8 +426,8 @@ export interface LastBriefingDetails {
 // ChatCompletionPayload / ResponsesPayload were public exports of agent.ts —
 // re-export them to keep the surface. PromptLayeredMessage was module-private;
 // import it back for the one class use below.
-export type { ChatCompletionPayload, ResponsesPayload } from './llmTransport.js';
-import type { PromptLayeredMessage } from './llmTransport.js';
+export type { ChatCompletionPayload, ResponsesPayload } from './transport/llmTransport.js';
+import type { PromptLayeredMessage } from './transport/llmTransport.js';
 
 export interface AgentOptions {
   workspaceRoot: string;
@@ -1681,7 +1681,7 @@ export class Agent {
 
 // Tool-result presentation helpers moved to ./toolSummary.ts (god-file
 // breakdown). Re-exported here so agent.ts's public surface is unchanged.
-export { getToolSummary, getToolPreview } from './toolSummary.js';
+export { getToolSummary, getToolPreview } from './support/toolSummary.js';
 
 
 /**
@@ -1751,4 +1751,4 @@ export {
   callOpenAIStream,
   type LlmRequestFormat,
   type BuildPayloadOptions,
-} from './llmTransport.js';
+} from './transport/llmTransport.js';

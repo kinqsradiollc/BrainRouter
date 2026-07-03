@@ -3,8 +3,8 @@ import path from 'node:path';
 import { getCliKnobs } from '../../config/config.js';
 // MAS-P5-T2: the child-output offload thresholds are now the shared
 // result-handoff constants (single source of truth in runtime/resultHandoff).
-import { RESULT_HANDOFF_THRESHOLD_CHARS, RESULT_PREVIEW_CHARS } from '../../util/resultHandoff.js';
-import type { AccessMode } from '../roles.js';
+import { RESULT_HANDOFF_THRESHOLD_CHARS, RESULT_PREVIEW_CHARS } from '../../util/result/resultHandoff.js';
+import type { AccessMode } from '../roles/roles.js';
 import type { OrchestrationContext } from './context.js';
 
 // Threshold above which a child agent's final output is offloaded to the

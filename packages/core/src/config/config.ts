@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import type { ExternalDirMode } from '../exec/execPolicy.js';
-import { sanitizeCommandAllowlist } from '../exec/approvalGuard.js';
+import type { ExternalDirMode } from '../exec/policy/execPolicy.js';
+import { sanitizeCommandAllowlist } from '../exec/guard/approvalGuard.js';
 import { BUILTIN_PROVIDERS } from '../provider/providers/index.js';
 
 // Record + knob type shapes live in ./configTypes.js (split out for readability).

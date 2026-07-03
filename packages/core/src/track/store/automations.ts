@@ -22,7 +22,7 @@ import {
   normalizeAssignees,
 } from './_internal.js';
 import { ensureProject } from './project.js';
-import { matchesTrackQuery } from '../query.js';
+import { matchesTrackQuery } from '../query/query.js';
 import type { CreateAutomationInput, AutomationPatch } from './types.js';
 
 export function listAutomations(workspaceRoot: string): AutomationRule[] {

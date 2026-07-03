@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { BUILT_IN_ROLES } from '../orchestration/roles.js';
+import { BUILT_IN_ROLES } from '../orchestration/roles/roles.js';
 
 // A3 — the worker overlay must forbid faking work with tool-call-shaped TEXT
 // (the NotionApp2 minimax worker emitted 24 such wrappers and did 0 real edits).

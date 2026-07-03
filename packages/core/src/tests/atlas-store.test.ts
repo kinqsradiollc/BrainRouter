@@ -8,7 +8,7 @@ import path from 'node:path';
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'br-atlas-store-'));
 process.env.BRAINROUTER_HOME = TMP;
 
-const { saveAtlasGraph, readAtlasGraph, atlasGraphStats, atlasGraphFile } = await import('../atlas/atlasStore.js');
+const { saveAtlasGraph, readAtlasGraph, atlasGraphStats, atlasGraphFile } = await import('../atlas/store/atlasStore.js');
 const { emptyAtlasGraph } = await import('@kinqs/brainrouter-types');
 
 test('ATLAS-3 atlasStore round-trips a graph per workspace + computes stats', () => {

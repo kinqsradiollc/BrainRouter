@@ -14,7 +14,7 @@ import {
   addClarifyingQuestion,
   answerClarifyingQuestion,
   openClarifyingQuestions,
-} from '../requirement/requirementStore.js';
+} from '../requirement/records/requirementStore.js';
 import { withTempWorkspace } from './_helpers.js';
 
 test('requirementStore: create → read back; id generated; timestamps set', () => {

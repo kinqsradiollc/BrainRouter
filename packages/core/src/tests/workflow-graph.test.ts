@@ -7,8 +7,8 @@ import {
   interpolate,
   stripSecretsForExport,
   type WorkflowGraph,
-} from '../workflow/graph.js';
-import { runGraph, runSingleNode, type GraphRunDeps } from '../workflow/graphEngine.js';
+} from '../workflow/graph/graph.js';
+import { runGraph, runSingleNode, type GraphRunDeps } from '../workflow/graph/graphEngine.js';
 
 const echoAgent: GraphRunDeps = { runAgent: async (prompt) => `AGENT(${prompt})` };
 

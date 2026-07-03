@@ -8,6 +8,6 @@
  *   - {@link resolveIdentityFromConfig} → ./identity.js
  *   - {@link isSessionNotFoundError}    → ./sessionErrors.js
  */
-export { McpClientWrapper } from './client.js';
-export { resolveIdentityFromConfig } from './identity.js';
-export { isSessionNotFoundError } from './sessionErrors.js';
+export { McpClientWrapper } from './client/client.js';
+export { resolveIdentityFromConfig } from './client/identity.js';
+export { isSessionNotFoundError } from './client/sessionErrors.js';

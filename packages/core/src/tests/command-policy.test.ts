@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluateCommandPolicy, splitCommandSegments, segmentHead } from '../exec/commandPolicy.js';
-import { resolveRunCommandApproval } from '../exec/dangerousCommand.js';
+import { evaluateCommandPolicy, splitCommandSegments, segmentHead } from '../exec/policy/commandPolicy.js';
+import { resolveRunCommandApproval } from '../exec/guard/dangerousCommand.js';
 
 test('CODEX-EXEC-POLICY splitCommandSegments splits on &&, ||, |, ;, newlines', () => {
   assert.deepEqual(splitCommandSegments('a && b || c | d ; e\nf'), ['a', 'b', 'c', 'd', 'e', 'f']);

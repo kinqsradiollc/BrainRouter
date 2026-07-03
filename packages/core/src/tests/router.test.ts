@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { routeTask } from '../orchestration/router.js';
+import { routeTask } from '../orchestration/delegation/router.js';
 
 /**
  * MAS-P2-M2 + M4 — `route_task` direct-first policy tests.

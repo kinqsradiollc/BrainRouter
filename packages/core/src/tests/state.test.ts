@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getStateDir, getStateFile } from '../storage/store.js';
-import { appendTranscriptEntry, listTranscripts, readTranscriptEntries, redactText } from '../session/sessionStore.js';
+import { appendTranscriptEntry, listTranscripts, readTranscriptEntries, redactText } from '../session/transcript/sessionStore.js';
 import { formatPlan, readPlan, updatePlan, seedPlanFromRequirement } from '../task/taskStore.js';
-import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, getWorkflowDir, listWorkflows, slugify } from '../workflow/workflowArtifacts.js';
+import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, getWorkflowDir, listWorkflows, slugify } from '../workflow/run/workflowArtifacts.js';
 import { addHook, readHooks, removeHook, runHooks, setHookEnabled } from '../hooks/hooksStore.js';
-import { applyYoloOff, applyYoloOn, readPreferences, writePreferences, normalizeEffort } from '../session/preferencesStore.js';
+import { applyYoloOff, applyYoloOn, readPreferences, writePreferences, normalizeEffort } from '../session/preferences/preferencesStore.js';
 import { withTempWorkspace } from './_helpers.js';
 import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
 
@@ -91,7 +91,7 @@ test('transcript store redacts secrets and reads recent entries', () => {
 });
 
 test('sessionStore: appendTranscriptEntry dedupes consecutive identical user prompts', async () => {
-  const { appendTranscriptEntry, readTranscriptEntries } = await import('../session/sessionStore.js');
+  const { appendTranscriptEntry, readTranscriptEntries } = await import('../session/transcript/sessionStore.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:dedup';
     appendTranscriptEntry(workspace, sk, { role: 'user', content: 'help me with X' });
@@ -164,7 +164,7 @@ test('workflowArtifacts: artifactRelativePath stays inside workspace and listWor
 });
 
 test('workflowArtifacts: stay in the workspace so they can be committed', async () => {
-  const { getWorkflowsRoot } = await import('../workflow/workflowArtifacts.js');
+  const { getWorkflowsRoot } = await import('../workflow/run/workflowArtifacts.js');
   withTempWorkspace((workspace) => {
     const root = getWorkflowsRoot(workspace);
     assert.equal(root, path.join(fs.realpathSync(workspace), '.brainrouter', 'workflows'));
@@ -350,7 +350,7 @@ test('normalizeEffort: canonical levels pass through; max and ultracode are dist
 });
 
 test('resolveEffort: cli.effort > preference > default', async () => {
-  const { resolveEffort } = await import('../session/preferencesStore.js');
+  const { resolveEffort } = await import('../session/preferences/preferencesStore.js');
   withTempWorkspace((workspace) => {
     try {
       // Default (no config knob, no pref) → medium.

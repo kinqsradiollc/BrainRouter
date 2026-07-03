@@ -17,8 +17,8 @@ import {
   isTraceStatus,
   type TraceRequirement,
   type TracePlanStep,
-} from '../requirement/trace.js';
-import { recordTraceSnapshot, readTraceSnapshot, detectDrift } from '../requirement/traceStore.js';
+} from '../requirement/trace/trace.js';
+import { recordTraceSnapshot, readTraceSnapshot, detectDrift } from '../requirement/trace/traceStore.js';
 import { withTempWorkspace } from './_helpers.js';
 
 test('parseCoversTags: extracts ids, dedups, tolerates separators and id schemes', () => {

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import type { AccessMode } from '../orchestration/roles.js';
+import type { AccessMode } from '../orchestration/roles/roles.js';
 import { getBrainrouterHome, getStateDir } from '../storage/store.js';
 import { getCliKnobs } from '../config/config.js';
 import { findGitRoot } from '../git/workspaceGit.js';

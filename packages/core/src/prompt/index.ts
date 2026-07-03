@@ -2,9 +2,7 @@
 // `@kinqs/brainrouter-core/prompt` instead of deep `dist/prompt/*.js` paths,
 // keeping the subsystem's file layout internal. Full public surface; the
 // internal service layer (service.ts) stays unexported.
-export * from './breadthHint.js';
-export * from './compactor.js';
-export * from './nextAction.js';
+export * from './planning/index.js';
+export * from './compaction/index.js';
 export * from './systemPrompt.js';
-export * from './toolCompaction.js';
-export * from './verbositySteering.js';
+export * from './steering/index.js';

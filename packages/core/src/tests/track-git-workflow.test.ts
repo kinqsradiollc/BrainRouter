@@ -7,7 +7,7 @@ import {
   readGitTrackContext,
   startGitWorkForTrackItem,
   type GitRunner,
-} from '../track/gitWorkflow.js';
+} from '../track/git/gitWorkflow.js';
 import { withTempWorkspace } from './_helpers.js';
 
 test('parseGitHubRemote: supports common GitHub remote URL forms', () => {

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createWorkflow } from '../workflow/workflowArtifacts.js';
+import { createWorkflow } from '../workflow/run/workflowArtifacts.js';
 import {
   stepTemplateForKind,
   computeRunStatus,
@@ -24,7 +24,7 @@ import {
   formatActivePhase,
   type WorkflowRun,
   type WorkflowRunStep,
-} from '../workflow/workflowRun.js';
+} from '../workflow/run/workflowRun.js';
 
 function tmpWs(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-wfrun-'));

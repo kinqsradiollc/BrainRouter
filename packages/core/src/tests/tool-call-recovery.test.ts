@@ -9,7 +9,7 @@ import {
   type ToolCallLike,
   type ToolResultMessage,
   type ChatMessageLike,
-} from '../agent/toolCallRecovery.js';
+} from '../agent/guards/toolCallRecovery.js';
 import { normalizeToolName } from '../agent/agent.js';
 
 const tc = (id: string, name: string, args: string | object = '{}'): ToolCallLike => ({

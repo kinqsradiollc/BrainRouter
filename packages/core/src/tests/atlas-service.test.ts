@@ -4,10 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isAtlasGraph } from '@kinqs/brainrouter-types';
-import { createAtlasService, AtlasService } from '../atlas/service.js';
-import { atlasGraphFile, readAtlasGraph, atlasGraphStats } from '../atlas/atlasStore.js';
-import { scanWorkspace } from '../atlas/scan.js';
-import { validateAtlasGraph } from '../atlas/validate.js';
+import { createAtlasService, AtlasService } from '../atlas/service/service.js';
+import { atlasGraphFile, readAtlasGraph, atlasGraphStats } from '../atlas/store/atlasStore.js';
+import { scanWorkspace } from '../atlas/pipeline/scan.js';
+import { validateAtlasGraph } from '../atlas/pipeline/validate.js';
 
 test('AtlasService is a per-workspace facade — delegates to the atlas pipeline', () => {
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-svc-'));

@@ -7,7 +7,7 @@ import {
   isFrameworkArmed,
   collectArmedGuidance,
   composeArmedSystemAddendum,
-} from '../requirement/pmFrameworks.js';
+} from '../requirement/frameworks/pmFrameworks.js';
 
 test('registry integrity: unique kebab ids, valid groups, non-empty fields', () => {
   const ids = new Set<string>();

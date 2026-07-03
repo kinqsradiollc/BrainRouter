@@ -7,7 +7,7 @@ import {
   runWebConnectorCheckpoint,
   type WebConnectorClient,
   type WebConnectorPage,
-} from '../connectors/webConnector.js';
+} from '../connectors/sources/webConnector.js';
 
 const NUL = String.fromCharCode(0);
 

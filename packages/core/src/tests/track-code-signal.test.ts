@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Agent } from '../agent/agent.js';
 import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
-import { createRequirement, getRequirement } from '../requirement/requirementStore.js';
+import { createRequirement, getRequirement } from '../requirement/records/requirementStore.js';
 import {
   createWorkItem,
   findWorkItemsByCodeLink,

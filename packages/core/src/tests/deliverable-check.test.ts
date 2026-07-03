@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Agent } from '../agent/agent.js';
-import { classifyDeferral, buildDeliverableCorrection } from '../agent/deliverableCheck.js';
+import { classifyDeferral, buildDeliverableCorrection } from '../agent/guards/deliverableCheck.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
 
 // --- CC-P6.2 pure heuristics --------------------------------------------------

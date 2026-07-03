@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { AtlasGraph } from '@kinqs/brainrouter-types';
-import { extractAtlasJson, extractAtlasJsonArray } from '../atlas/jsonExtract.js';
-import { enrichAtlasGraph, type AtlasLlmCaller } from '../atlas/enrich.js';
+import { extractAtlasJson, extractAtlasJsonArray } from '../atlas/enrich/jsonExtract.js';
+import { enrichAtlasGraph, type AtlasLlmCaller } from '../atlas/enrich/enrich.js';
 
 // ---------- jsonExtract ----------
 

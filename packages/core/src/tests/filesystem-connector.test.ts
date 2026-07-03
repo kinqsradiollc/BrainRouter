@@ -10,7 +10,7 @@ import {
   runFilesystemConnectorCheckpoint,
   type FilesystemConnectorClient,
   type FilesystemConnectorFileEntry,
-} from '../connectors/filesystemConnector.js';
+} from '../connectors/sources/filesystemConnector.js';
 
 const NUL = String.fromCharCode(0);
 

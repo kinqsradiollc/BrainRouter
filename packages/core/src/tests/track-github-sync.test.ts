@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ensureProject, createWorkItem, listWorkItems, getWorkItem, getGithubLinks, setGithubLink, updateWorkItem, listMembers, addComment, listLabels, getLabel, getGithubSyncTarget, setGithubSyncTarget } from '../track/trackStore.js';
-import { migrateTrackGithubToConnector } from '../track/githubMigrate.js';
+import { migrateTrackGithubToConnector } from '../track/github/githubMigrate.js';
 import {
   workItemToIssue,
   issueToWorkItem,
@@ -19,7 +19,7 @@ import {
   type FetchLike,
 } from '../track/githubSync.js';
 import type { WorkItem } from '@kinqs/brainrouter-types';
-import { createConnector } from '../connectors/connectorStore.js';
+import { createConnector } from '../connectors/store/connectorStore.js';
 import { setCliKnobOverride } from '../config/config.js';
 import { withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 

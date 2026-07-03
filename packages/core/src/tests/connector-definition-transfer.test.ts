@@ -4,11 +4,11 @@ import {
   createConnector,
   listConnectors,
   recordConnectorRun,
-} from '../connectors/connectorStore.js';
+} from '../connectors/store/connectorStore.js';
 import {
   exportConnectorDefinitions,
   importConnectorDefinitions,
-} from '../connectors/definitionTransfer.js';
+} from '../connectors/store/definitionTransfer.js';
 import { withTempWorkspace } from './_helpers.js';
 
 test('exportConnectorDefinitions emits portable definitions without runtime state or secrets', () => {

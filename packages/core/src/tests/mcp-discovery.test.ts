@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { searchMcpCatalog, toToolBrief, type McpCatalogTool } from '../mcp/discovery.js';
+import { searchMcpCatalog, toToolBrief, type McpCatalogTool } from '../mcp/discovery/discovery.js';
 
 const CATALOG: McpCatalogTool[] = [
   { name: 'mcp_github_create_issue', __rawName: 'create_issue', __serverId: 'github', description: 'Open a new GitHub issue in a repository.' },

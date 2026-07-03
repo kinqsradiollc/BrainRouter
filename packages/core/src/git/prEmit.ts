@@ -35,7 +35,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getBrainrouterHome } from '../storage/store.js';
-import { parseGitHubRemote, slugifyBranchPart } from '../track/gitWorkflow.js';
+import { parseGitHubRemote, slugifyBranchPart } from '../track/git/index.js';
 
 /** Injectable command runner so tests can drive the flow without real git/gh. */
 export type CmdRunner = (

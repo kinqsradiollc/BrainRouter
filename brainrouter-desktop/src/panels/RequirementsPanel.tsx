@@ -15,7 +15,7 @@ import {
   sortRequirements, linkCounts, priorityClass,
   requirementProvenance, REQUIREMENT_STATUS_OPTIONS, REQUIREMENT_PRIORITY_OPTIONS,
 } from '../lib/requirements/requirementsView.js';
-import { PM_FRAMEWORKS, type PmFrameworkGroup } from '@kinqs/brainrouter-core/dist/requirement/pmFrameworks.js';
+import { PM_FRAMEWORKS, type PmFrameworkGroup } from '@kinqs/brainrouter-core/dist/requirement/frameworks/pmFrameworks.js';
 
 const FW_GROUPS: ReadonlyArray<{ id: PmFrameworkGroup; label: string }> = [
   { id: 'discover', label: 'Discover' },

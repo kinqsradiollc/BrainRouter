@@ -8,7 +8,7 @@ import {
   listConnectorDocuments,
   searchConnectorDocuments,
   upsertConnectorDocuments,
-} from '../connectors/documentStore.js';
+} from '../connectors/store/documentStore.js';
 import { withTempWorkspace } from './_helpers.js';
 
 function doc(overrides: Partial<ConnectorDocument>): ConnectorDocument {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { reconnectBackoffMs, parseRetryAfterMs } from '../mcp/reconnect.js';
+import { reconnectBackoffMs, parseRetryAfterMs } from '../mcp/reconnect/reconnect.js';
 
 test('RECONNECT reconnectBackoffMs: exponential base·2^(n-1) with jitter, capped', () => {
   // Deterministic jitter=1.0 → pure exponential off the 500ms base.

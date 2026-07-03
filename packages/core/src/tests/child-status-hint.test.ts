@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPendingChildStatusHint } from '../util/childResume.js';
+import { buildPendingChildStatusHint } from '../util/agentloop/childResume.js';
 
 test('MAR-4 buildPendingChildStatusHint: names exact ids + steers to wait_agents, not list_agents', () => {
   const hint = buildPendingChildStatusHint(['agent-1', 'agent-2']);

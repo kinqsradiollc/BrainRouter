@@ -621,10 +621,10 @@ test('callOpenAIStream: retries once without reasoning effort when the stream en
   }
 });
 import { executeOrchestrationTool } from '../orchestration/tools.js';
-import { clearGoal, readGoal, setGoal } from '../goal/goalStore.js';
+import { clearGoal, readGoal, setGoal } from '../goal/store/goalStore.js';
 import { makeAgent, withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 import { listArtifacts } from '../artifact/artifactStore.js';
-import { createConnector } from '../connectors/connectorStore.js';
+import { createConnector } from '../connectors/store/connectorStore.js';
 
 test('compactHistory: stores compacted state in prompt layers without chat developer roles', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
@@ -986,7 +986,7 @@ test('Agent.runTurn pushes the goal-anchor system message as the single owner of
     );
     // Now drive the anchor injection directly — same code path as
     // `agent.ts:680` inside `runTurn`.
-    const { formatGoalBlock, readGoal } = await import('../goal/goalStore.js');
+    const { formatGoalBlock, readGoal } = await import('../goal/store/goalStore.js');
     const goal = readGoal(workspace, agent.sessionKey);
     assert.ok(goal, 'precondition: setGoal succeeded');
     (agent as any).replaceTaggedSystemMessage('goal-anchor', formatGoalBlock(goal!));
@@ -2135,7 +2135,7 @@ test('orchestration: task_agent wait timeout returns envelope without failing th
       assert.equal(result.childStatus, 'running');
       assert.match(result.id, /^agent-/);
       await new Promise((resolve) => setTimeout(resolve, 150));
-      const { getSession } = await import('../orchestration/orchestrator.js');
+      const { getSession } = await import('../orchestration/session/orchestrator.js');
       const record = getSession(workspace, result.id);
       assert.equal(record?.status, 'completed');
       assert.match(record?.finalOutput ?? '', /too late|never reached/);
@@ -2176,7 +2176,7 @@ test('orchestration: background child timeout arg does not kill the child', asyn
       );
       const result = JSON.parse(raw);
       await new Promise((resolve) => setTimeout(resolve, 150));
-      const { getSession } = await import('../orchestration/orchestrator.js');
+      const { getSession } = await import('../orchestration/session/orchestrator.js');
       const record = getSession(workspace, result.id);
       assert.equal(record?.status, 'completed');
       assert.equal(record?.error, undefined);
@@ -2288,7 +2288,7 @@ test('P1.2: agentId unknown returns error listing known ids', async () => {
 // ---------------------------------------------------------------------------
 
 test('toolSafety.isParallelSafe accepts both bare and MCP-prefixed read tools, rejects writers/orchestration/unknowns', async () => {
-  const { isParallelSafe } = await import('../agent/toolSafety.js');
+  const { isParallelSafe } = await import('../agent/guards/toolSafety.js');
   // Bare read-only locals + concurrency-safe agent spawners (0.3.9) — safe.
   for (const name of ['read_file', 'list_dir', 'grep_search', 'glob_files', 'fetch_url', 'web_search', 'task_agent', 'delegate_agent']) {
     assert.equal(isParallelSafe(name), true, `${name} must be parallel-safe`);
@@ -2315,7 +2315,7 @@ test('toolSafety.isParallelSafe accepts both bare and MCP-prefixed read tools, r
 });
 
 test('toolSafety.parallelExecutionEnabled honors cli.parallelSafeToolCalls kill switch', async () => {
-  const { parallelExecutionEnabled } = await import('../agent/toolSafety.js');
+  const { parallelExecutionEnabled } = await import('../agent/guards/toolSafety.js');
   try {
     resetCliKnobsForAgentRuntimeTest();
     assert.equal(parallelExecutionEnabled(), true, 'default ON');
@@ -2913,7 +2913,7 @@ test('runTurn recovery: synthetic orphan results do NOT trigger the R1 child-dra
   // text (also covered in tool-call-recovery.test.ts but we re-assert
   // through the public surface here so a regression in either layer
   // surfaces in agent-runtime as well).
-  const { synthesizeOrphanResults } = await import('../agent/toolCallRecovery.js');
+  const { synthesizeOrphanResults } = await import('../agent/guards/toolCallRecovery.js');
   const synth = synthesizeOrphanResults(
     [{ id: 'x', type: 'function', function: { name: 'spawn_agent', arguments: '{}' } }],
     [],

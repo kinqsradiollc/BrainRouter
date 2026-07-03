@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildPostEditCommand, formatPostEditDiagnostics, runPostEditCheck } from '../util/postEditCheck.js';
+import { buildPostEditCommand, formatPostEditDiagnostics, runPostEditCheck } from '../util/agentloop/postEditCheck.js';
 
 test('CLI-18 buildPostEditCommand: empty → null; {file} substituted (quoted); literal passthrough', () => {
   assert.equal(buildPostEditCommand('', 'a.ts'), null);

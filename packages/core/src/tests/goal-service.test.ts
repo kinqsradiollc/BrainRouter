@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createGoalService, GoalService } from '../goal/service.js';
-import { readGoal } from '../goal/goalStore.js';
+import { createGoalService, GoalService } from '../goal/store/service.js';
+import { readGoal } from '../goal/store/goalStore.js';
 
 test('GoalService is a per-workspace facade — delegates to the goal store', () => {
   const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'goal-svc-'));

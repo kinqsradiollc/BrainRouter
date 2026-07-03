@@ -4,8 +4,8 @@ import {
   exportTranscriptMarkdown,
   exportTranscriptJson,
   exportFileName,
-} from '../session/transcriptExport.js';
-import type { TranscriptEntry } from '../session/sessionStore.js';
+} from '../session/transcript/transcriptExport.js';
+import type { TranscriptEntry } from '../session/transcript/sessionStore.js';
 
 const META = { sessionKey: 'sess:abc-123', exportedAt: '2026-06-10T02:30:00.000Z' };
 

@@ -2,8 +2,8 @@
 // `@kinqs/brainrouter-core/attachment` instead of deep `dist/attachment/*.js` paths,
 // keeping the subsystem's file layout internal. Full public surface; the
 // internal service layer (service.ts) stays unexported.
-export * from './attachmentStore.js';
-export * from './detect.js';
-export * from './imageMeta.js';
-export * from './ingest.js';
-export * from './pdfText.js';
+export * from './store/attachmentStore.js';
+export * from './format/detect.js';
+export * from './format/imageMeta.js';
+export * from './ingest/ingest.js';
+export * from './format/pdfText.js';

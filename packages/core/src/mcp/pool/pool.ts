@@ -1,6 +1,6 @@
-import { McpClientWrapper } from '../client.js';
+import { McpClientWrapper } from '../client/client.js';
 import type { LLMConfig, ServerConfig } from '../../config/config.js';
-import { reconnectBackoffMs } from '../reconnect.js';
+import { reconnectBackoffMs } from '../reconnect/reconnect.js';
 import type { McpServerStatus } from '../types.js';
 import { dueForReconnect } from './reconnectSweep.js';
 import { isBrainrouterOwnedTool, normalizeMcpToolName } from './toolNames.js';

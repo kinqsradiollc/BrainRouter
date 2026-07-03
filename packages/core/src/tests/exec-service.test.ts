@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createExecService, ExecService } from '../exec/service.js';
-import { decideExecutionPolicy } from '../exec/execPolicy.js';
-import { evaluateCommandPolicy } from '../exec/commandPolicy.js';
-import { isDangerousCommand, resolveRunCommandApproval } from '../exec/dangerousCommand.js';
-import { evaluateDestructiveCommand } from '../exec/destructiveCommandGuard.js';
+import { decideExecutionPolicy } from '../exec/policy/execPolicy.js';
+import { evaluateCommandPolicy } from '../exec/policy/commandPolicy.js';
+import { isDangerousCommand, resolveRunCommandApproval } from '../exec/guard/dangerousCommand.js';
+import { evaluateDestructiveCommand } from '../exec/guard/destructiveCommandGuard.js';
 
 test('ExecService is a pure facade — every method matches the exec module', () => {
   const svc = createExecService();

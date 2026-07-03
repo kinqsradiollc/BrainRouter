@@ -28,7 +28,7 @@
  *     escalation is intentionally rejected.
  */
 
-import { readPreferences, writePreferences } from '../session/preferencesStore.js';
+import { readPreferences, writePreferences } from '../session/preferences/preferencesStore.js';
 import { loadProvidersConfig } from '../config/configLoader.js';
 
 /** First-line marker. Matches both forms: bare and with `:reason`. */

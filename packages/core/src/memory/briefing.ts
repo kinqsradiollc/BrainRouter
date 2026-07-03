@@ -1,5 +1,5 @@
 import type { McpClientPool as McpClientWrapper } from '../mcp/mcpPool.js';
-import { redactText } from '../session/sessionStore.js';
+import { redactText } from '../session/transcript/sessionStore.js';
 import { callMcpTool, hasMcpTool } from '../mcp/mcpUtils.js';
 import { extractFilePathHints, looksLikeDebugOrRetry } from './briefingTriggers.js';
 import { assessRecallCards } from './memoryPolicy.js';

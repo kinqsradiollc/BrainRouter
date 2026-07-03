@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { atlasWorkspaceTag } from '../atlas/atlasStore.js';
+import { atlasWorkspaceTag } from '../atlas/store/atlasStore.js';
 
 test('atlasWorkspaceTag: stable per root, distinct across roots, slug + hash shape', () => {
   const a = atlasWorkspaceTag('/Users/x/code/BrainRouter');

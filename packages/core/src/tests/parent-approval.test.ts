@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Agent } from '../agent/agent.js';
-import { assessMcpToolApproval } from '../agent/mcpApproval.js';
+import { assessMcpToolApproval } from '../agent/guards/mcpApproval.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
 import { setCliKnobOverride } from '../config/config.js';
 

@@ -8,7 +8,7 @@ import {
   runGoogleDriveConnectorCheckpoint,
   type GmailConnectorClient,
   type GoogleDriveConnectorClient,
-} from '../connectors/googleConnectors.js';
+} from '../connectors/sources/googleConnectors.js';
 
 function connector(patch: Partial<ConnectorRecord> = {}): ConnectorRecord {
   return {

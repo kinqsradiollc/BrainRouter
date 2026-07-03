@@ -1,5 +1,5 @@
-import { formatSessionSummary, type ChildSessionRecord } from '../orchestrator.js';
-import { parseChildOutput } from '../outputContracts.js';
+import { formatSessionSummary, type ChildSessionRecord } from '../session/orchestrator.js';
+import { parseChildOutput } from '../roles/outputContracts.js';
 
 export function summarize(record: ChildSessionRecord, includeOutput = false): Record<string, unknown> {
   const base: Record<string, unknown> = {

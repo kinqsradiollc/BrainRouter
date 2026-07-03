@@ -8,7 +8,7 @@ import {
   hasDependencyCycle,
   countPhaseAgents,
   type PhasePlan,
-} from '../orchestration/phasePlan.js';
+} from '../orchestration/workflow/phasePlan.js';
 
 // A canonical 2-phase plan: fan out one reviewer per target, then synthesize.
 const reviewWidePlan = {

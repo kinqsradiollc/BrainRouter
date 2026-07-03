@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { _resetCliKnobsCache, resolveCliKnobs, setCliKnobOverride } from '../config/config.js';
-import { resolveSandboxConfig, scopeSecretEnv } from '../exec/sandbox.js';
+import { resolveSandboxConfig, scopeSecretEnv } from '../exec/runtime/sandbox.js';
 
 /**
  * CODEX-SANDBOX-UNATTENDED — a silent / unattended agent (cloud worker,

@@ -5,8 +5,8 @@ import {
   loadWorkflowGraph,
   listWorkflowGraphs,
   deleteWorkflowGraph,
-} from '../workflow/graphStore.js';
-import type { WorkflowGraph } from '../workflow/graph.js';
+} from '../workflow/graph/graphStore.js';
+import type { WorkflowGraph } from '../workflow/graph/graph.js';
 import { withTempWorkspace } from './_helpers.js';
 
 const graph = (name: string): WorkflowGraph => ({
