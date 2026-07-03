@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { memoryEngine } from "../../memory/engine.js";
+import { memoryEngine } from "../../../memory/engine.js";
 
 /**
  * MEM-32b (0.4.4) — `memory_reflect`: synthesize cross-memory insights (patterns

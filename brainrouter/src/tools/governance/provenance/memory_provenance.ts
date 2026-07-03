@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { memoryEngine } from "../../memory/engine.js";
+import { memoryEngine } from "../../../memory/engine.js";
 import { buildProvenanceView } from "./provenance-view.js";
 export { buildProvenanceView, type ProvenanceView } from "./provenance-view.js";
 

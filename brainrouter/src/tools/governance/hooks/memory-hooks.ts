@@ -1,14 +1,14 @@
 import { z } from "zod";
 
-import { processClaudeCodeHook } from "../../integrations/claude-code.js";
-import { processCodexHook } from "../../integrations/codex.js";
+import { processClaudeCodeHook } from "../../../integrations/claude-code.js";
+import { processCodexHook } from "../../../integrations/codex.js";
 import {
   buildHookResult,
   listHostHooks,
   processGenericMcpHook,
   registerHostHook,
-} from "../../integrations/generic-mcp.js";
-import { memoryEngine } from "../../memory/engine.js";
+} from "../../../integrations/generic-mcp.js";
+import { memoryEngine } from "../../../memory/engine.js";
 
 const hookSourceSchema = z.enum(["claude-code", "codex", "generic-mcp"]);
 

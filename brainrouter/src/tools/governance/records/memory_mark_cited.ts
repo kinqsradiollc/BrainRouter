@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { memoryEngine } from "../../memory/engine.js";
+import { memoryEngine } from "../../../memory/engine.js";
 
 export const memoryMarkCitedToolSchema = {
   name: "memory_mark_cited",
