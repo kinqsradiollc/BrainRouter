@@ -25,7 +25,7 @@ import { decideExecutionPolicy, egressDecision } from '../exec/policy/execPolicy
 import { resolveSandboxConfig, runShell } from '../exec/runtime/sandbox.js';
 import { gitHeadSha } from '../git/workspaceGit.js';
 import { readGoal, blockGoal, completeGoal } from '../goal/store/goalStore.js';
-import { searchMcpCatalog } from '../mcp/discovery.js';
+import { searchMcpCatalog } from '../mcp/discovery/discovery.js';
 import { extractToolText } from '../mcp/mcpUtils.js';
 import { ownershipWriteViolation } from '../orchestration/ownership.js';
 import { spawnWorkerThread, waitWorker } from '../orchestration/workerTools.js';

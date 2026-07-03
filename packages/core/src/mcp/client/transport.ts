@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { LLMConfig, ServerConfig } from '../config/config.js';
+import type { LLMConfig, ServerConfig } from '../../config/config.js';
 
 /**
  * Transport construction for {@link McpClientWrapper}.

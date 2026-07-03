@@ -1,6 +1,6 @@
 import type { ServerConfig } from '../../config/config.js';
 import type { BrainHealth } from '../types.js';
-import { resolveIdentityFromConfig } from '../identity.js';
+import { resolveIdentityFromConfig } from '../client/identity.js';
 
 /**
  * Brain-profile selection + remote-brain (ADR-005) helpers.

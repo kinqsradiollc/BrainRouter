@@ -15,7 +15,7 @@ import { readGoal, formatGoalBlock } from '../goal/store/goalStore.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../hooks/hookifyStore.js';
 import { runHooks, parseHookDecision } from '../hooks/hooksStore.js';
 import { extractToolText } from '../mcp/mcpUtils.js';
-import { reconnectBackoffMs, probeConnectivity } from '../mcp/reconnect.js';
+import { reconnectBackoffMs, probeConnectivity } from '../mcp/reconnect/reconnect.js';
 import { listAll as listAgentDefinitions } from '../orchestration/agentRegistry.js';
 import { executeOrchestrationTool, isOrchestrationToolName, synthesizeDelegateTools, OrchestrationContext } from '../orchestration/tools.js';
 import { buildFanOutHint, shouldSuggestFanOut } from '../prompt/planning/breadthHint.js';

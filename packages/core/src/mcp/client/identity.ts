@@ -1,5 +1,5 @@
-import type { ServerConfig } from '../config/config.js';
-import type { McpIdentity } from './types.js';
+import type { ServerConfig } from '../../config/config.js';
+import type { McpIdentity } from '../types.js';
 
 /**
  * 10a: figure out who an MCP profile belongs to from config metadata + name

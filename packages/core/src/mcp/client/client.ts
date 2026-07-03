@@ -1,12 +1,12 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import type { LLMConfig, ServerConfig } from '../config/config.js';
-import { getCliKnobs } from '../config/config.js';
-import { VERSION } from '../version.js';
-import { isConnectivityError } from '../storage/checkpointStore.js';
-import { reconnectBackoffMs } from './reconnect.js';
-import type { McpIdentity } from './types.js';
+import type { LLMConfig, ServerConfig } from '../../config/config.js';
+import { getCliKnobs } from '../../config/config.js';
+import { VERSION } from '../../version.js';
+import { isConnectivityError } from '../../storage/checkpointStore.js';
+import { reconnectBackoffMs } from '../reconnect/reconnect.js';
+import type { McpIdentity } from '../types.js';
 import { resolveIdentityFromConfig } from './identity.js';
 import { isSessionNotFoundError } from './sessionErrors.js';
 import { buildHttpTransport, buildStdioTransport } from './transport.js';
