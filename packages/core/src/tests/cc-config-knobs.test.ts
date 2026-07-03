@@ -147,6 +147,12 @@ test('A6 resolveCliKnobs: skillsHideBundled default off, env override wins', () 
   }
 });
 
+test('E2 resolveCliKnobs: markdownCheckboxes defaults true, false honored', () => {
+  assert.equal(resolveCliKnobs(cfg({})).markdownCheckboxes, true);
+  assert.equal(resolveCliKnobs(cfg({ markdownCheckboxes: true })).markdownCheckboxes, true);
+  assert.equal(resolveCliKnobs(cfg({ markdownCheckboxes: false })).markdownCheckboxes, false);
+});
+
 // ---------------------------------------------------------------------------
 // A1 — safe mode disables lifecycle hooks (the hook-gate wiring)
 // ---------------------------------------------------------------------------

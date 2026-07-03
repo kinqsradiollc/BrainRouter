@@ -455,6 +455,8 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     skillsHideBundled: resolveBoolWithEnv(c.skillsHideBundled, 'BRAINROUTER_HIDE_BUNDLED_SKILLS'),
     // CC-SKILLS-D1 — clamp to 1..5; NaN / unset / out-of-range → the default 5.
     skillsStackMax: clampInt(c.skillsStackMax, 1, 5, 5),
+    // CC-UX-E2 — GFM task-list checkboxes in the CLI renderer. Default true.
+    markdownCheckboxes: c.markdownCheckboxes !== false,
     mcpTimeoutMs: c.mcpTimeoutMs ?? 60_000,
     brainUrl: c.brainUrl ?? null,
     sandbox: c.sandbox ?? 'off',

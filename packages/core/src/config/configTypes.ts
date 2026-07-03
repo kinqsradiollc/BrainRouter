@@ -361,6 +361,13 @@ export interface CliKnobs {
    * runaway prompt can't compose an unbounded instruction block. Default 5.
    */
   skillsStackMax?: number;
+  /**
+   * CC-UX-E2 — render GFM task-list items (`- [ ]` / `- [x]`) as checkbox
+   * glyphs (☐ / ☑) in the CLI markdown renderer instead of the literal
+   * `[ ]` / `[x]` text. Default true (a pure display nicety; the underlying
+   * markdown is unchanged). Set false to preserve the raw brackets.
+   */
+  markdownCheckboxes?: boolean;
 
   // ---- MCP plumbing -----------------------------------------------------
   /** MCP call timeout in ms. Default 60000. */
@@ -850,6 +857,8 @@ export interface ResolvedCliKnobs {
   skillsHideBundled: boolean;
   /** CC-SKILLS-D1 — max stacked `/skill` tokens per prompt (clamped 1..5). */
   skillsStackMax: number;
+  /** CC-UX-E2 — render GFM task-list checkboxes (☐ / ☑) in the CLI renderer. */
+  markdownCheckboxes: boolean;
   mcpTimeoutMs: number;
   /** REMOTE-BRAIN — remote brain HTTP endpoint, or null for the embedded default. */
   brainUrl: string | null;

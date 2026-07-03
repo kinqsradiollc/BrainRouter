@@ -17,6 +17,21 @@ export interface ActorUsage {
   wallClockMs?: number;
 }
 
+/** CC-UX-E3 — per-skill token accounting (from the agent's `usageBySkill`). */
+export interface SkillUsage {
+  skill: string;
+  promptTokens: number;
+  completionTokens: number;
+  calls: number;
+  turns: number;
+}
+
+/** CC-UX-E3 — per-MCP-server tool-call attribution (from `mcpServerCallCounts`). */
+export interface McpServerUsage {
+  server: string;
+  calls: number;
+}
+
 export interface UsageBreakdownInput {
   parent: {
     promptTokens: number;
@@ -30,6 +45,10 @@ export interface UsageBreakdownInput {
   offload?: { childTokensSpent: number; offloadCharsAvoided: number };
   /** WS0 — session prefix-cache stability (cache-stable-prefix hits vs busts). */
   prefixStability?: { stableCalls: number; bustCalls: number; ratio: number; lastLabels: string[] };
+  /** CC-UX-E3 — per-skill token spend (the `chat` bucket is the no-skill baseline). */
+  bySkill?: SkillUsage[];
+  /** CC-UX-E3 — per-MCP-server tool-call counts. */
+  byMcpServer?: McpServerUsage[];
 }
 
 const fmt = (n: number): string => n.toLocaleString('en-US');
@@ -84,7 +103,37 @@ export function buildUsageBreakdown(input: UsageBreakdownInput): string[] {
   // saved is deliberately omitted: it needs per-provider pricing, which an
   // OpenAI-compatible endpoint doesn't expose and we don't hardcode.)
   if (cacheable > 0) {
-    lines.push(`  cache       ${fmt(p.cachedTokens)} tokens served from cache · ${fmt(p.missedTokens)} full-price (${pct(p.cachedTokens, cacheable)} hit)`);
+    lines.push(`  cache       ${fmt(p.cachedTokens)} tokens served from cache · ${fmt(p.missedTokens)} full-price (${pct(p.cachedTokens, cacheable)} hit, ${fmt(p.missedTokens)} miss)`);
+  }
+
+  // CC-UX-E3 — per-skill token spend. The `chat` bucket is the no-skill
+  // baseline; skills are shown descending by total tokens. Only rendered when
+  // at least one non-`chat` skill actually ran a turn, so a plain chat session
+  // (everything in `chat`) doesn't get a redundant one-row table.
+  const skills = (input.bySkill ?? [])
+    .filter((s) => s.promptTokens + s.completionTokens > 0)
+    .sort((a, b) => (b.promptTokens + b.completionTokens) - (a.promptTokens + a.completionTokens));
+  if (skills.some((s) => s.skill !== 'chat')) {
+    lines.push('');
+    lines.push('By skill:');
+    for (const s of skills) {
+      lines.push(`  ${s.skill.padEnd(24)} ${fmt(s.promptTokens)} in / ${fmt(s.completionTokens)} out · ${s.calls} calls · ${s.turns} turns`);
+    }
+  }
+
+  // CC-UX-E3 — per-MCP-server tool-call attribution. Token cost per MCP server
+  // isn't separable from the turn's LLM spend (an OpenAI-compatible endpoint
+  // bills the whole turn), so we report call counts — the measurable signal of
+  // how much each server was leaned on.
+  const servers = (input.byMcpServer ?? [])
+    .filter((m) => m.calls > 0)
+    .sort((a, b) => b.calls - a.calls);
+  if (servers.length > 0) {
+    lines.push('');
+    lines.push('By MCP server (tool calls):');
+    for (const m of servers) {
+      lines.push(`  ${m.server.padEnd(24)} ${m.calls} call${m.calls === 1 ? '' : 's'}`);
+    }
   }
   // WS0 — prefix-cache stability: the share of calls whose cache-stable prefix
   // was byte-identical to the prior call (so the provider prefix-cache served

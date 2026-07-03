@@ -1774,6 +1774,13 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           }
           // 0.4.x-4 (`/context`) — count each tool that actually dispatches.
           this.toolCallCounts.set(name, (this.toolCallCounts.get(name) ?? 0) + 1);
+          // CC-UX-E3 (`/usage`) — attribute MCP tool dispatch to its server so
+          // the breakdown can show per-server call counts. `mcp_<server>_<tool>`
+          // → serverId; non-MCP tools return undefined and aren't counted.
+          {
+            const serverId = this.serverIdFromMcpToolName(name);
+            if (serverId) this.mcpServerCallCounts.set(serverId, (this.mcpServerCallCounts.get(serverId) ?? 0) + 1);
+          }
           if (isOrchestrationToolName(name)) {
             // WF-NO-NEST — a silent/child agent (itself a spawned worker, incl.
             // a workflow PHASE agent) must never launch its own workflow. That

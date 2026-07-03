@@ -6,7 +6,7 @@
 
 export const SLASH_COMMANDS = [
   '/help', '/status', '/workspace', '/where', '/tools', '/skills', '/reload-skills', '/plan', '/transcript',
-  '/doctor', '/policy', '/config', '/diff', '/commit', '/clear', '/compact', '/exit', '/quit',
+  '/doctor', '/policy', '/config', '/diff', '/commit', '/cd', '/clear', '/compact', '/exit', '/quit',
   '/roles', '/agents', '/agent', '/spawn', '/build', '/bg', '/wait', '/dm', '/broadcast', '/inbox', '/delegation-policy', '/handoff', '/pack', '/workers',
   '/spec', '/feature-dev', '/grill-me', '/review', '/review-auto', '/simplify', '/implement-plan', '/skill', '/workflow', '/workflows', '/approve', '/requirement', '/track', '/annotation', '/artifact', '/atlas', '/attach',
   '/memory', '/recall', '/briefing', '/refresh-memory', '/scenes', '/working', '/forget', '/brain', '/blackboard',
@@ -39,6 +39,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/help [category]', desc: 'List commands; `/help <category>` for a focused page' },
       { cmd: '/status', desc: 'Connection status, LLM config, DB stats' },
       { cmd: '/workspace', desc: 'Active workspace and session identity' },
+      { cmd: '/cd <path>', desc: 'Move the session working directory (keeps transcript + memory; resets read-ledger and child/worktree context)' },
       { cmd: '/where', desc: 'Single-screen view of workspace, workflow, goal, plan, recall, children' },
       { cmd: '/atlas', desc: 'Build/enrich a codebase knowledge graph (files, symbols, summaries, layers, tour); explore it in the desktop Atlas panel' },
       { cmd: '/doctor', desc: 'Config, connection, memory extraction health' },
