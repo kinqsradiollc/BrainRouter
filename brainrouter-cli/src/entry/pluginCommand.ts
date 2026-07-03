@@ -9,10 +9,14 @@
  *   brainrouter plugin enable <name>      — enable a plugin (cli.plugins.enabled)
  *   brainrouter plugin disable <name>     — disable a plugin
  *   brainrouter plugin remove <name>      — uninstall a plugin
+ *   brainrouter plugin search <q>         — search the hosted registry (P3)
+ *   brainrouter plugin trust <name>       — approve a plugin's shell/MCP capabilities (P3)
  *
  * A plugin FEEDS the existing subsystems (skills / agents / commands / hooks /
  * mcp / connectors / workflows) — no parallel runtime. `--workspace` targets the
  * committable workspace scope; the default is user scope (follows the user).
+ * Executable capabilities (command hooks + MCP command-servers) stay DISABLED
+ * until `plugin trust <name> --shell|--mcp` approves them (P3 consent gate).
  */
 import type { Command } from 'commander';
 import chalk from 'chalk';
@@ -20,10 +24,16 @@ import chalk from 'chalk';
 export function registerPluginCommand(program: Command): void {
   program
     .command('plugin <action> [target]')
-    .description('Plugins: init | install <path|git> | list | info <name> | validate <path> | enable <name> | disable <name> | remove <name>')
+    .description('Plugins: init | install | list | info | validate | enable | disable | remove | search <q> | trust <name>')
     .option('--workspace', 'Target the committable workspace scope (default: user scope)')
     .option('--force', 'Overwrite an existing install (install)')
     .option('--ref <ref>', 'git ref (branch/tag/commit) for a git source (install)')
+    .option('--category <category>', 'Filter search results by category (search)')
+    .option('--tag <tag>', 'Filter search results by tag (search)')
+    .option('--limit <n>', 'Max search results (search)')
+    .option('--shell', 'Approve a plugin\'s command hooks (trust)')
+    .option('--mcp', 'Approve a plugin\'s MCP command-servers (trust)')
+    .option('--revoke', 'Revoke instead of grant (trust)')
     .option('--json', 'Machine-readable output')
     .action(async (action, target, options) => {
       const plugin = await import('@kinqs/brainrouter-core/plugin');
@@ -127,9 +137,70 @@ export function registerPluginCommand(program: Command): void {
         case 'disable': {
           if (!target) return fail(`usage: brainrouter plugin ${act} <name>`);
           const enabled = act === 'enable';
+          // P3 — consent/disclosure: on ENABLE, show what the plugin contributes
+          // and flag risky (shell/MCP) capabilities that still need `plugin trust`.
+          if (enabled) {
+            const { loadOrInitConfig } = await import('@kinqs/brainrouter-core/config');
+            const { VERSION } = await import('@kinqs/brainrouter-core/version');
+            const cfg = loadOrInitConfig();
+            const root = plugin.pluginInstallRoot(scope, String(target), workspaceRoot);
+            const disc = plugin.discoverPlugin(root);
+            if (disc.ok) {
+              const summary = plugin.buildConsentSummary(disc.plugin, {
+                approved: plugin.pluginConsent(cfg, String(target)),
+                runtime: { brainrouterVersion: VERSION },
+              });
+              if (!options.json) {
+                console.log(chalk.gray(summary.disclosure));
+                for (const w of summary.compatibilityWarnings) console.log(chalk.yellow(`  ! ${w}`));
+                if (summary.requiresConsent && !(summary.shellApproved && summary.mcpApproved)) {
+                  console.log(chalk.yellow(`  This plugin ships executable capabilities that stay DISABLED until approved:`));
+                  if (summary.hookCommands.length && !summary.shellApproved) console.log(chalk.yellow(`    brainrouter plugin trust ${target} --shell`));
+                  if (summary.mcpCommands.length && !summary.mcpApproved) console.log(chalk.yellow(`    brainrouter plugin trust ${target} --mcp`));
+                }
+              }
+            }
+          }
           plugin.setPluginEnabled(String(target), enabled);
           if (options.json) { process.stdout.write(JSON.stringify({ name: String(target), enabled }) + '\n'); return; }
           console.log(chalk.green(`${enabled ? 'Enabled' : 'Disabled'} plugin "${target}".`));
+          return;
+        }
+
+        case 'search': {
+          if (!target) return fail('usage: brainrouter plugin search <query>');
+          const { loadOrInitConfig } = await import('@kinqs/brainrouter-core/config');
+          const registryUrl = loadOrInitConfig().cli?.plugins?.registryUrl;
+          const res = await plugin.fetchAndSearch(registryUrl, String(target), {
+            category: options.category,
+            tag: options.tag,
+            limit: options.limit ? Number(options.limit) : undefined,
+          });
+          if (!res.ok) return fail(res.error);
+          if (options.json) { process.stdout.write(JSON.stringify(res.hits.map((h) => h.entry)) + '\n'); return; }
+          if (res.hits.length === 0) { console.log(chalk.gray(`No plugins matched "${target}".`)); return; }
+          for (const { entry } of res.hits) {
+            const stars = entry.stars ? chalk.yellow(` ★${entry.stars}`) : '';
+            const cat = entry.category ? chalk.gray(` [${entry.category}]`) : '';
+            console.log(`${chalk.bold(entry.name)}${entry.version ? chalk.gray(` v${entry.version}`) : ''}${cat}${stars}`);
+            if (entry.description) console.log(chalk.gray(`  ${entry.description}`));
+            console.log(chalk.gray(`  install:  brainrouter plugin install ${entry.repo || entry.id}`));
+          }
+          return;
+        }
+
+        case 'trust': {
+          if (!target) return fail('usage: brainrouter plugin trust <name> [--shell] [--mcp] [--revoke]');
+          if (!options.shell && !options.mcp) return fail('specify --shell and/or --mcp to approve the capability');
+          const grant = !options.revoke;
+          const consent: { shell?: boolean; mcp?: boolean } = {};
+          if (options.shell) consent.shell = grant;
+          if (options.mcp) consent.mcp = grant;
+          plugin.setPluginConsent(String(target), consent);
+          if (options.json) { process.stdout.write(JSON.stringify({ name: String(target), consent }) + '\n'); return; }
+          const verb = grant ? 'Approved' : 'Revoked';
+          const caps = [options.shell ? 'shell (command hooks)' : '', options.mcp ? 'MCP command-servers' : ''].filter(Boolean).join(' + ');
+          console.log(chalk.green(`${verb} ${caps} for plugin "${target}".`));
           return;
         }
 
@@ -143,7 +214,7 @@ export function registerPluginCommand(program: Command): void {
         }
 
         default:
-          return fail(`Unknown plugin action "${act}". Use: init | install | list | info | validate | enable | disable | remove.`);
+          return fail(`Unknown plugin action "${act}". Use: init | install | list | info | validate | enable | disable | remove | search | trust.`);
       }
     });
 }

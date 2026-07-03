@@ -205,14 +205,43 @@ export interface MarketplaceSource {
  *   the USER scope (`~/.brainrouter/plugins/<name>/`) and the WORKSPACE scope
  *   (`<ws>/.brainrouter/plugins/<name>/`).
  * `registryUrl` — override the hosted registry index location (Phase 3).
+ *   Empty/unset → the built-in BrainRouter-owned default. Also accepts a local
+ *   file path (tests / air-gapped mirrors).
  * `marketplaces` — configured marketplace sources (P2). Empty (default) = no
  *   marketplaces; install-by-name has nothing to resolve against.
+ *
+ * PLUGIN-MARKETPLACE P3 — trust / consent / managed gating (plan §3.7/§4):
+ * `approved` — per-plugin-name map of which risky capabilities the user has
+ *   explicitly consented to. A plugin's hooks (`type: command`) and MCP
+ *   command-servers stay DISABLED until `approved[name].shell` /
+ *   `approved[name].mcp` is true. A skills/commands/agents-only plugin needs
+ *   no elevated trust and loads on `enabled` alone. Default `{}` = nothing
+ *   consented.
+ * `allowedMarketplaces` — managed allowlist of marketplace names. Non-empty ⇒
+ *   only these marketplaces may be added / resolved through. Empty = no allow
+ *   restriction (mirrors `availableModels`).
+ * `blockedMarketplaces` — managed denylist of marketplace names; any listed
+ *   marketplace is refused regardless of the allowlist.
+ * `allowManagedHooksOnly` — when true, a plugin's hook contributions are
+ *   refused (never registered) — the managed-environment kill-switch for
+ *   third-party hooks (mirrors CC's `allowManagedHooksOnly`).
  * Loading is SKIPPED entirely when `cli.safeMode` is on.
  */
+export interface PluginCapabilityConsent {
+  /** User consented to this plugin's command-type hooks (shell). */
+  shell?: boolean;
+  /** User consented to this plugin's MCP command-servers. */
+  mcp?: boolean;
+}
+
 export interface PluginsCliKnobs {
   enabled?: Record<string, boolean>;
   registryUrl?: string;
   marketplaces?: MarketplaceSource[];
+  approved?: Record<string, PluginCapabilityConsent>;
+  allowedMarketplaces?: string[];
+  blockedMarketplaces?: string[];
+  allowManagedHooksOnly?: boolean;
 }
 
 /** Per-provider generation wire format. The two OpenAI shapes plus the native
@@ -960,10 +989,18 @@ export interface ResolvedCliKnobs {
   webSearchEndpoint?: string;
   webSearch: ResolvedWebSearchKnobs;
   computerUse: { enabled: boolean; mode: string };
-  /** PLUGIN-MARKETPLACE P1/P2 — resolved plugin knobs (validated enable map +
+  /** PLUGIN-MARKETPLACE P1/P2/P3 — resolved plugin knobs (validated enable map +
    *  trimmed registry url; `registryUrl: ''` = unset → built-in default; the
-   *  validated marketplace-source list). */
-  plugins: { enabled: Record<string, boolean>; registryUrl: string; marketplaces: MarketplaceSource[] };
+   *  validated marketplace-source list; the P3 trust/consent + managed gates). */
+  plugins: {
+    enabled: Record<string, boolean>;
+    registryUrl: string;
+    marketplaces: MarketplaceSource[];
+    approved: Record<string, PluginCapabilityConsent>;
+    allowedMarketplaces: string[];
+    blockedMarketplaces: string[];
+    allowManagedHooksOnly: boolean;
+  };
   tierLadder?: { flash?: string; standard?: string; pro?: string };
   contextCompaction: boolean;
   childAgentTimeoutMs: number;

@@ -16,6 +16,7 @@ import type {
   WebSearchProviderName,
   ProviderWireFormat,
   MarketplaceSource,
+  PluginCapabilityConsent,
 } from './configTypes.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'brainrouter');
@@ -294,10 +295,43 @@ function resolveMarketplaceSources(input: unknown): MarketplaceSource[] {
   return out;
 }
 
-function resolvePluginsKnobs(input: unknown): { enabled: Record<string, boolean>; registryUrl: string; marketplaces: MarketplaceSource[] } {
+function resolveStringList(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of input) {
+    if (typeof raw !== 'string') continue;
+    const t = raw.trim();
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+  }
+  return out;
+}
+
+function resolveApprovedMap(input: unknown): Record<string, PluginCapabilityConsent> {
+  const out: Record<string, PluginCapabilityConsent> = {};
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return out;
+  for (const [rawKey, rawVal] of Object.entries(input as Record<string, unknown>)) {
+    const key = typeof rawKey === 'string' ? rawKey.trim() : '';
+    if (!key || !rawVal || typeof rawVal !== 'object' || Array.isArray(rawVal)) continue;
+    const v = rawVal as Record<string, unknown>;
+    const consent: PluginCapabilityConsent = {};
+    if (v.shell === true) consent.shell = true;
+    if (v.mcp === true) consent.mcp = true;
+    if (consent.shell || consent.mcp) out[key] = consent;
+  }
+  return out;
+}
+
+function resolvePluginsKnobs(input: unknown): ResolvedCliKnobs['plugins'] {
   const enabled: Record<string, boolean> = {};
   let registryUrl = '';
   let marketplaces: MarketplaceSource[] = [];
+  let approved: Record<string, PluginCapabilityConsent> = {};
+  let allowedMarketplaces: string[] = [];
+  let blockedMarketplaces: string[] = [];
+  let allowManagedHooksOnly = false;
   if (input && typeof input === 'object' && !Array.isArray(input)) {
     const obj = input as Record<string, unknown>;
     if (obj.enabled && typeof obj.enabled === 'object' && !Array.isArray(obj.enabled)) {
@@ -308,8 +342,12 @@ function resolvePluginsKnobs(input: unknown): { enabled: Record<string, boolean>
     }
     if (typeof obj.registryUrl === 'string') registryUrl = obj.registryUrl.trim();
     marketplaces = resolveMarketplaceSources(obj.marketplaces);
+    approved = resolveApprovedMap(obj.approved);
+    allowedMarketplaces = resolveStringList(obj.allowedMarketplaces);
+    blockedMarketplaces = resolveStringList(obj.blockedMarketplaces);
+    allowManagedHooksOnly = obj.allowManagedHooksOnly === true;
   }
-  return { enabled, registryUrl, marketplaces };
+  return { enabled, registryUrl, marketplaces, approved, allowedMarketplaces, blockedMarketplaces, allowManagedHooksOnly };
 }
 
 function unitInterval(value: unknown, fallback: number): number {

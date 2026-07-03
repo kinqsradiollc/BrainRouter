@@ -21,6 +21,17 @@ import { loadOrInitConfig, saveConfig } from '../config/config.js';
 import type { Config, MarketplaceSource } from '../config/configTypes.js';
 import { stagingDir } from './paths.js';
 import { installPlugin, classifySource, type InstallOptions, type InstallResult } from './install.js';
+import { assertMarketplaceAllowed, type ManagedGates } from './trust.js';
+
+/** Derive the managed gates from a Config's resolved-shape plugin knobs (fail-open). */
+function gatesFromConfig(config: Config): ManagedGates {
+  const p = config.cli?.plugins;
+  return {
+    allowedMarketplaces: p?.allowedMarketplaces ?? [],
+    blockedMarketplaces: p?.blockedMarketplaces ?? [],
+    allowManagedHooksOnly: p?.allowManagedHooksOnly === true,
+  };
+}
 
 /** The marketplace manifest file at a source root. */
 export const MARKETPLACE_MANIFEST_FILE = 'brainrouter-marketplace.json';
@@ -48,6 +59,8 @@ export interface MarketplacePluginEntry {
   version?: string;
   category?: string;
   author?: MarketplaceAuthor;
+  /** PLUGIN-MARKETPLACE P3 — expected sha256 integrity for a remote artifact. */
+  integrity?: string;
 }
 
 export interface MarketplaceManifest {
@@ -103,6 +116,7 @@ export function validateMarketplaceManifest(raw: unknown): MarketplaceParseResul
       if (typeof p.description === 'string' && p.description.trim()) entry.description = p.description.trim();
       if (typeof p.version === 'string' && p.version.trim()) entry.version = p.version.trim();
       if (typeof p.category === 'string' && p.category.trim()) entry.category = p.category.trim();
+      if (typeof p.integrity === 'string' && p.integrity.trim()) entry.integrity = p.integrity.trim();
       const author = parseAuthor(p.author);
       if (author) entry.author = author;
       plugins.push(entry);
@@ -174,6 +188,9 @@ export function addMarketplaceIn(
   const cleanSource = source.trim();
   if (!cleanName || !NAME_RE.test(cleanName)) return { ok: false, error: `invalid marketplace name "${name}"` };
   if (!cleanSource) return { ok: false, error: 'marketplace source is required' };
+  // P3 — managed gating: refuse a blocked / non-allowlisted marketplace at add time.
+  const gateErr = assertMarketplaceAllowed(cleanName, gatesFromConfig(config));
+  if (gateErr) return { ok: false, error: gateErr };
   const list = marketplacesOf(config);
   const existing = list.find((m) => m.name === cleanName);
   if (existing && !opts.force) return { ok: false, error: `marketplace "${cleanName}" already exists (use force to replace)` };
@@ -366,8 +383,12 @@ export function resolvePluginByName(name: string, config?: Config): ResolveResul
   const cfg = config ?? loadOrInitConfig();
   const list = marketplacesOf(cfg);
   if (list.length === 0) return { ok: false, error: 'no marketplaces configured (add one with `brainrouter marketplace add`)' };
+  const gates = gatesFromConfig(cfg);
   const errors: string[] = [];
   for (const mkt of list) {
+    // P3 — skip any marketplace the managed policy blocks / doesn't allowlist.
+    const gateErr = assertMarketplaceAllowed(mkt.name, gates);
+    if (gateErr) { errors.push(`${mkt.name}: ${gateErr}`); continue; }
     const fetched = fetchMarketplace(mkt);
     if (!fetched.ok) { errors.push(`${mkt.name}: ${fetched.error}`); continue; }
     const parsed = readMarketplaceManifestAt(fetched.fetched.dir);
@@ -393,13 +414,14 @@ export function resolvePluginByName(name: string, config?: Config): ResolveResul
  */
 export function resolvePluginInstallSpec(
   resolved: ResolvedMarketplacePlugin,
-): { ok: true; source: string; opts: Pick<InstallOptions, 'ref' | 'subPath' | 'marketplace'> } | { ok: false; error: string } {
+): { ok: true; source: string; opts: Pick<InstallOptions, 'ref' | 'subPath' | 'marketplace' | 'integrity'> } | { ok: false; error: string } {
   const { entry, fetched, marketplace } = resolved;
   const src = entry.source.trim();
+  const integrity = entry.integrity; // P3 — verified before the staged copy goes live
   // git+... or a bare git url with a possible #ref
   if (/^git\+/.test(src) || classifySource(src) === 'git') {
     const { url, ref } = parseGitUrl(src);
-    return { ok: true, source: url, opts: { ref: entry.version ? undefined : ref, marketplace } };
+    return { ok: true, source: url, opts: { ref: entry.version ? undefined : ref, marketplace, integrity } };
   }
   // http tarball — deferred to a later phase
   if (/^https?:\/\//i.test(src)) {
@@ -413,7 +435,7 @@ export function resolvePluginInstallSpec(
   if (relToRoot.startsWith('..') || path.isAbsolute(relToRoot)) {
     return { ok: false, error: `plugin source "${src}" resolves outside the marketplace` };
   }
-  return { ok: true, source: abs, opts: { marketplace } };
+  return { ok: true, source: abs, opts: { marketplace, integrity } };
 }
 
 export interface InstallByNameResult {
@@ -444,6 +466,7 @@ export function installPluginByName(
       ref: spec.opts.ref,
       subPath: spec.opts.subPath,
       marketplace: spec.opts.marketplace,
+      integrity: spec.opts.integrity,
     });
     if (!result.ok) return { ok: false, marketplace: resolved.resolved.marketplace, result, error: result.error };
     return { ok: true, marketplace: resolved.resolved.marketplace, result };

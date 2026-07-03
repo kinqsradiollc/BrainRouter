@@ -11,3 +11,6 @@ export * from './install.js';
 export * from './scaffold.js';
 export * from './service.js';
 export * from './marketplace.js';
+export * from './integrity.js';
+export * from './registry.js';
+export * from './trust.js';

@@ -136,8 +136,9 @@ test('loadPlugins: an enabled fixture plugin contributes skill+agent+command+hoo
   assert.equal(off.disabled.length, 1);
   assert.equal(off.disabled[0].name, 'acme-devkit');
 
-  // Enable it → contributions populate.
-  const cfg = baseCfg({ plugins: { enabled: { 'acme-devkit': true } } });
+  // Enable it → skills/agents/commands populate; hooks + MCP are gated behind the
+  // P3 consent model, so grant the shell + mcp capability too to see the full surface.
+  const cfg = baseCfg({ plugins: { enabled: { 'acme-devkit': true }, approved: { 'acme-devkit': { shell: true, mcp: true } } } });
   const on = loadPlugins(ws, cfg);
   assert.equal(on.loaded.length, 1);
   const p = on.loaded[0];

@@ -28,12 +28,16 @@ import {
   type PluginProvides,
 } from './discovery.js';
 import { expandPluginRoot } from './manifest.js';
+import { commandHooksEnabled, hooksAllowed, mcpServersEnabled } from './trust.js';
 
 /** A plugin that was resolved AND enabled, tagged with its scope + disclosure. */
 export interface LoadedPlugin extends DiscoveredPlugin {
   scope: PluginScope;
   enabled: boolean;
   provides: PluginProvides;
+  /** PLUGIN-MARKETPLACE P3 — whether this plugin's risky capabilities loaded. */
+  hooksGated?: boolean;
+  mcpGated?: boolean;
 }
 
 /**
@@ -155,7 +159,7 @@ export function loadPluginsWithKnobs(
       continue;
     }
     const provides = summarizeProvides(plugin);
-    loaded.push({ ...plugin, enabled: true, provides });
+    const approved = knobs.plugins.approved[plugin.name];
 
     const c = plugin.contributes;
     if (c.skills) contributions.skillRoots.push(c.skills);
@@ -163,13 +167,60 @@ export function loadPluginsWithKnobs(
     if (c.commands) contributions.commandFiles.push(...listEntries(c.commands, plugin.name, ['.md']));
     if (c.connectors) contributions.connectorFiles.push(...listEntries(c.connectors, plugin.name, ['.json']));
     if (c.workflows) contributions.workflowFiles.push(...listEntries(c.workflows, plugin.name, ['.js', '.mjs', '.json']));
-    if (c.hooks) contributions.hookFiles.push({ pluginName: plugin.name, path: c.hooks });
-    if (c.mcpServers) {
-      contributions.mcpConfigFiles.push({ pluginName: plugin.name, path: c.mcpServers, pluginRoot: plugin.root });
+
+    // PLUGIN-MARKETPLACE P3 — gate the risky (shell/MCP) capabilities. Hooks with
+    // a command-type entry need per-plugin SHELL consent; a `allowManagedHooksOnly`
+    // managed gate refuses third-party plugin hooks outright. MCP command-servers
+    // need per-plugin MCP consent. Skills/agents/commands/connectors/workflows are
+    // whitelist-safe and always load on `enabled` alone.
+    let hooksGated = false;
+    let mcpGated = false;
+    if (c.hooks) {
+      const hasCommandHook = fileHasCommandHook(c.hooks);
+      const allowed = hasCommandHook
+        ? commandHooksEnabled(knobs.plugins, approved)
+        : hooksAllowed(knobs.plugins);
+      if (allowed) contributions.hookFiles.push({ pluginName: plugin.name, path: c.hooks });
+      else {
+        hooksGated = true;
+        if (knobs.plugins.allowManagedHooksOnly) {
+          warnings.push(`${plugin.name}: hooks refused — allowManagedHooksOnly is on (managed policy)`);
+        } else {
+          warnings.push(`${plugin.name}: command hooks disabled — approve with \`brainrouter plugin trust ${plugin.name} --shell\``);
+        }
+      }
     }
+    if (c.mcpServers) {
+      if (mcpServersEnabled(approved)) {
+        contributions.mcpConfigFiles.push({ pluginName: plugin.name, path: c.mcpServers, pluginRoot: plugin.root });
+      } else {
+        mcpGated = true;
+        warnings.push(`${plugin.name}: MCP servers disabled — approve with \`brainrouter plugin trust ${plugin.name} --mcp\``);
+      }
+    }
+
+    loaded.push({ ...plugin, enabled: true, provides, hooksGated, mcpGated });
   }
 
   return { loaded, contributions, disabled, warnings, errors, skippedForSafeMode: false };
+}
+
+/** True when a hooks.json declares at least one command-type hook (shell-risky).
+ *  A parse failure / prompt-only file returns false (no shell gate needed). */
+function fileHasCommandHook(hooksFile: string): boolean {
+  let raw: unknown;
+  try { raw = JSON.parse(fs.readFileSync(hooksFile, 'utf8')); } catch { return false; }
+  const found = { hit: false };
+  const visit = (h: unknown): void => {
+    if (found.hit || !h || typeof h !== 'object') return;
+    if (Array.isArray(h)) { for (const x of h) visit(x); return; }
+    const obj = h as Record<string, unknown>;
+    const type = typeof obj.type === 'string' ? obj.type : undefined;
+    if (typeof obj.command === 'string' && (type === undefined || type === 'command')) { found.hit = true; return; }
+    for (const v of Object.values(obj)) if (Array.isArray(v) || (v && typeof v === 'object')) visit(v);
+  };
+  visit(raw);
+  return found.hit;
 }
 
 function listEntries(dir: string, pluginName: string, exts: readonly string[]): Array<{ pluginName: string; path: string }> {

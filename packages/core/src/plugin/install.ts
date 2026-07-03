@@ -18,6 +18,7 @@ import {
   type PluginScope,
 } from './paths.js';
 import { discoverPlugin } from './discovery.js';
+import { hashDirectory, compareDigest } from './integrity.js';
 import type { PluginManifest } from './manifest.js';
 
 export interface InstallOptions {
@@ -37,6 +38,14 @@ export interface InstallOptions {
   /** PLUGIN-MARKETPLACE P2 — marketplace name recorded in `install.json` when
    *  this install came from `plugin install <name>` (install-by-name). */
   marketplace?: string;
+  /**
+   * PLUGIN-MARKETPLACE P3 — expected sha256 `integrity` (from the registry
+   * entry). When set, the staged plugin's deterministic tree digest is verified
+   * BEFORE it is moved into place; a mismatch ABORTS (the live copy is untouched
+   * — the atomic-staging guarantee). Blank/undefined ⇒ no integrity pin (a git
+   * source carries its own ref/revision guarantee).
+   */
+  integrity?: string;
 }
 
 export type InstallResult =
@@ -150,6 +159,17 @@ export function installPlugin(source: string, opts: InstallOptions = {}): Instal
       return { ok: false, error: `invalid plugin: ${disc.error.errors.join('; ')}` };
     }
     const { name } = disc.plugin;
+
+    // P3 — integrity gate: verify the staged tree against the declared sha256
+    // BEFORE touching any live dir. A mismatch aborts the install (atomic).
+    if (opts.integrity && opts.integrity.trim()) {
+      const digest = hashDirectory(effectiveRoot);
+      const check = compareDigest(digest, opts.integrity);
+      if (!check.ok) {
+        return { ok: false, error: `integrity check failed for "${name}": ${check.message ?? 'mismatch'}` };
+      }
+    }
+
     const target = pluginInstallRoot(scope, name, workspaceRoot);
 
     if (fs.existsSync(target)) {
