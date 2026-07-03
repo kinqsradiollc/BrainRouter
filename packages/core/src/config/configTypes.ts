@@ -170,6 +170,30 @@ export interface ComputerUseCliKnobs {
 }
 
 /**
+ * PLUGIN-MARKETPLACE P2 — a marketplace source recorded in
+ * `cli.plugins.marketplaces[]` (plan §3.3/§3.5, mirrors Codex's
+ * `record_user_marketplace`). A marketplace is a repo/dir/tarball whose root
+ * holds a `brainrouter-marketplace.json` indexing one or many plugins. Install-
+ * by-name resolves a plugin across every configured marketplace.
+ *
+ * `sourceType` — `git` (clone/pull), `local` (a directory on disk), or `http`
+ *   (a downloadable tarball, Phase 3+).
+ * `source` — the git url / local path / http url.
+ * `ref` — pinned git ref (branch/tag/commit).
+ * `sparsePaths` — git sub-paths to check out (monorepo marketplaces).
+ * `lastRevision` / `lastUpdated` — recorded by `marketplace update`.
+ */
+export interface MarketplaceSource {
+  name: string;
+  sourceType: 'git' | 'local' | 'http';
+  source: string;
+  ref?: string;
+  sparsePaths?: string[];
+  lastRevision?: string;
+  lastUpdated?: string;
+}
+
+/**
  * PLUGIN-MARKETPLACE P1 — plugin subsystem knobs. A plugin is a thin
  * packaging + distribution wrapper that FEEDS the existing subsystems
  * (skills / agents / commands / hooks / mcp / connectors / workflows); no
@@ -181,11 +205,14 @@ export interface ComputerUseCliKnobs {
  *   the USER scope (`~/.brainrouter/plugins/<name>/`) and the WORKSPACE scope
  *   (`<ws>/.brainrouter/plugins/<name>/`).
  * `registryUrl` — override the hosted registry index location (Phase 3).
+ * `marketplaces` — configured marketplace sources (P2). Empty (default) = no
+ *   marketplaces; install-by-name has nothing to resolve against.
  * Loading is SKIPPED entirely when `cli.safeMode` is on.
  */
 export interface PluginsCliKnobs {
   enabled?: Record<string, boolean>;
   registryUrl?: string;
+  marketplaces?: MarketplaceSource[];
 }
 
 /** Per-provider generation wire format. The two OpenAI shapes plus the native
@@ -933,9 +960,10 @@ export interface ResolvedCliKnobs {
   webSearchEndpoint?: string;
   webSearch: ResolvedWebSearchKnobs;
   computerUse: { enabled: boolean; mode: string };
-  /** PLUGIN-MARKETPLACE P1 — resolved plugin knobs (validated enable map +
-   *  trimmed registry url; `registryUrl: ''` = unset → built-in default). */
-  plugins: { enabled: Record<string, boolean>; registryUrl: string };
+  /** PLUGIN-MARKETPLACE P1/P2 — resolved plugin knobs (validated enable map +
+   *  trimmed registry url; `registryUrl: ''` = unset → built-in default; the
+   *  validated marketplace-source list). */
+  plugins: { enabled: Record<string, boolean>; registryUrl: string; marketplaces: MarketplaceSource[] };
   tierLadder?: { flash?: string; standard?: string; pro?: string };
   contextCompaction: boolean;
   childAgentTimeoutMs: number;

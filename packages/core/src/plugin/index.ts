@@ -10,3 +10,4 @@ export * from './loader.js';
 export * from './install.js';
 export * from './scaffold.js';
 export * from './service.js';
+export * from './marketplace.js';

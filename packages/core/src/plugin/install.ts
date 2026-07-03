@@ -27,6 +27,16 @@ export interface InstallOptions {
   ref?: string;
   /** Overwrite an existing install of the same name. Default false → refuse. */
   force?: boolean;
+  /**
+   * PLUGIN-MARKETPLACE P2 — a sub-path INSIDE the fetched source that holds the
+   * actual plugin (monorepo marketplaces where one repo bundles many plugins;
+   * plan §3.3 `sparsePaths`). After fetch, the staged root is narrowed to this
+   * sub-directory before validation. Must stay inside the fetched tree.
+   */
+  subPath?: string;
+  /** PLUGIN-MARKETPLACE P2 — marketplace name recorded in `install.json` when
+   *  this install came from `plugin install <name>` (install-by-name). */
+  marketplace?: string;
 }
 
 export type InstallResult =
@@ -118,8 +128,24 @@ export function installPlugin(source: string, opts: InstallOptions = {}): Instal
       if (rev.status === 0) revision = rev.stdout.trim();
     }
 
+    // P2 — narrow to a sub-path INSIDE the fetched source (monorepo bundling).
+    // Guard: the resolved sub-path must stay inside the staged tree.
+    let effectiveRoot = stageRoot;
+    if (opts.subPath && opts.subPath.trim()) {
+      const rel = opts.subPath.trim().replace(/^[/\\]+/, '');
+      const candidate = path.resolve(stageRoot, rel);
+      const relToRoot = path.relative(stageRoot, candidate);
+      if (relToRoot.startsWith('..') || path.isAbsolute(relToRoot)) {
+        return { ok: false, error: `subPath "${opts.subPath}" resolves outside the fetched source` };
+      }
+      let stat: fs.Stats;
+      try { stat = fs.statSync(candidate); } catch { return { ok: false, error: `subPath "${opts.subPath}" not found in source` }; }
+      if (!stat.isDirectory()) return { ok: false, error: `subPath "${opts.subPath}" is not a directory` };
+      effectiveRoot = candidate;
+    }
+
     // Validate the staged copy BEFORE touching any live dir.
-    const disc = discoverPlugin(stageRoot);
+    const disc = discoverPlugin(effectiveRoot);
     if (!disc.ok) {
       return { ok: false, error: `invalid plugin: ${disc.error.errors.join('; ')}` };
     }
@@ -132,7 +158,8 @@ export function installPlugin(source: string, opts: InstallOptions = {}): Instal
       }
     }
 
-    // Drop the install record into the STAGED copy, then swap atomically.
+    // Drop the install record into the STAGED copy (the sub-path root when
+    // narrowed), then swap that dir atomically into place.
     const record: PluginInstallRecord = {
       source: source.trim(),
       sourceType,
@@ -141,7 +168,9 @@ export function installPlugin(source: string, opts: InstallOptions = {}): Instal
       installedAt: new Date().toISOString(),
       scope,
     };
-    fs.writeFileSync(path.join(stageRoot, INSTALL_RECORD_FILE), JSON.stringify(record, null, 2));
+    if (opts.subPath && opts.subPath.trim()) record.subPath = opts.subPath.trim();
+    if (opts.marketplace && opts.marketplace.trim()) record.marketplace = opts.marketplace.trim();
+    fs.writeFileSync(path.join(effectiveRoot, INSTALL_RECORD_FILE), JSON.stringify(record, null, 2));
 
     fs.mkdirSync(path.dirname(target), { recursive: true });
     // Replace atomically where possible: move the OLD dir aside, rename NEW in,
@@ -149,11 +178,11 @@ export function installPlugin(source: string, opts: InstallOptions = {}): Instal
     const backup = fs.existsSync(target) ? `${target}.old-${randomUUID()}` : null;
     if (backup) fs.renameSync(target, backup);
     try {
-      fs.renameSync(stageRoot, target);
+      fs.renameSync(effectiveRoot, target);
     } catch (err) {
       // Cross-device rename can fail; fall back to copy.
       try {
-        copyDir(stageRoot, target);
+        copyDir(effectiveRoot, target);
         rmrf(stageRoot);
       } catch (copyErr) {
         if (backup) fs.renameSync(backup, target); // restore prior live copy

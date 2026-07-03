@@ -52,6 +52,11 @@ export interface PluginInstallRecord {
   revision?: string;
   installedAt: string;
   scope: PluginScope;
+  /** PLUGIN-MARKETPLACE P2 — sub-path inside the fetched source (monorepo). */
+  subPath?: string;
+  /** PLUGIN-MARKETPLACE P2 — the marketplace name this plugin was resolved from
+   *  (install-by-name); absent for a direct path/git install. */
+  marketplace?: string;
 }
 
 export const INSTALL_RECORD_FILE = 'install.json';

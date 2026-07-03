@@ -46,8 +46,30 @@ export function registerPluginCommand(program: Command): void {
         }
 
         case 'install': {
-          if (!target) return fail('usage: brainrouter plugin install <path|git-url>');
-          const res = plugin.installPlugin(String(target), { scope, workspaceRoot, ref: options.ref, force: options.force });
+          if (!target) return fail('usage: brainrouter plugin install <path|git-url|name>');
+          const raw = String(target);
+          // Resolve the source form: a local path or git url installs directly;
+          // a plain NAME (no path separator, not a git url, not an existing dir)
+          // resolves BY NAME across configured marketplaces (P2).
+          const fs = await import('node:fs');
+          const looksLikePath = raw.includes('/') || raw.includes('\\') || raw.startsWith('.');
+          const isGit = plugin.classifySource(raw) === 'git';
+          const existsLocal = (() => { try { return fs.statSync(raw).isDirectory(); } catch { return false; } })();
+          const byName = !isGit && !existsLocal && !looksLikePath;
+
+          if (byName) {
+            const r = plugin.installPluginByName(raw, { scope, workspaceRoot, force: options.force });
+            if (!r.ok) return fail(r.error ?? 'install failed');
+            const res = r.result!;
+            if (!res.ok) return fail(res.error);
+            if (options.json) { process.stdout.write(JSON.stringify({ ...res, marketplace: r.marketplace }) + '\n'); return; }
+            console.log(chalk.green(`Installed "${res.name}" (${scope}) from marketplace "${r.marketplace}" → ${res.installedTo}`));
+            for (const w of res.warnings) console.log(chalk.yellow(`  ! ${w}`));
+            console.log(chalk.gray(`Enable it with:  brainrouter plugin enable ${res.name}${options.workspace ? ' --workspace' : ''}`));
+            return;
+          }
+
+          const res = plugin.installPlugin(raw, { scope, workspaceRoot, ref: options.ref, force: options.force });
           if (!res.ok) return fail(res.error);
           if (options.json) { process.stdout.write(JSON.stringify(res) + '\n'); return; }
           console.log(chalk.green(`Installed "${res.name}" (${scope}) → ${res.installedTo}`));

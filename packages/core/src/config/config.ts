@@ -15,6 +15,7 @@ import type {
   ResolvedWebSearchKnobs,
   WebSearchProviderName,
   ProviderWireFormat,
+  MarketplaceSource,
 } from './configTypes.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'brainrouter');
@@ -259,13 +260,44 @@ function normalizeToolOverrides(input: unknown): Record<string, boolean> {
 }
 
 /**
- * PLUGIN-MARKETPLACE P1 — reduce raw `cli.plugins` to a validated view.
+ * PLUGIN-MARKETPLACE P1/P2 — reduce raw `cli.plugins` to a validated view.
  * `enabled` keeps only string→boolean pairs (kebab-case names are trimmed,
  * case preserved); non-object input → `{}`. `registryUrl` trimmed; `''` = unset.
+ * `marketplaces` keeps only well-formed sources (a non-empty `name` + `source`
+ * + a recognized `sourceType`); malformed entries are dropped fail-safe.
  */
-function resolvePluginsKnobs(input: unknown): { enabled: Record<string, boolean>; registryUrl: string } {
+const MARKETPLACE_SOURCE_TYPES: readonly MarketplaceSource['sourceType'][] = ['git', 'local', 'http'];
+
+function resolveMarketplaceSources(input: unknown): MarketplaceSource[] {
+  if (!Array.isArray(input)) return [];
+  const out: MarketplaceSource[] = [];
+  const seen = new Set<string>();
+  for (const raw of input) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const obj = raw as Record<string, unknown>;
+    const name = typeof obj.name === 'string' ? obj.name.trim() : '';
+    const source = typeof obj.source === 'string' ? obj.source.trim() : '';
+    const sourceType = typeof obj.sourceType === 'string' ? (obj.sourceType.trim() as MarketplaceSource['sourceType']) : undefined;
+    if (!name || !source || !sourceType || !MARKETPLACE_SOURCE_TYPES.includes(sourceType)) continue;
+    if (seen.has(name)) continue; // first wins on duplicate names
+    seen.add(name);
+    const entry: MarketplaceSource = { name, sourceType, source };
+    if (typeof obj.ref === 'string' && obj.ref.trim()) entry.ref = obj.ref.trim();
+    if (Array.isArray(obj.sparsePaths)) {
+      const paths = obj.sparsePaths.filter((p): p is string => typeof p === 'string' && !!p.trim()).map((p) => p.trim());
+      if (paths.length) entry.sparsePaths = paths;
+    }
+    if (typeof obj.lastRevision === 'string' && obj.lastRevision.trim()) entry.lastRevision = obj.lastRevision.trim();
+    if (typeof obj.lastUpdated === 'string' && obj.lastUpdated.trim()) entry.lastUpdated = obj.lastUpdated.trim();
+    out.push(entry);
+  }
+  return out;
+}
+
+function resolvePluginsKnobs(input: unknown): { enabled: Record<string, boolean>; registryUrl: string; marketplaces: MarketplaceSource[] } {
   const enabled: Record<string, boolean> = {};
   let registryUrl = '';
+  let marketplaces: MarketplaceSource[] = [];
   if (input && typeof input === 'object' && !Array.isArray(input)) {
     const obj = input as Record<string, unknown>;
     if (obj.enabled && typeof obj.enabled === 'object' && !Array.isArray(obj.enabled)) {
@@ -275,8 +307,9 @@ function resolvePluginsKnobs(input: unknown): { enabled: Record<string, boolean>
       }
     }
     if (typeof obj.registryUrl === 'string') registryUrl = obj.registryUrl.trim();
+    marketplaces = resolveMarketplaceSources(obj.marketplaces);
   }
-  return { enabled, registryUrl };
+  return { enabled, registryUrl, marketplaces };
 }
 
 function unitInterval(value: unknown, fallback: number): number {

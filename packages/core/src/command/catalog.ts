@@ -18,7 +18,7 @@ export const SLASH_COMMANDS = [
   '/tokens', '/usage', '/context', '/watch', '/yolo', '/mode', '/review-policy', '/sandbox', '/kill',
   // workflow & ergonomics commands
   '/theme', '/title', '/personality', '/effort', '/tier', '/new', '/side', '/btw', '/raw',
-  '/feedback', '/rollout', '/ps', '/fg', '/stop', '/queue', '/logout', '/apps', '/plugin', '/plugins',
+  '/feedback', '/rollout', '/ps', '/fg', '/stop', '/queue', '/logout', '/apps', '/plugin', '/plugins', '/marketplace',
   '/experimental', '/memories', '/debug-config', '/mention', '/keymap', '/ide',
 ] as const;
 
@@ -211,6 +211,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/ide', desc: 'Show detected IDE host' },
       { cmd: '/apps  /plugins', desc: 'List workspace skills and plugin folders' },
       { cmd: '/plugin [init|install|list|info|enable|disable|remove|validate]', desc: 'Manage plugins — bundle skills/agents/commands/hooks/mcp/connectors/workflows into a named, installable unit (also: brainrouter plugin ...)' },
+      { cmd: '/marketplace [add|remove|list|update]', desc: 'Plugin marketplaces — register git/local/http sources, then install plugins by name across them (also: brainrouter marketplace ...)' },
       { cmd: '/feedback [message]', desc: 'Append feedback entry' },
       { cmd: '/experimental [on|off]', desc: 'Toggle experimental features' },
       { cmd: '/release-notes [version|list]', desc: 'Show changelog for current (or specified) CLI version' },
