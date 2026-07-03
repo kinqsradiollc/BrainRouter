@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildTemplatePlan, WORKFLOW_TEMPLATES } from '../workflow/workflowTemplates.js';
+import { buildTemplatePlan, WORKFLOW_TEMPLATES } from '../workflow/template/workflowTemplates.js';
 import { normalizePhasePlan } from '../orchestration/phasePlan.js';
-import { runWorkflow } from '../workflow/workflowTool.js';
+import { runWorkflow } from '../workflow/template/workflowTool.js';
 import type { PhaseRunner } from '../orchestration/phaseOrchestrator.js';
-import { readRun } from '../workflow/workflowRun.js';
+import { readRun } from '../workflow/run/workflowRun.js';
 
 function tmpWs(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'brainrouter-wftpl-'));

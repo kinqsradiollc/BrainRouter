@@ -20,9 +20,9 @@ import {
   stripSecretsForExport,
   type WorkflowGraph,
   type WorkflowNodeType,
-} from '@kinqs/brainrouter-core/dist/workflow/graph.js';
-import { runGraph, type GraphRunResult } from '@kinqs/brainrouter-core/dist/workflow/graphEngine.js';
-import type { SavedWorkflowMeta } from '@kinqs/brainrouter-core/dist/workflow/graphStore.js';
+} from '@kinqs/brainrouter-core/dist/workflow/graph/graph.js';
+import { runGraph, type GraphRunResult } from '@kinqs/brainrouter-core/dist/workflow/graph/graphEngine.js';
+import type { SavedWorkflowMeta } from '@kinqs/brainrouter-core/dist/workflow/graph/graphStore.js';
 import { hostQuery } from '../lib/hostQuery.js';
 
 /**

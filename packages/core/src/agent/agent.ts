@@ -155,8 +155,8 @@ import { startBackgroundShell, readBackgroundOutput } from '../exec/backgroundSh
 import { CHAPTER_ENTRY_NAME, chapterEntryContent } from '../session/chapterMarks.js';
 import { classifyForVerification, commandWritesFiles, decideVerification, buildVerificationNudge, buildDocsOnlyVerificationNote } from './verificationGate.js';
 import { resolveToolBudget, isBudgetCheckpoint, buildBudgetCheckpoint, buildBudgetCeilingMessage } from './turnBudget.js';
-import { getCurrentWorkflow } from '../workflow/workflowArtifacts.js';
-import { advanceRunStep, summarizeRun } from '../workflow/workflowRun.js';
+import { getCurrentWorkflow } from '../workflow/run/workflowArtifacts.js';
+import { advanceRunStep, summarizeRun } from '../workflow/run/workflowRun.js';
 import { spawnWorkerThread, waitWorker } from '../orchestration/workerTools.js';
 // PARITY-E3: runtime model fallback on model-not-found.
 import { isModelNotFoundError, shouldFallbackModel } from '../provider/modelFallback.js';

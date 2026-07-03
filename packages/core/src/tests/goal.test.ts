@@ -422,7 +422,7 @@ test('goalStore: session A goal does not leak into session B (regression for cro
 
 test('resolveGoalScope: always returns session scope when sessionKey is provided (workflow priority removed)', async () => {
   const { resolveGoalScope } = await import('../goal/store/goalStore.js');
-  const { createWorkflow } = await import('../workflow/workflowArtifacts.js');
+  const { createWorkflow } = await import('../workflow/run/workflowArtifacts.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:scope-session-always';
     // No workflow → session scope.
@@ -454,7 +454,7 @@ test('resolveGoalScope: falls back to legacy when no sessionKey', async () => {
 });
 
 test('goal stays session-scoped even with a workflow bound (no <workflow>/goal.json written)', async () => {
-  const { createWorkflow, getWorkflowDir } = await import('../workflow/workflowArtifacts.js');
+  const { createWorkflow, getWorkflowDir } = await import('../workflow/run/workflowArtifacts.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:no-workflow-goal';
     const meta = createWorkflow(workspace, { title: 'cache rewrite', kind: 'spec', sessionKey: sk });
@@ -479,7 +479,7 @@ test('goal stays session-scoped even with a workflow bound (no <workflow>/goal.j
 });
 
 test('switching workflows does NOT change the session goal (workflows = navigation, goals = runtime)', async () => {
-  const { createWorkflow, setCurrentWorkflow, getCurrentWorkflow } = await import('../workflow/workflowArtifacts.js');
+  const { createWorkflow, setCurrentWorkflow, getCurrentWorkflow } = await import('../workflow/run/workflowArtifacts.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:swap-keeps-goal';
     const a = createWorkflow(workspace, { title: 'workflow A', kind: 'feature-dev', sessionKey: sk });
@@ -520,7 +520,7 @@ test('pauseGoal / resumeGoal operate on the session goal regardless of workflow 
   // Both routes call pauseGoal/resumeGoal at session scope — workflow
   // binding doesn't change which goal file gets touched (there's only
   // one — the session's).
-  const { createWorkflow } = await import('../workflow/workflowArtifacts.js');
+  const { createWorkflow } = await import('../workflow/run/workflowArtifacts.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:test:pause-with-workflow';
     createWorkflow(workspace, { title: 'auth overhaul', kind: 'feature-dev', sessionKey: sk });
@@ -576,7 +576,7 @@ test('9d-bugfix: session B does NOT inherit session A\'s workflow binding (or it
   // a goal must NOT bleed into session B reading either. Session B
   // remains free to `/goal` independently.
   const { createWorkflow, getCurrentWorkflow, getLastUsedWorkflow } =
-    await import('../workflow/workflowArtifacts.js');
+    await import('../workflow/run/workflowArtifacts.js');
   withTempWorkspace((workspace) => {
     const sessionA = 'brainrouter-cli:session:A';
     const sessionB = 'brainrouter-cli:session:B';
@@ -621,7 +621,7 @@ test('9d-bugfix: setCurrentWorkflow without sessionKey still updates the workspa
   // and `getCurrentWorkflow(workspace)` (no sessionKey) keep working —
   // they just don't bind any specific session.
   const { setCurrentWorkflow, getCurrentWorkflow, getLastUsedWorkflow } =
-    await import('../workflow/workflowArtifacts.js');
+    await import('../workflow/run/workflowArtifacts.js');
   withTempWorkspace((workspace) => {
     setCurrentWorkflow(workspace, 'legacy-slug');
     assert.equal(getLastUsedWorkflow(workspace), 'legacy-slug');
@@ -634,7 +634,7 @@ test('9d-bugfix: setCurrentWorkflow without sessionKey still updates the workspa
 
 test('9d-bugfix: clearSessionWorkflow unbinds the session without touching the workspace hint', async () => {
   const { createWorkflow, clearSessionWorkflow, getCurrentWorkflow, getLastUsedWorkflow } =
-    await import('../workflow/workflowArtifacts.js');
+    await import('../workflow/run/workflowArtifacts.js');
   withTempWorkspace((workspace) => {
     const sk = 'brainrouter-cli:session:clear';
     const wf = createWorkflow(workspace, { title: 'auth refactor', kind: 'feature-dev', sessionKey: sk });

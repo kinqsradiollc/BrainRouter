@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { getStateFile, getSessionStateFile, getWorkspaceLocalDir, isPathInside, readJsonFile, writeJsonFile } from '../storage/store.js';
+import { getStateFile, getSessionStateFile, getWorkspaceLocalDir, isPathInside, readJsonFile, writeJsonFile } from '../../storage/store.js';
 
 /**
  * Canonical home for durable workflow artifacts produced by the multi-agent

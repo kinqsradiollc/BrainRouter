@@ -5,7 +5,7 @@ import path from 'node:path';
 import { getStateDir, getStateFile } from '../storage/store.js';
 import { appendTranscriptEntry, listTranscripts, readTranscriptEntries, redactText } from '../session/sessionStore.js';
 import { formatPlan, readPlan, updatePlan, seedPlanFromRequirement } from '../task/taskStore.js';
-import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, getWorkflowDir, listWorkflows, slugify } from '../workflow/workflowArtifacts.js';
+import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, getWorkflowDir, listWorkflows, slugify } from '../workflow/run/workflowArtifacts.js';
 import { addHook, readHooks, removeHook, runHooks, setHookEnabled } from '../hooks/hooksStore.js';
 import { applyYoloOff, applyYoloOn, readPreferences, writePreferences, normalizeEffort } from '../session/preferencesStore.js';
 import { withTempWorkspace } from './_helpers.js';
@@ -164,7 +164,7 @@ test('workflowArtifacts: artifactRelativePath stays inside workspace and listWor
 });
 
 test('workflowArtifacts: stay in the workspace so they can be committed', async () => {
-  const { getWorkflowsRoot } = await import('../workflow/workflowArtifacts.js');
+  const { getWorkflowsRoot } = await import('../workflow/run/workflowArtifacts.js');
   withTempWorkspace((workspace) => {
     const root = getWorkflowsRoot(workspace);
     assert.equal(root, path.join(fs.realpathSync(workspace), '.brainrouter', 'workflows'));

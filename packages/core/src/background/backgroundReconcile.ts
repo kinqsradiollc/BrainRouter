@@ -11,7 +11,7 @@
  */
 import { listWorkers, staleWorkerIds, updateWorkerMeta } from '../worker/workerStore.js';
 import { listSessions, updateSession } from '../orchestration/orchestrator.js';
-import { listRuns, finishRun, staleRunSlugs } from '../workflow/workflowRun.js';
+import { listRuns, finishRun, staleRunSlugs } from '../workflow/run/workflowRun.js';
 
 /**
  * Real OS process liveness: `kill(pid, 0)` throws ESRCH when the process is

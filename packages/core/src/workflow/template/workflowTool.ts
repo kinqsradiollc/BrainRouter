@@ -12,8 +12,8 @@
  * fake runner.
  */
 
-import type { OrchestrationContext } from '../orchestration/tools.js';
-import { normalizePhasePlan, type PhasePlan } from '../orchestration/phasePlan.js';
+import type { OrchestrationContext } from '../../orchestration/tools.js';
+import { normalizePhasePlan, type PhasePlan } from '../../orchestration/phasePlan.js';
 import { buildTemplatePlan } from './workflowTemplates.js';
 import {
   executePhasePlan,
@@ -23,11 +23,11 @@ import {
   type PhaseStatus,
   type PhaseExecution,
   type PhasePlanExecution,
-} from '../orchestration/phaseOrchestrator.js';
-import { ensurePhaseRun, advanceRunPhase, finishRun, readRun, type RunPhaseStatus } from './workflowRun.js';
-import { getCliKnobs } from '../config/config.js';
-import { prepareSharedWorktree, worktreePatchFile } from '../worktree/worktreeIsolation.js';
-import { finalizeBuildLoop, finalizeFanOutBuild, repairUntilGreen, type FanOutSlice } from '../orchestration/buildLoop.js';
+} from '../../orchestration/phaseOrchestrator.js';
+import { ensurePhaseRun, advanceRunPhase, finishRun, readRun, type RunPhaseStatus } from '../run/workflowRun.js';
+import { getCliKnobs } from '../../config/config.js';
+import { prepareSharedWorktree, worktreePatchFile } from '../../worktree/worktreeIsolation.js';
+import { finalizeBuildLoop, finalizeFanOutBuild, repairUntilGreen, type FanOutSlice } from '../../orchestration/buildLoop.js';
 
 /** The orchestration tool dispatcher (`executeOrchestrationTool`), injected to
  *  avoid a circular import and to let tests substitute a fake. */

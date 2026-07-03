@@ -9,7 +9,7 @@ import {
   formatDuration, summarizeRun, staleRunSlugs, computePhaseRunStatus, applyPhaseTransition,
   type WorkflowRun, type WorkflowRunStep, type WorkflowRunPhase,
   type RunStatus, type RunStepStatus, type RunPhaseStatus,
-} from "./workflowRun.js";
+} from "../run/workflowRun.js";
 import { buildTemplatePlan, type TemplateResult } from "./workflowTemplates.js";
 
 /** Options accepted by {@link IWorkflowService.applyPhaseTransition}. */

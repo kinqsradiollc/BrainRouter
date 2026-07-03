@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createWorkflowService, WorkflowService } from '../workflow/service.js';
+import { createWorkflowService, WorkflowService } from '../workflow/template/service.js';
 import {
   stepTemplateForKind, computeRunStatus, applyStepTransition, stepGlyph, formatRunGlyphs,
   formatDuration, summarizeRun, staleRunSlugs, type WorkflowRun, type WorkflowRunStep,
-} from '../workflow/workflowRun.js';
-import { buildTemplatePlan } from '../workflow/workflowTemplates.js';
+} from '../workflow/run/workflowRun.js';
+import { buildTemplatePlan } from '../workflow/template/workflowTemplates.js';
 
 test('WorkflowService is a stateless facade — delegates to the workflow run-model', () => {
   const svc = createWorkflowService();
