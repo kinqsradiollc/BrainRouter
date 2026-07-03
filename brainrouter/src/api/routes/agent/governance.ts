@@ -1,8 +1,8 @@
 import { Router } from "express";
-import { memoryEngine } from "../../memory/engine.js";
-import { requireAnyAuth, scopedUserId, errorStatus, type AuthedRequest } from "../middleware/auth.js";
-import { decodeCursor, pageItems, PaginationQuerySchema } from "../pagination.js";
-import { sendError } from "../../contracts/http.js";
+import { memoryEngine } from "../../../memory/engine.js";
+import { requireAnyAuth, scopedUserId, errorStatus, type AuthedRequest } from "../../middleware/auth.js";
+import { decodeCursor, pageItems, PaginationQuerySchema } from "../../pagination.js";
+import { sendError } from "../../../contracts/http.js";
 
 export const governanceRouter = Router();
 governanceRouter.use(requireAnyAuth);

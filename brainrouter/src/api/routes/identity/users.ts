@@ -1,9 +1,9 @@
 import { Router } from "express";
 import { randomBytes } from "node:crypto";
-import { memoryEngine } from "../../memory/engine.js";
-import { requireJwt, requireAdmin, type AuthedRequest } from "../middleware/auth.js";
-import { decodeCursor, pageItems, PaginationQuerySchema } from "../pagination.js";
-import { sendError } from "../../contracts/http.js";
+import { memoryEngine } from "../../../memory/engine.js";
+import { requireJwt, requireAdmin, type AuthedRequest } from "../../middleware/auth.js";
+import { decodeCursor, pageItems, PaginationQuerySchema } from "../../pagination.js";
+import { sendError } from "../../../contracts/http.js";
 
 export const usersRouter = Router();
 usersRouter.use(requireJwt, requireAdmin);

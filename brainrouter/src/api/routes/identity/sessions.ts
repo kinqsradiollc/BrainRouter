@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { memoryEngine } from "../../memory/engine.js";
-import { requireAnyAuth, type AuthedRequest } from "../middleware/auth.js";
+import { memoryEngine } from "../../../memory/engine.js";
+import { requireAnyAuth, type AuthedRequest } from "../../middleware/auth.js";
 
 /**
  * Federation Stage 2 (FED-S2-T7) — dashboard view onto the

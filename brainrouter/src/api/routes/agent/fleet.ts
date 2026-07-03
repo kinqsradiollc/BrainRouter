@@ -1,7 +1,7 @@
 import { Router } from "express";
-import { memoryEngine } from "../../memory/engine.js";
-import { requireAnyAuth, scopedUserId, errorStatus, type AuthedRequest } from "../middleware/auth.js";
-import { sendError } from "../../contracts/http.js";
+import { memoryEngine } from "../../../memory/engine.js";
+import { requireAnyAuth, scopedUserId, errorStatus, type AuthedRequest } from "../../middleware/auth.js";
+import { sendError } from "../../../contracts/http.js";
 
 /**
  * HONK-H3.3 — the dashboard fleet console reads here. The fleet runs client-side;

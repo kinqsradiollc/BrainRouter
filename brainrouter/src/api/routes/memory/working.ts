@@ -6,9 +6,9 @@ import {
   offloadWorkingPayload,
   resetWorkingMemory,
   listActiveSessions,
-} from "../../memory/working/offload.js";
-import { requireAnyAuth, scopedUserId, errorStatus, type AuthedRequest } from "../middleware/auth.js";
-import { sendError } from "../../contracts/http.js";
+} from "../../../memory/working/offload.js";
+import { requireAnyAuth, scopedUserId, errorStatus, type AuthedRequest } from "../../middleware/auth.js";
+import { sendError } from "../../../contracts/http.js";
 
 export const workingRouter = Router();
 workingRouter.use(requireAnyAuth);

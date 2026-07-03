@@ -1,9 +1,9 @@
 import { Router } from "express";
-import { memoryEngine } from "../../memory/engine.js";
-import { requireAnyAuth, type AuthedRequest } from "../middleware/auth.js";
-import { decodeCursor, pageItems, PaginationQuerySchema } from "../pagination.js";
+import { memoryEngine } from "../../../memory/engine.js";
+import { requireAnyAuth, type AuthedRequest } from "../../middleware/auth.js";
+import { decodeCursor, pageItems, PaginationQuerySchema } from "../../pagination.js";
 import { z } from "zod";
-import { sendError } from "../../contracts/http.js";
+import { sendError } from "../../../contracts/http.js";
 
 export const memoriesRouter = Router();
 memoriesRouter.use(requireAnyAuth);

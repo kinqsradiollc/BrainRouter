@@ -1,10 +1,10 @@
 import { Router } from "express";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
-import { memoryEngine } from "../../memory/engine.js";
-import { hashPassword, signJwt, verifyJwt, verifyPassword } from "../auth/crypto.js";
-import { JWT_SECRET, requireJwt, type AuthedRequest } from "../middleware/auth.js";
-import { sendError } from "../../contracts/http.js";
+import { memoryEngine } from "../../../memory/engine.js";
+import { hashPassword, signJwt, verifyJwt, verifyPassword } from "../../auth/crypto.js";
+import { JWT_SECRET, requireJwt, type AuthedRequest } from "../../middleware/auth.js";
+import { sendError } from "../../../contracts/http.js";
 
 // Short-lived access token (default 1h) + long-lived refresh token (default 30d).
 // The client silently mints a fresh access token from the refresh token, so the

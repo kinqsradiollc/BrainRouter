@@ -1,16 +1,16 @@
 import { Router } from "express";
 import { z } from "zod";
 
-import { processClaudeCodeHook } from "../../integrations/claude-code.js";
-import { processCodexHook } from "../../integrations/codex.js";
+import { processClaudeCodeHook } from "../../../integrations/claude-code.js";
+import { processCodexHook } from "../../../integrations/codex.js";
 import {
   listHostHooks,
   processGenericMcpHook,
   registerHostHook,
-} from "../../integrations/generic-mcp.js";
-import { memoryEngine } from "../../memory/engine.js";
-import { requireAnyAuth, scopedUserId, errorStatus, type AuthedRequest } from "../middleware/auth.js";
-import { sendError } from "../../contracts/http.js";
+} from "../../../integrations/generic-mcp.js";
+import { memoryEngine } from "../../../memory/engine.js";
+import { requireAnyAuth, scopedUserId, errorStatus, type AuthedRequest } from "../../middleware/auth.js";
+import { sendError } from "../../../contracts/http.js";
 
 export const hooksRouter = Router();
 hooksRouter.use(requireAnyAuth);

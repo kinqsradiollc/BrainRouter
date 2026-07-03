@@ -10,10 +10,10 @@
  */
 
 import { Router } from "express";
-import { memoryEngine } from "../../memory/engine.js";
-import { requireAnyAuth, type AuthedRequest } from "../middleware/auth.js";
-import { buildBrainAgentStatuses } from "../../memory/agents/status.js";
-import { sendError } from "../../contracts/http.js";
+import { memoryEngine } from "../../../memory/engine.js";
+import { requireAnyAuth, type AuthedRequest } from "../../middleware/auth.js";
+import { buildBrainAgentStatuses } from "../../../memory/agents/status.js";
+import { sendError } from "../../../contracts/http.js";
 
 export const brainRouter = Router();
 brainRouter.use(requireAnyAuth);
