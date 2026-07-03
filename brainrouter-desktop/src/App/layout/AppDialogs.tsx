@@ -7,6 +7,7 @@
 import React from 'react';
 import { CommandPalette } from '../../palette.js';
 import { SettingsDialog, type ConfigSnapshot, type UsageHistory } from '../../settings.js';
+import type { MarketplaceState } from '../../settings/marketplace/index.js';
 import { InteractionDialogs } from '../../components/dialogs/InteractionDialogs.js';
 import { ExportAndMenuDialogs } from '../../components/dialogs/ExportAndMenuDialogs.js';
 import { InfoAndGateDialogs } from '../../components/dialogs/InfoAndGateDialogs.js';
@@ -44,6 +45,8 @@ export interface AppDialogsProps {
   setProbeError: (v: string) => void;
   setProbedModels: (v: string[]) => void;
   toolCatalog: React.ComponentProps<typeof SettingsDialog>['toolCatalog'];
+  /** PLUGIN-MARKETPLACE P4-desktop — the Marketplace panel's data slice. */
+  market: MarketplaceState;
   execMode: string;
   codeFont: string;
   setCodeFont: (v: string) => void;
@@ -96,7 +99,7 @@ export function AppDialogs(p: AppDialogsProps): React.ReactElement {
   const {
     pop, setPop, q, cmdCtx, commands, paletteOpen, setPaletteOpen, settings, setSettings, snapshot, usageLines,
     usageHistory, tokens, catalog, setPreference, endpointModels, providerModels, probedModels, probeLoading,
-    probeError, setProbeLoading, setProbeError, setProbedModels, toolCatalog, execMode, codeFont, setCodeFont,
+    probeError, setProbeLoading, setProbeError, setProbedModels, toolCatalog, market, execMode, codeFont, setCodeFont,
     theme, setTheme, chatWidth, setChatWidth, chatSize, setChatSize, accent, setAccent, interaction, picked,
     setPicked, answerInteraction, trustAsk, setTrustAsk, switchToWorkspace, sessionMenu, sessions,
     closeSessionMenu, openExternal, togglePin, toggleComplete, startRename, forkSessionAction, moveToGroup,
@@ -130,6 +133,7 @@ export function AppDialogs(p: AppDialogsProps): React.ReactElement {
         probeError={probeError}
         onProbe={(a) => { setProbeLoading(true); setProbeError(''); q('q-probe', 'list-models-probe', a); }}
         toolCatalog={toolCatalog}
+        market={market}
         onProbeReset={() => { setProbedModels([]); setProbeLoading(false); setProbeError(''); }}
         onModelSave={(model) => window.brainrouter.send({ kind: 'set-model', model, persist: true })}
         onAction={(id, name, args) => {

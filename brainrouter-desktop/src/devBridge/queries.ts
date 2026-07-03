@@ -1189,6 +1189,50 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       return { lines: demo[cmd] ?? [`Unknown bridge command "${cmd}"`] };
     },
     'action:set-llm': (a) => ({ ok: true, provider: a.provider ?? 'openai', model: 'claude-opus-4-8', endpoint: a.endpoint ?? null }),
+    // PLUGIN-MARKETPLACE P4-desktop — canned registry + installed plugins so the
+    // Marketplace panel renders populated in browser-dev (no Electron host).
+    'plugin-list': () => ({
+      plugins: [
+        { name: 'acme-devkit', scope: 'user', version: '1.2.0', description: 'Skills, agents, and a review workflow for web dev.', author: 'Acme', category: 'development', enabled: true, provides: { skills: 3, agents: 1, workflows: 1 }, requiresConsent: false, shellApproved: false, mcpApproved: false, updateAvailable: '1.3.0' },
+        { name: 'sec-hooks', scope: 'user', version: '0.4.0', description: 'Pre-commit secret scanners (command hooks).', author: 'SecOps', category: 'security', enabled: false, provides: { hooks: 2, mcpServers: 1 }, requiresConsent: true, shellApproved: false, mcpApproved: false },
+      ],
+      skippedForSafeMode: false,
+      errors: [],
+    }),
+    'plugin-search': (a) => {
+      const all = [
+        { id: 'acme-devkit', name: 'acme-devkit', repo: 'git+https://github.com/acme/devkit.git', version: '1.3.0', category: 'development', tags: ['web', 'react'], stars: 128, lastUpdated: '2026-06-30', author: 'Acme', description: 'Skills, agents, and a review workflow for web dev.', provides: { skills: 3, agents: 1, workflows: 1 } },
+        { id: 'sec-hooks', name: 'sec-hooks', repo: 'git+https://github.com/secops/hooks.git', version: '0.4.0', category: 'security', tags: ['security', 'hooks'], stars: 64, lastUpdated: '2026-06-12', author: 'SecOps', description: 'Pre-commit secret scanners (command hooks).', provides: { hooks: 2, mcpServers: 1 } },
+        { id: 'jira-connector', name: 'jira-connector', repo: 'git+https://github.com/atlas/jira.git', version: '2.1.0', category: 'productivity', tags: ['jira', 'connector'], stars: 42, lastUpdated: '2026-05-20', author: 'Atlas', description: 'A Jira connector plus a Track-sync workflow.', provides: { connectors: 1, workflows: 1, skills: 1 } },
+      ];
+      const q = String(a.query ?? '').toLowerCase().trim();
+      const cat = String(a.category ?? '').toLowerCase().trim();
+      const hits = all
+        .filter((e) => (!cat || e.category === cat) && (!q || e.name.includes(q) || e.tags.some((t) => t.includes(q)) || (e.description ?? '').toLowerCase().includes(q)))
+        .map((entry) => ({ entry, score: q && entry.name.includes(q) ? 60 : 0 }));
+      return { ok: true, hits, fromCache: false };
+    },
+    'plugin-consent': (a) => ({
+      ok: true,
+      action: a.action === 'enable' ? 'enable' : 'install',
+      scope: a.scope === 'workspace' ? 'workspace' : 'user',
+      summary: {
+        name: String(a.name ?? 'plugin'),
+        version: '1.0.0',
+        provides: { skills: 3, agents: 1, hooks: String(a.name) === 'sec-hooks' ? 2 : 0, mcpServers: String(a.name) === 'sec-hooks' ? 1 : 0 },
+        hookCommands: String(a.name) === 'sec-hooks' ? [{ label: 'PreToolUse', command: 'node scan.js', kind: 'command' }] : [],
+        mcpCommands: String(a.name) === 'sec-hooks' ? [{ label: 'scanner', command: 'node server.js' }] : [],
+        requiresConsent: String(a.name) === 'sec-hooks',
+        shellApproved: false,
+        mcpApproved: false,
+        compatibilityWarnings: [],
+        disclosure: `${String(a.name ?? 'plugin')} provides 3 skills, 1 agent.`,
+      },
+    }),
+    'action:plugin-install': (a) => ({ ok: true, name: String(a.name ?? a.source ?? 'plugin') }),
+    'action:plugin-enable': () => ({ ok: true }),
+    'action:plugin-consent-set': () => ({ ok: true }),
+    'action:plugin-remove': () => ({ ok: true }),
   };
   return queries;
 }

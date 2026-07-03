@@ -5,6 +5,7 @@ export * from './shared/index.js';
 export * from './permissions/index.js';
 export * from './cli/index.js';
 export * from './connectors/index.js';
+export * from './marketplace/index.js';
 export * from './github/index.js';
 export * from './models/index.js';
 export * from './usage/index.js';

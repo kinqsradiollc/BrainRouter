@@ -17,6 +17,7 @@ import { PermissionModeCards } from './settings/permissions/PermissionModeCards.
 import { ComputerUseSettings } from './settings/permissions/ComputerUseSettings.js';
 import { CliConfigEditor } from './settings/cli/CliConfigEditor.js';
 import { ConnectorSettings } from './settings/connectors/ConnectorSettings.js';
+import { MarketplaceSettings, type MarketplaceState } from './settings/marketplace/index.js';
 import { McpServersSection } from './settings/connectors/McpServersSection.js';
 import { ModelsSection } from './settings/models/ModelsSection.js';
 import { UsageHeatmap } from './settings/usage/UsageHeatmap.js';
@@ -60,6 +61,8 @@ export function SettingsDialog(props: {
   onProbeReset: () => void;
   onModelSave: (model: string) => void;
   onAction: (id: string, name: string, args?: Record<string, unknown>) => void;
+  /** PLUGIN-MARKETPLACE P4-desktop — the Marketplace panel's data slice. */
+  market: MarketplaceState;
   onRunCommand: (c: DeskCommand) => void;
   /** The active session's execution mode — drives the Fast-mode toggle. */
   execMode?: string;
@@ -365,6 +368,14 @@ export function SettingsDialog(props: {
           onGithubSave={saveGithub}
           onAction={props.onAction}
           refreshSnapshot={refreshSnapshot}
+        />
+      );
+      case 'marketplace': return (
+        <MarketplaceSettings
+          market={props.market}
+          onAction={props.onAction}
+          refreshInstalled={() => props.onAction('q-plugin-list', 'plugin-list')}
+          refreshSearch={(a) => props.onAction('q-plugin-search', 'plugin-search', a)}
         />
       );
       case 'advanced': {
