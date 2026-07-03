@@ -8,8 +8,12 @@
 // store. MC-A2 adds the `worktree` backend — the existing git-worktree child
 // isolation promoted to a first-class runtime (opt-in). Further isolated
 // backends (container/remote) slot in behind the same port later.
+// MC-A4 adds the runtime MANAGER: LRU parking under `cli.runtime.maxLive`,
+// resume-by-id (in-process, worktree re-attach, process re-host), and boot
+// reconcile of records a dead process left live-ish.
 export * from './runtimeTypes.js';
 export * from './registry.js';
 export * from './backends/process.js';
 export * from './backends/worktree.js';
 export * from './state/runtimeStateStore.js';
+export * from './manager.js';
