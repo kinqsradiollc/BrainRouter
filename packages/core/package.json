@@ -87,6 +87,10 @@
       "types": "./dist/pack/index.d.ts",
       "default": "./dist/pack/index.js"
     },
+    "./plugin": {
+      "types": "./dist/plugin/index.d.ts",
+      "default": "./dist/plugin/index.js"
+    },
     "./prompt": {
       "types": "./dist/prompt/index.d.ts",
       "default": "./dist/prompt/index.js"

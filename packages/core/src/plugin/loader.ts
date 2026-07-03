@@ -1,0 +1,227 @@
+/**
+ * PLUGIN-MARKETPLACE P1 — the plugin LOADER (the reuse layer).
+ *
+ * Given a workspace root + config, resolve the ENABLED plugins across both
+ * scopes (user `~/.brainrouter/plugins/<name>/` and workspace
+ * `<ws>/.brainrouter/plugins/<name>/`) and produce the aggregate contributions
+ * the CLI/host feed into the EXISTING subsystems — skills, agents, commands,
+ * hooks, mcp, connectors, workflows. No parallel runtime: a plugin is inert
+ * data that populates systems we already ship (plan §3.6).
+ *
+ * Collisions across plugins are disambiguated `<pluginName>:<name>` (mirroring
+ * the skill-collision display we shipped). Loading is SKIPPED entirely under
+ * `cli.safeMode` (plan §3.6).
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import type { Config, ResolvedCliKnobs } from '../config/configTypes.js';
+import { resolveCliKnobs } from '../config/config.js';
+import {
+  pluginsDirForScope,
+  type PluginScope,
+} from './paths.js';
+import {
+  discoverPlugin,
+  looksLikePlugin,
+  summarizeProvides,
+  type DiscoveredPlugin,
+  type PluginProvides,
+} from './discovery.js';
+import { expandPluginRoot } from './manifest.js';
+
+/** A plugin that was resolved AND enabled, tagged with its scope + disclosure. */
+export interface LoadedPlugin extends DiscoveredPlugin {
+  scope: PluginScope;
+  enabled: boolean;
+  provides: PluginProvides;
+}
+
+/**
+ * Aggregate contributions across all loaded plugins, ready to feed subsystems.
+ * `skillRoots` append to the CLI's `skillSearchRoots`; the file/dir lists carry
+ * `{ pluginName, path }` so a caller can namespace on collision.
+ */
+export interface PluginContributions {
+  /** Plugin skill DIRECTORIES — appended to skillSearchRoots. */
+  skillRoots: string[];
+  agentFiles: Array<{ pluginName: string; path: string }>;
+  commandFiles: Array<{ pluginName: string; path: string }>;
+  hookFiles: Array<{ pluginName: string; path: string }>;
+  connectorFiles: Array<{ pluginName: string; path: string }>;
+  workflowFiles: Array<{ pluginName: string; path: string }>;
+  /** MCP server config files ({ pluginName, path, pluginRoot } for ${BRAINROUTER_PLUGIN_ROOT}). */
+  mcpConfigFiles: Array<{ pluginName: string; path: string; pluginRoot: string }>;
+}
+
+export interface LoadPluginsResult {
+  /** Enabled + resolved plugins (empty under safeMode or when none enabled). */
+  loaded: LoadedPlugin[];
+  /** Aggregate contributions to feed the subsystems. */
+  contributions: PluginContributions;
+  /** Plugins present on disk but NOT enabled (surfaced by `plugin list`). */
+  disabled: DiscoveredPlugin[];
+  /** Per-plugin discovery warnings + hard errors (invalid manifests etc.). */
+  warnings: string[];
+  errors: string[];
+  /** True when loading was skipped because safeMode is on. */
+  skippedForSafeMode: boolean;
+}
+
+function emptyContributions(): PluginContributions {
+  return {
+    skillRoots: [],
+    agentFiles: [],
+    commandFiles: [],
+    hookFiles: [],
+    connectorFiles: [],
+    workflowFiles: [],
+    mcpConfigFiles: [],
+  };
+}
+
+/** List immediate subdirectories of a plugins dir that look like plugins. */
+function pluginDirsIn(dir: string): string[] {
+  let entries: fs.Dirent[];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+  const out: string[] = [];
+  for (const e of entries) {
+    // Skip the staging dir + dotfiles.
+    if (e.name.startsWith('.')) continue;
+    if (!e.isDirectory()) continue;
+    const full = path.join(dir, e.name);
+    if (looksLikePlugin(full)) out.push(full);
+  }
+  return out;
+}
+
+/**
+ * Resolve + load enabled plugins. Precedence when the SAME plugin name exists in
+ * both scopes: WORKSPACE overrides USER (a project pins its own copy). The enable
+ * map (`cli.plugins.enabled`) is keyed by plugin name; a plugin defaults DISABLED.
+ */
+export function loadPlugins(workspaceRoot: string, config?: Config): LoadPluginsResult {
+  return loadPluginsWithKnobs(workspaceRoot, resolveCliKnobs(config));
+}
+
+/**
+ * Loader variant taking ALREADY-RESOLVED knobs — for callers that hold the
+ * resolved knobs but must NOT trigger a config-file read (e.g. the CLI skill
+ * catalog, where `loadConfig()` would `process.exit(1)` with no config on disk).
+ */
+export function loadPluginsWithKnobs(
+  workspaceRoot: string,
+  knobs: Pick<ResolvedCliKnobs, 'safeMode' | 'plugins'>,
+): LoadPluginsResult {
+  if (knobs.safeMode) {
+    return {
+      loaded: [],
+      contributions: emptyContributions(),
+      disabled: [],
+      warnings: [],
+      errors: [],
+      skippedForSafeMode: true,
+    };
+  }
+
+  const enabledMap = knobs.plugins.enabled;
+  const warnings: string[] = [];
+  const errors: string[] = [];
+
+  // Scan user first, then workspace so workspace wins on same-name.
+  const scopes: PluginScope[] = ['user', 'workspace'];
+  const byName = new Map<string, DiscoveredPlugin & { scope: PluginScope }>();
+
+  for (const scope of scopes) {
+    const dir = pluginsDirForScope(scope, workspaceRoot);
+    for (const pluginRoot of pluginDirsIn(dir)) {
+      const res = discoverPlugin(pluginRoot);
+      if (!res.ok) {
+        errors.push(`${pluginRoot}: ${res.error.errors.join('; ')}`);
+        continue;
+      }
+      for (const w of res.plugin.warnings) warnings.push(`${res.plugin.name}: ${w}`);
+      byName.set(res.plugin.name, { ...res.plugin, scope });
+    }
+  }
+
+  const loaded: LoadedPlugin[] = [];
+  const disabled: DiscoveredPlugin[] = [];
+  const contributions = emptyContributions();
+
+  for (const plugin of byName.values()) {
+    const isEnabled = enabledMap[plugin.name] === true;
+    if (!isEnabled) {
+      disabled.push(plugin);
+      continue;
+    }
+    const provides = summarizeProvides(plugin);
+    loaded.push({ ...plugin, enabled: true, provides });
+
+    const c = plugin.contributes;
+    if (c.skills) contributions.skillRoots.push(c.skills);
+    if (c.agents) contributions.agentFiles.push(...listEntries(c.agents, plugin.name, ['.md']));
+    if (c.commands) contributions.commandFiles.push(...listEntries(c.commands, plugin.name, ['.md']));
+    if (c.connectors) contributions.connectorFiles.push(...listEntries(c.connectors, plugin.name, ['.json']));
+    if (c.workflows) contributions.workflowFiles.push(...listEntries(c.workflows, plugin.name, ['.js', '.mjs', '.json']));
+    if (c.hooks) contributions.hookFiles.push({ pluginName: plugin.name, path: c.hooks });
+    if (c.mcpServers) {
+      contributions.mcpConfigFiles.push({ pluginName: plugin.name, path: c.mcpServers, pluginRoot: plugin.root });
+    }
+  }
+
+  return { loaded, contributions, disabled, warnings, errors, skippedForSafeMode: false };
+}
+
+function listEntries(dir: string, pluginName: string, exts: readonly string[]): Array<{ pluginName: string; path: string }> {
+  let entries: fs.Dirent[];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+  const out: Array<{ pluginName: string; path: string }> = [];
+  for (const e of entries) {
+    if (!e.isFile()) continue;
+    if (!exts.includes(path.extname(e.name).toLowerCase())) continue;
+    out.push({ pluginName, path: path.join(dir, e.name) });
+  }
+  return out;
+}
+
+/**
+ * Load an MCP-servers config file and expand `${BRAINROUTER_PLUGIN_ROOT}` in
+ * `command`/`args` so a plugin's server can reference its own bundled script
+ * portably (plan §3.2/§3.6). Returns a `{ serverId → serverConfig }` map with
+ * IDs namespaced `<pluginName>:<serverId>` to avoid collisions. Never throws.
+ */
+export function readPluginMcpServers(
+  entry: { pluginName: string; path: string; pluginRoot: string },
+): Record<string, unknown> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(entry.path, 'utf8'));
+  } catch {
+    return {};
+  }
+  const servers = (raw && typeof raw === 'object' && (raw as { mcpServers?: unknown }).mcpServers) || raw;
+  if (!servers || typeof servers !== 'object' || Array.isArray(servers)) return {};
+  const out: Record<string, unknown> = {};
+  for (const [id, cfg] of Object.entries(servers as Record<string, unknown>)) {
+    if (!cfg || typeof cfg !== 'object') continue;
+    const expanded = expandServerPaths(cfg as Record<string, unknown>, entry.pluginRoot);
+    out[`${entry.pluginName}:${id}`] = expanded;
+  }
+  return out;
+}
+
+function expandServerPaths(cfg: Record<string, unknown>, pluginRoot: string): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...cfg };
+  if (typeof out.command === 'string') out.command = expandPluginRoot(out.command, pluginRoot);
+  if (Array.isArray(out.args)) {
+    out.args = out.args.map((a) => (typeof a === 'string' ? expandPluginRoot(a, pluginRoot) : a));
+  }
+  if (out.env && typeof out.env === 'object' && !Array.isArray(out.env)) {
+    const env: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(out.env as Record<string, unknown>)) {
+      env[k] = typeof v === 'string' ? expandPluginRoot(v, pluginRoot) : v;
+    }
+    out.env = env;
+  }
+  return out;
+}

@@ -169,6 +169,25 @@ export interface ComputerUseCliKnobs {
   mode?: string;
 }
 
+/**
+ * PLUGIN-MARKETPLACE P1 — plugin subsystem knobs. A plugin is a thin
+ * packaging + distribution wrapper that FEEDS the existing subsystems
+ * (skills / agents / commands / hooks / mcp / connectors / workflows); no
+ * parallel runtime. Everything here defaults OFF/inert so the feature is
+ * additive + back-compat.
+ *
+ * `enabled` — per-plugin-name enable map (default `{}` = every installed
+ *   plugin stays disabled until explicitly enabled). Resolved through both
+ *   the USER scope (`~/.brainrouter/plugins/<name>/`) and the WORKSPACE scope
+ *   (`<ws>/.brainrouter/plugins/<name>/`).
+ * `registryUrl` — override the hosted registry index location (Phase 3).
+ * Loading is SKIPPED entirely when `cli.safeMode` is on.
+ */
+export interface PluginsCliKnobs {
+  enabled?: Record<string, boolean>;
+  registryUrl?: string;
+}
+
 /** Per-provider generation wire format. The two OpenAI shapes plus the native
  *  (non-OpenAI-compatible) Anthropic Messages and Gemini generateContent APIs.
  *  Native formats are opt-in via `cli.providerRequestFormat`. */
@@ -578,6 +597,10 @@ export interface CliKnobs {
   /** Native desktop computer-use tool. Default off; desktop host only. */
   computerUse?: ComputerUseCliKnobs;
 
+  /** PLUGIN-MARKETPLACE P1 — plugin enable map + registry override. Default
+   *  `{ enabled: {} }` (nothing enabled). Skipped entirely under `safeMode`. */
+  plugins?: PluginsCliKnobs;
+
   // ---- tier escalation --------------------------------------------------
   /** Tier ladder override — when set, beats the provider built-in. */
   tierLadder?: { flash?: string; standard?: string; pro?: string };
@@ -910,6 +933,9 @@ export interface ResolvedCliKnobs {
   webSearchEndpoint?: string;
   webSearch: ResolvedWebSearchKnobs;
   computerUse: { enabled: boolean; mode: string };
+  /** PLUGIN-MARKETPLACE P1 — resolved plugin knobs (validated enable map +
+   *  trimmed registry url; `registryUrl: ''` = unset → built-in default). */
+  plugins: { enabled: Record<string, boolean>; registryUrl: string };
   tierLadder?: { flash?: string; standard?: string; pro?: string };
   contextCompaction: boolean;
   childAgentTimeoutMs: number;

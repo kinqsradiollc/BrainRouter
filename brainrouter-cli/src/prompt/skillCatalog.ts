@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
+import { loadPluginsWithKnobs } from '@kinqs/brainrouter-core/plugin';
 
 const requireFromHere = createRequire(import.meta.url);
 
@@ -100,6 +101,17 @@ export function skillSearchRoots(
   const roots: string[] = [];
   for (const sub of WORKSPACE_SKILL_ROOTS) roots.push(path.join(workspaceRoot, sub));
 
+  // PLUGIN-MARKETPLACE P1 — enabled plugins contribute skill dirs here, between
+  // the workspace roots (which still win) and the bundled install roots. A
+  // plugin is a thin packaging wrapper feeding the SAME skill catalog. Skipped
+  // under safeMode (loadPlugins returns no roots then). Best-effort: config/FS
+  // trouble must never break skill discovery.
+  try {
+    for (const root of loadPluginsWithKnobs(workspaceRoot, getCliKnobs()).contributions.skillRoots) {
+      roots.push(root);
+    }
+  } catch { /* plugin loading is additive — never fatal to skills */ }
+
   // BUNDLED skill roots ship with the install (MCP package dir + the monorepo's
   // top-level `skills/`). CC-CONFIG-A6 lets a user hide these, keeping only the
   // workspace-authored roots above.
@@ -134,6 +146,9 @@ function resolveInstalledMcpPackageDir(): string | undefined {
 function inferRootScope(root: string, workspaceRoot: string): string {
   const resolvedWorkspace = path.resolve(workspaceRoot);
   const resolvedRoot = path.resolve(root);
+  // PLUGIN-MARKETPLACE P1 — a skill root under a `.brainrouter/plugins/<name>/`
+  // tree (user OR workspace scope) is a PLUGIN root, not a plain local override.
+  if (resolvedRoot.includes(`${path.sep}.brainrouter${path.sep}plugins${path.sep}`)) return 'plugin';
   if (resolvedRoot === path.join(resolvedWorkspace, '.brainrouter', 'skills')) return 'local';
   if (resolvedRoot.startsWith(path.join(resolvedWorkspace, '.brainrouter'))) return 'local';
   if (resolvedRoot === path.join(resolvedWorkspace, 'skills')) return 'workspace';

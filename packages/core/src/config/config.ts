@@ -258,6 +258,27 @@ function normalizeToolOverrides(input: unknown): Record<string, boolean> {
   return out;
 }
 
+/**
+ * PLUGIN-MARKETPLACE P1 — reduce raw `cli.plugins` to a validated view.
+ * `enabled` keeps only string→boolean pairs (kebab-case names are trimmed,
+ * case preserved); non-object input → `{}`. `registryUrl` trimmed; `''` = unset.
+ */
+function resolvePluginsKnobs(input: unknown): { enabled: Record<string, boolean>; registryUrl: string } {
+  const enabled: Record<string, boolean> = {};
+  let registryUrl = '';
+  if (input && typeof input === 'object' && !Array.isArray(input)) {
+    const obj = input as Record<string, unknown>;
+    if (obj.enabled && typeof obj.enabled === 'object' && !Array.isArray(obj.enabled)) {
+      for (const [rawKey, rawValue] of Object.entries(obj.enabled as Record<string, unknown>)) {
+        const key = typeof rawKey === 'string' ? rawKey.trim() : '';
+        if (key && typeof rawValue === 'boolean') enabled[key] = rawValue;
+      }
+    }
+    if (typeof obj.registryUrl === 'string') registryUrl = obj.registryUrl.trim();
+  }
+  return { enabled, registryUrl };
+}
+
 function unitInterval(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? value : fallback;
 }
@@ -502,6 +523,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
       enabled: c.computerUse?.enabled ?? false,
       mode: c.computerUse?.mode?.trim() || 'smart_approve',
     },
+    plugins: resolvePluginsKnobs(c.plugins),
     tierLadder: c.tierLadder,
     contextCompaction: c.contextCompaction ?? true,
     updateCheck: c.updateCheck ?? true,
