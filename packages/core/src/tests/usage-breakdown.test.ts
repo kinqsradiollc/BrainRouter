@@ -19,7 +19,7 @@ test('buildUsageBreakdown: parent line with cache hit-rate + totals + child shar
 
 test('WS0 0.5 buildUsageBreakdown: cache-savings line shows cached/full-price token counts', () => {
   const text = buildUsageBreakdown({ parent: PARENT, children: [] }).join('\n');
-  assert.match(text, /cache {7}40,000 tokens served from cache · 10,000 full-price \(80\.0% hit\)/);
+  assert.match(text, /cache {7}40,000 tokens served from cache · 10,000 full-price \(80\.0% hit, 10,000 miss\)/);
 });
 
 test('WS0 0.5 buildUsageBreakdown: no cache line when the provider reported no cache stats', () => {
@@ -50,6 +50,64 @@ test('WS0 buildUsageBreakdown: prefix-stability line shows ratio, bust count + l
     prefixStability: { stableCalls: 9, bustCalls: 1, ratio: 0.9, lastLabels: ['tool-list changed (+1)'] },
   }).join('\n');
   assert.match(text, /prefix {6}90\.0% cache-stable across 10 calls \(1 bust\) · last bust: tool-list changed \(\+1\)/);
+});
+
+// --- CC-UX-E3: per-category breakdown (skill / MCP server / cache miss) -----
+
+test('CC-UX-E3 buildUsageBreakdown: by-skill section sorts descending and skips chat-only sessions', () => {
+  // A session where a real skill ran → the section renders, sorted by total.
+  const withSkills = buildUsageBreakdown({
+    parent: { ...PARENT, cachedTokens: 0, missedTokens: 0 },
+    children: [],
+    bySkill: [
+      { skill: 'chat', promptTokens: 1_000, completionTokens: 100, calls: 2, turns: 2 },
+      { skill: 'code-review-and-quality', promptTokens: 8_000, completionTokens: 900, calls: 5, turns: 3 },
+      { skill: 'spec-driven-skill', promptTokens: 4_000, completionTokens: 200, calls: 2, turns: 1 },
+    ],
+  }).join('\n');
+  assert.match(withSkills, /By skill:/);
+  // Highest-spend skill listed before the lower one, and before chat.
+  const order = withSkills.indexOf('code-review-and-quality');
+  assert.ok(order > 0 && order < withSkills.indexOf('spec-driven-skill'), 'skills sorted by total spend');
+  assert.match(withSkills, /code-review-and-quality\s+8,000 in \/ 900 out · 5 calls · 3 turns/);
+
+  // A plain chat session (only the `chat` bucket) → no redundant one-row table.
+  const chatOnly = buildUsageBreakdown({
+    parent: { ...PARENT, cachedTokens: 0, missedTokens: 0 },
+    children: [],
+    bySkill: [{ skill: 'chat', promptTokens: 500, completionTokens: 50, calls: 1, turns: 1 }],
+  }).join('\n');
+  assert.ok(!chatOnly.includes('By skill:'), 'chat-only session omits the by-skill table');
+});
+
+test('CC-UX-E3 buildUsageBreakdown: by-MCP-server section shows call counts, sorted, zero-filtered', () => {
+  const text = buildUsageBreakdown({
+    parent: { ...PARENT, cachedTokens: 0, missedTokens: 0 },
+    children: [],
+    byMcpServer: [
+      { server: 'brainrouter', calls: 12 },
+      { server: 'github', calls: 3 },
+      { server: 'unused', calls: 0 },
+    ],
+  }).join('\n');
+  assert.match(text, /By MCP server \(tool calls\):/);
+  const first = text.indexOf('brainrouter');
+  const second = text.indexOf('github');
+  assert.ok(first > 0 && first < second, 'busiest server listed first');
+  assert.match(text, /github\s+3 calls/);
+  assert.match(text, /brainrouter\s+12 calls/);
+  assert.ok(!text.includes('unused'), 'zero-call servers are filtered out');
+});
+
+test('CC-UX-E3 buildUsageBreakdown: cache line reports both hit % and miss token count', () => {
+  const text = buildUsageBreakdown({ parent: PARENT, children: [] }).join('\n');
+  assert.match(text, /80\.0% hit, 10,000 miss/);
+});
+
+test('CC-UX-E3 buildUsageBreakdown: no category sections when none provided (back-compat)', () => {
+  const text = buildUsageBreakdown({ parent: { ...PARENT, cachedTokens: 0, missedTokens: 0 }, children: [] }).join('\n');
+  assert.ok(!text.includes('By skill:'), 'no by-skill section without input');
+  assert.ok(!text.includes('By MCP server'), 'no by-MCP section without input');
 });
 
 test('WS0 buildUsageBreakdown: no prefix line when nothing measured / fully stable has no last-bust', () => {

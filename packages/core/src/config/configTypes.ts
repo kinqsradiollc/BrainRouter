@@ -308,6 +308,66 @@ export interface CliKnobs {
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultracode';
   /** PARITY-E3 — model to fall back to when the primary model is unavailable. */
   fallbackModel?: string | null;
+  /**
+   * CC-CONFIG-A2 — ORDERED fallback chain (up to 3) tried in sequence when the
+   * primary model is unavailable (model-not-found / retryable provider error).
+   * Supersedes the single `fallbackModel` (which stays honored, appended last for
+   * back-compat). Empty/absent (default) = no chain; only `fallbackModel` applies.
+   */
+  fallbackModels?: string[];
+  /**
+   * CC-CONFIG-A3 — the set of models this install may use. Empty/absent (default)
+   * = no restriction. When `enforceAvailableModels` is true a model outside this
+   * list is rejected at agent init AND Fast-mode refuses to switch to it.
+   */
+  availableModels?: string[];
+  /** CC-CONFIG-A3 — when true, reject any model not in `availableModels`. Default false. */
+  enforceAvailableModels?: boolean;
+  /**
+   * CC-CONFIG-A4 — semver range gate against the running BrainRouter version
+   * (`packages/core/src/version`). When the current version is BELOW
+   * `requiredMinimumVersion` or ABOVE `requiredMaximumVersion` a warning is
+   * surfaced at startup; when `enforceVersionRange` is true it refuses to run.
+   * Empty/absent (default) = no version gate.
+   */
+  requiredMinimumVersion?: string;
+  requiredMaximumVersion?: string;
+  /** CC-CONFIG-A4 — refuse (vs warn) when outside the required version range. Default false. */
+  enforceVersionRange?: boolean;
+  /**
+   * CC-CONFIG-A1 — SAFE MODE (troubleshooting). When true, the agent boots WITHOUT
+   * memory briefing, skills, lifecycle hooks, and custom (non-brain) MCP servers —
+   * a minimal harness to isolate a misbehaving briefing/skill/hook/MCP. Also
+   * settable per-launch via `--safe-mode` / `BRAINROUTER_SAFE_MODE`. Default false.
+   */
+  safeMode?: boolean;
+  /**
+   * CC-CONFIG-A5 — provenance/attribution controls for generated commit + PR bodies.
+   * `sessionUrl` (default true): include the BrainRouter provenance/session footer.
+   * Set false to omit it (private repos / clean history).
+   */
+  attribution?: { sessionUrl?: boolean };
+  /**
+   * CC-CONFIG-A6 — hide BUNDLED skills (those shipping with the BrainRouter
+   * install) from skill listings, leaving only workspace-authored skills
+   * (`skills/`, `.brainrouter/skills`). Also settable via
+   * `BRAINROUTER_HIDE_BUNDLED_SKILLS`. Default false.
+   */
+  skillsHideBundled?: boolean;
+  /**
+   * CC-SKILLS-D1 — max number of leading `/skill` tokens that a single prompt
+   * may stack (`/a /b do X` composes a.SKILL.md then b.SKILL.md before the
+   * user input). Hard-capped at 5 in the resolver regardless of config so a
+   * runaway prompt can't compose an unbounded instruction block. Default 5.
+   */
+  skillsStackMax?: number;
+  /**
+   * CC-UX-E2 — render GFM task-list items (`- [ ]` / `- [x]`) as checkbox
+   * glyphs (☐ / ☑) in the CLI markdown renderer instead of the literal
+   * `[ ]` / `[x]` text. Default true (a pure display nicety; the underlying
+   * markdown is unchanged). Set false to preserve the raw brackets.
+   */
+  markdownCheckboxes?: boolean;
 
   // ---- MCP plumbing -----------------------------------------------------
   /** MCP call timeout in ms. Default 60000. */
@@ -370,6 +430,26 @@ export interface CliKnobs {
    * CODEX-APPROVAL-GUARD. Default empty = no change to approval behavior.
    */
   commandAllowlist?: string[];
+  /**
+   * CC-SAFETY-B1 — route EVERY `run_command` / shell call through the safety
+   * classifier (the destructive-command guard + the approval resolver) via a
+   * pre-tool gate, not just the ones that happen to hit a heuristic:
+   *   - `'off'`    (default) — no extra gate; existing behavior unchanged.
+   *   - `'on'`     — classify every shell call; a destructive/dangerous verdict
+   *                  asks (attended) or is denied (silent) as usual.
+   *   - `'strict'` — DENY every shell call unless it matches `commandAllowlist`
+   *                  (the whitelist). The strictest posture for unattended runs.
+   * Honors `enforceWhenSilent` (see `autoClassifyShellEnforceWhenSilent`): when a
+   * human is watching, `'on'`/`'strict'` may relax to advisory; when nobody is,
+   * the classification is enforced.
+   */
+  autoClassifyShell?: 'off' | 'on' | 'strict';
+  /**
+   * CC-SAFETY-B1 — enforce `autoClassifyShell` even in a silent/unattended
+   * session (default `true`, mirroring `hooks.enforceWhenSilent`). When `false`,
+   * an attended session may downgrade a classifier deny to an advisory prompt.
+   */
+  autoClassifyShellEnforceWhenSilent?: boolean;
   /**
    * CODEX-WORKTREE-ISOLATION — filesystem isolation for spawned write/shell
    * children. Default `auto`: creates a detached git worktree when the parent
@@ -759,6 +839,26 @@ export interface ResolvedCliKnobs {
   confirmRunWorkflow: boolean;
   effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultracode';
   fallbackModel: string | null;
+  /** CC-CONFIG-A2 — resolved ORDERED fallback chain (validated, capped at 3, deduped;
+   *  `fallbackModel` appended last for back-compat). */
+  fallbackModels: string[];
+  /** CC-CONFIG-A3 — resolved available-models allowlist (validated, deduped). */
+  availableModels: string[];
+  enforceAvailableModels: boolean;
+  /** CC-CONFIG-A4 — resolved version-range gate ('' = unset). */
+  requiredMinimumVersion: string;
+  requiredMaximumVersion: string;
+  enforceVersionRange: boolean;
+  /** CC-CONFIG-A1 — safe/troubleshooting mode. */
+  safeMode: boolean;
+  /** CC-CONFIG-A5 — provenance footer controls for commit/PR bodies. */
+  attribution: { sessionUrl: boolean };
+  /** CC-CONFIG-A6 — hide bundled skills from listings. */
+  skillsHideBundled: boolean;
+  /** CC-SKILLS-D1 — max stacked `/skill` tokens per prompt (clamped 1..5). */
+  skillsStackMax: number;
+  /** CC-UX-E2 — render GFM task-list checkboxes (☐ / ☑) in the CLI renderer. */
+  markdownCheckboxes: boolean;
   mcpTimeoutMs: number;
   /** REMOTE-BRAIN — remote brain HTTP endpoint, or null for the embedded default. */
   brainUrl: string | null;
@@ -771,6 +871,8 @@ export interface ResolvedCliKnobs {
   jobSecretScoping: boolean;
   jobSecretAllowlist: string[];
   commandAllowlist: string[];
+  autoClassifyShell: 'off' | 'on' | 'strict';
+  autoClassifyShellEnforceWhenSilent: boolean;
   childWorkspaceIsolation: 'off' | 'auto' | 'git-worktree';
   worktreeRoot: string;
   buildLoop: 'off' | 'escalate' | 'always';

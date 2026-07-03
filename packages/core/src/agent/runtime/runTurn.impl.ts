@@ -11,9 +11,11 @@ import { contextWindowForBudget } from '../../context/contextWindow.js';
 import { resolveToolPolicy, externalDirectoryDecision } from '../../exec/policy/execPolicy.js';
 import { isPathWithinRoots } from '../../exec/policy/pathPolicy.js';
 import { evaluatePermissionRules, primaryArgText } from '../../exec/policy/permissionRules.js';
+import { classifyShellCommand } from '../../exec/policy/shellClassifier.js';
+import { recordDenial } from '../../exec/runtime/recentDenials.js';
 import { readGoal, formatGoalBlock } from '../../goal/store/goalStore.js';
 import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../../hooks/hookifyStore.js';
-import { runHooks, parseHookDecision } from '../../hooks/hooksStore.js';
+import { runHooks, parseHookDecision, collectStopAdditionalContext } from '../../hooks/hooksStore.js';
 import { extractToolText } from '../../mcp/mcpUtils.js';
 import { reconnectBackoffMs, probeConnectivity } from '../../mcp/reconnect/reconnect.js';
 import { listAll as listAgentDefinitions } from '../../orchestration/agents/agentRegistry.js';
@@ -21,7 +23,7 @@ import { executeOrchestrationTool, isOrchestrationToolName, synthesizeDelegateTo
 import { buildFanOutHint, shouldSuggestFanOut } from '../../prompt/planning/breadthHint.js';
 import { buildNextActionMessages, parseNextActionPlan, nextActionDirective, planWantsFanOut, shouldSkipPlanner } from '../../prompt/planning/nextAction.js';
 import { compactToolOutput } from '../../prompt/compaction/toolCompaction.js';
-import { isModelNotFoundError, shouldFallbackModel } from '../../provider/modelFallback.js';
+import { isModelNotFoundError, nextFallbackModel, shouldFallbackModel } from '../../provider/modelFallback.js';
 import { resolveLocalModelProfile, localModelProfileActive, isLocalModelCoreTool } from '../../provider/modelFamily.js';
 import { currentTier, detectNeedsHigh, nextTier, resolveTierLadder, stripNeedsHigh } from '../../provider/tierLadder.js';
 import { drainCompletions, formatCompletionFeedback } from '../../session/completion/completionInbox.js';
@@ -78,6 +80,13 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     }
     this.lastTurnUsage = { promptTokens: 0, completionTokens: 0, calls: 0, cachedTokens: 0, missedTokens: 0 };
     this.lastTurnToolCalls = 0;
+    // CC-hooks parity — drain any additionalContext a prior `stop` /
+    // `subagent-stop` hook (or a child's subagent-stop) asked to inject back
+    // into the model on THIS turn. Read-and-clear so it fires exactly once.
+    if (this.pendingStopContext && this.pendingStopContext.trim()) {
+      prompt = `${prompt}\n\n[stop-hook context]\n${this.pendingStopContext.trim()}`;
+      this.pendingStopContext = undefined;
+    }
     // CC-P6.5 — per-turn verification tracking (mutated workspace? ran a check?).
     this.mutatedThisTurn = false;
     this.verifiedThisTurn = false;
@@ -181,10 +190,16 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     const toolOverrides = cliKnobs.toolOverrides;
     const overrideForceOnNames = new Set(Object.keys(toolOverrides).filter((k) => toolOverrides[k] === true));
     const overrideForceOffNames = Object.keys(toolOverrides).filter((k) => toolOverrides[k] === false);
+    // CC-SKILLS-D3 — the active skill's `disallowed-tools` frontmatter blacklists
+    // apply for THIS turn on top of the role/agent-def `disallowedTools`. Computed
+    // here so it filters BOTH local tools (below) and MCP tools (further down).
+    const effectiveDisallowed = [...this.disallowedTools, ...this.activeSkillDisallowedTools];
+    const disallowedLocalSet = new Set(effectiveDisallowed);
     let filteredLocalTools = localToolSpecsFromExecutors().filter((t) => {
       // HARD gates first — a user override can never escalate past these.
       const hardVisible =
         allowed.has(t.name) &&
+        !disallowedLocalSet.has(t.name) &&
         !MODEL_HIDDEN_TOOLS.has(t.name) &&
         !(hideWorkerTools && WORKER_THREAD_TOOLS.has(t.name)) &&
         !(hideComputerUse && t.name === 'computer_use') &&
@@ -220,11 +235,11 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // one returns a structured "hidden by budget" hint instead of a bare
     // unknown-tool error.
     this.lastBudgetHiddenTools = new Set();
-    if (this.toolScope || this.disallowedTools.length > 0 || overrideForceOffNames.length > 0) {
+    if (this.toolScope || effectiveDisallowed.length > 0 || overrideForceOffNames.length > 0) {
       visibleMcpTools = applyToolScope(visibleMcpTools, {
         allow: this.toolScope?.mcp,
         // cli.toolOverrides force-off applies to MCP tools by their namespaced name.
-        disallow: [...this.disallowedTools, ...overrideForceOffNames],
+        disallow: [...effectiveDisallowed, ...overrideForceOffNames],
       });
     }
     // Snapshot the user-force-on MCP tools so the discovery/budget step below can't
@@ -876,14 +891,19 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           }
         } else if (
           isModelNotFoundError(message) &&
-          shouldFallbackModel(this.llmConfig.model, getCliKnobs().fallbackModel, this.triedModelFallback)
+          (() => {
+            // CC-CONFIG-A2: walk the ORDERED fallback chain (which already appends
+            // the legacy single `cli.fallbackModel` last for back-compat). The
+            // per-turn `triedModels` set ensures we never re-try a dead candidate,
+            // so a model-not-found cascades through each fallback until one works.
+            this.triedModels.add((this.llmConfig.model ?? '').trim());
+            return nextFallbackModel(this.llmConfig.model, getCliKnobs().fallbackModels, this.triedModels) !== null;
+          })()
         ) {
-          // PARITY-E3: the primary model isn't available at this endpoint.
-          // Switch to cli.fallbackModel for the rest of the session and
-          // retry ONCE (the triedModelFallback flag prevents a loop).
           const from = this.llmConfig.model;
-          const fallback = getCliKnobs().fallbackModel as string;
+          const fallback = nextFallbackModel(from, getCliKnobs().fallbackModels, this.triedModels) as string;
           this.triedModelFallback = true;
+          this.triedModels.add(fallback);
           this.setModel(fallback);
           callbacks.onStatusUpdate(`Model "${from}" unavailable — falling back to ${fallback}...`);
           try {
@@ -1669,13 +1689,45 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           // a silent child can't answer fails closed. This closes the gap where
           // spawn/delegate/worker dispatches bypassed the access-mode gate.
           {
+            // CC-SAFETY-B2 — record any denial into the bounded, session-scoped
+            // recent-denials ring so `/recent-denials` can surface WHY the agent
+            // kept getting blocked. Best-effort; never breaks the gate.
+            const denyAndRecord = (reason: string): never => {
+              try { recordDenial(this.workspaceRoot, this.sessionKey, name, reason); } catch { /* best-effort */ }
+              throw new Error(reason);
+            };
             // CC-P3.2 — declarative cli.permissions rules run FIRST: a deny match
             // blocks outright; an allow match downgrades an `ask` below (it never
             // overrides a mode-based deny — rules can't escalate read mode).
             const ruleDecision = evaluatePermissionRules(
-              getCliKnobs().permissions, name, primaryArgText(name, args as Record<string, unknown> | null));
+              getCliKnobs().permissions, name, primaryArgText(name, args as Record<string, unknown> | null),
+              { workspace: this.workspaceRoot });
             if (ruleDecision === 'deny') {
-              throw new Error(`Tool "${name}" denied: matched a cli.permissions deny rule.`);
+              denyAndRecord(`Tool "${name}" denied: matched a cli.permissions deny rule.`);
+            }
+            // CC-SAFETY-B1 — classify-all-shell: when enabled, route EVERY
+            // run_command through the safety classifier at the gate (not just the
+            // ones a downstream heuristic catches). 'on' asks/denies on a risky
+            // verdict; 'strict' denies unless whitelisted. Silent sessions can't
+            // answer a prompt, so an 'ask' verdict fails closed there.
+            if (name === 'run_command') {
+              const knobs = getCliKnobs();
+              if (knobs.autoClassifyShell !== 'off') {
+                const cmd = String((args as { command?: unknown } | null)?.command ?? '');
+                const verdict = classifyShellCommand(cmd, {
+                  mode: knobs.autoClassifyShell,
+                  silent: this.silent,
+                  enforceWhenSilent: knobs.autoClassifyShellEnforceWhenSilent,
+                  allowlist: knobs.commandAllowlist,
+                  destructiveContext: { userIntent: this.lastUserPrompt },
+                });
+                if (verdict.decision === 'deny') {
+                  denyAndRecord(`Tool "${name}" denied by autoClassifyShell (${verdict.rule}): ${verdict.reason}`);
+                }
+                if (verdict.decision === 'ask' && this.silent) {
+                  denyAndRecord(`Tool "${name}" flagged by autoClassifyShell but this session can't prompt (fail-closed) (${verdict.rule}): ${verdict.reason}`);
+                }
+              }
             }
             const policy = resolveToolPolicy(name, this.accessMode, args as Record<string, unknown> | null);
             if (ruleDecision === 'allow' && policy.decision === 'ask') {
@@ -1693,10 +1745,10 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
               callbacks.onApproval?.({ tool: name, action: policy.action, decision: policy.decision, reason: policy.reason });
             }
             if (policy.decision === 'deny') {
-              throw new Error(`Tool "${name}" denied by execution policy: ${policy.reason}.`);
+              denyAndRecord(`Tool "${name}" denied by execution policy: ${policy.reason}.`);
             }
             if (policy.decision === 'ask' && this.silent) {
-              throw new Error(`Tool "${name}" requires approval but this session can't prompt (fail-closed): ${policy.reason}.`);
+              denyAndRecord(`Tool "${name}" requires approval but this session can't prompt (fail-closed): ${policy.reason}.`);
             }
             // POLICY-3 — external-directory gate: a file write whose target
             // escapes the workspace is governed by the profile's
@@ -1706,10 +1758,10 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
               const target = path.resolve(this.workspaceRoot, args.path);
               const ext = externalDirectoryDecision(target, this.workspaceRoot, getCliKnobs().externalDirWrites, isPathWithinRoots);
               if (ext.decision === 'deny') {
-                throw new Error(`Tool "${name}" denied: ${ext.reason}.`);
+                denyAndRecord(`Tool "${name}" denied: ${ext.reason}.`);
               }
               if (ext.decision === 'ask' && this.silent) {
-                throw new Error(`Tool "${name}" requires approval (external write) but this session can't prompt: ${ext.reason}.`);
+                denyAndRecord(`Tool "${name}" requires approval (external write) but this session can't prompt: ${ext.reason}.`);
               }
             }
           }
@@ -1722,6 +1774,13 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           }
           // 0.4.x-4 (`/context`) — count each tool that actually dispatches.
           this.toolCallCounts.set(name, (this.toolCallCounts.get(name) ?? 0) + 1);
+          // CC-UX-E3 (`/usage`) — attribute MCP tool dispatch to its server so
+          // the breakdown can show per-server call counts. `mcp_<server>_<tool>`
+          // → serverId; non-MCP tools return undefined and aren't counted.
+          {
+            const serverId = this.serverIdFromMcpToolName(name);
+            if (serverId) this.mcpServerCallCounts.set(serverId, (this.mcpServerCallCounts.get(serverId) ?? 0) + 1);
+          }
           if (isOrchestrationToolName(name)) {
             // WF-NO-NEST — a silent/child agent (itself a spawned worker, incl.
             // a workflow PHASE agent) must never launch its own workflow. That
@@ -2064,6 +2123,34 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       runHooks(this.workspaceRoot, 'post-turn', {
         payload: { prompt, answerPreview: finalAnswer.slice(0, 1000), tokens: this.lastTurnUsage },
       });
+    }
+    // CC-hooks parity — the `stop` (top-level) / `subagent-stop` (silent worker)
+    // event, and the completion notification. These fire on the `hookNotifyActive`
+    // gate (enabled + not safe-mode) so they ALSO run for unattended/background
+    // workers — the whole point of `subagent-stop` + `agent_completed` is to tap
+    // into silent runs. A `stop` hook may return {"additionalContext":"…"}; we
+    // STORE it on `pendingStopContext` for injection into the model on the next
+    // turn (top-level) or for the parent to read after a child's drain.
+    if (this.hookNotifyActive()) {
+      try {
+        const stopEvent = this.silent ? 'subagent-stop' : 'stop';
+        const stopResults = runHooks(this.workspaceRoot, stopEvent, {
+          payload: { prompt, answerPreview: finalAnswer.slice(0, 1000), tokens: this.lastTurnUsage },
+        });
+        const extra = collectStopAdditionalContext(stopResults);
+        if (extra) {
+          this.pendingStopContext = this.pendingStopContext
+            ? `${this.pendingStopContext}\n${extra}`
+            : extra;
+        }
+      } catch { /* stop hooks are advisory — never break the turn */ }
+      // Completion notification, so a user can wire a desktop/OS notifier
+      // (`terminal-notifier`, `osascript`, a webhook curl).
+      try {
+        runHooks(this.workspaceRoot, 'notification-agent-completed', {
+          payload: { sessionKey: this.sessionKey, silent: this.silent, answerPreview: finalAnswer.slice(0, 200) },
+        });
+      } catch { /* advisory */ }
     }
     turnSpan.end({
       outcome: exitedCleanly ? 'ok' : 'loop_limit',

@@ -369,7 +369,7 @@ test('goalStore: editGoal unified update changes text/status/budget/tokens in on
   });
 });
 
-test('goalStore: legacy workspace-level goal only falls back for no-session reads; first session-scoped setGoal archives it', async () => {
+test('goalStore: legacy workspace-level goal only falls back for no-session reads; first session-scoped setGoal retires it (no archive)', async () => {
   const { getStateDir, getStateFile, getSessionStateDir } = await import('../storage/store.js');
   withTempWorkspace((workspace) => {
     // Old layout — write directly to the workspace-level file.
@@ -384,14 +384,11 @@ test('goalStore: legacy workspace-level goal only falls back for no-session read
     assert.equal(readGoal(workspace, sessionKey)?.text, 'session-scoped');
     // Session bucket holds the new goal.
     assert.equal(fs.existsSync(path.join(getSessionStateDir(workspace, sessionKey), 'goal.json')), true);
-    // Legacy file is gone (archived, not left where another session would re-pick it up).
+    // Legacy file is gone (deleted, not left where another session would re-pick it up).
     assert.equal(fs.existsSync(getStateFile(workspace, 'goal.json')), false);
-    // Archived into the per-user cli state dir, NOT into the project workspace tree.
-    const archiveDir = path.join(getStateDir(workspace), '.brainrouter.migrated');
-    const migrated = fs.readdirSync(archiveDir);
-    assert.equal(migrated.length, 1);
-    assert.match(migrated[0]!, /^legacy-goal-.*\.json$/);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(archiveDir, migrated[0]!), 'utf8')).text, 'legacy goal');
+    // We no longer create a `.brainrouter.migrated` archive — neither in the
+    // per-user cli state dir nor in the project workspace tree.
+    assert.equal(fs.existsSync(path.join(getStateDir(workspace), '.brainrouter.migrated')), false);
     // Guardrail: the project workspace tree is not polluted (0.3.3 invariant).
     assert.equal(fs.existsSync(path.join(workspace, '.brainrouter.migrated')), false);
   });

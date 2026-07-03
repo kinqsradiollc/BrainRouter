@@ -1,6 +1,5 @@
 import fs from 'node:fs';
-import path from 'node:path';
-import { getStateDir, getStateFile, readJsonFile, writeJsonFile } from '../../storage/store.js';
+import { getStateFile, readJsonFile, writeJsonFile } from '../../storage/store.js';
 import {
   DEFAULT_GOAL_BUDGET,
   GOAL_TEXT_MAX_CHARS,
@@ -58,22 +57,29 @@ export function readGoal(workspaceRoot: string, sessionKey?: string): Goal | nul
   return normalize(readJsonFile<Partial<Goal> | null>(scope.path, null));
 }
 
-function archiveLegacyGoal(workspaceRoot: string): void {
+/**
+ * Retire a stale workspace-level `goal.json` the moment we write to a
+ * higher-priority scope. We DELETE it rather than archiving into a
+ * `.brainrouter.migrated/` folder — leaving that archive behind was the
+ * source of stray project-tree clutter. The goal content the caller cares
+ * about has already been written to the new scope by the time this runs, so
+ * the legacy file is genuinely disposable. Best-effort: never let a failed
+ * unlink block a goal write.
+ */
+function retireLegacyGoal(workspaceRoot: string): void {
   const legacyPath = getStateFile(workspaceRoot, 'goal.json');
   if (!fs.existsSync(legacyPath)) return;
-
-  const archiveDir = path.join(getStateDir(workspaceRoot), '.brainrouter.migrated');
-  fs.mkdirSync(archiveDir, { recursive: true });
-
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  let archivePath = path.join(archiveDir, `legacy-goal-${stamp}.json`);
-  let suffix = 1;
-  while (fs.existsSync(archivePath)) {
-    archivePath = path.join(archiveDir, `legacy-goal-${stamp}-${suffix}.json`);
-    suffix += 1;
+  try {
+    fs.rmSync(legacyPath, { force: true });
+  } catch {
+    // best-effort: fall back to blanking the file so a future no-session
+    // read can't resurface the stale goal.
+    try {
+      writeJsonFile(legacyPath, null);
+    } catch {
+      /* give up silently */
+    }
   }
-
-  fs.renameSync(legacyPath, archivePath);
 }
 
 /**
@@ -105,11 +111,12 @@ export function setGoal(
     }
   }
   const scope = resolveGoalScope(workspaceRoot, sessionKey);
-  // Archive any stale workspace-level goal.json the moment we write to a
+  // Retire any stale workspace-level goal.json the moment we write to a
   // non-legacy scope (workflow OR session). This preserves the Item 1 fix:
-  // never leave the legacy file where a future session would re-pick it up.
+  // never leave the legacy file where a future session would re-pick it up —
+  // and does it without creating a `.brainrouter.migrated/` archive.
   if (scope.scope !== 'legacy') {
-    archiveLegacyGoal(workspaceRoot);
+    retireLegacyGoal(workspaceRoot);
   }
   const now = new Date().toISOString();
   const goal: Goal = {

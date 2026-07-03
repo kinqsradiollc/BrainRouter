@@ -19,7 +19,13 @@ export type HookEvent =
   | 'user-prompt-submit' // CC-P4.2 — fired on prompt submit; a deny decision blocks the turn.
   | 'pre-compact' // CC-P4.2 — fired before auto/manual compaction; advisory.
   | 'session-start'
-  | 'session-end';
+  | 'session-end'
+  // ---- CC-hooks parity (0.4.17) -----------------------------------------
+  | 'message-display' // Fired with the assistant's about-to-display text; a hook may transform (updatedOutput) or hide (decision:"deny") it.
+  | 'stop'            // Fired when the top-level agent finishes a turn; may return additionalContext injected into the next turn.
+  | 'subagent-stop'   // Fired when a subagent/background worker finishes; may return additionalContext bubbled to the parent.
+  | 'notification-agent-needs-input'   // Fired when a background/subagent blocks awaiting input — wire desktop/OS notifications.
+  | 'notification-agent-completed';    // Fired on agent/background completion — wire desktop/OS notifications.
 
 export interface Hook {
   id: string;
@@ -135,10 +141,26 @@ export interface HookDecision {
   updatedInput?: Record<string, unknown>;
   /** user-prompt-submit: extra context appended to the prompt the model sees. */
   additionalContext?: string;
-  /** post-tool: REPLACE the tool result text the model receives (e.g. redact). */
+  /**
+   * post-tool: REPLACE the tool result text the model receives (e.g. redact).
+   * message-display: REPLACE the assistant text shown to the user (transform).
+   */
   updatedOutput?: string;
   /** post-tool: mark the tool result an error (e.g. a lint/policy breach). */
   isError?: boolean;
+  // ---- CC-hooks parity (0.4.17) -----------------------------------------
+  /**
+   * session-start: rename the session. The CLI/desktop applies this via
+   * `setSessionMeta(ws, sessionKey, { title })` so the sidebar shows the
+   * hook-chosen name instead of the first user message.
+   */
+  sessionTitle?: string;
+  /**
+   * session-start: `true` asks the host to rescan its skill roots
+   * (`skills/` + `.brainrouter/skills`) — e.g. after a hook synced a fresh
+   * skill pack onto disk. Advisory; a host with no skill cache just re-reads.
+   */
+  reloadSkills?: boolean;
 }
 
 export function parseHookDecision(stdout: string): HookDecision | null {
@@ -153,7 +175,9 @@ export function parseHookDecision(stdout: string): HookDecision | null {
         parsed.updatedInput !== undefined ||
         parsed.additionalContext !== undefined ||
         parsed.updatedOutput !== undefined ||
-        parsed.isError !== undefined;
+        parsed.isError !== undefined ||
+        parsed.sessionTitle !== undefined ||
+        parsed.reloadSkills !== undefined;
       return ok ? parsed : null;
     }
   } catch { /* non-JSON stdout — legacy semantics */ }
@@ -176,5 +200,81 @@ export function hookMatchesTool(pattern: string, tool: string): boolean {
     return rx.test(tool);
   }
   return tool.includes(pattern);
+}
+
+// ---- CC-hooks parity (0.4.17) helpers ---------------------------------------
+
+/** Outcome of running the `message-display` hooks over one assistant message. */
+export interface MessageDisplayOutcome {
+  /** The (possibly transformed) text to display; `''` when hidden. */
+  text: string;
+  /** `true` when a hook hid the message (`{"decision":"deny"}`). */
+  hidden: boolean;
+  /** `true` when a hook replaced the text (`{"updatedOutput":"…"}`). */
+  transformed: boolean;
+}
+
+/**
+ * Fold `message-display` hook stdout over the assistant's about-to-display text.
+ * A `{"decision":"deny"}` HIDES the message (returns empty, `hidden:true`); a
+ * `{"updatedOutput":"…"}` REPLACES it (last transform wins, chained). Non-JSON
+ * or exit-only stdout is a no-op. Pure over `results` so it unit-tests without
+ * spawning a shell. Deny short-circuits — a hidden message can't be transformed.
+ */
+export function applyMessageDisplayHooks(text: string, results: HookRunResult[]): MessageDisplayOutcome {
+  let out = text;
+  let transformed = false;
+  for (const r of results) {
+    const d = parseHookDecision(r.stdout);
+    if (!d) continue;
+    if (d.decision === 'deny') return { text: '', hidden: true, transformed };
+    if (typeof d.updatedOutput === 'string') { out = d.updatedOutput; transformed = true; }
+  }
+  return { text: out, hidden: false, transformed };
+}
+
+/** Structured session-start directives folded from the hooks' stdout. */
+export interface SessionStartDirectives {
+  /** Rename the session (last non-empty `sessionTitle` wins). */
+  sessionTitle?: string;
+  /** Any hook asked for a skill rescan (`reloadSkills:true`). */
+  reloadSkills: boolean;
+  /** Extra context any hook injected (`additionalContext`), joined by newline. */
+  additionalContext?: string;
+}
+
+/**
+ * Fold `session-start` hook stdout into structured directives the host applies
+ * (rename via setSessionMeta, rescan skill roots, inject startup context). Pure
+ * over `results`. Later `sessionTitle` overrides earlier; `reloadSkills` is a
+ * logical OR; `additionalContext` accumulates.
+ */
+export function parseSessionStartDirectives(results: HookRunResult[]): SessionStartDirectives {
+  const out: SessionStartDirectives = { reloadSkills: false };
+  const ctx: string[] = [];
+  for (const r of results) {
+    const d = parseHookDecision(r.stdout);
+    if (!d) continue;
+    if (typeof d.sessionTitle === 'string' && d.sessionTitle.trim()) out.sessionTitle = d.sessionTitle.trim();
+    if (d.reloadSkills === true) out.reloadSkills = true;
+    if (typeof d.additionalContext === 'string' && d.additionalContext.trim()) ctx.push(d.additionalContext.trim());
+  }
+  if (ctx.length > 0) out.additionalContext = ctx.join('\n');
+  return out;
+}
+
+/**
+ * Fold `additionalContext` out of `stop` / `subagent-stop` hook stdout — the
+ * string a hook injects back into the model's context on the next turn (Stop)
+ * or bubbles to the parent (SubagentStop). Pure over `results`; accumulates in
+ * order, newline-joined; empty → `undefined`.
+ */
+export function collectStopAdditionalContext(results: HookRunResult[]): string | undefined {
+  const ctx: string[] = [];
+  for (const r of results) {
+    const d = parseHookDecision(r.stdout);
+    if (typeof d?.additionalContext === 'string' && d.additionalContext.trim()) ctx.push(d.additionalContext.trim());
+  }
+  return ctx.length > 0 ? ctx.join('\n') : undefined;
 }
 

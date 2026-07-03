@@ -3,6 +3,7 @@ import { markedTerminal } from 'marked-terminal';
 import chalk from 'chalk';
 import stringWidth from 'string-width';
 import wrapAnsi from 'wrap-ansi';
+import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 
 /**
  * Configure `marked` + `marked-terminal` for the Ink chat REPL, then
@@ -77,10 +78,20 @@ function ensureConfigured(): void {
  *
  * Empty / non-string input returns the input verbatim.
  */
-export function renderMarkdown(source: string, opts?: { width?: number }): string {
+export function renderMarkdown(source: string, opts?: { width?: number; checkboxes?: boolean }): string {
   if (typeof source !== 'string' || source.length === 0) return source;
   ensureConfigured();
-  const unwrapped = unwrapMarkdownFences(source);
+  // CC-UX-E2 — GFM task-list checkboxes. An explicit `opts.checkboxes` wins
+  // (used by tests); otherwise fall back to the `cli.markdownCheckboxes` knob
+  // (default true). Reading the knob is guarded so a missing/broken config
+  // never breaks rendering.
+  let checkboxes = opts?.checkboxes;
+  if (checkboxes === undefined) {
+    try { checkboxes = getCliKnobs().markdownCheckboxes; } catch { checkboxes = true; }
+  }
+  const unwrapped = checkboxes === false
+    ? unwrapMarkdownFences(source)
+    : renderTaskListCheckboxes(unwrapMarkdownFences(source));
   // marked-terminal renders GFM tables as a fixed-width cli-table3 grid that
   // overflows narrow terminals; Ink then wraps each row mid-cell and mangles
   // the grid. So we OWN table rendering: split the source into table and
@@ -104,6 +115,40 @@ export function renderMarkdown(source: string, opts?: { width?: number }): strin
     }
   }
   return out.join('');
+}
+
+// --- GFM task-list checkboxes -----------------------------------------
+
+/**
+ * CC-UX-E2 — turn GFM task-list items into checkbox glyphs. A task-list item
+ * is a list bullet (`-`, `*`, or `+`) or an ordered `N.` marker immediately
+ * followed by `[ ]` (unchecked) or `[x]`/`[X]` (checked). marked-terminal
+ * renders the raw `[ ]` / `[x]` as literal text, which reads poorly; we rewrite
+ * the marker span to a leading `☐ ` / `☑ ` so the terminal shows a real
+ * checkbox while keeping the bullet's indentation (nested lists stay aligned).
+ *
+ * Only the checkbox token is rewritten — the item text is left verbatim, so
+ * inline markdown (bold, code, links) inside a task item still renders. Lines
+ * that aren't task-list items pass through byte-for-byte. Pure + exported for
+ * tests.
+ */
+export function renderTaskListCheckboxes(source: string): string {
+  if (typeof source !== 'string' || source.indexOf('[') === -1) return source;
+  // Capture: leading indent, bullet/ordered marker + its trailing space, then
+  // the `[ ]` / `[x]` box + at least one following space.
+  const re = /^(\s*)([-*+]|\d+[.)])\s+\[([ xX])\]\s+/;
+  return source
+    .split('\n')
+    .map((line) => {
+      const m = re.exec(line);
+      if (!m) return line;
+      const [full, indent, marker, box] = m;
+      const glyph = box === ' ' ? '☐' : '☑';
+      // Preserve the indent + bullet marker so nesting is unchanged; swap the
+      // `[ ]`/`[x]` span (and its trailing space) for the glyph + a space.
+      return `${indent}${marker} ${glyph} ${line.slice(full.length)}`;
+    })
+    .join('\n');
 }
 
 // --- GFM table rendering ----------------------------------------------

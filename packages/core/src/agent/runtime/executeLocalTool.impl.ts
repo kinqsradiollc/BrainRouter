@@ -7,6 +7,7 @@ import path from 'node:path';
 import chalk from 'chalk';
 import type { Agent } from '../agent.js';
 import { NoTTYError } from '../support/prompter.js';
+import { runHooks } from '../../hooks/hooksStore.js';
 import { getCliKnobs } from '../../config/config.js';
 import { createArtifact, updateArtifact, getArtifact } from '../../artifact/artifactStore.js';
 
@@ -23,6 +24,7 @@ import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } 
 import { evaluateDestructiveCommand } from '../../exec/guard/destructiveCommandGuard.js';
 import { decideExecutionPolicy, egressDecision } from '../../exec/policy/execPolicy.js';
 import { resolveSandboxConfig, runShell } from '../../exec/runtime/sandbox.js';
+import { recordDenial } from '../../exec/runtime/recentDenials.js';
 import { gitHeadSha } from '../../git/workspaceGit.js';
 import { readGoal, blockGoal, completeGoal } from '../../goal/store/goalStore.js';
 import { searchMcpCatalog } from '../../mcp/discovery/discovery.js';
@@ -236,13 +238,20 @@ export async function executeLocalToolLegacy(this: Agent, name: string, args: Re
             agentAuthoredCommits: this.agentAuthoredCommits,
           });
           if (verdict.decision === 'block') {
+            // CC-SAFETY-B2 — the destructive-command guard's reason flows into the
+            // session's recent-denials ring (best-effort) so `/recent-denials` can
+            // surface WHY the command was blocked.
+            const recordBlocked = () => {
+              try { recordDenial(this.workspaceRoot, this.sessionKey, 'run_command', `${verdict.rule}: ${verdict.reason}`); } catch { /* best-effort */ }
+            };
             if (this.silent || (!this.interactionPort && !this.prompter)) {
+              recordBlocked();
               return `Command blocked (${verdict.rule}): ${verdict.reason}`;
             }
             const approved = this.interactionPort
               ? await this.interactionPort.confirm({ title: 'Run destructive command?', detail: `${cmd}\n\n${verdict.reason}`, dangerous: true, tool: 'run_command' })
               : await this.prompter.askYesNo(`${verdict.reason}\nRun it anyway? (y/N) `, false);
-            if (!approved) return `Command blocked (${verdict.rule}): ${verdict.reason}`;
+            if (!approved) { recordBlocked(); return `Command blocked (${verdict.rule}): ${verdict.reason}`; }
             destructiveOverride = true; // user explicitly authorized — skip the redundant approval below
           }
         }
@@ -1078,6 +1087,17 @@ export async function executeLocalToolLegacy(this: Agent, name: string, args: Re
         // spec — the DESK-3 UI dialog path when a port is attached, else the
         // TTY picker.
         const askOne = async (spec: { question: string; header: string; options: Array<{ label: string; description: string }>; multiSelect: boolean }): Promise<string | string[]> => {
+          // CC-hooks parity — the agent is about to BLOCK awaiting the user's
+          // choice: fire `notification-agent-needs-input` so a user can wire a
+          // desktop/OS notifier (the terminal is likely backgrounded). Advisory
+          // and best-effort — a failing notifier must never break the picker.
+          if (this.hookNotifyActive()) {
+            try {
+              runHooks(this.workspaceRoot, 'notification-agent-needs-input', {
+                payload: { sessionKey: this.sessionKey, question: spec.question, header: spec.header, optionLabels: spec.options.map((o) => o.label) },
+              });
+            } catch { /* advisory */ }
+          }
           if (this.interactionPort) {
             const labels = await this.interactionPort.choice({
               question: spec.question, header: spec.header, options: spec.options, multiSelect: spec.multiSelect,

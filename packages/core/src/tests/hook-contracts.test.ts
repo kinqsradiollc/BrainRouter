@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Agent } from '../agent/agent.js';
-import { parseHookDecision, addHook, hookMatchesTool, readHooks, removeHook } from '../hooks/hooksStore.js';
+import {
+  parseHookDecision, addHook, hookMatchesTool, readHooks, removeHook,
+  applyMessageDisplayHooks, parseSessionStartDirectives, collectStopAdditionalContext,
+  type HookRunResult,
+} from '../hooks/hooksStore.js';
 import { setCliKnobOverride, _resetCliKnobsCache, resolveCliKnobs } from '../config/config.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
 
@@ -56,6 +60,62 @@ test('parseHookDecision: accepts additionalContext / updatedOutput / isError', (
   assert.deepEqual(parseHookDecision('{"additionalContext":"note"}'), { additionalContext: 'note' });
   assert.deepEqual(parseHookDecision('{"updatedOutput":"redacted"}'), { updatedOutput: 'redacted' });
   assert.deepEqual(parseHookDecision('{"isError":true}'), { isError: true });
+});
+
+// --- CC-hooks parity: pure helpers -------------------------------------------
+
+test('parseHookDecision: accepts sessionTitle / reloadSkills (CC-hooks parity)', () => {
+  assert.deepEqual(parseHookDecision('{"sessionTitle":"Nightly refactor"}'), { sessionTitle: 'Nightly refactor' });
+  assert.deepEqual(parseHookDecision('{"reloadSkills":true}'), { reloadSkills: true });
+  assert.deepEqual(parseHookDecision('{"sessionTitle":"X","reloadSkills":true}'), { sessionTitle: 'X', reloadSkills: true });
+});
+
+/** Minimal HookRunResult factory — only stdout/exitCode matter to the folders. */
+function res(stdout: string, exitCode = 0): HookRunResult {
+  return { hook: { id: 'h', event: 'stop', command: 'c', enabled: true, createdAt: '' } as any, exitCode, stdout, stderr: '' };
+}
+
+test('applyMessageDisplayHooks: transform replaces, deny hides, no-op passes through', () => {
+  // no hooks → unchanged
+  assert.deepEqual(applyMessageDisplayHooks('hello', []), { text: 'hello', hidden: false, transformed: false });
+  // transform
+  assert.deepEqual(applyMessageDisplayHooks('hello', [res('{"updatedOutput":"HELLO"}')]),
+    { text: 'HELLO', hidden: false, transformed: true });
+  // deny hides (empty text)
+  assert.deepEqual(applyMessageDisplayHooks('secret', [res('{"decision":"deny"}')]),
+    { text: '', hidden: true, transformed: false });
+  // deny short-circuits a later transform
+  assert.deepEqual(applyMessageDisplayHooks('secret', [res('{"decision":"deny"}'), res('{"updatedOutput":"X"}')]),
+    { text: '', hidden: true, transformed: false });
+  // non-JSON / exit-only stdout is a no-op
+  assert.deepEqual(applyMessageDisplayHooks('hi', [res('all good')]), { text: 'hi', hidden: false, transformed: false });
+  // last transform wins when chained
+  assert.deepEqual(applyMessageDisplayHooks('a', [res('{"updatedOutput":"b"}'), res('{"updatedOutput":"c"}')]),
+    { text: 'c', hidden: false, transformed: true });
+});
+
+test('parseSessionStartDirectives: title (last wins), reloadSkills OR, additionalContext accumulates', () => {
+  assert.deepEqual(parseSessionStartDirectives([]), { reloadSkills: false });
+  assert.deepEqual(
+    parseSessionStartDirectives([res('{"sessionTitle":"First"}'), res('{"sessionTitle":"Second"}')]),
+    { reloadSkills: false, sessionTitle: 'Second' },
+  );
+  assert.deepEqual(
+    parseSessionStartDirectives([res('{"reloadSkills":false}'), res('{"reloadSkills":true}')]),
+    { reloadSkills: true },
+  );
+  assert.deepEqual(
+    parseSessionStartDirectives([res('{"additionalContext":"a"}'), res('{"additionalContext":"b"}')]),
+    { reloadSkills: false, additionalContext: 'a\nb' },
+  );
+  // whitespace-only title / context is ignored
+  assert.deepEqual(parseSessionStartDirectives([res('{"sessionTitle":"   "}')]), { reloadSkills: false });
+});
+
+test('collectStopAdditionalContext: accumulates in order, empty → undefined', () => {
+  assert.equal(collectStopAdditionalContext([]), undefined);
+  assert.equal(collectStopAdditionalContext([res('not json')]), undefined);
+  assert.equal(collectStopAdditionalContext([res('{"additionalContext":"one"}'), res('{"additionalContext":"two"}')]), 'one\ntwo');
 });
 
 test('hookMatchesTool: anchored glob, substring back-compat, empty', () => {
@@ -229,6 +289,70 @@ test('post-tool updatedOutput replaces the tool result the model receives', asyn
       assert.ok(bodies.some((b) => b.includes('REDACTED-BY-HOOK')), 'redacted output should reach the LLM');
     } finally {
       globalThis.fetch = originalFetch;
+    }
+  }));
+});
+
+// --- CC-hooks parity: stop additionalContext injection ------------------------
+
+test('stop hook additionalContext is injected into the NEXT turn the model sees', async () => {
+  await serial(() => withTempWorkspaceAsync(async (workspace) => {
+    for (const h of readHooks(workspace)) removeHook(workspace, h.id);
+    addHook(workspace, {
+      event: 'stop',
+      command: `echo '{"additionalContext":"CARRYOVER: verify the migration ran"}'`,
+    });
+    const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [{ text: '{}' }] }), close: async () => {} };
+    const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+      workspaceRoot: workspace, launchCwd: workspace, silent: false,
+    });
+    const originalFetch = globalThis.fetch;
+    const bodies: string[] = [];
+    try {
+      setCliKnobOverride({ hooks: { enabled: true, enforceWhenSilent: true } });
+      globalThis.fetch = (async (_url: string, init: any) => {
+        bodies.push(init?.body ? String(init.body) : '');
+        return new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }], usage: { prompt_tokens: 5, completion_tokens: 1 } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }) as any;
+      // Turn 1 fires the stop hook, which stashes additionalContext for turn 2.
+      await agent.runTurn('first task', { onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {} } as any);
+      assert.equal(agent.pendingStopContext, 'CARRYOVER: verify the migration ran', 'stop hook context stashed');
+      const before = bodies.length;
+      // Turn 2 DRAINS the turn-1 stash into the prompt the model sees. (The stop
+      // hook then fires again at the END of turn 2 and re-stashes — that is
+      // correct: the injection is drain-once-per-turn, not fire-once-ever.)
+      await agent.runTurn('second task', { onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {} } as any);
+      assert.match(bodies.slice(before).join('\n'), /CARRYOVER: verify the migration ran/, 'stashed context reaches the model on the next turn');
+    } finally {
+      globalThis.fetch = originalFetch;
+      _resetCliKnobsCache();
+    }
+  }));
+});
+
+// --- CC-hooks parity: notification hook fires on completion -------------------
+
+test('notification-agent-completed hook fires through the hooks runner on finish', async () => {
+  await serial(() => withTempWorkspaceAsync(async (workspace) => {
+    for (const h of readHooks(workspace)) removeHook(workspace, h.id);
+    // The hook writes a sentinel file into the workspace when it fires — a
+    // side-effect the test can observe without a live notifier.
+    const sentinel = `${workspace}/notified.txt`;
+    addHook(workspace, { event: 'notification-agent-completed', command: `echo done > '${sentinel}'` });
+    const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [{ text: '{}' }] }), close: async () => {} };
+    const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+      workspaceRoot: workspace, launchCwd: workspace, silent: false,
+    });
+    const originalFetch = globalThis.fetch;
+    try {
+      setCliKnobOverride({ hooks: { enabled: true, enforceWhenSilent: true } });
+      globalThis.fetch = (async () => new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }], usage: { prompt_tokens: 5, completion_tokens: 1 } }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as any;
+      await agent.runTurn('do it', { onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {} } as any);
+      const fs = await import('node:fs');
+      assert.ok(fs.existsSync(sentinel), 'completion notification hook ran (sentinel written)');
+    } finally {
+      globalThis.fetch = originalFetch;
+      _resetCliKnobsCache();
     }
   }));
 });

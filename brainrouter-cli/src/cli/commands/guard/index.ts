@@ -11,6 +11,7 @@ import { applyYoloOff, applyYoloOn, readPreferences, writePreferences, resolveAc
 import { addHook, readHooks, removeHook, setHookEnabled, type HookEvent } from '@kinqs/brainrouter-core/hooks';
 import { createHookifyRule, deleteHookifyRule, listHookifyRules, toggleHookifyRule } from '@kinqs/brainrouter-core/hooks';
 import { saveConfig, getCliKnobs } from '@kinqs/brainrouter-core/config';
+import { listRecentDenials } from '@kinqs/brainrouter-core/exec';
 import type { CommandContext } from '../_context.js';
 
 
@@ -40,6 +41,27 @@ export async function tryHandleGuardCommand(ctx: CommandContext): Promise<boolea
       console.log(chalk.green(`\n✓ Access mode → ${chalk.cyan(sub)}\n`));
       return true;
     }
+    case '/recent-denials':
+    {
+      // CC-SAFETY-B2 — surface the last N tool denials (tool + reason + time)
+      // recorded by the pre-tool / permission gate for THIS session, so the user
+      // can see WHY the agent kept getting blocked.
+      const nArg = Number.parseInt(args[0] ?? '', 10);
+      const limit = Number.isFinite(nArg) && nArg > 0 ? nArg : 20;
+      const denials = listRecentDenials(agent.workspaceRoot, agent.sessionKey, limit);
+      console.log(chalk.bold('\nRecent tool denials'));
+      if (denials.length === 0) {
+        console.log(chalk.green('  (none — no tool calls have been blocked this session)\n'));
+        return true;
+      }
+      for (const d of denials) {
+        const when = new Date(d.ts).toLocaleString();
+        console.log(`  ${chalk.gray(when)}  ${chalk.cyan(d.tool)}`);
+        console.log(`    ${chalk.yellow(d.reason)}`);
+      }
+      console.log(chalk.gray(`\n  Showing the last ${denials.length} (use /recent-denials <n> for more).\n`));
+      return true;
+    }
     case '/hooks':
     {
       const sub = args[0];
@@ -62,7 +84,13 @@ export async function tryHandleGuardCommand(ctx: CommandContext): Promise<boolea
       if (sub === 'add') {
         const event = args[1] as HookEvent | undefined;
         const command = args.slice(2).join(' ').trim();
-        const validEvents: HookEvent[] = ['pre-turn', 'post-turn', 'pre-tool', 'post-tool', 'session-start', 'session-end'];
+        const validEvents: HookEvent[] = [
+          'pre-turn', 'post-turn', 'pre-tool', 'post-tool', 'session-start', 'session-end',
+          'user-prompt-submit', 'pre-compact',
+          // CC-hooks parity (0.4.17)
+          'message-display', 'stop', 'subagent-stop',
+          'notification-agent-needs-input', 'notification-agent-completed',
+        ];
         if (!event || !validEvents.includes(event) || !command) {
           console.log(chalk.red(`\nUsage: /hooks add <${validEvents.join('|')}> <shell-command>\n`));
           return true;

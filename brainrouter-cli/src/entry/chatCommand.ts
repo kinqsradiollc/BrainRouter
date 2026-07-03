@@ -25,11 +25,25 @@ export function registerChatCommand(program: Command): void {
     .option('-w, --workspace <path>', 'Workspace root for files, commands, memory session, and MCP --root')
     .option('--strict-mcp', 'Exit if the MCP server is unreachable (default: continue in offline mode with local tools only)')
     .option('--quiet', 'Suppress recall tables, briefing dumps, and tool-completion previews (model prose only). Toggle in-session with /quiet.')
+    .option('--safe-mode', 'Troubleshooting mode: skip memory briefing, skills, hooks, and custom MCP servers for this session.')
+    .option('--fallback-model <name...>', 'Ordered fallback model(s) tried when the primary model is unavailable (repeatable / space-separated, up to 3).')
     .option('--continue', 'Resume the most recent session in this workspace')
     .option('--resume <sessionKey>', 'Resume a specific session (exact key or unique prefix)')
     .action(async (options) => {
       if (options.workspace) {
         setCliKnobOverride({ workspaceOverride: options.workspace });
+      }
+      if (options.safeMode) {
+        // CC-CONFIG-A1 — enable safe mode for THIS launch without persisting.
+        setCliKnobOverride({ safeMode: true });
+      }
+      if (options.fallbackModel) {
+        // CC-CONFIG-A2 — override the ordered fallback chain for THIS launch.
+        // `setCliKnobOverride` shallow-replaces the resolved `fallbackModels`, so
+        // sanitize + cap here to match the resolver's contract.
+        const raw: unknown[] = Array.isArray(options.fallbackModel) ? options.fallbackModel : [options.fallbackModel];
+        const chain: string[] = [...new Set(raw.map((m) => String(m).trim()).filter((s) => s.length > 0))].slice(0, 3);
+        if (chain.length > 0) setCliKnobOverride({ fallbackModels: chain });
       }
       if (options.quiet) {
         // Quiet mode is durable in preferences, but `--quiet` should turn it
@@ -117,7 +131,23 @@ export function registerChatCommand(program: Command): void {
         console.error(chalk.gray(`Available profiles: ${allServerIds.join(', ')}.`));
         process.exit(1);
       }
-      const targetIds = selectMcpServerIds(config.servers, config.activeServer, requestedProfile);
+      let targetIds = selectMcpServerIds(config.servers, config.activeServer, requestedProfile);
+
+      // CC-CONFIG-A1 — SAFE MODE: connect ONLY the BrainRouter brain, dropping any
+      // custom / third-party MCP servers so a misbehaving external server can't
+      // break the troubleshooting session. Identity is the explicit `identity`
+      // tag, else the `brainrouter`-prefixed profile-name heuristic.
+      if (resolveCliKnobs(config).safeMode) {
+        const brainOnly = targetIds.filter((id) => {
+          const s = config.servers[id];
+          return s?.identity === 'brainrouter' || id.toLowerCase().startsWith('brainrouter');
+        });
+        if (brainOnly.length > 0 && brainOnly.length < targetIds.length) {
+          const dropped = targetIds.filter((id) => !brainOnly.includes(id));
+          console.error(chalk.yellow(`[BrainRouter] safe mode — skipping custom MCP servers: ${dropped.join(', ')}`));
+          targetIds = brainOnly;
+        }
+      }
 
       // Pre-process each target's serverConfig to thread workspaceRoot
       // into the stdio `--root` arg shape the MCP server expects.

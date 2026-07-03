@@ -1,12 +1,19 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { McpClient } from '@kinqs/brainrouter-core/mcp';
-import { skillSearchRoots } from './skillCatalog.js';
+import { getCliKnobs } from '@kinqs/brainrouter-core/config';
+import { skillSearchRoots, parseDisallowedToolsFrontmatter } from './skillCatalog.js';
 
 export interface SkillResolution {
   name: string;
   body: string;
   source: 'mcp' | 'filesystem' | 'fallback';
+  /**
+   * CC-SKILLS-D3 — tools this skill forbids for the turn it runs (parsed from
+   * `disallowed-tools` in the SKILL.md frontmatter). Reuses the agent's role
+   * `disallowedTools` blacklist path. Empty when the skill declares none.
+   */
+  disallowedTools?: string[];
 }
 
 export interface RunSkillOptions {
@@ -53,7 +60,8 @@ export async function resolveSkill(
   try {
     const res: any = await mcpClient.callTool('get_skill', { name, section });
     if (!res.isError && Array.isArray(res.content) && res.content[0]?.text) {
-      return { name, body: res.content[0].text, source: 'mcp' };
+      const body = res.content[0].text as string;
+      return { name, body, source: 'mcp', disallowedTools: parseDisallowedToolsFrontmatter(body) };
     }
   } catch {
     // Fall through to filesystem lookup.
@@ -61,14 +69,185 @@ export async function resolveSkill(
 
   const body = readSkillFromFilesystem(workspaceRoot, name);
   if (body) {
-    return { name, body, source: 'filesystem' };
+    return { name, body, source: 'filesystem', disallowedTools: parseDisallowedToolsFrontmatter(body) };
   }
 
   return {
     name,
     body: `(No SKILL.md found for "${name}". Use your general judgement and the agentic-engineering-workflow defaults.)`,
     source: 'fallback',
+    disallowedTools: [],
   };
+}
+
+/**
+ * CC-SKILLS-D1 — parse the leading `/skill` tokens from a raw prompt.
+ * `"/a /b do the thing"` → `{ skills: ['a','b'], rest: 'do the thing' }`.
+ *
+ * Only a CONTIGUOUS run of leading `/token` words counts; the first
+ * non-slash word ends the stack and everything from there is the user input.
+ * The stack is capped (default 5, `cli.skillsStackMax`, hard max 5) — extra
+ * leading skills beyond the cap are dropped from the stack and folded back
+ * into `rest` so nothing is silently lost. A bare `/` or `/skill`/`/skills`
+ * command word is NOT treated as a stack token (those are handled by the
+ * normal slash-command dispatcher).
+ */
+export function parseStackedSkillTokens(
+  input: string,
+  cap = getCliKnobs().skillsStackMax,
+): { skills: string[]; rest: string } {
+  const hardCap = Math.min(5, Math.max(1, cap || 5));
+  const trimmed = input.trimStart();
+  // Must begin with at least TWO leading /skill tokens to count as "stacked".
+  // A single "/foo bar" stays on the ordinary slash-command path.
+  const tokens = trimmed.split(/\s+/);
+  const reserved = new Set(['/skill', '/skills']);
+  const skills: string[] = [];
+  let i = 0;
+  for (; i < tokens.length; i++) {
+    const tok = tokens[i];
+    if (!tok.startsWith('/') || tok.length < 2 || reserved.has(tok)) break;
+    const name = tok.slice(1);
+    if (!/^[A-Za-z0-9][\w.-]*$/.test(name)) break; // not a plausible skill name
+    skills.push(name);
+  }
+  if (skills.length < 2) return { skills: [], rest: input };
+  // Cap the stack; fold any overflow tokens back into the user input so the
+  // model still sees them (as literal text) rather than dropping them.
+  const kept = skills.slice(0, hardCap);
+  const overflow = skills.slice(hardCap).map((s) => `/${s}`);
+  const rest = [...overflow, ...tokens.slice(i)].join(' ').trim();
+  return { skills: kept, rest };
+}
+
+/**
+ * CC-SKILLS-D1 — resolve an ordered list of skills and compose their bodies
+ * into one multi-phase instruction block ahead of the user input. Unresolved
+ * (fallback) skills are skipped so a typo doesn't poison the whole stack. The
+ * union of every resolved skill's `disallowed-tools` is returned so the caller
+ * can apply the strictest blacklist for the turn.
+ */
+export async function resolveStackedSkills(
+  mcpClient: McpClient,
+  names: string[],
+  workspaceRoot: string,
+): Promise<{ resolved: SkillResolution[]; disallowedTools: string[] }> {
+  const resolved: SkillResolution[] = [];
+  const disallowed = new Set<string>();
+  for (const name of names) {
+    const skill = await resolveSkill(mcpClient, name, workspaceRoot, 'full');
+    if (skill.source === 'fallback') continue; // skip unknown — don't poison the stack
+    resolved.push(skill);
+    for (const t of skill.disallowedTools ?? []) disallowed.add(t);
+  }
+  return { resolved, disallowedTools: [...disallowed] };
+}
+
+/**
+ * CC-SKILLS-D1 — build one prompt that runs several skills in order as
+ * numbered phases, followed by the user input. Mirrors buildSkillPrompt's
+ * structure so the agent sees a familiar layout.
+ */
+export function buildStackedSkillPrompt(
+  skills: SkillResolution[],
+  options: RunSkillOptions = {},
+): string {
+  const sections: string[] = [];
+  const names = skills.map((s) => s.name).join(' → ');
+  sections.push(`# Executing stacked skills: ${names}`);
+  sections.push(`Run these skills IN ORDER as sequential phases; carry context forward between them.`);
+  skills.forEach((skill, idx) => {
+    sections.push('');
+    sections.push(`## Phase ${idx + 1} — skill: ${skill.name} (source: ${skill.source})`);
+    sections.push(skill.body.trim());
+  });
+  if (options.input?.trim()) {
+    sections.push('');
+    sections.push('## User input');
+    sections.push(options.input.trim());
+  }
+  sections.push('');
+  sections.push('## Execution affordances');
+  sections.push([
+    '- You may delegate bounded parallel work with `spawn_agent` (roles: explorer, architect, reviewer, worker, verifier).',
+    '- Keep the durable plan current with `update_plan`. At most one item should be `in_progress`.',
+    '- Report run progress with `workflow_progress(step, status)`.',
+    '- Persist meaningful outputs through BrainRouter memory tools as the skills dictate.',
+    '- Always synthesize child outputs in your own words before claiming work is done.',
+  ].join('\n'));
+  if (options.orchestration?.trim()) {
+    sections.push('');
+    sections.push('## CLI orchestration hints');
+    sections.push(options.orchestration.trim());
+  }
+  return sections.join('\n');
+}
+
+/** Validate a skill name for `/skill init`: kebab/underscore identifier only. */
+export function isValidSkillName(name: string): boolean {
+  return /^[A-Za-z0-9][\w-]*$/.test(name);
+}
+
+/**
+ * CC-SKILLS-D4 — the SKILL.md template a fresh `/skill init <name>` scaffolds.
+ * Uses BrainRouter's OWN frontmatter (name/description/disallowed-tools) — no
+ * '.claude' anything. Pure so tests can assert the shape.
+ */
+export function renderSkillTemplate(name: string): string {
+  return [
+    '---',
+    `name: ${name}`,
+    `description: One-line summary of when to use the ${name} skill.`,
+    '# CC-SKILLS-D3 — optionally forbid tools for the turn this skill runs, e.g.:',
+    '# disallowed-tools: [run_command, write_file]',
+    '---',
+    '',
+    `# ${name}`,
+    '',
+    '## When to use',
+    '',
+    `Describe the situations where the ${name} skill should be invoked.`,
+    '',
+    '## Workflow',
+    '',
+    '1. First step.',
+    '2. Second step.',
+    '3. Verify the outcome.',
+    '',
+    '## Red flags',
+    '',
+    '- Note anti-patterns the agent should avoid.',
+    '',
+  ].join('\n');
+}
+
+export interface ScaffoldSkillResult {
+  path: string;
+  created: boolean;
+}
+
+/**
+ * CC-SKILLS-D4 — scaffold `<workspaceRoot>/.brainrouter/skills/<name>/SKILL.md`
+ * from the template. BrainRouter's OWN local skill root — never a '.claude'
+ * path. Returns the file path and whether it was newly created. When the file
+ * already exists it is NOT overwritten unless `force` is set.
+ */
+export function scaffoldSkill(
+  workspaceRoot: string,
+  name: string,
+  opts: { force?: boolean } = {},
+): ScaffoldSkillResult {
+  if (!isValidSkillName(name)) {
+    throw new Error(`Invalid skill name "${name}" — use letters, digits, dashes or underscores.`);
+  }
+  const dir = path.join(workspaceRoot, '.brainrouter', 'skills', name);
+  const file = path.join(dir, 'SKILL.md');
+  if (fs.existsSync(file) && !opts.force) {
+    return { path: file, created: false };
+  }
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file, renderSkillTemplate(name), 'utf8');
+  return { path: file, created: true };
 }
 
 function readSkillFromFilesystem(workspaceRoot: string, name: string): string | undefined {

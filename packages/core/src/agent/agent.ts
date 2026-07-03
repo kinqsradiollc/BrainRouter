@@ -252,6 +252,7 @@ import {
   createSystemMessage as createSystemMessageImpl,
   hookEnforceActive as hookEnforceActiveImpl,
   hookAdvisoryActive as hookAdvisoryActiveImpl,
+  hookNotifyActive as hookNotifyActiveImpl,
   runExtensionHooks as runExtensionHooksImpl,
   autoCaptureRequirement as autoCaptureRequirementImpl,
   autoSynchronizeRequirementPlanTrack as autoSynchronizeRequirementPlanTrackImpl,
@@ -619,6 +620,9 @@ export class Agent {
   public readonly resultCache = new ResultCache(getCliKnobs().offloadRetentionMs, getCliKnobs().offloadMaxEntries);
   /** PARITY-E3: set once we've switched to cli.fallbackModel this turn. */
   public triedModelFallback = false;
+  /** CC-CONFIG-A2: models already attempted this turn (primary + each fallback tried),
+   *  so the ordered fallback chain cascades without re-trying a dead model. */
+  public triedModels = new Set<string>();
   public initialized = false;
   public recalledRecordIds: string[] = [];
   public recalledRecords: RecalledRecord[] = [];
@@ -767,6 +771,14 @@ export class Agent {
    * Null/undefined when no skill is active.
    */
   public activeSkill?: string;
+  /**
+   * CC-SKILLS-D3 — per-turn tool blacklist declared by the active skill's
+   * `disallowed-tools` frontmatter. Merged into the same disallow path as the
+   * role/agent-def `disallowedTools` for the turn the skill runs, then cleared
+   * (like `activeSkill`) once the turn settles. Empty when no skill is active
+   * or the active skill declares no disallowed tools.
+   */
+  public activeSkillDisallowedTools: string[] = [];
   /**
    * Parent trace context (set by spawn_agent for child agents). When present,
    * the per-turn span uses these as its trace/parent so OTEL viewers can
@@ -1360,11 +1372,27 @@ export class Agent {
   /** 0.4.x-4 (`/context`) — per-tool call counts (which tools ran, how often). */
   public toolCallCounts: Map<string, number> = new Map();
 
+  /**
+   * CC-UX-E3 (`/usage`) — per-MCP-server tool-call counts. Keyed by the MCP
+   * server id derived from the tool name (`mcp_<server>_<tool>`); local /
+   * orchestration tools are not counted here. Lets `/usage` attribute dispatch
+   * to each connected MCP server. Reset alongside `toolCallCounts`.
+   */
+  public mcpServerCallCounts: Map<string, number> = new Map();
+
   /** Last assistant message of the most recent turn — used by `/copy`. */
   public lastAnswer = '';
 
   /** Last user prompt (post-mention-expansion). Used by `/continue` to resume after a loop-limit abort. */
   public lastUserPrompt = '';
+
+  /**
+   * CC-hooks parity — additionalContext a `stop` / `subagent-stop` hook asked
+   * to inject back into the model on the NEXT turn. Drained (read + cleared)
+   * at the top of `runTurn` and appended to the incoming prompt. A parent that
+   * spawns a child can also seed this from the child's subagent-stop output.
+   */
+  public pendingStopContext: string | undefined = undefined;
 
   /** True when the most recent turn hit the loop-limit ceiling before producing a final answer. */
   public lastTurnHitLoopLimit = false;
@@ -1386,6 +1414,62 @@ export class Agent {
     if (this.chatHistory.length > 0 && this.chatHistory[0].role === 'system') {
       this.chatHistory[0] = this.createSystemMessage();
     }
+  }
+
+  /**
+   * CC-UX-E1 — `/cd <path>`: move this session's working directory (the root all
+   * path resolution, run_command cwd, and code-index operations are bound to)
+   * to a new location WITHOUT dropping the transcript or memory. The chat
+   * history, sessionKey, and memory bucket are session-scoped and survive; only
+   * the filesystem anchor changes.
+   *
+   * Because path resolution, the read-before-edit ledger, and any child /
+   * worktree context are all anchored to the OLD root, moving the root
+   * invalidates them: the read ledger is cleared (a file at the same relative
+   * path in the new root is a different file), and any pending-child /
+   * last-turn worktree bookkeeping is reset so a subsequent turn doesn't try to
+   * apply an old-root patch against the new root. The system prompt is
+   * refreshed so the model sees the new workspace line.
+   *
+   * Returns the resolved absolute path on success. Throws on an invalid path
+   * (does not exist / is not a directory) so the caller can surface the error
+   * and leave the session pointed at the old root.
+   */
+  public changeWorkspace(target: string): string {
+    const raw = String(target ?? '').trim();
+    if (!raw) throw new Error('Usage: /cd <path> — a directory path is required.');
+    // Resolve relative to the CURRENT workspace root (so `/cd ../sibling`
+    // works), falling back to absolute paths verbatim. `~` expands to $HOME.
+    const home = process.env.HOME || process.env.USERPROFILE || '';
+    const expanded = raw === '~' ? home : raw.startsWith('~/') && home ? path.join(home, raw.slice(2)) : raw;
+    const resolved = path.isAbsolute(expanded)
+      ? path.resolve(expanded)
+      : path.resolve(this.workspaceRoot, expanded);
+    let stat: import('node:fs').Stats;
+    try {
+      stat = fs.statSync(resolved);
+    } catch {
+      throw new Error(`Path does not exist: ${resolved}`);
+    }
+    if (!stat.isDirectory()) {
+      throw new Error(`Not a directory: ${resolved}`);
+    }
+    // Canonicalise (resolve symlinks) so downstream path checks compare like
+    // for like — matches how the constructor's callers hand us a realpath.
+    let canonical = resolved;
+    try { canonical = fs.realpathSync(resolved); } catch { /* keep resolved */ }
+    if (canonical === this.workspaceRoot) return canonical; // no-op
+    this.workspaceRoot = canonical;
+    // The read-before-edit ledger and authored-commit set are keyed on the old
+    // root's absolute paths / HEAD — invalid against the new root.
+    this.filesReadThisSession = new Set();
+    this.agentAuthoredCommits = new Set();
+    // Reset child / worktree carry-over so a later turn doesn't apply an
+    // old-root patch or resume a child rooted at the prior workspace.
+    this.lastTurnPendingChildIds = [];
+    // Re-anchor the system prompt (it embeds the workspace root line).
+    this.refreshSystemPrompt();
+    return canonical;
   }
 
   /**
@@ -1439,6 +1523,7 @@ export class Agent {
     // 0.4.x-4 — per-skill + per-tool accounting is session-scoped too.
     this.usageBySkill = new Map();
     this.toolCallCounts = new Map();
+    this.mcpServerCallCounts = new Map(); // CC-UX-E3
     // 9b: session-boundary reset for gated recall.
     this.recallHasFiredThisSession = false;
     this.recallNextTurnIsPostCompaction = false;
@@ -1501,6 +1586,10 @@ export class Agent {
 
   public hookAdvisoryActive(): boolean {
     return hookAdvisoryActiveImpl.call(this);
+  }
+
+  public hookNotifyActive(): boolean {
+    return hookNotifyActiveImpl.call(this);
   }
 
   public async runExtensionHooks(

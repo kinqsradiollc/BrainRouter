@@ -7,7 +7,8 @@
  */
 
 import chalk from 'chalk';
-import { saveConfig } from '@kinqs/brainrouter-core/config';
+import { saveConfig, getCliKnobs } from '@kinqs/brainrouter-core/config';
+import { assertModelAllowed } from '@kinqs/brainrouter-core/provider';
 import { readPreferences, resolveEffort, writePreferences, normalizeEffort, getSessionMode, resolveActiveMode, setSessionMode, setSessionRuntime } from '@kinqs/brainrouter-core/session';
 import { PROVIDER_CATALOG, findProvider } from '@kinqs/brainrouter-core/provider';
 import { loadApiKeyPrefixesConfig } from '@kinqs/brainrouter-core/config';
@@ -28,6 +29,22 @@ export async function tryHandleUiModelCommand(ctx: CommandContext): Promise<bool
       // Direct-switch form `/model <name>` stays for scripts and muscle
       // memory. No-arg opens the picker (0.3.7).
       if (newModel) {
+        // CC-CONFIG-A3 — allowlist gate. Refuse an unlisted model when the
+        // install enforces `availableModels`, OR when the session is in Fast
+        // mode (Fast trades approvals for speed, so it must not silently swap to
+        // an un-sanctioned model). A clear message names the permitted set.
+        const knobs = getCliKnobs();
+        const inFastMode = resolveActiveMode(agent.workspaceRoot, agent.sessionKey).executionMode === 'fast';
+        const gate = assertModelAllowed(
+          newModel,
+          knobs.availableModels,
+          knobs.enforceAvailableModels || inFastMode,
+          inFastMode ? 'Fast mode' : 'This install',
+        );
+        if (gate) {
+          console.log(chalk.red(`\n✗ ${gate}\n`));
+          return true;
+        }
         agent.setModel(newModel);
         if (sessionOnly) {
           setSessionRuntime(agent.workspaceRoot, agent.sessionKey, { model: newModel });

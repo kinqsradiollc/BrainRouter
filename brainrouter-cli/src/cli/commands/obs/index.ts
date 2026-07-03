@@ -117,6 +117,10 @@ export async function tryHandleObsCommand(ctx: CommandContext): Promise<boolean>
         children,
         offload: agent.getOffloadTotals(),
         prefixStability: agent.getPrefixStability(), // WS0 — prefix-cache stability line
+        // CC-UX-E3 — per-category breakdown (skill, MCP server; cache misses in
+        // the cache line). Subagents are already the `children` rows above.
+        bySkill: Array.from(agent.usageBySkill.entries()).map(([skill, u]) => ({ skill, ...u })),
+        byMcpServer: Array.from(agent.mcpServerCallCounts.entries()).map(([server, calls]) => ({ server, calls })),
       });
       console.log('');
       for (const l of lines) console.log(l);

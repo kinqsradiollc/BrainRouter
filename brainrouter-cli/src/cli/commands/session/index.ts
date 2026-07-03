@@ -351,6 +351,32 @@ export async function tryHandleSessionCommand(ctx: CommandContext): Promise<bool
       });
       return true;
     }
+    case '/cd': {
+      // CC-UX-E1 — move the session's working directory without dropping the
+      // transcript or memory. Path resolution, run_command cwd, and the code
+      // index re-anchor to the new root; the read ledger + child/worktree
+      // carry-over are reset (agent.changeWorkspace does the heavy lifting).
+      const target = args.join(' ').trim();
+      if (!target) {
+        console.log(chalk.gray(`\nCurrent workspace: ${chalk.blue(agent.workspaceRoot)}`));
+        console.log(chalk.gray('Usage: /cd <path>\n'));
+        return true;
+      }
+      const prev = agent.workspaceRoot;
+      try {
+        const next = agent.changeWorkspace(target);
+        if (next === prev) {
+          console.log(chalk.gray(`\nAlready in ${chalk.blue(next)}\n`));
+        } else {
+          console.log(chalk.green(`\n✓ Workspace → ${chalk.blue(next)}`));
+          console.log(chalk.gray('  Transcript + memory kept; read-ledger and child/worktree context reset.\n'));
+        }
+        replCtx.refreshPromptForMode();
+      } catch (err: any) {
+        console.log(chalk.red(`\n${err?.message ?? String(err)}\n`));
+      }
+      return true;
+    }
     case '/clear': {
       agent.clearHistory();
       console.log(chalk.yellow('\nConversation history cleared.\n'));

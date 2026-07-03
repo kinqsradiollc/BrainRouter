@@ -19,12 +19,48 @@
  *   - an ALLOW match downgrades an `ask` decision to `allow` (fewer prompts)
  *     but NEVER overrides a mode-based deny — rules can't escalate read mode
  *     into writes.
+ *
+ * CC-SAFETY-B3 — a rule's glob may reference the home dir or the workspace root
+ * via `~`, `$HOME`, or `$WORKSPACE` (the same tokens sandbox roots accept), so
+ * `read_file(~/.ssh/**)` / `read_file($HOME/.env)` match the resolved absolute
+ * path a tool call carries. Expansion happens at parse time — see `expandPathVars`.
  * Pure → unit-tested.
  */
+
+import os from 'node:os';
 
 export interface PermissionRules {
   allow?: string[];
   deny?: string[];
+}
+
+/**
+ * CC-SAFETY-B3 — expand `~`, `$HOME`, and `$WORKSPACE` in a path-ish rule glob
+ * to absolute prefixes, so a config rule written with a variable matches the
+ * absolute path a tool call actually carries. A glob with none of these tokens
+ * (a bare `*`, a URL pattern) is returned unchanged. Pure — `home`/`workspace`
+ * are injectable (default to the live env) for deterministic tests.
+ *
+ *   ~/.ssh/**       → /Users/me/.ssh/**
+ *   $HOME/.env      → /Users/me/.env
+ *   $WORKSPACE/dist → /repo/dist
+ */
+export function expandPathVars(
+  glob: string,
+  vars?: { home?: string; workspace?: string },
+): string {
+  if (!glob) return glob;
+  const home = (vars?.home ?? os.homedir() ?? '').replace(/[/\\]+$/, '');
+  const workspace = (vars?.workspace ?? process.env.WORKSPACE ?? process.cwd() ?? '').replace(/[/\\]+$/, '');
+  let out = glob;
+  // Leading `~` (either `~` alone or `~/...`) → home. Only a LEADING `~` is a
+  // home reference; a mid-string `~` stays literal.
+  if (out === '~') out = home;
+  else if (out.startsWith('~/')) out = home + out.slice(1);
+  // $HOME / ${HOME} and $WORKSPACE / ${WORKSPACE}, anywhere in the pattern.
+  if (home) out = out.replace(/\$\{?HOME\}?/g, home);
+  if (workspace) out = out.replace(/\$\{?WORKSPACE\}?/g, workspace);
+  return out;
 }
 
 interface ParsedRule {
@@ -33,14 +69,16 @@ interface ParsedRule {
   argGlob: string | null;
 }
 
-/** Parse `tool` or `tool(pattern)` into its parts. Returns null for garbage. Pure. */
-export function parseRule(rule: string): ParsedRule | null {
+/** Parse `tool` or `tool(pattern)` into its parts. Returns null for garbage. Pure.
+ * CC-SAFETY-B3 — `~` / `$HOME` / `$WORKSPACE` in the glob are expanded to absolute
+ * prefixes (before lowercasing) so a variable-written rule matches the resolved path. */
+export function parseRule(rule: string, vars?: { home?: string; workspace?: string }): ParsedRule | null {
   const trimmed = (rule ?? '').trim();
   if (!trimmed) return null;
   const m = trimmed.match(/^([A-Za-z0-9_-]+)\s*(?:\((.*)\))?$/);
   if (!m) return null;
   const tool = m[1];
-  const argGlob = m[2] !== undefined ? m[2].trim().toLowerCase() : null;
+  const argGlob = m[2] !== undefined ? expandPathVars(m[2].trim(), vars).toLowerCase() : null;
   return { tool, argGlob: argGlob === '' ? null : argGlob };
 }
 
@@ -50,9 +88,15 @@ function globToRegExp(glob: string): RegExp {
   return new RegExp(`^${escaped}$`, 'i');
 }
 
-/** True iff `rule` matches this tool call. Pure. */
-export function ruleMatches(rule: string, toolName: string, argText: string): boolean {
-  const parsed = parseRule(rule);
+/** True iff `rule` matches this tool call. Pure.
+ * `vars` (CC-SAFETY-B3) supplies `~`/`$HOME`/`$WORKSPACE` expansion for the glob. */
+export function ruleMatches(
+  rule: string,
+  toolName: string,
+  argText: string,
+  vars?: { home?: string; workspace?: string },
+): boolean {
+  const parsed = parseRule(rule, vars);
   if (!parsed) return false;
   if (parsed.tool !== toolName) return false;
   if (parsed.argGlob === null) return true;
@@ -62,15 +106,19 @@ export function ruleMatches(rule: string, toolName: string, argText: string): bo
 /**
  * Evaluate the rule lists for a call. Returns 'deny' | 'allow' | null
  * (no rule matched). Deny wins over allow. Pure.
+ *
+ * `vars` (CC-SAFETY-B3) is threaded into each rule's glob expansion so a rule
+ * like `read_file(~/.ssh/**)` matches the resolved absolute path a tool carries.
  */
 export function evaluatePermissionRules(
   rules: PermissionRules | undefined,
   toolName: string,
   argText: string,
+  vars?: { home?: string; workspace?: string },
 ): 'allow' | 'deny' | null {
   if (!rules) return null;
-  for (const r of rules.deny ?? []) if (ruleMatches(r, toolName, argText)) return 'deny';
-  for (const r of rules.allow ?? []) if (ruleMatches(r, toolName, argText)) return 'allow';
+  for (const r of rules.deny ?? []) if (ruleMatches(r, toolName, argText, vars)) return 'deny';
+  for (const r of rules.allow ?? []) if (ruleMatches(r, toolName, argText, vars)) return 'allow';
   return null;
 }
 
