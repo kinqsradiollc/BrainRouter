@@ -4,10 +4,10 @@
  */
 import React, { useMemo, useState } from 'react';
 import type { TrackProject, AutomationRule, AutomationTrigger, AutomationAction, AutomationActionType } from '@kinqs/brainrouter-types';
-import { parseTrackQuery } from '../../lib/track/query.js';
-import { Icon } from '../../icons.js';
-import { TrackDropdown } from '../Dropdown.js';
-import type { TrackOps } from './types.js';
+import { parseTrackQuery } from '../../../lib/track/query.js';
+import { Icon } from '../../../icons.js';
+import { TrackDropdown } from '../../Dropdown.js';
+import type { TrackOps } from '../shared/types.js';
 
 const TRIGGERS: Array<{ id: AutomationTrigger; label: string; hint: string }> = [
   { id: 'created', label: 'When created', hint: 'a new work item is added' },

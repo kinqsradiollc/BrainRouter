@@ -6,7 +6,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { TrackProject, WorkItem, SavedView } from '@kinqs/brainrouter-types';
-import { Icon } from '../../icons.js';
+import { Icon } from '../../../icons.js';
 import { TYPE_ICON } from './types.js';
 
 /** True when the search text looks like a JQL query (has an operator/keyword). */

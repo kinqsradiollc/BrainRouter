@@ -4,10 +4,10 @@
  */
 import React, { useState } from 'react';
 import type { TrackProject, WorkItem, Sprint } from '@kinqs/brainrouter-types';
-import { Icon } from '../../icons.js';
-import { TrackDropdown } from '../Dropdown.js';
-import { TYPE_ICON, type TrackOps } from './types.js';
-import { Card } from './helpers.js';
+import { Icon } from '../../../icons.js';
+import { TrackDropdown } from '../../Dropdown.js';
+import { TYPE_ICON, type TrackOps } from '../shared/types.js';
+import { Card } from '../shared/helpers.js';
 
 export function ListView({ items, states, onOpen }: { items: WorkItem[]; states: TrackProject['workflowStates']; onOpen: (w: WorkItem) => void }): React.ReactElement {
   return (

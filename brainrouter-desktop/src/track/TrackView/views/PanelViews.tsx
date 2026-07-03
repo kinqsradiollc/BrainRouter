@@ -4,9 +4,9 @@
  */
 import React, { useState } from 'react';
 import type { TrackProject, WorkItem, WorkItemType, WorkItemPriority, Sprint, Module, ModuleStatus } from '@kinqs/brainrouter-types';
-import { Icon } from '../../icons.js';
-import { TrackDropdown } from '../Dropdown.js';
-import { TYPE_ICON, type TrackOps } from './types.js';
+import { Icon } from '../../../icons.js';
+import { TrackDropdown } from '../../Dropdown.js';
+import { TYPE_ICON, type TrackOps } from '../shared/types.js';
 
 const MODULE_STATUSES: ModuleStatus[] = ['backlog', 'planned', 'in-progress', 'paused', 'completed', 'cancelled'];
 

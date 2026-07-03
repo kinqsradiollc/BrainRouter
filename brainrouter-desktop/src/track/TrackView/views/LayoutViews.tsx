@@ -4,9 +4,9 @@
  */
 import React, { useState } from 'react';
 import type { TrackProject, WorkItem } from '@kinqs/brainrouter-types';
-import { Icon } from '../../icons.js';
-import { TYPE_ICON } from './types.js';
-import { fmtDate, isoToLocalDate } from './helpers.js';
+import { Icon } from '../../../icons.js';
+import { TYPE_ICON } from '../shared/types.js';
+import { fmtDate, isoToLocalDate } from '../shared/helpers.js';
 
 export function SpreadsheetView({ items, states, onOpen }: { items: WorkItem[]; states: TrackProject['workflowStates']; onOpen: (w: WorkItem) => void }): React.ReactElement {
   const stateName = (id: string): string => states.find((s) => s.id === id)?.name ?? id;

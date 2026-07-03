@@ -4,10 +4,10 @@
  */
 import React, { useState } from 'react';
 import type { ProjectMember, ProjectRole, ProjectCapability } from '@kinqs/brainrouter-types';
-import { roleCan } from '../../lib/track/permissions.js';
-import { Icon } from '../../icons.js';
-import { TrackDropdown } from '../Dropdown.js';
-import type { TrackOps } from './types.js';
+import { roleCan } from '../../../lib/track/permissions.js';
+import { Icon } from '../../../icons.js';
+import { TrackDropdown } from '../../Dropdown.js';
+import type { TrackOps } from '../shared/types.js';
 
 const ROLES: Array<{ id: ProjectRole; label: string; blurb: string }> = [
   { id: 'owner', label: 'Owner', blurb: 'Full control, incl. members & deletion' },

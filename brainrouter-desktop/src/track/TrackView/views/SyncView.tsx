@@ -4,8 +4,8 @@
  * TrackView.tsx byte-for-byte; no behavior change.
  */
 import React, { useState } from 'react';
-import { Icon } from '../../icons.js';
-import type { SyncConfig, SyncResult, GitTrackContext, TrackOps } from './types.js';
+import { Icon } from '../../../icons.js';
+import type { SyncConfig, SyncResult, GitTrackContext, TrackOps } from '../shared/types.js';
 
 type SyncBusy = 'import' | 'export' | 'sync' | 'gh-import' | 'scan' | 'refresh-git' | null;
 
