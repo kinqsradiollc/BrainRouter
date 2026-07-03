@@ -8,7 +8,7 @@ import {
   WORKER_THREAD_TOOLS,
 } from '../tool/registry.js';
 import { actionKindForTool } from '../exec/execPolicy.js';
-import { isParallelSafe } from '../agent/toolSafety.js';
+import { isParallelSafe } from '../agent/tools/toolSafety.js';
 import { LOCAL_TOOLS } from '../tool/specs.js';
 import {
   assertLocalToolExecutorInvariants,

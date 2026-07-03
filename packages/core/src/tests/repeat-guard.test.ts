@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isSequenceGuardExempt, DEFAULT_SEQUENCE_GUARD_EXEMPT, buildSequenceSignature } from '../agent/repeatGuard.js';
+import { isSequenceGuardExempt, DEFAULT_SEQUENCE_GUARD_EXEMPT, buildSequenceSignature } from '../agent/turn/repeatGuard.js';
 
 const EXEMPT = new Set(DEFAULT_SEQUENCE_GUARD_EXEMPT);
 

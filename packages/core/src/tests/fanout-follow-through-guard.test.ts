@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { shouldRunFanOutFollowThroughGuard } from '../agent/fanOutFollowThroughGuard.js';
+import { shouldRunFanOutFollowThroughGuard } from '../agent/turn/fanOutFollowThroughGuard.js';
 
 const base = {
   fanOutHinted: true,

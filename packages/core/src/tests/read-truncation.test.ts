@@ -4,7 +4,7 @@ import {
   truncateFullRead,
   READ_FILE_MAX_LINES,
   READ_FILE_MAX_CHARS,
-} from '../agent/readTruncation.js';
+} from '../agent/fs/readTruncation.js';
 
 test('truncateFullRead: small file is returned untouched', () => {
   const r = truncateFullRead('a\nb\nc\n', 'x.ts');

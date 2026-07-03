@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyDenial, formatDenialResult } from '../agent/denialMessage.js';
+import { classifyDenial, formatDenialResult } from '../agent/tools/denialMessage.js';
 
 test('classifyDenial: user-declined paths', () => {
   assert.equal(classifyDenial('MCP tool "x" rejected by user.'), 'user-declined');

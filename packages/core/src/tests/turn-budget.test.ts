@@ -6,7 +6,7 @@ import {
   buildBudgetCheckpoint,
   buildBudgetCeilingMessage,
   MAX_BUDGET_EXTENSIONS,
-} from '../agent/turnBudget.js';
+} from '../agent/turn/turnBudget.js';
 
 test('resolveToolBudget: window floors at 5, hard ceiling is a bounded multiple', () => {
   assert.deepEqual(resolveToolBudget(250), { window: 250, hardCeiling: 250 * (MAX_BUDGET_EXTENSIONS + 1) });

@@ -4,73 +4,73 @@
 // before. Imports mirror the symbols the loop referenced inside the class.
 import chalk from 'chalk';
 import path from 'node:path';
-import type { Agent, RunTurnCallbacks } from './agent.js';
-import { getCliKnobs } from '../config/config.js';
-import { linkArtifact } from '../artifact/artifactStore.js';
-import { contextWindowForBudget } from '../context/contextWindow.js';
-import { resolveToolPolicy, externalDirectoryDecision } from '../exec/execPolicy.js';
-import { isPathWithinRoots } from '../exec/pathPolicy.js';
-import { evaluatePermissionRules, primaryArgText } from '../exec/permissionRules.js';
-import { readGoal, formatGoalBlock } from '../goal/goalStore.js';
-import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../hooks/hookifyStore.js';
-import { runHooks, parseHookDecision } from '../hooks/hooksStore.js';
-import { extractToolText } from '../mcp/mcpUtils.js';
-import { reconnectBackoffMs, probeConnectivity } from '../mcp/reconnect.js';
-import { listAll as listAgentDefinitions } from '../orchestration/agentRegistry.js';
-import { executeOrchestrationTool, isOrchestrationToolName, synthesizeDelegateTools, OrchestrationContext } from '../orchestration/tools.js';
-import { buildFanOutHint, shouldSuggestFanOut } from '../prompt/breadthHint.js';
-import { buildNextActionMessages, parseNextActionPlan, nextActionDirective, planWantsFanOut, shouldSkipPlanner } from '../prompt/nextAction.js';
-import { compactToolOutput } from '../prompt/toolCompaction.js';
-import { isModelNotFoundError, shouldFallbackModel } from '../provider/modelFallback.js';
-import { resolveLocalModelProfile, localModelProfileActive, isLocalModelCoreTool } from '../provider/modelFamily.js';
-import { currentTier, detectNeedsHigh, nextTier, resolveTierLadder, stripNeedsHigh } from '../provider/tierLadder.js';
-import { drainCompletions, formatCompletionFeedback } from '../session/completionInbox.js';
-import { resolveActiveMode } from '../session/sessionModeStore.js';
-import { isInternalSessionKey } from '../session/sessionStore.js';
-import { isConnectivityError, isRetryableServerError } from '../storage/checkpointStore.js';
-import { readPlan } from '../task/taskStore.js';
-import { startSpan, traceEvent } from '../telemetry/tracing.js';
-import { localToolSpecsFromExecutors } from '../tool/executors.js';
-import { normalizeToolName } from '../tool/names.js';
-import { registryAllowedTools, hideWorkerToolsFor, WORKER_THREAD_TOOLS, MCP_DISCOVERY_TOOLS } from '../tool/registry.js';
-import { LOCAL_TOOLS } from '../tool/specs.js';
-import { applyToolScope, rankAndCapTools } from '../tool/toolBudget.js';
-import { resolveToolVisible } from '../tool/toolPolicy.js';
-import { extractCacheStats } from '../util/cacheStats.js';
-import { unsynthesizedChildIds, mergePendingChildIds, buildPendingChildStatusHint } from '../util/childResume.js';
-import { applyFederationIdentity } from '../util/federationIdentity.js';
-import { sanitizeModelArtifacts } from '../util/outputSanitize.js';
-import { makeResultHandoff, formatHandoffForModel, attachCompactedResultHandoff } from '../util/resultHandoff.js';
-import { isChildSynthesisTool, resultHasChildOutput, looksLikeChildSynthesisPunt } from '../util/synthesisGuard.js';
-import { estimateChatHistoryTokens } from '../util/tokenEstimate.js';
+import type { Agent, RunTurnCallbacks } from '../agent.js';
+import { getCliKnobs } from '../../config/config.js';
+import { linkArtifact } from '../../artifact/artifactStore.js';
+import { contextWindowForBudget } from '../../context/contextWindow.js';
+import { resolveToolPolicy, externalDirectoryDecision } from '../../exec/execPolicy.js';
+import { isPathWithinRoots } from '../../exec/pathPolicy.js';
+import { evaluatePermissionRules, primaryArgText } from '../../exec/permissionRules.js';
+import { readGoal, formatGoalBlock } from '../../goal/goalStore.js';
+import { buildHookifyContext, evaluateHookify, listHookifyRules } from '../../hooks/hookifyStore.js';
+import { runHooks, parseHookDecision } from '../../hooks/hooksStore.js';
+import { extractToolText } from '../../mcp/mcpUtils.js';
+import { reconnectBackoffMs, probeConnectivity } from '../../mcp/reconnect.js';
+import { listAll as listAgentDefinitions } from '../../orchestration/agentRegistry.js';
+import { executeOrchestrationTool, isOrchestrationToolName, synthesizeDelegateTools, OrchestrationContext } from '../../orchestration/tools.js';
+import { buildFanOutHint, shouldSuggestFanOut } from '../../prompt/breadthHint.js';
+import { buildNextActionMessages, parseNextActionPlan, nextActionDirective, planWantsFanOut, shouldSkipPlanner } from '../../prompt/nextAction.js';
+import { compactToolOutput } from '../../prompt/toolCompaction.js';
+import { isModelNotFoundError, shouldFallbackModel } from '../../provider/modelFallback.js';
+import { resolveLocalModelProfile, localModelProfileActive, isLocalModelCoreTool } from '../../provider/modelFamily.js';
+import { currentTier, detectNeedsHigh, nextTier, resolveTierLadder, stripNeedsHigh } from '../../provider/tierLadder.js';
+import { drainCompletions, formatCompletionFeedback } from '../../session/completionInbox.js';
+import { resolveActiveMode } from '../../session/sessionModeStore.js';
+import { isInternalSessionKey } from '../../session/sessionStore.js';
+import { isConnectivityError, isRetryableServerError } from '../../storage/checkpointStore.js';
+import { readPlan } from '../../task/taskStore.js';
+import { startSpan, traceEvent } from '../../telemetry/tracing.js';
+import { localToolSpecsFromExecutors } from '../../tool/executors.js';
+import { normalizeToolName } from '../../tool/names.js';
+import { registryAllowedTools, hideWorkerToolsFor, WORKER_THREAD_TOOLS, MCP_DISCOVERY_TOOLS } from '../../tool/registry.js';
+import { LOCAL_TOOLS } from '../../tool/specs.js';
+import { applyToolScope, rankAndCapTools } from '../../tool/toolBudget.js';
+import { resolveToolVisible } from '../../tool/toolPolicy.js';
+import { extractCacheStats } from '../../util/cacheStats.js';
+import { unsynthesizedChildIds, mergePendingChildIds, buildPendingChildStatusHint } from '../../util/childResume.js';
+import { applyFederationIdentity } from '../../util/federationIdentity.js';
+import { sanitizeModelArtifacts } from '../../util/outputSanitize.js';
+import { makeResultHandoff, formatHandoffForModel, attachCompactedResultHandoff } from '../../util/resultHandoff.js';
+import { isChildSynthesisTool, resultHasChildOutput, looksLikeChildSynthesisPunt } from '../../util/synthesisGuard.js';
+import { estimateChatHistoryTokens } from '../../util/tokenEstimate.js';
 import { classifyDeferral, buildDeliverableCorrection } from './deliverableCheck.js';
-import { classifyDenial, formatDenialResult } from './denialMessage.js';
+import { classifyDenial, formatDenialResult } from '../tools/denialMessage.js';
 import { resolveEffortForTurn } from './effortRouting.js';
 import { shouldRunFanOutFollowThroughGuard } from './fanOutFollowThroughGuard.js';
-import { assessMcpToolApproval } from './mcpApproval.js';
-import { NoTTYError } from './prompter.js';
-import { analyzeSchema, flattenSchema, nestArguments, type JSONSchema } from './repair/flatten.js';
-import { ToolCallRepair } from './repair/index.js';
+import { assessMcpToolApproval } from '../tools/mcpApproval.js';
+import { NoTTYError } from '../prompt/prompter.js';
+import { analyzeSchema, flattenSchema, nestArguments, type JSONSchema } from '../repair/flatten.js';
+import { ToolCallRepair } from '../repair/index.js';
 import { isSequenceGuardExempt, buildSequenceSignature } from './repeatGuard.js';
 import { shouldNudgeTaskTracking, buildTaskTrackingNudge } from './taskTrackingNudge.js';
 import {
   dedupeToolCalls, looksLikeDeferredToolPromise, looksLikeStalledPreamble, mentionsImminentToolWork,
   parseArgumentsOrError, sanitizeToolCallPairing, suggestSimilarToolName, synthesizeOrphanResults,
-} from './toolCallRecovery.js';
-import { isParallelSafe, parallelExecutionEnabled } from './toolSafety.js';
+} from '../tools/toolCallRecovery.js';
+import { isParallelSafe, parallelExecutionEnabled } from '../tools/toolSafety.js';
 import { resolveToolBudget, isBudgetCheckpoint, buildBudgetCheckpoint, buildBudgetCeilingMessage } from './turnBudget.js';
 import { classifyForVerification, commandWritesFiles, decideVerification, buildVerificationNudge, buildDocsOnlyVerificationNote } from './verificationGate.js';
-import { isTelemetryEnabled } from '../telemetry/telemetry.js';
-import { recordDailyUsage } from '../usage/usageHistoryStore.js';
+import { isTelemetryEnabled } from '../../telemetry/telemetry.js';
+import { recordDailyUsage } from '../../usage/usageHistoryStore.js';
 import { shrinkOversizedToolResults } from './turnEndShrink.js';
-import { getToolSummary, getToolPreview } from './toolSummary.js';
-import { trackChildObservation, parseChildDrainTimeouts, formatChildDrainTimeoutAnswer, summarizeWaitedChildOutputs } from './childObservation.js';
-import { sanitizeToolCallsForHistory, explainUnknownToolName } from './agent.js';
+import { getToolSummary, getToolPreview } from '../tools/toolSummary.js';
+import { trackChildObservation, parseChildDrainTimeouts, formatChildDrainTimeoutAnswer, summarizeWaitedChildOutputs } from '../observation/childObservation.js';
+import { sanitizeToolCallsForHistory, explainUnknownToolName } from '../agent.js';
 import {
   buildChatCompletionPayload, buildResponsesPayload, resolveRequestFormat, resolveWireEffort,
   callOpenAI, callOpenAIStream, InterruptError, isInterrupt, activeProviderDef, effortForTurnSelection,
   minimalReasoningEffort, abortableDelay,
-} from './llmTransport.js';
+} from '../transport/llmTransport.js';
 
 export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCallbacks, opts?: { hiddenPrompt?: boolean; images?: Array<{ mediaType: string; dataBase64: string }> }): Promise<string> {
     if (!this.initialized) {

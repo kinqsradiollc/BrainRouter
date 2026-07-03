@@ -4,7 +4,7 @@ import {
   TURN_END_RESULT_CAP_TOKENS,
   shouldProactivelyShrink,
   shrinkOversizedToolResults,
-} from '../agent/turnEndShrink.js';
+} from '../agent/turn/turnEndShrink.js';
 import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
 import { ResultCache } from '../util/resultHandoff.js';
 

@@ -11,7 +11,7 @@ import {
   ANTHROPIC_VERSION,
   ANTHROPIC_DEFAULT_MAX_TOKENS,
   type NativeBuildInput,
-} from '../agent/nativeProviders.js';
+} from '../agent/transport/nativeProviders.js';
 import { resolveRequestFormat } from '../agent/agent.js';
 import { _resetCliKnobsCache, resolveCliKnobs, setCliKnobOverride } from '../config/config.js';
 

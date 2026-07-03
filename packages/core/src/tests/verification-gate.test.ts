@@ -9,7 +9,7 @@ import {
   shouldNudgeVerification,
   buildVerificationNudge,
   buildDocsOnlyVerificationNote,
-} from '../agent/verificationGate.js';
+} from '../agent/turn/verificationGate.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
 
 // --- pure classifiers -------------------------------------------------------

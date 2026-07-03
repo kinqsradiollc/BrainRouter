@@ -2,7 +2,7 @@
 // Byte-identical moves: JSON parsing, child-id collection, spawn/wait tracking,
 // child-drain timeout formatting, and waited-child output summarization. Pure
 // functions consumed by the Agent turn loop.
-import { getCliKnobs } from '../config/config.js';
+import { getCliKnobs } from '../../config/config.js';
 
 export function parseJsonObject(text: string): any | undefined {
   try {

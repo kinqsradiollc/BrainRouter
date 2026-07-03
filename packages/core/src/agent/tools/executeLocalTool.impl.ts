@@ -5,10 +5,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import chalk from 'chalk';
-import type { Agent } from './agent.js';
-import { NoTTYError } from './prompter.js';
-import { getCliKnobs } from '../config/config.js';
-import { createArtifact, updateArtifact, getArtifact } from '../artifact/artifactStore.js';
+import type { Agent } from '../agent.js';
+import { NoTTYError } from '../prompt/prompter.js';
+import { getCliKnobs } from '../../config/config.js';
+import { createArtifact, updateArtifact, getArtifact } from '../../artifact/artifactStore.js';
 
 // Per-turn computer_use action cap — module const in the original agent.ts; kept
 // here (byte-identical value) since executeLocalToolLegacy is its only consumer.
@@ -17,30 +17,30 @@ import {
   listConnectors, runConnectorCheckpointCore, exportConnectorDocumentsForMemory,
   githubTokenClient, defaultEnvTokenResolver,
   type McpConnectorClient, type McpConnectorResource,
-} from '../connectors/index.js';
-import { startBackgroundShell, readBackgroundOutput } from '../exec/backgroundShell.js';
-import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../exec/dangerousCommand.js';
-import { evaluateDestructiveCommand } from '../exec/destructiveCommandGuard.js';
-import { decideExecutionPolicy, egressDecision } from '../exec/execPolicy.js';
-import { resolveSandboxConfig, runShell } from '../exec/sandbox.js';
-import { gitHeadSha } from '../git/workspaceGit.js';
-import { readGoal, blockGoal, completeGoal } from '../goal/goalStore.js';
-import { searchMcpCatalog } from '../mcp/discovery.js';
-import { extractToolText } from '../mcp/mcpUtils.js';
-import { ownershipWriteViolation } from '../orchestration/ownership.js';
-import { spawnWorkerThread, waitWorker } from '../orchestration/workerTools.js';
-import { summarizeLedger, formatBrief } from '../research/evidenceLedger.js';
-import { appendEvidence, setQuestion, readLedger } from '../research/researchStore.js';
-import { CHAPTER_ENTRY_NAME, chapterEntryContent } from '../session/chapterMarks.js';
-import { acknowledgeCompletions } from '../session/completionInbox.js';
-import { readPreferences } from '../session/preferencesStore.js';
-import { resolveActiveMode } from '../session/sessionModeStore.js';
-import { formatPlan, updatePlan, readPlan } from '../task/taskStore.js';
-import { isTelemetryEnabled } from '../telemetry/telemetry.js';
-import { traceEvent } from '../telemetry/tracing.js';
-import { localToolExecutor } from '../tool/executors.js';
-import { runExtractResult } from '../tool/extractResult.js';
-import { parseTrackQuery } from '../track/query.js';
+} from '../../connectors/index.js';
+import { startBackgroundShell, readBackgroundOutput } from '../../exec/backgroundShell.js';
+import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../../exec/dangerousCommand.js';
+import { evaluateDestructiveCommand } from '../../exec/destructiveCommandGuard.js';
+import { decideExecutionPolicy, egressDecision } from '../../exec/execPolicy.js';
+import { resolveSandboxConfig, runShell } from '../../exec/sandbox.js';
+import { gitHeadSha } from '../../git/workspaceGit.js';
+import { readGoal, blockGoal, completeGoal } from '../../goal/goalStore.js';
+import { searchMcpCatalog } from '../../mcp/discovery.js';
+import { extractToolText } from '../../mcp/mcpUtils.js';
+import { ownershipWriteViolation } from '../../orchestration/ownership.js';
+import { spawnWorkerThread, waitWorker } from '../../orchestration/workerTools.js';
+import { summarizeLedger, formatBrief } from '../../research/evidenceLedger.js';
+import { appendEvidence, setQuestion, readLedger } from '../../research/researchStore.js';
+import { CHAPTER_ENTRY_NAME, chapterEntryContent } from '../../session/chapterMarks.js';
+import { acknowledgeCompletions } from '../../session/completionInbox.js';
+import { readPreferences } from '../../session/preferencesStore.js';
+import { resolveActiveMode } from '../../session/sessionModeStore.js';
+import { formatPlan, updatePlan, readPlan } from '../../task/taskStore.js';
+import { isTelemetryEnabled } from '../../telemetry/telemetry.js';
+import { traceEvent } from '../../telemetry/tracing.js';
+import { localToolExecutor } from '../../tool/executors.js';
+import { runExtractResult } from '../../tool/extractResult.js';
+import { parseTrackQuery } from '../../track/query.js';
 import {
   ensureProject as trackEnsureProject,
   getProject as trackGetProject,
@@ -56,23 +56,23 @@ import {
   setSprintState as trackSetSprintState,
   updateSprint as trackUpdateSprint,
   sprintVelocity as trackSprintVelocity,
-} from '../track/trackStore.js';
-import { recordDailyUsage } from '../usage/usageHistoryStore.js';
-import { applyFederationIdentity } from '../util/federationIdentity.js';
-import { runPostEditCheck } from '../util/postEditCheck.js';
-import { estimateTokens as estimateTokensContentAware } from '../util/tokenEstimate.js';
-import { waitUntilCondition } from '../util/waitUntil.js';
-import { fetchAndExtract } from '../websearch/crawler.js';
-import { buildSearchProvider } from '../websearch/factory.js';
-import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../worker/workerStore.js';
-import { getCurrentWorkflow } from '../workflow/workflowArtifacts.js';
-import { advanceRunStep, summarizeRun } from '../workflow/workflowRun.js';
-import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from './applyPatch.js';
-import { evaluateDestructiveAction, isComputerActionMutating, validateComputerAction } from './computerUse.js';
-import { truncateFullRead } from './readTruncation.js';
-import { nestArguments } from './repair/flatten.js';
-import { shrinkOversizedToolResults } from './turnEndShrink.js';
-import { resolveWorkspacePath, globFiles, grepSearch } from './workspaceFs.js';
+} from '../../track/trackStore.js';
+import { recordDailyUsage } from '../../usage/usageHistoryStore.js';
+import { applyFederationIdentity } from '../../util/federationIdentity.js';
+import { runPostEditCheck } from '../../util/postEditCheck.js';
+import { estimateTokens as estimateTokensContentAware } from '../../util/tokenEstimate.js';
+import { waitUntilCondition } from '../../util/waitUntil.js';
+import { fetchAndExtract } from '../../websearch/crawler.js';
+import { buildSearchProvider } from '../../websearch/factory.js';
+import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../../worker/workerStore.js';
+import { getCurrentWorkflow } from '../../workflow/workflowArtifacts.js';
+import { advanceRunStep, summarizeRun } from '../../workflow/workflowRun.js';
+import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from '../fs/applyPatch.js';
+import { evaluateDestructiveAction, isComputerActionMutating, validateComputerAction } from '../computer/computerUse.js';
+import { truncateFullRead } from '../fs/readTruncation.js';
+import { nestArguments } from '../repair/flatten.js';
+import { shrinkOversizedToolResults } from '../turn/turnEndShrink.js';
+import { resolveWorkspacePath, globFiles, grepSearch } from '../fs/workspaceFs.js';
 import { isArtifactKind, isArtifactFormat, isWorkItemType, isWorkItemPriority, type ArtifactKind, type ArtifactFormat } from '@kinqs/brainrouter-types';
 
 export async function executeLocalToolLegacy(this: Agent, name: string, args: Record<string, any>): Promise<string> {
@@ -590,7 +590,7 @@ export async function executeLocalToolLegacy(this: Agent, name: string, args: Re
         }
         if (!args.file) throw new Error('lsp requires a `file`.');
         const resolved = resolveHere(String(args.file));
-        const { runLspQuery } = await import('../lsp/manager.js');
+        const { runLspQuery } = await import('../../lsp/manager.js');
         return await runLspQuery({
           action,
           file: resolved,
