@@ -106,6 +106,51 @@ test('MC-A4 maxLive=0: uncapped — never parks anything', async () => {
   });
 });
 
+test('runtime manager pending turns: queued pre-ready turns flush in order after start', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    const delivered: string[] = [];
+    const mgr = new RuntimeManager({
+      workspaceRoot: ws,
+      executeTurn: async (turn) => {
+        delivered.push(turn.prompt);
+        return `ok:${turn.prompt}`;
+      },
+      maxLive: 0,
+    });
+    const runtimeId = 'rt_pending_order';
+    assert.deepEqual(mgr.queueTurn(runtimeId, { prompt: 'one' }), { accepted: true, queued: 1, dropped: 0 });
+    assert.deepEqual(mgr.queueTurn(runtimeId, { prompt: 'two' }), { accepted: true, queued: 2, dropped: 0 });
+    assert.equal(mgr.pendingCount(runtimeId), 2);
+
+    const rt = await mgr.start({ sessionKey: 's:pending', runtimeId, kind: 'process' });
+    assert.equal(rt.id, runtimeId);
+    assert.deepEqual(delivered, ['one', 'two']);
+    assert.equal(mgr.pendingCount(runtimeId), 0);
+  });
+});
+
+test('runtime manager pending turns: overflow is bounded and preserves older turns', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    const delivered: string[] = [];
+    const mgr = new RuntimeManager({
+      workspaceRoot: ws,
+      executeTurn: async (turn) => {
+        delivered.push(turn.prompt);
+        return `ok:${turn.prompt}`;
+      },
+      maxLive: 0,
+      maxPendingMessages: 2,
+    });
+    const runtimeId = 'rt_pending_cap';
+    assert.equal(mgr.queueTurn(runtimeId, { prompt: 'first' }).accepted, true);
+    assert.equal(mgr.queueTurn(runtimeId, { prompt: 'second' }).accepted, true);
+    assert.deepEqual(mgr.queueTurn(runtimeId, { prompt: 'third' }), { accepted: false, queued: 2, dropped: 1 });
+
+    await mgr.start({ sessionKey: 's:pending-cap', runtimeId, kind: 'process' });
+    assert.deepEqual(delivered, ['first', 'second']);
+  });
+});
+
 test('MC-A4 cap full of mid-turn instances: start fails loudly instead of yanking a running turn', async () => {
   await withTempWorkspaceAsync(async (ws) => {
     let release!: () => void;

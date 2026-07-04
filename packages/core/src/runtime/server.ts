@@ -29,6 +29,7 @@ export interface RuntimeServerHandle {
 
 interface StartRequest {
   sessionKey?: string;
+  runtimeId?: string;
   kind?: RuntimeBackendKind;
   launchCwd?: string;
   role?: string;
@@ -153,6 +154,7 @@ export function createRuntimeRequestHandler(options: RuntimeServerOptions): http
         assertStartAuthorized(req, sessionKey);
         const rt = await options.manager.start({
           sessionKey,
+          runtimeId: typeof body.runtimeId === 'string' ? body.runtimeId.trim() : undefined,
           kind: body.kind,
           launchCwd: body.launchCwd,
           role: body.role,
@@ -171,6 +173,13 @@ export function createRuntimeRequestHandler(options: RuntimeServerOptions): http
         const body = postBody as SendRequest;
         const prompt = typeof body.prompt === 'string' ? body.prompt : '';
         if (!prompt) return sendJson(res, 400, { error: 'prompt_required' });
+        const runtime = options.manager.get(runtimeId);
+        const record = readRuntimeRecord(options.workspaceRoot, runtimeId);
+        if (runtime?.status() === 'starting' || record?.status === 'starting') {
+          const queued = options.manager.queueTurn(runtimeId, { prompt, hidden: body.hidden === true });
+          const status = queued.accepted ? 202 : 429;
+          return sendJson(res, status, { runtimeId, queued: queued.accepted, pending: queued.queued });
+        }
         const result = await options.manager.exec(runtimeId, { prompt, hidden: body.hidden === true });
         return sendJson(res, 200, { runtimeId, output: result.output });
       }
