@@ -10,7 +10,7 @@ import {
 } from './types.js';
 
 /**
- * PLUGIN-MARKETPLACE P4-desktop — the Marketplace panel (plan §3.8).
+ * PLUGIN-MARKETPLACE P4-desktop — the Marketplace panel.
  *
  * Reuses the connectors catalog UI language (source cards + configured grid +
  * portaled dialog). Two tabs:
@@ -171,6 +171,7 @@ export function MarketplaceSettings({ market, onAction, refreshInstalled, refres
                     {p.name}
                     {p.version ? <span className="pc-tag default">v{p.version}</span> : null}
                     <span className={`pc-tag ${p.enabled ? 'ok' : 'default'}`}>{p.enabled ? 'enabled' : 'disabled'}</span>
+                    {p.readOnly ? <span className="pc-tag default">read-only</span> : null}
                     {p.updateAvailable ? <span className="pc-tag danger">update → v{p.updateAvailable}</span> : null}
                   </span>
                   <span className="pc-host">{p.author ? `${p.author} · ` : ''}{p.scope} scope{p.category ? ` · ${p.category}` : ''}</span>
@@ -182,21 +183,21 @@ export function MarketplaceSettings({ market, onAction, refreshInstalled, refres
                     </span>
                   ) : null}
                   <span className="pc-actions">
-                    <button className="btn" onClick={() => {
-                      if (!p.enabled) { askConsent(p.name, 'enable', p.scope); return; }
+                    <button className="btn" disabled={p.readOnly} onClick={() => {
+                      if (!p.enabled) { askConsent(p.name, 'enable', p.scope === 'workspace' ? 'workspace' : 'user'); return; }
                       onAction('a-plugin-enable', 'action:plugin-enable', { name: p.name, enabled: false });
                       setTimeout(refreshInstalled, 250);
                     }}>{p.enabled ? 'Disable' : 'Enable'}</button>
                     {p.requiresConsent && !p.shellApproved ? (
-                      <button className="btn" onClick={() => { onAction('a-plugin-consent-set', 'action:plugin-consent-set', { name: p.name, shell: true }); setTimeout(refreshInstalled, 250); }}>Trust shell</button>
+                      <button className="btn" disabled={p.readOnly} onClick={() => { onAction('a-plugin-consent-set', 'action:plugin-consent-set', { name: p.name, shell: true }); setTimeout(refreshInstalled, 250); }}>Trust shell</button>
                     ) : null}
                     {p.requiresConsent && !p.mcpApproved ? (
-                      <button className="btn" onClick={() => { onAction('a-plugin-consent-set', 'action:plugin-consent-set', { name: p.name, mcp: true }); setTimeout(refreshInstalled, 250); }}>Trust MCP</button>
+                      <button className="btn" disabled={p.readOnly} onClick={() => { onAction('a-plugin-consent-set', 'action:plugin-consent-set', { name: p.name, mcp: true }); setTimeout(refreshInstalled, 250); }}>Trust MCP</button>
                     ) : null}
                     {p.updateAvailable ? (
-                      <button className="btn primary" onClick={() => { onAction('a-plugin-install', 'action:plugin-install', { name: p.name, scope: p.scope, force: true }); setTimeout(refreshInstalled, 500); }}>Update</button>
+                      <button className="btn primary" disabled={p.readOnly} onClick={() => { onAction('a-plugin-install', 'action:plugin-install', { name: p.name, scope: p.scope === 'workspace' ? 'workspace' : 'user', force: true }); setTimeout(refreshInstalled, 500); }}>Update</button>
                     ) : null}
-                    <button className="btn danger" onClick={() => { onAction('a-plugin-remove', 'action:plugin-remove', { name: p.name, scope: p.scope }); setTimeout(refreshInstalled, 250); }}>Remove</button>
+                    <button className="btn danger" disabled={p.readOnly} onClick={() => { onAction('a-plugin-remove', 'action:plugin-remove', { name: p.name, scope: p.scope === 'workspace' ? 'workspace' : 'user' }); setTimeout(refreshInstalled, 250); }}>Remove</button>
                   </span>
                 </div>
               ))}

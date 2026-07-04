@@ -28,6 +28,14 @@ function writeConventionRepo(parent: string, owner: string): string {
   return root;
 }
 
+function writeConventionPlugin(repoRoot: string, name: string): void {
+  const root = path.join(repoRoot, 'plugins', name);
+  fs.mkdirSync(path.join(root, '.brainrouter-plugin'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.brainrouter-plugin', 'plugin.json'), JSON.stringify({ name, version: '1.0.0' }));
+  fs.mkdirSync(path.join(root, 'skills', 'demo'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'skills', 'demo', 'SKILL.md'), `---\nname: ${name}-demo\n---\n# demo\n`);
+}
+
 const cfg = (cli: Record<string, unknown> = {}): Config => ({ activeServer: '', servers: {}, cli } as Config);
 
 test('MC-E1 discoverOrgConventionRepos discovers viewer and org repos and skips missing repos silently', async (t) => {
@@ -80,4 +88,27 @@ test('MC-E1 loader includes read-only convention skills and agents only when org
   const on = loadPluginsWithKnobs(ws, resolveCliKnobs(cfg({ skills: { orgRepoDiscovery: true } })));
   assert.ok(on.contributions.skillRoots.some((entry) => entry === path.join(root, 'skills')));
   assert.deepEqual(on.contributions.agentFiles.map((entry) => path.basename(entry.path)), ['reviewer.md']);
+});
+
+test('MC-E4 loader surfaces org-scope plugins as read-only rows', (t) => {
+  const tmp = mkTmp('br-org-plugin-');
+  const ws = mkTmp('br-org-ws-');
+  t.after(() => {
+    clearOrgConventionRepoRoots();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(ws, { recursive: true, force: true });
+  });
+
+  const root = writeConventionRepo(tmp, 'team');
+  writeConventionPlugin(root, 'team-kit');
+  setOrgConventionRepoRoots([root]);
+
+  const knobs = resolveCliKnobs(cfg({
+    skills: { orgRepoDiscovery: true },
+    plugins: { orgScope: true, enabled: { 'team-kit': true } },
+  }));
+  const loaded = loadPluginsWithKnobs(ws, knobs).loaded.find((plugin) => plugin.name === 'team-kit');
+
+  assert.equal(loaded?.scope, 'org');
+  assert.equal(loaded?.readOnly, true);
 });

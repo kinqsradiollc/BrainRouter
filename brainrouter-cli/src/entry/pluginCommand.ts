@@ -116,11 +116,18 @@ export function registerPluginCommand(program: Command): void {
         case 'list': {
           const { loadOrInitConfig } = await import('@kinqs/brainrouter-core/config');
           const r = plugin.loadPlugins(workspaceRoot, loadOrInitConfig());
-          if (options.json) { process.stdout.write(JSON.stringify({ loaded: r.loaded.map((p) => ({ name: p.name, scope: p.scope, provides: p.provides })), disabled: r.disabled.map((p) => p.name), skippedForSafeMode: r.skippedForSafeMode }) + '\n'); return; }
+          if (options.json) {
+            process.stdout.write(JSON.stringify({
+              loaded: r.loaded.map((p) => ({ name: p.name, scope: p.scope, readOnly: p.readOnly, provides: p.provides })),
+              disabled: r.disabled.map((p) => ({ name: p.name, scope: p.scope, readOnly: p.readOnly })),
+              skippedForSafeMode: r.skippedForSafeMode,
+            }) + '\n');
+            return;
+          }
           if (r.skippedForSafeMode) { console.log(chalk.yellow('safeMode is on — plugin loading is skipped.')); }
           if (r.loaded.length === 0 && r.disabled.length === 0) { console.log(chalk.gray('No plugins installed. Scaffold one with `brainrouter plugin init`.')); }
-          for (const p of r.loaded) console.log(`${chalk.green('●')} ${chalk.bold(p.name)} ${chalk.gray(`(${p.scope}) — ${describeProvides(p.provides)}`)}`);
-          for (const p of r.disabled) console.log(`${chalk.gray('○')} ${p.name} ${chalk.gray('(disabled)')}`);
+          for (const p of r.loaded) console.log(`${chalk.green('●')} ${chalk.bold(p.name)} ${chalk.gray(`(${p.scope}${p.readOnly ? ', read-only' : ''}) — ${describeProvides(p.provides)}`)}`);
+          for (const p of r.disabled) console.log(`${chalk.gray('○')} ${p.name} ${chalk.gray(`(${p.scope}${p.readOnly ? ', read-only' : ''}, disabled)`)}`);
           for (const e of r.errors) console.log(chalk.red(`  ! ${e}`));
           return;
         }

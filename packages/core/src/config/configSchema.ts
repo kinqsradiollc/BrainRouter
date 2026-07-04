@@ -139,6 +139,14 @@ export const CLI_CONFIG_SCHEMA: ConfigSchemaDescriptor = {
       defaultValue: false,
     },
     {
+      path: 'plugins.orgScope',
+      label: 'Org plugin scope',
+      section: 'agents',
+      type: 'boolean',
+      description: 'Show admin-controlled org plugin and skill rows as read-only.',
+      defaultValue: false,
+    },
+    {
       path: 'notifyBell',
       label: 'Notify bell',
       section: 'notifications',

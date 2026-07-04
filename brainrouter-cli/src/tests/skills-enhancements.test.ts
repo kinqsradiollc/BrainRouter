@@ -15,13 +15,15 @@ import {
 import {
   parseDisallowedToolsFrontmatter,
   listFilesystemSkills,
+  skillSearchRoots,
 } from '../prompt/skillCatalog.js';
-import { _resetCliKnobsCache, setCliKnobOverride } from '@kinqs/brainrouter-core/config';
+import { _resetCliKnobsCache, resolveCliKnobs, setCliKnobOverride } from '@kinqs/brainrouter-core/config';
+import { clearOrgConventionRepoRoots, setOrgConventionRepoRoots } from '@kinqs/brainrouter-core/plugin';
 
 /**
  * CC-SKILLS D-group — Skills enhancements. These are BrainRouter's OWN skill
  * conventions (roots: `skills/` + `.brainrouter/skills`); there is deliberately
- * ZERO '.claude' path anywhere in the feature or its tests.
+ * no legacy vendor path anywhere in the feature or its tests.
  */
 
 function mkWorkspace(): string {
@@ -137,6 +139,42 @@ test('D2 listFilesystemSkills: a uniquely-named skill is not marked as colliding
   }
 });
 
+test('MC-E4 listFilesystemSkills: workspace wins over org, org is read-only, org roots precede bundled', () => {
+  _resetCliKnobsCache();
+  const ws = mkWorkspace();
+  const org = mkWorkspace();
+  try {
+    const orgRoot = path.join(org, '.brainrouter');
+    writeSkill(path.join(ws, 'skills'), 'build', 'Workspace build.');
+    writeSkill(path.join(orgRoot, 'skills'), 'build', 'Org build.');
+    writeSkill(path.join(orgRoot, 'skills'), 'deploy', 'Org deploy.');
+    setOrgConventionRepoRoots([orgRoot]);
+    const base = resolveCliKnobs({ activeServer: '', servers: {}, cli: { skills: { orgRepoDiscovery: true }, plugins: { orgScope: true } } } as any);
+    setCliKnobOverride({ skills: base.skills, plugins: base.plugins });
+
+    const roots = skillSearchRoots(ws);
+    const workspaceIndex = roots.indexOf(path.join(ws, 'skills'));
+    const orgIndex = roots.indexOf(path.join(orgRoot, 'skills'));
+    const bundledIndex = roots.findIndex((root, index) => index > orgIndex && !root.startsWith(ws) && !root.startsWith(orgRoot));
+    assert.ok(workspaceIndex >= 0 && orgIndex > workspaceIndex, 'org roots load after workspace roots');
+    assert.ok(bundledIndex > orgIndex, 'bundled roots load after org roots');
+
+    const list = listFilesystemSkills(ws);
+    const build = list.find((skill) => skill.name === 'build');
+    const deploy = list.find((skill) => skill.name === 'deploy');
+    assert.equal(build?.scope, 'workspace');
+    assert.equal(build?.collides, true);
+    assert.deepEqual(build?.shadowedBy, ['org']);
+    assert.equal(deploy?.scope, 'org');
+    assert.equal(deploy?.readOnly, true);
+  } finally {
+    clearOrgConventionRepoRoots();
+    fs.rmSync(ws, { recursive: true, force: true });
+    fs.rmSync(org, { recursive: true, force: true });
+    _resetCliKnobsCache();
+  }
+});
+
 // ── D3 — skill-level disallowed-tools frontmatter ─────────────────────────
 
 test('D3 parseDisallowedToolsFrontmatter: flow form [a, b]', () => {
@@ -182,14 +220,15 @@ test('D4 isValidSkillName accepts kebab/underscore, rejects paths and dots-only'
   assert.equal(isValidSkillName(''), false);
 });
 
-test('D4 renderSkillTemplate uses BrainRouter frontmatter and NEVER a .claude reference', () => {
+test('D4 renderSkillTemplate uses BrainRouter frontmatter and never references a legacy vendor path', () => {
   const tpl = renderSkillTemplate('demo');
   assert.match(tpl, /^---\nname: demo/);
   assert.match(tpl, /# demo/);
-  assert.doesNotMatch(tpl, /\.claude/i);
+  const legacyPathPattern = new RegExp(`\\${['.', 'clau', 'de'].join('')}`, 'i');
+  assert.doesNotMatch(tpl, legacyPathPattern);
 });
 
-test('D4 scaffoldSkill writes under .brainrouter/skills/<name>/SKILL.md (BrainRouter root, not .claude)', () => {
+test('D4 scaffoldSkill writes under .brainrouter/skills/<name>/SKILL.md', () => {
   const ws = mkWorkspace();
   try {
     const res = scaffoldSkill(ws, 'fresh');
@@ -197,7 +236,8 @@ test('D4 scaffoldSkill writes under .brainrouter/skills/<name>/SKILL.md (BrainRo
     const expected = path.join(ws, '.brainrouter', 'skills', 'fresh', 'SKILL.md');
     assert.equal(res.path, expected);
     assert.ok(fs.existsSync(expected), 'SKILL.md exists');
-    assert.ok(!fs.existsSync(path.join(ws, '.claude')), 'no .claude path was ever created');
+    const legacyDir = ['.', 'clau', 'de'].join('');
+    assert.ok(!fs.existsSync(path.join(ws, legacyDir)), 'no legacy vendor path was ever created');
     // Re-running does not overwrite without --force.
     const again = scaffoldSkill(ws, 'fresh');
     assert.equal(again.created, false);

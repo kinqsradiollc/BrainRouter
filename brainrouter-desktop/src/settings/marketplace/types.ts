@@ -40,7 +40,8 @@ export interface RegistrySearchHit {
 /** An installed plugin, enriched with consent + update state (`plugin-list`). */
 export interface InstalledPluginView {
   name: string;
-  scope: 'user' | 'workspace';
+  scope: 'user' | 'workspace' | 'org';
+  readOnly?: boolean;
   version?: string;
   description?: string;
   author?: string;

@@ -264,6 +264,8 @@ export interface PluginsCliKnobs {
   allowedMarketplaces?: string[];
   blockedMarketplaces?: string[];
   allowManagedHooksOnly?: boolean;
+  /** MC-E4 — surface org convention repositories as a read-only plugin/skill scope. Default false. */
+  orgScope?: boolean;
   /**
    * PLUGIN-MARKETPLACE P5 — the community registry repo `brainrouter plugin
    * publish` opens a PR against (`owner/repo` or a git url). Empty/unset ⇒
@@ -1280,6 +1282,7 @@ export interface ResolvedCliKnobs {
     allowedMarketplaces: string[];
     blockedMarketplaces: string[];
     allowManagedHooksOnly: boolean;
+    orgScope: boolean;
     /** PLUGIN-MARKETPLACE P5 — community registry repo for `plugin publish`
      *  (empty = unset → stdout + local file + gh instructions). */
     publishRepo: string;

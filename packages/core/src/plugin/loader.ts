@@ -37,6 +37,7 @@ export type PluginLoadScope = PluginScope | 'org';
 export interface LoadedPlugin extends DiscoveredPlugin {
   scope: PluginLoadScope;
   enabled: boolean;
+  readOnly: boolean;
   provides: PluginProvides;
   /** PLUGIN-MARKETPLACE P3 — whether this plugin's risky capabilities loaded. */
   hooksGated?: boolean;
@@ -66,7 +67,7 @@ export interface LoadPluginsResult {
   /** Aggregate contributions to feed the subsystems. */
   contributions: PluginContributions;
   /** Plugins present on disk but NOT enabled (surfaced by `plugin list`). */
-  disabled: DiscoveredPlugin[];
+  disabled: Array<DiscoveredPlugin & { scope: PluginLoadScope; readOnly: boolean }>;
   /** Per-plugin discovery warnings + hard errors (invalid manifests etc.). */
   warnings: string[];
   errors: string[];
@@ -132,6 +133,7 @@ export function loadPluginsWithKnobs(
 
   const enabledMap = knobs.plugins.enabled;
   const altManifestNames = knobs.plugins.altManifestNames ?? [];
+  const orgScopeActive = knobs.plugins.orgScope === true || knobs.skills?.orgRepoDiscovery === true;
   const warnings: string[] = [];
   const errors: string[] = [];
   const contributions = emptyContributions();
@@ -142,7 +144,7 @@ export function loadPluginsWithKnobs(
   const byName = new Map<string, DiscoveredPlugin & { scope: PluginLoadScope }>();
 
   for (const scope of scopes) {
-    if (scope === 'workspace' && knobs.skills?.orgRepoDiscovery === true) {
+    if (scope === 'workspace' && orgScopeActive) {
       for (const repoRoot of getOrgConventionRepoRoots()) {
         addOrgConventionRepo(repoRoot, byName, contributions, altManifestNames);
       }
@@ -160,12 +162,13 @@ export function loadPluginsWithKnobs(
   }
 
   const loaded: LoadedPlugin[] = [];
-  const disabled: DiscoveredPlugin[] = [];
+  const disabled: Array<DiscoveredPlugin & { scope: PluginLoadScope; readOnly: boolean }> = [];
 
   for (const plugin of byName.values()) {
     const isEnabled = enabledMap[plugin.name] === true;
+    const readOnly = plugin.scope === 'org';
     if (!isEnabled) {
-      disabled.push(plugin);
+      disabled.push({ ...plugin, readOnly });
       continue;
     }
     const provides = summarizeProvides(plugin);
@@ -209,7 +212,7 @@ export function loadPluginsWithKnobs(
       }
     }
 
-    loaded.push({ ...plugin, enabled: true, provides, hooksGated, mcpGated });
+    loaded.push({ ...plugin, enabled: true, readOnly, provides, hooksGated, mcpGated });
   }
 
   return { loaded, contributions, disabled, warnings, errors, skippedForSafeMode: false };
