@@ -87,7 +87,7 @@ function emptyContributions(): PluginContributions {
 }
 
 /** List immediate subdirectories of a plugins dir that look like plugins. */
-function pluginDirsIn(dir: string): string[] {
+function pluginDirsIn(dir: string, altManifestNames: readonly string[] = []): string[] {
   let entries: fs.Dirent[];
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
   const out: string[] = [];
@@ -96,7 +96,7 @@ function pluginDirsIn(dir: string): string[] {
     if (e.name.startsWith('.')) continue;
     if (!e.isDirectory()) continue;
     const full = path.join(dir, e.name);
-    if (looksLikePlugin(full)) out.push(full);
+    if (looksLikePlugin(full, altManifestNames)) out.push(full);
   }
   return out;
 }
@@ -131,6 +131,7 @@ export function loadPluginsWithKnobs(
   }
 
   const enabledMap = knobs.plugins.enabled;
+  const altManifestNames = knobs.plugins.altManifestNames ?? [];
   const warnings: string[] = [];
   const errors: string[] = [];
   const contributions = emptyContributions();
@@ -143,12 +144,12 @@ export function loadPluginsWithKnobs(
   for (const scope of scopes) {
     if (scope === 'workspace' && knobs.skills?.orgRepoDiscovery === true) {
       for (const repoRoot of getOrgConventionRepoRoots()) {
-        addOrgConventionRepo(repoRoot, byName, contributions);
+        addOrgConventionRepo(repoRoot, byName, contributions, altManifestNames);
       }
     }
     const dir = pluginsDirForScope(scope, workspaceRoot);
-    for (const pluginRoot of pluginDirsIn(dir)) {
-      const res = discoverPlugin(pluginRoot);
+    for (const pluginRoot of pluginDirsIn(dir, altManifestNames)) {
+      const res = discoverPlugin(pluginRoot, { altManifestNames });
       if (!res.ok) {
         errors.push(`${pluginRoot}: ${res.error.errors.join('; ')}`);
         continue;
@@ -218,6 +219,7 @@ function addOrgConventionRepo(
   repoRoot: string,
   byName: Map<string, DiscoveredPlugin & { scope: PluginLoadScope }>,
   contributions: PluginContributions,
+  altManifestNames: readonly string[],
 ): void {
   const skillsDir = path.join(repoRoot, 'skills');
   if (dirExists(skillsDir)) contributions.skillRoots.push(skillsDir);
@@ -227,8 +229,8 @@ function addOrgConventionRepo(
     contributions.agentFiles.push(...listEntries(agentsDir, `org:${path.basename(path.dirname(repoRoot))}`, ['.md']));
   }
 
-  for (const pluginRoot of pluginDirsIn(path.join(repoRoot, 'plugins'))) {
-    const res = discoverPlugin(pluginRoot);
+  for (const pluginRoot of pluginDirsIn(path.join(repoRoot, 'plugins'), altManifestNames)) {
+    const res = discoverPlugin(pluginRoot, { altManifestNames });
     if (res.ok) byName.set(res.plugin.name, { ...res.plugin, scope: 'org' });
   }
 }

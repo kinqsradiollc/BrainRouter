@@ -342,6 +342,7 @@ function resolvePluginsKnobs(input: unknown): ResolvedCliKnobs['plugins'] {
   const enabled: Record<string, boolean> = {};
   let registryUrl = '';
   let marketplaces: MarketplaceSource[] = [];
+  let altManifestNames: string[] = [];
   let approved: Record<string, PluginCapabilityConsent> = {};
   let allowedMarketplaces: string[] = [];
   let blockedMarketplaces: string[] = [];
@@ -358,6 +359,10 @@ function resolvePluginsKnobs(input: unknown): ResolvedCliKnobs['plugins'] {
     }
     if (typeof obj.registryUrl === 'string') registryUrl = obj.registryUrl.trim();
     marketplaces = resolveMarketplaceSources(obj.marketplaces);
+    altManifestNames = resolveStringList(obj.altManifestNames).filter((name) => {
+      const trimmed = name.trim();
+      return trimmed.endsWith('.json') && !trimmed.includes('/') && !trimmed.includes('\\') && trimmed !== 'plugin.json' && trimmed !== 'brainrouter-marketplace.json';
+    });
     approved = resolveApprovedMap(obj.approved);
     allowedMarketplaces = resolveStringList(obj.allowedMarketplaces);
     blockedMarketplaces = resolveStringList(obj.blockedMarketplaces);
@@ -365,7 +370,7 @@ function resolvePluginsKnobs(input: unknown): ResolvedCliKnobs['plugins'] {
     if (typeof obj.publishRepo === 'string') publishRepo = obj.publishRepo.trim();
     autoUpdateCheck = obj.autoUpdateCheck === true;
   }
-  return { enabled, registryUrl, marketplaces, approved, allowedMarketplaces, blockedMarketplaces, allowManagedHooksOnly, publishRepo, autoUpdateCheck };
+  return { enabled, registryUrl, marketplaces, altManifestNames, approved, allowedMarketplaces, blockedMarketplaces, allowManagedHooksOnly, publishRepo, autoUpdateCheck };
 }
 
 function resolveHostedAgentKnobs(input: unknown): ResolvedCliKnobs['agents'] {

@@ -254,6 +254,12 @@ export interface PluginsCliKnobs {
   enabled?: Record<string, boolean>;
   registryUrl?: string;
   marketplaces?: MarketplaceSource[];
+  /**
+   * MC-E3 — extra JSON manifest filenames accepted while importing external
+   * marketplaces/plugins. BrainRouter still writes only its canonical names.
+   * Default [].
+   */
+  altManifestNames?: string[];
   approved?: Record<string, PluginCapabilityConsent>;
   allowedMarketplaces?: string[];
   blockedMarketplaces?: string[];
@@ -1269,6 +1275,7 @@ export interface ResolvedCliKnobs {
     enabled: Record<string, boolean>;
     registryUrl: string;
     marketplaces: MarketplaceSource[];
+    altManifestNames: string[];
     approved: Record<string, PluginCapabilityConsent>;
     allowedMarketplaces: string[];
     blockedMarketplaces: string[];
