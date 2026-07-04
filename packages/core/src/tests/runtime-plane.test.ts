@@ -149,7 +149,7 @@ test('MC-A1 agentTurnExecutor: one-line delegation to Agent.runTurn (prompt + hi
 test('MC-A1 resolveRuntime: explicit + defaulted kind → process backend; unknown normalizes to process', async () => {
   await withTempWorkspaceAsync(async (ws) => {
     const executeTurn = async () => 'ok';
-    assert.deepEqual([...availableRuntimeBackends()].sort(), ['container', 'process', 'worktree']);
+    assert.deepEqual([...availableRuntimeBackends()].sort(), ['container', 'hosted', 'process', 'worktree']);
     assert.equal(resolveRuntime({ executeTurn }, 'process').kind, 'process');
     // Unknown strings validate to 'process' (knob semantics — never a crash).
     assert.equal(resolveRuntime({ executeTurn }, 'container-someday').kind, 'process');

@@ -368,6 +368,29 @@ function resolvePluginsKnobs(input: unknown): ResolvedCliKnobs['plugins'] {
   return { enabled, registryUrl, marketplaces, approved, allowedMarketplaces, blockedMarketplaces, allowManagedHooksOnly, publishRepo, autoUpdateCheck };
 }
 
+function resolveHostedAgentKnobs(input: unknown): ResolvedCliKnobs['agents'] {
+  const raw = input && typeof input === 'object' && !Array.isArray(input)
+    ? (input as { hosted?: unknown }).hosted
+    : undefined;
+  const hosted = Array.isArray(raw) ? raw : [];
+  const seen = new Set<string>();
+  const out: ResolvedCliKnobs['agents']['hosted'] = [];
+  for (const entry of hosted) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const value = entry as Record<string, unknown>;
+    const name = typeof value.name === 'string' ? value.name.trim() : '';
+    const command = typeof value.command === 'string' ? value.command.trim() : '';
+    if (!name || !command || seen.has(name)) continue;
+    const args = Array.isArray(value.args)
+      ? value.args.filter((arg): arg is string => typeof arg === 'string')
+      : [];
+    const protocol = value.protocol === 'stdio' ? 'stdio' : 'line-json';
+    out.push({ name, command, args, protocol });
+    seen.add(name);
+  }
+  return { hosted: out };
+}
+
 function unitInterval(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? value : fallback;
 }
@@ -657,6 +680,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
       mode: c.computerUse?.mode?.trim() || 'smart_approve',
     },
     plugins: resolvePluginsKnobs(c.plugins),
+    agents: resolveHostedAgentKnobs(c.agents),
     // MC-A1 — runtime plane. Backend validates to 'process' (today's in-process
     // execution) so a typo can never silently opt into an isolated backend;
     // maxLive 0 = no live-instance cap (LRU parking arrives with MC-A4).

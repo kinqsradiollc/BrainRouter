@@ -43,9 +43,8 @@ export interface ServerConfig {
 export interface LLMConfig {
   // Provider catalog id (openai, lmstudio, ollama, deepseek, ...). The
   // request can be sent as either OpenAI Responses API or Chat Completions,
-  // selected by provider defaults plus `cli.providerRequestFormat`. Claude
-  // models still go through OpenAI-compatible gateways; the native Anthropic
-  // `/v1/messages` adapter was removed in 0.3.9.
+  // selected by provider defaults plus `cli.providerRequestFormat`. Models for
+  // external gateways still use OpenAI-compatible adapters.
   provider: string;
   apiKey: string;
   model: string;
@@ -288,7 +287,23 @@ export type ProviderWireFormat = 'responses' | 'chat-completions' | 'anthropic-m
  * strictly opt-in — requires `cli.runtime.containerImage`). Lives here (not
  * in `runtime/`) so the config layer never imports upward.
  */
-export type RuntimeBackendKind = 'process' | 'worktree' | 'container';
+export type RuntimeBackendKind = 'process' | 'worktree' | 'container' | 'hosted';
+
+export type HostedAgentProtocol = 'line-json' | 'stdio';
+
+export interface HostedAgentConfig {
+  name?: string;
+  command?: string;
+  args?: string[];
+  protocol?: HostedAgentProtocol;
+}
+
+export interface ResolvedHostedAgentConfig {
+  name: string;
+  command: string;
+  args: string[];
+  protocol: HostedAgentProtocol;
+}
 
 /** MC-A3 — resource limits for the `container` runtime backend. */
 export interface ContainerRuntimeLimits {
@@ -351,6 +366,7 @@ export interface RuntimeCliKnobs {
 export function normalizeRuntimeBackend(value: unknown): RuntimeBackendKind {
   if (value === 'worktree') return 'worktree';
   if (value === 'container') return 'container'; // MC-A3 — still opt-in: it also needs containerImage
+  if (value === 'hosted') return 'hosted';
   return 'process';
 }
 
@@ -425,6 +441,8 @@ export interface CliKnobs {
   permissions?: { allow?: string[]; deny?: string[] };
   /** Default-off Requirement → Plan → Track automation controls. */
   automation?: AutomationKnobs;
+  /** User-declared external CLI agents. Empty by default; no bundled binaries. */
+  agents?: { hosted?: HostedAgentConfig[] };
   // ---- memory / briefing -------------------------------------------------
   /** Default 'gated'. Recall trigger mode — see briefingTriggers.ts. */
   recallMode?: 'always' | 'gated' | 'off';
@@ -534,8 +552,8 @@ export interface CliKnobs {
    */
   confirmRunWorkflow?: boolean;
   /** Reasoning depth preference override (`/effort`). Default 'medium'. `max` and
-   *  `ultracode` are the desktop Claude slider's top tiers (cap to the wire's top
-   *  reasoning_effort, like xhigh). */
+   *  `ultracode` are desktop slider tiers capped to the wire's top
+   *  reasoning_effort, like xhigh. */
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultracode';
   /** PARITY-E3 — model to fall back to when the primary model is unavailable. */
   fallbackModel?: string | null;
@@ -1229,6 +1247,7 @@ export interface ResolvedCliKnobs {
      *  notice on session start. Default false. */
     autoUpdateCheck: boolean;
   };
+  agents: { hosted: ResolvedHostedAgentConfig[] };
   /** MC-A1 — validated runtime-plane knobs: backend falls back to 'process';
    *  `maxLive` clamped ≥ 0 (0 = no live-instance cap). MC-A6 adds the
    *  workspace-archive knobs: `archiveOnDispose` (default true),

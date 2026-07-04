@@ -13,6 +13,7 @@ import { normalizeRuntimeBackend } from '../config/configTypes.js';
 import type { RuntimeBackendKind } from '../config/configTypes.js';
 import type { IAgentRuntime, RuntimeTurnExecutor } from './runtimeTypes.js';
 import { createContainerRuntime } from './backends/container.js';
+import { createHostedCliRuntime } from './backends/hostedCli.js';
 import { createProcessRuntime } from './backends/process.js';
 import { createWorktreeRuntime } from './backends/worktree.js';
 
@@ -45,6 +46,7 @@ export function availableRuntimeBackends(): RuntimeBackendKind[] {
 registerRuntimeBackend('process', (options) => createProcessRuntime({ executeTurn: options.executeTurn, id: options.id }));
 registerRuntimeBackend('worktree', (options) => createWorktreeRuntime({ executeTurn: options.executeTurn, id: options.id }));
 registerRuntimeBackend('container', (options) => createContainerRuntime({ executeTurn: options.executeTurn, id: options.id }));
+registerRuntimeBackend('hosted', (options) => createHostedCliRuntime({ id: options.id }));
 
 /**
  * Obtain a runtime for `kind` (default: the `cli.runtime.backend` knob).

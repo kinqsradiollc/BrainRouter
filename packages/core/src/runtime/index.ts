@@ -6,6 +6,7 @@ export * from './registry.js';
 export * from './backends/process.js';
 export * from './backends/worktree.js';
 export * from './backends/container.js';
+export * from './backends/hostedCli.js';
 export * from './state/runtimeStateStore.js';
 export * from './manager.js';
 export * from './archive.js';
