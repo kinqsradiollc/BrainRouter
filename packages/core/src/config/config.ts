@@ -685,6 +685,8 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
       mentionHandle:
         (typeof c.triggers?.mentionHandle === 'string' && c.triggers.mentionHandle.trim().replace(/^@/, '')) ||
         'brainrouter',
+      // MC-B4 — CI-failure nudge: explicit true only, junk stays off.
+      ciNudge: c.triggers?.ciNudge === true,
     },
     tierLadder: c.tierLadder,
     contextCompaction: c.contextCompaction ?? true,

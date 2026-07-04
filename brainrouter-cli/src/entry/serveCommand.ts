@@ -53,9 +53,16 @@ export function registerServeCommand(program: Command): void {
           onEvent: triggers.createGithubTriggerSink({
             workspaceRoot,
             mentionHandle: knobs.mentionHandle,
+            // MC-B4 — opt-in CI-failure nudge (idempotent per head sha).
+            ciNudge: knobs.ciNudge,
             onResolved: (event, result) => {
               if (result.action === 'enqueued' && result.job) {
                 console.log(chalk.cyan(`  trigger → fleet job ${result.job.id} (${event.repo}${event.number ? `#${event.number}` : ''})`));
+              }
+            },
+            onNudged: (event, result) => {
+              if (result.action === 'nudged') {
+                console.log(chalk.cyan(`  trigger → CI-failure nudge posted (${event.repo}${event.number ? `#${event.number}` : ''})`));
               }
             },
           }),

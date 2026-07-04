@@ -388,6 +388,11 @@ export interface TriggersCliKnobs {
   /** MC-B2 — the @mention handle the GitHub resolver reacts to in issue/PR/
    *  review comments. Default 'brainrouter'; a leading '@' is stripped. */
   mentionHandle?: string;
+  /** MC-B4 — proactive CI-failure nudge. When true, a failed
+   *  `workflow_run.completed` for an OPEN PR in an allowlisted repo gets ONE
+   *  offer-to-fix comment (idempotent per head sha + workflow). Default
+   *  false — the nudge never posts unless explicitly enabled. */
+  ciNudge?: boolean;
 }
 
 export interface CliKnobs {
@@ -1247,6 +1252,8 @@ export interface ResolvedCliKnobs {
     allowedRepos: string[];
     /** MC-B2 — resolver @mention handle (default 'brainrouter', '@' stripped). */
     mentionHandle: string;
+    /** MC-B4 — CI-failure nudge comment; explicit `true` only (default false). */
+    ciNudge: boolean;
   };
   tierLadder?: { flash?: string; standard?: string; pro?: string };
   contextCompaction: boolean;

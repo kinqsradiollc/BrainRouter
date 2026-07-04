@@ -33,6 +33,7 @@ import { redactSecrets } from '../../git/prEmit.js';
 import { getWorkspaceStateRoot, readJsonFile, writeJsonFile } from '../../storage/store.js';
 import { resolveGithubConfigForWorkspace } from '../../track/githubSync/config.js';
 import type { FetchLike } from '../../track/githubSync/types.js';
+import { resolveCiNudge, type CiNudgeResult } from '../ciNudge.js';
 import { formatTriggerPostback, postGithubIssueComment, type GithubCommentTarget } from '../postback.js';
 import {
   buildAutomationEvent,
@@ -309,11 +310,16 @@ export async function resolveGithubTrigger(
 export interface GithubTriggerSinkOptions {
   workspaceRoot: string;
   mentionHandle?: string;
+  /** MC-B4 — `cli.triggers.ciNudge`: when true, failed `workflow_run`
+   *  completions for open PRs get one offer-to-fix comment. Default false. */
+  ciNudge?: boolean;
   /** Comment port override; default resolves the workspace's GitHub
    *  connector credential and posts via global fetch. */
   postComment?: GithubResolveOptions['postComment'];
   /** Result observer (the serve command logs enqueues). */
   onResolved?: (event: TriggerEvent, result: GithubResolveResult) => void;
+  /** MC-B4 — nudge observer (the serve command logs posted nudges). */
+  onNudged?: (event: TriggerEvent, result: CiNudgeResult) => void;
 }
 
 /** Default comment port: the workspace's GitHub connector credential + fetch. */
@@ -337,11 +343,23 @@ function defaultPostComment(workspaceRoot: string): GithubResolveOptions['postCo
  */
 export function createGithubTriggerSink(options: GithubTriggerSinkOptions): TriggerSink {
   return async (event: TriggerEvent) => {
+    const postComment = options.postComment ?? defaultPostComment(options.workspaceRoot);
     const result = await resolveGithubTrigger(event, {
       workspaceRoot: options.workspaceRoot,
       mentionHandle: options.mentionHandle,
-      postComment: options.postComment ?? defaultPostComment(options.workspaceRoot),
+      postComment,
     });
     options.onResolved?.(event, result);
+    // MC-B4 — the CI-failure nudge rides the same sink (own opt-in knob, own
+    // per-head-sha dedupe key); its outcome never affects the resolver's.
+    if (options.ciNudge === true) {
+      const nudge = await resolveCiNudge(event, {
+        workspaceRoot: options.workspaceRoot,
+        enabled: true,
+        mentionHandle: options.mentionHandle,
+        postComment,
+      });
+      options.onNudged?.(event, nudge);
+    }
   };
 }
