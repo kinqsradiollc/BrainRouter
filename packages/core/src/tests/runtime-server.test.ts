@@ -5,6 +5,8 @@ import { spawnSync } from 'node:child_process';
 import {
   RuntimeManager,
   RUNTIME_SESSION_HEADER,
+  assertRuntimeServerCompatible,
+  fetchRuntimeServerInfo,
   startRuntimeServer,
 } from '../runtime/index.js';
 import { withTempWorkspaceAsync } from './_helpers.js';
@@ -105,5 +107,28 @@ test('runtime runner server remains opt-in', async () => {
       () => startRuntimeServer({ enabled: false, manager, workspaceRoot: ws, port: 0 }),
       /disabled/,
     );
+  });
+});
+
+test('runtime runner handshake reports version and rejects incompatible clients', async () => {
+  await withTempWorkspaceAsync(async (ws) => {
+    const manager = new RuntimeManager({ workspaceRoot: ws, executeTurn: async () => 'ok' });
+    const handle = await startRuntimeServer({ enabled: true, manager, workspaceRoot: ws, port: 0 });
+    const base = `http://${handle.host}:${handle.port}`;
+    try {
+      const info = await fetchRuntimeServerInfo(base);
+      assert.equal(info.protocol, 'runtime/v1');
+      assert.match(info.version, /^\d+\.\d+\.\d+/);
+
+      const compatible = await assertRuntimeServerCompatible(base, { clientVersion: info.version });
+      assert.deepEqual(compatible, info);
+
+      await assert.rejects(
+        () => assertRuntimeServerCompatible(base, { clientVersion: '999.0.0' }),
+        /version mismatch/,
+      );
+    } finally {
+      await handle.close();
+    }
   });
 });

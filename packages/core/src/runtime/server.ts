@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import type { RuntimeManager } from './manager.js';
 import { readRuntimeRecord } from './state/runtimeStateStore.js';
 import type { RuntimeBackendKind } from '../config/configTypes.js';
+import { VERSION } from '../version.js';
 
 export const RUNTIME_API_PREFIX = '/runtime/v1';
 export const RUNTIME_SESSION_HEADER = 'x-brainrouter-runtime-key';
@@ -138,8 +139,12 @@ export function createRuntimeRequestHandler(options: RuntimeServerOptions): http
     void (async () => {
       const route = routeName(req.url);
       if (!route) return sendJson(res, 404, { error: 'not_found' });
-      if (req.method !== 'POST' && !(req.method === 'GET' && (route === 'status' || route === 'events' || route === 'file' || route === 'git'))) {
+      if (req.method !== 'POST' && !(req.method === 'GET' && (route === 'server_info' || route === 'status' || route === 'events' || route === 'file' || route === 'git'))) {
         return sendJson(res, 405, { error: 'method_not_allowed' });
+      }
+
+      if (route === 'server_info') {
+        return sendJson(res, 200, { protocol: 'runtime/v1', version: VERSION });
       }
 
       if (route === 'start') {

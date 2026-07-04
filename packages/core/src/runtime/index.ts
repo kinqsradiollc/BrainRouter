@@ -33,3 +33,4 @@ export * from './manager.js';
 export * from './archive.js';
 export * from './secrets/secretBroker.js';
 export * from './server.js';
+export * from './client.js';
