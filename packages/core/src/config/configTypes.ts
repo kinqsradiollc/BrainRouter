@@ -335,6 +335,16 @@ export interface RuntimeCliKnobs {
   containerImage?: string;
   /** MC-A3 — resource limits applied to `docker run` (`--cpus`/`--memory`). */
   container?: ContainerRuntimeLimits;
+  /** Serve the local runtime HTTP contract. Default false; callers must opt in. */
+  serve?: boolean;
+  /** Local runtime contract bind host. Defaults to loopback. */
+  serveHost?: string;
+  /** Local runtime contract port. Defaults to 8791; 0 is allowed for tests. */
+  servePort?: number;
+  /** Remote runtime endpoint. Empty by default; in-process remains the default. */
+  remoteUrl?: string;
+  /** Named app-preview ports reserved by runtimes. Empty by default. */
+  previewPorts?: Record<string, number>;
 }
 
 /** MC-A1 — validated knob values (see `RuntimeBackendKind`). */
@@ -1238,6 +1248,11 @@ export interface ResolvedCliKnobs {
     containerImage: string;
     /** MC-A3 — validated `docker run` limits (0/'' = no limit). */
     container: { cpus: number; memory: string };
+    serve: boolean;
+    serveHost: string;
+    servePort: number;
+    remoteUrl: string;
+    previewPorts: Record<string, number>;
   };
   /** MC-B1 — validated trigger-ingress knobs: `enabled` requires an explicit
    *  `true` (default-deny); `port` clamped 1..65535 (default 8787); `host`

@@ -326,6 +326,18 @@ function resolveApprovedMap(input: unknown): Record<string, PluginCapabilityCons
   return out;
 }
 
+function resolvePreviewPorts(input: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return out;
+  for (const [rawName, rawPort] of Object.entries(input as Record<string, unknown>)) {
+    const name = rawName.trim();
+    if (!name) continue;
+    const port = typeof rawPort === 'number' && Number.isInteger(rawPort) ? rawPort : NaN;
+    if (port >= 1 && port <= 65_535) out[name] = port;
+  }
+  return out;
+}
+
 function resolvePluginsKnobs(input: unknown): ResolvedCliKnobs['plugins'] {
   const enabled: Record<string, boolean> = {};
   let registryUrl = '';
@@ -668,6 +680,13 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
       jitSecretTtlMs: clampInt(c.runtime?.jitSecretTtlMs, 1_000, 3_600_000, 60_000),
       containerImage: typeof c.runtime?.containerImage === 'string' ? c.runtime.containerImage.trim() : '',
       container: normalizeContainerLimits(c.runtime?.container),
+      serve: c.runtime?.serve === true,
+      serveHost: typeof c.runtime?.serveHost === 'string' && c.runtime.serveHost.trim()
+        ? c.runtime.serveHost.trim()
+        : '127.0.0.1',
+      servePort: clampInt(c.runtime?.servePort, 0, 65_535, 8791),
+      remoteUrl: typeof c.runtime?.remoteUrl === 'string' ? c.runtime.remoteUrl.trim().replace(/\/+$/, '') : '',
+      previewPorts: resolvePreviewPorts(c.runtime?.previewPorts),
     },
     // MC-B1 — trigger ingress: DEFAULT-DENY across the board. `enabled`
     // requires an explicit `true` (nothing ever listens by accident), the
