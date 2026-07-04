@@ -19,7 +19,7 @@ import type {
   PluginCapabilityConsent,
   LlmProfileConfig,
 } from './configTypes.js';
-import { normalizeRuntimeBackend } from './configTypes.js';
+import { normalizeContainerLimits, normalizeRuntimeBackend } from './configTypes.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'brainrouter');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
@@ -648,9 +648,26 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     // MC-A1 — runtime plane. Backend validates to 'process' (today's in-process
     // execution) so a typo can never silently opt into an isolated backend;
     // maxLive 0 = no live-instance cap (LRU parking arrives with MC-A4).
+    // MC-A6 — archive knobs: archiveOnDispose defaults ON (anything but an
+    // explicit `false` keeps the safety net); archiveMaxMB caps the tarball
+    // payload (disk is constrained); archiveKeep bounds pruneArchives().
+    // MC-A5 — jitSecrets requires an explicit `true` (default false = children
+    // keep receiving raw env values); jitSecretTtlMs is the lease lifetime.
+    // MC-A3 — the container backend stays strictly opt-in even when
+    // `backend: 'container'` validates: containerImage has NO default (the
+    // backend errors until the user names an image) and nothing is ever
+    // pulled automatically. `container` holds validated docker resource
+    // limits (0/'' = unlimited).
     runtime: {
       backend: normalizeRuntimeBackend(c.runtime?.backend),
       maxLive: clampInt(c.runtime?.maxLive, 0, 256, 0),
+      archiveOnDispose: c.runtime?.archiveOnDispose !== false,
+      archiveMaxMB: clampInt(c.runtime?.archiveMaxMB, 1, 1024, 64),
+      archiveKeep: clampInt(c.runtime?.archiveKeep, 0, 500, 20),
+      jitSecrets: c.runtime?.jitSecrets === true,
+      jitSecretTtlMs: clampInt(c.runtime?.jitSecretTtlMs, 1_000, 3_600_000, 60_000),
+      containerImage: typeof c.runtime?.containerImage === 'string' ? c.runtime.containerImage.trim() : '',
+      container: normalizeContainerLimits(c.runtime?.container),
     },
     tierLadder: c.tierLadder,
     contextCompaction: c.contextCompaction ?? true,

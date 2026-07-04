@@ -3,6 +3,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { getCliKnobs } from '../../config/config.js';
+import {
+  getSecretBroker,
+  hasSecretLeaseEnv,
+  leaseSecretEnv,
+  resolveLeaseEnv,
+} from '../../runtime/secrets/secretBroker.js';
 
 /**
  * Optional sandboxing for `run_command`.
@@ -53,6 +59,12 @@ export interface SandboxConfig {
    * (secret-shaped vars removed). Absent → the command inherits the full env.
    */
   scopedEnv?: NodeJS.ProcessEnv;
+  /**
+   * MC-A5 — scope tag the JIT secret leases in `scopedEnv` were issued under
+   * (set only when `cli.runtime.jitSecrets` is on). `runShell` presents it
+   * back to the broker when it redeems the leases at spawn time.
+   */
+  leaseScope?: string;
 }
 
 // HONK-H0 — best-effort secret scrubbing for an unattended/fleet shell's env. This
@@ -80,13 +92,22 @@ const SECRET_ENV_VALUE = new RegExp(
  * in `allow` (case-insensitive). Non-secret vars (PATH, HOME, LANG, …) pass
  * through so the shell still works. Pure — never reads `process.env` itself.
  */
+/**
+ * MC-A5 — shared secret-shape detector: true when an env var looks like a
+ * credential by NAME or VALUE (same heuristics `scopeSecretEnv` scrubs with).
+ * The JIT-secret lease layer uses this to decide which vars to indirect.
+ */
+export function isSecretShapedEnvVar(name: string, value: string | undefined): boolean {
+  if (SECRET_ENV_NAME.test(name)) return true;
+  return typeof value === 'string' && SECRET_ENV_VALUE.test(value.trim());
+}
+
 export function scopeSecretEnv(env: NodeJS.ProcessEnv, opts?: { allow?: string[] }): NodeJS.ProcessEnv {
   const allow = new Set((opts?.allow ?? []).map((s) => s.trim().toLowerCase()).filter(Boolean));
   const out: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(env)) {
     if (allow.has(name.toLowerCase())) { out[name] = value; continue; }
-    if (SECRET_ENV_NAME.test(name)) continue;
-    if (typeof value === 'string' && SECRET_ENV_VALUE.test(value.trim())) continue;
+    if (isSecretShapedEnvVar(name, value)) continue;
     out[name] = value;
   }
   return out;
@@ -172,8 +193,21 @@ export function resolveSandboxConfig(
   // (fleet roles do), gated by the `jobSecretScoping` global kill switch and only
   // for enforced runs. The operator can allowlist specific vars a job needs.
   const scopeSecrets = !!opts?.scopeSecrets && knobs.jobSecretScoping && enforcedUnattended;
-  const scopedEnv = scopeSecrets ? scopeSecretEnv(process.env, { allow: knobs.jobSecretAllowlist }) : undefined;
-  return { enabled, workspaceRoot, readPaths, writePaths, allowNetwork, unavailableMode, enforcedUnattended, scopedEnv };
+  let scopedEnv = scopeSecrets ? scopeSecretEnv(process.env, { allow: knobs.jobSecretAllowlist }) : undefined;
+  // MC-A5 — with JIT secrets on, the allowlisted secret-shaped vars that
+  // survived scrubbing travel as single-use lease tokens instead of raw
+  // values; `runShell` redeems them from the broker right before spawn (the
+  // point of use). Default off → scopedEnv is exactly the HONK-H0 output.
+  let leaseScope: string | undefined;
+  if (scopedEnv && knobs.runtime.jitSecrets) {
+    leaseScope = `exec:${workspaceRoot}`;
+    scopedEnv = leaseSecretEnv(scopedEnv, getSecretBroker(), {
+      ttlMs: knobs.runtime.jitSecretTtlMs,
+      scope: leaseScope,
+      isSecret: isSecretShapedEnvVar,
+    });
+  }
+  return { enabled, workspaceRoot, readPaths, writePaths, allowNetwork, unavailableMode, enforcedUnattended, scopedEnv, leaseScope };
 }
 
 export interface SandboxRunResult {
@@ -199,14 +233,19 @@ export async function runShell(command: string, config: SandboxConfig, timeoutMs
   // Always pin cwd to the workspace root so `run_command` never inherits a
   // drifted process.cwd() (and writes test files into ~/.brainrouter).
   const cwd = config.workspaceRoot;
+  // MC-A5 — point-of-use: redeem any JIT secret leases riding in scopedEnv
+  // right before the child spawns. Leases are single-use per command (each
+  // `resolveSandboxConfig` call mints fresh ones). A lease that fails to
+  // redeem drops its var — the child never sees a dangling token.
+  const runEnv = await materializeLeaseEnv(config.scopedEnv, config.leaseScope);
   if (!config.enabled) {
-    return execShell(command, undefined, cwd, timeoutMs, false, 'none', signal, config.scopedEnv);
+    return execShell(command, undefined, cwd, timeoutMs, false, 'none', signal, runEnv);
   }
 
   if (process.platform === 'darwin') {
     const profilePath = writeMacSandboxProfile(config);
     const wrapped = ['sandbox-exec', '-f', profilePath, '/bin/sh', '-c', command];
-    const r = await execShell(wrapped[0], wrapped.slice(1), cwd, timeoutMs, true, 'sandbox-exec', signal, config.scopedEnv);
+    const r = await execShell(wrapped[0], wrapped.slice(1), cwd, timeoutMs, true, 'sandbox-exec', signal, runEnv);
     r.sandboxDenied = detectSandboxDenial(r.stderr);
     return r;
   }
@@ -214,21 +253,35 @@ export async function runShell(command: string, config: SandboxConfig, timeoutMs
   if (process.platform === 'linux') {
     if (await binaryAvailable('bwrap')) {
       const args = buildBwrapArgs(config, command);
-      const r = await execShell('bwrap', args, cwd, timeoutMs, true, 'bwrap', signal, config.scopedEnv);
+      const r = await execShell('bwrap', args, cwd, timeoutMs, true, 'bwrap', signal, runEnv);
       r.sandboxDenied = detectSandboxDenial(r.stderr);
       return r;
     }
     if (await binaryAvailable('firejail')) {
       const args = buildFirejailArgs(config, command);
-      const r = await execShell('firejail', args, cwd, timeoutMs, true, 'firejail', signal, config.scopedEnv);
+      const r = await execShell('firejail', args, cwd, timeoutMs, true, 'firejail', signal, runEnv);
       r.sandboxDenied = detectSandboxDenial(r.stderr);
       return r;
     }
-    return handleUnavailableSandbox(config, command, cwd, timeoutMs, 'Linux (no bwrap/firejail)', signal);
+    return handleUnavailableSandbox(config, command, cwd, timeoutMs, 'Linux (no bwrap/firejail)', signal, runEnv);
   }
 
   // Windows / other — no portable sandbox in stdlib.
-  return handleUnavailableSandbox(config, command, cwd, timeoutMs, process.platform, signal);
+  return handleUnavailableSandbox(config, command, cwd, timeoutMs, process.platform, signal, runEnv);
+}
+
+/**
+ * MC-A5 — resolve `BRAINROUTER_SECRET_LEASE_*` entries back into raw values
+ * via the process-wide broker. No leases present (the default-off path) →
+ * the env is returned untouched.
+ */
+async function materializeLeaseEnv(
+  env: NodeJS.ProcessEnv | undefined,
+  leaseScope: string | undefined,
+): Promise<NodeJS.ProcessEnv | undefined> {
+  if (!env || !hasSecretLeaseEnv(env)) return env;
+  const resolved = await resolveLeaseEnv(env, getSecretBroker(), { scope: leaseScope });
+  return resolved.env;
 }
 
 /**
@@ -244,6 +297,7 @@ async function handleUnavailableSandbox(
   timeoutMs: number,
   platformLabel: string,
   signal?: AbortSignal,
+  runEnv?: NodeJS.ProcessEnv,
 ): Promise<SandboxRunResult> {
   const verdict = decideUnavailableSandbox(config.unavailableMode, platformLabel);
   if (!verdict.run) {
@@ -257,7 +311,7 @@ async function handleUnavailableSandbox(
       refused: true,
     };
   }
-  const fallback = await execShell(command, undefined, cwd, timeoutMs, false, 'none', signal, config.scopedEnv);
+  const fallback = await execShell(command, undefined, cwd, timeoutMs, false, 'none', signal, runEnv ?? config.scopedEnv);
   fallback.notice = verdict.notice;
   return fallback;
 }

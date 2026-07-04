@@ -298,6 +298,95 @@ export function worktreePatchFile(workspaceRoot: string, childId: string): strin
   return path.join(getStateDir(workspaceRoot), 'worktree-patches', `${childId}.patch`);
 }
 
+/** What `captureWorktreeChanges` found (and persisted) in a working tree. */
+export interface WorktreeChangeCapture {
+  /** Number of files changed vs HEAD (0 = clean tree — nothing captured). */
+  changedFiles: number;
+  /** Where the FULL binary-safe patch landed (iff changes + writable `patchFile`). */
+  patchPath?: string;
+  /** Uncapped plain-text diff body (callers cap for display). */
+  preview?: string;
+}
+
+/**
+ * The recovery-patch WRITER, factored out of `removeChildWorktree` (MC-A6) so
+ * workspace archiving reuses the exact same capture: stage everything in
+ * `worktreeRoot` (tracked edits, new files, deletions — `.gitignore` still
+ * honored, so build artifacts stay out), persist a FULL binary-safe patch to
+ * `opts.patchFile`, and report the changed-file count plus an uncapped
+ * textual preview. Best-effort — returns a clean capture on any git failure;
+ * never throws.
+ */
+export function captureWorktreeChanges(
+  worktreeRoot: string,
+  opts: { patchFile?: string } = {},
+): WorktreeChangeCapture {
+  const capture: WorktreeChangeCapture = { changedFiles: 0 };
+  try {
+    if (!fs.existsSync(worktreeRoot)) return capture;
+    // Stage everything (tracked edits, new files, deletions) so the patch is
+    // COMPLETE. `.gitignore` is still honored, so node_modules/build output
+    // stays out — the patch only carries real source changes.
+    runGit(worktreeRoot, ['add', '-A']);
+    const stat = runGit(worktreeRoot, ['diff', '--cached', '--stat', 'HEAD']);
+    if (!stat.ok || !stat.stdout.trim()) return capture;
+    const lines = stat.stdout.trim().split('\n');
+    capture.changedFiles = Math.max(0, lines.length - 1); // last line is the summary
+
+    // Full, binary-safe patch — used for both persistence and apply. Never capped.
+    const fullRes = runGit(worktreeRoot, ['diff', '--cached', '--binary', 'HEAD']);
+    const fullPatch = fullRes.ok ? fullRes.stdout : '';
+    if (fullPatch.trim() && opts.patchFile) {
+      try {
+        fs.mkdirSync(path.dirname(opts.patchFile), { recursive: true });
+        fs.writeFileSync(opts.patchFile, fullPatch, 'utf8');
+        capture.patchPath = opts.patchFile;
+      } catch { /* persistence is best-effort */ }
+    }
+
+    // Human preview: plain text diff, uncapped here (callers cap).
+    const previewRes = runGit(worktreeRoot, ['diff', '--cached', 'HEAD']);
+    capture.preview = (previewRes.ok ? previewRes.stdout : stat.stdout).trim();
+  } catch { /* capture is best-effort — never throw at teardown/archive time */ }
+  return capture;
+}
+
+/**
+ * MC-A6 — provision a NEW detached worktree of `parentWorkspaceRoot`'s repo
+ * at an arbitrary `ref` (default HEAD), under the same worktree base the
+ * child isolation uses (`cli.worktreeRoot` knob honored). Backs
+ * resume-from-archive, which recreates a tree at the archived base commit.
+ * Unlike `prepareChildWorkspace`, an already-existing directory for
+ * `childId` is a failure (never adopt someone else's tree). Returns null
+ * when the workspace isn't a git repo or git refuses.
+ */
+export function createDetachedWorktree(
+  parentWorkspaceRoot: string,
+  childId: string,
+  ref = 'HEAD',
+): { sourceRoot: string; worktreeRoot: string } | null {
+  let root: string;
+  try {
+    root = fs.realpathSync(parentWorkspaceRoot);
+  } catch {
+    return null;
+  }
+  const repoRoot = gitRoot(root);
+  if (!repoRoot || !isInside(repoRoot, root)) return null;
+  const worktreeRoot = defaultWorktreePath(repoRoot, childId);
+  if (fs.existsSync(worktreeRoot)) return null;
+  try {
+    fs.mkdirSync(path.dirname(worktreeRoot), { recursive: true });
+  } catch {
+    return null;
+  }
+  const created = runGit(repoRoot, ['worktree', 'add', '--detach', worktreeRoot, ref]);
+  if (!created.ok) return null;
+  let real = worktreeRoot;
+  try { real = fs.realpathSync(worktreeRoot); } catch { /* use the raw path */ }
+  return { sourceRoot: repoRoot, worktreeRoot: real };
+}
+
 /** Why an isolated child's clean changes were HELD instead of merged back:
  *  `review` = the `cli.worktreeMergeReview` knob (user applies); `fanout` = a build
  *  fan-out slice (the build loop's synthesis gate owns the merge). */
@@ -360,29 +449,15 @@ export function removeChildWorktree(
 
   try {
     if (fs.existsSync(worktreeRoot)) {
-      // Stage everything (tracked edits, new files, deletions) so the patch is
-      // COMPLETE. `.gitignore` is still honored, so node_modules/build output
-      // stays out — the patch only carries real source changes.
-      runGit(worktreeRoot, ['add', '-A']);
-      const stat = runGit(worktreeRoot, ['diff', '--cached', '--stat', 'HEAD']);
-      if (stat.ok && stat.stdout.trim()) {
-        const lines = stat.stdout.trim().split('\n');
-        changedFiles = Math.max(0, lines.length - 1); // last line is the summary
-
-        // Full, binary-safe patch — used for both persistence and apply. Never capped.
-        const fullRes = runGit(worktreeRoot, ['diff', '--cached', '--binary', 'HEAD']);
-        const fullPatch = fullRes.ok ? fullRes.stdout : '';
-        if (fullPatch.trim() && opts.patchFile) {
-          try {
-            fs.mkdirSync(path.dirname(opts.patchFile), { recursive: true });
-            fs.writeFileSync(opts.patchFile, fullPatch, 'utf8');
-            patchPath = opts.patchFile;
-          } catch { /* persistence is best-effort */ }
-        }
+      // Capture via the shared recovery-patch writer (also used by MC-A6
+      // workspace archiving): stage + count + persist the full binary patch.
+      const capture = captureWorktreeChanges(worktreeRoot, { patchFile: opts.patchFile });
+      if (capture.changedFiles > 0) {
+        changedFiles = capture.changedFiles;
+        patchPath = capture.patchPath;
 
         // Human preview: plain text diff, capped (pointing at the full patch).
-        const previewRes = runGit(worktreeRoot, ['diff', '--cached', 'HEAD']);
-        const body = (previewRes.ok ? previewRes.stdout : stat.stdout).trim();
+        const body = capture.preview ?? '';
         diff = body.length > maxDiffChars
           ? `${body.slice(0, maxDiffChars)}\n… [diff truncated${patchPath ? ` — full patch at ${patchPath}` : ''}]`
           : body;

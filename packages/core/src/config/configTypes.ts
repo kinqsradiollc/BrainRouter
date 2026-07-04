@@ -283,11 +283,20 @@ export type ProviderWireFormat = 'responses' | 'chat-completions' | 'anthropic-m
 
 /**
  * MC-A1 — runtime-plane backend selector values. `process` (default) is
- * today's in-process host execution; `worktree` is reserved for the
- * git-worktree isolated backend (MC-A2). Lives here (not in `runtime/`) so the
- * config layer never imports upward.
+ * today's in-process host execution; `worktree` is the git-worktree isolated
+ * backend (MC-A2); `container` is the Docker-CLI isolated backend (MC-A3,
+ * strictly opt-in — requires `cli.runtime.containerImage`). Lives here (not
+ * in `runtime/`) so the config layer never imports upward.
  */
-export type RuntimeBackendKind = 'process' | 'worktree';
+export type RuntimeBackendKind = 'process' | 'worktree' | 'container';
+
+/** MC-A3 — resource limits for the `container` runtime backend. */
+export interface ContainerRuntimeLimits {
+  /** `docker run --cpus` value (fractional allowed). 0/absent = no limit. */
+  cpus?: number;
+  /** `docker run --memory` value (e.g. '512m', '2g'). Empty/absent = no limit. */
+  memory?: string;
+}
 
 /** MC-A1 — `cli.runtime` block: which runtime backend hosts agent runs. */
 export interface RuntimeCliKnobs {
@@ -297,11 +306,57 @@ export interface RuntimeCliKnobs {
   /** Cap on concurrently LIVE runtime instances before LRU parking (MC-A4).
    *  Default 0 = no cap (nothing is ever evicted). */
   maxLive?: number;
+  /** MC-A6 — write a durable workspace archive (git-delta patch + tarball of
+   *  changed files + manifest) when a throwaway `worktree` runtime is
+   *  disposed. Default true — worktree runtimes are teardown-by-design, so
+   *  their uncommitted work is preserved unless the user opts out. */
+  archiveOnDispose?: boolean;
+  /** MC-A6 — cap (in MB) on the changed-file payload packed into an
+   *  archive's tarball. Oversize payloads skip the tarball (the git-delta
+   *  patch is still captured) and note it in the manifest — the host disk is
+   *  a constrained resource. Default 64, clamped 1..1024. */
+  archiveMaxMB?: number;
+  /** MC-A6 — how many archives `pruneArchives()` keeps (newest first).
+   *  Default 20; 0 = no count-based pruning. */
+  archiveKeep?: number;
+  /** MC-A5 — JIT secret indirection for runtime children. When true,
+   *  secret-shaped vars in a child runtime's env are replaced with
+   *  `BRAINROUTER_SECRET_LEASE_<NAME>` tokens (single-use, short-TTL,
+   *  scope-checked) redeemed at point-of-use via the host secret broker.
+   *  Default false — children receive raw env values exactly as today. */
+  jitSecrets?: boolean;
+  /** MC-A5 — lease lifetime for JIT secret tokens, in ms. Default 60_000,
+   *  clamped 1_000..3_600_000. */
+  jitSecretTtlMs?: number;
+  /** MC-A3 — image the `container` backend runs. NO default and NO automatic
+   *  pulls (the host disk is a constrained resource): the backend refuses to
+   *  start until this is set, and a locally-missing image is an instructive
+   *  error telling the user the exact `docker pull` to run themselves. */
+  containerImage?: string;
+  /** MC-A3 — resource limits applied to `docker run` (`--cpus`/`--memory`). */
+  container?: ContainerRuntimeLimits;
 }
 
 /** MC-A1 — validated knob values (see `RuntimeBackendKind`). */
 export function normalizeRuntimeBackend(value: unknown): RuntimeBackendKind {
-  return value === 'worktree' ? 'worktree' : 'process';
+  if (value === 'worktree') return 'worktree';
+  if (value === 'container') return 'container'; // MC-A3 — still opt-in: it also needs containerImage
+  return 'process';
+}
+
+/** MC-A3 — `docker run --memory` shapes we accept: bytes or b/k/m/g suffixed. */
+const CONTAINER_MEMORY_RE = /^\d+(\.\d+)?[bkmg]?b?$/i;
+
+/** MC-A3 — validated container resource limits: junk drops to "no limit". */
+export function normalizeContainerLimits(value: unknown): { cpus: number; memory: string } {
+  const raw = (value && typeof value === 'object') ? value as ContainerRuntimeLimits : {};
+  const cpus = typeof raw.cpus === 'number' && Number.isFinite(raw.cpus) && raw.cpus > 0
+    ? Math.min(raw.cpus, 128)
+    : 0;
+  const memory = typeof raw.memory === 'string' && CONTAINER_MEMORY_RE.test(raw.memory.trim())
+    ? raw.memory.trim()
+    : '';
+  return { cpus, memory };
 }
 
 export interface CliKnobs {
@@ -1124,8 +1179,25 @@ export interface ResolvedCliKnobs {
     autoUpdateCheck: boolean;
   };
   /** MC-A1 — validated runtime-plane knobs: backend falls back to 'process';
-   *  `maxLive` clamped ≥ 0 (0 = no live-instance cap). */
-  runtime: { backend: RuntimeBackendKind; maxLive: number };
+   *  `maxLive` clamped ≥ 0 (0 = no live-instance cap). MC-A6 adds the
+   *  workspace-archive knobs: `archiveOnDispose` (default true),
+   *  `archiveMaxMB` (tarball payload cap, clamped 1..1024, default 64) and
+   *  `archiveKeep` (prune keeps newest N, default 20; 0 = no count prune).
+   *  MC-A5 adds `jitSecrets` (default false — raw child env unchanged) and
+   *  `jitSecretTtlMs` (lease lifetime, clamped 1s..1h, default 60s). */
+  runtime: {
+    backend: RuntimeBackendKind;
+    maxLive: number;
+    archiveOnDispose: boolean;
+    archiveMaxMB: number;
+    archiveKeep: number;
+    jitSecrets: boolean;
+    jitSecretTtlMs: number;
+    /** MC-A3 — container backend image ('' = unset → backend refuses to start). */
+    containerImage: string;
+    /** MC-A3 — validated `docker run` limits (0/'' = no limit). */
+    container: { cpus: number; memory: string };
+  };
   tierLadder?: { flash?: string; standard?: string; pro?: string };
   contextCompaction: boolean;
   childAgentTimeoutMs: number;

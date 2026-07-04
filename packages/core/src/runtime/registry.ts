@@ -12,6 +12,7 @@ import { getCliKnobs } from '../config/config.js';
 import { normalizeRuntimeBackend } from '../config/configTypes.js';
 import type { RuntimeBackendKind } from '../config/configTypes.js';
 import type { IAgentRuntime, RuntimeTurnExecutor } from './runtimeTypes.js';
+import { createContainerRuntime } from './backends/container.js';
 import { createProcessRuntime } from './backends/process.js';
 import { createWorktreeRuntime } from './backends/worktree.js';
 
@@ -35,10 +36,13 @@ export function availableRuntimeBackends(): RuntimeBackendKind[] {
 }
 
 // Built-in backends: `process` (MC-A1 — in-process host execution, the
-// default) and `worktree` (MC-A2 — isolated git-worktree runtime, opt-in via
-// `cli.runtime.backend`).
+// default), `worktree` (MC-A2 — isolated git-worktree runtime, opt-in via
+// `cli.runtime.backend`), and `container` (MC-A3 — docker-CLI isolated
+// runtime; resolving the kind is cheap, but `start()` stays strictly opt-in:
+// it refuses to run without `cli.runtime.containerImage` and never pulls).
 registerRuntimeBackend('process', (options) => createProcessRuntime({ executeTurn: options.executeTurn }));
 registerRuntimeBackend('worktree', (options) => createWorktreeRuntime({ executeTurn: options.executeTurn }));
+registerRuntimeBackend('container', (options) => createContainerRuntime({ executeTurn: options.executeTurn }));
 
 /**
  * Obtain a runtime for `kind` (default: the `cli.runtime.backend` knob).

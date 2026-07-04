@@ -28,12 +28,14 @@
  */
 
 import fs from 'node:fs';
+import { getCliKnobs } from '../../config/config.js';
 import {
   prepareChildWorkspace,
   removeChildWorktree,
   worktreePatchFile,
   type ChildWorktreeIsolation,
 } from '../../worktree/worktreeIsolation.js';
+import { archiveWorkspace } from '../archive.js';
 import type {
   IAgentRuntime,
   RuntimeSpec,
@@ -222,6 +224,22 @@ export class WorktreeAgentRuntime implements IAgentRuntime {
   async dispose(): Promise<void> {
     if (this.state === 'disposed') return; // idempotent
     if (this.spec && this.isolation) {
+      // MC-A6 — durable workspace archive BEFORE teardown (opt-out via
+      // `cli.runtime.archiveOnDispose`, default ON for worktree runtimes:
+      // they are throwaway, so uncommitted work is captured as
+      // patch + tarball + manifest under the runtime archives root and stays
+      // resumable via `resumeFromArchive(id)` long after the tree is gone.
+      if (getCliKnobs().runtime.archiveOnDispose) {
+        try {
+          archiveWorkspace({
+            id: this.id,
+            workspaceRoot: this.spec.workspaceRoot,
+            treeRoot: this.isolation.worktreeRoot,
+            sessionKey: this.spec.sessionKey,
+            now: this.nowFn,
+          });
+        } catch { /* archiving is best-effort — never block teardown */ }
+      }
       removeChildWorktree(this.isolation, {
         applyBack: false,
         patchFile: worktreePatchFile(this.spec.workspaceRoot, this.id),
