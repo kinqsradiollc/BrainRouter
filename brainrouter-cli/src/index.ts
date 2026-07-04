@@ -16,6 +16,7 @@ import { registerFleetCommand } from './entry/fleetCommand.js';
 import { registerPluginCommand } from './entry/pluginCommand.js';
 import { registerMarketplaceCommand } from './entry/marketplaceCommand.js';
 import { registerServeCommand } from './entry/serveCommand.js';
+import { registerAutomationsCommand } from './entry/automationsCommand.js';
 
 const program = new Command();
 
@@ -33,5 +34,6 @@ registerFleetCommand(program);
 registerPluginCommand(program);
 registerMarketplaceCommand(program);
 registerServeCommand(program);
+registerAutomationsCommand(program);
 
 program.parse(process.argv);
