@@ -211,7 +211,8 @@ test('MC-A4 resume: a durable-parked process record re-hosts in a FRESH manager'
     // Guards: unknown id / non-parked records refuse to resume.
     await assert.rejects(() => second.resume('rt_missing0'), /no runtime record/);
     await second.dispose(rt.id);
-    await assert.rejects(() => second.resume(rt.id), /only parked runtimes resume/);
+    // (MC-A3 widened the message: containers suspend as 'paused', not 'parked'.)
+    await assert.rejects(() => second.resume(rt.id), /only parked\/paused runtimes resume/);
   });
 });
 

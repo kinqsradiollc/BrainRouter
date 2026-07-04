@@ -283,11 +283,20 @@ export type ProviderWireFormat = 'responses' | 'chat-completions' | 'anthropic-m
 
 /**
  * MC-A1 — runtime-plane backend selector values. `process` (default) is
- * today's in-process host execution; `worktree` is reserved for the
- * git-worktree isolated backend (MC-A2). Lives here (not in `runtime/`) so the
- * config layer never imports upward.
+ * today's in-process host execution; `worktree` is the git-worktree isolated
+ * backend (MC-A2); `container` is the Docker-CLI isolated backend (MC-A3,
+ * strictly opt-in — requires `cli.runtime.containerImage`). Lives here (not
+ * in `runtime/`) so the config layer never imports upward.
  */
-export type RuntimeBackendKind = 'process' | 'worktree';
+export type RuntimeBackendKind = 'process' | 'worktree' | 'container';
+
+/** MC-A3 — resource limits for the `container` runtime backend. */
+export interface ContainerRuntimeLimits {
+  /** `docker run --cpus` value (fractional allowed). 0/absent = no limit. */
+  cpus?: number;
+  /** `docker run --memory` value (e.g. '512m', '2g'). Empty/absent = no limit. */
+  memory?: string;
+}
 
 /** MC-A1 — `cli.runtime` block: which runtime backend hosts agent runs. */
 export interface RuntimeCliKnobs {
@@ -319,11 +328,35 @@ export interface RuntimeCliKnobs {
   /** MC-A5 — lease lifetime for JIT secret tokens, in ms. Default 60_000,
    *  clamped 1_000..3_600_000. */
   jitSecretTtlMs?: number;
+  /** MC-A3 — image the `container` backend runs. NO default and NO automatic
+   *  pulls (the host disk is a constrained resource): the backend refuses to
+   *  start until this is set, and a locally-missing image is an instructive
+   *  error telling the user the exact `docker pull` to run themselves. */
+  containerImage?: string;
+  /** MC-A3 — resource limits applied to `docker run` (`--cpus`/`--memory`). */
+  container?: ContainerRuntimeLimits;
 }
 
 /** MC-A1 — validated knob values (see `RuntimeBackendKind`). */
 export function normalizeRuntimeBackend(value: unknown): RuntimeBackendKind {
-  return value === 'worktree' ? 'worktree' : 'process';
+  if (value === 'worktree') return 'worktree';
+  if (value === 'container') return 'container'; // MC-A3 — still opt-in: it also needs containerImage
+  return 'process';
+}
+
+/** MC-A3 — `docker run --memory` shapes we accept: bytes or b/k/m/g suffixed. */
+const CONTAINER_MEMORY_RE = /^\d+(\.\d+)?[bkmg]?b?$/i;
+
+/** MC-A3 — validated container resource limits: junk drops to "no limit". */
+export function normalizeContainerLimits(value: unknown): { cpus: number; memory: string } {
+  const raw = (value && typeof value === 'object') ? value as ContainerRuntimeLimits : {};
+  const cpus = typeof raw.cpus === 'number' && Number.isFinite(raw.cpus) && raw.cpus > 0
+    ? Math.min(raw.cpus, 128)
+    : 0;
+  const memory = typeof raw.memory === 'string' && CONTAINER_MEMORY_RE.test(raw.memory.trim())
+    ? raw.memory.trim()
+    : '';
+  return { cpus, memory };
 }
 
 export interface CliKnobs {
@@ -1160,6 +1193,10 @@ export interface ResolvedCliKnobs {
     archiveKeep: number;
     jitSecrets: boolean;
     jitSecretTtlMs: number;
+    /** MC-A3 — container backend image ('' = unset → backend refuses to start). */
+    containerImage: string;
+    /** MC-A3 — validated `docker run` limits (0/'' = no limit). */
+    container: { cpus: number; memory: string };
   };
   tierLadder?: { flash?: string; standard?: string; pro?: string };
   contextCompaction: boolean;

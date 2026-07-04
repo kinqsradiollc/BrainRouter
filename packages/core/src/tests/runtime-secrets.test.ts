@@ -164,6 +164,8 @@ const WS = '/tmp/ws-runtime-secrets';
 const RUNTIME_KNOBS_OFF = {
   backend: 'process' as const, maxLive: 0, archiveOnDispose: true, archiveMaxMB: 64,
   archiveKeep: 20, jitSecrets: false, jitSecretTtlMs: 60_000,
+  // MC-A3 — container backend knobs (irrelevant here; pinned to defaults).
+  containerImage: '', container: { cpus: 0, memory: '' },
 };
 
 test('MC-A5 sandbox default off: allowlisted secret stays RAW in scopedEnv (unchanged behavior)', () => {

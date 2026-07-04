@@ -31,6 +31,18 @@ export interface RuntimeWorktreeRef {
   worktreeRoot: string;
 }
 
+/**
+ * MC-A3 — where a `container`-backed instance lives. Persisted so a PAUSED
+ * container survives its owning process (docker keeps it frozen at ~0 CPU)
+ * and can be re-attached by id (`attachContainerRuntime`).
+ */
+export interface RuntimeContainerRef {
+  /** Docker container id `docker run -d` returned. */
+  containerId: string;
+  /** Image the container was started from (for surfacing/diagnostics). */
+  image: string;
+}
+
 export interface RuntimeInstanceRecord {
   id: string;
   backend: RuntimeBackendKind;
@@ -41,6 +53,8 @@ export interface RuntimeInstanceRecord {
   pid: number | null;
   /** MC-A2 — set for `worktree` instances once provisioning succeeds. */
   worktree?: RuntimeWorktreeRef | null;
+  /** MC-A3 — set for `container` instances once `docker run` succeeds. */
+  container?: RuntimeContainerRef | null;
   createdAt: string;
   updatedAt: string;
 }

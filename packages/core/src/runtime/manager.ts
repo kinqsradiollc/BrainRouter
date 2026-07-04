@@ -25,6 +25,7 @@
 import { getCliKnobs } from '../config/config.js';
 import { isSecretShapedEnvVar } from '../exec/runtime/sandbox.js';
 import type { IAgentRuntime, RuntimeTurn, RuntimeTurnExecutor, RuntimeTurnResult } from './runtimeTypes.js';
+import { attachContainerRuntime } from './backends/container.js';
 import { createProcessRuntime } from './backends/process.js';
 import { attachWorktreeRuntime } from './backends/worktree.js';
 import { resolveRuntime } from './registry.js';
@@ -63,6 +64,8 @@ export interface RuntimeReconcileResult {
  * records simply park (the conversation can be re-hosted). `worktree` records
  * park only when the tree still exists — verified by actually re-attaching
  * through the Phase-1 `attachWorktreeRuntime` primitive — and error otherwise.
+ * `container` records become 'paused' when their docker ref survived (the
+ * daemon may still hold the container; MC-A3) and error when it didn't.
  */
 export function reconcileRuntimeRecords(
   workspaceRoot: string,
@@ -72,6 +75,20 @@ export function reconcileRuntimeRecords(
   for (const record of listRuntimeRecords(workspaceRoot)) {
     if (!LIVE_STATUSES.has(record.status)) continue;
     if (isAlive(record.pid)) continue; // still owned by a live process
+    // MC-A3 — a dead-owner container record becomes 'paused' (the container's
+    // suspended state), provided its docker ref survived: the daemon may well
+    // still hold the container, so it stays re-attachable by id. Docker itself
+    // is NOT consulted here — the next lifecycle action surfaces daemon truth.
+    if (record.backend === 'container') {
+      if (!record.container) {
+        updateRuntimeRecord(workspaceRoot, record.id, { status: 'error', pid: null });
+        result.errored.push(record.id);
+        continue;
+      }
+      updateRuntimeRecord(workspaceRoot, record.id, { status: 'paused', pid: null });
+      result.parked.push(record.id);
+      continue;
+    }
     // Dead owner: park the record (pid cleared — nobody owns it now).
     updateRuntimeRecord(workspaceRoot, record.id, { status: 'parked', pid: null });
     if (record.backend === 'worktree') {
@@ -223,11 +240,18 @@ export class RuntimeManager {
     } else {
       const record = readRuntimeRecord(this.workspaceRoot, id);
       if (!record) throw new Error(`no runtime record '${id}' under ${this.workspaceRoot}`);
-      if (record.status !== 'parked') {
-        throw new Error(`runtime ${id} is '${record.status}' — only parked runtimes resume`);
+      // Suspended states differ per backend: worktree/process park, a
+      // container is 'paused' (docker keeps it frozen in place — MC-A3).
+      if (record.status !== 'parked' && record.status !== 'paused') {
+        throw new Error(`runtime ${id} is '${record.status}' — only parked/paused runtimes resume`);
       }
       if (record.backend === 'worktree') {
         runtime = attachWorktreeRuntime({ executeTurn: this.executeTurn, workspaceRoot: this.workspaceRoot, id });
+        await runtime.resume();
+      } else if (record.backend === 'container') {
+        // Re-attach by durable docker ref, then `docker unpause` — the
+        // container kept its full FS+process state while suspended.
+        runtime = attachContainerRuntime({ executeTurn: this.executeTurn, workspaceRoot: this.workspaceRoot, id });
         await runtime.resume();
       } else {
         // Re-host: the process backend has no live state to thaw — a fresh
@@ -258,6 +282,13 @@ export class RuntimeManager {
     if (record.backend === 'worktree' && record.status === 'parked') {
       // Re-attach so dispose runs the real teardown (recovery patch + removal).
       const runtime = attachWorktreeRuntime({ executeTurn: this.executeTurn, workspaceRoot: this.workspaceRoot, id });
+      await runtime.dispose();
+      return;
+    }
+    if (record.backend === 'container' && record.status === 'paused') {
+      // MC-A3 — re-attach so dispose runs the real teardown (archive hook,
+      // then `docker rm -f` of the suspended container).
+      const runtime = attachContainerRuntime({ executeTurn: this.executeTurn, workspaceRoot: this.workspaceRoot, id });
       await runtime.dispose();
       return;
     }

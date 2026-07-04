@@ -20,10 +20,14 @@
 // `BRAINROUTER_SECRET_LEASE_<NAME>` tokens instead of raw values
 // (`cli.runtime.jitSecrets`, default off); the exec layer redeems at
 // point-of-use.
+// MC-A3 adds the CONTAINER backend: a docker-CLI hosted body (strictly
+// opt-in — `cli.runtime.backend: 'container'` AND `cli.runtime.containerImage`
+// both required; no default image, no automatic pulls).
 export * from './runtimeTypes.js';
 export * from './registry.js';
 export * from './backends/process.js';
 export * from './backends/worktree.js';
+export * from './backends/container.js';
 export * from './state/runtimeStateStore.js';
 export * from './manager.js';
 export * from './archive.js';

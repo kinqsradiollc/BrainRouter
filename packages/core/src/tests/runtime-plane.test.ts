@@ -149,7 +149,7 @@ test('MC-A1 agentTurnExecutor: one-line delegation to Agent.runTurn (prompt + hi
 test('MC-A1 resolveRuntime: explicit + defaulted kind → process backend; unknown normalizes to process', async () => {
   await withTempWorkspaceAsync(async (ws) => {
     const executeTurn = async () => 'ok';
-    assert.deepEqual([...availableRuntimeBackends()].sort(), ['process', 'worktree']);
+    assert.deepEqual([...availableRuntimeBackends()].sort(), ['container', 'process', 'worktree']);
     assert.equal(resolveRuntime({ executeTurn }, 'process').kind, 'process');
     // Unknown strings validate to 'process' (knob semantics — never a crash).
     assert.equal(resolveRuntime({ executeTurn }, 'container-someday').kind, 'process');
@@ -209,6 +209,10 @@ const RUNTIME_KNOB_DEFAULTS = {
   // MC-A5 — JIT secrets default OFF (raw child env unchanged); 60s leases.
   jitSecrets: false,
   jitSecretTtlMs: 60_000,
+  // MC-A3 — container backend: NO default image (backend refuses to start
+  // until the user names one) and no resource limits unless configured.
+  containerImage: '',
+  container: { cpus: 0, memory: '' },
 };
 
 test('MC-A1 cli.runtime knob: defaults, validation, clamping', () => {
@@ -219,8 +223,11 @@ test('MC-A1 cli.runtime knob: defaults, validation, clamping', () => {
     resolveCliKnobs(cfg({ runtime: { backend: 'worktree', maxLive: 3 } })).runtime,
     { ...RUNTIME_KNOB_DEFAULTS, backend: 'worktree', maxLive: 3 },
   );
+  // MC-A3 — 'container' is a valid backend value now (the backend itself
+  // still refuses to start without cli.runtime.containerImage).
+  assert.equal(resolveCliKnobs(cfg({ runtime: { backend: 'container' } })).runtime.backend, 'container');
   // Invalid backend → 'process' (never silently isolates or crashes).
-  assert.equal(resolveCliKnobs(cfg({ runtime: { backend: 'container' } })).runtime.backend, 'process');
+  assert.equal(resolveCliKnobs(cfg({ runtime: { backend: 'containerd' } })).runtime.backend, 'process');
   assert.equal(resolveCliKnobs(cfg({ runtime: { backend: 42 } })).runtime.backend, 'process');
   // maxLive clamped to 0..256; junk → default 0.
   assert.equal(resolveCliKnobs(cfg({ runtime: { maxLive: -5 } })).runtime.maxLive, 0);
