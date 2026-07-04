@@ -15,6 +15,9 @@ import { registerAgentsCommand } from './entry/agentsCommand.js';
 import { registerFleetCommand } from './entry/fleetCommand.js';
 import { registerPluginCommand } from './entry/pluginCommand.js';
 import { registerMarketplaceCommand } from './entry/marketplaceCommand.js';
+import { registerServeCommand } from './entry/serveCommand.js';
+import { registerAutomationsCommand } from './entry/automationsCommand.js';
+import { registerTasksCommand } from './entry/tasksCommand.js';
 
 const program = new Command();
 
@@ -31,5 +34,8 @@ registerAgentsCommand(program);
 registerFleetCommand(program);
 registerPluginCommand(program);
 registerMarketplaceCommand(program);
+registerServeCommand(program);
+registerAutomationsCommand(program);
+registerTasksCommand(program);
 
 program.parse(process.argv);

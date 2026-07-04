@@ -170,7 +170,7 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId) => 
           findingsByFile={reviewFindingsByFile} />);
       case 'terminal': return <TerminalPanel />;
       case 'tools': return <ToolsPanel log={toolLog} />;
-      case 'tasks': return <TasksPanel fleet={backgroundTasks} recent={recentTasks} finished={finishedTasks} onClear={() => setFinishedTasks([])} onOpen={(id) => { const f = backgroundTasks.find((t) => t.id === id) ?? recentTasks.find((t) => t.id === id); if (f) openTask(f); }} onKill={(id) => { q('a-killbg', 'action:kill-bgshell', { id }); setTimeout(() => q('q-fleet', 'fleet'), 150); }} />;
+      case 'tasks': return <TasksPanel fleet={backgroundTasks} recent={recentTasks} finished={finishedTasks} onClear={() => setFinishedTasks([])} onOpen={(id) => { const f = backgroundTasks.find((t) => t.id === id) ?? recentTasks.find((t) => t.id === id); if (f) openTask(f); }} onKill={(id) => { q('a-killbg', 'action:kill-bgshell', { id }); setTimeout(() => q('q-fleet', 'fleet'), 150); }} onStartSuggestedTask={(prompt) => { setDraft(prompt); setToast('Suggested task added to the composer — press Enter to start.'); }} />;
       case 'dashboard': return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading…</div>}><DashboardPanel scope={dashScope} setScope={(s) => { setDashScope(s); if (s === 'all') refreshDashboard(); }}
         tab={dashTab} setTab={setDashTab} boards={dashBoards} busy={dashBusy} onRefresh={refreshDashboard}
         onOpenTask={openDashboardTask}

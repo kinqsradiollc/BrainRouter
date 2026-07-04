@@ -291,6 +291,28 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       { id: 'btask_v7', kind: 'verification', status: 'completed', title: 'Verify — npm run typecheck', sessionKey: 'dev:fix-recall-blend', createdAt: new Date(Date.now() - 5 * 60_000).toISOString(), startedAt: new Date(Date.now() - 5 * 60_000).toISOString(), completedAt: new Date(Date.now() - 4 * 60_000).toISOString(), updatedAt: new Date(Date.now() - 4 * 60_000).toISOString(), progress: [], linkedMemoryIds: [], transcript: { kind: 'task', id: 'btask_v7', parentSessionKey: 'internal:verify:btask_v7' } },
       { id: 'btask_v8', kind: 'verification', status: 'failed', title: 'Verify — npm test', error: '2 tests failed', sessionKey: 'dev:fix-recall-blend', createdAt: new Date(Date.now() - 9 * 60_000).toISOString(), startedAt: new Date(Date.now() - 9 * 60_000).toISOString(), completedAt: new Date(Date.now() - 8 * 60_000).toISOString(), updatedAt: new Date(Date.now() - 8 * 60_000).toISOString(), progress: [], linkedMemoryIds: [], transcript: { kind: 'task', id: 'btask_v8', parentSessionKey: 'internal:verify:btask_v8' } },
     ],
+    'suggested-tasks': () => ({
+      repo: 'kinqsradiollc/BrainRouter',
+      warnings: [],
+      tasks: [
+        {
+          kind: 'failing-checks',
+          title: 'PR #42 ("phase 3 reflexes") has failing checks: typecheck',
+          repo: 'kinqsradiollc/BrainRouter',
+          number: 42,
+          url: 'https://github.com/kinqsradiollc/BrainRouter/pull/42',
+          suggestedPrompt: 'Fix the failing checks on PR #42 in kinqsradiollc/BrainRouter ("phase 3 reflexes"): typecheck. Check out the PR branch, reproduce each failure locally, fix it, and push the fixes to the same branch.',
+        },
+        {
+          kind: 'labeled-issue',
+          title: 'Issue #77 ("wire desktop suggested starters") is labeled "brainrouter"',
+          repo: 'kinqsradiollc/BrainRouter',
+          number: 77,
+          url: 'https://github.com/kinqsradiollc/BrainRouter/issues/77',
+          suggestedPrompt: 'Work on issue #77 in kinqsradiollc/BrainRouter ("wire desktop suggested starters"). Implement it on a fresh branch and open a pull request that references the issue.',
+        },
+      ],
+    }),
     'attachment-ingest': (a) => {
       const name = String(a.name || a.path || 'file').split('/').pop() || 'file';
       const kind = attachmentKind(name);
