@@ -7,6 +7,7 @@ export * from './transcript/sessionStore.js';
 export * from './state/sessionMetaStore.js';
 export * from './state/sessionRuntimeStore.js';
 export * from './state/sessionModeStore.js';
+export * from './state/childConversationStore.js';
 export * from './preferences/preferencesStore.js';
 export * from './transcript/sessionRecap.js';
 export * from './transcript/transcriptExport.js';
