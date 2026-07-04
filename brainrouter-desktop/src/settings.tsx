@@ -301,6 +301,7 @@ export function SettingsDialog(props: {
           setPath={setPath}
           secretsSet={snapshot?.triggerSecretsSet ?? { github: false, slack: false, gitlab: false, jira: false }}
           rules={snapshot?.automationRules ?? []}
+          serve={snapshot?.triggerServe}
           onAction={props.onAction}
           refreshSnapshot={refreshSnapshot}
         />
@@ -429,7 +430,7 @@ export function SettingsDialog(props: {
         />
       );
       case 'marketplace': {
-        const plugins = (knobs.plugins ?? {}) as { orgScope?: boolean; autoUpdateCheck?: boolean; altManifestNames?: string[]; publishRepo?: string };
+        const plugins = (knobs.plugins ?? {}) as { orgScope?: boolean; autoUpdateCheck?: boolean; altManifestNames?: string[]; publishRepo?: string; registryUrl?: string };
         return (
           <>
             <MarketplaceSettings
@@ -444,6 +445,9 @@ export function SettingsDialog(props: {
             </Row>
             <Row title="Check for plugin updates" desc="On session start, compare installed plugins against the registry and surface an 'updates available' notice. Never auto-installs. (cli.plugins.autoUpdateCheck)">
               <Toggle on={plugins.autoUpdateCheck === true} onChange={(v) => setPath('plugins.autoUpdateCheck', v)} />
+            </Row>
+            <Row title="Registry URL" desc="The plugin index Marketplace search fetches — an https URL or a local file path for air-gapped mirrors. Blank = the built-in community registry. (cli.plugins.registryUrl)">
+              <KnobText value={plugins.registryUrl} placeholder="(built-in community registry)" onSave={(v) => setPath('plugins.registryUrl', v)} />
             </Row>
             <Row title="Alt manifest filenames" desc="Extra JSON manifest names accepted when importing external marketplaces (comma-separated). BrainRouter still writes only its canonical names. (cli.plugins.altManifestNames)">
               <KnobText value={(plugins.altManifestNames ?? []).join(', ')}

@@ -131,6 +131,7 @@ import { validateCatalogParity } from '@kinqs/brainrouter-core/command';
 import { readHooks, setHookEnabled } from '@kinqs/brainrouter-core/hooks';
 import { buildUsageBreakdown } from '@kinqs/brainrouter-core/util';
 import { scanSuggestedTasks, listAutomationRules, setAutomationRuleEnabled } from '@kinqs/brainrouter-core/triggers';
+import { startTriggerServe, stopTriggerServe, triggerServeStatus } from './triggerServe.js';
 // DESK-5 — the command bridge dispatches REPL-only commands against the SAME
 // stores the terminal CLI uses. No parallel state: /goal here is /goal there.
 import {
@@ -557,16 +558,24 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         }
       },
       'plugin-search': async (args) => {
+        // Registry unreachable is a SOFT condition: search is degraded, but
+        // installed plugins keep working. Surface a plain-language notice
+        // instead of a raw transport error like "HTTP 404".
+        const friendly = (raw: string): string => (
+          /HTTP \d+|fetch failed|ENOTFOUND|ECONNREFUSED|ETIMEDOUT/i.test(raw)
+            ? `Community registry unreachable (${raw.replace(/^registry fetch failed:\s*/i, '')}). Installed plugins are unaffected — set a custom registry under Marketplace → Scope & sources.`
+            : raw
+        );
         try {
           const res = await searchRegistryPlugins(typeof args.query === 'string' ? args.query : '', {
             category: typeof args.category === 'string' && args.category ? args.category : undefined,
             tag: typeof args.tag === 'string' && args.tag ? args.tag : undefined,
             limit: typeof args.limit === 'number' ? args.limit : undefined,
           });
-          if (!res.ok) return { ok: false, hits: [], error: res.error };
+          if (!res.ok) return { ok: false, hits: [], error: friendly(res.error) };
           return { ok: true, hits: res.hits, fromCache: res.fromCache };
         } catch (err) {
-          return { ok: false, hits: [], error: err instanceof Error ? err.message : String(err) };
+          return { ok: false, hits: [], error: friendly(err instanceof Error ? err.message : String(err)) };
         }
       },
       'plugin-consent': async (args) => {
@@ -1964,6 +1973,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
               }));
             } catch { return []; }
           })(),
+          triggerServe: triggerServeStatus(),
           // EXTENSIONS — discovered extensions + workspace trust, for the
           // Settings → Extensions section (toggle/trust refresh this snapshot).
           extensions: {
@@ -2635,6 +2645,11 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const ok = setAutomationRuleEnabled(workspaceRoot, id, enabled);
         return { ok, id, enabled };
       },
+      // MC-DESK — in-host trigger-ingress lifecycle (Settings → Automations).
+      // Same default-deny gates as `serve --triggers`; the handle lives in
+      // triggerServe.ts so a second start is a no-op and stop closes it.
+      'action:triggers-serve-start': () => startTriggerServe(workspaceRoot),
+      'action:triggers-serve-stop': () => stopTriggerServe(),
       'action:set-github-oauth-client-id': (args) => {
         const fresh = loadConfig() as { cli?: { github?: { oauthClientId?: string; caBundle?: string } } };
         const cli = (fresh.cli = fresh.cli ?? {});

@@ -17,16 +17,19 @@ import { Icon } from '../../icons.js';
 type Dict = Record<string, unknown>;
 type SecretsSet = { github: boolean; slack: boolean; gitlab: boolean; jira: boolean };
 type RuleRow = { id: string; name: string; on: string; when: string; do: string; enabled: boolean; sourcePath: string };
+type ServeStatus = { running: boolean; host: string | null; port: number | null; startedAt: string | null; providers: string[]; recentEvents: string[]; lastError: string | null };
 
-export function AutomationsSection({ knobs, setPath, secretsSet, rules = [], onAction, refreshSnapshot }: {
+export function AutomationsSection({ knobs, setPath, secretsSet, rules = [], serve, onAction, refreshSnapshot }: {
   knobs: Dict;
   setPath: (path: string, value: unknown) => void;
   secretsSet: SecretsSet;
   rules?: RuleRow[];
+  serve?: ServeStatus;
   onAction?: (id: string, name: string, args?: Record<string, unknown>) => void;
   refreshSnapshot?: () => void;
 }): React.ReactElement {
   const setRuleEnabled = (id: string, enabled: boolean): void => { onAction?.('a-rule', 'action:automation-rule-enabled', { id, enabled }); setTimeout(() => refreshSnapshot?.(), 150); };
+  const serveAction = (name: string): void => { onAction?.('a-serve', name, {}); setTimeout(() => refreshSnapshot?.(), 250); };
   const triggers = (knobs.triggers ?? {}) as Dict;
   const enabled = triggers.enabled === true;
   const allowedRepos = (Array.isArray(triggers.allowedRepos) ? triggers.allowedRepos : []).filter((r): r is string => typeof r === 'string');
@@ -41,9 +44,25 @@ export function AutomationsSection({ knobs, setPath, secretsSet, rules = [], onA
         allow-listed repos are processed. (cli.triggers)
       </div>
 
-      <Row title="Enable trigger ingress" desc="Master switch for the webhook listener. Off = nothing listens, whatever else is set. Start it with `brainrouter serve --triggers`. (cli.triggers.enabled)">
+      <Row title="Enable trigger ingress" desc="Master switch for the webhook listener. Off = nothing listens, whatever else is set. (cli.triggers.enabled)">
         <Toggle on={enabled} onChange={(v) => setPath('triggers.enabled', v)} />
       </Row>
+
+      <div className="set-h2">Listener daemon</div>
+      <Row
+        title={<>Webhook listener {serve?.running
+          ? <span className="badge native" style={{ marginLeft: 6 }}>running</span>
+          : <span className="badge cli" style={{ marginLeft: 6 }}>stopped</span>}</>}
+        desc={serve?.running
+          ? <>Listening on <code>http://{serve.host}:{serve.port}</code> · providers: {serve.providers.join(', ')} · since {serve.startedAt ? new Date(serve.startedAt).toLocaleTimeString() : '—'}. Runs while the desktop app is open; `brainrouter serve --triggers` does the same from a terminal.</>
+          : <>Start the inbound webhook listener in this app (same gates as `brainrouter serve --triggers`).{serve?.lastError ? <> · <span style={{ color: 'rgb(214,156,60)' }}>{serve.lastError}</span></> : null}</>}>
+        {serve?.running
+          ? <button className="btn danger" onClick={() => serveAction('action:triggers-serve-stop')}>Stop</button>
+          : <button className="btn" disabled={!enabled} title={enabled ? undefined : 'Turn on "Enable trigger ingress" first'} onClick={() => serveAction('action:triggers-serve-start')}>Start</button>}
+      </Row>
+      {serve?.running && serve.recentEvents.length ? (
+        <Row title="Recent activity" desc={<span style={{ whiteSpace: 'pre-wrap' }}>{serve.recentEvents.slice(0, 5).join('\n')}</span>} />
+      ) : null}
 
       <div style={{ opacity: enabled ? 1 : 0.5, pointerEvents: enabled ? 'auto' : 'none' }}>
         <div className="set-h2">Listener</div>

@@ -31,6 +31,7 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
   const devPreviewsLive = [
     { runtimeId: 'rt_ab12cd34', name: 'web', url: 'http://127.0.0.1:5173', port: 5173 },
   ];
+  const devTriggerServe = { running: false, host: null as string | null, port: null as number | null, startedAt: null as string | null, providers: [] as string[], recentEvents: [] as string[], lastError: null as string | null };
   const devAutomationRules = [
     { id: 'label-fix', name: 'Fix labeled bugs', on: 'github.issue.labeled', when: "label == 'bug'", do: 'build', enabled: true, sourcePath: '/Users/dev/BrainRouter/.brainrouter/automations/label-fix.md' },
     { id: 'ci-repair', name: 'Repair failing CI', on: 'github.workflow_run.completed', when: "conclusion == 'failure'", do: 'fix-ci', enabled: false, sourcePath: '/Users/dev/BrainRouter/.brainrouter/automations/ci-repair.md' },
@@ -932,7 +933,21 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       runtimeArchives: devArchives.map((a) => ({ ...a })),
       runtimePreviewsLive: devPreviewsLive.map((p) => ({ ...p })),
       automationRules: devAutomationRules.map((r) => ({ ...r })),
+      triggerServe: { ...devTriggerServe, providers: [...devTriggerServe.providers], recentEvents: [...devTriggerServe.recentEvents] },
     }),
+    'action:triggers-serve-start': () => {
+      const trig = devCliKnobs.triggers as { enabled?: boolean; host?: string; port?: number } | undefined;
+      if (trig?.enabled !== true) { devTriggerServe.lastError = 'Trigger ingress is disabled — turn on "Enable trigger ingress" first (cli.triggers.enabled).'; return { ok: false, error: devTriggerServe.lastError }; }
+      devTriggerServe.running = true; devTriggerServe.host = trig.host ?? '127.0.0.1'; devTriggerServe.port = trig.port ?? 8787;
+      devTriggerServe.startedAt = new Date().toISOString(); devTriggerServe.providers = ['github', 'slack', 'gitlab', 'jira'];
+      devTriggerServe.recentEvents = [`${devTriggerServe.startedAt} listening on http://${devTriggerServe.host}:${devTriggerServe.port}`];
+      devTriggerServe.lastError = null;
+      return { ok: true, host: devTriggerServe.host, port: devTriggerServe.port };
+    },
+    'action:triggers-serve-stop': () => {
+      devTriggerServe.running = false; devTriggerServe.host = null; devTriggerServe.port = null; devTriggerServe.startedAt = null; devTriggerServe.providers = [];
+      return { ok: true };
+    },
     'action:runtime-remove-record': (a) => { const i = devRuntimes.findIndex((r) => r.id === a.id); if (i >= 0) devRuntimes.splice(i, 1); return { ok: i >= 0, id: String(a.id ?? '') }; },
     'action:runtime-resume-archive': (a) => ({ ok: true, id: String(a.id ?? ''), worktreeRoot: '/Users/dev/.brainrouter/runtime/worktrees/'+String(a.id ?? ''), patchApplied: true, filesRestored: true, patchError: null }),
     'action:runtime-prune-archives': (a) => { const keepN = typeof a.keepN === 'number' ? a.keepN : 1; const removed = devArchives.slice(keepN).map((x) => x.id); devArchives = devArchives.slice(0, keepN); return { ok: true, removed }; },

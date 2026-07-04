@@ -52,6 +52,8 @@ export interface ConfigSnapshot {
   runtimeArchives?: Array<{ id: string; branch: string; baseCommit: string; bytes: number; changedFiles: number; status: string; createdAt: string; note: string | null; workspaceRoot: string }>;
   runtimePreviewsLive?: Array<{ runtimeId: string; name: string; url: string; port: number }>;
   automationRules?: Array<{ id: string; name: string; on: string; when: string; do: string; enabled: boolean; sourcePath: string }>;
+  // MC-DESK — in-host trigger-ingress daemon status (Start/Stop from Automations).
+  triggerServe?: { running: boolean; host: string | null; port: number | null; startedAt: string | null; providers: string[]; recentEvents: string[]; lastError: string | null };
   // EXTENSIONS — discovered extensions + workspace trust state.
   extensions?: {
     trusted: boolean;
