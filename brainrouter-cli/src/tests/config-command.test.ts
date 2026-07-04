@@ -7,9 +7,12 @@ import {
   listKnownConfigKeys,
   listProviderRequestFormatRows,
   parseConfigArgs,
+  parseSchemaValue,
   readAutomationKnob,
+  formatSchemaValue,
   WIRE_FORMAT_OPTIONS,
 } from '../cli/commands/config/index.js';
+import { findConfigSchemaField } from '@kinqs/brainrouter-core/config';
 
 const emptyConfig = (): any => ({ activeServer: '', servers: {} });
 
@@ -56,6 +59,24 @@ test('listKnownConfigKeys exposes the workflow-automation keys', () => {
   for (const required of ['automation', 'automation.requirements', 'automation.sync', 'automation.sprints']) {
     assert.ok(keys.includes(required), `/config should support ${required}`);
   }
+});
+
+test('listKnownConfigKeys exposes schema-driven cli knobs', () => {
+  const keys = listKnownConfigKeys();
+  for (const required of ['maxOutputTokens', 'budget.maxPerTaskTokens', 'notifyBell']) {
+    assert.ok(keys.includes(required), `/config should support schema key ${required}`);
+  }
+});
+
+test('schema renderer maps field types to CLI values and parsers', () => {
+  const numberField = findConfigSchemaField('budget.maxPerTaskTokens')!;
+  const boolField = findConfigSchemaField('notifyBell')!;
+  const selectField = findConfigSchemaField('nextActionPlanner')!;
+  assert.equal(formatSchemaValue(numberField, undefined), '0');
+  assert.deepEqual(parseSchemaValue(numberField, '42'), { ok: true, message: 'budget.maxPerTaskTokens → 42', value: 42 });
+  assert.deepEqual(parseSchemaValue(boolField, 'on'), { ok: true, message: 'notifyBell → on', value: true });
+  assert.deepEqual(parseSchemaValue(selectField, 'off'), { ok: true, message: 'nextActionPlanner → off', value: 'off' });
+  assert.equal(parseSchemaValue(selectField, 'maybe').ok, false);
 });
 
 test('listProviderRequestFormatRows keys saved providers by runtime provider id', () => {

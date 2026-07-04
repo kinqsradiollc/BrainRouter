@@ -54,7 +54,17 @@ import {
 // Deep imports into the CLI's built runtime (no "exports" field = allowed).
 // Extracting a proper @kinqs/brainrouter-agent package is tracked for 0.4.16.
 import { callOpenAI } from '@kinqs/brainrouter-core/agent';
-import { loadConfig, saveConfig, getCliKnobs, _resetCliKnobsCache, applyRuleEdit, type LLMConfig } from '@kinqs/brainrouter-core/config';
+import {
+  CLI_CONFIG_SCHEMA,
+  findConfigSchemaField,
+  loadConfig,
+  saveConfig,
+  getCliKnobs,
+  _resetCliKnobsCache,
+  applyRuleEdit,
+  setConfigValueAtPath,
+  type LLMConfig,
+} from '@kinqs/brainrouter-core/config';
 import {
   createRuntimeRunnerClient,
   listRuntimePreviewPorts,
@@ -1908,6 +1918,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           // §settings-completeness — the raw cli.* block so the Advanced section can
           // show current knob values (no key here; values are config, not secrets).
           cliKnobs: scrubCliSecrets(cli),
+          cliSchema: CLI_CONFIG_SCHEMA,
           // EXTENSIONS — discovered extensions + workspace trust, for the
           // Settings → Extensions section (toggle/trust refresh this snapshot).
           extensions: {
@@ -2504,6 +2515,17 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         saveConfig(fresh as never);
         _resetCliKnobsCache();
         return { ok: true, key };
+      },
+      'action:set-cli-schema-knob': (args) => {
+        const pathArg = typeof args.path === 'string' ? args.path : '';
+        const field = findConfigSchemaField(pathArg);
+        if (!field) return { ok: false, error: 'Unknown schema field.' };
+        const fresh = loadConfig() as { cli?: Record<string, unknown> };
+        const cli = (fresh.cli = fresh.cli ?? {});
+        setConfigValueAtPath(cli, field.path, args.value);
+        saveConfig(fresh as never);
+        _resetCliKnobsCache();
+        return { ok: true, path: field.path };
       },
       'action:set-github-oauth-client-id': (args) => {
         const fresh = loadConfig() as { cli?: { github?: { oauthClientId?: string; caBundle?: string } } };
