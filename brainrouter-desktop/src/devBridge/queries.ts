@@ -21,6 +21,24 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     'list-sessions': () => mergeMeta(S.wsCurrent),
     'runtime-runner-info': () => ({ mode: 'in-process', remoteUrl: null }),
     'runtime-runner-status': (a) => ({ runtimeId: String(a.runtimeId ?? ''), status: 'unknown', live: false }),
+    'runtime-previews-list': () => ({
+      reservations: [{ name: 'app', port: 5173, url: 'http://127.0.0.1:5173' }],
+      previews: [],
+    }),
+    'runtime-preview-register': (a) => ({
+      ok: true,
+      preview: {
+        runtimeId: String(a.runtimeId ?? 'rt_dev'),
+        name: String(a.name ?? 'app'),
+        port: Number(a.port ?? 5173),
+        host: '127.0.0.1',
+        protocol: 'http',
+        url: `http://127.0.0.1:${Number(a.port ?? 5173)}`,
+        registeredAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    }),
+    'runtime-preview-remove': () => ({ ok: true }),
     'schedule-list': () => devSchedules,
     'schedule-add': (a) => {
       const kind = a.kind === 'once' ? 'once' : 'cron';

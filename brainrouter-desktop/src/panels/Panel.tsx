@@ -9,7 +9,7 @@
 import React, { useState } from 'react';
 import { Icon } from '../icons.js';
 
-export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'tasks' | 'dashboard' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'review' | 'requirements' | 'annotations' | 'artifacts' | 'ci' | 'atlas' | 'workflows' | 'memory' | 'prototype';
+export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'preview' | 'tasks' | 'dashboard' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'review' | 'requirements' | 'annotations' | 'artifacts' | 'ci' | 'atlas' | 'workflows' | 'memory' | 'prototype';
 
 export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'context', title: 'Context', icon: 'layout-right' },
@@ -19,6 +19,7 @@ export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'diff', title: 'Changes', icon: 'diff' },
   { id: 'terminal', title: 'Terminal', icon: 'terminal' },
   { id: 'tools', title: 'Tool calls', icon: 'bolt' },
+  { id: 'preview', title: 'Preview', icon: 'globe' },
   { id: 'tasks', title: 'Background tasks', icon: 'tasks' },
   { id: 'dashboard', title: 'Dashboard', icon: 'tasks' },
   { id: 'plan', title: 'Plan', icon: 'plan' },

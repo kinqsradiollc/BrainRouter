@@ -55,7 +55,14 @@ import {
 // Extracting a proper @kinqs/brainrouter-agent package is tracked for 0.4.16.
 import { callOpenAI } from '@kinqs/brainrouter-core/agent';
 import { loadConfig, saveConfig, getCliKnobs, _resetCliKnobsCache, applyRuleEdit, type LLMConfig } from '@kinqs/brainrouter-core/config';
-import { createRuntimeRunnerClient, type RuntimeRunnerClient } from '@kinqs/brainrouter-core/runtime';
+import {
+  createRuntimeRunnerClient,
+  listRuntimePreviewPorts,
+  registerRuntimePreviewPort,
+  removeRuntimePreviewPort,
+  resolveRuntimePreviewReservations,
+  type RuntimeRunnerClient,
+} from '@kinqs/brainrouter-core/runtime';
 // 0.4.15 — named providers + per-sub-agent model routing (pure transforms).
 import { setProvider, removeProvider, setAgentModel, normalizeProviderModels, PROVIDER_CATALOG } from '@kinqs/brainrouter-core/provider';
 import { childSessionKey } from '@kinqs/brainrouter-core/mcp';
@@ -414,6 +421,28 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         if (!runtimeId || !sessionKey) return { error: 'runtimeId and sessionKey are required.' };
         return getRuntimeRunnerClient().status({ runtimeId, sessionKey });
       },
+      'runtime-previews-list': () => ({
+        reservations: resolveRuntimePreviewReservations(),
+        previews: listRuntimePreviewPorts(workspaceRoot),
+      }),
+      'runtime-preview-register': (args) => {
+        const runtimeId = typeof args.runtimeId === 'string' ? args.runtimeId.trim() : '';
+        const name = typeof args.name === 'string' ? args.name.trim() : '';
+        const port = typeof args.port === 'number' ? args.port : undefined;
+        if (!runtimeId || !name) return { ok: false, error: 'runtimeId and name are required.' };
+        try {
+          return { ok: true, preview: registerRuntimePreviewPort(workspaceRoot, { runtimeId, name, port }) };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      },
+      'runtime-preview-remove': (args) => ({
+        ok: removeRuntimePreviewPort(
+          workspaceRoot,
+          typeof args.runtimeId === 'string' ? args.runtimeId : '',
+          typeof args.name === 'string' ? args.name : '',
+        ),
+      }),
       // CONNECTORS — Onyx-like connector lifecycle foundation. These wrappers
       // expose the core catalog/store to the renderer without making Track Sync
       // pretend to be the general connector abstraction.

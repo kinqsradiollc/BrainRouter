@@ -16,6 +16,7 @@ export { DashboardPanel } from './review/DashboardPanel.js';
 export { TerminalPanel } from './workspace/TerminalPanel.js';
 export { ToolsPanel } from './workspace/ToolsPanel.js';
 export { WorktreesPanel } from './workspace/WorktreesPanel.js';
+export { PreviewPanel } from './workspace/PreviewPanel.js';
 export { TasksPanel, type FinishedTask } from './planning/TasksPanel.js';
 export { SchedulePanel } from './planning/SchedulePanel.js';
 export { RequirementsPanel } from './planning/RequirementsPanel.js';
