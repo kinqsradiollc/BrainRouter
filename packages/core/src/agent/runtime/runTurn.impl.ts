@@ -25,6 +25,7 @@ import { buildNextActionMessages, parseNextActionPlan, nextActionDirective, plan
 import { compactToolOutput } from '../../prompt/compaction/toolCompaction.js';
 import { isModelNotFoundError, nextFallbackModel, shouldFallbackModel } from '../../provider/modelFallback.js';
 import { resolveLocalModelProfile, localModelProfileActive, isLocalModelCoreTool } from '../../provider/modelFamily.js';
+import { enforceTaskBudget } from '../../provider/budget.js';
 import { currentTier, detectNeedsHigh, nextTier, resolveTierLadder, stripNeedsHigh } from '../../provider/tierLadder.js';
 import { switchModelToolAvailable } from '../../provider/llmProfiles.js';
 import { drainCompletions, formatCompletionFeedback } from '../../session/completion/completionInbox.js';
@@ -1007,6 +1008,16 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           missedTokens: cache.missedTokens,
           cacheHitRatio: cache.cacheHitRatio,
           source: cache.source,
+        });
+        enforceTaskBudget({
+          caps: getCliKnobs().budget,
+          modelId: this.llmConfig.model,
+          usage: {
+            promptTokens: this.sessionUsage.promptTokens + this.lastTurnUsage.promptTokens,
+            completionTokens: this.sessionUsage.completionTokens + this.lastTurnUsage.completionTokens,
+            cachedTokens: this.sessionUsage.cachedTokens + this.lastTurnUsage.cachedTokens,
+            missedTokens: this.sessionUsage.missedTokens + this.lastTurnUsage.missedTokens,
+          },
         });
         // HEADLESS-EVENTS — running token tally after each LLM call.
         callbacks.onUsageUpdate?.({ ...this.lastTurnUsage });

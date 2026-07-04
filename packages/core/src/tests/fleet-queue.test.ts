@@ -26,6 +26,7 @@ import {
 } from '../fleet/fleetStore.js';
 import { FleetJobRunner } from '../fleet/fleetRunner.js';
 import { acquireFleetLock, readFleetLock } from '../fleet/lock.js';
+import { BudgetExceededError } from '../provider/budget.js';
 
 function freshHome(): string {
   return mkdtempSync(path.join(tmpdir(), 'br-fleet-'));
@@ -255,6 +256,31 @@ test('FleetJobRunner.runOne failure path re-arms the job via backoff', async () 
     assert.equal(after.status, 'pending', 'one attempt left → re-armed');
     assert.equal(after.error, 'kaboom');
     assert.equal(after.attempts, 1);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('FleetJobRunner.runOne classifies budget failures as terminal', async () => {
+  const home = freshHome();
+  try {
+    const { job } = enqueueFleetJob({ kind: 'budget', workspaceRoot: '/ws', maxAttempts: 3 }, { home });
+    const runner = new FleetJobRunner({
+      capacity: 4,
+      home,
+      executors: {
+        budget: async () => {
+          throw new BudgetExceededError({ capTokens: 10, spentTokens: 10 });
+        },
+      },
+    });
+    await runner.tick();
+    const after = getFleetJob(job.id, home)!;
+    assert.equal(after.status, 'failed');
+    assert.equal(after.classification, 'budget_exceeded');
+    assert.equal(after.attempts, 1);
+    assert.equal(after.runAfter, undefined);
+    assert.deepEqual(after.output, { classification: 'budget_exceeded', capTokens: 10, spentTokens: 10 });
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

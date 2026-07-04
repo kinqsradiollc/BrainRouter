@@ -422,6 +422,11 @@ function positiveInt(value: unknown, fallback: number, opts: { min?: number; max
   return Math.max(min, Math.min(max, n));
 }
 
+function nonNegativeNumber(value: unknown, fallback = 0): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return fallback;
+  return value;
+}
+
 function resolveWebSearchKnobs(input: WebSearchCliKnobs | undefined): ResolvedWebSearchKnobs {
   const provider = WEB_SEARCH_PROVIDER_NAMES.includes(input?.provider as WebSearchProviderName)
     ? input!.provider!
@@ -657,6 +662,10 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
       threshold: unitInterval(c.critic?.threshold, 0.7),
       maxRefinementIterations: clampInt(c.critic?.maxRefinementIterations, 0, 8, 2),
       model: typeof c.critic?.model === 'string' ? c.critic.model.trim() : '',
+    },
+    budget: {
+      maxPerTaskUSD: nonNegativeNumber(c.budget?.maxPerTaskUSD),
+      maxPerTaskTokens: Math.floor(nonNegativeNumber(c.budget?.maxPerTaskTokens)),
     },
     notifyBell: c.notifyBell ?? false,
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,

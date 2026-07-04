@@ -362,6 +362,13 @@ export interface RuntimeCliKnobs {
   previewPorts?: Record<string, number>;
 }
 
+export interface BudgetCliKnobs {
+  /** Per-agent-task USD cap. 0 or absent means uncapped. */
+  maxPerTaskUSD?: number;
+  /** Per-agent-task token cap. 0 or absent means uncapped. */
+  maxPerTaskTokens?: number;
+}
+
 /** MC-A1 — validated knob values (see `RuntimeBackendKind`). */
 export function normalizeRuntimeBackend(value: unknown): RuntimeBackendKind {
   if (value === 'worktree') return 'worktree';
@@ -828,6 +835,8 @@ export interface CliKnobs {
      *  (`agentModels.critic`, falling back to the session model). */
     model?: string;
   };
+  /** Hard per-agent-task budget. Both caps default to 0, meaning uncapped. */
+  budget?: BudgetCliKnobs;
   /** PARITY-W3 — ring the terminal bell on an idle background-completion notice. Default false. */
   notifyBell?: boolean;
   /** Child-drain timeout in ms. Default 30000. */
@@ -1210,6 +1219,8 @@ export interface ResolvedCliKnobs {
   /** MC-D1 — validated critic-gate knobs: enabled defaults false; threshold
    *  falls back to 0.7 outside [0,1]; iterations clamped 0..8 (default 2). */
   critic: { enabled: boolean; threshold: number; maxRefinementIterations: number; model: string };
+  /** MC-D4 — hard per-task budget caps. 0 means uncapped. */
+  budget: { maxPerTaskUSD: number; maxPerTaskTokens: number };
   notifyBell: boolean;
   childDrainTimeoutMs: number;
   offloadRetentionMs: number;

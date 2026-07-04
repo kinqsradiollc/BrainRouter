@@ -58,6 +58,8 @@ export interface FleetJobRecord {
   pid?: number;
   output?: unknown;
   error?: string;
+  /** Terminal failure bucket for UI and trigger postbacks. */
+  classification?: string;
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
@@ -226,16 +228,18 @@ export function completeFleetJob(id: string, output?: unknown, opts?: { home?: s
 export function failFleetJob(
   id: string,
   error: string,
-  opts?: { home?: string; now?: Date; random?: () => number },
+  opts?: { home?: string; now?: Date; random?: () => number; classification?: string; output?: unknown; terminal?: boolean },
 ): FleetJobRecord | undefined {
   const data = read(opts?.home);
   const job = data.jobs.find((j) => j.id === id);
   if (!job) return undefined;
   const now = opts?.now ?? new Date();
   job.error = error;
+  job.classification = opts?.classification;
+  if (opts && 'output' in opts) job.output = opts.output;
   job.updatedAt = now.toISOString();
   delete job.pid;
-  if (job.attempts < job.maxAttempts) {
+  if (!opts?.terminal && job.attempts < job.maxAttempts) {
     job.status = 'pending';
     job.runAfter = new Date(now.getTime() + fleetBackoffMs(job.attempts, opts?.random)).toISOString();
   } else {

@@ -16,6 +16,7 @@ import {
   type FleetJobRecord,
 } from './fleetStore.js';
 import { acquireFleetLock, type FleetLockHandle } from './lock.js';
+import { isBudgetExceededError } from '../provider/budget.js';
 
 /** Runs a claimed job and returns its output; throws to fail (→ backoff/retry). */
 export type FleetExecutor = (job: FleetJobRecord) => Promise<unknown>;
@@ -120,7 +121,12 @@ export class FleetJobRunner {
         const output = await executor(job);
         completeFleetJob(job.id, output, { home: this.opts.home });
       } catch (err: unknown) {
-        failFleetJob(job.id, err instanceof Error ? err.message : String(err), { home: this.opts.home });
+        failFleetJob(job.id, err instanceof Error ? err.message : String(err), {
+          home: this.opts.home,
+          classification: isBudgetExceededError(err) ? err.classification : undefined,
+          output: isBudgetExceededError(err) ? err.budget : undefined,
+          terminal: isBudgetExceededError(err),
+        });
       }
     } finally {
       this.inFlight.delete(job.id);
