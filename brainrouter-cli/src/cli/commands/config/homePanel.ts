@@ -17,6 +17,7 @@ import {
 } from './editors.js';
 import { editMcp } from './mcpProfiles.js';
 import { showRawConfigPanel } from './rawConfig.js';
+import { buildSchemaPanelRows } from './schemaRenderer.js';
 
 export async function runHomePanel(ctx: CommandContext): Promise<void> {
   const { agent } = ctx;
@@ -124,6 +125,7 @@ function buildPanelRows(ctx: CommandContext): PanelRow[] {
       },
       edit: editAgentModels,
     },
+    ...buildSchemaPanelRows(ctx, ['modelLimits', 'notifications']),
     { key: 'theme',         label: 'Theme',            current: () => prefs().theme,                 edit: editTheme },
     { key: 'statusline',    label: 'Statusline',       current: () => prefs().statusline,            edit: editStatusline },
     { key: 'effort',        label: 'Reasoning effort', current: () => `${resolveEffort(agent.workspaceRoot).effort} (${resolveEffort(agent.workspaceRoot).source})`, edit: editEffort },

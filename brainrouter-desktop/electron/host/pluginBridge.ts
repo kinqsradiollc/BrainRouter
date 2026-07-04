@@ -26,6 +26,8 @@ import {
   removePlugin,
   fetchAndSearch,
   type PluginScope,
+  type PluginLoadScope,
+  type DiscoveredPlugin,
   type ConsentSummary,
   type SearchHit,
 } from '@kinqs/brainrouter-core/plugin';
@@ -35,7 +37,8 @@ import { VERSION } from '@kinqs/brainrouter-core/version';
 /** An installed plugin, flattened for the renderer (no fs paths beyond root). */
 export interface InstalledPluginView {
   name: string;
-  scope: PluginScope | 'user' | 'workspace';
+  scope: PluginLoadScope | 'user' | 'workspace' | 'org';
+  readOnly: boolean;
   version?: string;
   description?: string;
   author?: string;
@@ -97,26 +100,28 @@ export async function listInstalledPlugins(workspaceRoot: string): Promise<{ plu
   const runtime = { brainrouterVersion: VERSION };
   const seen = new Map<string, InstalledPluginView>();
 
-  const add = (name: string, scope: PluginScope, enabled: boolean): void => {
+  const add = (
+    plugin: DiscoveredPlugin & { scope: PluginLoadScope; readOnly?: boolean },
+    enabled: boolean,
+  ): void => {
+    const { name, scope } = plugin;
     if (seen.has(name)) return; // workspace overrides user (loadPlugins order)
-    const root = pluginInstallRoot(scope, name, workspaceRoot);
-    const disc = discoverPlugin(root);
-    if (!disc.ok) return;
     const consent = pluginConsent(config, name);
-    const summary: ConsentSummary = buildConsentSummary(disc.plugin, { approved: consent, runtime });
-    const record = readInstallRecord(root);
-    const installedVer = disc.plugin.manifest.version;
+    const summary: ConsentSummary = buildConsentSummary(plugin, { approved: consent, runtime });
+    const record = readInstallRecord(plugin.root);
+    const installedVer = plugin.manifest.version;
     const regVer = registryVersions.get(name.toLowerCase());
     const updateAvailable = regVer && installedVer && compareVersions(regVer, installedVer) > 0 ? regVer : undefined;
     seen.set(name, {
       name,
       scope,
+      readOnly: plugin.readOnly === true || scope === 'org',
       version: installedVer,
-      description: disc.plugin.manifest.description,
-      author: authorName(disc.plugin.manifest.author),
-      category: disc.plugin.manifest.category,
+      description: plugin.manifest.description,
+      author: authorName(plugin.manifest.author),
+      category: plugin.manifest.category,
       enabled,
-      provides: summarizeProvides(disc.plugin),
+      provides: summarizeProvides(plugin),
       requiresConsent: summary.requiresConsent,
       shellApproved: summary.shellApproved,
       mcpApproved: summary.mcpApproved,
@@ -126,11 +131,8 @@ export async function listInstalledPlugins(workspaceRoot: string): Promise<{ plu
     });
   };
 
-  for (const p of res.loaded) add(p.name, p.scope, true);
-  for (const p of res.disabled) {
-    const scope = (p as { scope?: PluginScope }).scope ?? 'user';
-    add(p.name, scope, false);
-  }
+  for (const p of res.loaded) add(p, true);
+  for (const p of res.disabled) add(p, false);
 
   return { plugins: [...seen.values()], skippedForSafeMode: res.skippedForSafeMode, errors: res.errors };
 }

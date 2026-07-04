@@ -3,5 +3,6 @@
 // the subsystem's file layout stays an internal detail.
 export * from './config.js';
 export * from './configLoader.js';
+export * from './configSchema.js';
 export * from './permissionRules.js';
 export * from './service.js';

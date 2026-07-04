@@ -19,6 +19,26 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
   } = S;
   const queries: Record<string, (args: Record<string, unknown>) => unknown> = {
     'list-sessions': () => mergeMeta(S.wsCurrent),
+    'runtime-runner-info': () => ({ mode: 'in-process', remoteUrl: null }),
+    'runtime-runner-status': (a) => ({ runtimeId: String(a.runtimeId ?? ''), status: 'unknown', live: false }),
+    'runtime-previews-list': () => ({
+      reservations: [{ name: 'app', port: 5173, url: 'http://127.0.0.1:5173' }],
+      previews: [],
+    }),
+    'runtime-preview-register': (a) => ({
+      ok: true,
+      preview: {
+        runtimeId: String(a.runtimeId ?? 'rt_dev'),
+        name: String(a.name ?? 'app'),
+        port: Number(a.port ?? 5173),
+        host: '127.0.0.1',
+        protocol: 'http',
+        url: `http://127.0.0.1:${Number(a.port ?? 5173)}`,
+        registeredAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+    }),
+    'runtime-preview-remove': () => ({ ok: true }),
     'schedule-list': () => devSchedules,
     'schedule-add': (a) => {
       const kind = a.kind === 'once' ? 'once' : 'cron';
@@ -843,7 +863,7 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       // Mock of config/providers.json — the main-provider picker source.
       providerCatalog: [
         { id: 'openai', label: 'OpenAI', endpoint: 'https://api.openai.com/v1', local: false },
-        { id: 'anthropic', label: 'Anthropic (Claude)', endpoint: 'https://api.anthropic.com/v1', local: false },
+        { id: 'anthropic', label: 'Anthropic', endpoint: 'https://api.anthropic.com/v1', local: false },
         { id: 'gemini', label: 'Google Gemini', endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai', local: false },
         { id: 'openrouter', label: 'OpenRouter', endpoint: 'https://openrouter.ai/api/v1', local: false },
         { id: 'zenmux', label: 'ZenMux', endpoint: 'https://zenmux.ai/api/v1', local: false },

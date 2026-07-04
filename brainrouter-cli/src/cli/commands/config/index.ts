@@ -45,5 +45,6 @@ export {
   applyProviderRequestFormat,
 } from './wireFormat.js';
 export { readAutomationKnob, applyAutomationKnob } from './automation.js';
+export { formatSchemaValue, parseSchemaValue, schemaHandlerForKey } from './schemaRenderer.js';
 export { buildScrubbedConfigJson } from './rawConfig.js';
 export { editLlm, promptBrainrouterApiKey } from './editors.js';

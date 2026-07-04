@@ -166,6 +166,7 @@ const RUNTIME_KNOBS_OFF = {
   archiveKeep: 20, jitSecrets: false, jitSecretTtlMs: 60_000,
   // MC-A3 — container backend knobs (irrelevant here; pinned to defaults).
   containerImage: '', container: { cpus: 0, memory: '' },
+  serve: false, serveHost: '127.0.0.1', servePort: 8791, remoteUrl: '', previewPorts: {},
 };
 
 test('MC-A5 sandbox default off: allowlisted secret stays RAW in scopedEnv (unchanged behavior)', () => {

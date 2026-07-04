@@ -4,7 +4,7 @@
 // (in ./args.ts) enumerates KEY_HANDLERS for tab-completion + tests.
 import chalk from 'chalk';
 import type { CommandContext } from '../_context.js';
-import { saveConfig, getCliKnobs, setCliKnobOverride, _resetCliKnobsCache } from '@kinqs/brainrouter-core/config';
+import { configSchemaFields, saveConfig, getCliKnobs, setCliKnobOverride, _resetCliKnobsCache } from '@kinqs/brainrouter-core/config';
 import { listProviderNames, maskApiKey } from '@kinqs/brainrouter-core/provider';
 import {
   readPreferences,
@@ -22,6 +22,7 @@ import {
   setDefaultProvider, type ConfigKeyHandler,
 } from './shared.js';
 import { readAutomationKnob, applyAutomationKnob } from './automation.js';
+import { schemaHandlerForKey } from './schemaRenderer.js';
 
 function automationHandler(key: string): ConfigKeyHandler {
   return {
@@ -228,20 +229,20 @@ export const KEY_HANDLERS: Record<string, ConfigKeyHandler> = {
 };
 
 export function printKey(ctx: CommandContext, key: string): void {
-  const handler = KEY_HANDLERS[key];
+  const handler = KEY_HANDLERS[key] ?? schemaHandlerForKey(key);
   if (!handler) {
     console.log(chalk.red(`\n  Unknown config key "${key}".`));
-    console.log(chalk.gray(`  Known keys: ${Object.keys(KEY_HANDLERS).join(', ')}.  Run /config (bare) for the interactive panel.\n`));
+    console.log(chalk.gray(`  Known keys: ${[...Object.keys(KEY_HANDLERS), ...configSchemaFields().map((f) => f.path)].join(', ')}.  Run /config (bare) for the interactive panel.\n`));
     return;
   }
   console.log(`\n  ${chalk.cyan(key)}: ${chalk.bold(handler.get(ctx))}\n`);
 }
 
 export async function setKey(ctx: CommandContext, key: string, value: string): Promise<void> {
-  const handler = KEY_HANDLERS[key];
+  const handler = KEY_HANDLERS[key] ?? schemaHandlerForKey(key);
   if (!handler || !handler.set) {
     console.log(chalk.red(`\n  /config can't set "${key}" directly.`));
-    console.log(chalk.gray(`  Run /config (bare) and pick "${key}" interactively, or pick one of: ${Object.keys(KEY_HANDLERS).join(', ')}.\n`));
+    console.log(chalk.gray(`  Run /config (bare) and pick "${key}" interactively, or pick one of: ${[...Object.keys(KEY_HANDLERS), ...configSchemaFields().map((f) => f.path)].join(', ')}.\n`));
     return;
   }
   const result = await handler.set(ctx, value);

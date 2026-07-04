@@ -1,6 +1,7 @@
 // Pure arg parsing for the `/config` command (exported for tests) and the
 // settable-key enumeration used by tab-completion.
 import { KEY_HANDLERS } from './keyHandlers.js';
+import { configSchemaFields } from '@kinqs/brainrouter-core/config';
 
 export type ParsedConfigArgs =
   | { mode: 'home' }
@@ -17,5 +18,5 @@ export function parseConfigArgs(args: string[]): ParsedConfigArgs {
 }
 
 export function listKnownConfigKeys(): string[] {
-  return Object.keys(KEY_HANDLERS);
+  return [...Object.keys(KEY_HANDLERS), ...configSchemaFields().map((field) => field.path)];
 }

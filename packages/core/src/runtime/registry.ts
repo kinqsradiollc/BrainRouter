@@ -13,12 +13,15 @@ import { normalizeRuntimeBackend } from '../config/configTypes.js';
 import type { RuntimeBackendKind } from '../config/configTypes.js';
 import type { IAgentRuntime, RuntimeTurnExecutor } from './runtimeTypes.js';
 import { createContainerRuntime } from './backends/container.js';
+import { createHostedCliRuntime } from './backends/hostedCli.js';
 import { createProcessRuntime } from './backends/process.js';
 import { createWorktreeRuntime } from './backends/worktree.js';
 
 export interface ResolveRuntimeOptions {
   /** Turn-execution seam handed to the backend (production: `agentTurnExecutor(agent)`). */
   executeTurn: RuntimeTurnExecutor;
+  /** Optional caller-assigned id, useful when a client needs to queue before ready. */
+  id?: string;
 }
 
 export type RuntimeFactory = (options: ResolveRuntimeOptions) => IAgentRuntime;
@@ -40,9 +43,10 @@ export function availableRuntimeBackends(): RuntimeBackendKind[] {
 // `cli.runtime.backend`), and `container` (MC-A3 — docker-CLI isolated
 // runtime; resolving the kind is cheap, but `start()` stays strictly opt-in:
 // it refuses to run without `cli.runtime.containerImage` and never pulls).
-registerRuntimeBackend('process', (options) => createProcessRuntime({ executeTurn: options.executeTurn }));
-registerRuntimeBackend('worktree', (options) => createWorktreeRuntime({ executeTurn: options.executeTurn }));
-registerRuntimeBackend('container', (options) => createContainerRuntime({ executeTurn: options.executeTurn }));
+registerRuntimeBackend('process', (options) => createProcessRuntime({ executeTurn: options.executeTurn, id: options.id }));
+registerRuntimeBackend('worktree', (options) => createWorktreeRuntime({ executeTurn: options.executeTurn, id: options.id }));
+registerRuntimeBackend('container', (options) => createContainerRuntime({ executeTurn: options.executeTurn, id: options.id }));
+registerRuntimeBackend('hosted', (options) => createHostedCliRuntime({ id: options.id }));
 
 /**
  * Obtain a runtime for `kind` (default: the `cli.runtime.backend` knob).

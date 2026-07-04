@@ -3,7 +3,7 @@
  *
  * Given a plugin root, read its manifest and resolve WHICH component paths it
  * actually contributes (auto-discovering the convention dirs when `contributes`
- * omits them, per plan §3.1/§3.2). The result is inert DATA — the loader feeds
+ * omits them). The result is inert DATA — the loader feeds
  * these paths into the existing subsystems (skills / agents / commands / hooks /
  * mcp / connectors / workflows). No parallel runtime.
  */
@@ -44,17 +44,17 @@ export type DiscoveryResult =
   | { ok: false; error: DiscoveryError };
 
 /** Absolute path of a plugin's manifest file. */
-export function manifestPath(pluginRoot: string): string {
-  return path.join(pluginRoot, PLUGIN_MANIFEST_DIR, PLUGIN_MANIFEST_FILE);
+export function manifestPath(pluginRoot: string, altManifestNames: readonly string[] = []): string {
+  return manifestCandidatePaths(pluginRoot, altManifestNames)[0];
+}
+
+export function manifestCandidatePaths(pluginRoot: string, altManifestNames: readonly string[] = []): string[] {
+  return manifestFilenames(altManifestNames).map((name) => path.join(pluginRoot, PLUGIN_MANIFEST_DIR, name));
 }
 
 /** True when a directory looks like a plugin (has the manifest file). */
-export function looksLikePlugin(pluginRoot: string): boolean {
-  try {
-    return fs.statSync(manifestPath(pluginRoot)).isFile();
-  } catch {
-    return false;
-  }
+export function looksLikePlugin(pluginRoot: string, altManifestNames: readonly string[] = []): boolean {
+  return !!findManifestFile(pluginRoot, altManifestNames);
 }
 
 const DIR_KINDS: ReadonlySet<PluginComponentKind> = new Set(['skills', 'agents', 'commands', 'workflows', 'connectors']);
@@ -63,14 +63,15 @@ const DIR_KINDS: ReadonlySet<PluginComponentKind> = new Set(['skills', 'agents',
  * Read + validate a plugin at `pluginRoot`. Returns discovered component paths
  * (only those that exist), or a hard error when the manifest is missing/invalid.
  */
-export function discoverPlugin(pluginRoot: string): DiscoveryResult {
+export function discoverPlugin(pluginRoot: string, opts: { altManifestNames?: readonly string[] } = {}): DiscoveryResult {
   const root = path.resolve(pluginRoot);
-  const mPath = manifestPath(root);
+  const mPath = findManifestFile(root, opts.altManifestNames ?? []);
   let text: string;
   try {
+    if (!mPath) throw new Error('missing manifest');
     text = fs.readFileSync(mPath, 'utf8');
   } catch {
-    return { ok: false, error: { root, errors: [`missing manifest at ${PLUGIN_MANIFEST_DIR}/${PLUGIN_MANIFEST_FILE}`] } };
+    return { ok: false, error: { root, errors: [`missing manifest at ${PLUGIN_MANIFEST_DIR}/${manifestFilenames(opts.altManifestNames ?? []).join('|')}`] } };
   }
 
   const parsed = parseManifest(text);
@@ -114,7 +115,32 @@ export function discoverPlugin(pluginRoot: string): DiscoveryResult {
   return { ok: true, plugin: { name: manifest.name, root, manifest, contributes, warnings } };
 }
 
-/** Count of each component a plugin contributes — the disclosure summary (plan §3.7). */
+function findManifestFile(pluginRoot: string, altManifestNames: readonly string[]): string | undefined {
+  for (const candidate of manifestCandidatePaths(pluginRoot, altManifestNames)) {
+    try {
+      if (fs.statSync(candidate).isFile()) return candidate;
+    } catch {
+      // Try the next supported filename.
+    }
+  }
+  return undefined;
+}
+
+function manifestFilenames(altManifestNames: readonly string[]): string[] {
+  const out = [PLUGIN_MANIFEST_FILE];
+  const seen = new Set(out);
+  for (const raw of altManifestNames) {
+    const name = raw.trim();
+    if (!name || seen.has(name)) continue;
+    if (name.includes('/') || name.includes('\\')) continue;
+    if (!name.endsWith('.json')) continue;
+    seen.add(name);
+    out.push(name);
+  }
+  return out;
+}
+
+/** Count of each component a plugin contributes — the disclosure summary. */
 export interface PluginProvides {
   skills: number;
   agents: number;

@@ -7,6 +7,7 @@ export * from './manifest.js';
 export * from './paths.js';
 export * from './discovery.js';
 export * from './loader.js';
+export * from './orgConvention.js';
 export * from './install.js';
 export * from './scaffold.js';
 export * from './service.js';

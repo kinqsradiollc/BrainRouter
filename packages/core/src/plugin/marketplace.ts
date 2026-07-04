@@ -1,5 +1,5 @@
 /**
- * PLUGIN-MARKETPLACE P2 — marketplace SOURCES + install-by-name (plan §3.3/§4).
+ * PLUGIN-MARKETPLACE P2 — marketplace SOURCES + install-by-name.
  *
  * A marketplace is a repo/dir/tarball whose root holds a
  * `brainrouter-marketplace.json` indexing one or many plugins. This module:
@@ -10,14 +10,14 @@
  *     stages+installs that plugin's source (reusing P1's atomic `installPlugin`,
  *     with git sub-path + pinned ref support).
  *
- * BrainRouter conventions only (`.brainrouter/`, `brainrouter-marketplace.json`) —
- * never `.claude`. Everything is additive + inert until a marketplace is added.
+ * BrainRouter conventions only (`.brainrouter/`, `brainrouter-marketplace.json`).
+ * Everything is additive + inert until a marketplace is added.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { loadOrInitConfig, saveConfig } from '../config/config.js';
+import { loadOrInitConfig, resolveCliKnobs, saveConfig } from '../config/config.js';
 import type { Config, MarketplaceSource } from '../config/configTypes.js';
 import { stagingDir } from './paths.js';
 import { installPlugin, classifySource, type InstallOptions, type InstallResult } from './install.js';
@@ -46,7 +46,7 @@ export interface MarketplaceAuthor {
 }
 
 /**
- * A plugin entry in a marketplace manifest (plan §3.3). `source` is the plugin's
+ * A plugin entry in a marketplace manifest. `source` is the plugin's
  * location RELATIVE TO the marketplace source, one of:
  *   - `./relative`               → bundled inside the marketplace repo/dir
  *   - `git+https://…/r.git#tag`  → a standalone plugin repo (pinned)
@@ -140,13 +140,33 @@ export function parseMarketplaceManifest(text: string): MarketplaceParseResult {
 }
 
 /** Read a marketplace manifest from a checked-out/local marketplace dir. */
-export function readMarketplaceManifestAt(dir: string): MarketplaceParseResult {
-  const file = path.join(dir, MARKETPLACE_MANIFEST_FILE);
+export function readMarketplaceManifestAt(dir: string, altManifestNames: readonly string[] = []): MarketplaceParseResult {
+  const names = marketplaceManifestFilenames(altManifestNames);
+  const file = names.map((name) => path.join(dir, name)).find((candidate) => {
+    try { return fs.statSync(candidate).isFile(); } catch { return false; }
+  });
   let text: string;
-  try { text = fs.readFileSync(file, 'utf8'); } catch {
-    return { valid: false, errors: [`missing ${MARKETPLACE_MANIFEST_FILE} at ${dir}`], warnings: [] };
+  try {
+    if (!file) throw new Error('missing marketplace manifest');
+    text = fs.readFileSync(file, 'utf8');
+  } catch {
+    return { valid: false, errors: [`missing ${names.join('|')} at ${dir}`], warnings: [] };
   }
   return parseMarketplaceManifest(text);
+}
+
+function marketplaceManifestFilenames(altManifestNames: readonly string[]): string[] {
+  const out = [MARKETPLACE_MANIFEST_FILE];
+  const seen = new Set(out);
+  for (const raw of altManifestNames) {
+    const name = raw.trim();
+    if (!name || seen.has(name)) continue;
+    if (name.includes('/') || name.includes('\\')) continue;
+    if (!name.endsWith('.json')) continue;
+    seen.add(name);
+    out.push(name);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -330,7 +350,7 @@ export function updateMarketplaceIn(config: Config, name: string): UpdateMarketp
   const fetched = fetchMarketplace(entry);
   if (!fetched.ok) return { ok: false, name, error: fetched.error };
   try {
-    const parsed = readMarketplaceManifestAt(fetched.fetched.dir);
+    const parsed = readMarketplaceManifestAt(fetched.fetched.dir, resolveCliKnobs(config).plugins.altManifestNames);
     if (!parsed.valid || !parsed.manifest) {
       return { ok: false, name, error: `invalid marketplace manifest: ${parsed.errors.join('; ')}` };
     }
@@ -381,6 +401,7 @@ export type ResolveResult =
  */
 export function resolvePluginByName(name: string, config?: Config): ResolveResult {
   const cfg = config ?? loadOrInitConfig();
+  const altManifestNames = resolveCliKnobs(cfg).plugins.altManifestNames;
   const list = marketplacesOf(cfg);
   if (list.length === 0) return { ok: false, error: 'no marketplaces configured (add one with `brainrouter marketplace add`)' };
   const gates = gatesFromConfig(cfg);
@@ -391,7 +412,7 @@ export function resolvePluginByName(name: string, config?: Config): ResolveResul
     if (gateErr) { errors.push(`${mkt.name}: ${gateErr}`); continue; }
     const fetched = fetchMarketplace(mkt);
     if (!fetched.ok) { errors.push(`${mkt.name}: ${fetched.error}`); continue; }
-    const parsed = readMarketplaceManifestAt(fetched.fetched.dir);
+    const parsed = readMarketplaceManifestAt(fetched.fetched.dir, altManifestNames);
     if (!parsed.valid || !parsed.manifest) {
       errors.push(`${mkt.name}: ${parsed.errors.join('; ')}`);
       fetched.fetched.cleanup?.();
@@ -454,7 +475,9 @@ export function installPluginByName(
   name: string,
   opts: { scope?: InstallOptions['scope']; workspaceRoot?: string; force?: boolean; config?: Config } = {},
 ): InstallByNameResult {
-  const resolved = resolvePluginByName(name, opts.config);
+  const config = opts.config ?? loadOrInitConfig();
+  const altManifestNames = resolveCliKnobs(config).plugins.altManifestNames;
+  const resolved = resolvePluginByName(name, config);
   if (!resolved.ok) return { ok: false, error: resolved.error };
   try {
     const spec = resolvePluginInstallSpec(resolved.resolved);
@@ -467,6 +490,7 @@ export function installPluginByName(
       subPath: spec.opts.subPath,
       marketplace: spec.opts.marketplace,
       integrity: spec.opts.integrity,
+      altManifestNames,
     });
     if (!result.ok) return { ok: false, marketplace: resolved.resolved.marketplace, result, error: result.error };
     return { ok: true, marketplace: resolved.resolved.marketplace, result };

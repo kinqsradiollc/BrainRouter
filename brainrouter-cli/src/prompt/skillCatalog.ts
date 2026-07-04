@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
-import { loadPluginsWithKnobs } from '@kinqs/brainrouter-core/plugin';
+import { getOrgConventionRepoRoots, loadPluginsWithKnobs } from '@kinqs/brainrouter-core/plugin';
 
 const requireFromHere = createRequire(import.meta.url);
 
@@ -12,6 +12,8 @@ export interface SkillListItem {
   category?: string;
   description?: string;
   source?: 'mcp' | 'filesystem';
+  /** MC-E4 — org-administered skill rows are visible but not editable locally. */
+  readOnly?: boolean;
   /**
    * CC-SKILLS-D2 — set when the SAME skill name was found in more than one
    * BrainRouter skill root. `true` on the entry that WON precedence (the one
@@ -59,12 +61,14 @@ export function listFilesystemSkills(workspaceRoot: string): SkillListItem[] {
       const rel = path.relative(root, filePath);
       const category = rel.split(path.sep)[0] || 'uncategorized';
       if (!winners.has(parsed.name)) {
+        const readOnly = scope === 'org';
         winners.set(parsed.name, {
           name: parsed.name,
           category,
           description: parsed.description,
           scope,
           source: 'filesystem',
+          ...(readOnly ? { readOnly } : {}),
           qualifiedName: `${scope}:${parsed.name}`,
           // MC-E2 — surface declared keyword triggers so the dispatch path
           // can arm dormant skills without re-reading every SKILL.md.
@@ -159,6 +163,7 @@ function inferRootScope(root: string, workspaceRoot: string): string {
   const resolvedRoot = path.resolve(root);
   // PLUGIN-MARKETPLACE P1 — a skill root under a `.brainrouter/plugins/<name>/`
   // tree (user OR workspace scope) is a PLUGIN root, not a plain local override.
+  if (isOrgConventionRoot(resolvedRoot)) return 'org';
   if (resolvedRoot.includes(`${path.sep}.brainrouter${path.sep}plugins${path.sep}`)) return 'plugin';
   if (resolvedRoot === path.join(resolvedWorkspace, '.brainrouter', 'skills')) return 'local';
   if (resolvedRoot.startsWith(path.join(resolvedWorkspace, '.brainrouter'))) return 'local';
@@ -166,6 +171,15 @@ function inferRootScope(root: string, workspaceRoot: string): string {
   // Any other root (installed MCP package `skills/`, monorepo root `skills/`)
   // is a bundled/shipped root, whether or not it happens to sit above the ws.
   return 'bundled';
+}
+
+function isOrgConventionRoot(resolvedRoot: string): boolean {
+  for (const repoRoot of getOrgConventionRepoRoots()) {
+    const resolvedRepo = path.resolve(repoRoot);
+    if (resolvedRoot === path.join(resolvedRepo, 'skills')) return true;
+    if (resolvedRoot.startsWith(`${resolvedRepo}${path.sep}plugins${path.sep}`)) return true;
+  }
+  return false;
 }
 
 function findSkillFiles(root: string): string[] {

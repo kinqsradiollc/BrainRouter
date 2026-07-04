@@ -54,7 +54,25 @@ import {
 // Deep imports into the CLI's built runtime (no "exports" field = allowed).
 // Extracting a proper @kinqs/brainrouter-agent package is tracked for 0.4.16.
 import { callOpenAI } from '@kinqs/brainrouter-core/agent';
-import { loadConfig, saveConfig, getCliKnobs, _resetCliKnobsCache, applyRuleEdit, type LLMConfig } from '@kinqs/brainrouter-core/config';
+import {
+  CLI_CONFIG_SCHEMA,
+  findConfigSchemaField,
+  loadConfig,
+  saveConfig,
+  getCliKnobs,
+  _resetCliKnobsCache,
+  applyRuleEdit,
+  setConfigValueAtPath,
+  type LLMConfig,
+} from '@kinqs/brainrouter-core/config';
+import {
+  createRuntimeRunnerClient,
+  listRuntimePreviewPorts,
+  registerRuntimePreviewPort,
+  removeRuntimePreviewPort,
+  resolveRuntimePreviewReservations,
+  type RuntimeRunnerClient,
+} from '@kinqs/brainrouter-core/runtime';
 // 0.4.15 — named providers + per-sub-agent model routing (pure transforms).
 import { setProvider, removeProvider, setAgentModel, normalizeProviderModels, PROVIDER_CATALOG } from '@kinqs/brainrouter-core/provider';
 import { childSessionKey } from '@kinqs/brainrouter-core/mcp';
@@ -350,6 +368,24 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
     nextTermSeq,
     resetGhEnvCache,
   } = ctx;
+  let runtimeRunnerClient: RuntimeRunnerClient | null = null;
+  let runtimeRunnerRemoteUrl = '';
+  const getRuntimeRunnerClient = () => {
+    const remoteUrl = getCliKnobs().runtime.remoteUrl;
+    if (!runtimeRunnerClient || remoteUrl !== runtimeRunnerRemoteUrl) {
+      runtimeRunnerRemoteUrl = remoteUrl;
+      runtimeRunnerClient = createRuntimeRunnerClient({
+        workspaceRoot,
+        remoteUrl,
+        executeTurn: async (turn) => getActiveAgent().runTurn(turn.prompt, {
+          onStatusUpdate: () => {},
+          onToolStart: () => {},
+          onToolEnd: () => {},
+        }, { hiddenPrompt: turn.hidden === true }),
+      });
+    }
+    return runtimeRunnerClient;
+  };
   return {
       // Read-only surfaces — same pure modules the TUI commands use.
       // DESK-6m — sidebar sessions merged with their UI meta (title override,
@@ -385,6 +421,38 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           return { rows: [], error: err instanceof Error ? err.message : String(err) };
         }
       },
+      'runtime-runner-info': () => {
+        const client = getRuntimeRunnerClient();
+        return { mode: client.mode, remoteUrl: runtimeRunnerRemoteUrl || null };
+      },
+      'runtime-runner-status': async (args) => {
+        const runtimeId = typeof args.runtimeId === 'string' ? args.runtimeId.trim() : '';
+        const sessionKey = typeof args.sessionKey === 'string' ? args.sessionKey.trim() : '';
+        if (!runtimeId || !sessionKey) return { error: 'runtimeId and sessionKey are required.' };
+        return getRuntimeRunnerClient().status({ runtimeId, sessionKey });
+      },
+      'runtime-previews-list': () => ({
+        reservations: resolveRuntimePreviewReservations(),
+        previews: listRuntimePreviewPorts(workspaceRoot),
+      }),
+      'runtime-preview-register': (args) => {
+        const runtimeId = typeof args.runtimeId === 'string' ? args.runtimeId.trim() : '';
+        const name = typeof args.name === 'string' ? args.name.trim() : '';
+        const port = typeof args.port === 'number' ? args.port : undefined;
+        if (!runtimeId || !name) return { ok: false, error: 'runtimeId and name are required.' };
+        try {
+          return { ok: true, preview: registerRuntimePreviewPort(workspaceRoot, { runtimeId, name, port }) };
+        } catch (error) {
+          return { ok: false, error: error instanceof Error ? error.message : String(error) };
+        }
+      },
+      'runtime-preview-remove': (args) => ({
+        ok: removeRuntimePreviewPort(
+          workspaceRoot,
+          typeof args.runtimeId === 'string' ? args.runtimeId : '',
+          typeof args.name === 'string' ? args.name : '',
+        ),
+      }),
       // CONNECTORS — Onyx-like connector lifecycle foundation. These wrappers
       // expose the core catalog/store to the renderer without making Track Sync
       // pretend to be the general connector abstraction.
@@ -696,9 +764,9 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const rows = listBackgroundTasks(workspaceRoot, { sessionKey, status });
         return rows.map((t) => ({ ...t, phase: currentPhase(t), workspaceRoot }));
       },
-      // MC-B6 — desktop starter surface for the same suggested-task scanner the
-      // CLI uses. Read-only GitHub REST scan; a human starts work by picking one
-      // of the ready-to-run prompts in the Tasks panel.
+      // Desktop starter surface for the same suggested-task scanner the CLI
+      // uses. Read-only GitHub REST scan; a human starts work by picking one of
+      // the ready-to-run prompts in the Tasks panel.
       'suggested-tasks': async (a) => scanSuggestedTasks(workspaceRoot, {
         repo: typeof a.repo === 'string' ? a.repo : undefined,
         mentionHandle: getCliKnobs().triggers.mentionHandle,
@@ -1850,6 +1918,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           // §settings-completeness — the raw cli.* block so the Advanced section can
           // show current knob values (no key here; values are config, not secrets).
           cliKnobs: scrubCliSecrets(cli),
+          cliSchema: CLI_CONFIG_SCHEMA,
           // EXTENSIONS — discovered extensions + workspace trust, for the
           // Settings → Extensions section (toggle/trust refresh this snapshot).
           extensions: {
@@ -2087,7 +2156,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const entries = readTranscriptTail(readRoot, childKey, 1200) as Parameters<typeof reconstructTranscriptRows>[0];
         return { id, kind, role: session?.role, goal: session?.prompt, status: session?.status, rows: reconstructTranscriptRows(entries).slice(-400) };
       },
-      // DESK-6w — a workflow run's full breakdown for the Claude-/workflows-style
+      // DESK-6w — a workflow run's full breakdown for workflow-style
       // card: each phase with its spawned child AGENTS resolved to live stats
       // (role/label/status + tokens, tool calls, wall-clock). Step-based runs
       // (no phases) fall back to a flat step list.
@@ -2446,6 +2515,17 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         saveConfig(fresh as never);
         _resetCliKnobsCache();
         return { ok: true, key };
+      },
+      'action:set-cli-schema-knob': (args) => {
+        const pathArg = typeof args.path === 'string' ? args.path : '';
+        const field = findConfigSchemaField(pathArg);
+        if (!field) return { ok: false, error: 'Unknown schema field.' };
+        const fresh = loadConfig() as { cli?: Record<string, unknown> };
+        const cli = (fresh.cli = fresh.cli ?? {});
+        setConfigValueAtPath(cli, field.path, args.value);
+        saveConfig(fresh as never);
+        _resetCliKnobsCache();
+        return { ok: true, path: field.path };
       },
       'action:set-github-oauth-client-id': (args) => {
         const fresh = loadConfig() as { cli?: { github?: { oauthClientId?: string; caBundle?: string } } };

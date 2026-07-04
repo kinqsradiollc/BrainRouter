@@ -28,6 +28,7 @@ import type { IAgentRuntime, RuntimeTurn, RuntimeTurnExecutor, RuntimeTurnResult
 import { attachContainerRuntime } from './backends/container.js';
 import { createProcessRuntime } from './backends/process.js';
 import { attachWorktreeRuntime } from './backends/worktree.js';
+import { PendingTurnQueue, type PendingEnqueueResult } from './pendingQueue.js';
 import { resolveRuntime } from './registry.js';
 import { getSecretBroker, prepareRuntimeChildEnv } from './secrets/secretBroker.js';
 import {
@@ -116,6 +117,8 @@ export interface RuntimeListing extends RuntimeInstanceRecord {
 export interface StartRuntimeOptions {
   /** Session key of the conversation the new runtime hosts. */
   sessionKey: string;
+  /** Optional caller-assigned runtime id, used when clients queue before ready. */
+  runtimeId?: string;
   /** Backend kind (default: the `cli.runtime.backend` knob). */
   kind?: string;
   launchCwd?: string;
@@ -133,6 +136,8 @@ export interface RuntimeManagerOptions {
   maxLive?: number;
   /** Injectable pid-liveness for boot reconcile (tests). */
   isAlive?: (pid: number | null | undefined) => boolean;
+  /** Per-runtime pending-turn cap while a backend is starting. */
+  maxPendingMessages?: number;
 }
 
 interface LiveEntry {
@@ -149,8 +154,11 @@ export class RuntimeManager {
 
   /** Instances currently live (ready/running) in THIS process. */
   private readonly live = new Map<string, LiveEntry>();
+  /** Instances whose backend start is in progress. */
+  private readonly starting = new Map<string, IAgentRuntime>();
   /** In-process handles we parked (LRU or explicit pause) — resumable directly. */
   private readonly parked = new Map<string, IAgentRuntime>();
+  private readonly pending: PendingTurnQueue;
   private seq = 0;
 
   constructor(options: RuntimeManagerOptions) {
@@ -158,6 +166,7 @@ export class RuntimeManager {
     this.executeTurn = options.executeTurn;
     this.maxLive = options.maxLive ?? getCliKnobs().runtime.maxLive;
     this.isAlive = options.isAlive ?? runtimePidAlive;
+    this.pending = new PendingTurnQueue(options.maxPendingMessages ?? 50);
   }
 
   /** Repair records a dead process left live-ish. See `reconcileRuntimeRecords`. */
@@ -172,7 +181,7 @@ export class RuntimeManager {
 
   /** The live/parked in-process handle for `id`, if this manager holds one. */
   get(id: string): IAgentRuntime | null {
-    return this.live.get(id)?.runtime ?? this.parked.get(id) ?? null;
+    return this.live.get(id)?.runtime ?? this.starting.get(id) ?? this.parked.get(id) ?? null;
   }
 
   /**
@@ -181,7 +190,7 @@ export class RuntimeManager {
    */
   async start(options: StartRuntimeOptions): Promise<IAgentRuntime> {
     await this.makeRoomForOneMore();
-    const runtime = resolveRuntime({ executeTurn: this.executeTurn }, options.kind);
+    const runtime = resolveRuntime({ executeTurn: this.executeTurn, id: options.runtimeId }, options.kind);
     // MC-A5 — with `cli.runtime.jitSecrets` on, secret-shaped vars in the
     // child env are replaced by single-use short-TTL lease tokens redeemed at
     // point-of-use through the host broker. Default off → env untouched.
@@ -193,15 +202,23 @@ export class RuntimeManager {
       isSecret: isSecretShapedEnvVar,
       broker: getSecretBroker(),
     });
-    await runtime.start({
-      workspaceRoot: this.workspaceRoot,
-      sessionKey: options.sessionKey,
-      launchCwd: options.launchCwd,
-      role: options.role,
-      model: options.model,
-      env,
-    });
-    this.trackLive(runtime);
+    this.starting.set(runtime.id, runtime);
+    try {
+      await runtime.start({
+        workspaceRoot: this.workspaceRoot,
+        sessionKey: options.sessionKey,
+        launchCwd: options.launchCwd,
+        role: options.role,
+        model: options.model,
+        env,
+      });
+      this.starting.delete(runtime.id);
+      this.trackLive(runtime);
+      await this.flushPending(runtime.id);
+    } catch (error) {
+      this.starting.delete(runtime.id);
+      throw error;
+    }
     return runtime;
   }
 
@@ -211,6 +228,25 @@ export class RuntimeManager {
     if (!entry) throw new Error(`runtime ${id} is not live in this manager`);
     entry.seq = ++this.seq;
     return entry.runtime.exec(turn);
+  }
+
+  /** Queue a turn for a runtime that is not ready yet. */
+  queueTurn(id: string, turn: RuntimeTurn): PendingEnqueueResult {
+    return this.pending.enqueue(id, turn);
+  }
+
+  pendingCount(id: string): number {
+    return this.pending.size(id);
+  }
+
+  /** Drain queued turns in arrival order once the runtime is ready. */
+  async flushPending(id: string): Promise<RuntimeTurnResult[]> {
+    const queued = this.pending.drain(id);
+    const results: RuntimeTurnResult[] = [];
+    for (const entry of queued) {
+      results.push(await this.exec(id, entry.turn));
+    }
+    return results;
   }
 
   /** Explicitly park a live instance (its durable record becomes 'parked'). */
@@ -265,6 +301,7 @@ export class RuntimeManager {
     updateRuntimeRecord(this.workspaceRoot, id, { pid: process.pid });
     this.parked.delete(id);
     this.trackLive(runtime);
+    await this.flushPending(id);
     return runtime;
   }
 
@@ -272,7 +309,9 @@ export class RuntimeManager {
   async dispose(id: string): Promise<void> {
     const held = this.live.get(id)?.runtime ?? this.parked.get(id) ?? null;
     this.live.delete(id);
+    this.starting.delete(id);
     this.parked.delete(id);
+    this.pending.drain(id);
     if (held) {
       await held.dispose();
       return;

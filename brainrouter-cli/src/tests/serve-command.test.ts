@@ -14,6 +14,9 @@ function knobs(over: Partial<ServeTriggersKnobs> = {}): ServeTriggersKnobs {
     port: 8787,
     host: '127.0.0.1',
     githubSecret: '',
+    slackSigningSecret: '',
+    gitlabSecret: '',
+    jiraSecret: '',
     allowedRepos: [],
     ...over,
   };
@@ -38,10 +41,16 @@ test('resolveServeBind: flags override knobs; junk falls back to the knobs', () 
 });
 
 test('serveStartupWarnings surfaces empty allowlist + missing secret (never fatal)', () => {
-  const bare = serveStartupWarnings(knobs({ enabled: true }), '');
-  assert.equal(bare.length, 2);
+  const bare = serveStartupWarnings(knobs({ enabled: true }), { github: '', slack: '', gitlab: '', jira: '' });
+  assert.equal(bare.length, 5);
   assert.match(bare[0], /allowedRepos is empty/);
   assert.match(bare[1], /rejected \(401\)/);
-  const ready = serveStartupWarnings(knobs({ enabled: true, allowedRepos: ['acme/*'] }), 's3cret');
+  assert.match(bare[2], /rejected \(401\)/);
+  assert.match(bare[3], /rejected \(401\)/);
+  assert.match(bare[4], /rejected \(401\)/);
+  const ready = serveStartupWarnings(
+    knobs({ enabled: true, allowedRepos: ['acme/*'] }),
+    { github: 's3cret', slack: 's3cret', gitlab: 's3cret', jira: 's3cret' },
+  );
   assert.deepEqual(ready, []);
 });

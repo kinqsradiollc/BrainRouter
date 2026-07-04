@@ -5,6 +5,7 @@
  */
 import type { SettingsSection } from '../../lib/commands/commands.js';
 import type { ConnectorCatalogEntry, ConnectorRecord, ConnectorRunRecord } from '@kinqs/brainrouter-types';
+import type { ConfigSchemaDescriptor } from '@kinqs/brainrouter-core/config';
 
 export interface ConnectorSlimPreview {
   id: string;
@@ -41,6 +42,7 @@ export interface ConfigSnapshot {
   providerCatalog?: Array<{ id: string; label: string; endpoint: string; local: boolean }>;
   // §settings-completeness — the raw cli.* config block (current knob values).
   cliKnobs?: Record<string, unknown>;
+  cliSchema?: ConfigSchemaDescriptor;
   // EXTENSIONS — discovered extensions + workspace trust state.
   extensions?: {
     trusted: boolean;

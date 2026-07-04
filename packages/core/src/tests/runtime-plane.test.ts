@@ -149,7 +149,7 @@ test('MC-A1 agentTurnExecutor: one-line delegation to Agent.runTurn (prompt + hi
 test('MC-A1 resolveRuntime: explicit + defaulted kind → process backend; unknown normalizes to process', async () => {
   await withTempWorkspaceAsync(async (ws) => {
     const executeTurn = async () => 'ok';
-    assert.deepEqual([...availableRuntimeBackends()].sort(), ['container', 'process', 'worktree']);
+    assert.deepEqual([...availableRuntimeBackends()].sort(), ['container', 'hosted', 'process', 'worktree']);
     assert.equal(resolveRuntime({ executeTurn }, 'process').kind, 'process');
     // Unknown strings validate to 'process' (knob semantics — never a crash).
     assert.equal(resolveRuntime({ executeTurn }, 'container-someday').kind, 'process');
@@ -213,6 +213,11 @@ const RUNTIME_KNOB_DEFAULTS = {
   // until the user names one) and no resource limits unless configured.
   containerImage: '',
   container: { cpus: 0, memory: '' },
+  serve: false,
+  serveHost: '127.0.0.1',
+  servePort: 8791,
+  remoteUrl: '',
+  previewPorts: {},
 };
 
 test('MC-A1 cli.runtime knob: defaults, validation, clamping', () => {
@@ -248,6 +253,12 @@ test('MC-A1 cli.runtime knob: defaults, validation, clamping', () => {
   assert.equal(resolveCliKnobs(cfg({ runtime: { archiveKeep: 5 } })).runtime.archiveKeep, 5);
   assert.equal(resolveCliKnobs(cfg({ runtime: { archiveKeep: -3 } })).runtime.archiveKeep, 0);
   assert.equal(resolveCliKnobs(cfg({ runtime: { archiveKeep: 'lots' } })).runtime.archiveKeep, 20);
+  assert.equal(resolveCliKnobs(cfg({ runtime: { serve: true } })).runtime.serve, true);
+  assert.equal(resolveCliKnobs(cfg({ runtime: { serveHost: ' 0.0.0.0 ' } })).runtime.serveHost, '0.0.0.0');
+  assert.equal(resolveCliKnobs(cfg({ runtime: { servePort: 0 } })).runtime.servePort, 0);
+  assert.equal(resolveCliKnobs(cfg({ runtime: { servePort: 70_000 } })).runtime.servePort, 65_535);
+  assert.equal(resolveCliKnobs(cfg({ runtime: { remoteUrl: ' http://127.0.0.1:1/// ' } })).runtime.remoteUrl, 'http://127.0.0.1:1');
+  assert.deepEqual(resolveCliKnobs(cfg({ runtime: { previewPorts: { app: 5173, bad: 0 } } })).runtime.previewPorts, { app: 5173 });
 });
 
 test('MC-A1 cli.runtime knob: hydrates into config.json with safe defaults', () => {

@@ -2,3 +2,4 @@
 export { TerminalPanel } from './TerminalPanel.js';
 export { ToolsPanel } from './ToolsPanel.js';
 export { WorktreesPanel } from './WorktreesPanel.js';
+export { PreviewPanel } from './PreviewPanel.js';

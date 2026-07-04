@@ -43,9 +43,8 @@ export interface ServerConfig {
 export interface LLMConfig {
   // Provider catalog id (openai, lmstudio, ollama, deepseek, ...). The
   // request can be sent as either OpenAI Responses API or Chat Completions,
-  // selected by provider defaults plus `cli.providerRequestFormat`. Claude
-  // models still go through OpenAI-compatible gateways; the native Anthropic
-  // `/v1/messages` adapter was removed in 0.3.9.
+  // selected by provider defaults plus `cli.providerRequestFormat`. Models for
+  // external gateways still use OpenAI-compatible adapters.
   provider: string;
   apiKey: string;
   model: string;
@@ -189,8 +188,7 @@ export interface ComputerUseCliKnobs {
 
 /**
  * PLUGIN-MARKETPLACE P2 — a marketplace source recorded in
- * `cli.plugins.marketplaces[]` (plan §3.3/§3.5, mirrors Codex's
- * `record_user_marketplace`). A marketplace is a repo/dir/tarball whose root
+ * `cli.plugins.marketplaces[]`. A marketplace is a repo/dir/tarball whose root
  * holds a `brainrouter-marketplace.json` indexing one or many plugins. Install-
  * by-name resolves a plugin across every configured marketplace.
  *
@@ -228,7 +226,7 @@ export interface MarketplaceSource {
  * `marketplaces` — configured marketplace sources (P2). Empty (default) = no
  *   marketplaces; install-by-name has nothing to resolve against.
  *
- * PLUGIN-MARKETPLACE P3 — trust / consent / managed gating (plan §3.7/§4):
+ * PLUGIN-MARKETPLACE P3 — trust / consent / managed gating:
  * `approved` — per-plugin-name map of which risky capabilities the user has
  *   explicitly consented to. A plugin's hooks (`type: command`) and MCP
  *   command-servers stay DISABLED until `approved[name].shell` /
@@ -256,10 +254,18 @@ export interface PluginsCliKnobs {
   enabled?: Record<string, boolean>;
   registryUrl?: string;
   marketplaces?: MarketplaceSource[];
+  /**
+   * MC-E3 — extra JSON manifest filenames accepted while importing external
+   * marketplaces/plugins. BrainRouter still writes only its canonical names.
+   * Default [].
+   */
+  altManifestNames?: string[];
   approved?: Record<string, PluginCapabilityConsent>;
   allowedMarketplaces?: string[];
   blockedMarketplaces?: string[];
   allowManagedHooksOnly?: boolean;
+  /** MC-E4 — surface org convention repositories as a read-only plugin/skill scope. Default false. */
+  orgScope?: boolean;
   /**
    * PLUGIN-MARKETPLACE P5 — the community registry repo `brainrouter plugin
    * publish` opens a PR against (`owner/repo` or a git url). Empty/unset ⇒
@@ -276,6 +282,15 @@ export interface PluginsCliKnobs {
   autoUpdateCheck?: boolean;
 }
 
+export interface SkillsCliKnobs {
+  /**
+   * MC-E1 — discover read-only convention repositories named `.brainrouter`
+   * for the signed-in GitHub user and orgs, then load their skills/agents
+   * through the existing contribution pipeline. Default false.
+   */
+  orgRepoDiscovery?: boolean;
+}
+
 /** Per-provider generation wire format. The two OpenAI shapes plus the native
  *  (non-OpenAI-compatible) Anthropic Messages and Gemini generateContent APIs.
  *  Native formats are opt-in via `cli.providerRequestFormat`. */
@@ -288,7 +303,23 @@ export type ProviderWireFormat = 'responses' | 'chat-completions' | 'anthropic-m
  * strictly opt-in — requires `cli.runtime.containerImage`). Lives here (not
  * in `runtime/`) so the config layer never imports upward.
  */
-export type RuntimeBackendKind = 'process' | 'worktree' | 'container';
+export type RuntimeBackendKind = 'process' | 'worktree' | 'container' | 'hosted';
+
+export type HostedAgentProtocol = 'line-json' | 'stdio';
+
+export interface HostedAgentConfig {
+  name?: string;
+  command?: string;
+  args?: string[];
+  protocol?: HostedAgentProtocol;
+}
+
+export interface ResolvedHostedAgentConfig {
+  name: string;
+  command: string;
+  args: string[];
+  protocol: HostedAgentProtocol;
+}
 
 /** MC-A3 — resource limits for the `container` runtime backend. */
 export interface ContainerRuntimeLimits {
@@ -335,12 +366,30 @@ export interface RuntimeCliKnobs {
   containerImage?: string;
   /** MC-A3 — resource limits applied to `docker run` (`--cpus`/`--memory`). */
   container?: ContainerRuntimeLimits;
+  /** Serve the local runtime HTTP contract. Default false; callers must opt in. */
+  serve?: boolean;
+  /** Local runtime contract bind host. Defaults to loopback. */
+  serveHost?: string;
+  /** Local runtime contract port. Defaults to 8791; 0 is allowed for tests. */
+  servePort?: number;
+  /** Remote runtime endpoint. Empty by default; in-process remains the default. */
+  remoteUrl?: string;
+  /** Named app-preview ports reserved by runtimes. Empty by default. */
+  previewPorts?: Record<string, number>;
+}
+
+export interface BudgetCliKnobs {
+  /** Per-agent-task USD cap. 0 or absent means uncapped. */
+  maxPerTaskUSD?: number;
+  /** Per-agent-task token cap. 0 or absent means uncapped. */
+  maxPerTaskTokens?: number;
 }
 
 /** MC-A1 — validated knob values (see `RuntimeBackendKind`). */
 export function normalizeRuntimeBackend(value: unknown): RuntimeBackendKind {
   if (value === 'worktree') return 'worktree';
   if (value === 'container') return 'container'; // MC-A3 — still opt-in: it also needs containerImage
+  if (value === 'hosted') return 'hosted';
   return 'process';
 }
 
@@ -381,6 +430,16 @@ export interface TriggersCliKnobs {
    *  the secret is resolved from the workspace's GitHub connector config
    *  (`webhookSecret`); if neither is set, GitHub deliveries are rejected. */
   githubSecret?: string;
+  /** Slack signing secret used to verify `X-Slack-Signature`. When empty,
+   *  the secret is resolved from the workspace's Slack connector config
+   *  (`signingSecret`); if neither is set, Slack deliveries are rejected. */
+  slackSigningSecret?: string;
+  /** GitLab webhook token used to verify `X-Gitlab-Token`. Empty rejects
+   *  deliveries unless a GitLab connector supplies `webhookSecret`. */
+  gitlabSecret?: string;
+  /** Jira webhook signing secret used to verify webhook HMAC headers. Empty
+   *  rejects deliveries unless a Jira connector supplies `webhookSecret`. */
+  jiraSecret?: string;
   /** Glob allowlist of `owner/name` repos whose events are processed.
    *  Default [] = nothing allowed (events verify, then drop with a 202 that
    *  never leaks which repos exist). */
@@ -415,6 +474,8 @@ export interface CliKnobs {
   permissions?: { allow?: string[]; deny?: string[] };
   /** Default-off Requirement → Plan → Track automation controls. */
   automation?: AutomationKnobs;
+  /** User-declared external CLI agents. Empty by default; no bundled binaries. */
+  agents?: { hosted?: HostedAgentConfig[] };
   // ---- memory / briefing -------------------------------------------------
   /** Default 'gated'. Recall trigger mode — see briefingTriggers.ts. */
   recallMode?: 'always' | 'gated' | 'off';
@@ -524,8 +585,8 @@ export interface CliKnobs {
    */
   confirmRunWorkflow?: boolean;
   /** Reasoning depth preference override (`/effort`). Default 'medium'. `max` and
-   *  `ultracode` are the desktop Claude slider's top tiers (cap to the wire's top
-   *  reasoning_effort, like xhigh). */
+   *  `ultracode` are desktop slider tiers capped to the wire's top
+   *  reasoning_effort, like xhigh. */
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultracode';
   /** PARITY-E3 — model to fall back to when the primary model is unavailable. */
   fallbackModel?: string | null;
@@ -591,6 +652,8 @@ export interface CliKnobs {
    * `BRAINROUTER_HIDE_BUNDLED_SKILLS`. Default false.
    */
   skillsHideBundled?: boolean;
+  /** MC-E1 — skills/agents discovery controls. Defaults inert. */
+  skills?: SkillsCliKnobs;
   /**
    * CC-SKILLS-D1 — max number of leading `/skill` tokens that a single prompt
    * may stack (`/a /b do X` composes a.SKILL.md then b.SKILL.md before the
@@ -790,6 +853,8 @@ export interface CliKnobs {
      *  (`agentModels.critic`, falling back to the session model). */
     model?: string;
   };
+  /** Hard per-agent-task budget. Both caps default to 0, meaning uncapped. */
+  budget?: BudgetCliKnobs;
   /** PARITY-W3 — ring the terminal bell on an idle background-completion notice. Default false. */
   notifyBell?: boolean;
   /** Child-drain timeout in ms. Default 30000. */
@@ -1141,6 +1206,8 @@ export interface ResolvedCliKnobs {
   attribution: { sessionUrl: boolean };
   /** CC-CONFIG-A6 — hide bundled skills from listings. */
   skillsHideBundled: boolean;
+  /** MC-E1 — resolved skills/agents discovery controls. */
+  skills: Required<SkillsCliKnobs>;
   /** CC-SKILLS-D1 — max stacked `/skill` tokens per prompt (clamped 1..5). */
   skillsStackMax: number;
   /** MC-E2 — keyword-triggered JIT skill injection kill-switch (default true). */
@@ -1172,6 +1239,8 @@ export interface ResolvedCliKnobs {
   /** MC-D1 — validated critic-gate knobs: enabled defaults false; threshold
    *  falls back to 0.7 outside [0,1]; iterations clamped 0..8 (default 2). */
   critic: { enabled: boolean; threshold: number; maxRefinementIterations: number; model: string };
+  /** MC-D4 — hard per-task budget caps. 0 means uncapped. */
+  budget: { maxPerTaskUSD: number; maxPerTaskTokens: number };
   notifyBell: boolean;
   childDrainTimeoutMs: number;
   offloadRetentionMs: number;
@@ -1208,10 +1277,12 @@ export interface ResolvedCliKnobs {
     enabled: Record<string, boolean>;
     registryUrl: string;
     marketplaces: MarketplaceSource[];
+    altManifestNames: string[];
     approved: Record<string, PluginCapabilityConsent>;
     allowedMarketplaces: string[];
     blockedMarketplaces: string[];
     allowManagedHooksOnly: boolean;
+    orgScope: boolean;
     /** PLUGIN-MARKETPLACE P5 — community registry repo for `plugin publish`
      *  (empty = unset → stdout + local file + gh instructions). */
     publishRepo: string;
@@ -1219,6 +1290,7 @@ export interface ResolvedCliKnobs {
      *  notice on session start. Default false. */
     autoUpdateCheck: boolean;
   };
+  agents: { hosted: ResolvedHostedAgentConfig[] };
   /** MC-A1 — validated runtime-plane knobs: backend falls back to 'process';
    *  `maxLive` clamped ≥ 0 (0 = no live-instance cap). MC-A6 adds the
    *  workspace-archive knobs: `archiveOnDispose` (default true),
@@ -1238,6 +1310,11 @@ export interface ResolvedCliKnobs {
     containerImage: string;
     /** MC-A3 — validated `docker run` limits (0/'' = no limit). */
     container: { cpus: number; memory: string };
+    serve: boolean;
+    serveHost: string;
+    servePort: number;
+    remoteUrl: string;
+    previewPorts: Record<string, number>;
   };
   /** MC-B1 — validated trigger-ingress knobs: `enabled` requires an explicit
    *  `true` (default-deny); `port` clamped 1..65535 (default 8787); `host`
@@ -1249,6 +1326,9 @@ export interface ResolvedCliKnobs {
     port: number;
     host: string;
     githubSecret: string;
+    slackSigningSecret: string;
+    gitlabSecret: string;
+    jiraSecret: string;
     allowedRepos: string[];
     /** MC-B2 — resolver @mention handle (default 'brainrouter', '@' stripped). */
     mentionHandle: string;

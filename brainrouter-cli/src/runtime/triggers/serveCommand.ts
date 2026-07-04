@@ -10,6 +10,9 @@ export interface ServeTriggersKnobs {
   port: number;
   host: string;
   githubSecret: string;
+  slackSigningSecret: string;
+  gitlabSecret: string;
+  jiraSecret: string;
   allowedRepos: string[];
 }
 
@@ -51,14 +54,26 @@ export function resolveServeBind(
   return { host, port };
 }
 
-/** Post-start warnings (never fatal): empty allowlist / missing secret. */
-export function serveStartupWarnings(knobs: ServeTriggersKnobs, githubSecret: string): string[] {
+/** Post-start warnings (never fatal): empty allowlist / missing secrets. */
+export function serveStartupWarnings(
+  knobs: ServeTriggersKnobs,
+  secrets: { github: string; slack: string; gitlab: string; jira: string },
+): string[] {
   const warnings: string[] = [];
   if (knobs.allowedRepos.length === 0) {
     warnings.push('cli.triggers.allowedRepos is empty — every event will be accepted-but-dropped.');
   }
-  if (!githubSecret) {
+  if (!secrets.github) {
     warnings.push('No GitHub webhook secret configured (cli.triggers.githubSecret or the GitHub connector\'s webhookSecret) — github deliveries will be rejected (401).');
+  }
+  if (!secrets.slack) {
+    warnings.push('No Slack signing secret configured (cli.triggers.slackSigningSecret or the Slack connector\'s signingSecret) — slack deliveries will be rejected (401).');
+  }
+  if (!secrets.gitlab) {
+    warnings.push('No GitLab webhook secret configured (cli.triggers.gitlabSecret or the GitLab connector\'s webhookSecret) — gitlab deliveries will be rejected (401).');
+  }
+  if (!secrets.jira) {
+    warnings.push('No Jira webhook secret configured (cli.triggers.jiraSecret or the Jira connector\'s webhookSecret) — jira deliveries will be rejected (401).');
   }
   return warnings;
 }

@@ -326,14 +326,28 @@ function resolveApprovedMap(input: unknown): Record<string, PluginCapabilityCons
   return out;
 }
 
+function resolvePreviewPorts(input: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return out;
+  for (const [rawName, rawPort] of Object.entries(input as Record<string, unknown>)) {
+    const name = rawName.trim();
+    if (!name) continue;
+    const port = typeof rawPort === 'number' && Number.isInteger(rawPort) ? rawPort : NaN;
+    if (port >= 1 && port <= 65_535) out[name] = port;
+  }
+  return out;
+}
+
 function resolvePluginsKnobs(input: unknown): ResolvedCliKnobs['plugins'] {
   const enabled: Record<string, boolean> = {};
   let registryUrl = '';
   let marketplaces: MarketplaceSource[] = [];
+  let altManifestNames: string[] = [];
   let approved: Record<string, PluginCapabilityConsent> = {};
   let allowedMarketplaces: string[] = [];
   let blockedMarketplaces: string[] = [];
   let allowManagedHooksOnly = false;
+  let orgScope = false;
   let publishRepo = '';
   let autoUpdateCheck = false;
   if (input && typeof input === 'object' && !Array.isArray(input)) {
@@ -346,14 +360,42 @@ function resolvePluginsKnobs(input: unknown): ResolvedCliKnobs['plugins'] {
     }
     if (typeof obj.registryUrl === 'string') registryUrl = obj.registryUrl.trim();
     marketplaces = resolveMarketplaceSources(obj.marketplaces);
+    altManifestNames = resolveStringList(obj.altManifestNames).filter((name) => {
+      const trimmed = name.trim();
+      return trimmed.endsWith('.json') && !trimmed.includes('/') && !trimmed.includes('\\') && trimmed !== 'plugin.json' && trimmed !== 'brainrouter-marketplace.json';
+    });
     approved = resolveApprovedMap(obj.approved);
     allowedMarketplaces = resolveStringList(obj.allowedMarketplaces);
     blockedMarketplaces = resolveStringList(obj.blockedMarketplaces);
     allowManagedHooksOnly = obj.allowManagedHooksOnly === true;
+    orgScope = obj.orgScope === true;
     if (typeof obj.publishRepo === 'string') publishRepo = obj.publishRepo.trim();
     autoUpdateCheck = obj.autoUpdateCheck === true;
   }
-  return { enabled, registryUrl, marketplaces, approved, allowedMarketplaces, blockedMarketplaces, allowManagedHooksOnly, publishRepo, autoUpdateCheck };
+  return { enabled, registryUrl, marketplaces, altManifestNames, approved, allowedMarketplaces, blockedMarketplaces, allowManagedHooksOnly, orgScope, publishRepo, autoUpdateCheck };
+}
+
+function resolveHostedAgentKnobs(input: unknown): ResolvedCliKnobs['agents'] {
+  const raw = input && typeof input === 'object' && !Array.isArray(input)
+    ? (input as { hosted?: unknown }).hosted
+    : undefined;
+  const hosted = Array.isArray(raw) ? raw : [];
+  const seen = new Set<string>();
+  const out: ResolvedCliKnobs['agents']['hosted'] = [];
+  for (const entry of hosted) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const value = entry as Record<string, unknown>;
+    const name = typeof value.name === 'string' ? value.name.trim() : '';
+    const command = typeof value.command === 'string' ? value.command.trim() : '';
+    if (!name || !command || seen.has(name)) continue;
+    const args = Array.isArray(value.args)
+      ? value.args.filter((arg): arg is string => typeof arg === 'string')
+      : [];
+    const protocol = value.protocol === 'stdio' ? 'stdio' : 'line-json';
+    out.push({ name, command, args, protocol });
+    seen.add(name);
+  }
+  return { hosted: out };
 }
 
 function unitInterval(value: unknown, fallback: number): number {
@@ -385,6 +427,11 @@ function positiveInt(value: unknown, fallback: number, opts: { min?: number; max
   const min = opts.min ?? 1;
   const max = opts.max ?? Number.MAX_SAFE_INTEGER;
   return Math.max(min, Math.min(max, n));
+}
+
+function nonNegativeNumber(value: unknown, fallback = 0): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return fallback;
+  return value;
 }
 
 function resolveWebSearchKnobs(input: WebSearchCliKnobs | undefined): ResolvedWebSearchKnobs {
@@ -584,6 +631,8 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     attribution: { sessionUrl: c.attribution?.sessionUrl !== false },
     // CC-CONFIG-A6 — env override wins.
     skillsHideBundled: resolveBoolWithEnv(c.skillsHideBundled, 'BRAINROUTER_HIDE_BUNDLED_SKILLS'),
+    // MC-E1 — org convention repositories are opt-in and read-only.
+    skills: { orgRepoDiscovery: c.skills?.orgRepoDiscovery === true },
     // CC-SKILLS-D1 — clamp to 1..5; NaN / unset / out-of-range → the default 5.
     skillsStackMax: clampInt(c.skillsStackMax, 1, 5, 5),
     // MC-E2 — keyword-triggered JIT skill injection. Default ON (additive:
@@ -623,6 +672,10 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
       maxRefinementIterations: clampInt(c.critic?.maxRefinementIterations, 0, 8, 2),
       model: typeof c.critic?.model === 'string' ? c.critic.model.trim() : '',
     },
+    budget: {
+      maxPerTaskUSD: nonNegativeNumber(c.budget?.maxPerTaskUSD),
+      maxPerTaskTokens: Math.floor(nonNegativeNumber(c.budget?.maxPerTaskTokens)),
+    },
     notifyBell: c.notifyBell ?? false,
     childDrainTimeoutMs: c.childDrainTimeoutMs ?? 30_000,
     offloadRetentionMs: c.offloadRetentionMs ?? 1_800_000,
@@ -645,6 +698,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
       mode: c.computerUse?.mode?.trim() || 'smart_approve',
     },
     plugins: resolvePluginsKnobs(c.plugins),
+    agents: resolveHostedAgentKnobs(c.agents),
     // MC-A1 — runtime plane. Backend validates to 'process' (today's in-process
     // execution) so a typo can never silently opt into an isolated backend;
     // maxLive 0 = no live-instance cap (LRU parking arrives with MC-A4).
@@ -668,6 +722,13 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
       jitSecretTtlMs: clampInt(c.runtime?.jitSecretTtlMs, 1_000, 3_600_000, 60_000),
       containerImage: typeof c.runtime?.containerImage === 'string' ? c.runtime.containerImage.trim() : '',
       container: normalizeContainerLimits(c.runtime?.container),
+      serve: c.runtime?.serve === true,
+      serveHost: typeof c.runtime?.serveHost === 'string' && c.runtime.serveHost.trim()
+        ? c.runtime.serveHost.trim()
+        : '127.0.0.1',
+      servePort: clampInt(c.runtime?.servePort, 0, 65_535, 8791),
+      remoteUrl: typeof c.runtime?.remoteUrl === 'string' ? c.runtime.remoteUrl.trim().replace(/\/+$/, '') : '',
+      previewPorts: resolvePreviewPorts(c.runtime?.previewPorts),
     },
     // MC-B1 — trigger ingress: DEFAULT-DENY across the board. `enabled`
     // requires an explicit `true` (nothing ever listens by accident), the
@@ -680,6 +741,9 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
       port: clampInt(c.triggers?.port, 1, 65_535, 8787),
       host: typeof c.triggers?.host === 'string' && c.triggers.host.trim() ? c.triggers.host.trim() : '127.0.0.1',
       githubSecret: typeof c.triggers?.githubSecret === 'string' ? c.triggers.githubSecret.trim() : '',
+      slackSigningSecret: typeof c.triggers?.slackSigningSecret === 'string' ? c.triggers.slackSigningSecret.trim() : '',
+      gitlabSecret: typeof c.triggers?.gitlabSecret === 'string' ? c.triggers.gitlabSecret.trim() : '',
+      jiraSecret: typeof c.triggers?.jiraSecret === 'string' ? c.triggers.jiraSecret.trim() : '',
       allowedRepos: sanitizeStringList(c.triggers?.allowedRepos),
       // MC-B2 — resolver @mention handle; junk/empty falls back to the default.
       mentionHandle:

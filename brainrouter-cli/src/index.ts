@@ -18,6 +18,8 @@ import { registerMarketplaceCommand } from './entry/marketplaceCommand.js';
 import { registerServeCommand } from './entry/serveCommand.js';
 import { registerAutomationsCommand } from './entry/automationsCommand.js';
 import { registerTasksCommand } from './entry/tasksCommand.js';
+import { registerConversationsCommand } from './entry/conversationsCommand.js';
+import { registerRunnerCommand } from './entry/runnerCommand.js';
 
 const program = new Command();
 
@@ -37,5 +39,7 @@ registerMarketplaceCommand(program);
 registerServeCommand(program);
 registerAutomationsCommand(program);
 registerTasksCommand(program);
+registerConversationsCommand(program);
+registerRunnerCommand(program);
 
 program.parse(process.argv);

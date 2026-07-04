@@ -29,23 +29,24 @@ import {
   installPluginByName,
   userPluginsDir,
 } from './index.js';
+import { resolveCliKnobs } from '../config/config.js';
 import type { Config, MarketplaceSource } from '../config/configTypes.js';
 
 function mkTmp(prefix: string): string {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 }
 
-const baseCfg = (marketplaces: MarketplaceSource[] = []): Config =>
-  ({ activeServer: '', servers: {}, cli: { plugins: { marketplaces } } } as Config);
+const baseCfg = (marketplaces: MarketplaceSource[] = [], plugins: Record<string, unknown> = {}): Config =>
+  ({ activeServer: '', servers: {}, cli: { plugins: { marketplaces, ...plugins } } } as Config);
 
 /** Write a plugin folder at <dir>/<rel> with a given name + version. */
-function writePlugin(root: string, name: string, version = '1.0.0'): void {
+function writePlugin(root: string, name: string, version = '1.0.0', manifestName = 'plugin.json'): void {
   const w = (rel: string, content: string): void => {
     const full = path.join(root, rel);
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.writeFileSync(full, content);
   };
-  w('.brainrouter-plugin/plugin.json', JSON.stringify({ name, version, category: 'development' }));
+  w(path.join('.brainrouter-plugin', manifestName), JSON.stringify({ name, version, category: 'development' }));
   w('skills/demo/SKILL.md', `---\nname: ${name}-demo\ndescription: demo\n---\n# demo\n`);
 }
 
@@ -62,6 +63,19 @@ function writeLocalMarketplace(dir: string, marketName: string, pluginName: stri
       owner: { name: 'tester' },
       plugins: [
         { name: pluginName, description: 'demo', source: `./plugins/${pluginName}`, version: pluginVersion, category: 'development' },
+      ],
+    }),
+  );
+}
+
+function writeAlternateMarketplace(dir: string, marketName: string, pluginName: string, manifestName: string): void {
+  writePlugin(path.join(dir, 'plugins', pluginName), pluginName, '1.0.0', manifestName);
+  fs.writeFileSync(
+    path.join(dir, manifestName),
+    JSON.stringify({
+      name: marketName,
+      plugins: [
+        { name: pluginName, description: 'demo', source: `./plugins/${pluginName}`, version: '1.0.0', category: 'development' },
       ],
     }),
   );
@@ -167,6 +181,46 @@ test('fetchMarketplace + readMarketplaceManifestAt: reads a local marketplace', 
   const parsed = readMarketplaceManifestAt(fetched.fetched.dir);
   assert.equal(parsed.valid, true);
   assert.equal(parsed.manifest?.plugins[0].name, 'acme-devkit');
+});
+
+test('MC-E3 alternate manifest names are accepted for marketplace and plugin imports only when configured', (t) => {
+  const home = mkTmp('br-plug-home-');
+  const market = mkTmp('br-market-');
+  const priorHome = process.env.BRAINROUTER_HOME;
+  process.env.BRAINROUTER_HOME = home;
+  t.after(() => {
+    if (priorHome === undefined) delete process.env.BRAINROUTER_HOME;
+    else process.env.BRAINROUTER_HOME = priorHome;
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(market, { recursive: true, force: true });
+  });
+
+  const manifestName = 'external-manifest.json';
+  writeAlternateMarketplace(market, 'acme-market', 'acme-devkit', manifestName);
+
+  assert.equal(readMarketplaceManifestAt(market).valid, false);
+  const parsed = readMarketplaceManifestAt(market, [manifestName]);
+  assert.equal(parsed.valid, true);
+  assert.equal(parsed.manifest?.plugins[0].name, 'acme-devkit');
+
+  const cfg = baseCfg([{ name: 'acme-market', sourceType: 'local', source: market }], { altManifestNames: [manifestName] });
+  const resolved = resolvePluginByName('acme-devkit', cfg);
+  assert.equal(resolved.ok, true);
+  if (resolved.ok) resolved.resolved.fetched.cleanup?.();
+
+  const installed = installPluginByName('acme-devkit', { scope: 'user', config: cfg });
+  assert.equal(installed.ok, true);
+  const installedTo = installed.result?.ok ? installed.result.installedTo : '';
+  assert.ok(fs.existsSync(path.join(installedTo, '.brainrouter-plugin', manifestName)));
+  assert.equal(fs.existsSync(path.join(installedTo, '.brainrouter-plugin', 'plugin.json')), false);
+});
+
+test('MC-E3 resolveCliKnobs keeps alternate manifest imports opt-in and filename-only', () => {
+  const knobs = resolveCliKnobs(baseCfg([], {
+    altManifestNames: [' external-manifest.json ', '../escape.json', 'nested/file.json', 'plugin.json', 'notes.txt', 'external-manifest.json'],
+  }));
+  assert.deepEqual(knobs.plugins.altManifestNames, ['external-manifest.json']);
+  assert.deepEqual(resolveCliKnobs(baseCfg()).plugins.altManifestNames, []);
 });
 
 test('resolvePluginByName + resolvePluginInstallSpec: resolves a bundled plugin to a local source', (t) => {

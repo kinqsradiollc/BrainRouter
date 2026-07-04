@@ -1,5 +1,5 @@
 /**
- * PLUGIN-MARKETPLACE P1 — plugin INSTALL with atomic staging (plan §3.5, Kimi).
+ * PLUGIN-MARKETPLACE P1 — plugin INSTALL with atomic staging.
  *
  * fetch (copy local / `git clone`) → `~/.brainrouter/plugins/.staging/<tmp>` →
  * validate the manifest → `rename` into place → write `install.json`. A failed
@@ -30,14 +30,16 @@ export interface InstallOptions {
   force?: boolean;
   /**
    * PLUGIN-MARKETPLACE P2 — a sub-path INSIDE the fetched source that holds the
-   * actual plugin (monorepo marketplaces where one repo bundles many plugins;
-   * plan §3.3 `sparsePaths`). After fetch, the staged root is narrowed to this
-   * sub-directory before validation. Must stay inside the fetched tree.
+   * actual plugin (monorepo marketplaces where one repo bundles many plugins).
+   * After fetch, the staged root is narrowed to this sub-directory before
+   * validation. Must stay inside the fetched tree.
    */
   subPath?: string;
   /** PLUGIN-MARKETPLACE P2 — marketplace name recorded in `install.json` when
    *  this install came from `plugin install <name>` (install-by-name). */
   marketplace?: string;
+  /** MC-E3 — extra manifest filenames accepted for import validation only. */
+  altManifestNames?: string[];
   /**
    * PLUGIN-MARKETPLACE P3 — expected sha256 `integrity` (from the registry
    * entry). When set, the staged plugin's deterministic tree digest is verified
@@ -154,7 +156,7 @@ export function installPlugin(source: string, opts: InstallOptions = {}): Instal
     }
 
     // Validate the staged copy BEFORE touching any live dir.
-    const disc = discoverPlugin(effectiveRoot);
+    const disc = discoverPlugin(effectiveRoot, { altManifestNames: opts.altManifestNames ?? [] });
     if (!disc.ok) {
       return { ok: false, error: `invalid plugin: ${disc.error.errors.join('; ')}` };
     }

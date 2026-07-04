@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Agent, buildChatCompletionPayload, buildResponsesPayload, callOpenAI, callOpenAIStream, resolveRequestFormat, sanitizeToolCallsForHistory } from '../agent/agent.js';
 import { _resetCliKnobsCache, setCliKnobOverride } from '../config/config.js';
+import { BudgetExceededError } from '../provider/budget.js';
 import { _resetModelReasoningCapabilities, registerModelReasoningCapabilities } from '../provider/models/reasoning.js';
 
 function resetCliKnobsForAgentRuntimeTest(extra: Parameters<typeof setCliKnobOverride>[0] = {}): void {
@@ -862,7 +863,7 @@ test('normalizeToolName resolves common LLM hallucinations to the canonical tool
 test('normalizeToolName resolves cross-vendor shell aliases to run_command', async () => {
   const { normalizeToolName } = await import('../agent/agent.js');
   const candidates = ['run_command', 'read_file', 'list_dir'];
-  // Claude Code convention.
+  // Known shell-tool convention.
   assert.equal(normalizeToolName('Bash', candidates), 'run_command');
   assert.equal(normalizeToolName('bash', candidates), 'run_command');
   // Generic shell synonyms.
@@ -1048,6 +1049,52 @@ test('agent: removeTaggedSystemMessage is idempotent and clears stale entries', 
   agent.replaceTaggedSystemMessage('other', 'keep me');
   agent.removeTaggedSystemMessage('demo');
   assert.equal(agent.chatHistory.filter((m: any) => m.content?.includes('keep me')).length, 1);
+});
+
+test('runTurn: task budget aborts when provider usage reaches token cap', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    setCliKnobOverride({ budget: { maxPerTaskUSD: 0, maxPerTaskTokens: 25 } });
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      choices: [{ message: { content: 'done' } }],
+      usage: { prompt_tokens: 20, completion_tokens: 5 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as any;
+    try {
+      const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [] }), close: async () => {} };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true,
+      });
+      await assert.rejects(
+        () => agent.runTurn('answer', { onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {} }),
+        (err) => err instanceof BudgetExceededError && err.budget.classification === 'budget_exceeded' && err.budget.spentTokens === 25,
+      );
+    } finally {
+      resetCliKnobsForAgentRuntimeTest();
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+test('runTurn: disabled task budget leaves provider usage behavior unchanged', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const originalFetch = globalThis.fetch;
+    setCliKnobOverride({ budget: { maxPerTaskUSD: 0, maxPerTaskTokens: 0 } });
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      choices: [{ message: { content: 'done' } }],
+      usage: { prompt_tokens: 20, completion_tokens: 5 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as any;
+    try {
+      const stubMcp: any = { listTools: async () => ({ tools: [] }), callTool: async () => ({ content: [] }), close: async () => {} };
+      const agent = new Agent(stubMcp, { provider: 'openai', apiKey: 'k', model: 'test-model' }, {
+        workspaceRoot: workspace, launchCwd: workspace, silent: true,
+      });
+      const answer = await agent.runTurn('answer', { onStatusUpdate: () => {}, onToolStart: () => {}, onToolEnd: () => {} });
+      assert.equal(answer, 'done');
+    } finally {
+      resetCliKnobsForAgentRuntimeTest();
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 test('runTurn: repeat-loop guard short-circuits identical (tool, args) calls after 3 repeats', async () => {

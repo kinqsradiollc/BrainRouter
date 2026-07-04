@@ -12,10 +12,11 @@ import React, { useMemo, useState } from 'react';
 import { wireBadge, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
 import { Icon } from './icons.js';
 import { ShortcutsReference } from './components/dialogs/ShortcutsReference.js';
-import { Row, Toggle, Select, ChoiceControl, KnobNumber, KnobText } from './settings/shared/controls.js';
+import { Row, Toggle, Select, ChoiceControl, KnobText } from './settings/shared/controls.js';
 import { PermissionModeCards } from './settings/permissions/PermissionModeCards.js';
 import { ComputerUseSettings } from './settings/permissions/ComputerUseSettings.js';
 import { CliConfigEditor } from './settings/cli/CliConfigEditor.js';
+import { SchemaCliFields } from './settings/cli/SchemaCliFields.js';
 import { ConnectorSettings } from './settings/connectors/ConnectorSettings.js';
 import { MarketplaceSettings, type MarketplaceState } from './settings/marketplace/index.js';
 import { McpServersSection } from './settings/connectors/McpServersSection.js';
@@ -95,7 +96,7 @@ export function SettingsDialog(props: {
   // Advanced. Shared with the CLI; empty/clear reverts to the default.
   const knobs = (snapshot?.cliKnobs ?? {}) as Record<string, unknown>;
   const setKnob = (key: string, value: unknown): void => { props.onAction('a-knob', 'action:set-cli-knob', { key, value }); setTimeout(refreshSnapshot, 80); };
-  const kb = (key: string): boolean => Boolean(knobs[key]);
+  const setSchemaKnob = (path: string, value: unknown): void => { props.onAction('a-schema-knob', 'action:set-cli-schema-knob', { path, value }); setTimeout(refreshSnapshot, 80); };
   const ks = (key: string, dflt: string): string => String(knobs[key] ?? dflt);
   const telemetryOn = (knobs.telemetry as { enabled?: boolean } | undefined)?.enabled !== false;
   const github = snapshot?.integrations?.github ?? { repo: null, hasToken: false, tokenSource: null, repos: [], caBundle: null };
@@ -118,7 +119,7 @@ export function SettingsDialog(props: {
         <>
           <div className="set-h">General</div>
           <div className="set-desc" style={{ marginBottom: 6 }}>Model &amp; providers moved to their own <b>Models</b> section.</div>
-          <Row title="Reasoning effort" desc="low = terse, medium = default, high = step-by-step, xhigh = maximum. max / ultracode are Claude's top slider tiers (they cap to maximum on the wire). Forwarded to provider reasoning slots when the model supports it. (/effort)">
+          <Row title="Reasoning effort" desc="low = terse, medium = default, high = step-by-step, xhigh = maximum. max / ultracode are top slider tiers (they cap to maximum on the wire). Forwarded to provider reasoning slots when the model supports it. (/effort)">
             <Select value={ps('effort', 'medium')} options={['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']} onChange={(v) => props.onPref('effort', v)} />
           </Row>
           <Row title="Personality" desc="Communication style for the agent's prose. (/personality)">
@@ -387,46 +388,13 @@ export function SettingsDialog(props: {
             <div className="set-desc" style={{ marginBottom: 6 }}>Everything else under <code>cli.*</code> in <code>~/.config/brainrouter/config.json</code> — shared with the CLI (<code>/config</code>). Leave a number blank to use its default.</div>
 
             <div className="set-h2">Model &amp; limits</div>
-            <Row title="Max output tokens" desc="Cap on completion tokens per call (cli.maxOutputTokens). Blank = the provider default; raise it (e.g. 8192) if replies get cut off mid-sentence.">
-              <KnobNumber value={knobs.maxOutputTokens} onSave={(v) => setKnob('maxOutputTokens', v)} placeholder="provider default" />
-            </Row>
-            <Row title="Auto-compact threshold" desc="Summarize + reset context above this many prompt tokens (cli.autoCompactTokens). Automatically capped to the current model's context window — set it BELOW the window to compact earlier (e.g. to save cost on large-window models).">
-              <KnobNumber value={knobs.autoCompactTokens} onSave={(v) => setKnob('autoCompactTokens', v)} placeholder="80000" />
-            </Row>
-            <Row title="Max tool loops" desc="Hard cap on tool iterations per turn (cli.maxToolLoops).">
-              <KnobNumber value={knobs.maxToolLoops} onSave={(v) => setKnob('maxToolLoops', v)} placeholder="60" />
-            </Row>
-            <Row title="LLM timeout (ms)" desc="Per-request timeout before retry/reconnect (cli.llmTimeoutMs).">
-              <KnobNumber value={knobs.llmTimeoutMs} onSave={(v) => setKnob('llmTimeoutMs', v)} placeholder="120000" />
-            </Row>
-            <Row title="Max concurrent LLM calls" desc="Parallel in-flight requests across the agent + children (cli.llmMaxConcurrent).">
-              <KnobNumber value={knobs.llmMaxConcurrent} onSave={(v) => setKnob('llmMaxConcurrent', v)} placeholder="4" />
-            </Row>
-            <Row title="Context compaction" desc="Auto-summarize old history when the window fills (cli.contextCompaction).">
-              <Toggle on={knobs.contextCompaction !== false} onChange={(v) => setKnob('contextCompaction', v)} />
-            </Row>
+            <SchemaCliFields schema={snapshot?.cliSchema} section="modelLimits" cli={knobs} onChange={setSchemaKnob} />
 
             <div className="set-h2">Agents</div>
-            <Row title="Next-action planner" desc="Plan the next step before acting (cli.nextActionPlanner).">
-              <Toggle on={ks('nextActionPlanner', 'on') !== 'off'} onChange={(v) => setKnob('nextActionPlanner', v ? 'on' : 'off')} />
-            </Row>
-            <Row title="Max concurrent children" desc="Parallel sub-agents (cli.maxConcurrentChildren).">
-              <KnobNumber value={knobs.maxConcurrentChildren} onSave={(v) => setKnob('maxConcurrentChildren', v)} placeholder="8" />
-            </Row>
-            <Row title="Max spawn depth" desc="How deep sub-agents may spawn sub-agents (cli.maxSpawnDepth).">
-              <KnobNumber value={knobs.maxSpawnDepth} onSave={(v) => setKnob('maxSpawnDepth', v)} placeholder="3" />
-            </Row>
-            <Row title="Build loop" desc="Auto build/verify after edits (cli.buildLoop).">
-              <Select value={ks('buildLoop', 'escalate')} options={['off', 'escalate', 'always']} onChange={(v) => setKnob('buildLoop', v)} />
-            </Row>
+            <SchemaCliFields schema={snapshot?.cliSchema} section="agents" cli={knobs} onChange={setSchemaKnob} />
 
             <div className="set-h2">Notifications</div>
-            <Row title="Notify bell" desc="Ring the terminal bell on an idle background completion (cli.notifyBell).">
-              <Toggle on={kb('notifyBell')} onChange={(v) => setKnob('notifyBell', v)} />
-            </Row>
-            <Row title="Update check" desc="Check for new BrainRouter versions on launch (cli.updateCheck).">
-              <Toggle on={ks('updateCheck', 'true') !== 'false' && knobs.updateCheck !== false} onChange={(v) => setKnob('updateCheck', v)} />
-            </Row>
+            <SchemaCliFields schema={snapshot?.cliSchema} section="notifications" cli={knobs} onChange={setSchemaKnob} />
 
             <div className="set-h2">GitHub</div>
             <Row title="OAuth client ID" desc="GitHub OAuth App client id with device flow enabled (cli.github.oauthClientId).">

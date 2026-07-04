@@ -4,7 +4,10 @@
  * adds gitlab/jira by registering more adapters — no server change needed.
  */
 import type { TriggerProvider } from './triggerTypes.js';
+import { gitlabTriggerProvider } from './providers/gitlab.js';
 import { githubTriggerProvider } from './providers/github.js';
+import { jiraTriggerProvider } from './providers/jira.js';
+import { slackTriggerProvider } from './providers/slack.js';
 
 const providers = new Map<string, TriggerProvider>();
 
@@ -27,5 +30,8 @@ export function listTriggerProviders(): string[] {
   return [...providers.keys()].sort();
 }
 
-// Built-ins. GitHub is the first (and, until MC-B7, only) provider.
+// Built-ins.
 registerTriggerProvider(githubTriggerProvider);
+registerTriggerProvider(gitlabTriggerProvider);
+registerTriggerProvider(jiraTriggerProvider);
+registerTriggerProvider(slackTriggerProvider);

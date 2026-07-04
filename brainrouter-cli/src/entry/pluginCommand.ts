@@ -60,6 +60,9 @@ export function registerPluginCommand(program: Command): void {
 
         case 'install': {
           if (!target) return fail('usage: brainrouter plugin install <path|git-url|name>');
+          const { loadOrInitConfig, resolveCliKnobs } = await import('@kinqs/brainrouter-core/config');
+          const config = loadOrInitConfig();
+          const altManifestNames = resolveCliKnobs(config).plugins.altManifestNames;
           const raw = String(target);
           // Resolve the source form: a local path or git url installs directly;
           // a plain NAME (no path separator, not a git url, not an existing dir)
@@ -71,7 +74,7 @@ export function registerPluginCommand(program: Command): void {
           const byName = !isGit && !existsLocal && !looksLikePath;
 
           if (byName) {
-            const r = plugin.installPluginByName(raw, { scope, workspaceRoot, force: options.force });
+            const r = plugin.installPluginByName(raw, { scope, workspaceRoot, force: options.force, config });
             if (!r.ok) return fail(r.error ?? 'install failed');
             const res = r.result!;
             if (!res.ok) return fail(res.error);
@@ -82,7 +85,7 @@ export function registerPluginCommand(program: Command): void {
             return;
           }
 
-          const res = plugin.installPlugin(raw, { scope, workspaceRoot, ref: options.ref, force: options.force });
+          const res = plugin.installPlugin(raw, { scope, workspaceRoot, ref: options.ref, force: options.force, altManifestNames });
           if (!res.ok) return fail(res.error);
           if (options.json) { process.stdout.write(JSON.stringify(res) + '\n'); return; }
           console.log(chalk.green(`Installed "${res.name}" (${scope}) → ${res.installedTo}`));
@@ -93,7 +96,9 @@ export function registerPluginCommand(program: Command): void {
 
         case 'validate': {
           if (!target) return fail('usage: brainrouter plugin validate <path>');
-          const res = plugin.discoverPlugin(String(target));
+          const { loadOrInitConfig, resolveCliKnobs } = await import('@kinqs/brainrouter-core/config');
+          const altManifestNames = resolveCliKnobs(loadOrInitConfig()).plugins.altManifestNames;
+          const res = plugin.discoverPlugin(String(target), { altManifestNames });
           if (!res.ok) {
             if (options.json) { process.stdout.write(JSON.stringify({ valid: false, errors: res.error.errors }) + '\n'); }
             else { console.error(chalk.red(`Invalid plugin:`)); for (const e of res.error.errors) console.error(chalk.red(`  - ${e}`)); }
@@ -111,11 +116,18 @@ export function registerPluginCommand(program: Command): void {
         case 'list': {
           const { loadOrInitConfig } = await import('@kinqs/brainrouter-core/config');
           const r = plugin.loadPlugins(workspaceRoot, loadOrInitConfig());
-          if (options.json) { process.stdout.write(JSON.stringify({ loaded: r.loaded.map((p) => ({ name: p.name, scope: p.scope, provides: p.provides })), disabled: r.disabled.map((p) => p.name), skippedForSafeMode: r.skippedForSafeMode }) + '\n'); return; }
+          if (options.json) {
+            process.stdout.write(JSON.stringify({
+              loaded: r.loaded.map((p) => ({ name: p.name, scope: p.scope, readOnly: p.readOnly, provides: p.provides })),
+              disabled: r.disabled.map((p) => ({ name: p.name, scope: p.scope, readOnly: p.readOnly })),
+              skippedForSafeMode: r.skippedForSafeMode,
+            }) + '\n');
+            return;
+          }
           if (r.skippedForSafeMode) { console.log(chalk.yellow('safeMode is on — plugin loading is skipped.')); }
           if (r.loaded.length === 0 && r.disabled.length === 0) { console.log(chalk.gray('No plugins installed. Scaffold one with `brainrouter plugin init`.')); }
-          for (const p of r.loaded) console.log(`${chalk.green('●')} ${chalk.bold(p.name)} ${chalk.gray(`(${p.scope}) — ${describeProvides(p.provides)}`)}`);
-          for (const p of r.disabled) console.log(`${chalk.gray('○')} ${p.name} ${chalk.gray('(disabled)')}`);
+          for (const p of r.loaded) console.log(`${chalk.green('●')} ${chalk.bold(p.name)} ${chalk.gray(`(${p.scope}${p.readOnly ? ', read-only' : ''}) — ${describeProvides(p.provides)}`)}`);
+          for (const p of r.disabled) console.log(`${chalk.gray('○')} ${p.name} ${chalk.gray(`(${p.scope}${p.readOnly ? ', read-only' : ''}, disabled)`)}`);
           for (const e of r.errors) console.log(chalk.red(`  ! ${e}`));
           return;
         }
