@@ -4,7 +4,9 @@
  * adds gitlab/jira by registering more adapters — no server change needed.
  */
 import type { TriggerProvider } from './triggerTypes.js';
+import { gitlabTriggerProvider } from './providers/gitlab.js';
 import { githubTriggerProvider } from './providers/github.js';
+import { jiraTriggerProvider } from './providers/jira.js';
 import { slackTriggerProvider } from './providers/slack.js';
 
 const providers = new Map<string, TriggerProvider>();
@@ -30,4 +32,6 @@ export function listTriggerProviders(): string[] {
 
 // Built-ins.
 registerTriggerProvider(githubTriggerProvider);
+registerTriggerProvider(gitlabTriggerProvider);
+registerTriggerProvider(jiraTriggerProvider);
 registerTriggerProvider(slackTriggerProvider);

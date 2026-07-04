@@ -14,13 +14,19 @@ import fs from 'node:fs';
 import { createHmac } from 'node:crypto';
 import {
   isRepoAllowed,
+  normalizeGitlabEvent,
   normalizeGithubEvent,
+  normalizeJiraEvent,
   normalizeSlackEvent,
   persistTriggerPayload,
+  resolveGitlabTriggerSecret,
   resolveGithubTriggerSecret,
+  resolveJiraTriggerSecret,
   resolveSlackTriggerSecret,
   startTriggerServer,
+  verifyGitlabSignature,
   verifyGithubSignature,
+  verifyJiraSignature,
   verifySlackSignature,
   getTriggerProvider,
   listTriggerProviders,
@@ -40,6 +46,10 @@ function sign(body: string, secret: string = SECRET): string {
 function signSlack(body: string, timestamp = Math.floor(Date.now() / 1000), secret: string = SECRET): string {
   const base = `v0:${timestamp}:${body}`;
   return `v0=${createHmac('sha256', secret).update(base).digest('hex')}`;
+}
+
+function signJira(body: string, secret: string = SECRET): string {
+  return `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`;
 }
 
 function issueLabeledPayload(repo = 'acme/widgets'): string {
@@ -270,7 +280,7 @@ test('MC-B1 ingress: unknown provider → 404; unknown route → 404; GET → 40
     });
     try {
       const body = issueLabeledPayload();
-      const unknown = await post(handle, '/triggers/gitlab/events', body, {
+      const unknown = await post(handle, '/triggers/bitbucket/events', body, {
         'x-hub-signature-256': sign(body),
       });
       assert.equal(unknown.status, 404, 'unregistered provider 404s (default-deny)');
@@ -296,6 +306,8 @@ test('MC-B1 ingress: disabled → refuses to start (nothing ever listens by defa
   assert.equal(knobs.triggers.host, '127.0.0.1');
   assert.equal(knobs.triggers.githubSecret, '');
   assert.equal(knobs.triggers.slackSigningSecret, '');
+  assert.equal(knobs.triggers.gitlabSecret, '');
+  assert.equal(knobs.triggers.jiraSecret, '');
   assert.deepEqual(knobs.triggers.allowedRepos, []);
 });
 
@@ -309,6 +321,8 @@ test('MC-B1 config: cli.triggers validates — enabled requires explicit true, p
         host: '  0.0.0.0  ',
         githubSecret: '  s3cret  ',
         slackSigningSecret: '  slack-secret  ',
+        gitlabSecret: '  gl-secret  ',
+        jiraSecret: '  jira-secret  ',
         allowedRepos: ['acme/*', '', 42],
       },
     },
@@ -320,11 +334,27 @@ test('MC-B1 config: cli.triggers validates — enabled requires explicit true, p
   assert.equal(knobs.triggers.host, '0.0.0.0');
   assert.equal(knobs.triggers.githubSecret, 's3cret');
   assert.equal(knobs.triggers.slackSigningSecret, 'slack-secret');
+  assert.equal(knobs.triggers.gitlabSecret, 'gl-secret');
+  assert.equal(knobs.triggers.jiraSecret, 'jira-secret');
   assert.deepEqual(knobs.triggers.allowedRepos, ['acme/*']);
   const onCfg: any = { activeServer: '', servers: {}, cli: { triggers: { enabled: true, port: 9000 } } };
   const on = resolveCliKnobs(onCfg);
   assert.equal(on.triggers.enabled, true);
   assert.equal(on.triggers.port, 9000);
+});
+
+test('GitLab and Jira signatures fail closed and validate their provider-specific headers', () => {
+  const rawBody = Buffer.from('{"a":1}');
+  assert.equal(verifyGitlabSignature({ headers: { 'x-gitlab-token': SECRET }, rawBody, secret: SECRET }), true);
+  assert.equal(verifyGitlabSignature({ headers: { 'x-gitlab-token': 'wrong' }, rawBody, secret: SECRET }), false);
+  assert.equal(verifyGitlabSignature({ headers: {}, rawBody, secret: SECRET }), false);
+  assert.equal(verifyGitlabSignature({ headers: { 'x-gitlab-token': SECRET }, rawBody, secret: '' }), false);
+
+  const jira = { 'x-atlassian-webhook-signature': signJira(rawBody.toString('utf8')) };
+  assert.equal(verifyJiraSignature({ headers: jira, rawBody, secret: SECRET }), true);
+  assert.equal(verifyJiraSignature({ headers: jira, rawBody: Buffer.from('{"a":2}'), secret: SECRET }), false);
+  assert.equal(verifyJiraSignature({ headers: {}, rawBody, secret: SECRET }), false);
+  assert.equal(verifyJiraSignature({ headers: jira, rawBody, secret: '' }), false);
 });
 
 // ---------------------------------------------------------------------------
@@ -413,6 +443,31 @@ test('Slack normalize: app mentions and thread messages map to chat events with 
   assert.equal(normalizeSlackEvent({}, { type: 'url_verification' }), null);
 });
 
+test('GitLab and Jira normalize provider payloads into trigger events', () => {
+  const gitlab = normalizeGitlabEvent({ 'x-gitlab-event': 'Note Hook' }, {
+    object_kind: 'note',
+    project: { path_with_namespace: 'acme/widgets' },
+    user: { username: 'dev' },
+    object_attributes: { noteable_iid: 42, note: '@brainrouter fix this' },
+  });
+  assert.equal(gitlab?.kind, 'comment.created');
+  assert.equal(gitlab?.repo, 'acme/widgets');
+  assert.equal(gitlab?.number, 42);
+  assert.equal(gitlab?.sender, 'dev');
+
+  const jira = normalizeJiraEvent({ 'x-atlassian-webhook-identifier': 'jira-1' }, {
+    webhookEvent: 'jira:issue_updated',
+    repo: 'acme/widgets',
+    user: { accountId: 'u-1' },
+    issue: { id: '10001', fields: { summary: 'Bug', labels: ['brainrouter'] } },
+  });
+  assert.equal(jira?.kind, 'issue.labeled');
+  assert.equal(jira?.repo, 'acme/widgets');
+  assert.equal(jira?.number, 10001);
+  assert.equal(jira?.sender, 'u-1');
+  assert.equal(jira?.deliveryId, 'jira-1');
+});
+
 test('MC-B1 allowlist: glob semantics + fail-closed edges', () => {
   assert.equal(isRepoAllowed('acme/widgets', ['acme/*']), true);
   assert.equal(isRepoAllowed('acme/widgets', ['acme/widgets']), true);
@@ -437,14 +492,21 @@ test('MC-B1 payload store: bounded + redacted; secret resolution prefers the exp
     assert.equal(resolveGithubTriggerSecret({}), '');
     assert.equal(resolveSlackTriggerSecret({ configSecret: ' slack ' }), 'slack');
     assert.equal(resolveSlackTriggerSecret({ workspaceRoot: workspace }), '');
+    assert.equal(resolveGitlabTriggerSecret({ configSecret: ' gitlab ' }), 'gitlab');
+    assert.equal(resolveGitlabTriggerSecret({ workspaceRoot: workspace }), '');
+    assert.equal(resolveJiraTriggerSecret({ configSecret: ' jira ' }), 'jira');
+    assert.equal(resolveJiraTriggerSecret({ workspaceRoot: workspace }), '');
   });
 });
 
 test('MC-B1 registry: built-in providers are present; unknown names miss; lookup is case-insensitive', () => {
   assert.ok(getTriggerProvider('github'));
+  assert.ok(getTriggerProvider('gitlab'));
+  assert.ok(getTriggerProvider('jira'));
   assert.ok(getTriggerProvider('slack'));
   assert.ok(getTriggerProvider('GitHub'));
-  assert.equal(getTriggerProvider('gitlab'), undefined, 'MC-B7 territory — not registered yet');
   assert.ok(listTriggerProviders().includes('github'));
+  assert.ok(listTriggerProviders().includes('gitlab'));
+  assert.ok(listTriggerProviders().includes('jira'));
   assert.ok(listTriggerProviders().includes('slack'));
 });

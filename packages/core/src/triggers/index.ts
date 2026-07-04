@@ -21,8 +21,11 @@ export * from './eventStore.js';
 export * from './server.js';
 export * from './rules.js';
 export * from './postback.js';
+export * from './providers/gitlab.js';
 export * from './providers/github.js';
+export * from './providers/jira.js';
 export * from './providers/slack.js';
+export * from './resolvers/external.js';
 export * from './resolvers/github.js';
 export * from './resolvers/slack.js';
 // MC-B4 — proactive CI-failure nudge (workflow_run failure on an open PR →

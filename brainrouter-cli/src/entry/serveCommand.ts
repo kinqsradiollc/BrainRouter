@@ -41,6 +41,14 @@ export function registerServeCommand(program: Command): void {
         configSecret: knobs.slackSigningSecret,
         workspaceRoot,
       });
+      const gitlabSecret = triggers.resolveGitlabTriggerSecret({
+        configSecret: knobs.gitlabSecret,
+        workspaceRoot,
+      });
+      const jiraSecret = triggers.resolveJiraTriggerSecret({
+        configSecret: knobs.jiraSecret,
+        workspaceRoot,
+      });
       const bind = resolveServeBind({ port: options.port, host: options.host }, knobs);
       const githubSink = triggers.createGithubTriggerSink({
         workspaceRoot,
@@ -67,6 +75,15 @@ export function registerServeCommand(program: Command): void {
           }
         },
       });
+      const externalSink = triggers.createExternalTriggerSink({
+        workspaceRoot,
+        mentionHandle: knobs.mentionHandle,
+        onResolved: (event, result) => {
+          if (result.action === 'enqueued' && result.job) {
+            console.log(chalk.cyan(`  trigger → fleet job ${result.job.id} (${event.provider}:${event.repo}${event.number ? `#${event.number}` : ''})`));
+          }
+        },
+      });
 
       let handle: Awaited<ReturnType<typeof triggers.startTriggerServer>>;
       try {
@@ -76,10 +93,11 @@ export function registerServeCommand(program: Command): void {
           port: bind.port,
           allowedRepos: knobs.allowedRepos,
           workspaceRoot,
-          secrets: { github: githubSecret, slack: slackSecret },
+          secrets: { github: githubSecret, slack: slackSecret, gitlab: gitlabSecret, jira: jiraSecret },
           onEvent: async (event) => {
             await githubSink(event);
             await slackSink(event);
+            await externalSink(event);
           },
         });
       } catch (error) {
@@ -90,7 +108,7 @@ export function registerServeCommand(program: Command): void {
 
       console.log(chalk.green(`Trigger ingress listening on http://${handle.host}:${handle.port}`));
       console.log(chalk.gray(`  Providers: ${triggers.listTriggerProviders().join(', ')}  ·  route: POST /triggers/{provider}/events`));
-      for (const warning of serveStartupWarnings(knobs, { github: githubSecret, slack: slackSecret })) {
+      for (const warning of serveStartupWarnings(knobs, { github: githubSecret, slack: slackSecret, gitlab: gitlabSecret, jira: jiraSecret })) {
         console.log(chalk.yellow(`  ${warning}`));
       }
 

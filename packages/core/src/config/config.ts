@@ -724,6 +724,8 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
       host: typeof c.triggers?.host === 'string' && c.triggers.host.trim() ? c.triggers.host.trim() : '127.0.0.1',
       githubSecret: typeof c.triggers?.githubSecret === 'string' ? c.triggers.githubSecret.trim() : '',
       slackSigningSecret: typeof c.triggers?.slackSigningSecret === 'string' ? c.triggers.slackSigningSecret.trim() : '',
+      gitlabSecret: typeof c.triggers?.gitlabSecret === 'string' ? c.triggers.gitlabSecret.trim() : '',
+      jiraSecret: typeof c.triggers?.jiraSecret === 'string' ? c.triggers.jiraSecret.trim() : '',
       allowedRepos: sanitizeStringList(c.triggers?.allowedRepos),
       // MC-B2 — resolver @mention handle; junk/empty falls back to the default.
       mentionHandle:

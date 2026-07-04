@@ -411,6 +411,12 @@ export interface TriggersCliKnobs {
    *  the secret is resolved from the workspace's Slack connector config
    *  (`signingSecret`); if neither is set, Slack deliveries are rejected. */
   slackSigningSecret?: string;
+  /** GitLab webhook token used to verify `X-Gitlab-Token`. Empty rejects
+   *  deliveries unless a GitLab connector supplies `webhookSecret`. */
+  gitlabSecret?: string;
+  /** Jira webhook signing secret used to verify webhook HMAC headers. Empty
+   *  rejects deliveries unless a Jira connector supplies `webhookSecret`. */
+  jiraSecret?: string;
   /** Glob allowlist of `owner/name` repos whose events are processed.
    *  Default [] = nothing allowed (events verify, then drop with a 202 that
    *  never leaks which repos exist). */
@@ -1288,6 +1294,8 @@ export interface ResolvedCliKnobs {
     host: string;
     githubSecret: string;
     slackSigningSecret: string;
+    gitlabSecret: string;
+    jiraSecret: string;
     allowedRepos: string[];
     /** MC-B2 — resolver @mention handle (default 'brainrouter', '@' stripped). */
     mentionHandle: string;
