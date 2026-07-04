@@ -60,6 +60,15 @@ export function scrubCliSecrets(cli: unknown): Record<string, unknown> {
     }
     c.track = track;
   }
+  // MC-B1 — the trigger-ingress signing secrets are write-only: the desktop's
+  // Automations panel only ever learns whether each is *set* (via the snapshot's
+  // triggerSecretsSet booleans), never the value. Strip them here so they can't
+  // reach the renderer through cliKnobs.
+  if (c.triggers && typeof c.triggers === 'object') {
+    const triggers = { ...(c.triggers as Record<string, unknown>) };
+    for (const k of ['githubSecret', 'slackSigningSecret', 'gitlabSecret', 'jiraSecret']) delete triggers[k];
+    c.triggers = triggers;
+  }
   return c;
 }
 

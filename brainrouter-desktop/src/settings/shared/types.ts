@@ -43,6 +43,10 @@ export interface ConfigSnapshot {
   // §settings-completeness — the raw cli.* config block (current knob values).
   cliKnobs?: Record<string, unknown>;
   cliSchema?: ConfigSchemaDescriptor;
+  // MC-B1 — write-only trigger signing secrets: the renderer only learns which
+  // are set (the value is scrubbed from cliKnobs), so the Automations panel can
+  // show "configured" without ever holding the secret.
+  triggerSecretsSet?: { github: boolean; slack: boolean; gitlab: boolean; jira: boolean };
   // EXTENSIONS — discovered extensions + workspace trust state.
   extensions?: {
     trusted: boolean;
@@ -113,6 +117,8 @@ export const NAV: Array<{ section: SettingsSection; icon: string; title: string;
   { section: 'memory', icon: 'brain', title: 'Memory', group: 'Settings' },
   { section: 'hooks', icon: 'link', title: 'Hooks', group: 'Settings' },
   { section: 'workflow-automation', icon: 'fork', title: 'Workflow automation', group: 'Settings' },
+  { section: 'runtime', icon: 'terminal', title: 'Runtime', group: 'Settings' },
+  { section: 'automations', icon: 'globe', title: 'Automations', group: 'Settings' },
   { section: 'extensions', icon: 'plug', title: 'Extensions', group: 'Settings' },
   { section: 'connectors', icon: 'bolt', title: 'MCP Servers', group: 'Settings' },
   { section: 'tools', icon: 'gear', title: 'Tools', group: 'Settings' },
@@ -126,7 +132,10 @@ export const NAV: Array<{ section: SettingsSection; icon: string; title: string;
 
 // WS11 — knobs that have a dedicated structured editor elsewhere (Permissions,
 // Workflow automation, Models, Connectors). Never shown as raw JSON here.
-export const DEDICATED_KNOBS = new Set(['permissions', 'automation', 'track', 'github', 'providers', 'agentModels', 'providerRequestFormat']);
+export const DEDICATED_KNOBS = new Set(['permissions', 'automation', 'track', 'github', 'providers', 'agentModels', 'providerRequestFormat',
+  // MC-DESK — object-knobs now driven by their own structured Settings panels
+  // (Runtime / Automations / Profiles), so they never appear as raw JSON rows.
+  'runtime', 'triggers', 'critic', 'budget', 'agents', 'llmProfiles']);
 // WS11 — internal/safety knobs (loop & storm guards, sandbox internals, scheduler
 // ticks, offload tuning): non-obvious to hand-edit and rarely needed, so hidden
 // from the default list. Still settable via `/config` or the raw disclosure.

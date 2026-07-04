@@ -904,6 +904,12 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
         { role: 'explorer', provider: 'groq', model: null },
         { role: 'reviewer', provider: null, model: 'gpt-5.3-codex' },
       ],
+      triggerSecretsSet: {
+        github: typeof (devCliKnobs.triggers as { githubSecret?: string } | undefined)?.githubSecret === 'string',
+        slack: typeof (devCliKnobs.triggers as { slackSigningSecret?: string } | undefined)?.slackSigningSecret === 'string',
+        gitlab: typeof (devCliKnobs.triggers as { gitlabSecret?: string } | undefined)?.gitlabSecret === 'string',
+        jira: typeof (devCliKnobs.triggers as { jiraSecret?: string } | undefined)?.jiraSecret === 'string',
+      },
     }),
     'action:set-provider': (a) => {
       const name = String(a.name ?? '').trim();
@@ -976,6 +982,22 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     'action:compact': () => ({ summary: 'Early exploration compacted; kept the blend fix decision and the sweep numbers.', estimatedTokens: 412, durationMs: 1830, replacedMessages: 14 }),
     'action:set-pref': (a) => { prefs[String(a.key)] = a.value; return { ...prefs }; },
     'action:set-cli-knob': (a) => { if (a.value === null) delete devCliKnobs[String(a.key)]; else devCliKnobs[String(a.key)] = a.value; return { ok: true, key: String(a.key) }; },
+    // MC-DESK — mirror of the host's sibling-safe nested writer for the Runtime /
+    // Automations / Profiles panels (browser preview + Preview server).
+    'action:set-cli-path': (a) => {
+      const path = String(a.path ?? '').trim();
+      if (!path || path.startsWith('.') || path.endsWith('.') || path.includes('..')) return { ok: false, error: 'Invalid config path.' };
+      const parts = path.split('.');
+      let cur: Record<string, unknown> = devCliKnobs;
+      for (const part of parts.slice(0, -1)) {
+        const nextVal = cur[part];
+        if (!nextVal || typeof nextVal !== 'object' || Array.isArray(nextVal)) cur[part] = {};
+        cur = cur[part] as Record<string, unknown>;
+      }
+      const leaf = parts[parts.length - 1];
+      if (a.value === null || a.value === undefined) delete cur[leaf]; else cur[leaf] = a.value;
+      return { ok: true, path };
+    },
     'action:set-track-github': (a) => {
       if (typeof a.caBundle === 'string' || a.caBundle === null) devGithub.caBundle = typeof a.caBundle === 'string' ? (a.caBundle.trim() || null) : null;
       if (typeof a.removeRepo === 'string') {

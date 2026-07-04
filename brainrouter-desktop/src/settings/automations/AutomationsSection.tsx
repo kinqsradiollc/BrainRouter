@@ -1,0 +1,119 @@
+/**
+ * MC-DESK — Settings → Automations. Structured UI for the inbound trigger
+ * ingress (`cli.triggers`): the opt-in webhook listener that turns signed
+ * GitHub / Slack / GitLab / Jira deliveries into automated agent jobs.
+ *
+ * Everything is DEFAULT-DENY: nothing listens until `enabled`, it binds
+ * loopback unless a host is named, an empty repo allowlist accepts nothing.
+ * Signing secrets are WRITE-ONLY — the panel only learns whether each is set
+ * (via snapshot.triggerSecretsSet); the value is scrubbed and never read back.
+ * Writes go through `setPath` (sibling-safe), so setting `enabled` never wipes
+ * a secret.
+ */
+import React, { useState } from 'react';
+import { Row, Toggle, KnobNumber, KnobText } from '../shared/controls.js';
+import { Icon } from '../../icons.js';
+
+type Dict = Record<string, unknown>;
+type SecretsSet = { github: boolean; slack: boolean; gitlab: boolean; jira: boolean };
+
+export function AutomationsSection({ knobs, setPath, secretsSet }: {
+  knobs: Dict;
+  setPath: (path: string, value: unknown) => void;
+  secretsSet: SecretsSet;
+}): React.ReactElement {
+  const triggers = (knobs.triggers ?? {}) as Dict;
+  const enabled = triggers.enabled === true;
+  const allowedRepos = (Array.isArray(triggers.allowedRepos) ? triggers.allowedRepos : []).filter((r): r is string => typeof r === 'string');
+
+  return (
+    <>
+      <div className="set-h">Automations</div>
+      <div className="set-desc" style={{ marginBottom: 8 }}>
+        Inbound triggers turn signed webhooks into agent jobs — a label or <code>@mention</code>
+        on a GitHub issue/PR, a Slack message, a failing CI run. Everything is
+        <b> default-deny</b>: nothing listens until enabled, it binds loopback, and only
+        allow-listed repos are processed. (cli.triggers)
+      </div>
+
+      <Row title="Enable trigger ingress" desc="Master switch for the webhook listener. Off = nothing listens, whatever else is set. Start it with `brainrouter serve --triggers`. (cli.triggers.enabled)">
+        <Toggle on={enabled} onChange={(v) => setPath('triggers.enabled', v)} />
+      </Row>
+
+      <div style={{ opacity: enabled ? 1 : 0.5, pointerEvents: enabled ? 'auto' : 'none' }}>
+        <div className="set-h2">Listener</div>
+        <Row title="Bind host" desc="Interface the ingress binds. Default loopback — exposing it beyond localhost is your explicit choice. (cli.triggers.host)">
+          <KnobText value={triggers.host} placeholder="127.0.0.1" onSave={(v) => setPath('triggers.host', v)} />
+        </Row>
+        <Row title="Port" desc="TCP port the ingress binds. Default 8787. (cli.triggers.port)">
+          <KnobNumber value={triggers.port} placeholder="8787" onSave={(v) => setPath('triggers.port', v)} />
+        </Row>
+
+        <div className="set-h2">Signing secrets</div>
+        <div className="set-desc" style={{ marginBottom: 8 }}>
+          Per-provider webhook verification. A provider with no secret rejects every delivery (401) — never "let through".
+          Secrets are write-only: type to set or replace; they're never shown back. If blank, the matching connector's
+          <code> webhookSecret</code> is used.
+        </div>
+        <SecretRow label="GitHub" desc="Verifies X-Hub-Signature-256." isSet={secretsSet.github} onSave={(v) => setPath('triggers.githubSecret', v)} onClear={() => setPath('triggers.githubSecret', null)} />
+        <SecretRow label="Slack" desc="Verifies X-Slack-Signature." isSet={secretsSet.slack} onSave={(v) => setPath('triggers.slackSigningSecret', v)} onClear={() => setPath('triggers.slackSigningSecret', null)} />
+        <SecretRow label="GitLab" desc="Verifies X-Gitlab-Token." isSet={secretsSet.gitlab} onSave={(v) => setPath('triggers.gitlabSecret', v)} onClear={() => setPath('triggers.gitlabSecret', null)} />
+        <SecretRow label="Jira" desc="Verifies the Jira webhook HMAC." isSet={secretsSet.jira} onSave={(v) => setPath('triggers.jiraSecret', v)} onClear={() => setPath('triggers.jiraSecret', null)} />
+
+        <ReposEditor repos={allowedRepos} onChange={(next) => setPath('triggers.allowedRepos', next)} />
+
+        <div className="set-h2">Behavior</div>
+        <Row title="Mention handle" desc="The @handle the GitHub resolver reacts to in issue/PR/review comments. Default 'brainrouter'. (cli.triggers.mentionHandle)">
+          <KnobText value={triggers.mentionHandle} placeholder="brainrouter" onSave={(v) => setPath('triggers.mentionHandle', v)} />
+        </Row>
+        <Row title="CI-failure nudge" desc="Post ONE offer-to-fix comment when a failed CI run lands on an open, allow-listed PR (idempotent). (cli.triggers.ciNudge)">
+          <Toggle on={triggers.ciNudge === true} onChange={(v) => setPath('triggers.ciNudge', v)} />
+        </Row>
+      </div>
+
+      <div className="set-h2">Automation rules</div>
+      <Row title="on / when / do rules" desc={<>Markdown rules under <code>.brainrouter/automations/*.md</code> match trigger events to actions (build / fix-ci / review). Suggested tasks from your repos surface in the <b>Tasks</b> panel.</>} />
+    </>
+  );
+}
+
+/** Write-only secret input: shows a "configured / not set" chip, never the value. */
+function SecretRow({ label, desc, isSet, onSave, onClear }: {
+  label: string; desc: string; isSet: boolean; onSave: (v: string | null) => void; onClear: () => void;
+}): React.ReactElement {
+  return (
+    <Row title={<>{label} <span className={`badge ${isSet ? 'native' : 'cli'}`} style={{ marginLeft: 6 }}>{isSet ? 'configured' : 'not set'}</span></>} desc={desc}>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <KnobText value="" placeholder={isSet ? 'type to replace' : 'paste secret'} onSave={(v) => { if (v && v.trim()) onSave(v.trim()); }} />
+        {isSet ? <button className="btn danger" onClick={onClear}>Clear</button> : null}
+      </div>
+    </Row>
+  );
+}
+
+/** owner/name repo allowlist editor. */
+function ReposEditor({ repos, onChange }: { repos: string[]; onChange: (next: string[]) => void }): React.ReactElement {
+  const [draft, setDraft] = useState('');
+  const add = (): void => {
+    const r = draft.trim();
+    if (!r || repos.includes(r)) { setDraft(''); return; }
+    onChange([...repos, r]); setDraft('');
+  };
+  return (
+    <>
+      <div className="set-h2">Allowed repos</div>
+      <div className="set-desc" style={{ marginBottom: 8 }}>Glob allowlist of <code>owner/name</code> repos whose events are processed. Empty = nothing is allowed. (cli.triggers.allowedRepos)</div>
+      {repos.length === 0 ? <div className="empty">No repos allow-listed — all events verify then drop.</div> : repos.map((r) => (
+        <div key={r} className="rule-row">
+          <span className="rule-kind allow">repo</span>
+          <span className="rule-text">{r}</span>
+          <button className="tab-close-btn rule-x" aria-label={`Remove ${r}`} title="Remove" onClick={() => onChange(repos.filter((x) => x !== r))}><Icon name="close" size={11} /></button>
+        </div>
+      ))}
+      <div className="rule-add">
+        <input className="ctl" placeholder="owner/name or owner/*" value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); }} />
+        <button className="btn" disabled={!draft.trim()} onClick={add}>Allow repo</button>
+      </div>
+    </>
+  );
+}

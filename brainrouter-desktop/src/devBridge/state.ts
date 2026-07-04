@@ -393,7 +393,21 @@ export function createDevState() {
     { name: 'local', provider: 'lmstudio', model: 'qwen2.5-coder-7b', endpoint: 'http://localhost:1234/v1', hasKey: false, models: [] },
   ];
   let devDefaultProvider: string | null = 'groq';
-  const devCliKnobs: Record<string, unknown> = { autoCompactTokens: 80000, maxToolLoops: 60, recallMode: 'gated', contextCompaction: true, llmTimeoutMs: 120000, automation: { enabled: true, requirements: { enabled: true, autopilot: false }, sync: { enabled: true }, sprints: { enabled: true, autopilot: true } } };
+  const devCliKnobs: Record<string, unknown> = {
+    autoCompactTokens: 80000, maxToolLoops: 60, recallMode: 'gated', contextCompaction: true, llmTimeoutMs: 120000,
+    automation: { enabled: true, requirements: { enabled: true, autopilot: false }, sync: { enabled: true }, sprints: { enabled: true, autopilot: true } },
+    // Motor Cortex — realistic fixtures so the Runtime / Automations / Profiles panels preview with content.
+    runtime: { backend: 'worktree', maxLive: 4, archiveOnDispose: true, archiveKeep: 20, archiveMaxMB: 64, jitSecrets: true, serve: false, serveHost: '127.0.0.1', servePort: 8791, previewPorts: { web: 5173, api: 8080 } },
+    budget: { maxPerTaskUSD: 2.5, maxPerTaskTokens: 0 },
+    critic: { enabled: true, threshold: 0.7, maxRefinementIterations: 2, model: '' },
+    triggers: { enabled: true, host: '127.0.0.1', port: 8787, githubSecret: 'set-in-dev', allowedRepos: ['kinqsradio/brainrouter'], mentionHandle: 'brainrouter', ciNudge: true },
+    agents: { hosted: [{ name: 'claude-code', command: 'claude', args: ['--print'], protocol: 'line-json' }] },
+    llmProfiles: { fast: { model: 'claude-haiku-4-5-20251001', reasoningEffort: 'low', fast: true }, deep: { model: 'claude-opus-4-8', reasoningEffort: 'high' } },
+    activeLlmProfile: 'deep',
+    skillsKeywordTriggers: true, skillsStackMax: 5, skillsHideBundled: false, skills: { orgRepoDiscovery: false },
+    plugins: { orgScope: false, autoUpdateCheck: false, altManifestNames: [], publishRepo: '' },
+    safeMode: false, attribution: { sessionUrl: true },
+  };
   const devExtensions = {
     trusted: true,
     items: [

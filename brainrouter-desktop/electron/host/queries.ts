@@ -1919,6 +1919,14 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           // show current knob values (no key here; values are config, not secrets).
           cliKnobs: scrubCliSecrets(cli),
           cliSchema: CLI_CONFIG_SCHEMA,
+          // MC-B1 — trigger signing secrets are write-only: expose only whether
+          // each is currently set so the Automations panel can show "configured"
+          // without the value ever reaching the renderer. Read from the RAW cli.
+          triggerSecretsSet: (() => {
+            const t = ((cli as Record<string, unknown> | undefined)?.triggers ?? {}) as Record<string, unknown>;
+            const isSet = (k: string): boolean => typeof t[k] === 'string' && (t[k] as string).length > 0;
+            return { github: isSet('githubSecret'), slack: isSet('slackSigningSecret'), gitlab: isSet('gitlabSecret'), jira: isSet('jiraSecret') };
+          })(),
           // EXTENSIONS — discovered extensions + workspace trust, for the
           // Settings → Extensions section (toggle/trust refresh this snapshot).
           extensions: {
@@ -2411,6 +2419,20 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           }
           next.track = targetTrack;
         }
+        // MC-B1 — the trigger signing secrets are scrubbed from the renderer's
+        // view too, so carry them forward when the whole-block save omits them
+        // (otherwise a raw-editor Save would wipe cli.triggers.*Secret).
+        const prevTriggers = (fresh.cli as { triggers?: Record<string, unknown> } | undefined)?.triggers;
+        if (prevTriggers && typeof prevTriggers === 'object') {
+          const nextTriggers = (next.triggers && typeof next.triggers === 'object' && !Array.isArray(next.triggers))
+            ? { ...(next.triggers as Record<string, unknown>) } : undefined;
+          const carried = nextTriggers ?? {};
+          let touched = false;
+          for (const k of ['githubSecret', 'slackSigningSecret', 'gitlabSecret', 'jiraSecret']) {
+            if (typeof prevTriggers[k] === 'string' && prevTriggers[k] && carried[k] === undefined) { carried[k] = prevTriggers[k]; touched = true; }
+          }
+          if (nextTriggers || touched) next.triggers = carried;
+        }
         fresh.cli = next as typeof fresh.cli;
         saveConfig(fresh);
         _resetCliKnobsCache();
@@ -2526,6 +2548,24 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         saveConfig(fresh as never);
         _resetCliKnobsCache();
         return { ok: true, path: field.path };
+      },
+      // MC-DESK — sibling-safe nested cli.* writer for the structured Motor
+      // Cortex panels (Runtime / Automations / Profiles). Unlike set-cli-knob
+      // (which REPLACES a whole top-level key) this sets ONE dotted leaf via
+      // setConfigValueAtPath, so writing `triggers.enabled` never erases the
+      // sibling `triggers.githubSecret`, and value===null deletes the leaf
+      // (revert to default). Not schema-gated — the panels own their paths.
+      'action:set-cli-path': (args) => {
+        const path = typeof args.path === 'string' ? args.path.trim() : '';
+        if (!path || path.startsWith('.') || path.endsWith('.') || path.includes('..')) {
+          return { ok: false, error: 'Invalid config path.' };
+        }
+        const fresh = loadConfig() as { cli?: Record<string, unknown> };
+        const cli = (fresh.cli = fresh.cli ?? {});
+        setConfigValueAtPath(cli, path, args.value === undefined ? null : args.value);
+        saveConfig(fresh as never);
+        _resetCliKnobsCache();
+        return { ok: true, path };
       },
       'action:set-github-oauth-client-id': (args) => {
         const fresh = loadConfig() as { cli?: { github?: { oauthClientId?: string; caBundle?: string } } };

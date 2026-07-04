@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const source = readFileSync(new URL('../../components/ReasoningSlider.tsx', import.meta.url), 'utf8');
+const source = readFileSync(new URL('../../components/model/ReasoningSlider.tsx', import.meta.url), 'utf8');
 const theme = readFileSync(new URL('../../theme.css', import.meta.url), 'utf8');
 
 function functionBody(name: string): string {

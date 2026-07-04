@@ -12,7 +12,7 @@ import React, { useMemo, useState } from 'react';
 import { wireBadge, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
 import { Icon } from './icons.js';
 import { ShortcutsReference } from './components/dialogs/ShortcutsReference.js';
-import { Row, Toggle, Select, ChoiceControl, KnobText } from './settings/shared/controls.js';
+import { Row, Toggle, Select, ChoiceControl, KnobText, KnobNumber } from './settings/shared/controls.js';
 import { PermissionModeCards } from './settings/permissions/PermissionModeCards.js';
 import { ComputerUseSettings } from './settings/permissions/ComputerUseSettings.js';
 import { CliConfigEditor } from './settings/cli/CliConfigEditor.js';
@@ -21,6 +21,9 @@ import { ConnectorSettings } from './settings/connectors/ConnectorSettings.js';
 import { MarketplaceSettings, type MarketplaceState } from './settings/marketplace/index.js';
 import { McpServersSection } from './settings/connectors/McpServersSection.js';
 import { ModelsSection } from './settings/models/ModelsSection.js';
+import { LlmProfilesCard } from './settings/models/LlmProfilesCard.js';
+import { RuntimeSection } from './settings/runtime/RuntimeSection.js';
+import { AutomationsSection } from './settings/automations/AutomationsSection.js';
 import { UsageHeatmap } from './settings/usage/UsageHeatmap.js';
 import { NAV, type ConfigSnapshot, type GithubSaveArgs, type UsageHistory } from './settings/shared/types.js';
 
@@ -97,6 +100,11 @@ export function SettingsDialog(props: {
   const knobs = (snapshot?.cliKnobs ?? {}) as Record<string, unknown>;
   const setKnob = (key: string, value: unknown): void => { props.onAction('a-knob', 'action:set-cli-knob', { key, value }); setTimeout(refreshSnapshot, 80); };
   const setSchemaKnob = (path: string, value: unknown): void => { props.onAction('a-schema-knob', 'action:set-cli-schema-knob', { path, value }); setTimeout(refreshSnapshot, 80); };
+  // MC-DESK — sibling-safe nested cli.* writer (action:set-cli-path). Sets ONE
+  // dotted leaf without replacing the parent object, so structured panels can
+  // edit `runtime.serve` / `triggers.enabled` without clobbering neighbours or
+  // write-only secrets. Pass null to revert a leaf to its default.
+  const setPath = (path: string, value: unknown): void => { props.onAction('a-cfgpath', 'action:set-cli-path', { path, value }); setTimeout(refreshSnapshot, 80); };
   const ks = (key: string, dflt: string): string => String(knobs[key] ?? dflt);
   const telemetryOn = (knobs.telemetry as { enabled?: boolean } | undefined)?.enabled !== false;
   const github = snapshot?.integrations?.github ?? { repo: null, hasToken: false, tokenSource: null, repos: [], caBundle: null };
@@ -142,27 +150,42 @@ export function SettingsDialog(props: {
           <Row title="Clear history" desc="Drops the in-memory history for this session. (/clear)">
             <button className="btn danger" onClick={() => props.onAction('a-clear', 'action:clear')}>Clear</button>
           </Row>
+          <div className="set-h2">Troubleshooting &amp; provenance</div>
+          <Row title="Safe mode" desc="Boot WITHOUT memory briefing, skills, lifecycle hooks and custom MCP servers — a minimal harness to isolate a misbehaving briefing/skill/hook/MCP. Takes effect on the next launch. (cli.safeMode)">
+            <Toggle on={knobs.safeMode === true} onChange={(v) => setPath('safeMode', v)} />
+          </Row>
+          <Row title="Session footer in commits/PRs" desc="Include the BrainRouter provenance/session footer in generated commit and PR bodies. Turn off for private repos / clean history. (cli.attribution.sessionUrl)">
+            <Toggle on={((knobs.attribution ?? {}) as { sessionUrl?: boolean }).sessionUrl !== false} onChange={(v) => setPath('attribution.sessionUrl', v)} />
+          </Row>
         </>
       );
       case 'models': return (
-        <ModelsSection
-          snapshot={snapshot}
-          knobs={knobs}
-          setKnob={setKnob}
-          refreshSnapshot={refreshSnapshot}
-          api={{
-            open: props.open,
-            section,
-            onAction: props.onAction,
-            endpointModels: props.endpointModels,
-            providerModels: props.providerModels,
-            probedModels: props.probedModels,
-            probeLoading: props.probeLoading,
-            probeError: props.probeError,
-            onProbe: props.onProbe,
-            onProbeReset: props.onProbeReset,
-          }}
-        />
+        <>
+          <ModelsSection
+            snapshot={snapshot}
+            knobs={knobs}
+            setKnob={setKnob}
+            refreshSnapshot={refreshSnapshot}
+            api={{
+              open: props.open,
+              section,
+              onAction: props.onAction,
+              endpointModels: props.endpointModels,
+              providerModels: props.providerModels,
+              probedModels: props.probedModels,
+              probeLoading: props.probeLoading,
+              probeError: props.probeError,
+              onProbe: props.onProbe,
+              onProbeReset: props.onProbeReset,
+            }}
+          />
+          <LlmProfilesCard
+            profiles={(knobs.llmProfiles ?? {}) as Record<string, { model?: string; endpoint?: string; reasoningEffort?: string; fast?: boolean }>}
+            active={String(knobs.activeLlmProfile ?? '')}
+            endpointModels={props.endpointModels}
+            setPath={setPath}
+          />
+        </>
       );
       case 'permissions': return (
         <>
@@ -261,6 +284,16 @@ export function SettingsDialog(props: {
           </>
         );
       }
+      case 'runtime': return (
+        <RuntimeSection knobs={knobs} setPath={setPath} />
+      );
+      case 'automations': return (
+        <AutomationsSection
+          knobs={knobs}
+          setPath={setPath}
+          secretsSet={snapshot?.triggerSecretsSet ?? { github: false, slack: false, gitlab: false, jira: false }}
+        />
+      );
       case 'extensions': {
         const ext = snapshot?.extensions;
         const trusted = ext?.trusted ?? false;
@@ -286,6 +319,19 @@ export function SettingsDialog(props: {
                 <Toggle on={e.enabled} onChange={(v) => setExtEnabled(e.name, v)} />
               </Row>
             ))}
+            <div className="set-h2">Skills</div>
+            <Row title="Keyword-triggered skills" desc="When a SKILL.md declares triggers:/keywords: in its frontmatter, a plain prompt containing one of those words injects that skill — like an explicit /skill. Additive; nothing fires unless a skill opts in. (cli.skillsKeywordTriggers)">
+              <Toggle on={knobs.skillsKeywordTriggers !== false} onChange={(v) => setPath('skillsKeywordTriggers', v)} />
+            </Row>
+            <Row title="Max stacked /skill tokens" desc="How many leading /skill tokens one prompt may compose. Hard-capped at 5 in the resolver. Default 5. (cli.skillsStackMax)">
+              <KnobNumber value={knobs.skillsStackMax} placeholder="5" onSave={(v) => setPath('skillsStackMax', v)} />
+            </Row>
+            <Row title="Hide bundled skills" desc="Hide skills shipped with the install, leaving only workspace-authored ones (skills/, .brainrouter/skills). (cli.skillsHideBundled)">
+              <Toggle on={knobs.skillsHideBundled === true} onChange={(v) => setPath('skillsHideBundled', v)} />
+            </Row>
+            <Row title="Org convention-repo discovery" desc="Discover read-only `.brainrouter` convention repos for your signed-in GitHub user + orgs, and load their skills/agents. (cli.skills.orgRepoDiscovery)">
+              <Toggle on={((knobs.skills ?? {}) as { orgRepoDiscovery?: boolean }).orgRepoDiscovery === true} onChange={(v) => setPath('skills.orgRepoDiscovery', v)} />
+            </Row>
           </>
         );
       }
@@ -371,14 +417,34 @@ export function SettingsDialog(props: {
           refreshSnapshot={refreshSnapshot}
         />
       );
-      case 'marketplace': return (
-        <MarketplaceSettings
-          market={props.market}
-          onAction={props.onAction}
-          refreshInstalled={() => props.onAction('q-plugin-list', 'plugin-list')}
-          refreshSearch={(a) => props.onAction('q-plugin-search', 'plugin-search', a)}
-        />
-      );
+      case 'marketplace': {
+        const plugins = (knobs.plugins ?? {}) as { orgScope?: boolean; autoUpdateCheck?: boolean; altManifestNames?: string[]; publishRepo?: string };
+        return (
+          <>
+            <MarketplaceSettings
+              market={props.market}
+              onAction={props.onAction}
+              refreshInstalled={() => props.onAction('q-plugin-list', 'plugin-list')}
+              refreshSearch={(a) => props.onAction('q-plugin-search', 'plugin-search', a)}
+            />
+            <div className="set-h2">Scope &amp; sources</div>
+            <Row title="Org convention scope" desc="Surface your org's read-only `.brainrouter` convention repos as an extra plugin/skill scope. (cli.plugins.orgScope)">
+              <Toggle on={plugins.orgScope === true} onChange={(v) => setPath('plugins.orgScope', v)} />
+            </Row>
+            <Row title="Check for plugin updates" desc="On session start, compare installed plugins against the registry and surface an 'updates available' notice. Never auto-installs. (cli.plugins.autoUpdateCheck)">
+              <Toggle on={plugins.autoUpdateCheck === true} onChange={(v) => setPath('plugins.autoUpdateCheck', v)} />
+            </Row>
+            <Row title="Alt manifest filenames" desc="Extra JSON manifest names accepted when importing external marketplaces (comma-separated). BrainRouter still writes only its canonical names. (cli.plugins.altManifestNames)">
+              <KnobText value={(plugins.altManifestNames ?? []).join(', ')}
+                placeholder="e.g. marketplace.json"
+                onSave={(v) => setPath('plugins.altManifestNames', v ? v.split(',').map((s) => s.trim()).filter(Boolean) : null)} />
+            </Row>
+            <Row title="Publish target repo" desc="The community registry repo `plugin publish` opens a PR against (owner/repo or git url). Blank prints gh instructions instead. (cli.plugins.publishRepo)">
+              <KnobText value={plugins.publishRepo} placeholder="owner/registry-repo" onSave={(v) => setPath('plugins.publishRepo', v)} />
+            </Row>
+          </>
+        );
+      }
       case 'advanced': {
         // §settings-completeness — the load-bearing cli.* knobs, individually
         // editable (per-knob writer). The knob helpers live at component scope.
