@@ -48,6 +48,17 @@ export function registerServeCommand(program: Command): void {
           allowedRepos: knobs.allowedRepos,
           workspaceRoot,
           secrets: { github: githubSecret },
+          // MC-B2 — the GitHub resolver sink: rule/@mention matches enqueue a
+          // fleet job (PR-emit delivery) and comment back on the thread.
+          onEvent: triggers.createGithubTriggerSink({
+            workspaceRoot,
+            mentionHandle: knobs.mentionHandle,
+            onResolved: (event, result) => {
+              if (result.action === 'enqueued' && result.job) {
+                console.log(chalk.cyan(`  trigger → fleet job ${result.job.id} (${event.repo}${event.number ? `#${event.number}` : ''})`));
+              }
+            },
+          }),
         });
       } catch (error) {
         console.error(chalk.red(`Trigger ingress failed to start: ${(error as Error).message}`));

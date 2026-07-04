@@ -63,6 +63,7 @@ export function normalizeGithubEvent(
 ): NormalizedTriggerEvent | null {
   const eventName = firstHeaderValue(headers['x-github-event']).toLowerCase();
   if (!eventName) return null;
+  const deliveryId = firstHeaderValue(headers['x-github-delivery']);
   const body = (payload && typeof payload === 'object' ? payload : {}) as GithubPayloadShape;
   const action = asString(body.action).toLowerCase();
   const repo = asString(body.repository?.full_name);
@@ -93,7 +94,7 @@ export function normalizeGithubEvent(
       kind = action ? `${eventName}.${action}` : eventName;
       break;
   }
-  return { kind, repo, number, sender };
+  return { kind, repo, number, sender, deliveryId: deliveryId || undefined };
 }
 
 /** The registered `github` adapter (see `registry.ts`). */

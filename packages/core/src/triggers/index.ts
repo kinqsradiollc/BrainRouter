@@ -11,7 +11,8 @@
 // bounded+redacted raw-payload persistence. MC-B3 adds the per-workspace
 // automation-rule registry (`.brainrouter/automations/*.md`, on/when/do) that
 // routes verified events to actions. MC-B2 wires the GitHub resolver
-// (label/@mention → fleet job → PR-emit); MC-B7 registers gitlab/jira
+// (label/@mention → fleet job with PR-emit delivery → comment back, with a
+// persisted delivery-id redelivery cache); MC-B7 registers gitlab/jira
 // adapters behind the same registry.
 export * from './triggerTypes.js';
 export * from './registry.js';
@@ -19,4 +20,6 @@ export * from './allowlist.js';
 export * from './eventStore.js';
 export * from './server.js';
 export * from './rules.js';
+export * from './postback.js';
 export * from './providers/github.js';
+export * from './resolvers/github.js';

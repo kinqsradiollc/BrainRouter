@@ -46,6 +46,9 @@ export interface TriggerEvent {
   number?: number;
   /** Provider-side login of the actor who caused the event ('' if absent). */
   sender: string;
+  /** Provider delivery id (e.g. the `x-github-delivery` GUID) when the
+   *  delivery carried one. Resolvers use it to dedupe webhook redeliveries. */
+  deliveryId?: string;
   /** Absolute path of the persisted (bounded, redacted) raw payload, or ''
    *  when persistence was unavailable. Resolvers re-read details from here. */
   payloadRef: string;
@@ -70,6 +73,8 @@ export interface NormalizedTriggerEvent {
   repo: string;
   number?: number;
   sender: string;
+  /** Provider delivery id, when the provider stamps one on the request. */
+  deliveryId?: string;
 }
 
 /**

@@ -385,6 +385,9 @@ export interface TriggersCliKnobs {
    *  Default [] = nothing allowed (events verify, then drop with a 202 that
    *  never leaks which repos exist). */
   allowedRepos?: string[];
+  /** MC-B2 — the @mention handle the GitHub resolver reacts to in issue/PR/
+   *  review comments. Default 'brainrouter'; a leading '@' is stripped. */
+  mentionHandle?: string;
 }
 
 export interface CliKnobs {
@@ -1242,6 +1245,8 @@ export interface ResolvedCliKnobs {
     host: string;
     githubSecret: string;
     allowedRepos: string[];
+    /** MC-B2 — resolver @mention handle (default 'brainrouter', '@' stripped). */
+    mentionHandle: string;
   };
   tierLadder?: { flash?: string; standard?: string; pro?: string };
   contextCompaction: boolean;

@@ -148,6 +148,7 @@ export function createTriggerRequestHandler(options: TriggerServerOptions): http
         repo: normalized.repo,
         number: normalized.number,
         sender: normalized.sender,
+        deliveryId: normalized.deliveryId,
         payloadRef,
         receivedAt: new Date().toISOString(),
       };
