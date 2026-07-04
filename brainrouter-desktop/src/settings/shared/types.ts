@@ -47,6 +47,11 @@ export interface ConfigSnapshot {
   // are set (the value is scrubbed from cliKnobs), so the Automations panel can
   // show "configured" without ever holding the secret.
   triggerSecretsSet?: { github: boolean; slack: boolean; gitlab: boolean; jira: boolean };
+  // MC-DESK Batch 2 — live runtime/automation monitor data (host-read).
+  runtimes?: Array<{ id: string; backend: string; status: string; pid: number | null; worktree: string | null; createdAt: string; updatedAt: string }>;
+  runtimeArchives?: Array<{ id: string; branch: string; baseCommit: string; bytes: number; changedFiles: number; status: string; createdAt: string; note: string | null; workspaceRoot: string }>;
+  runtimePreviewsLive?: Array<{ runtimeId: string; name: string; url: string; port: number }>;
+  automationRules?: Array<{ id: string; name: string; on: string; when: string; do: string; enabled: boolean; sourcePath: string }>;
   // EXTENSIONS — discovered extensions + workspace trust state.
   extensions?: {
     trusted: boolean;

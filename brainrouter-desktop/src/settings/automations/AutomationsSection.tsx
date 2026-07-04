@@ -16,12 +16,17 @@ import { Icon } from '../../icons.js';
 
 type Dict = Record<string, unknown>;
 type SecretsSet = { github: boolean; slack: boolean; gitlab: boolean; jira: boolean };
+type RuleRow = { id: string; name: string; on: string; when: string; do: string; enabled: boolean; sourcePath: string };
 
-export function AutomationsSection({ knobs, setPath, secretsSet }: {
+export function AutomationsSection({ knobs, setPath, secretsSet, rules = [], onAction, refreshSnapshot }: {
   knobs: Dict;
   setPath: (path: string, value: unknown) => void;
   secretsSet: SecretsSet;
+  rules?: RuleRow[];
+  onAction?: (id: string, name: string, args?: Record<string, unknown>) => void;
+  refreshSnapshot?: () => void;
 }): React.ReactElement {
+  const setRuleEnabled = (id: string, enabled: boolean): void => { onAction?.('a-rule', 'action:automation-rule-enabled', { id, enabled }); setTimeout(() => refreshSnapshot?.(), 150); };
   const triggers = (knobs.triggers ?? {}) as Dict;
   const enabled = triggers.enabled === true;
   const allowedRepos = (Array.isArray(triggers.allowedRepos) ? triggers.allowedRepos : []).filter((r): r is string => typeof r === 'string');
@@ -72,7 +77,20 @@ export function AutomationsSection({ knobs, setPath, secretsSet }: {
       </div>
 
       <div className="set-h2">Automation rules</div>
-      <Row title="on / when / do rules" desc={<>Markdown rules under <code>.brainrouter/automations/*.md</code> match trigger events to actions (build / fix-ci / review). Suggested tasks from your repos surface in the <b>Tasks</b> panel.</>} />
+      <div className="set-desc" style={{ marginBottom: 8 }}>
+        Markdown rules under <code>.brainrouter/automations/*.md</code> match trigger events to actions
+        (build / fix-ci / review). Toggle to enable/disable a rule (rewrites its frontmatter). Suggested
+        tasks from your repos surface in the <b>Tasks</b> panel.
+      </div>
+      {rules.length === 0 ? (
+        <div className="empty">No automation rules. Add one under .brainrouter/automations/&lt;name&gt;.md.</div>
+      ) : rules.map((r) => (
+        <Row key={r.id}
+          title={<>{r.name} <span className="badge cli" style={{ marginLeft: 6 }}>{r.do}</span></>}
+          desc={<>on <code>{r.on}</code>{r.when ? <> · when <code>{r.when}</code></> : ''} · <span className="dim">{r.sourcePath.split('/').pop()}</span></>}>
+          <Toggle on={r.enabled} onChange={(v) => setRuleEnabled(r.id, v)} />
+        </Row>
+      ))}
     </>
   );
 }

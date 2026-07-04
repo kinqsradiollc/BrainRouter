@@ -17,6 +17,24 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
   const {
     DEMO_DIFF, prefs, sessionModes, effectivePrefs, resolvedModel, SESSIONS_BY_ROOT, devMeta, mergeMeta, devGroups, devSchedules, devWorktrees, devRequirements, devAnnotations, devAnnotMarkdown, devArtifacts, devPlanState, trackCat, mkItem, devTrack, devSprints, devModules, devViews, devFindItem, devAutomations, devPlanDecisions, DEV_DIFF_HASH, devRunReview, devGate, devRules, devProviders, devCliKnobs, devExtensions, devGithub, devConnectorCatalog, devSlimDocuments, devConnectorPermissionCounts, devConnectorRuns, devServers, devFiles, devWorkflows, devShortcuts, devFileRead, devAttachments, attachmentKind, attachmentMime, decodePreview, attachmentContext,
   } = S;
+  // MC-DESK Batch 2 — mutable dev fixtures for the runtime/automation monitor
+  // cards (browser preview + Preview server). Real data comes from node-fs core
+  // APIs host-side; here we mock enough to render + exercise the actions.
+  const devRuntimes = [
+    { id: 'rt_ab12cd34', backend: 'worktree', status: 'ready', pid: 4821, worktree: '/Users/dev/.brainrouter/runtime/worktrees/rt_ab12cd34', createdAt: '2026-07-04T09:12:00Z', updatedAt: '2026-07-04T09:40:00Z' },
+    { id: 'rt_ef56gh78', backend: 'process', status: 'parked', pid: null, worktree: null, createdAt: '2026-07-03T21:05:00Z', updatedAt: '2026-07-04T02:11:00Z' },
+  ];
+  let devArchives = [
+    { id: 'rt_zz99yy88', branch: 'feat/login', baseCommit: 'a1b2c3d4e5', bytes: 184_320, changedFiles: 7, status: 'ok', createdAt: '2026-07-02T14:20:00Z', note: null, workspaceRoot: '/Users/dev/BrainRouter' },
+    { id: 'rt_qq11ww22', branch: 'HEAD', baseCommit: 'f6e5d4c3b2', bytes: 96_640_000, changedFiles: 210, status: 'partial', createdAt: '2026-06-30T08:00:00Z', note: 'tarball skipped: oversize payload', workspaceRoot: '/Users/dev/BrainRouter' },
+  ];
+  const devPreviewsLive = [
+    { runtimeId: 'rt_ab12cd34', name: 'web', url: 'http://127.0.0.1:5173', port: 5173 },
+  ];
+  const devAutomationRules = [
+    { id: 'label-fix', name: 'Fix labeled bugs', on: 'github.issue.labeled', when: "label == 'bug'", do: 'build', enabled: true, sourcePath: '/Users/dev/BrainRouter/.brainrouter/automations/label-fix.md' },
+    { id: 'ci-repair', name: 'Repair failing CI', on: 'github.workflow_run.completed', when: "conclusion == 'failure'", do: 'fix-ci', enabled: false, sourcePath: '/Users/dev/BrainRouter/.brainrouter/automations/ci-repair.md' },
+  ];
   const queries: Record<string, (args: Record<string, unknown>) => unknown> = {
     'list-sessions': () => mergeMeta(S.wsCurrent),
     'runtime-runner-info': () => ({ mode: 'in-process', remoteUrl: null }),
@@ -910,7 +928,15 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
         gitlab: typeof (devCliKnobs.triggers as { gitlabSecret?: string } | undefined)?.gitlabSecret === 'string',
         jira: typeof (devCliKnobs.triggers as { jiraSecret?: string } | undefined)?.jiraSecret === 'string',
       },
+      runtimes: devRuntimes.map((r) => ({ ...r })),
+      runtimeArchives: devArchives.map((a) => ({ ...a })),
+      runtimePreviewsLive: devPreviewsLive.map((p) => ({ ...p })),
+      automationRules: devAutomationRules.map((r) => ({ ...r })),
     }),
+    'action:runtime-remove-record': (a) => { const i = devRuntimes.findIndex((r) => r.id === a.id); if (i >= 0) devRuntimes.splice(i, 1); return { ok: i >= 0, id: String(a.id ?? '') }; },
+    'action:runtime-resume-archive': (a) => ({ ok: true, id: String(a.id ?? ''), worktreeRoot: '/Users/dev/.brainrouter/runtime/worktrees/'+String(a.id ?? ''), patchApplied: true, filesRestored: true, patchError: null }),
+    'action:runtime-prune-archives': (a) => { const keepN = typeof a.keepN === 'number' ? a.keepN : 1; const removed = devArchives.slice(keepN).map((x) => x.id); devArchives = devArchives.slice(0, keepN); return { ok: true, removed }; },
+    'action:automation-rule-enabled': (a) => { const r = devAutomationRules.find((x) => x.id === a.id); if (r) r.enabled = a.enabled === true; return { ok: !!r, id: String(a.id ?? ''), enabled: a.enabled === true }; },
     'action:set-provider': (a) => {
       const name = String(a.name ?? '').trim();
       if (!/^[a-zA-Z0-9._-]+$/.test(name)) return { ok: false, error: 'Provider name must be letters, digits, . _ - only.' };

@@ -285,13 +285,24 @@ export function SettingsDialog(props: {
         );
       }
       case 'runtime': return (
-        <RuntimeSection knobs={knobs} setPath={setPath} />
+        <RuntimeSection
+          knobs={knobs}
+          setPath={setPath}
+          runtimes={snapshot?.runtimes ?? []}
+          archives={snapshot?.runtimeArchives ?? []}
+          previews={snapshot?.runtimePreviewsLive ?? []}
+          onAction={props.onAction}
+          refreshSnapshot={refreshSnapshot}
+        />
       );
       case 'automations': return (
         <AutomationsSection
           knobs={knobs}
           setPath={setPath}
           secretsSet={snapshot?.triggerSecretsSet ?? { github: false, slack: false, gitlab: false, jira: false }}
+          rules={snapshot?.automationRules ?? []}
+          onAction={props.onAction}
+          refreshSnapshot={refreshSnapshot}
         />
       );
       case 'extensions': {

@@ -71,6 +71,11 @@ import {
   registerRuntimePreviewPort,
   removeRuntimePreviewPort,
   resolveRuntimePreviewReservations,
+  listRuntimeRecords,
+  removeRuntimeRecord,
+  listArchives,
+  resumeFromArchive,
+  pruneArchives,
   type RuntimeRunnerClient,
 } from '@kinqs/brainrouter-core/runtime';
 // 0.4.15 — named providers + per-sub-agent model routing (pure transforms).
@@ -125,7 +130,7 @@ import { SLASH_COMMANDS, HELP_CATEGORIES } from '@kinqs/brainrouter-core/command
 import { validateCatalogParity } from '@kinqs/brainrouter-core/command';
 import { readHooks, setHookEnabled } from '@kinqs/brainrouter-core/hooks';
 import { buildUsageBreakdown } from '@kinqs/brainrouter-core/util';
-import { scanSuggestedTasks } from '@kinqs/brainrouter-core/triggers';
+import { scanSuggestedTasks, listAutomationRules, setAutomationRuleEnabled } from '@kinqs/brainrouter-core/triggers';
 // DESK-5 — the command bridge dispatches REPL-only commands against the SAME
 // stores the terminal CLI uses. No parallel state: /goal here is /goal there.
 import {
@@ -1927,6 +1932,38 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
             const isSet = (k: string): boolean => typeof t[k] === 'string' && (t[k] as string).length > 0;
             return { github: isSet('githubSecret'), slack: isSet('slackSigningSecret'), gitlab: isSet('gitlabSecret'), jira: isSet('jiraSecret') };
           })(),
+          // MC-DESK Batch 2 — live runtime/automation surfaces for the Settings
+          // monitor cards. Each read is fail-soft: a missing store never breaks
+          // the whole snapshot. These call node-fs core APIs (host-side only).
+          runtimes: (() => {
+            try {
+              return listRuntimeRecords(workspaceRoot).map((r) => ({
+                id: r.id, backend: r.backend, status: r.status, pid: r.pid ?? null,
+                worktree: r.worktree?.worktreeRoot ?? null, createdAt: r.createdAt, updatedAt: r.updatedAt,
+              }));
+            } catch { return []; }
+          })(),
+          runtimeArchives: (() => {
+            try {
+              return listArchives().slice(0, 50).map((a) => ({
+                id: a.id, branch: a.branch, baseCommit: a.baseCommit.slice(0, 10), bytes: a.bytes,
+                changedFiles: a.changedFiles, status: a.status, createdAt: a.createdAt,
+                note: a.note ?? null, workspaceRoot: a.workspaceRoot,
+              }));
+            } catch { return []; }
+          })(),
+          runtimePreviewsLive: (() => {
+            try {
+              return listRuntimePreviewPorts(workspaceRoot).map((p) => ({ runtimeId: p.runtimeId, name: p.name, url: p.url, port: p.port }));
+            } catch { return []; }
+          })(),
+          automationRules: (() => {
+            try {
+              return listAutomationRules(workspaceRoot).map((r) => ({
+                id: r.id, name: r.name, on: r.on, when: r.when, do: r.do, enabled: r.enabled, sourcePath: r.sourcePath,
+              }));
+            } catch { return []; }
+          })(),
           // EXTENSIONS — discovered extensions + workspace trust, for the
           // Settings → Extensions section (toggle/trust refresh this snapshot).
           extensions: {
@@ -2566,6 +2603,33 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         saveConfig(fresh as never);
         _resetCliKnobsCache();
         return { ok: true, path };
+      },
+      // MC-DESK Batch 2 — live runtime/automation actions for the monitor cards.
+      'action:runtime-remove-record': (args) => {
+        const id = typeof args.id === 'string' ? args.id.trim() : '';
+        if (!id) return { ok: false, error: 'No runtime id.' };
+        try { removeRuntimeRecord(workspaceRoot, id); return { ok: true, id }; }
+        catch (err) { return { ok: false, error: err instanceof Error ? err.message : 'remove failed' }; }
+      },
+      'action:runtime-resume-archive': (args) => {
+        const id = typeof args.id === 'string' ? args.id.trim() : '';
+        if (!id) return { ok: false, error: 'No archive id.' };
+        try {
+          const r = resumeFromArchive(id);
+          return { ok: true, id, worktreeRoot: r.worktreeRoot, patchApplied: r.patchApplied, filesRestored: r.filesRestored, patchError: r.patchError ?? null };
+        } catch (err) { return { ok: false, error: err instanceof Error ? err.message : 'resume failed' }; }
+      },
+      'action:runtime-prune-archives': (args) => {
+        const keepN = typeof args.keepN === 'number' && Number.isFinite(args.keepN) ? args.keepN : undefined;
+        try { const removed = pruneArchives(keepN === undefined ? {} : { keepN }); return { ok: true, removed }; }
+        catch (err) { return { ok: false, error: err instanceof Error ? err.message : 'prune failed' }; }
+      },
+      'action:automation-rule-enabled': (args) => {
+        const id = typeof args.id === 'string' ? args.id.trim() : '';
+        const enabled = args.enabled === true;
+        if (!id) return { ok: false, error: 'No rule id.' };
+        const ok = setAutomationRuleEnabled(workspaceRoot, id, enabled);
+        return { ok, id, enabled };
       },
       'action:set-github-oauth-client-id': (args) => {
         const fresh = loadConfig() as { cli?: { github?: { oauthClientId?: string; caBundle?: string } } };

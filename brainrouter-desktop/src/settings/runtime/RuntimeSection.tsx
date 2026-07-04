@@ -14,13 +14,28 @@ import { Icon } from '../../icons.js';
 
 type Dict = Record<string, unknown>;
 type HostedAgent = { name?: string; command?: string; args?: string[]; protocol?: 'line-json' | 'stdio' };
+type RuntimeRow = { id: string; backend: string; status: string; pid: number | null; worktree: string | null; createdAt: string; updatedAt: string };
+type ArchiveRow = { id: string; branch: string; baseCommit: string; bytes: number; changedFiles: number; status: string; createdAt: string; note: string | null; workspaceRoot: string };
+type PreviewRow = { runtimeId: string; name: string; url: string; port: number };
 
 const BACKENDS = ['process', 'worktree', 'container', 'hosted'];
 
-export function RuntimeSection({ knobs, setPath }: {
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+export function RuntimeSection({ knobs, setPath, runtimes = [], archives = [], previews = [], onAction, refreshSnapshot }: {
   knobs: Dict;
   setPath: (path: string, value: unknown) => void;
+  runtimes?: RuntimeRow[];
+  archives?: ArchiveRow[];
+  previews?: PreviewRow[];
+  onAction?: (id: string, name: string, args?: Record<string, unknown>) => void;
+  refreshSnapshot?: () => void;
 }): React.ReactElement {
+  const act = (name: string, args: Record<string, unknown>): void => { onAction?.('a-rt', name, args); setTimeout(() => refreshSnapshot?.(), 150); };
   const runtime = (knobs.runtime ?? {}) as Dict;
   const critic = (knobs.critic ?? {}) as Dict;
   const budget = (knobs.budget ?? {}) as Dict;
@@ -103,6 +118,36 @@ export function RuntimeSection({ knobs, setPath }: {
       </Row>
 
       <PreviewPortsEditor ports={previewPorts} onChange={(next) => setPath('runtime.previewPorts', Object.keys(next).length ? next : null)} />
+
+      <div className="set-h2">Active runtimes</div>
+      <div className="set-desc" style={{ marginBottom: 8 }}>Runtime instances recorded on disk (live + parked). Dispose removes a stale record.</div>
+      {runtimes.length === 0 ? <div className="empty">No runtime instances recorded.</div> : runtimes.map((r) => (
+        <Row key={r.id} title={<>{r.id} <span className={`badge ${r.status === 'ready' || r.status === 'running' ? 'native' : 'cli'}`} style={{ marginLeft: 6 }}>{r.status}</span></>}
+          desc={<>{r.backend}{r.pid ? ` · pid ${r.pid}` : ' · not live'}{r.worktree ? <> · <code>{r.worktree}</code></> : null}</>}>
+          <button className="btn danger" onClick={() => act('action:runtime-remove-record', { id: r.id })}>Dispose</button>
+        </Row>
+      ))}
+
+      {previews.length ? (
+        <>
+          <div className="set-h2">Live preview servers</div>
+          {previews.map((p) => (
+            <Row key={`${p.runtimeId}:${p.name}`} title={p.name} desc={<>{p.runtimeId} · <a href={p.url} target="_blank" rel="noreferrer">{p.url}</a></>} />
+          ))}
+        </>
+      ) : null}
+
+      <div className="set-h2" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span>Workspace archives</span>
+        {archives.length ? <button className="btn" onClick={() => act('action:runtime-prune-archives', {})}>Prune old</button> : null}
+      </div>
+      <div className="set-desc" style={{ marginBottom: 8 }}>Disposed worktree runtimes, newest first. Resume recreates the worktree and re-applies the saved changes.</div>
+      {archives.length === 0 ? <div className="empty">No archives.</div> : archives.map((a) => (
+        <Row key={a.id} title={<>{a.branch} <span className={`badge ${a.status === 'ok' ? 'native' : 'cli'}`} style={{ marginLeft: 6 }}>{a.status}</span></>}
+          desc={<>{a.baseCommit} · {a.changedFiles} files · {fmtBytes(a.bytes)} · {new Date(a.createdAt).toLocaleString()}{a.note ? <> · <span style={{ color: 'rgb(214,156,60)' }}>{a.note}</span></> : null}</>}>
+          <button className="btn" onClick={() => act('action:runtime-resume-archive', { id: a.id })}>Resume</button>
+        </Row>
+      ))}
 
       <div className="set-h2">Per-task budget</div>
       <div className="set-desc" style={{ marginBottom: 8 }}>Hard caps on a single agent task. When a cap is hit the task stops with a budget error. 0 or blank = uncapped. (cli.budget)</div>
