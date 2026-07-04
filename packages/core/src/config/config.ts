@@ -723,6 +723,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
       port: clampInt(c.triggers?.port, 1, 65_535, 8787),
       host: typeof c.triggers?.host === 'string' && c.triggers.host.trim() ? c.triggers.host.trim() : '127.0.0.1',
       githubSecret: typeof c.triggers?.githubSecret === 'string' ? c.triggers.githubSecret.trim() : '',
+      slackSigningSecret: typeof c.triggers?.slackSigningSecret === 'string' ? c.triggers.slackSigningSecret.trim() : '',
       allowedRepos: sanitizeStringList(c.triggers?.allowedRepos),
       // MC-B2 — resolver @mention handle; junk/empty falls back to the default.
       mentionHandle:

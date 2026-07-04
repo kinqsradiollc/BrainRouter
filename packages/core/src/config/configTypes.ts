@@ -407,6 +407,10 @@ export interface TriggersCliKnobs {
    *  the secret is resolved from the workspace's GitHub connector config
    *  (`webhookSecret`); if neither is set, GitHub deliveries are rejected. */
   githubSecret?: string;
+  /** Slack signing secret used to verify `X-Slack-Signature`. When empty,
+   *  the secret is resolved from the workspace's Slack connector config
+   *  (`signingSecret`); if neither is set, Slack deliveries are rejected. */
+  slackSigningSecret?: string;
   /** Glob allowlist of `owner/name` repos whose events are processed.
    *  Default [] = nothing allowed (events verify, then drop with a 202 that
    *  never leaks which repos exist). */
@@ -1283,6 +1287,7 @@ export interface ResolvedCliKnobs {
     port: number;
     host: string;
     githubSecret: string;
+    slackSigningSecret: string;
     allowedRepos: string[];
     /** MC-B2 — resolver @mention handle (default 'brainrouter', '@' stripped). */
     mentionHandle: string;

@@ -5,6 +5,7 @@
  */
 import type { TriggerProvider } from './triggerTypes.js';
 import { githubTriggerProvider } from './providers/github.js';
+import { slackTriggerProvider } from './providers/slack.js';
 
 const providers = new Map<string, TriggerProvider>();
 
@@ -27,5 +28,6 @@ export function listTriggerProviders(): string[] {
   return [...providers.keys()].sort();
 }
 
-// Built-ins. GitHub is the first (and, until MC-B7, only) provider.
+// Built-ins.
 registerTriggerProvider(githubTriggerProvider);
+registerTriggerProvider(slackTriggerProvider);
