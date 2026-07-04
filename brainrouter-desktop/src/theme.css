@@ -1038,6 +1038,7 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .panel-body { flex: 1; min-width: 0; min-height: 0; padding: 9px 11px; display: flex; flex-direction: column; font-size: 12.5px; container-type: inline-size; container-name: panel; }
 .scroll { overflow-y: auto; min-width: 0; min-height: 0; flex: 1; }
 .empty { color: var(--text-faint); font-size: 12.5px; padding: 8px 2px; }
+.empty.error { color: var(--err); }
 .center-empty { text-align: center; margin: auto; line-height: 2; font-size: 13px; color: var(--text-dim); }
 /* tidy icon-led empty states (no lone oversized glyphs in small panels) */
 .panel-empty { display: flex; flex-direction: column; align-items: center; gap: 4px; line-height: 1.5; padding: 18px 10px; }
@@ -2277,6 +2278,14 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
 .task-row .task-status.st-canceled, .task-row .task-status.st-queued { color: var(--text-faint); background: var(--ov-08); }
 .task-row .task-phase { flex: none; font-size: 10px; color: var(--accent); }
 .task-row .task-elapsed { flex: none; font: 10px var(--mono); color: var(--text-faint); }
+.suggested-task-row { align-items: flex-start; }
+.suggested-task-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+.task-link { flex: none; border: 0; background: transparent; color: var(--accent); cursor: pointer; font-size: 11px; padding: 2px 4px; }
+.task-link:hover { color: var(--text); }
+.task-start { color: var(--accent); border-color: var(--border); }
+.task-start:hover { color: var(--text); background: var(--accent-soft); border-color: var(--accent); }
+.task-start:disabled { opacity: .45; cursor: default; }
+.suggested-task-warnings { margin: -1px 0 8px; color: var(--text-faint); font-size: 11px; line-height: 1.45; }
 
 /* DESK-6w — workflow run card (Claude /workflows style): phases → agents. */
 .wf-card { display: flex; flex-direction: column; gap: 14px;

@@ -27,3 +27,7 @@ export * from './resolvers/github.js';
 // one idempotent offer-to-fix comment that loops back through the mention
 // path). Gated behind `cli.triggers.ciNudge` (default false).
 export * from './ciNudge.js';
+// MC-B6 — suggested-tasks scanner (read-only REST scan: failing checks /
+// merge conflicts / review threads awaiting the author / labeled issues →
+// one-click starters with a ready-to-run prompt).
+export * from './suggestedTasks.js';
