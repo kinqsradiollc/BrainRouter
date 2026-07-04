@@ -194,7 +194,12 @@ function isGitCheckout(dir: string): boolean {
 }
 
 function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  // Org discovery shells out to the GitHub CLI; its stderr can be multi-line and
+  // (rarely) echo request context. Surface only the first line, length-capped,
+  // so a discovery warning can never carry a token dump into a log.
+  const raw = err instanceof Error ? err.message : String(err);
+  const firstLine = raw.split('\n', 1)[0].trim();
+  return firstLine.length > 200 ? `${firstLine.slice(0, 200)}…` : firstLine;
 }
 
 function run(command: string, args: string[], opts: { timeoutMs: number }): Promise<string> {

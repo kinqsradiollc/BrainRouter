@@ -1,6 +1,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import type { RuntimeManager } from './manager.js';
 import { readRuntimeRecord } from './state/runtimeStateStore.js';
@@ -92,15 +93,22 @@ function requireSessionHeader(req: http.IncomingMessage): string {
   return firstHeader(req.headers[RUNTIME_SESSION_HEADER]);
 }
 
+// Constant-time comparison so the loopback runtime key can't be recovered by
+// timing the 401. Length-guarded because timingSafeEqual throws on a mismatch.
+function sessionKeyMatches(presented: string, expected: string): boolean {
+  if (!expected || !presented || presented.length !== expected.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(presented), Buffer.from(expected));
+}
+
 function assertStartAuthorized(req: http.IncomingMessage, sessionKey: string): void {
-  if (!sessionKey || requireSessionHeader(req) !== sessionKey) {
+  if (!sessionKey || !sessionKeyMatches(requireSessionHeader(req), sessionKey)) {
     throw Object.assign(new Error('unauthorized'), { status: 401 });
   }
 }
 
 function assertRuntimeAuthorized(req: http.IncomingMessage, workspaceRoot: string, runtimeId: string): void {
   const record = readRuntimeRecord(workspaceRoot, runtimeId);
-  if (!record || !record.sessionKey || requireSessionHeader(req) !== record.sessionKey) {
+  if (!record || !record.sessionKey || !sessionKeyMatches(requireSessionHeader(req), record.sessionKey)) {
     throw Object.assign(new Error('unauthorized'), { status: 401 });
   }
 }

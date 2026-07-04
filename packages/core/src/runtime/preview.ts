@@ -43,6 +43,17 @@ function normalizePort(value: unknown): number {
   return port;
 }
 
+// App previews are LOCAL-only by design — a preview surfaces a dev server the
+// agent started inside its runtime, for the developer at this machine. Any
+// non-loopback host (0.0.0.0, a LAN/public IP, an external name) would expose
+// that server on the network, so we clamp every registration to loopback.
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]', '0:0:0:0:0:0:0:1']);
+function normalizeLoopbackHost(host: string | undefined): string {
+  const trimmed = (host ?? '').trim();
+  if (!trimmed) return '127.0.0.1';
+  return LOOPBACK_HOSTS.has(trimmed.toLowerCase()) ? trimmed : '127.0.0.1';
+}
+
 function previewUrl(protocol: 'http' | 'https', host: string, port: number): string {
   const hostname = host.trim() || '127.0.0.1';
   return `${protocol}://${hostname}:${port}`;
@@ -96,7 +107,7 @@ export function registerRuntimePreviewPort(workspaceRoot: string, input: Registe
   const reservations = getCliKnobs().runtime.previewPorts;
   const port = input.port === undefined ? reservations[name] : input.port;
   const normalizedPort = normalizePort(port);
-  const host = input.host?.trim() || '127.0.0.1';
+  const host = normalizeLoopbackHost(input.host);
   const protocol = input.protocol ?? 'http';
   const now = input.now ?? new Date().toISOString();
   const records = readAll(workspaceRoot);
