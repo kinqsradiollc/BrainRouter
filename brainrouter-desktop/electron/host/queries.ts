@@ -55,6 +55,7 @@ import {
 // Extracting a proper @kinqs/brainrouter-agent package is tracked for 0.4.16.
 import { callOpenAI } from '@kinqs/brainrouter-core/agent';
 import { loadConfig, saveConfig, getCliKnobs, _resetCliKnobsCache, applyRuleEdit, type LLMConfig } from '@kinqs/brainrouter-core/config';
+import { createRuntimeRunnerClient, type RuntimeRunnerClient } from '@kinqs/brainrouter-core/runtime';
 // 0.4.15 — named providers + per-sub-agent model routing (pure transforms).
 import { setProvider, removeProvider, setAgentModel, normalizeProviderModels, PROVIDER_CATALOG } from '@kinqs/brainrouter-core/provider';
 import { childSessionKey } from '@kinqs/brainrouter-core/mcp';
@@ -350,6 +351,24 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
     nextTermSeq,
     resetGhEnvCache,
   } = ctx;
+  let runtimeRunnerClient: RuntimeRunnerClient | null = null;
+  let runtimeRunnerRemoteUrl = '';
+  const getRuntimeRunnerClient = () => {
+    const remoteUrl = getCliKnobs().runtime.remoteUrl;
+    if (!runtimeRunnerClient || remoteUrl !== runtimeRunnerRemoteUrl) {
+      runtimeRunnerRemoteUrl = remoteUrl;
+      runtimeRunnerClient = createRuntimeRunnerClient({
+        workspaceRoot,
+        remoteUrl,
+        executeTurn: async (turn) => getActiveAgent().runTurn(turn.prompt, {
+          onStatusUpdate: () => {},
+          onToolStart: () => {},
+          onToolEnd: () => {},
+        }, { hiddenPrompt: turn.hidden === true }),
+      });
+    }
+    return runtimeRunnerClient;
+  };
   return {
       // Read-only surfaces — same pure modules the TUI commands use.
       // DESK-6m — sidebar sessions merged with their UI meta (title override,
@@ -384,6 +403,16 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         } catch (err) {
           return { rows: [], error: err instanceof Error ? err.message : String(err) };
         }
+      },
+      'runtime-runner-info': () => {
+        const client = getRuntimeRunnerClient();
+        return { mode: client.mode, remoteUrl: runtimeRunnerRemoteUrl || null };
+      },
+      'runtime-runner-status': async (args) => {
+        const runtimeId = typeof args.runtimeId === 'string' ? args.runtimeId.trim() : '';
+        const sessionKey = typeof args.sessionKey === 'string' ? args.sessionKey.trim() : '';
+        if (!runtimeId || !sessionKey) return { error: 'runtimeId and sessionKey are required.' };
+        return getRuntimeRunnerClient().status({ runtimeId, sessionKey });
       },
       // CONNECTORS — Onyx-like connector lifecycle foundation. These wrappers
       // expose the core catalog/store to the renderer without making Track Sync
@@ -696,9 +725,9 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const rows = listBackgroundTasks(workspaceRoot, { sessionKey, status });
         return rows.map((t) => ({ ...t, phase: currentPhase(t), workspaceRoot }));
       },
-      // MC-B6 — desktop starter surface for the same suggested-task scanner the
-      // CLI uses. Read-only GitHub REST scan; a human starts work by picking one
-      // of the ready-to-run prompts in the Tasks panel.
+      // Desktop starter surface for the same suggested-task scanner the CLI
+      // uses. Read-only GitHub REST scan; a human starts work by picking one of
+      // the ready-to-run prompts in the Tasks panel.
       'suggested-tasks': async (a) => scanSuggestedTasks(workspaceRoot, {
         repo: typeof a.repo === 'string' ? a.repo : undefined,
         mentionHandle: getCliKnobs().triggers.mentionHandle,
@@ -2087,7 +2116,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const entries = readTranscriptTail(readRoot, childKey, 1200) as Parameters<typeof reconstructTranscriptRows>[0];
         return { id, kind, role: session?.role, goal: session?.prompt, status: session?.status, rows: reconstructTranscriptRows(entries).slice(-400) };
       },
-      // DESK-6w — a workflow run's full breakdown for the Claude-/workflows-style
+      // DESK-6w — a workflow run's full breakdown for workflow-style
       // card: each phase with its spawned child AGENTS resolved to live stats
       // (role/label/status + tokens, tool calls, wall-clock). Step-based runs
       // (no phases) fall back to a flat step list.
