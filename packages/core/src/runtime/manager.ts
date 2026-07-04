@@ -23,10 +23,12 @@
  */
 
 import { getCliKnobs } from '../config/config.js';
+import { isSecretShapedEnvVar } from '../exec/runtime/sandbox.js';
 import type { IAgentRuntime, RuntimeTurn, RuntimeTurnExecutor, RuntimeTurnResult } from './runtimeTypes.js';
 import { createProcessRuntime } from './backends/process.js';
 import { attachWorktreeRuntime } from './backends/worktree.js';
 import { resolveRuntime } from './registry.js';
+import { getSecretBroker, prepareRuntimeChildEnv } from './secrets/secretBroker.js';
 import {
   listRuntimeRecords,
   readRuntimeRecord,
@@ -163,13 +165,24 @@ export class RuntimeManager {
   async start(options: StartRuntimeOptions): Promise<IAgentRuntime> {
     await this.makeRoomForOneMore();
     const runtime = resolveRuntime({ executeTurn: this.executeTurn }, options.kind);
+    // MC-A5 — with `cli.runtime.jitSecrets` on, secret-shaped vars in the
+    // child env are replaced by single-use short-TTL lease tokens redeemed at
+    // point-of-use through the host broker. Default off → env untouched.
+    const runtimeKnobs = getCliKnobs().runtime;
+    const env = prepareRuntimeChildEnv(options.env, {
+      jitSecrets: runtimeKnobs.jitSecrets,
+      ttlMs: runtimeKnobs.jitSecretTtlMs,
+      scope: `session:${options.sessionKey}`,
+      isSecret: isSecretShapedEnvVar,
+      broker: getSecretBroker(),
+    });
     await runtime.start({
       workspaceRoot: this.workspaceRoot,
       sessionKey: options.sessionKey,
       launchCwd: options.launchCwd,
       role: options.role,
       model: options.model,
-      env: options.env,
+      env,
     });
     this.trackLive(runtime);
     return runtime;

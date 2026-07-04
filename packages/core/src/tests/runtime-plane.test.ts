@@ -206,6 +206,9 @@ const RUNTIME_KNOB_DEFAULTS = {
   archiveOnDispose: true,
   archiveMaxMB: 64,
   archiveKeep: 20,
+  // MC-A5 — JIT secrets default OFF (raw child env unchanged); 60s leases.
+  jitSecrets: false,
+  jitSecretTtlMs: 60_000,
 };
 
 test('MC-A1 cli.runtime knob: defaults, validation, clamping', () => {

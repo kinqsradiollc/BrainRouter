@@ -310,6 +310,15 @@ export interface RuntimeCliKnobs {
   /** MC-A6 — how many archives `pruneArchives()` keeps (newest first).
    *  Default 20; 0 = no count-based pruning. */
   archiveKeep?: number;
+  /** MC-A5 — JIT secret indirection for runtime children. When true,
+   *  secret-shaped vars in a child runtime's env are replaced with
+   *  `BRAINROUTER_SECRET_LEASE_<NAME>` tokens (single-use, short-TTL,
+   *  scope-checked) redeemed at point-of-use via the host secret broker.
+   *  Default false — children receive raw env values exactly as today. */
+  jitSecrets?: boolean;
+  /** MC-A5 — lease lifetime for JIT secret tokens, in ms. Default 60_000,
+   *  clamped 1_000..3_600_000. */
+  jitSecretTtlMs?: number;
 }
 
 /** MC-A1 — validated knob values (see `RuntimeBackendKind`). */
@@ -1140,13 +1149,17 @@ export interface ResolvedCliKnobs {
    *  `maxLive` clamped ≥ 0 (0 = no live-instance cap). MC-A6 adds the
    *  workspace-archive knobs: `archiveOnDispose` (default true),
    *  `archiveMaxMB` (tarball payload cap, clamped 1..1024, default 64) and
-   *  `archiveKeep` (prune keeps newest N, default 20; 0 = no count prune). */
+   *  `archiveKeep` (prune keeps newest N, default 20; 0 = no count prune).
+   *  MC-A5 adds `jitSecrets` (default false — raw child env unchanged) and
+   *  `jitSecretTtlMs` (lease lifetime, clamped 1s..1h, default 60s). */
   runtime: {
     backend: RuntimeBackendKind;
     maxLive: number;
     archiveOnDispose: boolean;
     archiveMaxMB: number;
     archiveKeep: number;
+    jitSecrets: boolean;
+    jitSecretTtlMs: number;
   };
   tierLadder?: { flash?: string; standard?: string; pro?: string };
   contextCompaction: boolean;

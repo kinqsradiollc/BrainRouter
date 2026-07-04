@@ -651,12 +651,16 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     // MC-A6 — archive knobs: archiveOnDispose defaults ON (anything but an
     // explicit `false` keeps the safety net); archiveMaxMB caps the tarball
     // payload (disk is constrained); archiveKeep bounds pruneArchives().
+    // MC-A5 — jitSecrets requires an explicit `true` (default false = children
+    // keep receiving raw env values); jitSecretTtlMs is the lease lifetime.
     runtime: {
       backend: normalizeRuntimeBackend(c.runtime?.backend),
       maxLive: clampInt(c.runtime?.maxLive, 0, 256, 0),
       archiveOnDispose: c.runtime?.archiveOnDispose !== false,
       archiveMaxMB: clampInt(c.runtime?.archiveMaxMB, 1, 1024, 64),
       archiveKeep: clampInt(c.runtime?.archiveKeep, 0, 500, 20),
+      jitSecrets: c.runtime?.jitSecrets === true,
+      jitSecretTtlMs: clampInt(c.runtime?.jitSecretTtlMs, 1_000, 3_600_000, 60_000),
     },
     tierLadder: c.tierLadder,
     contextCompaction: c.contextCompaction ?? true,

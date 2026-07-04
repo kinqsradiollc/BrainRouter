@@ -15,6 +15,11 @@
 // patch + tarball + manifest under the runtime archives root
 // (`cli.runtime.archiveOnDispose`), resumable via `resumeFromArchive` and
 // bounded by `listArchives`/`pruneArchives` (`cli.runtime.archiveKeep`).
+// MC-A5 adds JIT SECRETS: a host-side `SecretBroker` issuing single-use,
+// short-TTL, scope-checked leases so children carry
+// `BRAINROUTER_SECRET_LEASE_<NAME>` tokens instead of raw values
+// (`cli.runtime.jitSecrets`, default off); the exec layer redeems at
+// point-of-use.
 export * from './runtimeTypes.js';
 export * from './registry.js';
 export * from './backends/process.js';
@@ -22,3 +27,4 @@ export * from './backends/worktree.js';
 export * from './state/runtimeStateStore.js';
 export * from './manager.js';
 export * from './archive.js';
+export * from './secrets/secretBroker.js';
