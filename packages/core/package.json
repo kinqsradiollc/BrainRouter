@@ -143,6 +143,10 @@
       "types": "./dist/track/index.d.ts",
       "default": "./dist/track/index.js"
     },
+    "./triggers": {
+      "types": "./dist/triggers/index.d.ts",
+      "default": "./dist/triggers/index.js"
+    },
     "./usage": {
       "types": "./dist/usage/index.d.ts",
       "default": "./dist/usage/index.js"

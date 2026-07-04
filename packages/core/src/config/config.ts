@@ -669,6 +669,19 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
       containerImage: typeof c.runtime?.containerImage === 'string' ? c.runtime.containerImage.trim() : '',
       container: normalizeContainerLimits(c.runtime?.container),
     },
+    // MC-B1 — trigger ingress: DEFAULT-DENY across the board. `enabled`
+    // requires an explicit `true` (nothing ever listens by accident), the
+    // bind host defaults to loopback, and an empty `allowedRepos` list means
+    // every verified event is accepted-but-dropped. `githubSecret` empty =
+    // resolve from the GitHub connector config, else reject deliveries —
+    // a missing secret is never treated as "skip verification".
+    triggers: {
+      enabled: c.triggers?.enabled === true,
+      port: clampInt(c.triggers?.port, 1, 65_535, 8787),
+      host: typeof c.triggers?.host === 'string' && c.triggers.host.trim() ? c.triggers.host.trim() : '127.0.0.1',
+      githubSecret: typeof c.triggers?.githubSecret === 'string' ? c.triggers.githubSecret.trim() : '',
+      allowedRepos: sanitizeStringList(c.triggers?.allowedRepos),
+    },
     tierLadder: c.tierLadder,
     contextCompaction: c.contextCompaction ?? true,
     updateCheck: c.updateCheck ?? true,

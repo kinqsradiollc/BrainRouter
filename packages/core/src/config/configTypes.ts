@@ -359,6 +359,34 @@ export function normalizeContainerLimits(value: unknown): { cpus: number; memory
   return { cpus, memory };
 }
 
+/**
+ * MC-B1 — `cli.triggers` block: the opt-in inbound webhook ingress
+ * (`brainrouter serve --triggers`). Everything here is DEFAULT-DENY: the
+ * listener never starts unless `enabled` is explicitly `true`, it binds
+ * loopback unless the user names another host, unknown providers 404, and an
+ * empty `allowedRepos` list means every event is accepted-but-dropped.
+ * Signature verification is mandatory per provider — a missing secret means
+ * every delivery for that provider is rejected (401), never "let through".
+ */
+export interface TriggersCliKnobs {
+  /** Master switch for the trigger ingress listener. Default false —
+   *  nothing listens until the user opts in explicitly. */
+  enabled?: boolean;
+  /** TCP port the ingress binds. Default 8787, clamped 1..65535. */
+  port?: number;
+  /** Interface the ingress binds. Default '127.0.0.1' (loopback) — exposing
+   *  the listener beyond localhost is the user's explicit choice. */
+  host?: string;
+  /** GitHub webhook secret used to verify `X-Hub-Signature-256`. When empty,
+   *  the secret is resolved from the workspace's GitHub connector config
+   *  (`webhookSecret`); if neither is set, GitHub deliveries are rejected. */
+  githubSecret?: string;
+  /** Glob allowlist of `owner/name` repos whose events are processed.
+   *  Default [] = nothing allowed (events verify, then drop with a 202 that
+   *  never leaks which repos exist). */
+  allowedRepos?: string[];
+}
+
 export interface CliKnobs {
   // ---- planning / orchestration -----------------------------------------
   /**
@@ -819,6 +847,11 @@ export interface CliKnobs {
    *  behavior; isolated backends are strictly opt-in. */
   runtime?: RuntimeCliKnobs;
 
+  // ---- trigger ingress (MC-B1) ------------------------------------------
+  /** Inbound webhook ingress (`brainrouter serve --triggers`). Default
+   *  `{ enabled: false }` — nothing listens until the user opts in. */
+  triggers?: TriggersCliKnobs;
+
   // ---- tier escalation --------------------------------------------------
   /** Tier ladder override — when set, beats the provider built-in. */
   tierLadder?: { flash?: string; standard?: string; pro?: string };
@@ -1197,6 +1230,18 @@ export interface ResolvedCliKnobs {
     containerImage: string;
     /** MC-A3 — validated `docker run` limits (0/'' = no limit). */
     container: { cpus: number; memory: string };
+  };
+  /** MC-B1 — validated trigger-ingress knobs: `enabled` requires an explicit
+   *  `true` (default-deny); `port` clamped 1..65535 (default 8787); `host`
+   *  defaults to loopback; `githubSecret` trimmed ('' = fall back to the
+   *  GitHub connector's `webhookSecret`, else reject deliveries);
+   *  `allowedRepos` sanitized ([] = every event accepted-but-dropped). */
+  triggers: {
+    enabled: boolean;
+    port: number;
+    host: string;
+    githubSecret: string;
+    allowedRepos: string[];
   };
   tierLadder?: { flash?: string; standard?: string; pro?: string };
   contextCompaction: boolean;
