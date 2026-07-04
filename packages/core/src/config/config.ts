@@ -624,6 +624,8 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     attribution: { sessionUrl: c.attribution?.sessionUrl !== false },
     // CC-CONFIG-A6 — env override wins.
     skillsHideBundled: resolveBoolWithEnv(c.skillsHideBundled, 'BRAINROUTER_HIDE_BUNDLED_SKILLS'),
+    // MC-E1 — org convention repositories are opt-in and read-only.
+    skills: { orgRepoDiscovery: c.skills?.orgRepoDiscovery === true },
     // CC-SKILLS-D1 — clamp to 1..5; NaN / unset / out-of-range → the default 5.
     skillsStackMax: clampInt(c.skillsStackMax, 1, 5, 5),
     // MC-E2 — keyword-triggered JIT skill injection. Default ON (additive:

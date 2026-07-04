@@ -11,6 +11,7 @@ import { Agent } from '@kinqs/brainrouter-core/agent';
 import { cliPrompter } from '../cli/prompt/cliPrompt.js';
 import { applyWorkspaceRoot, findWorkspaceRoot } from '@kinqs/brainrouter-core/workspace';
 import { DEFAULT_LLM } from './shared.js';
+import { refreshCliOrgConventionRepos } from './orgConvention.js';
 
 export function registerRunCommand(program: Command): void {
   // One-shot non-interactive run — pipe-friendly for scripting/CI.
@@ -86,6 +87,7 @@ export function registerRunCommand(program: Command): void {
       applyWorkspaceRoot(workspace.workspaceRoot);
 
       const config = loadConfig();
+      await refreshCliOrgConventionRepos(config);
       // Multi-MCP: like `chat`, connect third-party servers concurrently but
       // only one BrainRouter MCP profile at a time. `--profile <name>` scopes
       // to exactly one.

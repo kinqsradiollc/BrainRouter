@@ -15,6 +15,7 @@ import { runChat } from '../cli/ink/runChat.js';
 import { applyWorkspaceRoot, findWorkspaceRoot } from '@kinqs/brainrouter-core/workspace';
 import { runWizard, isOnboarded } from '../cli/ink/wizard/runWizard.js';
 import { DEFAULT_LLM } from './shared.js';
+import { refreshCliOrgConventionRepos } from './orgConvention.js';
 
 export function registerChatCommand(program: Command): void {
   // Chat Command (default)
@@ -89,6 +90,7 @@ export function registerChatCommand(program: Command): void {
       if (addedKnobs > 0) {
         console.error(`[BrainRouter] config.json updated — added ${addedKnobs} default setting${addedKnobs === 1 ? '' : 's'} you can now edit (run /debug-config to see them).`);
       }
+      await refreshCliOrgConventionRepos(config);
 
       // REMOTE-BRAIN (Workstream A) — if `cli.brainUrl` is set, point the active
       // brain at the remote HTTP endpoint (embedded/stdio stays default when unset).

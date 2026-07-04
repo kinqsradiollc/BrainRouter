@@ -188,8 +188,7 @@ export interface ComputerUseCliKnobs {
 
 /**
  * PLUGIN-MARKETPLACE P2 — a marketplace source recorded in
- * `cli.plugins.marketplaces[]` (plan §3.3/§3.5, mirrors Codex's
- * `record_user_marketplace`). A marketplace is a repo/dir/tarball whose root
+ * `cli.plugins.marketplaces[]`. A marketplace is a repo/dir/tarball whose root
  * holds a `brainrouter-marketplace.json` indexing one or many plugins. Install-
  * by-name resolves a plugin across every configured marketplace.
  *
@@ -227,7 +226,7 @@ export interface MarketplaceSource {
  * `marketplaces` — configured marketplace sources (P2). Empty (default) = no
  *   marketplaces; install-by-name has nothing to resolve against.
  *
- * PLUGIN-MARKETPLACE P3 — trust / consent / managed gating (plan §3.7/§4):
+ * PLUGIN-MARKETPLACE P3 — trust / consent / managed gating:
  * `approved` — per-plugin-name map of which risky capabilities the user has
  *   explicitly consented to. A plugin's hooks (`type: command`) and MCP
  *   command-servers stay DISABLED until `approved[name].shell` /
@@ -273,6 +272,15 @@ export interface PluginsCliKnobs {
    * false (off) — additive + inert.
    */
   autoUpdateCheck?: boolean;
+}
+
+export interface SkillsCliKnobs {
+  /**
+   * MC-E1 — discover read-only convention repositories named `.brainrouter`
+   * for the signed-in GitHub user and orgs, then load their skills/agents
+   * through the existing contribution pipeline. Default false.
+   */
+  orgRepoDiscovery?: boolean;
 }
 
 /** Per-provider generation wire format. The two OpenAI shapes plus the native
@@ -636,6 +644,8 @@ export interface CliKnobs {
    * `BRAINROUTER_HIDE_BUNDLED_SKILLS`. Default false.
    */
   skillsHideBundled?: boolean;
+  /** MC-E1 — skills/agents discovery controls. Defaults inert. */
+  skills?: SkillsCliKnobs;
   /**
    * CC-SKILLS-D1 — max number of leading `/skill` tokens that a single prompt
    * may stack (`/a /b do X` composes a.SKILL.md then b.SKILL.md before the
@@ -1188,6 +1198,8 @@ export interface ResolvedCliKnobs {
   attribution: { sessionUrl: boolean };
   /** CC-CONFIG-A6 — hide bundled skills from listings. */
   skillsHideBundled: boolean;
+  /** MC-E1 — resolved skills/agents discovery controls. */
+  skills: Required<SkillsCliKnobs>;
   /** CC-SKILLS-D1 — max stacked `/skill` tokens per prompt (clamped 1..5). */
   skillsStackMax: number;
   /** MC-E2 — keyword-triggered JIT skill injection kill-switch (default true). */

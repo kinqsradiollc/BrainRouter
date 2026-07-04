@@ -131,6 +131,14 @@ export const CLI_CONFIG_SCHEMA: ConfigSchemaDescriptor = {
       options: ['off', 'escalate', 'always'],
     },
     {
+      path: 'skills.orgRepoDiscovery',
+      label: 'Org repo discovery',
+      section: 'agents',
+      type: 'boolean',
+      description: 'Load read-only skills and agents from connected org convention repositories.',
+      defaultValue: false,
+    },
+    {
       path: 'notifyBell',
       label: 'Notify bell',
       section: 'notifications',

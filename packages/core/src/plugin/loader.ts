@@ -6,11 +6,11 @@
  * `<ws>/.brainrouter/plugins/<name>/`) and produce the aggregate contributions
  * the CLI/host feed into the EXISTING subsystems — skills, agents, commands,
  * hooks, mcp, connectors, workflows. No parallel runtime: a plugin is inert
- * data that populates systems we already ship (plan §3.6).
+ * data that populates systems we already ship.
  *
  * Collisions across plugins are disambiguated `<pluginName>:<name>` (mirroring
  * the skill-collision display we shipped). Loading is SKIPPED entirely under
- * `cli.safeMode` (plan §3.6).
+ * `cli.safeMode`.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -20,6 +20,7 @@ import {
   pluginsDirForScope,
   type PluginScope,
 } from './paths.js';
+import { getOrgConventionRepoRoots } from './orgConvention.js';
 import {
   discoverPlugin,
   looksLikePlugin,
@@ -31,8 +32,10 @@ import { expandPluginRoot } from './manifest.js';
 import { commandHooksEnabled, hooksAllowed, mcpServersEnabled } from './trust.js';
 
 /** A plugin that was resolved AND enabled, tagged with its scope + disclosure. */
+export type PluginLoadScope = PluginScope | 'org';
+
 export interface LoadedPlugin extends DiscoveredPlugin {
-  scope: PluginScope;
+  scope: PluginLoadScope;
   enabled: boolean;
   provides: PluginProvides;
   /** PLUGIN-MARKETPLACE P3 — whether this plugin's risky capabilities loaded. */
@@ -114,7 +117,7 @@ export function loadPlugins(workspaceRoot: string, config?: Config): LoadPlugins
  */
 export function loadPluginsWithKnobs(
   workspaceRoot: string,
-  knobs: Pick<ResolvedCliKnobs, 'safeMode' | 'plugins'>,
+  knobs: Pick<ResolvedCliKnobs, 'safeMode' | 'plugins' | 'skills'>,
 ): LoadPluginsResult {
   if (knobs.safeMode) {
     return {
@@ -130,12 +133,19 @@ export function loadPluginsWithKnobs(
   const enabledMap = knobs.plugins.enabled;
   const warnings: string[] = [];
   const errors: string[] = [];
+  const contributions = emptyContributions();
 
-  // Scan user first, then workspace so workspace wins on same-name.
+  // Scan user first, then org convention roots, then workspace so local project
+  // choices win on same-name while org repositories stay read-only.
   const scopes: PluginScope[] = ['user', 'workspace'];
-  const byName = new Map<string, DiscoveredPlugin & { scope: PluginScope }>();
+  const byName = new Map<string, DiscoveredPlugin & { scope: PluginLoadScope }>();
 
   for (const scope of scopes) {
+    if (scope === 'workspace' && knobs.skills?.orgRepoDiscovery === true) {
+      for (const repoRoot of getOrgConventionRepoRoots()) {
+        addOrgConventionRepo(repoRoot, byName, contributions);
+      }
+    }
     const dir = pluginsDirForScope(scope, workspaceRoot);
     for (const pluginRoot of pluginDirsIn(dir)) {
       const res = discoverPlugin(pluginRoot);
@@ -150,7 +160,6 @@ export function loadPluginsWithKnobs(
 
   const loaded: LoadedPlugin[] = [];
   const disabled: DiscoveredPlugin[] = [];
-  const contributions = emptyContributions();
 
   for (const plugin of byName.values()) {
     const isEnabled = enabledMap[plugin.name] === true;
@@ -205,6 +214,33 @@ export function loadPluginsWithKnobs(
   return { loaded, contributions, disabled, warnings, errors, skippedForSafeMode: false };
 }
 
+function addOrgConventionRepo(
+  repoRoot: string,
+  byName: Map<string, DiscoveredPlugin & { scope: PluginLoadScope }>,
+  contributions: PluginContributions,
+): void {
+  const skillsDir = path.join(repoRoot, 'skills');
+  if (dirExists(skillsDir)) contributions.skillRoots.push(skillsDir);
+
+  const agentsDir = path.join(repoRoot, 'agents');
+  if (dirExists(agentsDir)) {
+    contributions.agentFiles.push(...listEntries(agentsDir, `org:${path.basename(path.dirname(repoRoot))}`, ['.md']));
+  }
+
+  for (const pluginRoot of pluginDirsIn(path.join(repoRoot, 'plugins'))) {
+    const res = discoverPlugin(pluginRoot);
+    if (res.ok) byName.set(res.plugin.name, { ...res.plugin, scope: 'org' });
+  }
+}
+
+function dirExists(dir: string): boolean {
+  try {
+    return fs.statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /** True when a hooks.json declares at least one command-type hook (shell-risky).
  *  A parse failure / prompt-only file returns false (no shell gate needed). */
 function fileHasCommandHook(hooksFile: string): boolean {
@@ -238,7 +274,7 @@ function listEntries(dir: string, pluginName: string, exts: readonly string[]): 
 /**
  * Load an MCP-servers config file and expand `${BRAINROUTER_PLUGIN_ROOT}` in
  * `command`/`args` so a plugin's server can reference its own bundled script
- * portably (plan §3.2/§3.6). Returns a `{ serverId → serverConfig }` map with
+ * portably. Returns a `{ serverId → serverConfig }` map with
  * IDs namespaced `<pluginName>:<serverId>` to avoid collisions. Never throws.
  */
 export function readPluginMcpServers(
