@@ -34,11 +34,16 @@ export function LlmProfilesCard({ profiles, active, endpointModels, setPath }: {
     const profile: Profile = { model: model.trim() };
     if (effort !== '(default)') profile.reasoningEffort = effort;
     if (fast) profile.fast = true;
-    setPath(`llmProfiles.${n}`, profile);
+    // Write the WHOLE map so the profile name is a literal object KEY, never a
+    // dotted path segment — a name like "gpt-4.1" (or "__proto__") stays a key
+    // instead of being split into nested objects / a prototype walk.
+    setPath('llmProfiles', { ...profiles, [n]: profile });
     setName(''); setModel(''); setEffort('(default)'); setFast(false);
   };
   const remove = (n: string): void => {
-    setPath(`llmProfiles.${n}`, null);
+    const next = { ...profiles };
+    delete next[n];
+    setPath('llmProfiles', Object.keys(next).length ? next : null);
     if (active === n) setPath('activeLlmProfile', null);
   };
 

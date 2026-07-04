@@ -2594,7 +2594,11 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // (revert to default). Not schema-gated — the panels own their paths.
       'action:set-cli-path': (args) => {
         const path = typeof args.path === 'string' ? args.path.trim() : '';
-        if (!path || path.startsWith('.') || path.endsWith('.') || path.includes('..')) {
+        const segments = path.split('.');
+        // Reject empty/edge-dot paths AND prototype-pollution segments — even
+        // though this is loopback IPC from our own renderer, a bad path must
+        // never reach a native prototype through setConfigValueAtPath.
+        if (!path || segments.some((s) => !s || s === '__proto__' || s === 'constructor' || s === 'prototype')) {
           return { ok: false, error: 'Invalid config path.' };
         }
         const fresh = loadConfig() as { cli?: Record<string, unknown> };

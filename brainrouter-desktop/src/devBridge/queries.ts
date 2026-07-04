@@ -1012,8 +1012,8 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     // Automations / Profiles panels (browser preview + Preview server).
     'action:set-cli-path': (a) => {
       const path = String(a.path ?? '').trim();
-      if (!path || path.startsWith('.') || path.endsWith('.') || path.includes('..')) return { ok: false, error: 'Invalid config path.' };
       const parts = path.split('.');
+      if (!path || parts.some((s) => !s || s === '__proto__' || s === 'constructor' || s === 'prototype')) return { ok: false, error: 'Invalid config path.' };
       let cur: Record<string, unknown> = devCliKnobs;
       for (const part of parts.slice(0, -1)) {
         const nextVal = cur[part];
