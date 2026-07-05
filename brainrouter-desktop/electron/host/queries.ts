@@ -60,11 +60,13 @@ import {
   loadConfig,
   saveConfig,
   getCliKnobs,
+  resolveCliKnobs,
   _resetCliKnobsCache,
   applyRuleEdit,
   setConfigValueAtPath,
   type LLMConfig,
 } from '@kinqs/brainrouter-core/config';
+import { aggregateCatalog, buildModelRegistry, getRouterPolicy } from '@kinqs/brainrouter-core/router';
 import {
   createRuntimeRunnerClient,
   listRuntimePreviewPorts,
@@ -132,6 +134,7 @@ import { readHooks, setHookEnabled } from '@kinqs/brainrouter-core/hooks';
 import { buildUsageBreakdown } from '@kinqs/brainrouter-core/util';
 import { scanSuggestedTasks, listAutomationRules, setAutomationRuleEnabled } from '@kinqs/brainrouter-core/triggers';
 import { startTriggerServe, stopTriggerServe, triggerServeStatus } from './triggerServe.js';
+import { startRouterServe, stopRouterServe, routerServeStatus } from './routerServe.js';
 // DESK-5 — the command bridge dispatches REPL-only commands against the SAME
 // stores the terminal CLI uses. No parallel state: /goal here is /goal there.
 import {
@@ -1874,6 +1877,20 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const providerEntries = Object.entries(fresh.providers ?? {});
         const defaultProviderMatch = matchingDefaultProvider(fresh.providers, fresh.llm);
         const defaultProviderName = defaultProviderMatch.name;
+        const resolvedKnobs = resolveCliKnobs(fresh);
+        const baseName = fresh.providers?.base ? 'base-config' : 'base';
+        const routerRegistry = buildModelRegistry(
+          { ...(fresh.providers ?? {}), ...(fresh.llm ? { [baseName]: fresh.llm } : {}) },
+          {
+            aliases: resolvedKnobs.router.aliases,
+            chain: [...resolvedKnobs.router.chain, ...resolvedKnobs.fallbackModels, ...(fresh.llm ? [`${baseName}/${fresh.llm.model}`] : [])],
+            order: resolvedKnobs.router.order,
+            strategy: resolvedKnobs.router.strategy,
+            passThrough: resolvedKnobs.router.passThrough,
+            availableModels: resolvedKnobs.availableModels,
+            enforceAvailableModels: resolvedKnobs.enforceAvailableModels,
+          },
+        );
         const workspacePrefs = readPreferences(workspaceRoot);
         const activeMode = resolveActiveMode(workspaceRoot, getActiveAgent().sessionKey);
         const connectorItems = listConnectors(workspaceRoot);
@@ -1921,7 +1938,28 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           activeServer: fresh.activeServer ?? null, // WS9 — which brainrouter server is the ACTIVE brain (only one)
           // §multi-provider — named providers (API KEYS MASKED, never sent to the
           // renderer) + the per-sub-agent-role model routing.
-          providers: providerEntries.map(([name, p]) => ({ name, provider: p.provider, model: p.model, endpoint: p.endpoint ?? null, hasKey: !!p.apiKey, models: p.models ?? [], apiVersion: p.apiVersion ?? null })),
+          providers: providerEntries.map(([name, p]) => ({
+            name,
+            provider: p.provider,
+            model: p.model,
+            endpoint: p.endpoint ?? null,
+            hasKey: !!p.apiKey,
+            models: p.models ?? [],
+            cachedModels: p.cachedModels ?? [],
+            cachedAt: p.cachedAt ?? null,
+            apiVersion: p.apiVersion ?? null,
+            free: p.free === true,
+            passthroughUnknown: p.passthroughUnknown === true,
+          })),
+          routerCatalog: {
+            enabled: resolvedKnobs.router.enabled,
+            primaryChain: resolvedKnobs.router.chain,
+            canonical: aggregateCatalog(routerRegistry, { prefix: 'canonical' }),
+            bare: aggregateCatalog(routerRegistry, { prefix: 'bare' }),
+            aliases: aggregateCatalog(routerRegistry, { prefix: 'alias' }),
+          },
+          routerStatus: getRouterPolicy().status(),
+          routerServe: routerServeStatus(),
           defaultProviderName,
           defaultProviderModelMatches: defaultProviderMatch.modelMatches,
           agentModels: Object.entries(fresh.agentModels ?? {}).map(([role, a]) => ({ role, provider: a.provider ?? null, model: a.model ?? null })),
@@ -1940,6 +1978,10 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
             const t = ((cli as Record<string, unknown> | undefined)?.triggers ?? {}) as Record<string, unknown>;
             const isSet = (k: string): boolean => typeof t[k] === 'string' && (t[k] as string).length > 0;
             return { github: isSet('githubSecret'), slack: isSet('slackSigningSecret'), gitlab: isSet('gitlabSecret'), jira: isSet('jiraSecret') };
+          })(),
+          routerSecretsSet: (() => {
+            const r = ((cli as Record<string, unknown> | undefined)?.router ?? {}) as Record<string, unknown>;
+            return { serveKey: typeof r.serveKey === 'string' && r.serveKey.length > 0 };
           })(),
           // MC-DESK Batch 2 — live runtime/automation surfaces for the Settings
           // monitor cards. Each read is fail-soft: a missing store never breaks
@@ -2480,6 +2522,18 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           }
           if (nextTriggers || touched) next.triggers = carried;
         }
+        const prevRouter = (fresh.cli as { router?: Record<string, unknown> } | undefined)?.router;
+        if (prevRouter && typeof prevRouter === 'object') {
+          const nextRouter = (next.router && typeof next.router === 'object' && !Array.isArray(next.router))
+            ? { ...(next.router as Record<string, unknown>) } : undefined;
+          const carried = nextRouter ?? {};
+          if (typeof prevRouter.serveKey === 'string' && prevRouter.serveKey && carried.serveKey === undefined) {
+            carried.serveKey = prevRouter.serveKey;
+            next.router = carried;
+          } else if (nextRouter) {
+            next.router = carried;
+          }
+        }
         fresh.cli = next as typeof fresh.cli;
         saveConfig(fresh);
         _resetCliKnobsCache();
@@ -2650,6 +2704,8 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // triggerServe.ts so a second start is a no-op and stop closes it.
       'action:triggers-serve-start': () => startTriggerServe(workspaceRoot),
       'action:triggers-serve-stop': () => stopTriggerServe(),
+      'action:router-serve-start': () => startRouterServe(),
+      'action:router-serve-stop': () => stopRouterServe(),
       'action:set-github-oauth-client-id': (args) => {
         const fresh = loadConfig() as { cli?: { github?: { oauthClientId?: string; caBundle?: string } } };
         const cli = (fresh.cli = fresh.cli ?? {});
@@ -2680,6 +2736,9 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           ? (args.models as unknown[]).filter((m): m is string => typeof m === 'string')
           : undefined;
         const allowlist = rawModels !== undefined ? rawModels : existing?.models;
+        const cachedModels = Array.isArray(args.cachedModels)
+          ? [...new Set((args.cachedModels as unknown[]).filter((m): m is string => typeof m === 'string').map((m) => m.trim()).filter(Boolean))]
+          : existing?.cachedModels;
         const rawModel = typeof args.model === 'string' && args.model.trim() ? args.model.trim() : (existing?.model ?? '');
         const { model, models } = normalizeProviderModels(rawModel, allowlist);
         // Optional Azure-style api-version: explicit string sets/keeps it, '' clears,
@@ -2691,7 +2750,10 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           model,
           endpoint: typeof args.endpoint === 'string' ? (args.endpoint.trim() || PROVIDER_CATALOG.find((p) => p.id === providerId)?.endpoint || undefined) : (existing?.endpoint ?? PROVIDER_CATALOG.find((p) => p.id === providerId)?.endpoint),
           ...(models ? { models } : {}),
+          ...(cachedModels && cachedModels.length ? { cachedModels, cachedAt: new Date().toISOString() } : {}),
           ...(apiVersion ? { apiVersion } : {}),
+          ...(args.free === true ? { free: true } : existing?.free === true && args.free !== false ? { free: true } : {}),
+          ...(args.passthroughUnknown === true ? { passthroughUnknown: true } : existing?.passthroughUnknown === true && args.passthroughUnknown !== false ? { passthroughUnknown: true } : {}),
         };
         if (!llmCfg.model) return { ok: false, error: 'A model is required.' };
         saveConfig(setProvider(fresh, name, llmCfg));

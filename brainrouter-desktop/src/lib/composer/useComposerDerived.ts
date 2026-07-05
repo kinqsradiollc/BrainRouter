@@ -58,9 +58,19 @@ export function useComposerDerived(i: ComposerDerivedInput): ComposerDerived {
   const modeLabel = execMode === 'planning' ? 'Plan mode' : reviewPolicy === 'proceed' ? 'Auto mode' : 'Accept edits';
   const effort = String(prefsObj?.effort ?? 'medium');
   const modelChoices = useMemo(() => {
+    if (snapshot?.routerCatalog?.enabled) {
+      const routerChoices = [
+        'auto',
+        ...(snapshot.routerCatalog.primaryChain ?? []),
+        ...((snapshot.routerCatalog.aliases ?? []).map((item) => item.id)),
+        ...((snapshot.routerCatalog.canonical ?? []).map((item) => item.id)),
+        ...((snapshot.routerCatalog.bare ?? []).map((item) => item.id)),
+      ].filter((m): m is string => !!m);
+      return [...new Set(routerChoices)];
+    }
     const out = [info.model, snapshot?.fallbackModel].filter((m): m is string => !!m);
     return [...new Set(out)];
-  }, [info.model, snapshot?.fallbackModel]);
+  }, [info.model, snapshot?.fallbackModel, snapshot?.routerCatalog]);
 
   return { sessionTitle, hasConversation, homeMode, slashActive, slashMatches, execMode, modeLabel, effort, modelChoices };
 }

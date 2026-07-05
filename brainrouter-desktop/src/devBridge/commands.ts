@@ -134,6 +134,12 @@ export function installBridge(S: DevState, queries: Record<string, (args: Record
         case 'set-model': {
           const m = (command as { model: string }).model;
           const persist = (command as { persist?: boolean }).persist;
+          if (m === 'auto') {
+            delete devSessionModels[S.activeSession];
+            emit({ kind: 'status', text: 'Model set to Auto (primary chain).' }, 60, S.activeSession);
+            emit({ kind: 'session-changed', sessionKey: S.activeSession, loadedMessages: -1, model: resolvedModel(S.activeSession) }, 80, S.activeSession);
+            return;
+          }
           // Item 10 — persist:true → global default; persist:false → this chat only.
           if (persist) { S.devModel = m; delete devSessionModels[S.activeSession]; }
           else { devSessionModels[S.activeSession] = m; }

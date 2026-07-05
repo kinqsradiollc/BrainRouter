@@ -5,7 +5,7 @@
 import chalk from 'chalk';
 import path from 'node:path';
 import type { Agent, RunTurnCallbacks } from '../agent.js';
-import { getCliKnobs } from '../../config/config.js';
+import { getCliKnobs, loadOrInitConfig } from '../../config/config.js';
 import { linkArtifact } from '../../artifact/artifactStore.js';
 import { contextWindowForBudget } from '../../context/contextWindow.js';
 import { resolveToolPolicy, externalDirectoryDecision } from '../../exec/policy/execPolicy.js';
@@ -28,6 +28,13 @@ import { resolveLocalModelProfile, localModelProfileActive, isLocalModelCoreTool
 import { enforceTaskBudget } from '../../provider/budget.js';
 import { currentTier, detectNeedsHigh, nextTier, resolveTierLadder, stripNeedsHigh } from '../../provider/tierLadder.js';
 import { switchModelToolAvailable } from '../../provider/llmProfiles.js';
+import {
+  buildModelRegistry,
+  classifyRouterFailure,
+  getRouterPolicy,
+  resolveRoutes,
+  type RouterFailure,
+} from '../../router/index.js';
 import { drainCompletions, formatCompletionFeedback } from '../../session/completion/completionInbox.js';
 import { resolveActiveMode } from '../../session/state/sessionModeStore.js';
 import { isInternalSessionKey } from '../../session/transcript/sessionStore.js';
@@ -76,6 +83,16 @@ import {
   minimalReasoningEffort, abortableDelay,
 } from '../transport/llmTransport.js';
 
+function sameLlmRoute(route: { llm: { model: string; endpoint?: string; apiKey?: string } }, llm: { model: string; endpoint?: string; apiKey?: string }): boolean {
+  return route.llm.model === llm.model
+    && (route.llm.endpoint ?? '') === (llm.endpoint ?? '')
+    && (route.llm.apiKey ?? '') === (llm.apiKey ?? '');
+}
+
+function routeFailureStatus(failure: RouterFailure): string {
+  return failure.status ? `${failure.status}` : failure.kind.replace(/_/g, ' ');
+}
+
 export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCallbacks, opts?: { hiddenPrompt?: boolean; images?: Array<{ mediaType: string; dataBase64: string }> }): Promise<string> {
     if (!this.initialized) {
       await this.bootstrapSession(callbacks);
@@ -95,6 +112,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     this.filesWrittenThisTurn = [];
     this.shellWroteThisTurn = false;
     this.computerActionsThisTurn = 0;
+    this.triedRouterRoutes.clear();
     this.interruptRequested = false;
     // DESK-6 — fresh abort controller per turn (AFTER the reset), so a stale
     // pre-turn abort can never poison this turn's first LLM call.
@@ -739,7 +757,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       }
       callbacks.onStatusUpdate(`Thinking (turn ${loopCount})...`);
 
-      let response: { content: string; toolCalls?: any[]; usage?: { prompt_tokens?: number; completion_tokens?: number }; finishReason?: string };
+      let response: { content: string; toolCalls?: any[]; usage?: { prompt_tokens?: number; completion_tokens?: number }; finishReason?: string } | undefined;
       const invokeLlm = async () => {
         // Transport boundary guard: never send a malformed assistant.tool_calls ↔
         // tool-result sequence (strict gateways reject it with "tool call result
@@ -766,8 +784,8 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           callbacks.onAssistantDelta || callbacks.onReasoningDelta,
         ) && getCliKnobs().disableStream !== true;
         if (streamRequested) {
+          let started = false;
           try {
-            let started = false;
             const final = await callOpenAIStream(
               this.llmConfig,
               requestMessages,
@@ -793,6 +811,11 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             // call; rethrow the interrupt so the turn unwinds. (Detect by the
             // sentinel/flag, never message-substring — "aborted" is overloaded.)
             if (isInterrupt(streamErr) || this.interruptRequested) throw streamErr;
+            if (started) {
+              streamErr.brainrouterStreamStarted = true;
+              callbacks.onAssistantTurnEnd?.('');
+              throw streamErr;
+            }
             // Streaming failed (provider doesn't support SSE, malformed
             // chunks, network blip). Fall back transparently to the
             // non-streaming path so the turn still completes — log via
@@ -889,7 +912,93 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         // unchanged — bare rethrow preserves the prior surface for
         // network/auth/rate-limit failures the user wants to see.
         const message = String(err?.message ?? err);
-        const looksContextOverflow = /context length|context window|maximum context|too many tokens|reduce the length|prompt is too long|413|tokens? exceed/i.test(message);
+        const routerKnobs = getCliKnobs().router;
+        if (routerKnobs.enabled) {
+          const failure = classifyRouterFailure(err);
+          if (failure.retryable) {
+            const config = loadOrInitConfig();
+            const baseName = config.providers?.base ? 'base-config' : 'base';
+            const providers = { ...(config.providers ?? {}), [baseName]: this.llmConfig };
+            const primaryChain = [
+              ...routerKnobs.chain,
+              ...getCliKnobs().fallbackModels,
+              `${baseName}/${this.llmConfig.model}`,
+            ];
+            const registry = buildModelRegistry(providers, {
+              aliases: routerKnobs.aliases,
+              chain: primaryChain,
+              order: routerKnobs.order,
+              strategy: routerKnobs.strategy,
+              passThrough: routerKnobs.passThrough,
+              availableModels: getCliKnobs().availableModels,
+              enforceAvailableModels: getCliKnobs().enforceAvailableModels,
+            });
+            const policy = getRouterPolicy({
+              cooldownBaseMs: routerKnobs.cooldownBaseMs,
+              cooldownMaxMs: routerKnobs.cooldownMaxMs,
+              sessionAffinity: routerKnobs.sessionAffinity,
+              strategy: routerKnobs.strategy,
+            });
+            const resolvedRoutes = resolveRoutes(registry, this.llmConfig.model, {
+              withFallbacks: true,
+              sessionKey: this.sessionKey,
+            });
+            const failedRoute = resolvedRoutes.find((route) => sameLlmRoute(route, this.llmConfig));
+            if (failedRoute) {
+              this.triedRouterRoutes.add(failedRoute.slug);
+              policy.markFailure(failedRoute, failure);
+            } else {
+              policy.markFailure({ provider: this.llmConfig.provider, model: this.llmConfig.model }, failure);
+            }
+
+            let lastRouterError: unknown = err;
+            let attemptedRouterFallback = false;
+            for (;;) {
+              const candidates = resolvedRoutes.filter((route) => (
+                !this.triedRouterRoutes.has(route.slug) && !sameLlmRoute(route, this.llmConfig)
+              ));
+              const route = policy.pickRoute(candidates, this.sessionKey);
+              if (!route) break;
+              attemptedRouterFallback = true;
+              this.triedRouterRoutes.add(route.slug);
+              const from = `${this.llmConfig.provider}/${this.llmConfig.model}`;
+              callbacks.onStatusUpdate(
+                `Router fallback: ${from} unavailable (${routeFailureStatus(failure)}) — trying ${route.slug}...`,
+              );
+              this.recordTranscript({
+                role: 'system',
+                name: 'router',
+                content: `router: ${from} unavailable (${routeFailureStatus(failure)}), routed to ${route.slug}`,
+              });
+              traceEvent('router.fallback', {
+                from,
+                to: route.slug,
+                reason: failure.kind,
+                status: failure.status ?? null,
+              });
+              policy.noteFallback(from, route.slug, failure);
+              this.llmConfig = { ...route.llm };
+              try {
+                response = await invokeLlmResilient();
+                policy.noteSuccess(route, this.sessionKey);
+                lastRouterError = null;
+                break;
+              } catch (retryErr: any) {
+                lastRouterError = retryErr;
+                const retryFailure = classifyRouterFailure(retryErr);
+                policy.markFailure(route, retryFailure);
+                if (!retryFailure.retryable) break;
+              }
+            }
+            if (lastRouterError === null) {
+              // Router retry succeeded; continue with the normal response handling below.
+            } else if (attemptedRouterFallback) {
+              throw new Error(`LLM Execution failed after router fallback: ${(lastRouterError as any)?.message ?? lastRouterError}`);
+            }
+          }
+        }
+        if (!response) {
+          const looksContextOverflow = /context length|context window|maximum context|too many tokens|reduce the length|prompt is too long|413|tokens? exceed/i.test(message);
         if (looksContextOverflow && !this.silent && this.chatHistory.length > 6) {
           callbacks.onStatusUpdate(`Context overflow detected — reactive compaction before retry...`);
           try {
@@ -931,7 +1040,9 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         } else {
           throw new Error(`LLM Execution failed: ${message}`);
         }
+        }
       }
+      if (!response) throw new Error('LLM Execution failed: no response returned.');
       // 0.3.9 item 13 — model-tier self-escalation. When the response
       // starts with `<<<NEEDS_HIGH>>>` (with or without `:reason`), the
       // model is telling us this task exceeds its current tier. Step
@@ -940,6 +1051,40 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       // counter so a marker-emitting model can't loop forever.
       const needsHigh = detectNeedsHigh(response.content);
       if (needsHigh && (this.tierEscalationsThisTurn ?? 0) < 2) {
+        const routerKnobs = getCliKnobs().router;
+        if (routerKnobs.enabled && routerKnobs.aliases['tier:pro']) {
+          const config = loadOrInitConfig();
+          const baseName = config.providers?.base ? 'base-config' : 'base';
+          const registry = buildModelRegistry(
+            { ...(config.providers ?? {}), [baseName]: this.llmConfig },
+            {
+              aliases: routerKnobs.aliases,
+              chain: [...routerKnobs.chain, ...getCliKnobs().fallbackModels, `${baseName}/${this.llmConfig.model}`],
+              order: routerKnobs.order,
+              strategy: routerKnobs.strategy,
+              passThrough: routerKnobs.passThrough,
+              availableModels: getCliKnobs().availableModels,
+              enforceAvailableModels: getCliKnobs().enforceAvailableModels,
+            },
+          );
+          const route = resolveRoutes(registry, 'tier:pro', { withFallbacks: true })[0];
+          if (route && !sameLlmRoute(route, this.llmConfig)) {
+            this.tierEscalationsThisTurn = (this.tierEscalationsThisTurn ?? 0) + 1;
+            const before = `${this.llmConfig.provider}/${this.llmConfig.model}`;
+            this.llmConfig = { ...route.llm };
+            traceEvent('tier.escalate', {
+              from: before,
+              to: route.slug,
+              provider: route.provider,
+              reason: needsHigh.reason ?? null,
+              router: true,
+            });
+            callbacks.onStatusUpdate(
+              `⚠️ Tier escalation: ${before} → ${route.slug}${needsHigh.reason ? ` — ${needsHigh.reason}` : ''}`,
+            );
+            continue;
+          }
+        }
         // Endpoint-aware (same resolver as effort/auth): a hidden provider
         // reached via a custom endpoint — e.g. DeepSeek as provider:'openai' +
         // endpoint:api.deepseek.com — resolves to its OWN tier ladder instead of

@@ -34,7 +34,33 @@ export interface ConfigSnapshot {
   servers?: Array<{ id: string; online: boolean; identity?: string; detail?: string; type?: 'stdio' | 'http'; url?: string | null; command?: string | null; hasKey?: boolean; envCount?: number; headerCount?: number }>;
   activeServer?: string | null; // WS9 — the active BrainRouter brain (only one)
   // §multi-provider — named OpenAI-compatible providers (keys masked) + per-role routing.
-  providers?: Array<{ name: string; provider: string; model: string; endpoint: string | null; hasKey: boolean; models?: string[]; apiVersion?: string | null }>;
+  providers?: Array<{
+    name: string;
+    provider: string;
+    model: string;
+    endpoint: string | null;
+    hasKey: boolean;
+    models?: string[];
+    cachedModels?: string[];
+    cachedAt?: string | null;
+    apiVersion?: string | null;
+    free?: boolean;
+    passthroughUnknown?: boolean;
+  }>;
+  routerCatalog?: {
+    enabled: boolean;
+    primaryChain: string[];
+    canonical: Array<{ id: string; model: string; slug?: string; providers: string[]; provider?: string; endpoint?: string; cachedAt?: string }>;
+    bare: Array<{ id: string; model: string; providers: string[]; endpoint?: string; cachedAt?: string }>;
+    aliases: Array<{ id: string; model: string; alias?: string; target?: string; providers: string[] }>;
+  };
+  routerStatus?: {
+    providers: Array<{ provider: string; until: number; step: number; reason: string }>;
+    models: Array<{ route: string; until: number; step: number; reason: string }>;
+    recentEvents?: Array<{ at: number; message: string; from: string; to: string; reason: string; status?: number }>;
+  };
+  routerServe?: { running: boolean; host: string | null; port: number | null; startedAt: string | null; url: string | null; recentEvents: string[]; lastError: string | null };
+  routerSecretsSet?: { serveKey: boolean };
   defaultProviderName?: string | null;
   defaultProviderModelMatches?: boolean;
   agentModels?: Array<{ role: string; provider: string | null; model: string | null }>;
@@ -142,7 +168,7 @@ export const NAV: Array<{ section: SettingsSection; icon: string; title: string;
 export const DEDICATED_KNOBS = new Set(['permissions', 'automation', 'track', 'github', 'providers', 'agentModels', 'providerRequestFormat',
   // MC-DESK — object-knobs now driven by their own structured Settings panels
   // (Runtime / Automations / Profiles), so they never appear as raw JSON rows.
-  'runtime', 'triggers', 'critic', 'budget', 'agents', 'llmProfiles']);
+  'runtime', 'triggers', 'critic', 'budget', 'agents', 'llmProfiles', 'router']);
 // WS11 — internal/safety knobs (loop & storm guards, sandbox internals, scheduler
 // ticks, offload tuning): non-obvious to hand-edit and rarely needed, so hidden
 // from the default list. Still settable via `/config` or the raw disclosure.

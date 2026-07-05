@@ -2371,8 +2371,11 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
 .composer-controls .ctx-chip span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .composer-controls .model-pill { flex: 0 1 auto; min-width: 0; }
 .composer-controls .chip { flex: none; }
-.composer-controls .model-pill { max-width: min(420px, 44vw); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; border: 0; border-radius: 8px; background: transparent; color: var(--text-dim); padding: 4px 5px; cursor: pointer; font-size: 13px; }
+.composer-controls .model-pill { max-width: min(420px, 44vw); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; border: 0; border-radius: 8px; background: transparent; color: var(--text-dim); padding: 4px 5px; cursor: pointer; font-size: 13px; display: inline-flex; align-items: center; gap: 4px; }
 .composer-controls .model-pill:hover { background: var(--ov-06); color: var(--text); }
+.composer-controls .model-pill.router-fallback { color: var(--warn); background: rgba(210,153,34,0.10); }
+.composer-controls .router-fallback-badge { flex: none; font-weight: 700; line-height: 1; }
+.composer-controls .model-pill > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .composer-controls .chip, .composer-controls .ctx-chip, .composer-controls .model-pill { white-space: nowrap; }
 /* DESK-5q — effort is its own chip; context ring replaces the busy orb */
 .composer-controls .effort-pill { flex: none; border: 0; border-radius: 8px; background: transparent; color: var(--text-dim); padding: 4px 8px; cursor: pointer; font-size: 13px; white-space: nowrap; transition: background .14s, color .14s; }

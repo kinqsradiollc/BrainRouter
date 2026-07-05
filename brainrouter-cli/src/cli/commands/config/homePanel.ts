@@ -69,7 +69,7 @@ function buildPanelRows(ctx: CommandContext): PanelRow[] {
   return [
     {
       key: 'llm',
-      label: 'Default provider',
+      label: 'Primary provider',
       current: () => {
         const name = findDefaultProviderName(ctx);
         if (name) {

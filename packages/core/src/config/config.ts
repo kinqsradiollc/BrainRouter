@@ -18,6 +18,7 @@ import type {
   MarketplaceSource,
   PluginCapabilityConsent,
   LlmProfileConfig,
+  RouterCliKnobs,
 } from './configTypes.js';
 import { normalizeContainerLimits, normalizeRuntimeBackend } from './configTypes.js';
 
@@ -487,6 +488,42 @@ function resolveFallbackModels(list: unknown, legacy: string | null | undefined)
   return chain;
 }
 
+function sanitizeAliasMap(input: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return out;
+  for (const [rawKey, rawValue] of Object.entries(input as Record<string, unknown>)) {
+    const key = typeof rawKey === 'string' ? rawKey.trim() : '';
+    const value = typeof rawValue === 'string' ? rawValue.trim() : '';
+    if (!key || key.includes('/') || !value) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+function resolveRouterKnobs(input: RouterCliKnobs | undefined): ResolvedCliKnobs['router'] {
+  const strategy = input?.strategy === 'round-robin' || input?.strategy === 'free-first'
+    ? input.strategy
+    : 'priority';
+  const cooldownBaseMs = clampInt(input?.cooldownBaseMs, 500, 60_000, 3_000);
+  return {
+    enabled: input?.enabled === true,
+    passThrough: input?.passThrough !== false,
+    chain: sanitizeStringList(input?.chain),
+    strategy,
+    order: sanitizeStringList(input?.order),
+    aliases: sanitizeAliasMap(input?.aliases),
+    cooldownBaseMs,
+    cooldownMaxMs: clampInt(input?.cooldownMaxMs, cooldownBaseMs, 1_800_000, 300_000),
+    sessionAffinity: input?.sessionAffinity !== false,
+    serve: input?.serve === true,
+    serveHost: typeof input?.serveHost === 'string' && input.serveHost.trim()
+      ? input.serveHost.trim()
+      : '127.0.0.1',
+    servePort: clampInt(input?.servePort, 1, 65_535, 8_790),
+    serveKey: typeof input?.serveKey === 'string' ? input.serveKey : '',
+  };
+}
+
 /**
  * Resolve a boolean knob where an environment variable may FORCE it on/off from
  * any shell (troubleshooting toggles the user can flip without editing config.json).
@@ -612,6 +649,7 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
     quiet: c.quiet ?? false,
     theme: c.theme ?? 'auto',
     llmTimeoutMs: c.llmTimeoutMs ?? 120_000,
+    router: resolveRouterKnobs(c.router),
     llmMaxReconnects: Math.max(1, Math.floor(c.llmMaxReconnects ?? 5)),
     llmMaxConcurrent: c.llmMaxConcurrent ?? 4,
     disableStream: c.disableStream ?? false,

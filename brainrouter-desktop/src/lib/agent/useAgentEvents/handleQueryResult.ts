@@ -374,7 +374,7 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
       }
       case 'a-setdefault': {
         const r = result as { ok?: boolean; error?: string } | null;
-        setToast(r && r.ok ? '✓ Default provider updated' : `✗ Couldn't set default${r?.error ? `: ${r.error}` : ''}`);
+        setToast(r && r.ok ? '✓ Primary provider updated' : `✗ Couldn't set primary${r?.error ? `: ${r.error}` : ''}`);
         return;
       }
       case 'q-catalog': if (result && typeof result === 'object') setCatalog(result as CommandsCatalog); return;

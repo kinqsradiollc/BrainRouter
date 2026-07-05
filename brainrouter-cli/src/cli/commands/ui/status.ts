@@ -13,6 +13,7 @@ import { callMcpTool, hasMcpTool } from '@kinqs/brainrouter-core/mcp';
 import { listSessions, reconcileStale } from '@kinqs/brainrouter-core/orchestration';
 import { readPlan } from '@kinqs/brainrouter-core/task';
 import { getConfigPath, getCliKnobs, setCliKnobOverride } from '@kinqs/brainrouter-core/config';
+import { aggregateCatalog, buildModelRegistry, getRouterPolicy, resolveRoutes } from '@kinqs/brainrouter-core/router';
 import { getPolicyProfile, profileNames } from '../../../runtime/exec/policyProfiles.js';
 import { describeActiveServer } from '../serverStatus/index.js';
 import type { CommandContext } from '../_context.js';
@@ -126,6 +127,63 @@ export async function tryHandleUiStatusCommand(ctx: CommandContext): Promise<boo
       } catch (err: any) {
         spinner.fail(chalk.red('Failed to fetch diagnostics.'));
         console.warn(chalk.yellow(`  Warning: ${err.message}`));
+      }
+      console.log();
+      return true;
+    }
+    case '/router':
+    {
+      const knobs = getCliKnobs();
+      const router = knobs.router;
+      const baseName = config.providers?.base ? 'base-config' : 'base';
+      const providers = { ...(config.providers ?? {}), ...(config.llm ? { [baseName]: config.llm } : {}) };
+      const chain = [
+        ...router.chain,
+        ...knobs.fallbackModels,
+        ...(config.llm ? [`${baseName}/${config.llm.model}`] : []),
+      ];
+      const registry = buildModelRegistry(providers, {
+        aliases: router.aliases,
+        chain,
+        order: router.order,
+        strategy: router.strategy,
+        passThrough: router.passThrough,
+        availableModels: knobs.availableModels,
+        enforceAvailableModels: knobs.enforceAvailableModels,
+      });
+      const primaryRoutes = resolveRoutes(registry, '');
+      const policy = getRouterPolicy();
+      const now = Date.now();
+      const status = policy.status();
+      const activeProviders = status.providers.filter((item) => item.until > now);
+      const activeModels = status.models.filter((item) => item.until > now);
+
+      console.log(chalk.bold('\nProvider Router:'));
+      console.log(`  Auto-route models: ${router.enabled ? chalk.green('on') : chalk.gray('off')}`);
+      console.log(`  Strategy:          ${chalk.cyan(router.strategy)}`);
+      console.log(`  Pass-through:      ${router.passThrough ? chalk.green('on') : chalk.gray('off')}`);
+      console.log(`  Providers:         ${chalk.yellow(Object.keys(providers).length)}`);
+      console.log(`  Catalog:           ${chalk.yellow(aggregateCatalog(registry).length)} canonical · ${chalk.yellow(aggregateCatalog(registry, { prefix: 'bare' }).length)} bare · ${chalk.yellow(aggregateCatalog(registry, { prefix: 'alias' }).length)} aliases`);
+      console.log(`  Gateway:           ${router.serve ? chalk.green(`http://${router.serveHost}:${router.servePort}/router/v1`) : chalk.gray('off')}${router.serve ? chalk.gray(router.serveKey ? ' · key set' : ' · key missing') : ''}`);
+      console.log(chalk.gray('\n  Primary chain:'));
+      if (primaryRoutes.length === 0) {
+        console.log(chalk.yellow('    (no resolvable routes — connect a provider or configure cli.router.chain)'));
+      } else {
+        primaryRoutes.forEach((route, index) => {
+          const label = index === 0 ? 'Primary' : `Fallback ${index}`;
+          console.log(`    ${chalk.bold(label.padEnd(10))} ${chalk.cyan(route.slug)}${route.endpoint ? chalk.gray(` · ${route.endpoint}`) : ''}`);
+        });
+      }
+      if (activeProviders.length || activeModels.length) {
+        console.log(chalk.gray('\n  Active cooldowns:'));
+        for (const item of activeProviders) {
+          console.log(`    provider ${chalk.cyan(item.provider)} ${Math.ceil((item.until - now) / 1000)}s · ${item.reason}`);
+        }
+        for (const item of activeModels) {
+          console.log(`    model    ${chalk.cyan(item.route)} ${Math.ceil((item.until - now) / 1000)}s · ${item.reason}`);
+        }
+      } else {
+        console.log(chalk.gray('\n  Active cooldowns: none'));
       }
       console.log();
       return true;

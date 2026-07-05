@@ -46,6 +46,7 @@ function scrubSecrets(scrubbed: any): void {
     if (scrubbed.cli.webSearch.braveApiKey) scrubbed.cli.webSearch.braveApiKey = maskApiKey(scrubbed.cli.webSearch.braveApiKey);
     if (scrubbed.cli.webSearch.google?.apiKey) scrubbed.cli.webSearch.google.apiKey = maskApiKey(scrubbed.cli.webSearch.google.apiKey);
   }
+  if (scrubbed.cli?.router?.serveKey) scrubbed.cli.router.serveKey = maskApiKey(scrubbed.cli.router.serveKey);
   // Named provider keys (multi-provider routing) — these were NOT masked before,
   // so `/config show` leaked every saved provider's api key.
   for (const p of Object.values(scrubbed.providers ?? {})) {

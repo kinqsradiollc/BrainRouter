@@ -123,7 +123,7 @@ export async function editDefaultProvider(ctx: CommandContext): Promise<boolean>
   const current = findDefaultProviderName(ctx);
   const picked = await pickFromList({
     theme,
-    title: 'Default provider',
+    title: 'Primary provider',
     subtitle: 'Pick from saved Providers. Endpoint and API key are managed in the Providers row.',
     rows: names.map((name) => {
       const p = ctx.config.providers![name];
@@ -131,14 +131,14 @@ export async function editDefaultProvider(ctx: CommandContext): Promise<boolean>
         id: name,
         label: name,
         value: `${p.model} · ${shortenEndpoint(p.endpoint)}`,
-        description: name === current ? 'current default' : undefined,
+        description: name === current ? 'current primary' : undefined,
       };
     }),
     initialCursor: current ? Math.max(0, names.indexOf(current)) : 0,
   });
   if (picked.kind !== 'pick') return false;
   if (!setDefaultProvider(ctx, picked.id)) return false;
-  console.log(chalk.green(`\n  ✓ Default provider → "${picked.id}" · ${ctx.config.llm?.model ?? ''}\n`));
+  console.log(chalk.green(`\n  ✓ Primary provider → "${picked.id}" · ${ctx.config.llm?.model ?? ''}\n`));
   return true;
 }
 
@@ -191,14 +191,14 @@ export async function editProviders(ctx: CommandContext): Promise<boolean> {
 
   // Existing provider → edit or remove.
   const action = await pickFromList({ theme, title: `Provider "${picked.id}"`, subtitle: '', rows: [
-    { id: 'default', label: 'Use as default', value: 'main model/provider', description: 'Copy this provider into config.llm without re-entering endpoint/key' },
+    { id: 'default', label: 'Use as primary', value: 'main model/provider', description: 'Copy this provider into config.llm without re-entering endpoint/key' },
     { id: 'edit', label: 'Edit', value: 're-enter key / endpoint / model', description: '' },
     { id: 'remove', label: 'Remove', value: 'also clears any sub-agent pointing at it', description: '' },
   ], initialCursor: 0 });
   if (action.kind !== 'pick') return false;
   if (action.id === 'default') {
     if (!setDefaultProvider(ctx, picked.id)) return false;
-    console.log(chalk.green(`\n  ✓ Default provider → "${picked.id}" · ${ctx.config.llm?.model ?? ''}\n`));
+    console.log(chalk.green(`\n  ✓ Primary provider → "${picked.id}" · ${ctx.config.llm?.model ?? ''}\n`));
     return true;
   }
   if (action.id === 'remove') {
@@ -287,7 +287,7 @@ export async function editWebSearch(ctx: CommandContext): Promise<boolean> {
 /**
  * `/config` → "Sub-agent models" row. Assign a provider/model to each sub-agent
  * role. The role named `default` is shown as "Fallback for sub-agents"; it is
- * not the main default provider. Pick a role → pick a provider (a named one,
+ * not the main primary route. Pick a role → pick a provider (a named one,
  * the main LLM, or "inherit") → enter a model (blank = provider default).
  */
 export async function editAgentModels(ctx: CommandContext): Promise<boolean> {
@@ -300,7 +300,7 @@ export async function editAgentModels(ctx: CommandContext): Promise<boolean> {
       id: r,
       label: subagentRoleLabel(r),
       value: describeAgentModel(ctx.config, r),
-      description: r === 'default' ? 'Optional fallback, not the main default provider' : '',
+      description: r === 'default' ? 'Optional fallback, not the main primary route' : '',
     })),
     initialCursor: 0,
   });
@@ -312,9 +312,9 @@ export async function editAgentModels(ctx: CommandContext): Promise<boolean> {
   const provRow = await pickFromList({
     theme,
     title: `${roleLabel} → provider`,
-    subtitle: role === 'default' ? 'Leave clear to let unconfigured sub-agents follow the main default provider.' : 'Where this role\'s model runs.',
+    subtitle: role === 'default' ? 'Leave clear to let unconfigured sub-agents follow the main primary route.' : 'Where this role\'s model runs.',
     rows: [
-      { id: '__inherit', label: role === 'default' ? 'Clear / follow Default provider' : 'Inherit (clear)', value: 'use the main default provider', description: 'Remove this override' },
+      { id: '__inherit', label: role === 'default' ? 'Clear / follow primary route' : 'Inherit (clear)', value: 'use the main primary route', description: 'Remove this override' },
       { id: '__main', label: 'Main provider', value: `${ctx.config.llm?.model ?? '—'} (config.llm)`, description: 'Same endpoint as the main agent, optionally a different model' },
       ...providerNames.map((n) => ({ id: n, label: n, value: `${ctx.config.providers![n].model}`, description: 'A named provider' })),
     ],
@@ -325,7 +325,7 @@ export async function editAgentModels(ctx: CommandContext): Promise<boolean> {
   if (provRow.id === '__inherit') {
     ctx.config = setAgentModel(ctx.config, role, {});
     saveConfig(ctx.config);
-    console.log(chalk.green(`\n  ✓ ${roleLabel} now follows the main default provider.`));
+    console.log(chalk.green(`\n  ✓ ${roleLabel} now follows the main primary route.`));
     return true;
   }
 
@@ -341,7 +341,7 @@ export async function editAgentModels(ctx: CommandContext): Promise<boolean> {
   });
   if (modelResult.kind !== 'accept') return false;
   const cleared = setAgentModelNormalized(ctx, role, providerId, modelResult.text.trim());
-  console.log(chalk.green(`\n  ✓ ${roleLabel} → ${cleared ? 'follows the main default provider' : describeAgentModel(ctx.config, role)}`));
+  console.log(chalk.green(`\n  ✓ ${roleLabel} → ${cleared ? 'follows the main primary route' : describeAgentModel(ctx.config, role)}`));
   return true;
 }
 

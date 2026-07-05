@@ -210,7 +210,7 @@ export const KEY_HANDLERS: Record<string, ConfigKeyHandler> = {
         const known = listProviderNames(ctx.config);
         return { ok: false, reason: known.length ? `unknown Provider "${name}" — choose one of: ${known.join(', ')}` : 'no Providers configured — open /config and add one under Providers first' };
       }
-      return { ok: true, message: `default provider → ${name} · ${ctx.config.llm?.model ?? ''}` };
+      return { ok: true, message: `primary provider → ${name} · ${ctx.config.llm?.model ?? ''}` };
     },
   },
   'automation': automationHandler('automation'),

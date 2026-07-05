@@ -18,6 +18,8 @@ import { FOREGROUND_ONLY_KINDS } from '../../../constants.js';
 import { rid } from '../../rid.js';
 import { type AgentEventsCtx, isWorkspaceScopedReviewQuery } from './types.js';
 
+const ROUTER_FALLBACK_PREFIX = 'Router fallback:';
+
 export interface OnAgentEventDeps {
   ctx: AgentEventsCtx;
   streamedThisTurnRef: React.MutableRefObject<boolean>;
@@ -28,7 +30,7 @@ export interface OnAgentEventDeps {
 export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMessage) => void {
   const { ctx, streamedThisTurnRef, turnEditsRef, handleQueryResult } = deps;
   const {
-    setRows, setRunning, setStopping, setTurnStart, setStatusLine, setReasoningTail, setLiveText, setToolLog,
+    setRows, setRunning, setStopping, setTurnStart, setStatusLine, setLastRouterFallback, setReasoningTail, setLiveText, setToolLog,
     setLiveChildren, setFinishedTasks, setLastPlan, setGoalState, setPlanHistory, setTokens, setLiveTurn, setEfficiency, setTrack, setInteraction, setPicked, setViewKey,
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
     setDraft, planFeedbackRef, goalContPendingRef, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
@@ -119,7 +121,13 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
     const isForeground = !currentSessionKey || !owningSessionKey || owningSessionKey === currentSessionKey;
     if (!isForeground && FOREGROUND_ONLY_KINDS.has(e.kind)) return;
     switch (e.kind) {
-      case 'status': setStatusLine(e.text); break;
+      case 'status': {
+        setStatusLine(e.text);
+        if (e.text.startsWith(ROUTER_FALLBACK_PREFIX)) {
+          setLastRouterFallback(e.text.slice(ROUTER_FALLBACK_PREFIX.length).trim() || e.text);
+        }
+        break;
+      }
       case 'reasoning-delta': setReasoningTail((t) => t + e.text); break;
       case 'assistant-turn-start': liveBuf.current = ''; liveFlushPending.current = false; setLiveText(''); break;
       case 'assistant-delta':
@@ -249,7 +257,7 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
         // start, so count from now (honest-ish); if not, the spinner is hidden.
         setTurnStart(hostRunning ? Date.now() : 0);
         setStopping(false); // DESK-6 — a switch clears any pending stop indicator
-        setStatusLine(''); setReasoningTail(''); setLiveText(''); liveBuf.current = '';
+        setStatusLine(''); setLastRouterFallback(null); setReasoningTail(''); setLiveText(''); liveBuf.current = '';
         // Session-scoped surfaces must NOT carry over from the chat we just left:
         // reset the context meter + plan now (the refresh below repopulates them
         // from THIS session's data — a new chat → empty, not the old chat's 100%).
@@ -310,7 +318,7 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
         break;
       // DESK-5v — turn lifecycle is tracked PER SESSION so a background turn
       // keeps its spinner and lands its result/error in the right chat.
-      case 'turn-start': if (owningSessionKey) setSessionRunning(owningSessionKey, true); if (isForeground) { setRunning(true); setTurnStart(Date.now()); setLiveTurn(null); streamedThisTurnRef.current = false; turnEditsRef.current = new Map(); } break;
+      case 'turn-start': if (owningSessionKey) setSessionRunning(owningSessionKey, true); if (isForeground) { setRunning(true); setTurnStart(Date.now()); setLastRouterFallback(null); setLiveTurn(null); streamedThisTurnRef.current = false; turnEditsRef.current = new Map(); } break;
       case 'turn-complete': {
         if (owningSessionKey) setSessionRunning(owningSessionKey, false);
         if (!isForeground) { refreshSidebar(); break; } // background turn: its answer is on disk, re-read on switch-back

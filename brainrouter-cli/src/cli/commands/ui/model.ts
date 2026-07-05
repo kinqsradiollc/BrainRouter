@@ -9,6 +9,7 @@
 import chalk from 'chalk';
 import { saveConfig, getCliKnobs, sanitizeLlmProfiles, type LlmProfileConfig } from '@kinqs/brainrouter-core/config';
 import { assertModelAllowed, overlayLlmProfile } from '@kinqs/brainrouter-core/provider';
+import { aggregateCatalog, buildModelRegistry, resolveRoutes } from '@kinqs/brainrouter-core/router';
 import { readPreferences, resolveEffort, writePreferences, normalizeEffort, getSessionMode, resolveActiveMode, setSessionMode, setSessionRuntime, getSessionRuntime } from '@kinqs/brainrouter-core/session';
 import { PROVIDER_CATALOG, findProvider } from '@kinqs/brainrouter-core/provider';
 import { loadApiKeyPrefixesConfig } from '@kinqs/brainrouter-core/config';
@@ -35,8 +36,31 @@ export async function tryHandleUiModelCommand(ctx: CommandContext): Promise<bool
         // an un-sanctioned model). A clear message names the permitted set.
         const knobs = getCliKnobs();
         const inFastMode = resolveActiveMode(agent.workspaceRoot, agent.sessionKey).executionMode === 'fast';
+        const routerModelRequest = newModel === 'auto' ? '' : newModel;
+        const routerEnabled = knobs.router.enabled;
+        const baseName = config.providers?.base ? 'base-config' : 'base';
+        const routerRegistry = routerEnabled
+          ? buildModelRegistry(
+            { ...(config.providers ?? {}), ...(config.llm ? { [baseName]: config.llm } : {}) },
+            {
+              aliases: knobs.router.aliases,
+              chain: [...knobs.router.chain, ...knobs.fallbackModels, ...(config.llm ? [`${baseName}/${config.llm.model}`] : [])],
+              order: knobs.router.order,
+              strategy: knobs.router.strategy,
+              passThrough: knobs.router.passThrough,
+              availableModels: knobs.availableModels,
+              enforceAvailableModels: knobs.enforceAvailableModels || inFastMode,
+            },
+          )
+          : null;
+        const routerRoute = routerRegistry ? resolveRoutes(routerRegistry, routerModelRequest, { withFallbacks: true })[0] : undefined;
+        if (routerEnabled && !routerRoute) {
+          console.log(chalk.red(`\n✗ Router could not resolve "${newModel}". Check cli.router.chain, providers, and availableModels.\n`));
+          return true;
+        }
+        const modelForGate = routerRoute?.model ?? newModel;
         const gate = assertModelAllowed(
-          newModel,
+          modelForGate,
           knobs.availableModels,
           knobs.enforceAvailableModels || inFastMode,
           inFastMode ? 'Fast mode' : 'This install',
@@ -45,16 +69,49 @@ export async function tryHandleUiModelCommand(ctx: CommandContext): Promise<bool
           console.log(chalk.red(`\n✗ ${gate}\n`));
           return true;
         }
-        agent.setModel(newModel);
+        if (routerRoute && agent.setLLMConfig) agent.setLLMConfig(routerRoute.llm);
+        else agent.setModel(routerRoute?.model ?? newModel);
         if (sessionOnly) {
-          setSessionRuntime(agent.workspaceRoot, agent.sessionKey, { model: newModel });
+          setSessionRuntime(agent.workspaceRoot, agent.sessionKey, { model: routerRoute?.model ?? (newModel === 'auto' ? '' : newModel) });
         } else if (config.llm) {
-          config.llm.model = newModel;
+          config.llm = routerRoute ? { ...routerRoute.llm } : { ...config.llm, model: newModel };
           saveConfig(config);
           setSessionRuntime(agent.workspaceRoot, agent.sessionKey, { model: '' });
         }
         const scope = sessionOnly ? chalk.gray(' (this session only — not saved)') : '';
-        console.log(chalk.green(`\n✓ Model switched: ${chalk.gray(previous)} → ${chalk.cyan(newModel)}${scope}\n`));
+        const label = newModel === 'auto' && routerRoute ? `Auto (${routerRoute.slug})` : (routerRoute?.slug ?? newModel);
+        console.log(chalk.green(`\n✓ Model switched: ${chalk.gray(previous)} → ${chalk.cyan(label)}${scope}\n`));
+        return true;
+      }
+      if (getCliKnobs().router.enabled) {
+        const knobs = getCliKnobs();
+        const baseName = config.providers?.base ? 'base-config' : 'base';
+        const registry = buildModelRegistry(
+          { ...(config.providers ?? {}), ...(config.llm ? { [baseName]: config.llm } : {}) },
+          {
+            aliases: knobs.router.aliases,
+            chain: [...knobs.router.chain, ...knobs.fallbackModels, ...(config.llm ? [`${baseName}/${config.llm.model}`] : [])],
+            order: knobs.router.order,
+            strategy: knobs.router.strategy,
+            passThrough: knobs.router.passThrough,
+            availableModels: knobs.availableModels,
+            enforceAvailableModels: knobs.enforceAvailableModels,
+          },
+        );
+        const rows = aggregateCatalog(registry, { prefix: 'canonical' }).slice(0, 80);
+        console.log(chalk.bold('\nUnified model catalog'));
+        console.log(chalk.gray('  Use /model auto, /model <bare>, or /model <provider/model>.'));
+        if (rows.length === 0) {
+          console.log(chalk.yellow('  No catalog entries. Connect a provider or configure cli.router.chain.\n'));
+          return true;
+        }
+        for (const item of rows) {
+          const provider = item.provider ?? item.providers.join(',');
+          console.log(`  ${chalk.cyan(item.id.padEnd(36))} ${chalk.gray(provider)}`);
+        }
+        const total = aggregateCatalog(registry, { prefix: 'canonical' }).length;
+        if (total > rows.length) console.log(chalk.gray(`  ... ${total - rows.length} more`));
+        console.log();
         return true;
       }
       // No-arg → open the picker. Resolves provider by reading the

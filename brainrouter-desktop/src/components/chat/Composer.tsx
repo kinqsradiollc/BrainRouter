@@ -20,6 +20,7 @@ import { recognizedCommandToken } from '../../lib/composer/slashHighlight.js';
 import { findMentionToken, rankFileMatches, applyMention } from '../../lib/composer/mention.js';
 import { hostQuery } from '../../lib/hostQuery.js';
 import { usePlatform } from '../../lib/shortcuts/shortcuts.js';
+import type { ConfigSnapshot } from '../../settings.js';
 
 export interface ComposerProps {
   draft: string;
@@ -51,6 +52,8 @@ export interface ComposerProps {
   // active endpoint. defaultProviderName marks which one is currently active.
   connectedProviders?: Array<{ name: string; provider: string; model: string; models?: string[]; endpoint?: string | null }>;
   defaultProviderName?: string | null;
+  routerCatalog?: ConfigSnapshot['routerCatalog'];
+  routerFallback?: string | null;
   modelsLoading: boolean;
   setModelsLoading: (v: boolean) => void;
   modelChoices: string[];
@@ -82,7 +85,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
   const {
     draft, setDraft, running, stopping, submit, requestStop, slashActive, slashMatches, commands,
     slashSel, setSlashSel, setSlashDismissed, onRunSlash, pop, setPop, q, modeLabel, effort,
-    info, branches, endpointModels, allowedModels, connectedProviders, defaultProviderName, modelsLoading, setModelsLoading, modelChoices, modelScope, setModelScope,
+    info, branches, endpointModels, allowedModels, connectedProviders, defaultProviderName, routerCatalog, routerFallback, modelsLoading, setModelsLoading, modelChoices, modelScope, setModelScope,
     hasConversation, contextUsage, tokens, openSettings, onAttach, attachments = [], onClearAttachment, canSubmit = false,
     pastedImages = [], onPasteImages, onClearPastedImage,
   } = p;
@@ -97,6 +100,31 @@ export function Composer(p: ComposerProps): React.ReactElement {
   const [mentionFiles, setMentionFiles] = React.useState<string[]>([]);
   const [mention, setMention] = React.useState<{ token: ReturnType<typeof findMentionToken>; matches: string[] } | null>(null);
   const [mentionSel, setMentionSel] = React.useState(0);
+  const modelRecentsKey = `br-model-recents:${info.workspaceRoot ?? 'global'}`;
+  const [modelRecents, setModelRecents] = React.useState<string[]>(() => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(modelRecentsKey) ?? '[]');
+      return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string').slice(0, 5) : [];
+    } catch {
+      return [];
+    }
+  });
+  React.useEffect(() => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(modelRecentsKey) ?? '[]');
+      setModelRecents(Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string').slice(0, 5) : []);
+    } catch {
+      setModelRecents([]);
+    }
+  }, [modelRecentsKey]);
+  const rememberModel = React.useCallback((model: string): void => {
+    if (!model || model === 'auto') return;
+    setModelRecents((cur) => {
+      const next = [model, ...cur.filter((item) => item !== model)].slice(0, 5);
+      try { localStorage.setItem(modelRecentsKey, JSON.stringify(next)); } catch { /* localStorage may be unavailable in tests */ }
+      return next;
+    });
+  }, [modelRecentsKey]);
   React.useEffect(() => {
     void hostQuery<{ files?: Array<string | { path?: string }> }>('list-files', { limit: 3000 }).then((r) => {
       setMentionFiles((r?.files ?? []).map((f) => (typeof f === 'string' ? f : f.path ?? '')).filter(Boolean));
@@ -136,6 +164,11 @@ export function Composer(p: ComposerProps): React.ReactElement {
     if (!list || !onAttach) return;
     const files = Array.from(list);
     if (files.length) onAttach(files);
+  };
+  const pickModelRequest = (model: string, providerName?: string): void => {
+    window.brainrouter.send({ kind: 'set-model', model, ...(providerName ? { providerName } : {}), persist: modelScope === 'global' });
+    rememberModel(providerName ? `${providerName}/${model}` : model);
+    setPop('');
   };
   const syncMirrorScroll = React.useCallback(() => {
     if (textareaRef.current && mirrorRef.current) {
@@ -373,6 +406,84 @@ export function Composer(p: ComposerProps): React.ReactElement {
             {pop === 'model' ? (
               <div className="menu-pop model-menu" ref={modelMenuRef}>
                 {(() => {
+                  if (routerCatalog?.enabled) {
+                    const primary = (routerCatalog.primaryChain ?? []).filter(Boolean);
+                    const allRequests = new Set([
+                      ...primary,
+                      ...((routerCatalog.aliases ?? []).map((item) => item.id)),
+                      ...((routerCatalog.bare ?? []).map((item) => item.id)),
+                      ...((routerCatalog.canonical ?? []).map((item) => item.id)),
+                    ]);
+                    const recents = modelRecents.filter((item) => allRequests.has(item));
+                    const bareRows = (routerCatalog.bare ?? []).filter((item) => !NON_CHAT_MODEL.test(item.model));
+                    const canonicalGroups = new Map<string, typeof routerCatalog.canonical>();
+                    for (const item of routerCatalog.canonical ?? []) {
+                      if (NON_CHAT_MODEL.test(item.model)) continue;
+                      const provider = item.provider ?? item.providers[0] ?? 'provider';
+                      const rows = canonicalGroups.get(provider) ?? [];
+                      rows.push(item);
+                      canonicalGroups.set(provider, rows);
+                    }
+                    const renderRouterItem = (request: string, label: string, detail?: string): React.ReactElement => {
+                      const badges = capabilityBadges(modelCapabilities(label));
+                      return (
+                        <button key={request} className="menu-item model-item" onClick={() => pickModelRequest(request)} title={detail}>
+                          <span className="mi-check">{request === info.model ? '✓' : ''}</span>
+                          <ModelIcon model={label} style={{ marginRight: 6 }} />
+                          <span className="model-id">{label}</span>
+                          {detail ? <span className="choice-detail" style={{ marginLeft: 6 }}>{detail}</span> : null}
+                          {badges.length ? (
+                            <span className="model-caps">
+                              {badges.map((b) => <span key={b.key} className={`cap-chip cap-${b.key}`} title={b.title}>{b.label}</span>)}
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    };
+                    return (
+                      <>
+                        <div className="menu-head"><span>Provider router</span><span>{fmt('Mod+Shift+I')}</span></div>
+                        <div className="model-list">
+                          <button className="menu-item model-item" onClick={() => {
+                            window.brainrouter.send({ kind: 'set-model', model: 'auto', persist: false });
+                            setPop('');
+                          }}>
+                            <span className="mi-check" />
+                            <ModelIcon model={info.model ?? 'auto'} style={{ marginRight: 6 }} />
+                            <span className="model-id">Auto (primary chain)</span>
+                          </button>
+                        </div>
+                        {recents.length ? (
+                          <>
+                            <div className="menu-head"><span>Recent</span></div>
+                            <div className="model-list">{recents.map((request) => renderRouterItem(request, request))}</div>
+                          </>
+                        ) : null}
+                        {primary.length ? (
+                          <>
+                            <div className="menu-head"><span>Primary chain</span></div>
+                            <div className="model-list">{primary.map((request, index) => renderRouterItem(request, request, index === 0 ? 'Primary' : `Fallback ${index}`))}</div>
+                          </>
+                        ) : null}
+                        {bareRows.length ? (
+                          <>
+                            <div className="menu-head"><span>All models · bare requests</span></div>
+                            <div className="model-list model-list-endpoint">
+                              {bareRows.map((item) => renderRouterItem(item.id, item.model, item.providers.length > 1 ? item.providers.join(', ') : item.providers[0]))}
+                            </div>
+                          </>
+                        ) : null}
+                        {[...canonicalGroups.entries()].map(([provider, items]) => (
+                          <React.Fragment key={provider}>
+                            <div className="menu-head"><span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><ProviderIcon id={provider} size={14} />{provider} · {items.length}</span></div>
+                            <div className="model-list">
+                              {items.map((item) => renderRouterItem(item.id, item.model, item.id))}
+                            </div>
+                          </React.Fragment>
+                        ))}
+                      </>
+                    );
+                  }
                   // §multi-select-models — when the default provider saved an
                   // allowlist, narrow the live endpoint list to it (∩); an empty
                   // allowlist falls through to the full list (unchanged behavior).
@@ -406,8 +517,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
                           return (
                             <button key={m} className="menu-item model-item" onClick={() => {
                               // Item 10 — scope decides where it's saved: global (config.json) or this chat only.
-                              window.brainrouter.send({ kind: 'set-model', model: m, persist: modelScope === 'global' });
-                              setPop('');
+                              pickModelRequest(m);
                             }}>
                               <span className="mi-check">{m === info.model ? '✓' : ''}</span>
                               <ModelIcon model={m} style={{ marginRight: 6 }} />
@@ -437,9 +547,8 @@ export function Composer(p: ComposerProps): React.ReactElement {
                                   // 'global' → sets the shared default; 'session' → a per-chat
                                   // override (provider+model+endpoint, key resolved host-side) so
                                   // it never syncs to the other chats.
-                                  window.brainrouter.send({ kind: 'set-model', model: m, providerName: g.name, persist: modelScope === 'global' });
+                                  pickModelRequest(m, g.name);
                                   q('q-snapshot', 'config-snapshot'); q('q-models', 'list-models');
-                                  setPop('');
                                 }}>
                                   <span className="mi-check">{g.name === defaultProviderName && m === info.model ? '✓' : ''}</span>
                                   <ModelIcon model={m} style={{ marginRight: 6 }} />
@@ -470,11 +579,12 @@ export function Composer(p: ComposerProps): React.ReactElement {
                 </div>
               </div>
             ) : null}
-            <button type="button" className="model-pill" onClick={() => {
+            <button type="button" className={`model-pill${routerFallback ? ' router-fallback' : ''}`} title={routerFallback ? `Router fallback: ${routerFallback}` : undefined} onClick={() => {
               if (pop !== 'model') { setModelsLoading(true); q('q-models', 'list-models'); }
               setPop(pop === 'model' ? '' : 'model');
             }}>
-              {info.model ?? ''}
+              {routerFallback ? <span className="router-fallback-badge" aria-label="Router fallback">↷</span> : null}
+              <span>{info.model ?? ''}</span>
             </button>
           </span>
           {/* DESK-5s/5u — click the ring for a full context + usage breakdown. */}

@@ -32,10 +32,39 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     { runtimeId: 'rt_ab12cd34', name: 'web', url: 'http://127.0.0.1:5173', port: 5173 },
   ];
   const devTriggerServe = { running: false, host: null as string | null, port: null as number | null, startedAt: null as string | null, providers: [] as string[], recentEvents: [] as string[], lastError: null as string | null };
+  const devRouterServe = { running: false, host: null as string | null, port: null as number | null, startedAt: null as string | null, url: null as string | null, recentEvents: [] as string[], lastError: null as string | null };
+  const devAgentModels: Array<{ role: string; provider: string | null; model: string | null }> = [
+    { role: 'explorer', provider: 'groq', model: null },
+    { role: 'reviewer', provider: null, model: 'gpt-5.3-codex' },
+  ];
   const devAutomationRules = [
     { id: 'label-fix', name: 'Fix labeled bugs', on: 'github.issue.labeled', when: "label == 'bug'", do: 'build', enabled: true, sourcePath: '/Users/dev/BrainRouter/.brainrouter/automations/label-fix.md' },
     { id: 'ci-repair', name: 'Repair failing CI', on: 'github.workflow_run.completed', when: "conclusion == 'failure'", do: 'fix-ci', enabled: false, sourcePath: '/Users/dev/BrainRouter/.brainrouter/automations/ci-repair.md' },
   ];
+  const devRouterCatalog = () => {
+    const canonical = devProviders.flatMap((p) => {
+      const models = p.cachedModels?.length
+        ? (p.models.length ? p.cachedModels.filter((m) => p.models.includes(m)) : p.cachedModels)
+        : (p.models.length ? p.models : [p.model]);
+      return models.map((model) => ({
+        id: `${p.name}/${model}`,
+        slug: `${p.name}/${model}`,
+        model,
+        provider: p.name,
+        providers: [p.name],
+        endpoint: p.endpoint ?? undefined,
+        cachedAt: p.cachedAt ?? undefined,
+      }));
+    });
+    const bareMap = new Map<string, { id: string; model: string; providers: string[]; endpoint?: string; cachedAt?: string }>();
+    for (const entry of canonical) {
+      const row = bareMap.get(entry.model) ?? { id: entry.model, model: entry.model, providers: [], endpoint: entry.endpoint, cachedAt: entry.cachedAt };
+      row.providers.push(entry.provider);
+      bareMap.set(entry.model, row);
+    }
+    const router = (devCliKnobs.router ?? {}) as { enabled?: boolean; chain?: string[] };
+    return { enabled: router.enabled === true, primaryChain: Array.isArray(router.chain) ? router.chain : [], canonical, bare: [...bareMap.values()], aliases: [] };
+  };
   const queries: Record<string, (args: Record<string, unknown>) => unknown> = {
     'list-sessions': () => mergeMeta(S.wsCurrent),
     'runtime-runner-info': () => ({ mode: 'in-process', remoteUrl: null }),
@@ -917,12 +946,17 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       activeServer: S.devActiveServer, // WS9 — the single active brain
       // §multi-provider — named providers (mutable in dev) + per-role routing.
       providers: devProviders.map((p) => ({ ...p })),
+      routerCatalog: devRouterCatalog(),
+      routerStatus: {
+        providers: [{ provider: 'groq', until: Date.now() + 42_000, step: 1, reason: 'provider_retryable' }],
+        models: [],
+        recentEvents: [{ at: Date.now() - 12_000, message: 'groq/llama-3.3-70b unavailable (provider_retryable 429), routed to openrouter/llama-3.3-70b', from: 'groq/llama-3.3-70b', to: 'openrouter/llama-3.3-70b', reason: 'provider_retryable', status: 429 }],
+      },
+      routerServe: { ...devRouterServe, recentEvents: [...devRouterServe.recentEvents] },
+      routerSecretsSet: { serveKey: typeof ((devCliKnobs.router as { serveKey?: string } | undefined)?.serveKey) === 'string' },
       defaultProviderName: S.devDefaultProvider,
       defaultProviderModelMatches: true,
-      agentModels: [
-        { role: 'explorer', provider: 'groq', model: null },
-        { role: 'reviewer', provider: null, model: 'gpt-5.3-codex' },
-      ],
+      agentModels: devAgentModels.map((entry) => ({ ...entry })),
       triggerSecretsSet: {
         github: typeof (devCliKnobs.triggers as { githubSecret?: string } | undefined)?.githubSecret === 'string',
         slack: typeof (devCliKnobs.triggers as { slackSigningSecret?: string } | undefined)?.slackSigningSecret === 'string',
@@ -948,6 +982,21 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       devTriggerServe.running = false; devTriggerServe.host = null; devTriggerServe.port = null; devTriggerServe.startedAt = null; devTriggerServe.providers = [];
       return { ok: true };
     },
+    'action:router-serve-start': () => {
+      const router = devCliKnobs.router as { serve?: boolean; serveHost?: string; servePort?: number; serveKey?: string } | undefined;
+      if (router?.serve !== true) { devRouterServe.lastError = 'Router gateway is disabled — turn on cli.router.serve first.'; return { ok: false, error: devRouterServe.lastError }; }
+      if (!router.serveKey) { devRouterServe.lastError = 'Router gateway requires cli.router.serveKey.'; return { ok: false, error: devRouterServe.lastError }; }
+      devRouterServe.running = true; devRouterServe.host = router.serveHost ?? '127.0.0.1'; devRouterServe.port = router.servePort ?? 8790;
+      devRouterServe.url = `http://${devRouterServe.host}:${devRouterServe.port}/router/v1`;
+      devRouterServe.startedAt = new Date().toISOString();
+      devRouterServe.recentEvents = [`${devRouterServe.startedAt} listening on ${devRouterServe.url}`];
+      devRouterServe.lastError = null;
+      return { ok: true, host: devRouterServe.host, port: devRouterServe.port };
+    },
+    'action:router-serve-stop': () => {
+      devRouterServe.running = false; devRouterServe.host = null; devRouterServe.port = null; devRouterServe.url = null; devRouterServe.startedAt = null;
+      return { ok: true };
+    },
     'action:runtime-remove-record': (a) => { const i = devRuntimes.findIndex((r) => r.id === a.id); if (i >= 0) devRuntimes.splice(i, 1); return { ok: i >= 0, id: String(a.id ?? '') }; },
     'action:runtime-resume-archive': (a) => ({ ok: true, id: String(a.id ?? ''), worktreeRoot: '/Users/dev/.brainrouter/runtime/worktrees/'+String(a.id ?? ''), patchApplied: true, filesRestored: true, patchError: null }),
     'action:runtime-prune-archives': (a) => { const keepN = typeof a.keepN === 'number' ? a.keepN : 1; const removed = devArchives.slice(keepN).map((x) => x.id); devArchives = devArchives.slice(0, keepN); return { ok: true, removed }; },
@@ -956,9 +1005,22 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       const name = String(a.name ?? '').trim();
       if (!/^[a-zA-Z0-9._-]+$/.test(name)) return { ok: false, error: 'Provider name must be letters, digits, . _ - only.' };
       const models = Array.isArray(a.models) ? a.models.filter((m): m is string => typeof m === 'string' && m.trim().length > 0) : [];
+      const cachedModels = Array.isArray(a.cachedModels) ? a.cachedModels.filter((m): m is string => typeof m === 'string' && m.trim().length > 0) : [];
       const model = String(a.model ?? '').trim() || models[0] || '';
       if (!model) return { ok: false, error: 'A model is required.' };
-      const entry = { name, provider: String(a.provider ?? '').trim() || 'openai-compatible', model, endpoint: (String(a.endpoint ?? '').trim() || null), hasKey: !!String(a.apiKey ?? '').trim(), models, apiVersion: a.apiVersion ? String(a.apiVersion) : null };
+      const entry = {
+        name,
+        provider: String(a.provider ?? '').trim() || 'openai-compatible',
+        model,
+        endpoint: (String(a.endpoint ?? '').trim() || null),
+        hasKey: !!String(a.apiKey ?? '').trim(),
+        models,
+        cachedModels,
+        cachedAt: cachedModels.length ? new Date().toISOString() : null,
+        apiVersion: a.apiVersion ? String(a.apiVersion) : null,
+        free: a.free === true,
+        passthroughUnknown: a.passthroughUnknown === true,
+      };
       const i = devProviders.findIndex((p) => p.name === name);
       if (i >= 0) devProviders[i] = entry; else devProviders.push(entry);
       return { ok: true, name };
@@ -976,7 +1038,20 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       S.devDefaultProvider = name;
       return { ok: true, name };
     },
-    'action:set-agent-model': (a) => ({ ok: true, role: String(a.role ?? '') }),
+    'action:set-agent-model': (a) => {
+      const role = String(a.role ?? '').trim();
+      if (!role) return { ok: false, error: 'No role.' };
+      const provider = String(a.provider ?? '').trim();
+      const model = String(a.model ?? '').trim();
+      const i = devAgentModels.findIndex((entry) => entry.role === role);
+      if (!provider && !model) {
+        if (i >= 0) devAgentModels.splice(i, 1);
+      } else {
+        const next = { role, provider: provider || null, model: model || null };
+        if (i >= 0) devAgentModels[i] = next; else devAgentModels.push(next);
+      }
+      return { ok: true, role };
+    },
     'usage-breakdown': () => [
       'parent      48,213 in · 1,904 out · cache hit 92%',
       'explorer·3f2a   12,408 in · 822 out',

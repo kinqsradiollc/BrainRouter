@@ -69,6 +69,11 @@ export function scrubCliSecrets(cli: unknown): Record<string, unknown> {
     for (const k of ['githubSecret', 'slackSigningSecret', 'gitlabSecret', 'jiraSecret']) delete triggers[k];
     c.triggers = triggers;
   }
+  if (c.router && typeof c.router === 'object') {
+    const router = { ...(c.router as Record<string, unknown>) };
+    delete router.serveKey;
+    c.router = router;
+  }
   return c;
 }
 

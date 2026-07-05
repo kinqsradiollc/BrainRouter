@@ -12,6 +12,8 @@
  * Mutations return a NEW config — the caller persists with `saveConfig`.
  */
 import type { Config, LLMConfig, AgentModelAssignment } from '../config/config.js';
+import { resolveCliKnobs } from '../config/config.js';
+import { buildModelRegistry, resolveRoutes } from '../router/index.js';
 
 /**
  * Sub-agent roles that can have their own model. The entry named `default` is
@@ -45,12 +47,33 @@ export function getProvider(config: Pick<Config, 'providers'>, name: string): LL
  * override), so a role with no assignment inherits exactly what it does today.
  */
 export function resolveAgentLlm(
-  config: Pick<Config, 'providers' | 'agentModels'>,
+  config: Pick<Config, 'providers' | 'agentModels' | 'cli'>,
   baseLlm: LLMConfig,
   role: string,
 ): LLMConfig {
   const assign = config.agentModels?.[role] ?? config.agentModels?.['default'];
   if (!assign || (!assign.provider && !assign.model)) return baseLlm;
+  const knobs = resolveCliKnobs(config as Config);
+  if (knobs.router.enabled) {
+    const baseName = config.providers?.base ? 'base-config' : 'base';
+    const providers = { ...(config.providers ?? {}), [baseName]: baseLlm };
+    const request = assign.provider && assign.model
+      ? `${assign.provider}/${assign.model}`
+      : assign.provider
+        ? `${assign.provider}/${config.providers?.[assign.provider]?.model ?? ''}`
+        : assign.model ?? '';
+    const registry = buildModelRegistry(providers, {
+      aliases: knobs.router.aliases,
+      chain: [...knobs.router.chain, ...knobs.fallbackModels, `${baseName}/${baseLlm.model}`],
+      order: knobs.router.order,
+      strategy: knobs.router.strategy,
+      passThrough: knobs.router.passThrough,
+      availableModels: knobs.availableModels,
+      enforceAvailableModels: knobs.enforceAvailableModels,
+    });
+    const route = resolveRoutes(registry, request, { withFallbacks: true, role })[0];
+    if (route) return { ...route.llm };
+  }
   const provider = assign.provider ? config.providers?.[assign.provider] : undefined;
   const base = provider ?? baseLlm;
   const model = (assign.model && assign.model.trim()) || base.model;
@@ -60,6 +83,35 @@ export function resolveAgentLlm(
   // `config.llm` never holds the allowlist), so don't let it ride along.
   delete resolved.models;
   return resolved;
+}
+
+export function resolveCriticLlm(
+  config: Pick<Config, 'providers' | 'agentModels' | 'cli'>,
+  baseLlm: LLMConfig,
+): LLMConfig {
+  const criticRole = config.agentModels?.critic ? 'critic' : 'reviewer';
+  const roleLlm = resolveAgentLlm(config, baseLlm, criticRole);
+  const knobs = resolveCliKnobs(config as Config);
+  const request = knobs.critic.model;
+  if (!request) return roleLlm;
+  if (knobs.router.enabled) {
+    const baseName = config.providers?.base ? 'base-config' : 'base';
+    const registry = buildModelRegistry(
+      { ...(config.providers ?? {}), [baseName]: roleLlm },
+      {
+        aliases: knobs.router.aliases,
+        chain: [...knobs.router.chain, ...knobs.fallbackModels, `${baseName}/${roleLlm.model}`],
+        order: knobs.router.order,
+        strategy: knobs.router.strategy,
+        passThrough: knobs.router.passThrough,
+        availableModels: knobs.availableModels,
+        enforceAvailableModels: knobs.enforceAvailableModels,
+      },
+    );
+    const route = resolveRoutes(registry, request, { withFallbacks: true, role: 'critic' })[0];
+    if (route) return { ...route.llm };
+  }
+  return { ...roleLlm, model: request };
 }
 
 /**

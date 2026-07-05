@@ -46,6 +46,7 @@ export interface AgentEventsCtx {
   setStopping: React.Dispatch<React.SetStateAction<boolean>>;
   setTurnStart: React.Dispatch<React.SetStateAction<number>>;
   setStatusLine: React.Dispatch<React.SetStateAction<string>>;
+  setLastRouterFallback: React.Dispatch<React.SetStateAction<string | null>>;
   setReasoningTail: React.Dispatch<React.SetStateAction<string>>;
   setLiveText: React.Dispatch<React.SetStateAction<string>>;
   setToolLog: React.Dispatch<React.SetStateAction<Array<{ id: number; tool: string; ok: boolean; summary: string }>>>;

@@ -623,6 +623,8 @@ export class Agent {
   /** CC-CONFIG-A2: models already attempted this turn (primary + each fallback tried),
    *  so the ordered fallback chain cascades without re-trying a dead model. */
   public triedModels = new Set<string>();
+  /** Provider-router v2: provider/model route slugs already attempted this turn. */
+  public triedRouterRoutes = new Set<string>();
   public initialized = false;
   public recalledRecordIds: string[] = [];
   public recalledRecords: RecalledRecord[] = [];

@@ -8,7 +8,7 @@ import chalk from 'chalk';
 import type { Agent } from '../agent.js';
 import { NoTTYError } from '../support/prompter.js';
 import { runHooks } from '../../hooks/hooksStore.js';
-import { getCliKnobs } from '../../config/config.js';
+import { getCliKnobs, loadOrInitConfig } from '../../config/config.js';
 import { createArtifact, updateArtifact, getArtifact } from '../../artifact/artifactStore.js';
 
 // Per-turn computer_use action cap — module const in the original agent.ts; kept
@@ -39,6 +39,7 @@ import { readPreferences } from '../../session/preferences/preferencesStore.js';
 import { resolveActiveMode, setSessionMode } from '../../session/state/sessionModeStore.js';
 import { setSessionRuntime } from '../../session/state/sessionRuntimeStore.js';
 import { resolveProfileSwitch } from '../../provider/llmProfiles.js';
+import { buildModelRegistry, resolveRoutes } from '../../router/index.js';
 import { formatPlan, updatePlan, readPlan } from '../../task/taskStore.js';
 import { isTelemetryEnabled } from '../../telemetry/recorder/telemetry.js';
 import { traceEvent } from '../../telemetry/tracing/tracing.js';
@@ -690,17 +691,47 @@ export async function executeLocalToolLegacy(this: Agent, name: string, args: Re
         // agent must never loosen its own approval posture).
         const knobs = getCliKnobs();
         const inFastMode = resolveActiveMode(this.workspaceRoot, this.sessionKey).executionMode === 'fast';
+        const profileName = String(args.profile ?? '');
+        const rawProfile = knobs.llmProfiles?.[profileName.trim()];
+        const routeProfileModel = knobs.router.enabled && !rawProfile?.endpoint;
         const result = resolveProfileSwitch(String(args.profile ?? ''), knobs.llmProfiles, this.llmConfig, {
           availableModels: knobs.availableModels,
-          enforceAvailableModels: knobs.enforceAvailableModels,
-          fastMode: inFastMode,
+          enforceAvailableModels: routeProfileModel ? false : knobs.enforceAvailableModels,
+          fastMode: routeProfileModel ? false : inFastMode,
         });
         if (!result.ok) return JSON.stringify({ switched: false, error: result.error });
         const before = this.llmConfig.model;
-        this.llmConfig = result.llm;
+        let nextLlm = result.llm;
+        let resolvedRoute = '';
+        if (routeProfileModel) {
+          const config = loadOrInitConfig();
+          const baseName = config.providers?.base ? 'base-config' : 'base';
+          const registry = buildModelRegistry(
+            { ...(config.providers ?? {}), [baseName]: this.llmConfig },
+            {
+              aliases: knobs.router.aliases,
+              chain: [...knobs.router.chain, ...knobs.fallbackModels, `${baseName}/${this.llmConfig.model}`],
+              order: knobs.router.order,
+              strategy: knobs.router.strategy,
+              passThrough: knobs.router.passThrough,
+              availableModels: knobs.availableModels,
+              enforceAvailableModels: knobs.enforceAvailableModels || inFastMode,
+            },
+          );
+          const route = resolveRoutes(registry, result.profile.model, { withFallbacks: true })[0];
+          if (!route) {
+            return JSON.stringify({
+              switched: false,
+              error: `Router could not resolve profile "${result.name}" model "${result.profile.model}".`,
+            });
+          }
+          nextLlm = { ...route.llm };
+          resolvedRoute = route.slug;
+        }
+        this.llmConfig = nextLlm;
         try {
           setSessionRuntime(this.workspaceRoot, this.sessionKey, {
-            model: result.llm.model,
+            model: routeProfileModel ? result.profile.model : nextLlm.model,
             endpoint: result.profile.endpoint ?? '',
             llmProfile: result.name,
           });
@@ -710,15 +741,17 @@ export async function executeLocalToolLegacy(this: Agent, name: string, args: Re
         } catch { /* persistence is best-effort; the live switch already applied */ }
         traceEvent('model.profile_switch', {
           from: before,
-          to: result.llm.model,
+          to: nextLlm.model,
           profile: result.name,
+          route: resolvedRoute || null,
           reason: typeof args.reason === 'string' && args.reason.trim() ? args.reason.trim() : null,
         });
         return JSON.stringify({
           switched: true,
           profile: result.name,
           from: before,
-          to: result.llm.model,
+          to: nextLlm.model,
+          route: resolvedRoute || undefined,
           note: 'Applies from the next model call onward in this session.',
         });
       }

@@ -183,6 +183,7 @@ export function SettingsDialog(props: {
             profiles={(knobs.llmProfiles ?? {}) as Record<string, { model?: string; endpoint?: string; reasoningEffort?: string; fast?: boolean }>}
             active={String(knobs.activeLlmProfile ?? '')}
             endpointModels={props.endpointModels}
+            routerCatalog={snapshot?.routerCatalog}
             setPath={setPath}
           />
         </>

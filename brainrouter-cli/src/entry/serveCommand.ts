@@ -1,6 +1,7 @@
 /**
  * MC-B1 — `brainrouter serve --triggers`: the opt-in trigger-ingress mode.
- * Default-deny end to end: without `--triggers` the command starts nothing;
+ * Provider-router v2 also adds `--router` for the local OpenAI-compatible
+ * gateway. Default-deny end to end: without a mode flag the command starts nothing;
  * with it, `cli.triggers.enabled` must be explicitly true; the listener
  * binds loopback:8787 unless the user says otherwise; unknown providers
  * 404; unsigned/badly-signed deliveries 401; non-allowlisted repos drop.
@@ -11,14 +12,62 @@ import chalk from 'chalk';
 export function registerServeCommand(program: Command): void {
   program
     .command('serve')
-    .description('Long-running service modes. Currently: --triggers (inbound webhook ingress → normalized trigger events).')
+    .description('Long-running service modes: --triggers or --router.')
     .option('--triggers', 'Serve POST /triggers/{provider}/events (requires cli.triggers.enabled=true)')
+    .option('--router', 'Serve /router/v1 OpenAI-compatible provider-router gateway (requires cli.router.serve=true)')
     .option('--port <n>', 'Override cli.triggers.port (default 8787)')
     .option('--host <host>', 'Override cli.triggers.host (default 127.0.0.1)')
     .action(async (options) => {
-      const { getCliKnobs } = await import('@kinqs/brainrouter-core/config');
+      const { getCliKnobs, loadConfig } = await import('@kinqs/brainrouter-core/config');
       const { validateServeInvocation, resolveServeBind, serveStartupWarnings } =
         await import('../runtime/triggers/serveCommand.js');
+      if (options.router === true) {
+        if (options.triggers === true) {
+          console.error(chalk.red('Choose one serve mode at a time: --router or --triggers.'));
+          process.exitCode = 1;
+          return;
+        }
+        const config = loadConfig();
+        const router = getCliKnobs().router;
+        if (router.serve !== true) {
+          console.error(chalk.red('Router gateway is disabled (cli.router.serve is false — the default). Set cli.router.serve=true to opt in.'));
+          process.exitCode = 1;
+          return;
+        }
+        if (!router.serveKey) {
+          console.error(chalk.red('Router gateway requires cli.router.serveKey. The key is write-only and must be sent as a Bearer token.'));
+          process.exitCode = 1;
+          return;
+        }
+        const rawPort = options.port != null ? parseInt(String(options.port), 10) : NaN;
+        const bind = {
+          host: typeof options.host === 'string' && options.host.trim() ? options.host.trim() : router.serveHost,
+          port: Number.isInteger(rawPort) && rawPort >= 1 && rawPort <= 65_535 ? rawPort : router.servePort,
+        };
+        const { startRouterGateway } = await import('@kinqs/brainrouter-core/router/gateway');
+        let handle: Awaited<ReturnType<typeof startRouterGateway>>;
+        try {
+          handle = await startRouterGateway({
+            config,
+            host: bind.host,
+            port: bind.port,
+            serveKey: router.serveKey,
+          });
+        } catch (error) {
+          console.error(chalk.red(`Router gateway failed to start: ${(error as Error).message}`));
+          process.exitCode = 1;
+          return;
+        }
+        console.log(chalk.green(`Router gateway listening on http://${handle.host}:${handle.port}`));
+        console.log(chalk.gray('  Routes: GET /router/v1/models · POST /router/v1/chat/completions'));
+        const shutdown = async () => {
+          try { await handle.close(); } catch { /* already down */ }
+          process.exit(0);
+        };
+        process.on('SIGINT', shutdown);
+        process.on('SIGTERM', shutdown);
+        return;
+      }
       const knobs = getCliKnobs().triggers;
 
       const gateError = validateServeInvocation(

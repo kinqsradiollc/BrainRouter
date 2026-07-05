@@ -9,6 +9,7 @@ import { createPortal } from 'react-dom';
 import { ProviderIcon } from '../../components/model/ProviderIcon.js';
 import { Row, ChoiceControl, ComboInput } from '../shared/controls.js';
 import { WireFormatSelect } from '../shared/controls.js';
+import { RoutingChainEditor, describeRouterRequest, routerCatalogChoiceOptions } from './RoutingChainEditor.js';
 import {
   SUBAGENT_ROLES,
   SUBAGENT_ROLE_LABELS,
@@ -38,8 +39,17 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
   };
 }): React.ReactElement {
   const [editingProvider, setEditingProvider] = useState<string | null>(null);
-  const [provDraft, setProvDraft] = useState<{ name: string; provider: string; endpoint: string; apiKey: string; model: string; apiVersion: string }>({ name: '', provider: 'openai', endpoint: '', apiKey: '', model: '', apiVersion: '' });
-  const [roleDraft, setRoleDraft] = useState<Record<string, { provider: string; model: string }>>({});
+  const [provDraft, setProvDraft] = useState<{ name: string; provider: string; endpoint: string; apiKey: string; model: string; apiVersion: string; free: boolean; passthroughUnknown: boolean }>({
+    name: '',
+    provider: 'openai',
+    endpoint: '',
+    apiKey: '',
+    model: '',
+    apiVersion: '',
+    free: false,
+    passthroughUnknown: false,
+  });
+  const [roleDraft, setRoleDraft] = useState<Record<string, { request: string }>>({});
   // WS12 — provider configure modal + delete confirmation.
   const [provModalOpen, setProvModalOpen] = useState(false);
   const [confirmDeleteProvider, setConfirmDeleteProvider] = useState<string | null>(null);
@@ -52,15 +62,25 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
   // Search/filter text for the model checklist (filters the fetched list).
   const [modelFilter, setModelFilter] = useState('');
+  const [routerKeyDraft, setRouterKeyDraft] = useState('');
   // De-dups probe calls: blur + button + a re-render shouldn't re-fire the same
   // endpoint+key. Holds the last-probed signature.
   const lastProbeRef = useRef<string>('');
   /** WS12 — open the configure modal: edit an existing provider, prefill from a
    *  catalog id, or a blank custom provider. §multi-select-models: preload the
    *  saved allowlist (when editing) and clear any prior probe result. */
-  const openProviderModal = (init?: { name?: string; provider?: string; endpoint?: string | null; model?: string; models?: string[]; apiVersion?: string | null; editing?: string }): void => {
+  const openProviderModal = (init?: { name?: string; provider?: string; endpoint?: string | null; model?: string; models?: string[]; apiVersion?: string | null; free?: boolean; passthroughUnknown?: boolean; editing?: string }): void => {
     setEditingProvider(init?.editing ?? null);
-    setProvDraft({ name: init?.name ?? '', provider: init?.provider ?? 'openai', endpoint: init?.endpoint ?? '', apiKey: '', model: init?.model ?? '', apiVersion: init?.apiVersion ?? '' });
+    setProvDraft({
+      name: init?.name ?? '',
+      provider: init?.provider ?? 'openai',
+      endpoint: init?.endpoint ?? '',
+      apiKey: '',
+      model: init?.model ?? '',
+      apiVersion: init?.apiVersion ?? '',
+      free: init?.free === true,
+      passthroughUnknown: init?.passthroughUnknown === true,
+    });
     setSelectedModels(init?.models ?? []);
     setModelFilter('');
     lastProbeRef.current = '';
@@ -99,21 +119,43 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
     for (const name of providerNames ? providerNames.split(',') : []) api.onAction('q-models', 'list-models', { provider: name });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api.open, api.section, providerNames]);
-  // The /models list backing a role's picker: the active endpoint for
-  // main/inherit, else the named provider's own list.
-  const modelsForProvider = (provider: string): string[] =>
-    (!provider || provider === '(main)' || provider === 'inherit') ? api.endpointModels : (api.providerModels[provider] ?? []);
-
   const providerCatalog = snapshot?.providerCatalog ?? [];
   const savedProviders = snapshot?.providers ?? [];
   const defaultProvider = snapshot?.defaultProviderName ?? '';
-  const currentDefault = defaultProvider
-    ? savedProviders.find((p) => p.name === defaultProvider)
-    : null;
-  const defaultModelMatches = snapshot?.defaultProviderModelMatches !== false;
-  // Host of the active default's endpoint (named provider's, else the base llm's),
-  // so the "Default model" card can show WHERE the model runs.
-  const activeHost = ((currentDefault?.endpoint ?? snapshot?.endpoint) || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  const routerCatalog = snapshot?.routerCatalog;
+  const routerKnobs = (knobs.router && typeof knobs.router === 'object' ? knobs.router : {}) as Record<string, unknown>;
+  const routerServe = snapshot?.routerServe;
+  const routerServeEnabled = routerKnobs.serve === true;
+  const routerServeKeySet = snapshot?.routerSecretsSet?.serveKey === true;
+  const setRouterPath = (path: string, value: unknown): void => {
+    api.onAction('a-router-path', 'action:set-cli-path', { path: `router.${path}`, value });
+    setTimeout(refreshSnapshot, 80);
+  };
+  const routerServeAction = (name: string): void => {
+    api.onAction('a-router-serve', name, {});
+    setTimeout(refreshSnapshot, 250);
+  };
+  const routerRoleOptions = React.useMemo(() => ([
+    { value: 'inherit', label: 'Inherit main', detail: 'primary chain' },
+    ...routerCatalogChoiceOptions(routerCatalog),
+  ]), [routerCatalog]);
+  const roleRequestFor = (provider?: string | null, model?: string | null): string => {
+    const cleanProvider = (provider ?? '').trim();
+    const cleanModel = (model ?? '').trim();
+    if (!cleanProvider && !cleanModel) return 'inherit';
+    if (cleanProvider) return `${cleanProvider}/${cleanModel || savedProviders.find((p) => p.name === cleanProvider)?.model || ''}`.replace(/\/$/, '');
+    return cleanModel || 'inherit';
+  };
+  const assignmentForRequest = (request: string): { provider: string; model: string } => {
+    const value = request.trim();
+    if (!value || value === 'inherit' || value === 'auto') return { provider: '', model: '' };
+    const slash = value.indexOf('/');
+    if (slash > 0) {
+      const provider = value.slice(0, slash);
+      if (savedProviders.some((p) => p.name === provider)) return { provider, model: value.slice(slash + 1) };
+    }
+    return { provider: '', model: value };
+  };
   const overrideRaw = normalizeWireFormatOverrides(knobs.providerRequestFormat);
   const updateWireFormat = (id: string, next: WireFormatOverride | null): void => {
     const providerId = normalizeProviderId(id);
@@ -151,7 +193,7 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
   return (
     <>
       <div className="set-h">Models</div>
-      <div className="set-desc" style={{ marginBottom: 6 }}>Configure provider endpoints, choose the default model, and set provider-level request routing.</div>
+      <div className="set-desc" style={{ marginBottom: 6 }}>Configure provider endpoints, choose the primary route, and set provider-level request routing.</div>
 
       {/* Sub-tabs: provider setup vs. per-sub-agent model routing. */}
       <div style={{ display: 'flex', gap: 4, margin: '4px 0 14px', borderBottom: '1px solid var(--border)' }}>
@@ -165,29 +207,45 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
 
       {modelsTab === 'providers' ? (
       <>
-      <div className="set-h2">Default model</div>
-      <div className="set-desc" style={{ marginBottom: 8 }}>The model every new turn uses unless a sub-agent, profile, or <code>/model</code> overrides it.</div>
-      {/* The RESOLVED active default — shows what runs + where it comes from, so
-          a base/quickstart model (e.g. the free opencode tier) is never a mystery. */}
-      <div className="provider-card saved" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 3, padding: '11px 13px', marginBottom: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-          <ProviderIcon id={(currentDefault?.provider) || snapshot?.provider || 'openai-compatible'} size={22} />
-          <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{snapshot?.model || 'No model set'}</span>
-          {activeHost ? <span className="pc-host" style={{ flex: '0 0 auto' }}>· {activeHost}</span> : null}
+      <RoutingChainEditor
+        catalog={routerCatalog}
+        status={snapshot?.routerStatus}
+        providers={savedProviders}
+        routerKnobs={routerKnobs}
+        baseModel={snapshot?.model}
+        setRouterPath={setRouterPath}
+      />
+
+      <div className="set-h2">Gateway</div>
+      <div className="provider-card saved" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 9, padding: '11px 13px', marginBottom: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+          <span style={{ fontWeight: 650 }}>OpenAI-compatible gateway {routerServe?.running ? <span className="badge native" style={{ marginLeft: 6 }}>running</span> : <span className="badge cli" style={{ marginLeft: 6 }}>stopped</span>}</span>
+          {routerServe?.running
+            ? <button className="btn danger" onClick={() => routerServeAction('action:router-serve-stop')}>Stop</button>
+            : <button className="btn" disabled={!routerServeEnabled || !routerServeKeySet} title={!routerServeEnabled ? 'Turn on gateway serving first' : !routerServeKeySet ? 'Set a gateway key first' : undefined} onClick={() => routerServeAction('action:router-serve-start')}>Start</button>}
         </div>
         <div className="set-desc" style={{ margin: 0 }}>
-          {currentDefault
-            ? <>From your provider <b>{currentDefault.name}</b>{!defaultModelMatches ? <> — <span style={{ color: 'var(--warn)' }}>a <code>/model</code> override is active this session</span></> : null}.</>
-            : <>This is your <b>base config</b> — the free quickstart model, <i>not</i> one of the providers below. Pick a provider below to make it the default instead.</>}
+          {routerServe?.running && routerServe.url
+            ? <>URL <code>{routerServe.url}</code>{routerServe.startedAt ? <> · since {new Date(routerServe.startedAt).toLocaleTimeString()}</> : null}</>
+            : <>Local gateway is stopped.{routerServe?.lastError ? <> <span style={{ color: 'var(--warn)' }}>{routerServe.lastError}</span></> : null}</>}
+        </div>
+        {routerServe?.url ? (
+          <button className="btn" style={{ alignSelf: 'flex-start' }} onClick={() => { void navigator.clipboard?.writeText(routerServe.url ?? ''); }}>Copy URL</button>
+        ) : null}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13, cursor: 'pointer' }}>
+          <input type="checkbox" checked={routerServeEnabled} onChange={(e) => setRouterPath('serve', e.target.checked)} />
+          <span>Enable gateway serving</span>
+        </label>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 120px', gap: 8 }}>
+          <input className="ctl" defaultValue={String(routerKnobs.serveHost ?? '127.0.0.1')} placeholder="127.0.0.1" onBlur={(e) => setRouterPath('serveHost', e.target.value.trim() || null)} />
+          <input className="ctl" type="number" min={1} max={65535} defaultValue={String(routerKnobs.servePort ?? 8790)} placeholder="8790" onBlur={(e) => setRouterPath('servePort', Number(e.target.value) || null)} />
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto auto', gap: 8 }}>
+          <input className="ctl" type="password" placeholder={routerServeKeySet ? 'Gateway key configured' : 'Gateway bearer key'} value={routerKeyDraft} onChange={(e) => setRouterKeyDraft(e.target.value)} />
+          <button className="btn" disabled={!routerKeyDraft.trim()} onClick={() => { setRouterPath('serveKey', routerKeyDraft.trim()); setRouterKeyDraft(''); }}>Set key</button>
+          <button className="btn danger" disabled={!routerServeKeySet} onClick={() => setRouterPath('serveKey', null)}>Clear</button>
         </div>
       </div>
-      {savedProviders.length ? (
-        <Row title="Use a provider as the default" desc="Route the main model through one of your saved providers.">
-          <ChoiceControl value={defaultProvider} placeholder="Base config (quickstart)"
-            options={savedProviders.map((p) => ({ value: p.name, label: p.name, detail: `${p.provider} · ${p.model}` }))}
-            onChange={(name) => { if (name) { api.onAction('a-setdefault', 'action:set-default-provider', { name }); setTimeout(refreshSnapshot, 80); } }} />
-        </Row>
-      ) : null}
 
       <div className="set-h2">Set up a provider</div>
       <div className="set-desc" style={{ marginBottom: 8 }}>Pick one — the dialog pre-fills the endpoint, then enter your key to pull the models it unlocks.</div>
@@ -218,20 +276,39 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
       {savedProviders.length === 0 ? <div className="empty">None yet — pick one above, or add a custom provider.</div> : null}
       {savedProviders.length ? (
         <div className="provider-gallery" style={{ gridTemplateColumns: '1fr', gap: 8 }}>
-          {[...savedProviders].sort((a, b) => (a.name === defaultProvider ? -1 : b.name === defaultProvider ? 1 : 0)).map((p) => (
-            <div key={p.name} className="provider-card saved" style={{ flexDirection: 'row', alignItems: 'center', gap: 11, textAlign: 'left' }}>
-              <ProviderIcon id={p.provider} size={28} title={p.provider} />
-              <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0, flex: 1 }}>
-                <span className="pc-name" style={{ fontWeight: 600 }}>{p.name}{p.name === defaultProvider ? <span className="pc-tag default" style={{ marginLeft: 6 }}>Default</span> : null}</span>
-                <span className="pc-host" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.model}{p.models && p.models.length ? ` · ${p.models.length} models` : ''}</span>
-              </span>
-              <span className="pc-actions" style={{ marginLeft: 'auto', flexWrap: 'nowrap', flex: '0 0 auto' }}>
-                {p.name !== defaultProvider ? <button className="btn" title="Make this the default model" onClick={() => { api.onAction('a-setdefault', 'action:set-default-provider', { name: p.name }); setTimeout(refreshSnapshot, 80); }}>Set default</button> : null}
-                <button className="btn" onClick={() => openProviderModal({ editing: p.name, name: p.name, provider: p.provider, endpoint: p.endpoint ?? '', model: p.model, models: p.models ?? [], apiVersion: p.apiVersion ?? '' })}>Configure</button>
-                <button className="btn danger" title="Remove this provider" onClick={() => setConfirmDeleteProvider(p.name)}>Remove</button>
-              </span>
-            </div>
-          ))}
+          {[...savedProviders].sort((a, b) => (a.name === defaultProvider ? -1 : b.name === defaultProvider ? 1 : 0)).map((p) => {
+            const routeSlug = `${p.name}/${p.model}`;
+            const primaryChain = routerCatalog?.primaryChain ?? [];
+            const isPrimary = primaryChain[0] === routeSlug || p.name === defaultProvider;
+            return (
+              <div key={p.name} className="provider-card saved" style={{ flexDirection: 'row', alignItems: 'center', gap: 11, textAlign: 'left' }}>
+                <ProviderIcon id={p.provider} size={28} title={p.provider} />
+                <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0, flex: 1 }}>
+                  <span className="pc-name" style={{ fontWeight: 600 }}>{p.name}{isPrimary ? <span className="pc-tag default" style={{ marginLeft: 6 }}>Primary</span> : null}</span>
+                  <span className="pc-host" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.model}{p.models && p.models.length ? ` · ${p.models.length} models` : ''}</span>
+                </span>
+                <span className="pc-actions" style={{ marginLeft: 'auto', flexWrap: 'nowrap', flex: '0 0 auto' }}>
+                  {!isPrimary ? <button className="btn" title="Make this provider the primary route" onClick={() => {
+                    setRouterPath('chain', [routeSlug, ...primaryChain.filter((entry) => entry !== routeSlug)]);
+                    api.onAction('a-setdefault', 'action:set-default-provider', { name: p.name });
+                    setTimeout(refreshSnapshot, 80);
+                  }}>Set primary</button> : null}
+                  <button className="btn" onClick={() => openProviderModal({
+                    editing: p.name,
+                    name: p.name,
+                    provider: p.provider,
+                    endpoint: p.endpoint ?? '',
+                    model: p.model,
+                    models: p.models ?? [],
+                    apiVersion: p.apiVersion ?? '',
+                    free: p.free === true,
+                    passthroughUnknown: p.passthroughUnknown === true,
+                  })}>Configure</button>
+                  <button className="btn danger" title="Remove this provider" onClick={() => setConfirmDeleteProvider(p.name)}>Remove</button>
+                </span>
+              </div>
+            );
+          })}
         </div>
       ) : null}
       <button className="btn" style={{ marginTop: 4 }} onClick={() => openProviderModal({ provider: '' })}>+ Add custom provider</button>
@@ -247,10 +324,10 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
         // Onyx-style header: title + one-line subtitle describing the setup.
         const headerTitle = editingProvider ? `Configure ${editingProvider}` : cat ? `Connect ${headerLabel}` : 'Add a custom provider';
         const headerSubtitle = editingProvider
-          ? 'Update its key, endpoint, and which models are available.'
+          ? 'Update its key, endpoint, pass-through cache, and routing behavior.'
           : cat
-            ? `Connect to ${headerLabel}, then choose which models to make available.`
-            : 'Point at any OpenAI-compatible endpoint, then choose your models.';
+            ? `Connect to ${headerLabel}, then fetch the models this key unlocks.`
+            : 'Point at any OpenAI-compatible endpoint, then fetch its models.';
         // The single default ∈ the checked set (UI mirror of the host's
         // normalizeProviderModels); free-text when nothing was probed.
         const defaultModel = selectedModels.length
@@ -316,6 +393,20 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
                   </>
                 ) : null}
 
+                <div className="set-h2">Routing behavior</div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={provDraft.free || catalogLocal}
+                    disabled={catalogLocal}
+                    onChange={(e) => setProvDraft((d) => ({ ...d, free: e.target.checked }))} />
+                  <span>Prefer for free-first routing{catalogLocal ? ' (local provider)' : ''}</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 9, fontSize: 13, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={provDraft.passthroughUnknown}
+                    onChange={(e) => setProvDraft((d) => ({ ...d, passthroughUnknown: e.target.checked }))} />
+                  <span>Use as catch-all gateway for unknown model names</span>
+                </label>
+                <div className="set-desc" style={{ margin: 0 }}>Catch-all is intended for gateway providers that accept vendor-prefixed model ids even when they were not returned by Fetch.</div>
+
                 {/* §multi-select-models — one clear step: Fetch the endpoint's
                     models, tick the ones to make available, and mark ONE as this
                     provider's default (the ★). Free-text fallback when a probe
@@ -328,12 +419,12 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
                 </div>
                 <div className="set-desc" style={{ margin: 0 }}>
                   {api.probeLoading ? 'Fetching the models your key unlocks…'
-                    : api.probedModels.length ? <>Tick the models to make available, then mark one as the <b>default</b> (★). <b>{selectedModels.length}</b> of {api.probedModels.length} available.</>
+                    : api.probedModels.length ? <>{selectedModels.length === api.probedModels.length ? 'All fetched models are available to the router.' : <>Limiting this provider to <b>{selectedModels.length}</b> of {api.probedModels.length} fetched models.</>} Mark one as <b>preferred</b> (★).</>
                     : (api.probeError === 'http-401' || api.probeError === 'http-403') ? 'API key rejected — check the key.'
                     : api.probeError === 'http-404' ? 'Endpoint not found — check the base URL.'
                     : api.probeError === 'unreachable' ? "Couldn't reach the endpoint — check the URL / network."
                     : api.probeError && api.probeError.startsWith('http-') ? `Endpoint error ${api.probeError.replace('http-', '')} — check the endpoint.`
-                    : api.probeError === 'no-models' ? 'No models returned — check the key/endpoint, or type a default below.'
+                    : api.probeError === 'no-models' ? 'No models returned — check the key/endpoint, or type a preferred model below.'
                     : 'Enter your key above, then Fetch to load the models it unlocks.'}
                 </div>
                 {api.probedModels.length ? (
@@ -360,18 +451,18 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
                               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m}</span>
                             </label>
                             {checked ? (isDefault
-                              ? <span className="pc-tag default" style={{ flex: '0 0 auto' }}>★ Default</span>
-                              : <button type="button" className="btn" style={{ flex: '0 0 auto', padding: '2px 9px', fontSize: 11.5 }} title="Use as this provider's default model" onClick={() => setProvDraft((d) => ({ ...d, model: m }))}>Set default</button>
+                              ? <span className="pc-tag default" style={{ flex: '0 0 auto' }}>★ Preferred</span>
+                              : <button type="button" className="btn" style={{ flex: '0 0 auto', padding: '2px 9px', fontSize: 11.5 }} title="Use as this provider's preferred model" onClick={() => setProvDraft((d) => ({ ...d, model: m }))}>Set preferred</button>
                             ) : null}
                           </div>
                         );
                       })}
                     </div>
-                    <div className="set-desc" style={{ margin: '2px 0 0' }}>The <b>★ Default</b> model is what this provider uses when it's active. Every ticked model stays available to <code>/model</code>, sub-agents, and profiles.</div>
+                    <div className="set-desc" style={{ margin: '2px 0 0' }}>When every fetched model is selected, no model limit is saved. Uncheck models only when you want this provider to expose a smaller set.</div>
                   </>
                 ) : (
                   <>
-                    <input className="ctl" placeholder="default model (type one, or Fetch above)" list="ws12-provider-models" value={provDraft.model} onChange={(e) => setProvDraft((d) => ({ ...d, model: e.target.value }))} />
+                    <input className="ctl" placeholder="preferred model (type one, or Fetch above)" list="ws12-provider-models" value={provDraft.model} onChange={(e) => setProvDraft((d) => ({ ...d, model: e.target.value }))} />
                     <datalist id="ws12-provider-models">
                       {(editingProvider ? (api.providerModels[editingProvider] ?? []) : api.endpointModels).map((m) => <option key={m} value={m} />)}
                     </datalist>
@@ -380,7 +471,7 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
 
                 {!canConnect ? (
                   <div className="set-desc" style={{ margin: '2px 0 0', color: 'var(--warn)' }}>
-                    {!provDraft.name.trim() ? 'Enter a display name to connect.' : 'Pick at least one model — or type a default — to connect.'}
+                    {!provDraft.name.trim() ? 'Enter a display name to connect.' : 'Pick at least one model — or type a preferred model — to connect.'}
                   </div>
                 ) : null}
                 <div className="set-actions" style={{ marginTop: 6 }}>
@@ -394,12 +485,15 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
                         endpoint: (provDraft.endpoint || catalogEndpoint).trim(),
                         model: defaultModel.trim(),
                         apiKey: provDraft.apiKey.trim(),
-                        models: selectedModels,
+                        models: api.probedModels.length > 0 && selectedModels.length === api.probedModels.length ? [] : selectedModels,
+                        cachedModels: api.probedModels,
                         apiVersion: provDraft.apiVersion.trim(),
+                        free: provDraft.free || catalogLocal,
+                        passthroughUnknown: provDraft.passthroughUnknown,
                       });
                       setProvModalOpen(false);
                       setEditingProvider(null);
-                      setProvDraft({ name: '', provider: 'openai', endpoint: '', apiKey: '', model: '', apiVersion: '' });
+                      setProvDraft({ name: '', provider: 'openai', endpoint: '', apiKey: '', model: '', apiVersion: '', free: false, passthroughUnknown: false });
                       setSelectedModels([]);
                       api.onProbeReset();
                       setTimeout(refreshSnapshot, 80);
@@ -415,7 +509,7 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
         <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) setConfirmDeleteProvider(null); }}>
           <div className="dialog dangerous" style={{ width: 380 }}>
             <div className="dialog-title">Remove “{confirmDeleteProvider}”?</div>
-            <div className="set-desc" style={{ marginBottom: 12 }}>Deletes the saved provider and its stored key. Sub-agents routed to it fall back to the main default provider.</div>
+            <div className="set-desc" style={{ marginBottom: 12 }}>Deletes the saved provider and its stored key. Sub-agents routed to it fall back to the main primary route.</div>
             <div className="set-actions">
               <button className="btn" onClick={() => setConfirmDeleteProvider(null)}>Cancel</button>
               <button className="btn primary" onClick={() => { api.onAction('a-rmprov', 'action:remove-provider', { name: confirmDeleteProvider }); setConfirmDeleteProvider(null); setTimeout(refreshSnapshot, 80); }}>Remove</button>
@@ -429,7 +523,7 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
         return (
           <div className="wire-format-section">
             <div className="set-h2">Wire format (per provider)</div>
-            <div className="set-desc" style={{ marginBottom: 8 }}>Default follows BrainRouter's provider contract. Responses uses <code>/v1/responses</code> when the selected model can use it.</div>
+            <div className="set-desc" style={{ marginBottom: 8 }}>Automatic follows BrainRouter's provider contract. Responses uses <code>/v1/responses</code> when the selected model can use it.</div>
             <div className="wire-format-grid">
             {providerFormatRows.map((p) => {
               const cur = overrideRaw[p.id] ?? null;
@@ -467,44 +561,34 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
       ) : (
       <>
       <div className="set-h2">Sub-agent models</div>
-      <div className="set-desc" style={{ marginBottom: 6 }}>Optional routing for spawned agents. Leave roles unset to follow the main default provider. The fallback row only applies to sub-agents without a role-specific override.</div>
+      <div className="set-desc" style={{ marginBottom: 6 }}>Optional routing for spawned agents. Leave roles unset to inherit the main primary route. Pick a bare model to let the router choose a provider, or pick provider/model to pin one.</div>
       {SUBAGENT_ROLES.map((role) => {
         const cur = snapshot?.agentModels?.find((a) => a.role === role);
         const fallback = role === 'default' ? null : snapshot?.agentModels?.find((a) => a.role === 'default');
-        const curSel = !cur ? 'inherit' : (cur.provider ?? '(main)');
-        const d = roleDraft[role] ?? { provider: curSel, model: cur?.model ?? '' };
-        const providerOptions: ChoiceOption[] = [
-          { value: 'inherit', label: role === 'default' ? 'follow main default' : 'inherit' },
-          { value: '(main)', label: 'main provider', detail: snapshot?.model },
-          ...(snapshot?.providers ?? []).map((p) => ({ value: p.name, label: p.name, detail: p.model })),
-        ];
-        const setD = (patch: Partial<{ provider: string; model: string }>): void => setRoleDraft((r) => ({ ...r, [role]: { ...d, ...patch } }));
-        const roleModels = modelsForProvider(d.provider);
-        const curText = cur ? `${cur.provider ?? '(main)'} · ${cur.model ?? 'provider default'}` : '';
-        const isRedundantFallback = role === 'default' && !!cur && (
-          (cur.provider === defaultProvider && (!cur.model || cur.model === currentDefault?.model)) ||
-          (!cur.provider && (!cur.model || cur.model === snapshot?.model))
-        );
+        const curRequest = roleRequestFor(cur?.provider, cur?.model);
+        const d = roleDraft[role] ?? { request: curRequest };
+        const setD = (request: string): void => setRoleDraft((r) => ({ ...r, [role]: { request } }));
+        const options = routerRoleOptions.some((option) => option.value === d.request)
+          ? routerRoleOptions
+          : [{ value: d.request, label: d.request, detail: 'provider removed or model unavailable' }, ...routerRoleOptions];
+        const curText = cur ? roleRequestFor(cur.provider, cur.model) : '';
+        const isRedundantFallback = role === 'default' && !!cur && d.request === 'inherit';
         const desc = cur
           ? (role === 'default'
-              ? (isRedundantFallback ? `same as main default; clear it so sub-agents follow future default changes` : `fallback currently overrides unconfigured sub-agents: ${curText}`)
-              : `currently: ${curText}`)
+              ? (isRedundantFallback ? `same as primary route; clear it so sub-agents follow future primary changes` : `fallback now: ${curText} - ${describeRouterRequest(routerCatalog, curText)}`)
+              : `effective route now: ${curText} - ${describeRouterRequest(routerCatalog, curText)}`)
           : (role === 'default'
-              ? 'unset; unconfigured sub-agents follow the main default provider'
-              : (fallback ? `inherits fallback: ${fallback.provider ?? '(main)'} · ${fallback.model ?? 'provider default'}` : 'inherits the main default provider'));
+              ? 'unset; unconfigured sub-agents inherit the main primary route'
+              : (fallback ? `inherits fallback: ${roleRequestFor(fallback.provider, fallback.model)}` : 'inherits the main primary route'));
         return (
           <Row key={role} title={SUBAGENT_ROLE_LABELS[role]} desc={desc}>
-            <ChoiceControl value={d.provider} options={providerOptions} onChange={(v) => setD({ provider: v, model: '' })} />
-            <ComboInput style={{ width: 150 }} disabled={d.provider === 'inherit'}
-              placeholder={d.provider === 'inherit' ? '—' : (roleModels.length ? 'model (blank = default)' : '/models…')}
-              options={roleModels} value={d.model} onChange={(model) => setD({ model })} />
+            <ChoiceControl value={d.request} options={options as ChoiceOption[]} onChange={setD} />
             <button className="btn" onClick={() => {
-              const provider = d.provider === 'inherit' || d.provider === '(main)' ? '' : d.provider;
-              const model = d.provider === 'inherit' ? '' : d.model.trim();
+              const { provider, model } = assignmentForRequest(d.request);
               api.onAction('a-setrole', 'action:set-agent-model', { role, provider, model });
               setRoleDraft((r) => { const n = { ...r }; delete n[role]; return n; });
               refreshSnapshot();
-            }}>{d.provider === 'inherit' ? 'Clear' : 'Save'}</button>
+            }}>{d.request === 'inherit' ? 'Clear' : 'Save'}</button>
           </Row>
         );
       })}

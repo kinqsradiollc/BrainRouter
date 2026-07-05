@@ -11,15 +11,18 @@ import React, { useState } from 'react';
 import { Row, Select, Toggle } from '../shared/controls.js';
 import { ComboInput } from '../shared/controls.js';
 import { Icon } from '../../icons.js';
+import { describeRouterRequest, routerCatalogChoiceOptions } from './RoutingChainEditor.js';
+import type { ConfigSnapshot } from '../shared/types.js';
 
 type Dict = Record<string, unknown>;
 type Profile = { model?: string; endpoint?: string; reasoningEffort?: string; fast?: boolean };
 const EFFORTS = ['(default)', 'low', 'medium', 'high', 'xhigh'];
 
-export function LlmProfilesCard({ profiles, active, endpointModels, setPath }: {
+export function LlmProfilesCard({ profiles, active, endpointModels, routerCatalog, setPath }: {
   profiles: Record<string, Profile>;
   active: string;
   endpointModels: string[];
+  routerCatalog?: ConfigSnapshot['routerCatalog'];
   setPath: (path: string, value: unknown) => void;
 }): React.ReactElement {
   const [name, setName] = useState('');
@@ -27,6 +30,7 @@ export function LlmProfilesCard({ profiles, active, endpointModels, setPath }: {
   const [effort, setEffort] = useState('(default)');
   const [fast, setFast] = useState(false);
   const names = Object.keys(profiles).sort();
+  const modelOptions = routerCatalog ? routerCatalogChoiceOptions(routerCatalog).map((option) => option.value) : endpointModels;
 
   const add = (): void => {
     const n = name.trim();
@@ -62,14 +66,14 @@ export function LlmProfilesCard({ profiles, active, endpointModels, setPath }: {
         const p = profiles[n];
         return (
           <Row key={n} title={<>{n}{active === n ? <span className="badge native" style={{ marginLeft: 6 }}>active</span> : null}</>}
-            desc={<><code>{p.model}</code>{p.reasoningEffort ? ` · ${p.reasoningEffort}` : ''}{p.fast ? ' · fast' : ''}{p.endpoint ? ` · ${p.endpoint}` : ''}</>}>
+            desc={<><code>{p.model}</code>{routerCatalog && p.model ? <> - {describeRouterRequest(routerCatalog, p.model)}</> : null}{p.reasoningEffort ? ` · ${p.reasoningEffort}` : ''}{p.fast ? ' · fast' : ''}{p.endpoint ? ` · ${p.endpoint}` : ''}</>}>
             <button className="tab-close-btn rule-x" aria-label={`Remove profile ${n}`} title="Remove" onClick={() => remove(n)}><Icon name="close" size={11} /></button>
           </Row>
         );
       })}
       <div className="rule-add" style={{ flexWrap: 'wrap', gap: 6 }}>
         <input className="ctl" placeholder="profile name" value={name} style={{ maxWidth: 130 }} onChange={(e) => setName(e.target.value)} />
-        <ComboInput value={model} options={endpointModels} placeholder="model" onChange={setModel} style={{ maxWidth: 200 }} />
+        <ComboInput value={model} options={modelOptions} placeholder={routerCatalog ? 'bare or provider/model' : 'model'} onChange={setModel} style={{ maxWidth: 220 }} />
         <Select value={effort} options={EFFORTS} onChange={setEffort} />
         <label className="set-desc" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>fast <Toggle on={fast} onChange={setFast} /></label>
         <button className="btn" disabled={!name.trim() || !model.trim()} onClick={add}>Add profile</button>

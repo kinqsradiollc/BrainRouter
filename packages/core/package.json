@@ -115,6 +115,14 @@
       "types": "./dist/runtime/index.d.ts",
       "default": "./dist/runtime/index.js"
     },
+    "./router": {
+      "types": "./dist/router/index.d.ts",
+      "default": "./dist/router/index.js"
+    },
+    "./router/gateway": {
+      "types": "./dist/router/gateway.d.ts",
+      "default": "./dist/router/gateway.js"
+    },
     "./schedule": {
       "types": "./dist/schedule/index.d.ts",
       "default": "./dist/schedule/index.js"

@@ -27,7 +27,7 @@ import {
 } from '../../orchestration/workflow/phaseOrchestrator.js';
 import { ensurePhaseRun, advanceRunPhase, finishRun, readRun, recordRunCritic, type RunPhaseStatus } from '../run/workflowRun.js';
 import { getCliKnobs, loadOrInitConfig } from '../../config/config.js';
-import { resolveAgentLlm } from '../../provider/agentModels.js';
+import { resolveCriticLlm } from '../../provider/agentModels.js';
 import { prepareSharedWorktree, worktreePatchFile } from '../../worktree/worktreeIsolation.js';
 import {
   finalizeBuildLoop,
@@ -370,8 +370,11 @@ async function scoreBuildExecution(
     testOutput: phaseOutput('verify'),
     transcriptTail: phaseOutput('implement'),
   };
-  let llm = resolveAgentLlm(loadOrInitConfig(), ctx.llmConfig, 'critic');
-  if (modelOverride) llm = { ...llm, model: modelOverride };
+  const config = loadOrInitConfig();
+  const llm = resolveCriticLlm(
+    { ...config, cli: { ...(config.cli ?? {}), critic: { ...(config.cli?.critic ?? {}), model: modelOverride } } },
+    ctx.llmConfig,
+  );
   return runCritic(input, { llm });
 }
 

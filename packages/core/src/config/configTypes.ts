@@ -59,6 +59,14 @@ export interface LLMConfig {
   // `?api-version=` query param to the chat/completions (and /models) URL; the
   // OpenAI-compatible providers that don't need it simply leave it unset.
   apiVersion?: string;
+  /** Provider-router v2: prefer this provider in the `free-first` strategy. */
+  free?: boolean;
+  /** Provider-router v2: route unknown model ids here when it is the only catch-all gateway. */
+  passthroughUnknown?: boolean;
+  /** Provider-router v2: last live `/models` result, used as the offline catalog. */
+  cachedModels?: string[];
+  /** ISO timestamp for `cachedModels`. */
+  cachedAt?: string;
 }
 
 /**
@@ -184,6 +192,44 @@ export interface ResolvedWebSearchKnobs {
 export interface ComputerUseCliKnobs {
   enabled?: boolean;
   mode?: string;
+}
+
+export interface RouterCliKnobs {
+  /** Master switch. Default false keeps legacy direct-model behavior. */
+  enabled?: boolean;
+  /** Default true: use provider cachedModels as the pass-through catalog. */
+  passThrough?: boolean;
+  /** Ordered ModelRequests. Entry 0 is the Primary route. */
+  chain?: string[];
+  strategy?: 'priority' | 'round-robin' | 'free-first';
+  /** Provider order for ambiguous bare-model resolution. */
+  order?: string[];
+  /** Virtual model names, including reserved tier aliases such as `tier:pro`. */
+  aliases?: Record<string, string>;
+  cooldownBaseMs?: number;
+  cooldownMaxMs?: number;
+  sessionAffinity?: boolean;
+  serve?: boolean;
+  serveHost?: string;
+  servePort?: number;
+  /** Write-only gateway bearer secret. Scrubbed before renderer snapshots. */
+  serveKey?: string;
+}
+
+export interface ResolvedRouterCliKnobs {
+  enabled: boolean;
+  passThrough: boolean;
+  chain: string[];
+  strategy: 'priority' | 'round-robin' | 'free-first';
+  order: string[];
+  aliases: Record<string, string>;
+  cooldownBaseMs: number;
+  cooldownMaxMs: number;
+  sessionAffinity: boolean;
+  serve: boolean;
+  serveHost: string;
+  servePort: number;
+  serveKey: string;
 }
 
 /**
@@ -563,6 +609,8 @@ export interface CliKnobs {
   /** Per-call LLM timeout in ms. Default 120000. A timeout is treated as a
    *  RECONNECT signal (not a hard failure) — see `llmMaxReconnects`. */
   llmTimeoutMs?: number;
+  /** Provider-router v2. Default-inert; absent/disabled preserves legacy behavior. */
+  router?: RouterCliKnobs;
   /**
    * RECONNECT (0.4.12) — max reconnect attempts for a transient LLM failure
    * (timeout / disconnect / 5xx / 429) before giving up, with exponential backoff
@@ -1180,6 +1228,7 @@ export interface ResolvedCliKnobs {
   quiet: boolean;
   theme: 'light' | 'dark' | 'auto';
   llmTimeoutMs: number;
+  router: ResolvedRouterCliKnobs;
   llmMaxReconnects: number;
   llmMaxConcurrent: number;
   disableStream: boolean;

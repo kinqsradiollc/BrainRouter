@@ -72,6 +72,7 @@ export function App(): React.ReactElement {
     });
   }, [activeWsRef, sessionKeyRef]);
   const [statusLine, setStatusLine] = useState('');
+  const [lastRouterFallback, setLastRouterFallback] = useState<string | null>(null);
   const [reasoningTail, setReasoningTail] = useState('');
   const [liveText, setLiveText] = useState('');
   const [fleet, setFleet] = useState<FleetRow[]>([]);
@@ -348,7 +349,7 @@ export function App(): React.ReactElement {
   // Panels are user-controlled; columns shrink in place instead.
 
   useAgentEvents({
-    setRows, setRunning, setStopping, setTurnStart, setStatusLine, setReasoningTail, setLiveText, setToolLog,
+    setRows, setRunning, setStopping, setTurnStart, setStatusLine, setLastRouterFallback, setReasoningTail, setLiveText, setToolLog,
     setLiveChildren, setFinishedTasks, setLastPlan, setGoalState, setPlanHistory, setTokens, setLiveTurn, setEfficiency, setTrack, setInteraction, setPicked, setViewKey,
     setTaskView, setWorkflowView, setInfo, setWorkspaces, setRunningWs, setHostUp, setLastTurnFails,
     setDraft, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
@@ -512,6 +513,7 @@ export function App(): React.ReactElement {
         slashActive={slashActive} slashMatches={slashMatches} commands={commands} slashSel={slashSel} setSlashSel={setSlashSel}
         setSlashDismissed={setSlashDismissed} runSlash={runSlash} pop={pop} setPop={setPop} modeLabel={modeLabel}
         effort={effort} branches={branches} endpointModels={endpointModels} defaultProviderModels={defaultProviderModels}
+        routerCatalog={snapshot?.routerCatalog} routerFallback={lastRouterFallback}
         modelsLoading={modelsLoading} setModelsLoading={setModelsLoading} modelChoices={modelChoices} modelScope={modelScope}
         setModelScope={setModelScope} contextUsage={contextUsage} tokens={tokens} openSettings={openSettings}
         attachFiles={attachFiles} attachmentUploads={attachmentUploads} canSubmit={readyAttachments(attachmentUploads).length > 0}

@@ -1,0 +1,220 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import type { LLMConfig } from '../config/config.js';
+import { resolveCliKnobs } from '../config/config.js';
+import {
+  aggregateCatalog,
+  buildModelRegistry,
+  classifyRouterFailure,
+  resolveRoutes,
+  RouterPolicy,
+} from '../router/index.js';
+import { resolveAgentLlm, resolveCriticLlm } from '../provider/agentModels.js';
+
+const openai: LLMConfig = {
+  provider: 'openai',
+  apiKey: 'openai-key',
+  model: 'gpt-5.3',
+  endpoint: 'https://api.openai.com/v1',
+  cachedModels: ['gpt-5.3', 'gpt-5.3-mini', 'shared-model'],
+  cachedAt: '2026-07-05T00:00:00.000Z',
+};
+
+const groq: LLMConfig = {
+  provider: 'groq',
+  apiKey: 'groq-key',
+  model: 'llama-3.3-70b',
+  endpoint: 'https://api.groq.com/openai/v1',
+  cachedModels: ['llama-3.3-70b', 'shared-model'],
+  free: true,
+};
+
+test('buildModelRegistry pass-through uses cached /models and curated models as a limit', () => {
+  const registry = buildModelRegistry({
+    openai,
+    limited: { ...openai, provider: 'openai', models: ['gpt-5.3-mini'], cachedModels: ['gpt-5.3', 'gpt-5.3-mini'] },
+  });
+  assert.ok(registry.bySlug.has('openai/gpt-5.3'));
+  assert.ok(registry.bySlug.has('openai/gpt-5.3-mini'));
+  assert.deepEqual(
+    registry.entries.filter((entry) => entry.provider === 'limited').map((entry) => entry.model),
+    ['gpt-5.3-mini'],
+  );
+});
+
+test('buildModelRegistry enforces availableModels against catalog entries', () => {
+  const registry = buildModelRegistry(
+    { openai, groq },
+    { availableModels: ['openai/gpt-5.3', 'shared-model'], enforceAvailableModels: true },
+  );
+  assert.deepEqual(registry.entries.map((entry) => entry.slug), [
+    'openai/gpt-5.3',
+    'openai/shared-model',
+    'groq/shared-model',
+  ]);
+});
+
+test('resolveRoutes supports slug, alias, tier alias, unique bare, ambiguous bare, and primary chain', () => {
+  const registry = buildModelRegistry(
+    { openai, groq },
+    {
+      aliases: { fast: 'groq/llama-3.3-70b', 'tier:pro': 'openai/gpt-5.3' },
+      chain: ['fast', 'gpt-5.3-mini'],
+      order: ['groq', 'openai'],
+    },
+  );
+  assert.deepEqual(resolveRoutes(registry, 'groq/llama-3.3-70b').map((r) => r.slug), ['groq/llama-3.3-70b']);
+  assert.deepEqual(resolveRoutes(registry, 'fast').map((r) => r.slug), ['groq/llama-3.3-70b']);
+  assert.deepEqual(resolveRoutes(registry, 'tier:pro').map((r) => r.slug), ['openai/gpt-5.3']);
+  assert.deepEqual(resolveRoutes(registry, 'gpt-5.3-mini').map((r) => r.slug), ['openai/gpt-5.3-mini']);
+  assert.deepEqual(resolveRoutes(registry, 'shared-model').map((r) => r.slug), ['groq/shared-model', 'openai/shared-model']);
+  assert.deepEqual(resolveRoutes(registry, '').map((r) => r.slug), ['groq/llama-3.3-70b', 'openai/gpt-5.3-mini']);
+});
+
+test('resolveRoutes appends primary chain when requested with fallbacks', () => {
+  const registry = buildModelRegistry({ openai, groq }, { aliases: { fast: 'groq/llama-3.3-70b' }, chain: ['fast'] });
+  assert.deepEqual(resolveRoutes(registry, 'openai/gpt-5.3', { withFallbacks: true }).map((r) => r.slug), [
+    'openai/gpt-5.3',
+    'groq/llama-3.3-70b',
+  ]);
+});
+
+test('resolveRoutes sends unknown models to a single passthroughUnknown provider', () => {
+  const registry = buildModelRegistry({
+    openrouter: {
+      provider: 'openrouter',
+      apiKey: 'or-key',
+      model: 'openai/gpt-5.3',
+      endpoint: 'https://openrouter.ai/api/v1',
+      passthroughUnknown: true,
+    },
+  });
+  const route = resolveRoutes(registry, 'vendor/new-model')[0];
+  assert.equal(route.slug, 'openrouter/vendor/new-model');
+  assert.equal(route.llm.model, 'vendor/new-model');
+});
+
+test('resolveRoutes applies requireTools and minContext constraints when metadata is known', () => {
+  const registry = buildModelRegistry({ openai, groq }, { chain: ['gpt-5.3', 'llama-3.3-70b'] });
+  const openaiRoute = registry.bySlug.get('openai/gpt-5.3')!;
+  const groqRoute = registry.bySlug.get('groq/llama-3.3-70b')!;
+  openaiRoute.providerDef = { ...(openaiRoute.providerDef as any), supportsTools: false, contextWindow: 200_000 } as any;
+  groqRoute.providerDef = { ...(groqRoute.providerDef as any), contextWindow: 8_000 } as any;
+  assert.deepEqual(resolveRoutes(registry, '', { requireTools: true }).map((r) => r.slug), ['groq/llama-3.3-70b']);
+  assert.deepEqual(resolveRoutes(registry, '', { minContext: 100_000 }).map((r) => r.slug), ['openai/gpt-5.3']);
+});
+
+test('aggregateCatalog supports canonical, bare, alias, and query modes', () => {
+  const registry = buildModelRegistry({ openai, groq }, { aliases: { fast: 'groq/llama-3.3-70b' } });
+  assert.ok(aggregateCatalog(registry, { prefix: 'canonical' }).some((item) => item.id === 'openai/gpt-5.3'));
+  assert.deepEqual(
+    aggregateCatalog(registry, { prefix: 'bare', query: 'shared' }).map((item) => [item.id, item.providers]),
+    [['shared-model', ['openai', 'groq']]],
+  );
+  assert.deepEqual(aggregateCatalog(registry, { prefix: 'alias' })[0], {
+    id: 'fast',
+    alias: 'fast',
+    target: 'groq/llama-3.3-70b',
+    model: 'fast',
+    providers: ['groq'],
+  });
+});
+
+test('RouterPolicy classifies failures, cools provider/model scopes, and keeps least-cooled route', () => {
+  let now = 1_000;
+  const policy = new RouterPolicy({ now: () => now, cooldownBaseMs: 1_000, cooldownMaxMs: 10_000 });
+  const registry = buildModelRegistry({ openai, groq }, { chain: ['gpt-5.3', 'llama-3.3-70b'] });
+  const [first, second] = resolveRoutes(registry, '');
+  policy.markFailure(first, classifyRouterFailure(Object.assign(new Error('rate limited'), { status: 429 })));
+  assert.equal(policy.pickRoute([first, second])?.slug, second.slug);
+  policy.markFailure(second, classifyRouterFailure(Object.assign(new Error('model does not exist'), { status: 404 })));
+  assert.equal(policy.pickRoute([first, second])?.slug, first.slug, 'all cooled falls back to least-cooled');
+  now += 2_000;
+  assert.equal(policy.pickRoute([first, second])?.slug, first.slug);
+});
+
+test('classifyRouterFailure does not retry after streaming content has started', () => {
+  const failure = classifyRouterFailure(Object.assign(new Error('stream interrupted'), {
+    status: 500,
+    brainrouterStreamStarted: true,
+  }));
+  assert.equal(failure.retryable, false);
+  assert.equal(failure.kind, 'non_retryable');
+});
+
+test('resolveCliKnobs resolves router defaults and sanitizes malformed input', () => {
+  const knobs = resolveCliKnobs({
+    activeServer: 's',
+    servers: {},
+    cli: {
+      router: {
+        enabled: true,
+        passThrough: false,
+        chain: [' fast ', '', 'fast'],
+        strategy: 'free-first',
+        order: [' groq ', ''],
+        aliases: { fast: 'groq/llama-3.3-70b', 'bad/slash': 'x', empty: '' },
+        cooldownBaseMs: 50,
+        cooldownMaxMs: 100,
+        serve: true,
+        serveHost: ' 127.0.0.1 ',
+        servePort: 999_999,
+        serveKey: 'secret',
+      },
+    },
+  });
+  assert.deepEqual(knobs.router, {
+    enabled: true,
+    passThrough: false,
+    chain: ['fast'],
+    strategy: 'free-first',
+    order: ['groq'],
+    aliases: { fast: 'groq/llama-3.3-70b' },
+    cooldownBaseMs: 500,
+    cooldownMaxMs: 500,
+    sessionAffinity: true,
+    serve: true,
+    serveHost: '127.0.0.1',
+    servePort: 65_535,
+    serveKey: 'secret',
+  });
+});
+
+test('resolveAgentLlm uses provider router for role model requests when enabled', () => {
+  const cfg = {
+    activeServer: 's',
+    servers: {},
+    providers: { openai, groq },
+    agentModels: { worker: { model: 'shared-model' } },
+    cli: { router: { enabled: true, order: ['groq', 'openai'] } },
+  };
+  const llm = resolveAgentLlm(cfg, openai, 'worker');
+  assert.equal(llm.endpoint, groq.endpoint);
+  assert.equal(llm.model, 'shared-model');
+});
+
+test('resolveAgentLlm keeps legacy role behavior when router is disabled', () => {
+  const cfg = {
+    activeServer: 's',
+    servers: {},
+    providers: { openai, groq },
+    agentModels: { worker: { model: 'shared-model' } },
+    cli: { router: { enabled: false, order: ['groq', 'openai'] } },
+  };
+  const llm = resolveAgentLlm(cfg, openai, 'worker');
+  assert.equal(llm.endpoint, openai.endpoint);
+  assert.equal(llm.model, 'shared-model');
+});
+
+test('resolveCriticLlm routes cli.critic.model through the provider router', () => {
+  const cfg = {
+    activeServer: 's',
+    servers: {},
+    providers: { openai, groq },
+    agentModels: { reviewer: { provider: 'openai', model: 'gpt-5.3-mini' } },
+    cli: { critic: { model: 'shared-model' }, router: { enabled: true, order: ['groq', 'openai'] } },
+  };
+  const llm = resolveCriticLlm(cfg, openai);
+  assert.equal(llm.endpoint, groq.endpoint);
+  assert.equal(llm.model, 'shared-model');
+});

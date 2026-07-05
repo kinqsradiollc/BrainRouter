@@ -5,7 +5,7 @@
  */
 
 export const SLASH_COMMANDS = [
-  '/help', '/status', '/workspace', '/where', '/tools', '/skills', '/reload-skills', '/plan', '/transcript',
+  '/help', '/status', '/router', '/workspace', '/where', '/tools', '/skills', '/reload-skills', '/plan', '/transcript',
   '/doctor', '/policy', '/config', '/diff', '/commit', '/cd', '/clear', '/compact', '/exit', '/quit',
   '/roles', '/agents', '/agent', '/spawn', '/build', '/bg', '/wait', '/dm', '/broadcast', '/inbox', '/delegation-policy', '/handoff', '/pack', '/workers',
   '/spec', '/feature-dev', '/grill-me', '/review', '/review-auto', '/simplify', '/implement-plan', '/skill', '/workflow', '/workflows', '/approve', '/requirement', '/track', '/annotation', '/artifact', '/atlas', '/attach',
@@ -38,6 +38,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
     entries: [
       { cmd: '/help [category]', desc: 'List commands; `/help <category>` for a focused page' },
       { cmd: '/status', desc: 'Connection status, LLM config, DB stats' },
+      { cmd: '/router', desc: 'Provider-router status, catalog counts, primary chain, gateway, cooldowns' },
       { cmd: '/workspace', desc: 'Active workspace and session identity' },
       { cmd: '/cd <path>', desc: 'Move the session working directory (keeps transcript + memory; resets read-ledger and child/worktree context)' },
       { cmd: '/where', desc: 'Single-screen view of workspace, workflow, goal, plan, recall, children' },
@@ -200,7 +201,7 @@ export const HELP_CATEGORIES: HelpCategory[] = [
       { cmd: '/personality <style>', desc: 'concise | standard | detailed | pair-programmer' },
       { cmd: '/effort [low|medium|high|xhigh]', desc: 'Reasoning depth: low=terse, medium=default, high=step-by-step, xhigh=maximum (alias: max)' },
       { cmd: '/tier [name]', desc: "Show or pin the model tier on the provider's tier ladder" },
-      { cmd: '/model [name] [--session]', desc: 'Switch model; --session = this session only (not saved). cli.fallbackModel auto-swaps on model-not-found.' },
+      { cmd: '/model [auto|bare|provider/model] [--session]', desc: 'List or switch the session model request; router mode uses the unified catalog' },
       { cmd: '/profile [list|use <name>|save <name>|delete <name>]', desc: 'Named LLM profiles (cli.llmProfiles) — saved model/endpoint/effort presets; save snapshots the session; with 2+ profiles the agent gets a switch_model tool' },
       { cmd: '/raw [on|off]', desc: 'Toggle raw scrollback' },
       { cmd: '/quiet [on|off]', desc: 'Hide recall tables, previews, briefings (model prose only)' },

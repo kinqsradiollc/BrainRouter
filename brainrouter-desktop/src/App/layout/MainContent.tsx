@@ -124,6 +124,8 @@ export interface MainContentProps {
   branches: CP['branches'];
   endpointModels: CP['endpointModels'];
   defaultProviderModels: CP['allowedModels'];
+  routerCatalog: CP['routerCatalog'];
+  routerFallback: CP['routerFallback'];
   modelsLoading: CP['modelsLoading'];
   setModelsLoading: CP['setModelsLoading'];
   modelChoices: CP['modelChoices'];
@@ -175,7 +177,7 @@ export function MainContent(p: MainContentProps): React.ReactElement {
     running, turnStart, reasoningTail, statusLine, interaction, answerInteraction, chatEnd, atBottom, hasConversation,
     ensurePanel, draft, setDraft, stopping, submit, requestStop, slashActive, slashMatches, commands, slashSel,
     setSlashSel, setSlashDismissed, runSlash, pop, setPop, modeLabel, effort, branches, endpointModels,
-    defaultProviderModels, modelsLoading, setModelsLoading, modelChoices, modelScope, setModelScope, contextUsage,
+    defaultProviderModels, routerCatalog, routerFallback, modelsLoading, setModelsLoading, modelChoices, modelScope, setModelScope, contextUsage,
     tokens, openSettings, attachFiles, attachmentUploads, canSubmit, setAttachmentUploads, pastedImages,
     addPastedImages, setPastedImages, envAnim, setTermDockOpen, commitSubjects, openCiPanel, lastTurnFails, openTask,
     dockAnim, termDockHeight, resizeTerminal, termTabs, activeTerm, setActiveTerm, closeBottomTab, addBottomTab,
@@ -234,7 +236,7 @@ export function MainContent(p: MainContentProps): React.ReactElement {
               slashActive={slashActive} slashMatches={slashMatches} commands={commands} slashSel={slashSel} setSlashSel={setSlashSel}
               setSlashDismissed={setSlashDismissed} onRunSlash={runSlash} pop={pop} setPop={setPop} q={q}
               modeLabel={modeLabel} effort={effort} info={info} branches={branches}
-              endpointModels={endpointModels} allowedModels={defaultProviderModels} modelsLoading={modelsLoading} setModelsLoading={setModelsLoading}
+              endpointModels={endpointModels} allowedModels={defaultProviderModels} routerCatalog={routerCatalog} routerFallback={routerFallback} modelsLoading={modelsLoading} setModelsLoading={setModelsLoading}
               connectedProviders={snapshot?.providers ?? []} defaultProviderName={snapshot?.defaultProviderName ?? null}
               modelChoices={modelChoices} modelScope={modelScope} setModelScope={setModelScope}
               hasConversation={hasConversation} contextUsage={contextUsage} tokens={tokens} openSettings={openSettings}

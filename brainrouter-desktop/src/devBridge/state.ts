@@ -388,9 +388,9 @@ export function createDevState() {
   // §multi-provider — MUTABLE provider list so the browser preview actually
   // reflects create/configure/remove (the real Electron host persists to
   // config.json; here we keep an in-memory list that config-snapshot reads).
-  const devProviders: Array<{ name: string; provider: string; model: string; endpoint: string | null; hasKey: boolean; models: string[]; apiVersion?: string | null }> = [
-    { name: 'groq', provider: 'groq', model: 'llama-3.3-70b', endpoint: 'https://api.groq.com/openai/v1', hasKey: true, models: ['llama-3.3-70b', 'llama-3.1-405b', 'mixtral-8x7b'] },
-    { name: 'local', provider: 'lmstudio', model: 'qwen2.5-coder-7b', endpoint: 'http://localhost:1234/v1', hasKey: false, models: [] },
+  const devProviders: Array<{ name: string; provider: string; model: string; endpoint: string | null; hasKey: boolean; models: string[]; cachedModels?: string[]; cachedAt?: string | null; apiVersion?: string | null; free?: boolean; passthroughUnknown?: boolean }> = [
+    { name: 'groq', provider: 'groq', model: 'llama-3.3-70b', endpoint: 'https://api.groq.com/openai/v1', hasKey: true, models: [], cachedModels: ['llama-3.3-70b', 'llama-3.1-405b', 'mixtral-8x7b'], cachedAt: '2026-07-05T00:00:00.000Z', free: true },
+    { name: 'local', provider: 'lmstudio', model: 'qwen2.5-coder-7b', endpoint: 'http://localhost:1234/v1', hasKey: false, models: [], cachedModels: ['qwen2.5-coder-7b'], cachedAt: '2026-07-05T00:00:00.000Z', free: true },
   ];
   let devDefaultProvider: string | null = 'groq';
   const devCliKnobs: Record<string, unknown> = {
@@ -400,6 +400,7 @@ export function createDevState() {
     runtime: { backend: 'worktree', maxLive: 4, archiveOnDispose: true, archiveKeep: 20, archiveMaxMB: 64, jitSecrets: true, serve: false, serveHost: '127.0.0.1', servePort: 8791, previewPorts: { web: 5173, api: 8080 } },
     budget: { maxPerTaskUSD: 2.5, maxPerTaskTokens: 0 },
     critic: { enabled: true, threshold: 0.7, maxRefinementIterations: 2, model: '' },
+    router: { enabled: true, passThrough: true, chain: ['groq/llama-3.3-70b', 'local/qwen2.5-coder-7b'], strategy: 'priority', serve: false, serveHost: '127.0.0.1', servePort: 8790, serveKey: 'set-in-dev' },
     triggers: { enabled: true, host: '127.0.0.1', port: 8787, githubSecret: 'set-in-dev', allowedRepos: ['kinqsradio/brainrouter'], mentionHandle: 'brainrouter', ciNudge: true },
     agents: { hosted: [{ name: 'claude-code', command: 'claude', args: ['--print'], protocol: 'line-json' }] },
     llmProfiles: { fast: { model: 'claude-haiku-4-5-20251001', reasoningEffort: 'low', fast: true }, deep: { model: 'claude-opus-4-8', reasoningEffort: 'high' } },
