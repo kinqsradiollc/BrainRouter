@@ -327,7 +327,26 @@ export interface BuildPayloadOptions {
    * `{ type: 'function', function: { name: 'emit_layers' } }`.
    */
   tool_choice?: 'auto' | { type: 'function'; function: { name: string } };
+  /**
+   * Router gateway — verbatim OpenAI request params to forward to the upstream
+   * (temperature, top_p, max_tokens/max_completion_tokens, stop,
+   * presence/frequency_penalty, seed, response_format, n, logprobs,
+   * top_logprobs, logit_bias, user, parallel_tool_calls, stream_options,
+   * service_tier, prediction, metadata, modalities). The agent never sets this;
+   * only the OpenAI-compatible gateway does, so its clients' sampling params
+   * reach the provider. Whitelisted in buildChatCompletionPayload — never
+   * overrides model/messages/tools/tool_choice.
+   */
+  passthrough?: Record<string, unknown>;
 }
+
+/** OpenAI chat params the gateway may forward verbatim (never model/messages/tools). */
+export const GATEWAY_PASSTHROUGH_PARAMS = [
+  'temperature', 'top_p', 'max_tokens', 'max_completion_tokens', 'stop', 'n',
+  'presence_penalty', 'frequency_penalty', 'seed', 'response_format', 'logprobs',
+  'top_logprobs', 'logit_bias', 'user', 'parallel_tool_calls', 'stream_options',
+  'service_tier', 'prediction', 'metadata', 'modalities', 'store',
+] as const;
 
 function stripTaggedContent(content: any): any {
   return typeof content === 'string' && TAG_MARKER_RE.test(content)
@@ -615,6 +634,17 @@ export function buildChatCompletionPayload(
   const maxOutput = getCliKnobs().maxOutputTokens;
   if (typeof maxOutput === 'number' && maxOutput > 0) {
     (body as ChatCompletionPayload & { max_tokens?: number }).max_tokens = Math.floor(maxOutput);
+  }
+
+  // Router gateway — forward whitelisted OpenAI sampling params from the client
+  // verbatim (never model/messages/tools). Applied last so a client's explicit
+  // max_tokens wins over the cli.maxOutputTokens default above.
+  if (options.passthrough && typeof options.passthrough === 'object') {
+    const extra = body as unknown as Record<string, unknown>;
+    for (const key of GATEWAY_PASSTHROUGH_PARAMS) {
+      const value = (options.passthrough as Record<string, unknown>)[key];
+      if (value !== undefined) extra[key] = value;
+    }
   }
 
   return body;

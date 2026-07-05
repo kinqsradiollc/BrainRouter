@@ -34,16 +34,19 @@ export function registerServeCommand(program: Command): void {
           process.exitCode = 1;
           return;
         }
-        if (!router.serveKey) {
-          console.error(chalk.red('Router gateway requires cli.router.serveKey. The key is write-only and must be sent as a Bearer token.'));
-          process.exitCode = 1;
-          return;
-        }
         const rawPort = options.port != null ? parseInt(String(options.port), 10) : NaN;
         const bind = {
           host: typeof options.host === 'string' && options.host.trim() ? options.host.trim() : router.serveHost,
           port: Number.isInteger(rawPort) && rawPort >= 1 && rawPort <= 65_535 ? rawPort : router.servePort,
         };
+        // A key is OPTIONAL on loopback (local dev); an off-loopback bind MUST
+        // carry one — an open network port with no auth is never a safe default.
+        const loopback = /^(127\.0\.0\.1|localhost|::1|\[::1\])$/i.test(bind.host);
+        if (!loopback && !router.serveKey) {
+          console.error(chalk.red('A gateway key is required when binding to a non-loopback host — set cli.router.serveKey.'));
+          process.exitCode = 1;
+          return;
+        }
         const { startRouterGateway } = await import('@kinqs/brainrouter-core/router/gateway');
         let handle: Awaited<ReturnType<typeof startRouterGateway>>;
         try {
@@ -51,7 +54,7 @@ export function registerServeCommand(program: Command): void {
             config,
             host: bind.host,
             port: bind.port,
-            serveKey: router.serveKey,
+            serveKey: router.serveKey || undefined,
           });
         } catch (error) {
           console.error(chalk.red(`Router gateway failed to start: ${(error as Error).message}`));

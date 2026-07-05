@@ -45,15 +45,18 @@ export async function startRouterServe(): Promise<{ ok: boolean; error?: string;
   if (knobs.serve !== true) {
     return { ok: false, error: 'Router gateway is disabled — turn on cli.router.serve first.' };
   }
-  if (!knobs.serveKey) {
-    return { ok: false, error: 'Router gateway requires cli.router.serveKey.' };
+  const loopback = /^(127\.0\.0\.1|localhost|::1|\[::1\])$/i.test((knobs.serveHost ?? '').trim() || '127.0.0.1');
+  // A key is OPTIONAL on loopback (local dev). Off-loopback binds MUST carry a
+  // key — an open network port with no auth is never a safe default.
+  if (!loopback && !knobs.serveKey) {
+    return { ok: false, error: 'A gateway key is required when binding to a non-loopback host — set cli.router.serveKey.' };
   }
   try {
     state.handle = await startRouterGateway({
       config: loadConfig(),
       host: knobs.serveHost,
       port: knobs.servePort,
-      serveKey: knobs.serveKey,
+      serveKey: knobs.serveKey || undefined,
     });
     state.startedAt = new Date().toISOString();
     state.lastError = null;
