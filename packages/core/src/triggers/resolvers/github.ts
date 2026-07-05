@@ -101,11 +101,15 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** True when `text` @mentions `handle` as a whole word (case-insensitive). */
+/** True when `text` @mentions `handle` (case-insensitive). The trailing guard
+ *  is a GitHub-login boundary, not `\b`: `\b` treats `-` as a boundary, so
+ *  `@brainrouter-bot` (a DIFFERENT user — logins may contain hyphens) would
+ *  spuriously match `@brainrouter` and spawn a job. Reject a following
+ *  login char (`[A-Za-z0-9-]`) instead. */
 export function containsMention(text: string, handle: string): boolean {
   const clean = handle.trim().replace(/^@/, '');
   if (!clean || !text) return false;
-  return new RegExp(`@${escapeRegExp(clean)}\\b`, 'i').test(text);
+  return new RegExp(`@${escapeRegExp(clean)}(?![A-Za-z0-9-])`, 'i').test(text);
 }
 
 /** Event kinds whose text is scanned for an @mention. */
