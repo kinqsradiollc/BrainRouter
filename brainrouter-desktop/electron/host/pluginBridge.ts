@@ -143,7 +143,16 @@ export async function searchRegistryPlugins(
   opts: { category?: string; tag?: string; limit?: number } = {},
 ): Promise<{ ok: true; hits: SearchHit[]; fromCache: boolean } | { ok: false; error: string }> {
   const config = loadOrInitConfig();
-  return fetchAndSearch(config.cli?.plugins?.registryUrl, query, opts);
+  const customUrl = (config.cli?.plugins?.registryUrl ?? '').trim();
+  const res = await fetchAndSearch(customUrl || undefined, query, opts);
+  // The built-in community registry isn't published yet (or was deleted): a
+  // not-found on the DEFAULT registry is "no community index" — a clean empty
+  // state, not an error. Installed plugins are unaffected either way. A custom
+  // registryUrl that fails still surfaces the error (the user configured it).
+  if (!res.ok && !customUrl && /HTTP 40[34]|not found|ENOTFOUND/i.test(res.error)) {
+    return { ok: true, hits: [], fromCache: false };
+  }
+  return res;
 }
 
 /**

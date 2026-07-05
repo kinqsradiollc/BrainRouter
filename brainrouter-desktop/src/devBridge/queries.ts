@@ -875,7 +875,7 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
           { cmd: '/diff', desc: 'Show git changes' },
         ] },
       ],
-      all: ['/help', '/status', '/model', '/mcp', '/theme', '/vim', '/spawn', '/bg', '/workers', '/ps'],
+      all: ['/help', '/status', '/model', '/profile', '/mcp', '/theme', '/vim', '/spawn', '/bg', '/workers', '/ps'],
     }),
     'config-snapshot': () => ({
       model: 'claude-opus-4-8', provider: 'anthropic', endpoint: 'https://api.anthropic.com/v1', fallbackModel: null,

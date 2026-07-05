@@ -94,6 +94,7 @@ export const WIRED: Record<string, Wire> = {
 
   // -- settings deep links --
   '/model': { kind: 'settings', section: 'models' },
+  '/profile': { kind: 'settings', section: 'models' },
   '/tier': { kind: 'settings', section: 'general' },
   '/effort': { kind: 'settings', section: 'general' },
   '/personality': { kind: 'settings', section: 'general' },

@@ -120,7 +120,7 @@ export function MarketplaceSettings({ market, onAction, refreshInstalled, refres
 
           {market.error ? <div className="pc-host" style={{ color: 'var(--warn)', margin: '6px 0' }}>{market.error}</div> : null}
           {searching ? <div className="empty">Searching the registry…</div> : null}
-          {!searching && market.hits && hits.length === 0 && !market.error ? <div className="empty">No plugins match. Try a different search or add a marketplace via the CLI.</div> : null}
+          {!searching && market.hits && hits.length === 0 && !market.error ? <div className="empty">No plugins in the registry yet. Point at a different index under <b>Scope &amp; sources → Registry URL</b> below, or publish one with <code>brainrouter plugin publish</code>.</div> : null}
 
           {hits.length ? (
             <div className="provider-gallery connector-configured-grid">
