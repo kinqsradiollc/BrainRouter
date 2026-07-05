@@ -418,6 +418,23 @@ flowchart TD
 
 ---
 
+## UF-23 · Connect a source — *parity*
+**Covers:** US-42 · **Screens:** More → S-35
+
+```mermaid
+flowchart TD
+    A[More tab → Connectors] --> B[S-35 Connectors: sources + status]
+    B --> C{Action}
+    C -- refresh --> D[connectors-list → re-sort by health]
+    D --> B
+    C -- add --> E[Catalog: 18+ sources]
+    E --> F[Pick a source → flows + credential]
+    F --> G[Connect → host runs ingestion]
+    G --> B
+```
+
+---
+
 ## Flow ↔ screen ↔ story matrix
 
 | Flow | Screens | Stories | Milestone |
@@ -444,3 +461,4 @@ flowchart TD
 | UF-20 | S-21, S-32, S-07 | US-39 | future |
 | UF-21 | S-03, S-33 | US-40 | future |
 | UF-22 | S-34 | US-41 | parity |
+| UF-23 | S-35 | US-42 | parity |

@@ -242,6 +242,11 @@ As a Dev, I want to search the brain memory engine from my phone so that I can r
 **Acceptance:** a search box queries `memory-search`; results list ranked recalls (type label, relevance score, content snippet) sorted highest-first; records whose source changed are flagged **stale**; tapping a recall shows the full content + provenance; read-only.
 **Screens:** S-34 · **Flow:** UF-22 · *Ports `MemoryPanel.tsx`; `memory-search` (brain engine, #668).*
 
+### US-42 · See my connectors — *parity*
+As a Dev, I want to see my connected sources and their sync status from my phone so that I know my agent's context is fresh (and catch a broken connector).
+**Acceptance:** a list of connectors sorted by health (active → error → paused), each showing source, name, flow count, last activity, and a status pill; error sources are highlighted; pull-to-refresh; a header count with the error tally; browse the catalog to add a source.
+**Screens:** S-35 · **Flow:** UF-23 · *Ports the desktop connector catalog; `connectors-list`/`connectors-catalog`.*
+
 ---
 
 ## Coverage map (story → milestone → prototype)
@@ -251,6 +256,6 @@ As a Dev, I want to search the brain memory engine from my phone so that I can r
 | **MVP** | US-01…US-29 | yes (`flow-US-01.html` … `flow-US-29.html`) |
 | **v1** | US-30…US-33 | yes (documented; prototypes included) |
 | **future** | US-34…US-40 (S-27…S-33) | yes (`flow-UF-15.html` … `flow-UF-21.html`) |
-| **parity** | US-41 (S-34) | yes (`flow-UF-22.html`) |
+| **parity** | US-41…US-42 (S-34, S-35) | yes (`flow-UF-22.html`, `flow-UF-23.html`) |
 
 > The M3 "full-parity" surfaces (Annotations, Artifacts, Schedules, Worktrees, Track board, in-app Editor, Terminal) now have stories + flows + prototypes — this was their scheduled spec/story/prototype cycle. Each is a **mobile-native redesign** of its desktop panel (no drag-and-drop, read-then-write, sandboxed preview, remote shell), not a 1:1 port. Implementation is still sequenced last per [roadmap.md](roadmap.md); several may be re-scoped based on MVP/v1 usage.
