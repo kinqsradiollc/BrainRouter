@@ -8,15 +8,16 @@ design specs in [`brainrouter-docs/specs/`](brainrouter-docs/specs/).
 
 ## Shipped
 
-Latest published: **0.4.15** (2026-06-22) — the requirement-first workflow + the
-unified workspace (Chat · Track · Code) with a code-aware Jira-class board, a
-desktop UI pass, and a closing UX & reliability program (child auto-resume,
-destructive-command guard, MCP auto-reconnect + brain/tools split, provider
-gallery with live `/models`, cross-session usage heatmap, cross-workspace
-session menu).
+Latest tagged: **0.4.16** (2026-06-30) — the fleet-automation release: a global
+background job queue with requirements intake and an MCP fleet surface
+(`fleet_run` / `fleet_status`), draft-PR delivery on a passing build, native
+(non-shim) Anthropic/Gemini provider wire formats, Track↔GitHub three-way sync,
+a bounded local-model harness profile, and the import-boundary program that
+made the layered package graph machine-enforced.
 
 | Version | Theme | Date |
 |---|---|---|
+| 0.4.16 | Fleet automation (queue · intake · MCP surface · PR-emit) · native provider adapters · Track↔GitHub 3-way sync · enforced boundaries | 2026-06-30 |
 | 0.4.15 | Requirement-first workflow · unified workspace (Chat·Track·Code) · desktop UX & reliability pass | 2026-06-22 |
 | 0.4.14 | Memory accuracy (2 rounds) · grid TUI + fleet sidebar · workers that report back | 2026-06-10 |
 | 0.4.13 | Sub-agent result delivery (resume + synthesis guard) · REPL polish | 2026-06-07 |
@@ -126,6 +127,47 @@ per-workspace store (`packages/types/track.ts` + `packages/core/src/track/`), th
 surface (nine views — Board · List · Backlog · Sprint · Roadmap · Reports ·
 Automation · Members · Sync) with a JQL-style query language, automation rules,
 per-project roles/permissions, and two-way GitHub Issues sync.
+
+---
+
+## 0.4.17 — The Runtime Body · branch `release/0.4.17` · IN FLIGHT
+
+The agent gets a **body**: an execution plane it runs in, reflexes that react
+to the outside world, and the quality/customization surface to steer it — all
+default-OFF, all configurable from desktop Settings (no config.json editing).
+
+- [x] **Structure** — god-file breakdown campaign (per-domain modules across
+  cli/desktop/packages) + committed engineering handbook (`brainrouter-rules/`).
+- [x] **Runtime plane** — `IAgentRuntime` port with `process` (default) /
+  `worktree` (git-isolated) / `container` (Docker, strictly opt-in) / `hosted`
+  (user-declared external CLIs) backends; LRU parking (`maxLive`);
+  archive-on-dispose + resume-from-archive; JIT secret leases (single-use,
+  short-TTL); versioned runner REST contract (`/runtime/v1`, loopback +
+  session-key auth) with desktop/CLI as clients; app-preview port registry.
+- [x] **Automations (inbound reflexes)** — opt-in webhook ingress
+  (GitHub/Slack/GitLab/Jira; mandatory timing-safe signature verification,
+  repo allowlist, loopback-default bind); `on`/`when`/`do` rules in
+  `.brainrouter/automations/*.md`; label/@mention → fleet job → draft PR →
+  comment-back with redelivery idempotency; CI-failure nudge; suggested-tasks
+  scanner + desktop Tasks panel. Guide: [`automations.md`](brainrouter-docs/automations.md).
+- [x] **Agent quality** — critic gate (score + bounded refinement), hard
+  per-task budgets (USD/tokens), named LLM profiles + agent `switch_model`,
+  keyword-triggered JIT skill injection.
+- [x] **Customization** — org convention-repo discovery (read-only
+  `.brainrouter` repos for your user/orgs), org plugin scope, alt-manifest
+  import compatibility.
+- [x] **Plugin marketplace** — plugins as bundle+distribution over the existing
+  systems (skills/agents/hooks/MCP/connectors/workflows): init/validate/
+  install/enable/consent, hosted registry search, publish flow, desktop
+  Marketplace panel.
+- [x] **Reference-app parity batch** — safe mode, fallback/available models,
+  stacked skills, shell auto-classify, recent denials, `/cd`, usage breakdown,
+  version-range gate, attribution controls.
+- [x] **Desktop control surface** — Settings sections for ALL of the above
+  (Runtime + Automations + LLM profiles + marketplace scope), live runtime
+  monitor (dispose/resume/prune), automation-rule toggles, in-app trigger
+  daemon Start/Stop, sibling-safe nested config writer with write-only secrets.
+- [ ] Release prep: changelog, version bump, publish (user's call).
 
 ---
 

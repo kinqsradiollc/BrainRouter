@@ -18,6 +18,10 @@ deep dives.
 - **[hooks.md](hooks.md)** — authoring reference for shell hooks
   (`cli/hooks.json`) and hookify rules (`hooks/*.md`): events, schema,
   three worked examples, debug + limit notes.
+- **[automations.md](automations.md)** — inbound triggers → autonomous agent
+  jobs (0.4.17): webhook ingress + signature verification, `on`/`when`/`do`
+  rules, desktop setup, the loopback/tunnel reachability model, and the
+  end-to-end event → fleet job → draft PR → comment-back chain.
 - **[brain-agents.md](brain-agents.md)** — 0.4.0 design freeze for
   the brain-side agent registry, `memory_jobs` queue, and three MCP
   tools (`memory_agent_status` / `memory_agent_run` /
