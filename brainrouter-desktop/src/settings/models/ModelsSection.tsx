@@ -111,11 +111,9 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
     ? savedProviders.find((p) => p.name === defaultProvider)
     : null;
   const defaultModelMatches = snapshot?.defaultProviderModelMatches !== false;
-  const defaultProviderDesc = currentDefault
-    ? `${currentDefault.provider} · ${defaultModelMatches ? currentDefault.model : `${snapshot?.model ?? currentDefault.model} (current model)`}`
-    : snapshot?.model
-      ? `Current default is ${snapshot.model}. Save it as a Provider below to manage it here.`
-      : 'Add a provider below, then select it here.';
+  // Host of the active default's endpoint (named provider's, else the base llm's),
+  // so the "Default model" card can show WHERE the model runs.
+  const activeHost = ((currentDefault?.endpoint ?? snapshot?.endpoint) || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '');
   const overrideRaw = normalizeWireFormatOverrides(knobs.providerRequestFormat);
   const updateWireFormat = (id: string, next: WireFormatOverride | null): void => {
     const providerId = normalizeProviderId(id);
@@ -167,12 +165,29 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
 
       {modelsTab === 'providers' ? (
       <>
-      <div className="set-h2">Default model &amp; provider</div>
-      <Row title="Provider" desc={defaultProviderDesc}>
-        <ChoiceControl value={defaultProvider} placeholder={savedProviders.length ? 'Select provider' : 'No providers yet'}
-          options={savedProviders.map((p) => ({ value: p.name, label: p.name, detail: `${p.provider} · ${p.model}` }))}
-          onChange={(name) => { api.onAction('a-setdefault', 'action:set-default-provider', { name }); setTimeout(refreshSnapshot, 80); }} />
-      </Row>
+      <div className="set-h2">Default model</div>
+      <div className="set-desc" style={{ marginBottom: 8 }}>The model every new turn uses unless a sub-agent, profile, or <code>/model</code> overrides it.</div>
+      {/* The RESOLVED active default — shows what runs + where it comes from, so
+          a base/quickstart model (e.g. the free opencode tier) is never a mystery. */}
+      <div className="provider-card saved" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 3, padding: '11px 13px', marginBottom: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+          <ProviderIcon id={(currentDefault?.provider) || snapshot?.provider || 'openai-compatible'} size={22} />
+          <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{snapshot?.model || 'No model set'}</span>
+          {activeHost ? <span className="pc-host" style={{ flex: '0 0 auto' }}>· {activeHost}</span> : null}
+        </div>
+        <div className="set-desc" style={{ margin: 0 }}>
+          {currentDefault
+            ? <>From your provider <b>{currentDefault.name}</b>{!defaultModelMatches ? <> — <span style={{ color: 'var(--warn)' }}>a <code>/model</code> override is active this session</span></> : null}.</>
+            : <>This is your <b>base config</b> — the free quickstart model, <i>not</i> one of the providers below. Pick a provider below to make it the default instead.</>}
+        </div>
+      </div>
+      {savedProviders.length ? (
+        <Row title="Use a provider as the default" desc="Route the main model through one of your saved providers.">
+          <ChoiceControl value={defaultProvider} placeholder="Base config (quickstart)"
+            options={savedProviders.map((p) => ({ value: p.name, label: p.name, detail: `${p.provider} · ${p.model}` }))}
+            onChange={(name) => { if (name) { api.onAction('a-setdefault', 'action:set-default-provider', { name }); setTimeout(refreshSnapshot, 80); } }} />
+        </Row>
+      ) : null}
 
       <div className="set-h2">Set up a provider</div>
       <div className="set-desc" style={{ marginBottom: 8 }}>Pick one — the dialog pre-fills the endpoint, then enter your key to pull the models it unlocks.</div>
@@ -301,22 +316,25 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
                   </>
                 ) : null}
 
-                {/* §multi-select-models — Models section: fetch the key's models,
-                    search/select which to make available; free-text fallback when
-                    a probe returns nothing (Azure/Anthropic compat, offline). */}
+                {/* §multi-select-models — one clear step: Fetch the endpoint's
+                    models, tick the ones to make available, and mark ONE as this
+                    provider's default (the ★). Free-text fallback when a probe
+                    returns nothing (Azure/Anthropic compat, offline). */}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 4 }}>
                   <div className="set-h2" style={{ margin: 0 }}>Models</div>
-                  <button className="btn primary-ghost" style={{ flex: '0 0 auto' }} disabled={api.probeLoading} onClick={runProbe}>{api.probeLoading ? 'Fetching…' : 'Fetch models'}</button>
+                  <button className="btn primary-ghost" style={{ flex: '0 0 auto' }} disabled={api.probeLoading} onClick={runProbe}>
+                    {api.probeLoading ? 'Fetching…' : api.probedModels.length ? 'Re-fetch' : 'Fetch models'}
+                  </button>
                 </div>
                 <div className="set-desc" style={{ margin: 0 }}>
                   {api.probeLoading ? 'Fetching the models your key unlocks…'
-                    : api.probedModels.length ? `Select models to make available — ${selectedModels.length} of ${api.probedModels.length} selected.`
+                    : api.probedModels.length ? <>Tick the models to make available, then mark one as the <b>default</b> (★). <b>{selectedModels.length}</b> of {api.probedModels.length} available.</>
                     : (api.probeError === 'http-401' || api.probeError === 'http-403') ? 'API key rejected — check the key.'
                     : api.probeError === 'http-404' ? 'Endpoint not found — check the base URL.'
                     : api.probeError === 'unreachable' ? "Couldn't reach the endpoint — check the URL / network."
                     : api.probeError && api.probeError.startsWith('http-') ? `Endpoint error ${api.probeError.replace('http-', '')} — check the endpoint.`
                     : api.probeError === 'no-models' ? 'No models returned — check the key/endpoint, or type a default below.'
-                    : 'Enter your key above, then fetch the models it unlocks.'}
+                    : 'Enter your key above, then Fetch to load the models it unlocks.'}
                 </div>
                 {api.probedModels.length ? (
                   <>
@@ -329,29 +347,31 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
                         <span>{allFilteredChecked ? 'Deselect all' : 'Select all'}{modelFilter.trim() ? ` (${filteredModels.length})` : ''}</span>
                       </label>
                     </div>
-                    <div style={{ maxHeight: 220, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 5, padding: 1 }}>
+                    <div style={{ maxHeight: 240, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 5, padding: 1 }}>
                       {filteredModels.length === 0 ? <div className="set-desc" style={{ margin: 0, padding: '6px 2px' }}>No models match “{modelFilter}”.</div> : null}
                       {filteredModels.map((m) => {
                         const checked = selectedModels.includes(m);
+                        const isDefault = checked && m === defaultModel;
                         return (
-                          <label key={m} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 11px', borderRadius: 8, cursor: 'pointer', fontSize: 13,
-                            border: `1px solid ${checked ? 'var(--accent)' : 'var(--border)'}`, background: checked ? 'var(--accent-soft)' : 'var(--input)' }}>
-                            <input type="checkbox" checked={checked} onChange={() => setSelectedModels((cur) => cur.includes(m) ? cur.filter((x) => x !== m) : [...cur, m])} />
-                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m}</span>
-                          </label>
+                          <div key={m} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 11px', borderRadius: 8, fontSize: 13,
+                            border: `1px solid ${isDefault ? 'var(--accent)' : checked ? 'var(--accent-soft)' : 'var(--border)'}`, background: checked ? 'var(--accent-soft)' : 'var(--input)' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0, cursor: 'pointer' }}>
+                              <input type="checkbox" checked={checked} onChange={() => setSelectedModels((cur) => cur.includes(m) ? cur.filter((x) => x !== m) : [...cur, m])} />
+                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m}</span>
+                            </label>
+                            {checked ? (isDefault
+                              ? <span className="pc-tag default" style={{ flex: '0 0 auto' }}>★ Default</span>
+                              : <button type="button" className="btn" style={{ flex: '0 0 auto', padding: '2px 9px', fontSize: 11.5 }} title="Use as this provider's default model" onClick={() => setProvDraft((d) => ({ ...d, model: m }))}>Set default</button>
+                            ) : null}
+                          </div>
                         );
                       })}
                     </div>
-                    <div className="mcp-add-row" style={{ alignItems: 'center', marginTop: 2 }}>
-                      <span className="set-desc" style={{ margin: 0, flex: '0 0 auto' }}>Default model</span>
-                      <ChoiceControl value={defaultModel}
-                        options={selectedModels.map((m) => ({ value: m, label: m }))}
-                        onChange={(m) => setProvDraft((d) => ({ ...d, model: m }))} />
-                    </div>
+                    <div className="set-desc" style={{ margin: '2px 0 0' }}>The <b>★ Default</b> model is what this provider uses when it's active. Every ticked model stays available to <code>/model</code>, sub-agents, and profiles.</div>
                   </>
                 ) : (
                   <>
-                    <input className="ctl" placeholder="default model (type one, or fetch above)" list="ws12-provider-models" value={provDraft.model} onChange={(e) => setProvDraft((d) => ({ ...d, model: e.target.value }))} />
+                    <input className="ctl" placeholder="default model (type one, or Fetch above)" list="ws12-provider-models" value={provDraft.model} onChange={(e) => setProvDraft((d) => ({ ...d, model: e.target.value }))} />
                     <datalist id="ws12-provider-models">
                       {(editingProvider ? (api.providerModels[editingProvider] ?? []) : api.endpointModels).map((m) => <option key={m} value={m} />)}
                     </datalist>
