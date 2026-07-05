@@ -192,12 +192,65 @@ As a Dev, I want to view and create requirement records so that I track what nee
 
 ---
 
+## future stories (M3 — full-parity surfaces)
+
+> The deliberately-deferred surfaces (S-27…S-33) now get their spec/story/prototype cycle. Each maps a desktop panel to a **mobile-native** flow — no drag-and-drop, read-then-write, sandboxed preview, remote shell. Prototypes: `flow-UF-15.html` … `flow-UF-21.html`.
+
+### US-34 · Read & add annotations — *future*
+As a Dev, I want to read and add annotations pinned to a file and line so that I can capture review notes and TODOs against the code from my phone.
+**Acceptance:** annotations list grouped by file, each row showing author (me / agent), `file:line`, note text, and age; ＋ adds a note at a picked `file:line` (or the current selection) and it appears optimistically; tapping a row opens the code frame + note with Edit / Resolve / Delete; resolved annotations collapse under a "Resolved" divider; destructive actions confirm.
+**Screens:** S-27 · **Flow:** UF-15 · *Ports `AnnotationsPanel.tsx`; `annotation-list`/`-add`/`-resolve`.*
+
+### US-35 · Preview an artifact — *future*
+As a Dev, I want to preview artifacts the agent produced (HTML / SVG / Markdown) in a sandbox so that I can see rendered output without a desktop.
+**Acceptance:** artifacts list with a type badge, size, and age; tapping one opens a **sandboxed** WebView preview (no network, no host/file access) with a shield note; a Preview ⇄ Source toggle; export / open-externally; unsupported types show source only; the sandbox origin is null.
+**Screens:** S-28 · **Flow:** UF-16 · *Ports `ArtifactsPanel.tsx`; `artifact-list`/`-read`. Expo WebView with a locked-down `originWhitelist`.*
+
+### US-36 · Manage schedules — *future*
+As a Dev, I want to view and manage scheduled agent runs so that recurring work keeps happening without me.
+**Acceptance:** schedules list (name, cadence in plain words e.g. "Every day · 09:00", next-run relative, last-run status, enabled toggle); ＋ creates one (name, prompt, cadence: Daily / Weekly / Cron); tapping a row opens detail with run history, **Run now**, Edit, Delete; toggling enabled persists host-side; a disabled schedule is visibly dimmed.
+**Screens:** S-29 · **Flow:** UF-17 · *Ports `SchedulePanel.tsx`; `schedule-list`/`-add`/`-toggle`/`-run` (cron routines).*
+
+### US-37 · Manage worktrees — *future*
+As a Dev, I want to see and manage git worktrees so that I can juggle parallel branches from my phone.
+**Acceptance:** worktrees list (branch, path, ahead/behind counts, clean/dirty dot, a "current" marker); ＋ creates a worktree (new branch + base); tapping a row opens actions (Switch / Open changes / Remove — remove confirms and refuses if dirty); switching re-scopes the active session to that worktree.
+**Screens:** S-30 · **Flow:** UF-18 · *Ports `WorktreesPanel.tsx`; `worktree-list`/`-add`/`-remove`/`-switch`.*
+
+### US-38 · Triage on a tap-to-move board — *future*
+As a Dev, I want a tap-to-move task board so that I can triage sprint work without desktop drag-and-drop.
+**Acceptance:** horizontally-scrollable columns (Backlog / Todo / In progress / Done) with per-column counts; cards show title, assignee, labels; tapping a card opens detail; **Move** opens a status sheet (tap a column — no DnD); a sprint switcher and a members filter; moves reflect optimistically and sync host-side.
+**Screens:** S-31 · **Flow:** UF-19 · *Ports `TrackView.tsx`; `track-board`/`-move`/`-sprints` (no-DnD mobile redesign).*
+
+### US-39 · Make a quick edit — *future*
+As a Dev, I want a lightweight editor so that I can make a quick fix and save without a laptop.
+**Acceptance:** opens from the read-only file viewer (S-21) via Edit; a syntax-highlighted editable buffer with line numbers; a keyboard accessory row (tab, brackets, save); an unsaved-changes dot + live +/− count; **Save** writes via the host and offers Review / Commit; large files warn; no full Monaco.
+**Screens:** S-32 (from S-21) · **Flow:** UF-20 · *RN/WebView CodeMirror; `write-file` (Monaco replacement).*
+
+### US-40 · Run a command on the host — *future*
+As a Dev, I want a remote-shell view so that I can run a quick command on the host and read its output.
+**Acceptance:** a mono scrollback of host-run output; a command input; running streams stdout/stderr and shows an exit code; long-running commands can be Stopped; a persistent "runs on the host · «workspace»" safety note; the shell executes **host-side** — nothing runs on-device — and the working directory is the active workspace.
+**Screens:** S-33 · **Flow:** UF-21 · *Ports `TerminalPanel.tsx`; `term-run`/`term-stream` (remote shell; xterm replacement).*
+
+---
+
+## parity stories (new desktop capabilities)
+
+> Surfaces newly implemented on the desktop app (post-M3) being ported to mobile. Prototypes: `flow-UF-22.html` …
+
+### US-41 · Search my memory — *parity*
+As a Dev, I want to search the brain memory engine from my phone so that I can recall codebase facts, decisions, and lessons on the go.
+**Acceptance:** a search box queries `memory-search`; results list ranked recalls (type label, relevance score, content snippet) sorted highest-first; records whose source changed are flagged **stale**; tapping a recall shows the full content + provenance; read-only.
+**Screens:** S-34 · **Flow:** UF-22 · *Ports `MemoryPanel.tsx`; `memory-search` (brain engine, #668).*
+
+---
+
 ## Coverage map (story → milestone → prototype)
 
 | Milestone | Stories | Prototyped |
 |---|---|---|
 | **MVP** | US-01…US-29 | yes (`flow-US-01.html` … `flow-US-29.html`) |
 | **v1** | US-30…US-33 | yes (documented; prototypes included) |
-| **future** | (S-27…S-33 screens) | deferred — documented in [roadmap.md](roadmap.md), not yet prototyped |
+| **future** | US-34…US-40 (S-27…S-33) | yes (`flow-UF-15.html` … `flow-UF-21.html`) |
+| **parity** | US-41 (S-34) | yes (`flow-UF-22.html`) |
 
-> Future-milestone surfaces (Annotations, Artifacts, Schedules, Worktrees, Track board, in-app Editor, Terminal) are intentionally **not** given stories/prototypes yet — they're sequenced in the roadmap and will get their own spec/story/prototype cycle when scheduled. This is a deliberate scope boundary, not an omission.
+> The M3 "full-parity" surfaces (Annotations, Artifacts, Schedules, Worktrees, Track board, in-app Editor, Terminal) now have stories + flows + prototypes — this was their scheduled spec/story/prototype cycle. Each is a **mobile-native redesign** of its desktop panel (no drag-and-drop, read-then-write, sandboxed preview, remote shell), not a 1:1 port. Implementation is still sequenced last per [roadmap.md](roadmap.md); several may be re-scoped based on MVP/v1 usage.

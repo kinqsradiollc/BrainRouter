@@ -1,6 +1,6 @@
 # User Flows — BrainRouter Mobile
 
-> Screen-to-screen journeys with Mermaid diagrams. Each flow has a unique ID, the screens ([ui-spec.md](ui-spec.md)) and stories ([user-stories.md](user-stories.md)) it covers, and a milestone. Screen IDs in `()` reference the UI spec. Prototypes: `flow-UF-01.html` … `flow-UF-14.html`.
+> Screen-to-screen journeys with Mermaid diagrams. Each flow has a unique ID, the screens ([ui-spec.md](ui-spec.md)) and stories ([user-stories.md](user-stories.md)) it covers, and a milestone. Screen IDs in `()` reference the UI spec. Prototypes: `flow-UF-01.html` … `flow-UF-21.html` (UF-15…21 are the M3 "full-parity" surfaces).
 
 ---
 
@@ -263,6 +263,161 @@ flowchart TD
 
 ---
 
+## UF-15 · Read & add an annotation — *future*
+**Covers:** US-34 · **Screens:** S-03 → S-27
+
+```mermaid
+flowchart TD
+    A[S-03 overflow → Annotations] --> B[S-27 Annotations: grouped by file]
+    B --> C[Tap ＋ Add]
+    C --> D[Pick file:line / use current selection]
+    D --> E[Type note → Save]
+    E --> F[annotation-add → appears optimistically]
+    F --> B
+    B --> G[Tap an annotation]
+    G --> H[Detail: code frame + note]
+    H --> I{Action}
+    I -- edit --> J[annotation-edit] --> B
+    I -- resolve --> K[annotation-resolve → collapses] --> B
+    I -- delete --> L[Confirm → annotation-remove] --> B
+```
+
+---
+
+## UF-16 · Preview an artifact — *future*
+**Covers:** US-35 · **Screens:** S-03 → S-28
+
+```mermaid
+flowchart TD
+    A[S-03 overflow → Artifacts] --> B[S-28 Artifacts list: type badge / size / age]
+    B --> C[Tap an artifact]
+    C --> D{Type}
+    D -- html/svg --> E[Sandboxed WebView preview]
+    D -- unsupported --> F[Source only]
+    E --> G[Toggle Preview ⇄ Source]
+    G --> E
+    E --> H{Action}
+    H -- export --> I[Share / export sheet]
+    H -- open externally --> J[External viewer]
+    E --> K[Shield note: sandbox · no network / host]
+```
+
+---
+
+## UF-17 · Create & manage a schedule — *future*
+**Covers:** US-36 · **Screens:** S-03 → S-29
+
+```mermaid
+flowchart TD
+    A[S-03 overflow → Schedules] --> B[S-29 Schedules: cadence + next-run + toggle]
+    B --> C[Toggle enable/disable → schedule-toggle]
+    B --> D[Tap ＋ New]
+    D --> E[Name + prompt]
+    E --> F[Cadence sheet: Daily / Weekly / Cron]
+    F --> G[schedule-add → row appears]
+    G --> B
+    B --> H[Tap a schedule]
+    H --> I[Detail: run history]
+    I --> J{Action}
+    J -- run now --> K[schedule-run] --> I
+    J -- edit --> E
+    J -- delete --> L[Confirm → schedule-remove] --> B
+```
+
+---
+
+## UF-18 · Create & switch a worktree — *future*
+**Covers:** US-37 · **Screens:** S-03 → S-30 → S-02
+
+```mermaid
+flowchart TD
+    A[S-03 overflow → Worktrees] --> B[S-30 Worktrees: branch / path / status]
+    B --> C[Tap ＋ New]
+    C --> D[New branch + base]
+    D --> E[worktree-add → row appears]
+    E --> B
+    B --> F[Tap a worktree]
+    F --> G[Actions sheet]
+    G --> H{Choice}
+    H -- switch --> I[worktree-switch → re-scope session] --> J[S-02 re-scoped]
+    H -- open changes --> K[S-07 Changes]
+    H -- remove --> L{Dirty?}
+    L -- yes --> M[Refuse: commit / stash first]
+    L -- no --> N[Confirm → worktree-remove] --> B
+```
+
+---
+
+## UF-19 · Triage on the Track board — *future*
+**Covers:** US-38 · **Screens:** S-31
+
+```mermaid
+flowchart TD
+    A[Track tab S-31] --> B[Columns: Backlog / Todo / In progress / Done]
+    B --> C[Sprint switcher / members filter]
+    B --> D[Tap a card]
+    D --> E[Card detail: assignee / labels / desc]
+    E --> F[Tap Move]
+    F --> G[Status sheet: pick a column — no DnD]
+    G --> H[track-move → card jumps column]
+    H --> B
+```
+
+---
+
+## UF-20 · Quick edit → save — *future*
+**Covers:** US-39 · **Screens:** S-21 → S-32 → S-07
+
+```mermaid
+flowchart TD
+    A[S-21 File viewer read-only] --> B[Tap Edit]
+    B --> C[S-32 Editor: buffer + line numbers]
+    C --> D[Edit a line]
+    D --> E[Unsaved dot + live +/− count]
+    E --> F[Tap Save]
+    F --> G[write-file via host]
+    G --> H{Next}
+    H -- review --> I[S-07 Changes / diff]
+    H -- keep editing --> C
+    H -- discard --> J[Confirm → revert] --> A
+```
+
+---
+
+## UF-21 · Run a command on the host — *future*
+**Covers:** US-40 · **Screens:** S-03 → S-33
+
+```mermaid
+flowchart TD
+    A[S-03 overflow → Terminal] --> B[S-33 Terminal: host scrollback + prompt]
+    B --> C[Type a command]
+    C --> D[Run → term-run]
+    D --> E[stdout/stderr streams host-side]
+    E --> F{Still running?}
+    F -- yes, want to stop --> G[Tap Stop → term-stop]
+    F -- completes --> H[Exit code shown]
+    G --> B
+    H --> B
+    B --> I[Note: runs on the host · workspace cwd]
+```
+
+---
+
+## UF-22 · Search your memory — *parity*
+**Covers:** US-41 · **Screens:** More → S-34
+
+```mermaid
+flowchart TD
+    A[More tab → Memory] --> B[S-34 Memory: search box]
+    B --> C[Type query → memory-search]
+    C --> D{Recalls?}
+    D -- none --> E[Empty state]
+    D -- yes --> F[Ranked recalls: type · score · stale]
+    F --> G[Tap a recall → full content + provenance]
+```
+
+---
+
 ## Flow ↔ screen ↔ story matrix
 
 | Flow | Screens | Stories | Milestone |
@@ -281,3 +436,11 @@ flowchart TD
 | UF-12 | S-05 (deep link) | US-25, US-12 | MVP |
 | UF-13 | S-02, S-03 | US-04, US-17 | MVP |
 | UF-14 | S-03, S-22 | US-30 | v1 |
+| UF-15 | S-03, S-27 | US-34 | future |
+| UF-16 | S-03, S-28 | US-35 | future |
+| UF-17 | S-03, S-29 | US-36 | future |
+| UF-18 | S-03, S-30, S-02 | US-37 | future |
+| UF-19 | S-31 | US-38 | future |
+| UF-20 | S-21, S-32, S-07 | US-39 | future |
+| UF-21 | S-03, S-33 | US-40 | future |
+| UF-22 | S-34 | US-41 | parity |
