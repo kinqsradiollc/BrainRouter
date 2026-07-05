@@ -121,11 +121,19 @@ can reach it — GitHub cannot. Three ways to make it reachable:
 
 ## Design position
 
-BrainRouter's automations are **self-hosted and local-first**: the same
-machine (or server) that holds your workspaces, memory, and provider keys
-runs the listener, and jobs execute on your own fleet queue with your own
-models. The trade-off versus CI-hosted responder bots (which run inside a CI
-provider's infrastructure per event) is deliberate — nothing about your code,
-prompts, or keys transits a third party, jobs reuse your warm local setup and
-memory, and the cost model is your own hardware. The price is the
-reachability step above when the event source lives on the public internet.
+BrainRouter's automations run on a **self-hosted execution plane** with
+**bring-your-own-provider** models. "Self-hosted" is about *where the work
+runs*, not which model answers: the machine (or server) that holds your
+workspaces, memory, and provider keys runs the listener, and jobs execute on
+your own fleet queue in your own worktrees. The *model* behind each job is
+whatever you configure — any OpenAI-compatible or native provider, **cloud
+(OpenAI, Anthropic, Gemini, OpenRouter, …) or local (Ollama, LM Studio)** — so
+"self-hosted" does not mean "local-only inference."
+
+The trade-off versus CI-hosted responder bots (which run inside a CI
+provider's infrastructure per event) is deliberate: your **code, workspace,
+and orchestration** stay on your box (only the prompt/completion round-trip
+goes to whatever model provider you chose), jobs reuse your warm local setup
+and memory, and the compute/runtime cost is your own hardware (model tokens
+are billed by your provider as usual). The price is the reachability step
+above when the event source lives on the public internet.

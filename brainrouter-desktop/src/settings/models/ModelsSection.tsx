@@ -5,6 +5,7 @@
  * own local state so the composed shell stays thin; render is unchanged.
  */
 import React, { useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ProviderIcon } from '../../components/model/ProviderIcon.js';
 import { Row, ChoiceControl, ComboInput } from '../shared/controls.js';
 import { WireFormatSelect } from '../shared/controls.js';
@@ -250,7 +251,9 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
           ? cur.filter((m) => !filteredModels.includes(m))
           : [...new Set([...cur, ...filteredModels])]);
         const canConnect = !!provDraft.name.trim() && (selectedModels.length > 0 || !!provDraft.model.trim());
-        return (
+        // Portal to <body>: the Settings modal's popIn `transform` would make this
+        // fixed overlay resolve against — and get clipped by — the settings box.
+        return createPortal((
           <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) { setProvModalOpen(false); api.onProbeReset(); } }}>
             <div className="dialog" style={{ width: 520, maxHeight: '86vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
               <div className="dialog-title" style={{ display: 'flex', alignItems: 'center', gap: 11, flex: 'none' }}>
@@ -385,10 +388,10 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
               </div>
             </div>
           </div>
-        );
+        ), document.body);
       })() : null}
 
-      {confirmDeleteProvider ? (
+      {confirmDeleteProvider ? createPortal((
         <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) setConfirmDeleteProvider(null); }}>
           <div className="dialog dangerous" style={{ width: 380 }}>
             <div className="dialog-title">Remove “{confirmDeleteProvider}”?</div>
@@ -399,7 +402,7 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
             </div>
           </div>
         </div>
-      ) : null}
+      ), document.body) : null}
 
       {(() => {
         if (providerFormatRows.length === 0) return null;

@@ -5,6 +5,7 @@
  * add-server draft state; render is unchanged.
  */
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Icon } from '../../icons.js';
 import { Row, ChoiceControl } from '../shared/controls.js';
 import type { ConfigSnapshot } from '../shared/types.js';
@@ -71,7 +72,8 @@ export function McpServersSection({ snapshot, onAction, refreshSnapshot }: {
         const isStdio = mcp.type === 'stdio';
         const canAdd = !!mcp.id.trim() && (isStdio ? !!mcp.command.trim() : !!mcp.url.trim());
         const closeModal = (): void => setMcpModalOpen(false);
-        return (
+        // Portal to <body> so the Settings modal's popIn transform can't clip it.
+        return createPortal((
           <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}>
             <div className="dialog" style={{ width: 520, maxHeight: '86vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
               <div className="dialog-title" style={{ display: 'flex', alignItems: 'center', gap: 11, flex: 'none' }}>
@@ -128,7 +130,7 @@ export function McpServersSection({ snapshot, onAction, refreshSnapshot }: {
               </div>
             </div>
           </div>
-        );
+        ), document.body);
       })() : null}
     </>
   );
