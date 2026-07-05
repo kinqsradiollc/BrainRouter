@@ -2889,20 +2889,36 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           env: { ...process.env, TERM: 'xterm-256color', FORCE_COLOR: '1' },
         });
         const sess: TermSession = { proc, buf: '', alive: true };
-        const append = (d: Buffer) => {
-          sess.buf += d.toString('utf-8');
+        const append = (d: Buffer | string) => {
+          sess.buf += typeof d === 'string' ? d : d.toString('utf-8');
           if (sess.buf.length > TERM_BUF_CAP) sess.buf = sess.buf.slice(-TERM_BUF_CAP);
         };
+        // CRITICAL — a spawn failure (shell missing, EACCES) is emitted as an
+        // ASYNC 'error' event AFTER this handler returns. With no listener Node
+        // treats it as an unhandled error and crashes the whole host process,
+        // which takes down `npm start`. Catch it: mark the session dead and put
+        // the reason in the buffer so the panel shows an error, not a blank hang.
+        proc.on('error', (err) => {
+          sess.alive = false;
+          append(`\r\n[terminal failed to start ${shell}: ${err instanceof Error ? err.message : String(err)}]\r\n`);
+        });
         proc.stdout.on('data', append);
         proc.stderr.on('data', append);
-        proc.on('exit', (code) => { sess.alive = false; sess.buf += `\r\n[shell exited ${code ?? '?'}]\r\n`; });
+        // A bare stream 'error' (e.g. EPIPE when the shell dies mid-write) also
+        // throws if unlistened — swallow it; `exit`/`error` above own recovery.
+        proc.stdin.on('error', () => { sess.alive = false; });
+        proc.stdout.on('error', () => { /* stream closed; exit handler cleans up */ });
+        proc.stderr.on('error', () => { /* stream closed; exit handler cleans up */ });
+        proc.on('exit', (code) => { sess.alive = false; append(`\r\n[shell exited ${code ?? '?'}]\r\n`); });
         terms.set(id, sess);
         return { id, shell };
       },
       'term-write': (args) => {
         const sess = terms.get(String(args.id));
         if (!sess?.alive) return { ok: false };
-        sess.proc.stdin.write(String(args.data ?? ''));
+        // Guard stdin.write — writing to a shell that just died raises EPIPE,
+        // which (unguarded) would crash the host the same way the spawn error did.
+        try { sess.proc.stdin.write(String(args.data ?? '')); } catch { sess.alive = false; return { ok: false }; }
         return { ok: true };
       },
       'term-read': (args) => {

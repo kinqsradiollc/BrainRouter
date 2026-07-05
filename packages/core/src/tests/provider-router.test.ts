@@ -193,16 +193,19 @@ test('resolveAgentLlm uses provider router for role model requests when enabled'
   assert.equal(llm.model, 'shared-model');
 });
 
-test('resolveAgentLlm keeps legacy role behavior when router is disabled', () => {
+test('resolveAgentLlm routes role models through the always-on router', () => {
+  // Router-first architecture: routing is always on (no `enabled` gate). A bare
+  // role model available from multiple providers is resolved through the router,
+  // honoring `order` — here `shared-model` exists on both, so groq wins.
   const cfg = {
     activeServer: 's',
     servers: {},
     providers: { openai, groq },
     agentModels: { worker: { model: 'shared-model' } },
-    cli: { router: { enabled: false, order: ['groq', 'openai'] } },
+    cli: { router: { order: ['groq', 'openai'] } },
   };
   const llm = resolveAgentLlm(cfg, openai, 'worker');
-  assert.equal(llm.endpoint, openai.endpoint);
+  assert.equal(llm.endpoint, groq.endpoint);
   assert.equal(llm.model, 'shared-model');
 });
 

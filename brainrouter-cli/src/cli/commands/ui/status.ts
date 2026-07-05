@@ -159,7 +159,7 @@ export async function tryHandleUiStatusCommand(ctx: CommandContext): Promise<boo
       const activeModels = status.models.filter((item) => item.until > now);
 
       console.log(chalk.bold('\nProvider Router:'));
-      console.log(`  Auto-route models: ${router.enabled ? chalk.green('on') : chalk.gray('off')}`);
+      console.log(`  Routing:           ${chalk.green('always on')} ${chalk.gray('(every request routes through the chain)')}`);
       console.log(`  Strategy:          ${chalk.cyan(router.strategy)}`);
       console.log(`  Pass-through:      ${router.passThrough ? chalk.green('on') : chalk.gray('off')}`);
       console.log(`  Providers:         ${chalk.yellow(Object.keys(providers).length)}`);

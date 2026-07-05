@@ -1010,6 +1010,10 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .attachment-name { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text); }
 .attachment-meta, .attachment-size { flex: none; color: var(--text-faint); font-family: var(--mono); font-size: 10.5px; }
 .attachment-clear { flex: none; border: 0; background: transparent; color: var(--text-faint); width: 18px; height: 18px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+/* Session Attachments panel — row thumbnail + inline preview. */
+.attachment-thumb { flex: none; width: 26px; height: 26px; object-fit: cover; border-radius: 5px; border: 1px solid var(--ov-08); }
+.attachments-panel .attachment-preview-img { padding: 8px 2px; }
+.attachments-panel .attachment-preview-img img { max-height: 360px; object-fit: contain; }
 .attachment-clear:hover { background: var(--ov-08); color: var(--text); }
 /* §vision — a pasted screenshot rides the same strip as file chips, rendered as
    a small thumbnail with a corner remove button. */

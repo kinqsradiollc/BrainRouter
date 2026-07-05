@@ -506,7 +506,12 @@ function resolveRouterKnobs(input: RouterCliKnobs | undefined): ResolvedCliKnobs
     : 'priority';
   const cooldownBaseMs = clampInt(input?.cooldownBaseMs, 500, 60_000, 3_000);
   return {
-    enabled: input?.enabled === true,
+    // Router-first architecture: routing is ALWAYS on. An unconfigured chain
+    // resolves to the base model (callers append `${base}/${model}`), so this is
+    // byte-identical to a direct call for users who never set up a chain. The
+    // `enabled` config field is retained for back-compat parsing but no longer
+    // gates behavior — there is no "off" path.
+    enabled: true,
     passThrough: input?.passThrough !== false,
     chain: sanitizeStringList(input?.chain),
     strategy,

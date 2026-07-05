@@ -62,8 +62,9 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       row.providers.push(entry.provider);
       bareMap.set(entry.model, row);
     }
-    const router = (devCliKnobs.router ?? {}) as { enabled?: boolean; chain?: string[] };
-    return { enabled: router.enabled === true, primaryChain: Array.isArray(router.chain) ? router.chain : [], canonical, bare: [...bareMap.values()], aliases: [] };
+    const router = (devCliKnobs.router ?? {}) as { chain?: string[] };
+    // Router-first: routing is always on (no `enabled` gate).
+    return { enabled: true, primaryChain: Array.isArray(router.chain) ? router.chain : [], canonical, bare: [...bareMap.values()], aliases: [] };
   };
   const queries: Record<string, (args: Record<string, unknown>) => unknown> = {
     'list-sessions': () => mergeMeta(S.wsCurrent),

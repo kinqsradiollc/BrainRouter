@@ -71,7 +71,12 @@ export function resolveAgentLlm(
       availableModels: knobs.availableModels,
       enforceAvailableModels: knobs.enforceAvailableModels,
     });
-    const route = resolveRoutes(registry, request, { withFallbacks: true, role })[0];
+    // withFallbacks:false — a sub-agent role must resolve to its DECLARED model.
+    // The router still routes a bare, catalog-known model by order/strategy, but
+    // an explicit provider/model (or an uncached model) that the router can't
+    // place must NOT be hijacked by the primary chain — it falls through to the
+    // legacy pin below (parent provider + the declared model).
+    const route = resolveRoutes(registry, request, { withFallbacks: false, role })[0];
     if (route) return { ...route.llm };
   }
   const provider = assign.provider ? config.providers?.[assign.provider] : undefined;

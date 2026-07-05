@@ -406,24 +406,20 @@ export function Composer(p: ComposerProps): React.ReactElement {
             {pop === 'model' ? (
               <div className="menu-pop model-menu" ref={modelMenuRef}>
                 {(() => {
-                  if (routerCatalog?.enabled) {
+                  if (routerCatalog) {
                     const primary = (routerCatalog.primaryChain ?? []).filter(Boolean);
+                    // Router-first (always on): the picker offers the routes, not a
+                    // per-provider model catalog. Every pick is Auto (the primary
+                    // chain), a chain entry, or one of your recent routes — each
+                    // resolves through the one proxy. To add or pin a specific
+                    // model, edit the chain in Settings → Models → Routing
+                    // ("Custom model…" below).
                     const allRequests = new Set([
                       ...primary,
                       ...((routerCatalog.aliases ?? []).map((item) => item.id)),
-                      ...((routerCatalog.bare ?? []).map((item) => item.id)),
                       ...((routerCatalog.canonical ?? []).map((item) => item.id)),
                     ]);
                     const recents = modelRecents.filter((item) => allRequests.has(item));
-                    const bareRows = (routerCatalog.bare ?? []).filter((item) => !NON_CHAT_MODEL.test(item.model));
-                    const canonicalGroups = new Map<string, typeof routerCatalog.canonical>();
-                    for (const item of routerCatalog.canonical ?? []) {
-                      if (NON_CHAT_MODEL.test(item.model)) continue;
-                      const provider = item.provider ?? item.providers[0] ?? 'provider';
-                      const rows = canonicalGroups.get(provider) ?? [];
-                      rows.push(item);
-                      canonicalGroups.set(provider, rows);
-                    }
                     const renderRouterItem = (request: string, label: string, detail?: string): React.ReactElement => {
                       const badges = capabilityBadges(modelCapabilities(label));
                       return (
@@ -464,23 +460,9 @@ export function Composer(p: ComposerProps): React.ReactElement {
                             <div className="menu-head"><span>Primary chain</span></div>
                             <div className="model-list">{primary.map((request, index) => renderRouterItem(request, request, index === 0 ? 'Primary' : `Fallback ${index}`))}</div>
                           </>
-                        ) : null}
-                        {bareRows.length ? (
-                          <>
-                            <div className="menu-head"><span>All models · bare requests</span></div>
-                            <div className="model-list model-list-endpoint">
-                              {bareRows.map((item) => renderRouterItem(item.id, item.model, item.providers.length > 1 ? item.providers.join(', ') : item.providers[0]))}
-                            </div>
-                          </>
-                        ) : null}
-                        {[...canonicalGroups.entries()].map(([provider, items]) => (
-                          <React.Fragment key={provider}>
-                            <div className="menu-head"><span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><ProviderIcon id={provider} size={14} />{provider} · {items.length}</span></div>
-                            <div className="model-list">
-                              {items.map((item) => renderRouterItem(item.id, item.model, item.id))}
-                            </div>
-                          </React.Fragment>
-                        ))}
+                        ) : (
+                          <div className="menu-head"><span>Chain is empty · base model serves all traffic</span></div>
+                        )}
                       </>
                     );
                   }

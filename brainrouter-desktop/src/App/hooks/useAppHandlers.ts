@@ -72,7 +72,16 @@ export function useAppHandlers(ctx: AppHandlersCtx): AppHandlers {
     const pendingAttachments = attachmentUploads.filter((a) => a.status === 'reading' || a.status === 'attaching');
     const failedAttachments = attachmentUploads.filter((a) => a.status === 'failed');
     const attached = readyAttachments(attachmentUploads);
-    const imagesToSend = pastedImages.map((p) => ({ mediaType: p.mediaType, dataBase64: p.dataBase64 }));
+    // §vision — send images through the inline vision channel: pasted images PLUS
+    // any attached image files (whose bytes we retained). Without this, attached
+    // images only reach the model as extracted text/metadata and are invisible.
+    const attachedImages = attached
+      .filter((a) => !!a.dataBase64 && (a.mediaType?.startsWith('image/') || a.kind === 'image'))
+      .map((a) => ({ mediaType: a.mediaType || 'image/png', dataBase64: a.dataBase64! }));
+    const imagesToSend = [
+      ...pastedImages.map((p) => ({ mediaType: p.mediaType, dataBase64: p.dataBase64 })),
+      ...attachedImages,
+    ];
     if (running || stopping) return;
     if (!typedPrompt && attached.length === 0 && imagesToSend.length === 0) return;
     if (pendingAttachments.length > 0) {
@@ -200,7 +209,14 @@ export function useAppHandlers(ctx: AppHandlersCtx): AppHandlers {
           return;
         }
         const base64 = out.includes(',') ? out.slice(out.indexOf(',') + 1) : out;
-        setAttachmentUploads((prev) => prev.map((u) => u.id === upload.id ? { ...u, status: 'attaching' } : u));
+        // §vision — an ATTACHED image must ALSO ride the vision sidecar so a
+        // vision-capable model actually sees the pixels. The ingest path only
+        // extracts text/metadata (invisible to the model), so retain the bytes +
+        // mime on the upload; submit() forwards them via start-turn `images`.
+        const isImage = file.type.startsWith('image/');
+        setAttachmentUploads((prev) => prev.map((u) => u.id === upload.id
+          ? { ...u, status: 'attaching', ...(isImage ? { mediaType: file.type || 'image/png', dataBase64: base64 } : {}) }
+          : u));
         q(`q-attach:${upload.id}`, 'attachment-ingest', { name: file.name, dataBase64: base64 });
       };
       reader.onerror = () => {

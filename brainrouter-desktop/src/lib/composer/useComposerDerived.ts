@@ -58,7 +58,7 @@ export function useComposerDerived(i: ComposerDerivedInput): ComposerDerived {
   const modeLabel = execMode === 'planning' ? 'Plan mode' : reviewPolicy === 'proceed' ? 'Auto mode' : 'Accept edits';
   const effort = String(prefsObj?.effort ?? 'medium');
   const modelChoices = useMemo(() => {
-    if (snapshot?.routerCatalog?.enabled) {
+    if (snapshot?.routerCatalog) {
       const routerChoices = [
         'auto',
         ...(snapshot.routerCatalog.primaryChain ?? []),

@@ -1,6 +1,6 @@
 import React from 'react';
 import { ProviderIcon } from '../../components/model/ProviderIcon.js';
-import { Row, ChoiceControl, Toggle } from '../shared/controls.js';
+import { Row, ChoiceControl } from '../shared/controls.js';
 import type { ChoiceOption, ConfigSnapshot } from '../shared/types.js';
 
 type ProviderSnapshot = NonNullable<ConfigSnapshot['providers']>[number];
@@ -48,7 +48,7 @@ export function describeRouterRequest(catalog: RouterCatalog | undefined, reques
   const alias = catalog?.aliases.find((item) => item.id === request);
   if (alias) return alias.target ? `Alias target: ${alias.target}` : 'Alias route';
   const bare = catalog?.bare.find((item) => item.id === request);
-  if (bare) return bare.providers.length > 1 ? `Bare model; router chooses among ${bare.providers.join(', ')}` : `Bare model on ${bare.providers[0]}`;
+  if (bare) return bare.providers.length > 1 ? `Router chooses among ${bare.providers.join(', ')}` : `Routed to ${bare.providers[0]}`;
   const canonical = catalog?.canonical.find((item) => item.id === request);
   if (canonical) return `${canonical.model} pinned to ${canonical.provider ?? canonical.providers[0]}${hostOf(canonical.endpoint) ? ` at ${hostOf(canonical.endpoint)}` : ''}`;
   return 'Provider removed or model unavailable; resolver skips it until edited.';
@@ -78,7 +78,6 @@ export function RoutingChainEditor({
   setRouterPath: (path: string, value: unknown) => void;
 }): React.ReactElement {
   const chain = catalog?.primaryChain ?? [];
-  const routerEnabled = catalog?.enabled === true;
   const strategy = typeof routerKnobs.strategy === 'string' ? routerKnobs.strategy : 'priority';
   const providerNames = providers.map((provider) => provider.name);
   const providerNameSet = new Set(providerNames);
@@ -98,12 +97,9 @@ export function RoutingChainEditor({
   return (
     <>
       <div className="set-h2">Routing</div>
-      <div className="set-desc" style={{ marginBottom: 8 }}>Primary route and ordered fallbacks for new turns, sub-agents, profiles, and gateway calls.</div>
+      <div className="set-desc" style={{ marginBottom: 8 }}>Every request routes through this chain — new turns, sub-agents, profiles, and gateway calls. Routing is always on; an empty chain simply falls through to the base model below.</div>
       <div className="provider-card saved" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 10, padding: '11px 13px', marginBottom: 8 }}>
-        <Row title="Auto-route models" desc="Off = the primary model is used directly, like before.">
-          <Toggle on={routerEnabled} onChange={(value) => setRouterPath('enabled', value)} />
-        </Row>
-        <Row title="Strategy" desc="Orders providers when a bare model is available from more than one provider.">
+        <Row title="Strategy" desc="Orders providers when a chain entry resolves to more than one provider.">
           <ChoiceControl
             value={strategy}
             options={[
@@ -180,7 +176,7 @@ export function RoutingChainEditor({
         {ambiguousChain && configuredOrder.length > 1 ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <div className="set-title">Provider order</div>
-            <div className="set-desc">Used when a bare-model chain entry is available from multiple providers.</div>
+            <div className="set-desc">Used when a chain entry is available from multiple providers.</div>
             {configuredOrder.map((provider, index) => (
               <div
                 key={provider}

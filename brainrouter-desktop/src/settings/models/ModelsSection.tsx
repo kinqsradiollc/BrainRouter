@@ -127,6 +127,13 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
   const routerServe = snapshot?.routerServe;
   const routerServeEnabled = routerKnobs.serve === true;
   const routerServeKeySet = snapshot?.routerSecretsSet?.serveKey === true;
+  // The gateway key is OPTIONAL on a loopback bind (local dev); a non-loopback
+  // host MUST carry one — an open network port with no auth is never safe. This
+  // mirrors the CLI/host guards in serveCommand.ts / routerServe.ts.
+  const routerServeHost = String(routerKnobs.serveHost ?? '127.0.0.1').trim() || '127.0.0.1';
+  const routerServeLoopback = /^(127\.0\.0\.1|localhost|::1|\[::1\])$/i.test(routerServeHost);
+  const routerServeKeyRequired = !routerServeLoopback;
+  const routerServeCanStart = routerServeEnabled && (routerServeKeySet || !routerServeKeyRequired);
   const setRouterPath = (path: string, value: unknown): void => {
     api.onAction('a-router-path', 'action:set-cli-path', { path: `router.${path}`, value });
     setTimeout(refreshSnapshot, 80);
@@ -222,7 +229,7 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
           <span style={{ fontWeight: 650 }}>OpenAI-compatible gateway {routerServe?.running ? <span className="badge native" style={{ marginLeft: 6 }}>running</span> : <span className="badge cli" style={{ marginLeft: 6 }}>stopped</span>}</span>
           {routerServe?.running
             ? <button className="btn danger" onClick={() => routerServeAction('action:router-serve-stop')}>Stop</button>
-            : <button className="btn" disabled={!routerServeEnabled || !routerServeKeySet} title={!routerServeEnabled ? 'Turn on gateway serving first' : !routerServeKeySet ? 'Set a gateway key first' : undefined} onClick={() => routerServeAction('action:router-serve-start')}>Start</button>}
+            : <button className="btn" disabled={!routerServeCanStart} title={!routerServeEnabled ? 'Turn on gateway serving first' : routerServeKeyRequired && !routerServeKeySet ? 'Set a gateway key first (required off-loopback)' : undefined} onClick={() => routerServeAction('action:router-serve-start')}>Start</button>}
         </div>
         <div className="set-desc" style={{ margin: 0 }}>
           {routerServe?.running && routerServe.url
@@ -241,9 +248,14 @@ export function ModelsSection({ snapshot, knobs, setKnob, refreshSnapshot, api }
           <input className="ctl" type="number" min={1} max={65535} defaultValue={String(routerKnobs.servePort ?? 8790)} placeholder="8790" onBlur={(e) => setRouterPath('servePort', Number(e.target.value) || null)} />
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto auto', gap: 8 }}>
-          <input className="ctl" type="password" placeholder={routerServeKeySet ? 'Gateway key configured' : 'Gateway bearer key'} value={routerKeyDraft} onChange={(e) => setRouterKeyDraft(e.target.value)} />
+          <input className="ctl" type="password" placeholder={routerServeKeySet ? 'Gateway key configured' : routerServeKeyRequired ? 'Gateway bearer key (required)' : 'Gateway bearer key (optional)'} value={routerKeyDraft} onChange={(e) => setRouterKeyDraft(e.target.value)} />
           <button className="btn" disabled={!routerKeyDraft.trim()} onClick={() => { setRouterPath('serveKey', routerKeyDraft.trim()); setRouterKeyDraft(''); }}>Set key</button>
           <button className="btn danger" disabled={!routerServeKeySet} onClick={() => setRouterPath('serveKey', null)}>Clear</button>
+        </div>
+        <div className="set-desc" style={{ margin: 0 }}>
+          {routerServeLoopback
+            ? <>Bound to loopback (<code>{routerServeHost}</code>) — a bearer key is optional. Clients send <code>Authorization: Bearer …</code> only if a key is set.</>
+            : <>Bound to <code>{routerServeHost}</code> — a bearer key is <strong>required</strong> because the port is reachable off-machine.</>}
         </div>
       </div>
 

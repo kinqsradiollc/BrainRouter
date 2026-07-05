@@ -59,6 +59,11 @@ export interface AttachmentUpload {
   attachmentId?: string;
   kind?: string;
   contextMarkdown?: string;
+  // §vision — for image attachments we retain the raw bytes + mime so the send
+  // path can forward them as an inline vision image (image_url sidecar), the
+  // same channel pasted images use. Non-image attachments leave these unset.
+  mediaType?: string;
+  dataBase64?: string;
 }
 
 export interface TaskViewState {

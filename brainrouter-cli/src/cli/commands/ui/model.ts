@@ -53,11 +53,12 @@ export async function tryHandleUiModelCommand(ctx: CommandContext): Promise<bool
             },
           )
           : null;
-        const routerRoute = routerRegistry ? resolveRoutes(routerRegistry, routerModelRequest, { withFallbacks: true })[0] : undefined;
-        if (routerEnabled && !routerRoute) {
-          console.log(chalk.red(`\n✗ Router could not resolve "${newModel}". Check cli.router.chain, providers, and availableModels.\n`));
-          return true;
-        }
+        // withFallbacks:false — an explicit `/model <name>` must resolve to THAT
+        // model. The router places it when it's in the catalog (bare → best
+        // provider by order, or provider/model pinned); when it can't (a brand-new
+        // or uncached model), we fall through to setting the raw name on the
+        // current provider — never silently swap in the primary chain's model.
+        const routerRoute = routerRegistry ? resolveRoutes(routerRegistry, routerModelRequest, { withFallbacks: false })[0] : undefined;
         const modelForGate = routerRoute?.model ?? newModel;
         const gate = assertModelAllowed(
           modelForGate,
