@@ -31,6 +31,7 @@ import { TrackScreen } from '../screens/TrackScreen';
 import { TerminalScreen } from '../screens/TerminalScreen';
 import { EditorScreen } from '../screens/EditorScreen';
 import { MemoryScreen } from '../screens/MemoryScreen';
+import { ConnectorsScreen } from '../screens/ConnectorsScreen';
 import type {
   AppTabsParamList,
   ChatsStackParamList,
@@ -101,6 +102,7 @@ function MoreNavigator(): React.JSX.Element {
     <MoreStack.Navigator screenOptions={{ headerShown: false }}>
       <MoreStack.Screen name="More" component={MoreScreen} />
       <MoreStack.Screen name="Memory" component={MemoryScreen} options={{ ...header, title: 'Memory' }} />
+      <MoreStack.Screen name="Connectors" component={ConnectorsScreen} options={{ ...header, title: 'Connectors' }} />
       <MoreStack.Screen name="Requirements" component={RequirementsScreen} options={{ ...header, title: 'Requirements' }} />
       <MoreStack.Screen name="Annotations" component={AnnotationsScreen} options={{ ...header, title: 'Annotations' }} />
       <MoreStack.Screen name="Artifacts" component={ArtifactsScreen} options={{ ...header, title: 'Artifacts' }} />
