@@ -26,6 +26,7 @@ export type SettingsStackParamList = {
 
 export type MoreStackParamList = {
   More: undefined; // hub
+  Memory: undefined; // S-34
   Requirements: undefined; // S-26
   Annotations: undefined; // S-27
   Artifacts: undefined; // S-28

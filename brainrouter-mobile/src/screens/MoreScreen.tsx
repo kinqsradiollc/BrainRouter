@@ -14,9 +14,10 @@ import type { MoreStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<MoreStackParamList, 'More'>;
 
-type ToolKey = 'Requirements' | 'Annotations' | 'Artifacts' | 'Schedules' | 'CI' | 'Worktrees' | 'Search' | 'Files' | 'Track' | 'Terminal' | 'Editor';
+type ToolKey = 'Memory' | 'Requirements' | 'Annotations' | 'Artifacts' | 'Schedules' | 'CI' | 'Worktrees' | 'Search' | 'Files' | 'Track' | 'Terminal' | 'Editor';
 
 const TOOLS: Array<{ key: ToolKey; label: string; icon: IconName; desc: string }> = [
+  { key: 'Memory', label: 'Memory', icon: 'brain', desc: 'Search the brain memory engine' },
   { key: 'Requirements', label: 'Requirements', icon: 'plan', desc: 'Structured intent & acceptance criteria' },
   { key: 'Annotations', label: 'Annotations', icon: 'edit', desc: 'Feedback & review comments' },
   { key: 'Artifacts', label: 'Artifacts', icon: 'file', desc: 'Design notes, reports, sketches' },
