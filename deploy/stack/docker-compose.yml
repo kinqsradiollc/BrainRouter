@@ -1,0 +1,70 @@
+# BrainRouter production stack (ADR-010) — Postgres + the service-capable brain.
+#
+#   cd deploy/stack && cp .env.example .env  # then fill the secrets
+#   docker compose up -d --build
+#   # → brain on http://localhost:3747 (MCP at /mcp, REST /api/*, /health)
+#
+# This runs the brain as a single service-capable process (memory + cognition +
+# Atlas + tenancy/RBAC + DB providers + trigger ingress + fleet), reachable over
+# MCP — exactly the topology ADR-010 targets. The brain's own modules already
+# have IService ports (ADR-006/008); further per-PROCESS extraction (provider
+# gateway, sandboxed exec, retrieval, workers) is activated per its scale drivers
+# — see README.md for the roadmap and how to split a module out.
+#
+# Providers (LLM / embeddings / reranker / judge) are now configured in the
+# DATABASE by an admin (dashboard → AI Providers, or POST /api/admin/providers),
+# NOT via .env. The BRAINROUTER_*_LLM/EMBEDDING/... vars below are an OPTIONAL
+# bootstrap fallback only — leave them empty for a pure DB-configured deployment.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set a real POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-brainrouter}
+    volumes:
+      - brainrouter-pg:/var/lib/postgresql/data
+      - ../postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-brainrouter}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  brain:
+    build:
+      context: ../..
+      dockerfile: deploy/brain/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      BRAINROUTER_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brainrouter}
+      # REQUIRED in production — JWT signing (sessions reset on boot without it).
+      BRAINROUTER_JWT_SECRET: ${BRAINROUTER_JWT_SECRET:?set BRAINROUTER_JWT_SECRET in .env}
+      # REQUIRED to store provider / integration API keys (AES-256-GCM KEK — a
+      # base64/hex 32-byte value). Without it, admins can configure everything
+      # except secrets. Rotate via re-seal; never commit it.
+      BRAINROUTER_SECRET_KEY: ${BRAINROUTER_SECRET_KEY:?set BRAINROUTER_SECRET_KEY (32-byte base64/hex) in .env}
+      # Which org's DB providers back the brain's own calls (default: the seeded
+      # admin's personal org). Set for a dedicated system org.
+      BRAINROUTER_SYSTEM_ORG_ID: ${BRAINROUTER_SYSTEM_ORG_ID:-}
+      # First-admin seed (clear after first boot; the API key prints once in logs).
+      BRAINROUTER_ADMIN_PASSWORD: ${BRAINROUTER_ADMIN_PASSWORD:-}
+      BRAINROUTER_ADMIN_EMAIL: ${BRAINROUTER_ADMIN_EMAIL:-admin@example.com}
+      # OPTIONAL provider bootstrap fallback (prefer the DB / dashboard).
+      BRAINROUTER_LLM_ENDPOINT: ${BRAINROUTER_LLM_ENDPOINT:-}
+      BRAINROUTER_LLM_API_KEY: ${BRAINROUTER_LLM_API_KEY:-}
+      BRAINROUTER_LLM_MODEL: ${BRAINROUTER_LLM_MODEL:-}
+      # Observability + browser CORS.
+      BRAINROUTER_METRICS: ${BRAINROUTER_METRICS:-}
+      BRAINROUTER_CORS_ORIGIN: ${BRAINROUTER_CORS_ORIGIN:-}
+    ports:
+      - "${BRAINROUTER_PORT:-3747}:3747"
+
+volumes:
+  brainrouter-pg:
+    name: brainrouter-pg
