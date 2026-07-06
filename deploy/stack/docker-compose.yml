@@ -52,6 +52,9 @@ services:
       # Which org's DB providers back the brain's own calls (default: the seeded
       # admin's personal org). Set for a dedicated system org.
       BRAINROUTER_SYSTEM_ORG_ID: ${BRAINROUTER_SYSTEM_ORG_ID:-}
+      # Decompose: delegate async jobs to the worker service(s). The brain serves
+      # MCP + REST; the worker drains the shared memory_jobs queue.
+      BRAINROUTER_JOB_RUNNER: "off"
       # First-admin seed (clear after first boot; the API key prints once in logs).
       BRAINROUTER_ADMIN_PASSWORD: ${BRAINROUTER_ADMIN_PASSWORD:-}
       BRAINROUTER_ADMIN_EMAIL: ${BRAINROUTER_ADMIN_EMAIL:-admin@example.com}
@@ -88,6 +91,46 @@ services:
       GATEWAY_PORT: "3748"
     ports:
       - "${GATEWAY_PORT:-3748}:3748"
+
+  # Trigger Ingress (ADR-011) — the stateless hosted GitHub webhook receiver.
+  # Its own process/port; verifies the App HMAC, resolves the tenant, and enqueues
+  # into the shared Postgres queue. Point the org GitHub App webhook at this URL.
+  ingress:
+    build:
+      context: ../..
+      dockerfile: deploy/brain/Dockerfile
+    restart: unless-stopped
+    command: ["node", "dist/services/ingress/index.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      BRAINROUTER_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brainrouter}
+      # Needed to OPEN the App's webhook secret when verifying signatures.
+      BRAINROUTER_SECRET_KEY: ${BRAINROUTER_SECRET_KEY}
+      INGRESS_PORT: "3749"
+    ports:
+      - "${INGRESS_PORT:-3749}:3749"
+
+  # Worker / Jobs (ADR-011) — drains the shared memory_jobs queue (competing
+  # consumer; scale with `--scale worker=N`). No HTTP. The brain delegates async
+  # work here (it runs with BRAINROUTER_JOB_RUNNER=off).
+  worker:
+    build:
+      context: ../..
+      dockerfile: deploy/brain/Dockerfile
+    restart: unless-stopped
+    command: ["node", "dist/services/worker/index.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      BRAINROUTER_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brainrouter}
+      BRAINROUTER_JWT_SECRET: ${BRAINROUTER_JWT_SECRET}
+      BRAINROUTER_SECRET_KEY: ${BRAINROUTER_SECRET_KEY}
+      BRAINROUTER_JOB_RUNNER: "on"
 
 volumes:
   brainrouter-pg:
