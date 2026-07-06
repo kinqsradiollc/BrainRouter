@@ -261,12 +261,12 @@ export function SettingsDialog(props: {
         const TIERS = ['off', 'propose', 'autopilot'];
         return (
           <>
-            <div className="set-h">Workflow automation</div>
+            <div className="set-h">Auto-planning</div>
             <div className="set-desc" style={{ marginBottom: 8 }}>
               Let agents drive the Requirement → Plan → Track → Sprint pipeline straight from the
               conversation. Every stage is <b>off by default</b> and runs only in your interactive
-              session — never for background workers. (Distinct from the Track <i>Automation</i> tab,
-              which is trigger → action rules.)
+              session — never for background workers. (This is agent-driven planning inside your
+              chat — not the <b>Automations</b> category, which is inbound webhooks → jobs.)
             </div>
             <SetGroup title="Automation">
               <Row title="Enable automation" desc="Master switch (cli.automation.enabled). Off → nothing fires, whatever the stages below say.">

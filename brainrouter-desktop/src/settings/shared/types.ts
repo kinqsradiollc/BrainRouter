@@ -149,7 +149,7 @@ export const NAV: Array<{ section: SettingsSection; icon: string; title: string;
   { section: 'permissions', icon: 'shield', title: 'Permissions', group: 'Settings' },
   { section: 'memory', icon: 'brain', title: 'Memory', group: 'Settings' },
   { section: 'hooks', icon: 'link', title: 'Hooks', group: 'Settings' },
-  { section: 'workflow-automation', icon: 'fork', title: 'Workflow automation', group: 'Settings' },
+  { section: 'workflow-automation', icon: 'fork', title: 'Auto-planning', group: 'Settings' },
   { section: 'runtime', icon: 'terminal', title: 'Runtime', group: 'Settings' },
   { section: 'automations', icon: 'globe', title: 'Automations', group: 'Settings' },
   { section: 'extensions', icon: 'plug', title: 'Extensions', group: 'Settings' },
