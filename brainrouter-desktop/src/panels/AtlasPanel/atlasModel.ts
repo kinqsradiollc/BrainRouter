@@ -14,7 +14,7 @@ import {
 } from "../../lib/atlas/atlasView.js";
 import { layeredLayout } from "../../lib/atlas/layeredLayout.js";
 
-export type Mode = "overview" | "structural" | "domain" | "services";
+export type Mode = "overview" | "structural" | "domain" | "services" | "screens";
 
 /** Max file nodes the top-level Structural view renders before summarizing the
  *  rest as "+N more files". Keeps a large repo a readable wide band instead of a

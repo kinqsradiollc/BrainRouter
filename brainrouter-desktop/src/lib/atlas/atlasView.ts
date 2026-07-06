@@ -58,3 +58,9 @@ export {
 
 // Project stats (Deep Dive).
 export { atlasProjectStats, type AtlasProjectStats } from "./atlasView/stats.js";
+
+// Screens map (UI-TEST fusion) — runtime interaction map as a first-class mode.
+export {
+  atlasUiModel, atlasElementColor, ATLAS_ELEMENT_COLORS,
+  type AtlasUiModel, type AtlasUiScreenNode, type AtlasUiElementNode,
+} from "./atlasView/uiModel.js";
