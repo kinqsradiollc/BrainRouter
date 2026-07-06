@@ -24,10 +24,9 @@ import { buildTrackOps } from '../track/trackOps.js';
 
 // Monaco is ~5MB — lazy-load the editor panel so it only loads when first opened.
 const EditorPanel = lazy(() => import('../../panels/editing/EditorPanel.js').then((m) => ({ default: m.EditorPanel })));
-// CI + Dashboard are optional panels rarely opened on load — lazy so they stay
-// out of the initial bundle / first paint.
+// CI is an optional panel rarely opened on load — lazy so it stays out of the
+// initial bundle / first paint.
 const CIPanel = lazy(() => import('../../panels/ci/CIPanel.js').then((m) => ({ default: m.CIPanel })));
-const DashboardPanel = lazy(() => import('../../panels/review/DashboardPanel.js').then((m) => ({ default: m.DashboardPanel })));
 
 type Query = (id: string, name: string, args?: Record<string, unknown>) => void;
 
@@ -122,7 +121,7 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId) => 
     allFiles, statuses, openFile, grepHits, filesLoading, filesTruncated, filesError, fileView, editor,
     closeEditorTab, openUrl, setToast, ci, reviewPrWithAi, track, trackOps, changedFiles, diffView, diffTarget,
     setDiffTarget, ensurePanel, setDiffView, runGit, gitBusy, reviewGate, reviewFindingsByFile, toolLog,
-    backgroundTasks, recentTasks, finishedTasks, setFinishedTasks, openTask, taskView, setTaskView, renderRow,
+    taskView, setTaskView, renderRow,
     requestStop, closeSideTab, dashScope, setDashScope,
     refreshDashboard, dashTab, setDashTab, dashBoards, dashBusy, openDashboardTask, switchToWorkspace, activeRoot,
     lastPlan, planHistory, planFeedbackRef, searchHits, schedules, worktrees, worktreeDiffs, openWorktree,
@@ -177,14 +176,20 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId) => 
       case 'terminal': return <TerminalPanel />;
       case 'tools': return <ToolsPanel log={toolLog} />;
       case 'preview': return <PreviewPanel />;
-      case 'tasks': return <TasksPanel fleet={backgroundTasks} recent={recentTasks} finished={finishedTasks} onClear={() => setFinishedTasks([])} onOpen={(id) => { const f = backgroundTasks.find((t) => t.id === id) ?? recentTasks.find((t) => t.id === id); if (f) openTask(f); }} onKill={(id) => { q('a-killbg', 'action:kill-bgshell', { id }); setTimeout(() => q('q-fleet', 'fleet'), 150); }} onStartSuggestedTask={(prompt) => { setDraft(prompt); setToast('Suggested task added to the composer — press Enter to start.'); }} />;
+      // Unified Tasks panel — suggested starters + the (former Dashboard) task
+      // board: scope toggle, lifecycle/kind tabs, cross-workspace grouping. A row
+      // click opens the task read-only in the Task side panel (openDashboardTask
+      // → openTask → ensurePanel('task-detail')).
+      case 'tasks': return <TasksPanel
+        scope={dashScope} setScope={(s) => { setDashScope(s); if (s === 'all') refreshDashboard(); }}
+        tab={dashTab} setTab={setDashTab} boards={dashBoards} busy={dashBusy} onRefresh={refreshDashboard}
+        onOpenTask={openDashboardTask}
+        onStopTask={(t) => { if (!t.workspaceRoot || t.workspaceRoot === activeRoot) { window.brainrouter.send({ kind: 'interrupt' }); setToast('Interrupt sent to this workspace.'); } else { switchToWorkspace(t.workspaceRoot); setToast('Opening that workspace before stopping its tasks.'); } }}
+        onKill={(id) => { q('a-killbg', 'action:kill-bgshell', { id }); setTimeout(() => q('q-fleet', 'fleet'), 150); }}
+        onStartSuggestedTask={(prompt) => { setDraft(prompt); setToast('Suggested task added to the composer — press Enter to start.'); }} />;
       case 'task-detail': return <TaskDetailPanel task={taskView} renderRow={renderRow}
         onBack={() => { setTaskView(null); closeSideTab('task-detail'); }}
         onInterrupt={() => { requestStop(); setToast('Interrupt sent.'); }} />;
-      case 'dashboard': return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading…</div>}><DashboardPanel scope={dashScope} setScope={(s) => { setDashScope(s); if (s === 'all') refreshDashboard(); }}
-        tab={dashTab} setTab={setDashTab} boards={dashBoards} busy={dashBusy} onRefresh={refreshDashboard}
-        onOpenTask={openDashboardTask}
-        onStopTask={(t) => { if (!t.workspaceRoot || t.workspaceRoot === activeRoot) { window.brainrouter.send({ kind: 'interrupt' }); setToast('Interrupt sent to this workspace.'); } else { switchToWorkspace(t.workspaceRoot); setToast('Opening that workspace before stopping its tasks.'); } }} /></Suspense>;
       case 'plan': {
         // §7 — record an approval/changes-requested decision, then re-fetch the
         // history so the new version appears in the panel.

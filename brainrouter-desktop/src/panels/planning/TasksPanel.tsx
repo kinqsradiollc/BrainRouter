@@ -1,14 +1,28 @@
 /**
- * DESK-5w / §3 — the Background tasks panel: live agents/workflows AND durable
- * background tasks (plan revisions, reviews, attachment jobs) running for the
- * active workspace. Durable rows show a status badge, current phase, and elapsed time;
- * clicking any row opens its transcript/conversation (read-only). Workspace- and
- * global-scoped inspection lives in the Dashboard panel; this panel shows the
- * active workspace's running tasks.
+ * The unified Tasks panel — the single home for background work. It merges the
+ * old Background-tasks list and the Dashboard into one surface:
+ *   1. Suggested starters — repo issues the agent could pick up (workspace-local).
+ *   2. A task board — scope toggle (this Workspace · All workspaces) + lifecycle
+ *      / kind tabs (Running · Finished · Failed · Workflows · Agents · Bash),
+ *      grouped by workspace. Clicking any task opens it READ-ONLY in the Task
+ *      side panel (never in the chat). Running tasks can be stopped in place.
  */
 import React from 'react';
-import type { FleetRow } from '../../types.js';
+import { Icon } from '../../icons.js';
+import { fmtElapsed } from '../../lib/format.js';
 import { bridgeQuery } from '../../lib/bridgeQuery.js';
+import {
+  DASH_TABS,
+  countByTab,
+  allTasks,
+  visibleDashboardBoards,
+  taskLifecycle,
+  taskStatusLabel,
+  type DashTab,
+  type DashTask,
+  type WorkspaceDash,
+} from '../../lib/workspace/dashboard.js';
+import { GATE_LABEL } from '../reviewShared.js';
 
 export interface FinishedTask { id: string; label: string; status: string }
 export interface SuggestedTaskView {
@@ -26,21 +40,7 @@ export interface SuggestedTasksViewResult {
   warnings: string[];
 }
 
-/** Compact elapsed-time label from an ISO start time. */
-function elapsed(startedAt?: string): string {
-  if (!startedAt) return '';
-  const start = Date.parse(startedAt);
-  if (Number.isNaN(start)) return '';
-  const s = Math.max(0, Math.round((Date.now() - start) / 1000));
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ${s % 60}s`;
-  return `${Math.floor(m / 60)}h ${m % 60}m`;
-}
-
-// Attachments are CONTENT (durable AttachmentRecords), not background jobs — they
-// no longer create a task, so they don't belong in this durable-task whitelist.
-const DURABLE_KINDS = new Set(['plan-revision', 'review', 'verification']);
+const TAB_LABEL: Record<DashTab, string> = { running: 'Running', finished: 'Finished', failed: 'Failed/Stale', workflows: 'Workflows', agents: 'Agents', bash: 'Bash' };
 
 const SUGGESTED_KIND_TAGS: Record<string, string> = {
   'failing-checks': 'checks',
@@ -53,23 +53,24 @@ export function suggestedTaskKindTag(kind: string): string {
   return SUGGESTED_KIND_TAGS[kind] ?? kind;
 }
 
-export function TasksPanel({ fleet, recent = [], onOpen, onKill, onStartSuggestedTask }: {
-  fleet: FleetRow[];
-  /** §3 — recently-finished DURABLE tasks (completed/failed), e.g. a verification
-   *  run that just ended. Clicking reopens its transcript/result. */
-  recent?: FleetRow[];
-  finished?: FinishedTask[];
-  onClear?: () => void;
-  /** DESK-5w — open a running task's conversation (read-only). */
-  onOpen?: (id: string) => void;
-  /** WS2 2.4 — stop a background shell (dev server etc.) from the panel. */
+export function TasksPanel({ scope, setScope, tab, setTab, boards, busy, onRefresh, onOpenTask, onStopTask, onKill, onStartSuggestedTask }: {
+  scope: 'workspace' | 'all';
+  setScope: (s: 'workspace' | 'all') => void;
+  tab: DashTab;
+  setTab: (t: DashTab) => void;
+  /** the boards to show — one entry (active workspace) or many (global). */
+  boards: WorkspaceDash[];
+  busy?: boolean;
+  onRefresh: () => void;
+  /** Open a task's conversation READ-ONLY in the Task side panel. */
+  onOpenTask: (t: DashTask) => void;
+  /** Interrupt / cancel a running agent or workflow task. */
+  onStopTask?: (t: DashTask) => void;
+  /** Kill a background shell (dev server etc.) by its id — kills the whole tree. */
   onKill?: (id: string) => void;
   /** MC-B6 — stage a suggested starter prompt in the composer. */
   onStartSuggestedTask?: (prompt: string) => void;
 }): React.ReactElement {
-  // Don't double-list a task that's still running in the fleet above.
-  const runningIds = new Set(fleet.map((f) => f.id));
-  const finishedDurable = recent.filter((t) => !runningIds.has(t.id)).slice(0, 25);
   const [suggested, setSuggested] = React.useState<SuggestedTasksViewResult | null>(null);
   const [suggestBusy, setSuggestBusy] = React.useState(false);
   const [suggestError, setSuggestError] = React.useState('');
@@ -93,8 +94,14 @@ export function TasksPanel({ fleet, recent = [], onOpen, onKill, onStartSuggeste
       .finally(() => setSuggestBusy(false));
   }, []);
   React.useEffect(() => { refreshSuggested(); }, [refreshSuggested]);
+
+  const counts = countByTab(allTasks(boards));
+  const shown = visibleDashboardBoards(boards, tab, scope);
+  const totalShown = shown.reduce((n, b) => n + b.tasks.length, 0);
+
   return (
-    <div className="scroll">
+    <div className="scroll dash-panel">
+      {/* 1. Suggested starters — repo work the agent could pick up. */}
       <div className="tasks-section">
         <span>Suggested starters{suggested?.repo ? ` · ${suggested.repo}` : ''}</span>
         <button className="tasks-clear" type="button" onClick={refreshSuggested} disabled={suggestBusy}>{suggestBusy ? 'Scanning...' : 'Refresh'}</button>
@@ -127,52 +134,63 @@ export function TasksPanel({ fleet, recent = [], onOpen, onKill, onStartSuggeste
           {suggested.warnings.slice(0, 3).map((warning) => <div key={warning}>warning: {warning}</div>)}
         </div>
       ) : null}
-      <div className="tasks-section"><span>Running in this workspace{fleet.length ? ` · ${fleet.length}` : ''}</span></div>
-      {fleet.length === 0 ? <div className="empty">Nothing running in this workspace.</div> : fleet.map((f) => {
-        const durable = f.durable === true || DURABLE_KINDS.has(f.kind);
-        const el = elapsed(f.startedAt);
-        const content = (
-          <>
-            <span className="task-kind">{f.kind}</span>
-            {/* only render the (flex:1) name when there's a label — otherwise an
-                empty name stretches and orphans the kind badge from the status. */}
-            {f.label ? <span className="file-name">{f.label}</span> : null}
-            {durable && f.status && f.status !== 'running' ? <span className={`task-status st-${f.status}`}>{f.status}</span> : null}
-            {durable && f.phase && (!f.status || f.status === 'running') ? <span className="task-phase">{f.phase}</span> : null}
-            {el ? <span className="task-elapsed">{el}</span> : null}
-          </>
-        );
-        // WS2 2.4 — a background shell (e.g. a dev server) gets a Stop control; a
-        // nested <button> is invalid, so the row becomes a flex div with an inner
-        // open-button + the Stop button.
-        if (f.kind === 'shell' && onKill) {
-          return (
-            <div key={f.id} className="task-row">
-              <button className="task-row-main" onClick={() => onOpen?.(f.id)} title="Open this task's output">{content}</button>
-              <button className="task-stop" title="Stop this background process (kills the whole tree)" onClick={() => onKill(f.id)}>Stop</button>
-            </div>
-          );
-        }
-        return (
-          <button key={f.id} className="task-row clickable" onClick={() => onOpen?.(f.id)} title="Open this task's conversation">
-            {content}
-            <span className="task-open">→</span>
+
+      {/* 2. Task board — scope + lifecycle/kind tabs, grouped by workspace. */}
+      <div className="dash-bar">
+        <div className="seg dash-scope">
+          <button className={scope === 'workspace' ? 'active' : ''} onClick={() => setScope('workspace')}>Workspace</button>
+          <button className={scope === 'all' ? 'active' : ''} onClick={() => setScope('all')}>All workspaces</button>
+        </div>
+        <button className="dash-refresh" disabled={busy} onClick={onRefresh} title="Refresh">{busy ? '…' : '↻'}</button>
+      </div>
+      <div className="dash-tabs">
+        {DASH_TABS.map((t) => (
+          <button key={t} className={`dash-tab${tab === t ? ' active' : ''}`} onClick={() => setTab(t)}>
+            {TAB_LABEL[t]}{counts[t] ? <span className="dash-count">{counts[t]}</span> : null}
           </button>
-        );
-      })}
-      {finishedDurable.length > 0 ? (
-        <>
-          <div className="tasks-section"><span>Recently finished · {finishedDurable.length}</span></div>
-          {finishedDurable.map((f) => (
-            <button key={f.id} className="task-row clickable" onClick={() => onOpen?.(f.id)} title="Open this task's result">
-              <span className="task-kind">{f.kind}</span>
-              {f.label ? <span className="file-name">{f.label}</span> : null}
-              {f.status ? <span className={`task-status st-${f.status}`}>{f.status}</span> : null}
-              <span className="task-open">→</span>
-            </button>
-          ))}
-        </>
-      ) : null}
+        ))}
+      </div>
+      {totalShown === 0 ? <div className="empty center-empty">Nothing {TAB_LABEL[tab].toLowerCase()}{scope === 'all' ? ' across your workspaces' : ' in this workspace'}.</div> : null}
+      {shown.map((b) => (
+        b.tasks.length === 0 && scope === 'workspace' ? null : (
+          <div key={b.workspaceRoot} className="dash-ws">
+            {scope === 'all' ? (
+              <div className="dash-ws-head">
+                <Icon name="folder" size={12} />
+                <span className="dash-ws-name" title={b.workspaceRoot}>{b.workspaceRoot.split('/').pop() || b.workspaceRoot}</span>
+                {b.reviewGate && b.reviewGate.status !== 'clean' ? (
+                  <span className={`dash-ws-gate gate-${b.reviewGate.status}`} title={b.reviewGate.reason}>{GATE_LABEL[b.reviewGate.status] ?? b.reviewGate.status}</span>
+                ) : null}
+                <span className="dash-ws-count">{b.tasks.length}</span>
+              </div>
+            ) : null}
+            {b.tasks.map((t) => {
+              const lifecycle = taskLifecycle(t);
+              const status = taskStatusLabel(t);
+              const phase = t.phase && t.phase !== t.status ? t.phase.replace(/[-_]+/g, ' ') : '';
+              const isShell = t.kind === 'shell' || t.kind === 'bash';
+              return (
+                <div key={`${b.workspaceRoot}:${t.id}`} className="dash-row">
+                  <span className={`dash-dot ${lifecycle === 'running' ? 'run' : lifecycle === 'failed' ? 'fail' : 'done'}`} />
+                  <button className="dash-row-main" onClick={() => onOpenTask(t)} title="Open this task's output (read-only) in the Task panel">
+                    <span className="dash-kind">{t.worktree ? <Icon name="merge" size={10} /> : null}{t.kind}</span>
+                    <span className="dash-label">{t.label}</span>
+                    {t.role ? <span className="dash-role">{t.role}</span> : null}
+                  </button>
+                  <span className={`dash-status ${lifecycle}`}>{status}</span>
+                  {phase ? <span className="dash-phase">{phase}</span> : null}
+                  {t.startedAt ? <span className="dash-time">{fmtElapsed(t.startedAt)}</span> : null}
+                  {lifecycle === 'running' && isShell && onKill ? (
+                    <button className="dash-stop" title="Stop this background process (kills the whole tree)" onClick={() => onKill(t.id)}><Icon name="close" size={11} /></button>
+                  ) : lifecycle === 'running' && onStopTask ? (
+                    <button className="dash-stop" title="Stop / cancel" onClick={() => onStopTask(t)}><Icon name="close" size={11} /></button>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        )
+      ))}
     </div>
   );
 }
