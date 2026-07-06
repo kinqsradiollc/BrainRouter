@@ -268,10 +268,13 @@ export function SettingsDialog(props: {
               session — never for background workers. (Distinct from the Track <i>Automation</i> tab,
               which is trigger → action rules.)
             </div>
-            <Row title="Enable automation" desc="Master switch (cli.automation.enabled). Off → nothing fires, whatever the stages below say.">
-              <Toggle on={master} onChange={(v) => writeAuto({ ...auto, enabled: v })} />
-            </Row>
-            <div style={{ opacity: master ? 1 : 0.45, pointerEvents: master ? 'auto' : 'none' }}>
+            <SetGroup title="Automation">
+              <Row title="Enable automation" desc="Master switch (cli.automation.enabled). Off → nothing fires, whatever the stages below say.">
+                <Toggle on={master} onChange={(v) => writeAuto({ ...auto, enabled: v })} />
+              </Row>
+              <Row title="Shared with the CLI" desc="Persists to cli.automation in config.json — the same knobs as `/config set automation…` in the terminal." />
+            </SetGroup>
+            <div className={`set-group${master ? '' : ' dim'}`}>
               <div className="set-h2">Stages</div>
               <Row title="Detect requirements" desc="Capture requirements the agent spots in chat. Propose = save as draft + one-click promote; Autopilot = auto-create ready and run the cascade (cli.automation.requirements).">
                 <Select value={tierOf(auto.requirements)} options={TIERS}
@@ -285,7 +288,6 @@ export function SettingsDialog(props: {
                   onChange={(v) => writeAuto({ ...auto, sprints: { ...auto.sprints, enabled: v !== 'off', autopilot: v === 'autopilot' } })} />
               </Row>
             </div>
-            <Row title="Shared with the CLI" desc="Persists to cli.automation in config.json — the same knobs as `/config set automation…` in the terminal." />
           </>
         );
       }
@@ -323,32 +325,36 @@ export function SettingsDialog(props: {
             <div className="set-desc" style={{ marginBottom: 8 }}>
               Code-level extensions register agent tools, providers, and lifecycle hooks at runtime — no fork, no republish. They live at <code>~/.config/brainrouter/extensions/</code> (user) or <code>.brainrouter/extensions/</code> (workspace), each a folder with an <code>extension.json</code> + an entry module exporting <code>activate(host)</code>.
             </div>
-            <Row title="Trust this workspace" desc="Workspace extensions run code from THIS repo — they only activate when the workspace is trusted. Built-in and user extensions are unaffected.">
-              <Toggle on={trusted} onChange={setTrust} />
-            </Row>
-            <div className="set-h2">Discovered</div>
-            {items.length === 0 ? (
-              <Row title="No extensions found" desc="Add one under ~/.config/brainrouter/extensions/<name>/ or <workspace>/.brainrouter/extensions/<name>/." />
-            ) : items.map((e) => (
-              <Row key={e.name}
-                title={`${e.name}  ·  v${e.version} · ${e.source}`}
-                desc={<>{e.description || '—'}{e.contributes.length ? <> · contributes: {e.contributes.join(', ')}</> : null}{e.blocked ? <> · <span style={{ color: 'rgb(214,156,60)' }}>blocked — workspace not trusted</span></> : null}</>}>
-                <Toggle on={e.enabled} onChange={(v) => setExtEnabled(e.name, v)} />
+            <SetGroup title="Workspace trust">
+              <Row title="Trust this workspace" desc="Workspace extensions run code from THIS repo — they only activate when the workspace is trusted. Built-in and user extensions are unaffected.">
+                <Toggle on={trusted} onChange={setTrust} />
               </Row>
-            ))}
-            <div className="set-h2">Skills</div>
-            <Row title="Keyword-triggered skills" desc="When a SKILL.md declares triggers:/keywords: in its frontmatter, a plain prompt containing one of those words injects that skill — like an explicit /skill. Additive; nothing fires unless a skill opts in. (cli.skillsKeywordTriggers)">
-              <Toggle on={knobs.skillsKeywordTriggers !== false} onChange={(v) => setPath('skillsKeywordTriggers', v)} />
-            </Row>
-            <Row title="Max stacked /skill tokens" desc="How many leading /skill tokens one prompt may compose. Hard-capped at 5 in the resolver. Default 5. (cli.skillsStackMax)">
-              <KnobNumber value={knobs.skillsStackMax} placeholder="5" onSave={(v) => setPath('skillsStackMax', v)} />
-            </Row>
-            <Row title="Hide bundled skills" desc="Hide skills shipped with the install, leaving only workspace-authored ones (skills/, .brainrouter/skills). (cli.skillsHideBundled)">
-              <Toggle on={knobs.skillsHideBundled === true} onChange={(v) => setPath('skillsHideBundled', v)} />
-            </Row>
-            <Row title="Org convention-repo discovery" desc="Discover read-only `.brainrouter` convention repos for your signed-in GitHub user + orgs, and load their skills/agents. (cli.skills.orgRepoDiscovery)">
-              <Toggle on={((knobs.skills ?? {}) as { orgRepoDiscovery?: boolean }).orgRepoDiscovery === true} onChange={(v) => setPath('skills.orgRepoDiscovery', v)} />
-            </Row>
+            </SetGroup>
+            <SetGroup title="Discovered extensions">
+              {items.length === 0 ? (
+                <Row title="No extensions found" desc="Add one under ~/.config/brainrouter/extensions/<name>/ or <workspace>/.brainrouter/extensions/<name>/." />
+              ) : items.map((e) => (
+                <Row key={e.name}
+                  title={`${e.name}  ·  v${e.version} · ${e.source}`}
+                  desc={<>{e.description || '—'}{e.contributes.length ? <> · contributes: {e.contributes.join(', ')}</> : null}{e.blocked ? <> · <span style={{ color: 'rgb(214,156,60)' }}>blocked — workspace not trusted</span></> : null}</>}>
+                  <Toggle on={e.enabled} onChange={(v) => setExtEnabled(e.name, v)} />
+                </Row>
+              ))}
+            </SetGroup>
+            <SetGroup title="Skills">
+              <Row title="Keyword-triggered skills" desc="When a SKILL.md declares triggers:/keywords: in its frontmatter, a plain prompt containing one of those words injects that skill — like an explicit /skill. Additive; nothing fires unless a skill opts in. (cli.skillsKeywordTriggers)">
+                <Toggle on={knobs.skillsKeywordTriggers !== false} onChange={(v) => setPath('skillsKeywordTriggers', v)} />
+              </Row>
+              <Row title="Max stacked /skill tokens" desc="How many leading /skill tokens one prompt may compose. Hard-capped at 5 in the resolver. Default 5. (cli.skillsStackMax)">
+                <KnobNumber value={knobs.skillsStackMax} placeholder="5" onSave={(v) => setPath('skillsStackMax', v)} />
+              </Row>
+              <Row title="Hide bundled skills" desc="Hide skills shipped with the install, leaving only workspace-authored ones (skills/, .brainrouter/skills). (cli.skillsHideBundled)">
+                <Toggle on={knobs.skillsHideBundled === true} onChange={(v) => setPath('skillsHideBundled', v)} />
+              </Row>
+              <Row title="Org convention-repo discovery" desc="Discover read-only `.brainrouter` convention repos for your signed-in GitHub user + orgs, and load their skills/agents. (cli.skills.orgRepoDiscovery)">
+                <Toggle on={((knobs.skills ?? {}) as { orgRepoDiscovery?: boolean }).orgRepoDiscovery === true} onChange={(v) => setPath('skills.orgRepoDiscovery', v)} />
+              </Row>
+            </SetGroup>
           </>
         );
       }
@@ -376,12 +382,14 @@ export function SettingsDialog(props: {
         <>
           <div className="set-h">Hooks</div>
           <div className="set-desc" style={{ marginBottom: 6 }}>Lifecycle shell hooks from <code>.brainrouter/cli/hooks.json</code> — shared with the CLI. JSON stdout decisions (<code>{'{decision, reason}'}</code>) gate tool calls.</div>
-          {(snapshot?.hooks ?? []).length === 0 ? <div className="empty">No hooks configured. Add them with /hooks add in the CLI.</div> : null}
-          {(snapshot?.hooks ?? []).map((h) => (
-            <Row key={h.id} title={`${h.event}${h.match ? ` · ${h.match}` : ''}`} desc={<code>{h.command}</code>}>
-              <Toggle on={h.enabled} onChange={(v) => props.onAction('a-hook', 'action:set-hook', { id: h.id, enabled: v })} />
-            </Row>
-          ))}
+          <SetGroup title="Lifecycle hooks">
+            {(snapshot?.hooks ?? []).length === 0 ? <div className="empty">No hooks configured. Add them with /hooks add in the CLI.</div> : null}
+            {(snapshot?.hooks ?? []).map((h) => (
+              <Row key={h.id} title={`${h.event}${h.match ? ` · ${h.match}` : ''}`} desc={<code>{h.command}</code>}>
+                <Toggle on={h.enabled} onChange={(v) => props.onAction('a-hook', 'action:set-hook', { id: h.id, enabled: v })} />
+              </Row>
+            ))}
+          </SetGroup>
         </>
       );
       case 'tools': {
@@ -404,22 +412,24 @@ export function SettingsDialog(props: {
             <div className="set-desc" style={{ marginBottom: 10 }}>
               Enable or disable individual agent tools. Local models hide some by default — set those to <b>On</b> to force-enable them. Core tools (read / edit / run + plan / goal) are always on.
             </div>
-            <div className="set-h2">Built-in tools</div>
-            {cat.builtin.length === 0
-              ? <Row title="Loading…" desc="" />
-              : cat.builtin.map((t) => (
-                  <Row key={t.name} title={t.name} desc={t.protected ? `${t.description}${t.description ? ' · ' : ''}core — always on` : t.description}>
-                    <Select value={stateOf(t.name)} options={t.protected ? ['default', 'on'] : ['default', 'on', 'off']} onChange={(v) => setOverride(t.name, v)} />
-                  </Row>
-                ))}
-            <div className="set-h2" style={{ marginTop: 14 }}>MCP tools</div>
-            {cat.mcp.length === 0
-              ? <Row title="No MCP tools" desc="Connect MCP servers under “MCP Servers” to see their tools here." />
-              : cat.mcp.map((t) => (
-                  <Row key={t.name} title={t.name.replace(/^mcp_/, '')} desc={`from ${t.server}`}>
-                    <Select value={stateOf(t.name)} options={['default', 'on', 'off']} onChange={(v) => setOverride(t.name, v)} />
-                  </Row>
-                ))}
+            <SetGroup title="Built-in tools">
+              {cat.builtin.length === 0
+                ? <Row title="Loading…" desc="" />
+                : cat.builtin.map((t) => (
+                    <Row key={t.name} title={t.name} desc={t.protected ? `${t.description}${t.description ? ' · ' : ''}core — always on` : t.description}>
+                      <Select value={stateOf(t.name)} options={t.protected ? ['default', 'on'] : ['default', 'on', 'off']} onChange={(v) => setOverride(t.name, v)} />
+                    </Row>
+                  ))}
+            </SetGroup>
+            <SetGroup title="MCP tools" collapsible defaultOpen={cat.mcp.length > 0}>
+              {cat.mcp.length === 0
+                ? <Row title="No MCP tools" desc="Connect MCP servers under “MCP Servers” to see their tools here." />
+                : cat.mcp.map((t) => (
+                    <Row key={t.name} title={t.name.replace(/^mcp_/, '')} desc={`from ${t.server}`}>
+                      <Select value={stateOf(t.name)} options={['default', 'on', 'off']} onChange={(v) => setOverride(t.name, v)} />
+                    </Row>
+                  ))}
+            </SetGroup>
           </>
         );
       }
@@ -446,24 +456,25 @@ export function SettingsDialog(props: {
               refreshInstalled={() => props.onAction('q-plugin-list', 'plugin-list')}
               refreshSearch={(a) => props.onAction('q-plugin-search', 'plugin-search', a)}
             />
-            <div className="set-h2">Scope &amp; sources</div>
-            <Row title="Org convention scope" desc="Surface your org's read-only `.brainrouter` convention repos as an extra plugin/skill scope. (cli.plugins.orgScope)">
-              <Toggle on={plugins.orgScope === true} onChange={(v) => setPath('plugins.orgScope', v)} />
-            </Row>
-            <Row title="Check for plugin updates" desc="On session start, compare installed plugins against the registry and surface an 'updates available' notice. Never auto-installs. (cli.plugins.autoUpdateCheck)">
-              <Toggle on={plugins.autoUpdateCheck === true} onChange={(v) => setPath('plugins.autoUpdateCheck', v)} />
-            </Row>
-            <Row title="Registry URL" desc="The plugin index Marketplace search fetches — an https URL or a local file path for air-gapped mirrors. Blank = the built-in community registry. (cli.plugins.registryUrl)">
-              <KnobText value={plugins.registryUrl} placeholder="(built-in community registry)" onSave={(v) => setPath('plugins.registryUrl', v)} />
-            </Row>
-            <Row title="Alt manifest filenames" desc="Extra JSON manifest names accepted when importing external marketplaces (comma-separated). BrainRouter still writes only its canonical names. (cli.plugins.altManifestNames)">
-              <KnobText value={(plugins.altManifestNames ?? []).join(', ')}
-                placeholder="e.g. marketplace.json"
-                onSave={(v) => setPath('plugins.altManifestNames', v ? v.split(',').map((s) => s.trim()).filter(Boolean) : null)} />
-            </Row>
-            <Row title="Publish target repo" desc="The community registry repo `plugin publish` opens a PR against (owner/repo or git url). Blank prints gh instructions instead. (cli.plugins.publishRepo)">
-              <KnobText value={plugins.publishRepo} placeholder="owner/registry-repo" onSave={(v) => setPath('plugins.publishRepo', v)} />
-            </Row>
+            <SetGroup title="Scope &amp; sources">
+              <Row title="Org convention scope" desc="Surface your org's read-only `.brainrouter` convention repos as an extra plugin/skill scope. (cli.plugins.orgScope)">
+                <Toggle on={plugins.orgScope === true} onChange={(v) => setPath('plugins.orgScope', v)} />
+              </Row>
+              <Row title="Check for plugin updates" desc="On session start, compare installed plugins against the registry and surface an 'updates available' notice. Never auto-installs. (cli.plugins.autoUpdateCheck)">
+                <Toggle on={plugins.autoUpdateCheck === true} onChange={(v) => setPath('plugins.autoUpdateCheck', v)} />
+              </Row>
+              <Row title="Registry URL" desc="The plugin index Marketplace search fetches — an https URL or a local file path for air-gapped mirrors. Blank = the built-in community registry. (cli.plugins.registryUrl)">
+                <KnobText value={plugins.registryUrl} placeholder="(built-in community registry)" onSave={(v) => setPath('plugins.registryUrl', v)} />
+              </Row>
+              <Row title="Alt manifest filenames" desc="Extra JSON manifest names accepted when importing external marketplaces (comma-separated). BrainRouter still writes only its canonical names. (cli.plugins.altManifestNames)">
+                <KnobText value={(plugins.altManifestNames ?? []).join(', ')}
+                  placeholder="e.g. marketplace.json"
+                  onSave={(v) => setPath('plugins.altManifestNames', v ? v.split(',').map((s) => s.trim()).filter(Boolean) : null)} />
+              </Row>
+              <Row title="Publish target repo" desc="The community registry repo `plugin publish` opens a PR against (owner/repo or git url). Blank prints gh instructions instead. (cli.plugins.publishRepo)">
+                <KnobText value={plugins.publishRepo} placeholder="owner/registry-repo" onSave={(v) => setPath('plugins.publishRepo', v)} />
+              </Row>
+            </SetGroup>
           </>
         );
       }
@@ -475,22 +486,23 @@ export function SettingsDialog(props: {
             <div className="set-h">Advanced</div>
             <div className="set-desc" style={{ marginBottom: 6 }}>Everything else under <code>cli.*</code> in <code>~/.config/brainrouter/config.json</code> — shared with the CLI (<code>/config</code>). Leave a number blank to use its default.</div>
 
-            <div className="set-h2">Model &amp; limits</div>
-            <SchemaCliFields schema={snapshot?.cliSchema} section="modelLimits" cli={knobs} onChange={setSchemaKnob} />
-
-            <div className="set-h2">Agents</div>
-            <SchemaCliFields schema={snapshot?.cliSchema} section="agents" cli={knobs} onChange={setSchemaKnob} />
-
-            <div className="set-h2">Notifications</div>
-            <SchemaCliFields schema={snapshot?.cliSchema} section="notifications" cli={knobs} onChange={setSchemaKnob} />
-
-            <div className="set-h2">GitHub</div>
-            <Row title="OAuth client ID" desc="GitHub OAuth App client id with device flow enabled (cli.github.oauthClientId).">
-              <KnobText value={githubOauthClientId} onSave={saveGithubOauthClientId} placeholder="Iv1..." />
-            </Row>
-
-            <div className="set-h2">Keyboard shortcuts</div>
-            <ShortcutsReference />
+            <SetGroup title="Model &amp; limits" collapsible>
+              <SchemaCliFields schema={snapshot?.cliSchema} section="modelLimits" cli={knobs} onChange={setSchemaKnob} />
+            </SetGroup>
+            <SetGroup title="Agents" collapsible defaultOpen={false}>
+              <SchemaCliFields schema={snapshot?.cliSchema} section="agents" cli={knobs} onChange={setSchemaKnob} />
+            </SetGroup>
+            <SetGroup title="Notifications" collapsible defaultOpen={false}>
+              <SchemaCliFields schema={snapshot?.cliSchema} section="notifications" cli={knobs} onChange={setSchemaKnob} />
+            </SetGroup>
+            <SetGroup title="GitHub">
+              <Row title="OAuth client ID" desc="GitHub OAuth App client id with device flow enabled (cli.github.oauthClientId).">
+                <KnobText value={githubOauthClientId} onSave={saveGithubOauthClientId} placeholder="Iv1..." />
+              </Row>
+            </SetGroup>
+            <SetGroup title="Keyboard shortcuts" collapsible defaultOpen={false}>
+              <ShortcutsReference />
+            </SetGroup>
 
             {/* WS11 — the raw knob editor is collapsed behind a Developer
                 disclosure: most users never need it, and the JSON-valued knobs
@@ -510,12 +522,14 @@ export function SettingsDialog(props: {
       case 'observability': return (
         <>
           <div className="set-h">Usage</div>
-          <Row title="This session" desc={props.tokens ? `${props.tokens.turns} turns` : 'No turns yet.'}>
-            <span className="dim">{props.tokens ? `${props.tokens.promptTokens.toLocaleString()} in · ${props.tokens.completionTokens.toLocaleString()} out` : '—'}</span>
-          </Row>
-          <div className="set-h2" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span>Across all sessions ({usageDays === 7 ? 'last week' : usageDays === 30 ? 'last 30 days' : 'last year'})</span>
-            <span style={{ display: 'flex', gap: 4 }}>
+          <SetGroup title="This session">
+            <Row title="Tokens" desc={props.tokens ? `${props.tokens.turns} turns` : 'No turns yet.'}>
+              <span className="dim">{props.tokens ? `${props.tokens.promptTokens.toLocaleString()} in · ${props.tokens.completionTokens.toLocaleString()} out` : '—'}</span>
+            </Row>
+          </SetGroup>
+          <SetGroup
+            title={`Across all sessions (${usageDays === 7 ? 'last week' : usageDays === 30 ? 'last 30 days' : 'last year'})`}
+            right={<span style={{ display: 'flex', gap: 4 }}>
               {[{ label: 'Week', days: 7 }, { label: 'Month', days: 30 }, { label: 'Year', days: 365 }].map((r) => (
                 <button
                   key={r.days}
@@ -524,25 +538,28 @@ export function SettingsDialog(props: {
                   onClick={() => { setUsageDays(r.days); props.onAction('q-usage-hist', 'usage-history', { days: r.days }); }}
                 >{r.label}</button>
               ))}
-            </span>
-          </div>
-          {props.usageHistory ? (
-            <>
-              <Row
-                title="Activity in range"
-                desc={`${props.usageHistory.total.turns.toLocaleString()} turns · ${props.usageHistory.total.calls.toLocaleString()} requests · ${(props.usageHistory.total.promptTokens + props.usageHistory.total.completionTokens).toLocaleString()} tokens`}
-              />
-              <UsageHeatmap hist={props.usageHistory} />
-              <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>Each square is a UTC day; brighter = more tokens. This tally is durable and survives session delete.</div>
-            </>
-          ) : (
-            <pre className="usage-pre">Loading cross-session usage…</pre>
-          )}
-          <Row title="Workspace" desc={<code>{snapshot?.workspaceRoot ?? '—'}</code>} />
-          <Row title="Local telemetry" desc="Privacy-conscious local-only task/latency log — no network (cli.telemetry.enabled).">
-            <Toggle on={telemetryOn} onChange={(v) => setKnob('telemetry', { enabled: v })} />
-          </Row>
-          <Row title="Deep diagnostics" desc="/doctor, /debug-config, /watch and /trace remain CLI-side (they tail local logs)." />
+            </span>}
+          >
+            {props.usageHistory ? (
+              <>
+                <Row
+                  title="Activity in range"
+                  desc={`${props.usageHistory.total.turns.toLocaleString()} turns · ${props.usageHistory.total.calls.toLocaleString()} requests · ${(props.usageHistory.total.promptTokens + props.usageHistory.total.completionTokens).toLocaleString()} tokens`}
+                />
+                <UsageHeatmap hist={props.usageHistory} />
+                <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>Each square is a UTC day; brighter = more tokens. This tally is durable and survives session delete.</div>
+              </>
+            ) : (
+              <pre className="usage-pre">Loading cross-session usage…</pre>
+            )}
+          </SetGroup>
+          <SetGroup title="Diagnostics">
+            <Row title="Workspace" desc={<code>{snapshot?.workspaceRoot ?? '—'}</code>} />
+            <Row title="Local telemetry" desc="Privacy-conscious local-only task/latency log — no network (cli.telemetry.enabled).">
+              <Toggle on={telemetryOn} onChange={(v) => setKnob('telemetry', { enabled: v })} />
+            </Row>
+            <Row title="Deep diagnostics" desc="/doctor, /debug-config, /watch and /trace remain CLI-side (they tail local logs)." />
+          </SetGroup>
         </>
       );
       case 'appearance': return (
@@ -607,7 +624,7 @@ export function SettingsDialog(props: {
             const rows = filteredCommands.filter((c) => c.category === cat.title);
             if (!rows.length) return null;
             return (
-              <div key={cat.key} className="cmd-cat">
+              <div key={cat.key} className="set-group cmd-cat">
                 <div className="set-h2">{cat.title}</div>
                 {rows.map((c) => (
                   <div key={c.base + c.cmd} className="cmd-row">
