@@ -135,6 +135,7 @@ import {
   atlasGraphStats,
   atlasWorkspaceTag,
   enrichAtlasGraph,
+  buildAtlasChangeContext,
   extractAtlasJson,
   type AtlasLlmCaller,
 } from '@kinqs/brainrouter-core/atlas';
@@ -690,7 +691,12 @@ async function main(): Promise<void> {
     };
     if (files.length === 0) { phase('completed', 'no working-tree changes'); const r: ReviewRun = { ...base, summary: 'No working-tree changes to review.' }; saveReview(workspaceRoot, r); return { ...r, files: 0 }; }
     phase('analyzing', `${files.length} file(s)`);
-    const prompt = `You are reviewing the uncommitted changes in this workspace before a commit/PR. Focus on real bugs, security issues, and performance problems introduced by the diff. Be concise.\n\nDiff:\n${diff.slice(0, 60_000)}\n\n${REVIEW_OUTPUT_CONTRACT}`;
+    // ATLAS-UNDERSTANDING — prepend a FREE, deterministic blast-radius block (from
+    // the codebase Atlas) so the read-only reviewer weighs regression risk with
+    // architectural awareness. No LLM call: it rides the review the user is already
+    // paying for. Empty string when there's no Atlas graph, so it never blocks.
+    const changeCtx = buildAtlasChangeContext(readAtlasGraph(workspaceRoot), files);
+    const prompt = `You are reviewing the uncommitted changes in this workspace before a commit/PR. Focus on real bugs, security issues, and performance problems introduced by the diff. Be concise.\n\n${changeCtx ? `${changeCtx}\n\n` : ''}Diff:\n${diff.slice(0, 60_000)}\n\n${REVIEW_OUTPUT_CONTRACT}`;
     // §6 — isolated, read-only, non-prompting reviewer (review: session filtered).
     // It runs under a `:raw` sub-key so its turn (a 60KB diff prompt + raw JSON
     // findings) does NOT pollute the task's CURATED transcript — runReviewTask

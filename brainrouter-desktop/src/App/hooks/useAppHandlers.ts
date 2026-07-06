@@ -179,8 +179,9 @@ export function useAppHandlers(ctx: AppHandlersCtx): AppHandlers {
       `Do the review on an ISOLATED git worktree so my working tree stays untouched:`,
       `1. Check out the PR head into a worktree: \`git fetch origin pull/${pr.number}/head\` then \`git worktree add --detach ${wt} FETCH_HEAD\`.`,
       `2. Read the change in context: \`gh pr diff ${pr.number}\` for the diff, then open the changed files under \`${wt}\`.`,
-      `3. Work the review checklist: what is this change trying to achieve; does it actually achieve that (read the code, not the description); are there tests and did they actually validate the change; does it break existing functionality (check callers + adjacent behavior); do you genuinely understand what the feature does.`,
-      `4. Give a clear verdict — approve or request changes — with specific \`file:line\` references for each point.`,
+      `3. Get the real blast radius from the codebase Atlas (free, deterministic): for each changed file call \`atlas_query\` to find its node, then \`atlas_impact\` to see who depends on it (by layer). Use that to judge regression risk — a change to a widely-depended-on file needs more scrutiny of its callers.`,
+      `4. Work the review checklist: what is this change trying to achieve; does it actually achieve that (read the code, not the description); are there tests and did they actually validate the change; does it break existing functionality (check the dependents Atlas listed + adjacent behavior); do you genuinely understand what the feature does.`,
+      `5. Lead with a short Change summary (2-4 sentences) — what changed, why, and what it touches (from the Atlas impact) — so a reviewer builds the mental model. Then give a clear verdict — approve or request changes — with specific \`file:line\` references for each point.`,
       `When finished, clean up: \`git worktree remove --force ${wt}\`.`,
     ].join('\n');
     submit(prompt);

@@ -11,4 +11,5 @@ export { buildBaseGraph, type BuildOptions } from "./pipeline/buildGraph.js";
 export { validateAtlasGraph, type AtlasValidation } from "./pipeline/validate.js";
 export { atlasGraphFile, saveAtlasGraph, readAtlasGraph, atlasGraphStats, atlasWorkspaceTag } from "./store/atlasStore.js";
 export { enrichAtlasGraph, carryForwardSummaries, type AtlasLlmCaller, type EnrichOptions, type EnrichResult } from "./enrich/enrich.js";
+export { buildAtlasChangeContext } from "./changeContext.js";
 export { extractAtlasJson, extractAtlasJsonArray } from "./enrich/jsonExtract.js";

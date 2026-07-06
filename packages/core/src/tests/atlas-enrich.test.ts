@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import type { AtlasGraph } from '@kinqs/brainrouter-types';
 import { extractAtlasJson, extractAtlasJsonArray } from '../atlas/enrich/jsonExtract.js';
 import { enrichAtlasGraph, carryForwardSummaries, type AtlasLlmCaller } from '../atlas/enrich/enrich.js';
+import { buildAtlasChangeContext } from '../atlas/changeContext.js';
 
 // ---------- jsonExtract ----------
 
@@ -212,6 +213,21 @@ test('COST-CACHE a file whose symbols changed IS re-summarized; the rest are reu
   assert.ok(!summarizedPaths.includes('src/db.ts'), 'the unchanged file is NOT re-summarized');
   assert.equal(second.reused, 2); // db.ts + package.json reused
   assert.equal(second.graph.nodes.find((n) => n.id === 'file:src/app.ts')?.summary, 'Entry point (now with helper).');
+});
+
+// ---------- ATLAS-UNDERSTANDING: free change-impact context ----------
+
+test('ATLAS-UNDERSTANDING buildAtlasChangeContext reports blast radius for changed files (no LLM)', () => {
+  const g = baseGraph();
+  // src/db.ts is imported by src/app.ts → changing db.ts has app.ts as a dependent.
+  const ctx = buildAtlasChangeContext(g, ['src/db.ts']);
+  assert.ok(ctx.includes('Change impact'), 'has the impact header');
+  assert.ok(ctx.includes('src/db.ts'), 'lists the changed file');
+  assert.ok(/dependent/.test(ctx), 'reports dependents from the graph');
+  // A missing/empty graph or unmatched files → "" so a stale Atlas never breaks review.
+  assert.equal(buildAtlasChangeContext(null, ['src/db.ts']), '');
+  assert.equal(buildAtlasChangeContext(g, ['does/not/exist.ts']), '');
+  assert.equal(buildAtlasChangeContext(g, []), '');
 });
 
 test('COST-CACHE carryForwardSummaries copies a prior graph\'s summaries onto a fresh base by id', () => {
