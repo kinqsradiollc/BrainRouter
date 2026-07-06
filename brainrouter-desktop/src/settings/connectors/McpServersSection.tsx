@@ -7,7 +7,7 @@
 import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from '../../icons.js';
-import { Row, ChoiceControl } from '../shared/controls.js';
+import { Row, ChoiceControl, SetGroup } from '../shared/controls.js';
 import type { ConfigSnapshot } from '../shared/types.js';
 
 export function McpServersSection({ snapshot, onAction, refreshSnapshot }: {
@@ -51,19 +51,17 @@ export function McpServersSection({ snapshot, onAction, refreshSnapshot }: {
       {allServers.length === 0 ? <div className="empty">No MCP servers configured (offline mode — local tools only).</div> : null}
 
       {allServers.length ? (
-        <div className="mcp-group brains">
-          <div className="set-h2" style={{ marginTop: 0 }}><Icon name="brain" size={13} /> Brains</div>
+        <SetGroup title={<><Icon name="brain" size={13} /> Brains</>}>
           <div className="set-desc" style={{ marginBottom: 8 }}>BrainRouter memory servers — the identity-bearing brain. Only ONE is active at a time; others stay configured and keep reconnecting.</div>
           {brains.length ? brains.map(renderServer) : <Row title="No brain configured" desc="Add a BrainRouter MCP server below to enable memory recall." />}
-        </div>
+        </SetGroup>
       ) : null}
 
       {allServers.length ? (
-        <div className="mcp-group tools">
-          <div className="set-h2" style={{ marginTop: 0 }}><Icon name="bolt" size={13} /> Tools</div>
+        <SetGroup title={<><Icon name="bolt" size={13} /> Tools</>}>
           <div className="set-desc" style={{ marginBottom: 8 }}>Third-party MCP tool servers (filesystem, web, etc.) — kept separate from the brain.</div>
           {tools.length ? tools.map(renderServer) : <Row title="No tool servers" desc="Add MCP tool servers below." />}
-        </div>
+        </SetGroup>
       ) : null}
 
       <button className="btn primary" style={{ marginTop: 6 }} onClick={() => setMcpModalOpen(true)}>+ Add server</button>

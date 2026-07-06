@@ -263,11 +263,6 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
   .wire-format-row { grid-template-columns: 1fr; align-items: stretch; }
   .wire-format-control { justify-content: stretch; }
 }
-/* WS9 — Brains vs Tools as two visually distinct areas (the brain is identity-bearing). */
-.mcp-group { border: 1px solid var(--border); border-radius: 10px; padding: 13px 15px; margin-bottom: 12px; background: color-mix(in srgb, var(--raised) 45%, transparent); }
-.mcp-group.brains { border-left: 2px solid var(--accent); }
-.mcp-group.tools { border-left: 2px solid var(--border-strong); }
-.mcp-group .set-h2 { display: flex; align-items: center; gap: 6px; }
 .connector-shell { margin: 8px 0 18px; }
 .connector-catalog { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
 .connector-source-card { min-height: 118px; display: flex; flex-direction: column; gap: 8px; text-align: left; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--raised) 56%, transparent); color: var(--text); padding: 12px; cursor: pointer; transition: border-color .15s, background .15s, transform .15s; }

@@ -11,7 +11,7 @@
  * a secret.
  */
 import React, { useState } from 'react';
-import { Row, Toggle, KnobNumber, KnobText } from '../shared/controls.js';
+import { Row, Toggle, KnobNumber, KnobText, SetGroup } from '../shared/controls.js';
 import { Icon } from '../../icons.js';
 
 type Dict = Record<string, unknown>;
@@ -44,72 +44,79 @@ export function AutomationsSection({ knobs, setPath, secretsSet, rules = [], ser
         allow-listed repos are processed. (cli.triggers)
       </div>
 
-      <Row title="Enable trigger ingress" desc="Master switch for the webhook listener. Off = nothing listens, whatever else is set. (cli.triggers.enabled)">
-        <Toggle on={enabled} onChange={(v) => setPath('triggers.enabled', v)} />
-      </Row>
-
-      <div className="set-h2">Listener daemon</div>
-      <Row
-        title={<>Webhook listener {serve?.running
-          ? <span className="badge native" style={{ marginLeft: 6 }}>running</span>
-          : <span className="badge cli" style={{ marginLeft: 6 }}>stopped</span>}</>}
-        desc={serve?.running
-          ? <>Listening on <code>http://{serve.host}:{serve.port}</code> · providers: {serve.providers.join(', ')} · since {serve.startedAt ? new Date(serve.startedAt).toLocaleTimeString() : '—'}. Runs while the desktop app is open; `brainrouter serve --triggers` does the same from a terminal.</>
-          : <>Start the inbound webhook listener in this app (same gates as `brainrouter serve --triggers`).{serve?.lastError ? <> · <span style={{ color: 'rgb(214,156,60)' }}>{serve.lastError}</span></> : null}</>}>
-        {serve?.running
-          ? <button className="btn danger" onClick={() => serveAction('action:triggers-serve-stop')}>Stop</button>
-          : <button className="btn" disabled={!enabled} title={enabled ? undefined : 'Turn on "Enable trigger ingress" first'} onClick={() => serveAction('action:triggers-serve-start')}>Start</button>}
-      </Row>
-      {serve?.running && serve.recentEvents.length ? (
-        <Row title="Recent activity" desc={<span style={{ whiteSpace: 'pre-wrap' }}>{serve.recentEvents.slice(0, 5).join('\n')}</span>} />
-      ) : null}
-
-      <div style={{ opacity: enabled ? 1 : 0.5, pointerEvents: enabled ? 'auto' : 'none' }}>
-        <div className="set-h2">Listener</div>
-        <Row title="Bind host" desc="Interface the ingress binds. Default loopback — exposing it beyond localhost is your explicit choice. (cli.triggers.host)">
-          <KnobText value={triggers.host} placeholder="127.0.0.1" onSave={(v) => setPath('triggers.host', v)} />
+      <SetGroup title="Trigger ingress">
+        <Row title="Enable trigger ingress" desc="Master switch for the webhook listener. Off = nothing listens, whatever else is set. (cli.triggers.enabled)">
+          <Toggle on={enabled} onChange={(v) => setPath('triggers.enabled', v)} />
         </Row>
-        <Row title="Port" desc="TCP port the ingress binds. Default 8787. (cli.triggers.port)">
-          <KnobNumber value={triggers.port} placeholder="8787" onSave={(v) => setPath('triggers.port', v)} />
-        </Row>
+      </SetGroup>
 
-        <div className="set-h2">Signing secrets</div>
-        <div className="set-desc" style={{ marginBottom: 8 }}>
-          Per-provider webhook verification. A provider with no secret rejects every delivery (401) — never "let through".
-          Secrets are write-only: type to set or replace; they're never shown back. If blank, the matching connector's
-          <code> webhookSecret</code> is used.
-        </div>
-        <SecretRow label="GitHub" desc="Verifies X-Hub-Signature-256." isSet={secretsSet.github} onSave={(v) => setPath('triggers.githubSecret', v)} onClear={() => setPath('triggers.githubSecret', null)} />
-        <SecretRow label="Slack" desc="Verifies X-Slack-Signature." isSet={secretsSet.slack} onSave={(v) => setPath('triggers.slackSigningSecret', v)} onClear={() => setPath('triggers.slackSigningSecret', null)} />
-        <SecretRow label="GitLab" desc="Verifies X-Gitlab-Token." isSet={secretsSet.gitlab} onSave={(v) => setPath('triggers.gitlabSecret', v)} onClear={() => setPath('triggers.gitlabSecret', null)} />
-        <SecretRow label="Jira" desc="Verifies the Jira webhook HMAC." isSet={secretsSet.jira} onSave={(v) => setPath('triggers.jiraSecret', v)} onClear={() => setPath('triggers.jiraSecret', null)} />
+      <SetGroup title="Listener daemon">
+        <Row
+          title={<>Webhook listener {serve?.running
+            ? <span className="badge native" style={{ marginLeft: 6 }}>running</span>
+            : <span className="badge cli" style={{ marginLeft: 6 }}>stopped</span>}</>}
+          desc={serve?.running
+            ? <>Listening on <code>http://{serve.host}:{serve.port}</code> · providers: {serve.providers.join(', ')} · since {serve.startedAt ? new Date(serve.startedAt).toLocaleTimeString() : '—'}. Runs while the desktop app is open; `brainrouter serve --triggers` does the same from a terminal.</>
+            : <>Start the inbound webhook listener in this app (same gates as `brainrouter serve --triggers`).{serve?.lastError ? <> · <span style={{ color: 'rgb(214,156,60)' }}>{serve.lastError}</span></> : null}</>}>
+          {serve?.running
+            ? <button className="btn danger" onClick={() => serveAction('action:triggers-serve-stop')}>Stop</button>
+            : <button className="btn" disabled={!enabled} title={enabled ? undefined : 'Turn on "Enable trigger ingress" first'} onClick={() => serveAction('action:triggers-serve-start')}>Start</button>}
+        </Row>
+        {serve?.running && serve.recentEvents.length ? (
+          <Row title="Recent activity" desc={<span style={{ whiteSpace: 'pre-wrap' }}>{serve.recentEvents.slice(0, 5).join('\n')}</span>} />
+        ) : null}
+      </SetGroup>
+
+      <div style={{ opacity: enabled ? 1 : 0.5, pointerEvents: enabled ? 'auto' : 'none', display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <SetGroup title="Listener">
+          <Row title="Bind host" desc="Interface the ingress binds. Default loopback — exposing it beyond localhost is your explicit choice. (cli.triggers.host)">
+            <KnobText value={triggers.host} placeholder="127.0.0.1" onSave={(v) => setPath('triggers.host', v)} />
+          </Row>
+          <Row title="Port" desc="TCP port the ingress binds. Default 8787. (cli.triggers.port)">
+            <KnobNumber value={triggers.port} placeholder="8787" onSave={(v) => setPath('triggers.port', v)} />
+          </Row>
+        </SetGroup>
+
+        <SetGroup title="Signing secrets">
+          <div className="set-desc" style={{ marginBottom: 8 }}>
+            Per-provider webhook verification. A provider with no secret rejects every delivery (401) — never "let through".
+            Secrets are write-only: type to set or replace; they're never shown back. If blank, the matching connector's
+            <code> webhookSecret</code> is used.
+          </div>
+          <SecretRow label="GitHub" desc="Verifies X-Hub-Signature-256." isSet={secretsSet.github} onSave={(v) => setPath('triggers.githubSecret', v)} onClear={() => setPath('triggers.githubSecret', null)} />
+          <SecretRow label="Slack" desc="Verifies X-Slack-Signature." isSet={secretsSet.slack} onSave={(v) => setPath('triggers.slackSigningSecret', v)} onClear={() => setPath('triggers.slackSigningSecret', null)} />
+          <SecretRow label="GitLab" desc="Verifies X-Gitlab-Token." isSet={secretsSet.gitlab} onSave={(v) => setPath('triggers.gitlabSecret', v)} onClear={() => setPath('triggers.gitlabSecret', null)} />
+          <SecretRow label="Jira" desc="Verifies the Jira webhook HMAC." isSet={secretsSet.jira} onSave={(v) => setPath('triggers.jiraSecret', v)} onClear={() => setPath('triggers.jiraSecret', null)} />
+        </SetGroup>
 
         <ReposEditor repos={allowedRepos} onChange={(next) => setPath('triggers.allowedRepos', next)} />
 
-        <div className="set-h2">Behavior</div>
-        <Row title="Mention handle" desc="The @handle the GitHub resolver reacts to in issue/PR/review comments. Default 'brainrouter'. (cli.triggers.mentionHandle)">
-          <KnobText value={triggers.mentionHandle} placeholder="brainrouter" onSave={(v) => setPath('triggers.mentionHandle', v)} />
-        </Row>
-        <Row title="CI-failure nudge" desc="Post ONE offer-to-fix comment when a failed CI run lands on an open, allow-listed PR (idempotent). (cli.triggers.ciNudge)">
-          <Toggle on={triggers.ciNudge === true} onChange={(v) => setPath('triggers.ciNudge', v)} />
-        </Row>
+        <SetGroup title="Behavior">
+          <Row title="Mention handle" desc="The @handle the GitHub resolver reacts to in issue/PR/review comments. Default 'brainrouter'. (cli.triggers.mentionHandle)">
+            <KnobText value={triggers.mentionHandle} placeholder="brainrouter" onSave={(v) => setPath('triggers.mentionHandle', v)} />
+          </Row>
+          <Row title="CI-failure nudge" desc="Post ONE offer-to-fix comment when a failed CI run lands on an open, allow-listed PR (idempotent). (cli.triggers.ciNudge)">
+            <Toggle on={triggers.ciNudge === true} onChange={(v) => setPath('triggers.ciNudge', v)} />
+          </Row>
+        </SetGroup>
       </div>
 
-      <div className="set-h2">Automation rules</div>
-      <div className="set-desc" style={{ marginBottom: 8 }}>
-        Markdown rules under <code>.brainrouter/automations/*.md</code> match trigger events to actions
-        (build / fix-ci / review). Toggle to enable/disable a rule (rewrites its frontmatter). Suggested
-        tasks from your repos surface in the <b>Tasks</b> panel.
-      </div>
-      {rules.length === 0 ? (
-        <div className="empty">No automation rules. Add one under .brainrouter/automations/&lt;name&gt;.md.</div>
-      ) : rules.map((r) => (
-        <Row key={r.id}
-          title={<>{r.name} <span className="badge cli" style={{ marginLeft: 6 }}>{r.do}</span></>}
-          desc={<>on <code>{r.on}</code>{r.when ? <> · when <code>{r.when}</code></> : ''} · <span className="dim">{r.sourcePath.split('/').pop()}</span></>}>
-          <Toggle on={r.enabled} onChange={(v) => setRuleEnabled(r.id, v)} />
-        </Row>
-      ))}
+      <SetGroup title="Automation rules">
+        <div className="set-desc" style={{ marginBottom: 8 }}>
+          Markdown rules under <code>.brainrouter/automations/*.md</code> match trigger events to actions
+          (build / fix-ci / review). Toggle to enable/disable a rule (rewrites its frontmatter). Suggested
+          tasks from your repos surface in the <b>Tasks</b> panel.
+        </div>
+        {rules.length === 0 ? (
+          <div className="empty">No automation rules. Add one under .brainrouter/automations/&lt;name&gt;.md.</div>
+        ) : rules.map((r) => (
+          <Row key={r.id}
+            title={<>{r.name} <span className="badge cli" style={{ marginLeft: 6 }}>{r.do}</span></>}
+            desc={<>on <code>{r.on}</code>{r.when ? <> · when <code>{r.when}</code></> : ''} · <span className="dim">{r.sourcePath.split('/').pop()}</span></>}>
+            <Toggle on={r.enabled} onChange={(v) => setRuleEnabled(r.id, v)} />
+          </Row>
+        ))}
+      </SetGroup>
     </>
   );
 }
@@ -137,8 +144,7 @@ function ReposEditor({ repos, onChange }: { repos: string[]; onChange: (next: st
     onChange([...repos, r]); setDraft('');
   };
   return (
-    <>
-      <div className="set-h2">Allowed repos</div>
+    <SetGroup title="Allowed repos">
       <div className="set-desc" style={{ marginBottom: 8 }}>Glob allowlist of <code>owner/name</code> repos whose events are processed. Empty = nothing is allowed. (cli.triggers.allowedRepos)</div>
       {repos.length === 0 ? <div className="empty">No repos allow-listed — all events verify then drop.</div> : repos.map((r) => (
         <div key={r} className="rule-row">
@@ -151,6 +157,6 @@ function ReposEditor({ repos, onChange }: { repos: string[]; onChange: (next: st
         <input className="ctl" placeholder="owner/name or owner/*" value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); }} />
         <button className="btn" disabled={!draft.trim()} onClick={add}>Allow repo</button>
       </div>
-    </>
+    </SetGroup>
   );
 }
