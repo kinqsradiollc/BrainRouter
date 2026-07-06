@@ -19,6 +19,7 @@
   --ok: hsl(142, 60%, 45%);
   --warn: hsl(38, 85%, 48%);
   --err: hsl(38, 85%, 50%);
+  --err-soft: hsla(38, 85%, 50%, 0.12); /* subtle tint of --err (amber) for error-state fills */
   --term-bg: hsl(240, 8%, 3%);
   --r-sm: 9px; --r-md: 14px; --r-lg: 20px;
   --font: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
@@ -178,6 +179,76 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .provider-card .pc-actions .btn { font-size: 11px; padding: 3px 9px; }
 .provider-card .pc-actions .btn.danger { color: var(--danger, #f85149); }
 .provider-card .pc-actions .btn.danger:hover { border-color: var(--danger, #f85149); background: rgba(248, 81, 73, 0.12); }
+/* ── Models settings — shared layout/utility classes (replace ad-hoc inline
+ *    styles across ModelsSection.tsx + RoutingChainEditor.tsx). Every rule reuses
+ *    existing tokens; one spacing scale (gaps land on 6/8/9/10). ── */
+/* Sub-tab bar */
+.models-subtabs { display: flex; gap: 4px; margin: 4px 0 14px; border-bottom: 1px solid var(--border); }
+.models-subtab { background: none; border: 0; cursor: pointer; padding: 6px 10px; font-size: 13px; font-weight: 600; color: var(--text-faint); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.models-subtab.active { color: var(--text); border-bottom-color: var(--accent); }
+/* Container card variants (Routing + Gateway): cancel the tile min-height + hover-lift */
+.rc-panel { flex-direction: column; align-items: stretch; gap: 10px; padding: 11px 13px; margin-bottom: 8px; min-height: 0; cursor: default; }
+.rc-panel:hover { border-color: var(--border-strong); transform: none; box-shadow: none; }
+/* Provider tile/row + galleries */
+.provider-card--row { flex-direction: row; align-items: center; gap: 10px; text-align: left; min-height: 0; }
+.provider-gallery--tiles { grid-template-columns: repeat(auto-fill, minmax(252px, 1fr)); }
+.provider-gallery--list { grid-template-columns: 1fr; gap: 8px; }
+.pc-status { margin-left: auto; font-size: 11.5px; font-weight: 600; }
+.pc-status--ok { color: var(--ok); }
+.pc-status--connect { color: var(--accent); }
+/* Rows, grids, checkbox rows */
+.row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.field-grid { display: grid; gap: 8px; align-items: center; }
+/* Inputs must FILL their grid track — a bare .ctl (esp. type=number) keeps its
+ * intrinsic width and overflows a fixed column past the card edge. */
+.field-grid > .ctl { width: 100%; min-width: 0; box-sizing: border-box; }
+.field-grid input[type="number"] { -moz-appearance: textfield; }
+.field-grid input[type="number"]::-webkit-inner-spin-button,
+.field-grid input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.field-grid--hostport { grid-template-columns: minmax(0, 1fr) 116px; }
+.field-grid--key { grid-template-columns: minmax(0, 1fr) auto auto; }
+.check-row { display: flex; align-items: center; gap: 9px; font-size: 13px; cursor: pointer; }
+.check-row input[type="checkbox"] { accent-color: var(--accent); flex: none; }
+/* Scrolling list of selectable rows (model checklist, chain, provider order) */
+.scroll-list { max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 5px; padding: 1px; }
+.list-row-card { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--input); font-size: 13px; }
+.list-row-card.selected { border-color: var(--accent-soft); background: var(--accent-soft); }
+.list-row-card.default { border-color: var(--accent); } /* AFTER .selected so ★ default wins the border */
+.list-row-card.removed { border-color: var(--err); background: var(--err-soft); }
+/* Routing chain rows (grid variant of list-row-card) */
+.chain-row { display: grid; grid-template-columns: 92px minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.chain-row--tail { grid-template-columns: 92px minmax(0, 1fr); border-style: dashed; background: transparent; color: var(--text-faint); }
+.chain-row-label { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 700; }
+.drag-handle { color: var(--text-faint); cursor: grab; user-select: none; }
+/* Small building blocks */
+.btn-group { display: flex; gap: 4px; }
+.stack { display: flex; flex-direction: column; gap: 6px; }
+.stack-tight { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.chip-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
+.status-dot { width: 7px; height: 7px; border-radius: 99px; flex: 0 0 auto; }
+.status-dot--ok { background: var(--ok); }
+.status-dot--warn { background: var(--warn); }
+.status-dot--err { background: var(--err); }
+.pc-tag--dot { display: inline-flex; align-items: center; gap: 5px; }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.no-shrink { flex: 0 0 auto; }
+.flex-1 { flex: 1; min-width: 0; }
+.btn--start { align-self: flex-start; }
+.btn--chip { min-height: 0; padding: 2px 9px; font-size: 11.5px; }
+/* Provider modal + delete-confirm dialogs */
+.dialog--form { width: 520px; max-height: 86vh; display: flex; flex-direction: column; overflow: hidden; }
+.dialog--narrow { width: 380px; }
+.dialog-title--stack { display: flex; align-items: center; gap: 11px; }
+/* set-desc spacing/tone modifiers (compose with .set-desc) */
+.set-desc--flush { margin: 0; }
+.set-desc--block { display: block; margin: 4px 0 0; }
+.set-desc--mb6 { margin: 0 0 6px; }
+.set-desc--mb8 { margin: 0 0 8px; }
+.set-desc--mb12 { margin: 0 0 12px; }
+.set-desc--mt2 { margin: 2px 0 0; }
+.set-desc--warn { color: var(--warn); }
+.set-h2--flush { margin: 0; }
+.hint-inline { color: var(--text-faint); font-weight: 400; }
 .wire-format-section { margin-top: 18px; }
 .wire-format-grid { display: grid; gap: 8px; margin: 8px 0 16px; }
 .wire-format-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(210px, 260px); align-items: center; gap: 12px; padding: 11px 12px; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in srgb, var(--raised) 64%, transparent); }
@@ -1163,6 +1234,14 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .plan-annotate-btn { flex: 0 0 auto; width: 23px; height: 23px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-faint); cursor: pointer; opacity: 0; }
 .plan-item:hover .plan-annotate-btn, .plan-annotate-btn:focus-visible { opacity: 1; }
 .plan-annotate-btn:hover { color: var(--text); background: var(--ov-07); border-color: var(--border); }
+/* §plan-comments — per-step comment button (count badge) + inline composer/thread. */
+.plan-annotate-btn.has-notes { opacity: 1; color: var(--accent); }
+.plan-annotate-btn.open { opacity: 1; color: var(--accent); background: var(--accent-soft); border-color: var(--accent); }
+.plan-annotate-count { font-size: 9.5px; font-weight: 700; margin-left: 1px; }
+.plan-annotations { display: flex; flex-direction: column; gap: 5px; margin: 0 0 6px 26px; }
+.plan-annotation { font-size: 12px; color: var(--text-dim); background: var(--ov-04); border: 1px solid var(--border); border-left: 2px solid var(--accent); border-radius: 6px; padding: 5px 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.plan-annotate-compose { display: flex; gap: 6px; align-items: center; }
+.plan-annotate-compose .filter { flex: 1; min-width: 0; }
 .plan-mark { display: inline-block; width: 20px; flex: none; }
 .plan-step { min-width: 0; }
 /* PARITY-Q — acceptance cue under each plan item */
@@ -1361,6 +1440,10 @@ textarea.ctl { min-width: 0; resize: vertical; line-height: 1.45; }
 .btn { min-height: 30px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; background: var(--raised); border: 1px solid var(--border-strong); color: var(--text); border-radius: var(--r-sm); padding: 7px 14px; font-size: 12.5px; font-weight: 550; cursor: pointer; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); flex: none; white-space: nowrap; }
 .btn:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* Top-level ghost variant — the .panel-body-scoped rule doesn't reach dialogs
+ * portaled to <body> (e.g. the provider modal's Fetch-models button). */
+.btn.primary-ghost { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.btn.primary-ghost:hover:not(:disabled) { border-color: var(--accent); background: color-mix(in srgb, var(--accent-soft) 60%, var(--accent) 12%); }
 .btn.danger:hover { border-color: var(--err); color: var(--err); }
 .rule-row { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 12px; color: var(--text-dim); padding: 4px 0; }
 .rule-kind { flex: none; width: 46px; font-size: 10px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; }
@@ -4145,6 +4228,33 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .choice-option.selected,
 .choice-option.selected:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent); }
 .choice-detail { opacity: 0.7; }
+
+/* ── Settings overhaul — grouped "titled cards" + control polish. Grouping is
+ *    OPT-IN via <SetGroup> (.set-group): bare .set-row/.set-h2 OUTSIDE a group
+ *    keep their current look, so categories convert to cards one at a time with
+ *    nothing half-broken in between. ── */
+.set-body { display: flex; flex-direction: column; gap: 16px; max-width: 660px; }
+.set-group { background: var(--raised); border: 1px solid var(--border); border-radius: var(--r-md); padding: 3px 15px 9px; }
+/* group title = quiet uppercase eyebrow (scoped, so bare .set-h2 is untouched) */
+.set-group > .set-h2 { position: sticky; top: 0; z-index: 1; margin: 0; padding: 11px 0 8px; font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; color: var(--text-faint); background: var(--raised); }
+.set-group > .set-h2 .ic { color: var(--accent); }
+/* dividers ONLY between adjacent rows inside a card; card edges never hairline */
+.set-group .set-row { border-bottom: 0; }
+.set-group .set-row + .set-row { border-top: 1px solid var(--ov-05); }
+.set-group > .set-desc:first-of-type { margin-top: 2px; }
+/* collapsible group: the title is the toggle; chevron rotates */
+.set-group.collapsible > .set-h2 { cursor: pointer; width: 100%; justify-content: space-between; user-select: none; }
+.set-group.collapsible > .set-h2 .chev { color: var(--text-dim); transition: transform .15s; }
+.set-group.collapsible.open > .set-h2 .chev { transform: rotate(180deg); }
+/* ChoiceControl chevron now animates open (the .open class was already applied) */
+.choice-btn .ic { transition: transform .15s; }
+.choice-btn.open .ic { transform: rotate(180deg); }
+/* ComboInput menu — was a cramped raw mono dump; give it the picker's density,
+ *  mono only on the model id, a match highlight, and a truncation footer. */
+.combo-menu .choice-option { padding: 7px 9px; font: 500 12px var(--font); }
+.combo-model { font-family: var(--mono); font-size: 11.5px; color: currentColor; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.combo-hl { background: transparent; color: inherit; font-weight: 700; }
+.combo-more { padding: 6px 9px; font-size: 11px; color: var(--text-faint); pointer-events: none; border-top: 1px solid var(--ov-05); }
 
 /* ---- Panel control SIZING consistency pass ---- */
 

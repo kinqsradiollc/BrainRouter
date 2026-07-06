@@ -11,7 +11,7 @@ import React, { useState } from 'react';
 import { Row, Select, Toggle } from '../shared/controls.js';
 import { ComboInput } from '../shared/controls.js';
 import { Icon } from '../../icons.js';
-import { describeRouterRequest, routerCatalogChoiceOptions } from './RoutingChainEditor.js';
+import { routerCatalogChoiceOptions } from './RoutingChainEditor.js';
 import type { ConfigSnapshot } from '../shared/types.js';
 
 type Dict = Record<string, unknown>;
@@ -30,7 +30,9 @@ export function LlmProfilesCard({ profiles, active, endpointModels, routerCatalo
   const [effort, setEffort] = useState('(default)');
   const [fast, setFast] = useState(false);
   const names = Object.keys(profiles).sort();
-  const modelOptions = routerCatalog ? routerCatalogChoiceOptions(routerCatalog).map((option) => option.value) : endpointModels;
+  // Rich options (model + provider detail) so the combo shows provider context —
+  // ComboInput accepts ChoiceOption[] directly; don't flatten to bare values.
+  const modelOptions = routerCatalog ? routerCatalogChoiceOptions(routerCatalog) : endpointModels;
 
   const add = (): void => {
     const n = name.trim();
@@ -66,7 +68,7 @@ export function LlmProfilesCard({ profiles, active, endpointModels, routerCatalo
         const p = profiles[n];
         return (
           <Row key={n} title={<>{n}{active === n ? <span className="badge native" style={{ marginLeft: 6 }}>active</span> : null}</>}
-            desc={<><code>{p.model}</code>{routerCatalog && p.model ? <> - {describeRouterRequest(routerCatalog, p.model)}</> : null}{p.reasoningEffort ? ` · ${p.reasoningEffort}` : ''}{p.fast ? ' · fast' : ''}{p.endpoint ? ` · ${p.endpoint}` : ''}</>}>
+            desc={<><code>{p.model}</code>{p.reasoningEffort ? ` · ${p.reasoningEffort}` : ''}{p.fast ? ' · fast' : ''}{p.endpoint ? ` · ${p.endpoint}` : ''}</>}>
             <button className="tab-close-btn rule-x" aria-label={`Remove profile ${n}`} title="Remove" onClick={() => remove(n)}><Icon name="close" size={11} /></button>
           </Row>
         );

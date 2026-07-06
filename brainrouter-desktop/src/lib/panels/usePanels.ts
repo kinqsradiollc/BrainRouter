@@ -172,6 +172,7 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
     if (id === 'requirements') q('q-req', 'requirement-list'); // REQUIREMENT-RECORDS — list on open
     if (id === 'annotations') q('q-annot', 'annotation-list'); // ANNOTATION-RECORDS — list on open
     if (id === 'artifacts') { q('q-art', 'artifact-list'); q('q-annot', 'annotation-list'); } // ARTIFACT-RECORDS — list on open (+ annotations so §8 artifact annotations show)
+    if (id === 'plan') q('q-annot', 'annotation-list'); // §plan-comments — load per-step comments on open
     if (id === 'diff') q('q-review-current', 'review-current'); // Wave 7 — show the review gate in the Changes area
     setSideTabs((t) => (t.includes(id) ? t : [...t, id]));
     setActiveSideTab(id);

@@ -44,16 +44,6 @@ export function routerCatalogChoiceOptions(catalog: RouterCatalog | undefined, c
   return options;
 }
 
-export function describeRouterRequest(catalog: RouterCatalog | undefined, request: string): string {
-  const alias = catalog?.aliases.find((item) => item.id === request);
-  if (alias) return alias.target ? `Alias target: ${alias.target}` : 'Alias route';
-  const bare = catalog?.bare.find((item) => item.id === request);
-  if (bare) return bare.providers.length > 1 ? `Router chooses among ${bare.providers.join(', ')}` : `Routed to ${bare.providers[0]}`;
-  const canonical = catalog?.canonical.find((item) => item.id === request);
-  if (canonical) return `${canonical.model} pinned to ${canonical.provider ?? canonical.providers[0]}${hostOf(canonical.endpoint) ? ` at ${hostOf(canonical.endpoint)}` : ''}`;
-  return 'Provider removed or model unavailable; resolver skips it until edited.';
-}
-
 function reorder<T>(items: T[], from: number, to: number): T[] {
   if (from === to || from < 0 || to < 0 || from >= items.length || to >= items.length) return items;
   const next = [...items];
@@ -97,8 +87,8 @@ export function RoutingChainEditor({
   return (
     <>
       <div className="set-h2">Routing</div>
-      <div className="set-desc" style={{ marginBottom: 8 }}>Every request routes through this chain — new turns, sub-agents, profiles, and gateway calls. Routing is always on; an empty chain simply falls through to the base model below.</div>
-      <div className="provider-card saved" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 10, padding: '11px 13px', marginBottom: 8 }}>
+      <div className="set-desc set-desc--mb8">Every request routes through this chain — new turns, sub-agents, profiles, and gateway calls. Routing is always on; an empty chain simply falls through to the base model below.</div>
+      <div className="provider-card saved rc-panel">
         <Row title="Strategy" desc="Orders providers when a chain entry resolves to more than one provider.">
           <ChoiceControl
             value={strategy}
@@ -112,18 +102,19 @@ export function RoutingChainEditor({
         </Row>
 
         {providers.length === 0 ? (
-          <div className="empty">No providers yet - connect one below; the base quickstart model is serving all traffic.</div>
+          <div className="empty">No providers yet — connect one below; the base quickstart model is serving all traffic.</div>
         ) : null}
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div className="stack">
           {chain.length === 0 ? (
-            <div className="set-desc" style={{ margin: 0 }}>Primary chain is empty; the base config remains the visible tail route.</div>
+            <div className="set-desc set-desc--flush">Primary chain is empty; the base config remains the visible tail route.</div>
           ) : null}
           {chain.map((entry, index) => {
             const removedProvider = entry.includes('/') && !providerNameSet.has(entry.split('/')[0]) && !entry.startsWith('base/');
             return (
               <div
                 key={`${entry}-${index}`}
+                className={`list-row-card chain-row${removedProvider ? ' removed' : ''}`}
                 draggable
                 onDragStart={(event) => { setDragChainIndex(index); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', String(index)); }}
                 onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }}
@@ -133,19 +124,9 @@ export function RoutingChainEditor({
                   saveChain(reorder(chain, from, index));
                   setDragChainIndex(null);
                 }}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '92px minmax(0, 1fr) auto',
-                  gap: 8,
-                  alignItems: 'center',
-                  padding: '8px 9px',
-                  borderRadius: 8,
-                  border: `1px solid ${removedProvider ? 'var(--err)' : 'var(--border)'}`,
-                  background: removedProvider ? 'rgba(245,80,80,.08)' : 'var(--input)',
-                }}
               >
-                <span style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 700 }}>
-                  <span title="Drag to reorder" style={{ color: 'var(--text-faint)', cursor: 'grab' }}>::</span>
+                <span className="chain-row-label">
+                  <span className="drag-handle" title="Drag to reorder">::</span>
                   {index === 0 ? 'Primary' : `Fallback ${index}`}
                 </span>
                 <span style={{ minWidth: 0 }}>
@@ -154,9 +135,9 @@ export function RoutingChainEditor({
                     options={routerCatalogChoiceOptions(catalog, entry)}
                     onChange={(value) => saveChain(chain.map((item, itemIndex) => itemIndex === index ? value : item))}
                   />
-                  <span className="set-desc" style={{ display: 'block', margin: '4px 0 0' }}>{describeRouterRequest(catalog, entry)}</span>
+                  {removedProvider ? <span className="set-desc set-desc--block set-desc--warn">Provider removed — the resolver skips this route until you fix it.</span> : null}
                 </span>
-                <span style={{ display: 'flex', gap: 4 }}>
+                <span className="btn-group">
                   <button className="btn" disabled={index === 0} title="Move up" onClick={() => saveChain(reorder(chain, index, index - 1))}>Up</button>
                   <button className="btn" disabled={index >= chain.length - 1} title="Move down" onClick={() => saveChain(reorder(chain, index, index + 1))}>Down</button>
                   <button className="btn danger" title="Remove route" onClick={() => saveChain(chain.filter((_item, itemIndex) => itemIndex !== index))}>Remove</button>
@@ -165,21 +146,22 @@ export function RoutingChainEditor({
             );
           })}
           {baseModel ? (
-            <div style={{ display: 'grid', gridTemplateColumns: '92px minmax(0, 1fr)', gap: 8, alignItems: 'center', padding: '8px 9px', borderRadius: 8, border: '1px dashed var(--border)', color: 'var(--text-faint)' }}>
-              <span style={{ fontSize: 12.5, fontWeight: 700 }}>Tail</span>
-              <span><code>Base config (quickstart)</code> - {baseModel}</span>
+            <div className="list-row-card chain-row chain-row--tail">
+              <span className="chain-row-label">Tail</span>
+              <span><code>Base config (quickstart)</code> — {baseModel}</span>
             </div>
           ) : null}
         </div>
-        <button className="btn" style={{ alignSelf: 'flex-start' }} disabled={!firstNewChoice} onClick={() => saveChain([...chain, firstNewChoice])}>Add fallback</button>
+        <button className="btn btn--start" disabled={!firstNewChoice} onClick={() => saveChain([...chain, firstNewChoice])}>Add fallback</button>
 
         {ambiguousChain && configuredOrder.length > 1 ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div className="stack">
             <div className="set-title">Provider order</div>
             <div className="set-desc">Used when a chain entry is available from multiple providers.</div>
             {configuredOrder.map((provider, index) => (
               <div
                 key={provider}
+                className="list-row-card"
                 draggable
                 onDragStart={(event) => { setDragProviderIndex(index); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', String(index)); }}
                 onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'move'; }}
@@ -189,11 +171,10 @@ export function RoutingChainEditor({
                   saveOrder(reorder(configuredOrder, from, index));
                   setDragProviderIndex(null);
                 }}
-                style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 9px', border: '1px solid var(--border)', borderRadius: 8, background: 'var(--input)' }}
               >
-                <span title="Drag to reorder" style={{ color: 'var(--text-faint)', cursor: 'grab' }}>::</span>
+                <span className="drag-handle" title="Drag to reorder">::</span>
                 <ProviderIcon id={providers.find((item) => item.name === provider)?.provider ?? provider} size={16} />
-                <span style={{ flex: 1 }}>{provider}</span>
+                <span className="flex-1">{provider}</span>
                 <button className="btn" disabled={index === 0} onClick={() => saveOrder(reorder(configuredOrder, index, index - 1))}>Up</button>
                 <button className="btn" disabled={index >= configuredOrder.length - 1} onClick={() => saveOrder(reorder(configuredOrder, index, index + 1))}>Down</button>
               </div>
@@ -201,30 +182,29 @@ export function RoutingChainEditor({
           </div>
         ) : null}
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div className="stack">
           <div className="set-title">Health</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {providers.length === 0 ? <span className="set-desc" style={{ margin: 0 }}>No provider health yet.</span> : null}
+          <div className="chip-wrap">
+            {providers.length === 0 ? <span className="set-desc set-desc--flush">No provider health yet.</span> : null}
             {providers.map((provider) => {
               const cooldown = providerCooldowns.get(provider.name);
               const cooling = cooldown ? secondsRemaining(cooldown.until) : 0;
               const rejected = cooldown?.reason === 'auth_rejected' && cooling > 0;
               const label = rejected ? 'key rejected' : cooling > 0 ? `cooling ${cooling}s` : 'ok';
-              const color = rejected ? 'var(--err)' : cooling > 0 ? 'var(--warn)' : 'var(--ok)';
               return (
-                <span key={provider.name} className="pc-tag" style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                  <span style={{ width: 7, height: 7, borderRadius: 99, background: color }} />
+                <span key={provider.name} className="pc-tag pc-tag--dot">
+                  <span className={`status-dot status-dot--${rejected ? 'err' : cooling > 0 ? 'warn' : 'ok'}`} />
                   {provider.name}: {label}
                 </span>
               );
             })}
           </div>
           {modelCooldowns.length ? (
-            <div className="set-desc" style={{ margin: 0 }}>
+            <div className="set-desc set-desc--flush">
               Model lockouts: {modelCooldowns.map((item) => <code key={item.route} style={{ marginRight: 6 }}>{item.route} {secondsRemaining(item.until)}s</code>)}
             </div>
           ) : null}
-          <div className="set-desc" style={{ margin: 0 }}>
+          <div className="set-desc set-desc--flush">
             {recent.length ? <>Recent fallbacks: {recent.map((event) => <code key={`${event.at}-${event.to}`} style={{ marginRight: 6 }}>{event.message}</code>)}</> : <>Recent fallbacks: none</>}
           </div>
         </div>

@@ -108,9 +108,24 @@ export function WireFormatSelect({ value, onChange }: { value: WireFormatOverrid
   );
 }
 
+/** A free-typed combo whose menu can be plain strings OR rich {value,label,detail}
+ *  options (same shape as ChoiceControl). A bare `provider/model` string is split
+ *  so the model reads in mono on the left and the provider as a quiet detail on the
+ *  right — the combo picker is no longer a cramped raw dump. */
+function toComboOption(o: string | ChoiceOption): ChoiceOption {
+  if (typeof o !== 'string') return o;
+  const slash = o.lastIndexOf('/');
+  return slash > 0 ? { value: o, label: o.slice(slash + 1), detail: o.slice(0, slash) } : { value: o, label: o };
+}
+function highlightMatch(label: string, q: string): React.ReactNode {
+  if (!q) return label;
+  const i = label.toLowerCase().indexOf(q);
+  if (i < 0) return label;
+  return <>{label.slice(0, i)}<mark className="combo-hl">{label.slice(i, i + q.length)}</mark>{label.slice(i + q.length)}</>;
+}
 export function ComboInput({ value, options, onChange, placeholder, disabled, style }: {
   value: string;
-  options: string[];
+  options: Array<string | ChoiceOption>;
   onChange: (v: string) => void;
   placeholder?: string;
   disabled?: boolean;
@@ -118,7 +133,9 @@ export function ComboInput({ value, options, onChange, placeholder, disabled, st
 }): React.ReactElement {
   const [open, setOpen] = useState(false);
   const q = value.trim().toLowerCase();
-  const filtered = (q ? options.filter((o) => o.toLowerCase().includes(q)) : options).slice(0, 80);
+  const opts = options.map(toComboOption);
+  const matched = q ? opts.filter((o) => `${o.label} ${o.detail ?? ''}`.toLowerCase().includes(q)) : opts;
+  const filtered = matched.slice(0, 80);
   return (
     <div className="combo" style={style} onBlur={() => window.setTimeout(() => setOpen(false), 120)}>
       <input className="ctl combo-input" disabled={disabled} value={value} placeholder={placeholder}
@@ -126,14 +143,40 @@ export function ComboInput({ value, options, onChange, placeholder, disabled, st
       {open && !disabled && filtered.length > 0 ? (
         <div className="choice-menu combo-menu">
           {filtered.map((o) => (
-            <button key={o} type="button" className={`choice-option${o === value ? ' selected' : ''}`}
+            <button key={o.value} type="button" className={`choice-option${o.value === value ? ' selected' : ''}`}
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => { onChange(o); setOpen(false); }}>
-              <span>{o}</span>
+              onClick={() => { onChange(o.value); setOpen(false); }}>
+              <span className="combo-model">{highlightMatch(o.label, q)}</span>
+              {o.detail ? <span className="choice-detail">{o.detail}</span> : null}
             </button>
           ))}
+          {matched.length > filtered.length ? <div className="combo-more">{filtered.length} of {matched.length} — keep typing to narrow</div> : null}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/** A titled settings CARD — the grouping primitive for the Settings overhaul.
+ *  Wrap a related run of <Row>/controls in one to turn the flat divided list into
+ *  scannable blocks. `collapsible` folds the body under the title (default open). */
+export function SetGroup({ title, children, collapsible, defaultOpen = true, right }: {
+  title: React.ReactNode;
+  children: React.ReactNode;
+  collapsible?: boolean;
+  defaultOpen?: boolean;
+  right?: React.ReactNode;
+}): React.ReactElement {
+  const [open, setOpen] = useState(defaultOpen);
+  const showBody = !collapsible || open;
+  return (
+    <div className={`set-group${collapsible ? ' collapsible' : ''}${collapsible && open ? ' open' : ''}`}>
+      <div className="set-h2" onClick={collapsible ? () => setOpen((v) => !v) : undefined}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 7, flex: 1, minWidth: 0 }}>{title}</span>
+        {right ?? null}
+        {collapsible ? <Icon name="chev-down" size={13} className="chev" /> : null}
+      </div>
+      {showBody ? children : null}
     </div>
   );
 }

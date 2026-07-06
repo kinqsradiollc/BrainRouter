@@ -180,7 +180,7 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId) => 
         // §7 — record an approval/changes-requested decision, then re-fetch the
         // history so the new version appears in the panel.
         const refreshHistory = () => setTimeout(() => q('q-plan-history', 'plan-history'), 150);
-        return <PlanPanel plan={lastPlan} history={planHistory}
+        return <PlanPanel plan={lastPlan} history={planHistory} annotations={annotations}
           onApprove={() => { q('q-plan-decision', 'plan-record-decision', { verdict: 'approved' }); refreshHistory(); setToast('Plan approved — snapshot saved to the version history.'); }}
           onRequestChanges={(feedback) => {
             // §1 — launch a REAL background plan-revision task (the host returns

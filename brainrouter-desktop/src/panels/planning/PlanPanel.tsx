@@ -15,16 +15,26 @@ import {
 } from '../../lib/plan/planReviewView.js';
 import type { PlanItem } from '../../types.js';
 
-export function PlanPanel({ plan, history, onApprove, onRequestChanges, onAnnotateStep }: {
+export function PlanPanel({ plan, history, annotations, onApprove, onRequestChanges, onAnnotateStep }: {
   plan: { items: PlanItem[]; explanation?: string } | null;
   history?: PlanDecisionView[];
+  /** Open comments on plan steps (type 'plan'), matched per step by targetId. */
+  annotations?: Array<{ id: string; type?: string; targetId?: string; body: string; status?: string }>;
   onApprove?: () => void;
   onRequestChanges?: (feedback: string) => void;
   onAnnotateStep?: (item: PlanItem, index: number, body: string) => void;
 }): React.ReactElement {
   const [feedback, setFeedback] = useState('');
   const [showHistory, setShowHistory] = useState(false);
+  // §plan-comments — inline composer state (Electron's renderer has no
+  // window.prompt, so a step comment is collected via an in-panel input).
+  const [annotating, setAnnotating] = useState<number | null>(null);
+  const [draft, setDraft] = useState('');
   const decisions = history ?? [];
+  // Comments live in the shared annotation store; each plan step's are anchored
+  // by targetId `plan-step:<n>` (1-based). Open ones drive the next revision.
+  const openNotes = (annotations ?? []).filter((n) => (!n.type || n.type === 'plan') && n.status !== 'resolved' && n.status !== 'rejected' && n.status !== 'ignored');
+  const notesForStep = (index: number): typeof openNotes => openNotes.filter((n) => n.targetId === `plan-step:${index + 1}`);
 
   if (!plan || plan.items.length === 0) {
     return (
@@ -43,15 +53,14 @@ export function PlanPanel({ plan, history, onApprove, onRequestChanges, onAnnota
   // stays available below).
   const allDone = plan.items.every((it) => it.status === 'completed');
   const submitChanges = (): void => {
-    if (!feedback.trim() || !onRequestChanges) return;
+    if (!onRequestChanges || (!feedback.trim() && openNotes.length === 0)) return;
     onRequestChanges(feedback.trim());
     setFeedback('');
   };
-  const annotateStep = (item: PlanItem, index: number): void => {
-    if (!onAnnotateStep) return;
-    const body = window.prompt('Annotation for this plan step');
-    if (!body?.trim()) return;
-    onAnnotateStep(item, index, body.trim());
+  const submitAnnotation = (item: PlanItem, index: number): void => {
+    if (!onAnnotateStep || !draft.trim()) return;
+    onAnnotateStep(item, index, draft.trim());
+    setDraft(''); // keep the composer open so the new comment appears in the thread
   };
 
   return (
@@ -65,17 +74,35 @@ export function PlanPanel({ plan, history, onApprove, onRequestChanges, onAnnota
       ) : null}
 
       {plan.explanation ? <div className="plan-why">{plan.explanation}</div> : null}
-      {plan.items.map((it, i) => (
-        <div key={i} className={`plan-item ${it.status}`}>
-          <span className="plan-mark">{it.status === 'completed' ? '✓' : it.status === 'in_progress' ? '◐' : '○'}</span>
-          <span className="plan-step">{it.step}{it.acceptance ? <span className="plan-acceptance">✓ {it.acceptance}</span> : null}</span>
-          {onAnnotateStep ? (
-            <button className="plan-annotate-btn" title="Annotate this plan step" onClick={() => annotateStep(it, i)}>
-              <Icon name="bubble" size={12} />
-            </button>
-          ) : null}
-        </div>
-      ))}
+      {plan.items.map((it, i) => {
+        const notes = notesForStep(i);
+        const open = annotating === i;
+        return (
+          <div key={i} className="plan-item-wrap">
+            <div className={`plan-item ${it.status}`}>
+              <span className="plan-mark">{it.status === 'completed' ? '✓' : it.status === 'in_progress' ? '◐' : '○'}</span>
+              <span className="plan-step">{it.step}{it.acceptance ? <span className="plan-acceptance">✓ {it.acceptance}</span> : null}</span>
+              {onAnnotateStep ? (
+                <button className={`plan-annotate-btn${notes.length ? ' has-notes' : ''}${open ? ' open' : ''}`} title="Comment on this step"
+                  onClick={() => { setAnnotating(open ? null : i); setDraft(''); }}>
+                  <Icon name="bubble" size={12} />{notes.length ? <span className="plan-annotate-count">{notes.length}</span> : null}
+                </button>
+              ) : null}
+            </div>
+            {onAnnotateStep && open ? (
+              <div className="plan-annotations">
+                {notes.map((n) => <div key={n.id} className="plan-annotation">{n.body}</div>)}
+                <div className="plan-annotate-compose">
+                  <input className="filter" autoFocus placeholder="Comment on this step…" value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') submitAnnotation(it, i); if (e.key === 'Escape') { setAnnotating(null); setDraft(''); } }} />
+                  <button className="btn" disabled={!draft.trim()} onClick={() => submitAnnotation(it, i)}>Add</button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
 
       {onApprove ? (
         <div className="plan-review-controls">
@@ -83,11 +110,11 @@ export function PlanPanel({ plan, history, onApprove, onRequestChanges, onAnnota
             <div className="plan-complete-note">All steps are done — nothing to approve.</div>
           ) : (
             <>
-              <input className="filter plan-feedback-input" placeholder="Optional note for “Request changes”…" value={feedback}
+              <input className="filter plan-feedback-input" placeholder={openNotes.length ? `Optional — ${openNotes.length} step comment${openNotes.length === 1 ? '' : 's'} will be sent` : 'Note for “Request changes”…'} value={feedback}
                 onChange={(e) => setFeedback(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') submitChanges(); }} />
               <div className="plan-review-actions">
                 <Button variant="primary" onClick={onApprove} title="Record an approval — snapshots the plan as a version">Approve plan</Button>
-                <Button variant="default" onClick={submitChanges} disabled={!feedback.trim()} title="Send feedback and start a background revision task">Request changes</Button>
+                <Button variant="default" onClick={submitChanges} disabled={!feedback.trim() && openNotes.length === 0} title="Send feedback + step comments and start a background revision task">Request changes</Button>
               </div>
             </>
           )}

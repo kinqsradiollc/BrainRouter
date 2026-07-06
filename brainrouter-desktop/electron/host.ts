@@ -219,6 +219,7 @@ import { type RequirementRecord } from '@kinqs/brainrouter-types';
 // the CLI store; the desktop panel only reads/mutates through these endpoints.
 import { linkAnnotation } from '@kinqs/brainrouter-core/annotation';
 import { annotationsToMarkdown } from '@kinqs/brainrouter-core/annotation';
+import { listAnnotations, setStatus as setAnnotationStatus } from '@kinqs/brainrouter-core/annotation';
 import { type AnnotationRecord } from '@kinqs/brainrouter-types';
 // ARTIFACT-RECORDS (0.4.15) — durable Artifact Records store (shared with the
 // CLI). Thin wrappers below keep all business logic in the CLI store; the
@@ -822,12 +823,28 @@ async function main(): Promise<void> {
           onAssistantTurnStart: (): void => {}, onAssistantTurnEnd: (): void => {}, onReasoningDelta: (): void => {}, onUsageUpdate: (): void => {},
           onPlanUpdate: (items: RevisedPlan['items'], explanation?: string) => { revised = { items, explanation }; },
         } as never;
-        const prompt = `The implementation plan below was NOT approved.\n\nRequested changes:\n${feedback}\n\nCurrent plan:\n${formatPlan(planBefore)}\n\nRevise the plan to fully address the requested changes, then call \`update_plan\` with the corrected, ordered plan (each item { step, status }, at most one in_progress). Do not implement anything — only produce the revised plan.`;
+        // §plan-comments — the reviewer's per-step comments (open `plan`
+        // annotations) ride into the revision so the agent addresses each one,
+        // not just the top-level note. Advisory: never break the revision.
+        const stepNotes = (() => {
+          try {
+            return listAnnotations(workspaceRoot, { targetKind: 'plan', sessionKey })
+              .filter((n) => n.status !== 'resolved' && n.status !== 'rejected' && n.status !== 'ignored');
+          } catch { return [] as AnnotationRecord[]; }
+        })();
+        const notesBlock = stepNotes.length
+          ? `\n\nPer-step comments from the reviewer (address each):\n${stepNotes.map((n) => `- ${n.anchor?.block ?? 'plan'}${n.anchor?.selectedText ? ` (“${n.anchor.selectedText}”)` : ''}: ${n.body}`).join('\n')}`
+          : '';
+        const changesText = feedback || "Address the reviewer's per-step comments below.";
+        const prompt = `The implementation plan below was NOT approved.\n\nRequested changes:\n${changesText}${notesBlock}\n\nCurrent plan:\n${formatPlan(planBefore)}\n\nRevise the plan to fully address the requested changes, then call \`update_plan\` with the corrected, ordered plan (each item { step, status }, at most one in_progress). Do not implement anything — only produce the revised plan.`;
         await (reviser as { runTurn(p: string, c: unknown): Promise<string> }).runTurn(prompt, cb);
         taskProgress(task.id, 'writing-plan');
         const result = revised as RevisedPlan | null;
         if (result && Array.isArray(result.items) && result.items.length > 0) {
           const next = updatePlan(workspaceRoot, { plan: result.items, explanation: result.explanation, requirementId: planBefore.requirementId }, sessionKey);
+          // §plan-comments — the revision addressed them; resolve so they don't
+          // re-inject on the next request (advisory).
+          for (const n of stepNotes) { try { setAnnotationStatus(workspaceRoot, n.id, 'resolved'); } catch { /* advisory */ } }
           // Version history: snapshot the revised plan as a `revised` decision.
           const revDecision = recordPlanDecision(workspaceRoot, sessionKey, { verdict: 'revised', planSnapshot: next.items, explanation: next.explanation, requirementId: next.requirementId });
           // Repaint the USER's Plan panel with the revised plan (the feedback

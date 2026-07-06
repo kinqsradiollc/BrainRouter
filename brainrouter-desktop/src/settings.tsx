@@ -12,7 +12,7 @@ import React, { useMemo, useState } from 'react';
 import { wireBadge, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
 import { Icon } from './icons.js';
 import { ShortcutsReference } from './components/dialogs/ShortcutsReference.js';
-import { Row, Toggle, Select, ChoiceControl, KnobText, KnobNumber } from './settings/shared/controls.js';
+import { Row, Toggle, Select, ChoiceControl, KnobText, KnobNumber, SetGroup } from './settings/shared/controls.js';
 import { PermissionModeCards } from './settings/permissions/PermissionModeCards.js';
 import { ComputerUseSettings } from './settings/permissions/ComputerUseSettings.js';
 import { CliConfigEditor } from './settings/cli/CliConfigEditor.js';
@@ -21,7 +21,6 @@ import { ConnectorSettings } from './settings/connectors/ConnectorSettings.js';
 import { MarketplaceSettings, type MarketplaceState } from './settings/marketplace/index.js';
 import { McpServersSection } from './settings/connectors/McpServersSection.js';
 import { ModelsSection } from './settings/models/ModelsSection.js';
-import { LlmProfilesCard } from './settings/models/LlmProfilesCard.js';
 import { RuntimeSection } from './settings/runtime/RuntimeSection.js';
 import { AutomationsSection } from './settings/automations/AutomationsSection.js';
 import { UsageHeatmap } from './settings/usage/UsageHeatmap.js';
@@ -165,6 +164,7 @@ export function SettingsDialog(props: {
             snapshot={snapshot}
             knobs={knobs}
             setKnob={setKnob}
+            setPath={setPath}
             refreshSnapshot={refreshSnapshot}
             api={{
               open: props.open,
@@ -179,13 +179,6 @@ export function SettingsDialog(props: {
               onProbeReset: props.onProbeReset,
             }}
           />
-          <LlmProfilesCard
-            profiles={(knobs.llmProfiles ?? {}) as Record<string, { model?: string; endpoint?: string; reasoningEffort?: string; fast?: boolean }>}
-            active={String(knobs.activeLlmProfile ?? '')}
-            endpointModels={props.endpointModels}
-            routerCatalog={snapshot?.routerCatalog}
-            setPath={setPath}
-          />
         </>
       );
       case 'permissions': return (
@@ -193,34 +186,40 @@ export function SettingsDialog(props: {
           <div className="set-h">Permissions</div>
           <div className="set-desc" style={{ marginBottom: 8 }}>Pick a mode — it sets the access tier, approval, sandbox, and out-of-workspace policy below in one click. Any stored combination maps back to the nearest card.</div>
           <PermissionModeCards ps={ps} ks={ks} onPref={props.onPref} onAction={props.onAction} setKnob={setKnob} />
-          <Row title="Execution mode" desc="planning routes shell commands through per-call approval; fast skips confirmation for non-dangerous commands. (/mode)">
-            <Select value={ps('executionMode', 'planning')} options={['planning', 'fast']} onChange={(v) => props.onPref('executionMode', v)} />
-          </Row>
-          <Row title="Review policy" desc="request = stop at multi-file approval gates; proceed = apply and report after. (/review-policy)">
-            <Select value={ps('reviewPolicy', 'request')} options={['request', 'proceed']} onChange={(v) => props.onPref('reviewPolicy', v)} />
-          </Row>
-          <Row title="YOLO" desc="Shortcut for execution mode fast + review policy proceed. (/yolo)">
-            <Toggle on={ps('executionMode', 'planning') === 'fast' && ps('reviewPolicy', 'request') === 'proceed'}
-              onChange={(v) => { props.onPref('executionMode', v ? 'fast' : 'planning'); props.onPref('reviewPolicy', v ? 'proceed' : 'request'); }} />
-          </Row>
-          <Row title="Delegation policy" desc="Whether/when the agent may spawn child agents. (/delegation-policy)">
-            <Select value={ps('delegationPolicy', 'auto')} options={['auto', 'ask-before-spawn', 'ask-before-write-child', 'no-children']}
-              onChange={(v) => props.onPref('delegationPolicy', v)} />
-          </Row>
-          <Row title="Auto-chain after workers" desc="Chain review / verify follow-ups after every worker finishes. (/auto-chain)">
-            <Select value={ps('autoChain', 'off')} options={['off', 'review', 'verify', 'both']} onChange={(v) => props.onPref('autoChain', v)} />
-          </Row>
-          <Row title="Access mode (this session)" desc="read = look only · write = edit files · shell = run commands. (/permissions)">
-            <Select value="—" options={['—', 'read', 'write', 'shell']} onChange={(v) => v !== '—' && props.onAction('a-access', 'action:set-access', { mode: v })} />
-          </Row>
-          <Row title="Sandbox" desc={<>Isolate <code>run_command</code> in a restricted sandbox (cli.sandbox). off = no isolation. Grants are managed via /sandbox in the CLI.</>}>
-            <Select value={ks('sandbox', 'off')} options={['off', 'on']} onChange={(v) => setKnob('sandbox', v)} />
-          </Row>
-          <Row title="External-dir writes" desc="Writing files outside the workspace root (cli.externalDirWrites).">
-            <Select value={ks('externalDirWrites', 'ask')} options={['ask', 'allow', 'deny']} onChange={(v) => setKnob('externalDirWrites', v)} />
-          </Row>
+          <SetGroup title="Session policy">
+            <Row title="Execution mode" desc="planning routes shell commands through per-call approval; fast skips confirmation for non-dangerous commands. (/mode)">
+              <Select value={ps('executionMode', 'planning')} options={['planning', 'fast']} onChange={(v) => props.onPref('executionMode', v)} />
+            </Row>
+            <Row title="Review policy" desc="request = stop at multi-file approval gates; proceed = apply and report after. (/review-policy)">
+              <Select value={ps('reviewPolicy', 'request')} options={['request', 'proceed']} onChange={(v) => props.onPref('reviewPolicy', v)} />
+            </Row>
+            <Row title="YOLO" desc="Shortcut for execution mode fast + review policy proceed. (/yolo)">
+              <Toggle on={ps('executionMode', 'planning') === 'fast' && ps('reviewPolicy', 'request') === 'proceed'}
+                onChange={(v) => { props.onPref('executionMode', v ? 'fast' : 'planning'); props.onPref('reviewPolicy', v ? 'proceed' : 'request'); }} />
+            </Row>
+          </SetGroup>
+          <SetGroup title="Delegation & chaining">
+            <Row title="Delegation policy" desc="Whether/when the agent may spawn child agents. (/delegation-policy)">
+              <Select value={ps('delegationPolicy', 'auto')} options={['auto', 'ask-before-spawn', 'ask-before-write-child', 'no-children']}
+                onChange={(v) => props.onPref('delegationPolicy', v)} />
+            </Row>
+            <Row title="Auto-chain after workers" desc="Chain review / verify follow-ups after every worker finishes. (/auto-chain)">
+              <Select value={ps('autoChain', 'off')} options={['off', 'review', 'verify', 'both']} onChange={(v) => props.onPref('autoChain', v)} />
+            </Row>
+          </SetGroup>
+          <SetGroup title="Filesystem & sandbox">
+            <Row title="Access mode (this session)" desc="read = look only · write = edit files · shell = run commands. (/permissions)">
+              <Select value="—" options={['—', 'read', 'write', 'shell']} onChange={(v) => v !== '—' && props.onAction('a-access', 'action:set-access', { mode: v })} />
+            </Row>
+            <Row title="Sandbox" desc={<>Isolate <code>run_command</code> in a restricted sandbox (cli.sandbox). off = no isolation. Grants are managed via /sandbox in the CLI.</>}>
+              <Select value={ks('sandbox', 'off')} options={['off', 'on']} onChange={(v) => setKnob('sandbox', v)} />
+            </Row>
+            <Row title="External-dir writes" desc="Writing files outside the workspace root (cli.externalDirWrites).">
+              <Select value={ks('externalDirWrites', 'ask')} options={['ask', 'allow', 'deny']} onChange={(v) => setKnob('externalDirWrites', v)} />
+            </Row>
+          </SetGroup>
           <ComputerUseSettings knobs={knobs} refreshSnapshot={refreshSnapshot} />
-          <div className="set-h2">Permission rules (cli.permissions)</div>
+          <SetGroup title="Permission rules (cli.permissions)">
           <div className="set-desc" style={{ marginBottom: 8 }}>Glob rules evaluated at the unified execution-policy gate. Deny wins; allow downgrades ask. Shared with the CLI.</div>
           {(snapshot?.permissionRules?.deny ?? []).map((r) => (
             <div key={`d${r}`} className="rule-row"><span className="rule-kind deny">deny</span><span className="rule-text">{r}</span>
@@ -241,6 +240,7 @@ export function SettingsDialog(props: {
               onKeyDown={(e) => { if (e.key === 'Enter' && ruleDraft.trim()) { props.onAction('a-rule', 'action:rule-edit', { op: 'add', kind: ruleKind, rule: ruleDraft.trim() }); setRuleDraft(''); } }} />
             <button className="btn" disabled={!ruleDraft.trim()} onClick={() => { props.onAction('a-rule', 'action:rule-edit', { op: 'add', kind: ruleKind, rule: ruleDraft.trim() }); setRuleDraft(''); }}>Add rule</button>
           </div>
+          </SetGroup>
         </>
       );
       case 'workflow-automation': {
@@ -542,43 +542,47 @@ export function SettingsDialog(props: {
       case 'appearance': return (
         <>
           <div className="set-h">Appearance</div>
-          <Row title="Accent color" desc="Interactive accent across the app — pick anything. Empty resets to the theme default.">
-            <input type="color" className="ctl color-ctl" value={props.accent || '#7aa2f7'} onChange={(e) => props.onAccent(e.target.value)} />
-            {props.accent ? <button className="btn" onClick={() => props.onAccent('')}>Reset</button> : null}
-          </Row>
-          <Row title="Desktop theme" desc="Graphite Mono = near-black neutral with an indigo accent (the desktop default). High-contrast = pure near-black.">
-            <Select value={props.theme === 'hc' ? 'High-contrast dark' : 'Graphite Mono'} options={['Graphite Mono', 'High-contrast dark']}
-              onChange={(v) => props.onTheme(v === 'High-contrast dark' ? 'hc' : 'dark')} />
-          </Row>
-          <Row title="Markdown theme (CLI)" desc="Syntax highlighting theme the terminal CLI uses for markdown output. (/theme)">
-            <Select value={ps('theme', 'dark')} options={['auto', 'light', 'dark', 'mono']} onChange={(v) => props.onPref('theme', v)} />
-          </Row>
-          <Row title="Code font" desc="Monospace font for code, diffs and the terminal panel (desktop only).">
-            <input className="ctl" value={props.codeFont} placeholder="e.g. JetBrains Mono" onChange={(e) => props.onCodeFont(e.target.value)} />
-          </Row>
-          <Row title="Transcript width" desc="Maximum width of the transcript and composer columns.">
-            <div className="seg">
-              {['narrow', 'medium', 'wide'].map((w) => (
-                <button key={w} className={props.chatWidth === w ? 'active' : ''} onClick={() => props.onChatWidth(w)}>{w[0].toUpperCase() + w.slice(1)}</button>
-              ))}
-            </div>
-          </Row>
-          <Row title="Transcript text size" desc="Size of the conversation transcript text.">
-            <div className="seg">
-              {['small', 'medium', 'large'].map((z) => (
-                <button key={z} className={props.chatSize === z ? 'active' : ''} onClick={() => props.onChatSize(z)}>{z[0].toUpperCase() + z.slice(1)}</button>
-              ))}
-            </div>
-          </Row>
-          <Row title="Raw scrollback (CLI)" desc="Skip markdown rendering in the terminal REPL for copy-friendly text. (/raw)">
-            <Toggle on={pb('rawScrollback', false)} onChange={(v) => props.onPref('rawScrollback', v)} />
-          </Row>
-          <Row title="Vi composer (CLI)" desc="vi-mode keybindings for the terminal composer. (/vim)">
-            <Toggle on={ps('editorMode', 'emacs') === 'vi'} onChange={(v) => props.onPref('editorMode', v ? 'vi' : 'emacs')} />
-          </Row>
-          <Row title="Experimental features" desc="Unlock gated experimental features across both heads. (/experimental)">
-            <Toggle on={pb('experimental', false)} onChange={(v) => props.onPref('experimental', v)} />
-          </Row>
+          <SetGroup title="Desktop">
+            <Row title="Accent color" desc="Interactive accent across the app — pick anything. Empty resets to the theme default.">
+              <input type="color" className="ctl color-ctl" value={props.accent || '#7aa2f7'} onChange={(e) => props.onAccent(e.target.value)} />
+              {props.accent ? <button className="btn" onClick={() => props.onAccent('')}>Reset</button> : null}
+            </Row>
+            <Row title="Desktop theme" desc="Graphite Mono = near-black neutral with an indigo accent (the desktop default). High-contrast = pure near-black.">
+              <Select value={props.theme === 'hc' ? 'High-contrast dark' : 'Graphite Mono'} options={['Graphite Mono', 'High-contrast dark']}
+                onChange={(v) => props.onTheme(v === 'High-contrast dark' ? 'hc' : 'dark')} />
+            </Row>
+            <Row title="Code font" desc="Monospace font for code, diffs and the terminal panel (desktop only).">
+              <input className="ctl" value={props.codeFont} placeholder="e.g. JetBrains Mono" onChange={(e) => props.onCodeFont(e.target.value)} />
+            </Row>
+            <Row title="Transcript width" desc="Maximum width of the transcript and composer columns.">
+              <div className="seg">
+                {['narrow', 'medium', 'wide'].map((w) => (
+                  <button key={w} className={props.chatWidth === w ? 'active' : ''} onClick={() => props.onChatWidth(w)}>{w[0].toUpperCase() + w.slice(1)}</button>
+                ))}
+              </div>
+            </Row>
+            <Row title="Transcript text size" desc="Size of the conversation transcript text.">
+              <div className="seg">
+                {['small', 'medium', 'large'].map((z) => (
+                  <button key={z} className={props.chatSize === z ? 'active' : ''} onClick={() => props.onChatSize(z)}>{z[0].toUpperCase() + z.slice(1)}</button>
+                ))}
+              </div>
+            </Row>
+          </SetGroup>
+          <SetGroup title="Terminal (CLI)">
+            <Row title="Markdown theme" desc="Syntax highlighting theme the terminal CLI uses for markdown output. (/theme)">
+              <Select value={ps('theme', 'dark')} options={['auto', 'light', 'dark', 'mono']} onChange={(v) => props.onPref('theme', v)} />
+            </Row>
+            <Row title="Raw scrollback" desc="Skip markdown rendering in the terminal REPL for copy-friendly text. (/raw)">
+              <Toggle on={pb('rawScrollback', false)} onChange={(v) => props.onPref('rawScrollback', v)} />
+            </Row>
+            <Row title="Vi composer" desc="vi-mode keybindings for the terminal composer. (/vim)">
+              <Toggle on={ps('editorMode', 'emacs') === 'vi'} onChange={(v) => props.onPref('editorMode', v ? 'vi' : 'emacs')} />
+            </Row>
+            <Row title="Experimental features" desc="Unlock gated experimental features across both heads. (/experimental)">
+              <Toggle on={pb('experimental', false)} onChange={(v) => props.onPref('experimental', v)} />
+            </Row>
+          </SetGroup>
         </>
       );
       case 'commands': return (
@@ -632,7 +636,7 @@ export function SettingsDialog(props: {
             </React.Fragment>
           ))}
         </nav>
-        <div className="settings-content">{body}</div>
+        <div className="settings-content"><div className="set-body">{body}</div></div>
         <span className="settings-actions panel-chrome-actions">
           <button className={`icon-btn${zoomed ? ' active' : ''}`} title={zoomed ? 'Restore settings' : 'Enlarge settings'}
             aria-label={zoomed ? 'Restore settings' : 'Enlarge settings'} onClick={() => setZoomed((v) => !v)}>

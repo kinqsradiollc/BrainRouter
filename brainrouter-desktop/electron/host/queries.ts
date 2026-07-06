@@ -2168,7 +2168,15 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const verdict = a.verdict as PlanVerdict;
         if (verdict !== 'approved' && verdict !== 'changes-requested') return { error: `Unknown plan verdict "${String(a.verdict)}".` };
         const feedback = typeof a.feedback === 'string' ? a.feedback.trim() : '';
-        if (verdict === 'changes-requested' && !feedback) return { error: 'Requesting changes needs feedback to return to the session.' };
+        // A revision needs SOMETHING to act on: a top-level note OR at least one
+        // open per-step comment (annotation). Comment-only revisions are allowed.
+        const openPlanNotes = verdict === 'changes-requested'
+          ? listAnnotations(workspaceRoot, { targetKind: 'plan', sessionKey: getActiveAgent().sessionKey })
+              .filter((n) => n.status !== 'resolved' && n.status !== 'rejected' && n.status !== 'ignored').length
+          : 0;
+        if (verdict === 'changes-requested' && !feedback && openPlanNotes === 0) {
+          return { error: 'Add a note, or comment on a plan step, before requesting changes.' };
+        }
         const cur = readPlan(workspaceRoot, getActiveAgent().sessionKey);
         if (cur.items.length === 0) return { error: 'There is no plan to review in this session yet.' };
         const decision = recordPlanDecision(workspaceRoot, getActiveAgent().sessionKey, {
