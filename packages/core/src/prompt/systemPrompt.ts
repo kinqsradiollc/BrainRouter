@@ -68,6 +68,13 @@ export interface SystemPromptContext {
    * midnight boundary).
    */
   nowMs?: number;
+  /**
+   * WORKTREE-SAFETY — other git worktrees active in this repo (formatted
+   * "<path> (<branch>)"), EXCLUDING this session's own. When present, the Runtime
+   * Context warns the agent that a concurrent agent may be working in one, so it
+   * stays in its own worktree and doesn't touch a branch/tree it doesn't own.
+   */
+  activeWorktrees?: string[];
 }
 
 function personalityOverlay(style: SystemPromptContext['personality']): string {
@@ -437,6 +444,9 @@ function runtimeContextLines(context: SystemPromptContext): string[] {
     `- Platform: ${process.platform}`,
     `- Shell: ${process.env.SHELL ?? 'unknown'}`,
     context.model ? `- Active model: ${context.model}` : '',
+    context.activeWorktrees && context.activeWorktrees.length > 0
+      ? `- Concurrent work areas — another agent may be active in these git worktrees: ${context.activeWorktrees.join('; ')}. Stay inside YOUR worktree (the workspace root above); do NOT edit files, switch/merge, or remove a branch or worktree you don't own. Coordinate through the human if the work overlaps.`
+      : '',
     '- All relative paths resolve from the workspace root.',
   ];
 }
