@@ -41,6 +41,40 @@ export interface RecallFilters {
    * (filtering by `projectTag` instead of `workspaceTag`).
    */
   scope?: "project" | "workspace";
+  /**
+   * ADR-010 P5 — the caller's organization. When set, a record belonging to a
+   * DIFFERENT org is dropped (hard cross-org isolation); within the caller's org
+   * another member's record is only visible when shared (`visibility='org'`).
+   * NULL-tolerant: an untagged (legacy) record always surfaces. Unset = no org
+   * scoping (backward compatible).
+   */
+  orgId?: string;
+  /** ADR-010 P5 — the caller's user id, paired with {@link orgId} to allow the
+   *  caller's own records plus org-shared ones. */
+  callerUserId?: string;
+}
+
+/**
+ * ADR-010 P5 — org isolation + visibility rule. Pure + unit-tested. Returns
+ * `false` to DROP a record from a caller acting in `orgId` (as `callerUserId`).
+ * NULL-tolerant on the record's org so the rollout is gradual (untagged records
+ * surface everywhere), and a hard boundary across orgs.
+ */
+export function orgVisibilityAllows(
+  rec: { org_id?: string | null; visibility?: string | null; user_id?: string | null },
+  orgId: string | undefined,
+  callerUserId: string | undefined,
+): boolean {
+  if (!orgId) return true; // no org scoping requested
+  const recOrg = rec.org_id ?? null;
+  if (recOrg === null) return true; // untagged (legacy) — surfaces everywhere
+  if (recOrg !== orgId) return false; // hard cross-org isolation
+  // Same org: the caller's own records always; another member's only when shared.
+  const owner = rec.user_id ?? null;
+  if (callerUserId && owner && owner !== callerUserId) {
+    return (rec.visibility ?? "private") === "org";
+  }
+  return true;
 }
 
 /** SESSION-SCOPED kinds — captured per chat session, never recalled cross-session. */
@@ -79,6 +113,9 @@ export function applyFilters<T extends CognitiveFtsResult | VectorSearchResult>(
       if (!sessionKey || (r as { session_key?: string }).session_key !== sessionKey) return false;
     }
     if (!filters) return true;
+    // ADR-010 P5 — org isolation + visibility (hard cross-org boundary,
+    // NULL-tolerant on untagged records). Runs before the optional filters.
+    if (filters.orgId && !orgVisibilityAllows(r as { org_id?: string | null; visibility?: string | null; user_id?: string | null }, filters.orgId, filters.callerUserId)) return false;
     if (types && !types.has(r.type)) return false;
     if (scenes && (!r.scene_name || !scenes.has(r.scene_name))) return false;
     if (filters.skillTag && r.skill_tag !== filters.skillTag) return false;
