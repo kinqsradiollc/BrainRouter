@@ -74,6 +74,7 @@ export interface RenderPanelBodyCtx {
   finishedTasks: FinishedTask[];
   setFinishedTasks: (v: FinishedTask[]) => void;
   openTask: (f: FleetRow) => void;
+  submit: (prompt: string) => void;
   taskView: TaskViewState | null;
   setTaskView: React.Dispatch<React.SetStateAction<TaskViewState | null>>;
   renderRow: (row: ChatRow, isLast: boolean) => React.ReactElement;
@@ -121,7 +122,7 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId) => 
     allFiles, statuses, openFile, grepHits, filesLoading, filesTruncated, filesError, fileView, editor,
     closeEditorTab, openUrl, setToast, ci, reviewPrWithAi, track, trackOps, changedFiles, diffView, diffTarget,
     setDiffTarget, ensurePanel, setDiffView, runGit, gitBusy, reviewGate, reviewFindingsByFile, toolLog,
-    taskView, setTaskView, renderRow,
+    submit, taskView, setTaskView, renderRow,
     requestStop, closeSideTab, dashScope, setDashScope,
     refreshDashboard, dashTab, setDashTab, dashBoards, dashBusy, openDashboardTask, switchToWorkspace, activeRoot,
     lastPlan, planHistory, planFeedbackRef, searchHits, schedules, worktrees, worktreeDiffs, openWorktree,
@@ -186,7 +187,22 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId) => 
         onOpenTask={openDashboardTask}
         onStopTask={(t) => { if (!t.workspaceRoot || t.workspaceRoot === activeRoot) { window.brainrouter.send({ kind: 'interrupt' }); setToast('Interrupt sent to this workspace.'); } else { switchToWorkspace(t.workspaceRoot); setToast('Opening that workspace before stopping its tasks.'); } }}
         onKill={(id) => { q('a-killbg', 'action:kill-bgshell', { id }); setTimeout(() => q('q-fleet', 'fleet'), 150); }}
-        onStartSuggestedTask={(prompt) => { setDraft(prompt); setToast('Suggested task added to the composer — press Enter to start.'); }} />;
+        branches={branches.branches}
+        onStartSuggested={(prompt, opts) => {
+          if (opts.mode === 'here') { setDraft(prompt); setToast('Suggested task added to the composer — press Enter to start.'); return; }
+          if (opts.mode === 'session') { window.brainrouter.send({ kind: 'new-session' } as never); setDraft(prompt); setToast('New session ready — press Enter to start the task.'); return; }
+          // worktree — run NOW on an isolated git worktree (the agent creates it,
+          // like the "review PR on a worktree" flow), so the working tree is untouched.
+          const base = opts.branch ? ` based on \`${opts.branch}\`` : '';
+          const wtPrompt = [
+            prompt,
+            '',
+            `Do this on an ISOLATED git worktree so my main working tree stays untouched:`,
+            `create a new branch + worktree${base} (e.g. \`git worktree add -b task/<short-name> .worktrees/<short-name> ${opts.branch || 'HEAD'}\`), do all the work inside it, then summarize what changed so I can review before merging. Remove the worktree only after I confirm.`,
+          ].join('\n');
+          submit(wtPrompt);
+          setToast(opts.branch ? `Starting in an isolated worktree off ${opts.branch}…` : 'Starting in an isolated worktree…');
+        }} />;
       case 'task-detail': return <TaskDetailPanel task={taskView} renderRow={renderRow}
         onBack={() => { setTaskView(null); closeSideTab('task-detail'); }}
         onInterrupt={() => { requestStop(); setToast('Interrupt sent.'); }} />;

@@ -53,7 +53,13 @@ export function suggestedTaskKindTag(kind: string): string {
   return SUGGESTED_KIND_TAGS[kind] ?? kind;
 }
 
-export function TasksPanel({ scope, setScope, tab, setTab, boards, busy, onRefresh, onOpenTask, onStopTask, onKill, onStartSuggestedTask }: {
+/** How a suggested starter is launched. `here` drafts it into the current
+ *  composer; `session` opens a fresh session for it; `worktree` runs it now on an
+ *  isolated git worktree (optionally based on `branch`) so the working tree is
+ *  untouched — mirroring "review PR on a worktree". */
+export type StartMode = 'here' | 'session' | 'worktree';
+
+export function TasksPanel({ scope, setScope, tab, setTab, boards, busy, onRefresh, onOpenTask, onStopTask, onKill, onStartSuggested, branches = [] }: {
   scope: 'workspace' | 'all';
   setScope: (s: 'workspace' | 'all') => void;
   tab: DashTab;
@@ -68,9 +74,13 @@ export function TasksPanel({ scope, setScope, tab, setTab, boards, busy, onRefre
   onStopTask?: (t: DashTask) => void;
   /** Kill a background shell (dev server etc.) by its id — kills the whole tree. */
   onKill?: (id: string) => void;
-  /** MC-B6 — stage a suggested starter prompt in the composer. */
-  onStartSuggestedTask?: (prompt: string) => void;
+  /** Launch a suggested starter — here / new session / isolated worktree (+branch). */
+  onStartSuggested?: (prompt: string, opts: { mode: StartMode; branch?: string }) => void;
+  /** Branch names for the "worktree from branch…" options. */
+  branches?: string[];
 }): React.ReactElement {
+  // Which suggested-task row has its "Start ▾" menu open (by row key), if any.
+  const [startMenu, setStartMenu] = React.useState<string | null>(null);
   const [suggested, setSuggested] = React.useState<SuggestedTasksViewResult | null>(null);
   const [suggestBusy, setSuggestBusy] = React.useState(false);
   const [suggestError, setSuggestError] = React.useState('');
@@ -109,26 +119,47 @@ export function TasksPanel({ scope, setScope, tab, setTab, boards, busy, onRefre
       {suggestError ? <div className="empty error">{suggestError}</div> : null}
       {!suggestError && suggested && suggested.tasks.length === 0 && !suggestBusy ? <div className="empty">No suggested starters in this workspace.</div> : null}
       {!suggestError && !suggested && suggestBusy ? <div className="empty">Scanning connected repo...</div> : null}
-      {suggested?.tasks.slice(0, 8).map((task) => (
-        <div key={`${task.kind}:${task.repo}:${task.number}:${task.title}`} className="task-row suggested-task-row">
-          <span className="task-kind">{suggestedTaskKindTag(task.kind)}</span>
-          <span className="file-name suggested-task-title">{task.title}</span>
-          {task.url ? (
-            <button className="task-link" type="button" title="Open in browser" onClick={() => window.brainrouter.send({ kind: 'query', id: `suggested-open:${task.number}`, name: 'action:open-external', args: { url: task.url } } as never)}>
-              Open
-            </button>
-          ) : null}
-          <button
-            className="task-stop task-start"
-            type="button"
-            disabled={!onStartSuggestedTask}
-            onClick={() => onStartSuggestedTask?.(task.suggestedPrompt)}
-            title="Send this starter prompt to the composer"
-          >
-            Start
-          </button>
-        </div>
-      ))}
+      {suggested?.tasks.slice(0, 8).map((task) => {
+        const rowKey = `${task.kind}:${task.repo}:${task.number}:${task.title}`;
+        const start = (mode: StartMode, branch?: string): void => { setStartMenu(null); onStartSuggested?.(task.suggestedPrompt, { mode, branch }); };
+        return (
+          <div key={rowKey} className="task-row suggested-task-row">
+            <span className="task-kind">{suggestedTaskKindTag(task.kind)}</span>
+            <span className="file-name suggested-task-title">{task.title}</span>
+            {task.url ? (
+              <button className="task-link" type="button" title="Open in browser" onClick={() => window.brainrouter.send({ kind: 'query', id: `suggested-open:${task.number}`, name: 'action:open-external', args: { url: task.url } } as never)}>
+                Open
+              </button>
+            ) : null}
+            <div className="start-wrap" onBlur={() => window.setTimeout(() => setStartMenu((k) => (k === rowKey ? null : k)), 120)}>
+              <button
+                className="task-stop task-start"
+                type="button"
+                disabled={!onStartSuggested}
+                onClick={() => setStartMenu((k) => (k === rowKey ? null : rowKey))}
+                title="Choose how to start this task"
+              >
+                Start ▾
+              </button>
+              {startMenu === rowKey ? (
+                <div className="start-menu">
+                  <button type="button" className="start-item" onMouseDown={(e) => e.preventDefault()} onClick={() => start('here')}>Start here <span className="start-hint">in this chat</span></button>
+                  <button type="button" className="start-item" onMouseDown={(e) => e.preventDefault()} onClick={() => start('session')}>New session <span className="start-hint">fresh chat</span></button>
+                  <button type="button" className="start-item" onMouseDown={(e) => e.preventDefault()} onClick={() => start('worktree')}>New worktree <span className="start-hint">isolated · runs now</span></button>
+                  {branches.length ? (
+                    <>
+                      <div className="start-sep">Worktree from branch…</div>
+                      {branches.slice(0, 8).map((b) => (
+                        <button key={b} type="button" className="start-item start-branch" onMouseDown={(e) => e.preventDefault()} onClick={() => start('worktree', b)}>{b}</button>
+                      ))}
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        );
+      })}
       {suggested?.warnings.length ? (
         <div className="suggested-task-warnings">
           {suggested.warnings.slice(0, 3).map((warning) => <div key={warning}>warning: {warning}</div>)}

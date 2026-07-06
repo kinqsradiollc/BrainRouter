@@ -455,7 +455,7 @@ export function App(): React.ReactElement {
     allFiles, statuses, openFile, grepHits, filesLoading, filesTruncated, filesError, fileView, editor,
     closeEditorTab, openUrl, setToast, ci, reviewPrWithAi, track, trackOps, changedFiles, diffView, diffTarget,
     setDiffTarget, ensurePanel, setDiffView, runGit, gitBusy, reviewGate, reviewFindingsByFile, toolLog,
-    backgroundTasks, recentTasks, finishedTasks, setFinishedTasks, openTask, taskView, setTaskView, renderRow,
+    backgroundTasks, recentTasks, finishedTasks, setFinishedTasks, openTask, submit, taskView, setTaskView, renderRow,
     requestStop, closeSideTab, dashScope, setDashScope,
     refreshDashboard, dashTab, setDashTab, dashBoards, dashBusy, openDashboardTask, switchToWorkspace, activeRoot,
     lastPlan, planHistory, planFeedbackRef, searchHits, schedules, worktrees, worktreeDiffs, openWorktree,
