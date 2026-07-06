@@ -54,3 +54,30 @@ test('WS5: extractIacTarget pulls the stack/target', () => {
   assert.equal(extractIacTarget('cdk destroy MyAppStack'), 'MyAppStack');
   assert.equal(extractIacTarget('terraform destroy -target=module.db'), 'module.db');
 });
+
+test('WORKTREE-SAFETY: git worktree remove is BLOCKED unless the user asked to remove it', () => {
+  assert.equal(evaluateDestructiveCommand('git worktree remove .worktrees/task-x', { userIntent: 'do the task' }).decision, 'block');
+  assert.equal(evaluateDestructiveCommand('git worktree remove --force .worktrees/task-x', { userIntent: 'do the task' }).rule, 'worktree-remove');
+  // Allowed once the user asks to clean up / remove the worktree.
+  assert.equal(evaluateDestructiveCommand('git worktree remove .worktrees/task-x', { userIntent: 'remove that worktree now' }).decision, 'allow');
+  assert.equal(evaluateDestructiveCommand('git worktree remove .worktrees/task-x', { userIntent: 'discard it and clean up' }).decision, 'allow');
+});
+
+test('WORKTREE-SAFETY: git merge is BLOCKED unless the user asked to merge', () => {
+  assert.equal(evaluateDestructiveCommand('git merge feature', { userIntent: 'fix the bug' }).decision, 'block');
+  assert.equal(evaluateDestructiveCommand('git merge --no-ff feature', { userIntent: 'fix the bug' }).rule, 'branch-merge');
+  assert.equal(evaluateDestructiveCommand('git merge feature', { userIntent: 'merge feature into main' }).decision, 'allow');
+  // Housekeeping + non-merge git subcommands are NOT blocked.
+  assert.equal(evaluateDestructiveCommand('git merge --abort', { userIntent: 'fix the bug' }).decision, 'allow');
+  assert.equal(evaluateDestructiveCommand('git merge-base main HEAD', { userIntent: 'fix the bug' }).decision, 'allow');
+});
+
+test('WORKTREE-SAFETY: switching / force-checking-out a branch is BLOCKED unless the user asked', () => {
+  assert.equal(evaluateDestructiveCommand('git switch main', { userIntent: 'do the task' }).decision, 'block');
+  assert.equal(evaluateDestructiveCommand('git switch main', { userIntent: 'do the task' }).rule, 'branch-switch');
+  assert.equal(evaluateDestructiveCommand('git checkout -f main', { userIntent: 'do the task' }).decision, 'block');
+  // Allowed on explicit request; creating a branch is never blocked.
+  assert.equal(evaluateDestructiveCommand('git switch main', { userIntent: 'switch to the main branch' }).decision, 'allow');
+  assert.equal(evaluateDestructiveCommand('git switch -c feature', { userIntent: 'do the task' }).decision, 'allow');
+  assert.equal(evaluateDestructiveCommand('git checkout -b feature', { userIntent: 'do the task' }).decision, 'allow');
+});

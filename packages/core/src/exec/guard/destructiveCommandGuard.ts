@@ -26,7 +26,7 @@ export interface DestructiveContext {
   agentAuthoredCommits?: ReadonlySet<string>;
 }
 
-export type DestructiveRule = 'discard-work' | 'amend-foreign' | 'iac-destroy';
+export type DestructiveRule = 'discard-work' | 'amend-foreign' | 'iac-destroy' | 'worktree-remove' | 'branch-merge' | 'branch-switch';
 
 export interface DestructiveVerdict {
   decision: 'allow' | 'block';
@@ -41,6 +41,12 @@ const DISCARD_INTENT =
   /\b(discard|throw\s+(?:it\s+)?away|reset|revert|wipe|nuke|blow\s+away|start\s+over|scrap|undo\s+(?:my|the|all|local|these|those)\b|get\s+rid\s+of|clean\s+(?:out|up)?)\b/i;
 // Verbs that, together with the SPECIFIC stack name, authorize an IaC destroy.
 const DESTROY_INTENT = /\b(destroy|tear\s*down|teardown|delete|remove|decommission|nuke)\b/i;
+// WORKTREE-SAFETY — intents that authorize the branch/worktree finalize actions
+// an agent must otherwise NOT take on its own initiative (a botched merge-back or
+// branch switch can wreck the user's uncommitted work).
+const MERGE_INTENT = /\b(merge|land|integrate|combine|fast[- ]?forward|ff\s+merge)\b/i;
+const SWITCH_INTENT = /\b(switch|check\s*out|checkout|change\s+branch|go\s+to\s+branch)\b/i;
+const WORKTREE_REMOVE_INTENT = /\bworktree\b[^|;&]*\b(remove|delete|clean|dispose|drop|prune|done|finish)\b|\b(remove|delete|clean|dispose|drop|prune)\b[^|;&]*\bworktree\b/i;
 
 // --- per-segment matchers (each tested against a single command segment) ---
 const RE_RESET_HARD = /\bgit\s+reset\b[^|;&]*--hard\b/i;
@@ -49,6 +55,17 @@ const RE_CLEAN_FORCE = /\bgit\s+clean\s+-[a-zA-Z]*f/i; // `git clean -fd`, `-xf`
 const RE_STASH_DROP = /\bgit\s+stash\s+(drop|clear)\b/i;
 const RE_AMEND = /\bgit\s+commit\b[^|;&]*--amend\b/i;
 const RE_IAC_DESTROY = /\b(terraform|pulumi|cdk)\b[^|;&]*\bdestroy\b/i;
+// WORKTREE-SAFETY matchers.
+const RE_WORKTREE_REMOVE = /\bgit\s+worktree\s+remove\b/i;
+// `git merge <ref>` but NOT `git merge --abort|--continue|--quit|--skip` and NOT
+// `git merge-base` / `git merge-file` (the `(?![-\w])` after "merge").
+const RE_GIT_MERGE = /\bgit\s+merge(?![-\w])\s+(?!--(?:abort|continue|quit|skip)\b)\S/i;
+// `git switch <branch>` but NOT `git switch -c|--create|-C` (creating a branch is safe).
+const RE_GIT_SWITCH = /\bgit\s+switch\s+(?!-c\b|--create\b|-C\b)\S/i;
+// A FORCED checkout (`-f` / `--force`) throws away the working tree to switch — the
+// discard-flavoured branch change. (A plain `git checkout <branch>` is left to git,
+// which refuses to clobber conflicting local changes.)
+const RE_CHECKOUT_FORCE = /\bgit\s+checkout\b[^|;&]*\s(?:-f|--force)\b/i;
 
 /** Best-effort extraction of the stack/target a destroy command targets, so we
  *  can require the user named THAT stack (not just "destroy something"). */
@@ -106,6 +123,36 @@ export function evaluateDestructiveCommand(command: string, ctx: DestructiveCont
         decision: 'block',
         rule: 'iac-destroy',
         reason: `"${seg}" tears down infrastructure. I only run an IaC destroy when you've explicitly asked to destroy that specific stack${target ? ` ("${target}")` : ''}. Name the stack to confirm.`,
+      };
+    }
+    // 4) git worktree remove — can discard the worktree's uncommitted work; the
+    //    agent must confirm before tearing one down.
+    if (RE_WORKTREE_REMOVE.test(seg)) {
+      if (WORKTREE_REMOVE_INTENT.test(intent) || DISCARD_INTENT.test(intent)) continue;
+      return {
+        decision: 'block',
+        rule: 'worktree-remove',
+        reason: `"${seg}" removes a git worktree, which can discard uncommitted work inside it. Confirm you're done with that worktree before I remove it — otherwise I'll leave it and tell you where the work is.`,
+      };
+    }
+    // 5) git merge — landing changes into a branch is your call; I don't merge on
+    //    my own initiative (a bad merge-back can wreck your working tree).
+    if (RE_GIT_MERGE.test(seg)) {
+      if (MERGE_INTENT.test(intent)) continue;
+      return {
+        decision: 'block',
+        rule: 'branch-merge',
+        reason: `"${seg}" merges changes into a branch. I don't merge on my own — tell me explicitly to merge, or I'll open a PR / leave the branch for you to review.`,
+      };
+    }
+    // 6) git switch / forced checkout — changing the branch checked out in this
+    //    working tree can disrupt your context + uncommitted work.
+    if (RE_GIT_SWITCH.test(seg) || RE_CHECKOUT_FORCE.test(seg)) {
+      if (SWITCH_INTENT.test(intent)) continue;
+      return {
+        decision: 'block',
+        rule: 'branch-switch',
+        reason: `"${seg}" changes the branch checked out in this working tree, which can disrupt your current work. Say which branch to switch to — or I'll work on an isolated worktree instead so your tree stays put.`,
       };
     }
   }
