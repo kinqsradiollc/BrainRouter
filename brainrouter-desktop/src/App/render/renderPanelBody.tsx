@@ -193,15 +193,22 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId) => 
           if (opts.mode === 'session') { window.brainrouter.send({ kind: 'new-session' } as never); setDraft(prompt); setToast('New session ready — press Enter to start the task.'); return; }
           // worktree — run NOW on an isolated git worktree (the agent creates it,
           // like the "review PR on a worktree" flow), so the working tree is untouched.
-          const base = opts.branch ? ` based on \`${opts.branch}\`` : '';
+          // The finalize step is ASK-FIRST and forbids touching the main tree — a
+          // botched merge-back can wreck uncommitted work, so the agent must stop
+          // and let the human choose PR / local merge / leave.
+          const base = opts.branch || 'HEAD';
           const wtPrompt = [
             prompt,
             '',
-            `Do this on an ISOLATED git worktree so my main working tree stays untouched:`,
-            `create a new branch + worktree${base} (e.g. \`git worktree add -b task/<short-name> .worktrees/<short-name> ${opts.branch || 'HEAD'}\`), do all the work inside it, then summarize what changed so I can review before merging. Remove the worktree only after I confirm.`,
+            'Run this in an ISOLATED git worktree so my main working tree is never touched. Follow these rules exactly:',
+            `1. Create a NEW branch + worktree for it, e.g. \`git worktree add -b task/<short-name> .worktrees/<short-name> ${base}\`. Do ALL work inside that worktree directory.`,
+            '2. NEVER run `git checkout`/`switch`/`merge`/`reset` or `git worktree remove` in my MAIN working tree — my uncommitted work must stay exactly as it is.',
+            '3. When done, COMMIT the work on the new branch inside the worktree so nothing can be lost.',
+            `4. Then STOP: show me the branch name, a summary, and the diff, and ASK how I want to land it — (a) open a Pull Request, (b) merge locally into \`${base}\`, or (c) leave it on the branch. WAIT for my answer; do not merge, push, or delete anything on your own.`,
+            '5. Only after I explicitly confirm should you merge/push or remove the worktree.',
           ].join('\n');
           submit(wtPrompt);
-          setToast(opts.branch ? `Starting in an isolated worktree off ${opts.branch}…` : 'Starting in an isolated worktree…');
+          setToast(opts.branch ? `Starting in an isolated worktree off ${opts.branch} — I'll ask before merging.` : "Starting in an isolated worktree — I'll ask before merging.");
         }} />;
       case 'task-detail': return <TaskDetailPanel task={taskView} renderRow={renderRow}
         onBack={() => { setTaskView(null); closeSideTab('task-detail'); }}
