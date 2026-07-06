@@ -175,11 +175,20 @@ if (USE_HTTP) {
     });
   }
 
+  // ADR-013 — this process's role. `brain` (default) serves BOTH the MCP tool
+  // plane AND the REST/auth API (single-node, unchanged). Decompose a fleet by
+  // running `mcp` (the memory/agent brain — MCP only) and `api` (auth + REST API
+  // — no MCP) as separate services; each still boots the shared engine + DB.
+  const SERVICE = (process.env.BRAINROUTER_SERVICE ?? "brain").toLowerCase();
+  const serveRest = SERVICE === "brain" || SERVICE === "api";
+  const serveMcp = SERVICE === "brain" || SERVICE === "mcp";
+
   // Health check
   app.get('/health', (_req: Request, res: Response) => {
-    res.json({ status: 'ok', transport: 'http', root: config.localRoot });
+    res.json({ status: 'ok', transport: 'http', service: SERVICE, root: config.localRoot });
   });
 
+  if (serveRest) {
   app.use("/api", apiRateLimit);
   app.use("/api/auth/signin", authRateLimit);
   app.use("/api/auth/signup", authRateLimit);
@@ -212,6 +221,7 @@ if (USE_HTTP) {
   // proxy traffic, so it only catches a runaway/abusive client.
   app.use("/v1", apiRateLimit);
   app.use("/v1", chatCompletionsRouter);
+  } // end serveRest
 
   // MCP endpoint — handles POST (requests) and GET (SSE stream).
   //
@@ -302,16 +312,19 @@ if (USE_HTTP) {
 
   // DoS backstop on the MCP tool transport (env-tunable; default 600/min — well
   // above a normal agent's tool-call cadence, so it only trips a runaway).
-  app.use('/mcp', apiRateLimit);
-  app.post('/mcp', handleMcp);
-  app.get('/mcp', handleMcp);
+  // Mounted only when this process serves the MCP plane (SERVICE=brain|mcp).
+  if (serveMcp) {
+    app.use('/mcp', apiRateLimit);
+    app.post('/mcp', handleMcp);
+    app.get('/mcp', handleMcp);
 
-  // DELETE — client-side session teardown
-  app.delete('/mcp', (req: Request, res: Response) => {
-    const sessionId = req.headers['mcp-session-id'] as string | undefined;
-    if (sessionId) sessions.delete(sessionId);
-    res.status(204).send();
-  });
+    // DELETE — client-side session teardown
+    app.delete('/mcp', (req: Request, res: Response) => {
+      const sessionId = req.headers['mcp-session-id'] as string | undefined;
+      if (sessionId) sessions.delete(sessionId);
+      res.status(204).send();
+    });
+  }
 
   const dashboardDist = path.resolve(process.cwd(), "..", "dashboard", "dist");
   if (fs.existsSync(dashboardDist)) {

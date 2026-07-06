@@ -52,8 +52,10 @@ services:
       # Which org's DB providers back the brain's own calls (default: the seeded
       # admin's personal org). Set for a dedicated system org.
       BRAINROUTER_SYSTEM_ORG_ID: ${BRAINROUTER_SYSTEM_ORG_ID:-}
-      # Decompose: delegate async jobs to the worker service(s). The brain serves
-      # MCP + REST; the worker drains the shared memory_jobs queue.
+      # Decompose (ADR-013): this node serves the MCP plane only — the memory /
+      # agent brain. The auth + REST API is the `api` service; jobs are the
+      # `worker` service. Set SERVICE=brain to collapse back to a single node.
+      BRAINROUTER_SERVICE: "mcp"
       BRAINROUTER_JOB_RUNNER: "off"
       # First-admin seed (clear after first boot; the API key prints once in logs).
       BRAINROUTER_ADMIN_PASSWORD: ${BRAINROUTER_ADMIN_PASSWORD:-}
@@ -129,6 +131,34 @@ services:
       BRAINROUTER_JWT_SECRET: ${BRAINROUTER_JWT_SECRET}
       BRAINROUTER_SECRET_KEY: ${BRAINROUTER_SECRET_KEY}
       BRAINROUTER_JOB_RUNNER: "on"
+
+  # Auth + REST API (ADR-013) — the identity / tenancy / admin / memory-REST plane
+  # (SERVICE=api, no MCP). Scale independently of the MCP brain; point the
+  # dashboard's API URL here. Same image, REST-only entrypoint.
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/brain/Dockerfile
+    restart: unless-stopped
+    command: ["node", "dist/index.js", "--http", "--port", "3750"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      BRAINROUTER_SERVICE: "api"
+      BRAINROUTER_JOB_RUNNER: "off"
+      BRAINROUTER_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brainrouter}
+      BRAINROUTER_JWT_SECRET: ${BRAINROUTER_JWT_SECRET:?set BRAINROUTER_JWT_SECRET in .env}
+      BRAINROUTER_SECRET_KEY: ${BRAINROUTER_SECRET_KEY:?set BRAINROUTER_SECRET_KEY in .env}
+      BRAINROUTER_SYSTEM_ORG_ID: ${BRAINROUTER_SYSTEM_ORG_ID:-}
+      # First-admin seed (clear after first boot; the API key prints once in logs).
+      BRAINROUTER_ADMIN_PASSWORD: ${BRAINROUTER_ADMIN_PASSWORD:-}
+      BRAINROUTER_ADMIN_EMAIL: ${BRAINROUTER_ADMIN_EMAIL:-admin@example.com}
+      BRAINROUTER_METRICS: ${BRAINROUTER_METRICS:-}
+      BRAINROUTER_CORS_ORIGIN: ${BRAINROUTER_CORS_ORIGIN:-}
+    ports:
+      - "${API_PORT:-3750}:3750"
 
 volumes:
   brainrouter-pg:
