@@ -21,6 +21,7 @@ import type { CodeRecallResult } from "./bench/code-recall.js";
 import type { RetrievalMetrics } from "./bench/code-scale.js";
 import type { CursorPaginationOptions, DiagnosticsBundle, EvidenceListFilters, IMemoryStore, MemoryListFilters, OperationLogFilters } from "@kinqs/brainrouter-types";
 import type { TenancyStore } from "../tenancy/store.js";
+import type { ProviderStore } from "../providers/store.js";
 import { MemoryCapturePipeline } from "./capture.js";
 import { MemoryRecallPipeline } from "./recall.js";
 import { MemoryJobRunner } from "./scheduler/runner.js";
@@ -336,6 +337,11 @@ export class MemoryEngine {
    */
   public get tenancy(): TenancyStore {
     return this.store as unknown as TenancyStore;
+  }
+
+  /** ADR-010 P2 — DB-backed provider configs (see {@link tenancy} for the cast rationale). */
+  public get providers(): ProviderStore {
+    return this.store as unknown as ProviderStore;
   }
 
   public createUser(userId: string, apiKey: string, displayName = "", isAdmin = false): Promise<UserRecord> {

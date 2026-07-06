@@ -44,6 +44,7 @@ import path from 'node:path';
 import { decideMcpAcceptPromotion } from './api/mcpAcceptHeader.js';
 import { authRouter, usersRouter, sessionsRouter } from './api/routes/identity/index.js';
 import { orgsRouter } from './api/routes/tenancy/index.js';
+import { providersRouter } from './api/routes/admin/index.js';
 import {
   memoriesRouter,
   contradictionsRouter,
@@ -178,6 +179,7 @@ if (USE_HTTP) {
   app.use("/api/auth", authRouter);
   app.use("/api/users", usersRouter);
   app.use("/api/orgs", orgsRouter);
+  app.use("/api/admin/providers", providersRouter);
   app.use("/api/memories", memoriesRouter);
   app.use("/api/scenes", scenesRouter);
   app.use("/api/persona", personaRouter);

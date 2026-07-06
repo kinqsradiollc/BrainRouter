@@ -119,9 +119,12 @@ import * as graph from "./queries/graphQueries.js";
 import * as userStats from "./queries/userStatsQueries.js";
 import * as sourcesTree from "./queries/sourcesTreeQueries.js";
 import * as tenancy from "./queries/tenancyQueries.js";
+import * as providerCfg from "./queries/providerConfigQueries.js";
 import type { TenancyStore } from "../../../tenancy/store.js";
 import type { Role } from "../../../tenancy/rbac.js";
 import type { OrganizationRecord, OrgMemberRecord, OrgMembership, OrgPlan } from "../../../tenancy/types.js";
+import type { ProviderStore } from "../../../providers/store.js";
+import type { ProviderConfigRecord, ProviderConfigInput, ProviderKind, ResolvedProviderConfig } from "../../../providers/types.js";
 
 const MIGRATIONS_DIR = fileURLToPath(new URL("./migrations", import.meta.url));
 
@@ -156,7 +159,7 @@ export interface PostgresMemoryStoreOptions {
   compressionStore?: { ttlSeconds?: number; maxEntries?: number; now?: () => number };
 }
 
-export class PostgresMemoryStore implements IMemoryStore, TenancyStore {
+export class PostgresMemoryStore implements IMemoryStore, TenancyStore, ProviderStore {
   private readonly pool: Pool;
   private readonly ownsPool: boolean;
   private vecReady = false;
@@ -392,6 +395,30 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore {
   }
   public ensurePersonalOrg(userId: string, displayName?: string): Promise<OrganizationRecord> {
     return tenancy.ensurePersonalOrg(this.exec, userId, displayName);
+  }
+
+  // ── provider configs (ADR-010 P2: DB-backed providers, no .env) ──────────
+
+  public listProviderConfigs(orgId: string, kind?: ProviderKind): Promise<ProviderConfigRecord[]> {
+    return providerCfg.listProviderConfigs(this.exec, orgId, kind);
+  }
+  public getProviderConfig(id: string): Promise<ProviderConfigRecord | null> {
+    return providerCfg.getProviderConfig(this.exec, id);
+  }
+  public createProviderConfig(orgId: string, input: ProviderConfigInput, createdBy?: string): Promise<ProviderConfigRecord> {
+    return providerCfg.createProviderConfig(this.exec, orgId, input, createdBy);
+  }
+  public updateProviderConfig(id: string, patch: Partial<ProviderConfigInput>): Promise<ProviderConfigRecord | null> {
+    return providerCfg.updateProviderConfig(this.exec, id, patch);
+  }
+  public deleteProviderConfig(id: string): Promise<void> {
+    return providerCfg.deleteProviderConfig(this.exec, id);
+  }
+  public setDefaultProvider(orgId: string, kind: ProviderKind, id: string): Promise<void> {
+    return providerCfg.setDefaultProvider(this.exec, orgId, kind, id);
+  }
+  public getDefaultResolvedProvider(orgId: string, kind: ProviderKind): Promise<ResolvedProviderConfig | null> {
+    return providerCfg.getDefaultResolvedProvider(this.exec, orgId, kind);
   }
 
   // ── sensory ────────────────────────────────────────────────────────────
