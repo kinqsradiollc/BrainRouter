@@ -88,6 +88,7 @@ export function ReviewPanel({ review, gate, running, onRun, onDiscuss, onApply, 
                 <div key={f.id ?? i} className={`review-finding${resolved ? ' resolved' : ''}`}>
                   <div className="review-finding-head">
                     <span className={`sev sev-${f.severity}`}>{f.severity}</span>
+                    {f.preExisting ? <span className="sev sev-preexisting" title="A bug that already existed here — this change did not introduce it (does not block).">pre-existing</span> : null}
                     {f.line ? <span className="review-line">L{f.line}{f.endLine && f.endLine !== f.line ? `–${f.endLine}` : ''}</span> : null}
                     {resolved ? <span className="finding-status">{f.status}</span> : null}
                     <span className="review-conf">{f.confidence}%</span>

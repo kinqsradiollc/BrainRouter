@@ -1715,6 +1715,8 @@ select.toolbar-input { cursor: pointer; }
 .sev-high { background: rgba(242, 141, 45, 0.08); border-color: rgba(242, 141, 45, 0.35); color: #f28d2d; }
 .sev-perf, .sev-warn, .sev-medium { background: rgba(229, 192, 123, 0.08); border-color: rgba(229, 192, 123, 0.35); color: #e5c07b; }
 .sev-style, .sev-nit, .sev-info, .sev-low { background: rgba(108, 192, 74, 0.08); border-color: rgba(108, 192, 74, 0.35); color: #6cc04a; }
+/* Pre-existing (🟣) — a bug the diff touches but did not introduce; informational, never blocks. */
+.sev-preexisting { background: rgba(163, 113, 247, 0.08); border-color: rgba(163, 113, 247, 0.35); color: #a371f7; }
 /* Wave 5 — review gate banner + per-finding actions */
 .review-gate { font-size: 12px; font-weight: 560; padding: 10px 14px; border-radius: 9px; margin: 8px 4px 12px; border: 1px solid transparent; line-height: 1.5; }
 .review-gate.gate-clean { background: rgba(108, 192, 74, 0.06); border-color: rgba(108, 192, 74, 0.3); color: #6cc04a; }

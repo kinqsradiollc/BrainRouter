@@ -52,6 +52,12 @@ export interface ReviewFinding {
   status: FindingStatus;
   canApply: boolean;
   source: 'ai-review';
+  /**
+   * Claude-style "Pre-existing" (🟣): a real bug in the code this diff touches
+   * that the diff did NOT introduce. Informational — never blocks the gate
+   * (unresolvedBlocking / reviewGate key off status + severity, not this flag).
+   */
+  preExisting?: boolean;
 }
 
 export interface ReviewRun {

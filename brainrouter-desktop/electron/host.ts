@@ -62,7 +62,7 @@ import { WorkspaceFileListCache, type WorkspaceFileListResult } from './workspac
 import { startWorkspaceWatcher } from './fileWatch.js';
 import { loadSchedules, addSchedule, removeSchedule, setScheduleEnabled } from '@kinqs/brainrouter-core/schedule';
 import { parseCron, nextCronFire } from '@kinqs/brainrouter-core/schedule';
-import { parseReviewFindings, REVIEW_OUTPUT_CONTRACT, stripReasoning } from '@kinqs/brainrouter-core/review';
+import { parseReviewFindings, REVIEW_OUTPUT_CONTRACT, stripReasoning, buildReviewInstructionBlock } from '@kinqs/brainrouter-core/review';
 import {
   hashDiff,
   reviewGate,
@@ -388,14 +388,17 @@ async function main(): Promise<void> {
   // §6 — the local reviewer runs in an ISOLATED, READ-ONLY, NON-PROMPTING agent:
   //  - a deny-all interaction port (confirm→false, choice→null) that NEVER emits
   //    an interaction-request to the UI, so review can't pop an approval dialog;
-  //  - read access mode (look-only: no file writes, no shell, no mutating tools).
-  // Its review: sessionKey is filtered from the picker. Even if the model ignores
-  // the "don't call tools" instruction, it fails closed instead of prompting.
+  //  - read access mode (look-only: no file writes, no shell, no mutating tools);
+  //  - NO network-read tools: the reviewer now actively reads the codebase to
+  //    verify findings AND ingests an untrusted diff + repo-controlled REVIEW.md,
+  //    so `fetch_url`/`web_search` are denied to close the read-a-secret →
+  //    exfiltrate-over-the-network surface. A local-diff review never needs the web.
   const spawnReviewer = (sessionKey?: string): AgentLike => {
     const a = new Agent(mcpClient, llmForSession('review'), {
       workspaceRoot,
       launchCwd: workspaceRoot,
       interactionPort: { confirm: async () => false, choice: async () => null },
+      disallowedTools: ['fetch_url', 'web_search'],
     });
     // A STABLE per-task `review:<id>` key (filtered from the picker by
     // isInternalSessionKey) so the reviewer's turn transcript is durably
@@ -702,7 +705,11 @@ async function main(): Promise<void> {
     let atlasGraph = readAtlasGraph(workspaceRoot);
     try { atlasGraph = carryForwardSummaries(buildBaseGraph(workspaceRoot), atlasGraph); } catch { /* keep the stored graph as-is if a rebuild isn't possible */ }
     const changeCtx = buildAtlasChangeContext(atlasGraph, files);
-    const prompt = `You are reviewing the uncommitted changes in this workspace before a commit/PR. Focus on real bugs, security issues, and performance problems introduced by the diff. Be concise.\n\n${changeCtx ? `${changeCtx}\n\n` : ''}Diff:\n${diff.slice(0, 60_000)}\n\n${REVIEW_OUTPUT_CONTRACT}`;
+    // REVIEW.md (if present) is injected FIRST as the repo owner's highest-priority
+    // review policy — it overrides the default contract (severity calibration,
+    // skip rules, nit caps, repo-specific checks). Empty string when absent.
+    const reviewInstr = buildReviewInstructionBlock(workspaceRoot);
+    const prompt = `${reviewInstr}You are reviewing the uncommitted changes in this workspace before a commit/PR. Focus on real bugs, security issues, and performance problems introduced by the diff. Be concise.\n\n${changeCtx ? `${changeCtx}\n\n` : ''}Diff:\n${diff.slice(0, 60_000)}\n\n${REVIEW_OUTPUT_CONTRACT}`;
     // §6 — isolated, read-only, non-prompting reviewer (review: session filtered).
     // It runs under a `:raw` sub-key so its turn (a 60KB diff prompt + raw JSON
     // findings) does NOT pollute the task's CURATED transcript — runReviewTask
@@ -720,6 +727,7 @@ async function main(): Promise<void> {
       confidence: f.confidence ?? 70, summary: f.summary,
       details: f.details, suggestion: f.suggestion, codeExcerpt: f.codeExcerpt, diffHunk: f.diffHunk,
       patch: f.patch, status: 'open', canApply: !!f.patch, source: 'ai-review',
+      preExisting: f.preExisting || undefined,
     }));
     // Strip the model's <think> reasoning so it never shows as the summary; when
     // there are no findings the empty-state covers it, so leave the summary blank.

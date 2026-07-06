@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseReviewFindings, lastJsonBlock } from '../review/reviewFindings.js';
+import { parseReviewFindings, lastJsonBlock, REVIEW_OUTPUT_CONTRACT } from '../review/reviewFindings.js';
 
 test('parses a fenced json findings array after prose', () => {
   const out = `Here is my review.\n\n\`\`\`json\n[{"file":"src/a.ts","line":12,"severity":"bug","confidence":90,"summary":"off-by-one"}]\n\`\`\``;
@@ -72,6 +72,34 @@ test('rich fields are simply absent when the model omits them (no crash)', () =>
   assert.equal(f.details, undefined);
   assert.equal(f.patch, undefined);
   assert.equal(f.codeExcerpt, undefined);
+});
+
+// Claude-style Pre-existing (🟣) — a bug the diff touches but did not introduce.
+test('parses preExisting from a boolean field', () => {
+  const [f] = parseReviewFindings('```json\n[{"file":"a.ts","summary":"leaks fd","severity":"high","preExisting":true}]\n```');
+  assert.equal(f.preExisting, true);
+});
+
+test('parses preExisting from a "pre-existing" severity label', () => {
+  const [f] = parseReviewFindings('```json\n[{"file":"a.ts","summary":"latent race","severity":"pre-existing"}]\n```');
+  assert.equal(f.preExisting, true);
+  assert.equal(f.severity, 'info', 'the "pre-existing" label is not a real severity → coerced to info');
+});
+
+test('preExisting is absent (undefined) for a normal finding', () => {
+  const [f] = parseReviewFindings('```json\n[{"file":"a.ts","summary":"x","severity":"high"}]\n```');
+  assert.equal(f.preExisting, undefined);
+});
+
+test('REVIEW_OUTPUT_CONTRACT is tool-aware (read-only but tells the reviewer which tools to call)', () => {
+  const c = REVIEW_OUTPUT_CONTRACT;
+  // It must NOT forbid all tools anymore, and must name the read tools + the verification bar.
+  assert.ok(!/call any tools/i.test(c) || /SHOULD call/i.test(c), 'no blanket "do not call any tools"');
+  assert.ok(c.includes('read_file'), 'names read_file');
+  assert.ok(c.includes('grep_search'), 'names grep_search');
+  assert.ok(/VERIFICATION BAR/.test(c), 'states a verification bar');
+  assert.ok(/pre-existing/i.test(c) && /preExisting/.test(c), 'documents the pre-existing severity');
+  assert.ok(/READ-ONLY/i.test(c) && /MUST NOT edit/i.test(c), 'still read-only: no edits/writes');
 });
 
 import { stripReasoning } from '../review/reviewFindings.js';

@@ -4,6 +4,7 @@
 // internal service layer (service.ts) stays unexported.
 export * from './critic.js';
 export * from './reviewFindings.js';
+export * from './reviewInstructions.js';
 export * from './reviewModel.js';
 export * from './reviewStore.js';
 export * from './reviewSynthesis.js';

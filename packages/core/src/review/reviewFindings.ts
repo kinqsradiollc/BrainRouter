@@ -24,6 +24,12 @@ export interface ParsedReviewFinding {
   diffHunk?: string;
   /** An optional FULL unified diff, git-apply-able, when the fix is small + safe. */
   patch?: string;
+  /**
+   * Claude-style "Pre-existing" (🟣): a real bug the reviewer found in the code
+   * this diff *touches* but that this diff did NOT introduce. Reported for
+   * awareness; never blocks the gate (see reviewGate → only open/stale + severity).
+   */
+  preExisting?: boolean;
 }
 
 // Accept both the v2 scale and the older free-form words (the host normalizes).
@@ -62,6 +68,8 @@ function coerce(raw: unknown): ParsedReviewFinding | null {
     codeExcerpt: str(o.codeExcerpt) ?? str(o.excerpt),
     diffHunk: str(o.diffHunk) ?? str(o.hunk),
     patch: str(o.patch),
+    // Accept `preExisting` / `preexisting` (bool) or a "pre-existing" severity label.
+    preExisting: o.preExisting === true || o.preexisting === true || sevRaw === 'pre-existing' || sevRaw === 'preexisting' || undefined,
   };
 }
 
@@ -79,18 +87,33 @@ export function parseReviewFindings(text: string): ParsedReviewFinding[] {
 
 /** The instruction appended to the review prompt so output is parseable + rich. */
 export const REVIEW_OUTPUT_CONTRACT =
-  'You are in READ-ONLY review mode: do NOT edit files, run shell commands, or call any tools — analyze the diff shown above.\n' +
+  'You are in READ-ONLY review mode. You MUST NOT edit files, write, apply patches, or run shell / mutating commands.\n' +
+  'But you are NOT limited to the diff — VERIFY every finding against the real codebase with your read-only tools. Do not guess from the diff alone; a review that only reads the diff misses the bugs that live in the callers.\n' +
+  'Tools you SHOULD call while reviewing (all read-only, safe to use freely):\n' +
+  '  - `read_file` — open each changed file AND its neighbors/callers for the surrounding context the diff hunk omits.\n' +
+  '  - `grep_search` / `glob_files` / `list_dir` — find the callers, the definition, the tests, and other uses of anything the diff changes (a renamed/edited export, a changed signature, a new invariant).\n' +
+  '  - `memory_search` — prior reviews on these files; never re-flag something a past review already accepted. `memory_file_history` — known regressions / past fixes on each changed file.\n' +
+  'The Atlas "Change impact" block above already gives you the free, deterministic blast radius — use it to decide WHICH callers to open with `read_file`.\n' +
+  'VERIFICATION BAR: every behavior claim ("this races", "returns undefined", "breaks callers") must be backed by a concrete `file:line` you ACTUALLY READ, not inferred from a name. If you could not verify it, do not flag it — false positives waste the author\'s time.\n' +
+  '\n' +
   'FIRST, write a short UNDERSTANDING section in plain markdown (NO code fences anywhere in it) so a human can build the mental model:\n' +
-  '  "## What changed" — 2-4 sentences: what this change does, why, and what it touches (use the Change impact above).\n' +
+  '  "## What changed" — 2-4 sentences: what this change does, why, and what it touches (use the Change impact above + what you read).\n' +
   '  "## Check your understanding" — exactly 3 short questions that verify a reader actually grasped the change; put each answer inside a `<details><summary>Answer</summary> … </details>` so it stays hidden until revealed.\n' +
+  '  "## Findings summary" — ONE line tallying the findings by severity, e.g. `2 important · 3 nit · 1 pre-existing`, or `No blocking issues` when nothing important was found.\n' +
+  '\n' +
+  'SEVERITY (map onto the JSON `severity` field):\n' +
+  '  - IMPORTANT → use "critical" or "high": a bug that would break production, corrupt data, or leak secrets — should be fixed before merge.\n' +
+  '  - NIT → use "low" or "info": minor issue, worth fixing but not blocking. Report AT MOST 5 nits inline; if there are more, say "plus N more nits" in the summary instead of listing them.\n' +
+  '  - PRE-EXISTING → set "preExisting": true: a real bug you verified in the code this diff TOUCHES but that this diff did NOT introduce. Report it for awareness; it never blocks the merge.\n' +
+  '\n' +
   'THEN end your reply with a fenced ```json array of findings. Each finding object: {' +
   '"file": "<repo-relative path>", "line": <first affected line|null>, "endLine": <last affected line|null>, ' +
-  '"severity": "critical|high|medium|low|info", "confidence": <0-100>, ' +
-  '"summary": "<one line>", "details": "<why this is a real issue>", "suggestion": "<the concrete fix>", ' +
+  '"severity": "critical|high|medium|low|info", "preExisting": <true only for a pre-existing bug|false>, "confidence": <0-100>, ' +
+  '"summary": "<one line>", "details": "<why this is a real issue + the file:line evidence you verified>", "suggestion": "<the concrete fix>", ' +
   '"codeExcerpt": "<3-8 verbatim lines of the affected code, indentation preserved>", ' +
   '"diffHunk": "<optional unified-diff hunk: problem lines prefixed - , suggested lines prefixed + >", ' +
   '"patch": "<optional FULL git-apply-able unified diff, ONLY when the fix is small and safe to auto-apply>"}. ' +
-  'Quote code verbatim (preserve indentation) in codeExcerpt/diffHunk/patch. Only flag real issues introduced by the diff — an empty array [] is correct when the changes look good.';
+  'Quote code verbatim (preserve indentation) in codeExcerpt/diffHunk/patch. Flag real, verified issues — an empty array [] is correct when the changes look good.';
 
 /** Strip a model's reasoning block(s) — <think>/<thinking>/<thought>/<reasoning>,
  *  closed or an unclosed leading one — so chain-of-thought never leaks into the

@@ -29,13 +29,21 @@ export interface BuildReviewPromptOptions {
   accessMode: AccessMode;
   /** `--fix`: apply surviving fixes + re-verify (write/shell only). */
   fix: boolean;
+  /**
+   * Repo-root REVIEW.md block (from `buildReviewInstructionBlock`), injected
+   * verbatim as the HIGHEST-priority instruction ahead of everything else.
+   * Empty string / undefined when the repo has no REVIEW.md.
+   */
+  reviewInstructions?: string;
 }
 
 export function buildReviewPrompt(opts: BuildReviewPromptOptions): string {
-  const { scope, slug, reportPath, diff, diffTruncated, accessMode, fix } = opts;
+  const { scope, slug, reportPath, diff, diffTruncated, accessMode, fix, reviewInstructions } = opts;
   const canWrite = accessMode === 'write' || accessMode === 'shell';
 
   const steps: string[] = [
+    // REVIEW.md (repo owner's rules) overrides everything below on any conflict.
+    ...(reviewInstructions && reviewInstructions.trim() ? [reviewInstructions.trimEnd(), ''] : []),
     '# Code Review',
     '',
     `Provide a code review for: ${scope}`,

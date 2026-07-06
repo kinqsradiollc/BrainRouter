@@ -19,6 +19,7 @@ import { askYesNo } from '../../prompt/cliPrompt.js';
 import { DEFAULT_REVIEW_ROSTER, DEFAULT_REVIEW_THRESHOLD } from '@kinqs/brainrouter-core/review';
 import { hashDiff, reviewGate } from '@kinqs/brainrouter-core/review';
 import { getLatestReview } from '@kinqs/brainrouter-core/review';
+import { buildReviewInstructionBlock } from '@kinqs/brainrouter-core/review';
 import { formatPlan, readPlan, updatePlan } from '@kinqs/brainrouter-core/task';
 import { appendTranscriptEntry } from '@kinqs/brainrouter-core/session';
 import { recordPlanDecision, readPlanHistory, diffSnapshots } from '@kinqs/brainrouter-core/task';
@@ -534,6 +535,8 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
         diffTruncated: reviewDiff.truncated,
         accessMode,
         fix,
+        // Repo-root REVIEW.md (if any) — highest-priority review policy.
+        reviewInstructions: buildReviewInstructionBlock(agent.workspaceRoot),
       });
       agent.activeSkill = SLASH_TO_SKILL['/review'] ?? 'code-review-and-quality';
       ctx.repl.runAgentTurn(reviewPrompt);
