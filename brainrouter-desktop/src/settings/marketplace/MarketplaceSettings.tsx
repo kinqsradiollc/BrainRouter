@@ -83,11 +83,9 @@ export function MarketplaceSettings({ market, onAction, refreshInstalled, refres
         Executable capabilities (shell hooks, MCP servers) stay disabled until you approve them.
       </div>
 
-      <div className="connector-shell" style={{ marginBottom: 12 }}>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button type="button" className={`btn${tab === 'browse' ? ' primary' : ''}`} onClick={() => { setTab('browse'); if (!market.hits) runSearch(); }}>Browse</button>
-          <button type="button" className={`btn${tab === 'installed' ? ' primary' : ''}`} onClick={() => { setTab('installed'); refreshInstalled(); }}>Installed{market.installed?.length ? ` (${market.installed.length})` : ''}</button>
-        </div>
+      <div className="models-subtabs" style={{ marginBottom: 12 }}>
+        <button type="button" className={`models-subtab${tab === 'browse' ? ' active' : ''}`} onClick={() => { setTab('browse'); if (!market.hits) runSearch(); }}>Browse</button>
+        <button type="button" className={`models-subtab${tab === 'installed' ? ' active' : ''}`} onClick={() => { setTab('installed'); refreshInstalled(); }}>Installed{market.installed?.length ? ` (${market.installed.length})` : ''}</button>
       </div>
 
       {tab === 'browse' ? (

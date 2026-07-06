@@ -234,7 +234,9 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .no-shrink { flex: 0 0 auto; }
 .flex-1 { flex: 1; min-width: 0; }
 .btn--start { align-self: flex-start; }
-.btn--chip { min-height: 0; padding: 2px 9px; font-size: 11.5px; }
+/* Compact chip modifier — needs the .btn compound so it out-specifies the
+   scoped `.set-body/.modal button.btn` base geometry and stays small. */
+.btn.btn--chip { min-height: 0; padding: 2px 9px; font-size: 11.5px; }
 /* Provider modal + delete-confirm dialogs */
 .dialog--form { width: 520px; max-height: 86vh; display: flex; flex-direction: column; overflow: hidden; }
 .dialog--narrow { width: 380px; }
@@ -4077,52 +4079,82 @@ button .ic, .chip .ic, .ctx-chip .ic, .ws-chip .ic { vertical-align: -2.5px; }
  * single source of truth for how a control LOOKS; it sits last so it wins.
  * ===================================================================== */
 
-/* Settings buttons adopt the panel button geometry (so .btn ≡ .wt-btn). */
-.set-body button.btn,
-.modal button.btn {
+/* Settings + dialog buttons — ONE system, unified with the right-panel action
+   buttons the app already uses: solid raised base, accent-border LIFT + shadow on
+   hover, tactile scale on press. Scope covers settings content (.set-body), legacy
+   modals (.modal) and every portal dialog (.dialog) so a button reads identically
+   wherever a config surface renders it. Every rule is wrapped in :where() so its
+   specificity stays low (base = 0,1,1): the size modifier `.btn.btn--chip` (0,2,0)
+   still wins the geometry, and the .primary/.danger/.primary-ghost/:hover variants
+   layer above the base naturally. */
+:where(.set-body, .modal, .dialog) button.btn {
   min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   gap: 6px;
-  background: transparent;
+  background: var(--raised);
   border: 1px solid var(--border-strong);
-  color: var(--text-dim);
+  color: var(--text);
   font-size: 11.5px;
   font-weight: 550;
   padding: 6px 12px;
   border-radius: 8px;
-  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
-.set-body button.btn:hover:not(:disabled),
-.modal button.btn:hover:not(:disabled) {
+:where(.set-body, .modal, .dialog) button.btn:hover:not(:disabled) {
   color: var(--text);
-  background: var(--ov-06);
-  border-color: var(--border-strong);
+  border-color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
 }
-.set-body button.btn:disabled,
-.modal button.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+:where(.set-body, .modal, .dialog) button.btn:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+  transition: all 0.08s ease;
+}
+:where(.set-body, .modal, .dialog) button.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
 
-/* Primary = solid accent gradient + soft glow, identical to the panel primary. */
-.set-body button.btn.primary,
-.modal button.btn.primary {
+/* Primary = accent→blue gradient + soft glow, identical to the panel primary. */
+:where(.set-body, .modal, .dialog) button.btn.primary {
   background: linear-gradient(135deg, var(--accent) 0%, hsl(212, 100%, 55%) 100%);
   border: 1px solid transparent;
   color: #fff;
   box-shadow: 0 2px 8px hsla(212, 100%, 65%, 0.22);
 }
-.set-body button.btn.primary:hover:not(:disabled),
-.modal button.btn.primary:hover:not(:disabled) {
+:where(.set-body, .modal, .dialog) button.btn.primary:hover:not(:disabled) {
   color: #fff;
+  border-color: transparent;
   transform: translateY(-1.5px);
   box-shadow: 0 5px 15px hsla(212, 100%, 65%, 0.35);
 }
-.set-body button.btn.primary:active,
-.modal button.btn.primary:active { transform: translateY(0) scale(0.97); }
+:where(.set-body, .modal, .dialog) button.btn.primary:active:not(:disabled) { transform: translateY(0) scale(0.97); }
 
-/* Danger = neutral, red on hover (consistent with panels). */
-.set-body button.btn.danger:hover:not(:disabled),
-.modal button.btn.danger:hover:not(:disabled) {
+/* Primary-ghost — accent-tinted outline, matches the panel ghost. */
+:where(.set-body, .modal, .dialog) button.btn.primary-ghost {
+  background: hsla(212, 100%, 65%, 0.08);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+:where(.set-body, .modal, .dialog) button.btn.primary-ghost:hover:not(:disabled) {
+  background: hsla(212, 100%, 65%, 0.16);
+  color: var(--text);
+  border-color: var(--accent);
+  transform: translateY(-1.5px);
+  box-shadow: 0 4px 10px hsla(212, 100%, 65%, 0.15);
+}
+
+/* Danger — neutral base, red border + text on hover (consistent with panels). */
+:where(.set-body, .modal, .dialog) button.btn.danger:hover:not(:disabled) {
   border-color: var(--err, var(--warn));
   color: var(--err, var(--warn));
-  background: transparent;
+  background: var(--raised);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
 }
 
 /* One select look: .filter (full-width row filters) + .ctl (inline) share the
