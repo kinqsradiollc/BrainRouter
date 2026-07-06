@@ -22,6 +22,7 @@ import type { RetrievalMetrics } from "./bench/code-scale.js";
 import type { CursorPaginationOptions, DiagnosticsBundle, EvidenceListFilters, IMemoryStore, MemoryListFilters, OperationLogFilters } from "@kinqs/brainrouter-types";
 import type { TenancyStore } from "../tenancy/store.js";
 import type { ProviderStore } from "../providers/store.js";
+import type { IntegrationStore } from "../integrations/store.js";
 import { resolveProviderConfig } from "../providers/resolver.js";
 import { systemProviderOrgId } from "../providers/runtime.js";
 import { MemoryCapturePipeline } from "./capture.js";
@@ -347,6 +348,11 @@ export class MemoryEngine {
   /** ADR-010 P2 — DB-backed provider configs (see {@link tenancy} for the cast rationale). */
   public get providers(): ProviderStore {
     return this.store as unknown as ProviderStore;
+  }
+
+  /** ADR-010 P6 — org-scoped external integrations (GitHub App, …). */
+  public get integrations(): IntegrationStore {
+    return this.store as unknown as IntegrationStore;
   }
 
   /**

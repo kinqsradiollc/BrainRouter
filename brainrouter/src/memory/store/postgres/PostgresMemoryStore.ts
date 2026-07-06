@@ -120,11 +120,14 @@ import * as userStats from "./queries/userStatsQueries.js";
 import * as sourcesTree from "./queries/sourcesTreeQueries.js";
 import * as tenancy from "./queries/tenancyQueries.js";
 import * as providerCfg from "./queries/providerConfigQueries.js";
+import * as integrationCfg from "./queries/integrationConfigQueries.js";
 import type { TenancyStore } from "../../../tenancy/store.js";
 import type { Role } from "../../../tenancy/rbac.js";
 import type { OrganizationRecord, OrgMemberRecord, OrgMembership, OrgPlan } from "../../../tenancy/types.js";
 import type { ProviderStore } from "../../../providers/store.js";
 import type { ProviderConfigRecord, ProviderConfigInput, ProviderKind, ResolvedProviderConfig } from "../../../providers/types.js";
+import type { IntegrationStore } from "../../../integrations/store.js";
+import type { IntegrationConfigRecord, IntegrationConfigInput, IntegrationKind, ResolvedIntegration } from "../../../integrations/types.js";
 
 const MIGRATIONS_DIR = fileURLToPath(new URL("./migrations", import.meta.url));
 
@@ -159,7 +162,7 @@ export interface PostgresMemoryStoreOptions {
   compressionStore?: { ttlSeconds?: number; maxEntries?: number; now?: () => number };
 }
 
-export class PostgresMemoryStore implements IMemoryStore, TenancyStore, ProviderStore {
+export class PostgresMemoryStore implements IMemoryStore, TenancyStore, ProviderStore, IntegrationStore {
   private readonly pool: Pool;
   private readonly ownsPool: boolean;
   private vecReady = false;
@@ -419,6 +422,27 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   }
   public getDefaultResolvedProvider(orgId: string, kind: ProviderKind): Promise<ResolvedProviderConfig | null> {
     return providerCfg.getDefaultResolvedProvider(this.exec, orgId, kind);
+  }
+
+  // ── integrations (ADR-010 P6: org-scoped GitHub App etc.) ────────────────
+
+  public listIntegrationConfigs(orgId: string, kind?: IntegrationKind): Promise<IntegrationConfigRecord[]> {
+    return integrationCfg.listIntegrationConfigs(this.exec, orgId, kind);
+  }
+  public getIntegrationConfig(id: string): Promise<IntegrationConfigRecord | null> {
+    return integrationCfg.getIntegrationConfig(this.exec, id);
+  }
+  public createIntegrationConfig(orgId: string, input: IntegrationConfigInput, createdBy?: string): Promise<IntegrationConfigRecord> {
+    return integrationCfg.createIntegrationConfig(this.exec, orgId, input, createdBy);
+  }
+  public updateIntegrationConfig(id: string, patch: Partial<IntegrationConfigInput>): Promise<IntegrationConfigRecord | null> {
+    return integrationCfg.updateIntegrationConfig(this.exec, id, patch);
+  }
+  public deleteIntegrationConfig(id: string): Promise<void> {
+    return integrationCfg.deleteIntegrationConfig(this.exec, id);
+  }
+  public getResolvedIntegration(orgId: string, kind: IntegrationKind): Promise<ResolvedIntegration | null> {
+    return integrationCfg.getResolvedIntegration(this.exec, orgId, kind);
   }
 
   // ── sensory ────────────────────────────────────────────────────────────
