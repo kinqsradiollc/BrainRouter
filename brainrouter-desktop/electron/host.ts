@@ -694,8 +694,12 @@ async function main(): Promise<void> {
     // ATLAS-UNDERSTANDING — prepend a FREE, deterministic blast-radius block (from
     // the codebase Atlas) so the read-only reviewer weighs regression risk with
     // architectural awareness. No LLM call: it rides the review the user is already
-    // paying for. Empty string when there's no Atlas graph, so it never blocks.
-    const changeCtx = buildAtlasChangeContext(readAtlasGraph(workspaceRoot), files);
+    // paying for. If no graph is built yet, build the BASE graph on the fly (also
+    // free — deterministic scan) so this works out-of-the-box; any failure just
+    // yields an empty block and the review proceeds without impact context.
+    let atlasGraph = readAtlasGraph(workspaceRoot);
+    if (!atlasGraph) { try { atlasGraph = buildBaseGraph(workspaceRoot); } catch { atlasGraph = null; } }
+    const changeCtx = buildAtlasChangeContext(atlasGraph, files);
     const prompt = `You are reviewing the uncommitted changes in this workspace before a commit/PR. Focus on real bugs, security issues, and performance problems introduced by the diff. Be concise.\n\n${changeCtx ? `${changeCtx}\n\n` : ''}Diff:\n${diff.slice(0, 60_000)}\n\n${REVIEW_OUTPUT_CONTRACT}`;
     // §6 — isolated, read-only, non-prompting reviewer (review: session filtered).
     // It runs under a `:raw` sub-key so its turn (a 60KB diff prompt + raw JSON
