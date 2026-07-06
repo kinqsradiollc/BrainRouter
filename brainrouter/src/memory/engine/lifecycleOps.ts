@@ -163,6 +163,9 @@ export async function ensureSeedAdminUser(engine: MemoryEngine): Promise<void> {
     const passwordHash = await hashPassword(seededPassword);
     await self.store.updateUserPassword(seededUserId, passwordHash);
   }
+  // ADR-010 P1 — the seeded admin owns a personal org (its default), so the org
+  // tier is populated from first boot even before any signup.
+  await engine.tenancy.ensurePersonalOrg(seededUserId, "Default Admin");
   console.error(`[BrainRouter] Admin seeded. Email: ${seededEmail}  API key (shown once): ${apiKey}`);
 }
 

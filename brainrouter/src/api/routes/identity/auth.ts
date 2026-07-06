@@ -108,6 +108,9 @@ authRouter.post("/signup", async (req, res) => {
     const created = await memoryEngine.createUser(userId, apiKey, displayName || userId, false);
     await memoryEngine.updateUserEmail(created.userId, email);
     await memoryEngine.updatePassword(created.userId, passwordHash);
+    // ADR-010 P1 — every new user gets a personal org (owner) as their default,
+    // so single-user works with zero config and the org tier is never empty.
+    await memoryEngine.tenancy.ensurePersonalOrg(created.userId, displayName || userId);
     const user = await memoryEngine.getUserById(created.userId);
     if (!user) {
       sendError(res, 500, "Failed to load user after signup");

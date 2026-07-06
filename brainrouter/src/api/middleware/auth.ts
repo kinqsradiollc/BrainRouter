@@ -3,8 +3,16 @@ import { memoryEngine } from "../../memory/engine.js";
 import { randomBytes } from "node:crypto";
 import { verifyJwt } from "../auth/crypto.js";
 import { sendError } from "../../contracts/http.js";
+import type { Role } from "../../tenancy/rbac.js";
 
-export type AuthedRequest = Request & { userId?: string; isAdmin?: boolean; email?: string };
+export type AuthedRequest = Request & {
+  userId?: string;
+  isAdmin?: boolean;
+  email?: string;
+  /** ADR-010 — org context, attached by the tenancy middleware on gated routes. */
+  orgId?: string;
+  role?: Role;
+};
 
 /**
  * Extract the bearer credential from the `Authorization` header (the one piece

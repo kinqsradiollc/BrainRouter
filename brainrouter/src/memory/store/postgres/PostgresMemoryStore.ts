@@ -118,6 +118,10 @@ import * as atlasIdentity from "./queries/atlasIdentityQueries.js";
 import * as graph from "./queries/graphQueries.js";
 import * as userStats from "./queries/userStatsQueries.js";
 import * as sourcesTree from "./queries/sourcesTreeQueries.js";
+import * as tenancy from "./queries/tenancyQueries.js";
+import type { TenancyStore } from "../../../tenancy/store.js";
+import type { Role } from "../../../tenancy/rbac.js";
+import type { OrganizationRecord, OrgMemberRecord, OrgMembership, OrgPlan } from "../../../tenancy/types.js";
 
 const MIGRATIONS_DIR = fileURLToPath(new URL("./migrations", import.meta.url));
 
@@ -152,7 +156,7 @@ export interface PostgresMemoryStoreOptions {
   compressionStore?: { ttlSeconds?: number; maxEntries?: number; now?: () => number };
 }
 
-export class PostgresMemoryStore implements IMemoryStore {
+export class PostgresMemoryStore implements IMemoryStore, TenancyStore {
   private readonly pool: Pool;
   private readonly ownsPool: boolean;
   private vecReady = false;
@@ -355,6 +359,39 @@ export class PostgresMemoryStore implements IMemoryStore {
   /** Close the pool (only if this store created it). For test/teardown use. */
   public async close(): Promise<void> {
     if (this.ownsPool) await this.pool.end();
+  }
+
+  // ── tenancy (ADR-010 P1: organizations + membership/roles) ───────────────
+
+  public createOrganization(input: { orgId: string; name: string; slug: string; plan?: OrgPlan }): Promise<OrganizationRecord> {
+    return tenancy.createOrganization(this.exec, input);
+  }
+  public getOrganization(orgId: string): Promise<OrganizationRecord | null> {
+    return tenancy.getOrganization(this.exec, orgId);
+  }
+  public addOrgMember(orgId: string, userId: string, role: Role): Promise<void> {
+    return tenancy.addOrgMember(this.exec, orgId, userId, role);
+  }
+  public removeOrgMember(orgId: string, userId: string): Promise<void> {
+    return tenancy.removeOrgMember(this.exec, orgId, userId);
+  }
+  public getMemberRole(orgId: string, userId: string): Promise<Role | null> {
+    return tenancy.getMemberRole(this.exec, orgId, userId);
+  }
+  public listOrgMembers(orgId: string): Promise<OrgMemberRecord[]> {
+    return tenancy.listOrgMembers(this.exec, orgId);
+  }
+  public listOrgMembershipsForUser(userId: string): Promise<OrgMembership[]> {
+    return tenancy.listOrgMembershipsForUser(this.exec, userId);
+  }
+  public setDefaultOrg(userId: string, orgId: string): Promise<void> {
+    return tenancy.setDefaultOrg(this.exec, userId, orgId);
+  }
+  public getDefaultOrgId(userId: string): Promise<string | null> {
+    return tenancy.getDefaultOrgId(this.exec, userId);
+  }
+  public ensurePersonalOrg(userId: string, displayName?: string): Promise<OrganizationRecord> {
+    return tenancy.ensurePersonalOrg(this.exec, userId, displayName);
   }
 
   // ── sensory ────────────────────────────────────────────────────────────

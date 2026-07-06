@@ -20,6 +20,7 @@ import type { ModeStats } from "./bench/regression.js";
 import type { CodeRecallResult } from "./bench/code-recall.js";
 import type { RetrievalMetrics } from "./bench/code-scale.js";
 import type { CursorPaginationOptions, DiagnosticsBundle, EvidenceListFilters, IMemoryStore, MemoryListFilters, OperationLogFilters } from "@kinqs/brainrouter-types";
+import type { TenancyStore } from "../tenancy/store.js";
 import { MemoryCapturePipeline } from "./capture.js";
 import { MemoryRecallPipeline } from "./recall.js";
 import { MemoryJobRunner } from "./scheduler/runner.js";
@@ -325,6 +326,16 @@ export class MemoryEngine {
     path?: { from: string; to: string; found: boolean; entities: string[] };
   }> {
     return memoryOps.graphAnalytics(this, userId, opts);
+  }
+
+  /**
+   * ADR-010 P1 — the org/membership surface. The backend always runs on
+   * `PostgresMemoryStore` (SQLite removed, ADR-007), which implements
+   * `TenancyStore` alongside `IMemoryStore`; the shared `IMemoryStore` type has
+   * no org concept, so this is the one localized cast that exposes it.
+   */
+  public get tenancy(): TenancyStore {
+    return this.store as unknown as TenancyStore;
   }
 
   public createUser(userId: string, apiKey: string, displayName = "", isAdmin = false): Promise<UserRecord> {
