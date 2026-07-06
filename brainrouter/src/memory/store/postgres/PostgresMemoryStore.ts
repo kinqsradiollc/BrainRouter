@@ -545,8 +545,8 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
 
   // ── FTS (tsvector + GIN) ──────────────────────────────────────────────
 
-  public searchCognitiveFts(userId: string, query: string, limit: number): Promise<CognitiveFtsResult[]> {
-    return search.searchCognitiveFts(this.exec, userId, query, limit);
+  public searchCognitiveFts(userId: string, query: string, limit: number, orgId?: string): Promise<CognitiveFtsResult[]> {
+    return search.searchCognitiveFts(this.exec, userId, query, limit, orgId);
   }
 
   public searchCognitiveFtsAsOf(userId: string, query: string, limit: number, asOf: string): Promise<CognitiveFtsResult[]> {
@@ -559,8 +559,8 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
     return search.upsertCognitiveVec(this.exec, this.vecCtx, recordId, embedding);
   }
 
-  public searchCognitiveVec(userId: string, queryEmbedding: Float32Array, limit: number): Promise<VectorSearchResult[]> {
-    return search.searchCognitiveVec(this.exec, this.vecCtx, userId, queryEmbedding, limit);
+  public searchCognitiveVec(userId: string, queryEmbedding: Float32Array, limit: number, orgId?: string): Promise<VectorSearchResult[]> {
+    return search.searchCognitiveVec(this.exec, this.vecCtx, userId, queryEmbedding, limit, orgId);
   }
 
   // ── contradictions ───────────────────────────────────────────────────

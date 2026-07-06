@@ -100,8 +100,21 @@ export class MemoryRecallPipeline {
     const limits = { ...readRecallLimits(), ...params.limitsOverride };
     const selection = { ...readRecallSelection(), ...params.selectionOverride };
 
+    // ADR-010 P5b — org-shared recall. When the caller's org is set, retrieval
+    // ALSO returns org-shared records (visibility='org') from that org; stamp the
+    // caller so applyFilters' orgVisibilityAllows can enforce per-member privacy.
+    // GATED: without filters.orgId this is exactly the prior user-only path.
+    const orgId = filters?.orgId;
+    if (filters?.orgId && !filters.callerUserId) filters.callerUserId = userId;
+    // `searchCognitive*` gain an optional orgId in PostgresMemoryStore; the shared
+    // IMemoryStore type doesn't carry it, so reach it through a narrow local cast.
+    const orgStore = this.store as unknown as {
+      searchCognitiveFts(userId: string, query: string, limit: number, orgId?: string): Promise<CognitiveFtsResult[]>;
+      searchCognitiveVec(userId: string, queryEmbedding: Float32Array, limit: number, orgId?: string): Promise<VectorSearchResult[]>;
+    };
+
     // 1. FTS5 BM25 search (Top-K, env: BRAINROUTER_RECALL_FTS_LIMIT)
-    const ftsResultsRaw = await this.store.searchCognitiveFts(userId, query, limits.ftsLimit);
+    const ftsResultsRaw = await orgStore.searchCognitiveFts(userId, query, limits.ftsLimit, orgId);
     const filePathResultsRaw = await this.expandWithFilePathMatches(userId, query);
 
     // 2. Vector search (Top-K, env: BRAINROUTER_RECALL_VEC_LIMIT)
@@ -109,7 +122,7 @@ export class MemoryRecallPipeline {
     if (this.embeddingService.isReady()) {
       try {
         const queryVec = await this.embeddingService.embed(query);
-        vecResultsRaw = await this.store.searchCognitiveVec(userId, queryVec, limits.vecLimit);
+        vecResultsRaw = await orgStore.searchCognitiveVec(userId, queryVec, limits.vecLimit, orgId);
       } catch (e) {
         console.error("[BrainRouter] Vector search skipped during recall:", (e as Error).message);
       }

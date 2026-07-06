@@ -75,13 +75,23 @@ export async function handleMemorySearch(args: unknown, options?: { defaultUserI
       };
     }
 
+    // ADR-010 P5b — scope recall to the caller's org so org-SHARED records
+    // (visibility='org') surface alongside their own. Best-effort: no tenancy →
+    // user-only recall (unchanged). For a single-user personal org this adds
+    // nothing (no shared records exist), so results are identical.
+    let filters = params.filters as (typeof params.filters & { orgId?: string }) | undefined;
+    try {
+      const orgId = await memoryEngine.tenancy.getDefaultOrgId(effectiveUserId);
+      if (orgId) filters = { ...(filters ?? {}), orgId };
+    } catch { /* no org context — user-scoped recall */ }
+
     // Standard recall path
     const result = await memoryEngine.recall({
       userId: effectiveUserId,
       sessionKey: params.sessionKey,
       query: params.query,
       activeSkill: params.activeSkill,
-      filters: params.filters,
+      filters,
     });
 
     return {
