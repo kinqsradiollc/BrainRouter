@@ -9,7 +9,7 @@
 import React, { useState } from 'react';
 import { Icon } from '../icons.js';
 
-export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'preview' | 'tasks' | 'dashboard' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'review' | 'requirements' | 'annotations' | 'artifacts' | 'attachments' | 'ci' | 'atlas' | 'workflows' | 'memory' | 'prototype';
+export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'preview' | 'tasks' | 'task-detail' | 'dashboard' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'review' | 'requirements' | 'annotations' | 'artifacts' | 'attachments' | 'ci' | 'atlas' | 'workflows' | 'memory' | 'prototype';
 
 export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'context', title: 'Context', icon: 'layout-right' },
@@ -21,6 +21,7 @@ export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'tools', title: 'Tool calls', icon: 'bolt' },
   { id: 'preview', title: 'Preview', icon: 'globe' },
   { id: 'tasks', title: 'Background tasks', icon: 'tasks' },
+  { id: 'task-detail', title: 'Task', icon: 'tasks' },
   { id: 'dashboard', title: 'Dashboard', icon: 'tasks' },
   { id: 'plan', title: 'Plan', icon: 'plan' },
   { id: 'search', title: 'Search session', icon: 'search' },
@@ -42,6 +43,9 @@ const HIDDEN_MANUAL_PANEL_IDS = new Set<PanelId>([
   // The read-only file viewer is legacy/internal; the Monaco editor owns file
   // viewing and editing in user-facing menus.
   'file',
+  // The task-detail viewer opens by CLICKING a task in Background tasks — never
+  // from the Views menu (there's no "current task" until you pick one).
+  'task-detail',
 ]);
 
 export const MANUAL_PANEL_DEFS = PANEL_DEFS.filter((d) => !HIDDEN_MANUAL_PANEL_IDS.has(d.id));

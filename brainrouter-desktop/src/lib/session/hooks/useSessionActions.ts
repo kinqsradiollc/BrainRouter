@@ -471,7 +471,10 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
       rows: [{ id: rid(), kind: 'loading', ts: Date.now() }],
     });
     q('q-task-transcript', 'task-transcript', { kind: transcriptKind, id: f.id, parentSessionKey: parentKey });
-    viewToTop();
+    // DESK — a background task opens READ-ONLY in the right panel (task-detail),
+    // NOT in the chat: the live conversation stays put and you can inspect the
+    // task's preserved output alongside it.
+    ensurePanel('task-detail');
   };
   const openWorkflow = (slug: string): void => {
     const now = new Date().toISOString();

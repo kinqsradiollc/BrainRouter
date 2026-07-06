@@ -7,13 +7,13 @@
 import React, { Suspense, lazy } from 'react';
 import {
   DiffPanel, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
-  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, AttachmentsPanel, AtlasPanel, WorkflowsPanel, MemoryPanel, PrototypePanel, TasksPanel, TerminalPanel, ToolsPanel, PreviewPanel, ContextPanel, type PanelId, type SearchHit, type ReviewFindingView, type GrepHit, type FinishedTask,
+  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, AttachmentsPanel, AtlasPanel, WorkflowsPanel, MemoryPanel, PrototypePanel, TasksPanel, TaskDetailPanel, TerminalPanel, ToolsPanel, PreviewPanel, ContextPanel, type PanelId, type SearchHit, type ReviewFindingView, type GrepHit, type FinishedTask,
 } from '../../panels/index.js';
 import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph } from '@kinqs/brainrouter-types';
 import type { TrackPrStatus } from '../../track/TrackView.js';
 import type { ScheduleRecordView } from '../../lib/schedule/scheduleView.js';
 import { setEntry } from '../../lib/review/reviewWorkspace.js';
-import type { PlanItem, FleetRow } from '../../types.js';
+import type { PlanItem, FleetRow, TaskViewState, ChatRow } from '../../types.js';
 import type { PlanDecisionView } from '../../lib/plan/planReviewView.js';
 import type { GitState } from '../../lib/git/useGitState.js';
 import type { useEditor } from '../../lib/editor/useEditor.js';
@@ -75,6 +75,11 @@ export interface RenderPanelBodyCtx {
   finishedTasks: FinishedTask[];
   setFinishedTasks: (v: FinishedTask[]) => void;
   openTask: (f: FleetRow) => void;
+  taskView: TaskViewState | null;
+  setTaskView: React.Dispatch<React.SetStateAction<TaskViewState | null>>;
+  renderRow: (row: ChatRow, isLast: boolean) => React.ReactElement;
+  requestStop: () => void;
+  closeSideTab: (id: PanelId) => void;
   dashScope: 'workspace' | 'all';
   setDashScope: (s: 'workspace' | 'all') => void;
   refreshDashboard: () => void;
@@ -117,7 +122,8 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId) => 
     allFiles, statuses, openFile, grepHits, filesLoading, filesTruncated, filesError, fileView, editor,
     closeEditorTab, openUrl, setToast, ci, reviewPrWithAi, track, trackOps, changedFiles, diffView, diffTarget,
     setDiffTarget, ensurePanel, setDiffView, runGit, gitBusy, reviewGate, reviewFindingsByFile, toolLog,
-    backgroundTasks, recentTasks, finishedTasks, setFinishedTasks, openTask, dashScope, setDashScope,
+    backgroundTasks, recentTasks, finishedTasks, setFinishedTasks, openTask, taskView, setTaskView, renderRow,
+    requestStop, closeSideTab, dashScope, setDashScope,
     refreshDashboard, dashTab, setDashTab, dashBoards, dashBusy, openDashboardTask, switchToWorkspace, activeRoot,
     lastPlan, planHistory, planFeedbackRef, searchHits, schedules, worktrees, worktreeDiffs, openWorktree,
     review, reviewRunning, setReviewRunningByWs, setReviewByWs, setDraft, atlasGraph, atlasBuilding, atlasEnriching,
@@ -172,6 +178,9 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId) => 
       case 'tools': return <ToolsPanel log={toolLog} />;
       case 'preview': return <PreviewPanel />;
       case 'tasks': return <TasksPanel fleet={backgroundTasks} recent={recentTasks} finished={finishedTasks} onClear={() => setFinishedTasks([])} onOpen={(id) => { const f = backgroundTasks.find((t) => t.id === id) ?? recentTasks.find((t) => t.id === id); if (f) openTask(f); }} onKill={(id) => { q('a-killbg', 'action:kill-bgshell', { id }); setTimeout(() => q('q-fleet', 'fleet'), 150); }} onStartSuggestedTask={(prompt) => { setDraft(prompt); setToast('Suggested task added to the composer — press Enter to start.'); }} />;
+      case 'task-detail': return <TaskDetailPanel task={taskView} renderRow={renderRow}
+        onBack={() => { setTaskView(null); closeSideTab('task-detail'); }}
+        onInterrupt={() => { requestStop(); setToast('Interrupt sent.'); }} />;
       case 'dashboard': return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading…</div>}><DashboardPanel scope={dashScope} setScope={(s) => { setDashScope(s); if (s === 'all') refreshDashboard(); }}
         tab={dashTab} setTab={setDashTab} boards={dashBoards} busy={dashBusy} onRefresh={refreshDashboard}
         onOpenTask={openDashboardTask}

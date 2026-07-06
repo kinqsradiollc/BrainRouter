@@ -19,6 +19,7 @@ export { WorktreesPanel } from './workspace/WorktreesPanel.js';
 export { AttachmentsPanel } from './workspace/AttachmentsPanel.js';
 export { PreviewPanel } from './workspace/PreviewPanel.js';
 export { TasksPanel, type FinishedTask } from './planning/TasksPanel.js';
+export { TaskDetailPanel } from './planning/TaskDetailPanel.js';
 export { SchedulePanel } from './planning/SchedulePanel.js';
 export { RequirementsPanel } from './planning/RequirementsPanel.js';
 export { WorkflowsPanel, type WorkflowsPanelProps } from './planning/WorkflowsPanel.js';

@@ -79,13 +79,12 @@ export interface ChatThreadProps {
 export function ChatThread(p: ChatThreadProps): React.ReactElement {
   const [reasoningExpanded, setReasoningExpanded] = useState(false);
   const {
-    homeMode, railOpen, setRailOpen, gitInfo, info, sessionTitle, taskView, setTaskView, chatRef, atBottomRef,
-    setAtBottom, workflowView, setWorkflowView, renderRow, homeStats, statsTab, setStatsTab, statsRange, setStatsRange,
+    homeMode, railOpen, setRailOpen, gitInfo, info, sessionTitle, chatRef, atBottomRef,
+    setAtBottom, workflowView, setWorkflowView, homeStats, statsTab, setStatsTab, statsRange, setStatsRange,
     snapshot, sessions, viewKey, onRenameCurrent,
     resumeSession, forkParent, transcriptEls, liveText, running, turnStart, reasoningTail,
     statusLine, interaction, answerInteraction, q, chatEnd, atBottom, hasConversation, changedFiles, ensurePanel, composer,
   } = p;
-  const taskTitle = taskView?.title || taskView?.goal || taskView?.role || taskView?.kind;
   // header rename — show the CURRENT session's listed title (the host overrides
   // it with a custom rename: host.ts `m.title || s.firstUserMessage`), falling
   // back to the derived sessionTitle for a brand-new chat.
@@ -110,19 +109,7 @@ export function ChatThread(p: ChatThreadProps): React.ReactElement {
         <span className="crumb">
           <b>{gitInfo?.repo ?? info.workspaceRoot?.split('/').pop() ?? 'BrainRouter'}</b>
           <span className="crumb-sep">/</span>
-          {taskView ? (
-            /* Background task viewer: keep it visually separate from the
-               parent chat so review/re-run work does not look like a nested
-               session under the visible conversation title. */
-            <>
-              <button className="crumb-link task-back-link" onClick={() => setTaskView(null)}>Chat</button>
-              <span className="crumb-sep">/</span>
-              <span className="crumb-muted">Background task</span>
-              <span className="crumb-sep">/</span>
-              <span className="crumb-cur">{taskTitle}</span>
-              {taskView.status ? <span className={`task-status ${taskView.status}`}>{taskView.status}</span> : null}
-            </>
-          ) : editingTitle ? (
+          {editingTitle ? (
             <input className="session-rename" autoFocus value={titleDraft}
               onChange={(e) => setTitleDraft(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); finishTitleEdit(true); } else if (e.key === 'Escape') { e.preventDefault(); finishTitleEdit(false); } }}
@@ -152,15 +139,6 @@ export function ChatThread(p: ChatThreadProps): React.ReactElement {
         {workflowView ? (
           /* DESK-6w — the /workflows-style card for a workflow run. */
           <WorkflowCard wf={workflowView} onBack={() => setWorkflowView(null)} />
-        ) : taskView ? (
-          /* DESK-6v — a background task's conversation, read-only, in place
-             of the chat. The header breadcrumb (Repo / Session / Role +
-             status) now carries the title and back-link, so there's no
-             second header bar here — that double header was the confusing
-             part. The prompt is already the first user bubble. */
-          <div className="task-convo">
-            {taskView.rows.map((r) => renderRow(r, false))}
-          </div>
         ) : (
           <>
             {homeMode ? (
@@ -180,13 +158,13 @@ export function ChatThread(p: ChatThreadProps): React.ReactElement {
             {transcriptEls}
           </>
         )}
-        {!taskView && !workflowView && liveText ? (
+        {!workflowView && liveText ? (
           <div className="row assistant md live">
             <Markdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>{liveText}</Markdown>
             <span className="caret">▍</span>
           </div>
         ) : null}
-        {!taskView && !workflowView && running ? (
+        {!workflowView && running ? (
           <div className="row workline-container">
             <div className="workline-header">
               <span className="spinner sm" />
@@ -221,7 +199,7 @@ export function ChatThread(p: ChatThreadProps): React.ReactElement {
             ) : null}
           </div>
         ) : null}
-        {!taskView && !workflowView && interaction && interaction.type === 'confirm' ? (
+        {!workflowView && interaction && interaction.type === 'confirm' ? (
           <div className="approval-card" onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) answerInteraction({ type: 'confirm', approved: true });
           }}>

@@ -455,7 +455,8 @@ export function App(): React.ReactElement {
     allFiles, statuses, openFile, grepHits, filesLoading, filesTruncated, filesError, fileView, editor,
     closeEditorTab, openUrl, setToast, ci, reviewPrWithAi, track, trackOps, changedFiles, diffView, diffTarget,
     setDiffTarget, ensurePanel, setDiffView, runGit, gitBusy, reviewGate, reviewFindingsByFile, toolLog,
-    backgroundTasks, recentTasks, finishedTasks, setFinishedTasks, openTask, dashScope, setDashScope,
+    backgroundTasks, recentTasks, finishedTasks, setFinishedTasks, openTask, taskView, setTaskView, renderRow,
+    requestStop, closeSideTab, dashScope, setDashScope,
     refreshDashboard, dashTab, setDashTab, dashBoards, dashBusy, openDashboardTask, switchToWorkspace, activeRoot,
     lastPlan, planHistory, planFeedbackRef, searchHits, schedules, worktrees, worktreeDiffs, openWorktree,
     review, reviewRunning, setReviewRunningByWs, setReviewByWs, setDraft, atlasGraph, atlasBuilding, atlasEnriching,
@@ -463,7 +464,9 @@ export function App(): React.ReactElement {
     annotations, artifacts,
   });
   const tabTitle = (id: PanelId): string =>
-    id === 'file' && fileView?.path ? fileView.path.split('/').pop()! : PANEL_DEFS.find((d) => d.id === id)?.title ?? id;
+    id === 'file' && fileView?.path ? fileView.path.split('/').pop()!
+      : id === 'task-detail' && taskView ? (taskView.title || taskView.role || 'Task')
+      : PANEL_DEFS.find((d) => d.id === id)?.title ?? id;
 
   // DESK-5f/5h — animated presence for every show/hide surface.
   // Env column may ONLY appear when the chat keeps its full natural content

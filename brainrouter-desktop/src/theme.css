@@ -2331,6 +2331,12 @@ button:active, .chip:active, .send:active, .pill:active { transform: scale(0.97)
    shrink-to-content and float to the middle, out of sync with the prose. As a
    block they fill the column and left-align exactly like the normal chat. */
 .task-convo { display: block; width: 100%; min-width: 0; }
+/* Task-detail side panel — a sticky Back / title / status / Interrupt toolbar
+   above the read-only task conversation. */
+.task-detail-panel { display: flex; flex-direction: column; min-height: 0; }
+.task-detail-bar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 8px; padding: 8px 10px; margin: -1px -1px 6px; background: var(--surface); border-bottom: 1px solid var(--border); }
+.task-detail-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; color: var(--text); }
+.task-detail-convo { padding: 0 2px 12px; }
 /* .task-back is still used by the WorkflowCard's back button. */
 .task-back { border: 1px solid var(--border, var(--ov-12)); background: transparent; color: var(--text-dim);
   border-radius: 7px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
