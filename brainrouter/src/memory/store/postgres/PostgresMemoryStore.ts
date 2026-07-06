@@ -444,6 +444,9 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public getResolvedIntegration(orgId: string, kind: IntegrationKind): Promise<ResolvedIntegration | null> {
     return integrationCfg.getResolvedIntegration(this.exec, orgId, kind);
   }
+  public findIntegrationByInstallation(kind: IntegrationKind, installationId: string): Promise<(ResolvedIntegration & { orgId: string }) | null> {
+    return integrationCfg.findIntegrationByInstallation(this.exec, kind, installationId);
+  }
 
   // ── sensory ────────────────────────────────────────────────────────────
 

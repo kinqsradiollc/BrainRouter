@@ -45,6 +45,7 @@ import { decideMcpAcceptPromotion } from './api/mcpAcceptHeader.js';
 import { authRouter, usersRouter, sessionsRouter } from './api/routes/identity/index.js';
 import { orgsRouter } from './api/routes/tenancy/index.js';
 import { providersRouter, integrationsRouter } from './api/routes/admin/index.js';
+import { triggersRouter } from './api/routes/triggers/index.js';
 import {
   memoriesRouter,
   contradictionsRouter,
@@ -146,7 +147,13 @@ if (USE_HTTP) {
   // transcripts, multi-record recall/sync). body-parser's stock 100kb default
   // rejected large but legitimate requests; override via BRAINROUTER_MAX_BODY_SIZE.
   const jsonBodyLimit = resolveJsonBodyLimit();
-  app.use(express.json({ limit: jsonBodyLimit }));
+  // ADR-010 P6b — stash the raw bytes so the GitHub webhook ingress can verify
+  // the X-Hub-Signature-256 HMAC over the exact payload (re-serialized JSON
+  // wouldn't byte-match). Cheap: one Buffer reference per request.
+  app.use(express.json({
+    limit: jsonBodyLimit,
+    verify: (req: express.Request & { rawBody?: Buffer }, _res, buf) => { req.rawBody = buf; },
+  }));
   // API-AUTHN (0.4.9) — fail closed in production if no JWT secret is configured.
   const jwtBootErr = jwtSecretBootError(IS_PRODUCTION, USING_FALLBACK_JWT_SECRET);
   if (jwtBootErr) {
@@ -181,6 +188,8 @@ if (USE_HTTP) {
   app.use("/api/orgs", orgsRouter);
   app.use("/api/admin/providers", providersRouter);
   app.use("/api/admin/integrations", integrationsRouter);
+  // Hosted webhook ingress — unauthenticated by JWT (verifies the App's HMAC).
+  app.use("/api/triggers", triggersRouter);
   app.use("/api/memories", memoriesRouter);
   app.use("/api/scenes", scenesRouter);
   app.use("/api/persona", personaRouter);

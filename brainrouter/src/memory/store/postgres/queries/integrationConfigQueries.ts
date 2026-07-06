@@ -87,14 +87,36 @@ export async function deleteIntegrationConfig(exec: Executor, id: string): Promi
  * its secret opened. Null when none. The only place a stored integration secret
  * is decrypted (the trigger ingress resolver calls this).
  */
-export async function getResolvedIntegration(exec: Executor, orgId: string, kind: IntegrationKind): Promise<ResolvedIntegration | null> {
-  const row = await exec.one(`SELECT ${COLS} FROM integration_configs WHERE org_id = $1 AND kind = $2 AND enabled ORDER BY created_at ASC LIMIT 1`, [orgId, kind]);
-  if (!row) return null;
+function resolveRow(row: any): ResolvedIntegration {
   const rec = rowToRecord(row);
   const cipher = String(row.secret_ciphertext ?? "");
   let secret: Record<string, string> = {};
-  if (cipher) {
-    try { secret = JSON.parse(open(cipher)) as Record<string, string>; } catch { secret = {}; }
-  }
+  if (cipher) { try { secret = JSON.parse(open(cipher)) as Record<string, string>; } catch { secret = {}; } }
   return { kind: rec.kind, config: rec.config, secret };
+}
+
+export async function getResolvedIntegration(exec: Executor, orgId: string, kind: IntegrationKind): Promise<ResolvedIntegration | null> {
+  const row = await exec.one(`SELECT ${COLS} FROM integration_configs WHERE org_id = $1 AND kind = $2 AND enabled ORDER BY created_at ASC LIMIT 1`, [orgId, kind]);
+  return row ? resolveRow(row) : null;
+}
+
+/**
+ * ADR-010 P6b — resolve the tenant + decrypted integration from a GitHub App
+ * installation id (the webhook's routing key). Cross-org lookup by the
+ * installationId stored in config_json — the ONLY id-based cross-org query, used
+ * by the stateless webhook ingress before it trusts anything.
+ */
+export async function findIntegrationByInstallation(
+  exec: Executor,
+  kind: IntegrationKind,
+  installationId: string,
+): Promise<(ResolvedIntegration & { orgId: string }) | null> {
+  const row = await exec.one(
+    `SELECT ${COLS} FROM integration_configs
+      WHERE kind = $1 AND enabled AND (config_json::jsonb ->> 'installationId') = $2
+      ORDER BY created_at ASC LIMIT 1`,
+    [kind, installationId],
+  );
+  if (!row) return null;
+  return { orgId: String(row.org_id), ...resolveRow(row) };
 }

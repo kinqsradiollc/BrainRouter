@@ -13,4 +13,7 @@ export interface IntegrationStore {
   deleteIntegrationConfig(id: string): Promise<void>;
   /** Decrypted default integration for (org, kind), or null when none. */
   getResolvedIntegration(orgId: string, kind: IntegrationKind): Promise<ResolvedIntegration | null>;
+  /** ADR-010 P6b — resolve tenant + decrypted integration from a GitHub App
+   *  installation id (the webhook ingress routing key). */
+  findIntegrationByInstallation(kind: IntegrationKind, installationId: string): Promise<(ResolvedIntegration & { orgId: string }) | null>;
 }
