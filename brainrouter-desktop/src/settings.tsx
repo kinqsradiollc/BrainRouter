@@ -126,36 +126,40 @@ export function SettingsDialog(props: {
         <>
           <div className="set-h">General</div>
           <div className="set-desc" style={{ marginBottom: 6 }}>Model &amp; providers moved to their own <b>Models</b> section.</div>
-          <Row title="Reasoning effort" desc="low = terse, medium = default, high = step-by-step, xhigh = maximum. max / ultracode are top slider tiers (they cap to maximum on the wire). Forwarded to provider reasoning slots when the model supports it. (/effort)">
-            <Select value={ps('effort', 'medium')} options={['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']} onChange={(v) => props.onPref('effort', v)} />
-          </Row>
-          <Row title="Personality" desc="Communication style for the agent's prose. (/personality)">
-            <Select value={ps('personality', 'standard')} options={['concise', 'standard', 'detailed', 'pair-programmer']} onChange={(v) => props.onPref('personality', v)} />
-          </Row>
-          <Row title="Model tier pin" desc="Pin the tier ladder: flash | standard | pro. “follow model” lets <<<NEEDS_HIGH>>> self-escalation work. (/tier)">
-            <Select value={tier} options={['follow model', 'flash', 'standard', 'pro']}
-              onChange={(v) => props.onPref('tier', v === 'follow model' ? null : v)} />
-          </Row>
-          <div className="set-h2">Session</div>
-          <Row title="Fast mode" desc="Answer directly with minimal planning for quick, low-friction turns. Independent of reasoning effort (set that above) — Fast mode changes the agent's strategy, not how hard the model thinks. (/fast)">
-            <Toggle on={props.execMode === 'fast'} onChange={(v) => props.onAction('a-mode', 'action:set-session-mode', { executionMode: v ? 'fast' : 'planning' })} />
-          </Row>
-          <Row title="New chat" desc="Fresh session key; current transcript stays on disk. (/new)">
-            <button className="btn" onClick={() => props.onAction('a-new', 'new-session')}>New chat</button>
-          </Row>
-          <Row title="Compact this session" desc="LLM-driven compaction of the active history — same as /compact in the CLI.">
-            <button className="btn" onClick={() => props.onAction('a-compact', 'action:compact')}>Compact</button>
-          </Row>
-          <Row title="Clear history" desc="Drops the in-memory history for this session. (/clear)">
-            <button className="btn danger" onClick={() => props.onAction('a-clear', 'action:clear')}>Clear</button>
-          </Row>
-          <div className="set-h2">Troubleshooting &amp; provenance</div>
-          <Row title="Safe mode" desc="Boot WITHOUT memory briefing, skills, lifecycle hooks and custom MCP servers — a minimal harness to isolate a misbehaving briefing/skill/hook/MCP. Takes effect on the next launch. (cli.safeMode)">
-            <Toggle on={knobs.safeMode === true} onChange={(v) => setPath('safeMode', v)} />
-          </Row>
-          <Row title="Session footer in commits/PRs" desc="Include the BrainRouter provenance/session footer in generated commit and PR bodies. Turn off for private repos / clean history. (cli.attribution.sessionUrl)">
-            <Toggle on={((knobs.attribution ?? {}) as { sessionUrl?: boolean }).sessionUrl !== false} onChange={(v) => setPath('attribution.sessionUrl', v)} />
-          </Row>
+          <SetGroup title="Agent behavior">
+            <Row title="Reasoning effort" desc="low = terse, medium = default, high = step-by-step, xhigh = maximum. max / ultracode are top slider tiers (they cap to maximum on the wire). Forwarded to provider reasoning slots when the model supports it. (/effort)">
+              <Select value={ps('effort', 'medium')} options={['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']} onChange={(v) => props.onPref('effort', v)} />
+            </Row>
+            <Row title="Personality" desc="Communication style for the agent's prose. (/personality)">
+              <Select value={ps('personality', 'standard')} options={['concise', 'standard', 'detailed', 'pair-programmer']} onChange={(v) => props.onPref('personality', v)} />
+            </Row>
+            <Row title="Model tier pin" desc="Pin the tier ladder: flash | standard | pro. “follow model” lets <<<NEEDS_HIGH>>> self-escalation work. (/tier)">
+              <Select value={tier} options={['follow model', 'flash', 'standard', 'pro']}
+                onChange={(v) => props.onPref('tier', v === 'follow model' ? null : v)} />
+            </Row>
+          </SetGroup>
+          <SetGroup title="Session">
+            <Row title="Fast mode" desc="Answer directly with minimal planning for quick, low-friction turns. Independent of reasoning effort (set that above) — Fast mode changes the agent's strategy, not how hard the model thinks. (/fast)">
+              <Toggle on={props.execMode === 'fast'} onChange={(v) => props.onAction('a-mode', 'action:set-session-mode', { executionMode: v ? 'fast' : 'planning' })} />
+            </Row>
+            <Row title="New chat" desc="Fresh session key; current transcript stays on disk. (/new)">
+              <button className="btn" onClick={() => props.onAction('a-new', 'new-session')}>New chat</button>
+            </Row>
+            <Row title="Compact this session" desc="LLM-driven compaction of the active history — same as /compact in the CLI.">
+              <button className="btn" onClick={() => props.onAction('a-compact', 'action:compact')}>Compact</button>
+            </Row>
+            <Row title="Clear history" desc="Drops the in-memory history for this session. (/clear)">
+              <button className="btn danger" onClick={() => props.onAction('a-clear', 'action:clear')}>Clear</button>
+            </Row>
+          </SetGroup>
+          <SetGroup title="Troubleshooting &amp; provenance">
+            <Row title="Safe mode" desc="Boot WITHOUT memory briefing, skills, lifecycle hooks and custom MCP servers — a minimal harness to isolate a misbehaving briefing/skill/hook/MCP. Takes effect on the next launch. (cli.safeMode)">
+              <Toggle on={knobs.safeMode === true} onChange={(v) => setPath('safeMode', v)} />
+            </Row>
+            <Row title="Session footer in commits/PRs" desc="Include the BrainRouter provenance/session footer in generated commit and PR bodies. Turn off for private repos / clean history. (cli.attribution.sessionUrl)">
+              <Toggle on={((knobs.attribution ?? {}) as { sessionUrl?: boolean }).sessionUrl !== false} onChange={(v) => setPath('attribution.sessionUrl', v)} />
+            </Row>
+          </SetGroup>
         </>
       );
       case 'models': return (
@@ -351,19 +355,21 @@ export function SettingsDialog(props: {
       case 'memory': return (
         <>
           <div className="set-h">Memory</div>
-          <Row title="Memory pipeline" desc="Run phase-1/phase-2 consolidation on session start. (/memories)">
-            <Toggle on={pb('memoriesEnabled', true)} onChange={(v) => props.onPref('memoriesEnabled', v)} />
-          </Row>
-          <Row title="Recall mode" desc="When BrainRouter memory recall fires (cli.recallMode).">
-            <Select value={ks('recallMode', 'gated')} options={['always', 'gated', 'off']} onChange={(v) => setKnob('recallMode', v)} />
-          </Row>
-          <Row title="Persona anchor" desc="Pin the brain's distilled Core Identity into the cache-stable briefing prefix every turn. (/persona on|off)">
-            <Toggle on={pb('personaAnchorEnabled', true)} onChange={(v) => props.onPref('personaAnchorEnabled', v)} />
-          </Row>
-          <Row title="Quiet mode" desc="Hide recall tables, briefings and previews — model prose only. (/quiet)">
-            <Toggle on={pb('quiet', false)} onChange={(v) => props.onPref('quiet', v)} />
-          </Row>
-          <Row title="Search, recall & brain ops" desc="/memory, /recall, /briefing, /blackboard, /brain, /forget, /export, /import run against the MCP brain — terminal CLI for now (DESK-5 command bridge)." />
+          <SetGroup title="Memory &amp; recall">
+            <Row title="Memory pipeline" desc="Run phase-1/phase-2 consolidation on session start. (/memories)">
+              <Toggle on={pb('memoriesEnabled', true)} onChange={(v) => props.onPref('memoriesEnabled', v)} />
+            </Row>
+            <Row title="Recall mode" desc="When BrainRouter memory recall fires (cli.recallMode).">
+              <Select value={ks('recallMode', 'gated')} options={['always', 'gated', 'off']} onChange={(v) => setKnob('recallMode', v)} />
+            </Row>
+            <Row title="Persona anchor" desc="Pin the brain's distilled Core Identity into the cache-stable briefing prefix every turn. (/persona on|off)">
+              <Toggle on={pb('personaAnchorEnabled', true)} onChange={(v) => props.onPref('personaAnchorEnabled', v)} />
+            </Row>
+            <Row title="Quiet mode" desc="Hide recall tables, briefings and previews — model prose only. (/quiet)">
+              <Toggle on={pb('quiet', false)} onChange={(v) => props.onPref('quiet', v)} />
+            </Row>
+            <Row title="Search, recall & brain ops" desc="/memory, /recall, /briefing, /blackboard, /brain, /forget, /export, /import run against the MCP brain — terminal CLI for now (DESK-5 command bridge)." />
+          </SetGroup>
         </>
       );
       case 'hooks': return (
