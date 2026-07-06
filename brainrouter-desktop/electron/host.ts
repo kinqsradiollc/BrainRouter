@@ -225,7 +225,7 @@ import { type AnnotationRecord } from '@kinqs/brainrouter-types';
 // ARTIFACT-RECORDS (0.4.15) — durable Artifact Records store (shared with the
 // CLI). Thin wrappers below keep all business logic in the CLI store; the
 // desktop panel only reads/mutates/previews through these endpoints.
-import { linkArtifact } from '@kinqs/brainrouter-core/artifact';
+import { linkArtifact, createArtifact } from '@kinqs/brainrouter-core/artifact';
 import { type ArtifactRecord } from '@kinqs/brainrouter-types';
 import { listWorkers, readWorkerSummary, readWorkerTranscript, readWorkerMeta } from '@kinqs/brainrouter-core/worker';
 import { localToolSpecsFromExecutors, isProtectedCoreTool } from '@kinqs/brainrouter-core/tool';
@@ -725,6 +725,22 @@ async function main(): Promise<void> {
     const summary = findings.length === 0 ? '' : (visible.slice(0, 400) || `${findings.length} finding(s) across ${files.length} file(s).`);
     const run: ReviewRun = { ...base, summary, findings };
     saveReview(workspaceRoot, run);
+    // ATLAS-UNDERSTANDING — persist the change explainer + comprehension quiz the
+    // reviewer produced in the SAME call ($0 extra) together with the free Atlas
+    // blast-radius context as a durable "Understanding" artifact, so the human can
+    // build the mental model and self-check. Best-effort — never blocks the review.
+    if (visible.length > 40) {
+      try {
+        const doc = [changeCtx, visible].filter(Boolean).join('\n\n');
+        createArtifact(workspaceRoot, {
+          kind: 'markdown-report',
+          title: `Understanding — ${files.length} file${files.length === 1 ? '' : 's'} · ${isoNow().slice(0, 10)}`,
+          content: doc,
+          format: 'markdown',
+          status: 'draft',
+        });
+      } catch { /* the artifact is a bonus; the review still stands */ }
+    }
     phase('completed', `${findings.length} finding(s) across ${files.length} file(s)`);
     return { ...run, files: files.length };
   };

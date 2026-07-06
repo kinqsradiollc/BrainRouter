@@ -79,8 +79,11 @@ export function parseReviewFindings(text: string): ParsedReviewFinding[] {
 
 /** The instruction appended to the review prompt so output is parseable + rich. */
 export const REVIEW_OUTPUT_CONTRACT =
-  'You are in READ-ONLY review mode: do NOT edit files, run shell commands, or call any tools — analyze the diff shown above and reply with findings only.\n' +
-  'End your reply with a fenced ```json array of findings. Each finding object: {' +
+  'You are in READ-ONLY review mode: do NOT edit files, run shell commands, or call any tools — analyze the diff shown above.\n' +
+  'FIRST, write a short UNDERSTANDING section in plain markdown (NO code fences anywhere in it) so a human can build the mental model:\n' +
+  '  "## What changed" — 2-4 sentences: what this change does, why, and what it touches (use the Change impact above).\n' +
+  '  "## Check your understanding" — exactly 3 short questions that verify a reader actually grasped the change; put each answer inside a `<details><summary>Answer</summary> … </details>` so it stays hidden until revealed.\n' +
+  'THEN end your reply with a fenced ```json array of findings. Each finding object: {' +
   '"file": "<repo-relative path>", "line": <first affected line|null>, "endLine": <last affected line|null>, ' +
   '"severity": "critical|high|medium|low|info", "confidence": <0-100>, ' +
   '"summary": "<one line>", "details": "<why this is a real issue>", "suggestion": "<the concrete fix>", ' +
