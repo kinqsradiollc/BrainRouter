@@ -10,5 +10,5 @@ export { extractSymbols, type FileSymbols, type ExtractedSymbol, type ExtractedI
 export { buildBaseGraph, type BuildOptions } from "./pipeline/buildGraph.js";
 export { validateAtlasGraph, type AtlasValidation } from "./pipeline/validate.js";
 export { atlasGraphFile, saveAtlasGraph, readAtlasGraph, atlasGraphStats, atlasWorkspaceTag } from "./store/atlasStore.js";
-export { enrichAtlasGraph, type AtlasLlmCaller, type EnrichOptions, type EnrichResult } from "./enrich/enrich.js";
+export { enrichAtlasGraph, carryForwardSummaries, type AtlasLlmCaller, type EnrichOptions, type EnrichResult } from "./enrich/enrich.js";
 export { extractAtlasJson, extractAtlasJsonArray } from "./enrich/jsonExtract.js";

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { AtlasGraph } from '@kinqs/brainrouter-types';
 import { extractAtlasJson, extractAtlasJsonArray } from '../atlas/enrich/jsonExtract.js';
-import { enrichAtlasGraph, type AtlasLlmCaller } from '../atlas/enrich/enrich.js';
+import { enrichAtlasGraph, carryForwardSummaries, type AtlasLlmCaller } from '../atlas/enrich/enrich.js';
 
 // ---------- jsonExtract ----------
 
@@ -169,4 +169,61 @@ test('ATLAS-4 enrichAtlasGraph never throws when the LLM rejects', async () => {
   const res = await enrichAtlasGraph(baseGraph(), throwing, { batchSize: 10 });
   assert.equal(res.summarized, 0);
   assert.ok(res.batchesFailed >= 1);
+});
+
+// ---------- COST-CACHE: incremental re-enrichment ----------
+
+test('COST-CACHE re-enriching an unchanged graph reuses summaries — zero summary LLM calls', async () => {
+  const first = await enrichAtlasGraph(baseGraph(), goodLlm);
+  assert.equal(first.summarized, 3);
+  assert.equal(first.reused, 0);
+
+  // Re-enrich the ALREADY-enriched graph; refuse to answer summary batches.
+  let summaryCalls = 0;
+  const noSummaries: AtlasLlmCaller = async (args) => {
+    if (args.user.includes('one object per file')) { summaryCalls++; return '[]'; }
+    return goodLlm(args); // layers / tour / relationships still answered
+  };
+  const second = await enrichAtlasGraph(first.graph, noSummaries);
+  assert.equal(summaryCalls, 0, 'no summary LLM call for unchanged files');
+  assert.equal(second.reused, 3);
+  assert.equal(second.summarized, 0);
+  // The cached summary survives untouched.
+  assert.equal(second.graph.nodes.find((n) => n.id === 'file:src/app.ts')?.summary, 'Application entry point.');
+});
+
+test('COST-CACHE a file whose symbols changed IS re-summarized; the rest are reused', async () => {
+  const first = await enrichAtlasGraph(baseGraph(), goodLlm);
+  // Add a symbol to app.ts → its summary fingerprint flips.
+  const changed = JSON.parse(JSON.stringify(first.graph)) as typeof first.graph;
+  changed.nodes.push({ id: 'function:src/app.ts:helper', type: 'function', name: 'helper', filePath: 'src/app.ts', lineRange: [7, 9] });
+  changed.edges.push({ source: 'file:src/app.ts', target: 'function:src/app.ts:helper', type: 'contains' });
+
+  const summarizedPaths: string[] = [];
+  const caller: AtlasLlmCaller = async (args) => {
+    if (args.user.includes('one object per file')) {
+      for (const line of args.user.split('\n')) { const m = line.match(/^\d+\.\s+(\S+)/); if (m) summarizedPaths.push(m[1]); }
+      return '```json\n' + JSON.stringify([{ path: 'src/app.ts', summary: 'Entry point (now with helper).', tags: ['entry'], complexity: 'moderate' }]) + '\n```';
+    }
+    return goodLlm(args);
+  };
+  const second = await enrichAtlasGraph(changed, caller);
+  assert.ok(summarizedPaths.includes('src/app.ts'), 'the changed file is re-summarized');
+  assert.ok(!summarizedPaths.includes('src/db.ts'), 'the unchanged file is NOT re-summarized');
+  assert.equal(second.reused, 2); // db.ts + package.json reused
+  assert.equal(second.graph.nodes.find((n) => n.id === 'file:src/app.ts')?.summary, 'Entry point (now with helper).');
+});
+
+test('COST-CACHE carryForwardSummaries copies a prior graph\'s summaries onto a fresh base by id', () => {
+  const prior = { ...baseGraph(), nodes: baseGraph().nodes.map((n) => n.id === 'file:src/app.ts' ? { ...n, summary: 'Entry.', summarySig: 'abc123', tags: ['e'] } : n) };
+  const fresh = baseGraph(); // freshly rebuilt, no summaries
+  const merged = carryForwardSummaries(fresh, prior);
+  const app = merged.nodes.find((n) => n.id === 'file:src/app.ts')!;
+  assert.equal(app.summary, 'Entry.');
+  assert.equal(app.summarySig, 'abc123');
+  assert.deepEqual(app.tags, ['e']);
+  // fresh input is not mutated
+  assert.equal(fresh.nodes.find((n) => n.id === 'file:src/app.ts')!.summary, undefined);
+  // a null prior is a no-op
+  assert.equal(carryForwardSummaries(fresh, null), fresh);
 });

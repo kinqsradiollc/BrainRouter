@@ -7,6 +7,7 @@
  */
 export {
   enrichAtlasGraph,
+  carryForwardSummaries,
   type AtlasLlmCaller,
   type EnrichOptions,
   type EnrichResult,

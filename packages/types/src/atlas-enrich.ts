@@ -131,6 +131,8 @@ export interface EnrichResult {
   relationships: number;
   /** Summary batches whose LLM output could not be parsed (skipped). */
   batchesFailed: number;
+  /** COST-CACHE — files whose summary was reused unchanged (no LLM call spent). */
+  reused: number;
 }
 
 /** File-level node types worth summarising (symbols are detail, skipped here). */
@@ -187,6 +189,41 @@ interface SummaryRow {
   summary?: string;
   tags?: string[];
   complexity?: AtlasComplexity;
+}
+
+/**
+ * COST-CACHE — a cheap, stable fingerprint of the exact inputs a file's summary
+ * depends on: its path, language, and the symbol names in it. If this is unchanged
+ * since the last enrich, the summary would come out identical, so we reuse the
+ * cached one instead of paying for another LLM call. Structural changes (added /
+ * renamed symbols) flip the fingerprint and force a fresh summary. djb2 (no crypto
+ * dep — this package stays dependency-light for the renderer bundle).
+ */
+function summaryInputSig(node: AtlasNode, symbols: Map<string, string[]>): string {
+  const syms = (symbols.get(node.filePath ?? "") ?? []).join(",");
+  const input = `${node.filePath ?? ""}|${node.language ?? node.type}|${syms}`;
+  let h = 5381;
+  for (let i = 0; i < input.length; i++) h = ((h << 5) + h + input.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
+/**
+ * COST-CACHE — carry a PRIOR enriched graph's summaries (+ their fingerprints,
+ * tags, complexity) onto a freshly-rebuilt base graph, matched by node id. Callers
+ * that rebuild the base graph from disk each time (CLI / desktop) pass the result
+ * to `enrichAtlasGraph` so unchanged files skip the LLM. Pure; returns a new graph.
+ */
+export function carryForwardSummaries(base: AtlasGraph, prior: AtlasGraph | null | undefined): AtlasGraph {
+  if (!prior) return base;
+  const priorById = new Map(prior.nodes.map((n) => [n.id, n] as const));
+  return {
+    ...base,
+    nodes: base.nodes.map((n) => {
+      const p = priorById.get(n.id);
+      if (!p?.summary || !p.summarySig) return n;
+      return { ...n, summary: p.summary, summarySig: p.summarySig, tags: p.tags ?? n.tags, complexity: p.complexity ?? n.complexity };
+    }),
+  };
 }
 
 function summaryPrompt(graph: AtlasGraph, batch: AtlasNode[], symbols: Map<string, string[]>): string {
@@ -280,9 +317,15 @@ export async function enrichAtlasGraph(graph: AtlasGraph, llm: AtlasLlmCaller, o
   const fileNodes = graph.nodes.filter((n) => FILE_LEVEL.has(n.type) && n.filePath);
   const targets = fileNodes.slice(0, maxFiles);
   const symbols = symbolsByFile(graph);
+  const sigByPath = new Map<string, string>();
+  for (const n of targets) if (n.filePath) sigByPath.set(n.filePath, summaryInputSig(n, symbols));
 
   // --- 1. per-file summaries (batched, concurrent) ---
-  const batches = chunk(targets, batchSize);
+  // COST-CACHE — only summarise files that are NEW or whose input fingerprint
+  // changed; everything unchanged keeps its cached summary for free.
+  const toSummarize = targets.filter((n) => !(n.summary && n.filePath && n.summarySig === sigByPath.get(n.filePath)));
+  const reused = targets.length - toSummarize.length;
+  const batches = chunk(toSummarize, batchSize);
   const summaries = new Map<string, SummaryRow>();
   let done = 0;
   let batchesFailed = 0;
@@ -324,7 +367,8 @@ export async function enrichAtlasGraph(graph: AtlasGraph, llm: AtlasLlmCaller, o
     const complexity = isAtlasComplexity(row.complexity) ? row.complexity : n.complexity;
     const summary = typeof row.summary === "string" && row.summary.trim() ? row.summary.trim() : undefined;
     if (summary) summarized++;
-    return { ...n, summary: summary ?? n.summary, tags: tags ?? n.tags, complexity };
+    // Stamp the fingerprint so the NEXT enrich can reuse this summary for free.
+    return { ...n, summary: summary ?? n.summary, tags: tags ?? n.tags, complexity, summarySig: (n.filePath ? sigByPath.get(n.filePath) : undefined) ?? n.summarySig };
   });
 
   const enriched: AtlasGraph = { ...graph, nodes };
@@ -455,5 +499,5 @@ export async function enrichAtlasGraph(graph: AtlasGraph, llm: AtlasLlmCaller, o
   }
   if (layerEdges.length) enriched.layerEdges = layerEdges;
 
-  return { graph: enriched, summarized, layers: effectiveLayers.length, tourSteps: tour.length, relationships: layerEdges.length, batchesFailed };
+  return { graph: enriched, summarized, layers: effectiveLayers.length, tourSteps: tour.length, relationships: layerEdges.length, batchesFailed, reused };
 }

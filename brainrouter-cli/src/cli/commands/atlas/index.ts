@@ -18,6 +18,7 @@ import {
   atlasGraphFile,
   atlasWorkspaceTag,
   enrichAtlasGraph,
+  carryForwardSummaries,
   type AtlasLlmCaller,
 } from "@kinqs/brainrouter-core/atlas";
 import { callOpenAI } from "@kinqs/brainrouter-core/agent";
@@ -105,7 +106,9 @@ export async function tryHandleAtlasCommand(ctx: CommandContext): Promise<boolea
     const started = Date.now();
     let graph;
     try {
-      graph = buildBaseGraph(root);
+      // COST-CACHE — preserve the prior enrichment's summaries across a rebuild so
+      // the next `/atlas enrich` only re-pays for files whose structure changed.
+      graph = carryForwardSummaries(buildBaseGraph(root), readAtlasGraph(root));
     } catch (e) {
       console.log(chalk.red(`\nAtlas build failed: ${e instanceof Error ? e.message : String(e)}\n`));
       return true;

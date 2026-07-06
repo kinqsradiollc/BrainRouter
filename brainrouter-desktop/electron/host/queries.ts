@@ -201,6 +201,7 @@ import {
   atlasGraphStats,
   atlasWorkspaceTag,
   enrichAtlasGraph,
+  carryForwardSummaries,
   extractAtlasJson,
   type AtlasLlmCaller,
 } from '@kinqs/brainrouter-core/atlas';
@@ -1417,7 +1418,10 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         return readAtlasGraph(workspaceRoot);
       },
       'atlas-build': async () => {
-        const graph = buildBaseGraph(workspaceRoot);
+        // COST-CACHE — carry the prior enrichment's summaries onto the rebuilt
+        // graph (matched by node id) so a rebuild doesn't throw away understanding;
+        // the next enrich then only re-pays for files whose structure changed.
+        const graph = carryForwardSummaries(buildBaseGraph(workspaceRoot), readAtlasGraph(workspaceRoot));
         saveAtlasGraph(workspaceRoot, graph);
         // Sync the fresh build up so other clients / the dashboard can serve it.
         if (getCliKnobs().brainUrl) await callBrainAtlas('atlas_put', { workspaceTag: atlasWorkspaceTag(workspaceRoot), graph });
