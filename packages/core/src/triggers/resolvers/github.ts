@@ -32,6 +32,7 @@ import { enqueueFleetJob, type CreateFleetJobInput, type FleetJobRecord } from '
 import { redactSecrets } from '../../git/prEmit.js';
 import { getWorkspaceStateRoot, readJsonFile, writeJsonFile } from '../../storage/store.js';
 import { resolveGithubConfigForWorkspace } from '../../track/githubSync/config.js';
+import { resolveAppInstallationToken } from '../../track/githubSync/githubApp.js';
 import type { FetchLike } from '../../track/githubSync/types.js';
 import { resolveCiNudge, type CiNudgeResult } from '../ciNudge.js';
 import { formatTriggerPostback, postGithubIssueComment, type GithubCommentTarget } from '../postback.js';
@@ -329,10 +330,18 @@ export interface GithubTriggerSinkOptions {
 /** Default comment port: the workspace's GitHub connector credential + fetch. */
 function defaultPostComment(workspaceRoot: string): GithubResolveOptions['postComment'] {
   return async (target, body) => {
-    const config = resolveGithubConfigForWorkspace(workspaceRoot, target.repo);
-    if (!config.token) return false;
+    // Phase 1 — prefer the single GitHub App bot (short-lived installation
+    // token) when one is configured; otherwise fall back to the workspace PAT
+    // (`cli.track.githubToken` / connector / GITHUB_TOKEN) — the local-first
+    // default. resolveAppInstallationToken returns undefined when no App is set
+    // or a mint fails, so this never breaks the PAT flow.
+    // `|| undefined` so ANY falsy App token (incl. '') falls through to the PAT,
+    // not just a nullish one — never let a blank App token silence the fallback.
+    const token = ((await resolveAppInstallationToken(target.repo)) || undefined)
+      ?? resolveGithubConfigForWorkspace(workspaceRoot, target.repo).token;
+    if (!token) return false;
     return postGithubIssueComment(
-      { fetchImpl: fetch as unknown as FetchLike, token: config.token },
+      { fetchImpl: fetch as unknown as FetchLike, token },
       target,
       body,
     );

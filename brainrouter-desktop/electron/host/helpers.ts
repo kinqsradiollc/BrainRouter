@@ -67,6 +67,15 @@ export function scrubCliSecrets(cli: unknown): Record<string, unknown> {
   if (c.triggers && typeof c.triggers === 'object') {
     const triggers = { ...(c.triggers as Record<string, unknown>) };
     for (const k of ['githubSecret', 'slackSigningSecret', 'gitlabSecret', 'jiraSecret']) delete triggers[k];
+    // Phase 1 — the GitHub App private key is write-only too: strip the inline
+    // PEM before it reaches the renderer. The non-secret App fields (appId,
+    // installationId, apiBase, privateKeyPath) stay so the panel can show the
+    // App is configured without ever exposing the key.
+    if (triggers.githubApp && typeof triggers.githubApp === 'object') {
+      const app = { ...(triggers.githubApp as Record<string, unknown>) };
+      delete app.privateKey;
+      triggers.githubApp = app;
+    }
     c.triggers = triggers;
   }
   if (c.router && typeof c.router === 'object') {

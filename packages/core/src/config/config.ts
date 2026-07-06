@@ -476,6 +476,29 @@ function sanitizeStringList(input: unknown): string[] {
 }
 
 /**
+ * Phase 1 — sanitize the GitHub App bot creds. Returns `undefined` unless an
+ * `appId` AND at least one key source (`privateKey` or `privateKeyPath`) are
+ * present, so a half-configured App never shadows the PAT fallback. Values are
+ * trimmed and passed through verbatim (the PEM/path is read at mint time).
+ */
+function sanitizeGithubApp(input: unknown): import('./configTypes.js').GithubAppCliKnobs | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const a = input as Record<string, unknown>;
+  const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+  const appId = str(a.appId);
+  const privateKey = typeof a.privateKey === 'string' && a.privateKey.trim() ? a.privateKey.trim() : undefined;
+  const privateKeyPath = str(a.privateKeyPath);
+  if (!appId || (!privateKey && !privateKeyPath)) return undefined;
+  return {
+    appId,
+    ...(privateKey ? { privateKey } : {}),
+    ...(privateKeyPath ? { privateKeyPath } : {}),
+    ...(str(a.installationId) ? { installationId: str(a.installationId) } : {}),
+    ...(str(a.apiBase) ? { apiBase: str(a.apiBase) } : {}),
+  };
+}
+
+/**
  * CC-CONFIG-A2 — resolve the ORDERED fallback chain. Sanitizes `fallbackModels`,
  * caps it at 3, then appends the legacy single `fallbackModel` (if any) at the end
  * for back-compat — deduped, so declaring it in both never double-tries. The result
@@ -783,6 +806,10 @@ export function resolveCliKnobs(cfg?: Config): ResolvedCliKnobs {
       enabled: c.triggers?.enabled === true,
       port: clampInt(c.triggers?.port, 1, 65_535, 8787),
       host: typeof c.triggers?.host === 'string' && c.triggers.host.trim() ? c.triggers.host.trim() : '127.0.0.1',
+      // Phase 1 — GitHub App bot creds, only surfaced when appId + a key source
+      // are both present (otherwise the PAT path applies). The private key is
+      // passed through verbatim; loadGithubAppCredentials reads privateKeyPath.
+      githubApp: sanitizeGithubApp(c.triggers?.githubApp),
       githubSecret: typeof c.triggers?.githubSecret === 'string' ? c.triggers.githubSecret.trim() : '',
       slackSigningSecret: typeof c.triggers?.slackSigningSecret === 'string' ? c.triggers.slackSigningSecret.trim() : '',
       gitlabSecret: typeof c.triggers?.gitlabSecret === 'string' ? c.triggers.gitlabSecret.trim() : '',

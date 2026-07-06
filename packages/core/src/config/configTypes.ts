@@ -463,10 +463,36 @@ export function normalizeContainerLimits(value: unknown): { cpus: number; memory
  * Signature verification is mandatory per provider — a missing secret means
  * every delivery for that provider is rejected (401), never "let through".
  */
+/**
+ * GitHub App credentials for the trigger bot (Phase 1 of the centralized-ingress
+ * plan). When set, the trigger post-back authenticates as a single GitHub App
+ * (`brainrouter[bot]`) using short-lived per-installation tokens instead of a
+ * long-lived per-workspace PAT — one synced bot identity across repos. Absent =
+ * the existing PAT path (`cli.track.githubToken` / `GITHUB_TOKEN`) still applies
+ * (local-first default). The private key is sensitive: prefer `privateKeyPath`
+ * (a file the process reads) over inlining the PEM, and in a hosted deployment
+ * keep it in backend secret custody, never shipped to a desktop.
+ */
+export interface GithubAppCliKnobs {
+  /** Numeric GitHub App ID (the JWT `iss`). */
+  appId?: string;
+  /** RSA private-key PEM, inline. Prefer `privateKeyPath` for real deployments. */
+  privateKey?: string;
+  /** Path to the RSA private-key PEM (read at token-mint time). */
+  privateKeyPath?: string;
+  /** Optional fixed installation id; when omitted it is resolved per owner/repo. */
+  installationId?: string;
+  /** GitHub Enterprise API base (default `https://api.github.com`). */
+  apiBase?: string;
+}
+
 export interface TriggersCliKnobs {
   /** Master switch for the trigger ingress listener. Default false —
    *  nothing listens until the user opts in explicitly. */
   enabled?: boolean;
+  /** Phase 1 — single GitHub App bot for the trigger post-back (installation
+   *  tokens); falls back to the PAT path when unset. See {@link GithubAppCliKnobs}. */
+  githubApp?: GithubAppCliKnobs;
   /** TCP port the ingress binds. Default 8787, clamped 1..65535. */
   port?: number;
   /** Interface the ingress binds. Default '127.0.0.1' (loopback) — exposing
@@ -1374,6 +1400,8 @@ export interface ResolvedCliKnobs {
     enabled: boolean;
     port: number;
     host: string;
+    /** Phase 1 — resolved GitHub App bot creds (only present when configured). */
+    githubApp?: GithubAppCliKnobs;
     githubSecret: string;
     slackSigningSecret: string;
     gitlabSecret: string;
