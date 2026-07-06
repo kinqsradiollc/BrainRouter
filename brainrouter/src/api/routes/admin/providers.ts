@@ -52,6 +52,7 @@ providersRouter.post("/", async (req: AuthedRequest, res) => {
   }
   try {
     const created = await memoryEngine.providers.createProviderConfig(req.orgId!, parsed, req.userId);
+    await memoryEngine.applyProviderOverrides(); // take effect without a restart
     res.status(201).json({ provider: created });
   } catch (error: any) {
     sendError(res, 400, error?.message ?? "Failed to create provider config");
@@ -78,6 +79,7 @@ providersRouter.patch("/:id", async (req: AuthedRequest, res) => {
     return;
   }
   const updated = await memoryEngine.providers.updateProviderConfig(String(req.params.id), parsed);
+  await memoryEngine.applyProviderOverrides();
   res.json({ provider: updated });
 });
 
@@ -85,6 +87,7 @@ providersRouter.patch("/:id", async (req: AuthedRequest, res) => {
 providersRouter.delete("/:id", async (req: AuthedRequest, res) => {
   if (!(await ownedConfig(req, res))) return;
   await memoryEngine.providers.deleteProviderConfig(String(req.params.id));
+  await memoryEngine.applyProviderOverrides();
   res.json({ ok: true });
 });
 

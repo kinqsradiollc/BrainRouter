@@ -46,12 +46,12 @@ export function judgeDocChars(env: NodeJS.ProcessEnv = process.env): number {
  */
 export class RelevanceJudgeService {
   private readonly enabled: boolean;
-  private readonly endpoint: string;
-  private readonly apiKey: string;
-  private readonly model: string;
+  private endpoint: string;
+  private apiKey: string;
+  private model: string;
   private readonly maxCandidates: number;
   private readonly timeoutMs: number;
-  private readonly ready: boolean;
+  private ready: boolean;
 
   constructor(config: RelevanceJudgeServiceConfig) {
     this.enabled = config.enabled ?? false;
@@ -75,6 +75,15 @@ export class RelevanceJudgeService {
 
   isReady(): boolean {
     return this.ready;
+  }
+
+  /** ADR-010 P2 — apply a DB-resolved provider (endpoint/apiKey/model); readiness
+   *  still requires the judge to be enabled. */
+  reconfigure(cfg: { endpoint?: string; apiKey?: string; model?: string }): void {
+    if (cfg.endpoint) this.endpoint = cfg.endpoint;
+    if (cfg.apiKey) this.apiKey = cfg.apiKey;
+    if (cfg.model) this.model = cfg.model;
+    this.ready = this.enabled && !!this.apiKey;
   }
 
   getMaxCandidates(): number {

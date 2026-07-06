@@ -22,6 +22,8 @@ import type { RetrievalMetrics } from "./bench/code-scale.js";
 import type { CursorPaginationOptions, DiagnosticsBundle, EvidenceListFilters, IMemoryStore, MemoryListFilters, OperationLogFilters } from "@kinqs/brainrouter-types";
 import type { TenancyStore } from "../tenancy/store.js";
 import type { ProviderStore } from "../providers/store.js";
+import { resolveProviderConfig } from "../providers/resolver.js";
+import { systemProviderOrgId } from "../providers/runtime.js";
 import { MemoryCapturePipeline } from "./capture.js";
 import { MemoryRecallPipeline } from "./recall.js";
 import { MemoryJobRunner } from "./scheduler/runner.js";
@@ -142,6 +144,9 @@ export class MemoryEngine {
   /** Run the store lifecycle (migrations → initVec → seed-admin) + bg reembed; see engine/lifecycleOps.ts. */
   async #initialize(): Promise<void> {
     await lifecycleOps.initialize(this);
+    // ADR-010 P2 — after migrations + seed (so the system org + any provider
+    // rows exist), apply DB provider configs over the env-built services.
+    await this.applyProviderOverrides();
   }
 
   /**
@@ -342,6 +347,37 @@ export class MemoryEngine {
   /** ADR-010 P2 — DB-backed provider configs (see {@link tenancy} for the cast rationale). */
   public get providers(): ProviderStore {
     return this.store as unknown as ProviderStore;
+  }
+
+  /**
+   * ADR-010 P2 — the ".env retired" cutover. Resolve the system org's DB provider
+   * configs (llm/embedding/reranker/judge) and apply any that exist over the
+   * env-built singletons. Applied ONLY when a DB row exists (source==='db'), so an
+   * env-only deployment is byte-identical to before. Called after seed on startup
+   * and after an admin writes a provider config (so it takes effect without a
+   * restart). Best-effort — a DB hiccup leaves the env config in place.
+   */
+  public async applyProviderOverrides(): Promise<void> {
+    const orgId = systemProviderOrgId();
+    const store = this.providers;
+    try {
+      const llm = await resolveProviderConfig(store, orgId, "llm");
+      if (llm?.source === "db") {
+        const o = { endpoint: llm.endpoint, apiKey: llm.apiKey, model: llm.model };
+        for (const runner of [this.extractionRunner, this.synthesisRunner]) {
+          const set = (runner as { setProviderOverride?: (x: typeof o) => void }).setProviderOverride;
+          if (typeof set === "function") set.call(runner, o);
+        }
+      }
+      const emb = await resolveProviderConfig(store, orgId, "embedding");
+      if (emb?.source === "db") this.embeddingService.reconfigure({ endpoint: emb.endpoint, apiKey: emb.apiKey, model: emb.model });
+      const rer = await resolveProviderConfig(store, orgId, "reranker");
+      if (rer?.source === "db") this.rerankerService.reconfigure({ endpoint: rer.endpoint, apiKey: rer.apiKey, model: rer.model });
+      const jud = await resolveProviderConfig(store, orgId, "judge");
+      if (jud?.source === "db") this.relevanceJudge.reconfigure({ endpoint: jud.endpoint, apiKey: jud.apiKey, model: jud.model });
+    } catch {
+      /* best-effort — keep the env-built config on any DB error */
+    }
   }
 
   public createUser(userId: string, apiKey: string, displayName = "", isAdmin = false): Promise<UserRecord> {

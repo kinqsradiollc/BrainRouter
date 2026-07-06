@@ -14,12 +14,12 @@ export function embeddingTimeoutMs(env: NodeJS.ProcessEnv = process.env): number
 }
 
 export class EmbeddingService {
-  private readonly endpoint: string;
-  private readonly apiKey: string;
-  private readonly model: string;
+  private endpoint: string;
+  private apiKey: string;
+  private model: string;
   private readonly dimensions: number;
   private readonly timeoutMs: number;
-  private readonly ready: boolean;
+  private ready: boolean;
 
   constructor(config: EmbeddingServiceConfig) {
     this.endpoint = config.endpoint ?? "https://api.openai.com/v1/embeddings";
@@ -42,6 +42,15 @@ export class EmbeddingService {
 
   isReady(): boolean {
     return this.ready;
+  }
+
+  /** ADR-010 P2 — apply a DB-resolved provider (endpoint/apiKey/model) at runtime,
+   *  recomputing readiness. Only called when a DB config exists (else env stands). */
+  reconfigure(cfg: { endpoint?: string; apiKey?: string; model?: string }): void {
+    if (cfg.endpoint) this.endpoint = cfg.endpoint;
+    if (cfg.apiKey) this.apiKey = cfg.apiKey;
+    if (cfg.model) this.model = cfg.model;
+    this.ready = !!this.apiKey;
   }
 
   /**

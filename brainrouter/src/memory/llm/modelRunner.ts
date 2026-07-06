@@ -39,17 +39,34 @@ function shouldFallback(err: unknown): boolean {
   return /\b(429|500|502|503|504)\b/.test(msg);
 }
 
+/** ADR-010 P2 — a DB-resolved LLM provider that overrides the .env config. */
+export interface LlmProviderOverride {
+  endpoint?: string;
+  apiKey?: string;
+  model?: string;
+}
+
 // Configurable LLM Runner — supports per-task model routing
 export class ModelLLMRunner implements LLMRunner {
   private readonly modelOverride?: string;
+  private providerOverride: LlmProviderOverride | null = null;
 
   constructor(modelOverride?: string) {
     this.modelOverride = modelOverride?.trim() || undefined;
   }
 
+  /**
+   * ADR-010 P2 — apply a DB-resolved provider (endpoint/apiKey/model). It wins
+   * over the `BRAINROUTER_LLM_*` env vars; `null` clears it (back to env). Only
+   * set when a DB config actually exists, so an env-only deployment is untouched.
+   */
+  setProviderOverride(o: LlmProviderOverride | null): void {
+    this.providerOverride = o && (o.endpoint || o.apiKey || o.model) ? o : null;
+  }
+
   async run({ prompt, systemPrompt, timeoutMs = 120_000, taskId, tool }: LLMRunParams): Promise<string> {
-    const endpoint = process.env.BRAINROUTER_LLM_ENDPOINT ?? "https://api.openai.com/v1/chat/completions";
-    const apiKey = process.env.BRAINROUTER_LLM_API_KEY;
+    const endpoint = this.providerOverride?.endpoint || process.env.BRAINROUTER_LLM_ENDPOINT || "https://api.openai.com/v1/chat/completions";
+    const apiKey = this.providerOverride?.apiKey || process.env.BRAINROUTER_LLM_API_KEY;
 
     if (!apiKey) {
       // Typed sentinel so upstream pipelines can short-circuit cleanly without dumping a stack trace.
@@ -71,6 +88,7 @@ export class ModelLLMRunner implements LLMRunner {
     }
 
     const model = this.modelOverride
+      ?? this.providerOverride?.model
       ?? (process.env.BRAINROUTER_LLM_MODEL?.trim() || undefined)
       ?? "gpt-4o-mini";
 

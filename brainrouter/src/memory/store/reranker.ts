@@ -73,13 +73,13 @@ export function rerankerBreakerCooldownMs(env: NodeJS.ProcessEnv = process.env):
 }
 
 export class RerankerService {
-  private readonly endpoint: string;
-  private readonly apiKey: string;
-  private readonly model: string;
+  private endpoint: string;
+  private apiKey: string;
+  private model: string;
   private readonly topN: number;
   private readonly timeoutMs: number;
   private readonly acquireWaitMs: number;
-  private readonly ready: boolean;
+  private ready: boolean;
 
   // Circuit breaker — a flapping / overloaded reranker should be SKIPPED for a
   // cooldown, not retried (and timed-out) on every single recall. `isAvailable()`
@@ -110,6 +110,14 @@ export class RerankerService {
 
   isReady(): boolean {
     return this.ready;
+  }
+
+  /** ADR-010 P2 — apply a DB-resolved provider (endpoint/apiKey/model) at runtime. */
+  reconfigure(cfg: { endpoint?: string; apiKey?: string; model?: string }): void {
+    if (cfg.endpoint) this.endpoint = cfg.endpoint;
+    if (cfg.apiKey) this.apiKey = cfg.apiKey;
+    if (cfg.model) this.model = cfg.model;
+    this.ready = !!this.apiKey;
   }
 
   /**
