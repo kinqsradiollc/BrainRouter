@@ -135,6 +135,7 @@ import {
   atlasGraphStats,
   atlasWorkspaceTag,
   enrichAtlasGraph,
+  carryForwardSummaries,
   buildAtlasChangeContext,
   extractAtlasJson,
   type AtlasLlmCaller,
@@ -225,7 +226,7 @@ import { type AnnotationRecord } from '@kinqs/brainrouter-types';
 // ARTIFACT-RECORDS (0.4.15) — durable Artifact Records store (shared with the
 // CLI). Thin wrappers below keep all business logic in the CLI store; the
 // desktop panel only reads/mutates/previews through these endpoints.
-import { linkArtifact, createArtifact } from '@kinqs/brainrouter-core/artifact';
+import { linkArtifact, createArtifact, updateArtifact, readArtifactsAll } from '@kinqs/brainrouter-core/artifact';
 import { type ArtifactRecord } from '@kinqs/brainrouter-types';
 import { listWorkers, readWorkerSummary, readWorkerTranscript, readWorkerMeta } from '@kinqs/brainrouter-core/worker';
 import { localToolSpecsFromExecutors, isProtectedCoreTool } from '@kinqs/brainrouter-core/tool';
@@ -691,14 +692,15 @@ async function main(): Promise<void> {
     };
     if (files.length === 0) { phase('completed', 'no working-tree changes'); const r: ReviewRun = { ...base, summary: 'No working-tree changes to review.' }; saveReview(workspaceRoot, r); return { ...r, files: 0 }; }
     phase('analyzing', `${files.length} file(s)`);
-    // ATLAS-UNDERSTANDING — prepend a FREE, deterministic blast-radius block (from
-    // the codebase Atlas) so the read-only reviewer weighs regression risk with
-    // architectural awareness. No LLM call: it rides the review the user is already
-    // paying for. If no graph is built yet, build the BASE graph on the fly (also
-    // free — deterministic scan) so this works out-of-the-box; any failure just
-    // yields an empty block and the review proceeds without impact context.
+    // ATLAS-UNDERSTANDING — prepend a FREE, deterministic blast-radius block. To
+    // stay correct across NEW / renamed / deleted files, rebuild the base graph
+    // fresh each review (deterministic scan, no LLM) and carry forward cached
+    // summaries from the stored graph — so the impact reflects the tree as it is
+    // NOW, never a stale snapshot. Falls back to the stored graph if a rebuild
+    // fails; NOT saved, so the stored ENRICHED graph (tour/layers) stays intact for
+    // the Atlas panel. Empty block on total failure — never blocks the review.
     let atlasGraph = readAtlasGraph(workspaceRoot);
-    if (!atlasGraph) { try { atlasGraph = buildBaseGraph(workspaceRoot); } catch { atlasGraph = null; } }
+    try { atlasGraph = carryForwardSummaries(buildBaseGraph(workspaceRoot), atlasGraph); } catch { /* keep the stored graph as-is if a rebuild isn't possible */ }
     const changeCtx = buildAtlasChangeContext(atlasGraph, files);
     const prompt = `You are reviewing the uncommitted changes in this workspace before a commit/PR. Focus on real bugs, security issues, and performance problems introduced by the diff. Be concise.\n\n${changeCtx ? `${changeCtx}\n\n` : ''}Diff:\n${diff.slice(0, 60_000)}\n\n${REVIEW_OUTPUT_CONTRACT}`;
     // §6 — isolated, read-only, non-prompting reviewer (review: session filtered).
@@ -727,18 +729,20 @@ async function main(): Promise<void> {
     saveReview(workspaceRoot, run);
     // ATLAS-UNDERSTANDING — persist the change explainer + comprehension quiz the
     // reviewer produced in the SAME call ($0 extra) together with the free Atlas
-    // blast-radius context as a durable "Understanding" artifact, so the human can
-    // build the mental model and self-check. Best-effort — never blocks the review.
+    // blast-radius context as a durable "Understanding" artifact. It is a SINGLE
+    // artifact per workspace, UPDATED (new version) each review rather than piling
+    // up a stale copy per run — so it always reflects the current changes, older
+    // versions live in its history, and a provenance header records exactly what it
+    // describes (date · files · diff hash). Best-effort — never blocks the review.
     if (visible.length > 40) {
       try {
-        const doc = [changeCtx, visible].filter(Boolean).join('\n\n');
-        createArtifact(workspaceRoot, {
-          kind: 'markdown-report',
-          title: `Understanding — ${files.length} file${files.length === 1 ? '' : 's'} · ${isoNow().slice(0, 10)}`,
-          content: doc,
-          format: 'markdown',
-          status: 'draft',
-        });
+        const UNDERSTANDING_PATH = '.brainrouter/understanding/working-changes.md';
+        const header = `> As of ${isoNow().slice(0, 10)} · ${files.length} changed file${files.length === 1 ? '' : 's'} · diff \`${base.diffHash.slice(0, 12)}\`. Regenerated on each review; older versions are in this artifact's history.`;
+        const doc = [header, changeCtx, visible].filter(Boolean).join('\n\n');
+        const title = `Understanding — working changes (${files.length} file${files.length === 1 ? '' : 's'})`;
+        const existing = Object.values(readArtifactsAll(workspaceRoot)).find((a) => a.path === UNDERSTANDING_PATH);
+        if (existing) updateArtifact(workspaceRoot, existing.id, { content: doc, title, status: 'draft' });
+        else createArtifact(workspaceRoot, { kind: 'markdown-report', title, content: doc, format: 'markdown', status: 'draft', path: UNDERSTANDING_PATH });
       } catch { /* the artifact is a bonus; the review still stands */ }
     }
     phase('completed', `${findings.length} finding(s) across ${files.length} file(s)`);
