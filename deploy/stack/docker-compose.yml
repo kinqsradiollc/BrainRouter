@@ -65,6 +65,30 @@ services:
     ports:
       - "${BRAINROUTER_PORT:-3747}:3747"
 
+  # Provider/LLM Gateway (ADR-006 service #1) — the first extracted microservice.
+  # Same image as the brain, different entrypoint: a standalone provider-resolution
+  # service on its own port. Other services POST /v1/resolve {orgId,kind} (with a
+  # brain-issued JWT) to get their org's provider. Optional — remove it to run the
+  # brain as a self-contained monolith; add it to split provider egress out.
+  gateway:
+    build:
+      context: ../..
+      dockerfile: deploy/brain/Dockerfile
+    restart: unless-stopped
+    command: ["node", "dist/services/gateway/index.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      BRAINROUTER_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brainrouter}
+      BRAINROUTER_JWT_SECRET: ${BRAINROUTER_JWT_SECRET}
+      # Needed to DECRYPT provider keys it returns to callers.
+      BRAINROUTER_SECRET_KEY: ${BRAINROUTER_SECRET_KEY}
+      GATEWAY_PORT: "3748"
+    ports:
+      - "${GATEWAY_PORT:-3748}:3748"
+
 volumes:
   brainrouter-pg:
     name: brainrouter-pg
