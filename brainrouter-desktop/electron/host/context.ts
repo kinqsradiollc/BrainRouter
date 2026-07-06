@@ -28,6 +28,7 @@ import type { AnnotationRecord } from '@kinqs/brainrouter-types';
 import type { ArtifactRecord } from '@kinqs/brainrouter-types';
 import type { GithubConnectorClient, GithubConnectorPermissionClient, GithubConnectorValidationClient, McpConnectorClient } from '@kinqs/brainrouter-core/connectors';
 import type { ComputerUseBridge, SecretBridge, TermSession } from './helpers.js';
+import type { UiTestHost } from '../uitestHost.js';
 
 type WsGit = ReturnType<typeof resolveWorkspaceGit>;
 
@@ -49,6 +50,8 @@ export type GhResult = { ok: boolean; stdout: string; stderr: string; error?: st
  */
 export interface HostContext {
   // ── Core runtime ──────────────────────────────────────────────────────────
+  // UI-TEST fusion — the web UI-testing host the query router drives.
+  uitest: UiTestHost;
   workspaceRoot: string;
   wsGit: WsGit;
   fileListCache: WorkspaceFileListCache;

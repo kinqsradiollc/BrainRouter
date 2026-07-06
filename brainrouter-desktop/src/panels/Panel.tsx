@@ -9,7 +9,7 @@
 import React, { useState } from 'react';
 import { Icon } from '../icons.js';
 
-export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'preview' | 'tasks' | 'task-detail' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'review' | 'requirements' | 'annotations' | 'artifacts' | 'attachments' | 'ci' | 'atlas' | 'workflows' | 'memory' | 'prototype';
+export type PanelId = 'context' | 'files' | 'file' | 'editor' | 'diff' | 'terminal' | 'tools' | 'preview' | 'tasks' | 'task-detail' | 'plan' | 'search' | 'schedule' | 'worktrees' | 'review' | 'requirements' | 'annotations' | 'artifacts' | 'attachments' | 'ci' | 'atlas' | 'workflows' | 'memory' | 'prototype' | 'uitest';
 
 export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'context', title: 'Context', icon: 'layout-right' },
@@ -36,6 +36,7 @@ export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'workflows', title: 'Workflows', icon: 'bolt' },
   { id: 'memory', title: 'Memory', icon: 'pin' },
   { id: 'prototype', title: 'Prototype', icon: 'bolt' },
+  { id: 'uitest', title: 'Browser', icon: 'globe' },
 ];
 
 const HIDDEN_MANUAL_PANEL_IDS = new Set<PanelId>([

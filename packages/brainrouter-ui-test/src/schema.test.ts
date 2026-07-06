@@ -6,7 +6,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { UiMapSchema, UiCommandResultSchema, CommandSchema } from './schema.js';
+import { UiMapSchema, UiCommandResultSchema, CommandSchema, DeviceSchema } from './schema.js';
 
 const validManifest = {
   version: 1,
@@ -80,6 +80,14 @@ test('CommandSchema discriminates each command kind', () => {
 test('CommandSchema rejects an unknown kind and a type-command missing text', () => {
   assert.equal(CommandSchema.safeParse({ kind: 'frobnicate' }).success, false);
   assert.equal(CommandSchema.safeParse({ kind: 'type', testID: 'x' }).success, false);
+});
+
+test('DeviceSchema requires name + positive integer width/height (agent set-device gate)', () => {
+  assert.equal(DeviceSchema.safeParse({ name: 'iPhone', width: 390, height: 844 }).success, true);
+  assert.equal(DeviceSchema.safeParse({ name: 'x', width: 390 }).success, false, 'missing height');
+  assert.equal(DeviceSchema.safeParse({ name: 'x', width: -1, height: 100 }).success, false, 'non-positive');
+  assert.equal(DeviceSchema.safeParse({ name: 'x', width: 1.5, height: 100 }).success, false, 'non-integer');
+  assert.equal(DeviceSchema.safeParse({ width: 390, height: 844 }).success, false, 'missing name');
 });
 
 test('UiCommandResultSchema accepts a normalized result', () => {

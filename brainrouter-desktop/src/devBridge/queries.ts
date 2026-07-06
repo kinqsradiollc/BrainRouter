@@ -1414,6 +1414,65 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     'action:plugin-enable': () => ({ ok: true }),
     'action:plugin-consent-set': () => ({ ok: true }),
     'action:plugin-remove': () => ({ ok: true }),
+    // UI-TEST fusion — a synthetic screen map + stories so the Atlas "Screens"
+    // mode + Browser panel render in browser-only dev (real extraction + LLM
+    // suggestion run in the host over the workspace).
+    'uitest:manifest': () => ({ manifest: devUiMap() }),
+    'uitest:extract': () => ({ manifest: devUiMap(), diff: { added: [], removed: [], changed: [] }, degraded: false, fileCount: 3 }),
+    'uitest:list-stories': () => ({ stories: devStories() }),
+    'uitest:suggest-stories': () => ({ stories: devStories(), count: devStories().length }),
+    'uitest:ensure-app': () => ({ url: 'http://localhost:5174', started: false }),
   };
   return queries;
+}
+
+/** A synthetic multi-screen UI map (mirrors the shape of a real extracted app)
+ *  so the Atlas "Screens" mode + Command Layer render in browser-only dev; the
+ *  host does the real source extraction. Includes a large screen to exercise the
+ *  per-screen cap (+N more). */
+function devUiMap() {
+  const F = 'examples/mock-ui/src/pages.ts';
+  type Act = 'tap' | 'type' | 'navigate' | 'assertVisible';
+  type Typ = 'button' | 'input' | 'link' | 'select' | 'element';
+  const el = (id: string, action: Act, type: Typ = 'element') => ({ id, testID: id, type, action, filePath: F, line: 1 });
+  const screen = (id: string, title: string, route: string | null, elements: ReturnType<typeof el>[]) =>
+    ({ id, title, platform: 'web' as const, route, filePath: F, elements });
+  const settings: ReturnType<typeof el>[] = [];
+  for (const g of ['general', 'provider', 'model', 'keys', 'appearance', 'shortcuts', 'advanced', 'network', 'privacy', 'danger']) {
+    settings.push(el(`${g}-toggle`, 'tap', 'button'), el(`${g}-field`, 'type', 'input'), el(`${g}-reset`, 'tap', 'button'));
+  }
+  return {
+    version: 1 as const,
+    generatedAt: '2020-01-01T00:00:00.000Z',
+    screens: [
+      screen('home', 'Home', '/', [el('home-title', 'assertVisible'), el('counter-increment', 'tap', 'button'), el('counter-value', 'assertVisible'), el('counter-reset', 'tap', 'button')]),
+      screen('login', 'Login', '/login', [el('email-field', 'type', 'input'), el('password-field', 'type', 'input'), el('login-submit', 'tap', 'button'), el('login-message', 'assertVisible')]),
+      screen('todos', 'Todos', '/todos', [el('todo-input', 'type', 'input'), el('todo-add', 'tap', 'button'), el('todo-list', 'assertVisible'), el('todo-count', 'assertVisible')]),
+      screen('timeline', 'Timeline', '/timeline', ['play', 'pause', 'loop', 'next-frame', 'previous-frame', 'next-keyframe', 'previous-keyframe', 'zoom-in', 'zoom-out', 'reset-view', 'retry', 'span'].map((id) => el(id, 'tap', 'button'))),
+      screen('dashboard', 'Dashboard', '/dashboard', [el('refresh', 'tap', 'button'), el('filter', 'type', 'input'), el('export', 'tap', 'button'), el('date-range', 'tap', 'button'), el('chart', 'assertVisible'), el('table', 'assertVisible')]),
+      screen('entity-registry', 'Entity Registry', '/entity-registry', ['aliases', 'canonical'].map((id) => el(id, 'type', 'input')).concat(['add-entity', 'remove-entity', 'search-entity', 'entity-list', 'save', 'cancel', 'import', 'export', 'refresh'].map((id) => el(id, 'tap', 'button')))),
+      screen('dialogue-studio', 'Dialogue Studio', '/dialogue-studio', ['casting', 'generate', 'generate-all', 'play-line', 'export-x-sheet', 'icon-button'].map((id) => el(id, 'tap', 'button'))),
+      screen('settings', 'Settings', null, settings),
+    ],
+  };
+}
+
+/** Synthetic UI stories over devUiMap (browser-only dev; the host LLM-generates
+ *  the real ones). */
+function devStories() {
+  return [
+    { id: 'log-in', title: 'Log in', description: 'Open Login, enter credentials, and submit.', steps: [
+      { action: 'navigate' as const, target: 'login' },
+      { action: 'type' as const, target: 'email-field', text: 'a@b.co' },
+      { action: 'type' as const, target: 'password-field', text: 'secret' },
+      { action: 'tap' as const, target: 'login-submit' },
+      { action: 'assertVisible' as const, target: 'login-message' },
+    ] },
+    { id: 'add-a-todo', title: 'Add a todo', description: 'Go to Todos and add an item to the list.', steps: [
+      { action: 'navigate' as const, target: 'todos' },
+      { action: 'type' as const, target: 'todo-input', text: 'Buy milk' },
+      { action: 'tap' as const, target: 'todo-add' },
+      { action: 'assertVisible' as const, target: 'todo-list' },
+    ] },
+  ];
 }
