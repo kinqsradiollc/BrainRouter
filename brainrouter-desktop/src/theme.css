@@ -4260,10 +4260,10 @@ select.ctl option { background: var(--surface); color: var(--text); }
  *    OPT-IN via <SetGroup> (.set-group): bare .set-row/.set-h2 OUTSIDE a group
  *    keep their current look, so categories convert to cards one at a time with
  *    nothing half-broken in between. ── */
-.set-body { display: flex; flex-direction: column; gap: 16px; max-width: 660px; }
+.set-body { display: flex; flex-direction: column; gap: 16px; max-width: 820px; margin: 0 auto; }
 .set-group { background: var(--raised); border: 1px solid var(--border); border-radius: var(--r-md); padding: 3px 15px 9px; }
 /* group title = quiet uppercase eyebrow (scoped, so bare .set-h2 is untouched) */
-.set-group > .set-h2 { position: sticky; top: 0; z-index: 1; margin: 0; padding: 11px 0 8px; font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; color: var(--text-faint); background: var(--raised); }
+.set-group > .set-h2 { margin: 0; padding: 11px 0 8px; font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; color: var(--text-faint); background: var(--raised); }
 .set-group > .set-h2 .ic { color: var(--accent); }
 /* dividers ONLY between adjacent rows inside a card; card edges never hairline */
 .set-group .set-row { border-bottom: 0; }
