@@ -60,7 +60,7 @@ import {
 import { brainRouter, fleetRouter, hooksRouter, governanceRouter } from './api/routes/agent/index.js';
 import { chatCompletionsRouter } from './api/routes/chat-completions.js';
 import { USING_FALLBACK_JWT_SECRET, IS_PRODUCTION, jwtSecretBootError } from './api/middleware/auth.js';
-import { securityHeaders, corsMiddleware } from './api/middleware/securityHeaders.js';
+import { securityHeaders, corsMiddleware, resolveCorsAllowlist } from './api/middleware/securityHeaders.js';
 import { resolveJsonBodyLimit, payloadTooLargeHandler } from './api/bodyLimit.js';
 import { createRateLimiter } from './api/middleware/rateLimit.js';
 import { errorHandler } from './api/middleware/errorHandler.js';
@@ -141,7 +141,9 @@ if (USE_HTTP) {
   // BRAINROUTER_CORS_ORIGIN may be a comma-separated list; only listed origins
   // are reflected and only they receive credentials.
   app.use(securityHeaders({ production: IS_PRODUCTION }));
-  app.use(corsMiddleware());
+  // In dev, any localhost origin is allowed so the dashboard "just works"; in
+  // production only BRAINROUTER_CORS_ORIGIN is reflected.
+  app.use(corsMiddleware(resolveCorsAllowlist(), { production: IS_PRODUCTION }));
 
   // BRAIN-BODY-LIMIT — size the JSON body limit for real MCP payloads (capture
   // transcripts, multi-record recall/sync). body-parser's stock 100kb default
