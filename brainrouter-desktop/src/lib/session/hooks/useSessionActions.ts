@@ -127,7 +127,6 @@ export interface SessionActions {
   openUrl: (url: string) => void;
   openCiPanel: () => void;
   refreshDashboard: () => void;
-  openDashboard: () => void;
   closeSessionMenu: () => void;
   setMeta: (key: string, patch: Record<string, unknown>) => void;
   togglePin: (s: SessionRow, root?: string) => void;
@@ -172,7 +171,6 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
       .catch(() => { /* gh/disk unreadable */ })
       .finally(() => setDashBusy(false));
   };
-  const openDashboard = (): void => { ensurePanel('dashboard'); refreshDashboard(); };
 
   function requestProjectSessions(root: string, limit = 80): void {
     const now = Date.now();
@@ -524,7 +522,7 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
     refreshSession, refreshSidebar, refreshGit, resumeSession, resumeSessionRef, resumeTimerRef,
     openTask, openWorkflow, viewToTop, answerInteraction, requestStop,
     switchToWorkspace, openProject, openWorktree, addProject, toggleProject,
-    openSettings, openFile, closeEditorTab, openUrl, openCiPanel, refreshDashboard, openDashboard,
+    openSettings, openFile, closeEditorTab, openUrl, openCiPanel, refreshDashboard,
     closeSessionMenu, setMeta, togglePin, toggleComplete, toggleArchive, moveToGroup,
     startRename, commitRename, forkSessionAction, deleteSessionAction, openExternal, openSessionMenu,
   };

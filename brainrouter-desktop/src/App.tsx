@@ -298,7 +298,7 @@ export function App(): React.ReactElement {
     refreshSession, refreshSidebar, refreshGit, resumeSession, resumeSessionRef, resumeTimerRef,
     openTask, openWorkflow, viewToTop, answerInteraction, requestStop,
     switchToWorkspace, openProject, openWorktree, addProject, toggleProject,
-    openSettings, openFile, closeEditorTab, openUrl, openCiPanel, refreshDashboard, openDashboard,
+    openSettings, openFile, closeEditorTab, openUrl, openCiPanel, refreshDashboard,
     closeSessionMenu, setMeta, togglePin, toggleComplete, toggleArchive, moveToGroup,
     startRename, commitRename, forkSessionAction, deleteSessionAction, openExternal, openSessionMenu,
   } = useSessionActions({

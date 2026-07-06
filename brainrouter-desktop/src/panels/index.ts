@@ -12,7 +12,6 @@ export { FileViewerPanel } from './files/FileViewerPanel.js';
 export { SearchPanel, type SearchHit } from './files/SearchPanel.js';
 export { DiffPanel } from './review/DiffPanel.js';
 export { ReviewPanel } from './review/ReviewPanel.js';
-export { DashboardPanel } from './review/DashboardPanel.js';
 export { TerminalPanel } from './workspace/TerminalPanel.js';
 export { ToolsPanel } from './workspace/ToolsPanel.js';
 export { WorktreesPanel } from './workspace/WorktreesPanel.js';
