@@ -985,6 +985,16 @@ export async function callOpenAI(
       retryBody = stripToolsFromBody(body);
       if (retryBody) retryKind = 'tools_unsupported';
     }
+    // A 400 whose body does NOT name the offending field — an OpenAI-compatible
+    // proxy masking the upstream rejection as "Upstream request failed" / a generic
+    // invalid_request_error. A common cause is a free / OSS model that silently
+    // rejects `reasoning_effort`. If we sent it, strip it and retry ONCE before
+    // giving up, rather than hard-failing the turn. (stripReasoningEffortFromBody
+    // returns undefined when there was nothing to strip, so this is a no-op then.)
+    if (!retryBody && res.status === 400) {
+      const stripped = stripReasoningEffortFromBody(body);
+      if (stripped) { retryBody = stripped; retryKind = 'reasoning_effort'; }
+    }
     if (retryBody) {
       traceEvent(retryKind === 'tools_unsupported' ? 'llm_call.tools_unsupported_retry' : 'llm_call.reasoning_effort_retry', {
         model: config.model,

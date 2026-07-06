@@ -112,6 +112,23 @@ test('LLM-RETRY-5XX isRetryableServerError: deterministic client errors are NOT 
   assert.equal(isRetryableServerError(new Error('summarized 500 tokens of output')), false);
 });
 
+test('LLM-RETRY-5XX isRetryableServerError: masked upstream 400 (proxy relaying a 5xx) IS retryable', () => {
+  // The exact shape the user hit: an OpenAI-compatible proxy relays an upstream
+  // failure as a 400 whose body says "Upstream request failed". The structured
+  // status is 400 (client error, NOT in RETRYABLE_HTTP_STATUS), so the retry
+  // decision must fall through to the message and recognize the upstream marker.
+  const masked = Object.assign(
+    new Error('OpenAI API error: 400 Bad Request - {"error":{"message":"Error from provider (Console): Upstream request failed","type":"invalid_request_error","param":null,"code":"invalid_request_error"}}'),
+    { status: 400 },
+  );
+  assert.equal(isRetryableServerError(masked), true);
+  // Other upstream phrasings a proxy might use.
+  assert.equal(isRetryableServerError(new Error('502 - upstream connect error or disconnect/reset before headers')), true);
+  assert.equal(isRetryableServerError(new Error('Bad Request - upstream timed out')), true);
+  // But a GENUINE invalid-param 400 (no upstream marker) stays fatal — a retry can't fix it.
+  assert.equal(isRetryableServerError(Object.assign(new Error("OpenAI API error: 400 Bad Request - Unsupported value: 'temperature' does not support 0.7"), { status: 400 })), false);
+});
+
 test('LLM-RETRY-5XX shouldRetryLlm: covers connectivity AND retryable server errors, bounded by attempts', () => {
   const gw = new Error('OpenAI API error: 504 Gateway Time-out');
   const net = new Error('fetch failed');

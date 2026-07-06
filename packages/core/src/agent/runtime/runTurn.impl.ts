@@ -1370,6 +1370,38 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           continue;
         }
 
+        // Empty-answer-after-tools guardrail. The model ran real tool calls this
+        // turn but returned a FINAL response with NO tool_calls AND no text — it
+        // abandoned the synthesis, so the turn would end on an empty / placeholder
+        // answer ("…the model returned no additional commentary"). This is the most
+        // common weak/free-model failure (deepseek-*-flash-free, small OS models):
+        // they run the tools then go silent. The preamble/deferral guards all miss
+        // it because they require NON-empty content. Re-prompt ONCE (bounded by the
+        // shared preamble budget) to force the actual answer from the tool results.
+        if (
+          preambleGuardFired < PREAMBLE_GUARD_MAX &&
+          this.lastTurnToolCalls > 0 &&
+          !(response.content ?? '').trim()
+        ) {
+          preambleGuardFired += 1;
+          const correction = [
+            'Runtime empty-answer guardrail tripped.',
+            `You ran ${this.lastTurnToolCalls} tool call(s) this turn, then returned an EMPTY response — no text and no further tool_calls. The user only sees your final prose and tool_calls, so right now they got nothing back.`,
+            '',
+            'Write your final answer NOW, in THIS response:',
+            "- Answer the user's original question using what the tools returned.",
+            '- Cite concrete findings (files, line numbers, values) from the tool output.',
+            '- If the results were inconclusive, say what you found and what is still unknown.',
+            '',
+            'Do NOT return empty text again, and do NOT just restate that you ran the tools.',
+          ].join('\n');
+          const guardMsg = { role: 'user', content: correction };
+          this.chatHistory.push(guardMsg);
+          this.recordTranscript({ ...guardMsg, name: 'guard' });
+          callbacks.onStatusUpdate(`Recovery: empty-answer-after-tools (${preambleGuardFired}/${PREAMBLE_GUARD_MAX}) — forcing synthesis`);
+          continue;
+        }
+
         // Stalled-preamble guardrail: when the model emits a short preamble
         // like "I'll start by exploring…" / "Let me check…" but ATTACHES NO
         // tool_calls in the same response, the loop would otherwise break
