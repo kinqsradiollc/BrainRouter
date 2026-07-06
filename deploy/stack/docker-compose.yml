@@ -58,10 +58,8 @@ services:
       # First-admin seed (clear after first boot; the API key prints once in logs).
       BRAINROUTER_ADMIN_PASSWORD: ${BRAINROUTER_ADMIN_PASSWORD:-}
       BRAINROUTER_ADMIN_EMAIL: ${BRAINROUTER_ADMIN_EMAIL:-admin@example.com}
-      # OPTIONAL provider bootstrap fallback (prefer the DB / dashboard).
-      BRAINROUTER_LLM_ENDPOINT: ${BRAINROUTER_LLM_ENDPOINT:-}
-      BRAINROUTER_LLM_API_KEY: ${BRAINROUTER_LLM_API_KEY:-}
-      BRAINROUTER_LLM_MODEL: ${BRAINROUTER_LLM_MODEL:-}
+      # AI providers (LLM / embeddings / reranker / judge) are configured in the
+      # DB by an admin (dashboard → AI Providers), NOT via env — see ADR-012.
       # Observability + browser CORS.
       BRAINROUTER_METRICS: ${BRAINROUTER_METRICS:-}
       BRAINROUTER_CORS_ORIGIN: ${BRAINROUTER_CORS_ORIGIN:-}

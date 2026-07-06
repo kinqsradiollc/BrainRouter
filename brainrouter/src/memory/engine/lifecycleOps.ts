@@ -28,12 +28,17 @@ export interface EngineServices {
   recallPipeline: MemoryRecallPipeline;
 }
 
-/** Build every env-configured service + pipeline for a fresh engine. */
+/**
+ * Build every service + pipeline for a fresh engine. ADR-012: the provider
+ * CREDENTIALS (endpoint/apiKey/model) are NO LONGER read from env here — the
+ * services start UNCONFIGURED and `applyProviderOverrides()` configures them
+ * from the system org's DB provider config (after the one-time env→DB seed).
+ * Only OPERATIONAL knobs (dimensions/timeouts/concurrency/opt-in flags), which
+ * are not credentials, remain env-driven.
+ */
 export function buildServices(store: IMemoryStore, extractionRunner: ConstructorParameters<typeof MemoryCapturePipeline>[1], synthesisRunner: unknown): EngineServices {
   const embeddingService = new EmbeddingService({
-    endpoint: process.env.BRAINROUTER_EMBEDDING_ENDPOINT,
-    apiKey: process.env.BRAINROUTER_EMBEDDING_API_KEY ?? process.env.BRAINROUTER_LLM_API_KEY,
-    model: process.env.BRAINROUTER_EMBEDDING_MODEL,
+    // dimensions is a SCHEMA knob (the pgvector column width), not a credential.
     dimensions: process.env.BRAINROUTER_EMBEDDING_DIMENSIONS ? parseInt(process.env.BRAINROUTER_EMBEDDING_DIMENSIONS, 10) : undefined,
     timeoutMs: process.env.BRAINROUTER_EMBEDDING_TIMEOUT_MS
       ? parseInt(process.env.BRAINROUTER_EMBEDDING_TIMEOUT_MS, 10)
@@ -41,9 +46,6 @@ export function buildServices(store: IMemoryStore, extractionRunner: Constructor
   });
 
   const rerankerService = new RerankerService({
-    endpoint: process.env.BRAINROUTER_RERANKER_ENDPOINT,
-    apiKey: process.env.BRAINROUTER_RERANKER_API_KEY,
-    model: process.env.BRAINROUTER_RERANKER_MODEL,
     topN: process.env.BRAINROUTER_RERANKER_TOP_N
       ? parseInt(process.env.BRAINROUTER_RERANKER_TOP_N, 10)
       : undefined,
@@ -53,20 +55,12 @@ export function buildServices(store: IMemoryStore, extractionRunner: Constructor
   });
 
   // Relevance judge is opt-in (off by default) — enable with
-  // BRAINROUTER_RELEVANCE_JUDGE_ENABLED=true, since it adds a per-query LLM
-  // call. Falls back to the shared BRAINROUTER_LLM_* settings unless
-  // explicitly overridden so a single LLM credential covers extraction,
-  // synthesis, and judging. When enabled it runs INLINE inside recall; the
-  // engine records a throttled observability job (see `recall`) so the agent
-  // no longer shows "idle · never" while it's actually working.
+  // BRAINROUTER_RELEVANCE_JUDGE_ENABLED=true (an OPERATIONAL flag, since it adds
+  // a per-query LLM call). Its provider (endpoint/apiKey/model) comes from the DB
+  // "judge" provider via applyProviderOverrides; when no judge provider is set it
+  // is simply not ready. When enabled + configured it runs INLINE inside recall.
   const relevanceJudge = new RelevanceJudgeService({
     enabled: process.env.BRAINROUTER_RELEVANCE_JUDGE_ENABLED === "true",
-    endpoint: process.env.BRAINROUTER_RELEVANCE_JUDGE_ENDPOINT
-      ?? process.env.BRAINROUTER_LLM_ENDPOINT,
-    apiKey: process.env.BRAINROUTER_RELEVANCE_JUDGE_API_KEY
-      ?? process.env.BRAINROUTER_LLM_API_KEY,
-    model: process.env.BRAINROUTER_RELEVANCE_JUDGE_MODEL
-      ?? process.env.BRAINROUTER_LLM_MODEL,
     maxCandidates: process.env.BRAINROUTER_RELEVANCE_JUDGE_MAX_CANDIDATES
       ? parseInt(process.env.BRAINROUTER_RELEVANCE_JUDGE_MAX_CANDIDATES, 10)
       : undefined,

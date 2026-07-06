@@ -1,8 +1,9 @@
 // Shared wire-format types + upstream endpoint for the OpenAI-compatible
 // /v1/chat/completions endpoint.
 
-const DEFAULT_UPSTREAM_ENDPOINT =
-  process.env.BRAINROUTER_LLM_ENDPOINT ?? "https://api.openai.com/v1/chat/completions";
+// ADR-012 — a static fallback only; the real endpoint comes from the DB-resolved
+// provider (see resolveUpstreamLlm). No `.env` provider reads.
+const DEFAULT_UPSTREAM_ENDPOINT = "https://api.openai.com/v1/chat/completions";
 
 interface IncomingMessage {
   role: "system" | "user" | "assistant" | "tool";

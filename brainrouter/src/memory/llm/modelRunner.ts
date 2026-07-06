@@ -39,11 +39,15 @@ function shouldFallback(err: unknown): boolean {
   return /\b(429|500|502|503|504)\b/.test(msg);
 }
 
-/** ADR-010 P2 — a DB-resolved LLM provider that overrides the .env config. */
+/** ADR-012 — the DB-resolved LLM provider the runner uses (no more `.env`). */
 export interface LlmProviderOverride {
   endpoint?: string;
   apiKey?: string;
   model?: string;
+  /** Optional resilience: retry once on this model when the primary fails. */
+  fallbackModel?: string;
+  fallbackEndpoint?: string;
+  fallbackApiKey?: string;
 }
 
 // Configurable LLM Runner — supports per-task model routing
@@ -56,23 +60,24 @@ export class ModelLLMRunner implements LLMRunner {
   }
 
   /**
-   * ADR-010 P2 — apply a DB-resolved provider (endpoint/apiKey/model). It wins
-   * over the `BRAINROUTER_LLM_*` env vars; `null` clears it (back to env). Only
-   * set when a DB config actually exists, so an env-only deployment is untouched.
+   * ADR-012 — set the DB-resolved LLM provider (endpoint/apiKey/model + optional
+   * fallback). This is the ONLY source of the runner's credentials now; `null`
+   * clears it → the runner is unconfigured (cognition is skipped) until an admin
+   * configures a provider in the DB / dashboard.
    */
   setProviderOverride(o: LlmProviderOverride | null): void {
     this.providerOverride = o && (o.endpoint || o.apiKey || o.model) ? o : null;
   }
 
   async run({ prompt, systemPrompt, timeoutMs = 120_000, taskId, tool }: LLMRunParams): Promise<string> {
-    const endpoint = this.providerOverride?.endpoint || process.env.BRAINROUTER_LLM_ENDPOINT || "https://api.openai.com/v1/chat/completions";
-    const apiKey = this.providerOverride?.apiKey || process.env.BRAINROUTER_LLM_API_KEY;
+    const endpoint = this.providerOverride?.endpoint || "https://api.openai.com/v1/chat/completions";
+    const apiKey = this.providerOverride?.apiKey;
 
     if (!apiKey) {
       // Typed sentinel so upstream pipelines can short-circuit cleanly without dumping a stack trace.
       // Callers should check `error.code === "LLM_NOT_CONFIGURED"` and skip extraction silently.
       // Thrown BEFORE the breaker so a config gap never counts as a provider failure.
-      const err: any = new Error(`[BrainRouter:${taskId}] BRAINROUTER_LLM_API_KEY is not set. Skipping LLM step.`);
+      const err: any = new Error(`[BrainRouter:${taskId}] no LLM provider is configured (add one in the dashboard → AI Providers). Skipping LLM step.`);
       err.code = "LLM_NOT_CONFIGURED";
       throw err;
     }
@@ -89,7 +94,6 @@ export class ModelLLMRunner implements LLMRunner {
 
     const model = this.modelOverride
       ?? this.providerOverride?.model
-      ?? (process.env.BRAINROUTER_LLM_MODEL?.trim() || undefined)
       ?? "gpt-4o-mini";
 
     const messages: { role: string; content: string }[] = [];
@@ -106,7 +110,7 @@ export class ModelLLMRunner implements LLMRunner {
         : ["BRAINROUTER_LLM_TIMEOUT_MS"],
     });
 
-    const fallbackModelName = process.env.BRAINROUTER_LLM_FALLBACK_MODEL?.trim() || undefined;
+    const fallbackModelName = this.providerOverride?.fallbackModel?.trim() || undefined;
 
     try {
       let result: string;
@@ -114,14 +118,13 @@ export class ModelLLMRunner implements LLMRunner {
         result = await this.runOnce({ endpoint, apiKey, model, messages, effectiveTimeoutMs, taskId, tool });
       } catch (err) {
         // On a provider/transport failure, retry ONCE against a stable fallback
-        // model before giving up. No-op (rethrow) when no fallback is configured,
-        // it equals the primary, or the error is a client error — so behaviour is
-        // byte-identical to before whenever BRAINROUTER_LLM_FALLBACK_MODEL is unset.
+        // model before giving up. No-op (rethrow) when no fallback is configured
+        // on the provider, it equals the primary, or the error is a client error.
         if (!fallbackModelName || fallbackModelName === model || !shouldFallback(err)) {
           throw err;
         }
-        const fbEndpoint = process.env.BRAINROUTER_LLM_FALLBACK_ENDPOINT?.trim() || endpoint;
-        const fbApiKey = process.env.BRAINROUTER_LLM_FALLBACK_API_KEY?.trim() || apiKey;
+        const fbEndpoint = this.providerOverride?.fallbackEndpoint?.trim() || endpoint;
+        const fbApiKey = this.providerOverride?.fallbackApiKey?.trim() || apiKey;
         console.warn(
           `[BrainRouter:${taskId}] primary model "${model}" failed (${err instanceof Error ? err.message : String(err)}); `
           + `retrying once on fallback model "${fallbackModelName}".`,

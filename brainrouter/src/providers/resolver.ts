@@ -1,18 +1,20 @@
 /**
- * ProviderResolver (ADR-010 P2) — resolve a runtime provider config for
- * (org, kind), DB-first with a `.env` fallback during rollout.
+ * ProviderResolver (ADR-012) — resolve a runtime provider config for (org, kind)
+ * from the DATABASE. This is the "new system": providers (LLM / embeddings /
+ * reranker / judge) are configured per-org in the DB (dashboard → AI Providers,
+ * or POST /api/admin/providers), exactly like desktop/CLI — never `.env`.
  *
- * This is the seam that retires `.env`: `buildServices()`/`modelRunner` call
- * `resolveProviderConfig` instead of reading `process.env` directly. When an org
- * has a DB row (with a key) it wins; otherwise we fall back to the existing
- * `BRAINROUTER_*` env vars so nothing breaks before configs are migrated in.
+ * `resolveFromEnv` is retained ONLY for the one-time upgrade SEED
+ * (`seedProvidersFromEnv`): a deployment that still has legacy `BRAINROUTER_*`
+ * provider vars gets them migrated into the DB once on boot, then the vars are
+ * dead. `resolveProviderConfig` itself no longer reads `process.env`.
  */
 import type { ProviderStore } from "./store.js";
 import type { ProviderKind, ResolvedProviderConfig } from "./types.js";
 
 const env = (k: string): string => (process.env[k] ?? "").trim();
 
-/** The legacy `.env` provider config for a kind, or null when no key is set. */
+/** Legacy `.env` provider config for a kind, or null — SEED-ONLY (see above). */
 export function resolveFromEnv(kind: ProviderKind): ResolvedProviderConfig | null {
   const base = (
     endpoint: string,
@@ -38,9 +40,10 @@ export function resolveFromEnv(kind: ProviderKind): ResolvedProviderConfig | nul
 }
 
 /**
- * DB-first provider resolution with an env fallback. Returns null only when
- * NEITHER a DB row nor an env key exists for the kind (the caller then treats
- * that service as unconfigured — the existing behaviour).
+ * DB-only provider resolution. Returns the org's default provider for the kind,
+ * or null when none is configured (the caller then treats that service as
+ * unconfigured — recall degrades to keyword-only, cognition is skipped). No env
+ * fallback: providers live in the DB now.
  */
 export async function resolveProviderConfig(
   store: ProviderStore,
@@ -51,7 +54,7 @@ export async function resolveProviderConfig(
     const db = await store.getDefaultResolvedProvider(orgId, kind);
     if (db && db.apiKey) return db;
   } catch {
-    /* DB unavailable / unconfigured → fall back to env */
+    /* DB unavailable / unconfigured → unconfigured */
   }
-  return resolveFromEnv(kind);
+  return null;
 }

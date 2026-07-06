@@ -24,6 +24,7 @@ import type { TenancyStore } from "../tenancy/store.js";
 import type { ProviderStore } from "../providers/store.js";
 import type { IntegrationStore } from "../integrations/store.js";
 import { resolveProviderConfig } from "../providers/resolver.js";
+import { seedProvidersFromEnv } from "../providers/seed.js";
 import { systemProviderOrgId } from "../providers/runtime.js";
 import { MemoryCapturePipeline } from "./capture.js";
 import { MemoryRecallPipeline } from "./recall.js";
@@ -145,8 +146,11 @@ export class MemoryEngine {
   /** Run the store lifecycle (migrations → initVec → seed-admin) + bg reembed; see engine/lifecycleOps.ts. */
   async #initialize(): Promise<void> {
     await lifecycleOps.initialize(this);
-    // ADR-010 P2 — after migrations + seed (so the system org + any provider
-    // rows exist), apply DB provider configs over the env-built services.
+    // ADR-012 — one-time migration: seed the system org's DB providers from any
+    // legacy BRAINROUTER_* env (idempotent; skips kinds already DB-configured),
+    // then resolve + apply the DB provider configs onto the services. After this,
+    // providers are DB-only; the env vars are dead.
+    try { await seedProvidersFromEnv(this.providers, systemProviderOrgId()); } catch { /* best-effort */ }
     await this.applyProviderOverrides();
   }
 
@@ -368,8 +372,17 @@ export class MemoryEngine {
     const store = this.providers;
     try {
       const llm = await resolveProviderConfig(store, orgId, "llm");
-      if (llm?.source === "db") {
-        const o = { endpoint: llm.endpoint, apiKey: llm.apiKey, model: llm.model };
+      if (llm) {
+        const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+        const o = {
+          endpoint: llm.endpoint,
+          apiKey: llm.apiKey,
+          model: llm.model,
+          // Optional resilience carried on the provider config's `extra`.
+          fallbackModel: str(llm.extra?.fallbackModel),
+          fallbackEndpoint: str(llm.extra?.fallbackEndpoint),
+          fallbackApiKey: str(llm.extra?.fallbackApiKey),
+        };
         for (const runner of [this.extractionRunner, this.synthesisRunner]) {
           const set = (runner as { setProviderOverride?: (x: typeof o) => void }).setProviderOverride;
           if (typeof set === "function") set.call(runner, o);

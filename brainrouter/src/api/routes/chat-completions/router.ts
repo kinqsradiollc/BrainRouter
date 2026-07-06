@@ -16,14 +16,17 @@
 // Auth: same Bearer header convention as the rest of the API
 // (memory API key OR JWT, via requireAnyAuth).
 //
-// Upstream LLM: same env-driven config as the rest of the engine
-// (BRAINROUTER_LLM_ENDPOINT / BRAINROUTER_LLM_API_KEY / BRAINROUTER_LLM_MODEL).
+// Upstream LLM: the caller's org DB-configured LLM provider (ADR-012), resolved
+// per request from the DB — falls back to the system org, never `.env`.
 // We forward streaming requests as Server-Sent Events back to the client.
 
 import { Router, type Response } from "express";
 import { memoryEngine } from "../../../memory/engine.js";
 import { requireAnyAuth, type AuthedRequest } from "../../middleware/auth.js";
 import { DEFAULT_UPSTREAM_ENDPOINT, type IncomingBody } from "./types.js";
+import { resolveProviderConfig } from "../../../providers/resolver.js";
+import { systemProviderOrgId } from "../../../providers/runtime.js";
+import { resolveOrgContext } from "../../../tenancy/context.js";
 import {
   flattenContent,
   buildBriefingMessage,
@@ -37,6 +40,22 @@ import { streamUpstream } from "./streaming.js";
 
 export const chatCompletionsRouter = Router();
 chatCompletionsRouter.use(requireAnyAuth);
+
+/**
+ * ADR-012 — resolve the upstream LLM from the DB provider config: the caller's
+ * org first, then the system org. Returns null when neither has an LLM provider
+ * (→ 503; configure one in the dashboard). Never reads `.env`.
+ */
+async function resolveUpstreamLlm(userId: string): Promise<{ endpoint: string; apiKey: string; model: string } | null> {
+  let orgId = systemProviderOrgId();
+  try {
+    const ctx = await resolveOrgContext(memoryEngine.tenancy, userId);
+    if (ctx?.orgId) orgId = ctx.orgId;
+  } catch { /* fall back to the system org */ }
+  const p = await resolveProviderConfig(memoryEngine.providers, orgId, "llm");
+  if (!p?.apiKey) return null;
+  return { endpoint: p.endpoint || DEFAULT_UPSTREAM_ENDPOINT, apiKey: p.apiKey, model: p.model };
+}
 
 chatCompletionsRouter.post("/chat/completions", async (req: AuthedRequest, res: Response) => {
   const userId = req.userId!;
@@ -77,20 +96,19 @@ chatCompletionsRouter.post("/chat/completions", async (req: AuthedRequest, res: 
     }
   }
 
-  // 2. Forward to upstream.
-  const upstreamApiKey = process.env.BRAINROUTER_LLM_API_KEY;
-  if (!upstreamApiKey) {
+  // 2. Forward to upstream — the DB-resolved LLM provider (ADR-012).
+  const provider = await resolveUpstreamLlm(userId);
+  if (!provider) {
     res.status(503).json({
       error: {
-        message:
-          "Upstream LLM not configured. Set BRAINROUTER_LLM_API_KEY on the MCP server (or use the CLI which forwards it automatically).",
+        message: "No LLM provider is configured. Add one in the dashboard → AI Providers (or POST /api/admin/providers).",
       },
     });
     return;
   }
 
   const upstreamPayload: Record<string, unknown> = {
-    model: body.model ?? process.env.BRAINROUTER_LLM_MODEL ?? "gpt-4o-mini",
+    model: body.model ?? provider.model ?? "gpt-4o-mini",
     messages: outboundMessages.map((m) => ({ role: m.role, content: flattenContent(m.content), name: m.name })),
     stream: Boolean(body.stream),
   };
@@ -99,11 +117,11 @@ chatCompletionsRouter.post("/chat/completions", async (req: AuthedRequest, res: 
 
   let upstream: globalThis.Response;
   try {
-    upstream = await fetch(DEFAULT_UPSTREAM_ENDPOINT, {
+    upstream = await fetch(provider.endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${upstreamApiKey}`,
+        Authorization: `Bearer ${provider.apiKey}`,
       },
       body: JSON.stringify(upstreamPayload),
     });
@@ -192,8 +210,9 @@ chatCompletionsRouter.get("/memory-status", async (req: AuthedRequest, res: Resp
 });
 
 // Minimal /v1/models so OpenAI SDK clients that list models don't 404.
-chatCompletionsRouter.get("/models", (_req: AuthedRequest, res: Response) => {
-  const defaultModel = process.env.BRAINROUTER_LLM_MODEL ?? "gpt-4o-mini";
+chatCompletionsRouter.get("/models", async (req: AuthedRequest, res: Response) => {
+  const provider = await resolveUpstreamLlm(req.userId ?? "").catch(() => null);
+  const defaultModel = provider?.model || "gpt-4o-mini";
   res.json({
     object: "list",
     data: [
