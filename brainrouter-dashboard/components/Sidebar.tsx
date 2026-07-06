@@ -241,6 +241,25 @@ const links = [
         <path d="m21 15-5-5L5 21" />
       </svg>
     )
+  },
+  {
+    href: "/providers",
+    label: "AI Providers",
+    icon: (
+      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M4 7h16M4 12h16M4 17h10" />
+        <circle cx="18" cy="17" r="2" />
+      </svg>
+    )
+  },
+  {
+    href: "/organizations",
+    label: "Organizations",
+    icon: (
+      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 21h18M6 21V7l6-4 6 4v14M10 9h.01M14 9h.01M10 13h.01M14 13h.01" />
+      </svg>
+    )
   }
 ] as const;
 
@@ -269,7 +288,7 @@ export function Sidebar({ isCollapsed: isCollapsedProp, onToggleCollapse, isMobi
   };
 
   const visibleLinks = links.filter((link) => {
-    if ((link.href === "/users" || link.href === "/brand") && !user?.isAdmin) return false;
+    if ((link.href === "/users" || link.href === "/brand" || link.href === "/providers") && !user?.isAdmin) return false;
     return true;
   });
 
@@ -279,7 +298,7 @@ export function Sidebar({ isCollapsed: isCollapsedProp, onToggleCollapse, isMobi
     { title: "Memory", hrefs: ["/memories", "/scenes", "/persona", "/working-memory", "/blackboard", "/vault"] },
     { title: "Graph & Recall", hrefs: ["/recall-inspector", "/timeline", "/intelligence", "/tree"] },
     { title: "Integrity", hrefs: ["/contradictions", "/evidence", "/sources"] },
-    { title: "System", hrefs: ["/hooks", "/fleet", "/skills", "/profile", "/users", "/brand"] },
+    { title: "System", hrefs: ["/hooks", "/fleet", "/skills", "/profile", "/providers", "/organizations", "/users", "/brand"] },
   ];
   const linkByHref = new Map<string, (typeof visibleLinks)[number]>(visibleLinks.map((l) => [l.href, l]));
 
