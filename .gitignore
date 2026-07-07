@@ -40,6 +40,10 @@ brainrouter-cli/changelog/
 .env.development.local
 .env.test.local
 .env.production.local
+# .env backups (may hold secrets) — never commit them
+.env.bak
+.env.*.bak
+*.env.bak
 
 # TypeScript incremental build cache
 *.tsbuildinfo
