@@ -398,6 +398,12 @@ export class MemoryEngine {
     return this.store as unknown as EmailAuthStore;
   }
 
+  /** The active embedding dimension (0 if unbuilt) — for the embedder-swap guard. */
+  public getEmbeddingDimensions(): number {
+    const s = this.store as unknown as { getVecDimensions?: () => number };
+    return typeof s.getVecDimensions === "function" ? s.getVecDimensions() : 0;
+  }
+
   /** ADR-014 P-C — team consensus persona store. */
   public get orgPersona(): OrgPersonaStore {
     return this.store as unknown as OrgPersonaStore;

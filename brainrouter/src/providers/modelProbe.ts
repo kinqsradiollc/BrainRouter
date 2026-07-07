@@ -7,7 +7,7 @@
  *   - the generic path fetches the OpenAI-compatible `GET /models` and tags each
  *     model's reasoning capability via `inferModelReasoningCapabilities`.
  */
-import { resolveModelsUrl } from "./wireFormat.js";
+import { resolveModelsUrl, resolveEmbeddingsUrl } from "./wireFormat.js";
 
 // Loaded lazily + defensively — core's provider barrel is Node-safe and already a
 // backend dependency, but we tolerate any export drift without crashing a probe.
@@ -90,6 +90,33 @@ export async function probeModels(baseUrl: string, apiKey: string, kind: string 
     }
     out.sort((a, b) => a.id.localeCompare(b.id));
     return out;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Test-embed a tiny string to discover the model's output DIMENSION. Used by the
+ * guard that warns before swapping to a different-dimension embedder (which would
+ * force the whole `cognitive_vec` table to be rebuilt + re-embedded).
+ * Returns the dimension, or null if the probe fails.
+ */
+export async function probeEmbeddingDim(baseUrl: string, apiKey: string, model: string, timeoutMs = 8000): Promise<number | null> {
+  const url = resolveEmbeddingsUrl(baseUrl);
+  if (!url) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const key = apiKey || (await core()).LOCAL_PLACEHOLDER_KEY || "";
+    if (key) headers.Authorization = `Bearer ${key}`;
+    const res = await fetch(url, { method: "POST", headers, body: JSON.stringify({ input: "dimension probe", model }), signal: controller.signal });
+    if (!res.ok) return null;
+    const data = (await res.json()) as any;
+    const vec = data?.data?.[0]?.embedding;
+    return Array.isArray(vec) && vec.length > 0 ? vec.length : null;
+  } catch {
+    return null;
   } finally {
     clearTimeout(timer);
   }

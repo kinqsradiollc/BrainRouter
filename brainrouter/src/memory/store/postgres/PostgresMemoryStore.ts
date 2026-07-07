@@ -336,6 +336,12 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
     return this.vecReady && this.vecDimensions > 0;
   }
 
+  /** The active embedding dimension (0 when the vector table isn't built yet). Used
+   *  by the dashboard guard that warns before a dimension-changing embedder swap. */
+  public getVecDimensions(): number {
+    return this.vecReady ? this.vecDimensions : 0;
+  }
+
   public async reembedStaleRecords(embedder: (text: string) => Promise<Float32Array>): Promise<number> {
     if (!this.vecReady) return 0;
     const rows = await this.rows<{ record_id: string; content: string }>(`

@@ -12,7 +12,7 @@ import { requirePermission } from "../../middleware/tenancy.js";
 import { sendError } from "../../../contracts/http.js";
 import { isProviderKind, PROVIDER_KINDS, type ProviderConfigInput } from "../../../providers/types.js";
 import { isSecretBoxConfigured } from "../../../security/secretBox.js";
-import { probeModels, deriveProviderId } from "../../../providers/modelProbe.js";
+import { probeModels, deriveProviderId, probeEmbeddingDim } from "../../../providers/modelProbe.js";
 import { BUILTIN_PROVIDERS, providerServesKind } from "@kinqs/brainrouter-core/provider";
 
 export const providersRouter = Router();
@@ -84,6 +84,20 @@ providersRouter.post("/probe-models", async (req: AuthedRequest, res) => {
     // 200 with ok:false — a probe failure is a normal, recoverable UI state.
     res.json({ ok: false, error: error instanceof Error ? error.message : "Failed to fetch models" });
   }
+});
+
+/**
+ * POST /api/admin/providers/probe-embedding-dim — test-embed the candidate model to
+ * discover its output dimension, and report the store's CURRENT dimension. The
+ * dashboard warns before a swap that changes the dimension (rebuilds cognitive_vec).
+ */
+providersRouter.post("/probe-embedding-dim", async (req: AuthedRequest, res) => {
+  const baseUrl = String(req.body?.baseUrl ?? "").trim();
+  const apiKey = String(req.body?.apiKey ?? "").trim();
+  const model = String(req.body?.model ?? "").trim();
+  if (!baseUrl || !model) { sendError(res, 400, "baseUrl and model are required"); return; }
+  const dimensions = await probeEmbeddingDim(baseUrl, apiKey, model);
+  res.json({ ok: dimensions != null, dimensions, currentDimensions: memoryEngine.getEmbeddingDimensions() });
 });
 
 /** POST /api/admin/providers — create a config. */

@@ -147,6 +147,12 @@ export const adminApi = {
       "/api/admin/providers/probe-models",
       { method: "POST", body: { baseUrl, apiKey, kind }, orgId },
     ),
+  /** Test-embed a model to get its dimension + the store's current one (swap guard). */
+  probeEmbeddingDim: (baseUrl: string, apiKey: string, model: string, orgId?: string) =>
+    authFetch<{ ok: boolean; dimensions: number | null; currentDimensions: number }>(
+      "/api/admin/providers/probe-embedding-dim",
+      { method: "POST", body: { baseUrl, apiKey, model }, orgId },
+    ),
   /** The providers the shared core (desktop/CLI) supports for a KIND — reused verbatim. */
   providerCatalog: (kind?: string) =>
     authFetch<{ providers: { id: string; label: string; endpoint: string; local: boolean; requestFormat?: string; capabilities?: string[]; defaultModels?: string[] }[] }>(`/api/admin/providers/catalog${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`),

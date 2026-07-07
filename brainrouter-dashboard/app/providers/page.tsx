@@ -163,6 +163,19 @@ function ProvidersInner() {
     try {
       const models = probed.length > 0 && selected.length === probed.length ? [] : selected;
       const model = draft.model.trim() || selected[0] || "";
+
+      // Guard: swapping to a DIFFERENT-dimension embedder rebuilds cognitive_vec and
+      // drops every existing embedding (they must be re-embedded). Confirm first.
+      if (draft.kind === "embedding" && model) {
+        const dim = await adminApi.probeEmbeddingDim(draft.baseUrl.trim(), draft.apiKey.trim(), model);
+        if (dim.ok && dim.dimensions && dim.currentDimensions > 0 && dim.dimensions !== dim.currentDimensions) {
+          const ok = window.confirm(
+            `This embedding model produces ${dim.dimensions}-dimensional vectors, but your memory store is ${dim.currentDimensions}-dimensional.\n\n` +
+            `Saving will REBUILD the vector table and DROP all existing embeddings — every memory must be re-embedded before it's searchable again.\n\nContinue?`,
+          );
+          if (!ok) { setSaving(false); return; }
+        }
+      }
       const body: any = {
         kind: draft.kind, providerId: draft.providerId || undefined, label: draft.label.trim(),
         baseUrl: draft.baseUrl.trim(), model, models, wireFormat: draft.wireFormat || undefined,
