@@ -3053,6 +3053,72 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         if (fresh.servers && fresh.servers[id]) { delete fresh.servers[id]; saveConfig(fresh as never); }
         return { ok: true, id };
       },
+      // ADR-016 C0 — sign in to a BrainRouter backend and point the active brain
+      // at it over HTTP with the returned per-user apiKey, so memory becomes
+      // backend-backed (the same MCP plane the CLI/dashboard use). The apiKey lives
+      // in the brain server profile like any other MCP key; the previous (embedded)
+      // profile is stashed under cli.account so sign-out restores it non-destructively.
+      'action:auth-signin': async (args) => {
+        const email = String(args.email ?? '').trim();
+        const password = String(args.password ?? '');
+        const baseUrl = (String(args.url ?? '').trim() || 'http://localhost:3747').replace(/\/+$/, '');
+        if (!email || !password) return { ok: false, error: 'Email and password are required.' };
+        let res: Response;
+        try {
+          res = await fetch(`${baseUrl}/api/auth/signin`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password }),
+          });
+        } catch { return { ok: false, error: `Cannot reach BrainRouter at ${baseUrl}.` }; }
+        if (!res.ok) {
+          let msg = `Sign-in failed (HTTP ${res.status})`;
+          try { const j = await res.json() as { error?: string }; if (j?.error) msg = j.error; } catch { /* keep default */ }
+          return { ok: false, error: msg };
+        }
+        const data = await res.json() as { apiKey?: string; userId?: string; displayName?: string; email?: string };
+        const apiKey = String(data.apiKey ?? '').trim();
+        if (!apiKey) return { ok: false, error: 'Sign-in succeeded but returned no API key.' };
+        const isBrain = (id: string, s: { identity?: string } | undefined) => s?.identity === 'brainrouter' || /^brainrouter/i.test(id);
+        const fresh = loadConfig() as { servers?: Record<string, unknown>; cli?: Record<string, unknown> };
+        fresh.servers = fresh.servers ?? {};
+        const brainId = Object.keys(fresh.servers).find((id) => isBrain(id, fresh.servers![id] as { identity?: string })) ?? 'brainrouter';
+        const prevBrain = fresh.servers[brainId] ?? null;
+        const mcpUrl = `${baseUrl}/mcp`;
+        const account = { url: baseUrl, mcpUrl, userId: data.userId ?? '', displayName: data.displayName ?? email, email: data.email ?? email };
+        fresh.servers[brainId] = { type: 'http', url: mcpUrl, apiKey, identity: 'brainrouter' };
+        fresh.cli = fresh.cli ?? {};
+        fresh.cli.brainUrl = mcpUrl;
+        fresh.cli.account = { ...account, prevBrain };
+        saveConfig(fresh as never);
+        _resetCliKnobsCache();
+        try { await mcpClient.disconnectOne(brainId); } catch { /* not connected */ }
+        try { await mcpClient.connectOne(brainId, fresh.servers[brainId] as never, loadConfig().llm ?? getLlm(), 5_000); }
+        catch { return { ok: false, error: `Signed in, but couldn't reach the brain at ${mcpUrl}. Is the backend running?` }; }
+        return { ok: true, account };
+      },
+      'action:auth-signout': async () => {
+        const isBrain = (id: string, s: { identity?: string } | undefined) => s?.identity === 'brainrouter' || /^brainrouter/i.test(id);
+        const fresh = loadConfig() as { servers?: Record<string, unknown>; cli?: { account?: { prevBrain?: unknown } } & Record<string, unknown> };
+        const prevBrain = fresh.cli?.account?.prevBrain ?? null;
+        const brainId = fresh.servers ? Object.keys(fresh.servers).find((id) => isBrain(id, fresh.servers![id] as { identity?: string })) : undefined;
+        if (brainId && fresh.servers) {
+          if (prevBrain) fresh.servers[brainId] = prevBrain;
+          else delete fresh.servers[brainId];
+        }
+        if (fresh.cli) { delete fresh.cli.brainUrl; delete fresh.cli.account; }
+        saveConfig(fresh as never);
+        _resetCliKnobsCache();
+        try { if (brainId) await mcpClient.disconnectOne(brainId); } catch { /* already gone */ }
+        try { if (brainId && fresh.servers?.[brainId]) await mcpClient.connectOne(brainId, fresh.servers[brainId] as never, loadConfig().llm ?? getLlm(), 5_000); }
+        catch { /* embedded brain reconnects on next boot */ }
+        return { ok: true };
+      },
+      'auth-status': () => {
+        const account = (loadConfig() as { cli?: { account?: { url?: string; userId?: string; displayName?: string; email?: string } } }).cli?.account;
+        return account
+          ? { signedIn: true, account: { url: account.url ?? '', userId: account.userId ?? '', displayName: account.displayName ?? '', email: account.email ?? '' } }
+          : { signedIn: false, account: null };
+      },
       // DESK-6m — per-chat context-menu actions (Pin / Mark completed / Rename /
       // Move to group / Archive / Delete / Fork / Open). All write the shared
       // CLI stores, so the terminal sees the same titles/pins/groups.
