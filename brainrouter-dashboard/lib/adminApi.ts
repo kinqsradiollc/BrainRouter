@@ -149,7 +149,7 @@ export const adminApi = {
     ),
   /** The providers the shared core (desktop/CLI) supports for a KIND — reused verbatim. */
   providerCatalog: (kind?: string) =>
-    authFetch<{ providers: { id: string; label: string; endpoint: string; local: boolean; requestFormat?: string; capabilities?: string[] }[] }>(`/api/admin/providers/catalog${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`),
+    authFetch<{ providers: { id: string; label: string; endpoint: string; local: boolean; requestFormat?: string; capabilities?: string[]; defaultModels?: string[] }[] }>(`/api/admin/providers/catalog${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`),
   /** Per-subagent-role model routing (desktop/CLI parity). */
   getAgentModels: (orgId?: string) =>
     authFetch<{ roles: string[]; assignments: Record<string, { provider?: string; model?: string }> }>("/api/admin/agent-models", { orgId }),

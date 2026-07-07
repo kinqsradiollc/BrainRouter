@@ -17,6 +17,7 @@ export const cohere: ProviderDefinition = {
   local: false,
   pickerVisible: false,
   capabilities: ['reranker'],
+  defaultModels: ['rerank-v3.5', 'rerank-english-v3.0', 'rerank-multilingual-v3.0'],
 };
 
 /** Voyage AI — embeddings + reranking (OpenAI-compatible /v1). */
@@ -29,6 +30,7 @@ export const voyage: ProviderDefinition = {
   local: false,
   pickerVisible: false,
   capabilities: ['embedding', 'reranker'],
+  defaultModels: ['rerank-2', 'rerank-2-lite', 'voyage-3', 'voyage-3-lite', 'voyage-3-large'],
 };
 
 /** Jina AI — embeddings + reranking (OpenAI-compatible /v1). */
@@ -41,4 +43,5 @@ export const jina: ProviderDefinition = {
   local: false,
   pickerVisible: false,
   capabilities: ['embedding', 'reranker'],
+  defaultModels: ['jina-reranker-v2-base-multilingual', 'jina-embeddings-v3'],
 };

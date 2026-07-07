@@ -39,6 +39,13 @@ export interface ProviderDefinition {
   capabilities?: Array<'chat' | 'embedding' | 'reranker'>;
 
   /**
+   * Known model ids for providers whose endpoint does NOT expose a live GET /models
+   * (rerank vendors like Cohere, some embedders). Seeds the model picker so the user
+   * isn't forced to type them by hand; a live /models still wins when available.
+   */
+  defaultModels?: string[];
+
+  /**
    * Primary generation wire format:
    *  - 'responses'         — POST /responses with typed `input` items
    *                          (OpenAI-native Codex shape).

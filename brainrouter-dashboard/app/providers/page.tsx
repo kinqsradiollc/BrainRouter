@@ -37,7 +37,7 @@ const ROLE_DESC: Record<string, string> = {
 };
 type AgentAssign = { provider?: string; model?: string };
 
-interface CatalogEntry { id: string; label: string; endpoint: string; local: boolean }
+interface CatalogEntry { id: string; label: string; endpoint: string; local: boolean; defaultModels?: string[] }
 interface Draft {
   kind: ProviderKind; providerId: string; label: string; baseUrl: string; apiKey: string;
   model: string; apiVersion: string; wireFormat: string; reasoningEffort: string;
@@ -111,7 +111,10 @@ function ProvidersInner() {
     setEditingId(null);
     const custom = c.id === "openai-compatible";
     setDraft({ ...EMPTY_DRAFT, kind: galleryKind, providerId: custom ? "" : c.id, label: custom ? "" : c.label, baseUrl: custom ? "" : c.endpoint });
-    setProbed([]); setSelected([]); setModelFilter(""); setProbeError(""); setOpen(true);
+    // Seed known models for vendors whose endpoint has no live /models (rerank vendors),
+    // so the picker is populated without a fetch. A successful Fetch replaces them.
+    const seed = c.defaultModels ?? [];
+    setProbed(seed); setSelected(seed); setModelFilter(""); setProbeError(""); setOpen(true);
   }
   function openCustom() {
     setEditingId(null);
@@ -135,7 +138,12 @@ function ProvidersInner() {
     setProbing(true); setProbeError("");
     try {
       const res = await adminApi.probeModels(draft.baseUrl.trim(), draft.apiKey.trim());
-      if (!res.ok || !res.models?.length) { setProbeError(res.error || "No models returned — check the key/endpoint."); return; }
+      if (!res.ok || !res.models?.length) {
+        setProbeError(draft.kind === "llm"
+          ? (res.error || "No models returned — check the key/endpoint.")
+          : "This provider doesn't list models — pick a suggested one, or type the model name below.");
+        return;
+      }
       const ids = res.models.map((m) => m.id);
       setProbed(ids); setSelected(ids);
       if (!draft.model.trim() || !ids.includes(draft.model)) setDraft((d) => ({ ...d, model: ids[0] }));
@@ -368,20 +376,24 @@ function ProvidersInner() {
                 )}
               </div>
 
-              <div className="settings-grid">
-                <label className="settings-label">Wire format
-                  <select className="settings-select" value={draft.wireFormat} onChange={(e) => setDraft({ ...draft, wireFormat: e.target.value })}>
-                    <option value="">Auto (chat-completions)</option>
-                    <option value="chat-completions">chat-completions</option>
-                    <option value="responses">responses</option>
-                  </select>
-                </label>
-                <label className="settings-label">Reasoning effort
-                  <select className="settings-select" value={draft.reasoningEffort} onChange={(e) => setDraft({ ...draft, reasoningEffort: e.target.value })}>
-                    {REASONING.map((r) => <option key={r} value={r}>{r || "—"}</option>)}
-                  </select>
-                </label>
-              </div>
+              {/* Wire format + reasoning effort are chat-only — hidden for embedding/reranker,
+                  whose request shape is fixed (POST /embeddings or /rerank). */}
+              {draft.kind === "llm" && (
+                <div className="settings-grid">
+                  <label className="settings-label">Wire format
+                    <select className="settings-select" value={draft.wireFormat} onChange={(e) => setDraft({ ...draft, wireFormat: e.target.value })}>
+                      <option value="">Auto (chat-completions)</option>
+                      <option value="chat-completions">chat-completions</option>
+                      <option value="responses">responses</option>
+                    </select>
+                  </label>
+                  <label className="settings-label">Reasoning effort
+                    <select className="settings-select" value={draft.reasoningEffort} onChange={(e) => setDraft({ ...draft, reasoningEffort: e.target.value })}>
+                      {REASONING.map((r) => <option key={r} value={r}>{r || "—"}</option>)}
+                    </select>
+                  </label>
+                </div>
+              )}
               <div className="settings-checks">
                 <label className="settings-check"><input type="checkbox" checked={draft.isDefault} onChange={(e) => setDraft({ ...draft, isDefault: e.target.checked })} /> Default for its kind</label>
                 <label className="settings-check"><input type="checkbox" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} /> Enabled</label>

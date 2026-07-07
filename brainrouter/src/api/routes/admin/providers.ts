@@ -56,6 +56,7 @@ providersRouter.get("/catalog", (req: AuthedRequest, res) => {
       local: Boolean(p.local),
       requestFormat: typeof p.requestFormat === "string" ? p.requestFormat : undefined,
       capabilities: Array.isArray(p.capabilities) ? p.capabilities : ["chat"],
+      defaultModels: Array.isArray(p.defaultModels) ? p.defaultModels : [],
     }));
   res.json({ providers });
 });
