@@ -20,6 +20,7 @@ export function AccountSettings(): React.ReactElement {
   const [gh, setGh] = useState<GhState | null>(null);
   const [ghBusy, setGhBusy] = useState(false);
   const [ghMsg, setGhMsg] = useState('');
+  const [deviceCode, setDeviceCode] = useState<{ code: string; uri: string } | null>(null);
 
   const refreshGh = useCallback(async () => {
     try {
@@ -56,20 +57,24 @@ export function AccountSettings(): React.ReactElement {
   }, []);
 
   const connectGithub = useCallback(async () => {
-    setGhBusy(true); setGhMsg('');
+    setGhBusy(true); setGhMsg(''); setDeviceCode(null);
     try {
-      const res = await bridgeQuery<{ ok: boolean; url?: string; error?: string }>('github-connect-start');
-      if (!res.ok || !res.url) { setGhMsg(res.error || 'Could not start the GitHub connection.'); return; }
-      await bridgeQuery('action:open-external', { url: res.url });
-      setGhMsg('Authorize BrainRouter in the browser tab that just opened…');
-      for (let i = 0; i < 20; i++) {
-        await new Promise((r) => setTimeout(r, 3000));
-        const st = await bridgeQuery<{ connected?: boolean; login?: string | null }>('github-connect-status');
-        if (st.connected) { setGh({ appConfigured: true, connected: true, login: st.login ?? null }); setGhMsg(''); return; }
+      const res = await bridgeQuery<{ ok: boolean; userCode?: string; verificationUri?: string; interval?: number; error?: string }>('github-device-start');
+      if (!res.ok || !res.userCode) { setGhMsg(res.error || 'Could not start the GitHub connection.'); return; }
+      const uri = res.verificationUri || 'https://github.com/login/device';
+      setDeviceCode({ code: res.userCode, uri });
+      await bridgeQuery('action:open-external', { url: uri });
+      setGhMsg('Enter the code below at github.com/login/device to authorize — this updates automatically.');
+      const interval = Math.max(3, res.interval ?? 5);
+      for (let i = 0; i < 40; i++) {
+        await new Promise((r) => setTimeout(r, interval * 1000));
+        const st = await bridgeQuery<{ status?: string; login?: string }>('github-device-poll');
+        if (st.status === 'connected') { setGh({ appConfigured: true, connected: true, login: st.login ?? null }); setGhMsg(''); setDeviceCode(null); return; }
+        if (st.status === 'expired' || st.status === 'error') { setGhMsg('That code expired — click Connect GitHub to try again.'); setDeviceCode(null); return; }
       }
-      setGhMsg('Still waiting — click Refresh once you have authorized on GitHub.');
+      setGhMsg('Timed out — click Connect GitHub to try again.');
     } catch (e) { setGhMsg(e instanceof Error ? e.message : 'Failed to connect.'); }
-    finally { setGhBusy(false); }
+    finally { setGhBusy(false); setDeviceCode(null); }
   }, []);
 
   const disconnectGithub = useCallback(async () => {
@@ -115,6 +120,12 @@ export function AccountSettings(): React.ReactElement {
                   <button className="btn primary" disabled={ghBusy} onClick={() => void connectGithub()}>{ghBusy ? 'Waiting…' : 'Connect GitHub'}</button>
                   <button className="btn" disabled={ghBusy} onClick={() => void refreshGh()}>Refresh</button>
                 </div>
+                {deviceCode && (
+                  <div style={{ marginTop: 10, padding: 12, borderRadius: 8, border: '1px solid var(--border, #333)', background: 'var(--input-bg, #16181d)' }}>
+                    <div className="muted" style={{ fontSize: 12 }}>Enter this code at <b>github.com/login/device</b> (opened in your browser):</div>
+                    <div style={{ fontFamily: 'ui-monospace, monospace', fontSize: 22, letterSpacing: 3, marginTop: 6 }}>{deviceCode.code}</div>
+                  </div>
+                )}
                 {ghMsg && <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>{ghMsg}</div>}
               </>
             ) : (

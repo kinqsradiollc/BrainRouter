@@ -3156,6 +3156,32 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         try { await fetch(`${base}/api/connectors/github/disconnect`, { method: 'POST', headers: { Authorization: `Bearer ${apiKey}` } }); return { ok: true }; }
         catch { return { ok: false }; }
       },
+      // Device flow (no client secret) — start returns a short code + the verify URL;
+      // poll until GitHub reports the user authorized it.
+      'github-device-start': async () => {
+        const cfg = loadConfig() as { cli?: { account?: { url?: string } }; servers?: Record<string, { identity?: string; apiKey?: string }> };
+        const base = String(cfg.cli?.account?.url ?? '').replace(/\/+$/, '');
+        const bId = Object.keys(cfg.servers ?? {}).find((k) => (cfg.servers![k]?.identity === 'brainrouter') || /^brainrouter/i.test(k));
+        const apiKey = bId ? String(cfg.servers![bId]?.apiKey ?? '') : '';
+        if (!base || !apiKey) return { ok: false, error: 'Sign in to BrainRouter first.' };
+        try {
+          const r = await fetch(`${base}/api/connectors/github/device/start`, { method: 'POST', headers: { Authorization: `Bearer ${apiKey}` } });
+          const d = await r.json() as { userCode?: string; verificationUri?: string; interval?: number; error?: string };
+          if (!r.ok || !d.userCode) return { ok: false, error: d.error || `HTTP ${r.status}` };
+          return { ok: true, userCode: d.userCode, verificationUri: d.verificationUri, interval: d.interval ?? 5 };
+        } catch (e) { return { ok: false, error: e instanceof Error ? e.message : 'failed' }; }
+      },
+      'github-device-poll': async () => {
+        const cfg = loadConfig() as { cli?: { account?: { url?: string } }; servers?: Record<string, { identity?: string; apiKey?: string }> };
+        const base = String(cfg.cli?.account?.url ?? '').replace(/\/+$/, '');
+        const bId = Object.keys(cfg.servers ?? {}).find((k) => (cfg.servers![k]?.identity === 'brainrouter') || /^brainrouter/i.test(k));
+        const apiKey = bId ? String(cfg.servers![bId]?.apiKey ?? '') : '';
+        if (!base || !apiKey) return { status: 'error' };
+        try {
+          const r = await fetch(`${base}/api/connectors/github/device/poll`, { method: 'POST', headers: { Authorization: `Bearer ${apiKey}` } });
+          return await r.json() as Record<string, unknown>;
+        } catch (e) { return { status: 'error', error: e instanceof Error ? e.message : 'failed' }; }
+      },
       // DESK-6m — per-chat context-menu actions (Pin / Mark completed / Rename /
       // Move to group / Archive / Delete / Fork / Open). All write the shared
       // CLI stores, so the terminal sees the same titles/pins/groups.

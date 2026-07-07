@@ -114,6 +114,46 @@ githubConnectorRouter.post("/github/disconnect", requireAnyAuth, async (req: Aut
   res.json({ ok: true });
 });
 
+// ---- Device flow (RFC 8628) — no client secret needed (public client). The user
+// gets a short code to enter at github.com/login/device; we poll for the token. ----
+const deviceKey = (userId: string) => `connectorDevice:github:${userId}`;
+
+githubConnectorRouter.post("/github/device/start", requireAnyAuth, async (req: AuthedRequest, res) => {
+  const app = await getApp();
+  if (!app?.clientId) { sendError(res, 400, "GitHub OAuth is not configured on this server yet."); return; }
+  try {
+    const r = await fetch(`${GH}/login/device/code`, {
+      method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ client_id: app.clientId, scope: SCOPE }),
+    });
+    const d = await r.json() as { device_code?: string; user_code?: string; verification_uri?: string; interval?: number; expires_in?: number; error?: string };
+    if (!d.device_code || !d.user_code) { sendError(res, 400, d.error || "GitHub returned no device code — is Device Flow enabled on the OAuth App?"); return; }
+    await memoryEngine.emailAuth.setSetting(deviceKey(req.userId!), { deviceCode: d.device_code, exp: Math.floor(Date.now() / 1000) + (d.expires_in ?? 900) });
+    res.json({ userCode: d.user_code, verificationUri: d.verification_uri ?? "https://github.com/login/device", interval: d.interval ?? 5 });
+  } catch (e) { sendError(res, 500, e instanceof Error ? e.message : "device start failed"); }
+});
+
+githubConnectorRouter.post("/github/device/poll", requireAnyAuth, async (req: AuthedRequest, res) => {
+  const app = await getApp();
+  const dev = await memoryEngine.emailAuth.getSetting<{ deviceCode?: string; exp?: number }>(deviceKey(req.userId!));
+  if (!app?.clientId || !dev?.deviceCode) { res.json({ status: "error", error: "no pending device authorization" }); return; }
+  if ((dev.exp ?? 0) < Math.floor(Date.now() / 1000)) { res.json({ status: "expired" }); return; }
+  try {
+    const r = await fetch(`${GH}/login/oauth/access_token`, {
+      method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ client_id: app.clientId, device_code: dev.deviceCode, grant_type: "urn:ietf:params:oauth:grant-type:device_code" }),
+    });
+    const d = await r.json() as { access_token?: string; scope?: string; error?: string };
+    if (d.error === "authorization_pending" || d.error === "slow_down") { res.json({ status: "pending" }); return; }
+    if (!d.access_token) { res.json({ status: "error", error: d.error || "no token" }); return; }
+    const ur = await fetch(`${GH_API}/user`, { headers: { Authorization: `Bearer ${d.access_token}`, Accept: "application/vnd.github+json" } });
+    const login = (ur.ok ? ((await ur.json()) as { login?: string }).login : "") || "";
+    await memoryEngine.emailAuth.setSetting(tokenKey(req.userId!), { sealed: seal(JSON.stringify({ accessToken: d.access_token, login, scope: d.scope ?? SCOPE, connectedAt: new Date().toISOString() })) });
+    await memoryEngine.emailAuth.setSetting(deviceKey(req.userId!), {});
+    res.json({ status: "connected", login });
+  } catch (e) { res.json({ status: "error", error: e instanceof Error ? e.message : "poll failed" }); }
+});
+
 githubConnectorRouter.get("/github/repos", requireAnyAuth, async (req: AuthedRequest, res) => {
   const tok = await getUserToken(req.userId!);
   if (!tok) { res.json({ connected: false, repos: [] }); return; }
