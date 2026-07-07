@@ -6,6 +6,7 @@
  * private key + webhook secret are write-only. Uses the app's premium blocks.
  */
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "../../components/AuthProvider";
 import { AuthGuard } from "../../components/AuthGuard";
@@ -92,6 +93,13 @@ function IntegrationsInner() {
         </div>
       )}
       {error && <div className="settings-note settings-note--error">{error}</div>}
+
+      <PremiumCard level={2} style={{ marginTop: "var(--spacing-16)" }}>
+        <div className="settings-cardhead">
+          <div><h3>GitHub repositories</h3><div className="settings-hint">Link the repos your GitHub App can access to your memory system.</div></div>
+          <Link href="/integrations/github"><PremiumButton size="small" variant="ghost">Manage repositories →</PremiumButton></Link>
+        </div>
+      </PremiumCard>
 
       <div className="settings-stack">
         <PremiumCard level={2}>
