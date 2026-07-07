@@ -1,9 +1,9 @@
 import type { RelevanceJudgeServiceConfig, RelevanceVerdict } from "@kinqs/brainrouter-types";
-import { fetchWithExternalRetry } from "../util/retry.js";
 import { acquireLLMSlot } from "../llm/llm-semaphore.js";
-import { extractChatCompletionText, resolveLLMTimeoutMs } from "../llm/llm-response.js";
-import { normalizeRequestTimeoutMs, requestTimeoutSignal } from "../util/request-timeout.js";
+import { resolveLLMTimeoutMs } from "../llm/llm-response.js";
+import { normalizeRequestTimeoutMs } from "../util/request-timeout.js";
 import { extractJsonValue } from "../util/llm-json.js";
+import { modelGateway } from "../../services/modelGateway/modelGateway.js";
 
 export interface JudgeCandidate {
   /** Stable id used for logging — typically the memory's record_id. */
@@ -133,22 +133,23 @@ export class RelevanceJudgeService {
       "Include one verdict per candidate. Keep each reason under 120 chars.",
     ].join("\n");
 
-    // STRUCTURED OUTPUT — force the verdicts through a schema'd tool call so the
-    // shape is consistent across model versions instead of trusting the prompt's
-    // "respond with strict JSON". Loose item schema; the prompt still describes
-    // each verdict's fields. Backends that reject `tools` 400 → we drop them and
-    // retry (below); the prompt's JSON instruction is the fallback either way.
-    // `response_format` is still omitted (same per-provider 400 concerns).
-    const body: Record<string, unknown> = {
-      model: this.model,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      temperature: 0,
-      tools: [{
-        type: "function",
-        function: {
+    // The judge is just another LLM call (like the desktop/CLI agent), so it routes
+    // through the single ModelGateway using the configured LLM provider. The gateway
+    // owns the wire format, the forced-tool structured output (schema'd so the shape
+    // is consistent across models), the LM-Studio unload retry and the tool-drop
+    // fallback — no more duplicated transport here.
+    const release = await acquireLLMSlot();
+    let raw: string;
+    try {
+      raw = await modelGateway.dispatch({
+        endpoint: this.endpoint,
+        apiKey: this.apiKey,
+        model: this.model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        tool: {
           name: "report_relevance",
           description: "Return one relevance verdict per candidate, as described in the prompt.",
           parameters: {
@@ -158,71 +159,9 @@ export class RelevanceJudgeService {
             additionalProperties: false,
           },
         },
-      }],
-      tool_choice: { type: "function", function: { name: "report_relevance" } },
-    };
-
-    const doFetch = () => fetchWithExternalRetry(this.endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify(body),
-      signal: requestTimeoutSignal(this.timeoutMs),
-    }, {
-      label: "Relevance Judge API",
-    });
-
-    const release = await acquireLLMSlot();
-    let raw: string;
-    try {
-      let res = await doFetch();
-      // LM Studio quirk: idle models auto-unload and the first call after
-      // unload returns 400 with "Model is unloaded" / "No models loaded".
-      // The backend then loads the model in the background, so a retry
-      // ~1.5s later usually succeeds. Mirrors ModelLLMRunner in engine.ts.
-      if (res.status === 400) {
-        const errorBody = await res.text();
-        if (/model\s+(is\s+)?unloaded|model\s+not\s+loaded|no\s+models?\s+loaded/i.test(errorBody)) {
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-          res = await doFetch();
-          if (!res.ok) {
-            const retryBody = await res.text().catch(() => "(no body)");
-            throw new Error(
-              `Relevance Judge API failed after LM Studio reload retry: HTTP ${res.status} ${res.statusText} - ${retryBody}`,
-            );
-          }
-        } else if (body.tools) {
-          // Backend likely rejects `tools`/`tool_choice` → drop them and retry as
-          // a plain completion (the prompt still asks for the JSON shape).
-          delete body.tools;
-          delete body.tool_choice;
-          res = await doFetch();
-          if (!res.ok) {
-            const retryBody = await res.text().catch(() => "(no body)");
-            throw new Error(`Relevance Judge API failed after dropping tool_choice: HTTP ${res.status} ${res.statusText} - ${retryBody}`);
-          }
-        } else {
-          throw new Error(`Relevance Judge API failed: HTTP ${res.status} ${res.statusText} - ${errorBody}`);
-        }
-      } else if (!res.ok) {
-        const err = await res.text().catch(() => "(no body)");
-        throw new Error(`Relevance Judge API failed: HTTP ${res.status} ${res.statusText} - ${err}`);
-      }
-      const data = await res.json() as any;
-      if (data?.error) {
-        const errMsg = typeof data.error === "string" ? data.error : (data.error.message ?? JSON.stringify(data.error).slice(0, 400));
-        throw new Error(`Relevance Judge endpoint returned an error envelope: ${errMsg}`);
-      }
-      // Prefer the forced tool-call's arguments (schema-shaped); fall back to
-      // message content when the model answered inline or tools were dropped.
-      const toolArgs = data?.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
-      const content = (typeof toolArgs === "string" && toolArgs.trim()) ? toolArgs : extractChatCompletionText(data);
-      if (typeof content !== "string") {
-        throw new Error(`Relevance Judge returned no usable content. Response: ${JSON.stringify(data).slice(0, 400)}`);
-      }
-      raw = content;
+        timeoutMs: this.timeoutMs,
+        label: "Relevance Judge",
+      });
     } finally {
       release();
     }

@@ -72,7 +72,7 @@ class ModelGateway {
   }
 
   /** Dispatch a chat call for a registered kind (resolves its config, then dispatch). */
-  async chat(kind: ModelKind, opts: Omit<GatewayDispatchOptions, "endpoint" | "apiKey" | "wireFormat"> & { model?: string }): Promise<string> {
+  async chat(kind: ModelKind, opts: Omit<GatewayDispatchOptions, "endpoint" | "apiKey" | "wireFormat" | "model"> & { model?: string }): Promise<string> {
     const cfg = this.configs.get(kind);
     if (!cfg?.endpoint) {
       const err: any = new Error(`[gateway] no ${kind} provider configured`);
