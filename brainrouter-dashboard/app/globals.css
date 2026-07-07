@@ -631,6 +631,29 @@ h5, h6 { font-size: 13px; line-height: 1.4; font-weight: 600; letter-spacing: 0;
 .models-tab:hover { color: var(--text); }
 .models-tab--active { background: var(--accent-wash); color: var(--accent); }
 
+/* ── Provider catalog gallery + setup modal (desktop parity) ── */
+.prov-gallery { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--spacing-8); margin-top: var(--spacing-8); }
+@media (max-width: 640px) { .prov-gallery { grid-template-columns: 1fr; } }
+.prov-card { display: flex; align-items: center; gap: var(--spacing-12); text-align: left; padding: 10px 12px; border: 1px solid var(--border-dim); border-radius: var(--radius-md); background: var(--overlay-bg); cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+.prov-card:hover { border-color: var(--border-strong); background: var(--overlay-bg-hover-strong); }
+.prov-icon { flex-shrink: 0; width: 34px; height: 34px; border-radius: var(--radius-sm); display: grid; place-items: center; font-size: 13px; font-weight: 650; color: #fff; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10); }
+.prov-icon--sm { width: 30px; height: 30px; font-size: 12px; }
+.prov-meta { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.prov-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.prov-host { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prov-status { flex-shrink: 0; font-size: 12px; font-weight: 600; color: var(--accent); }
+.prov-status--ok { color: var(--ok); }
+
+.prov-overlay { position: fixed; inset: 0; z-index: 1000; background: var(--overlay-bg-strong, rgba(0,0,0,0.6)); display: flex; align-items: flex-start; justify-content: center; padding: 6vh 16px; overflow-y: auto; }
+.prov-dialog { width: 100%; max-width: 40rem; background: var(--surface-raised, var(--color-charcoal-canvas)); border: 1px solid var(--border-med); border-radius: var(--radius-lg); box-shadow: var(--shadow-md, 0 20px 60px rgba(0,0,0,0.5)); display: flex; flex-direction: column; max-height: 88vh; }
+.prov-dialog__head { display: flex; align-items: center; gap: var(--spacing-12); padding: var(--spacing-16) var(--spacing-20); border-bottom: 1px solid var(--border-dim); }
+.prov-dialog__body { padding: var(--spacing-16) var(--spacing-20); overflow-y: auto; display: flex; flex-direction: column; gap: var(--spacing-12); }
+.prov-dialog__foot { display: flex; justify-content: flex-end; gap: var(--spacing-8); padding: var(--spacing-12) var(--spacing-20); border-top: 1px solid var(--border-dim); }
+.prov-modellist { max-height: 15rem; overflow-y: auto; border: 1px solid var(--border-dim); border-radius: var(--radius-md); background: var(--overlay-bg); }
+.prov-modelrow { display: flex; align-items: center; gap: var(--spacing-8); padding: 6px 10px; }
+.prov-modelrow + .prov-modelrow { border-top: 1px solid var(--border-dim); }
+.prov-modelrow--sel { background: var(--accent-wash); }
+
 /* ── Organizations ─────────────────────────────────────────── */
 .org-create { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 16px; align-items: end; }
 .org-create__name { grid-column: 1; }
