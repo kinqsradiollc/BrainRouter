@@ -28,6 +28,21 @@ export function isSubagentRole(x: unknown): x is SubagentRole {
   return typeof x === 'string' && (SUBAGENT_ROLES as readonly string[]).includes(x);
 }
 
+/**
+ * The MEMORY BRAIN's own model-consuming cognitive roles — DISTINCT from the
+ * coding agent's {@link SUBAGENT_ROLES}. The brain runs its own LLM workers
+ * (memory extraction vs synthesis/distillation can use different models via
+ * `BRAINROUTER_EXTRACTION_MODEL` / `BRAINROUTER_SYNTHESIS_MODEL`), so its "sub-agent
+ * model" routing is keyed by these roles, not the coding roles above. Each role
+ * overrides the model on the shared LLM provider.
+ */
+export const BRAIN_AGENT_ROLES = ['extraction', 'synthesis'] as const;
+export type BrainAgentRole = (typeof BRAIN_AGENT_ROLES)[number];
+
+export function isBrainAgentRole(x: unknown): x is BrainAgentRole {
+  return typeof x === 'string' && (BRAIN_AGENT_ROLES as readonly string[]).includes(x);
+}
+
 /** Named providers configured (beyond the main `llm`). */
 export function listProviderNames(config: Pick<Config, 'providers'>): string[] {
   return Object.keys(config.providers ?? {}).sort();

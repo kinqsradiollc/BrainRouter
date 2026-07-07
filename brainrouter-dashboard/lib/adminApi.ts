@@ -147,6 +147,14 @@ export const adminApi = {
       "/api/admin/providers/probe-models",
       { method: "POST", body: { baseUrl, apiKey }, orgId },
     ),
+  /** The providers the shared core (desktop/CLI) supports — reused verbatim. */
+  providerCatalog: () =>
+    authFetch<{ providers: { id: string; label: string; endpoint: string; local: boolean; requestFormat?: string }[] }>("/api/admin/providers/catalog"),
+  /** Per-subagent-role model routing (desktop/CLI parity). */
+  getAgentModels: (orgId?: string) =>
+    authFetch<{ roles: string[]; assignments: Record<string, { provider?: string; model?: string }> }>("/api/admin/agent-models", { orgId }),
+  setAgentModels: (assignments: Record<string, { provider?: string; model?: string }>, orgId?: string) =>
+    authFetch<{ assignments: Record<string, { provider?: string; model?: string }> }>("/api/admin/agent-models", { method: "PUT", body: { assignments }, orgId }),
   // GitHub App / integration configs (RBAC: triggers:manage).
   listIntegrations: (orgId?: string) =>
     authFetch<{ integrations: IntegrationConfig[]; secretStorageReady: boolean }>("/api/admin/integrations", { orgId }),

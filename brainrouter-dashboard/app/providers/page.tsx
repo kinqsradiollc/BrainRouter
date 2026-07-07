@@ -25,6 +25,19 @@ const KINDS: { kind: ProviderKind; label: string; hint: string }[] = [
 const EMPTY: ProviderInput = { kind: "llm", providerId: "", label: "", baseUrl: "", apiKey: "", model: "", models: [], wireFormat: "", reasoningEffort: "", isDefault: true, enabled: true };
 const REASONING = ["", "low", "medium", "high", "xhigh"];
 
+// The MEMORY BRAIN's cognitive roles (packages/core BRAIN_AGENT_ROLES) — distinct
+// from the coding agent's subagents. The list comes from the backend
+// (/api/admin/agent-models); these are the display labels. Each role picks a model
+// on the shared LLM provider (extraction vs synthesis can run different models).
+const ROLE_LABELS: Record<string, string> = {
+  extraction: "Extraction", synthesis: "Synthesis",
+};
+const ROLE_DESC: Record<string, string> = {
+  extraction: "The LLM that distills memories from each turn.",
+  synthesis: "The LLM for identity distillation, digests & summaries.",
+};
+type AgentAssign = { provider?: string; model?: string };
+
 function ProvidersInner() {
   const router = useRouter();
   const { user } = useAuth();
@@ -39,6 +52,33 @@ function ProvidersInner() {
   const [saving, setSaving] = useState(false);
   const [fetchingModels, setFetchingModels] = useState(false);
   const [fetchError, setFetchError] = useState("");
+  const [modelsTab, setModelsTab] = useState<"providers" | "subagents">("providers");
+  const [roles, setRoles] = useState<string[]>([]);
+  const [assignments, setAssignments] = useState<Record<string, AgentAssign>>({});
+  const [savingAgents, setSavingAgents] = useState(false);
+  const [agentMsg, setAgentMsg] = useState("");
+
+  const loadAgentModels = useCallback(async () => {
+    try {
+      const res = await adminApi.getAgentModels();
+      setRoles(res.roles ?? []);
+      setAssignments(res.assignments ?? {});
+    } catch { /* surfaced only when the subagents tab is used */ }
+  }, []);
+
+  async function saveAgentModels() {
+    setSavingAgents(true);
+    setAgentMsg("");
+    try {
+      const res = await adminApi.setAgentModels(assignments);
+      setAssignments(res.assignments ?? {});
+      setAgentMsg("Saved.");
+    } catch (e) {
+      setAgentMsg(e instanceof Error ? e.message : "Failed to save");
+    } finally {
+      setSavingAgents(false);
+    }
+  }
 
   async function fetchModels() {
     const baseUrl = (form.baseUrl ?? "").trim();
@@ -75,7 +115,7 @@ function ProvidersInner() {
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); void loadAgentModels(); }, [load, loadAgentModels]);
   useEffect(() => { if (user && !user.isAdmin) router.replace("/overview"); }, [router, user]);
 
   function resetForm() { setForm(EMPTY); setModelsText(""); setExtraText(""); setEditingId(null); setFetchError(""); }
@@ -126,6 +166,12 @@ function ProvidersInner() {
       )}
       {error && <div className="settings-note settings-note--error">{error}</div>}
 
+      <div className="models-tabs" role="tablist">
+        <button type="button" className={`models-tab ${modelsTab === "providers" ? "models-tab--active" : ""}`} onClick={() => setModelsTab("providers")}>Providers</button>
+        <button type="button" className={`models-tab ${modelsTab === "subagents" ? "models-tab--active" : ""}`} onClick={() => setModelsTab("subagents")}>Subagents</button>
+      </div>
+
+      {modelsTab === "providers" && (<>
       <div className="settings-stack">
         {KINDS.map(({ kind, label, hint }) => {
           const rows = providers.filter((p) => p.kind === kind);
@@ -228,6 +274,50 @@ function ProvidersInner() {
           </div>
         </form>
       </PremiumCard>
+      </>)}
+
+      {modelsTab === "subagents" && (() => {
+        const llmProvider = providers.find((p) => p.kind === "llm" && p.isDefault) ?? providers.find((p) => p.kind === "llm");
+        const modelOpts = llmProvider ? Array.from(new Set([llmProvider.model, ...(llmProvider.models ?? [])].filter(Boolean))) : [];
+        return (
+        <PremiumCard level={2} style={{ marginTop: "var(--spacing-24)" }}>
+          <div className="settings-cardhead">
+            <div>
+              <h3>Brain worker models</h3>
+              <div className="settings-hint">Route the brain&apos;s cognitive workers to different models on your LLM provider — the same routing mechanism as the desktop/CLI agent. Models come from your saved LLM provider.</div>
+            </div>
+          </div>
+          {!llmProvider ? (
+            <div className="settings-empty-inline">Configure an LLM provider first (Providers tab).</div>
+          ) : roles.length === 0 ? (
+            <div className="settings-empty-inline">Loading roles…</div>
+          ) : roles.map((role) => {
+            const a = assignments[role] ?? {};
+            const set = (patch: AgentAssign) => setAssignments((m) => ({ ...m, [role]: { ...m[role], ...patch } }));
+            return (
+              <div key={role} className="org-member">
+                <div className="org-member__id" style={{ whiteSpace: "normal" }}>
+                  <strong>{ROLE_LABELS[role] ?? role}</strong>
+                  <div className="settings-hint">{ROLE_DESC[role] ?? ""}</div>
+                </div>
+                {modelOpts.length > 0 ? (
+                  <select className="settings-select org-rolepick" style={{ minWidth: "12rem" }} value={a.model ?? ""} onChange={(e) => set({ model: e.target.value || undefined })} aria-label={`Model for ${role}`}>
+                    <option value="">Default ({llmProvider.model || "provider default"})</option>
+                    {modelOpts.map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                ) : (
+                  <input className="settings-input org-rolepick" style={{ width: "12rem" }} placeholder="model (optional)" value={a.model ?? ""} onChange={(e) => set({ model: e.target.value || undefined })} aria-label={`Model for ${role}`} />
+                )}
+              </div>
+            );
+          })}
+          <div style={{ marginTop: "var(--spacing-16)", display: "flex", alignItems: "center", gap: "var(--spacing-12)" }}>
+            <PremiumButton variant="primary" disabled={savingAgents || !llmProvider} onClick={saveAgentModels}>{savingAgents ? "Saving…" : "Save brain models"}</PremiumButton>
+            {agentMsg && <span className="settings-hint">{agentMsg}</span>}
+          </div>
+        </PremiumCard>
+        );
+      })()}
     </div>
   );
 }

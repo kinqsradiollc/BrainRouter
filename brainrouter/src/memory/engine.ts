@@ -470,6 +470,12 @@ export class MemoryEngine {
       const jud = await resolveProviderConfig(store, orgId, "judge");
       if (jud?.source === "db") this.relevanceJudge.reconfigure({ endpoint: jud.endpoint, apiKey: jud.apiKey, model: jud.model });
       if (jud) modelGateway.configure("judge", { endpoint: jud.endpoint, apiKey: jud.apiKey, model: jud.model, wireFormat: str(jud.wireFormat) });
+
+      // Brain agent-models (BRAIN_AGENT_ROLES): per-role model override on the shared
+      // LLM provider — the extraction vs synthesis runner can run different models.
+      const assigns = (await this.emailAuth.getSetting<Record<string, { model?: string }>>(`agentModels:${orgId}`)) ?? {};
+      (this.extractionRunner as { setModelOverride?: (m?: string) => void }).setModelOverride?.(str(assigns.extraction?.model));
+      (this.synthesisRunner as { setModelOverride?: (m?: string) => void }).setModelOverride?.(str(assigns.synthesis?.model));
     } catch {
       /* best-effort — keep the env-built config on any DB error */
     }

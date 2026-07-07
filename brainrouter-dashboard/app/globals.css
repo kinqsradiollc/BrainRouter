@@ -625,6 +625,12 @@ h5, h6 { font-size: 13px; line-height: 1.4; font-weight: 600; letter-spacing: 0;
 .settings-cardhead h3 { margin: 0; }
 .settings-empty-inline { font-size: 13px; color: var(--text-muted); }
 
+/* ── Models settings tabs (Providers | Subagents) ──────────── */
+.models-tabs { display: inline-flex; gap: 4px; margin-top: var(--spacing-24); padding: 4px; border: 1px solid var(--border-dim); border-radius: var(--radius-pill); background: var(--overlay-bg); }
+.models-tab { border: 0; background: transparent; color: var(--text-secondary); font-size: 13px; font-weight: 500; padding: 6px 16px; border-radius: var(--radius-pill); cursor: pointer; transition: background 0.15s, color 0.15s; }
+.models-tab:hover { color: var(--text); }
+.models-tab--active { background: var(--accent-wash); color: var(--accent); }
+
 /* ── Organizations ─────────────────────────────────────────── */
 .org-create { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 16px; align-items: end; }
 .org-create__name { grid-column: 1; }

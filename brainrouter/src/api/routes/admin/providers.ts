@@ -13,6 +13,7 @@ import { sendError } from "../../../contracts/http.js";
 import { isProviderKind, PROVIDER_KINDS, type ProviderConfigInput } from "../../../providers/types.js";
 import { isSecretBoxConfigured } from "../../../security/secretBox.js";
 import { probeModels, deriveProviderId } from "../../../providers/modelProbe.js";
+import { BUILTIN_PROVIDERS } from "@kinqs/brainrouter-core/provider";
 
 export const providersRouter = Router();
 providersRouter.use(requireAnyAuth, requirePermission("providers:manage"));
@@ -36,6 +37,24 @@ function parseInput(body: any, requireKind: boolean): ProviderConfigInput | { er
   if (typeof body?.isDefault === "boolean") out.isDefault = body.isDefault;
   return out;
 }
+
+/**
+ * GET /api/admin/providers/catalog — the providers supported by the shared core
+ * (desktop/CLI) package. Reused verbatim (no new provider code) so the dashboard's
+ * provider picker offers exactly what the desktop supports.
+ */
+providersRouter.get("/catalog", (_req: AuthedRequest, res) => {
+  const providers = (BUILTIN_PROVIDERS as any[])
+    .filter((p) => p && (p.pickerVisible ?? true))
+    .map((p) => ({
+      id: String(p.id),
+      label: String(p.label ?? p.id),
+      endpoint: typeof p.endpoint === "string" ? p.endpoint : "",
+      local: Boolean(p.local),
+      requestFormat: typeof p.requestFormat === "string" ? p.requestFormat : undefined,
+    }));
+  res.json({ providers });
+});
 
 /** GET /api/admin/providers — the org's configs (no keys). */
 providersRouter.get("/", async (req: AuthedRequest, res) => {

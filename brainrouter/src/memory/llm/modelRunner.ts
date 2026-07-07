@@ -55,11 +55,20 @@ export interface LlmProviderOverride {
 
 // Configurable LLM Runner — supports per-task model routing
 export class ModelLLMRunner implements LLMRunner {
-  private readonly modelOverride?: string;
+  private modelOverride?: string;
   private providerOverride: LlmProviderOverride | null = null;
 
   constructor(modelOverride?: string) {
     this.modelOverride = modelOverride?.trim() || undefined;
+  }
+
+  /**
+   * Per-role model override (ADR-014 brain agent-models). The dashboard's
+   * Subagents tab can route the extraction vs synthesis runner to different models
+   * on the shared LLM provider. `undefined`/empty clears it (env/default applies).
+   */
+  setModelOverride(model?: string): void {
+    this.modelOverride = model?.trim() || undefined;
   }
 
   /**
