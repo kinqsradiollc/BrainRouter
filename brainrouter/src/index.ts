@@ -42,6 +42,7 @@ import { collectSystemStatus } from './observability/status.js';
 import { modelGateway } from './services/modelGateway/modelGateway.js';
 
 import { memoryEngine, closeMemoryEngine } from './memory/engine.js';
+import { resolveOrgContext } from './tenancy/context.js';
 import path from 'node:path';
 import { decideMcpAcceptPromotion } from './api/mcpAcceptHeader.js';
 import { authRouter, usersRouter, sessionsRouter } from './api/routes/identity/index.js';
@@ -295,6 +296,11 @@ if (USE_HTTP) {
       return;
     }
     const effectiveUserId = user.userId;
+    // C1 (ADR-016) — resolve the caller's active org (X-BrainRouter-Org header,
+    // else their default org) so the MCP recall path can surface org-shared memory.
+    const requestedOrg = (req.headers['x-brainrouter-org'] as string | undefined)?.trim() || undefined;
+    const orgCtx = await resolveOrgContext(memoryEngine.tenancy, effectiveUserId, requestedOrg).catch(() => null);
+    const defaultOrgId = orgCtx?.orgId;
 
     if (req.method === 'POST' && !sessionId) {
       // New session — initialise
@@ -305,7 +311,7 @@ if (USE_HTTP) {
         },
       });
 
-      const mcpServer = buildMcpServer(registry, { defaultUserId: effectiveUserId, isAdmin: user.isAdmin });
+      const mcpServer = buildMcpServer(registry, { defaultUserId: effectiveUserId, isAdmin: user.isAdmin, defaultOrgId });
 
       transport.onclose = () => {
         const id = [...sessions.entries()].find(([, v]) => v.transport === transport)?.[0];

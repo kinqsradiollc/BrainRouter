@@ -43,7 +43,7 @@ export const memoryRecallToolSchema = {
   }
 } as const;
 
-export async function handleMemoryRecall(args: any, options?: { defaultUserId?: string }) {
+export async function handleMemoryRecall(args: any, options?: { defaultUserId?: string; defaultOrgId?: string }) {
   const params = z.object({
     userId: z.string().optional(),
     sessionKey: z.string(),
@@ -73,7 +73,9 @@ export async function handleMemoryRecall(args: any, options?: { defaultUserId?: 
       sessionKey: params.sessionKey,
       query: params.query,
       activeSkill: params.activeSkill,
-      filters: params.filters,
+      // C1 (ADR-016) — inject the server-pinned org so org-shared memory is
+      // merged in (pipeline gates on filters.orgId; callerUserId is auto-set).
+      filters: options?.defaultOrgId ? { ...params.filters, orgId: options.defaultOrgId } : params.filters,
     });
 
     return {

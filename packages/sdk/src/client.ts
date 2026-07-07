@@ -82,9 +82,20 @@ export class BrainRouterClient {
     return this;
   }
 
+  /** ADR-016 C1 — pin the active org, sent as X-BrainRouter-Org on every request,
+   *  so org-shared memory + org-scoped routes resolve for a signed-in client. */
+  private activeOrg = "";
+  withActiveOrg(orgId: string) {
+    this.activeOrg = orgId?.trim() ?? "";
+    return this;
+  }
+
   private headers(tokenOverride?: string): Record<string, string> {
     const bearer = tokenOverride || this.token || this.apiKey;
-    return bearer ? { Authorization: `Bearer ${bearer}` } : {};
+    return {
+      ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
+      ...(this.activeOrg ? { "X-BrainRouter-Org": this.activeOrg } : {}),
+    };
   }
 
   private qs(params?: object): string {
