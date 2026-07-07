@@ -3116,6 +3116,33 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           ? { signedIn: true, account: { url: account.url ?? '', userId: account.userId ?? '', displayName: account.displayName ?? '', email: account.email ?? '' } }
           : { signedIn: false, account: null };
       },
+      // ADR-016 C5 — migrate this workspace's LOCAL connectors to the signed-in
+      // backend (server-only model). Pushes the non-secret definition of each
+      // local connector to POST /api/connectors; credentials are NOT shipped —
+      // the user re-authorizes each source through the server OAuth broker. The
+      // local copy is kept as a fallback until the server sync is confirmed.
+      'action:migrate-connectors': async () => {
+        const cfg = loadConfig() as { cli?: { account?: { url?: string } }; servers?: Record<string, { apiKey?: string; identity?: string }> };
+        const url = cfg.cli?.account?.url?.replace(/\/+$/, '');
+        if (!url) return { ok: false, error: 'Sign in to BrainRouter first (Settings → Account).' };
+        const brain = cfg.servers ? Object.values(cfg.servers).find((s) => s?.identity === 'brainrouter') : undefined;
+        const apiKey = brain?.apiKey ?? '';
+        if (!apiKey) return { ok: false, error: 'No API key for the signed-in backend — sign in again.' };
+        let local: Array<{ source: string; name: string; config: Record<string, unknown> }> = [];
+        try { local = listConnectors(workspaceRoot) as never; } catch { local = []; }
+        let migrated = 0; const failed: string[] = [];
+        for (const c of local) {
+          try {
+            const res = await fetch(`${url}/api/connectors`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+              body: JSON.stringify({ source: c.source, name: c.name, config: c.config }),
+            });
+            if (res.ok) migrated++; else failed.push(`${c.source}: HTTP ${res.status}`);
+          } catch (e) { failed.push(`${c.source}: ${e instanceof Error ? e.message : 'error'}`); }
+        }
+        return { ok: true, total: local.length, migrated, failed, note: 'Reconnect each source in Settings to re-authorize — credentials are re-entered through the server, never shipped from the desktop.' };
+      },
       // DESK-6m — per-chat context-menu actions (Pin / Mark completed / Rename /
       // Move to group / Archive / Delete / Fork / Open). All write the shared
       // CLI stores, so the terminal sees the same titles/pins/groups.
