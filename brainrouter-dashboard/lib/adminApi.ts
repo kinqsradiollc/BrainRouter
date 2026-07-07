@@ -95,13 +95,15 @@ export interface IntegrationInput {
   secret?: Record<string, string>;
 }
 
-export type OrgPlan = "single" | "team" | "enterprise";
+export type OrgPlan = "free" | "pro" | "team" | "enterprise" | "self_hosted_enterprise";
 
-/** The org plan tiers (mirrors the backend `ORG_PLANS`), with UI copy. */
+/** The plan tiers (mirrors the backend `ORG_PLANS`), with UI copy. */
 export const ORG_PLANS: { value: OrgPlan; label: string; description: string }[] = [
-  { value: "single", label: "Single", description: "Solo workspace — just you." },
-  { value: "team", label: "Team", description: "A shared team with roles and org-wide memory." },
-  { value: "enterprise", label: "Enterprise", description: "Org-wide tenancy, scaled memory, SSO-ready." },
+  { value: "free", label: "Free", description: "Solo, local-first — just you." },
+  { value: "pro", label: "Pro", description: "Solo, supercharged — more projects, hosted MCP, advanced connectors." },
+  { value: "team", label: "Team", description: "A shared team with roles, org memory, and invitations." },
+  { value: "enterprise", label: "Enterprise", description: "Org-wide tenancy, SSO, domain allowlist, and audit logs." },
+  { value: "self_hosted_enterprise", label: "Enterprise (Self-hosted)", description: "Enterprise features, run on your own infrastructure." },
 ];
 
 export interface OrgEntitlements {

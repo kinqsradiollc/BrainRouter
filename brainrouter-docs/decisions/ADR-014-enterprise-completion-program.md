@@ -57,26 +57,49 @@ carries `org_id`, and every query filters on it.**
 This directly answers "how are memory/persona organized when a user is solo *and* in a team": they are
 **never merged across orgs** — `org_id` partitions them, `visibility` decides sharing within an org.
 
+## Model refinement — Team-centric (the "clean" model)
+
+The tenancy unit is **the Team**. A user joins one or more Teams; a Team owns its members, RBAC,
+memory, persona, artifacts, projects/repos, invitations, and domain allowlist. The **plan attaches to
+the Team** and controls what it may use. Solo work is just a Team of one (the personal Team).
+
+**Mapping to the code:** the existing `organizations` row **is** the Team — it already owns members
+(`org_members`), memory (`cognitive_records.org_id`), providers, integrations, and RBAC. We keep the
+internal key `org_id` (a rename to `team_id` would be a large, value-free migration and would ripple
+through every scoped query); "Team" is the product/UX name for the same unit. A deeper *teams-within-a-
+team* hierarchy (org > team > project) remains an optional later layer — the flat model ships first.
+
+```
+User ──joins──▶ Team (= organizations row, keyed by org_id)
+                 └─ owns: members + RBAC, memory, persona, artifacts, projects/repos, invites, allowed_domains
+Team.plan ──gates──▶ what the Team may use  (free | pro | team | enterprise | self_hosted_enterprise)
+```
+
 ## Decision — plan entitlements (the gate)
 
 Plans stop being labels and become an **entitlement matrix** (single source of truth in
 `brainrouter/src/tenancy/entitlements.ts`):
 
-| Feature / limit | single | team | enterprise |
-|---|---|---|---|
-| Seats (members) | 1 | 10 | ∞ |
-| Projects / repos | 3 | 25 | ∞ |
-| Shared org memory | ✗ | ✓ | ✓ |
-| Org consensus persona | ✗ | ✓ | ✓ |
-| Email invitations | ✗ | ✓ | ✓ |
-| Restricted (per-member) projects | ✗ | ✗ | ✓ |
-| Email-domain allowlist | ✗ | ✗ | ✓ |
-| SSO realm | ✗ | ✗ | ✓ |
-| Org-owned GitHub App | ✗ | ✓ | ✓ |
+| Feature / limit | free | pro | team | enterprise | self-hosted ent. |
+|---|---|---|---|---|---|
+| Seats (members) | 1 | 1 | 10 | ∞ | ∞ |
+| Projects / repos | 3 | 25 | 50 | ∞ | ∞ |
+| Shared team memory | ✗ | ✗ | ✓ | ✓ | ✓ |
+| Team consensus persona | ✗ | ✗ | ✓ | ✓ | ✓ |
+| Email invitations | ✗ | ✗ | ✓ | ✓ | ✓ |
+| Hosted MCP access | ✗ | ✓ | ✓ | ✓ | ✓ |
+| Advanced connectors | ✗ | ✓ | ✓ | ✓ | ✓ |
+| Team-owned GitHub App | ✗ | ✗ | ✓ | ✓ | ✓ |
+| Restricted (per-member) projects | ✗ | ✗ | ✗ | ✓ | ✓ |
+| Email-domain allowlist | ✗ | ✗ | ✗ | ✓ | ✓ |
+| SSO realm | ✗ | ✗ | ✗ | ✓ | ✓ |
+| Audit logs | ✗ | ✗ | ✗ | ✓ | ✓ |
 
-An `EntitlementChecker` + `requireFeature(feature)` / `withinSeatLimit()` middleware gate the relevant
-routes. "Only certain repos for team/enterprise" = the **projects limit** + the **restricted-projects**
-feature. Values are defaults; they live in code so a self-host operator can fork them.
+`free` is the solo/local-first default (the pre-ADR-014 `single` tier — migration `010` backfills it and
+`normalizeOrgPlan` maps any stray legacy value). An `EntitlementChecker` + `requireFeature(feature)` /
+seat-limit middleware gate the relevant routes. "Only certain repos for team/enterprise" = the
+**projects limit** + the **restricted-projects** feature. Values are defaults; they live in code so a
+self-host operator can fork them.
 
 ## Decision — the phased program
 

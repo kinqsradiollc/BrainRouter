@@ -14,13 +14,16 @@ import type { OrgPlan } from "./types.js";
 
 /** Boolean feature gates a plan may unlock. */
 export const PLAN_FEATURES = [
-  "sharedMemory", // mark memory/artifacts org-visible (visibility='org')
-  "orgPersona", // distil + inject an org consensus persona
+  "sharedMemory", // mark memory/artifacts team-visible (visibility='org')
+  "orgPersona", // distil + inject a team consensus persona
   "invites", // invite teammates by email (vs. add existing users only)
   "restrictedProjects", // per-member project access (not everyone sees every project)
-  "domainAllowlist", // restrict org membership to specific email domains
-  "sso", // org SSO realm
-  "githubApp", // org-owned GitHub App / trigger automation
+  "domainAllowlist", // restrict team membership to specific email domains
+  "sso", // team SSO realm
+  "githubApp", // team-owned GitHub App / trigger automation
+  "auditLogs", // membership/plan/ownership audit trail
+  "advancedConnectors", // the full connector catalogue (vs. the free subset)
+  "hostedMcp", // hosted MCP endpoint access (vs. localhost-only)
 ] as const;
 export type PlanFeature = (typeof PLAN_FEATURES)[number];
 
@@ -40,30 +43,40 @@ export interface PlanEntitlements {
 
 const feats = (...f: PlanFeature[]): ReadonlySet<PlanFeature> => new Set(f);
 
+/** Every feature (used by the top enterprise tiers). */
+const ALL_FEATURES = feats(...PLAN_FEATURES);
+
 /** Plan → entitlements. Mirrors the matrix in ADR-014. */
 export const PLAN_ENTITLEMENTS: Record<OrgPlan, PlanEntitlements> = {
-  single: {
-    plan: "single",
+  // Solo, local-first — the no-permission-wall personal tier.
+  free: {
+    plan: "free",
     limits: { seats: 1, projects: 3 },
     features: feats(),
   },
+  // Solo, supercharged — still one seat, but more projects + hosted MCP + connectors.
+  pro: {
+    plan: "pro",
+    limits: { seats: 1, projects: 25 },
+    features: feats("advancedConnectors", "hostedMcp"),
+  },
+  // A shared team: roles, org memory/persona, invitations, GitHub automation.
   team: {
     plan: "team",
-    limits: { seats: 10, projects: 25 },
-    features: feats("sharedMemory", "orgPersona", "invites", "githubApp"),
+    limits: { seats: 10, projects: 50 },
+    features: feats("sharedMemory", "orgPersona", "invites", "githubApp", "advancedConnectors", "hostedMcp"),
   },
+  // Org-wide: everything, unlimited.
   enterprise: {
     plan: "enterprise",
     limits: { seats: null, projects: null },
-    features: feats(
-      "sharedMemory",
-      "orgPersona",
-      "invites",
-      "restrictedProjects",
-      "domainAllowlist",
-      "sso",
-      "githubApp",
-    ),
+    features: ALL_FEATURES,
+  },
+  // Enterprise features, run on the customer's own infrastructure.
+  self_hosted_enterprise: {
+    plan: "self_hosted_enterprise",
+    limits: { seats: null, projects: null },
+    features: ALL_FEATURES,
   },
 };
 
@@ -72,7 +85,7 @@ export function entitlementsFor(plan: OrgPlan | string | null | undefined): Plan
   if (typeof plan === "string" && plan in PLAN_ENTITLEMENTS) {
     return PLAN_ENTITLEMENTS[plan as OrgPlan];
   }
-  return PLAN_ENTITLEMENTS.single;
+  return PLAN_ENTITLEMENTS.free;
 }
 
 /** True when `plan` unlocks `feature`. Unknown plans grant nothing. */

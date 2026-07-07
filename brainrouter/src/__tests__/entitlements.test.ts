@@ -8,15 +8,28 @@ import {
 } from "../tenancy/entitlements.js";
 
 describe("PLAN-ENTITLEMENTS (single source of truth)", () => {
-  it("defines exactly the three plans", () => {
-    expect(Object.keys(PLAN_ENTITLEMENTS).sort()).toEqual(["enterprise", "single", "team"]);
+  it("defines exactly the five plans", () => {
+    expect(Object.keys(PLAN_ENTITLEMENTS).sort()).toEqual([
+      "enterprise",
+      "free",
+      "pro",
+      "self_hosted_enterprise",
+      "team",
+    ]);
   });
 
-  it("single is the most restrictive: 1 seat, no team features", () => {
-    expect(entitlementsFor("single").limits.seats).toBe(1);
-    expect(featuresFor("single")).toEqual([]);
-    expect(planHasFeature("single", "sharedMemory")).toBe(false);
-    expect(planHasFeature("single", "invites")).toBe(false);
+  it("free is the most restrictive: 1 seat, no team features", () => {
+    expect(entitlementsFor("free").limits.seats).toBe(1);
+    expect(featuresFor("free")).toEqual([]);
+    expect(planHasFeature("free", "sharedMemory")).toBe(false);
+    expect(planHasFeature("free", "invites")).toBe(false);
+  });
+
+  it("pro is still solo (1 seat) but unlocks hosted MCP + advanced connectors", () => {
+    expect(entitlementsFor("pro").limits.seats).toBe(1);
+    expect(planHasFeature("pro", "hostedMcp")).toBe(true);
+    expect(planHasFeature("pro", "advancedConnectors")).toBe(true);
+    expect(planHasFeature("pro", "sharedMemory")).toBe(false); // solo → no team sharing
   });
 
   it("team unlocks shared memory + persona + invites, capped seats/projects", () => {
@@ -27,22 +40,21 @@ describe("PLAN-ENTITLEMENTS (single source of truth)", () => {
     expect(entitlementsFor("team").limits.seats).toBe(10);
   });
 
-  it("enterprise unlocks everything with unlimited seats/projects", () => {
-    expect(entitlementsFor("enterprise").limits.seats).toBeNull();
-    expect(entitlementsFor("enterprise").limits.projects).toBeNull();
-    for (const f of ["domainAllowlist", "sso", "restrictedProjects"] as const) {
-      expect(planHasFeature("enterprise", f)).toBe(true);
+  it("enterprise (and self-hosted) unlock everything, unlimited seats/projects", () => {
+    for (const plan of ["enterprise", "self_hosted_enterprise"] as const) {
+      expect(entitlementsFor(plan).limits.seats).toBeNull();
+      expect(entitlementsFor(plan).limits.projects).toBeNull();
+      for (const f of ["domainAllowlist", "sso", "restrictedProjects", "auditLogs"] as const) {
+        expect(planHasFeature(plan, f)).toBe(true);
+      }
     }
   });
 
   it("withinLimit enforces caps and treats null as unlimited", () => {
-    // single: 1 seat — adding the 2nd member is blocked
-    expect(withinLimit("single", "seats", 1)).toBe(false);
-    expect(withinLimit("single", "seats", 0)).toBe(true);
-    // team: 10 seats
+    expect(withinLimit("free", "seats", 1)).toBe(false); // 1-seat plan, adding 2nd blocked
+    expect(withinLimit("free", "seats", 0)).toBe(true);
     expect(withinLimit("team", "seats", 9)).toBe(true);
     expect(withinLimit("team", "seats", 10)).toBe(false);
-    // enterprise: unlimited
     expect(withinLimit("enterprise", "seats", 9999)).toBe(true);
   });
 

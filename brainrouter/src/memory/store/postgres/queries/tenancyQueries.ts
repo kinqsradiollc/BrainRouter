@@ -5,6 +5,7 @@
  */
 import type { Executor } from "./executor.js";
 import type { OrgPlan, OrganizationRecord, OrgMemberRecord, OrgMembership } from "../../../../tenancy/types.js";
+import { normalizeOrgPlan } from "../../../../tenancy/types.js";
 import { isRole, type Role } from "../../../../tenancy/rbac.js";
 
 const ORG_COLUMNS = "org_id, name, slug, plan, created_at";
@@ -19,7 +20,7 @@ function orgRowToRecord(row: any): OrganizationRecord {
     orgId: String(row.org_id),
     name: String(row.name),
     slug: String(row.slug),
-    plan: (["single", "team", "enterprise"].includes(row.plan) ? row.plan : "single") as OrgPlan,
+    plan: normalizeOrgPlan(row.plan),
     createdAt: toIso(row.created_at),
   };
 }
@@ -46,7 +47,7 @@ export async function createOrganization(
   await exec.run(
     `INSERT INTO organizations (org_id, name, slug, plan, created_at)
      VALUES ($1,$2,$3,$4,$5) ON CONFLICT (org_id) DO NOTHING`,
-    [input.orgId, input.name, input.slug, input.plan ?? "single", now],
+    [input.orgId, input.name, input.slug, input.plan ?? "free", now],
   );
   return (await getOrganization(exec, input.orgId))!;
 }
@@ -138,7 +139,7 @@ export async function ensurePersonalOrg(
     orgId,
     name: `${(displayName ?? "").trim() || userId} (personal)`,
     slug: `personal-${userId}`,
-    plan: "single",
+    plan: "free",
     now,
   });
   await addOrgMember(exec, orgId, userId, "owner", now);
