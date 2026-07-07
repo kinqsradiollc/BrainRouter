@@ -196,7 +196,33 @@ export const adminApi = {
     authFetch<{ project: Project }>(`/api/orgs/${orgId}/projects/${projectId}`, { method: "PATCH", body: patch, orgId }),
   deleteProject: (orgId: string, projectId: string) =>
     authFetch(`/api/orgs/${orgId}/projects/${projectId}`, { method: "DELETE", orgId }),
+  // Admin console (ADR-014 Phase F) — system-admin oversight of every team.
+  listAllOrgs: () => authFetch<{ orgs: OrgStats[]; total: number }>("/api/admin/orgs"),
+  listOrgAudit: (orgId: string) => authFetch<{ audit: OrgAuditEntry[] }>(`/api/orgs/${orgId}/audit`, { orgId }),
 };
+
+export interface OrgStats {
+  orgId: string;
+  name: string;
+  slug: string;
+  plan: string;
+  memberCount: number;
+  projectCount: number;
+  ownerId: string | null;
+  createdAt: string;
+  seatLimit: number | null;
+  projectLimit: number | null;
+  overSeats: boolean;
+}
+
+export interface OrgAuditEntry {
+  id: number;
+  actorId: string | null;
+  action: string;
+  target: string | null;
+  detail: string | null;
+  createdAt: string;
+}
 
 export interface Project {
   projectId: string;

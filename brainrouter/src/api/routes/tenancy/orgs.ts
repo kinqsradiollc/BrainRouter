@@ -144,13 +144,17 @@ orgsRouter.post("/:orgId/members", async (req: AuthedRequest, res) => {
     }
   }
   await memoryEngine.tenancy.addOrgMember(orgId, userId, role);
+  await memoryEngine.adminConsole.logOrgAudit({ orgId, actorId: req.userId, action: alreadyMember ? "member.role" : "member.add", target: userId, detail: role, createdAt: new Date().toISOString() });
   res.status(201).json({ orgId, userId, role, email: email || undefined });
 });
 
 /** DELETE /api/orgs/:orgId/members/:userId — remove a member (members:manage). */
 orgsRouter.delete("/:orgId/members/:userId", async (req: AuthedRequest, res) => {
   if (!(await requireMemberAdmin(req, res))) return;
-  await memoryEngine.tenancy.removeOrgMember(String(req.params.orgId), String(req.params.userId));
+  const orgId = String(req.params.orgId);
+  const userId = String(req.params.userId);
+  await memoryEngine.tenancy.removeOrgMember(orgId, userId);
+  await memoryEngine.adminConsole.logOrgAudit({ orgId, actorId: req.userId, action: "member.remove", target: userId, createdAt: new Date().toISOString() });
   res.json({ ok: true });
 });
 
@@ -184,10 +188,18 @@ orgsRouter.post("/:orgId/plan", async (req: AuthedRequest, res) => {
   }
   try {
     const org = await memoryEngine.tenancy.updateOrganizationPlan(orgId, plan);
+    await memoryEngine.adminConsole.logOrgAudit({ orgId, actorId: req.userId, action: "plan.change", target: plan, createdAt: new Date().toISOString() });
     res.json({ org: { orgId: org.orgId, name: org.name, slug: org.slug, plan: org.plan, role, capabilities: capabilitiesFor(role) } });
   } catch (error) {
     sendError(res, 400, error instanceof Error ? error.message : "Failed to update plan");
   }
+});
+
+/** GET /api/orgs/:orgId/audit — the Team's audit trail (members:manage). */
+orgsRouter.get("/:orgId/audit", async (req: AuthedRequest, res) => {
+  if (!(await requireMemberAdmin(req, res))) return;
+  const entries = await memoryEngine.adminConsole.listOrgAudit(String(req.params.orgId), 100);
+  res.json({ audit: entries });
 });
 
 /**

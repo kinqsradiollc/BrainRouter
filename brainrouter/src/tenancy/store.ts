@@ -13,6 +13,7 @@ import type { AuthTokenRecord, OrgInviteRecord } from "../memory/store/postgres/
 import type { OrgIdentityRecord } from "../memory/store/postgres/queries/orgPersonaQueries.js";
 import type { SharedMemory } from "../memory/store/postgres/queries/memorySharingQueries.js";
 import type { ProjectRecord, ProjectMemberRecord } from "../memory/store/postgres/queries/projectQueries.js";
+import type { OrgStatsRow, OrgAuditRow } from "../memory/store/postgres/queries/adminConsoleQueries.js";
 
 export interface TenancyStore {
   createOrganization(input: { orgId: string; name: string; slug: string; plan?: OrgPlan }): Promise<OrganizationRecord>;
@@ -75,4 +76,11 @@ export interface ProjectStore {
   addProjectMember(projectId: string, userId: string, role: string, now: string): Promise<void>;
   removeProjectMember(projectId: string, userId: string): Promise<void>;
   listProjectMembers(projectId: string): Promise<ProjectMemberRecord[]>;
+}
+
+/** Admin console + audit trail (ADR-014 Phase F), via `memoryEngine.adminConsole`. */
+export interface AdminConsoleStore {
+  listAllOrgsWithStats(limit?: number): Promise<OrgStatsRow[]>;
+  logOrgAudit(rec: { orgId: string; actorId?: string | null; action: string; target?: string | null; detail?: string | null; createdAt: string }): Promise<void>;
+  listOrgAudit(orgId: string, limit?: number): Promise<OrgAuditRow[]>;
 }

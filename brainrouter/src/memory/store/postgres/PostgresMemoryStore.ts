@@ -123,6 +123,7 @@ import * as emailAuth from "./queries/emailAuthQueries.js";
 import * as orgPersona from "./queries/orgPersonaQueries.js";
 import * as sharing from "./queries/memorySharingQueries.js";
 import * as projects from "./queries/projectQueries.js";
+import * as adminConsole from "./queries/adminConsoleQueries.js";
 import * as providerCfg from "./queries/providerConfigQueries.js";
 import * as integrationCfg from "./queries/integrationConfigQueries.js";
 import type { TenancyStore } from "../../../tenancy/store.js";
@@ -407,6 +408,11 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public addProjectMember(projectId: string, userId: string, role: string, now: string): Promise<void> { return projects.addProjectMember(this.exec, projectId, userId, role, now); }
   public removeProjectMember(projectId: string, userId: string): Promise<void> { return projects.removeProjectMember(this.exec, projectId, userId); }
   public listProjectMembers(projectId: string): Promise<projects.ProjectMemberRecord[]> { return projects.listProjectMembers(this.exec, projectId); }
+
+  // ── admin console + audit (ADR-014 P-F) ──────────────────────────────────
+  public listAllOrgsWithStats(limit = 500): Promise<adminConsole.OrgStatsRow[]> { return adminConsole.listAllOrgsWithStats(this.exec, limit); }
+  public logOrgAudit(rec: { orgId: string; actorId?: string | null; action: string; target?: string | null; detail?: string | null; createdAt: string }): Promise<void> { return adminConsole.logOrgAudit(this.exec, rec); }
+  public listOrgAudit(orgId: string, limit = 100): Promise<adminConsole.OrgAuditRow[]> { return adminConsole.listOrgAudit(this.exec, orgId, limit); }
 
   // ── tenancy (ADR-010 P1: organizations + membership/roles) ───────────────
 

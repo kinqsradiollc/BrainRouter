@@ -689,6 +689,15 @@ h5, h6 { font-size: 13px; line-height: 1.4; font-weight: 600; letter-spacing: 0;
 .authflow-text { margin: 0 0 var(--spacing-20); font-size: 14px; color: var(--text-secondary); line-height: 1.55; }
 .authflow-form { display: flex; flex-direction: column; gap: var(--spacing-12); text-align: left; }
 .authflow-actions { margin-top: var(--spacing-16); display: flex; justify-content: center; }
+
+/* ── Admin console table ───────────────────────────────────── */
+.admin-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 40rem; }
+.admin-table th { text-align: left; padding: var(--spacing-8) var(--spacing-12); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-muted); border-bottom: 1px solid var(--border-dim); }
+.admin-table td { padding: var(--spacing-12); border-bottom: 1px solid var(--border-dim); color: var(--text); vertical-align: top; }
+.admin-table tr:last-child td { border-bottom: 0; }
+.admin-table__name { font-weight: 600; color: var(--text); }
+.admin-table__sub { font-size: 12px; color: var(--text-muted); font-family: var(--font-mono); }
+.admin-table__over { color: var(--danger); font-weight: 600; }
 .org-iconbtn { flex-shrink: 0; display: grid; place-items: center; width: 30px; height: 30px; border-radius: var(--radius-sm); border: 1px solid var(--border-dim); background: transparent; color: var(--text-muted); cursor: pointer; transition: background 0.15s, color 0.15s, border-color 0.15s; }
 .org-iconbtn:hover { background: rgba(229, 103, 95, 0.10); border-color: rgba(229, 103, 95, 0.35); color: var(--danger); }
 .org-invite { margin-top: var(--spacing-16); padding: var(--spacing-16); border: 1px dashed var(--border-med); border-radius: var(--radius-md); background: var(--overlay-bg); display: flex; align-items: flex-end; gap: var(--spacing-12); flex-wrap: wrap; }
