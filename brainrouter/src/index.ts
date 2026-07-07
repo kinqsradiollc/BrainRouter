@@ -58,7 +58,6 @@ import {
   workingRouter,
 } from './api/routes/memory/index.js';
 import { brainRouter, fleetRouter, hooksRouter, governanceRouter } from './api/routes/agent/index.js';
-import { chatCompletionsRouter } from './api/routes/chat-completions.js';
 import { USING_FALLBACK_JWT_SECRET, IS_PRODUCTION, jwtSecretBootError } from './api/middleware/auth.js';
 import { securityHeaders, corsMiddleware, resolveCorsAllowlist } from './api/middleware/securityHeaders.js';
 import { resolveJsonBodyLimit, payloadTooLargeHandler } from './api/bodyLimit.js';
@@ -215,14 +214,6 @@ if (USE_HTTP) {
   app.use("/api/hooks", hooksRouter);
   app.use("/api/working", workingRouter);
   app.use("/api/skills", skillsRouter);
-  // OpenAI-compatible chat endpoint (memory-augmented):
-  //   POST /v1/chat/completions  — standard OpenAI body, sessionKey via body.brainrouter.sessionKey or X-BrainRouter-Session header
-  //   GET  /v1/models            — returns the configured upstream model
-  // DoS backstop — the same generous, env-tunable global limiter the /api surface
-  // uses (BRAINROUTER_RATE_LIMIT_MAX, default 600/min). Above normal agent +
-  // proxy traffic, so it only catches a runaway/abusive client.
-  app.use("/v1", apiRateLimit);
-  app.use("/v1", chatCompletionsRouter);
   } // end serveRest
 
   // MCP endpoint — handles POST (requests) and GET (SSE stream).
