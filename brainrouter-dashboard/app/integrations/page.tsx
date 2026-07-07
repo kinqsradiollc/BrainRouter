@@ -14,6 +14,7 @@ import { PageHeader } from "../../components/PageHeader";
 import { PremiumCard } from "../../components/PremiumCard";
 import { PremiumButton } from "../../components/PremiumButton";
 import { adminApi, type IntegrationConfig, type IntegrationInput } from "../../lib/adminApi";
+import { GithubOAuthAppCard } from "./GithubOAuthAppCard";
 
 interface FormState {
   appId: string;
@@ -113,6 +114,8 @@ function IntegrationsInner() {
           <Link href="/integrations/github"><PremiumButton size="small" variant="ghost">Manage repositories →</PremiumButton></Link>
         </div>
       </PremiumCard>
+
+      <GithubOAuthAppCard />
 
       <div className="settings-stack">
         <PremiumCard level={2}>

@@ -170,6 +170,11 @@ export const adminApi = {
     authFetch<{ integration: IntegrationConfig }>(`/api/admin/integrations/${id}`, { method: "PATCH", body, orgId }),
   deleteIntegration: (id: string, orgId?: string) =>
     authFetch(`/api/admin/integrations/${id}`, { method: "DELETE", orgId }),
+  // ADR-016 — the deployment's GitHub OAuth App (for per-user "Connect GitHub").
+  getGithubOAuthApp: () =>
+    authFetch<{ configured: boolean; clientId: string; hasSecret: boolean; redirectBase: string; secretStorageReady: boolean }>("/api/admin/connectors/github/app"),
+  setGithubOAuthApp: (body: { clientId: string; clientSecret?: string; redirectBase?: string }) =>
+    authFetch<{ ok: boolean; configured: boolean; hasSecret: boolean }>("/api/admin/connectors/github/app", { method: "POST", body }),
   listOrgs: () => authFetch<{ orgs: OrgSummary[] }>("/api/orgs"),
   createOrg: (name: string, plan: OrgPlan = "team") =>
     authFetch<{ org: OrgSummary }>("/api/orgs", { method: "POST", body: { name, plan } }),
