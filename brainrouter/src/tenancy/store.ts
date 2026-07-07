@@ -11,6 +11,7 @@ import type { Role } from "./rbac.js";
 import type { OrganizationRecord, OrgMemberRecord, OrgMembership, OrgPlan } from "./types.js";
 import type { AuthTokenRecord, OrgInviteRecord } from "../memory/store/postgres/queries/emailAuthQueries.js";
 import type { OrgIdentityRecord } from "../memory/store/postgres/queries/orgPersonaQueries.js";
+import type { SharedMemory } from "../memory/store/postgres/queries/memorySharingQueries.js";
 
 export interface TenancyStore {
   createOrganization(input: { orgId: string; name: string; slug: string; plan?: OrgPlan }): Promise<OrganizationRecord>;
@@ -54,4 +55,10 @@ export interface OrgPersonaStore {
   getOrgSharedIdentityCognitives(orgId: string, limit?: number): Promise<any[]>;
   getOrgIdentity(orgId: string): Promise<OrgIdentityRecord | null>;
   upsertOrgIdentity(rec: OrgIdentityRecord): Promise<void>;
+}
+
+/** Artifact/memory sharing (ADR-014 Phase D), via `memoryEngine.sharing`. */
+export interface MemorySharingStore {
+  setMemoryVisibility(recordId: string, userId: string, orgId: string, visibility: "private" | "org"): Promise<boolean>;
+  listOrgSharedMemories(orgId: string, limit?: number): Promise<SharedMemory[]>;
 }

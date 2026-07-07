@@ -180,7 +180,25 @@ export const adminApi = {
     authFetch<{ config: EmailSettings; configured: boolean }>("/api/admin/email", { method: "PUT", body }),
   testEmail: (to?: string) =>
     authFetch<{ delivered: boolean; transport: string; detail?: string }>("/api/admin/email/test", { method: "POST", body: { to } }),
+  // Artifact sharing (ADR-014 Phase D).
+  listOrgShared: (orgId: string, limit = 50) =>
+    authFetch<{ shared: SharedMemory[] }>(`/api/memories/org/${orgId}/shared?limit=${limit}`, { orgId }),
+  shareMemory: (recordId: string, orgId: string) =>
+    authFetch(`/api/memories/${encodeURIComponent(recordId)}/share`, { method: "POST", body: { orgId }, orgId }),
+  unshareMemory: (recordId: string, orgId: string) =>
+    authFetch(`/api/memories/${encodeURIComponent(recordId)}/unshare`, { method: "POST", body: { orgId }, orgId }),
 };
+
+export interface SharedMemory {
+  recordId: string;
+  userId: string;
+  content: string;
+  type: string;
+  priority: number;
+  skillTag: string;
+  visibility: string;
+  createdTime: string;
+}
 
 export interface OrgInvite {
   email: string;

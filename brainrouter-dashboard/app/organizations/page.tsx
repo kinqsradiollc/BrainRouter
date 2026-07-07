@@ -10,7 +10,7 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
 import { PremiumCard } from "../../components/PremiumCard";
 import { PremiumButton } from "../../components/PremiumButton";
-import { adminApi, ORG_PLANS, type OrgSummary, type OrgMember, type OrgPlan } from "../../lib/adminApi";
+import { adminApi, ORG_PLANS, type OrgSummary, type OrgMember, type OrgPlan, type SharedMemory } from "../../lib/adminApi";
 
 const ROLES = ["owner", "admin", "member", "viewer"];
 const planLabel = (plan: string) => ORG_PLANS.find((p) => p.value === plan)?.label ?? plan;
@@ -53,6 +53,7 @@ function OrgsInner() {
   const [busyPlan, setBusyPlan] = useState<string | null>(null);
   const [domainDraft, setDomainDraft] = useState<Record<string, string>>({});
   const [savingDomains, setSavingDomains] = useState<string | null>(null);
+  const [shared, setShared] = useState<Record<string, SharedMemory[]>>({});
 
   const load = useCallback(async () => {
     try {
@@ -124,6 +125,12 @@ function OrgsInner() {
     if (!members[org.orgId] && org.capabilities.includes("members:manage")) {
       try { await refreshMembers(org.orgId); }
       catch (e) { setError(e instanceof Error ? e.message : "Failed to load members"); }
+    }
+    if (!shared[org.orgId] && org.entitlements?.features?.includes("sharedMemory")) {
+      try {
+        const res = await adminApi.listOrgShared(org.orgId);
+        setShared((s) => ({ ...s, [org.orgId]: res.shared ?? [] }));
+      } catch { /* non-fatal */ }
     }
   }
 
@@ -342,6 +349,23 @@ function OrgsInner() {
                       <PremiumButton variant="ghost" disabled={savingDomains === org.orgId} onClick={() => saveDomains(org.orgId)}>
                         {savingDomains === org.orgId ? "Saving…" : "Save domains"}
                       </PremiumButton>
+                    </div>
+                  )}
+
+                  {org.entitlements?.features?.includes("sharedMemory") && (
+                    <div className="org-members" style={{ borderTop: "1px solid var(--border-dim)", marginTop: "var(--spacing-16)" }}>
+                      <div className="org-members__title">Team artifacts ({(shared[org.orgId] ?? []).length})</div>
+                      {shared[org.orgId] === undefined ? (
+                        <div className="settings-empty-inline">Loading…</div>
+                      ) : (shared[org.orgId] ?? []).length === 0 ? (
+                        <div className="settings-empty-inline">Nothing shared with this team yet. Members share work with <code>memory:share</code>.</div>
+                      ) : (shared[org.orgId] ?? []).map((m) => (
+                        <div key={m.recordId} className="org-member">
+                          <span className="settings-badge settings-badge--muted">{m.type || "note"}</span>
+                          <span className="org-member__id" title={m.content}>{m.content.slice(0, 120) || m.recordId}</span>
+                          <span className="settings-hint">{m.userId}</span>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>

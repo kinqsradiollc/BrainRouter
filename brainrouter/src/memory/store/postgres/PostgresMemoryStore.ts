@@ -121,6 +121,7 @@ import * as sourcesTree from "./queries/sourcesTreeQueries.js";
 import * as tenancy from "./queries/tenancyQueries.js";
 import * as emailAuth from "./queries/emailAuthQueries.js";
 import * as orgPersona from "./queries/orgPersonaQueries.js";
+import * as sharing from "./queries/memorySharingQueries.js";
 import * as providerCfg from "./queries/providerConfigQueries.js";
 import * as integrationCfg from "./queries/integrationConfigQueries.js";
 import type { TenancyStore } from "../../../tenancy/store.js";
@@ -390,6 +391,10 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public getOrgSharedIdentityCognitives(orgId: string, limit = 100): Promise<any[]> { return orgPersona.getOrgSharedIdentityCognitives(this.exec, orgId, limit); }
   public getOrgIdentity(orgId: string): Promise<orgPersona.OrgIdentityRecord | null> { return orgPersona.getOrgIdentity(this.exec, orgId); }
   public upsertOrgIdentity(rec: orgPersona.OrgIdentityRecord): Promise<void> { return orgPersona.upsertOrgIdentity(this.exec, rec); }
+
+  // ── artifact/memory sharing (ADR-014 P-D) ────────────────────────────────
+  public setMemoryVisibility(recordId: string, userId: string, orgId: string, visibility: "private" | "org"): Promise<boolean> { return sharing.setMemoryVisibility(this.exec, recordId, userId, orgId, visibility); }
+  public listOrgSharedMemories(orgId: string, limit = 50): Promise<sharing.SharedMemory[]> { return sharing.listOrgSharedMemories(this.exec, orgId, limit); }
 
   // ── tenancy (ADR-010 P1: organizations + membership/roles) ───────────────
 
