@@ -661,6 +661,26 @@ h5, h6 { font-size: 13px; line-height: 1.4; font-weight: 600; letter-spacing: 0;
 /* Plan selector in the create-org form (stacked label, keeps its top margin). */
 .org-planselect { width: 100%; min-width: 11rem; }
 .org-plan-hint { margin: 0; font-size: 12px; color: var(--text-muted); }
+
+/* ── Public status page ────────────────────────────────────── */
+.status-page { max-width: 44rem; margin-inline: auto; padding: var(--spacing-40) var(--spacing-24); }
+.status-head { margin-bottom: var(--spacing-24); }
+.status-brand { font-size: 12px; font-weight: 600; letter-spacing: 0.6px; text-transform: uppercase; color: var(--accent); }
+.status-title { margin: var(--spacing-4) 0 0; font-size: 28px; font-weight: 650; color: var(--text); }
+.status-banner { display: flex; align-items: center; gap: var(--spacing-12); border: 1px solid; border-radius: var(--radius-lg); padding: var(--spacing-16) var(--spacing-20); }
+.status-banner__dot { width: 12px; height: 12px; border-radius: 9999px; flex-shrink: 0; }
+.status-banner__text { font-size: 17px; font-weight: 600; }
+.status-list { margin-top: var(--spacing-24); border: 1px solid var(--border-dim); border-radius: var(--radius-lg); background: var(--color-charcoal-canvas); overflow: hidden; }
+.status-row { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-12); padding: var(--spacing-16) var(--spacing-20); }
+.status-row + .status-row { border-top: 1px solid var(--border-dim); }
+.status-row__main { display: flex; align-items: center; gap: var(--spacing-12); min-width: 0; flex-wrap: wrap; }
+.status-row__dot { width: 9px; height: 9px; border-radius: 9999px; flex-shrink: 0; }
+.status-row__label { font-size: 14px; color: var(--text); }
+.status-row__detail { font-size: 12px; color: var(--text-muted); }
+.status-row__badge { flex-shrink: 0; font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: var(--radius-pill); }
+.status-empty { padding: var(--spacing-24) var(--spacing-20); font-size: 14px; color: var(--text-muted); text-align: center; }
+.status-foot { margin-top: var(--spacing-20); display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 12px; color: var(--text-muted); }
+.status-foot__dot { opacity: 0.4; }
 .org-iconbtn { flex-shrink: 0; display: grid; place-items: center; width: 30px; height: 30px; border-radius: var(--radius-sm); border: 1px solid var(--border-dim); background: transparent; color: var(--text-muted); cursor: pointer; transition: background 0.15s, color 0.15s, border-color 0.15s; }
 .org-iconbtn:hover { background: rgba(229, 103, 95, 0.10); border-color: rgba(229, 103, 95, 0.35); color: var(--danger); }
 .org-invite { margin-top: var(--spacing-16); padding: var(--spacing-16); border: 1px dashed var(--border-med); border-radius: var(--radius-md); background: var(--overlay-bg); display: flex; align-items: flex-end; gap: var(--spacing-12); flex-wrap: wrap; }

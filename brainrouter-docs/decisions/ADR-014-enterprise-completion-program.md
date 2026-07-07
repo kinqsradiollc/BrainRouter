@@ -148,6 +148,14 @@ rules; no new `BRAINROUTER_*` provider vars; LLM-output JSON via `memory/util/ll
 - Dashboard "Admin → Organizations" surface. **Answers:** admin can view all created plans/orgs.
 
 ### Phase G — Hosting & deployment
+- **Single gateway:** the `brain` process is the one entrypoint — a single Express app fronts REST
+  (`/api/*`), MCP (`/mcp`), the dashboard (`/dashboard`), health (`/health`), and status
+  (`/api/status`) on one port. Split-service mode (`BRAINROUTER_SERVICE`) is an optimization; the
+  default and target is the unified gateway, and every client points at one base URL.
+- **Status surface (shipped):** `GET /api/status` aggregates the health of every component behind the
+  gateway (gateway / REST / MCP / database / memory; email + provider-gateway as they land), rolled up
+  worst-of; the public dashboard `/status` page renders it status-page style and auto-refreshes.
+  Returns `503` when any component is down so external monitors can alert.
 - `deploy/tunnel/` Cloudflare-tunnel compose example; document `BRAINROUTER_SYSTEM_ORG_ID`.
 - Client **health-check fallback**: prefer `localhost:3747` if healthy → configured tunnel URL → hosted;
   one `cli.brainUrl` knob, decision logged once. **Answers:** localhost / Cloudflare / hosted, one build.

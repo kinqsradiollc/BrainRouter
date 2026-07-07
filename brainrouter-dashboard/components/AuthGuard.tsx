@@ -28,7 +28,9 @@ export function AuthGuard({ children }: AuthGuardProps) {
     }
 
     const authed = isAuthenticated();
-    if (!authed && pathname !== "/auth" && pathname !== "/" && pathname !== "/about") {
+    // Public routes (no sign-in): marketing home, auth, about, and the status page.
+    const PUBLIC = ["/", "/auth", "/about", "/status"];
+    if (!authed && !PUBLIC.includes(pathname)) {
       router.replace("/auth");
       return;
     }

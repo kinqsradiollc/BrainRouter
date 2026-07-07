@@ -367,6 +367,11 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
     if (this.ownsPool) await this.pool.end();
   }
 
+  /** Liveness probe for the status gateway — a trivial round-trip to Postgres. */
+  public async ping(): Promise<boolean> {
+    try { await this.exec.one("SELECT 1 AS ok"); return true; } catch { return false; }
+  }
+
   // ── tenancy (ADR-010 P1: organizations + membership/roles) ───────────────
 
   public createOrganization(input: { orgId: string; name: string; slug: string; plan?: OrgPlan }): Promise<OrganizationRecord> {

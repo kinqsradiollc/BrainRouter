@@ -171,6 +171,17 @@ export class MemoryEngine {
    * callers go through `getMemoryEngine()` / the `memoryEngine` proxy, which
    * lazily reconstructs a fresh instance on next use.
    */
+  /**
+   * Liveness probe for the status gateway — a trivial round-trip to the backing
+   * store. Injected/non-Postgres stores (tests) have no `ping` and are treated as
+   * live. Never throws.
+   */
+  public async ping(): Promise<boolean> {
+    const s = this.store as unknown as { ping?: () => Promise<boolean> };
+    if (typeof s.ping !== "function") return true;
+    try { return await s.ping(); } catch { return false; }
+  }
+
   public async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;

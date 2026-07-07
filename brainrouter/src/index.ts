@@ -38,6 +38,7 @@ import { Registry } from './registry.js';
 import { resolveRegistryConfig } from './resolver.js';
 import { buildMcpServer } from './transport/mcpServer.js';
 import { recordHttp, routeBucket, renderPrometheus, metricsSnapshot } from './observability/metrics.js';
+import { collectSystemStatus } from './observability/status.js';
 
 import { memoryEngine, closeMemoryEngine } from './memory/engine.js';
 import path from 'node:path';
@@ -184,9 +185,25 @@ if (USE_HTTP) {
   const serveRest = SERVICE === "brain" || SERVICE === "api";
   const serveMcp = SERVICE === "brain" || SERVICE === "mcp";
 
-  // Health check
+  // Health check (fast liveness probe).
   app.get('/health', (_req: Request, res: Response) => {
     res.json({ status: 'ok', transport: 'http', service: SERVICE, root: config.localRoot });
+  });
+
+  // Public status aggregation for the single gateway — reports the health of every
+  // component (gateway / REST / MCP / database / memory). Unauthenticated + not
+  // rate-limited (mounted before the /api throttle) so a status page or external
+  // monitor can poll it. 503 when any component is down.
+  app.get('/api/status', async (_req: Request, res: Response) => {
+    const status = await collectSystemStatus({
+      service: SERVICE,
+      serveRest,
+      serveMcp,
+      pingDb: () => memoryEngine.ping(),
+      uptimeSec: Math.round(process.uptime()),
+      checkedAt: new Date().toISOString(),
+    });
+    res.status(status.status === 'down' ? 503 : 200).json(status);
   });
 
   if (serveRest) {
