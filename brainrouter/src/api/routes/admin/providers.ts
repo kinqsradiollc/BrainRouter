@@ -12,6 +12,7 @@ import { requirePermission } from "../../middleware/tenancy.js";
 import { sendError } from "../../../contracts/http.js";
 import { isProviderKind, PROVIDER_KINDS, type ProviderConfigInput } from "../../../providers/types.js";
 import { isSecretBoxConfigured } from "../../../security/secretBox.js";
+import { probeModels, deriveProviderId } from "../../../providers/modelProbe.js";
 
 export const providersRouter = Router();
 providersRouter.use(requireAnyAuth, requirePermission("providers:manage"));
@@ -42,6 +43,24 @@ providersRouter.get("/", async (req: AuthedRequest, res) => {
   res.json({ providers: configs, secretStorageReady: isSecretBoxConfigured() });
 });
 
+/**
+ * POST /api/admin/providers/probe-models — discover the models an endpoint exposes
+ * (GET /models, or LM Studio's native /api/v1/models). Reuses @kinqs/brainrouter-core
+ * so the dashboard can offer the same "Fetch models" flow as the desktop.
+ */
+providersRouter.post("/probe-models", async (req: AuthedRequest, res) => {
+  const baseUrl = String(req.body?.baseUrl ?? "").trim();
+  const apiKey = String(req.body?.apiKey ?? "").trim();
+  if (!baseUrl) { sendError(res, 400, "baseUrl is required"); return; }
+  try {
+    const models = await probeModels(baseUrl, apiKey);
+    res.json({ ok: true, models });
+  } catch (error) {
+    // 200 with ok:false — a probe failure is a normal, recoverable UI state.
+    res.json({ ok: false, error: error instanceof Error ? error.message : "Failed to fetch models" });
+  }
+});
+
 /** POST /api/admin/providers — create a config. */
 providersRouter.post("/", async (req: AuthedRequest, res) => {
   const parsed = parseInput(req.body, true);
@@ -49,6 +68,11 @@ providersRouter.post("/", async (req: AuthedRequest, res) => {
   if (parsed.apiKey && !isSecretBoxConfigured()) {
     sendError(res, 400, "BRAINROUTER_SECRET_KEY must be configured before storing a provider API key");
     return;
+  }
+  // Derive the provider id from the endpoint (via core's catalog) or the label, so
+  // the dashboard no longer needs a manual "Provider id" field (desktop parity).
+  if (!parsed.providerId?.trim()) {
+    parsed.providerId = await deriveProviderId(parsed.baseUrl, parsed.label);
   }
   try {
     const created = await memoryEngine.providers.createProviderConfig(req.orgId!, parsed, req.userId);

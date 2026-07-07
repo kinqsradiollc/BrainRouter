@@ -37,6 +37,29 @@ function ProvidersInner() {
   const [extraText, setExtraText] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [fetchError, setFetchError] = useState("");
+
+  async function fetchModels() {
+    const baseUrl = (form.baseUrl ?? "").trim();
+    if (!baseUrl) { setFetchError("Enter a Base URL first."); return; }
+    setFetchingModels(true);
+    setFetchError("");
+    try {
+      const res = await adminApi.probeModels(baseUrl, (form.apiKey ?? "").trim());
+      if (!res.ok || !res.models?.length) {
+        setFetchError(res.error || "No models returned by that endpoint.");
+        return;
+      }
+      const ids = res.models.map((m) => m.id);
+      setModelsText(ids.join(", "));
+      if (!(form.model ?? "").trim()) setForm((f) => ({ ...f, model: ids[0] }));
+    } catch (e) {
+      setFetchError(e instanceof Error ? e.message : "Failed to fetch models");
+    } finally {
+      setFetchingModels(false);
+    }
+  }
 
   const load = useCallback(async () => {
     try {
@@ -55,7 +78,7 @@ function ProvidersInner() {
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { if (user && !user.isAdmin) router.replace("/overview"); }, [router, user]);
 
-  function resetForm() { setForm(EMPTY); setModelsText(""); setExtraText(""); setEditingId(null); }
+  function resetForm() { setForm(EMPTY); setModelsText(""); setExtraText(""); setEditingId(null); setFetchError(""); }
 
   function startEdit(p: ProviderConfig) {
     setEditingId(p.id);
@@ -158,8 +181,8 @@ function ProvidersInner() {
                 {KINDS.map((k) => <option key={k.kind} value={k.kind}>{k.label}</option>)}
               </select>
             </label>
-            <label className="settings-label">Provider id
-              <input className="settings-input" placeholder="openai" value={form.providerId} onChange={(e) => setForm({ ...form, providerId: e.target.value })} />
+            <label className="settings-label">Label <span className="settings-hint">(a name for this provider)</span>
+              <input className="settings-input" placeholder="OpenAI" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
             </label>
             <label className="settings-label">Base URL <span className="settings-hint">(the /v1 base — the wire format picks the path)</span>
               <input className="settings-input" placeholder="https://api.openai.com/v1" value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} />
@@ -167,15 +190,19 @@ function ProvidersInner() {
             <label className="settings-label">API key
               <input type="password" autoComplete="off" className="settings-input" placeholder={editingId ? "leave blank to keep current key" : "sk-…"} value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} />
             </label>
-            <label className="settings-label">Model
+            <label className="settings-label">Default model <span className="settings-hint">(preferred for this key)</span>
               <input className="settings-input" placeholder="gpt-4o-mini" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} />
             </label>
-            <label className="settings-label">Label
-              <input className="settings-input" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
-            </label>
-            <label className="settings-label settings-col-2">Models <span className="settings-hint">(comma-separated; the models this key unlocks)</span>
+            <div className="settings-label settings-col-2">
+              <div className="flex items-center justify-between gap-3" style={{ marginBottom: "var(--spacing-4)" }}>
+                <span>Models <span className="settings-hint">(the models this key unlocks — fetched from the endpoint)</span></span>
+                <button type="button" className="settings-action settings-action--accent" disabled={fetchingModels || !(form.baseUrl ?? "").trim()} onClick={fetchModels}>
+                  {fetchingModels ? "Fetching…" : "Fetch models"}
+                </button>
+              </div>
               <input className="settings-input" placeholder="gpt-4o-mini, gpt-4o" value={modelsText} onChange={(e) => setModelsText(e.target.value)} />
-            </label>
+              {fetchError && <div className="settings-hint" style={{ color: "var(--danger)", marginTop: "var(--spacing-4)" }}>{fetchError}</div>}
+            </div>
             <label className="settings-label">Wire format <span className="settings-hint">(how to talk to the API)</span>
               <select className="settings-select" value={form.wireFormat} onChange={(e) => setForm({ ...form, wireFormat: e.target.value })}>
                 <option value="">Auto (chat-completions)</option>

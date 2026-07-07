@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveRequestUrl, buildRequestBody, extractResponsesText, isResponsesWire } from "../providers/wireFormat.js";
+import { resolveRequestUrl, buildRequestBody, extractResponsesText, isResponsesWire, resolveModelsUrl } from "../providers/wireFormat.js";
 
 const OAI = "https://api.openai.com/v1";
 
@@ -26,6 +26,14 @@ describe("WIRE-FORMAT — base URL resolution (both responses + completions)", (
     const az = "https://x.openai.azure.com/openai/deployments/gpt/chat/completions?api-version=2024-02-01";
     expect(resolveRequestUrl(az, "chat-completions")).toBe(az);
     expect(resolveRequestUrl(az, "responses")).toBe("https://x.openai.azure.com/openai/deployments/gpt/responses?api-version=2024-02-01");
+  });
+
+  it("resolveModelsUrl derives GET /models from any base shape", () => {
+    expect(resolveModelsUrl(OAI)).toBe(`${OAI}/models`);
+    expect(resolveModelsUrl(`${OAI}/`)).toBe(`${OAI}/models`);
+    expect(resolveModelsUrl(`${OAI}/chat/completions`)).toBe(`${OAI}/models`);
+    expect(resolveModelsUrl(`${OAI}/responses`)).toBe(`${OAI}/models`);
+    expect(resolveModelsUrl(`${OAI}/models`)).toBe(`${OAI}/models`); // idempotent
   });
 
   it("isResponsesWire is case-insensitive + defaults false", () => {

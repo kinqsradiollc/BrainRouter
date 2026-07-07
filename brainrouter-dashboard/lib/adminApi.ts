@@ -141,6 +141,12 @@ export const adminApi = {
     authFetch(`/api/admin/providers/${id}`, { method: "DELETE", orgId }),
   setDefaultProvider: (id: string, orgId?: string) =>
     authFetch(`/api/admin/providers/${id}/default`, { method: "POST", orgId }),
+  /** Discover the models an endpoint exposes (GET /models / LM Studio), reusing core. */
+  probeModels: (baseUrl: string, apiKey: string, orgId?: string) =>
+    authFetch<{ ok: boolean; models?: { id: string; reasoning?: boolean }[]; error?: string }>(
+      "/api/admin/providers/probe-models",
+      { method: "POST", body: { baseUrl, apiKey }, orgId },
+    ),
   // GitHub App / integration configs (RBAC: triggers:manage).
   listIntegrations: (orgId?: string) =>
     authFetch<{ integrations: IntegrationConfig[]; secretStorageReady: boolean }>("/api/admin/integrations", { orgId }),

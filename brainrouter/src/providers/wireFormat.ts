@@ -34,6 +34,18 @@ export function resolveRequestUrl(rawBase: string, wireFormat?: string | null): 
   return base + path + query;
 }
 
+/** Resolve the GET /models URL from a (possibly full) base URL. Strips a wire suffix. */
+export function resolveModelsUrl(rawBase: string): string {
+  const url = String(rawBase ?? "").trim();
+  if (!url) return url;
+  const qIdx = url.indexOf("?");
+  const query = qIdx >= 0 ? url.slice(qIdx) : "";
+  let base = (qIdx >= 0 ? url.slice(0, qIdx) : url).replace(/\/+$/, "");
+  base = base.replace(/\/(chat\/completions|responses)$/i, "");
+  if (/\/models$/i.test(base)) return base + query;
+  return base + "/models" + query;
+}
+
 export interface WireBodyInput {
   model: string;
   messages: { role: string; content: string }[];
