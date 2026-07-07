@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Claude, cloned for BrainRouter — Prototypes</title>
+  <link rel="stylesheet" href="claude-design-system.css" />
+  <style>
+    .nav { position:sticky; top:0; z-index:2; }
+    .wrap { max-width:var(--page-max); margin:0 auto; padding:var(--sp-32) var(--sp-16) var(--section-gap);
+      display:flex; flex-direction:column; gap:var(--section-gap); }
+    .intro h1 { font-size:var(--text-heading-lg); line-height:1.1; letter-spacing:-1.22px; max-width:16ch; }
+    .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:var(--sp-16); margin-top:var(--sp-16); }
+    .grid a.card { text-decoration:none; color:var(--ink); display:block; }
+    .grid a.card:hover { background:var(--surface-3); }
+    @media (max-width:900px){ .grid{ grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header class="nav">
+    <span class="nav__mark">CLAUDE · BRAINROUTER</span>
+    <a class="arrow-link" href="design-system.html">Design system</a>
+  </header>
+
+  <main class="wrap">
+    <section class="intro">
+      <p class="label">Static design prototypes</p>
+      <h1>Claude, <span class="underline-emphasis">cloned</span> for BrainRouter.</h1>
+      <p style="max-width:52ch;margin-top:var(--sp-16)">A Claude-designed app shell over BrainRouter's
+      functions — ivory parchment, one clay accent held in reserve, serif on dark, mono for data.
+      Every screen links a single <a class="arrow-link" href="claude-design-system.css" style="display:inline">stylesheet</a>.</p>
+    </section>
+
+    <section>
+      <div class="row" style="display:flex;align-items:baseline;gap:var(--sp-12)">
+        <h2 style="font-size:var(--text-heading)">Desktop</h2><span class="label">Electron app · 1280×800</span></div>
+      <div class="grid">
+        <a class="card card--release" href="desktop/d1-home.html"><p class="label">Start</p>
+          <h3 style="font-size:var(--text-heading-sm);margin-top:var(--sp-8)">New-chat home</h3>
+          <p style="margin-top:var(--sp-8)">Greeting, suggestions, composer.</p>
+          <span class="arrow-link" style="display:inline-block;margin-top:var(--sp-16)">Open</span></a>
+        <a class="card card--release" href="desktop/d2-chat.html"><p class="label">Converse</p>
+          <h3 style="font-size:var(--text-heading-sm);margin-top:var(--sp-8)">Chat thread</h3>
+          <p style="margin-top:var(--sp-8)">Messages, tool rows, changeset.</p>
+          <span class="arrow-link" style="display:inline-block;margin-top:var(--sp-16)">Open</span></a>
+        <a class="card card--release" href="desktop/d3-sidebar.html"><p class="label">Navigate</p>
+          <h3 style="font-size:var(--text-heading-sm);margin-top:var(--sp-8)">Sidebar + projects</h3>
+          <p style="margin-top:var(--sp-8)">Recents, projects, skills, board.</p>
+          <span class="arrow-link" style="display:inline-block;margin-top:var(--sp-16)">Open</span></a>
+        <a class="card card--release" href="desktop/d4-artifact.html"><p class="label">Memory</p>
+          <h3 style="font-size:var(--text-heading-sm);margin-top:var(--sp-8)">Artifact panel</h3>
+          <p style="margin-top:var(--sp-8)">Recalled memory + Atlas graph.</p>
+          <span class="arrow-link" style="display:inline-block;margin-top:var(--sp-16)">Open</span></a>
+        <a class="card card--release" href="desktop/d5-settings.html"><p class="label">Configure</p>
+          <h3 style="font-size:var(--text-heading-sm);margin-top:var(--sp-8)">Skills + settings</h3>
+          <p style="margin-top:var(--sp-8)">Skills gallery, provider picker.</p>
+          <span class="arrow-link" style="display:inline-block;margin-top:var(--sp-16)">Open</span></a>
+      </div>
+    </section>
+
+    <section>
+      <div class="row" style="display:flex;align-items:baseline;gap:var(--sp-12)">
+        <h2 style="font-size:var(--text-heading)">Web</h2><span class="label">Dashboard · 1200px</span></div>
+      <div class="grid">
+        <a class="card card--release" href="web/w1-overview.html"><p class="label">Overview</p>
+          <h3 style="font-size:var(--text-heading-sm);margin-top:var(--sp-8)">Dashboard home</h3>
+          <p style="margin-top:var(--sp-8)">Editorial hero, dark stat band, activity.</p>
+          <span class="arrow-link" style="display:inline-block;margin-top:var(--sp-16)">Open</span></a>
+        <a class="card card--release" href="web/w2-recall.html"><p class="label">Recall</p>
+          <h3 style="font-size:var(--text-heading-sm);margin-top:var(--sp-8)">Recall inspector</h3>
+          <p style="margin-top:var(--sp-8)">Pipeline timeline + evidence.</p>
+          <span class="arrow-link" style="display:inline-block;margin-top:var(--sp-16)">Open</span></a>
+      </div>
+    </section>
+
+    <section>
+      <div class="row" style="display:flex;align-items:baseline;gap:var(--sp-12)">
+        <h2 style="font-size:var(--text-heading)">Mobile</h2><span class="label">390×844</span></div>
+      <div class="grid">
+        <a class="card card--release" href="mobile/m1-chat.html"><p class="label">Chat</p>
+          <h3 style="font-size:var(--text-heading-sm);margin-top:var(--sp-8)">Mobile chat</h3>
+          <p style="margin-top:var(--sp-8)">Thread + bottom composer.</p>
+          <span class="arrow-link" style="display:inline-block;margin-top:var(--sp-16)">Open</span></a>
+        <a class="card card--release" href="mobile/m2-conversations.html"><p class="label">Sessions</p>
+          <h3 style="font-size:var(--text-heading-sm);margin-top:var(--sp-8)">Conversations</h3>
+          <p style="margin-top:var(--sp-8)">Grouped list + New chat.</p>
+          <span class="arrow-link" style="display:inline-block;margin-top:var(--sp-16)">Open</span></a>
+        <a class="card card--release" href="mobile/m3-detail.html"><p class="label">Detail</p>
+          <h3 style="font-size:var(--text-heading-sm);margin-top:var(--sp-8)">Memory sheet</h3>
+          <p style="margin-top:var(--sp-8)">Metadata + mini graph + actions.</p>
+          <span class="arrow-link" style="display:inline-block;margin-top:var(--sp-16)">Open</span></a>
+      </div>
+    </section>
+
+    <section>
+      <div class="row" style="display:flex;align-items:baseline;gap:var(--sp-12)">
+        <h2 style="font-size:var(--text-heading)">CLI</h2><span class="label">terminal · dark inversion</span></div>
+      <div class="grid">
+        <a class="card card--release" href="cli/c1-terminal.html"><p class="label">Session</p>
+          <h3 style="font-size:var(--text-heading-sm);margin-top:var(--sp-8)">Claude Code terminal</h3>
+          <p style="margin-top:var(--sp-8)">Prompt, /recall, tool call, /config.</p>
+          <span class="arrow-link" style="display:inline-block;margin-top:var(--sp-16)">Open</span></a>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

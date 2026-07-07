@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BrainRouter — Overview</title>
+  <link rel="stylesheet" href="../claude-design-system.css" />
+  <style>
+    .nav { position:sticky; top:0; z-index:2; }
+    .wrap { max-width:var(--page-max); margin:0 auto; padding:var(--sp-84) var(--sp-16) var(--section-gap);
+      display:flex; flex-direction:column; gap:var(--section-gap); }
+    .hero { display:grid; grid-template-columns:55% 1fr; gap:var(--sp-32); align-items:end; }
+    .hero h1 { font-size:var(--text-heading-lg); line-height:1.1; letter-spacing:-1.22px; }
+    .stat-card { display:grid; grid-template-columns:1fr auto; align-items:center; gap:var(--sp-32); }
+    .grid3 { display:grid; grid-template-columns:repeat(3,1fr); gap:var(--sp-16); }
+    @media (max-width:900px){ .hero{ grid-template-columns:1fr; } .stat-card{ grid-template-columns:1fr; }
+      .grid3{ grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header class="nav">
+    <span class="nav__mark">CLAUDE · BRAINROUTER</span>
+    <nav class="row" style="display:flex;gap:var(--sp-16);align-items:center">
+      <a class="rail__item" href="#">Overview</a>
+      <a class="rail__item" href="#">Memories</a>
+      <a class="rail__item" href="#">Recall</a>
+      <button class="btn btn--cta">Try Claude</button>
+    </nav>
+  </header>
+
+  <main class="wrap">
+    <!-- HERO -->
+    <section class="hero">
+      <h1>Your brain, <span class="underline-emphasis">remembered</span>.</h1>
+      <p style="max-width:34ch">A living memory instrument — every session, decision, and file relationship
+      kept warm and recallable. This is the overview of what BrainRouter currently holds.</p>
+    </section>
+
+    <!-- DARK EDITORIAL BAND -->
+    <section class="card--dark stat-card">
+      <div>
+        <p class="label" style="color:var(--color-cloud-light)">Memories remembered</p>
+        <h2 style="font-size:var(--text-display)">128k</h2>
+        <p style="font-size:var(--text-heading-sm);color:var(--color-ivory-dark);margin-top:var(--sp-8)">
+          across 42 sessions · 7 projects · freshness ramp live</p>
+      </div>
+      <button class="btn btn--cta" style="background:#faf9f5;justify-self:end">Open recall inspector</button>
+    </section>
+
+    <!-- LATEST ACTIVITY -->
+    <section>
+      <div class="row" style="display:flex;align-items:baseline;gap:var(--sp-12)">
+        <h2 style="font-size:var(--text-heading)">Latest activity</h2>
+        <span class="label">recall events</span>
+      </div>
+      <div class="grid3" style="margin-top:var(--sp-16)">
+        <div class="card card--release">
+          <p class="label">Date · 2026-07-08</p>
+          <h3 style="font-size:var(--text-heading-sm);margin-top:var(--sp-8)">Recalled: worktree cleanup</h3>
+          <p style="margin-top:var(--sp-8)">3 memories surfaced for the unused-worktree removal.</p>
+          <a class="arrow-link" href="#" style="display:inline-block;margin-top:var(--sp-16)">View recall</a>
+        </div>
+        <div class="card card--release">
+          <p class="label">Date · 2026-07-07</p>
+          <h3 style="font-size:var(--text-heading-sm);margin-top:var(--sp-8)">New memory: Onyx redesign</h3>
+          <p style="margin-top:var(--sp-8)">PR #630 notes linked to the Models-panel work.</p>
+          <a class="arrow-link" href="#" style="display:inline-block;margin-top:var(--sp-16)">View recall</a>
+        </div>
+        <div class="card card--release">
+          <p class="label">Date · 2026-06-27</p>
+          <h3 style="font-size:var(--text-heading-sm);margin-top:var(--sp-8)">Contradiction resolved</h3>
+          <p style="margin-top:var(--sp-8)">Reranker-timeout note reconciled with the shipped fix.</p>
+          <a class="arrow-link" href="#" style="display:inline-block;margin-top:var(--sp-16)">View recall</a>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

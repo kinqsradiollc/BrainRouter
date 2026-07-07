@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Claude · BrainRouter — Memory artifact</title>
+  <link rel="stylesheet" href="../claude-design-system.css" />
+  <style>
+    .split { display:grid; grid-template-columns:1fr 420px; min-height:100vh; }
+    .left { border-right:1px solid var(--line); overflow-y:auto; }
+    .artifact { overflow-y:auto; padding:var(--sp-32); display:flex; flex-direction:column; gap:var(--sp-16); }
+    .artifact__head { display:flex; align-items:baseline; justify-content:space-between; gap:var(--sp-8); }
+    .meta-grid { display:grid; grid-template-columns:auto 1fr; gap:var(--sp-8) var(--sp-16); }
+    .meta-grid dt { margin:0; } .meta-grid dd { margin:0; }
+    .graph { width:100%; height:auto; display:block; }
+    @media (max-width:900px){ .split{ grid-template-columns:1fr; } .left{ border-right:0; border-bottom:1px solid var(--line); } }
+  </style>
+</head>
+<body>
+  <div class="split">
+    <!-- LEFT: short chat -->
+    <section class="left">
+      <div class="thread" style="max-width:620px">
+        <article class="msg msg--user">
+          <p class="msg__meta">You · 20:04</p>
+          <div class="msg__body">Show me what the reranker-timeout memory links to.</div>
+        </article>
+        <article class="msg msg--assistant">
+          <p class="msg__meta">Claude</p>
+          <div class="msg__body">Opened the memory as an artifact on the right — it links the recall
+          pipeline to the provider probe and two sessions. The graph shows the blast radius.</div>
+        </article>
+      </div>
+    </section>
+
+    <!-- RIGHT: artifact panel -->
+    <aside class="artifact panel" style="border-radius:0" aria-label="Memory artifact">
+      <div class="artifact__head">
+        <h1 style="font-size:var(--text-heading-sm)">recall-timeout-fix</h1>
+        <span class="label">Artifact</span>
+      </div>
+
+      <dl class="meta-grid">
+        <dt class="label">Type</dt><dd>project</dd>
+        <dt class="label">Freshness</dt><dd>hot · recalled 3× today</dd>
+        <dt class="label">Source</dt><dd style="font-family:var(--font-mono);font-size:var(--text-caption)">4776f75</dd>
+      </dl>
+
+      <p style="line-height:1.6">Kind-aware model probe keeps LM Studio embedding/reranker models out of
+      the chat path; a second guard sheds parallel load under CPU pressure. Recurs whenever a local
+      provider is slow.</p>
+
+      <!-- Dark editorial card with Atlas graph -->
+      <div class="card--dark">
+        <p class="label" style="color:var(--color-cloud-light)">Atlas · blast radius</p>
+        <svg class="graph" viewBox="0 0 380 200" role="img" aria-label="Atlas graph: recall links to probe, memory and providers">
+          <g stroke="#e8e6dc" stroke-width="1" opacity="0.55" fill="none">
+            <line x1="190" y1="100" x2="80" y2="48"/>
+            <line x1="190" y1="100" x2="80" y2="152"/>
+            <line x1="190" y1="100" x2="300" y2="52"/>
+            <line x1="190" y1="100" x2="300" y2="150"/>
+            <line x1="300" y1="52" x2="300" y2="150"/>
+          </g>
+          <g font-family="var(--font-mono)" font-size="9">
+            <circle cx="190" cy="100" r="7" fill="#d97757"/>
+            <text x="190" y="122" fill="#faf9f5" text-anchor="middle">recall.ts</text>
+            <circle cx="80" cy="48" r="5" fill="none" stroke="#6a9bcc" stroke-width="1.5"/>
+            <text x="80" y="36" fill="#6a9bcc" text-anchor="middle">probe.ts</text>
+            <circle cx="80" cy="152" r="5" fill="none" stroke="#6a9bcc" stroke-width="1.5"/>
+            <text x="80" y="170" fill="#6a9bcc" text-anchor="middle">providers</text>
+            <circle cx="300" cy="52" r="5" fill="none" stroke="#788c5d" stroke-width="1.5"/>
+            <text x="300" y="40" fill="#788c5d" text-anchor="middle">memory:onyx</text>
+            <circle cx="300" cy="150" r="5" fill="none" stroke="#788c5d" stroke-width="1.5"/>
+            <text x="300" y="168" fill="#788c5d" text-anchor="middle">memory:wsl</text>
+          </g>
+        </svg>
+      </div>
+
+      <div class="row" style="display:flex;gap:var(--sp-8)">
+        <button class="btn btn--cta">Open in chat</button>
+        <button class="btn btn--ghost">Copy id</button>
+      </div>
+    </aside>
+  </div>
+</body>
+</html>

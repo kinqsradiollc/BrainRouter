@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Claude-Clone · Design System</title>
+  <link rel="stylesheet" href="claude-design-system.css" />
+  <style>
+    /* page-local layout only — no visual decisions live here */
+    .wrap { max-width:var(--page-max); margin:0 auto; padding:var(--sp-32) var(--sp-16);
+      display:flex; flex-direction:column; gap:var(--section-gap); }
+    .swatches { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:var(--sp-16); }
+    .sw { display:flex; flex-direction:column; gap:var(--sp-4); }
+    .sw__chip { height:64px; border:1px solid var(--line); border-radius:var(--r-card); }
+    .sw__hex { font-family:var(--font-mono); font-size:var(--text-caption); }
+    .sw__role { color:var(--ink-2); font-size:var(--text-caption); }
+    .row { display:flex; flex-wrap:wrap; gap:var(--sp-16); align-items:center; }
+    .grid3 { display:grid; grid-template-columns:repeat(3,1fr); gap:var(--sp-16); }
+    .stack { display:flex; flex-direction:column; gap:var(--sp-12); }
+    .sectionhead { display:flex; align-items:baseline; gap:var(--sp-12); }
+    @media (max-width:720px){ .grid3{ grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header class="nav">
+    <span class="nav__mark">CLAUDE · BRAINROUTER</span>
+    <div class="row">
+      <button class="btn btn--ghost">Docs</button>
+      <button class="btn btn--cta">Try Claude</button>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <!-- HERO — sans display on ivory, underline emphasis -->
+    <section>
+      <p class="label">Design System</p>
+      <h1 style="font-size:var(--text-heading-lg);line-height:1.1;letter-spacing:-1.22px;max-width:14ch">
+        AI research and <span class="underline-emphasis">products</span>, cloned for BrainRouter.
+      </h1>
+      <p style="max-width:46ch;margin-top:var(--sp-16);color:var(--ink)">
+        Warm ivory parchment, a single earthy accent held in reserve, and typography doing all
+        the personality work — Anthropic's language applied to a memory instrument.
+      </p>
+    </section>
+
+    <!-- COLOR -->
+    <section class="stack">
+      <div class="sectionhead"><h2 style="font-size:var(--text-heading)">Color</h2>
+        <span class="label">achromatic base · clay reserved</span></div>
+      <div class="swatches">
+        <div class="sw"><div class="sw__chip" style="background:#faf9f5"></div><span class="sw__hex">#faf9f5</span><span class="sw__role">Ivory Light · page base</span></div>
+        <div class="sw"><div class="sw__chip" style="background:#f0eee6"></div><span class="sw__hex">#f0eee6</span><span class="sw__role">Ivory Medium · nav/cards</span></div>
+        <div class="sw"><div class="sw__chip" style="background:#e3dacc"></div><span class="sw__hex">#e3dacc</span><span class="sw__role">Oat · tertiary card</span></div>
+        <div class="sw"><div class="sw__chip" style="background:#141413"></div><span class="sw__hex">#141413</span><span class="sw__role">Slate Dark · ink + dark surface</span></div>
+        <div class="sw"><div class="sw__chip" style="background:#87867f"></div><span class="sw__hex">#87867f</span><span class="sw__role">Cloud Dark · meta text</span></div>
+        <div class="sw"><div class="sw__chip" style="background:#b0aea5"></div><span class="sw__hex">#b0aea5</span><span class="sw__role">Cloud Medium · disabled</span></div>
+        <div class="sw"><div class="sw__chip" style="background:#d97757"></div><span class="sw__hex">#d97757</span><span class="sw__role">Clay · the one accent</span></div>
+        <div class="sw"><div class="sw__chip" style="background:#c6613f"></div><span class="sw__hex">#c6613f</span><span class="sw__role">Ember · accent pressed</span></div>
+        <div class="sw"><div class="sw__chip" style="background:#788c5d"></div><span class="sw__hex">#788c5d</span><span class="sw__role">Olive · tag family</span></div>
+        <div class="sw"><div class="sw__chip" style="background:#6a9bcc"></div><span class="sw__hex">#6a9bcc</span><span class="sw__role">Sky · tag family</span></div>
+        <div class="sw"><div class="sw__chip" style="background:#c46686"></div><span class="sw__hex">#c46686</span><span class="sw__role">Fig · tag family</span></div>
+        <div class="sw"><div class="sw__chip" style="background:#bcd1ca"></div><span class="sw__hex">#bcd1ca</span><span class="sw__role">Cactus · tag family</span></div>
+      </div>
+    </section>
+
+    <!-- TYPE -->
+    <section class="stack">
+      <div class="sectionhead"><h2 style="font-size:var(--text-heading)">Type</h2>
+        <span class="label">grotesque UI · serif on dark · mono for data</span></div>
+      <div class="stack">
+        <div><span class="label">display / serif / dark-only</span>
+          <div class="card--dark" style="margin-top:var(--sp-8)"><h2>Claude</h2></div></div>
+        <div><span class="label">heading-lg 61px · sans 700</span>
+          <p style="font-size:var(--text-heading-lg);line-height:1.1;letter-spacing:-1.22px;font-weight:700">Recall</p></div>
+        <div><span class="label">heading 24px · sans</span>
+          <p style="font-size:var(--text-heading);font-weight:700">Memory instrument</p></div>
+        <div><span class="label">subheading 18px · serif body</span>
+          <p style="font-family:var(--font-serif);font-size:var(--text-subheading);line-height:1.6;max-width:60ch">
+            The reranker no longer sheds load under CPU pressure — a kind-aware probe keeps
+            embedding and reranker models out of the chat-only path.</p></div>
+        <div><span class="label">body-sm 15px · sans</span>
+          <p style="max-width:60ch">Default running text sits at 15px with tight −0.002em tracking, roughly 65 characters wide.</p></div>
+        <div><span class="label">caption / mono · metadata</span>
+          <p class="label">DATE · 2026-07-07 &nbsp;·&nbsp; TOKENS · 4,812 &nbsp;·&nbsp; MODEL · claude-opus-4-8</p></div>
+      </div>
+    </section>
+
+    <!-- BUTTONS -->
+    <section class="stack">
+      <div class="sectionhead"><h2 style="font-size:var(--text-heading)">Buttons</h2>
+        <span class="label">0px radius · asymmetric CTA · no shadow</span></div>
+      <div class="row">
+        <button class="btn">Default</button>
+        <button class="btn btn--cta">Try Claude</button>
+        <button class="btn btn--accent">New chat</button>
+        <button class="btn btn--ghost">Ghost</button>
+        <a class="arrow-link" href="#">Read announcement</a>
+      </div>
+    </section>
+
+    <!-- CARDS -->
+    <section class="stack">
+      <div class="sectionhead"><h2 style="font-size:var(--text-heading)">Cards</h2>
+        <span class="label">depth via contrast, never shadow</span></div>
+      <div class="card--dark">
+        <h2 style="font-size:var(--text-display)">128k</h2>
+        <p style="font-size:var(--text-heading-sm);color:var(--color-ivory-dark);margin-top:var(--sp-8)">memories remembered</p>
+        <button class="btn btn--cta" style="margin-top:var(--sp-16);background:#faf9f5">Open recall inspector</button>
+      </div>
+      <div class="grid3">
+        <div class="card card--release">
+          <p class="label">CATEGORY · memory</p>
+          <h3 style="font-size:var(--text-heading-sm);margin-top:var(--sp-8)">Reranker timeout fix</h3>
+          <p style="margin-top:var(--sp-8)">Kind-aware model probe stops LM Studio embedding models being dropped.</p>
+          <p style="margin-top:var(--sp-16)"><span class="label">DATE · 2026-06-27</span></p>
+          <a class="arrow-link" href="#" style="margin-top:var(--sp-8);display:inline-block">Read announcement</a>
+        </div>
+        <div class="card card--release">
+          <p class="tag tag--sky">provider</p>
+          <h3 style="font-size:var(--text-heading-sm);margin-top:var(--sp-8)">LM Studio picker</h3>
+          <p style="margin-top:var(--sp-8)">Key-driven multi-select model fetch, Onyx-style panel.</p>
+          <p style="margin-top:var(--sp-16)"><span class="label">DATE · 2026-07-01</span></p>
+          <a class="arrow-link" href="#" style="margin-top:var(--sp-8);display:inline-block">Model details</a>
+        </div>
+        <div class="card card--release">
+          <p class="tag tag--olive">skill</p>
+          <h3 style="font-size:var(--text-heading-sm);margin-top:var(--sp-8)">verify-loop</h3>
+          <p style="margin-top:var(--sp-8)">Green-gate agent output, re-spawn on failure, before opening a PR.</p>
+          <p style="margin-top:var(--sp-16)"><span class="label">CATEGORY · qa</span></p>
+          <a class="arrow-link" href="#" style="margin-top:var(--sp-8);display:inline-block">Configure</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- EMPHASIS -->
+    <section class="stack">
+      <div class="sectionhead"><h2 style="font-size:var(--text-heading)">Emphasis</h2>
+        <span class="label">underline replaces color</span></div>
+      <p style="font-size:var(--text-heading-lg);line-height:1.1;letter-spacing:-1.22px;font-weight:700;max-width:16ch">
+        Your brain, <span class="underline-emphasis">remembered</span>.
+      </p>
+    </section>
+  </main>
+</body>
+</html>

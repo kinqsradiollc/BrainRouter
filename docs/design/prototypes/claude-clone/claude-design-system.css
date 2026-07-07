@@ -1,0 +1,124 @@
+/*
+  Claude-Clone Design System — single source of truth.
+  Ported from docs/design/themes/anthorpic.md (Anthropic style reference).
+  Every prototype links this file: <link rel="stylesheet" href="../claude-design-system.css" />
+  Re-theme the whole set by editing ONLY this file.
+*/
+:root {
+  /* Colors — achromatic ivory/slate base, chromatic budget reserved for Clay */
+  --color-slate-dark:#141413; --color-ivory-light:#faf9f5; --color-ivory-medium:#f0eee6;
+  --color-ivory-dark:#e8e6dc; --color-oat:#e3dacc; --color-cloud-medium:#b0aea5;
+  --color-cloud-light:#d1cfc5; --color-cloud-dark:#87867f; --color-slate-medium:#3d3d3a;
+  --color-slate-light:#5e5d59; --color-clay:#d97757; --color-accent-ember:#c6613f;
+  --color-olive:#788c5d; --color-sky:#6a9bcc; --color-fig:#c46686; --color-cactus:#bcd1ca;
+
+  /* Semantic aliases (map to base palette; do NOT introduce new hues) */
+  --bg:var(--color-ivory-light); --surface-2:var(--color-ivory-medium);
+  --surface-3:var(--color-oat); --ink:var(--color-slate-dark); --ink-2:var(--color-slate-light);
+  --ink-muted:var(--color-cloud-dark); --line:var(--color-slate-dark); --accent:var(--color-clay);
+
+  /* Type families (system-stack substitutes; no CDN) */
+  --font-sans:-apple-system,"Segoe UI",Roboto,Inter,system-ui,sans-serif;
+  --font-serif:"Iowan Old Style",Palatino,Georgia,ui-serif,serif;
+  --font-mono:"Cascadia Code","JetBrains Mono",ui-monospace,Consolas,monospace;
+
+  /* Type scale (from anthorpic.md) */
+  --text-caption:12px; --text-body-sm:15px; --text-subheading:18px; --text-heading-sm:20px;
+  --text-heading:24px; --text-heading-lg:61px; --text-display:91px;
+
+  /* Spacing (4px base) */
+  --sp-4:4px; --sp-8:8px; --sp-12:12px; --sp-16:16px; --sp-32:32px; --sp-76:76px; --sp-84:84px;
+
+  /* Radii — 0px controls, asymmetric CTA, 8/16/24 for cards/panels/feature */
+  --r-card:8px; --r-panel:16px; --r-feature:24px; --r-btn:0px; --r-cta:0 0 8px 8px;
+
+  /* Layout */
+  --page-max:1200px; --section-gap:61px; --card-pad:31px;
+
+  --ease:cubic-bezier(.2,.8,.2,1);
+}
+
+/* Warm-slate dark inversion (Claude product dark mode) — opt in: <html data-theme="dark"> */
+:root[data-theme="dark"] {
+  --bg:#1f1e1d; --surface-2:#262624; --surface-3:#30302e;
+  --ink:#f5f4ef; --ink-2:#c9c7bf; --ink-muted:#8a897f;
+  --line:#3d3d3a; --accent:#e08b6a;
+}
+
+*,*::before,*::after { box-sizing:border-box; }
+html,body { margin:0; }
+body {
+  background:var(--bg); color:var(--ink);
+  font-family:var(--font-sans); font-size:var(--text-body-sm); line-height:1.4;
+  letter-spacing:-0.002em; -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3 { text-wrap:balance; margin:0; letter-spacing:-0.012em; font-weight:700; }
+:focus-visible { outline:2px solid var(--line); outline-offset:2px; }
+
+/* Emphasis: underline only, never color/weight */
+.underline-emphasis { text-decoration:underline; text-decoration-thickness:3px; text-underline-offset:4px; }
+
+/* Metadata label — pure text, no chip */
+.label { font-family:var(--font-mono); font-size:var(--text-caption); color:var(--ink-muted);
+  text-transform:uppercase; letter-spacing:0.04em; }
+
+/* Buttons */
+.btn { font-family:var(--font-sans); font-size:var(--text-body-sm); font-weight:500;
+  background:var(--bg); color:var(--ink); border:1px solid var(--line); border-radius:var(--r-btn);
+  padding:12px 31px; cursor:pointer; transition:background .15s var(--ease),color .15s var(--ease); }
+.btn:hover { background:var(--surface-2); }
+.btn--cta { border-radius:var(--r-cta); } /* signature asymmetric radius */
+.btn--ghost { background:transparent; padding:12px; }
+.btn--accent { background:var(--accent); color:var(--color-ivory-light); border-color:var(--accent); }
+.btn--accent:hover { background:var(--color-accent-ember); border-color:var(--color-accent-ember); }
+
+/* Cards / surfaces */
+.card { background:var(--surface-2); border-radius:var(--r-card); padding:var(--card-pad); }
+.card--release { background:var(--surface-2); }
+.card--dark { background:var(--color-slate-dark); color:var(--color-ivory-light); border-radius:var(--r-feature); padding:var(--card-pad); }
+.card--dark h2 { font-family:var(--font-serif); font-weight:400; font-size:var(--text-display); line-height:1.1; }
+.panel { border:1px solid var(--line); border-radius:var(--r-panel); }
+
+/* Categorical tags (one per section) */
+.tag { font-family:var(--font-mono); font-size:var(--text-caption); color:var(--ink); }
+.tag--olive { color:var(--color-olive); } .tag--sky { color:var(--color-sky); }
+.tag--fig { color:var(--color-fig); } .tag--cactus { color:var(--color-cactus); }
+
+/* Arrow text link */
+.arrow-link { color:var(--ink); text-decoration:none; font-weight:400; }
+.arrow-link:hover { text-decoration:underline; }
+.arrow-link::after { content:" \2192"; }
+
+/* ---- App shell (Claude product surfaces) ---- */
+.app { display:grid; grid-template-columns:260px 1fr; min-height:100vh; }
+.rail { background:var(--surface-2); border-right:1px solid var(--line); padding:var(--sp-16);
+  display:flex; flex-direction:column; gap:var(--sp-8); }
+.rail__item { display:flex; align-items:center; gap:var(--sp-8); padding:var(--sp-8) var(--sp-12);
+  border-radius:var(--r-btn); color:var(--ink); text-decoration:none; font-size:var(--text-body-sm); }
+.rail__item[aria-current="true"] { background:var(--bg); border:1px solid var(--line); }
+.rail__item:hover { background:var(--bg); }
+
+/* Chat thread */
+.thread { max-width:740px; margin:0 auto; padding:var(--sp-32) var(--sp-16);
+  display:flex; flex-direction:column; gap:var(--sp-32); }
+.msg { display:flex; flex-direction:column; gap:var(--sp-8); }
+.msg__meta { font-family:var(--font-mono); font-size:var(--text-caption); color:var(--ink-muted);
+  text-transform:uppercase; letter-spacing:0.04em; }
+.msg--user .msg__body { background:var(--surface-2); border-radius:var(--r-card); padding:var(--sp-16); }
+.msg--assistant .msg__body { font-family:var(--font-serif); font-size:var(--text-subheading); line-height:1.6; }
+.tool-row { border:1px solid var(--line); border-radius:var(--r-card); padding:var(--sp-12) var(--sp-16);
+  font-family:var(--font-mono); font-size:var(--text-caption); }
+
+/* Composer */
+.composer { max-width:740px; margin:0 auto var(--sp-32); border:1px solid var(--line);
+  border-radius:var(--r-panel); background:var(--bg); padding:var(--sp-12); }
+.composer__input { width:100%; border:0; background:transparent; color:var(--ink);
+  font-family:var(--font-sans); font-size:var(--text-subheading); resize:none; outline:none; padding:var(--sp-8); }
+.composer__bar { display:flex; align-items:center; justify-content:space-between; gap:var(--sp-8); margin-top:var(--sp-8); }
+
+/* Top nav */
+.nav { height:68px; display:flex; align-items:center; justify-content:space-between;
+  padding:0 var(--sp-32); background:var(--surface-2); border-bottom:1px solid transparent; }
+.nav__mark { font-weight:700; font-size:16px; letter-spacing:-0.01em; }
+
+@media (prefers-reduced-motion: reduce) { * { animation:none !important; transition:none !important; } }

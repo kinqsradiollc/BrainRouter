@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Claude · BrainRouter — Memory detail</title>
+  <link rel="stylesheet" href="../claude-design-system.css" />
+  <style>
+    body { display:flex; justify-content:center; align-items:flex-end; min-height:100vh; }
+    .device { width:390px; max-width:100%; min-height:100vh; display:flex; flex-direction:column;
+      justify-content:flex-end; }
+    .backdrop { flex:1; background:var(--color-slate-dark); opacity:0.28; }
+    .sheet { background:var(--bg); border:1px solid var(--line); border-bottom:0;
+      border-radius:var(--r-panel) var(--r-panel) 0 0; padding:var(--sp-16);
+      display:flex; flex-direction:column; gap:var(--sp-16); }
+    .grip { width:40px; height:4px; border-radius:9999px; background:var(--color-cloud-medium);
+      align-self:center; }
+    .meta-grid { display:grid; grid-template-columns:auto 1fr; gap:var(--sp-8) var(--sp-16); }
+    .meta-grid dt, .meta-grid dd { margin:0; }
+    .graph { width:100%; height:auto; display:block; }
+    .actions { display:flex; gap:var(--sp-8); }
+    .actions .btn { flex:1; text-align:center; min-height:44px; }
+  </style>
+</head>
+<body>
+  <div class="device">
+    <div class="backdrop"></div>
+    <section class="sheet" aria-label="Memory detail">
+      <span class="grip"></span>
+      <div>
+        <p class="tag tag--olive">memory · skill</p>
+        <h1 style="font-size:var(--text-heading-sm);margin-top:var(--sp-4)">recall-timeout-fix</h1>
+      </div>
+
+      <dl class="meta-grid">
+        <dt class="label">Type</dt><dd>project</dd>
+        <dt class="label">Freshness</dt><dd>hot · recalled 3× today</dd>
+        <dt class="label">Links</dt><dd>probe.ts · 2 sessions</dd>
+      </dl>
+
+      <p style="line-height:1.6">Kind-aware model probe keeps LM Studio embedding/reranker models out of
+      the chat path; a CPU-timeout guard sheds parallel load under pressure.</p>
+
+      <div class="card--dark">
+        <p class="label" style="color:var(--color-cloud-light)">Atlas · links</p>
+        <svg class="graph" viewBox="0 0 320 120" role="img" aria-label="Mini graph: recall links to probe and two memories">
+          <g stroke="#e8e6dc" stroke-width="1" opacity="0.55">
+            <line x1="160" y1="60" x2="70" y2="40"/>
+            <line x1="160" y1="60" x2="250" y2="34"/>
+            <line x1="160" y1="60" x2="250" y2="86"/>
+          </g>
+          <circle cx="160" cy="60" r="6" fill="#d97757"/>
+          <text x="160" y="80" fill="#faf9f5" font-family="var(--font-mono)" font-size="9" text-anchor="middle">recall.ts</text>
+          <circle cx="70" cy="40" r="4" fill="none" stroke="#6a9bcc" stroke-width="1.5"/>
+          <text x="70" y="28" fill="#6a9bcc" font-family="var(--font-mono)" font-size="9" text-anchor="middle">probe.ts</text>
+          <circle cx="250" cy="34" r="4" fill="none" stroke="#788c5d" stroke-width="1.5"/>
+          <text x="250" y="24" fill="#788c5d" font-family="var(--font-mono)" font-size="9" text-anchor="middle">onyx</text>
+          <circle cx="250" cy="86" r="4" fill="none" stroke="#788c5d" stroke-width="1.5"/>
+          <text x="250" y="102" fill="#788c5d" font-family="var(--font-mono)" font-size="9" text-anchor="middle">wsl</text>
+        </svg>
+      </div>
+
+      <div class="actions">
+        <button class="btn btn--cta">Open in chat</button>
+        <button class="btn btn--ghost">Dismiss</button>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

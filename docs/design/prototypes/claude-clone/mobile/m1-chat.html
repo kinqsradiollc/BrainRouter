@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Claude · BrainRouter — Mobile chat</title>
+  <link rel="stylesheet" href="../claude-design-system.css" />
+  <style>
+    body { display:flex; justify-content:center; }
+    .device { width:390px; max-width:100%; min-height:100vh; display:flex; flex-direction:column;
+      border-left:1px solid var(--line); border-right:1px solid var(--line); }
+    .topbar { height:52px; flex:none; display:flex; align-items:center; justify-content:space-between;
+      padding:0 var(--sp-16); border-bottom:1px solid var(--line); background:var(--surface-2); }
+    .topbar__title { font-weight:700; letter-spacing:-0.01em; }
+    .icon-btn { background:none; border:0; font-size:18px; color:var(--ink); cursor:pointer;
+      min-width:44px; min-height:44px; }
+    .scroll { flex:1; overflow-y:auto; }
+    .thread { padding:var(--sp-16); gap:var(--sp-16); }
+    .msg--user .msg__body { max-width:85%; align-self:flex-end; }
+    .composer { margin:var(--sp-12); }
+    .composer .btn--accent { min-height:44px; }
+  </style>
+</head>
+<body>
+  <div class="device">
+    <header class="topbar">
+      <button class="icon-btn" aria-label="Back">‹</button>
+      <span class="topbar__title">Claude</span>
+      <button class="icon-btn" aria-label="More">⋯</button>
+    </header>
+
+    <div class="scroll">
+      <div class="thread">
+        <article class="msg msg--user">
+          <p class="msg__meta">You · 19:12</p>
+          <div class="msg__body">Why did the reranker time out on Windows?</div>
+        </article>
+        <article class="msg msg--assistant">
+          <p class="msg__meta">Claude</p>
+          <div class="msg__body">It loaded on the same path as chat-only models, so under CPU pressure
+          it held the request open. A <span class="underline-emphasis">kind-aware probe</span> now keeps
+          embedding and reranker models off that path.</div>
+        </article>
+        <div class="msg">
+          <div class="tool-row">mcp · recall("reranker timeout")&nbsp;→&nbsp;7 memories</div>
+        </div>
+      </div>
+    </div>
+
+    <form class="composer" onsubmit="return false">
+      <textarea class="composer__input" rows="1" placeholder="Message Claude…" aria-label="Message"></textarea>
+      <div class="composer__bar">
+        <span class="label" style="text-transform:none">opus-4-8</span>
+        <button class="btn btn--accent" type="submit">↑</button>
+      </div>
+    </form>
+  </div>
+</body>
+</html>

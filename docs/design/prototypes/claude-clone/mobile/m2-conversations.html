@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Claude · BrainRouter — Chats</title>
+  <link rel="stylesheet" href="../claude-design-system.css" />
+  <style>
+    body { display:flex; justify-content:center; }
+    .device { width:390px; max-width:100%; min-height:100vh; display:flex; flex-direction:column;
+      border-left:1px solid var(--line); border-right:1px solid var(--line); }
+    .topbar { height:52px; flex:none; display:flex; align-items:center; justify-content:space-between;
+      padding:0 var(--sp-16); border-bottom:1px solid var(--line); background:var(--surface-2); }
+    .topbar__title { font-size:var(--text-heading-sm); font-weight:700; letter-spacing:-0.01em; }
+    .scroll { flex:1; overflow-y:auto; }
+    .group-label { padding:var(--sp-16) var(--sp-16) var(--sp-8); }
+    .row { display:block; padding:var(--sp-12) var(--sp-16); border-bottom:1px solid var(--line);
+      text-decoration:none; color:var(--ink); }
+    .row:hover { background:var(--surface-2); }
+    .row__title { display:flex; justify-content:space-between; gap:var(--sp-8); }
+    .row__when { font-family:var(--font-mono); font-size:11px; color:var(--ink-muted); flex:none; }
+    .row__prev { color:var(--ink-muted); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .newbtn { min-height:44px; padding:8px 16px; }
+  </style>
+</head>
+<body>
+  <div class="device">
+    <header class="topbar">
+      <span class="topbar__title">Chats</span>
+      <button class="btn btn--accent newbtn">＋ New</button>
+    </header>
+
+    <div class="scroll">
+      <p class="label group-label">Today</p>
+      <a class="row" href="#">
+        <div class="row__title"><span>Reranker timeout on Windows</span><span class="row__when">18m</span></div>
+        <div class="row__prev">Kind-aware probe keeps embedding models off the chat path.</div>
+      </a>
+      <a class="row" href="#">
+        <div class="row__title"><span>Clean unused worktrees</span><span class="row__when">5h</span></div>
+        <div class="row__prev">Removed 3 redundant worktrees; kept the active feature ones.</div>
+      </a>
+
+      <p class="label group-label">Earlier</p>
+      <a class="row" href="#">
+        <div class="row__title"><span>Onyx Models panel redesign</span><span class="row__when">2d</span></div>
+        <div class="row__prev">Key-driven multi-select model fetch, PR #630.</div>
+      </a>
+      <a class="row" href="#">
+        <div class="row__title"><span>Atlas Deep-Dive polish</span><span class="row__when">3d</span></div>
+        <div class="row__prev">Tour pulse, docked deep dive, orthogonal edges.</div>
+      </a>
+      <a class="row" href="#">
+        <div class="row__title"><span>Mobile projects screen</span><span class="row__when">4d</span></div>
+        <div class="row__prev">Session controls + picker sheet + connection domain.</div>
+      </a>
+    </div>
+  </div>
+</body>
+</html>

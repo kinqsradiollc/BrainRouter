@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BrainRouter — Recall inspector</title>
+  <link rel="stylesheet" href="../claude-design-system.css" />
+  <style>
+    .nav { position:sticky; top:0; z-index:2; }
+    .wrap { max-width:820px; margin:0 auto; padding:var(--sp-32) var(--sp-16) var(--section-gap);
+      display:flex; flex-direction:column; gap:var(--sp-32); }
+    .meta-row { display:flex; flex-wrap:wrap; gap:var(--sp-32); }
+    .meta-row .pair { display:flex; flex-direction:column; gap:2px; }
+    .timeline-scroll { overflow-x:auto; }
+    .timeline { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(120px,1fr);
+      border-top:1px solid var(--line); min-width:720px; }
+    .stage { padding:var(--sp-12); border-right:1px solid var(--line); }
+    .stage:last-child { border-right:0; }
+    .stage .n { font-size:var(--text-heading-sm); font-family:var(--font-mono); }
+    .evidence { display:flex; flex-direction:column; gap:var(--sp-16); }
+    @media (max-width:520px){ .wrap{ padding-top:var(--sp-16); } }
+  </style>
+</head>
+<body>
+  <header class="nav">
+    <span class="nav__mark">CLAUDE · BRAINROUTER</span>
+    <a class="arrow-link" href="#">Back to overview</a>
+  </header>
+
+  <main class="wrap">
+    <div>
+      <p class="label">Recall inspector</p>
+      <h1 style="font-size:var(--text-heading);margin-top:var(--sp-4)">"reranker timeout"</h1>
+    </div>
+
+    <!-- METADATA PAIRS -->
+    <div class="meta-row">
+      <div class="pair"><span class="label">Query</span><span>reranker timeout</span></div>
+      <div class="pair"><span class="label">Stages</span><span>6</span></div>
+      <div class="pair"><span class="label">Latency</span><span style="font-family:var(--font-mono)">214 ms</span></div>
+      <div class="pair"><span class="label">Results</span><span>7 memories</span></div>
+    </div>
+
+    <!-- STAGE TIMELINE -->
+    <section>
+      <p class="label" style="margin-bottom:var(--sp-8)">Pipeline</p>
+      <div class="timeline-scroll">
+        <div class="timeline">
+          <div class="stage"><p class="label">01 · keyword</p><p class="n">18</p></div>
+          <div class="stage"><p class="label">02 · vector</p><p class="n">31</p></div>
+          <div class="stage"><p class="label">03 · filepath</p><p class="n">6</p></div>
+          <div class="stage"><p class="label">04 · reranker</p><p class="n">12</p></div>
+          <div class="stage"><p class="label">05 · judge</p><p class="n">9</p></div>
+          <div class="stage"><p class="label">06 · graph</p><p class="n">7</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- EVIDENCE -->
+    <section class="evidence">
+      <p class="label">Evidence</p>
+      <div class="card">
+        <p class="tag tag--olive">memory</p>
+        <h2 style="font-size:var(--text-heading-sm);margin-top:var(--sp-8)">recall-timeout-fix</h2>
+        <p style="margin-top:var(--sp-8);line-height:1.6">Kind-aware model probe keeps embedding/reranker
+        models out of the chat path; a CPU-timeout guard sheds parallel load.</p>
+        <p class="label" style="margin-top:var(--sp-16)">Source · commit 4776f75</p>
+      </div>
+      <div class="card">
+        <p class="tag tag--sky">session</p>
+        <h2 style="font-size:var(--text-heading-sm);margin-top:var(--sp-8)">Windows reranker debugging</h2>
+        <p style="margin-top:var(--sp-8);line-height:1.6">Reproduced the hang under CPU pressure; localized
+        it to the shared load path before the fix landed.</p>
+        <p class="label" style="margin-top:var(--sp-16)">Source · session 2026-06-26</p>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

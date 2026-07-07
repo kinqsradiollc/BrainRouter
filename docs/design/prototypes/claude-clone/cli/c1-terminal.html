@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Claude Code · BrainRouter — Terminal</title>
+  <link rel="stylesheet" href="../claude-design-system.css" />
+  <style>
+    body { min-height:100vh; display:flex; }
+    .term { flex:1; display:flex; flex-direction:column; font-family:var(--font-mono);
+      font-size:13px; line-height:1.6; }
+    .chrome { height:36px; flex:none; display:flex; align-items:center; gap:var(--sp-8);
+      padding:0 var(--sp-16); background:var(--surface-2); border-bottom:1px solid var(--line); }
+    .dot { width:11px; height:11px; border-radius:9999px; border:1px solid var(--line); }
+    .chrome__title { margin-left:var(--sp-8); color:var(--ink-muted); font-size:12px; }
+    .body { flex:1; overflow-y:auto; padding:var(--sp-16); white-space:pre-wrap; word-break:break-word; }
+    .prompt { color:var(--accent); }
+    .dim { color:var(--ink-muted); }
+    .ok { color:var(--color-olive); }
+    .cursor-row { color:var(--ink-muted); }
+    .cursor-row.sel { color:var(--ink); }
+    .cursor-row.sel .k { text-decoration:underline; text-decoration-thickness:2px; text-underline-offset:3px; }
+    .status { flex:none; display:flex; gap:var(--sp-16); padding:var(--sp-8) var(--sp-16);
+      border-top:1px solid var(--line); background:var(--surface-2); color:var(--ink-muted); font-size:12px; }
+    .status b { color:var(--ink); font-weight:400; }
+  </style>
+</head>
+<body>
+  <div class="term">
+    <div class="chrome">
+      <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      <span class="chrome__title">brainrouter — claude — zsh — 96×30</span>
+    </div>
+
+    <div class="body"><span class="dim"># BrainRouter CLI · Claude Code</span>
+<span class="prompt">brainrouter ❯</span> /recall reranker timeout
+
+<span class="dim">↳ recall pipeline</span>  keyword→vector→filepath→reranker→judge→graph
+<span class="ok">✓</span> recall("reranker timeout") <span class="dim">→</span> 7 memories <span class="dim">(214ms)</span>
+
+  The reranker timed out because it loaded on the chat-only path; under CPU
+  pressure the request stayed open to the wall clock. The fix adds a kind-aware
+  probe that keeps embedding/reranker models off that path, plus a CPU-timeout
+  guard that sheds parallel load. <span class="dim">[memory: recall-timeout-fix · 4776f75]</span>
+
+<span class="prompt">brainrouter ❯</span> /config
+<span class="dim">⚙  /config  ·  Workspace: D:/BrainRouter/BrainRouter</span>
+<span class="cursor-row sel">  ❯ <span class="k">Default provider</span> ......... Anthropic</span>
+<span class="cursor-row">    Connected providers ..... Anthropic, LM Studio, OpenRouter</span>
+<span class="cursor-row">    Agent models ............ opus-4-8 / sonnet-5</span>
+<span class="cursor-row">    Effort level ............ high</span>
+<span class="cursor-row">    Theme ................... dark</span>
+<span class="dim">    ↑/↓ navigate · ↵ edit row · esc close</span>
+
+<span class="prompt">brainrouter ❯</span> <span style="color:var(--accent)">█</span></div>
+
+    <div class="status">
+      <span>model <b>claude-opus-4-8</b></span>
+      <span>effort <b>high</b></span>
+      <span>context <b>42.1k</b></span>
+      <span>tokens <b>4,812</b></span>
+    </div>
+  </div>
+</body>
+</html>

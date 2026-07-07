@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Claude · BrainRouter — Projects</title>
+  <link rel="stylesheet" href="../claude-design-system.css" />
+  <style>
+    .main { padding:var(--sp-32); overflow-y:auto; }
+    .rail__brand { display:flex; align-items:center; gap:var(--sp-8); font-weight:700; font-size:16px;
+      letter-spacing:-0.01em; padding:var(--sp-8) var(--sp-12); }
+    .mark { width:20px; height:20px; }
+    .rail__label { padding:var(--sp-12) var(--sp-12) var(--sp-4); }
+    .rail__row { display:flex; flex-direction:column; padding:var(--sp-8) var(--sp-12);
+      color:var(--ink); text-decoration:none; border-radius:var(--r-btn); }
+    .rail__row:hover { background:var(--bg); }
+    .rail__row .when { font-family:var(--font-mono); font-size:11px; color:var(--ink-muted); margin-top:2px; }
+    .board { display:grid; grid-template-columns:repeat(3,1fr); gap:var(--sp-16); margin-top:var(--sp-16); }
+    @media (max-width:900px){ .board{ grid-template-columns:1fr; } }
+    @media (max-width:820px){ .app{ grid-template-columns:1fr; } .rail{ display:none; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <nav class="rail" aria-label="Primary" style="overflow-y:auto">
+      <div class="rail__brand">
+        <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l2.2 6.8H21l-5.5 4 2.1 6.8L12 15.6 6.4 19.6l2.1-6.8L3 8.8h6.8z" fill="#d97757"/></svg>
+        Claude · BrainRouter
+      </div>
+      <button class="btn btn--accent" style="margin:var(--sp-8) 0">＋ New chat</button>
+
+      <p class="label rail__label">Recents</p>
+      <a class="rail__row" href="#">Reranker timeout on Windows<span class="when">18m ago</span></a>
+      <a class="rail__row" href="#">Onyx Models panel redesign<span class="when">2h ago</span></a>
+      <a class="rail__row" href="#">Clean unused worktrees<span class="when">5h ago</span></a>
+      <a class="rail__row" href="#">Atlas Deep-Dive polish<span class="when">yesterday</span></a>
+      <a class="rail__row" href="#">Mobile projects screen<span class="when">2d ago</span></a>
+
+      <p class="label rail__label">Projects</p>
+      <a class="rail__item" href="#">BrainRouter Core</a>
+      <a class="rail__item" href="#">Dashboard</a>
+      <a class="rail__item" href="#">Mobile</a>
+      <a class="rail__item" href="#">Docs</a>
+
+      <p class="label rail__label">Skills</p>
+      <a class="rail__item" href="#">planning-skill</a>
+      <a class="rail__item" href="#">debugging-and-error-recovery</a>
+      <a class="rail__item" href="#">verify-loop</a>
+      <a class="rail__item" href="#">changelog-generator</a>
+    </nav>
+
+    <main class="main">
+      <h1 style="font-size:var(--text-heading)">Projects</h1>
+      <div class="board">
+        <div class="card card--release">
+          <p class="label">Updated · 2026-07-07</p>
+          <h2 style="font-size:var(--text-heading-sm);margin-top:var(--sp-8)">BrainRouter Core</h2>
+          <p style="margin-top:var(--sp-8)">Memory engine, recall pipeline, MCP tool registry.</p>
+          <a class="arrow-link" href="#" style="display:inline-block;margin-top:var(--sp-16)">Open</a>
+        </div>
+        <div class="card card--release">
+          <p class="label">Updated · 2026-07-05</p>
+          <h2 style="font-size:var(--text-heading-sm);margin-top:var(--sp-8)">Dashboard</h2>
+          <p style="margin-top:var(--sp-8)">Cognitive-graph viz, recall history, memory states.</p>
+          <a class="arrow-link" href="#" style="display:inline-block;margin-top:var(--sp-16)">Open</a>
+        </div>
+        <div class="card card--release">
+          <p class="label">Updated · 2026-07-02</p>
+          <h2 style="font-size:var(--text-heading-sm);margin-top:var(--sp-8)">Mobile</h2>
+          <p style="margin-top:var(--sp-8)">Prototype flows — projects, sessions, picker sheet.</p>
+          <a class="arrow-link" href="#" style="display:inline-block;margin-top:var(--sp-16)">Open</a>
+        </div>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

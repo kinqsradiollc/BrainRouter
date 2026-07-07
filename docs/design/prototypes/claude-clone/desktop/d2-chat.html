@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Claude · BrainRouter — Chat</title>
+  <link rel="stylesheet" href="../claude-design-system.css" />
+  <style>
+    .main { display:flex; flex-direction:column; min-height:100vh; }
+    .scroll { flex:1; overflow-y:auto; }
+    .rail__brand { display:flex; align-items:center; gap:var(--sp-8); font-weight:700; font-size:16px;
+      letter-spacing:-0.01em; padding:var(--sp-8) var(--sp-12); }
+    .rail__group { margin-top:var(--sp-16); }
+    .mark { width:20px; height:20px; }
+    .changeset { border:1px solid var(--line); border-radius:var(--r-card); padding:var(--sp-16); }
+    .changeset__files { font-family:var(--font-mono); font-size:var(--text-caption); line-height:1.9; margin-top:var(--sp-8); }
+    .add { color:var(--color-olive); } .del { color:var(--color-fig); }
+    .model-pill { display:flex; align-items:center; gap:var(--sp-8); }
+    @media (max-width:820px){ .app{ grid-template-columns:1fr; } .rail{ display:none; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <nav class="rail" aria-label="Primary">
+      <div class="rail__brand">
+        <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l2.2 6.8H21l-5.5 4 2.1 6.8L12 15.6 6.4 19.6l2.1-6.8L3 8.8h6.8z" fill="#d97757"/></svg>
+        Claude · BrainRouter
+      </div>
+      <button class="btn btn--accent" style="margin-top:var(--sp-8)">＋ New chat</button>
+      <div class="rail__group">
+        <a class="rail__item" aria-current="true" href="#">Chats</a>
+        <a class="rail__item" href="#">Projects</a>
+        <a class="rail__item" href="#">Skills</a>
+        <a class="rail__item" href="#">Memory</a>
+        <a class="rail__item" href="#">Atlas</a>
+      </div>
+    </nav>
+
+    <div class="main">
+      <div class="scroll">
+        <div class="thread">
+          <!-- USER -->
+          <article class="msg msg--user">
+            <p class="msg__meta">You · 19:12</p>
+            <div class="msg__body">Why did the reranker time out on Windows, and how was it fixed?</div>
+          </article>
+
+          <!-- ASSISTANT -->
+          <article class="msg msg--assistant">
+            <p class="msg__meta">Claude · claude-opus-4-8</p>
+            <div class="msg__body">
+              <p>The timeout came from two places. The recall pipeline loaded the reranker on the same
+              path as chat-only models, so under CPU pressure it kept the request open until the wall
+              clock ran out. The fix adds a <span class="underline-emphasis">kind-aware probe</span> that
+              recognises embedding and reranker models and keeps them out of the chat path entirely.</p>
+              <p style="margin-top:var(--sp-12)">A second guard sheds parallel load and applies a CPU
+              timeout, so a slow local model degrades gracefully instead of hanging the whole recall.</p>
+            </div>
+          </article>
+
+          <!-- TOOL ROWS -->
+          <div class="msg">
+            <div class="tool-row">mcp · recall("reranker timeout")&nbsp;&nbsp;→&nbsp;&nbsp;7 memories</div>
+            <div class="tool-row" style="margin-top:var(--sp-8)">git · log --oneline -5&nbsp;&nbsp;→&nbsp;&nbsp;4776f75 kind-aware model probe</div>
+          </div>
+
+          <!-- CHANGESET -->
+          <div class="msg">
+            <div class="changeset">
+              <p class="label">Changeset · 3 files · <span class="add">+113</span> <span class="del">−4</span></p>
+              <div class="changeset__files">
+                brainrouter/src/memory/recall.ts&nbsp;&nbsp;<span class="add">+61</span> <span class="del">−2</span><br />
+                brainrouter/src/providers/probe.ts&nbsp;&nbsp;<span class="add">+44</span><br />
+                brainrouter/src/providers/probe.test.ts&nbsp;&nbsp;<span class="add">+8</span> <span class="del">−2</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <form class="composer" onsubmit="return false">
+        <textarea class="composer__input" rows="1" placeholder="Reply to Claude…" aria-label="Message"></textarea>
+        <div class="composer__bar">
+          <div class="model-pill"><span class="label" style="text-transform:none">claude-opus-4-8</span></div>
+          <button class="btn btn--accent" type="submit">Send ↑</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</body>
+</html>
