@@ -119,6 +119,7 @@ export interface OrgSummary {
   role: string;
   capabilities: string[];
   entitlements?: OrgEntitlements;
+  allowedDomains?: string[];
   isDefault: boolean;
 }
 
@@ -154,6 +155,8 @@ export const adminApi = {
     authFetch<{ org: OrgSummary }>("/api/orgs", { method: "POST", body: { name, plan } }),
   updateOrgPlan: (orgId: string, plan: OrgPlan) =>
     authFetch<{ org: OrgSummary }>(`/api/orgs/${orgId}/plan`, { method: "POST", body: { plan }, orgId }),
+  updateAllowedDomains: (orgId: string, domains: string[]) =>
+    authFetch<{ org: { orgId: string; allowedDomains: string[] } }>(`/api/orgs/${orgId}/allowed-domains`, { method: "POST", body: { domains }, orgId }),
   listMembers: (orgId: string) => authFetch<{ members: OrgMember[] }>(`/api/orgs/${orgId}/members`, { orgId }),
   addMember: (orgId: string, userId: string, role: string) =>
     authFetch(`/api/orgs/${orgId}/members`, { method: "POST", body: { userId, role }, orgId }),

@@ -11,7 +11,8 @@ import { requireAnyAuth, type AuthedRequest } from "../../middleware/auth.js";
 import { sendError } from "../../../contracts/http.js";
 import { can, capabilitiesFor, isRole, ROLES } from "../../../tenancy/rbac.js";
 import { isOrgPlan, ORG_PLANS } from "../../../tenancy/types.js";
-import { entitlementsFor, featuresFor, withinLimit } from "../../../tenancy/entitlements.js";
+import { entitlementsFor, featuresFor, withinLimit, planHasFeature } from "../../../tenancy/entitlements.js";
+import { domainAllowed, normalizeDomains } from "../../../tenancy/emailDomain.js";
 
 /** Serialize a plan's entitlements (limits + features) for the dashboard. */
 function entitlementsView(plan: string) {
@@ -62,6 +63,7 @@ orgsRouter.get("/", async (req: AuthedRequest, res) => {
         role: m.role,
         capabilities: capabilitiesFor(m.role),
         entitlements: entitlementsView(m.org.plan),
+        allowedDomains: m.org.allowedDomains,
         isDefault: m.org.orgId === defaultOrgId,
       })),
     });
@@ -108,6 +110,12 @@ orgsRouter.post("/:orgId/members", async (req: AuthedRequest, res) => {
   let userId = String(req.body?.userId ?? "").trim();
   const email = String(req.body?.email ?? "").trim().toLowerCase();
   if (!userId && email) {
+    // Enterprise domain allowlist: reject an invite whose email domain isn't allowed.
+    const org = await memoryEngine.tenancy.getOrganization(orgId);
+    if (org && org.allowedDomains.length > 0 && !domainAllowed(email, org.allowedDomains)) {
+      sendError(res, 403, `${email} is not in this team's allowed email domains (${org.allowedDomains.join(", ")}).`);
+      return;
+    }
     const user = await memoryEngine.getUserByEmail(email);
     if (!user) {
       sendError(res, 404, `No user with email ${email}. They must create an account before they can be added.`);
@@ -175,5 +183,37 @@ orgsRouter.post("/:orgId/plan", async (req: AuthedRequest, res) => {
     res.json({ org: { orgId: org.orgId, name: org.name, slug: org.slug, plan: org.plan, role, capabilities: capabilitiesFor(role) } });
   } catch (error) {
     sendError(res, 400, error instanceof Error ? error.message : "Failed to update plan");
+  }
+});
+
+/**
+ * POST /api/orgs/:orgId/allowed-domains — set the team's email-domain allowlist
+ * (owner via org:manage; requires the enterprise `domainAllowlist` feature). Body:
+ * { domains: string[] }. An empty list clears the restriction.
+ */
+orgsRouter.post("/:orgId/allowed-domains", async (req: AuthedRequest, res) => {
+  const orgId = String(req.params.orgId ?? "").trim();
+  if (!orgId) { sendError(res, 400, "orgId is required"); return; }
+  const role = await memoryEngine.tenancy.getMemberRole(orgId, req.userId!);
+  if (!can(role, "org:manage")) {
+    sendError(res, 403, "This action requires the 'org:manage' capability");
+    return;
+  }
+  const raw = req.body?.domains;
+  if (!Array.isArray(raw) || raw.some((d) => typeof d !== "string")) {
+    sendError(res, 400, "domains must be an array of strings");
+    return;
+  }
+  const org = await memoryEngine.tenancy.getOrganization(orgId);
+  if (!org) { sendError(res, 404, "organization not found"); return; }
+  if (!planHasFeature(org.plan, "domainAllowlist")) {
+    sendError(res, 402, "Email-domain allowlisting requires the enterprise plan.");
+    return;
+  }
+  try {
+    const updated = await memoryEngine.tenancy.updateAllowedDomains(orgId, normalizeDomains(raw));
+    res.json({ org: { orgId: updated.orgId, allowedDomains: updated.allowedDomains } });
+  } catch (error) {
+    sendError(res, 400, error instanceof Error ? error.message : "Failed to update allowed domains");
   }
 });

@@ -39,6 +39,8 @@ export interface OrganizationRecord {
   name: string;
   slug: string;
   plan: OrgPlan;
+  /** Enterprise email-domain allowlist (ADR-014 Phase B). Empty = no restriction. */
+  allowedDomains: string[];
   createdAt: string;
 }
 

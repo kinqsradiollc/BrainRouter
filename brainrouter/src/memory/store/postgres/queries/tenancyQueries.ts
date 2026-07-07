@@ -8,7 +8,7 @@ import type { OrgPlan, OrganizationRecord, OrgMemberRecord, OrgMembership } from
 import { normalizeOrgPlan } from "../../../../tenancy/types.js";
 import { isRole, type Role } from "../../../../tenancy/rbac.js";
 
-const ORG_COLUMNS = "org_id, name, slug, plan, created_at";
+const ORG_COLUMNS = "org_id, name, slug, plan, allowed_domains, created_at";
 
 function toIso(v: unknown): string {
   if (v instanceof Date) return v.toISOString();
@@ -21,6 +21,7 @@ function orgRowToRecord(row: any): OrganizationRecord {
     name: String(row.name),
     slug: String(row.slug),
     plan: normalizeOrgPlan(row.plan),
+    allowedDomains: Array.isArray(row.allowed_domains) ? row.allowed_domains.map(String) : [],
     createdAt: toIso(row.created_at),
   };
 }
@@ -63,6 +64,17 @@ export async function updateOrganizationPlan(
   plan: OrgPlan,
 ): Promise<OrganizationRecord> {
   await exec.run(`UPDATE organizations SET plan = $2 WHERE org_id = $1`, [orgId, plan]);
+  const org = await getOrganization(exec, orgId);
+  if (!org) throw new Error(`Organization not found: ${orgId}`);
+  return org;
+}
+
+export async function updateAllowedDomains(
+  exec: Executor,
+  orgId: string,
+  domains: string[],
+): Promise<OrganizationRecord> {
+  await exec.run(`UPDATE organizations SET allowed_domains = $2 WHERE org_id = $1`, [orgId, domains]);
   const org = await getOrganization(exec, orgId);
   if (!org) throw new Error(`Organization not found: ${orgId}`);
   return org;

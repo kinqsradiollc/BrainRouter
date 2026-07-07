@@ -15,6 +15,8 @@ export interface TenancyStore {
   getOrganization(orgId: string): Promise<OrganizationRecord | null>;
   /** Change an org's plan tier (owner-gated at the route). Returns the updated record. */
   updateOrganizationPlan(orgId: string, plan: OrgPlan): Promise<OrganizationRecord>;
+  /** Set the org's email-domain allowlist (owner + enterprise-gated). Returns the updated record. */
+  updateAllowedDomains(orgId: string, domains: string[]): Promise<OrganizationRecord>;
   addOrgMember(orgId: string, userId: string, role: Role): Promise<void>;
   removeOrgMember(orgId: string, userId: string): Promise<void>;
   getMemberRole(orgId: string, userId: string): Promise<Role | null>;

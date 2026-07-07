@@ -50,6 +50,8 @@ function OrgsInner() {
   const [creating, setCreating] = useState(false);
   const [busyDefault, setBusyDefault] = useState<string | null>(null);
   const [busyPlan, setBusyPlan] = useState<string | null>(null);
+  const [domainDraft, setDomainDraft] = useState<Record<string, string>>({});
+  const [savingDomains, setSavingDomains] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -84,6 +86,20 @@ function OrgsInner() {
       setError(e instanceof Error ? e.message : "Failed to create organization");
     } finally {
       setCreating(false);
+    }
+  }
+
+  async function saveDomains(orgId: string) {
+    setSavingDomains(orgId);
+    try {
+      const domains = (domainDraft[orgId] ?? "").split(/[\s,]+/).map((d) => d.trim()).filter(Boolean);
+      await adminApi.updateAllowedDomains(orgId, domains);
+      await load();
+      setError("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to update allowed domains");
+    } finally {
+      setSavingDomains(null);
     }
   }
 
@@ -305,6 +321,22 @@ function OrgsInner() {
                       {inviting ? "Inviting…" : "Invite"}
                     </PremiumButton>
                   </div>
+
+                  {canManageOrg && org.entitlements?.features?.includes("domainAllowlist") && (
+                    <div className="org-invite" style={{ marginTop: "var(--spacing-12)" }}>
+                      <label className="settings-label" style={{ flex: "1 1 18rem" }}>Allowed email domains
+                        <input
+                          className="settings-input"
+                          placeholder="brainrouter.dev, acme.com"
+                          value={domainDraft[org.orgId] ?? (org.allowedDomains ?? []).join(", ")}
+                          onChange={(e) => setDomainDraft({ ...domainDraft, [org.orgId]: e.target.value })}
+                        />
+                      </label>
+                      <PremiumButton variant="ghost" disabled={savingDomains === org.orgId} onClick={() => saveDomains(org.orgId)}>
+                        {savingDomains === org.orgId ? "Saving…" : "Save domains"}
+                      </PremiumButton>
+                    </div>
+                  )}
                 </div>
               )}
             </PremiumCard>
