@@ -84,6 +84,10 @@ describe("API-HEADERS-CORS — middleware integration", () => {
     expect(evil.status).toBe(403);
     const ok = await fetch(`${base}/x`, { method: "OPTIONS", headers: { Origin: "https://app.test" } });
     expect(ok.status).toBe(204);
+    // The dashboard sends the active-org header on admin/tenancy calls; it must
+    // be listed in Allow-Headers or the browser blocks the request in preflight.
+    const allowHeaders = ok.headers.get("access-control-allow-headers") ?? "";
+    expect(allowHeaders).toContain("X-BrainRouter-Org");
   });
 
   it("lets a no-Origin request (curl / server-to-server) through", async () => {

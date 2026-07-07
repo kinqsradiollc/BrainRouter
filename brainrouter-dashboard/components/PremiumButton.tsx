@@ -35,7 +35,7 @@ export function PremiumButton({
     justifyContent: "center",
     gap: size === "small" ? "4px" : "8px",
     transition: "all 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
-    border: "1px solid transparent",
+    border: "1px solid rgba(0, 0, 0, 0)",
     outline: "none",
     whiteSpace: "nowrap",
     ...style
@@ -47,7 +47,7 @@ export function PremiumButton({
     variantStyle = {
       background: "linear-gradient(135deg, #34C28E 0%, #34C28E 50%, #34C28E 100%)",
       color: "#0b0c10",
-      border: "1px solid transparent",
+      border: "1px solid rgba(0, 0, 0, 0)",
       boxShadow: "var(--elev-inset)"
     };
   } else if (variant === "ghost") {
@@ -119,7 +119,7 @@ export function PremiumButton({
                   ? "#34C28E"
                   : (variant === "text"
                       ? "var(--border-strong)"
-                      : "transparent"))),
+                      : "rgba(0, 0, 0, 0)"))),
         color: variant === "text"
           ? "var(--color-pure-white)"
           : (variant === "danger"

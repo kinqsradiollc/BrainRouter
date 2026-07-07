@@ -625,6 +625,36 @@ h5, h6 { font-size: 13px; line-height: 1.4; font-weight: 600; letter-spacing: 0;
 .settings-cardhead h3 { margin: 0; }
 .settings-empty-inline { font-size: 13px; color: var(--text-muted); }
 
+/* ── Organizations ─────────────────────────────────────────── */
+.org-create { display: flex; align-items: flex-end; gap: var(--spacing-12); flex-wrap: wrap; }
+.org-create > .settings-label { flex: 1 1 20rem; }
+
+/* Org row header — compact, no dead space when collapsed. */
+.org-head { display: flex; align-items: center; gap: var(--spacing-16); }
+.org-avatar {
+  flex-shrink: 0; width: 46px; height: 46px; border-radius: var(--radius-md);
+  display: grid; place-items: center; font-size: 19px; font-weight: 650;
+  color: #fff; letter-spacing: 0.5px; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.10);
+}
+.org-headmeta { min-width: 0; flex: 1; }
+.org-name { margin: 0; font-size: 16px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: var(--spacing-8); flex-wrap: wrap; }
+.org-sub { margin-top: 4px; font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.org-sub__dot { opacity: 0.4; }
+.org-sub__slug { font-family: var(--font-mono); }
+
+/* Expanded member-management panel. */
+.org-members { margin-top: var(--spacing-20); padding-top: var(--spacing-16); border-top: 1px solid var(--border-dim); }
+.org-members__title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: var(--spacing-12); }
+.org-member { display: flex; align-items: center; gap: var(--spacing-12); padding: var(--spacing-8) 0; }
+.org-member + .org-member { border-top: 1px solid var(--border-dim); }
+.org-member__avatar { flex-shrink: 0; width: 30px; height: 30px; border-radius: 9999px; display: grid; place-items: center; font-size: 12px; font-weight: 600; background: var(--overlay-bg-hover-strong); color: var(--text-secondary); }
+.org-member__id { flex: 1; min-width: 0; font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.org-rolepick { flex: 0 0 auto; width: auto; min-width: 7rem; margin-top: 0; padding: 6px 28px 6px 10px; font-size: 12px; }
+.org-iconbtn { flex-shrink: 0; display: grid; place-items: center; width: 30px; height: 30px; border-radius: var(--radius-sm); border: 1px solid var(--border-dim); background: transparent; color: var(--text-muted); cursor: pointer; transition: background 0.15s, color 0.15s, border-color 0.15s; }
+.org-iconbtn:hover { background: rgba(229, 103, 95, 0.10); border-color: rgba(229, 103, 95, 0.35); color: var(--danger); }
+.org-invite { margin-top: var(--spacing-16); padding: var(--spacing-16); border: 1px dashed var(--border-med); border-radius: var(--radius-md); background: var(--overlay-bg); display: flex; align-items: flex-end; gap: var(--spacing-12); flex-wrap: wrap; }
+.org-invite > .settings-label:first-child { flex: 1 1 16rem; }
+
 /* Decorative Badges & Highlights */
 .badge-gold {
   background: var(--gradient-golden-gradient);
@@ -829,13 +859,12 @@ html {
 }
 
 .loading-spinner-shell {
-  position: fixed;
-  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  min-height: 100dvh;
+  width: 100%;
   background: var(--surface-base);
-  z-index: 9999;
 }
 
 .loading-spinner-ring {

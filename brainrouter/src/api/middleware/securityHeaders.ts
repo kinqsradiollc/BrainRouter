@@ -55,7 +55,7 @@ export function corsMiddleware(allowlist: string[] = resolveCorsAllowlist(), opt
       res.setHeader("Access-Control-Allow-Credentials", "true");
     }
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, PATCH, DELETE");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, mcp-session-id");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, mcp-session-id, X-BrainRouter-Org, X-BrainRouter-Session");
     if (req.method === "OPTIONS") {
       res.sendStatus(allowed || !origin ? 204 : 403);
       return;
