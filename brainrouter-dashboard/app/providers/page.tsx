@@ -239,7 +239,7 @@ function ProvidersInner() {
                   <button key={c.id} type="button" className="prov-card" onClick={() => openCatalog(c)} title={`Set up ${c.label}`}>
                     <span className="prov-icon" style={{ background: providerGradient(c.id) }} aria-hidden>{monogram(c.label)}</span>
                     <span className="prov-meta">
-                      <span className="prov-name">{c.label}{c.local ? " (local)" : ""}</span>
+                      <span className="prov-name">{c.label}</span>
                       <span className="prov-host">{hostOf(c.endpoint)}</span>
                     </span>
                     <span className={`prov-status ${done ? "prov-status--ok" : ""}`}>{done ? "✓ Configured" : "Connect"}</span>
