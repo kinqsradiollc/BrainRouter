@@ -10,6 +10,7 @@
 import type { Role } from "./rbac.js";
 import type { OrganizationRecord, OrgMemberRecord, OrgMembership, OrgPlan } from "./types.js";
 import type { AuthTokenRecord, OrgInviteRecord } from "../memory/store/postgres/queries/emailAuthQueries.js";
+import type { OrgIdentityRecord } from "../memory/store/postgres/queries/orgPersonaQueries.js";
 
 export interface TenancyStore {
   createOrganization(input: { orgId: string; name: string; slug: string; plan?: OrgPlan }): Promise<OrganizationRecord>;
@@ -46,4 +47,11 @@ export interface EmailAuthStore {
   acceptInvite(tokenHash: string, nowIso: string): Promise<OrgInviteRecord | null>;
   listInvites(orgId: string): Promise<OrgInviteRecord[]>;
   revokeInvite(tokenHash: string): Promise<void>;
+}
+
+/** Team consensus-persona store (ADR-014 Phase C), via `memoryEngine.orgPersona`. */
+export interface OrgPersonaStore {
+  getOrgSharedIdentityCognitives(orgId: string, limit?: number): Promise<any[]>;
+  getOrgIdentity(orgId: string): Promise<OrgIdentityRecord | null>;
+  upsertOrgIdentity(rec: OrgIdentityRecord): Promise<void>;
 }

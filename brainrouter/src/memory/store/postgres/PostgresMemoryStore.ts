@@ -120,6 +120,7 @@ import * as userStats from "./queries/userStatsQueries.js";
 import * as sourcesTree from "./queries/sourcesTreeQueries.js";
 import * as tenancy from "./queries/tenancyQueries.js";
 import * as emailAuth from "./queries/emailAuthQueries.js";
+import * as orgPersona from "./queries/orgPersonaQueries.js";
 import * as providerCfg from "./queries/providerConfigQueries.js";
 import * as integrationCfg from "./queries/integrationConfigQueries.js";
 import type { TenancyStore } from "../../../tenancy/store.js";
@@ -384,6 +385,11 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public acceptInvite(tokenHash: string, nowIso: string): Promise<emailAuth.OrgInviteRecord | null> { return emailAuth.acceptInvite(this.exec, tokenHash, nowIso); }
   public listInvites(orgId: string): Promise<emailAuth.OrgInviteRecord[]> { return emailAuth.listInvites(this.exec, orgId); }
   public revokeInvite(tokenHash: string): Promise<void> { return emailAuth.revokeInvite(this.exec, tokenHash); }
+
+  // ── team consensus persona (ADR-014 P-C) ─────────────────────────────────
+  public getOrgSharedIdentityCognitives(orgId: string, limit = 100): Promise<any[]> { return orgPersona.getOrgSharedIdentityCognitives(this.exec, orgId, limit); }
+  public getOrgIdentity(orgId: string): Promise<orgPersona.OrgIdentityRecord | null> { return orgPersona.getOrgIdentity(this.exec, orgId); }
+  public upsertOrgIdentity(rec: orgPersona.OrgIdentityRecord): Promise<void> { return orgPersona.upsertOrgIdentity(this.exec, rec); }
 
   // ── tenancy (ADR-010 P1: organizations + membership/roles) ───────────────
 

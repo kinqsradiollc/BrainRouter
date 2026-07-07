@@ -20,7 +20,7 @@ import type { ModeStats } from "./bench/regression.js";
 import type { CodeRecallResult } from "./bench/code-recall.js";
 import type { RetrievalMetrics } from "./bench/code-scale.js";
 import type { CursorPaginationOptions, DiagnosticsBundle, EvidenceListFilters, IMemoryStore, MemoryListFilters, OperationLogFilters } from "@kinqs/brainrouter-types";
-import type { TenancyStore, EmailAuthStore } from "../tenancy/store.js";
+import type { TenancyStore, EmailAuthStore, OrgPersonaStore } from "../tenancy/store.js";
 import type { ProviderStore } from "../providers/store.js";
 import type { IntegrationStore } from "../integrations/store.js";
 import { resolveProviderConfig } from "../providers/resolver.js";
@@ -36,6 +36,7 @@ import { scanSkillsForHints } from "./skills/skill-hints-loader.js";
 import { distillFocusScenes } from "./pipeline/focus/contextual-focus-builder.js";
 import { planGovernance, planStorageGovernance, type GovernancePlanFilters, type GovernancePlanResult, type StorageGovernanceStats, type StorageGovernanceResult } from "./governance/governance-plan.js";
 import { distillCoreIdentity } from "./pipeline/identity/identity-distiller.js";
+import { distillOrgPersona } from "./pipeline/identity/org-identity-distiller.js";
 import { spikeSkill as spikeSkillActivation } from "./pipeline/skill/skill-prewarm.js";
 import type { LLMRunner } from "@kinqs/brainrouter-types";
 import { ModelLLMRunner } from "./llm/modelRunner.js";
@@ -82,6 +83,9 @@ export class MemoryEngine {
   private sweepInProgress = false;
 
   private personaCache: Map<string, { personaMd: string; cachedAt: number }> = new Map();
+  // ADR-014 P-C — team consensus persona cache, keyed by orgId (never mixes with
+  // the per-user personaCache above, so `you-in-team-A` ≠ `you-in-team-B`).
+  private orgPersonaCache: Map<string, { personaMd: string; cachedAt: number }> = new Map();
   private readonly PERSONA_CACHE_TTL_MS = parseInt(
     process.env.BRAINROUTER_PERSONA_CACHE_TTL_MS ?? String(60 * 60 * 1000), 10
   );
@@ -303,6 +307,34 @@ export class MemoryEngine {
     return result;
   }
 
+  /** On-demand Team consensus persona distillation (ADR-014 P-C). */
+  public async distillOrgPersona(orgId: string) {
+    const result = await distillOrgPersona({ orgId, store: this.orgPersona, llmRunner: this.synthesisRunner });
+    if (result.success && result.personaMd) {
+      this.orgPersonaCache.set(orgId, { personaMd: result.personaMd, cachedAt: Date.now() });
+    }
+    return result;
+  }
+
+  /**
+   * The Team consensus persona (cached), distilling on-demand if none exists yet.
+   * Returns null when the team has no shared persona/instruction memories.
+   */
+  public async getOrgPersona(orgId: string): Promise<{ personaMd: string } | null> {
+    const cached = this.orgPersonaCache.get(orgId);
+    if (cached && (Date.now() - cached.cachedAt) < this.PERSONA_CACHE_TTL_MS) {
+      return { personaMd: cached.personaMd };
+    }
+    let rec = await this.orgPersona.getOrgIdentity(orgId);
+    if (!rec) {
+      const distilled = await this.distillOrgPersona(orgId);
+      if (distilled.success && distilled.personaMd) return { personaMd: distilled.personaMd };
+      return null;
+    }
+    this.orgPersonaCache.set(orgId, { personaMd: rec.personaMd, cachedAt: Date.now() });
+    return { personaMd: rec.personaMd };
+  }
+
   /** Get the current Core Identity for a user, using prompt-level in-memory cache. */
   public async getPersona(userId: string) {
     const cached = this.personaCache.get(userId);
@@ -363,6 +395,11 @@ export class MemoryEngine {
   /** ADR-014 P-B2 — email/auth store: SMTP settings, verification tokens, invites. */
   public get emailAuth(): EmailAuthStore {
     return this.store as unknown as EmailAuthStore;
+  }
+
+  /** ADR-014 P-C — team consensus persona store. */
+  public get orgPersona(): OrgPersonaStore {
+    return this.store as unknown as OrgPersonaStore;
   }
 
   /** ADR-010 P2 — DB-backed provider configs (see {@link tenancy} for the cast rationale). */
