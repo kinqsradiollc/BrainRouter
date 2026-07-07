@@ -10,9 +10,10 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
 import { PremiumCard } from "../../components/PremiumCard";
 import { PremiumButton } from "../../components/PremiumButton";
-import { adminApi, type OrgSummary, type OrgMember } from "../../lib/adminApi";
+import { adminApi, ORG_PLANS, type OrgSummary, type OrgMember, type OrgPlan } from "../../lib/adminApi";
 
 const ROLES = ["owner", "admin", "member", "viewer"];
+const planLabel = (plan: string) => ORG_PLANS.find((p) => p.value === plan)?.label ?? plan;
 
 /** Deterministic gradient per org id — no Math.random (SSR-safe, stable). */
 const AVATAR_GRADIENTS = [
@@ -45,8 +46,10 @@ function OrgsInner() {
   const [invite, setInvite] = useState({ email: "", role: "member" });
   const [inviting, setInviting] = useState(false);
   const [newOrgName, setNewOrgName] = useState("");
+  const [newOrgPlan, setNewOrgPlan] = useState<OrgPlan>("team");
   const [creating, setCreating] = useState(false);
   const [busyDefault, setBusyDefault] = useState<string | null>(null);
+  const [busyPlan, setBusyPlan] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -73,13 +76,27 @@ function OrgsInner() {
     if (!newOrgName.trim()) return;
     setCreating(true);
     try {
-      await adminApi.createOrg(newOrgName.trim());
+      await adminApi.createOrg(newOrgName.trim(), newOrgPlan);
       setNewOrgName("");
+      setNewOrgPlan("team");
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create organization");
     } finally {
       setCreating(false);
+    }
+  }
+
+  async function changePlan(orgId: string, plan: OrgPlan) {
+    setBusyPlan(orgId);
+    try {
+      await adminApi.updateOrgPlan(orgId, plan);
+      await load();
+      setError("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to change plan");
+    } finally {
+      setBusyPlan(null);
     }
   }
 
@@ -147,7 +164,7 @@ function OrgsInner() {
       <PremiumCard level={2} style={{ marginTop: "var(--spacing-24)" }}>
         <div className="settings-cardhead"><h3>Create an organization</h3></div>
         <form onSubmit={createOrg} className="org-create">
-          <label className="settings-label">Organization name
+          <label className="settings-label org-create__name">Organization name
             <input
               className="settings-input"
               placeholder="Acme Inc."
@@ -155,9 +172,21 @@ function OrgsInner() {
               onChange={(e) => setNewOrgName(e.target.value)}
             />
           </label>
-          <PremiumButton type="submit" variant="primary" disabled={creating || !newOrgName.trim()}>
-            {creating ? "Creating…" : "Create organization"}
-          </PremiumButton>
+          <label className="settings-label org-create__plan">Plan
+            <select
+              className="settings-select org-planselect"
+              value={newOrgPlan}
+              onChange={(e) => setNewOrgPlan(e.target.value as OrgPlan)}
+            >
+              {ORG_PLANS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+            </select>
+          </label>
+          <div className="org-create__foot">
+            <PremiumButton type="submit" variant="primary" disabled={creating || !newOrgName.trim()}>
+              {creating ? "Creating…" : "Create organization"}
+            </PremiumButton>
+            <p className="org-plan-hint">{ORG_PLANS.find((p) => p.value === newOrgPlan)?.description}</p>
+          </div>
         </form>
       </PremiumCard>
 
@@ -169,6 +198,7 @@ function OrgsInner() {
           <div className="settings-empty-inline">You don&apos;t belong to any organization yet — create one above.</div>
         ) : orgs.map((org) => {
           const canManage = org.capabilities.includes("members:manage");
+          const canManageOrg = org.capabilities.includes("org:manage");
           const isOpen = expanded === org.orgId;
           const list = members[org.orgId];
           return (
@@ -186,7 +216,19 @@ function OrgsInner() {
                   <div className="org-sub">
                     <span className="org-sub__slug">{org.slug}</span>
                     <span className="org-sub__dot">·</span>
-                    <span>{org.plan} plan</span>
+                    {canManageOrg ? (
+                      <select
+                        className="settings-select org-planpick"
+                        value={org.plan}
+                        disabled={busyPlan === org.orgId}
+                        onChange={(e) => changePlan(org.orgId, e.target.value as OrgPlan)}
+                        aria-label={`Plan for ${org.name}`}
+                      >
+                        {ORG_PLANS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                      </select>
+                    ) : (
+                      <span>{planLabel(org.plan)} plan</span>
+                    )}
                     {isOpen && list && (
                       <>
                         <span className="org-sub__dot">·</span>

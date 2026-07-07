@@ -56,6 +56,17 @@ export async function getOrganization(exec: Executor, orgId: string): Promise<Or
   return row ? orgRowToRecord(row) : null;
 }
 
+export async function updateOrganizationPlan(
+  exec: Executor,
+  orgId: string,
+  plan: OrgPlan,
+): Promise<OrganizationRecord> {
+  await exec.run(`UPDATE organizations SET plan = $2 WHERE org_id = $1`, [orgId, plan]);
+  const org = await getOrganization(exec, orgId);
+  if (!org) throw new Error(`Organization not found: ${orgId}`);
+  return org;
+}
+
 export async function addOrgMember(
   exec: Executor,
   orgId: string,

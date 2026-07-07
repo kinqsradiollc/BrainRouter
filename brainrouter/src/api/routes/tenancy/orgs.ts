@@ -10,6 +10,7 @@ import { memoryEngine } from "../../../memory/engine.js";
 import { requireAnyAuth, type AuthedRequest } from "../../middleware/auth.js";
 import { sendError } from "../../../contracts/http.js";
 import { can, capabilitiesFor, isRole, ROLES } from "../../../tenancy/rbac.js";
+import { isOrgPlan, ORG_PLANS } from "../../../tenancy/types.js";
 
 export const orgsRouter = Router();
 orgsRouter.use(requireAnyAuth);
@@ -18,11 +19,19 @@ orgsRouter.use(requireAnyAuth);
 orgsRouter.post("/", async (req: AuthedRequest, res) => {
   const name = String(req.body?.name ?? "").trim();
   if (!name) { sendError(res, 400, "name is required"); return; }
+  // Plan is optional; if supplied it must be one of the known tiers. Defaults to
+  // "team" (the shared-team tier) to preserve the prior create behaviour.
+  const rawPlan = req.body?.plan;
+  if (rawPlan !== undefined && !isOrgPlan(rawPlan)) {
+    sendError(res, 400, `plan must be one of: ${ORG_PLANS.join(", ")}`);
+    return;
+  }
+  const plan = isOrgPlan(rawPlan) ? rawPlan : "team";
   const orgId = `org_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
   const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "org";
   const slug = `${base}-${randomUUID().slice(0, 6)}`;
   try {
-    const org = await memoryEngine.tenancy.createOrganization({ orgId, name, slug, plan: "team" });
+    const org = await memoryEngine.tenancy.createOrganization({ orgId, name, slug, plan });
     await memoryEngine.tenancy.addOrgMember(orgId, req.userId!, "owner");
     res.status(201).json({
       org: { orgId: org.orgId, name: org.name, slug: org.slug, plan: org.plan, role: "owner", capabilities: capabilitiesFor("owner"), isDefault: false },
@@ -123,4 +132,28 @@ orgsRouter.post("/:orgId/default", async (req: AuthedRequest, res) => {
   }
   await memoryEngine.tenancy.setDefaultOrg(req.userId!, orgId);
   res.json({ ok: true, defaultOrgId: orgId });
+});
+
+/** POST /api/orgs/:orgId/plan — change the org's plan tier (org:manage, i.e. owner). */
+orgsRouter.post("/:orgId/plan", async (req: AuthedRequest, res) => {
+  const orgId = String(req.params.orgId ?? "").trim();
+  if (!orgId) { sendError(res, 400, "orgId is required"); return; }
+  // Authorize before validating the body — don't reveal anything to a caller who
+  // isn't an owner of this org.
+  const role = await memoryEngine.tenancy.getMemberRole(orgId, req.userId!);
+  if (!can(role, "org:manage")) {
+    sendError(res, 403, "This action requires the 'org:manage' capability");
+    return;
+  }
+  const plan = req.body?.plan;
+  if (!isOrgPlan(plan)) {
+    sendError(res, 400, `plan must be one of: ${ORG_PLANS.join(", ")}`);
+    return;
+  }
+  try {
+    const org = await memoryEngine.tenancy.updateOrganizationPlan(orgId, plan);
+    res.json({ org: { orgId: org.orgId, name: org.name, slug: org.slug, plan: org.plan, role, capabilities: capabilitiesFor(role) } });
+  } catch (error) {
+    sendError(res, 400, error instanceof Error ? error.message : "Failed to update plan");
+  }
 });

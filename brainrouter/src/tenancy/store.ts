@@ -13,6 +13,8 @@ import type { OrganizationRecord, OrgMemberRecord, OrgMembership, OrgPlan } from
 export interface TenancyStore {
   createOrganization(input: { orgId: string; name: string; slug: string; plan?: OrgPlan }): Promise<OrganizationRecord>;
   getOrganization(orgId: string): Promise<OrganizationRecord | null>;
+  /** Change an org's plan tier (owner-gated at the route). Returns the updated record. */
+  updateOrganizationPlan(orgId: string, plan: OrgPlan): Promise<OrganizationRecord>;
   addOrgMember(orgId: string, userId: string, role: Role): Promise<void>;
   removeOrgMember(orgId: string, userId: string): Promise<void>;
   getMemberRole(orgId: string, userId: string): Promise<Role | null>;

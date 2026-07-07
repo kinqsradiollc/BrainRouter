@@ -626,8 +626,14 @@ h5, h6 { font-size: 13px; line-height: 1.4; font-weight: 600; letter-spacing: 0;
 .settings-empty-inline { font-size: 13px; color: var(--text-muted); }
 
 /* ── Organizations ─────────────────────────────────────────── */
-.org-create { display: flex; align-items: flex-end; gap: var(--spacing-12); flex-wrap: wrap; }
-.org-create > .settings-label { flex: 1 1 20rem; }
+.org-create { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 16px; align-items: end; }
+.org-create__name { grid-column: 1; }
+.org-create__plan { grid-column: 2; }
+.org-create__foot { grid-column: 1 / -1; display: flex; align-items: center; gap: var(--spacing-16); flex-wrap: wrap; margin-top: 12px; }
+@media (max-width: 560px) {
+  .org-create { grid-template-columns: 1fr; }
+  .org-create__plan { grid-column: 1; }
+}
 
 /* Org row header — compact, no dead space when collapsed. */
 .org-head { display: flex; align-items: center; gap: var(--spacing-16); }
@@ -650,6 +656,11 @@ h5, h6 { font-size: 13px; line-height: 1.4; font-weight: 600; letter-spacing: 0;
 .org-member__avatar { flex-shrink: 0; width: 30px; height: 30px; border-radius: 9999px; display: grid; place-items: center; font-size: 12px; font-weight: 600; background: var(--overlay-bg-hover-strong); color: var(--text-secondary); }
 .org-member__id { flex: 1; min-width: 0; font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .org-rolepick { flex: 0 0 auto; width: auto; min-width: 7rem; margin-top: 0; padding: 6px 28px 6px 10px; font-size: 12px; }
+/* Inline plan selector inside the muted org sub-line (owners only). */
+.org-planpick { flex: 0 0 auto; width: auto; min-width: 6rem; margin-top: 0; padding: 3px 26px 3px 9px; font-size: 12px; }
+/* Plan selector in the create-org form (stacked label, keeps its top margin). */
+.org-planselect { width: 100%; min-width: 11rem; }
+.org-plan-hint { margin: 0; font-size: 12px; color: var(--text-muted); }
 .org-iconbtn { flex-shrink: 0; display: grid; place-items: center; width: 30px; height: 30px; border-radius: var(--radius-sm); border: 1px solid var(--border-dim); background: transparent; color: var(--text-muted); cursor: pointer; transition: background 0.15s, color 0.15s, border-color 0.15s; }
 .org-iconbtn:hover { background: rgba(229, 103, 95, 0.10); border-color: rgba(229, 103, 95, 0.35); color: var(--danger); }
 .org-invite { margin-top: var(--spacing-16); padding: var(--spacing-16); border: 1px dashed var(--border-med); border-radius: var(--radius-md); background: var(--overlay-bg); display: flex; align-items: flex-end; gap: var(--spacing-12); flex-wrap: wrap; }

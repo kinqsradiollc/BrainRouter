@@ -3,7 +3,19 @@
  */
 import type { Role } from "./rbac.js";
 
-export type OrgPlan = "single" | "team" | "enterprise";
+/**
+ * Organization plan tiers (single source of truth). Currently descriptive labels
+ * — they carry no enforced entitlements/limits yet — but they are owner-settable
+ * (see `org:manage`) and surfaced in the dashboard, so the valid set lives here
+ * and every create/update path validates against it via {@link isOrgPlan}.
+ */
+export const ORG_PLANS = ["single", "team", "enterprise"] as const;
+export type OrgPlan = (typeof ORG_PLANS)[number];
+
+/** Narrow an unknown value to a valid {@link OrgPlan}. */
+export function isOrgPlan(x: unknown): x is OrgPlan {
+  return typeof x === "string" && (ORG_PLANS as readonly string[]).includes(x);
+}
 
 export interface OrganizationRecord {
   orgId: string;

@@ -95,6 +95,15 @@ export interface IntegrationInput {
   secret?: Record<string, string>;
 }
 
+export type OrgPlan = "single" | "team" | "enterprise";
+
+/** The org plan tiers (mirrors the backend `ORG_PLANS`), with UI copy. */
+export const ORG_PLANS: { value: OrgPlan; label: string; description: string }[] = [
+  { value: "single", label: "Single", description: "Solo workspace — just you." },
+  { value: "team", label: "Team", description: "A shared team with roles and org-wide memory." },
+  { value: "enterprise", label: "Enterprise", description: "Org-wide tenancy, scaled memory, SSO-ready." },
+];
+
 export interface OrgSummary {
   orgId: string;
   name: string;
@@ -133,7 +142,10 @@ export const adminApi = {
   deleteIntegration: (id: string, orgId?: string) =>
     authFetch(`/api/admin/integrations/${id}`, { method: "DELETE", orgId }),
   listOrgs: () => authFetch<{ orgs: OrgSummary[] }>("/api/orgs"),
-  createOrg: (name: string) => authFetch<{ org: OrgSummary }>("/api/orgs", { method: "POST", body: { name } }),
+  createOrg: (name: string, plan: OrgPlan = "team") =>
+    authFetch<{ org: OrgSummary }>("/api/orgs", { method: "POST", body: { name, plan } }),
+  updateOrgPlan: (orgId: string, plan: OrgPlan) =>
+    authFetch<{ org: OrgSummary }>(`/api/orgs/${orgId}/plan`, { method: "POST", body: { plan }, orgId }),
   listMembers: (orgId: string) => authFetch<{ members: OrgMember[] }>(`/api/orgs/${orgId}/members`, { orgId }),
   addMember: (orgId: string, userId: string, role: string) =>
     authFetch(`/api/orgs/${orgId}/members`, { method: "POST", body: { userId, role }, orgId }),

@@ -375,6 +375,9 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public getOrganization(orgId: string): Promise<OrganizationRecord | null> {
     return tenancy.getOrganization(this.exec, orgId);
   }
+  public updateOrganizationPlan(orgId: string, plan: OrgPlan): Promise<OrganizationRecord> {
+    return tenancy.updateOrganizationPlan(this.exec, orgId, plan);
+  }
   public addOrgMember(orgId: string, userId: string, role: Role): Promise<void> {
     return tenancy.addOrgMember(this.exec, orgId, userId, role);
   }
