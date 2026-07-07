@@ -53,6 +53,7 @@ function ProvidersInner() {
   const [fetchingModels, setFetchingModels] = useState(false);
   const [fetchError, setFetchError] = useState("");
   const [modelsTab, setModelsTab] = useState<"providers" | "subagents">("providers");
+  const [catalog, setCatalog] = useState<{ id: string; label: string; endpoint: string; local: boolean }[]>([]);
   const [roles, setRoles] = useState<string[]>([]);
   const [assignments, setAssignments] = useState<Record<string, AgentAssign>>({});
   const [savingAgents, setSavingAgents] = useState(false);
@@ -64,7 +65,23 @@ function ProvidersInner() {
       setRoles(res.roles ?? []);
       setAssignments(res.assignments ?? {});
     } catch { /* surfaced only when the subagents tab is used */ }
+    try {
+      const cat = await adminApi.providerCatalog();
+      setCatalog(cat.providers ?? []);
+    } catch { /* catalog is optional — the form still works with a manual URL */ }
   }, []);
+
+  /** Pick a provider from the core catalog → prefill the endpoint (desktop parity). */
+  function selectCatalogProvider(id: string) {
+    if (!id) { setForm((f) => ({ ...f, providerId: "" })); return; }
+    const entry = catalog.find((c) => c.id === id);
+    setForm((f) => ({
+      ...f,
+      providerId: id,
+      baseUrl: entry?.endpoint || f.baseUrl,
+      label: f.label || entry?.label || id,
+    }));
+  }
 
   async function saveAgentModels() {
     setSavingAgents(true);
@@ -225,6 +242,12 @@ function ProvidersInner() {
             <label className="settings-label">Kind
               <select className="settings-select" value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value as ProviderKind })}>
                 {KINDS.map((k) => <option key={k.kind} value={k.kind}>{k.label}</option>)}
+              </select>
+            </label>
+            <label className="settings-label">Provider <span className="settings-hint">(from the core catalog — prefills the URL)</span>
+              <select className="settings-select" value={form.providerId ?? ""} onChange={(e) => selectCatalogProvider(e.target.value)}>
+                <option value="">Custom endpoint…</option>
+                {catalog.map((c) => <option key={c.id} value={c.id}>{c.label}{c.local ? " (local)" : ""}</option>)}
               </select>
             </label>
             <label className="settings-label">Label <span className="settings-hint">(a name for this provider)</span>
