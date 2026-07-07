@@ -137,7 +137,7 @@ function ProvidersInner() {
     if (!draft.baseUrl.trim()) { setProbeError("Enter a Base URL first."); return; }
     setProbing(true); setProbeError("");
     try {
-      const res = await adminApi.probeModels(draft.baseUrl.trim(), draft.apiKey.trim());
+      const res = await adminApi.probeModels(draft.baseUrl.trim(), draft.apiKey.trim(), draft.kind);
       if (!res.ok || !res.models?.length) {
         setProbeError(draft.kind === "llm"
           ? (res.error || "No models returned — check the key/endpoint.")

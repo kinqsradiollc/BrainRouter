@@ -75,9 +75,10 @@ providersRouter.get("/", async (req: AuthedRequest, res) => {
 providersRouter.post("/probe-models", async (req: AuthedRequest, res) => {
   const baseUrl = String(req.body?.baseUrl ?? "").trim();
   const apiKey = String(req.body?.apiKey ?? "").trim();
+  const kind = String(req.body?.kind ?? "llm").trim();
   if (!baseUrl) { sendError(res, 400, "baseUrl is required"); return; }
   try {
-    const models = await probeModels(baseUrl, apiKey);
+    const models = await probeModels(baseUrl, apiKey, kind);
     res.json({ ok: true, models });
   } catch (error) {
     // 200 with ok:false — a probe failure is a normal, recoverable UI state.

@@ -44,12 +44,19 @@ export interface ProbedModel {
   reasoning?: boolean;
 }
 
-/** Fetch the models an endpoint exposes (LM Studio native, else GET /models). */
-export async function probeModels(baseUrl: string, apiKey: string, timeoutMs = 8000): Promise<ProbedModel[]> {
+/**
+ * Fetch the models an endpoint exposes. For `kind: 'llm'` (default) LM Studio's
+ * native /api/v1/models enrichment is used (context windows, reasoning, loaded) —
+ * but that endpoint FILTERS OUT embedding-type models, so for embedding/reranker
+ * we go straight to the plain OpenAI-compatible GET /v1/models (which returns
+ * every model, incl. `text-embedding-*`).
+ */
+export async function probeModels(baseUrl: string, apiKey: string, kind: string = "llm", timeoutMs = 8000): Promise<ProbedModel[]> {
   const c = await core();
+  const chat = kind === "llm" || kind === "judge" || !kind;
 
-  // LM Studio native enrichment (context windows, tool/reasoning support, loaded).
-  if (c.isLmStudioEndpoint?.(baseUrl) && c.fetchLmStudioModels) {
+  // LM Studio native enrichment — chat only (it drops embedding-type models).
+  if (chat && c.isLmStudioEndpoint?.(baseUrl) && c.fetchLmStudioModels) {
     const lm = await c.fetchLmStudioModels(baseUrl).catch(() => null);
     if (lm && lm.length) {
       return lm.map((m) => ({ id: m.id, reasoning: !!m.reasoning })).filter((m) => m.id);

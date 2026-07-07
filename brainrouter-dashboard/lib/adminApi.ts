@@ -142,10 +142,10 @@ export const adminApi = {
   setDefaultProvider: (id: string, orgId?: string) =>
     authFetch(`/api/admin/providers/${id}/default`, { method: "POST", orgId }),
   /** Discover the models an endpoint exposes (GET /models / LM Studio), reusing core. */
-  probeModels: (baseUrl: string, apiKey: string, orgId?: string) =>
+  probeModels: (baseUrl: string, apiKey: string, kind = "llm", orgId?: string) =>
     authFetch<{ ok: boolean; models?: { id: string; reasoning?: boolean }[]; error?: string }>(
       "/api/admin/providers/probe-models",
-      { method: "POST", body: { baseUrl, apiKey }, orgId },
+      { method: "POST", body: { baseUrl, apiKey, kind }, orgId },
     ),
   /** The providers the shared core (desktop/CLI) supports for a KIND — reused verbatim. */
   providerCatalog: (kind?: string) =>
