@@ -1,6 +1,7 @@
 import type { EmbeddingServiceConfig } from "@kinqs/brainrouter-types";
 import { fetchWithExternalRetry } from "../util/retry.js";
 import { acquireEmbeddingSlot } from "../llm/llm-semaphore.js";
+import { resolveEmbeddingsUrl } from "../../providers/wireFormat.js";
 import { normalizeRequestTimeoutMs, parseRequestTimeoutMs, requestTimeoutSignal } from "../util/request-timeout.js";
 
 /**
@@ -70,7 +71,9 @@ export class EmbeddingService {
     // pool still bounds embedding bursts on its own backend.
     const release = await acquireEmbeddingSlot();
     try {
-      const res = await fetchWithExternalRetry(this.endpoint, {
+      // The saved endpoint is a /v1 base; the embeddings PATH is appended here so
+      // the operator never has to type `/embeddings` (parity with the LLM wire).
+      const res = await fetchWithExternalRetry(resolveEmbeddingsUrl(this.endpoint), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

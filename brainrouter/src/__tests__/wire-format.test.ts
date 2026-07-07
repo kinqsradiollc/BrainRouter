@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveRequestUrl, buildRequestBody, extractResponsesText, isResponsesWire, resolveModelsUrl } from "../providers/wireFormat.js";
+import { resolveRequestUrl, buildRequestBody, extractResponsesText, isResponsesWire, resolveModelsUrl, resolveEmbeddingsUrl, resolveRerankUrl } from "../providers/wireFormat.js";
 
 const OAI = "https://api.openai.com/v1";
 
@@ -34,6 +34,20 @@ describe("WIRE-FORMAT — base URL resolution (both responses + completions)", (
     expect(resolveModelsUrl(`${OAI}/chat/completions`)).toBe(`${OAI}/models`);
     expect(resolveModelsUrl(`${OAI}/responses`)).toBe(`${OAI}/models`);
     expect(resolveModelsUrl(`${OAI}/models`)).toBe(`${OAI}/models`); // idempotent
+  });
+
+  it("resolveEmbeddingsUrl appends /embeddings from a /v1 base (no manual path)", () => {
+    const lm = "http://localhost:1234/v1";
+    expect(resolveEmbeddingsUrl(lm)).toBe(`${lm}/embeddings`);
+    expect(resolveEmbeddingsUrl(`${lm}/`)).toBe(`${lm}/embeddings`);
+    expect(resolveEmbeddingsUrl(`${lm}/embeddings`)).toBe(`${lm}/embeddings`); // idempotent
+    expect(resolveEmbeddingsUrl(`${lm}/chat/completions`)).toBe(`${lm}/embeddings`); // normalizes
+  });
+
+  it("resolveRerankUrl appends /rerank from a /v1 base", () => {
+    const co = "https://api.cohere.com/v1";
+    expect(resolveRerankUrl(co)).toBe(`${co}/rerank`);
+    expect(resolveRerankUrl(`${co}/rerank`)).toBe(`${co}/rerank`); // idempotent
   });
 
   it("isResponsesWire is case-insensitive + defaults false", () => {

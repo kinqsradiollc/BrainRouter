@@ -34,16 +34,37 @@ export function resolveRequestUrl(rawBase: string, wireFormat?: string | null): 
   return base + path + query;
 }
 
-/** Resolve the GET /models URL from a (possibly full) base URL. Strips a wire suffix. */
-export function resolveModelsUrl(rawBase: string): string {
+/**
+ * Append an OpenAI-compatible API path to a (possibly full) base URL, idempotently.
+ * Any known wire suffix on the saved URL is stripped first, so `/v1`, `/v1/embeddings`,
+ * `/v1/chat/completions` etc. all normalize to the same `<base>/<path>`. Query strings
+ * (e.g. Azure `?api-version=`) are preserved. This is why a saved endpoint never needs
+ * the path typed in — the KIND decides it (`/embeddings`, `/rerank`, `/models`).
+ */
+export function appendApiPath(rawBase: string, path: string): string {
   const url = String(rawBase ?? "").trim();
   if (!url) return url;
   const qIdx = url.indexOf("?");
   const query = qIdx >= 0 ? url.slice(qIdx) : "";
-  let base = (qIdx >= 0 ? url.slice(0, qIdx) : url).replace(/\/+$/, "");
-  base = base.replace(/\/(chat\/completions|responses)$/i, "");
-  if (/\/models$/i.test(base)) return base + query;
-  return base + "/models" + query;
+  const base = (qIdx >= 0 ? url.slice(0, qIdx) : url)
+    .replace(/\/+$/, "")
+    .replace(/\/(chat\/completions|responses|embeddings|rerank|models)$/i, "");
+  return base + path + query;
+}
+
+/** Resolve the GET /models URL from a (possibly full) base URL. */
+export function resolveModelsUrl(rawBase: string): string {
+  return appendApiPath(rawBase, "/models");
+}
+
+/** Resolve the POST /embeddings URL — so an embeddings provider only needs the /v1 base. */
+export function resolveEmbeddingsUrl(rawBase: string): string {
+  return appendApiPath(rawBase, "/embeddings");
+}
+
+/** Resolve the POST /rerank URL — so a reranker provider only needs the /v1 base. */
+export function resolveRerankUrl(rawBase: string): string {
+  return appendApiPath(rawBase, "/rerank");
 }
 
 export interface WireBodyInput {

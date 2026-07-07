@@ -2,6 +2,7 @@ import type { RerankerServiceConfig } from "@kinqs/brainrouter-types";
 import { fetchWithExternalRetry } from "../util/retry.js";
 import { acquireRerankerSlot, acquireRerankerSlotOrNull } from "../llm/llm-semaphore.js";
 import { normalizeRequestTimeoutMs, parseRequestTimeoutMs, requestTimeoutSignal } from "../util/request-timeout.js";
+import { resolveRerankUrl } from "../../providers/wireFormat.js";
 
 export interface RankedResult {
   index: number;
@@ -208,7 +209,9 @@ export class RerankerService {
       throw new Error("Reranker slot busy under parallel load; using RRF");
     }
     try {
-      const res = await fetchWithExternalRetry(this.endpoint, {
+      // The saved endpoint is a /v1 base; the /rerank PATH is appended here so the
+      // operator only needs the base URL (parity with the LLM + embeddings wires).
+      const res = await fetchWithExternalRetry(resolveRerankUrl(this.endpoint), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
