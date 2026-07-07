@@ -10,7 +10,7 @@ import { memoryEngine } from "../../../memory/engine.js";
 import { requireAnyAuth, type AuthedRequest } from "../../middleware/auth.js";
 import { sendError } from "../../../contracts/http.js";
 import { can } from "../../../tenancy/rbac.js";
-import { mintInstallationToken, buildAppJwt } from "@kinqs/brainrouter-core/track";
+import { mintInstallationToken, buildAppJwt, validateGithubApiBase } from "@kinqs/brainrouter-core/track";
 
 export const githubReposRouter = Router();
 githubReposRouter.use(requireAnyAuth);
@@ -25,8 +25,10 @@ const DEFAULT_API_BASE = "https://api.github.com";
  */
 async function autoResolveInstallationId(appId: string, privateKey: string, apiBase: string): Promise<string> {
   try {
+    const base = validateGithubApiBase(apiBase);
+    if (!base) return "";
     const jwt = buildAppJwt({ appId, privateKey }, Math.floor(Date.now() / 1000));
-    const r = await fetch(`${apiBase}/app/installations?per_page=100`, {
+    const r = await fetch(`${base}/app/installations?per_page=100`, {
       headers: { Authorization: `Bearer ${jwt}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
     });
     if (!r.ok) return "";
@@ -97,15 +99,16 @@ githubReposRouter.get("/:orgId/github/repos", async (req: AuthedRequest, res) =>
   let installationId = String(integ.config.installationId ?? "").trim();
   const privateKey = String(integ.secret.privateKey ?? "").trim();
   const apiBase = String(integ.config.apiBase ?? DEFAULT_API_BASE).trim() || DEFAULT_API_BASE;
-  if (!appId || !privateKey) { res.json({ configured: true, installed: false, repos: [] }); return; }
+  const base = validateGithubApiBase(apiBase); // CWE-918 — never fetch/leak the token to an untrusted host
+  if (!appId || !privateKey || !base) { res.json({ configured: true, installed: false, repos: [] }); return; }
   // Installation id is optional in config — discover it from the App if absent.
-  if (!installationId) installationId = await autoResolveInstallationId(appId, privateKey, apiBase);
+  if (!installationId) installationId = await autoResolveInstallationId(appId, privateKey, base);
   if (!installationId) { res.json({ configured: true, installed: false, repos: [] }); return; }
 
   try {
     const deps = { fetchImpl: fetch as unknown as typeof fetch, nowSec: () => Math.floor(Date.now() / 1000) };
-    const tok = await mintInstallationToken({ appId, privateKey, apiBase }, installationId, deps);
-    const r = await fetch(`${apiBase}/installation/repositories?per_page=100`, {
+    const tok = await mintInstallationToken({ appId, privateKey, apiBase: base }, installationId, deps);
+    const r = await fetch(`${base}/installation/repositories?per_page=100`, {
       headers: { Authorization: `Bearer ${tok.token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
     });
     if (!r.ok) {
