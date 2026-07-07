@@ -105,7 +105,16 @@ self-host operator can fork them.
 
 Delivered as independent, CI-green phases. Each ships behind the existing DB-only / settings-not-.env
 rules; no new `BRAINROUTER_*` provider vars; LLM-output JSON via `memory/util/llm-json.ts`; models from
-`/models`. Migrations start at `010`.
+`/models`. Migrations `010`–`015`.
+
+**Status — all phases shipped (release/0.4.17):** A ✅ (entitlements + 5-tier plans) · B ✅ (domain
+allowlist + SMTP/verification/invitations/reset) · C ✅ (team persona; auto-injection awaits MCP
+org-context) · D ✅ (artifact sharing via REST/dashboard; MCP tools await the same MCP org-context +
+CLI catalog parity) · E ✅ (projects + per-project ACL) · F ✅ (admin console + audit) · G ✅ (single
+gateway + `/api/status` + `/status` page; Cloudflare-tunnel example + `HOSTING.md`; CLI `/health`
+fallback already present). Two follow-ups remain, both blocked on the same **MCP org-context**
+plumbing: auto-injecting the team persona into the agent briefing, and the `memory_share_to_org` /
+`memory_org_browse` MCP tools.
 
 ### Phase A — Foundations & isolation hardening
 - Lift `CognitiveRecord` (packages/types) to include `org_id?` + `visibility?` (schema already has them).

@@ -1,0 +1,31 @@
+# Cloudflare Tunnel in front of the single BrainRouter gateway (ADR-014 Phase G).
+#
+# The brain process is ONE gateway — REST (/api/*), MCP (/mcp), /health, /api/status,
+# and the dashboard all on one port (3747). This compose puts a Cloudflare tunnel in
+# front of that single port, so a self-hosted brain on a laptop/box is reachable at a
+# stable public hostname with no inbound ports opened.
+#
+# Usage:
+#   1. Create a tunnel + token in the Cloudflare Zero Trust dashboard, route your
+#      hostname (e.g. brain.example.com) to http://brain:3747.
+#   2. Put the token in .env as TUNNEL_TOKEN=...
+#   3. Run alongside your brain:
+#        docker compose -f ../stack/docker-compose.yml -f docker-compose.tunnel.yml up -d
+#   4. Point clients at it:  cli.brainUrl = https://brain.example.com
+#      (the CLI probes /health first and falls back to an embedded brain if it's down.)
+#
+# The tunnel forwards to the gateway's ONE port; /health + /api/status let Cloudflare
+# and external monitors track liveness.
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: brainrouter-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: "${TUNNEL_TOKEN:?set TUNNEL_TOKEN in .env — see the Cloudflare Zero Trust dashboard}"
+    # No published ports: the tunnel dials OUT to Cloudflare, so nothing is exposed
+    # on the host. It reaches the gateway over the compose network as http://brain:3747.
+    depends_on:
+      - brain
