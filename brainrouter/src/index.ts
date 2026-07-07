@@ -46,6 +46,7 @@ import path from 'node:path';
 import { decideMcpAcceptPromotion } from './api/mcpAcceptHeader.js';
 import { authRouter, usersRouter, sessionsRouter } from './api/routes/identity/index.js';
 import { orgsRouter, projectsRouter, githubReposRouter } from './api/routes/tenancy/index.js';
+import { connectorOauthRouter } from './api/routes/connectors/oauth.js';
 import { providersRouter, agentModelsRouter, integrationsRouter, adminEmailRouter, adminOrgsRouter } from './api/routes/admin/index.js';
 import { triggersRouter } from './api/routes/triggers/index.js';
 import {
@@ -220,6 +221,7 @@ if (USE_HTTP) {
   app.use("/api/admin/providers", providersRouter);
   app.use("/api/admin/agent-models", agentModelsRouter);
   app.use("/api/admin/integrations", integrationsRouter);
+  app.use("/api/connectors", connectorOauthRouter);
   app.use("/api/admin/email", adminEmailRouter);
   app.use("/api/admin/orgs", adminOrgsRouter);
   // Hosted webhook ingress — unauthenticated by JWT (verifies the App's HMAC).

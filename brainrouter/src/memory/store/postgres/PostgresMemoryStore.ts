@@ -126,12 +126,14 @@ import * as projects from "./queries/projectQueries.js";
 import * as adminConsole from "./queries/adminConsoleQueries.js";
 import * as providerCfg from "./queries/providerConfigQueries.js";
 import * as integrationCfg from "./queries/integrationConfigQueries.js";
+import * as connectorCfg from "./queries/connectorConfigQueries.js";
 import type { TenancyStore } from "../../../tenancy/store.js";
 import type { Role } from "../../../tenancy/rbac.js";
 import type { OrganizationRecord, OrgMemberRecord, OrgMembership, OrgPlan } from "../../../tenancy/types.js";
 import type { ProviderStore } from "../../../providers/store.js";
 import type { ProviderConfigRecord, ProviderConfigInput, ProviderKind, ResolvedProviderConfig } from "../../../providers/types.js";
 import type { IntegrationStore } from "../../../integrations/store.js";
+import type { ConnectorStore, ConnectorConfigRecord, ConnectorConfigInput, ConnectorConfigPatch, ResolvedConnector, OAuthAppConfig, ResolvedOAuthApp } from "../../../connectors/store.js";
 import type { IntegrationConfigRecord, IntegrationConfigInput, IntegrationKind, ResolvedIntegration } from "../../../integrations/types.js";
 
 const MIGRATIONS_DIR = fileURLToPath(new URL("./migrations", import.meta.url));
@@ -167,7 +169,7 @@ export interface PostgresMemoryStoreOptions {
   compressionStore?: { ttlSeconds?: number; maxEntries?: number; now?: () => number };
 }
 
-export class PostgresMemoryStore implements IMemoryStore, TenancyStore, ProviderStore, IntegrationStore {
+export class PostgresMemoryStore implements IMemoryStore, TenancyStore, ProviderStore, IntegrationStore, ConnectorStore {
   private readonly pool: Pool;
   private readonly ownsPool: boolean;
   private vecReady = false;
@@ -506,6 +508,17 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public findIntegrationByInstallation(kind: IntegrationKind, installationId: string): Promise<(ResolvedIntegration & { orgId: string }) | null> {
     return integrationCfg.findIntegrationByInstallation(this.exec, kind, installationId);
   }
+
+  // ── connectors (ADR-016 C2: per-user connector config + sealed OAuth token) ──
+  public listConnectors(userId: string): Promise<ConnectorConfigRecord[]> { return connectorCfg.listConnectors(this.exec, userId); }
+  public listAllEnabledConnectors(): Promise<ConnectorConfigRecord[]> { return connectorCfg.listAllEnabledConnectors(this.exec); }
+  public getConnector(id: string): Promise<ConnectorConfigRecord | null> { return connectorCfg.getConnector(this.exec, id); }
+  public getResolvedConnector(id: string): Promise<ResolvedConnector | null> { return connectorCfg.getResolvedConnector(this.exec, id); }
+  public createConnector(userId: string, input: ConnectorConfigInput): Promise<ConnectorConfigRecord> { return connectorCfg.createConnector(this.exec, userId, input); }
+  public updateConnector(id: string, patch: ConnectorConfigPatch): Promise<ConnectorConfigRecord | null> { return connectorCfg.updateConnector(this.exec, id, patch); }
+  public deleteConnector(id: string): Promise<void> { return connectorCfg.deleteConnector(this.exec, id); }
+  public getResolvedOAuthApp(orgId: string, source: string): Promise<ResolvedOAuthApp | null> { return connectorCfg.getResolvedOAuthApp(this.exec, orgId, source); }
+  public upsertOAuthApp(orgId: string, source: string, clientId: string, clientSecret: string | undefined, scopes?: string): Promise<OAuthAppConfig> { return connectorCfg.upsertOAuthApp(this.exec, orgId, source, clientId, clientSecret, scopes); }
 
   // ── sensory ────────────────────────────────────────────────────────────
 

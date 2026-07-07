@@ -23,6 +23,7 @@ import type { CursorPaginationOptions, DiagnosticsBundle, EvidenceListFilters, I
 import type { TenancyStore, EmailAuthStore, OrgPersonaStore, MemorySharingStore, ProjectStore, AdminConsoleStore } from "../tenancy/store.js";
 import type { ProviderStore } from "../providers/store.js";
 import type { IntegrationStore } from "../integrations/store.js";
+import type { ConnectorStore } from "../connectors/store.js";
 import { resolveProviderConfig } from "../providers/resolver.js";
 import { seedProvidersFromEnv } from "../providers/seed.js";
 import { systemProviderOrgId } from "../providers/runtime.js";
@@ -432,6 +433,11 @@ export class MemoryEngine {
   /** ADR-010 P6 — org-scoped external integrations (GitHub App, …). */
   public get integrations(): IntegrationStore {
     return this.store as unknown as IntegrationStore;
+  }
+
+  /** ADR-016 C2 — per-user connectors + sealed OAuth tokens (server-side). */
+  public get connectors(): ConnectorStore {
+    return this.store as unknown as ConnectorStore;
   }
 
   /**
