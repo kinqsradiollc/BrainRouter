@@ -1058,6 +1058,9 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const base = {
           repo: wsGit.repoName, workspaceRoot, gitRoot: wsGit.gitRoot,
           repoRelativePath: wsGit.repoRelativePath, isSubdir: wsGit.isSubdir,
+          // ADR-015 — the repo identity used to MATCH this workspace to a linked
+          // GitHub repo (survives http↔ssh remotes / a moved folder / a 2nd clone).
+          remoteUrl: wsGit.remoteUrl, repoIdentity: wsGit.repoIdentity, repoTag: wsGit.repoTag,
         };
         const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD'], workspaceRoot)).trim();
         if (!branch) return { ...base, branch: null, files: 0, insertions: 0, deletions: 0 };
