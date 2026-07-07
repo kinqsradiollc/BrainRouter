@@ -79,9 +79,9 @@ brainrouter-benchmark/envs/
 # (not the package-local test folders under brainrouter-cli/, brainrouter/, etc.)
 /test/
 
-# Local Projects
-projects
-conceptCode
+# Local Projects (root-level scratch dir only — NOT app/projects, packages, etc.)
+/projects/
+/conceptCode/
 brainrouter/brain.db
 TENCENTDB_AGENT_MEMORY.md
 
