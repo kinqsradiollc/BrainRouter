@@ -38,6 +38,13 @@ export async function attachOrgContext(req: AuthedRequest, res: Response): Promi
   const requested = requestedOrg(req);
   const ctx = await resolveOrgContext(memoryEngine.tenancy, req.userId, requested);
   if (!ctx) {
+    // A system (deployment) admin transcends org membership — they may act on any
+    // requested org as an effective owner (e.g. configure a team's providers).
+    if (req.isAdmin && requested) {
+      req.orgId = requested;
+      req.role = "owner";
+      return true;
+    }
     sendError(res, 403, "You are not a member of the requested organization");
     return false;
   }
@@ -50,6 +57,9 @@ export async function attachOrgContext(req: AuthedRequest, res: Response): Promi
 export function requirePermission(cap: Capability) {
   return async (req: AuthedRequest, res: Response, next: NextFunction): Promise<void> => {
     if (!(await attachOrgContext(req, res))) return;
+    // A system (deployment) admin holds every capability on the config surfaces
+    // (providers / integrations / triggers), regardless of their org role.
+    if (req.isAdmin) { next(); return; }
     if (!can(req.role, cap)) {
       sendError(res, 403, `This action requires the '${cap}' capability`);
       return;
