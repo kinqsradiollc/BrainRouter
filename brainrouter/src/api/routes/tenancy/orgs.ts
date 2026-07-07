@@ -11,6 +11,13 @@ import { requireAnyAuth, type AuthedRequest } from "../../middleware/auth.js";
 import { sendError } from "../../../contracts/http.js";
 import { can, capabilitiesFor, isRole, ROLES } from "../../../tenancy/rbac.js";
 import { isOrgPlan, ORG_PLANS } from "../../../tenancy/types.js";
+import { entitlementsFor, featuresFor, withinLimit } from "../../../tenancy/entitlements.js";
+
+/** Serialize a plan's entitlements (limits + features) for the dashboard. */
+function entitlementsView(plan: string) {
+  const ents = entitlementsFor(plan);
+  return { limits: ents.limits, features: featuresFor(plan) };
+}
 
 export const orgsRouter = Router();
 orgsRouter.use(requireAnyAuth);
@@ -54,6 +61,7 @@ orgsRouter.get("/", async (req: AuthedRequest, res) => {
         plan: m.org.plan,
         role: m.role,
         capabilities: capabilitiesFor(m.role),
+        entitlements: entitlementsView(m.org.plan),
         isDefault: m.org.orgId === defaultOrgId,
       })),
     });
@@ -110,6 +118,18 @@ orgsRouter.post("/:orgId/members", async (req: AuthedRequest, res) => {
   if (!userId) {
     sendError(res, 400, "userId or email is required");
     return;
+  }
+  // Seat limit (ADR-014 Phase A): only NEW members consume a seat — an upsert that
+  // just changes an existing member's role does not.
+  const members = await memoryEngine.tenancy.listOrgMembers(orgId);
+  const alreadyMember = members.some((m) => m.userId === userId);
+  if (!alreadyMember) {
+    const org = await memoryEngine.tenancy.getOrganization(orgId);
+    if (!withinLimit(org?.plan, "seats", members.length)) {
+      const seats = entitlementsFor(org?.plan).limits.seats;
+      sendError(res, 402, `The ${org?.plan ?? "current"} plan allows ${seats} member${seats === 1 ? "" : "s"}. Upgrade the plan to add more.`);
+      return;
+    }
   }
   await memoryEngine.tenancy.addOrgMember(orgId, userId, role);
   res.status(201).json({ orgId, userId, role, email: email || undefined });

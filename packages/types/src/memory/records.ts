@@ -128,7 +128,21 @@ export interface CognitiveRecord {
    * untagged records keep surfacing regardless of the active project.
    */
   projectTag?: string | null;
+  /**
+   * ADR-010 P5 / ADR-014 — the organization this record belongs to. NULL/absent =
+   * the user's personal scope (pre-tenancy records). Recall filters are org-aware:
+   * a member only sees their own records + records shared with their active org.
+   */
+  orgId?: string | null;
+  /**
+   * ADR-014 — record visibility WITHIN its org. `private` = only the owning user;
+   * `org` = every member of `orgId`. Absent = `private` (today's behaviour).
+   */
+  visibility?: MemoryVisibility;
 }
+
+/** Record visibility within an organization (ADR-014). */
+export type MemoryVisibility = "private" | "org";
 
 import { createHash } from "node:crypto";
 

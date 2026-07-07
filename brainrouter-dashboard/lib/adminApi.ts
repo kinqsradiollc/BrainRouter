@@ -104,6 +104,11 @@ export const ORG_PLANS: { value: OrgPlan; label: string; description: string }[]
   { value: "enterprise", label: "Enterprise", description: "Org-wide tenancy, scaled memory, SSO-ready." },
 ];
 
+export interface OrgEntitlements {
+  limits: { seats: number | null; projects: number | null };
+  features: string[];
+}
+
 export interface OrgSummary {
   orgId: string;
   name: string;
@@ -111,6 +116,7 @@ export interface OrgSummary {
   plan: string;
   role: string;
   capabilities: string[];
+  entitlements?: OrgEntitlements;
   isDefault: boolean;
 }
 
