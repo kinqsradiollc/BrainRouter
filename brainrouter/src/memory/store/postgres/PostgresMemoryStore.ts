@@ -122,6 +122,7 @@ import * as tenancy from "./queries/tenancyQueries.js";
 import * as emailAuth from "./queries/emailAuthQueries.js";
 import * as orgPersona from "./queries/orgPersonaQueries.js";
 import * as sharing from "./queries/memorySharingQueries.js";
+import * as projects from "./queries/projectQueries.js";
 import * as providerCfg from "./queries/providerConfigQueries.js";
 import * as integrationCfg from "./queries/integrationConfigQueries.js";
 import type { TenancyStore } from "../../../tenancy/store.js";
@@ -395,6 +396,17 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   // ── artifact/memory sharing (ADR-014 P-D) ────────────────────────────────
   public setMemoryVisibility(recordId: string, userId: string, orgId: string, visibility: "private" | "org"): Promise<boolean> { return sharing.setMemoryVisibility(this.exec, recordId, userId, orgId, visibility); }
   public listOrgSharedMemories(orgId: string, limit = 50): Promise<sharing.SharedMemory[]> { return sharing.listOrgSharedMemories(this.exec, orgId, limit); }
+
+  // ── projects + per-project access (ADR-014 P-E) ──────────────────────────
+  public createProject(rec: projects.ProjectRecord): Promise<void> { return projects.createProject(this.exec, rec); }
+  public getProject(projectId: string): Promise<projects.ProjectRecord | null> { return projects.getProject(this.exec, projectId); }
+  public countProjects(orgId: string): Promise<number> { return projects.countProjects(this.exec, orgId); }
+  public updateProject(projectId: string, patch: { name?: string; repoUrl?: string | null; restricted?: boolean }): Promise<projects.ProjectRecord | null> { return projects.updateProject(this.exec, projectId, patch); }
+  public deleteProject(projectId: string): Promise<void> { return projects.deleteProject(this.exec, projectId); }
+  public listAccessibleProjects(orgId: string, userId: string, isOrgAdmin: boolean): Promise<projects.ProjectRecord[]> { return projects.listAccessibleProjects(this.exec, orgId, userId, isOrgAdmin); }
+  public addProjectMember(projectId: string, userId: string, role: string, now: string): Promise<void> { return projects.addProjectMember(this.exec, projectId, userId, role, now); }
+  public removeProjectMember(projectId: string, userId: string): Promise<void> { return projects.removeProjectMember(this.exec, projectId, userId); }
+  public listProjectMembers(projectId: string): Promise<projects.ProjectMemberRecord[]> { return projects.listProjectMembers(this.exec, projectId); }
 
   // ── tenancy (ADR-010 P1: organizations + membership/roles) ───────────────
 

@@ -20,7 +20,7 @@ import type { ModeStats } from "./bench/regression.js";
 import type { CodeRecallResult } from "./bench/code-recall.js";
 import type { RetrievalMetrics } from "./bench/code-scale.js";
 import type { CursorPaginationOptions, DiagnosticsBundle, EvidenceListFilters, IMemoryStore, MemoryListFilters, OperationLogFilters } from "@kinqs/brainrouter-types";
-import type { TenancyStore, EmailAuthStore, OrgPersonaStore, MemorySharingStore } from "../tenancy/store.js";
+import type { TenancyStore, EmailAuthStore, OrgPersonaStore, MemorySharingStore, ProjectStore } from "../tenancy/store.js";
 import type { ProviderStore } from "../providers/store.js";
 import type { IntegrationStore } from "../integrations/store.js";
 import { resolveProviderConfig } from "../providers/resolver.js";
@@ -405,6 +405,11 @@ export class MemoryEngine {
   /** ADR-014 P-D — artifact/memory sharing store. */
   public get sharing(): MemorySharingStore {
     return this.store as unknown as MemorySharingStore;
+  }
+
+  /** ADR-014 P-E — projects + per-project access control store. */
+  public get projects(): ProjectStore {
+    return this.store as unknown as ProjectStore;
   }
 
   /** ADR-010 P2 — DB-backed provider configs (see {@link tenancy} for the cast rationale). */

@@ -187,7 +187,27 @@ export const adminApi = {
     authFetch(`/api/memories/${encodeURIComponent(recordId)}/share`, { method: "POST", body: { orgId }, orgId }),
   unshareMemory: (recordId: string, orgId: string) =>
     authFetch(`/api/memories/${encodeURIComponent(recordId)}/unshare`, { method: "POST", body: { orgId }, orgId }),
+  // Projects (ADR-014 Phase E).
+  listProjects: (orgId: string) =>
+    authFetch<{ projects: Project[] }>(`/api/orgs/${orgId}/projects`, { orgId }),
+  createProject: (orgId: string, body: { name: string; repoUrl?: string; restricted?: boolean }) =>
+    authFetch<{ project: Project }>(`/api/orgs/${orgId}/projects`, { method: "POST", body, orgId }),
+  updateProject: (orgId: string, projectId: string, patch: { name?: string; repoUrl?: string | null; restricted?: boolean }) =>
+    authFetch<{ project: Project }>(`/api/orgs/${orgId}/projects/${projectId}`, { method: "PATCH", body: patch, orgId }),
+  deleteProject: (orgId: string, projectId: string) =>
+    authFetch(`/api/orgs/${orgId}/projects/${projectId}`, { method: "DELETE", orgId }),
 };
+
+export interface Project {
+  projectId: string;
+  orgId: string;
+  name: string;
+  slug: string;
+  repoUrl: string | null;
+  restricted: boolean;
+  createdBy: string | null;
+  createdAt: string;
+}
 
 export interface SharedMemory {
   recordId: string;

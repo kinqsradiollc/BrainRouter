@@ -12,6 +12,7 @@ import type { OrganizationRecord, OrgMemberRecord, OrgMembership, OrgPlan } from
 import type { AuthTokenRecord, OrgInviteRecord } from "../memory/store/postgres/queries/emailAuthQueries.js";
 import type { OrgIdentityRecord } from "../memory/store/postgres/queries/orgPersonaQueries.js";
 import type { SharedMemory } from "../memory/store/postgres/queries/memorySharingQueries.js";
+import type { ProjectRecord, ProjectMemberRecord } from "../memory/store/postgres/queries/projectQueries.js";
 
 export interface TenancyStore {
   createOrganization(input: { orgId: string; name: string; slug: string; plan?: OrgPlan }): Promise<OrganizationRecord>;
@@ -61,4 +62,17 @@ export interface OrgPersonaStore {
 export interface MemorySharingStore {
   setMemoryVisibility(recordId: string, userId: string, orgId: string, visibility: "private" | "org"): Promise<boolean>;
   listOrgSharedMemories(orgId: string, limit?: number): Promise<SharedMemory[]>;
+}
+
+/** Projects + per-project access control (ADR-014 Phase E), via `memoryEngine.projects`. */
+export interface ProjectStore {
+  createProject(rec: ProjectRecord): Promise<void>;
+  getProject(projectId: string): Promise<ProjectRecord | null>;
+  countProjects(orgId: string): Promise<number>;
+  updateProject(projectId: string, patch: { name?: string; repoUrl?: string | null; restricted?: boolean }): Promise<ProjectRecord | null>;
+  deleteProject(projectId: string): Promise<void>;
+  listAccessibleProjects(orgId: string, userId: string, isOrgAdmin: boolean): Promise<ProjectRecord[]>;
+  addProjectMember(projectId: string, userId: string, role: string, now: string): Promise<void>;
+  removeProjectMember(projectId: string, userId: string): Promise<void>;
+  listProjectMembers(projectId: string): Promise<ProjectMemberRecord[]>;
 }
