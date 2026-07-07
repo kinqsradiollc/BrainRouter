@@ -45,6 +45,7 @@ function OrgsInner() {
   const [members, setMembers] = useState<Record<string, OrgMember[]>>({});
   const [invite, setInvite] = useState({ email: "", role: "member" });
   const [inviting, setInviting] = useState(false);
+  const [inviteNote, setInviteNote] = useState("");
   const [newOrgName, setNewOrgName] = useState("");
   const [newOrgPlan, setNewOrgPlan] = useState<OrgPlan>("team");
   const [creating, setCreating] = useState(false);
@@ -129,11 +130,16 @@ function OrgsInner() {
   async function inviteMember(orgId: string) {
     if (!invite.email.trim()) return;
     setInviting(true);
+    setInviteNote("");
     try {
-      await adminApi.inviteMemberByEmail(orgId, invite.email.trim(), invite.role);
-      await refreshMembers(orgId);
+      const res = await adminApi.invite(orgId, invite.email.trim(), invite.role);
       setInvite({ email: "", role: "member" });
       setError("");
+      setInviteNote(
+        res.delivered
+          ? `Invitation emailed to ${res.invite.email}.`
+          : `Invitation created for ${res.invite.email}. Email delivery is off — share this link: ${res.link}`,
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to invite member");
     } finally {
@@ -321,6 +327,7 @@ function OrgsInner() {
                       {inviting ? "Inviting…" : "Invite"}
                     </PremiumButton>
                   </div>
+                  {inviteNote && <div className="settings-note settings-note--warn" style={{ wordBreak: "break-all" }}>{inviteNote}</div>}
 
                   {canManageOrg && org.entitlements?.features?.includes("domainAllowlist") && (
                     <div className="org-invite" style={{ marginTop: "var(--spacing-12)" }}>

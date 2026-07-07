@@ -20,7 +20,7 @@ import type { ModeStats } from "./bench/regression.js";
 import type { CodeRecallResult } from "./bench/code-recall.js";
 import type { RetrievalMetrics } from "./bench/code-scale.js";
 import type { CursorPaginationOptions, DiagnosticsBundle, EvidenceListFilters, IMemoryStore, MemoryListFilters, OperationLogFilters } from "@kinqs/brainrouter-types";
-import type { TenancyStore } from "../tenancy/store.js";
+import type { TenancyStore, EmailAuthStore } from "../tenancy/store.js";
 import type { ProviderStore } from "../providers/store.js";
 import type { IntegrationStore } from "../integrations/store.js";
 import { resolveProviderConfig } from "../providers/resolver.js";
@@ -358,6 +358,11 @@ export class MemoryEngine {
    */
   public get tenancy(): TenancyStore {
     return this.store as unknown as TenancyStore;
+  }
+
+  /** ADR-014 P-B2 — email/auth store: SMTP settings, verification tokens, invites. */
+  public get emailAuth(): EmailAuthStore {
+    return this.store as unknown as EmailAuthStore;
   }
 
   /** ADR-010 P2 — DB-backed provider configs (see {@link tenancy} for the cast rationale). */

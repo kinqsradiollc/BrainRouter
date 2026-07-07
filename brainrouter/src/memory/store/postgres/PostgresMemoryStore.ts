@@ -119,6 +119,7 @@ import * as graph from "./queries/graphQueries.js";
 import * as userStats from "./queries/userStatsQueries.js";
 import * as sourcesTree from "./queries/sourcesTreeQueries.js";
 import * as tenancy from "./queries/tenancyQueries.js";
+import * as emailAuth from "./queries/emailAuthQueries.js";
 import * as providerCfg from "./queries/providerConfigQueries.js";
 import * as integrationCfg from "./queries/integrationConfigQueries.js";
 import type { TenancyStore } from "../../../tenancy/store.js";
@@ -371,6 +372,18 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public async ping(): Promise<boolean> {
     try { await this.exec.one("SELECT 1 AS ok"); return true; } catch { return false; }
   }
+
+  // ── email/auth (ADR-014 P-B2: settings, tokens, invites) ─────────────────
+  public getSetting<T = unknown>(key: string): Promise<T | null> { return emailAuth.getSetting<T>(this.exec, key); }
+  public setSetting(key: string, value: unknown): Promise<void> { return emailAuth.setSetting(this.exec, key, value, new Date().toISOString()); }
+  public createAuthToken(rec: { tokenHash: string; kind: string; userId?: string | null; email?: string | null; expiresAt: string; createdAt: string }): Promise<void> { return emailAuth.createAuthToken(this.exec, rec); }
+  public consumeAuthToken(tokenHash: string, kind: string, nowIso: string): Promise<emailAuth.AuthTokenRecord | null> { return emailAuth.consumeAuthToken(this.exec, tokenHash, kind, nowIso); }
+  public setEmailVerified(userId: string): Promise<void> { return emailAuth.setEmailVerified(this.exec, userId); }
+  public createInvite(rec: emailAuth.OrgInviteRecord): Promise<void> { return emailAuth.createInvite(this.exec, rec); }
+  public getInviteByHash(tokenHash: string): Promise<emailAuth.OrgInviteRecord | null> { return emailAuth.getInviteByHash(this.exec, tokenHash); }
+  public acceptInvite(tokenHash: string, nowIso: string): Promise<emailAuth.OrgInviteRecord | null> { return emailAuth.acceptInvite(this.exec, tokenHash, nowIso); }
+  public listInvites(orgId: string): Promise<emailAuth.OrgInviteRecord[]> { return emailAuth.listInvites(this.exec, orgId); }
+  public revokeInvite(tokenHash: string): Promise<void> { return emailAuth.revokeInvite(this.exec, tokenHash); }
 
   // ── tenancy (ADR-010 P1: organizations + membership/roles) ───────────────
 

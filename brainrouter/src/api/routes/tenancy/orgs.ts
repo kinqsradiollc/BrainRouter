@@ -13,6 +13,10 @@ import { can, capabilitiesFor, isRole, ROLES } from "../../../tenancy/rbac.js";
 import { isOrgPlan, ORG_PLANS } from "../../../tenancy/types.js";
 import { entitlementsFor, featuresFor, withinLimit, planHasFeature } from "../../../tenancy/entitlements.js";
 import { domainAllowed, normalizeDomains } from "../../../tenancy/emailDomain.js";
+import { generateToken, hashToken, expiryFrom, notExpired } from "../../../tenancy/tokens.js";
+import { sendInviteEmail } from "../../../services/email/emailFlows.js";
+
+const INVITE_TTL_MS = 7 * 86400_000;
 
 /** Serialize a plan's entitlements (limits + features) for the dashboard. */
 function entitlementsView(plan: string) {
@@ -216,4 +220,75 @@ orgsRouter.post("/:orgId/allowed-domains", async (req: AuthedRequest, res) => {
   } catch (error) {
     sendError(res, 400, error instanceof Error ? error.message : "Failed to update allowed domains");
   }
+});
+
+// ── invitations (ADR-014 Phase B2) ────────────────────────────────────────
+
+/**
+ * POST /api/orgs/accept-invite { token } — the signed-in user accepts an emailed
+ * invitation. Their account email must match the invite. (Top-level; declared
+ * before the `/:orgId/*` routes so it isn't captured as an orgId.)
+ */
+orgsRouter.post("/accept-invite", async (req: AuthedRequest, res) => {
+  const token = String(req.body?.token ?? "").trim();
+  if (!token) { sendError(res, 400, "token is required"); return; }
+  const hash = hashToken(token);
+  const now = new Date().toISOString();
+  const invite = await memoryEngine.emailAuth.getInviteByHash(hash);
+  if (!invite || invite.acceptedAt || !notExpired(invite.expiresAt, now)) {
+    sendError(res, 400, "This invitation is invalid, expired, or already used"); return;
+  }
+  const user = await memoryEngine.getUserById(req.userId!);
+  if (!user) { sendError(res, 401, "not authenticated"); return; }
+  if ((user.email ?? "").trim().toLowerCase() !== invite.email.toLowerCase()) {
+    sendError(res, 403, `This invitation is for ${invite.email}. Sign in with that email to accept.`); return;
+  }
+  const members = await memoryEngine.tenancy.listOrgMembers(invite.orgId);
+  const org = await memoryEngine.tenancy.getOrganization(invite.orgId);
+  if (!members.some((m) => m.userId === user.userId) && !withinLimit(org?.plan, "seats", members.length)) {
+    sendError(res, 402, `This team is at its seat limit for the ${org?.plan ?? "current"} plan.`); return;
+  }
+  const accepted = await memoryEngine.emailAuth.acceptInvite(hash, now);
+  if (!accepted) { sendError(res, 400, "This invitation is invalid, expired, or already used"); return; }
+  await memoryEngine.tenancy.addOrgMember(invite.orgId, user.userId, isRole(invite.role) ? invite.role : "member");
+  res.json({ ok: true, orgId: invite.orgId, name: org?.name });
+});
+
+/** POST /api/orgs/:orgId/invites { email, role } — invite by email (members:manage + `invites` feature). */
+orgsRouter.post("/:orgId/invites", async (req: AuthedRequest, res) => {
+  if (!(await requireMemberAdmin(req, res))) return;
+  const orgId = String(req.params.orgId);
+  const email = String(req.body?.email ?? "").trim().toLowerCase();
+  const role = String(req.body?.role ?? "member").trim();
+  if (!email) { sendError(res, 400, "email is required"); return; }
+  if (!isRole(role)) { sendError(res, 400, `a valid role (${ROLES.join(", ")}) is required`); return; }
+  const org = await memoryEngine.tenancy.getOrganization(orgId);
+  if (!org) { sendError(res, 404, "organization not found"); return; }
+  if (!planHasFeature(org.plan, "invites")) {
+    sendError(res, 402, "Email invitations require the team plan or higher."); return;
+  }
+  if (org.allowedDomains.length > 0 && !domainAllowed(email, org.allowedDomains)) {
+    sendError(res, 403, `${email} is not in this team's allowed email domains (${org.allowedDomains.join(", ")}).`); return;
+  }
+  const { raw, hash } = generateToken();
+  const now = new Date().toISOString();
+  const expiresAt = expiryFrom(now, INVITE_TTL_MS);
+  await memoryEngine.emailAuth.createInvite({ tokenHash: hash, orgId, email, role, invitedBy: req.userId!, expiresAt, acceptedAt: null, createdAt: now });
+  const sent = await sendInviteEmail(email, org.name, raw);
+  // Return the link ONLY when SMTP is off, so a no-email deployment still works.
+  res.status(201).json({ invite: { email, role, expiresAt }, delivered: sent.ok, link: sent.ok ? undefined : sent.link });
+});
+
+/** GET /api/orgs/:orgId/invites — pending invitations (members:manage). */
+orgsRouter.get("/:orgId/invites", async (req: AuthedRequest, res) => {
+  if (!(await requireMemberAdmin(req, res))) return;
+  const invites = await memoryEngine.emailAuth.listInvites(String(req.params.orgId));
+  res.json({ invites: invites.map((i) => ({ email: i.email, role: i.role, invitedBy: i.invitedBy, expiresAt: i.expiresAt, createdAt: i.createdAt, tokenHash: i.tokenHash })) });
+});
+
+/** DELETE /api/orgs/:orgId/invites/:hash — revoke a pending invitation (members:manage). */
+orgsRouter.delete("/:orgId/invites/:hash", async (req: AuthedRequest, res) => {
+  if (!(await requireMemberAdmin(req, res))) return;
+  await memoryEngine.emailAuth.revokeInvite(String(req.params.hash));
+  res.json({ ok: true });
 });

@@ -681,6 +681,14 @@ h5, h6 { font-size: 13px; line-height: 1.4; font-weight: 600; letter-spacing: 0;
 .status-empty { padding: var(--spacing-24) var(--spacing-20); font-size: 14px; color: var(--text-muted); text-align: center; }
 .status-foot { margin-top: var(--spacing-20); display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 12px; color: var(--text-muted); }
 .status-foot__dot { opacity: 0.4; }
+
+/* ── Email-link landing pages (verify / reset / accept-invite) ─────────── */
+.authflow-shell { min-height: 70dvh; display: flex; align-items: center; justify-content: center; padding: var(--spacing-24); }
+.authflow-card { width: 100%; max-width: 26rem; border: 1px solid var(--border-dim); border-radius: var(--radius-lg); background: var(--color-charcoal-canvas); padding: var(--spacing-32); text-align: center; }
+.authflow-title { margin: 0 0 var(--spacing-8); font-size: 20px; font-weight: 650; color: var(--text); }
+.authflow-text { margin: 0 0 var(--spacing-20); font-size: 14px; color: var(--text-secondary); line-height: 1.55; }
+.authflow-form { display: flex; flex-direction: column; gap: var(--spacing-12); text-align: left; }
+.authflow-actions { margin-top: var(--spacing-16); display: flex; justify-content: center; }
 .org-iconbtn { flex-shrink: 0; display: grid; place-items: center; width: 30px; height: 30px; border-radius: var(--radius-sm); border: 1px solid var(--border-dim); background: transparent; color: var(--text-muted); cursor: pointer; transition: background 0.15s, color 0.15s, border-color 0.15s; }
 .org-iconbtn:hover { background: rgba(229, 103, 95, 0.10); border-color: rgba(229, 103, 95, 0.35); color: var(--danger); }
 .org-invite { margin-top: var(--spacing-16); padding: var(--spacing-16); border: 1px dashed var(--border-med); border-radius: var(--radius-md); background: var(--overlay-bg); display: flex; align-items: flex-end; gap: var(--spacing-12); flex-wrap: wrap; }

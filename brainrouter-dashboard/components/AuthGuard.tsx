@@ -28,8 +28,9 @@ export function AuthGuard({ children }: AuthGuardProps) {
     }
 
     const authed = isAuthenticated();
-    // Public routes (no sign-in): marketing home, auth, about, and the status page.
-    const PUBLIC = ["/", "/auth", "/about", "/status"];
+    // Public routes (no sign-in): marketing home, auth, about, status, and the
+    // email-link landing pages (verify / reset / accept-invite).
+    const PUBLIC = ["/", "/auth", "/about", "/status", "/verify-email", "/reset-password", "/accept-invite"];
     if (!authed && !PUBLIC.includes(pathname)) {
       router.replace("/auth");
       return;

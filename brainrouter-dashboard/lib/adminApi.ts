@@ -165,4 +165,40 @@ export const adminApi = {
   removeMember: (orgId: string, userId: string) =>
     authFetch(`/api/orgs/${orgId}/members/${encodeURIComponent(userId)}`, { method: "DELETE", orgId }),
   setDefaultOrg: (orgId: string) => authFetch(`/api/orgs/${orgId}/default`, { method: "POST" }),
+  // Invitations (ADR-014 Phase B2).
+  invite: (orgId: string, email: string, role: string) =>
+    authFetch<{ invite: { email: string; role: string; expiresAt: string }; delivered: boolean; link?: string }>(`/api/orgs/${orgId}/invites`, { method: "POST", body: { email, role }, orgId }),
+  listInvites: (orgId: string) =>
+    authFetch<{ invites: OrgInvite[] }>(`/api/orgs/${orgId}/invites`, { orgId }),
+  revokeInvite: (orgId: string, tokenHash: string) =>
+    authFetch(`/api/orgs/${orgId}/invites/${tokenHash}`, { method: "DELETE", orgId }),
+  acceptInvite: (token: string) =>
+    authFetch<{ ok: boolean; orgId: string; name?: string }>(`/api/orgs/accept-invite`, { method: "POST", body: { token } }),
+  // Admin SMTP settings (system-global).
+  getEmailSettings: () => authFetch<{ config: EmailSettings | null; configured: boolean }>("/api/admin/email"),
+  putEmailSettings: (body: EmailSettingsInput) =>
+    authFetch<{ config: EmailSettings; configured: boolean }>("/api/admin/email", { method: "PUT", body }),
+  testEmail: (to?: string) =>
+    authFetch<{ delivered: boolean; transport: string; detail?: string }>("/api/admin/email/test", { method: "POST", body: { to } }),
 };
+
+export interface OrgInvite {
+  email: string;
+  role: string;
+  invitedBy: string | null;
+  expiresAt: string;
+  createdAt: string;
+  tokenHash: string;
+}
+
+export interface EmailSettings {
+  enabled: boolean;
+  host: string;
+  port: number;
+  secure?: boolean;
+  user?: string;
+  from: string;
+  appUrl?: string;
+  hasPassword?: boolean;
+}
+export type EmailSettingsInput = Omit<EmailSettings, "hasPassword"> & { pass?: string };
