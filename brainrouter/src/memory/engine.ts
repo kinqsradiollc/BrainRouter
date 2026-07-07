@@ -26,6 +26,7 @@ import type { IntegrationStore } from "../integrations/store.js";
 import { resolveProviderConfig } from "../providers/resolver.js";
 import { seedProvidersFromEnv } from "../providers/seed.js";
 import { systemProviderOrgId } from "../providers/runtime.js";
+import { modelGateway } from "../services/modelGateway/modelGateway.js";
 import { MemoryCapturePipeline } from "./capture.js";
 import { MemoryRecallPipeline } from "./recall.js";
 import { MemoryJobRunner } from "./scheduler/runner.js";
@@ -439,9 +440,9 @@ export class MemoryEngine {
     const orgId = systemProviderOrgId();
     const store = this.providers;
     try {
+      const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
       const llm = await resolveProviderConfig(store, orgId, "llm");
       if (llm) {
-        const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
         const o = {
           endpoint: llm.endpoint,
           apiKey: llm.apiKey,
@@ -457,13 +458,18 @@ export class MemoryEngine {
           const set = (runner as { setProviderOverride?: (x: typeof o) => void }).setProviderOverride;
           if (typeof set === "function") set.call(runner, o);
         }
+        // Register the LLM provider in the single gateway (the one authority).
+        modelGateway.configure("llm", { endpoint: llm.endpoint, apiKey: llm.apiKey, model: llm.model, wireFormat: str(llm.wireFormat) });
       }
       const emb = await resolveProviderConfig(store, orgId, "embedding");
       if (emb?.source === "db") this.embeddingService.reconfigure({ endpoint: emb.endpoint, apiKey: emb.apiKey, model: emb.model });
+      if (emb) modelGateway.configure("embedding", { endpoint: emb.endpoint, apiKey: emb.apiKey, model: emb.model });
       const rer = await resolveProviderConfig(store, orgId, "reranker");
       if (rer?.source === "db") this.rerankerService.reconfigure({ endpoint: rer.endpoint, apiKey: rer.apiKey, model: rer.model });
+      if (rer) modelGateway.configure("reranker", { endpoint: rer.endpoint, apiKey: rer.apiKey, model: rer.model });
       const jud = await resolveProviderConfig(store, orgId, "judge");
       if (jud?.source === "db") this.relevanceJudge.reconfigure({ endpoint: jud.endpoint, apiKey: jud.apiKey, model: jud.model });
+      if (jud) modelGateway.configure("judge", { endpoint: jud.endpoint, apiKey: jud.apiKey, model: jud.model, wireFormat: str(jud.wireFormat) });
     } catch {
       /* best-effort — keep the env-built config on any DB error */
     }

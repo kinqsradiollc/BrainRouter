@@ -15,8 +15,8 @@
 import type { LLMRunner, LLMRunParams, LLMToolSchema } from "@kinqs/brainrouter-types";
 import { fetchWithExternalRetry, ExternalApiError } from "../util/retry.js";
 import { acquireLLMSlot } from "./llm-semaphore.js";
-import { extractChatCompletionText, resolveLLMTimeoutMs, isExternalTimeoutError } from "./llm-response.js";
-import { resolveRequestUrl, buildRequestBody, extractResponsesText, isResponsesWire } from "../../providers/wireFormat.js";
+import { resolveLLMTimeoutMs, isExternalTimeoutError } from "./llm-response.js";
+import { modelGateway } from "../../services/modelGateway/modelGateway.js";
 import { requestTimeoutSignal } from "../util/request-timeout.js";
 import { cognitiveBreakerOpen, recordCognitiveSuccess, recordCognitiveFailure } from "./cognitive-breaker.js";
 
@@ -155,9 +155,10 @@ export class ModelLLMRunner implements LLMRunner {
     }
   }
 
-  // One attempt against one model/endpoint. Owns the semaphore slot and the
-  // LM-Studio unload retry so the fallback path can re-run it cleanly without
-  // leaking a slot or losing the unload handling.
+  // One attempt against one model/endpoint. Owns the LLM semaphore slot; the actual
+  // dispatch — wire-format resolution, structured-output tool, LM-Studio unload +
+  // tool-drop retries, response parse — runs through the single ModelGateway, so all
+  // LLM cognition traffic routes through the one gateway.
   private async runOnce(args: {
     endpoint: string;
     apiKey: string;
@@ -169,130 +170,17 @@ export class ModelLLMRunner implements LLMRunner {
     wireFormat?: string;
   }): Promise<string> {
     const { endpoint, apiKey, model, messages, effectiveTimeoutMs, taskId, tool, wireFormat } = args;
-    const responses = isResponsesWire(wireFormat);
-
-    // "Base URL cause": the saved endpoint is a BASE; the wire format decides the
-    // path (/chat/completions vs /responses). resolveRequestUrl normalizes either
-    // shape so one saved URL works for both wires (parity with the desktop).
-    const requestUrl = resolveRequestUrl(endpoint, wireFormat);
-
     const maxTokens = parsePositiveInt(process.env.BRAINROUTER_LLM_MAX_TOKENS);
     const jsonMode = process.env.BRAINROUTER_LLM_JSON_MODE === "on" && taskId === "cognitive-extraction";
-    // Body in the provider's wire shape (chat-completions messages+tools, or
-    // responses input+instructions). Structured-output tool-calling only applies
-    // to chat-completions; responses falls back to the prompt's JSON instruction.
-    const body: Record<string, unknown> = buildRequestBody(wireFormat, { model, messages, tool, maxTokens, jsonMode });
-
-    const doFetch = () => fetchWithExternalRetry(requestUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(body),
-      signal: requestTimeoutSignal(effectiveTimeoutMs),
-    }, {
-      label: `[BrainRouter:${taskId}] LLM API`,
-    });
-
-    // Acquire a slot from the global LLM semaphore BEFORE issuing the
-    // request. On consumer hardware (LM Studio with a single GPU) firing
-    // more than ~2 concurrent generations against the same backend causes
-    // the model to thrash or auto-unload — see llm-semaphore.ts for the
-    // full rationale. Cloud backends (OpenAI / OpenRouter) can lift the cap
-    // with BRAINROUTER_LLM_MAX_CONCURRENT=10 (or higher).
+    // Acquire an LLM semaphore slot BEFORE dispatch (consumer-GPU thrash guard —
+    // see llm-semaphore.ts); release in finally so the queue keeps moving on throw.
     const release = await acquireLLMSlot();
     try {
-      let res = await doFetch();
-
-      // LM Studio quirk: if the model has been idle long enough to auto-unload,
-      // it returns 400 with `{"error":"Model is unloaded."}` on the first call
-      // and then loads the model in the background. The next call usually
-      // succeeds. Detect that exact error and retry ONCE after a brief pause
-      // so background workers (contradiction check, graph extraction, focus
-      // shift detection) don't all fail when the user has been quiet for a bit.
-      if (res.status === 400) {
-        const errorBody = await res.text();
-        if (/model\s+(is\s+)?unloaded|model\s+not\s+loaded|no\s+models?\s+loaded/i.test(errorBody)) {
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-          res = await doFetch();
-          if (!res.ok) {
-            const retryBody = await res.text();
-            throw new Error(
-              `[BrainRouter:${taskId}] LLM model "${model}" was unloaded by the server; ` +
-              `retry also failed (${res.status} ${res.statusText}). ` +
-              `If you're using LM Studio, enable JIT model loading or pin the model as always-loaded. ` +
-              `Original error: ${errorBody}. Retry error: ${retryBody}`,
-            );
-          }
-        } else if (tool && body.tools) {
-          // The 400 most likely means this backend rejects `tools`/`tool_choice`
-          // (some OpenAI-compatible proxies do). Drop the forced tool and retry
-          // once as a plain completion — the prompt still carries the JSON
-          // instruction, so the caller's JSON chokepoint handles the content.
-          delete body.tools;
-          delete body.tool_choice;
-          res = await doFetch();
-          if (!res.ok) {
-            const retryBody = await res.text();
-            throw new Error(`[BrainRouter:${taskId}] LLM Error (${model}) after dropping tool_choice: ${res.status} ${res.statusText} - ${retryBody}`);
-          }
-        } else {
-          throw new Error(`[BrainRouter:${taskId}] LLM Error (${model}): ${res.status} ${res.statusText} - ${errorBody}`);
-        }
-      } else if (!res.ok) {
-        const errorBody = await res.text();
-        throw new Error(`[BrainRouter:${taskId}] LLM Error (${model}): ${res.status} ${res.statusText} - ${errorBody}`);
-      }
-
-      const data = await res.json() as any;
-      // Defensive parsing — see brainrouter/src/agent/agent.ts callOpenAI for the
-      // full rationale. The short version: some endpoints return HTTP 200
-      // with an `error` envelope or a non-standard schema. Surface the
-      // actual response body in the error so a misconfigured model name
-      // doesn't crash with "Cannot read properties of undefined".
-      if (data && typeof data === "object" && data.error) {
-        const errMsg = typeof data.error === "string"
-          ? data.error
-          : (data.error.message ?? JSON.stringify(data.error).slice(0, 400));
-        throw new Error(`[BrainRouter:${taskId}] LLM endpoint returned an error envelope: ${errMsg}`);
-      }
-      // Responses API: parse `output_text` / `output[].content[].text` (no `choices`).
-      if (responses) {
-        const text = extractResponsesText(data);
-        if (typeof text !== "string" || !text.trim()) {
-          throw new Error(`[BrainRouter:${taskId}] Responses API returned no usable output for model "${model}". Body: ${JSON.stringify(data).slice(0, 600)}`);
-        }
-        return text;
-      }
-      if (!Array.isArray(data?.choices) || data.choices.length === 0) {
-        throw new Error(
-          `[BrainRouter:${taskId}] LLM endpoint returned no choices for model "${model}". ` +
-          `Response body: ${JSON.stringify(data).slice(0, 600)}`,
-        );
-      }
-      // Tolerate standard, streaming-style, and reasoning-model shapes. Some
-      // local OpenAI-compatible backends return an empty message.content with
-      // useful output in reasoning_content.
-      const choice = data.choices[0];
-      // STRUCTURED OUTPUT — when we forced a tool, the result is the tool-call's
-      // JSON `arguments` (schema-shaped, consistent across models). Prefer it.
-      // If the model ignored tool_choice and replied in content instead, fall
-      // through to the normal content extraction below.
-      if (tool) {
-        const toolArgs = choice?.message?.tool_calls?.[0]?.function?.arguments;
-        if (typeof toolArgs === "string" && toolArgs.trim()) return toolArgs;
-      }
-      const content = extractChatCompletionText(data);
-      if (typeof content !== "string") {
-        throw new Error(
-          `[BrainRouter:${taskId}] LLM choice had no usable content. Choice: ${JSON.stringify(choice).slice(0, 600)}`,
-        );
-      }
-      return content;
+      return await modelGateway.dispatch({
+        endpoint, apiKey, model, wireFormat, messages, tool, maxTokens, jsonMode,
+        timeoutMs: effectiveTimeoutMs, label: `BrainRouter:${taskId}`,
+      });
     } finally {
-      // Always release, success or failure, so the queue keeps moving even
-      // if an upstream throw bubbles. The semaphore's release is idempotent.
       release();
     }
   }

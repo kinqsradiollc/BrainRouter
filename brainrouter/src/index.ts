@@ -39,6 +39,7 @@ import { resolveRegistryConfig } from './resolver.js';
 import { buildMcpServer } from './transport/mcpServer.js';
 import { recordHttp, routeBucket, renderPrometheus, metricsSnapshot } from './observability/metrics.js';
 import { collectSystemStatus } from './observability/status.js';
+import { modelGateway } from './services/modelGateway/modelGateway.js';
 
 import { memoryEngine, closeMemoryEngine } from './memory/engine.js';
 import path from 'node:path';
@@ -202,6 +203,7 @@ if (USE_HTTP) {
       pingDb: () => memoryEngine.ping(),
       uptimeSec: Math.round(process.uptime()),
       checkedAt: new Date().toISOString(),
+      modelKinds: modelGateway.snapshot(),
     });
     res.status(status.status === 'down' ? 503 : 200).json(status);
   });
