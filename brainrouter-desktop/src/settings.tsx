@@ -21,6 +21,7 @@ import { ConnectorSettings } from './settings/connectors/ConnectorSettings.js';
 import { MarketplaceSettings, type MarketplaceState } from './settings/marketplace/index.js';
 import { McpServersSection } from './settings/connectors/McpServersSection.js';
 import { ModelsSection } from './settings/models/ModelsSection.js';
+import { AccountSettings } from './settings/account/AccountSettings.js';
 import { RuntimeSection } from './settings/runtime/RuntimeSection.js';
 import { AutomationsSection } from './settings/automations/AutomationsSection.js';
 import { UsageHeatmap } from './settings/usage/UsageHeatmap.js';
@@ -122,6 +123,7 @@ export function SettingsDialog(props: {
 
   const body = (() => {
     switch (section) {
+      case 'account': return <AccountSettings />;
       case 'general': return (
         <>
           <div className="set-h">General</div>
