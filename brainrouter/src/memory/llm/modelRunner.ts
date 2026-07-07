@@ -16,6 +16,7 @@ import type { LLMRunner, LLMRunParams, LLMToolSchema } from "@kinqs/brainrouter-
 import { fetchWithExternalRetry, ExternalApiError } from "../util/retry.js";
 import { acquireLLMSlot } from "./llm-semaphore.js";
 import { extractChatCompletionText, resolveLLMTimeoutMs, isExternalTimeoutError } from "./llm-response.js";
+import { resolveRequestUrl, buildRequestBody, extractResponsesText, isResponsesWire } from "../../providers/wireFormat.js";
 import { requestTimeoutSignal } from "../util/request-timeout.js";
 import { cognitiveBreakerOpen, recordCognitiveSuccess, recordCognitiveFailure } from "./cognitive-breaker.js";
 
@@ -44,6 +45,8 @@ export interface LlmProviderOverride {
   endpoint?: string;
   apiKey?: string;
   model?: string;
+  /** Wire format: 'responses' → POST /responses; anything else → /chat/completions. */
+  wireFormat?: string;
   /** Optional resilience: retry once on this model when the primary fails. */
   fallbackModel?: string;
   fallbackEndpoint?: string;
@@ -112,10 +115,12 @@ export class ModelLLMRunner implements LLMRunner {
 
     const fallbackModelName = this.providerOverride?.fallbackModel?.trim() || undefined;
 
+    const wireFormat = this.providerOverride?.wireFormat;
+
     try {
       let result: string;
       try {
-        result = await this.runOnce({ endpoint, apiKey, model, messages, effectiveTimeoutMs, taskId, tool });
+        result = await this.runOnce({ endpoint, apiKey, model, messages, effectiveTimeoutMs, taskId, tool, wireFormat });
       } catch (err) {
         // On a provider/transport failure, retry ONCE against a stable fallback
         // model before giving up. No-op (rethrow) when no fallback is configured
@@ -137,6 +142,7 @@ export class ModelLLMRunner implements LLMRunner {
           effectiveTimeoutMs,
           taskId,
           tool,
+          wireFormat,
         });
       }
       recordCognitiveSuccess();
@@ -160,32 +166,24 @@ export class ModelLLMRunner implements LLMRunner {
     effectiveTimeoutMs: number;
     taskId: string;
     tool?: LLMToolSchema;
+    wireFormat?: string;
   }): Promise<string> {
-    const { endpoint, apiKey, model, messages, effectiveTimeoutMs, taskId, tool } = args;
+    const { endpoint, apiKey, model, messages, effectiveTimeoutMs, taskId, tool, wireFormat } = args;
+    const responses = isResponsesWire(wireFormat);
 
-    const body: Record<string, unknown> = { model, messages };
+    // "Base URL cause": the saved endpoint is a BASE; the wire format decides the
+    // path (/chat/completions vs /responses). resolveRequestUrl normalizes either
+    // shape so one saved URL works for both wires (parity with the desktop).
+    const requestUrl = resolveRequestUrl(endpoint, wireFormat);
+
     const maxTokens = parsePositiveInt(process.env.BRAINROUTER_LLM_MAX_TOKENS);
-    if (maxTokens) {
-      body.max_tokens = maxTokens;
-    }
-    // STRUCTURED OUTPUT — force the model to return its result as a function call
-    // whose schema fixes the shape, instead of relying on a "respond in JSON"
-    // prompt that drifts across model versions. Backends that don't support
-    // tool-calling 400 here and we transparently retry without it (below), so
-    // the prompt's JSON instruction remains the compatibility fallback.
-    if (tool) {
-      body.tools = [{ type: "function", function: { name: tool.name, description: tool.description ?? "", parameters: tool.parameters } }];
-      body.tool_choice = { type: "function", function: { name: tool.name } };
-    }
-    // Opt-in JSON mode, extraction only. OFF by default: some OpenAI-compatible
-    // proxies (incl. the free nemotron endpoint) 400 on an unknown
-    // `response_format`, and json_object forces a top-level object while
-    // extraction expects an array. Enable only against a backend known to honour it.
-    if (process.env.BRAINROUTER_LLM_JSON_MODE === "on" && taskId === "cognitive-extraction") {
-      body.response_format = { type: "json_object" };
-    }
+    const jsonMode = process.env.BRAINROUTER_LLM_JSON_MODE === "on" && taskId === "cognitive-extraction";
+    // Body in the provider's wire shape (chat-completions messages+tools, or
+    // responses input+instructions). Structured-output tool-calling only applies
+    // to chat-completions; responses falls back to the prompt's JSON instruction.
+    const body: Record<string, unknown> = buildRequestBody(wireFormat, { model, messages, tool, maxTokens, jsonMode });
 
-    const doFetch = () => fetchWithExternalRetry(endpoint, {
+    const doFetch = () => fetchWithExternalRetry(requestUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -258,6 +256,14 @@ export class ModelLLMRunner implements LLMRunner {
           ? data.error
           : (data.error.message ?? JSON.stringify(data.error).slice(0, 400));
         throw new Error(`[BrainRouter:${taskId}] LLM endpoint returned an error envelope: ${errMsg}`);
+      }
+      // Responses API: parse `output_text` / `output[].content[].text` (no `choices`).
+      if (responses) {
+        const text = extractResponsesText(data);
+        if (typeof text !== "string" || !text.trim()) {
+          throw new Error(`[BrainRouter:${taskId}] Responses API returned no usable output for model "${model}". Body: ${JSON.stringify(data).slice(0, 600)}`);
+        }
+        return text;
       }
       if (!Array.isArray(data?.choices) || data.choices.length === 0) {
         throw new Error(

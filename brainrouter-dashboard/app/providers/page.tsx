@@ -161,8 +161,8 @@ function ProvidersInner() {
             <label className="settings-label">Provider id
               <input className="settings-input" placeholder="openai" value={form.providerId} onChange={(e) => setForm({ ...form, providerId: e.target.value })} />
             </label>
-            <label className="settings-label">Base URL
-              <input className="settings-input" placeholder="https://api.openai.com/v1/chat/completions" value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} />
+            <label className="settings-label">Base URL <span className="settings-hint">(the /v1 base — the wire format picks the path)</span>
+              <input className="settings-input" placeholder="https://api.openai.com/v1" value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} />
             </label>
             <label className="settings-label">API key
               <input type="password" autoComplete="off" className="settings-input" placeholder={editingId ? "leave blank to keep current key" : "sk-…"} value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} />
@@ -176,8 +176,12 @@ function ProvidersInner() {
             <label className="settings-label settings-col-2">Models <span className="settings-hint">(comma-separated; the models this key unlocks)</span>
               <input className="settings-input" placeholder="gpt-4o-mini, gpt-4o" value={modelsText} onChange={(e) => setModelsText(e.target.value)} />
             </label>
-            <label className="settings-label">Wire format <span className="settings-hint">(optional)</span>
-              <input className="settings-input" placeholder="chat-completions | responses | …" value={form.wireFormat} onChange={(e) => setForm({ ...form, wireFormat: e.target.value })} />
+            <label className="settings-label">Wire format <span className="settings-hint">(how to talk to the API)</span>
+              <select className="settings-select" value={form.wireFormat} onChange={(e) => setForm({ ...form, wireFormat: e.target.value })}>
+                <option value="">Auto (chat-completions)</option>
+                <option value="chat-completions">chat-completions (/chat/completions)</option>
+                <option value="responses">responses (/responses)</option>
+              </select>
             </label>
             <label className="settings-label">Reasoning effort <span className="settings-hint">(optional)</span>
               <select className="settings-select" value={form.reasoningEffort} onChange={(e) => setForm({ ...form, reasoningEffort: e.target.value })}>

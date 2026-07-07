@@ -446,6 +446,8 @@ export class MemoryEngine {
           endpoint: llm.endpoint,
           apiKey: llm.apiKey,
           model: llm.model,
+          // Wire format decides /chat/completions vs /responses at request time.
+          wireFormat: str(llm.wireFormat),
           // Optional resilience carried on the provider config's `extra`.
           fallbackModel: str(llm.extra?.fallbackModel),
           fallbackEndpoint: str(llm.extra?.fallbackEndpoint),
