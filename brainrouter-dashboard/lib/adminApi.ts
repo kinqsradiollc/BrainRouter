@@ -185,6 +185,11 @@ export const adminApi = {
   removeMember: (orgId: string, userId: string) =>
     authFetch(`/api/orgs/${orgId}/members/${encodeURIComponent(userId)}`, { method: "DELETE", orgId }),
   setDefaultOrg: (orgId: string) => authFetch(`/api/orgs/${orgId}/default`, { method: "POST" }),
+  // GitHub App repo linking (RBAC: triggers:manage).
+  githubStatus: (orgId: string) =>
+    authFetch<{ configured: boolean; installed: boolean; installUrl?: string }>(`/api/orgs/${orgId}/github/status`, { orgId }),
+  githubRepos: (orgId: string) =>
+    authFetch<{ configured: boolean; installed: boolean; repos: { fullName: string; url: string; private: boolean; defaultBranch: string }[]; error?: string }>(`/api/orgs/${orgId}/github/repos`, { orgId }),
   // Invitations (ADR-014 Phase B2).
   invite: (orgId: string, email: string, role: string) =>
     authFetch<{ invite: { email: string; role: string; expiresAt: string }; delivered: boolean; link?: string }>(`/api/orgs/${orgId}/invites`, { method: "POST", body: { email, role }, orgId }),

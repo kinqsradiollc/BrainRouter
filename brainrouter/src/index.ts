@@ -45,7 +45,7 @@ import { memoryEngine, closeMemoryEngine } from './memory/engine.js';
 import path from 'node:path';
 import { decideMcpAcceptPromotion } from './api/mcpAcceptHeader.js';
 import { authRouter, usersRouter, sessionsRouter } from './api/routes/identity/index.js';
-import { orgsRouter, projectsRouter } from './api/routes/tenancy/index.js';
+import { orgsRouter, projectsRouter, githubReposRouter } from './api/routes/tenancy/index.js';
 import { providersRouter, agentModelsRouter, integrationsRouter, adminEmailRouter, adminOrgsRouter } from './api/routes/admin/index.js';
 import { triggersRouter } from './api/routes/triggers/index.js';
 import {
@@ -216,6 +216,7 @@ if (USE_HTTP) {
   app.use("/api/users", usersRouter);
   app.use("/api/orgs", orgsRouter);
   app.use("/api/orgs", projectsRouter);
+  app.use("/api/orgs", githubReposRouter);
   app.use("/api/admin/providers", providersRouter);
   app.use("/api/admin/agent-models", agentModelsRouter);
   app.use("/api/admin/integrations", integrationsRouter);

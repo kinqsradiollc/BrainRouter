@@ -5,6 +5,7 @@
 export * from './git/index.js';
 export * from './github/index.js';
 export * from './githubSync.js';
+export * from './githubSync/githubApp.js';
 export * from './query/index.js';
 export * from './automation/index.js';
 export * from './trackStore.js';
