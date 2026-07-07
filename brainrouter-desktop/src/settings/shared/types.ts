@@ -144,6 +144,7 @@ export const SUBAGENT_ROLE_LABELS: Record<SubagentRole, string> = {
 };
 
 export const NAV: Array<{ section: SettingsSection; icon: string; title: string; group: 'Settings' | 'Desktop app' }> = [
+  { section: 'account', icon: 'user', title: 'Account', group: 'Settings' },
   { section: 'general', icon: 'gear', title: 'General', group: 'Settings' },
   { section: 'models', icon: 'spark', title: 'Models', group: 'Settings' },
   { section: 'permissions', icon: 'shield', title: 'Permissions', group: 'Settings' },

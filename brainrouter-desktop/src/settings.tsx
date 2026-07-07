@@ -13,6 +13,7 @@ import { wireBadge, type CommandsCatalog, type DeskCommand, type SettingsSection
 import { Icon } from './icons.js';
 import { ShortcutsReference } from './components/dialogs/ShortcutsReference.js';
 import { Row, Toggle, Select, ChoiceControl, KnobText, KnobNumber, SetGroup } from './settings/shared/controls.js';
+import { AccountSettings } from './settings/account/AccountSettings.js';
 import { PermissionModeCards } from './settings/permissions/PermissionModeCards.js';
 import { ComputerUseSettings } from './settings/permissions/ComputerUseSettings.js';
 import { CliConfigEditor } from './settings/cli/CliConfigEditor.js';
@@ -122,6 +123,7 @@ export function SettingsDialog(props: {
 
   const body = (() => {
     switch (section) {
+      case 'account': return <AccountSettings />;
       case 'general': return (
         <>
           <div className="set-h">General</div>
