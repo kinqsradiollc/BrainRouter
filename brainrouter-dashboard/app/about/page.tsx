@@ -41,9 +41,9 @@ const SURFACES: Surface[] = [
   },
   {
     tag: "BROWSER",
-    title: "Web chat & dashboard",
-    body: "Talk to the agent and inspect recall, scenes, contradictions, evidence, and the knowledge graph — all over the same store.",
-    link: { href: "/chat", label: "/chat" },
+    title: "Dashboard",
+    body: "Inspect recall, scenes, contradictions, evidence, and the knowledge graph — and administer providers, integrations, and organizations — all over the same store.",
+    link: { href: "/overview", label: "/overview" },
   },
   {
     tag: "PROTOCOL",

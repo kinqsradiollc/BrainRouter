@@ -10,15 +10,6 @@ import { getClient } from "../lib/client";
 
 const links = [
   {
-    href: "/chat",
-    label: "Chat",
-    icon: (
-      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
-      </svg>
-    )
-  },
-  {
     href: "/overview",
     label: "Overview",
     icon: (
@@ -260,6 +251,15 @@ const links = [
         <path d="M3 21h18M6 21V7l6-4 6 4v14M10 9h.01M14 9h.01M10 13h.01M14 13h.01" />
       </svg>
     )
+  },
+  {
+    href: "/integrations",
+    label: "Integrations",
+    icon: (
+      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8" />
+      </svg>
+    )
   }
 ] as const;
 
@@ -288,17 +288,17 @@ export function Sidebar({ isCollapsed: isCollapsedProp, onToggleCollapse, isMobi
   };
 
   const visibleLinks = links.filter((link) => {
-    if ((link.href === "/users" || link.href === "/brand" || link.href === "/providers") && !user?.isAdmin) return false;
+    if ((link.href === "/users" || link.href === "/brand" || link.href === "/providers" || link.href === "/integrations") && !user?.isAdmin) return false;
     return true;
   });
 
   // Group the routes into labelled sections instead of one flat 20-item wall.
   const NAV_GROUPS: { title: string; hrefs: string[] }[] = [
-    { title: "Workspace", hrefs: ["/chat", "/overview"] },
+    { title: "Workspace", hrefs: ["/overview"] },
     { title: "Memory", hrefs: ["/memories", "/scenes", "/persona", "/working-memory", "/blackboard", "/vault"] },
     { title: "Graph & Recall", hrefs: ["/recall-inspector", "/timeline", "/intelligence", "/tree"] },
     { title: "Integrity", hrefs: ["/contradictions", "/evidence", "/sources"] },
-    { title: "System", hrefs: ["/hooks", "/fleet", "/skills", "/profile", "/providers", "/organizations", "/users", "/brand"] },
+    { title: "System", hrefs: ["/hooks", "/fleet", "/skills", "/profile", "/providers", "/integrations", "/organizations", "/users", "/brand"] },
   ];
   const linkByHref = new Map<string, (typeof visibleLinks)[number]>(visibleLinks.map((l) => [l.href, l]));
 

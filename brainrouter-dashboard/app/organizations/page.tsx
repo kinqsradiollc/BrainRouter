@@ -1,12 +1,15 @@
 "use client";
 
 /**
- * ADR-010 P4 — Organizations. See the orgs you belong to (with your role +
- * capabilities), switch your default org, and — where you have members:manage —
- * add/remove members and set roles.
+ * ADR-010 P4 — Organizations. Create an org, see the orgs you belong to (role +
+ * capabilities), switch your default, and — where you have members:manage —
+ * invite members by email and set roles. Uses the app's premium blocks.
  */
 import { useCallback, useEffect, useState } from "react";
 import { AuthGuard } from "../../components/AuthGuard";
+import { PageHeader } from "../../components/PageHeader";
+import { PremiumCard } from "../../components/PremiumCard";
+import { PremiumButton } from "../../components/PremiumButton";
 import { adminApi, type OrgSummary, type OrgMember } from "../../lib/adminApi";
 
 const ROLES = ["owner", "admin", "member", "viewer"];
@@ -17,7 +20,9 @@ function OrgsInner() {
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [members, setMembers] = useState<Record<string, OrgMember[]>>({});
-  const [invite, setInvite] = useState({ userId: "", role: "member" });
+  const [invite, setInvite] = useState({ email: "", role: "member" });
+  const [newOrgName, setNewOrgName] = useState("");
+  const [creating, setCreating] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -34,6 +39,21 @@ function OrgsInner() {
 
   useEffect(() => { void load(); }, [load]);
 
+  async function createOrg(e: React.FormEvent) {
+    e.preventDefault();
+    if (!newOrgName.trim()) return;
+    setCreating(true);
+    try {
+      await adminApi.createOrg(newOrgName.trim());
+      setNewOrgName("");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create organization");
+    } finally {
+      setCreating(false);
+    }
+  }
+
   async function openMembers(org: OrgSummary) {
     if (expanded === org.orgId) { setExpanded(null); return; }
     setExpanded(org.orgId);
@@ -47,74 +67,86 @@ function OrgsInner() {
     }
   }
 
-  async function addMember(orgId: string) {
-    if (!invite.userId.trim()) return;
+  async function inviteMember(orgId: string) {
+    if (!invite.email.trim()) return;
     try {
-      await adminApi.addMember(orgId, invite.userId.trim(), invite.role);
+      await adminApi.inviteMemberByEmail(orgId, invite.email.trim(), invite.role);
       const res = await adminApi.listMembers(orgId);
       setMembers((m) => ({ ...m, [orgId]: res.members ?? [] }));
-      setInvite({ userId: "", role: "member" });
+      setInvite({ email: "", role: "member" });
+      setError("");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to add member");
+      setError(e instanceof Error ? e.message : "Failed to invite member");
     }
   }
 
   return (
-    <div className="mx-auto max-w-4xl px-6 py-8">
-      <h1 className="text-2xl font-semibold text-white">Organizations</h1>
-      <p className="mt-1 text-sm text-neutral-400">Your organizations, roles, and members.</p>
-      {error && <div className="mt-4 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">{error}</div>}
+    <div className="settings-page">
+      <PageHeader title="Organizations" description="Create organizations, switch your default, and invite teammates by email with a role." />
+      {error && <div className="settings-note settings-note--error">{error}</div>}
 
-      <div className="mt-6 space-y-3">
+      <PremiumCard level={2} style={{ marginTop: "var(--spacing-24)" }}>
+        <div className="settings-cardhead"><h3>Create an organization</h3></div>
+        <form onSubmit={createOrg} className="flex flex-wrap items-end gap-3">
+          <label className="settings-label" style={{ flex: "1 1 16rem" }}>Name
+            <input className="settings-input" placeholder="Acme Inc." value={newOrgName} onChange={(e) => setNewOrgName(e.target.value)} />
+          </label>
+          <PremiumButton type="submit" variant="primary" disabled={creating}>{creating ? "Creating…" : "Create organization"}</PremiumButton>
+        </form>
+      </PremiumCard>
+
+      <div className="settings-stack">
         {loading ? (
-          <div className="text-sm text-neutral-500">Loading…</div>
+          <div className="settings-empty-inline">Loading…</div>
         ) : orgs.length === 0 ? (
-          <div className="text-sm text-neutral-500">You don&apos;t belong to any organization yet.</div>
+          <div className="settings-empty-inline">You don&apos;t belong to any organization yet.</div>
         ) : orgs.map((org) => (
-          <div key={org.orgId} className="rounded-lg border border-neutral-800 bg-neutral-900/50">
-            <div className="flex items-center justify-between px-4 py-3">
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-white">{org.name}</span>
-                  <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-300">{org.role}</span>
-                  <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-400">{org.plan}</span>
-                  {org.isDefault && <span className="rounded bg-indigo-500/20 px-1.5 py-0.5 text-[10px] text-indigo-300">default</span>}
+          <PremiumCard key={org.orgId} level={2}>
+            <div className="settings-cardhead">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 style={{ display: "inline" }}>{org.name}</h3>
+                  <span className="settings-badge settings-badge--muted">{org.role}</span>
+                  <span className="settings-badge settings-badge--muted">{org.plan}</span>
+                  {org.isDefault && <span className="settings-badge settings-badge--default">default</span>}
                 </div>
-                <div className="mt-0.5 text-xs text-neutral-500">{org.slug}</div>
+                <div className="settings-row__sub">{org.slug}</div>
               </div>
-              <div className="flex items-center gap-2">
-                {!org.isDefault && (
-                  <button className="rounded px-2 py-1 text-xs text-indigo-300 hover:bg-neutral-800" onClick={async () => { await adminApi.setDefaultOrg(org.orgId); await load(); }}>Make default</button>
-                )}
+              <div className="settings-actions">
+                {!org.isDefault && <PremiumButton size="small" variant="ghost" onClick={async () => { await adminApi.setDefaultOrg(org.orgId); await load(); }}>Make default</PremiumButton>}
                 {org.capabilities.includes("members:manage") && (
-                  <button className="rounded px-2 py-1 text-xs text-neutral-300 hover:bg-neutral-800" onClick={() => openMembers(org)}>{expanded === org.orgId ? "Hide" : "Members"}</button>
+                  <PremiumButton size="small" variant="text" onClick={() => openMembers(org)}>{expanded === org.orgId ? "Hide members" : "Members"}</PremiumButton>
                 )}
               </div>
             </div>
 
             {expanded === org.orgId && org.capabilities.includes("members:manage") && (
-              <div className="border-t border-neutral-800 px-4 py-3">
-                <div className="divide-y divide-neutral-800">
-                  {(members[org.orgId] ?? []).map((m) => (
-                    <div key={m.userId} className="flex items-center justify-between py-2">
-                      <span className="text-sm text-white">{m.userId}</span>
-                      <div className="flex items-center gap-3">
-                        <span className="text-xs text-neutral-400">{m.role}</span>
-                        <button className="text-xs text-red-300 hover:underline" onClick={async () => { await adminApi.removeMember(org.orgId, m.userId); const res = await adminApi.listMembers(org.orgId); setMembers((mm) => ({ ...mm, [org.orgId]: res.members ?? [] })); }}>Remove</button>
-                      </div>
+              <div>
+                {(members[org.orgId] ?? []).length === 0 ? (
+                  <div className="settings-empty-inline">No members yet.</div>
+                ) : (members[org.orgId] ?? []).map((m) => (
+                  <div key={m.userId} className="settings-item">
+                    <span className="settings-row__title truncate">{m.userId}</span>
+                    <div className="settings-actions">
+                      <span className="settings-hint">{m.role}</span>
+                      <PremiumButton size="small" variant="danger" onClick={async () => { await adminApi.removeMember(org.orgId, m.userId); const res = await adminApi.listMembers(org.orgId); setMembers((mm) => ({ ...mm, [org.orgId]: res.members ?? [] })); }}>Remove</PremiumButton>
                     </div>
-                  ))}
-                </div>
-                <div className="mt-3 flex items-center gap-2">
-                  <input className="flex-1 rounded border border-neutral-700 bg-neutral-950 px-3 py-1.5 text-sm text-white" placeholder="user id to add" value={invite.userId} onChange={(e) => setInvite({ ...invite, userId: e.target.value })} />
-                  <select className="rounded border border-neutral-700 bg-neutral-950 px-2 py-1.5 text-sm text-white" value={invite.role} onChange={(e) => setInvite({ ...invite, role: e.target.value })}>
-                    {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
-                  </select>
-                  <button className="rounded bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500" onClick={() => addMember(org.orgId)}>Add</button>
+                  </div>
+                ))}
+                <div className="mt-4 flex flex-wrap items-end gap-2">
+                  <label className="settings-label" style={{ flex: "1 1 14rem" }}>Invite by email
+                    <input className="settings-input" type="email" placeholder="teammate@company.com" value={invite.email} onChange={(e) => setInvite({ ...invite, email: e.target.value })} />
+                  </label>
+                  <label className="settings-label">Role
+                    <select className="settings-select" value={invite.role} onChange={(e) => setInvite({ ...invite, role: e.target.value })}>
+                      {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                  </label>
+                  <PremiumButton variant="primary" onClick={() => inviteMember(org.orgId)}>Invite</PremiumButton>
                 </div>
               </div>
             )}
-          </div>
+          </PremiumCard>
         ))}
       </div>
     </div>

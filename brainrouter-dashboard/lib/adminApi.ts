@@ -68,8 +68,31 @@ export interface ProviderInput {
   model?: string;
   models?: string[];
   wireFormat?: string;
+  reasoningEffort?: string;
+  extra?: Record<string, unknown>;
   enabled?: boolean;
   isDefault?: boolean;
+}
+
+export type IntegrationKind = "github_app";
+
+export interface IntegrationConfig {
+  id: string;
+  orgId: string;
+  kind: IntegrationKind;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  hasSecret: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface IntegrationInput {
+  kind: IntegrationKind;
+  enabled?: boolean;
+  config?: Record<string, unknown>;
+  /** github_app: { privateKey, webhookSecret }. Omit to keep the stored secret. */
+  secret?: Record<string, string>;
 }
 
 export interface OrgSummary {
@@ -100,10 +123,22 @@ export const adminApi = {
     authFetch(`/api/admin/providers/${id}`, { method: "DELETE", orgId }),
   setDefaultProvider: (id: string, orgId?: string) =>
     authFetch(`/api/admin/providers/${id}/default`, { method: "POST", orgId }),
+  // GitHub App / integration configs (RBAC: triggers:manage).
+  listIntegrations: (orgId?: string) =>
+    authFetch<{ integrations: IntegrationConfig[]; secretStorageReady: boolean }>("/api/admin/integrations", { orgId }),
+  createIntegration: (body: IntegrationInput, orgId?: string) =>
+    authFetch<{ integration: IntegrationConfig }>("/api/admin/integrations", { method: "POST", body, orgId }),
+  updateIntegration: (id: string, body: Partial<IntegrationInput>, orgId?: string) =>
+    authFetch<{ integration: IntegrationConfig }>(`/api/admin/integrations/${id}`, { method: "PATCH", body, orgId }),
+  deleteIntegration: (id: string, orgId?: string) =>
+    authFetch(`/api/admin/integrations/${id}`, { method: "DELETE", orgId }),
   listOrgs: () => authFetch<{ orgs: OrgSummary[] }>("/api/orgs"),
+  createOrg: (name: string) => authFetch<{ org: OrgSummary }>("/api/orgs", { method: "POST", body: { name } }),
   listMembers: (orgId: string) => authFetch<{ members: OrgMember[] }>(`/api/orgs/${orgId}/members`, { orgId }),
   addMember: (orgId: string, userId: string, role: string) =>
     authFetch(`/api/orgs/${orgId}/members`, { method: "POST", body: { userId, role }, orgId }),
+  inviteMemberByEmail: (orgId: string, email: string, role: string) =>
+    authFetch(`/api/orgs/${orgId}/members`, { method: "POST", body: { email, role }, orgId }),
   removeMember: (orgId: string, userId: string) =>
     authFetch(`/api/orgs/${orgId}/members/${encodeURIComponent(userId)}`, { method: "DELETE", orgId }),
   setDefaultOrg: (orgId: string) => authFetch(`/api/orgs/${orgId}/default`, { method: "POST" }),

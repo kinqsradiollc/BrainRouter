@@ -566,6 +566,65 @@ h5, h6 { font-size: 13px; line-height: 1.4; font-weight: 600; letter-spacing: 0;
   color: #ffffff;
 }
 
+/* ── Admin settings surfaces (providers / integrations / organizations) ──────
+   Theme-token primitives so the admin pages match the app's design language
+   (surface tokens + green accent) and follow light/dark. Layout stays in JSX;
+   responsive: the field grid collapses to one column below 640px. */
+.settings-page { max-width: 64rem; margin-inline: auto; padding: var(--spacing-32) var(--spacing-24); }
+.settings-lede { color: var(--text-secondary); font-size: 14px; line-height: 1.55; margin-top: var(--spacing-4); }
+.settings-note { margin-top: var(--spacing-16); border-radius: var(--radius-md); padding: var(--spacing-12) var(--spacing-16); font-size: 13px; }
+.settings-note--warn { border: 1px solid rgba(217, 164, 65, 0.35); background: rgba(217, 164, 65, 0.10); color: var(--warn); }
+.settings-note--error { border: 1px solid rgba(229, 103, 95, 0.35); background: rgba(229, 103, 95, 0.10); color: var(--danger); }
+.settings-section { margin-top: var(--spacing-32); }
+.settings-section__head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--spacing-12); }
+.settings-hint { color: var(--text-muted); font-size: 12px; }
+.settings-list { margin-top: var(--spacing-8); border: 1px solid var(--border-dim); border-radius: var(--radius-md); background: var(--color-charcoal-canvas); overflow: hidden; }
+.settings-row { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-12); padding: var(--spacing-12) var(--spacing-16); }
+.settings-row + .settings-row { border-top: 1px solid var(--border-dim); }
+.settings-row__title { font-size: 14px; color: var(--text); }
+.settings-row__sub { margin-top: 2px; font-size: 12px; color: var(--text-muted); }
+.settings-empty, .settings-loading { padding: var(--spacing-12) var(--spacing-16); font-size: 14px; color: var(--text-muted); }
+.settings-form { margin-top: var(--spacing-40); border: 1px solid var(--border-dim); border-radius: var(--radius-lg); background: var(--color-charcoal-canvas); padding: var(--spacing-24); }
+.settings-grid { display: grid; grid-template-columns: 1fr; gap: var(--spacing-16); margin-top: var(--spacing-16); }
+@media (min-width: 640px) { .settings-grid { grid-template-columns: 1fr 1fr; } }
+.settings-col-2 { grid-column: 1 / -1; }
+.settings-label { display: block; font-size: 13px; color: var(--text-secondary); }
+.settings-input, .settings-select, .settings-textarea {
+  margin-top: var(--spacing-4); width: 100%; border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong); background: var(--overlay-bg); color: var(--text);
+  padding: 9px 12px; font-size: 14px; font-family: var(--font-sans);
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+}
+.settings-textarea { font-family: var(--font-mono); font-size: 12px; line-height: 1.5; resize: vertical; }
+.settings-input:focus, .settings-select:focus, .settings-textarea:focus {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); background: var(--color-pewter-accent);
+}
+.settings-input::placeholder, .settings-textarea::placeholder { color: var(--text-muted); }
+.settings-select {
+  appearance: none; -webkit-appearance: none; cursor: pointer; padding-right: 34px;
+  background-image: var(--select-bg-image); background-repeat: no-repeat; background-position: right 12px center; background-size: 12px;
+}
+.settings-checks { margin-top: var(--spacing-16); display: flex; flex-wrap: wrap; align-items: center; gap: var(--spacing-24); }
+.settings-check { display: inline-flex; align-items: center; gap: var(--spacing-8); font-size: 14px; color: var(--text-secondary); cursor: pointer; }
+.settings-check input { accent-color: var(--accent); }
+.settings-action { border: 1px solid transparent; background: transparent; border-radius: var(--radius-sm); padding: 5px 10px; font-size: 12px; cursor: pointer; color: var(--text-secondary); transition: background 0.2s, color 0.2s; }
+.settings-action:hover { background: var(--overlay-bg-hover-strong); color: var(--text); }
+.settings-action--accent { color: var(--accent); }
+.settings-action--danger { color: var(--danger); }
+.settings-badge { border-radius: var(--radius-sm); padding: 2px 6px; font-size: 10px; font-weight: 500; }
+.settings-badge--default { background: var(--accent-wash); color: var(--accent); }
+.settings-badge--muted { background: var(--overlay-bg-hover-strong); color: var(--text-secondary); }
+.settings-flag-ok { font-size: 10px; color: var(--ok); }
+.settings-flag-muted { font-size: 10px; color: var(--text-muted); }
+.settings-actions { display: flex; flex-shrink: 0; align-items: center; gap: var(--spacing-8); flex-wrap: wrap; justify-content: flex-end; }
+/* A row INSIDE a PremiumCard (provider / member / integration). */
+.settings-item { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-12); padding: 10px 12px; border: 1px solid var(--border-dim); border-radius: var(--radius-sm); background: var(--overlay-bg); }
+.settings-item + .settings-item { margin-top: var(--spacing-8); }
+.settings-stack { display: flex; flex-direction: column; gap: var(--spacing-20); margin-top: var(--spacing-24); }
+.settings-cardhead { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--spacing-12); margin-bottom: var(--spacing-16); }
+.settings-cardhead h3 { margin: 0; }
+.settings-empty-inline { font-size: 13px; color: var(--text-muted); }
+
 /* Decorative Badges & Highlights */
 .badge-gold {
   background: var(--gradient-golden-gradient);
@@ -896,40 +955,6 @@ html {
   margin-bottom: 0 !important;
 }
 
-/* ----------------------------------------------------------------------------
- * Chat-bubble variant
- *
- * `.markdown-content` is tuned for document layouts (Core Identity, Scene
- * summaries) where 24px heading margins and 16px paragraph gaps read as
- * breathing room. In a chat bubble those same margins read as awkward dead
- * space between paragraphs and between the bubble label and the body.
- *
- * The variant tightens vertical rhythm while inheriting fonts, colors, list
- * markers, and code styles unchanged.
- * -------------------------------------------------------------------------- */
-.markdown-content--chat p,
-.markdown-content--chat ul,
-.markdown-content--chat ol,
-.markdown-content--chat pre,
-.markdown-content--chat blockquote {
-  margin-bottom: 6px;
-}
-
-.markdown-content--chat h1,
-.markdown-content--chat h2,
-.markdown-content--chat h3,
-.markdown-content--chat h4 {
-  margin-top: 10px;
-  margin-bottom: 4px;
-}
-
-.markdown-content--chat li {
-  margin-bottom: 2px;
-}
-
-.markdown-content--chat > *:first-child {
-  margin-top: 0 !important;
-}
 
 /* ─── DASH-MOTION-A11Y ──────────────────────────────────────────────────────
    Keyboard focus: a visible Signal ring on focus-visible only (so mouse clicks

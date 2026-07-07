@@ -21,7 +21,6 @@ interface Cmd {
 }
 
 const ROUTES: { label: string; group: string; href: string }[] = [
-  { label: "Chat", group: "Workspace", href: "/chat" },
   { label: "Overview", group: "Workspace", href: "/overview" },
   { label: "Memories", group: "Memory", href: "/memories" },
   { label: "Focus Scenes", group: "Memory", href: "/scenes" },

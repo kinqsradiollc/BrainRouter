@@ -3,13 +3,16 @@
 /**
  * ADR-010 P4 — AI provider admin. Configure the backend's LLM / embeddings /
  * reranker / judge providers (DB-backed, encrypted at rest) — the same setup as
- * desktop/CLI. Admin-only (RBAC: providers:manage). Keys are write-only: the API
- * only ever tells us whether a key is set.
+ * desktop/CLI. Admin-only (RBAC: providers:manage). Keys are write-only.
+ * Uses the app's premium building blocks (PageHeader / PremiumCard / PremiumButton).
  */
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "../../components/AuthProvider";
 import { AuthGuard } from "../../components/AuthGuard";
+import { PageHeader } from "../../components/PageHeader";
+import { PremiumCard } from "../../components/PremiumCard";
+import { PremiumButton } from "../../components/PremiumButton";
 import { adminApi, type ProviderConfig, type ProviderInput, type ProviderKind } from "../../lib/adminApi";
 
 const KINDS: { kind: ProviderKind; label: string; hint: string }[] = [
@@ -19,7 +22,8 @@ const KINDS: { kind: ProviderKind; label: string; hint: string }[] = [
   { kind: "judge", label: "Relevance Judge", hint: "LLM relevance filter (opt-in)" },
 ];
 
-const EMPTY: ProviderInput = { kind: "llm", providerId: "", label: "", baseUrl: "", apiKey: "", model: "", models: [], isDefault: true, enabled: true };
+const EMPTY: ProviderInput = { kind: "llm", providerId: "", label: "", baseUrl: "", apiKey: "", model: "", models: [], wireFormat: "", reasoningEffort: "", isDefault: true, enabled: true };
+const REASONING = ["", "low", "medium", "high", "xhigh"];
 
 function ProvidersInner() {
   const router = useRouter();
@@ -30,6 +34,8 @@ function ProvidersInner() {
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState<ProviderInput>(EMPTY);
   const [modelsText, setModelsText] = useState("");
+  const [extraText, setExtraText] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
@@ -49,105 +55,148 @@ function ProvidersInner() {
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { if (user && !user.isAdmin) router.replace("/overview"); }, [router, user]);
 
-  async function create(e: React.FormEvent) {
+  function resetForm() { setForm(EMPTY); setModelsText(""); setExtraText(""); setEditingId(null); }
+
+  function startEdit(p: ProviderConfig) {
+    setEditingId(p.id);
+    setForm({ kind: p.kind, providerId: p.providerId, label: p.label, baseUrl: p.baseUrl, apiKey: "", model: p.model, wireFormat: p.wireFormat, reasoningEffort: p.reasoningEffort, enabled: p.enabled, isDefault: p.isDefault });
+    setModelsText((p.models ?? []).join(", "));
+    setExtraText("");
+    setError("");
+    if (typeof window !== "undefined") window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+  }
+
+  async function save(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
     try {
       const models = modelsText.split(",").map((s) => s.trim()).filter(Boolean);
-      await adminApi.createProvider({ ...form, models });
-      setForm(EMPTY);
-      setModelsText("");
+      let extra: Record<string, unknown> | undefined;
+      if (extraText.trim()) {
+        try { extra = JSON.parse(extraText) as Record<string, unknown>; }
+        catch { throw new Error("Advanced (extra) must be valid JSON"); }
+      }
+      const body: ProviderInput = { ...form, models, ...(extra ? { extra } : {}) };
+      if (editingId) {
+        if (!body.apiKey) delete body.apiKey; // blank key on edit = keep the stored one
+        await adminApi.updateProvider(editingId, body);
+      } else {
+        await adminApi.createProvider(body);
+      }
+      resetForm();
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to create provider");
+      setError(e instanceof Error ? e.message : "Failed to save provider");
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-8">
-      <h1 className="text-2xl font-semibold text-white">AI Providers</h1>
-      <p className="mt-1 text-sm text-neutral-400">
-        Configure the backend&apos;s LLM, embeddings, reranker and judge providers. Stored in the database
-        (keys encrypted at rest) — no <code>.env</code>. Only admins can change these.
-      </p>
+    <div className="settings-page">
+      <PageHeader title="AI Providers" description="Configure the backend's LLM, embeddings, reranker and judge providers — stored encrypted in the database, no .env. Admins only." />
 
       {!secretReady && (
-        <div className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-300">
+        <div className="settings-note settings-note--warn">
           <code>BRAINROUTER_SECRET_KEY</code> is not configured on the server — provider API keys cannot be stored until it is set.
         </div>
       )}
-      {error && <div className="mt-4 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">{error}</div>}
+      {error && <div className="settings-note settings-note--error">{error}</div>}
 
-      {KINDS.map(({ kind, label, hint }) => {
-        const rows = providers.filter((p) => p.kind === kind);
-        return (
-          <section key={kind} className="mt-8">
-            <div className="flex items-baseline justify-between">
-              <h2 className="text-lg font-medium text-white">{label}</h2>
-              <span className="text-xs text-neutral-500">{hint}</span>
-            </div>
-            <div className="mt-2 divide-y divide-neutral-800 rounded-lg border border-neutral-800 bg-neutral-900/50">
-              {loading ? (
-                <div className="px-4 py-3 text-sm text-neutral-500">Loading…</div>
-              ) : rows.length === 0 ? (
-                <div className="px-4 py-3 text-sm text-neutral-500">No {label} provider configured.</div>
-              ) : rows.map((p) => (
-                <div key={p.id} className="flex items-center justify-between px-4 py-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="truncate text-sm text-white">{p.label || p.providerId || p.model || p.id}</span>
-                      {p.isDefault && <span className="rounded bg-indigo-500/20 px-1.5 py-0.5 text-[10px] font-medium text-indigo-300">default</span>}
-                      {!p.enabled && <span className="rounded bg-neutral-700 px-1.5 py-0.5 text-[10px] text-neutral-300">disabled</span>}
-                      {p.hasKey ? <span className="text-[10px] text-emerald-400">key set</span> : <span className="text-[10px] text-neutral-500">no key</span>}
-                    </div>
-                    <div className="mt-0.5 truncate text-xs text-neutral-500">{p.baseUrl || "—"} · {p.model || "—"}</div>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    {!p.isDefault && (
-                      <button className="rounded px-2 py-1 text-xs text-indigo-300 hover:bg-neutral-800" onClick={async () => { await adminApi.setDefaultProvider(p.id); await load(); }}>Set default</button>
-                    )}
-                    <button className="rounded px-2 py-1 text-xs text-red-300 hover:bg-neutral-800" onClick={async () => { await adminApi.deleteProvider(p.id); await load(); }}>Delete</button>
-                  </div>
+      <div className="settings-stack">
+        {KINDS.map(({ kind, label, hint }) => {
+          const rows = providers.filter((p) => p.kind === kind);
+          return (
+            <PremiumCard key={kind} level={2}>
+              <div className="settings-cardhead">
+                <div>
+                  <h3>{label}</h3>
+                  <div className="settings-hint">{hint}</div>
                 </div>
-              ))}
-            </div>
-          </section>
-        );
-      })}
+                <span className="settings-badge settings-badge--muted">{rows.length} configured</span>
+              </div>
+              {loading ? (
+                <div className="settings-empty-inline">Loading…</div>
+              ) : rows.length === 0 ? (
+                <div className="settings-empty-inline">No {label} provider yet — add one below.</div>
+              ) : (
+                <div>
+                  {rows.map((p) => (
+                    <div key={p.id} className="settings-item">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="settings-row__title truncate">{p.label || p.providerId || p.model || p.id}</span>
+                          {p.isDefault && <span className="settings-badge settings-badge--default">default</span>}
+                          {!p.enabled && <span className="settings-badge settings-badge--muted">disabled</span>}
+                          {p.hasKey ? <span className="settings-flag-ok">key set</span> : <span className="settings-flag-muted">no key</span>}
+                        </div>
+                        <div className="settings-row__sub truncate">{p.baseUrl || "—"} · {p.model || "—"}</div>
+                      </div>
+                      <div className="settings-actions">
+                        {!p.isDefault && <PremiumButton size="small" variant="ghost" onClick={async () => { await adminApi.setDefaultProvider(p.id); await load(); }}>Set default</PremiumButton>}
+                        <PremiumButton size="small" variant="text" onClick={() => startEdit(p)}>Edit</PremiumButton>
+                        <PremiumButton size="small" variant="danger" onClick={async () => { if (confirm(`Delete this ${label} provider?`)) { await adminApi.deleteProvider(p.id); await load(); } }}>Delete</PremiumButton>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </PremiumCard>
+          );
+        })}
+      </div>
 
-      <form onSubmit={create} className="mt-10 rounded-lg border border-neutral-800 bg-neutral-900/50 p-5">
-        <h2 className="text-lg font-medium text-white">Add a provider</h2>
-        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <label className="text-sm text-neutral-300">Kind
-            <select className="mt-1 w-full rounded border border-neutral-700 bg-neutral-950 px-3 py-2 text-white" value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value as ProviderKind })}>
-              {KINDS.map((k) => <option key={k.kind} value={k.kind}>{k.label}</option>)}
-            </select>
-          </label>
-          <label className="text-sm text-neutral-300">Provider id
-            <input className="mt-1 w-full rounded border border-neutral-700 bg-neutral-950 px-3 py-2 text-white" placeholder="openai" value={form.providerId} onChange={(e) => setForm({ ...form, providerId: e.target.value })} />
-          </label>
-          <label className="text-sm text-neutral-300">Base URL
-            <input className="mt-1 w-full rounded border border-neutral-700 bg-neutral-950 px-3 py-2 text-white" placeholder="https://api.openai.com/v1/chat/completions" value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} />
-          </label>
-          <label className="text-sm text-neutral-300">API key
-            <input type="password" autoComplete="off" className="mt-1 w-full rounded border border-neutral-700 bg-neutral-950 px-3 py-2 text-white" placeholder="sk-…" value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} />
-          </label>
-          <label className="text-sm text-neutral-300">Model
-            <input className="mt-1 w-full rounded border border-neutral-700 bg-neutral-950 px-3 py-2 text-white" placeholder="gpt-4o-mini" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} />
-          </label>
-          <label className="text-sm text-neutral-300">Label
-            <input className="mt-1 w-full rounded border border-neutral-700 bg-neutral-950 px-3 py-2 text-white" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
-          </label>
-        </div>
-        <label className="mt-4 flex items-center gap-2 text-sm text-neutral-300">
-          <input type="checkbox" checked={form.isDefault} onChange={(e) => setForm({ ...form, isDefault: e.target.checked })} /> Make this the default for its kind
-        </label>
-        <button type="submit" disabled={saving} className="mt-4 rounded bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50">
-          {saving ? "Saving…" : "Add provider"}
-        </button>
-      </form>
+      <PremiumCard level={2} style={{ marginTop: "var(--spacing-24)" }}>
+        <form onSubmit={save}>
+          <div className="settings-cardhead">
+            <h3>{editingId ? "Edit provider" : "Add a provider"}</h3>
+            {editingId && <PremiumButton size="small" variant="text" onClick={resetForm}>Cancel</PremiumButton>}
+          </div>
+          <div className="settings-grid">
+            <label className="settings-label">Kind
+              <select className="settings-select" value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value as ProviderKind })}>
+                {KINDS.map((k) => <option key={k.kind} value={k.kind}>{k.label}</option>)}
+              </select>
+            </label>
+            <label className="settings-label">Provider id
+              <input className="settings-input" placeholder="openai" value={form.providerId} onChange={(e) => setForm({ ...form, providerId: e.target.value })} />
+            </label>
+            <label className="settings-label">Base URL
+              <input className="settings-input" placeholder="https://api.openai.com/v1/chat/completions" value={form.baseUrl} onChange={(e) => setForm({ ...form, baseUrl: e.target.value })} />
+            </label>
+            <label className="settings-label">API key
+              <input type="password" autoComplete="off" className="settings-input" placeholder={editingId ? "leave blank to keep current key" : "sk-…"} value={form.apiKey} onChange={(e) => setForm({ ...form, apiKey: e.target.value })} />
+            </label>
+            <label className="settings-label">Model
+              <input className="settings-input" placeholder="gpt-4o-mini" value={form.model} onChange={(e) => setForm({ ...form, model: e.target.value })} />
+            </label>
+            <label className="settings-label">Label
+              <input className="settings-input" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
+            </label>
+            <label className="settings-label settings-col-2">Models <span className="settings-hint">(comma-separated; the models this key unlocks)</span>
+              <input className="settings-input" placeholder="gpt-4o-mini, gpt-4o" value={modelsText} onChange={(e) => setModelsText(e.target.value)} />
+            </label>
+            <label className="settings-label">Wire format <span className="settings-hint">(optional)</span>
+              <input className="settings-input" placeholder="chat-completions | responses | …" value={form.wireFormat} onChange={(e) => setForm({ ...form, wireFormat: e.target.value })} />
+            </label>
+            <label className="settings-label">Reasoning effort <span className="settings-hint">(optional)</span>
+              <select className="settings-select" value={form.reasoningEffort} onChange={(e) => setForm({ ...form, reasoningEffort: e.target.value })}>
+                {REASONING.map((r) => <option key={r} value={r}>{r || "—"}</option>)}
+              </select>
+            </label>
+            <label className="settings-label settings-col-2">Advanced <span className="settings-hint">(optional JSON — provider-specific extra config)</span>
+              <textarea className="settings-textarea" rows={2} placeholder='{"apiVersion":"2024-02-01"}' value={extraText} onChange={(e) => setExtraText(e.target.value)} />
+            </label>
+          </div>
+          <div className="settings-checks">
+            <label className="settings-check"><input type="checkbox" checked={form.isDefault} onChange={(e) => setForm({ ...form, isDefault: e.target.checked })} /> Default for its kind</label>
+            <label className="settings-check"><input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} /> Enabled</label>
+          </div>
+          <div style={{ marginTop: "var(--spacing-16)" }}>
+            <PremiumButton type="submit" variant="primary" disabled={saving}>{saving ? "Saving…" : editingId ? "Save changes" : "Add provider"}</PremiumButton>
+          </div>
+        </form>
+      </PremiumCard>
     </div>
   );
 }

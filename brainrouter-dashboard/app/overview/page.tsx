@@ -79,27 +79,7 @@ export default function Page() {
           <PageHeader
             title="Overview"
             description="LTM (Long Term Memory) observability telemetry and citation graph analysis."
-          >
-            <a
-              href="/chat"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "8px",
-                padding: "10px 18px",
-                borderRadius: "10px",
-                background: "linear-gradient(135deg, #34C28E 0%, #34C28E 100%)",
-                color: "#fff",
-                fontSize: "13px",
-                fontWeight: 500,
-                letterSpacing: "0.01em",
-                textDecoration: "none",
-                boxShadow: "var(--shadow-sm)",
-              }}
-            >
-              Open memory-augmented chat →
-            </a>
-          </PageHeader>
+          />
         </motion.div>
 
         {/* Stats Cards Bento Row */}
