@@ -13,7 +13,7 @@ import { sendError } from "../../../contracts/http.js";
 import { isProviderKind, PROVIDER_KINDS, type ProviderConfigInput } from "../../../providers/types.js";
 import { isSecretBoxConfigured } from "../../../security/secretBox.js";
 import { probeModels, deriveProviderId } from "../../../providers/modelProbe.js";
-import { BUILTIN_PROVIDERS } from "@kinqs/brainrouter-core/provider";
+import { BUILTIN_PROVIDERS, providerServesKind } from "@kinqs/brainrouter-core/provider";
 
 export const providersRouter = Router();
 providersRouter.use(requireAnyAuth, requirePermission("providers:manage"));
@@ -39,19 +39,23 @@ function parseInput(body: any, requireKind: boolean): ProviderConfigInput | { er
 }
 
 /**
- * GET /api/admin/providers/catalog — the providers supported by the shared core
- * (desktop/CLI) package. Reused verbatim (no new provider code) so the dashboard's
- * provider picker offers exactly what the desktop supports.
+ * GET /api/admin/providers/catalog?kind=llm|embedding|reranker — the providers the
+ * shared core (desktop/CLI) supports FOR THAT KIND. Reused verbatim (no new provider
+ * code): chat providers for llm, and the embedding/reranker vendors (Cohere, Voyage,
+ * Jina, + the OpenAI-compatible/local ones) for those kinds, via core's capability tags.
  */
-providersRouter.get("/catalog", (_req: AuthedRequest, res) => {
+providersRouter.get("/catalog", (req: AuthedRequest, res) => {
+  const kindParam = String(req.query.kind ?? "").trim().toLowerCase();
+  const cap: "chat" | "embedding" | "reranker" = kindParam === "embedding" ? "embedding" : kindParam === "reranker" ? "reranker" : "chat";
   const providers = (BUILTIN_PROVIDERS as any[])
-    .filter((p) => p && (p.pickerVisible ?? true))
+    .filter((p) => p && providerServesKind(p, cap))
     .map((p) => ({
       id: String(p.id),
       label: String(p.label ?? p.id),
       endpoint: typeof p.endpoint === "string" ? p.endpoint : "",
       local: Boolean(p.local),
       requestFormat: typeof p.requestFormat === "string" ? p.requestFormat : undefined,
+      capabilities: Array.isArray(p.capabilities) ? p.capabilities : ["chat"],
     }));
   res.json({ providers });
 });

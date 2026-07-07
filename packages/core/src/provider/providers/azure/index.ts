@@ -19,4 +19,5 @@ export const azure: ProviderDefinition = {
   envKey: 'AZURE_OPENAI_API_KEY',
   local: false,
   pickerVisible: true,
+  capabilities: ['chat', 'embedding'],
 };

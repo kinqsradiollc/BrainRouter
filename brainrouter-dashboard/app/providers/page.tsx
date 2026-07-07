@@ -66,6 +66,7 @@ function ProvidersInner() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"providers" | "subagents">("providers");
+  const [galleryKind, setGalleryKind] = useState<ProviderKind>("llm");
 
   // Modal state.
   const [open, setOpen] = useState(false);
@@ -95,22 +96,26 @@ function ProvidersInner() {
     finally { setLoading(false); }
   }, []);
 
+  const loadCatalog = useCallback(async (kind: string) => {
+    try { const cat = await adminApi.providerCatalog(kind); setCatalog(cat.providers ?? []); } catch { /* optional */ }
+  }, []);
   const loadAux = useCallback(async () => {
-    try { const cat = await adminApi.providerCatalog(); setCatalog(cat.providers ?? []); } catch { /* optional */ }
     try { const res = await adminApi.getAgentModels(); setRoles(res.roles ?? []); setAssignments(res.assignments ?? {}); } catch { /* optional */ }
   }, []);
 
   useEffect(() => { void load(); void loadAux(); }, [load, loadAux]);
+  useEffect(() => { void loadCatalog(galleryKind); }, [galleryKind, loadCatalog]);
   useEffect(() => { if (user && !user.isAdmin) router.replace("/overview"); }, [router, user]);
 
   function openCatalog(c: CatalogEntry) {
     setEditingId(null);
-    setDraft({ ...EMPTY_DRAFT, kind: "llm", providerId: c.id === "openai-compatible" ? "" : c.id, label: c.id === "openai-compatible" ? "" : c.label, baseUrl: c.id === "openai-compatible" ? "" : c.endpoint });
+    const custom = c.id === "openai-compatible";
+    setDraft({ ...EMPTY_DRAFT, kind: galleryKind, providerId: custom ? "" : c.id, label: custom ? "" : c.label, baseUrl: custom ? "" : c.endpoint });
     setProbed([]); setSelected([]); setModelFilter(""); setProbeError(""); setOpen(true);
   }
   function openCustom() {
     setEditingId(null);
-    setDraft({ ...EMPTY_DRAFT });
+    setDraft({ ...EMPTY_DRAFT, kind: galleryKind });
     setProbed([]); setSelected([]); setModelFilter(""); setProbeError(""); setOpen(true);
   }
   function openEdit(p: ProviderConfig) {
@@ -196,9 +201,16 @@ function ProvidersInner() {
 
       {tab === "providers" && (
         <>
-          {/* Catalog gallery — pick one, the dialog pre-fills the endpoint. */}
+          {/* Catalog gallery — pick a kind, then a provider; the dialog pre-fills the endpoint. */}
           <PremiumCard level={2} style={{ marginTop: "var(--spacing-24)" }}>
-            <div className="settings-cardhead"><div><h3>Set up a provider</h3><div className="settings-hint">Pick one — the dialog pre-fills the endpoint, then enter your key to pull the models it unlocks.</div></div></div>
+            <div className="settings-cardhead">
+              <div><h3>Set up a provider</h3><div className="settings-hint">Pick a kind + a provider — the dialog pre-fills the endpoint, then enter your key to pull the models it unlocks.</div></div>
+              <div className="models-tabs" role="tablist">
+                {KINDS.map((k) => (
+                  <button key={k.kind} type="button" className={`models-tab ${galleryKind === k.kind ? "models-tab--active" : ""}`} onClick={() => setGalleryKind(k.kind)}>{k.label}</button>
+                ))}
+              </div>
+            </div>
             <div className="prov-gallery">
               {catalog.length === 0 ? <div className="settings-empty-inline">Loading the provider catalog…</div> : catalog.map((c) => {
                 const done = configuredIds.has(c.id);

@@ -24,6 +24,7 @@ export const lmstudio: ProviderDefinition = {
   envKey: 'LMSTUDIO_API_KEY',
   local: true,
   pickerVisible: true,
+  capabilities: ['chat', 'embedding', 'reranker'],
   // LM Studio DOES support graded reasoning effort for reasoning models (gpt-oss,
   // qwen3, deepseek-r1 distills) on /v1/chat/completions — levels low/medium/high
   // (no xhigh tier, so xhigh caps at high). The DOCUMENTED form is the nested

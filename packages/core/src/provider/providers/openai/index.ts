@@ -10,6 +10,7 @@ export const openai: ProviderDefinition = {
   envKey: 'OPENAI_API_KEY',
   local: false,
   pickerVisible: true,
+  capabilities: ['chat', 'embedding'],
   requestFormat: 'responses',
   // Declared explicitly so the canonical provider STATES its own contract rather
   // than relying on the runtime fallback — `reasoning_effort` is accepted for

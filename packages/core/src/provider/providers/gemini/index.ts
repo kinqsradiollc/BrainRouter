@@ -15,4 +15,5 @@ export const gemini: ProviderDefinition = {
   envKey: 'GEMINI_API_KEY',
   local: false,
   pickerVisible: true,
+  capabilities: ['chat', 'embedding'],
 };

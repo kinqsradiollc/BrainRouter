@@ -31,6 +31,14 @@ export interface ProviderDefinition {
   pickerVisible: boolean;
 
   /**
+   * Which model KINDS this provider serves. Omitted ⇒ `['chat']` (the historical
+   * default — every existing provider is a chat provider). Embedding/reranker-only
+   * vendors (Cohere, Voyage, Jina) set this to surface in the BrainRouter dashboard's
+   * per-kind catalog without appearing in the desktop's chat picker.
+   */
+  capabilities?: Array<'chat' | 'embedding' | 'reranker'>;
+
+  /**
    * Primary generation wire format:
    *  - 'responses'         — POST /responses with typed `input` items
    *                          (OpenAI-native Codex shape).

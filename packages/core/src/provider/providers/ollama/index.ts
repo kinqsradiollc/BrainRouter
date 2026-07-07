@@ -10,6 +10,7 @@ export const ollama: ProviderDefinition = {
   envKey: 'OLLAMA_API_KEY',
   local: true,
   pickerVisible: true,
+  capabilities: ['chat', 'embedding'],
   // Ollama's OpenAI-compat /v1 accepts `reasoning_effort` (high|medium|low|none);
   // it has no `minimal`/`xhigh`, so xhigh maps down to high.
   reasoningEffort: 'param',

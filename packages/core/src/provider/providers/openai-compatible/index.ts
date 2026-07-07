@@ -12,6 +12,7 @@ export const openaiCompatible: ProviderDefinition = {
   envKey: 'OPENAI_API_KEY',
   local: false,
   pickerVisible: true,
+  capabilities: ['chat', 'embedding', 'reranker'],
   // reasoningEffort + effortValueMap are intentionally UNDECLARED: the endpoint
   // is user-supplied and its capabilities are unknown, so we assume OpenAI
   // semantics and inherit the shared DEFAULT_EFFORT_VALUE_MAP at resolve time
