@@ -67,5 +67,24 @@ export async function processGithubDelivery(deps: WebhookDeps, req: WebhookReque
     });
   } catch { /* best-effort; the endpoint still acks */ }
 
+  // ADR-017 D5 — a PR open/update fans out an automatic security review as its own
+  // job (the reviewer runs headless + posts back via the installation token).
+  const action = String(req.body?.action ?? "");
+  if (req.event === "pull_request" && (action === "opened" || action === "synchronize" || action === "reopened")) {
+    const pr = (req.body?.pull_request ?? {}) as { number?: number; head?: { sha?: string } };
+    try {
+      await deps.enqueue({
+        kind: "pr-security-review",
+        input: {
+          orgId: integ.orgId,
+          installationId,
+          repo: req.body?.repository?.full_name,
+          prNumber: pr.number,
+          headSha: pr.head?.sha,
+        },
+      });
+    } catch { /* best-effort */ }
+  }
+
   return { status: 202, body: { ok: true, orgId: integ.orgId } };
 }

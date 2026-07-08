@@ -22,6 +22,7 @@ import { distillCoreIdentity } from "../pipeline/identity/identity-distiller.js"
 import { distillFocusScenes } from "../pipeline/focus/contextual-focus-builder.js";
 import { digestTreeNodes } from "../tree/digest.js";
 import { enqueueAgentJob } from "./jobs.js";
+import { runPrSecurityReview } from "../../integrations/prSecurityReview.js";
 
 /**
  * 0.4.3 (MEM-10) — engine operations the depth-agent executors call. Declared
@@ -36,6 +37,8 @@ export interface JobEngineOps {
   summarizeBucket(userId: string, childIds: string[], kind: string): Promise<{ id: string } | null>;
   rechunkSources(userId: string, documentIds: string[]): Promise<{ rechunked: number; skipped: number; chunksWritten: number }>;
   runRetrievalBenchmark(userId: string, opts?: { sampleSize?: number; baseDir?: string }): Promise<{ summaryPath: string | null; statsByMode: Record<string, unknown>; sampled: number; passed: boolean }>;
+  /** ADR-017 D5 — the org's GitHub App creds (non-secret config + opened secret) for a webhook installation. */
+  findGithubAppByInstallation(installationId: string): Promise<{ config: Record<string, unknown>; secret: Record<string, string> } | null>;
 }
 
 export interface JobExecContext {
@@ -125,6 +128,27 @@ const EXECUTORS: Record<string, JobExecutor> = {
   benchmark_eval: async (input, ctx) => {
     const sampleSize = typeof input?.sampleSize === "number" ? input.sampleSize : undefined;
     return requireEngine(ctx).runRetrievalBenchmark(userIdOf(input), sampleSize !== undefined ? { sampleSize } : undefined);
+  },
+
+  // ADR-017 D5 — the GitHub App bot's automatic PR security review. Enqueued by the
+  // pull_request webhook; mints the installation token, reviews the diff, posts back.
+  "pr-security-review": async (input, ctx) => {
+    const engine = requireEngine(ctx);
+    return runPrSecurityReview(
+      {
+        orgId: typeof input?.orgId === "string" ? input.orgId : undefined,
+        installationId: String(input?.installationId ?? ""),
+        repo: String(input?.repo ?? ""),
+        prNumber: Number(input?.prNumber),
+        headSha: String(input?.headSha ?? ""),
+      },
+      {
+        llmRunner: ctx.llmRunner,
+        fetchImpl: fetch,
+        nowSec: () => Math.floor(Date.now() / 1000),
+        getIntegration: (installationId) => engine.findGithubAppByInstallation(installationId),
+      },
+    );
   },
 };
 
