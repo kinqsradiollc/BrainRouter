@@ -28,6 +28,7 @@ import {
   type ReviewLens,
 } from '@kinqs/brainrouter-core/review';
 import type { LLMRunner } from '@kinqs/brainrouter-types';
+import { resolveReviewPolicy } from './githubWebhook.js';
 
 export interface PrReviewInput {
   orgId?: string;
@@ -59,6 +60,8 @@ export interface PrReviewResult {
   reviewPosted?: boolean;
   /** Whether a gating check-run was posted (requires the App's `checks: write`). */
   checkPosted?: boolean;
+  /** Whether an APPROVE review was posted (repo policy `approveClean` + a clean lens). */
+  approved?: boolean;
   skipped?: string;
   error?: string;
 }
@@ -96,6 +99,7 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
   const privateKey = String(integ.secret.privateKey ?? '').trim();
   const apiBase = validateGithubApiBase(typeof integ.config.apiBase === 'string' ? integ.config.apiBase : '') ?? 'https://api.github.com';
   if (!appId || !privateKey) return { ok: false, findings: 0, posted: false, skipped: 'no-app-creds' };
+  const policy = resolveReviewPolicy(integ.config, repo);
 
   let token: string;
   try {
@@ -167,14 +171,21 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
   const body = formatReviewSummaryComment(lens, { findings, headSha });
   const posted = await upsertReviewComment(deps.fetchImpl, apiBase, repo, prNumber, body, token, lens.summaryMarker);
 
+  // 4b. Approve the PR from this lens when it's clean AND the repo opts in (Strix
+  //     "Approve clean PRs"). Approvals only on a green lens; noise otherwise.
+  let approved = false;
+  if (findings.length === 0 && policy.approveClean) {
+    approved = await postGroupedReview(deps.fetchImpl, apiBase, repo, prNumber, headSha, buildReviewIntro(lens, 0), [], token, 'APPROVE');
+  }
+
   // 5. Post a gating CHECK-RUN so the PR's Checks box reflects the review and branch
   //    protection can REQUIRE it (Strix-style). Blocking findings ⇒ failure; findings
-  //    with none blocking ⇒ neutral; clean ⇒ success. No-op (false) until the App has
-  //    `checks: write`.
+  //    with none blocking ⇒ neutral; clean ⇒ success. When the repo's `blockOnFindings`
+  //    is off, the check is advisory (never 'failure'). No-op (false) without `checks: write`.
   const blocking = findings.filter((f) => lens.isBlocking(f)).length;
-  const checkPosted = await postCheckRun(deps.fetchImpl, apiBase, repo, headSha, lens, findings, blocking, token);
+  const checkPosted = await postCheckRun(deps.fetchImpl, apiBase, repo, headSha, lens, findings, blocking, policy.blockOnFindings, token);
 
-  return { ok: true, findings: findings.length, blocking, posted, inlinePosted, reviewPosted, checkPosted };
+  return { ok: true, findings: findings.length, blocking, posted, inlinePosted, reviewPosted, checkPosted, approved };
 }
 
 interface InlineReviewComment {
@@ -205,12 +216,13 @@ async function listOurInlineMarkers(fetchImpl: typeof fetch, apiBase: string, re
 /** POST one grouped PR review carrying every inline comment + a top-level body. */
 async function postGroupedReview(
   fetchImpl: typeof fetch, apiBase: string, repo: string, prNumber: number, commitId: string, body: string, comments: InlineReviewComment[], token: string,
+  event: 'COMMENT' | 'APPROVE' = 'COMMENT',
 ): Promise<boolean> {
   try {
     const r = await fetchImpl(`${apiBase}/repos/${repo}/pulls/${prNumber}/reviews`, {
       method: 'POST',
       headers: { ...ghHeaders(token), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...(commitId ? { commit_id: commitId } : {}), event: 'COMMENT', body, comments }),
+      body: JSON.stringify({ ...(commitId ? { commit_id: commitId } : {}), event, body, comments }),
     });
     return r.ok;
   } catch { return false; }
@@ -258,12 +270,13 @@ async function upsertReviewComment(fetchImpl: typeof fetch, apiBase: string, rep
  * `checks: write`.
  */
 async function postCheckRun(
-  fetchImpl: typeof fetch, apiBase: string, repo: string, headSha: string, lens: ReviewLens, findings: ParsedReviewFinding[], blocking: number, token: string,
+  fetchImpl: typeof fetch, apiBase: string, repo: string, headSha: string, lens: ReviewLens, findings: ParsedReviewFinding[], blocking: number, blockOnFindings: boolean, token: string,
 ): Promise<boolean> {
   if (!headSha) return false;
-  const conclusion = blocking > 0 ? 'failure' : findings.length > 0 ? 'neutral' : 'success';
+  // When the repo opts out of blocking, a blocking finding is advisory (neutral), never failure.
+  const conclusion = (blocking > 0 && blockOnFindings) ? 'failure' : findings.length > 0 ? 'neutral' : 'success';
   const title =
-    blocking > 0 ? `${blocking} blocking · ${findings.length} finding(s)`
+    blocking > 0 ? `${blocking} blocking · ${findings.length} finding(s)${blockOnFindings ? '' : ' (advisory)'}`
       : findings.length > 0 ? `${findings.length} finding(s), none blocking`
         : 'No issues found';
   const bySev = findings.reduce<Record<string, number>>((a, f) => { a[f.severity] = (a[f.severity] ?? 0) + 1; return a; }, {});

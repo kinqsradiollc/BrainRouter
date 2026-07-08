@@ -182,6 +182,21 @@ describe("PR security review executor (ADR-017 D5)", () => {
     expect(summary).toContain("/review");
   });
 
+  it("blockOnFindings OFF ⇒ check-run is advisory (neutral), not failure, despite blocking", async () => {
+    const routes: Routes = { calls: [], diff: DIFF_ADDED };
+    const d = makeDeps(routes, { llmRunner: llm(REVIEW_INLINE), getIntegration: async () => ({ config: { appId: "4237068", reviewPolicyDefaults: { blockOnFindings: false } }, secret: { privateKey } }) });
+    await runPrSecurityReview({ installationId: "42", repo: "o/r", prNumber: 7, headSha: "sha" }, d);
+    expect(routes.bodies?.["POST /repos/o/r/check-runs"] ?? "").toContain('"conclusion":"neutral"');
+  });
+
+  it("approveClean ON + a clean lens ⇒ posts an APPROVE review", async () => {
+    const routes: Routes = { calls: [], diff: DIFF_ADDED };
+    const d = makeDeps(routes, { llmRunner: llm("```json\n[]\n```"), getIntegration: async () => ({ config: { appId: "4237068", reviewPolicyDefaults: { approveClean: true } }, secret: { privateKey } }) });
+    const r = await runPrSecurityReview({ installationId: "42", repo: "o/r", prNumber: 7, headSha: "sha" }, d);
+    expect(r.approved).toBe(true);
+    expect(routes.bodies?.["POST /repos/o/r/pulls/7/reviews"] ?? "").toContain('"event":"APPROVE"');
+  });
+
   it("skips bad input and a missing integration without throwing", async () => {
     expect((await runPrSecurityReview({ installationId: "42", repo: "bad", prNumber: 1, headSha: "x" }, makeDeps({ calls: [] }))).skipped).toBe("bad-input");
     expect((await runPrSecurityReview({ installationId: "42", repo: "o/r", prNumber: 1, headSha: "x" }, makeDeps({ calls: [] }, { getIntegration: async () => null }))).skipped).toBe("no-integration");
