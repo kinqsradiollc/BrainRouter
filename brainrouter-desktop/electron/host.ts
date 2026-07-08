@@ -19,6 +19,7 @@ import { createComputerUseBridge, createSecretBridge, git, type ParentPortLike, 
 // `queries` object). host.ts assembles the HostContext bag below and folds
 // buildQueries(ctx) into createHostCore({ queries }).
 import { buildQueries } from './host/queries.js';
+import { ensureBrainSession } from './host/brainSession.js';
 // host/github-track-services — the extracted gh-CLI / connector / Track-PR
 // service layer. host.ts builds it with its runtime deps and folds the returned
 // functions into the HostContext.
@@ -294,6 +295,9 @@ async function main(): Promise<void> {
     await mcpClient.connectAll(config.servers ?? {}, llm, { timeoutMs: 5_000 });
     mcpClient.startReconnectSupervisor(); // WS9 — auto-reconnect dropped MCP servers in the background
   } catch { /* offline-mode: local tools only, same as the CLI */ }
+  // FED — register this desktop as an active session for the signed-in user, so it
+  // appears on the Account page + dashboard "Devices & sessions" (heartbeats itself).
+  void ensureBrainSession(mcpClient, workspaceRoot);
 
   // REMOTE-BRAIN Phase 3d — call a brain Atlas tool via the MCP pool, parsing its
   // JSON text result. Best-effort: null on any failure so the local artifact path

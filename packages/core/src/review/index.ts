@@ -6,6 +6,7 @@ export * from './critic.js';
 export * from './reviewFindings.js';
 export * from './reviewInstructions.js';
 export * from './reviewModel.js';
+export * from './securityReview.js';
 export * from './reviewStore.js';
 export * from './reviewSynthesis.js';
 // reviewModel and reviewSynthesis both declare an unrelated `ReviewFinding`

@@ -10,8 +10,6 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { useRouter } from "next/navigation";
-import { useAuth } from "../../components/AuthProvider";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
 import { PremiumCard } from "../../components/PremiumCard";
@@ -58,8 +56,9 @@ const monogram = (s: string) => (s || "?").trim().slice(0, 2).toUpperCase();
 const hostOf = (url: string) => url.replace(/^https?:\/\//, "").replace(/\/.*$/, "") || "custom endpoint";
 
 function ProvidersInner() {
-  const router = useRouter();
-  const { user } = useAuth();
+  // No client-side isAdmin gate: /api/admin/providers is org-scoped
+  // (requirePermission("providers:manage")) so org owners/managers are already
+  // authorized server-side — bouncing them to /overview was the real blocker.
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [secretReady, setSecretReady] = useState(true);
@@ -105,7 +104,6 @@ function ProvidersInner() {
 
   useEffect(() => { void load(); void loadAux(); }, [load, loadAux]);
   useEffect(() => { void loadCatalog(galleryKind); }, [galleryKind, loadCatalog]);
-  useEffect(() => { if (user && !user.isAdmin) router.replace("/overview"); }, [router, user]);
 
   function openCatalog(c: CatalogEntry) {
     setEditingId(null);

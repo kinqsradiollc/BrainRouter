@@ -38,7 +38,8 @@ import {
   type TrackGithubConfig,
   type TermSession,
 } from './helpers.js';
-import { exec, spawn } from 'node:child_process';
+import { exec, spawn, execFileSync } from 'node:child_process';
+import { ensureBrainSession, endBrainSession } from './brainSession.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -1395,9 +1396,59 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         migrateTrackGithubToConnector(workspaceRoot);
         const cfg = resolveGithubConfigForWorkspace(workspaceRoot, typeof a.repo === 'string' ? a.repo : undefined);
         if (cfg.error) return { error: cfg.error };
-        if (!cfg.repo) return { error: 'No repository configured. Configure a GitHub connector in Settings → Connectors → GitHub.' };
-        if (!cfg.token) return { error: 'No token. Add one to the GitHub connector in Settings → Connectors, or set GITHUB_TOKEN/GH_TOKEN.' };
-        const opts = { repo: cfg.repo, token: cfg.token, fetchImpl: fetch as never, dryRun };
+
+        // OAuth-first (ADR-016): when GitHub is connected to the signed-in BrainRouter
+        // account, Track's GitHub REST calls are proxied through the sealed server-side
+        // token (no PAT on this machine) and the repo is auto-detected from the
+        // workspace's git remote. Falls back to the legacy PAT/gh path otherwise.
+        const acct = (() => {
+          const c = loadConfig() as { cli?: { account?: { url?: string } }; servers?: Record<string, { identity?: string; apiKey?: string }> };
+          const base = String(c.cli?.account?.url ?? '').replace(/\/+$/, '');
+          const bId = Object.keys(c.servers ?? {}).find((k) => (c.servers![k]?.identity === 'brainrouter') || /^brainrouter/i.test(k));
+          const apiKey = bId ? String(c.servers![bId]?.apiKey ?? '') : '';
+          return base && apiKey ? { base, apiKey } : null;
+        })();
+        let oauth: { base: string; apiKey: string } | null = null;
+        if (acct) {
+          try {
+            const s = await fetch(`${acct.base}/api/connectors/github/status`, { headers: { Authorization: `Bearer ${acct.apiKey}` } });
+            if (s.ok && ((await s.json()) as { connected?: boolean }).connected) oauth = acct;
+          } catch { /* not reachable → fall back to PAT */ }
+        }
+
+        const detectRepo = (): string => {
+          try {
+            const out = execFileSync('git', ['-C', workspaceRoot, 'remote', 'get-url', 'origin'], { encoding: 'utf8', timeout: 4000 }).trim();
+            const m = out.replace(/\.git$/i, '').match(/[:/]([^/:]+)\/([^/]+?)$/);
+            return m ? `${m[1]}/${m[2]}` : '';
+          } catch { return ''; }
+        };
+        const repo = cfg.repo || (oauth ? detectRepo() : '');
+        if (!repo) return { error: oauth ? 'No GitHub repository detected for this workspace — open a folder with a GitHub remote.' : 'No repository configured. Configure a GitHub connector in Settings → Connectors → GitHub.' };
+
+        // A FetchLike that tunnels api.github.com REST calls through the backend's
+        // sealed-token proxy — the GitHub token never touches this machine.
+        const proxyFetch = (base: string, apiKey: string) => async (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) => {
+          const u = new URL(url);
+          const body = init?.body ? JSON.parse(init.body) : undefined;
+          const r = await fetch(`${base}/api/connectors/github/track/proxy`, {
+            method: 'POST', headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ method: (init?.method ?? 'GET').toUpperCase(), path: u.pathname + (u.search || ''), body }),
+          });
+          const w = await r.json() as { ok?: boolean; status?: number; data?: unknown; error?: string };
+          const status = w.status ?? (w.ok ? 200 : 500);
+          const data = w.data ?? (w.error ? { message: w.error } : null);
+          return { ok: w.ok ?? (status >= 200 && status < 300), status, json: async () => data, text: async () => (typeof data === 'string' ? data : JSON.stringify(data ?? '')) };
+        };
+
+        if (oauth) {
+          const opts = { repo, token: 'via-oauth-broker', fetchImpl: proxyFetch(oauth.base, oauth.apiKey) as never, dryRun };
+          if (direction === 'export') return await exportToGithub(workspaceRoot, opts);
+          if (direction === 'sync') return await syncBidirectional(workspaceRoot, opts);
+          return await importFromGithub(workspaceRoot, opts);
+        }
+        if (!cfg.token) return { error: 'Connect GitHub in Settings → Connectors → GitHub (recommended), or add a token / set GITHUB_TOKEN.' };
+        const opts = { repo, token: cfg.token, fetchImpl: fetch as never, dryRun };
         if (direction === 'export') return await exportToGithub(workspaceRoot, opts);
         if (direction === 'sync') return await syncBidirectional(workspaceRoot, opts);
         return await importFromGithub(workspaceRoot, opts);
@@ -3078,7 +3129,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           try { const j = await res.json() as { error?: string }; if (j?.error) msg = j.error; } catch { /* keep default */ }
           return { ok: false, error: msg };
         }
-        const data = await res.json() as { apiKey?: string; userId?: string; displayName?: string; email?: string };
+        const data = await res.json() as { apiKey?: string; userId?: string; displayName?: string; email?: string; jwt?: string; refreshToken?: string };
         const apiKey = String(data.apiKey ?? '').trim();
         if (!apiKey) return { ok: false, error: 'Sign-in succeeded but returned no API key.' };
         const isBrain = (id: string, s: { identity?: string } | undefined) => s?.identity === 'brainrouter' || /^brainrouter/i.test(id);
@@ -3091,12 +3142,15 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         fresh.servers[brainId] = { type: 'http', url: mcpUrl, apiKey, identity: 'brainrouter' };
         fresh.cli = fresh.cli ?? {};
         fresh.cli.brainUrl = mcpUrl;
-        fresh.cli.account = { ...account, prevBrain };
+        // jwt + refreshToken stay host-side (not returned to the renderer) — used only
+        // for account management like "log out of all devices" (rotate-key needs a jwt).
+        fresh.cli.account = { ...account, prevBrain, jwt: String(data.jwt ?? ''), refreshToken: String(data.refreshToken ?? '') };
         saveConfig(fresh as never);
         _resetCliKnobsCache();
         try { await mcpClient.disconnectOne(brainId); } catch { /* not connected */ }
         try { await mcpClient.connectOne(brainId, fresh.servers[brainId] as never, loadConfig().llm ?? getLlm(), 5_000); }
         catch { return { ok: false, error: `Signed in, but couldn't reach the brain at ${mcpUrl}. Is the backend running?` }; }
+        void ensureBrainSession(mcpClient, workspaceRoot); // show this device on the Account page
         return { ok: true, account };
       },
       'action:auth-signout': async () => {
@@ -3110,6 +3164,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         }
         if (fresh.cli) { delete fresh.cli.brainUrl; delete fresh.cli.account; }
         saveConfig(fresh as never);
+        void endBrainSession(mcpClient);
         _resetCliKnobsCache();
         try { if (brainId) await mcpClient.disconnectOne(brainId); } catch { /* already gone */ }
         try { if (brainId && fresh.servers?.[brainId]) await mcpClient.connectOne(brainId, fresh.servers[brainId] as never, loadConfig().llm ?? getLlm(), 5_000); }
@@ -3121,6 +3176,66 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         return account
           ? { signedIn: true, account: { url: account.url ?? '', userId: account.userId ?? '', displayName: account.displayName ?? '', email: account.email ?? '' } }
           : { signedIn: false, account: null };
+      },
+      // Account overview — the org id + the account's active sessions/devices, read
+      // from the backend with the signed-in apiKey (both endpoints are requireAnyAuth).
+      'account-overview': async () => {
+        const cfg = loadConfig() as { cli?: { account?: { url?: string } }; servers?: Record<string, { identity?: string; apiKey?: string }> };
+        const base = String(cfg.cli?.account?.url ?? '').replace(/\/+$/, '');
+        const bId = Object.keys(cfg.servers ?? {}).find((k) => (cfg.servers![k]?.identity === 'brainrouter') || /^brainrouter/i.test(k));
+        const apiKey = bId ? String(cfg.servers![bId]?.apiKey ?? '') : '';
+        if (!base || !apiKey) return { signedIn: false, sessions: [] };
+        const h = { Authorization: `Bearer ${apiKey}` };
+        const out: { signedIn: true; orgId?: string; orgName?: string; plan?: string; role?: string; sessions: Array<{ clientKind: string; workspaceRoot?: string; startedAt?: string; lastHeartbeatAt?: string }> } = { signedIn: true, sessions: [] };
+        try {
+          const r = await fetch(`${base}/api/orgs`, { headers: h });
+          if (r.ok) {
+            const j = await r.json() as { orgs?: Array<{ orgId: string; name?: string; plan?: string; role?: string; isDefault?: boolean }> };
+            const org = (j.orgs ?? []).find((o) => o.isDefault) ?? (j.orgs ?? [])[0];
+            if (org) { out.orgId = org.orgId; out.orgName = org.name; out.plan = org.plan; out.role = org.role; }
+          }
+        } catch { /* org id optional */ }
+        try {
+          const r = await fetch(`${base}/api/sessions?includeStale=true`, { headers: h });
+          if (r.ok) {
+            const j = await r.json() as { sessions?: Array<{ clientKind?: string; workspaceRoot?: string; startedAt?: string; lastHeartbeatAt?: string }> };
+            out.sessions = (j.sessions ?? []).map((s) => ({ clientKind: s.clientKind ?? 'unknown', workspaceRoot: s.workspaceRoot, startedAt: s.startedAt, lastHeartbeatAt: s.lastHeartbeatAt }));
+          }
+        } catch { /* sessions optional */ }
+        return out;
+      },
+      // Log out of all OTHER devices — rotate the account's API key so every other
+      // client (CLI, other desktops) using the old key is invalidated, then re-key
+      // THIS device so it stays signed in. Refreshes the short-lived jwt first.
+      'action:logout-all-devices': async () => {
+        const cfg = loadConfig() as { cli?: { account?: { url?: string; jwt?: string; refreshToken?: string } }; servers?: Record<string, { identity?: string; apiKey?: string }> };
+        const base = String(cfg.cli?.account?.url ?? '').replace(/\/+$/, '');
+        const bId = Object.keys(cfg.servers ?? {}).find((k) => (cfg.servers![k]?.identity === 'brainrouter') || /^brainrouter/i.test(k));
+        const refreshToken = String(cfg.cli?.account?.refreshToken ?? '');
+        let jwt = String(cfg.cli?.account?.jwt ?? '');
+        if (!base || !bId || (!jwt && !refreshToken)) return { ok: false, error: 'Sign out and back in, then try again.' };
+        if (refreshToken) {
+          try {
+            const rr = await fetch(`${base}/api/auth/refresh`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken }) });
+            if (rr.ok) {
+              const rj = await rr.json() as { jwt?: string; refreshToken?: string };
+              if (rj.jwt) jwt = rj.jwt;
+              const f = loadConfig() as { cli?: { account?: Record<string, unknown> } };
+              if (f.cli?.account) { if (rj.jwt) f.cli.account.jwt = rj.jwt; if (rj.refreshToken) f.cli.account.refreshToken = rj.refreshToken; saveConfig(f as never); }
+            }
+          } catch { /* use existing jwt */ }
+        }
+        if (!jwt) return { ok: false, error: 'Sign out and back in, then try again.' };
+        try {
+          const r = await fetch(`${base}/api/auth/rotate-key`, { method: 'POST', headers: { Authorization: `Bearer ${jwt}` } });
+          if (!r.ok) return { ok: false, error: r.status === 401 ? 'Sign out and back in, then try again.' : `Failed (HTTP ${r.status})` };
+          const newKey = String((await r.json() as { apiKey?: string }).apiKey ?? '');
+          if (!newKey) return { ok: false, error: 'No new key returned.' };
+          const fresh = loadConfig() as { servers?: Record<string, { apiKey?: string }> };
+          if (fresh.servers?.[bId]) { fresh.servers[bId]!.apiKey = newKey; saveConfig(fresh as never); }
+          try { await mcpClient.disconnectOne(bId); await mcpClient.connectOne(bId, (loadConfig() as { servers: Record<string, unknown> }).servers[bId] as never, loadConfig().llm ?? getLlm(), 5_000); } catch { /* reconnect best-effort */ }
+          return { ok: true };
+        } catch (e) { return { ok: false, error: e instanceof Error ? e.message : 'failed' }; }
       },
       // ADR-016 C2 — GitHub connector via the backend's server-mediated OAuth broker.
       // The desktop is a thin client: it asks the backend (with the signed-in apiKey)
@@ -3158,6 +3273,20 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         if (!base || !apiKey) return { ok: false };
         try { await fetch(`${base}/api/connectors/github/disconnect`, { method: 'POST', headers: { Authorization: `Bearer ${apiKey}` } }); return { ok: true }; }
         catch { return { ok: false }; }
+      },
+      // Every repo the signed-in user's GitHub OAuth connection can access — the one
+      // source of truth for the repo picker AND Track sync (no per-connector token).
+      'github-connect-repos': async () => {
+        const cfg = loadConfig() as { cli?: { account?: { url?: string } }; servers?: Record<string, { identity?: string; apiKey?: string }> };
+        const base = String(cfg.cli?.account?.url ?? '').replace(/\/+$/, '');
+        const bId = Object.keys(cfg.servers ?? {}).find((k) => (cfg.servers![k]?.identity === 'brainrouter') || /^brainrouter/i.test(k));
+        const apiKey = bId ? String(cfg.servers![bId]?.apiKey ?? '') : '';
+        if (!base || !apiKey) return { connected: false, repos: [], signedIn: false };
+        try {
+          const r = await fetch(`${base}/api/connectors/github/repos`, { headers: { Authorization: `Bearer ${apiKey}` } });
+          if (!r.ok) return { connected: false, repos: [], signedIn: true, error: `HTTP ${r.status}` };
+          return { signedIn: true, ...(await r.json() as Record<string, unknown>) };
+        } catch (e) { return { connected: false, repos: [], signedIn: true, error: e instanceof Error ? e.message : 'failed' }; }
       },
       // Device flow (no client secret) — start returns a short code + the verify URL;
       // poll until GitHub reports the user authorized it.

@@ -7,8 +7,6 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useAuth } from "../../components/AuthProvider";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
 import { PremiumCard } from "../../components/PremiumCard";
@@ -29,8 +27,9 @@ const EMPTY: FormState = { appId: "", appSlug: "", installationId: "", apiBase: 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
 function IntegrationsInner() {
-  const router = useRouter();
-  const { user } = useAuth();
+  // No client-side isAdmin gate: /api/admin/integrations is org-scoped
+  // (requirePermission("triggers:manage")) so org owners/managers are authorized
+  // server-side. The org-owned GitHub App config lives at /api/orgs/:orgId/github/*.
   const [items, setItems] = useState<IntegrationConfig[]>([]);
   const [secretReady, setSecretReady] = useState(true);
   const [error, setError] = useState("");
@@ -66,7 +65,6 @@ function IntegrationsInner() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => { if (user && !user.isAdmin) router.replace("/overview"); }, [router, user]);
 
   function resetForm() { setForm(EMPTY); setEditingId(null); setPemFileName(""); }
 
