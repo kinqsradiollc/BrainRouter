@@ -130,6 +130,20 @@ export interface OrgMember {
   createdAt: string;
 }
 
+export interface ReviewJob {
+  id: string;
+  lens: "security" | "code";
+  status: string;
+  repo: string | null;
+  prNumber: number | null;
+  findings: number | null;
+  blocking: number | null;
+  skipped: string | null;
+  error: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+
 export const adminApi = {
   listProviders: (orgId?: string) =>
     authFetch<{ providers: ProviderConfig[]; secretStorageReady: boolean }>("/api/admin/providers", { orgId }),
@@ -170,6 +184,9 @@ export const adminApi = {
     authFetch<{ integration: IntegrationConfig }>(`/api/admin/integrations/${id}`, { method: "PATCH", body, orgId }),
   deleteIntegration: (id: string, orgId?: string) =>
     authFetch(`/api/admin/integrations/${id}`, { method: "DELETE", orgId }),
+  // ADR-017 D5 — recent PR reviews (both lenses) for the Reviews dashboard.
+  listReviewJobs: (orgId?: string, limit = 30) =>
+    authFetch<{ reviews: ReviewJob[] }>(`/api/admin/reviews/jobs?limit=${limit}`, { orgId }),
   // ADR-016 — the deployment's GitHub OAuth App (for per-user "Connect GitHub").
   getGithubOAuthApp: () =>
     authFetch<{ configured: boolean; clientId: string; hasSecret: boolean; redirectBase: string; secretStorageReady: boolean }>("/api/admin/connectors/github/app"),

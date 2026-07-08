@@ -21,6 +21,19 @@ export interface WebhookDeps {
   enqueue(job: { kind: string; input: Record<string, unknown> }): Promise<void>;
 }
 
+/**
+ * Is this repo LINKED in our system for review? Gates the bot to repos the org opted in —
+ * like the rest of BrainRouter's per-repo scoping. The allowlist lives on the org's
+ * `github_app` integration config (`linkedRepositories: string[]`), set from the dashboard.
+ * ABSENT field → review every installed repo (back-compat: don't silently stop a working
+ * bot); PRESENT (even empty) → only the listed repos are reviewed.
+ */
+export function isRepoLinkedForReview(config: Record<string, unknown> | undefined, repoFullName: string): boolean {
+  const raw = config?.linkedRepositories;
+  if (!Array.isArray(raw)) return true; // never configured → review all (opt-out model)
+  return raw.map(String).includes(repoFullName);
+}
+
 export interface WebhookRequest {
   body: Record<string, any>;
   rawBody: Buffer;
@@ -67,24 +80,40 @@ export async function processGithubDelivery(deps: WebhookDeps, req: WebhookReque
     });
   } catch { /* best-effort; the endpoint still acks */ }
 
-  // ADR-017 D5 — a PR open/update fans out an automatic security review as its own
-  // job (the reviewer runs headless + posts back via the installation token).
+  // ADR-017 D5 — PR reviews fan out to both lenses, each a headless job that posts back
+  // via the installation token: a SECURITY lens (vulnerabilities) + a general CODE-REVIEW
+  // lens (correctness / clarity / architecture / perf / tests). Only repos LINKED in our
+  // system are reviewed (like the rest of BrainRouter's repo scoping); unlinked repos are
+  // ignored even though the App can see all of them.
   const action = String(req.body?.action ?? "");
+  const orgId = integ.orgId;
+  const repoFullName = req.body?.repository?.full_name;
+  const repoLinked = isRepoLinkedForReview(integ.config, String(repoFullName ?? ""));
+  const fireReviews = async (prNumber: unknown, headSha: unknown) => {
+    if (!repoLinked) return; // repo not linked to our system → do not review
+    const reviewInput = { orgId, installationId, repo: repoFullName, prNumber, headSha };
+    for (const kind of ["pr-security-review", "pr-code-review"] as const) {
+      try {
+        await deps.enqueue({ kind, input: reviewInput });
+      } catch { /* best-effort; each lens is independent */ }
+    }
+  };
+
+  // A PR open/update auto-reviews with both lenses.
   if (req.event === "pull_request" && (action === "opened" || action === "synchronize" || action === "reopened")) {
     const pr = (req.body?.pull_request ?? {}) as { number?: number; head?: { sha?: string } };
-    try {
-      await deps.enqueue({
-        kind: "pr-security-review",
-        input: {
-          orgId: integ.orgId,
-          installationId,
-          repo: req.body?.repository?.full_name,
-          prNumber: pr.number,
-          headSha: pr.head?.sha,
-        },
-      });
-    } catch { /* best-effort */ }
+    await fireReviews(pr.number, pr.head?.sha);
   }
 
-  return { status: 202, body: { ok: true, orgId: integ.orgId } };
+  // Re-run on demand: a `/review` or `@brainrouter review` comment on a PR re-triggers both
+  // lenses (Strix-style "Re-run review"). issue_comment carries no head SHA, so the executor
+  // resolves it from the PR.
+  if (req.event === "issue_comment" && action === "created" && req.body?.issue?.pull_request) {
+    const body = String(req.body?.comment?.body ?? "");
+    const isReviewCmd =
+      /(^|\s)\/review\b/i.test(body) || /@\S*brainrouter\S*\s+review\b/i.test(body) || /\bbrainrouter\s+review\b/i.test(body);
+    if (isReviewCmd) await fireReviews(req.body?.issue?.number, "");
+  }
+
+  return { status: 202, body: { ok: true, orgId } };
 }

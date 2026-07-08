@@ -55,6 +55,22 @@ export async function listMemoryJobs(exec: Executor, filters?: MemoryJobListFilt
   return rows.map((r) => jobRowToRecord(r as any));
 }
 
+/**
+ * ADR-017 D5 — recent PR-review jobs (security + code-review lenses) for an org's
+ * Reviews dashboard. The org lives in `input_json` (memory_jobs has no org column);
+ * ordered newest-first for display (the queue's default ASC ordering is for draining).
+ */
+export async function listReviewJobsForOrg(exec: Executor, orgId: string, limit = 30): Promise<MemoryJobRecord[]> {
+  const rows = await exec.rows(
+    pg(`SELECT ${JOB_COLUMNS} FROM memory_jobs
+          WHERE kind IN ('pr-security-review','pr-code-review')
+            AND (input_json::jsonb ->> 'orgId') = ?
+         ORDER BY created_at DESC, id DESC LIMIT ?`),
+    [orgId, limit],
+  );
+  return rows.map((r) => jobRowToRecord(r as any));
+}
+
 export async function claimNextMemoryJob(exec: Executor, options?: { now?: string }): Promise<MemoryJobRecord | null> {
   const now = options?.now ?? new Date().toISOString();
   return exec.tx(async (client) => {

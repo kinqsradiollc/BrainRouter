@@ -790,6 +790,11 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
     return job.listMemoryJobs(this.exec, filters);
   }
 
+  /** ADR-017 D5 — recent PR-review jobs for an org's Reviews dashboard (newest-first). */
+  public listReviewJobsForOrg(orgId: string, limit?: number): Promise<MemoryJobRecord[]> {
+    return job.listReviewJobsForOrg(this.exec, orgId, limit);
+  }
+
   public claimNextMemoryJob(options?: { now?: string }): Promise<MemoryJobRecord | null> {
     return job.claimNextMemoryJob(this.exec, options);
   }

@@ -315,6 +315,24 @@ export function SettingsDialog(props: {
           refreshSnapshot={refreshSnapshot}
         />
       );
+      case 'reviews': return (
+        <>
+          <div className="set-h">PR Reviews</div>
+          <div className="set-desc" style={{ marginBottom: 8 }}>
+            Every pull request on a linked repo gets an automatic AI review — a <b>security</b> pass and a general <b>code-review</b> pass — with inline <code>suggestion</code> comments and a gating check-run. Re-run any time with a <code>/review</code> PR comment.
+          </div>
+          <SetGroup title="What runs on every reviewed PR">
+            <Row title="🛡️ Security review" desc="Vulnerability findings (injection, secrets, auth, SSRF, …), CWE-tagged." />
+            <Row title="🔎 Code review" desc="Correctness, clarity, architecture, performance, and test coverage." />
+            <Row title="Block on blocking findings" desc="A critical/high finding fails the check-run so branch protection can hold the merge." />
+            <Row title="Re-review on every push" desc="Each new commit re-runs both lenses on the new diff." />
+          </SetGroup>
+          <SetGroup title="Manage">
+            <Row title="Choose which repos are reviewed" desc="Open the BrainRouter dashboard → Reviews to toggle auto-review per repository and browse recent reviews + findings." />
+            <Row title="Connect / configure the GitHub App" desc="Settings → Automations wires the same GitHub App (installation, webhook) this reviewer runs on." />
+          </SetGroup>
+        </>
+      );
       case 'extensions': {
         const ext = snapshot?.extensions;
         const trusted = ext?.trusted ?? false;

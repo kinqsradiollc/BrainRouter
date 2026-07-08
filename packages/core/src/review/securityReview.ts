@@ -1,13 +1,14 @@
 /**
- * PR-security-review — the "brain" of the GitHub App bot (ADR-017 D5). A read-only
- * reviewer runs over a checked-out PR with a SECURITY lens and returns findings in
- * the standard review JSON contract, so {@link parseReviewFindings} consumes the
- * output unchanged. This module supplies (a) the security prompt — a breadth-first
- * vulnerability taxonomy — and (b) an idempotent PR-review-comment renderer. Pure:
- * no network, no secrets echoed, safe to unit-test.
+ * PR-security-review — the "brain" of the GitHub App bot (ADR-017 D5). Driven by a
+ * `pull_request` webhook, the bot runs a SINGLE-SHOT LLM over the PR's unified diff
+ * (no filesystem tools, no checkout) and returns findings in the standard review
+ * JSON contract, so {@link parseReviewFindings} consumes the output unchanged. This
+ * module supplies (a) the security prompt — a breadth-first vulnerability taxonomy
+ * written for diff-only review — and (b) an idempotent PR-review-comment renderer.
+ * Pure: no network, no secrets echoed, safe to unit-test.
  */
 import type { ParsedReviewFinding } from './reviewFindings.js';
-import { REVIEW_OUTPUT_CONTRACT } from './reviewFindings.js';
+import { type ReviewLens, isBlockingBySeverity } from './reviewLens.js';
 
 /** The vulnerability classes the reviewer sweeps for (breadth over a code change). */
 export const SECURITY_VULN_CLASSES: readonly string[] = [
@@ -41,68 +42,54 @@ export const SECURITY_VULN_CLASSES: readonly string[] = [
 export const SECURITY_REVIEW_MARKER = '<!-- brainrouter-security-review -->';
 
 /**
- * The security-lens review prompt, appended after the diff/context. It reuses the
- * standard {@link REVIEW_OUTPUT_CONTRACT} JSON tail so the same parser works — the
- * reviewer just hunts security issues and prefixes each `summary` with the CWE id.
+ * The security-lens review prompt, appended AFTER the unified diff. This bot runs a
+ * single LLM turn with NO tools and NO checkout, so the contract is deliberately
+ * self-contained and diff-focused: it must NOT tell the model to "open other files"
+ * or "verify with read-only tools" (it has none) — a model that follows such an
+ * instruction concludes it "could not verify" and suppresses every finding. The JSON
+ * tail matches {@link parseReviewFindings} so the same parser + renderer are reused.
  */
 export function buildSecurityReviewContract(): string {
   return (
-    'You are a SECURITY reviewer for a pull request — review like an application-security engineer hunting for real, exploitable vulnerabilities the change introduces or exposes.\n' +
-    'Sweep the change AND the code paths it touches (open callers/definitions with your read-only tools) for these classes:\n' +
-    SECURITY_VULN_CLASSES.map((c) => `  - ${c}`).join('\n') + '\n' +
-    'Prefix the JSON `summary` with the CWE id when known, e.g. "[CWE-89] SQL injection in buildUserQuery()". Put a short exploit/impact sketch plus the concrete file:line you verified in `details`, and the concrete remediation in `suggestion`.\n' +
-    'Report a finding ONLY when you have verified BOTH a source (untrusted input) AND a sink (a dangerous operation it reaches) — an unproven guess is a false positive; prefer an empty array. Severity: exploitable-in-production / secret-leak / auth-bypass ⇒ "critical" or "high"; defense-in-depth / hardening ⇒ "low" or "info".\n' +
+    'You are a SECURITY reviewer for a pull request. The unified diff is provided ABOVE — review it DIRECTLY. The added (`+`) lines are the new code; scrutinise them for vulnerabilities the change introduces or exposes.\n' +
+    'You are a single-shot reviewer with NO tools: do not ask to open other files or run commands. Base every finding on evidence visible in the diff itself — a hunk header like `@@ -0,0 +1,18 @@` gives you the real line numbers.\n' +
     '\n' +
-    REVIEW_OUTPUT_CONTRACT
+    'Sweep for these vulnerability classes:\n' +
+    SECURITY_VULN_CLASSES.map((c) => `  - ${c}`).join('\n') + '\n' +
+    '\n' +
+    'Report a finding when the diff shows BOTH an untrusted SOURCE and a dangerous SINK it reaches — e.g. request input (req.query / req.params / req.body / argv / env / headers) flowing into a SQL/NoSQL query, a shell command, a file path, HTML, a template, a deserializer, or a redirect; or a hardcoded secret / credential committed in the change. Prefix the `summary` with the CWE id when known, e.g. "[CWE-89] SQL injection in the /user handler".\n' +
+    'Severity: exploitable-in-production / secret leak / auth bypass ⇒ "critical" or "high"; defense-in-depth / hardening ⇒ "low" or "info". An empty array is correct ONLY when the change genuinely introduces no security issue — do not invent problems, but do NOT stay silent about a vulnerability that is plainly visible in the diff.\n' +
+    '\n' +
+    'For `line`/`endLine`, give the EXACT new-file line numbers of the vulnerable code (read them off the `+` lines under the hunk header) — these anchor the inline comment, so they must be precise. When a safe drop-in fix exists, put the EXACT replacement for lines [line..endLine] in `replacement` (the corrected code ONLY, no `+`/`-` diff prefixes, indentation preserved) so the author can apply it in one click; it must cover exactly those lines.\n' +
+    '\n' +
+    'Reply with a fenced ```json array of finding objects. Each object:\n' +
+    '{"file": "<repo-relative path from the diff>", "line": <first affected new-file line>, "endLine": <last affected new-file line>, ' +
+    '"severity": "critical|high|medium|low|info", "confidence": <0-100>, ' +
+    '"summary": "<one line, CWE-prefixed>", "details": "<the source, the sink, and the concrete exploit/impact>", ' +
+    '"suggestion": "<the concrete remediation, in prose>", ' +
+    '"replacement": "<exact corrected code for lines [line..endLine], verbatim, no diff prefixes — omit if no safe one-shot fix>", ' +
+    '"codeExcerpt": "<the vulnerable line(s) from the diff, verbatim, indentation preserved>"}.\n' +
+    'Output ONLY the JSON array inside a single ```json fence — no prose before or after.'
   );
 }
 
-const SEV_ORDER: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
-const SEV_EMOJI: Record<string, string> = { critical: '🔴', high: '🟠', medium: '🟡', low: '🔵', info: '⚪' };
-
 /** A finding is blocking when it's a genuine (not pre-existing) critical/high issue. */
 export function isBlockingSecurityFinding(f: ParsedReviewFinding): boolean {
-  return (f.severity === 'critical' || f.severity === 'high') && !f.preExisting;
+  return isBlockingBySeverity(f);
 }
 
-export interface SecurityCommentInput {
-  findings: ParsedReviewFinding[];
-  /** The PR head commit the review ran against (shown + used for staleness). */
-  headSha: string;
-  /** Cap listed findings to avoid a wall of text; extras are tallied, not listed. */
-  maxListed?: number;
-}
-
-/**
- * Render an idempotent GitHub PR review comment. The stable {@link SECURITY_REVIEW_MARKER}
- * header lets the caller find + update its previous comment in place (one per PR),
- * so re-review on a new push replaces rather than stacks.
- */
-export function formatSecurityReviewComment(input: SecurityCommentInput): string {
-  const cap = input.maxListed ?? 20;
-  const head = input.headSha ? input.headSha.slice(0, 7) : 'HEAD';
-  const findings = [...input.findings].sort((a, b) => (SEV_ORDER[a.severity] ?? 5) - (SEV_ORDER[b.severity] ?? 5));
-  const out: string[] = [SECURITY_REVIEW_MARKER, '## 🛡️ BrainRouter security review', ''];
-
-  if (findings.length === 0) {
-    out.push('No security issues found in the changed code. ✅', '', `<sub>Reviewed \`${head}\` — read-only security sweep.</sub>`);
-    return out.join('\n');
-  }
-
-  const blocking = findings.filter(isBlockingSecurityFinding).length;
-  const bySev = findings.reduce<Record<string, number>>((a, f) => { a[f.severity] = (a[f.severity] ?? 0) + 1; return a; }, {});
-  out.push(`**${blocking} blocking** · ${Object.entries(bySev).map(([s, n]) => `${n} ${s}`).join(' · ')}`, '');
-
-  for (const f of findings.slice(0, cap)) {
-    const loc = f.line ? `\`${f.file}:${f.line}\`` : `\`${f.file}\``;
-    out.push(`### ${SEV_EMOJI[f.severity] ?? '•'} ${f.summary}${f.preExisting ? ' _(pre-existing)_' : ''}`);
-    out.push(`${loc}${typeof f.confidence === 'number' ? ` · confidence ${f.confidence}%` : ''}`);
-    if (f.details) out.push('', f.details);
-    if (f.suggestion) out.push('', `**Fix:** ${f.suggestion}`);
-    if (f.codeExcerpt) out.push('', '```', f.codeExcerpt, '```');
-    out.push('');
-  }
-  if (findings.length > cap) out.push(`…plus ${findings.length - cap} more finding(s) not shown.`, '');
-  out.push(`<sub>Reviewed \`${head}\` — read-only security sweep; verify before acting.</sub>`);
-  return out.join('\n');
-}
+/** The security lens: vulnerability review, one summary + inline suggestions per PR. */
+export const SECURITY_LENS: ReviewLens = {
+  id: 'security',
+  summaryMarker: SECURITY_REVIEW_MARKER,
+  inlineMarkerPrefix: 'brs',
+  emoji: '🛡️',
+  name: 'BrainRouter security review',
+  noFindingsLine: 'No security issues found in the changed code. ✅',
+  findingNoun: 'security finding',
+  sweepLabel: 'security sweep',
+  footerLabel: '🛡️ BrainRouter security',
+  systemPrompt: 'You are a meticulous application-security reviewer for pull requests.',
+  buildContract: buildSecurityReviewContract,
+  isBlocking: isBlockingSecurityFinding,
+};
