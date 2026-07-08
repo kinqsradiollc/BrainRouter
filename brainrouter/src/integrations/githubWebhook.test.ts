@@ -66,4 +66,19 @@ describe("ADR-010 P6b — GitHub webhook core", () => {
     expect(job.input.repo).toBe("acme/app");
     expect(job.input.number).toBe(7);
   });
+
+  it("pull_request opened → also enqueues a pr-security-review job (ADR-017 D5)", async () => {
+    const d = deps();
+    const payload = { installation: { id: 42 }, action: "opened", repository: { full_name: "acme/app" }, pull_request: { number: 12, head: { sha: "abc123" } } };
+    const raw = Buffer.from(JSON.stringify(payload));
+    const out = await processGithubDelivery(d, { body: payload, rawBody: raw, signature: sign(raw), event: "pull_request", delivery: "d-2" });
+    expect(out.status).toBe(202);
+    const kinds = (d.enqueue as any).mock.calls.map((c: any[]) => c[0].kind);
+    expect(kinds).toContain("pr-security-review");
+    const review = (d.enqueue as any).mock.calls.find((c: any[]) => c[0].kind === "pr-security-review")[0];
+    expect(review.input.repo).toBe("acme/app");
+    expect(review.input.prNumber).toBe(12);
+    expect(review.input.headSha).toBe("abc123");
+    expect(review.input.installationId).toBe("42");
+  });
 });

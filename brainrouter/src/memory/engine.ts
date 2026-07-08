@@ -787,6 +787,12 @@ export class MemoryEngine {
     return benchOps.runRetrievalBenchmark(this, userId, opts);
   }
 
+  /** ADR-017 D5 — the org's GitHub App creds (config + opened secret) for a webhook installation. */
+  public async findGithubAppByInstallation(installationId: string): Promise<{ config: Record<string, unknown>; secret: Record<string, string> } | null> {
+    const r = await this.integrations.findIntegrationByInstallation("github_app", installationId);
+    return r ? { config: r.config, secret: r.secret } : null;
+  }
+
   /** MEM-25 code-recall benchmark over built-in fixtures; see engine/benchOps.ts. */
   public runCodeChunkBenchmark(opts?: { baseDir?: string }): CodeRecallResult & { summaryPath: string | null } {
     return benchOps.runCodeChunkBenchmark(opts);
