@@ -119,6 +119,56 @@ one broker, one memory plane — no manual repo/owner anywhere.
   - **Safety:** installation-scoped least privilege; never echo secrets; comment is idempotent
     (update-in-place per PR head SHA); a hard cap on findings + a "no issues found" path.
 
+### D6 — RBAC roles + tenanted resource hierarchy  ⟨2026-07-08 correction⟩
+
+**Bug this corrects.** ADR-017 §3 (merged in #812) removed the client-side `isAdmin` redirect on
+`/integrations` wholesale. That over-corrected: the page *also* hosts the **deployment-level** "GitHub
+OAuth App" credential card, which is *correctly* global-admin-only (`connectors/github.ts`
+`if (!req.isAdmin) 403`). A normal user now sees that card and hits repeated 403s. The right model is
+**per-section gating**, not "whole page open" nor "whole page admin-only":
+- **Deployment admin** (global `isAdmin`) configures the ONE shared GitHub **App credentials** — or, with
+  the unified broker, they are **bundled via env** and the card is legacy/hidden.
+- **Org Owner/Admin** links which **repositories** the org syncs to memory.
+- **Any member (Developer+)** can **Connect GitHub** (device flow) and use the shared App.
+- **Viewer** sees linked repos + memory read-only; no configuration.
+- The dashboard must **hide/disable** controls the caller can't use and show an "ask an org admin" state
+  — never render an admin-only form to a normal user and let it 403.
+
+**Canonical resource + role hierarchy (target model — from the product spec):**
+```
+User
+ ├─ Private Memory · Private Persona · Personal Sessions
+ └─ Team Memberships → Role per Team
+
+Team (= Org)
+ ├─ Members → Owner · Admin · Developer · Viewer
+ ├─ Team Memory · Persona · Artifacts
+ ├─ Projects → Repositories · Project Memory · Persona · Artifacts · Project Access Control
+ ├─ RBAC · Invitations · Domain Allowlist
+ └─ Enterprise Plan
+
+Enterprise Plan
+ └─ Member/Project limits · Shared Memory/Artifacts · Team Persona · Hosted MCP · Advanced Connectors
+    · Audit Logs · Admin Controls · Domain Allowlisting · Support / SLA
+```
+
+**Role → capability matrix (replaces the current owner/manager/member trio):**
+
+| Capability | Owner | Admin | Developer | Viewer |
+|---|:-:|:-:|:-:|:-:|
+| Billing / plan / delete org | ✓ | | | |
+| Manage admins · transfer ownership | ✓ | | | |
+| Configure org GitHub App + linked repos · connectors · domain allowlist | ✓ | ✓ | | |
+| Manage members (invite/remove; set role ≤ Developer) | ✓ | ✓ | | |
+| Create/manage projects + project access control | ✓ | ✓ | ✓\* | |
+| Connect GitHub (device flow) · use connectors | ✓ | ✓ | ✓ | |
+| Read/write own + team/project memory (per project ACL) | ✓ | ✓ | ✓ | |
+| Read team/project memory + artifacts | ✓ | ✓ | ✓ | ✓ |
+
+`\*` Developers manage only the projects they own or were granted. **Deployment-level App credentials stay
+global-admin-only** (or bundled). A personal-org owner is always Owner of their own scope. Legacy mapping:
+`manager → admin`, `member → developer`.
+
 ## Checklist
 
 ### P0 — Safe, small bug fixes (do first)
@@ -129,14 +179,21 @@ one broker, one memory plane — no manual repo/owner anywhere.
 - [ ] D3: compute + plumb `workspace_tag`/`project_tag` on capture — **10-file critical-path plumb** (EmitContext + CLI/desktop builders → `memory_capture_turn` schema → `capture` → `captureTurn` → `extractPendingSensory` → extractor `cognitive-extractor.ts:183` sets `record.workspaceTag`/`projectTag` via `workspaceTagFromPath`/`projectTagFromName`). All-or-nothing through the memory hot-path → do as its own tested PR, not a tail-end edit. + Option-A backfill (join `active_sessions.workspace_root`, idempotent Node script).
 
 ### P1 — Fully-automatic OAuth sync
-- [ ] Connector index run enumerates installation repos via the broker (no manual repo list).
-- [ ] Track sync repo fully auto (installations + git-remote match); personal-no-repo edge case verified.
-- [ ] Remove dead manual-repo code paths; migrate legacy configs.
+- [x] **Connector index run enumerates installation repos via the broker** (`canResolveRepositories` guard; desktop `listAccessibleRepositories` → `GET /api/connectors/github/repos`). No hard "owner required" for OAuth; static/CLI path preserved. Owner field removed from the UI. **Merged (#814).**
+- [x] **Track sync repo fully auto** (git-remote match, done earlier) + connector auto-enumeration. Personal-no-repo → no-op.
+- [ ] Remove remaining dead manual-repo code paths; migrate legacy configs (follow-up).
 
 ### P2 — Tenancy + RBAC
 - [ ] Fix the org-config 403: org owner/manager gate (not global-admin-only) on memory-repo / App / projects.
 - [ ] Recall scope filter + a Personal·Team·Org scope switcher (API + dashboard).
 - [ ] Memory rows correctly scoped (org_id + visibility + tags) end-to-end.
+
+### P2.5 — RBAC rebuild (D6 — roles + per-section gating)
+- [ ] Expand roles `owner/manager/member` → **`owner/admin/developer/viewer`**; update `capabilitiesFor()` + `ROLE_CAPABILITIES` + tenancy queries/migration (map `manager→admin`, `member→developer`).
+- [ ] `/integrations` **per-section gating**: deployment App-credential card = global admin (or hidden when bundled); org GitHub App + repos = owner/admin; connect/use = developer+. **Kills the 403 spam.**
+- [ ] Backend `requirePermission` honors the 4 roles; personal-org owner passes for their own scope.
+- [ ] Dashboard hides/disables controls by the caller's org role (not global `isAdmin`); shows "ask an org admin" instead of raw 403s.
+- [ ] Project Access Control: per-project role grants (Developer scoping) — schema + enforcement.
 
 ### P3 — Dashboard org/team redesign  (design skill)
 - [ ] Org/team setup wizard (create/join → members+roles → link projects/repos → memory config).

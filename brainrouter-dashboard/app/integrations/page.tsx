@@ -7,6 +7,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useAuth } from "../../components/AuthProvider";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
 import { PremiumCard } from "../../components/PremiumCard";
@@ -27,9 +28,9 @@ const EMPTY: FormState = { appId: "", appSlug: "", installationId: "", apiBase: 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
 function IntegrationsInner() {
-  // No client-side isAdmin gate: /api/admin/integrations is org-scoped
-  // (requirePermission("triggers:manage")) so org owners/managers are authorized
-  // server-side. The org-owned GitHub App config lives at /api/orgs/:orgId/github/*.
+  // Per-section RBAC (ADR-017 D6): the deployment-level GitHub App credentials are
+  // global-admin-only; everyone else connects + links repos through the shared App.
+  const { user } = useAuth();
   const [items, setItems] = useState<IntegrationConfig[]>([]);
   const [secretReady, setSecretReady] = useState(true);
   const [error, setError] = useState("");
@@ -113,6 +114,7 @@ function IntegrationsInner() {
         </div>
       </PremiumCard>
 
+      {user?.isAdmin ? (<>
       <GithubOAuthAppCard />
 
       <div className="settings-stack">
@@ -191,6 +193,11 @@ function IntegrationsInner() {
           </div>
         </form>
       </PremiumCard>
+      </>) : (
+        <PremiumCard level={2} style={{ marginTop: "var(--spacing-16)" }}>
+          <div className="settings-hint">The shared GitHub App is configured by your deployment administrator — everyone in the org connects through the same App. Use <b>Manage repositories</b> above to link repos to your memory.</div>
+        </PremiumCard>
+      )}
     </div>
   );
 }
