@@ -149,16 +149,18 @@ one broker, one memory plane — no manual repo/owner anywhere.
     architecture, performance) + test coverage; it explicitly DEFERS security to the security lens so the
     two never double-report. Distinct markers (`brs-finding` / `brc-finding`, `brainrouter-security-review`
     / `brainrouter-code-review`) keep the two from clobbering each other's comments or dedup.
-  - **Gating check-run per lens** (`POST /repos/{repo}/check-runs`, named `BrainRouter security review` /
-    `BrainRouter code review`): `blocking` (critical/high, not pre-existing) ⇒ `failure`; findings but none
-    blocking ⇒ `neutral`; clean ⇒ `success`. Needs the App's **`checks: write`**; degrades to a no-op
-    (review + comments still post) without it. Branch protection can then REQUIRE these checks.
+  - **Check-run per lens** (`POST /repos/{repo}/check-runs`, named `BrainRouter security review` /
+    `BrainRouter code review`). **Security GATES, code review ADVISES** (`ReviewLens.advisory`): the security
+    check goes `failure` on a `blocking` (critical/high, not pre-existing) finding; the code-review check is
+    advisory — `neutral` when it has findings, `success` when clean, **never `failure`** — so it's a signal,
+    not a merge gate, and is NOT a required check. Needs the App's **`checks: write`**; degrades to a no-op
+    (review + comments still post) without it.
   - **Deterministic CI** (`.github/workflows/ci.yml`) adds two jobs beside build+test: **Lint & Typecheck**
     and **Security Audit (deps)** (reports high/moderate; blocks only on `--audit-level=critical`, since a
     high-severity gate would be a permanent red X on unfixable transitive advisories). Ephemeral worktrees
     (`.worktrees/**`, `.claude/worktrees/**`) are eslint-ignored so agent-fleet checkouts don't break lint.
-    Together with the bot's two check-runs, a PR must pass: Build & Test · Lint & Typecheck · Security Audit
-    · BrainRouter security review · BrainRouter code review.
+    Required checks a PR must pass: Build & Test · Lint & Typecheck · Security Audit · BrainRouter security
+    review. (BrainRouter code review posts a check-run but is advisory — not required.)
   - Tests: core review 13, backend executor 13 (+ webhook 10, executor-inventory 7) — all green.
 
 - **⟨2026-07-08 as-built⟩ Check-runs LIVE + on-demand re-run + linked-repo gating.**

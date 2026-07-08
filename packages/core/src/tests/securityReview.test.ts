@@ -30,6 +30,11 @@ test('security contract is self-contained, diff-focused, and requests a suggesti
   assert.ok(SECURITY_VULN_CLASSES.length > 15);
 });
 
+test('security lens gates; code-review lens is advisory', () => {
+  assert.equal(SECURITY_LENS.advisory, false);
+  assert.equal(CODE_REVIEW_LENS.advisory, true);
+});
+
 test('code-review contract is self-contained, quality-focused, and defers security', () => {
   const c = buildCodeReviewContract();
   assert.ok(/Correctness/i.test(c));

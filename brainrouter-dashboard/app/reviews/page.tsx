@@ -113,6 +113,10 @@ function ReviewsInner() {
   const cfgRepo = (integ?.config?.reviewPolicies ?? {}) as Record<string, Partial<Record<PolicyField, boolean>>>;
   const orgDefault = (f: PolicyField): boolean => cfgDefaults[f] ?? POLICY_DEFAULTS[f];
   const repoOverride = (repo: string, f: PolicyField): boolean | undefined => cfgRepo[repo]?.[f];
+  // Each patch is computed from the render-time cfg snapshot, so a second toggle fired
+  // before the first request lands would overwrite it (lost update). Disable ALL policy
+  // controls while any policy patch is in flight.
+  const policyBusy = busy.startsWith("def:") || busy.startsWith("repo:");
 
   async function patchConfig(next: Record<string, unknown>, key: string) {
     if (!integ) { setError("Configure the GitHub App first on the Integrations page."); return; }
@@ -151,8 +155,8 @@ function ReviewsInner() {
       {/* What the bot does — the effective, shipped behavior. */}
       <PremiumCard level={2} style={{ marginTop: "var(--spacing-24)" }}>
         <div className="settings-cardhead"><div><h3>How reviews work</h3><div className="settings-hint">Two lenses run on every reviewed PR; each posts inline suggestions + a gating check-run. Re-run any time with a <code>/review</code> PR comment.</div></div></div>
-        <div className="settings-item"><span className="settings-row__title">🛡️ Security review — vulnerability findings</span><span className="settings-flag-ok">on</span></div>
-        <div className="settings-item"><span className="settings-row__title">🔎 Code review — correctness · clarity · perf · tests</span><span className="settings-flag-ok">on</span></div>
+        <div className="settings-item"><span className="settings-row__title">🛡️ Security review — vulnerability findings</span><span className="settings-flag-ok">gates the merge</span></div>
+        <div className="settings-item"><span className="settings-row__title">🔎 Code review — correctness · clarity · perf · tests</span><span className="settings-badge settings-badge--muted">advisory</span></div>
       </PremiumCard>
 
       {/* Policy defaults — org-wide; per-repo overrides live in the repo list below. */}
@@ -161,7 +165,7 @@ function ReviewsInner() {
         {POLICY_META.map(({ f, label, hint }) => (
           <div key={f} className="settings-item">
             <div className="min-w-0"><span className="settings-row__title">{label}</span><div className="settings-row__sub">{hint}</div></div>
-            <Segmented value={orgDefault(f) ? "on" : "off"} disabled={busy === `def:${f}`}
+            <Segmented value={orgDefault(f) ? "on" : "off"} disabled={policyBusy}
               options={[{ v: "on", label: "On" }, { v: "off", label: "Off" }]}
               onChange={(v) => setDefault(f, v === "on")} />
           </div>
@@ -232,7 +236,7 @@ function ReviewsInner() {
                         return (
                           <span key={f} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                             <span className="settings-row__sub">{label}</span>
-                            <Segmented value={cur} disabled={busy === `repo:${r.fullName}:${f}`}
+                            <Segmented value={cur} disabled={policyBusy}
                               options={[{ v: "default", label: `Default (${orgDefault(f) ? "On" : "Off"})` }, { v: "on", label: "On" }, { v: "off", label: "Off" }]}
                               onChange={(v) => setRepoPolicy(r.fullName, f, v === "default" ? undefined : v === "on")} />
                           </span>

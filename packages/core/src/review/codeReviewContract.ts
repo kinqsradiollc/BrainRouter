@@ -69,6 +69,7 @@ export const CODE_REVIEW_LENS: ReviewLens = {
   sweepLabel: 'code review',
   footerLabel: '🔎 BrainRouter code review',
   systemPrompt: 'You are a meticulous senior software engineer reviewing a pull request for correctness, clarity, architecture, performance, and test coverage.',
+  advisory: true, // code review ADVISES (suggestions) — never gates the merge, not a required check
   buildContract: buildCodeReviewContract,
   isBlocking: isBlockingCodeReviewFinding,
 };

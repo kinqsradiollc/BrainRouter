@@ -147,6 +147,15 @@ describe("PR security review executor (ADR-017 D5)", () => {
     expect(summary).toContain("<!-- brainrouter-code-review -->");
   });
 
+  it("code review is ADVISORY — check-run is neutral, never failure, even with blocking findings", async () => {
+    const routes: Routes = { calls: [], diff: DIFF_ADDED };
+    const r = await runPrCodeReview({ installationId: "42", repo: "o/r", prNumber: 7, headSha: "sha" }, makeDeps(routes, { llmRunner: llm(CODE_INLINE) }));
+    expect(r.blocking).toBeGreaterThan(0); // it did find a high-severity issue…
+    const cb = routes.bodies?.["POST /repos/o/r/check-runs"] ?? "";
+    expect(cb).toContain('"conclusion":"neutral"'); // …but advisory ⇒ never gates the merge
+    expect(cb).not.toContain('"conclusion":"failure"');
+  });
+
   it("does not re-post an inline finding it already surfaced (dedup by marker)", async () => {
     const routes: Routes = {
       calls: [], diff: DIFF_ADDED,

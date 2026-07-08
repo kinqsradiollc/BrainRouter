@@ -273,10 +273,13 @@ async function postCheckRun(
   fetchImpl: typeof fetch, apiBase: string, repo: string, headSha: string, lens: ReviewLens, findings: ParsedReviewFinding[], blocking: number, blockOnFindings: boolean, token: string,
 ): Promise<boolean> {
   if (!headSha) return false;
-  // When the repo opts out of blocking, a blocking finding is advisory (neutral), never failure.
-  const conclusion = (blocking > 0 && blockOnFindings) ? 'failure' : findings.length > 0 ? 'neutral' : 'success';
-  const title =
-    blocking > 0 ? `${blocking} blocking · ${findings.length} finding(s)${blockOnFindings ? '' : ' (advisory)'}`
+  // Advisory lenses (code review) never fail — findings are suggestions. Security gates,
+  // unless the repo opts out of blocking (then a blocking finding is neutral/advisory).
+  const gates = blockOnFindings && !lens.advisory;
+  const conclusion = (blocking > 0 && gates) ? 'failure' : findings.length > 0 ? 'neutral' : 'success';
+  const title = lens.advisory
+    ? (findings.length > 0 ? `${findings.length} suggestion(s)` : 'No suggestions')
+    : blocking > 0 ? `${blocking} blocking · ${findings.length} finding(s)${blockOnFindings ? '' : ' (advisory)'}`
       : findings.length > 0 ? `${findings.length} finding(s), none blocking`
         : 'No issues found';
   const bySev = findings.reduce<Record<string, number>>((a, f) => { a[f.severity] = (a[f.severity] ?? 0) + 1; return a; }, {});
