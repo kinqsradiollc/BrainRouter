@@ -356,16 +356,13 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
           <Row title="Name" desc="Local display name for this connector instance.">
             <input className="ctl" value={name} onChange={(e) => setName(e.target.value)} placeholder="GitHub connector" />
           </Row>
-          <Row title="Owner / organization" desc="Optional — narrow indexing to one owner/org. Blank syncs every repo your BrainRouter app can access.">
-            <input className="ctl mono" value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="all accessible repos" spellCheck={false} autoCapitalize="off" />
-          </Row>
-          <Row title="Repositories" desc="BrainRouter syncs every repository your GitHub app is installed on — no manual selection.">
+          <Row title="Repositories" desc="Auto-detected over OAuth — BrainRouter syncs every repository your GitHub app can access. No owner or repo to set.">
             {githubInstallUrl ? (
               <button type="button" onClick={() => void bridgeQuery('action:open-external', { url: githubInstallUrl })}
                 style={{ background: 'none', border: 0, padding: 0, color: 'var(--accent, #6ea8fe)', cursor: 'pointer', font: 'inherit', textDecoration: 'underline', justifySelf: 'start' }}>
-                Manage which repositories the app can access ↗
+                Manage on GitHub ↗
               </button>
-            ) : <span className="set-desc">Connect GitHub above to choose which repositories the app can access.</span>}
+            ) : <span className="set-desc">Connect GitHub above; repositories are detected automatically.</span>}
           </Row>
           <Row title="Content" desc="Choose what the connector ingests for memory and recall.">
             <div className="connector-toggles">
