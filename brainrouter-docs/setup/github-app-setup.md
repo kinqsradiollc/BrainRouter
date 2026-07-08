@@ -37,7 +37,10 @@ Example org used throughout: **`kinqsradiollc`**. Substitute your own.
 ## 2. Grab the credentials
 
 On the App's settings page after creation:
-- **App ID** — shown near the top (a number).
+- **App ID** — shown near the top (a number, e.g. `4237068`).
+- **App slug** — the last path segment of the App's settings URL,
+  `github.com/organizations/<org>/settings/apps/<app-slug>` (e.g.
+  `brainrouter-memory-kinqsradiollc`). Powers the one-click Install / Configure links.
 - **Private key** — click **Generate a private key**; a `.pem` downloads. Keep it safe.
 - **Webhook secret** — only if you set one in step 1.
 
@@ -58,7 +61,8 @@ On **Integrations**, fill the GitHub App form:
 | Field | Value |
 |---|---|
 | **App ID** | the number from step 2 |
-| **Installation ID** | the number from step 3 |
+| **App slug** | from step 2 — enables the one-click **Install / Configure repos on GitHub** buttons |
+| **Installation ID** | the number from step 3 — **needed to list & link repos** (the repo picker mints a token per installation) |
 | **API base** | leave blank → defaults to `https://api.github.com` (set only for GitHub Enterprise) |
 | **Private key** | paste the **entire** `.pem` contents, incl. `-----BEGIN/END RSA PRIVATE KEY-----` |
 | **Webhook secret** | the secret from step 1 (blank if no webhook) |

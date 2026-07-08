@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { resolveWorkspaceGit, findGitRoot, workspaceGitScope } from '../git/workspaceGit.js';
+import { repoTag } from '../track/git/repoIdentity.js';
 
 const gitInit = (dir: string): void => {
   spawnSync('git', ['init', '-q'], { cwd: dir });
@@ -67,4 +68,31 @@ test('workspaceGitScope: subdir runs at git root with a repo-relative pathspec; 
 
 test('findGitRoot returns null outside any repo', () => {
   assert.equal(findGitRoot(tmp()), null);
+});
+
+test('remote origin → repoIdentity + repoTag populated, independent of http/ssh form (ADR-015)', () => {
+  const repo = tmp(); gitInit(repo);
+  spawnSync('git', ['remote', 'add', 'origin', 'git@github.com:kinqsradiollc/BrainRouter.git'], { cwd: repo });
+  const info = resolveWorkspaceGit(repo);
+  assert.equal(info.remoteUrl, 'git@github.com:kinqsradiollc/BrainRouter.git');
+  assert.equal(info.repoIdentity, 'github.com/kinqsradiollc/brainrouter');
+  assert.equal(info.repoTag.length, 16);
+  assert.equal(info.repoTag, repoTag('https://github.com/kinqsradiollc/BrainRouter'),
+    'same tag whether the local remote is ssh or https');
+});
+
+test('git repo with no remote → remoteUrl null, identity + tag empty', () => {
+  const repo = tmp(); gitInit(repo);
+  const info = resolveWorkspaceGit(repo);
+  assert.equal(info.hasGit, true);
+  assert.equal(info.remoteUrl, null);
+  assert.equal(info.repoIdentity, '');
+  assert.equal(info.repoTag, '');
+});
+
+test('no git repo → remote fields null/empty too', () => {
+  const info = resolveWorkspaceGit(tmp());
+  assert.equal(info.remoteUrl, null);
+  assert.equal(info.repoIdentity, '');
+  assert.equal(info.repoTag, '');
 });

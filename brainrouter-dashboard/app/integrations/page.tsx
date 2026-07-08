@@ -7,28 +7,29 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useAuth } from "../../components/AuthProvider";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
 import { PremiumCard } from "../../components/PremiumCard";
 import { PremiumButton } from "../../components/PremiumButton";
 import { adminApi, type IntegrationConfig, type IntegrationInput } from "../../lib/adminApi";
+import { GithubOAuthAppCard } from "./GithubOAuthAppCard";
 
 interface FormState {
   appId: string;
+  appSlug: string;
   installationId: string;
   apiBase: string;
   privateKey: string;
   webhookSecret: string;
   enabled: boolean;
 }
-const EMPTY: FormState = { appId: "", installationId: "", apiBase: "", privateKey: "", webhookSecret: "", enabled: true };
+const EMPTY: FormState = { appId: "", appSlug: "", installationId: "", apiBase: "", privateKey: "", webhookSecret: "", enabled: true };
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
 function IntegrationsInner() {
-  const router = useRouter();
-  const { user } = useAuth();
+  // No client-side isAdmin gate: /api/admin/integrations is org-scoped
+  // (requirePermission("triggers:manage")) so org owners/managers are authorized
+  // server-side. The org-owned GitHub App config lives at /api/orgs/:orgId/github/*.
   const [items, setItems] = useState<IntegrationConfig[]>([]);
   const [secretReady, setSecretReady] = useState(true);
   const [error, setError] = useState("");
@@ -36,6 +37,18 @@ function IntegrationsInner() {
   const [form, setForm] = useState<FormState>(EMPTY);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [pemFileName, setPemFileName] = useState("");
+
+  // Read the downloaded .pem entirely in the browser and drop it into the field —
+  // the key goes file → browser → (on save) encrypted storage, never elsewhere.
+  function onPickPem(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => { setForm((f) => ({ ...f, privateKey: String(reader.result ?? "") })); setPemFileName(file.name); };
+    reader.readAsText(file);
+    e.target.value = "";
+  }
 
   const load = useCallback(async () => {
     try {
@@ -52,13 +65,12 @@ function IntegrationsInner() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => { if (user && !user.isAdmin) router.replace("/overview"); }, [router, user]);
 
-  function resetForm() { setForm(EMPTY); setEditingId(null); }
+  function resetForm() { setForm(EMPTY); setEditingId(null); setPemFileName(""); }
 
   function startEdit(it: IntegrationConfig) {
     setEditingId(it.id);
-    setForm({ appId: str(it.config.appId), installationId: str(it.config.installationId), apiBase: str(it.config.apiBase), privateKey: "", webhookSecret: "", enabled: it.enabled });
+    setForm({ appId: str(it.config.appId), appSlug: str(it.config.appSlug), installationId: str(it.config.installationId), apiBase: str(it.config.apiBase), privateKey: "", webhookSecret: "", enabled: it.enabled });
     setError("");
     if (typeof window !== "undefined") window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
   }
@@ -67,7 +79,7 @@ function IntegrationsInner() {
     e.preventDefault();
     setSaving(true);
     try {
-      const config: Record<string, unknown> = { appId: form.appId.trim(), installationId: form.installationId.trim(), apiBase: form.apiBase.trim() };
+      const config: Record<string, unknown> = { appId: form.appId.trim(), appSlug: form.appSlug.trim(), installationId: form.installationId.trim(), apiBase: form.apiBase.trim() };
       const secret: Record<string, string> = {};
       if (form.privateKey.trim()) secret.privateKey = form.privateKey;
       if (form.webhookSecret.trim()) secret.webhookSecret = form.webhookSecret;
@@ -100,6 +112,8 @@ function IntegrationsInner() {
           <Link href="/integrations/github"><PremiumButton size="small" variant="ghost">Manage repositories →</PremiumButton></Link>
         </div>
       </PremiumCard>
+
+      <GithubOAuthAppCard />
 
       <div className="settings-stack">
         <PremiumCard level={2}>
@@ -147,15 +161,24 @@ function IntegrationsInner() {
             <label className="settings-label">App ID
               <input className="settings-input" placeholder="123456" value={form.appId} onChange={(e) => setForm({ ...form, appId: e.target.value })} />
             </label>
-            <label className="settings-label">Installation ID <span className="settings-hint">(optional)</span>
-              <input className="settings-input" placeholder="auto-resolved if blank" value={form.installationId} onChange={(e) => setForm({ ...form, installationId: e.target.value })} />
+            <label className="settings-label">Installation ID <span className="settings-hint">(optional — auto-detected after you install)</span>
+              <input className="settings-input" placeholder="auto-detected" value={form.installationId} onChange={(e) => setForm({ ...form, installationId: e.target.value })} />
+            </label>
+            <label className="settings-label settings-col-2">App slug <span className="settings-hint">(from the App URL — enables the Install / Configure repos links)</span>
+              <input className="settings-input" placeholder="brainrouter-memory-your-org" value={form.appSlug} onChange={(e) => setForm({ ...form, appSlug: e.target.value })} />
             </label>
             <label className="settings-label settings-col-2">API base <span className="settings-hint">(optional — GitHub Enterprise)</span>
               <input className="settings-input" placeholder="https://api.github.com" value={form.apiBase} onChange={(e) => setForm({ ...form, apiBase: e.target.value })} />
             </label>
-            <label className="settings-label settings-col-2">Private key (PEM)
-              <textarea autoComplete="off" className="settings-textarea" rows={3} placeholder={editingId ? "leave blank to keep the stored key" : "-----BEGIN RSA PRIVATE KEY-----"} value={form.privateKey} onChange={(e) => setForm({ ...form, privateKey: e.target.value })} />
-            </label>
+            <div className="settings-label settings-col-2">
+              <span>Private key (PEM) <span className="settings-hint">— load the <code>.pem</code> you downloaded, or paste it; it never leaves your browser until you save</span></span>
+              <div className="flex flex-wrap items-center gap-2" style={{ margin: "6px 0" }}>
+                <input id="pem-file-input" type="file" accept=".pem,.key,application/x-pem-file,text/plain" style={{ display: "none" }} onChange={onPickPem} />
+                <PremiumButton type="button" size="small" variant="ghost" onClick={() => document.getElementById("pem-file-input")?.click()}>Load .pem file…</PremiumButton>
+                {pemFileName && <span className="settings-flag-ok">Loaded {pemFileName}</span>}
+              </div>
+              <textarea aria-label="Private key (PEM)" autoComplete="off" className="settings-textarea" rows={3} placeholder={editingId ? "leave blank to keep the stored key" : "-----BEGIN RSA PRIVATE KEY-----"} value={form.privateKey} onChange={(e) => setForm({ ...form, privateKey: e.target.value })} />
+            </div>
             <label className="settings-label settings-col-2">Webhook secret
               <input type="password" autoComplete="off" className="settings-input" placeholder={editingId ? "leave blank to keep the stored secret" : "whsec_…"} value={form.webhookSecret} onChange={(e) => setForm({ ...form, webhookSecret: e.target.value })} />
             </label>
