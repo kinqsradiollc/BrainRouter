@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ConnectorDefinitionBundle, ConnectorRecord } from '@kinqs/brainrouter-types';
 import { Icon } from '../../icons.js';
+import { bridgeQuery } from '../../lib/bridgeQuery.js';
 import { Row, ChoiceControl } from '../shared/controls.js';
 import { GithubIntegration } from '../github/GithubIntegration.js';
 import { GithubRepoPicker } from '../github/GithubRepoPicker.js';
@@ -67,13 +68,11 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
   }, [firstGithub?.id, firstGithub?.updatedAt]);
 
   React.useEffect(() => {
-    if (!firstGithub?.id || !window.brainrouter.ghOauth) {
-      setOauthState({ status: 'idle' });
-      return;
-    }
-    void window.brainrouter.ghOauth({ op: 'status', connectorId: firstGithub.id })
-      .then((res) => setOauthState({ status: 'idle', hasToken: res.hasToken === true, storageMode: typeof res.storageMode === 'string' ? res.storageMode : undefined }))
-      .catch((err) => setOauthState({ status: 'error', error: err instanceof Error ? err.message : String(err) }));
+    // Server-mediated OAuth: the GitHub token lives in your BrainRouter account,
+    // not on this machine. Reflect whether it's connected (requires being signed in).
+    void bridgeQuery<{ signedIn?: boolean; connected?: boolean }>('github-connect-status')
+      .then((res) => setOauthState({ status: 'idle', hasToken: !!res.connected, storageMode: 'BrainRouter account' }))
+      .catch(() => setOauthState({ status: 'idle' }));
   }, [firstGithub?.id, firstGithub?.credential.mode, firstGithub?.updatedAt]);
 
   React.useEffect(() => {
@@ -135,66 +134,48 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
     setTimeout(refreshSnapshot, 120);
   };
 
+  // Connect GitHub through BrainRouter's server-mediated broker (device flow). No
+  // client id/secret on this machine; the token is stored in your account. Requires
+  // being signed in (Settings → Account).
   const startGithubOauth = async (): Promise<void> => {
-    if (!firstGithub) {
-      setOauthState({ status: 'error', error: 'Save the GitHub connector before connecting OAuth.' });
-      return;
-    }
-    if (!window.brainrouter.ghOauth) {
-      setOauthState({ status: 'error', error: 'GitHub OAuth requires the Electron app.' });
-      return;
-    }
-    if (!githubOauthClientId.trim()) {
-      setOauthState({ status: 'error', error: 'Set cli.github.oauthClientId in Advanced before connecting OAuth.' });
-      return;
-    }
     setOauthState({ status: 'starting' });
-    const res = await window.brainrouter.ghOauth({ op: 'start', connectorId: firstGithub.id, clientId: githubOauthClientId.trim() });
-    if (typeof res.error === 'string') {
-      setOauthState({ status: 'error', error: res.error });
-      return;
+    try {
+      const res = await bridgeQuery<{ ok: boolean; userCode?: string; verificationUri?: string; interval?: number; error?: string }>('github-device-start');
+      if (!res.ok || !res.userCode) {
+        setOauthState({ status: 'error', error: res.error || 'Sign in to your BrainRouter account (Settings → Account) to connect GitHub.' });
+        return;
+      }
+      const uri = res.verificationUri || 'https://github.com/login/device';
+      setOauthState({ status: 'pending', userCode: res.userCode, verificationUri: uri, intervalSec: Number(res.interval) > 0 ? Number(res.interval) : 5, expiresAtMs: Date.now() + 15 * 60_000 });
+      await bridgeQuery('action:open-external', { url: uri });
+    } catch (e) {
+      setOauthState({ status: 'error', error: e instanceof Error ? e.message : 'Could not start the GitHub connection.' });
     }
-    setOauthState({
-      status: 'pending',
-      userCode: String(res.userCode ?? ''),
-      verificationUri: String(res.verificationUri ?? 'https://github.com/login/device'),
-      intervalSec: Number(res.intervalSec) > 0 ? Number(res.intervalSec) : 5,
-      expiresAtMs: Number(res.expiresAtMs) || Date.now() + 15 * 60_000,
-    });
   };
 
   const cancelGithubOauth = async (): Promise<void> => {
-    if (firstGithub?.id && window.brainrouter.ghOauth) await window.brainrouter.ghOauth({ op: 'cancel', connectorId: firstGithub.id }).catch(() => undefined);
     setOauthState({ status: 'idle' });
   };
 
   const disconnectGithubOauth = async (): Promise<void> => {
-    if (firstGithub?.id && window.brainrouter.ghOauth) await window.brainrouter.ghOauth({ op: 'disconnect', connectorId: firstGithub.id }).catch(() => undefined);
+    await bridgeQuery('action:github-disconnect').catch(() => undefined);
     markGithubOauthCredential(false);
     setOauthState({ status: 'idle', hasToken: false });
   };
 
   React.useEffect(() => {
-    if (oauthState.status !== 'pending' || !firstGithub?.id || !window.brainrouter.ghOauth) return;
+    if (oauthState.status !== 'pending') return;
     const delay = Math.max(1, oauthState.intervalSec) * 1000;
     const timer = window.setTimeout(() => {
-      void window.brainrouter.ghOauth?.({ op: 'poll', connectorId: firstGithub.id }).then((res) => {
-        if (res.status === 'pending') {
-          setOauthState((cur) => cur.status === 'pending'
-            ? { ...cur, intervalSec: Number(res.nextIntervalSec) > 0 ? Number(res.nextIntervalSec) : cur.intervalSec, expiresAtMs: Number(res.expiresAtMs) || cur.expiresAtMs }
-            : cur);
-          return;
-        }
-        if (res.status === 'authorized') {
-          markGithubOauthCredential(true);
-          setOauthState({ status: 'authorized', scope: typeof res.scope === 'string' ? res.scope : undefined, storageMode: typeof res.storageMode === 'string' ? res.storageMode : undefined });
-          return;
-        }
-        setOauthState({ status: 'error', error: typeof res.error === 'string' ? res.error : `OAuth ${String(res.status ?? 'failed')}.` });
+      void bridgeQuery<{ status?: string; login?: string }>('github-device-poll').then((res) => {
+        // Re-trigger the effect (new object) so polling continues until authorized.
+        if (res.status === 'pending') { setOauthState((cur) => (cur.status === 'pending' ? { ...cur } : cur)); return; }
+        if (res.status === 'connected') { markGithubOauthCredential(true); setOauthState({ status: 'authorized', storageMode: 'BrainRouter account' }); setTimeout(refreshSnapshot, 120); return; }
+        setOauthState({ status: 'error', error: 'That code expired — click Connect to try again.' });
       }).catch((err) => setOauthState({ status: 'error', error: err instanceof Error ? err.message : String(err) }));
     }, delay);
     return () => window.clearTimeout(timer);
-  }, [oauthState, firstGithub?.id]);
+  }, [oauthState]);
 
   const saveGenericConnector = (): void => {
     if (!selectedEntry || selectedEntry.source === 'github') return;
@@ -383,7 +364,7 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
           <Row title="Auto run" desc="Optional polling cadence in minutes. Blank disables background connector runs.">
             <input className="ctl mono" type="number" min={1} step={1} value={pollMinutes} onChange={(e) => setPollMinutes(e.target.value)} placeholder="disabled" />
           </Row>
-          <Row title="Credential provider" desc="Dynamic uses the GitHub CLI account. Static reads an environment token. OAuth stores a per-connector token in the OS keychain.">
+          <Row title="Credential provider" desc="OAuth connects through your BrainRouter account (recommended — no token on this machine). GitHub CLI uses gh auth; Token reads an environment token.">
             <ChoiceControl
               value={credentialMode}
               options={[
@@ -402,7 +383,7 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
             </Row>
           ) : null}
           {credentialMode === 'oauth' ? (
-            <Row title="OAuth account" desc={oauthState.status === 'idle' && oauthState.hasToken ? `Token stored via ${oauthState.storageMode ?? 'keychain'}.` : 'Device-flow authorization stores the token in the OS keychain.'}>
+            <Row title="OAuth account" desc={oauthState.status === 'idle' && oauthState.hasToken ? 'Connected through your BrainRouter account.' : 'Connect GitHub through BrainRouter — no token is stored on this machine. Requires being signed in (Account).'}>
               <div style={{ display: 'grid', gap: 8, minWidth: 300 }}>
                 {oauthState.status === 'pending' ? (
                   <div className="gh-int-status ok">
@@ -418,7 +399,7 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
                 <span className="pc-actions">
                   {oauthState.status === 'pending'
                     ? <button type="button" className="btn" onClick={() => void cancelGithubOauth()}>Cancel</button>
-                    : <button type="button" className="btn" disabled={!firstGithub || oauthState.status === 'starting'} onClick={() => void startGithubOauth()}>{oauthState.status === 'starting' ? 'Starting...' : (oauthState.status === 'idle' && oauthState.hasToken ? 'Reconnect' : 'Connect')}</button>}
+                    : <button type="button" className="btn" disabled={oauthState.status === 'starting'} onClick={() => void startGithubOauth()}>{oauthState.status === 'starting' ? 'Starting...' : (oauthState.status === 'idle' && oauthState.hasToken ? 'Reconnect' : 'Connect')}</button>}
                   {oauthState.status === 'idle' && oauthState.hasToken ? <button type="button" className="btn danger" onClick={() => void disconnectGithubOauth()}>Disconnect</button> : null}
                 </span>
               </div>

@@ -3061,7 +3061,10 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       'action:auth-signin': async (args) => {
         const email = String(args.email ?? '').trim();
         const password = String(args.password ?? '');
-        const baseUrl = (String(args.url ?? '').trim() || 'http://localhost:3747').replace(/\/+$/, '');
+        // The backend URL is OURS — a single build-time constant (override via the
+        // BRAINROUTER_URL env / a self-built binary). Not a user-facing field, so
+        // signing in stays simple: email + password.
+        const baseUrl = (process.env.BRAINROUTER_URL ?? 'http://localhost:3747').replace(/\/+$/, '');
         if (!email || !password) return { ok: false, error: 'Email and password are required.' };
         let res: Response;
         try {
