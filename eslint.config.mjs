@@ -16,6 +16,11 @@ export default [
       '**/dist/**',
       '**/dist-electron/**',
       '**/build/**',
+      // Ephemeral git worktrees (agent fleets / PR-verify checkouts) are full copies
+      // of the tree at other commits — never the source of truth, and they trip the
+      // no-restricted-imports rule with their older deep-dist imports. Never lint them.
+      '**/.worktrees/**',
+      '**/.claude/worktrees/**',
       '**/.next/**',
       '**/.open-next/**',
       '**/.wrangler/**',

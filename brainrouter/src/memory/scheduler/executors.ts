@@ -22,7 +22,7 @@ import { distillCoreIdentity } from "../pipeline/identity/identity-distiller.js"
 import { distillFocusScenes } from "../pipeline/focus/contextual-focus-builder.js";
 import { digestTreeNodes } from "../tree/digest.js";
 import { enqueueAgentJob } from "./jobs.js";
-import { runPrSecurityReview } from "../../integrations/prSecurityReview.js";
+import { runPrSecurityReview, runPrCodeReview, type PrReviewInput, type PrReviewDeps } from "../../integrations/prSecurityReview.js";
 
 /**
  * 0.4.3 (MEM-10) — engine operations the depth-agent executors call. Declared
@@ -58,6 +58,26 @@ function requireEngine(ctx: JobExecContext): JobEngineOps {
     throw new Error("depth-agent executor requires an engine in the job context (not wired)");
   }
   return ctx.engine;
+}
+
+/** Shared plumbing for the PR-review lenses (security + code review) — one input/deps shape. */
+function prReviewInput(input: any): PrReviewInput {
+  return {
+    orgId: typeof input?.orgId === "string" ? input.orgId : undefined,
+    installationId: String(input?.installationId ?? ""),
+    repo: String(input?.repo ?? ""),
+    prNumber: Number(input?.prNumber),
+    headSha: String(input?.headSha ?? ""),
+  };
+}
+function prReviewDeps(ctx: JobExecContext): PrReviewDeps {
+  const engine = requireEngine(ctx);
+  return {
+    llmRunner: ctx.llmRunner,
+    fetchImpl: fetch,
+    nowSec: () => Math.floor(Date.now() / 1000),
+    getIntegration: (installationId) => engine.findGithubAppByInstallation(installationId),
+  };
 }
 
 /** Runs the agent's work for `input`; returns a compact JSON summary for `output`. */
@@ -130,26 +150,11 @@ const EXECUTORS: Record<string, JobExecutor> = {
     return requireEngine(ctx).runRetrievalBenchmark(userIdOf(input), sampleSize !== undefined ? { sampleSize } : undefined);
   },
 
-  // ADR-017 D5 — the GitHub App bot's automatic PR security review. Enqueued by the
-  // pull_request webhook; mints the installation token, reviews the diff, posts back.
-  "pr-security-review": async (input, ctx) => {
-    const engine = requireEngine(ctx);
-    return runPrSecurityReview(
-      {
-        orgId: typeof input?.orgId === "string" ? input.orgId : undefined,
-        installationId: String(input?.installationId ?? ""),
-        repo: String(input?.repo ?? ""),
-        prNumber: Number(input?.prNumber),
-        headSha: String(input?.headSha ?? ""),
-      },
-      {
-        llmRunner: ctx.llmRunner,
-        fetchImpl: fetch,
-        nowSec: () => Math.floor(Date.now() / 1000),
-        getIntegration: (installationId) => engine.findGithubAppByInstallation(installationId),
-      },
-    );
-  },
+  // ADR-017 D5 — the GitHub App bot's automatic PR reviews. Both are enqueued by the
+  // pull_request webhook; each mints the installation token, reviews the diff with its
+  // LENS, and posts back inline suggestions + a summary + a gating check-run.
+  "pr-security-review": (input, ctx) => runPrSecurityReview(prReviewInput(input), prReviewDeps(ctx)),
+  "pr-code-review": (input, ctx) => runPrCodeReview(prReviewInput(input), prReviewDeps(ctx)),
 };
 
 export function getJobExecutor(agentId: string): JobExecutor | undefined {

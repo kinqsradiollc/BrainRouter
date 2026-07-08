@@ -114,8 +114,7 @@ function IntegrationsInner() {
         </div>
       </PremiumCard>
 
-      {user?.isAdmin ? (<>
-      <GithubOAuthAppCard />
+      {user?.isAdmin && <GithubOAuthAppCard />}
 
       <div className="settings-stack">
         <PremiumCard level={2}>
@@ -193,11 +192,6 @@ function IntegrationsInner() {
           </div>
         </form>
       </PremiumCard>
-      </>) : (
-        <PremiumCard level={2} style={{ marginTop: "var(--spacing-16)" }}>
-          <div className="settings-hint">The shared GitHub App is configured by your deployment administrator — everyone in the org connects through the same App. Use <b>Manage repositories</b> above to link repos to your memory.</div>
-        </PremiumCard>
-      )}
     </div>
   );
 }

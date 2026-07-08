@@ -119,6 +119,63 @@ one broker, one memory plane — no manual repo/owner anywhere.
   - **Safety:** installation-scoped least privilege; never echo secrets; comment is idempotent
     (update-in-place per PR head SHA); a hard cap on findings + a "no issues found" path.
 
+- **⟨2026-07-08 as-built⟩ Single-shot diff review + inline `suggestion` comments.** The shipped bot
+  (`prSecurityReview.ts`) runs a **single LLM turn over the PR's unified diff** — no checkout, no
+  filesystem tools. The reviewer contract is therefore **self-contained and diff-focused**
+  (`buildSecurityReviewContract`); it must **not** instruct the model to "verify with read-only tools"
+  it doesn't have, or a compliant model suppresses every finding as "unverifiable" (the bug that made
+  the first live run report a clean bill on a diff full of injection). Output shape now matches a
+  human PR review:
+  - A **grouped PR review** (`POST /pulls/{n}/reviews`, `event: COMMENT`) whose body tallies the new
+    findings and points at the pinned summary.
+  - One **inline review comment per finding**, anchored to the exact new-file line(s) — `addedLinesByPath`
+    parses the diff so a bad anchor can never 422 the whole review; `resolveInlineAnchor` decides the
+    range and whether a suggestion is safe. Each carries a severity·CWE header, impact, a **GitHub
+    ```suggestion block** (one-click *Apply suggestion*, from the finding's `replacement`), a collapsed
+    "prompt to fix with AI", and a resolve/tune footer.
+  - The **pinned summary** issue-comment (marker-keyed, idempotent) stays as the whole-PR status.
+  - **Idempotency across pushes:** each inline comment embeds a per-finding marker (`brs-finding:…`);
+    a re-run skips findings already surfaced, so the review says "N **new** findings" instead of
+    stacking. Grouped-review 422 falls back to posting comments individually.
+
+- **⟨2026-07-08 as-built⟩ Multi-LENS reviews + gating check-runs + full CI (Strix parity → superset).**
+  The bot is no longer security-only. The security path was refactored into a **lens abstraction**
+  (`review/reviewLens.ts` — one parameterized `runPrReview(input, deps, lens)` + shared renderers), so a
+  new review kind is a *data object*, not a copy of the executor. Two lenses ship, each fanning out from
+  one `pull_request` webhook as its own job:
+  - **Security lens** (`SECURITY_LENS`, `buildSecurityReviewContract`) — the vulnerability taxonomy.
+  - **Code-review lens** (`CODE_REVIEW_LENS`, `buildCodeReviewContract`) — the repo's own five-axis
+    `code-review-and-quality` framework, scoped to the four NON-security axes (correctness, readability,
+    architecture, performance) + test coverage; it explicitly DEFERS security to the security lens so the
+    two never double-report. Distinct markers (`brs-finding` / `brc-finding`, `brainrouter-security-review`
+    / `brainrouter-code-review`) keep the two from clobbering each other's comments or dedup.
+  - **Gating check-run per lens** (`POST /repos/{repo}/check-runs`, named `BrainRouter security review` /
+    `BrainRouter code review`): `blocking` (critical/high, not pre-existing) ⇒ `failure`; findings but none
+    blocking ⇒ `neutral`; clean ⇒ `success`. Needs the App's **`checks: write`**; degrades to a no-op
+    (review + comments still post) without it. Branch protection can then REQUIRE these checks.
+  - **Deterministic CI** (`.github/workflows/ci.yml`) adds two jobs beside build+test: **Lint & Typecheck**
+    and **Security Audit (deps)** (reports high/moderate; blocks only on `--audit-level=critical`, since a
+    high-severity gate would be a permanent red X on unfixable transitive advisories). Ephemeral worktrees
+    (`.worktrees/**`, `.claude/worktrees/**`) are eslint-ignored so agent-fleet checkouts don't break lint.
+    Together with the bot's two check-runs, a PR must pass: Build & Test · Lint & Typecheck · Security Audit
+    · BrainRouter security review · BrainRouter code review.
+  - Tests: core review 13, backend executor 13 (+ webhook 10, executor-inventory 7) — all green.
+
+- **⟨2026-07-08 as-built⟩ Check-runs LIVE + on-demand re-run + linked-repo gating.**
+  - **Checks: write** accepted on the installation → both check-runs post & gate live (verified on the
+    test PR: `BrainRouter security review` + `BrainRouter code review`, each with GitHub's native Re-run,
+    grouped under the App in the PR Checks tab). Branch protection can now require the 5 checks.
+  - **On-demand re-run:** a `/review` (or `@brainrouter review`) PR comment re-triggers both lenses via the
+    `issue_comment` webhook; the executor resolves the head SHA from the PR when the comment carries none.
+    The summary comment now shows a Strix-style **Re-run / Manage** action row (`REVIEW_ACTION_FOOTER`).
+  - **Linked-repo gating:** the bot reviews ONLY repos in the org's `github_app` integration
+    `config.linkedRepositories` allowlist (`isRepoLinkedForReview`) — like the rest of BrainRouter's per-repo
+    scoping. Back-compat default: field ABSENT → review all (don't silently stop a working bot); PRESENT →
+    only listed repos. The allowlist is set from the dashboard (reuses the admin-integration PATCH).
+  - **Bot login:** `brainrouter[bot]` (and `brainrouter-memory[bot]`) is RESERVED by GitHub for the
+    `@brainrouter` account; this org-owned App can't take it. The check-run *titles* already read cleanly
+    ("BrainRouter security review"). Getting `brainrouter[bot]` requires owning the App under `@brainrouter`.
+
 ### D6 — RBAC roles + tenanted resource hierarchy  ⟨2026-07-08 correction⟩
 
 **Bug this corrects.** ADR-017 §3 (merged in #812) removed the client-side `isAdmin` redirect on
@@ -201,11 +258,13 @@ global-admin-only** (or bundled). A personal-org owner is always Owner of their 
 - [ ] Owner/manager-only controls enforced in UI + API.
 
 ### P4 — PR-security-review bot
-- [x] **Reviewer "brain"** — `packages/core/src/review/securityReview.ts`: 24-class vuln taxonomy + `buildSecurityReviewContract()` (reuses `REVIEW_OUTPUT_CONTRACT` so `parseReviewFindings` consumes it) + idempotent `formatSecurityReviewComment()` (stable marker, severity sort, blocking count, findings cap, "no issues" path). Exported + 5 unit tests green.
-- [ ] Webhook route + `X-Hub-Signature-256` verify (App webhook secret).
-- [ ] `pr-security-review` backend role/job: PR checkout → reviewer (security lens) → adversarial verify → post-back.
-- [ ] Configure the GitHub App webhook (events: `pull_request`, `issue_comment`; URL + secret) — Chrome, same App.
-- [ ] Idempotent PR comment; least-privilege installation token; network-denied reviewer; "no issues" path.
+- [x] **Reviewer "brain"** — `packages/core/src/review/securityReview.ts`: 24-class vuln taxonomy + `buildSecurityReviewContract()` (self-contained, diff-focused — NOT the tool-using `REVIEW_OUTPUT_CONTRACT`) + `formatSecurityReviewComment()` pinned summary + `formatInlineFinding()`/`buildReviewIntro()`/`inlineFindingMarker()` for inline comments. Exported + unit tests green (12).
+- [x] Webhook route + `X-Hub-Signature-256` verify (`integrations/githubWebhook.ts`; enqueues `pr-security-review` on `pull_request` opened/synchronize/reopened).
+- [x] `pr-security-review` backend executor (`integrations/prSecurityReview.ts`): installation token → fetch PR diff → single-shot security review → **grouped PR review with inline `suggestion` comments** + idempotent pinned summary. DI'd + 7 unit tests green.
+- [x] GitHub App configured live (App `4237068`, installation `145021499`): Pull-requests + Issues R/W accepted, `pull_request`+`issue_comment` events, webhook URL+secret — verified end-to-end on a test PR (3 findings, applyable suggestions).
+- [x] Idempotent post-back (marker-keyed summary + per-finding `brs-finding` dedup across pushes); least-privilege installation token; "no issues" path; grouped-review 422 → per-comment fallback.
+- [ ] Adversarial verify pass before posting (single-shot bot posts directly today; verification pass is a follow-up).
+- [ ] `@mention` review trigger via `issue_comment` (event subscribed; executor path TBD).
 
 ## Risks & mitigations
 - **Auth changes can lock users out** → no `token_version`/JWT-middleware changes ship untested; reuse existing tested primitives (`rotate-key`, `requireAnyAuth`, installation tokens).
