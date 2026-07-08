@@ -25,8 +25,10 @@ export class CaptureExtraction extends CapturePersistence {
     sessionId?: string;
     activeSkill?: string;
     skillHints?: string;
+    workspaceTag?: string | null;
+    projectTag?: string | null;
   }): Promise<{ triggered: boolean; extractedCount: number; status: CognitiveExtractionStatus; errorMessage?: string }> {
-    const { userId, sessionKey, sessionId = "", activeSkill, skillHints } = params;
+    const { userId, sessionKey, sessionId = "", activeSkill, skillHints, workspaceTag, projectTag } = params;
     const recentSensory = await this.store.getRecentSensoryMessages(userId, sessionKey, 20);
     if (recentSensory.length === 0) {
       return { triggered: false, extractedCount: 0, status: "skipped" };
@@ -47,7 +49,9 @@ export class CaptureExtraction extends CapturePersistence {
           llmRunner: this.llmRunner,
           activeSkill,
           existingSceneNames,
-          skillHints: resolvedSkillHints
+          skillHints: resolvedSkillHints,
+          workspaceTag,
+          projectTag
         }),
       { summarize: (r) => ({ success: r.success, records: r.records?.length ?? 0 }) },
     );

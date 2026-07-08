@@ -53,11 +53,14 @@ export async function extractCognitiveMemories(params: {
   existingSceneNames?: string[];
   activeSkill?: string;
   skillHints?: string;
+  workspaceTag?: string | null;
+  projectTag?: string | null;
 }): Promise<CognitiveExtractionResult> {
-  const { 
-    messages, userId, sessionKey, sessionId, llmRunner, 
+  const {
+    messages, userId, sessionKey, sessionId, llmRunner,
     maxMessagesPerExtraction = 10, maxBackgroundMessages = 5,
-    previousSceneName, existingSceneNames, activeSkill, skillHints
+    previousSceneName, existingSceneNames, activeSkill, skillHints,
+    workspaceTag = null, projectTag = null
   } = params;
 
   if (messages.length === 0) {
@@ -190,6 +193,8 @@ export async function extractCognitiveMemories(params: {
         priority: mem.priority,
         sceneName: scene.scene_name,
         skillTag: mem.skill_tag || activeSkill || "",
+        workspaceTag,
+        projectTag,
         halfLifeDays: config.halfLifeDays,
         supersededBy: null,
         timestampStr: "",

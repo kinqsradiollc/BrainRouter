@@ -230,7 +230,7 @@ export function maybeAutoApprovePlan(this: Agent, state: PlanState): void {
       // Capture to memory like the explicit approvals (fire-and-forget — never
       // block update_plan on an MCP round-trip).
       void emitAgentEvent(
-        { mcpClient: this.mcpClient, sessionKey: this.sessionKey },
+        { mcpClient: this.mcpClient, sessionKey: this.sessionKey, workspaceRoot: this.workspaceRoot },
         {
           kind: 'agent_output',
           summary: `Plan auto-approved (auto mode) (${decision.id}) — ${state.items.length} item(s)`,
