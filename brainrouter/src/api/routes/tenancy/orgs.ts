@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { memoryEngine } from "../../../memory/engine.js";
 import { requireAnyAuth, type AuthedRequest } from "../../middleware/auth.js";
 import { sendError } from "../../../contracts/http.js";
-import { can, capabilitiesFor, isRole, ROLES } from "../../../tenancy/rbac.js";
+import { can, capabilitiesFor, isRole, normalizeRole, ROLES } from "../../../tenancy/rbac.js";
 import { isOrgPlan, ORG_PLANS } from "../../../tenancy/types.js";
 import { entitlementsFor, featuresFor, withinLimit, planHasFeature } from "../../../tenancy/entitlements.js";
 import { domainAllowed, normalizeDomains } from "../../../tenancy/emailDomain.js";
@@ -262,7 +262,7 @@ orgsRouter.post("/accept-invite", async (req: AuthedRequest, res) => {
   }
   const accepted = await memoryEngine.emailAuth.acceptInvite(hash, now);
   if (!accepted) { sendError(res, 400, "This invitation is invalid, expired, or already used"); return; }
-  await memoryEngine.tenancy.addOrgMember(invite.orgId, user.userId, isRole(invite.role) ? invite.role : "member");
+  await memoryEngine.tenancy.addOrgMember(invite.orgId, user.userId, normalizeRole(invite.role) ?? "developer");
   res.json({ ok: true, orgId: invite.orgId, name: org?.name });
 });
 
@@ -271,9 +271,9 @@ orgsRouter.post("/:orgId/invites", async (req: AuthedRequest, res) => {
   if (!(await requireMemberAdmin(req, res))) return;
   const orgId = String(req.params.orgId);
   const email = String(req.body?.email ?? "").trim().toLowerCase();
-  const role = String(req.body?.role ?? "member").trim();
+  const role = normalizeRole(String(req.body?.role ?? "developer").trim());
   if (!email) { sendError(res, 400, "email is required"); return; }
-  if (!isRole(role)) { sendError(res, 400, `a valid role (${ROLES.join(", ")}) is required`); return; }
+  if (!role) { sendError(res, 400, `a valid role (${ROLES.join(", ")}) is required`); return; }
   const org = await memoryEngine.tenancy.getOrganization(orgId);
   if (!org) { sendError(res, 404, "organization not found"); return; }
   if (!planHasFeature(org.plan, "invites")) {

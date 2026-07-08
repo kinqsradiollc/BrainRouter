@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { memoryEngine } from "../../../memory/engine.js";
 import { requireAnyAuth, type AuthedRequest } from "../../middleware/auth.js";
 import { sendError } from "../../../contracts/http.js";
-import { can, roleAtLeast, isRole, ROLES } from "../../../tenancy/rbac.js";
+import { can, roleAtLeast, normalizeRole, ROLES } from "../../../tenancy/rbac.js";
 import { planHasFeature, withinLimit, entitlementsFor } from "../../../tenancy/entitlements.js";
 import { normalizeRepoUrl } from "@kinqs/brainrouter-core/track";
 
@@ -118,9 +118,9 @@ projectsRouter.post("/:orgId/projects/:projectId/members", async (req: AuthedReq
   const ctx = await requireProjectAdmin(req, res);
   if (!ctx) return;
   const userId = String(req.body?.userId ?? "").trim();
-  const role = String(req.body?.role ?? "member").trim();
+  const role = normalizeRole(String(req.body?.role ?? "developer").trim());
   if (!userId) { sendError(res, 400, "userId is required"); return; }
-  if (!isRole(role)) { sendError(res, 400, `a valid role (${ROLES.join(", ")}) is required`); return; }
+  if (!role) { sendError(res, 400, `a valid role (${ROLES.join(", ")}) is required`); return; }
   // The user must belong to the Team first.
   const memberRole = await memoryEngine.tenancy.getMemberRole(ctx.orgId, userId);
   if (!memberRole) { sendError(res, 400, "That user is not a member of the team"); return; }
