@@ -328,6 +328,15 @@ export function createHostCore(input) {
             }
             case 'set-model': {
                 const a = pool.get(activeKey)?.agent;
+                if (cmd.model === 'auto') {
+                    try {
+                        input.clearSessionModel?.(activeKey);
+                    }
+                    catch { /* best effort */ }
+                    emit({ kind: 'status', text: 'Model set to Auto (primary chain).' });
+                    emit({ kind: 'session-changed', sessionKey: activeKey, loadedMessages: -1, model: cmd.model });
+                    return;
+                }
                 // Item 10 — persist:true → GLOBAL default (config.json, shared with the
                 // CLI). persist:false → THIS SESSION ONLY (sessionRuntimeStore), so it
                 // survives a respawn for this chat without changing every other chat.

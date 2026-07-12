@@ -22,6 +22,7 @@ import { MarketplaceSettings, type MarketplaceState } from './settings/marketpla
 import { McpServersSection } from './settings/connectors/McpServersSection.js';
 import { ModelsSection } from './settings/models/ModelsSection.js';
 import { AccountSettings } from './settings/account/AccountSettings.js';
+import { ReviewsSettings } from './settings/reviews/ReviewsSettings.js';
 import { RuntimeSection } from './settings/runtime/RuntimeSection.js';
 import { AutomationsSection } from './settings/automations/AutomationsSection.js';
 import { UsageHeatmap } from './settings/usage/UsageHeatmap.js';
@@ -317,10 +318,7 @@ export function SettingsDialog(props: {
       );
       case 'reviews': return (
         <>
-          <div className="set-h">PR Reviews</div>
-          <div className="set-desc" style={{ marginBottom: 8 }}>
-            Every pull request on a linked repo gets an automatic AI review — a <b>security</b> pass and a general <b>code-review</b> pass — with inline <code>suggestion</code> comments and a gating check-run. Re-run any time with a <code>/review</code> PR comment.
-          </div>
+          <ReviewsSettings />
           <SetGroup title="What runs on every reviewed PR">
             <Row title="🛡️ Security review" desc="Vulnerability findings (injection, secrets, auth, SSRF, …), CWE-tagged." />
             <Row title="🔎 Code review" desc="Correctness, clarity, architecture, performance, and test coverage." />
