@@ -17,6 +17,10 @@ import type { CommandsCatalog } from '../../commands/commands.js';
 import type { ConfigSnapshot, UsageHistory } from '../../../settings.js';
 import type { MarketplaceState } from '../../../settings/marketplace/index.js';
 import { type WorktreeEntry } from '../../worktree/worktreeParser.js';
+// UI-TEST fusion — the extracted screen map + user-journey stories the Atlas
+// Screens mode + Browser panel render.
+import type { UiMap } from '@kinqs/brainrouter-ui-test/dist/types.js';
+import type { Story } from '@kinqs/brainrouter-ui-test/dist/flow/storySchema.js';
 import { type ProjectSessionsByRoot } from '../../session/workspaces/projectSessionsView.js';
 
 export type InfoState = { sessionKey?: string; model?: string; workspaceRoot?: string; username?: string };
@@ -113,6 +117,8 @@ export interface AgentEventsCtx {
   setAtlasEnriching: React.Dispatch<React.SetStateAction<boolean>>;
   setAtlasAssessing: React.Dispatch<React.SetStateAction<string | null>>;
   setAtlasAssessments: React.Dispatch<React.SetStateAction<Record<string, import('../../atlas/atlasView.js').AtlasChangeAssessment>>>;
+  setAtlasUiMap: React.Dispatch<React.SetStateAction<UiMap | null>>;
+  setAtlasStories: React.Dispatch<React.SetStateAction<Story[]>>;
   setWorktrees: React.Dispatch<React.SetStateAction<WorktreeEntry[]>>;
   setWorktreeDiffs: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   setReviewRunningByWs: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;

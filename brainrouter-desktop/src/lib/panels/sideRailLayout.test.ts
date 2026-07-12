@@ -4,6 +4,7 @@ import {
   SIDE_RAIL_MAX,
   SIDE_RAIL_MIN,
   clampSideRailWidth,
+  openWidthFor,
   reorderByValue,
   sideRailClassName,
   sideRailFullscreenTitle,
@@ -45,4 +46,26 @@ test('reorderByValue is stable for no-op and unknown values', () => {
   assert.equal(reorderByValue(tabs, 'files', 'files'), tabs);
   assert.equal(reorderByValue(tabs, 'missing', 'files'), tabs);
   assert.equal(reorderByValue(tabs, 'files', 'missing'), tabs);
+});
+
+test('openWidthFor widens to the Browser comfortable width, never shrinks', () => {
+  assert.equal(openWidthFor('uitest', SIDE_RAIL_MIN), 500); // 240 -> 500 on open
+  assert.equal(openWidthFor('uitest', 640), 640);           // already wider: unchanged
+  assert.equal(openWidthFor('uitest', 500), 500);           // exactly at the default
+});
+
+test('openWidthFor leaves a rail already at max, and never widens a panel with no preference', () => {
+  // already at (or above) the rail max: widen is a no-op, and the clamped
+  // preference (≤ max) never over-widens past the current width.
+  assert.equal(openWidthFor('uitest', SIDE_RAIL_MAX), SIDE_RAIL_MAX);
+  assert.equal(openWidthFor('uitest', SIDE_RAIL_MAX + 500), SIDE_RAIL_MAX + 500);
+  // a panel without an OPEN_WIDTH preference keeps whatever width it had.
+  assert.equal(openWidthFor('files', 300), 300);
+  assert.equal(openWidthFor('files', SIDE_RAIL_MIN), SIDE_RAIL_MIN);
+});
+
+test('openWidthFor leaves panels without a preferred width untouched', () => {
+  assert.equal(openWidthFor('files', SIDE_RAIL_MIN), SIDE_RAIL_MIN);
+  assert.equal(openWidthFor('atlas', 300), 300);
+  assert.equal(openWidthFor('editor', 720), 720);
 });
