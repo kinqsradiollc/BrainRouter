@@ -41,6 +41,9 @@ export interface GatewayDispatchOptions {
   jsonMode?: boolean;
   timeoutMs?: number;
   label?: string;
+  /** Per-call retry budget (background jobs like PR review want more headroom
+   * against transient provider overload than an interactive call does). */
+  retry?: { maxRetries?: number; baseDelayMs?: number; maxDelayMs?: number };
 }
 
 /** One process-wide gateway. All four model kinds register + resolve through it. */
@@ -90,6 +93,7 @@ class ModelGateway {
       jsonMode: opts.jsonMode,
       timeoutMs: opts.timeoutMs,
       label: opts.label,
+      retry: opts.retry,
     });
   }
 
@@ -101,7 +105,7 @@ class ModelGateway {
    * a tool was forced + honored, else the message content.
    */
   async dispatch(opts: GatewayDispatchOptions): Promise<string> {
-    const { endpoint, apiKey, model, wireFormat, messages, tool, maxTokens, jsonMode, timeoutMs, label } = opts;
+    const { endpoint, apiKey, model, wireFormat, messages, tool, maxTokens, jsonMode, timeoutMs, label, retry } = opts;
     const responses = isResponsesWire(wireFormat);
     const url = resolveRequestUrl(endpoint, wireFormat);
     const tag = label ?? "gateway";
@@ -112,7 +116,7 @@ class ModelGateway {
       headers: { "Content-Type": "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
       body: JSON.stringify(body),
       signal: requestTimeoutSignal(timeoutMs ?? 120_000),
-    }, { label: `[${tag}] gateway chat` });
+    }, { label: `[${tag}] gateway chat`, ...(retry ?? {}) });
 
     let res = await doFetch();
     if (res.status === 400) {
