@@ -89,6 +89,7 @@ export interface ReviewJobDto {
   status: string;
   repo: string | null;
   prNumber: number | null;
+  forge?: "github" | "gitlab";
   findings: number | null;
   blocking: number | null;
   findingsDetail: ReviewFindingDetailDto[];
@@ -98,7 +99,7 @@ export interface ReviewJobDto {
   updatedAt: string;
   createdAt: string;
 }
-export interface ManualReviewRunRequest { repo: string; prNumber: number; lens: "security" | "code" | "pentest" | "both"; }
+export interface ManualReviewRunRequest { repo: string; prNumber: number; lens: "security" | "code" | "pentest" | "both"; forge?: "github" | "gitlab"; }
 
 export interface CursorPaginationParams {
   cursor?: string;

@@ -1,5 +1,5 @@
 /**
- * Track view — Members panel (roles, GitHub-collaborator pull, capability
+ * Track view — Members panel (roles, forge-collaborator pull, capability
  * matrix). Split out of TrackView.tsx byte-for-byte; no behavior change.
  */
 import React, { useState } from 'react';
@@ -25,13 +25,14 @@ const CAPS: Array<{ cap: ProjectCapability; label: string }> = [
   { cap: 'manage-members', label: 'Manage members' },
 ];
 
-export function MembersView({ members, ops }: { members: ProjectMember[]; ops: TrackOps }): React.ReactElement {
+export function MembersView({ members, ops, provider = 'github' }: { members: ProjectMember[]; ops: TrackOps; provider?: 'github' | 'gitlab' }): React.ReactElement {
   const [adding, setAdding] = useState(false);
   const [id, setId] = useState('');
   const [name, setName] = useState('');
   const [role, setRole] = useState<ProjectRole>('member');
   const owners = members.filter((m) => m.role === 'owner').length;
   const soleOwner = (m: ProjectMember): boolean => m.role === 'owner' && owners === 1;
+  const providerLabel = provider === 'gitlab' ? 'GitLab' : 'GitHub';
 
   const submit = (): void => {
     const handle = id.trim();
@@ -44,10 +45,10 @@ export function MembersView({ members, ops }: { members: ProjectMember[]; ops: T
     <div className="track-members">
       <div className="track-section-head">
         Members <span className="track-col-count">{members.length}</span>
-        <button className="track-member-pull" title="Import this repo's collaborators as members (roles mapped from their GitHub permission)" onClick={() => ops.syncMembers()}><Icon name="refresh" size={12} /> Pull from GitHub</button>
+        <button className="track-member-pull" title={`Import this repo's collaborators as members (roles mapped from their ${providerLabel} permission)`} onClick={() => ops.syncMembers()}><Icon name="refresh" size={12} /> Pull from {providerLabel}</button>
         <button className="track-auto-new" onClick={() => setAdding((a) => !a)}><Icon name={adding ? 'close' : 'plus'} size={12} /> {adding ? 'Cancel' : 'Add member'}</button>
       </div>
-      <p className="track-auto-intro">Each member has a role that gates what they can do on this project. <b>Pull from GitHub</b> imports the repo's collaborators (admin → admin · write → member · read → viewer); the local owner is kept. The board, the CLI, and the agent all enforce the same policy.</p>
+      <p className="track-auto-intro">Each member has a role that gates what they can do on this project. <b>Pull from {providerLabel}</b> imports the repo's collaborators (admin → admin · write → member · read → viewer); the local owner is kept. The board, the CLI, and the agent all enforce the same policy.</p>
 
       {adding ? (
         <div className="track-member-form">

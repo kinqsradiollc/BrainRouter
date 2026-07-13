@@ -27,7 +27,12 @@ import type { RequirementRecord } from '@kinqs/brainrouter-types';
 import type { AnnotationRecord } from '@kinqs/brainrouter-types';
 import type { ArtifactRecord } from '@kinqs/brainrouter-types';
 import type { GithubConnectorClient, GithubConnectorPermissionClient, GithubConnectorValidationClient, McpConnectorClient } from '@kinqs/brainrouter-core/connectors';
-import type { ComputerUseBridge, SecretBridge, TermSession } from './helpers.js';
+import type { ComputerUseBridge, SecretBridge } from './helpers.js';
+import type { PtyRegistry } from './pty.js';
+import type { HostedAgentManager } from './hostedAgents.js';
+import type { FanoutManager } from './fanoutManager.js';
+import type { RemoteWorktreeManager } from './sshRemote.js';
+import type { MobileRelayServer } from './mobileRelayServer.js';
 import type { UiTestHost } from '../uitestHost.js';
 
 type WsGit = ReturnType<typeof resolveWorkspaceGit>;
@@ -103,8 +108,11 @@ export interface HostContext {
   captureArtifactNote: (record: ArtifactRecord, change: string) => Promise<void>;
 
   // ── Terminals + short-lived caches ──────────────────────────────────────────
-  terms: Map<string, TermSession>;
-  nextTermSeq: () => number;
+  ptyRegistry: PtyRegistry;
+  hostedAgents: HostedAgentManager;
+  fanoutManager: FanoutManager;
+  remoteWorktrees: RemoteWorktreeManager;
+  mobileRelay: MobileRelayServer;
   modelsCacheByKey: Map<string, { models: string[]; at: number }>;
   getPrCache: () => { at: number; pr: { number: number; state: string; title?: string } | null } | null;
   setPrCache: (v: { at: number; pr: { number: number; state: string; title?: string } | null } | null) => void;

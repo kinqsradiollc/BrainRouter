@@ -1,7 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { callMcpTool, childSessionKey, extractToolText, safeJsonParse } from '@kinqs/brainrouter-core/mcp';
-import { createSession, getSession, listSessions, updateSession, executeOrchestrationTool } from '@kinqs/brainrouter-core/orchestration';
+import {
+  createSession,
+  getSession,
+  listSessions,
+  updateSession,
+  executeOrchestrationTool,
+} from '@kinqs/brainrouter-core/orchestration';
+import { _resetCliKnobsCache, setCliKnobOverride } from '@kinqs/brainrouter-core/config';
 import { normalizeSkillsList } from '../cli/commands/workflow/index.js';
 import { withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
 
@@ -14,7 +21,10 @@ test('McpClientWrapper.isConnected is false before connect', async () => {
 test('resolveIdentityFromConfig: explicit identity wins over heuristics (10a)', async () => {
   const { resolveIdentityFromConfig } = await import('@kinqs/brainrouter-core/mcp');
   assert.equal(
-    resolveIdentityFromConfig({ type: 'http', url: 'https://example.com', identity: 'third-party' }, 'brainrouter-cloud'),
+    resolveIdentityFromConfig(
+      { type: 'http', url: 'https://example.com', identity: 'third-party' },
+      'brainrouter-cloud',
+    ),
     'third-party',
     'explicit `identity: third-party` beats a brainrouter-shaped name',
   );
@@ -52,20 +62,11 @@ test('resolveIdentityFromConfig: name prefix and URL host detect BrainRouter (10
     resolveIdentityFromConfig({ type: 'http', url: 'https://example.brainrouter.dev/mcp' }, 'staging'),
     'brainrouter',
   );
-  assert.equal(
-    resolveIdentityFromConfig({ type: 'http', url: 'https://random.example.com' }, 'whatever'),
-    'unknown',
-  );
+  assert.equal(resolveIdentityFromConfig({ type: 'http', url: 'https://random.example.com' }, 'whatever'), 'unknown');
 
   // Stdio command basename.
-  assert.equal(
-    resolveIdentityFromConfig({ type: 'stdio', command: '/usr/local/bin/brainrouter-mcp' }),
-    'brainrouter',
-  );
-  assert.equal(
-    resolveIdentityFromConfig({ type: 'stdio', command: 'github-mcp' }),
-    'unknown',
-  );
+  assert.equal(resolveIdentityFromConfig({ type: 'stdio', command: '/usr/local/bin/brainrouter-mcp' }), 'brainrouter');
+  assert.equal(resolveIdentityFromConfig({ type: 'stdio', command: 'github-mcp' }), 'unknown');
 });
 
 test('McpClientWrapper.getIdentity returns "unknown" before listTools (10a)', async () => {
@@ -118,21 +119,21 @@ test('mcpUtils: callMcpTool normalizes success, error flag, and thrown errors', 
   assert.equal(err.isError, true);
   assert.equal(err.text, 'boom');
 
-  const throwClient: any = { callTool: async () => { throw new Error('network gone'); } };
+  const throwClient: any = {
+    callTool: async () => {
+      throw new Error('network gone');
+    },
+  };
   const thrown = await callMcpTool(throwClient, 'whatever', {});
   assert.equal(thrown.isError, true);
   assert.equal(thrown.text, 'network gone');
 });
 
 test('normalizeSkillsList accepts array and wrapped skill-list payloads', () => {
-  assert.deepEqual(
-    normalizeSkillsList([{ name: 'adr-skill', scope: 'global', description: 'Records decisions' }]),
-    [{ name: 'adr-skill', scope: 'global', description: 'Records decisions' }],
-  );
-  assert.deepEqual(
-    normalizeSkillsList({ skills: [{ name: 'debugging-skill' }] }),
-    [{ name: 'debugging-skill' }],
-  );
+  assert.deepEqual(normalizeSkillsList([{ name: 'adr-skill', scope: 'global', description: 'Records decisions' }]), [
+    { name: 'adr-skill', scope: 'global', description: 'Records decisions' },
+  ]);
+  assert.deepEqual(normalizeSkillsList({ skills: [{ name: 'debugging-skill' }] }), [{ name: 'debugging-skill' }]);
   assert.equal(normalizeSkillsList({ ok: true }), undefined);
 });
 
@@ -162,14 +163,19 @@ test('orchestrator session registry persists lifecycle transitions', () => {
 test('orchestration: task_agent waits and returns child output', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const originalFetch = globalThis.fetch;
+    _resetCliKnobsCache();
+    setCliKnobOverride({ providerRequestFormat: { openai: 'chat-completions' } });
     globalThis.fetch = (async (_url: any, opts: any) => {
       const body = JSON.parse(opts.body);
       const messages = Array.isArray(body.messages) ? body.messages : [];
       const lastUser = [...messages].reverse().find((m: any) => m.role === 'user')?.content ?? '';
-      return new Response(JSON.stringify({
-        choices: [{ message: { content: `child completed: ${lastUser}` } }],
-        usage: { prompt_tokens: 20, completion_tokens: 5 },
-      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: `child completed: ${lastUser}` } }],
+          usage: { prompt_tokens: 20, completion_tokens: 5 },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
     }) as any;
     try {
       const stubMcp: any = {
@@ -192,6 +198,7 @@ test('orchestration: task_agent waits and returns child output', async () => {
       assert.match(result.finalOutput, /child completed: map auth/);
     } finally {
       globalThis.fetch = originalFetch;
+      _resetCliKnobsCache();
     }
   });
 });
@@ -199,12 +206,17 @@ test('orchestration: task_agent waits and returns child output', async () => {
 test('orchestration: delegate_agent returns running child id with continue semantics', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const originalFetch = globalThis.fetch;
+    _resetCliKnobsCache();
+    setCliKnobOverride({ providerRequestFormat: { openai: 'chat-completions' } });
     globalThis.fetch = (async () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
-      return new Response(JSON.stringify({
-        choices: [{ message: { content: 'background child complete' } }],
-        usage: { prompt_tokens: 20, completion_tokens: 5 },
-      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: 'background child complete' } }],
+          usage: { prompt_tokens: 20, completion_tokens: 5 },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
     }) as any;
     try {
       const stubMcp: any = {
@@ -233,6 +245,7 @@ test('orchestration: delegate_agent returns running child id with continue seman
       assert.equal(waited.status, 'completed');
     } finally {
       globalThis.fetch = originalFetch;
+      _resetCliKnobsCache();
     }
   });
 });
@@ -240,14 +253,19 @@ test('orchestration: delegate_agent returns running child id with continue seman
 test('orchestration: spawn_agent wait=true remains backward-compatible', async () => {
   await withTempWorkspaceAsync(async (workspace) => {
     const originalFetch = globalThis.fetch;
+    _resetCliKnobsCache();
+    setCliKnobOverride({ providerRequestFormat: { openai: 'chat-completions' } });
     globalThis.fetch = (async (_url: any, opts: any) => {
       const body = JSON.parse(opts.body);
       const messages = Array.isArray(body.messages) ? body.messages : [];
       const lastUser = [...messages].reverse().find((m: any) => m.role === 'user')?.content ?? '';
-      return new Response(JSON.stringify({
-        choices: [{ message: { content: `legacy child completed: ${lastUser}` } }],
-        usage: { prompt_tokens: 20, completion_tokens: 5 },
-      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: `legacy child completed: ${lastUser}` } }],
+          usage: { prompt_tokens: 20, completion_tokens: 5 },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
     }) as any;
     try {
       const stubMcp: any = {
@@ -263,12 +281,17 @@ test('orchestration: spawn_agent wait=true remains backward-compatible', async (
         llmConfig: { provider: 'openai' as const, apiKey: 'k', model: 'test-model' },
         launchCwd: workspace,
       };
-      const raw = await executeOrchestrationTool('spawn_agent', { role: 'explorer', prompt: 'map auth', wait: true }, ctx);
+      const raw = await executeOrchestrationTool(
+        'spawn_agent',
+        { role: 'explorer', prompt: 'map auth', wait: true },
+        ctx,
+      );
       const result = JSON.parse(raw);
       assert.equal(result.status, 'completed');
       assert.match(result.finalOutput, /legacy child completed: map auth/);
     } finally {
       globalThis.fetch = originalFetch;
+      _resetCliKnobsCache();
     }
   });
 });
@@ -296,7 +319,7 @@ test('orchestration: extractChildPreview prefers a Headline/Summary section over
   assert.match(preview2, /…/); // contains the divider
 });
 
-test('orchestration: clampAccess prevents a child from exceeding the parent\'s access mode', async () => {
+test("orchestration: clampAccess prevents a child from exceeding the parent's access mode", async () => {
   const { clampAccess } = await import('@kinqs/brainrouter-core/orchestration');
   // Same level: no clamp.
   assert.equal(clampAccess('shell', 'shell'), 'shell');
@@ -355,7 +378,10 @@ test('breadthHint: multi-target comparisons trigger fan-out (the live "why no sp
   ];
   for (const p of comparisons) {
     const r = shouldSuggestFanOut(p);
-    assert.ok(r.suggest, `expected fan-out for comparison: "${p}" (score=${r.intent.score}, signals=${r.intent.signals.join(',')})`);
+    assert.ok(
+      r.suggest,
+      `expected fan-out for comparison: "${p}" (score=${r.intent.score}, signals=${r.intent.signals.join(',')})`,
+    );
   }
   // A trivial two-thing compare with an explicit self-veto must still NOT fan out.
   assert.ok(!shouldSuggestFanOut('compare these two lines yourself, no fan-out').suggest);
@@ -385,14 +411,20 @@ test('breadthHint: explicit no-fan-out hints in the prompt veto suggestion even 
   const vetoed = [
     'audit every file in src/ (no spawn_agent, no fan-out, files are small)',
     'review all the tools — do this in one turn',
-    'test every config combination, don\'t fan out — directly with read_file',
+    "test every config combination, don't fan out — directly with read_file",
     'check each module yourself, no children',
   ];
   for (const p of vetoed) {
     const r = shouldSuggestFanOut(p);
-    assert.ok(!r.suggest, `expected veto on: "${p}" (got score=${r.intent.score}, signals=${r.intent.signals.join(',')})`);
+    assert.ok(
+      !r.suggest,
+      `expected veto on: "${p}" (got score=${r.intent.score}, signals=${r.intent.signals.join(',')})`,
+    );
     assert.ok(r.veto, `expected r.veto string on: "${p}"`);
-    assert.ok(r.intent.signals.some((s) => s.startsWith('vetoed:')), 'expected a vetoed:<phrase> signal');
+    assert.ok(
+      r.intent.signals.some((s) => s.startsWith('vetoed:')),
+      'expected a vetoed:<phrase> signal',
+    );
   }
   // Direct unit test of the veto detector for clarity.
   assert.equal(detectFanOutVeto('audit everything (no fan-out)').vetoed, true);
@@ -413,9 +445,17 @@ test('detectBreadthIntent flags "do everything in 1 go" / "as much as I could" /
   ];
   for (const c of cases) {
     const { suggest, intent } = shouldSuggestFanOut(c.prompt);
-    assert.equal(suggest, c.expectFanOut, `expected suggest=${c.expectFanOut} for "${c.prompt}", got ${suggest} (signals: ${intent.signals.join(',')}, score ${intent.score})`);
+    assert.equal(
+      suggest,
+      c.expectFanOut,
+      `expected suggest=${c.expectFanOut} for "${c.prompt}", got ${suggest} (signals: ${intent.signals.join(',')}, score ${intent.score})`,
+    );
     if (c.expectSignal) {
-      assert.equal(intent.signals.includes(c.expectSignal), true, `expected signal "${c.expectSignal}" in ${JSON.stringify(intent.signals)}`);
+      assert.equal(
+        intent.signals.includes(c.expectSignal),
+        true,
+        `expected signal "${c.expectSignal}" in ${JSON.stringify(intent.signals)}`,
+      );
     }
   }
 

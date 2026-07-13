@@ -1,0 +1,36 @@
+{
+  "name": "brainrouter-mobile",
+  "version": "0.4.16",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test \"src/**/*.test.ts\" \"e2e/**/*.test.ts\"",
+    "test:e2e": "tsx --test \"e2e/**/*.test.ts\"",
+    "build": "npm run bundle:ios && npm run bundle:android",
+    "bundle:ios": "expo export --platform ios --output-dir dist/ios",
+    "bundle:android": "expo export --platform android --output-dir dist/android",
+    "package:android": "eas build --platform android --profile preview",
+    "package:ios": "eas build --platform ios --profile preview"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "^3.1.1",
+    "expo": "^57.0.4",
+    "expo-camera": "^57.0.1",
+    "expo-notifications": "^57.0.3",
+    "expo-secure-store": "^57.0.0",
+    "expo-speech": "^57.0.0",
+    "react": "^19.2.3",
+    "react-native": "0.86.0",
+    "react-native-get-random-values": "^2.0.0",
+    "tweetnacl": "^1.0.3"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "tsx": "^4.7.0",
+    "typescript": "^5.5.4"
+  }
+}

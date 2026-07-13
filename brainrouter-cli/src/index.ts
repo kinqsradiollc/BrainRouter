@@ -21,6 +21,8 @@ import { registerAutomationsCommand } from './entry/automationsCommand.js';
 import { registerTasksCommand } from './entry/tasksCommand.js';
 import { registerConversationsCommand } from './entry/conversationsCommand.js';
 import { registerRunnerCommand } from './entry/runnerCommand.js';
+import { registerAgentHookCommand } from './entry/agentHookCommand.js';
+import { registerMcpProxyCommand } from './entry/mcpProxyCommand.js';
 
 const program = new Command();
 
@@ -43,5 +45,7 @@ registerAutomationsCommand(program);
 registerTasksCommand(program);
 registerConversationsCommand(program);
 registerRunnerCommand(program);
+registerAgentHookCommand(program);
+registerMcpProxyCommand(program);
 
 program.parse(process.argv);

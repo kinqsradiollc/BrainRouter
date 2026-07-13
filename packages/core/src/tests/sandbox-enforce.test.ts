@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { _resetCliKnobsCache, resolveCliKnobs, setCliKnobOverride } from '../config/config.js';
-import { resolveSandboxConfig, scopeSecretEnv } from '../exec/runtime/sandbox.js';
+import { resolveSandboxConfig, scopeSecretEnv, windowsPathToWsl, windowsWslSandboxPlan } from '../exec/runtime/sandbox.js';
 
 /**
  * CODEX-SANDBOX-UNATTENDED — a silent / unattended agent (cloud worker,
@@ -19,6 +19,28 @@ const WS = '/tmp/ws-sandbox-enforce';
 test('config default: sandboxEnforceWhenSilent is true', () => {
   const resolved = resolveCliKnobs({ activeServer: '', servers: {} });
   assert.equal(resolved.sandboxEnforceWhenSilent, true);
+});
+
+test('Windows sandbox maps drive paths into a WSL bubblewrap argv without a shell boundary', () => {
+  assert.equal(windowsPathToWsl('C:\\work\\BrainRouter'), '/mnt/c/work/BrainRouter');
+  assert.equal(windowsPathToWsl('D:/tmp/repo'), '/mnt/d/tmp/repo');
+  assert.equal(windowsPathToWsl('\\\\server\\share\\repo'), undefined);
+  assert.equal(windowsPathToWsl('C:\\work\\..\\escape'), undefined);
+  const plan = windowsWslSandboxPlan({
+    enabled: true,
+    workspaceRoot: 'C:\\work\\BrainRouter',
+    readPaths: ['D:\\sdk'],
+    writePaths: ['C:\\temp\\out'],
+    allowNetwork: false,
+    unavailableMode: 'deny',
+  }, 'npm test && echo $HOME');
+  assert.equal(plan?.executable, 'wsl.exe');
+  assert.deepEqual(plan?.args.slice(0, 2), ['--exec', 'bwrap']);
+  assert.ok(plan?.args.includes('/mnt/c/work/BrainRouter'));
+  assert.ok(plan?.args.includes('/mnt/d/sdk'));
+  assert.ok(plan?.args.includes('/mnt/c/temp/out'));
+  assert.ok(plan?.args.includes('--unshare-net'));
+  assert.deepEqual(plan?.args.slice(-3), ['/bin/sh', '-c', 'npm test && echo $HOME']);
 });
 
 test('silent + enforce(default) + sandbox off → forced on, network denied, fail-closed', () => {

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { callOpenAIStream } from '@kinqs/brainrouter-core/agent';
+import { _resetCliKnobsCache, setCliKnobOverride } from '@kinqs/brainrouter-core/config';
 import { extractAtToken, applyAtCompletion, getFileIndex, matchFiles } from '../cli/ink/chat/fileIndex.js';
 
 /**
@@ -27,10 +28,10 @@ function makeSseServer(frames: string[]): Promise<{ url: string; close: () => vo
           // Send response head.
           sock.write(
             'HTTP/1.1 200 OK\r\n' +
-            'Content-Type: text/event-stream\r\n' +
-            'Cache-Control: no-cache\r\n' +
-            'Connection: close\r\n' +
-            '\r\n',
+              'Content-Type: text/event-stream\r\n' +
+              'Cache-Control: no-cache\r\n' +
+              'Connection: close\r\n' +
+              '\r\n',
           );
           // Emit each frame with a tiny inter-frame gap.
           (async () => {
@@ -65,6 +66,8 @@ test('callOpenAIStream: accumulates text deltas and fires onTextDelta in order',
   ];
   const server = await makeSseServer(frames);
   const seen: string[] = [];
+  _resetCliKnobsCache();
+  setCliKnobOverride({ providerRequestFormat: { openai: 'chat-completions' } });
   try {
     const result = await callOpenAIStream(
       { provider: 'openai', endpoint: server.url, apiKey: 'sk-test', model: 'mock' } as any,
@@ -82,6 +85,7 @@ test('callOpenAIStream: accumulates text deltas and fires onTextDelta in order',
     assert.equal(result.toolCalls, undefined);
   } finally {
     server.close();
+    _resetCliKnobsCache();
   }
 });
 
@@ -94,6 +98,8 @@ test('callOpenAIStream: assembles tool_calls fragmented across frames by index',
     'data: [DONE]\n\n',
   ];
   const server = await makeSseServer(frames);
+  _resetCliKnobsCache();
+  setCliKnobOverride({ providerRequestFormat: { openai: 'chat-completions' } });
   try {
     const result = await callOpenAIStream(
       { provider: 'openai', endpoint: server.url, apiKey: 'sk-test', model: 'mock' } as any,
@@ -106,6 +112,7 @@ test('callOpenAIStream: assembles tool_calls fragmented across frames by index',
     assert.equal(result.toolCalls?.[0].function.arguments, '{"path":"foo.ts"}');
   } finally {
     server.close();
+    _resetCliKnobsCache();
   }
 });
 
@@ -123,12 +130,7 @@ test('applyAtCompletion: replaces trailing @-token with chosen path + trailing s
 });
 
 test('matchFiles: ranks exact basename, then starts-with, then path-contains', () => {
-  const idx = [
-    'src/foo.ts',
-    'src/utils/foo-helper.ts',
-    'docs/foo.md',
-    'foo.ts',
-  ];
+  const idx = ['src/foo.ts', 'src/utils/foo-helper.ts', 'docs/foo.md', 'foo.ts'];
   const out = matchFiles(idx, 'foo.ts', 8);
   // foo.ts at root is an exact basename match → first.
   assert.equal(out[0], 'foo.ts');

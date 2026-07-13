@@ -8,3 +8,4 @@ export * from './guards/verificationGate.js';
 export * from './support/prompter.js';
 export * from './fs/computerUse.js';
 export * from './fs/applyPatch.js';
+export * from './adapters/index.js';

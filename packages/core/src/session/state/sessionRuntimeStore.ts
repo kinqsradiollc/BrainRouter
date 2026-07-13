@@ -10,6 +10,8 @@ import type { LLMConfig } from '../../config/config.js';
  * workspace in `sessionRuntime.json`, keyed by sessionKey.
  */
 export interface SessionRuntime {
+  /** Hosted terminal adapter selected for this session. */
+  agentAdapter?: string;
   provider?: string;
   model?: string;
   endpoint?: string;
@@ -52,7 +54,7 @@ export function setSessionRuntime(workspaceRoot: string, sessionKey: string, pat
   const all = readSessionRuntimeAll(workspaceRoot);
   const next: SessionRuntime = { ...(all[sessionKey] ?? {}), ...patch };
   if (next.mcpProfiles && next.mcpProfiles.length === 0) delete next.mcpProfiles;
-  for (const k of ['provider', 'model', 'endpoint', 'brainProfile', 'llmProfile'] as const) {
+  for (const k of ['provider', 'model', 'endpoint', 'brainProfile', 'llmProfile', 'agentAdapter'] as const) {
     if (next[k] == null || next[k] === '') delete next[k];
   }
   if (Object.keys(next).length === 0) delete all[sessionKey];

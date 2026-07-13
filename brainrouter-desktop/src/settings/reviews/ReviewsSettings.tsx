@@ -5,7 +5,7 @@
 // dashboard; this is the "what did the bot just flag, and jump to it" surface.
 import { useCallback, useEffect, useState } from 'react';
 import { bridgeQuery } from '../../lib/bridgeQuery.js';
-import { githubPullRequestUrl, normalizeReviewListResponse } from './reviewPresentation.js';
+import { changeRequestUrl, normalizeReviewListResponse } from './reviewPresentation.js';
 
 interface ReviewRow {
   id: string;
@@ -13,6 +13,7 @@ interface ReviewRow {
   status: string;
   repo: string | null;
   prNumber: number | null;
+  forge?: 'github' | 'gitlab';
   findings: number | null;
   blocking: number | null;
   skipped: string | null;
@@ -56,7 +57,7 @@ export function ReviewsSettings(): React.ReactElement {
 
   const openPr = async (r: ReviewRow): Promise<void> => {
     if (!r.repo || !r.prNumber) return;
-    const url = githubPullRequestUrl(r.repo, r.prNumber);
+    const url = changeRequestUrl(r.repo, r.prNumber, r.forge);
     if (!url) return;
     try {
       const result = await bridgeQuery<{ ok?: boolean; error?: string }>('action:open-external', { url });
@@ -73,7 +74,7 @@ export function ReviewsSettings(): React.ReactElement {
     if (!canRun || !r.repo || !r.prNumber) return;
     setRunning(r.id); setError('');
     try {
-      const res = await bridgeQuery<{ ok: boolean; error?: string }>('reviews-run', { repo: r.repo, prNumber: r.prNumber, lens: r.lens });
+      const res = await bridgeQuery<{ ok: boolean; error?: string }>('reviews-run', { repo: r.repo, prNumber: r.prNumber, lens: r.lens, forge: r.forge });
       if (!res.ok) setError(res.error ?? 'run failed');
       else setTimeout(() => void load(), 1500); // let the queued job surface
     } catch (e) { setError(e instanceof Error ? e.message : 'run failed'); }
@@ -90,7 +91,7 @@ export function ReviewsSettings(): React.ReactElement {
     <>
       <div className="set-h">PR Reviews</div>
       <div className="set-desc" style={{ marginBottom: 10 }}>
-        Pull requests the bot has reviewed — 🛡️ <b>security</b> (gates the merge) and 🔎 <b>code review</b> (advisory suggestions). Click a row to open the PR on GitHub, or hit <b>Re-run</b> to run that lens again right here. You can also comment <code>/security-review</code> / <code>/code-review</code> on the PR. Choose repos and policies in Dashboard → Reviews.
+        Pull requests and merge requests the bot has reviewed — 🛡️ <b>security</b> (gates the merge) and 🔎 <b>code review</b> (advisory suggestions). Click a row to open it on its forge, or hit <b>Re-run</b> to run that lens again here. Choose repositories and policies in Dashboard → Reviews.
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -131,7 +132,7 @@ export function ReviewsSettings(): React.ReactElement {
           <div key={r.id}
             style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 2px', borderBottom: '1px solid var(--border-dim, rgba(255,255,255,0.06))' }}>
             {clickable ? (
-              <button type="button" onClick={() => void openPr(r)} title="Open PR on GitHub" aria-label={`Open ${r.repo} pull request ${r.prNumber} on GitHub`}
+              <button type="button" onClick={() => void openPr(r)} title="Open change request" aria-label={`Open ${r.repo} change request ${r.prNumber}`}
                 style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: 10, padding: 0, textAlign: 'left', color: 'inherit', background: 'transparent', border: 0, cursor: 'pointer' }}>
                 {summary}
               </button>

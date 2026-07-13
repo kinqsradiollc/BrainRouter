@@ -1,4 +1,5 @@
 export interface TrackSyncConfigLike {
+  provider?: 'github' | 'gitlab';
   repo: string | null;
   hasToken: boolean;
   tokenSource: string | null;
@@ -11,6 +12,7 @@ export interface TrackSyncConfigLike {
 }
 
 export interface TrackSyncAvailability {
+  provider: 'github' | 'gitlab';
   configured: boolean;
   repo: string | null;
   source: string | null;
@@ -23,6 +25,7 @@ function clean(value: string | null | undefined): string | null {
 }
 
 export function resolveTrackSyncAvailability(config: TrackSyncConfigLike | null | undefined): TrackSyncAvailability {
+  const provider = config?.provider === 'gitlab' ? 'gitlab' : 'github';
   const explicitRepo = clean(config?.repo);
   const repo = explicitRepo ?? clean(config?.detectedRepo);
   const accountManaged = config?.account?.connected === true;
@@ -30,12 +33,13 @@ export function resolveTrackSyncAvailability(config: TrackSyncConfigLike | null 
   const login = clean(config?.account?.login);
 
   return {
+    provider,
     configured: Boolean(repo && (accountManaged || localReady)),
     repo,
     source: accountManaged
       ? `BrainRouter account${login ? ` · ${login}` : ''}`
       : localReady
-        ? clean(config?.tokenSource) ?? 'Local GitHub credential'
+        ? clean(config?.tokenSource) ?? `Local ${provider === 'gitlab' ? 'GitLab' : 'GitHub'} credential`
         : null,
     accountManaged,
   };

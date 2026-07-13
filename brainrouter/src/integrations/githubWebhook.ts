@@ -35,7 +35,8 @@ export interface WebhookDeps {
 export function isRepoLinkedForReview(config: Record<string, unknown> | undefined, repoFullName: string): boolean {
   const raw = config?.linkedRepositories;
   if (!Array.isArray(raw)) return true; // never configured → review all (opt-out model)
-  return raw.map(String).includes(repoFullName);
+  const normalizedRepo = repoFullName.trim().toLowerCase();
+  return raw.some((value) => String(value).trim().toLowerCase() === normalizedRepo);
 }
 
 /** Per-repo review behavior (Strix-style Approve / Block / Re-review), resolved per PR. */
@@ -90,6 +91,42 @@ const PERMISSION_RANK: Record<GithubPermission, number> = { none: 0, read: 1, wr
 
 function githubHeaders(token: string): Record<string, string> {
   return { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" };
+}
+
+/**
+ * Manual reviews are already gated by org RBAC. An explicit linkedRepositories
+ * list continues to control automatic webhook reviews, but it must not strand a
+ * maintainer manually reviewing a repository that the same GitHub App
+ * installation can access. Verify installation access with GitHub before
+ * allowing that manual run; failures stay closed.
+ */
+export async function isRepoAvailableForManualReview(
+  config: Record<string, unknown> | undefined,
+  repoFullName: string,
+  auth: { apiBase: string; token: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<boolean> {
+  if (isRepoLinkedForReview(config, repoFullName)) return true;
+  return canAccessGithubRepository(repoFullName, auth, fetchImpl);
+}
+
+/** Confirm that one concrete GitHub credential can reach a repository. */
+export async function canAccessGithubRepository(
+  repoFullName: string,
+  auth: { apiBase: string; token: string },
+  fetchImpl: typeof fetch = fetch,
+): Promise<boolean> {
+  const [owner, repo, ...extra] = repoFullName.split("/");
+  const apiBase = validateGithubApiBase(auth.apiBase);
+  if (!owner || !repo || extra.length || !apiBase || !auth.token) return false;
+  try {
+    const response = await fetchImpl(`${apiBase}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, {
+      headers: githubHeaders(auth.token),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 /** Server-side repository-permission lookup for comment commands. */

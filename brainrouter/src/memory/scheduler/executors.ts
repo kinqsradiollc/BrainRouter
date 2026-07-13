@@ -43,6 +43,10 @@ export interface JobEngineOps {
   runRetrievalBenchmark(userId: string, opts?: { sampleSize?: number; baseDir?: string }): Promise<{ summaryPath: string | null; statsByMode: Record<string, unknown>; sampled: number; passed: boolean }>;
   /** ADR-017 D5 — the org's GitHub App creds (non-secret config + opened secret) for a webhook installation. */
   findGithubAppByInstallation(installationId: string): Promise<{ config: Record<string, unknown>; secret: Record<string, string> } | null>;
+  /** Per-user GitHub connector credential for an explicitly requested manual review. */
+  findGithubAccountAuthorization?(userId: string): Promise<{ token: string; apiBase: string } | null>;
+  /** Per-user, org-pinned GitLab connector credential for a manual MR review. */
+  findGitlabAccountAuthorization?(userId: string, orgId: string): Promise<{ token: string; apiBase: string; config: Record<string, unknown> } | null>;
   reviewRunner?(lens: "security" | "code" | "pentest", orgId?: string): LLMRunner | Promise<LLMRunner | undefined> | undefined;
   reviewAssignment?(lens: "security" | "code" | "pentest", orgId?: string): { maxDiffChars?: number; timeoutMs?: number } | Promise<{ maxDiffChars?: number; timeoutMs?: number } | undefined> | undefined;
   pentestAgentConfig?(orgId: string): Promise<LLMConfig | null>;
@@ -71,9 +75,13 @@ function requireEngine(ctx: JobExecContext): JobEngineOps {
 
 /** Shared plumbing for the PR-review lenses (security + code review) — one input/deps shape. */
 function prReviewInput(input: any): PrReviewInput {
+  const forge = input?.forge === "gitlab" ? "gitlab" : "github";
   return {
     orgId: typeof input?.orgId === "string" ? input.orgId : undefined,
     installationId: String(input?.installationId ?? ""),
+    forge,
+    credentialSource: forge === "gitlab" ? "gitlab_account" : input?.credentialSource === "github_account" ? "github_account" : "github_app",
+    requestedBy: typeof input?.requestedBy === "string" ? input.requestedBy : undefined,
     repo: String(input?.repo ?? ""),
     prNumber: Number(input?.prNumber),
     headSha: String(input?.headSha ?? ""),
@@ -88,6 +96,8 @@ async function prReviewDeps(ctx: JobExecContext, lens: "security" | "code" | "pe
     fetchImpl: fetch,
     nowSec: () => Math.floor(Date.now() / 1000),
     getIntegration: (installationId) => engine.findGithubAppByInstallation(installationId),
+    getUserAuthorization: (userId) => engine.findGithubAccountAuthorization?.(userId) ?? Promise.resolve(null),
+    getGitlabAuthorization: (userId, requestedOrgId) => engine.findGitlabAccountAuthorization?.(userId, requestedOrgId) ?? Promise.resolve(null),
     getVulnerabilityIntelligence: () => loadVulnerabilityIntelligence(),
     maxDiffChars: assignment?.maxDiffChars,
     timeoutMs: assignment?.timeoutMs,

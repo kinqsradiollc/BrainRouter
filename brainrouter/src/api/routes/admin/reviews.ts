@@ -7,7 +7,8 @@ import { requireAnyAuth, type AuthedRequest } from "../../middleware/auth.js";
 import { attachOrgContext, requirePermission } from "../../middleware/tenancy.js";
 import { sendError } from "../../../contracts/http.js";
 import { can } from "../../../tenancy/rbac.js";
-import { isRepoLinkedForReview } from "../../../integrations/githubWebhook.js";
+import { canAccessGithubRepository, isRepoAvailableForManualReview, isRepoLinkedForReview } from "../../../integrations/githubWebhook.js";
+import { resolveGithubAccountToken } from "../../../connectors/githubAccountToken.js";
 
 export const reviewsRouter = Router();
 reviewsRouter.use(requireAnyAuth);
@@ -22,11 +23,11 @@ type Lens = "security" | "code" | "pentest" | "both";
 const cache = new Map<string, { until: number; prs: unknown[] }>();
 
 function reviewRecord(job: MemoryJobRecord): ReviewJobDto {
-  const input = (job.input ?? {}) as { repo?: string; prNumber?: number; target?: string };
+  const input = (job.input ?? {}) as { repo?: string; prNumber?: number; target?: string; forge?: "github" | "gitlab" };
   const output = (job.output ?? {}) as { findings?: number; blocking?: number; posted?: boolean; error?: string; skipped?: string; findingsDetail?: unknown[] };
   return {
     id: job.id, lens: job.kind === "pr-code-review" ? "code" : (job.kind === "pr-pentest" || job.kind === "domain-pentest") ? "pentest" : "security", status: job.status,
-    repo: input.repo ?? input.target ?? null, prNumber: input.prNumber ?? null,
+    repo: input.repo ?? input.target ?? null, prNumber: input.prNumber ?? null, forge: input.forge === "gitlab" ? "gitlab" : "github",
     findings: typeof output.findings === "number" ? output.findings : null,
     blocking: typeof output.blocking === "number" ? output.blocking : null,
     findingsDetail: Array.isArray(output.findingsDetail) ? output.findingsDetail as ReviewJobDto["findingsDetail"] : [], progress: job.progress ?? [],
@@ -48,6 +49,38 @@ async function githubToken(orgId: string) {
   const token = await mintInstallationToken({ appId, privateKey, apiBase }, installationId, { fetchImpl: fetch as never, nowSec: () => Math.floor(Date.now() / 1000) });
   return { integ, apiBase, token: token.token, installationId };
 }
+type ManualReviewAuthorization = {
+  credentialSource: "github_app" | "github_account" | "gitlab_account";
+  installationId: string;
+};
+async function manualReviewAuthorization(orgId: string, userId: string, repo: string, forge: "github" | "gitlab"): Promise<ManualReviewAuthorization | null> {
+  if (forge === "gitlab") {
+    const account = await memoryEngine.findGitlabAccountAuthorization(userId, orgId);
+    if (!account) return null;
+    try {
+      const response = await fetch(`${account.apiBase}/projects/${encodeURIComponent(repo)}`, {
+        headers: { Authorization: `Bearer ${account.token}`, Accept: "application/json" },
+        signal: AbortSignal.timeout(15_000),
+      });
+      return response.ok ? { credentialSource: "gitlab_account", installationId: "" } : null;
+    } catch { return null; }
+  }
+  // Prefer the org's dedicated App bot when one exists. Fall back to the same
+  // per-user GitHub authorization that powers Connectors and Track, so a user
+  // never has to configure the same repository twice just to run a manual review.
+  try {
+    const app = await githubToken(orgId);
+    if (app && await isRepoAvailableForManualReview(app.integ.config, repo, { apiBase: app.apiBase, token: app.token })) {
+      return { credentialSource: "github_app", installationId: app.installationId };
+    }
+  } catch { /* a broken optional App integration must not mask a healthy account connector */ }
+
+  const account = await resolveGithubAccountToken(memoryEngine.emailAuth, userId);
+  if (account && await canAccessGithubRepository(repo, { apiBase: "https://api.github.com", token: account.accessToken })) {
+    return { credentialSource: "github_account", installationId: "" };
+  }
+  return null;
+}
 async function canRun(req: AuthedRequest): Promise<boolean> {
   if (req.isAdmin || can(req.role, "reviews:run")) return true;
   if (req.role !== "developer") return false;
@@ -60,7 +93,12 @@ async function requireRun(req: AuthedRequest, res: any): Promise<boolean> {
   sendError(res, 403, "This action requires the 'reviews:run' capability");
   return false;
 }
-function validRepo(repo: unknown): repo is string { return typeof repo === "string" && /^[^/\s]+\/[^/\s]+$/.test(repo); }
+function validRepo(repo: unknown, forge: "github" | "gitlab" = "github"): repo is string {
+  if (typeof repo !== "string") return false;
+  const segments = repo.split("/");
+  return segments.length >= 2 && (forge === "gitlab" || segments.length === 2)
+    && segments.every((part) => /^[A-Za-z0-9_.-]+$/.test(part) && part !== "." && part !== "..");
+}
 
 /** GET /jobs — compact recent list; developer-readable. */
 reviewsRouter.get("/jobs", requirePermission("reviews:read"), async (req: AuthedRequest, res) => {
@@ -119,24 +157,38 @@ reviewsRouter.get("/jobs/:id", requirePermission("reviews:read"), async (req: Au
   res.json({ review: reviewRecord(job), canRun: await canRun(req) });
 });
 
-/** POST /run — validates linked repo, audits requester, and refuses duplicate in-flight jobs. */
+/** POST /run — validates installation access, audits requester, and refuses duplicate in-flight jobs. */
 reviewsRouter.post("/run", async (req: AuthedRequest, res) => {
   if (!(await requireRun(req, res))) return;
   const repo = req.body?.repo;
   const prNumber = Number(req.body?.prNumber);
   const lens = req.body?.lens as Lens;
-  if (!validRepo(repo) || !Number.isInteger(prNumber) || prNumber <= 0 || !["security", "code", "pentest", "both"].includes(lens)) { sendError(res, 400, "repo, positive prNumber, and lens are required"); return; }
-  const token = await githubToken(req.orgId!);
-  if (!token || !isRepoLinkedForReview(token.integ.config, repo)) { sendError(res, 400, "Repository is not linked for review"); return; }
+  const forge = req.body?.forge === "gitlab" ? "gitlab" : "github";
+  if (!validRepo(repo, forge) || !Number.isInteger(prNumber) || prNumber <= 0 || !["security", "code", "pentest", "both"].includes(lens)) { sendError(res, 400, "repo, positive prNumber, and lens are required"); return; }
+  const authorization = await manualReviewAuthorization(req.orgId!, req.userId!, repo, forge);
+  if (!authorization) { sendError(res, 400, `Repository is not available through the connected ${forge === "gitlab" ? "GitLab" : "GitHub"} authorization`); return; }
   const requested = lens === "both" ? ["security", "code"] as const : [lens] as const;
   const store = memoryEngine.store as Store;
   const jobs: Array<{ id: string; lens: "security" | "code" | "pentest" }> = [];
   for (const one of requested) {
     const kind = one === "security" ? "pr-security-review" : one === "pentest" ? "pr-pentest" : "pr-code-review";
     const inflight = (await store.listMemoryJobs?.({ kind, status: ["pending", "running"], limit: 500 })) ?? [];
-    const duplicate = inflight.find((job) => { const input = job.input as { orgId?: unknown; repo?: unknown; prNumber?: unknown }; return input.orgId === req.orgId && input.repo === repo && Number(input.prNumber) === prNumber; });
+    const duplicate = inflight.find((job) => { const input = job.input as { orgId?: unknown; repo?: unknown; prNumber?: unknown; forge?: unknown }; return input.orgId === req.orgId && input.repo === repo && Number(input.prNumber) === prNumber && (input.forge === "gitlab" ? "gitlab" : "github") === forge; });
     if (duplicate) { jobs.push({ id: duplicate.id, lens: one }); continue; }
-    const job = await store.enqueueMemoryJob?.({ kind, input: { orgId: req.orgId!, installationId: token.installationId, repo, prNumber, headSha: "", requestedBy: req.userId }, maxAttempts: 3 });
+    const job = await store.enqueueMemoryJob?.({
+      kind,
+      input: {
+        orgId: req.orgId!,
+        forge,
+        installationId: authorization.installationId,
+        credentialSource: authorization.credentialSource,
+        repo,
+        prNumber,
+        headSha: "",
+        requestedBy: req.userId,
+      },
+      maxAttempts: 3,
+    });
     if (job) jobs.push({ id: job.id, lens: one });
   }
   res.status(202).json({ jobs });
@@ -153,7 +205,7 @@ reviewsRouter.get("/prs", requirePermission("reviews:read"), async (req: AuthedR
   if (!Array.isArray(linked)) {
     try {
       const response = await fetch(`${auth.apiBase}/installation/repositories?per_page=100`, { headers: ghHeaders(auth.token) });
-      if (response.ok) repos = ((await response.json() as { repositories?: Array<{ full_name?: string }> }).repositories ?? []).map((repo) => String(repo.full_name ?? "")).filter(validRepo);
+      if (response.ok) repos = ((await response.json() as { repositories?: Array<{ full_name?: string }> }).repositories ?? []).map((repo) => String(repo.full_name ?? "")).filter((repo) => validRepo(repo));
     } catch { /* a console read should degrade to an empty PR list */ }
   }
   const jobs = (await (memoryEngine.store as Store).listReviewJobsForOrg?.(req.orgId!, 500)) ?? [];

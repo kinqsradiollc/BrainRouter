@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import crypto from "node:crypto";
-import { verifyGithubSignature, processGithubDelivery, isRepoLinkedForReview, parseReviewCommand, resolveCommenterPermission, resolveReviewPolicy, type WebhookDeps } from "./githubWebhook.js";
+import { verifyGithubSignature, processGithubDelivery, isRepoLinkedForReview, isRepoAvailableForManualReview, parseReviewCommand, resolveCommenterPermission, resolveReviewPolicy, type WebhookDeps } from "./githubWebhook.js";
 
 const SECRET = "whsec_test_123";
 function sign(raw: Buffer, secret = SECRET): string {
@@ -86,9 +86,43 @@ describe("ADR-010 P6b — GitHub webhook core", () => {
   it("isRepoLinkedForReview: absent field → all; present allowlist → membership", () => {
     expect(isRepoLinkedForReview({ installationId: "42" }, "acme/app")).toBe(true); // never configured → review all
     expect(isRepoLinkedForReview({ linkedRepositories: ["acme/app", "acme/lib"] }, "acme/app")).toBe(true);
+    expect(isRepoLinkedForReview({ linkedRepositories: ["Acme/App"] }, "acme/app")).toBe(true); // GitHub names are case-insensitive
     expect(isRepoLinkedForReview({ linkedRepositories: ["acme/other"] }, "acme/app")).toBe(false);
     expect(isRepoLinkedForReview({ linkedRepositories: [] }, "acme/app")).toBe(false); // opted in to nothing
     expect(isRepoLinkedForReview(undefined, "acme/app")).toBe(true);
+  });
+
+  it("manual review accepts repositories available to the connected GitHub App", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ full_name: "acme/app" }), { status: 200 })) as unknown as typeof fetch;
+
+    await expect(isRepoAvailableForManualReview(
+      { linkedRepositories: [] },
+      "acme/app",
+      { apiBase: "https://api.github.com", token: "installation-token" },
+      fetchImpl,
+    )).resolves.toBe(true);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://api.github.com/repos/acme/app",
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer installation-token" }) }),
+    );
+  });
+
+  it("manual review remains denied when the GitHub App cannot access the repository", async () => {
+    const deniedFetch = vi.fn(async () => new Response("not found", { status: 404 })) as unknown as typeof fetch;
+    const failingFetch = vi.fn(async () => { throw new Error("offline"); }) as unknown as typeof fetch;
+
+    await expect(isRepoAvailableForManualReview(
+      { linkedRepositories: ["acme/other"] },
+      "acme/app",
+      { apiBase: "https://api.github.com", token: "installation-token" },
+      deniedFetch,
+    )).resolves.toBe(false);
+    await expect(isRepoAvailableForManualReview(
+      { linkedRepositories: [] },
+      "acme/app",
+      { apiBase: "https://api.github.com", token: "installation-token" },
+      failingFetch,
+    )).resolves.toBe(false);
   });
 
   it("pull_request on an UNLINKED repo → trigger enqueues but NO reviews", async () => {

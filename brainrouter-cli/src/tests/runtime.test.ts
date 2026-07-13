@@ -1,8 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { parseInterval, isLoopRunning, startLoop, stopLoop, getLoopState } from '../runtime/background/loopRunner.js';
-import { resolveSandboxConfig, decideUnavailableSandbox, detectSandboxDenial, isDangerousCommand, resolveRunCommandApproval } from '@kinqs/brainrouter-core/exec';
+import {
+  resolveSandboxConfig,
+  decideUnavailableSandbox,
+  detectSandboxDenial,
+  isDangerousCommand,
+  resolveRunCommandApproval,
+} from '@kinqs/brainrouter-core/exec';
 import { startSpan, traceEnabled } from '@kinqs/brainrouter-core/telemetry';
+import { _resetCliKnobsCache, setCliKnobOverride } from '@kinqs/brainrouter-core/config';
 
 test('callOpenAI: rejects malformed LLM responses with a useful error instead of TypeError', async () => {
   // Stub the global fetch with three scenarios that have historically crashed
@@ -10,7 +17,14 @@ test('callOpenAI: rejects malformed LLM responses with a useful error instead of
   // when the upstream returned HTTP 200 + a non-standard body.
   const { callOpenAI } = await import('@kinqs/brainrouter-core/agent');
   const realFetch = global.fetch;
-  const llmConfig = { provider: 'openai' as const, apiKey: 'test', model: 'gpt-oss-120b', endpoint: 'http://localhost:9999/v1' };
+  const llmConfig = {
+    provider: 'openai' as const,
+    apiKey: 'test',
+    model: 'gpt-oss-120b',
+    endpoint: 'http://localhost:9999/v1',
+  };
+  _resetCliKnobsCache();
+  setCliKnobOverride({ providerRequestFormat: { openai: 'chat-completions' } });
 
   const cases: Array<{ name: string; body: any; expectMatch: RegExp }> = [
     {
@@ -32,10 +46,11 @@ test('callOpenAI: rejects malformed LLM responses with a useful error instead of
 
   try {
     for (const c of cases) {
-      global.fetch = (async () => new Response(JSON.stringify(c.body), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })) as any;
+      global.fetch = (async () =>
+        new Response(JSON.stringify(c.body), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })) as any;
       await assert.rejects(
         () => callOpenAI(llmConfig, [], []),
         (err: any) => c.expectMatch.test(err.message ?? ''),
@@ -44,6 +59,7 @@ test('callOpenAI: rejects malformed LLM responses with a useful error instead of
     }
   } finally {
     global.fetch = realFetch;
+    _resetCliKnobsCache();
   }
 });
 

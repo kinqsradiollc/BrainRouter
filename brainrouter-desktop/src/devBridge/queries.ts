@@ -37,6 +37,8 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     { role: 'explorer', provider: 'groq', model: null },
     { role: 'reviewer', provider: null, model: 'gpt-5.3-codex' },
   ];
+  const devFanoutRuns: Array<Record<string, unknown>> = [];
+  const devSshHosts: Array<Record<string, unknown>> = [];
   const devAutomationRules = [
     { id: 'label-fix', name: 'Fix labeled bugs', on: 'github.issue.labeled', when: "label == 'bug'", do: 'build', enabled: true, sourcePath: '/Users/dev/BrainRouter/.brainrouter/automations/label-fix.md' },
     { id: 'ci-repair', name: 'Repair failing CI', on: 'github.workflow_run.completed', when: "conclusion == 'failure'", do: 'fix-ci', enabled: false, sourcePath: '/Users/dev/BrainRouter/.brainrouter/automations/ci-repair.md' },
@@ -857,7 +859,7 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
         clearTimeout(timer);
       }
     },
-    'term-open': () => { S.termBuf = '\u001b[1;32mdemo-shell\u001b[0m on \u001b[1;34m/Users/dev/BrainRouter\u001b[0m\r\n$ '; return { id: 'tdemo', shell: '/bin/zsh (demo)' }; },
+    'term-open': () => { S.termBuf = '\u001b[1;32mdemo-shell\u001b[0m on \u001b[1;34m/Users/dev/BrainRouter\u001b[0m\r\n$ '; return { id: 'tdemo', shell: '/bin/zsh (demo)', snapshot: S.termBuf, start: 0, next: S.termBuf.length, alive: true, reused: false }; },
     'term-write': (a) => {
       const d = String(a.data ?? '');
       S.termBuf += d.replace('\r', '');
@@ -865,7 +867,46 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       return { ok: true };
     },
     'term-read': (a) => { const from = Number(a.from) || 0; return { chunk: S.termBuf.slice(from), next: S.termBuf.length, alive: true }; },
+    'term-resize': () => ({ ok: true }),
     'term-kill': () => ({ ok: true }),
+    'hosted-agent-catalog': () => ({ adapters: [
+      { id: 'brainrouter', label: 'BrainRouter', installed: true, requiresWorkspaceTrust: false },
+      { id: 'claude-code', label: 'Claude Code', installed: true, requiresWorkspaceTrust: true },
+      { id: 'codex', label: 'Codex CLI', installed: true, requiresWorkspaceTrust: true },
+      { id: 'opencode', label: 'OpenCode', installed: false, requiresWorkspaceTrust: true },
+      { id: 'gemini-cli', label: 'Gemini CLI', installed: true, requiresWorkspaceTrust: true },
+    ], selected: 'brainrouter' }),
+    'hosted-agent-attach': () => null,
+    'hosted-agent-start': (a) => ({ id: 'tdemo-agent', shell: String(a.adapterId ?? 'brainrouter'), snapshot: `\r\n[${String(a.adapterId ?? 'brainrouter')} started]\r\n`, start: 0, next: String(a.adapterId ?? 'brainrouter').length + 14, alive: true, reused: false, status: 'working' }),
+    'hosted-agent-status': () => null,
+    'hosted-agent-control': () => ({ ok: true }),
+    'hosted-agent-setup': () => ({ ok: true, hookCommand: 'native', mcp: 'registered' }),
+    'ssh-host-list': () => devSshHosts,
+    'ssh-host-discover-key': () => ({ fingerprint: `SHA256:${'A'.repeat(43)}` }),
+    'ssh-host-save': (a) => {
+      const host = { ...a, id: String(a.id ?? `ssh_demo${devSshHosts.length + 1}`), label: String(a.label ?? `${String(a.username)}@${String(a.host)}`), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      devSshHosts.push(host); return host;
+    },
+    'ssh-host-test': () => ({ ok: true, gitVersion: 'git version 2.45.2' }),
+    'ssh-host-remove': (a) => { const index = devSshHosts.findIndex((host) => host.id === a.id); if (index >= 0) devSshHosts.splice(index, 1); return { ok: index >= 0 }; },
+    'fanout-list': () => devFanoutRuns,
+    'fanout-start': (a) => {
+      const id = `fan_dev${devFanoutRuns.length + 1}`;
+      const adapters = Array.isArray(a.adapterIds) ? a.adapterIds.map(String) : ['brainrouter', 'codex'];
+      const executionHostId = String(a.executionHostId ?? 'local');
+      const run = { id, task: String(a.task ?? 'Demo fan-out'), status: 'running', executionHostId, candidates: adapters.map((adapterId, index) => ({ id: `${id}_c${index + 1}`, adapterId, status: 'working', executionHostId, terminalId: `tdemo_${index}`, changedFiles: index + 1, diffSummary: ` M src/candidate-${index + 1}.ts`, score: undefined, rank: undefined })) };
+      devFanoutRuns.unshift(run); return run;
+    },
+    'fanout-rank': (a) => { const run = devFanoutRuns.find((item) => item.id === a.runId) as { candidates?: Array<Record<string, unknown>>; status?: string } | undefined; run?.candidates?.forEach((candidate, index) => { candidate.rank = index + 1; candidate.score = 50 - index * 5; }); if (run) run.status = 'comparing'; return run ?? null; },
+    'fanout-promote': (a) => { const run = devFanoutRuns.find((item) => item.id === a.runId) as { winnerId?: string; status?: string; promotion?: unknown } | undefined; if (run) { run.winnerId = String(a.candidateId); run.status = 'promoted'; run.promotion = { mode: String(a.mode), ok: true }; } return run ?? null; },
+    'fanout-cleanup': () => ({ ok: true }),
+    'fanout-terminal': (a) => ({ id: String(a.candidateId), snapshot: `\u001b[36m${String(a.candidateId)}\u001b[0m\r\nWorking in isolated checkout…\r\n`, next: 48, alive: true }),
+    'fanout-control': () => ({ ok: true }),
+    'mobile-relay-status': () => ({ running: false, endpoints: [], connectedDevices: 0, devices: [] }),
+    'mobile-relay-start': () => ({ running: true, endpoints: ['ws://127.0.0.1:47631'], connectedDevices: 0, devices: [] }),
+    'mobile-relay-stop': () => ({ running: false, endpoints: [], connectedDevices: 0, devices: [] }),
+    'mobile-relay-pairing': () => ({ payload: { expiresAt: new Date(Date.now() + 300_000).toISOString() }, qrDataUrl: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="white"/><path d="M10 10h60v60H10zm120 0h60v60h-60zM10 130h60v60H10zm80-40h20v20H90zm40 20h30v30h-30z" fill="black"/></svg>') }),
+    'mobile-relay-revoke': () => ({ ok: true }),
     'file-diff': (a) => ({ path: String(a.path ?? 'src/agent/agent.ts'), diff: DEMO_DIFF }),
     'read-file': (a) => ({
       path: String(a.path ?? 'src/state/completionInbox.ts'),

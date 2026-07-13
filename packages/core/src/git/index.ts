@@ -7,3 +7,4 @@ export * from './checkpointStore.js';
 export * from './gitChurn.js';
 export * from './prEmit.js';
 export * from './workspaceGit.js';
+export * from './capabilities.js';

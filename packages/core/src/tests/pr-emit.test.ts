@@ -14,6 +14,7 @@ const {
   derivePrTitle,
   derivePrBody,
   parsePrUrl,
+  parseChangeRequestUrl,
   isGhAvailable,
   isSafeRef,
   redactSecrets,
@@ -95,6 +96,10 @@ test('parsePrUrl extracts the URL + number, and is empty when absent', () => {
   assert.deepEqual(parsePrUrl('no url here'), {});
 });
 
+test('parseChangeRequestUrl also extracts a GitLab merge-request URL', () => {
+  assert.deepEqual(parseChangeRequestUrl('https://gitlab.com/o/r/-/merge_requests/19\n'), { url: 'https://gitlab.com/o/r/-/merge_requests/19', number: 19 });
+});
+
 test('isGhAvailable reflects the gh --version exit', () => {
   assert.equal(isGhAvailable(makeRunner(() => ({ ok: true }))), true);
   assert.equal(isGhAvailable(makeRunner(() => ({ ok: false }))), false);
@@ -111,17 +116,19 @@ test('emitPrFromPatch skips when the patch file is missing', () => {
 test('emitPrFromPatch skips (no-gh) when the GitHub CLI is absent', () => {
   const res = emitPrFromPatch(
     { ...baseInput, patchPath: writePatch() },
-    makeRunner((cmd, args) => (cmd === 'gh' && args[0] === '--version' ? { ok: false } : { ok: true })),
+    makeRunner((cmd, args) => {
+      if (cmd === 'git' && args[0] === 'remote') return { ok: true, stdout: 'git@github.com:owner/repo.git' };
+      return cmd === 'gh' && args[0] === '--version' ? { ok: false } : { ok: true };
+    }),
   );
   assert.equal(res.skipped, 'no-gh');
 });
 
-test('emitPrFromPatch skips (no-remote) when origin is not a GitHub remote', () => {
+test('emitPrFromPatch skips (no-remote) when origin is not a recognized forge remote', () => {
   const res = emitPrFromPatch(
     { ...baseInput, patchPath: writePatch() },
     makeRunner((cmd, args) => {
-      if (cmd === 'gh' && args[0] === '--version') return { ok: true };
-      if (cmd === 'git' && args[0] === 'remote') return { ok: true, stdout: 'https://gitlab.com/o/r.git' };
+      if (cmd === 'git' && args[0] === 'remote') return { ok: true, stdout: 'https://example.com/o/r.git' };
       return { ok: true };
     }),
   );
@@ -178,6 +185,27 @@ test('emitPrFromPatch honors an explicit (safe) base branch override', () => {
   assert.ok(create!.args.includes('develop') && !create!.args.includes('main'));
 });
 
+test('emitPrFromPatch opens a GitLab draft merge request through glab', () => {
+  const calls: Call[] = [];
+  const res = emitPrFromPatch(
+    { ...baseInput, patchPath: writePatch() },
+    makeRunner((cmd, args) => {
+      if (cmd === 'git' && args[0] === 'remote') return { ok: true, stdout: 'git@gitlab.com:owner/repo.git' };
+      if (cmd === 'git' && args[0] === 'branch') return { ok: true, stdout: 'main\n' };
+      if (cmd === 'glab' && args[0] === '--version') return { ok: true, stdout: 'glab 1.0' };
+      if (cmd === 'glab' && args[0] === 'mr' && args[1] === 'create') return { ok: true, stdout: 'https://gitlab.com/owner/repo/-/merge_requests/9\n' };
+      return { ok: true };
+    }, calls),
+  );
+  assert.equal(res.ok, true);
+  assert.equal(res.forge, 'gitlab');
+  assert.equal(res.prNumber, 9);
+  const create = calls.find((call) => call.cmd === 'glab' && call.args[0] === 'mr' && call.args[1] === 'create');
+  assert.ok(create?.args.includes('--draft'));
+  assert.ok(create?.args.includes('--source-branch'));
+  assert.ok(!calls.some((call) => call.cmd === 'gh'), 'GitLab delivery never probes or invokes gh');
+});
+
 // --- emitPrFromPatch: failure modes ---------------------------------------
 
 test('emitPrFromPatch reports a push failure (pushed:false) and cleans up', () => {
@@ -195,7 +223,7 @@ test('emitPrFromPatch reports a push failure (pushed:false) and cleans up', () =
   assert.ok(calls.some((c) => c.cmd === 'git' && c.args[0] === 'worktree' && c.args[1] === 'remove'));
 });
 
-test('emitPrFromPatch reports a gh-create failure but notes the branch was pushed', () => {
+test('emitPrFromPatch reports a forge create failure but notes the branch was pushed', () => {
   const res = emitPrFromPatch(
     { ...baseInput, patchPath: writePatch() },
     makeRunner((cmd, args) => {
@@ -205,7 +233,7 @@ test('emitPrFromPatch reports a gh-create failure but notes the branch was pushe
   );
   assert.equal(res.ok, false);
   assert.equal(res.pushed, true);
-  assert.match(res.error ?? '', /gh pr create failed/);
+  assert.match(res.error ?? '', /gh change-request create failed/);
 });
 
 test('emitPrFromPatch reports a failed patch apply without pushing', () => {

@@ -14,11 +14,16 @@ import { mergeGithubCliEnv, normalizeGithubCliError } from './ghCli.js';
 // host/helpers — pure, closure-free helpers (config scrubbing, Track↔GitHub
 // normalization, computer-use/secret bridges, endpoint model probing, transcript
 // row reconstruction) extracted verbatim from this file.
-import { createComputerUseBridge, createSecretBridge, git, type ParentPortLike, type TermSession } from './host/helpers.js';
+import { createComputerUseBridge, createSecretBridge, git, type ParentPortLike } from './host/helpers.js';
 // host/queries — the extracted query router (the former inline ~2400-line
 // `queries` object). host.ts assembles the HostContext bag below and folds
 // buildQueries(ctx) into createHostCore({ queries }).
 import { buildQueries } from './host/queries.js';
+import { PtyRegistry } from './host/pty.js';
+import { HostedAgentManager } from './host/hostedAgents.js';
+import { FanoutManager } from './host/fanoutManager.js';
+import { RemoteWorktreeManager } from './host/sshRemote.js';
+import { MobileRelayServer } from './host/mobileRelayServer.js';
 import { ensureBrainSession } from './host/brainSession.js';
 // host/github-track-services — the extracted gh-CLI / connector / Track-PR
 // service layer. host.ts builds it with its runtime deps and folds the returned
@@ -637,9 +642,38 @@ async function main(): Promise<void> {
     emitRecordEvent({ kind: 'provenance', subjectKind: 'artifact', subjectId: record.id, provenance });
   };
 
-  // DESK-5c — terminal session registry + endpoint-models cache.
-  const terms = new Map<string, TermSession>();
-  let termSeq = 0;
+  // One real PTY registry per workspace host. A panel can detach/re-attach while
+  // the shell and scrollback remain host-owned; host shutdown kills every child.
+  const ptyRegistry = new PtyRegistry({ workspaceRoot });
+  const hostedAgents = new HostedAgentManager({
+    workspaceRoot,
+    ptyRegistry,
+    onTransition: (session) => {
+      send({
+        seq: ++portSeq,
+        ts: Date.now(),
+        sessionKey: session.sessionKey,
+        event: { kind: 'status', text: `${session.adapterId}: ${session.status}` },
+      });
+      try {
+        appendTranscriptEntry(workspaceRoot, session.sessionKey, {
+          role: 'system',
+          content: `[hosted-agent] ${session.adapterId} status: ${session.status}`,
+        });
+      } catch { /* status persistence is advisory */ }
+    },
+  });
+  const remoteWorktrees = new RemoteWorktreeManager(workspaceRoot);
+  const fanoutManager = new FanoutManager({ workspaceRoot, hostedAgents, remoteWorktrees });
+  const mobileRelay = new MobileRelayServer({
+    status: () => fanoutManager.list(),
+    terminalSnapshot: (candidateId) => {
+      const attached = fanoutManager.attach(candidateId);
+      return attached ? { snapshot: attached.snapshot, start: attached.start, next: attached.next, alive: attached.alive } : null;
+    },
+    terminalInput: (candidateId, data) => fanoutManager.writeTerminal(candidateId, data),
+    agentControl: (candidateId, action, text) => fanoutManager.control(candidateId, action, text),
+  });
   // Per-endpoint /models cache ('' = the active llm; otherwise a named provider).
   const modelsCacheByKey = new Map<string, { models: string[]; at: number }>();
   // DESK-5d — PR state cache (gh is a network call; the sidebar refreshes often).
@@ -966,7 +1000,7 @@ async function main(): Promise<void> {
     lifecycleActionFor, emitRecordEvent, taskEventView, emitTaskEvent, taskProgress,
     verifyTitle, observeVerificationEvent, goalStrikes,
     captureRequirementNote, captureAnnotationNote, captureAnnotationExportNote, captureArtifactNote,
-    terms, nextTermSeq: () => ++termSeq, modelsCacheByKey,
+    ptyRegistry, hostedAgents, fanoutManager, remoteWorktrees, mobileRelay, modelsCacheByKey,
     getPrCache: () => prCache, setPrCache: (v) => { prCache = v; },
     getPrStatusMapCache: () => prStatusMapCache, setPrStatusMapCache: (v) => { prStatusMapCache = v; },
     readTranscriptCached, isoNow, collectWorkingDiff,
@@ -1030,6 +1064,10 @@ async function main(): Promise<void> {
       clearInterval(connectorSchedulerTimer);
       clearTimeout(connectorSchedulerBootTimer);
       stopWorkspaceWatcher();
+      mobileRelay.stop();
+      fanoutManager.dispose();
+      hostedAgents.dispose();
+      ptyRegistry.dispose();
       uitest.dispose();
       void mcpClient.close?.();
       process.exit(0);

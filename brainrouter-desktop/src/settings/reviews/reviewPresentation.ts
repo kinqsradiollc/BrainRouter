@@ -8,6 +8,7 @@ export interface ReviewListPresentation<T = unknown> {
 export interface PullRequestReviewTarget {
   repo: string;
   prNumber: number;
+  forge: 'github' | 'gitlab';
 }
 
 export interface ReviewActionAccess {
@@ -22,7 +23,7 @@ export function reviewActionAvailability(access: ReviewActionAccess, target: Pul
   if (!access.signedIn) return { enabled: false, help: 'Sign in to BrainRouter to use organization reviews.' };
   if (access.error) return { enabled: false, help: `Reviews unavailable: ${access.error}` };
   if (!access.canRun) return { enabled: false, help: 'Your role can view reviews but needs the reviews:run capability to start one.' };
-  if (!target) return { enabled: false, help: 'The GitHub repository could not be resolved for this pull request.' };
+  if (!target) return { enabled: false, help: 'The repository could not be resolved for this change request.' };
   return { enabled: true, help: 'Runs with your organization policy and posts the result to this pull request.' };
 }
 
@@ -40,6 +41,17 @@ export function githubPullRequestUrl(repo: string, prNumber: number): string | n
   return `https://github.com/${normalizedRepo}/pull/${prNumber}`;
 }
 
+export function changeRequestUrl(repo: string, prNumber: number, forge: 'github' | 'gitlab' = 'github'): string | null {
+  const normalizedRepo = repo.trim();
+  const parts = normalizedRepo.split('/');
+  if (parts.length < 2 || (forge === 'github' && parts.length !== 2)) return null;
+  if (parts.some((segment) => !/^[A-Za-z0-9_.-]+$/.test(segment) || segment === '.' || segment === '..')) return null;
+  if (!Number.isSafeInteger(prNumber) || prNumber <= 0) return null;
+  return forge === 'gitlab'
+    ? `https://gitlab.com/${normalizedRepo}/-/merge_requests/${prNumber}`
+    : `https://github.com/${normalizedRepo}/pull/${prNumber}`;
+}
+
 /** Resolve an org-review target from the canonical PR URL returned by GitHub or
  * GitHub Enterprise. Keeping this strict prevents a malformed local `gh` result
  * from reaching the account-scoped review endpoint. */
@@ -49,6 +61,14 @@ export function pullRequestReviewTarget(url: string | undefined, expectedNumber?
     const parsed = new URL(url);
     if (parsed.protocol !== 'https:') return null;
     const parts = parsed.pathname.split('/').filter(Boolean);
+    const dash = parts.indexOf('-');
+    if (dash >= 2 && parts[dash + 1] === 'merge_requests') {
+      const repoParts = parts.slice(0, dash);
+      if (repoParts.some((part) => !/^[A-Za-z0-9_.-]+$/.test(part) || part === '.' || part === '..')) return null;
+      const prNumber = Number(parts[dash + 2]);
+      if (!Number.isSafeInteger(prNumber) || prNumber <= 0 || (expectedNumber !== undefined && expectedNumber !== prNumber)) return null;
+      return { repo: repoParts.join('/'), prNumber, forge: 'gitlab' };
+    }
     if (parts.length < 4 || parts[2] !== 'pull') return null;
     const [owner, repo] = parts;
     if (!/^[A-Za-z0-9_.-]+$/.test(owner) || !/^[A-Za-z0-9_.-]+$/.test(repo)) return null;
@@ -56,7 +76,7 @@ export function pullRequestReviewTarget(url: string | undefined, expectedNumber?
     const prNumber = Number(parts[3]);
     if (!Number.isSafeInteger(prNumber) || prNumber <= 0) return null;
     if (expectedNumber !== undefined && expectedNumber !== prNumber) return null;
-    return { repo: `${owner}/${repo}`, prNumber };
+    return { repo: `${owner}/${repo}`, prNumber, forge: 'github' };
   } catch {
     return null;
   }
