@@ -39,6 +39,8 @@ export interface JobEngineOps {
   runRetrievalBenchmark(userId: string, opts?: { sampleSize?: number; baseDir?: string }): Promise<{ summaryPath: string | null; statsByMode: Record<string, unknown>; sampled: number; passed: boolean }>;
   /** ADR-017 D5 — the org's GitHub App creds (non-secret config + opened secret) for a webhook installation. */
   findGithubAppByInstallation(installationId: string): Promise<{ config: Record<string, unknown>; secret: Record<string, string> } | null>;
+  reviewRunner?(lens: "security" | "code", orgId?: string): LLMRunner | Promise<LLMRunner | undefined> | undefined;
+  reviewAssignment?(lens: "security" | "code", orgId?: string): { maxDiffChars?: number; timeoutMs?: number } | Promise<{ maxDiffChars?: number; timeoutMs?: number } | undefined> | undefined;
 }
 
 export interface JobExecContext {
@@ -51,6 +53,8 @@ export interface JobExecContext {
    * its presence and the production runner always supplies it.
    */
   engine?: JobEngineOps;
+  /** Bound by the scheduler for best-effort persistent progress events. */
+  jobId?: string;
 }
 
 function requireEngine(ctx: JobExecContext): JobEngineOps {
@@ -70,13 +74,21 @@ function prReviewInput(input: any): PrReviewInput {
     headSha: String(input?.headSha ?? ""),
   };
 }
-function prReviewDeps(ctx: JobExecContext): PrReviewDeps {
+async function prReviewDeps(ctx: JobExecContext, lens: "security" | "code", orgId?: string): Promise<PrReviewDeps> {
   const engine = requireEngine(ctx);
+  const assignment = await engine.reviewAssignment?.(lens, orgId);
+  const reviewRunner = await engine.reviewRunner?.(lens, orgId);
   return {
-    llmRunner: ctx.llmRunner,
+    llmRunner: reviewRunner ?? ctx.llmRunner,
     fetchImpl: fetch,
     nowSec: () => Math.floor(Date.now() / 1000),
     getIntegration: (installationId) => engine.findGithubAppByInstallation(installationId),
+    maxDiffChars: assignment?.maxDiffChars,
+    timeoutMs: assignment?.timeoutMs,
+    onProgress: (event) => {
+      if (!ctx.jobId) return;
+      void ctx.store.appendJobProgress(ctx.jobId, { ts: new Date().toISOString(), ...event }).catch(() => {});
+    },
   };
 }
 
@@ -153,8 +165,8 @@ const EXECUTORS: Record<string, JobExecutor> = {
   // ADR-017 D5 — the GitHub App bot's automatic PR reviews. Both are enqueued by the
   // pull_request webhook; each mints the installation token, reviews the diff with its
   // LENS, and posts back inline suggestions + a summary + a gating check-run.
-  "pr-security-review": (input, ctx) => runPrSecurityReview(prReviewInput(input), prReviewDeps(ctx)),
-  "pr-code-review": (input, ctx) => runPrCodeReview(prReviewInput(input), prReviewDeps(ctx)),
+  "pr-security-review": async (input, ctx) => runPrSecurityReview(prReviewInput(input), await prReviewDeps(ctx, "security", typeof input?.orgId === "string" ? input.orgId : undefined)),
+  "pr-code-review": async (input, ctx) => runPrCodeReview(prReviewInput(input), await prReviewDeps(ctx, "code", typeof input?.orgId === "string" ? input.orgId : undefined)),
 };
 
 export function getJobExecutor(agentId: string): JobExecutor | undefined {

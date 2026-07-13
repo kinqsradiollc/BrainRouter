@@ -46,6 +46,19 @@ export interface PrReviewDeps {
   getIntegration: (installationId: string) => Promise<{ config: Record<string, unknown>; secret: Record<string, string> } | null>;
   /** Cap on the diff (chars) sent to the model — a huge PR must not blow the context. */
   maxDiffChars?: number;
+  timeoutMs?: number;
+  /** Best-effort durable job activity callback (must never affect review output). */
+  onProgress?: (event: { kind: string; msg: string; data?: Record<string, unknown> }) => void;
+}
+
+export interface PrReviewFindingDetail {
+  file: string;
+  line?: number;
+  severity: string;
+  title: string;
+  cwe?: string;
+  preExisting?: boolean;
+  suggestable?: boolean;
 }
 
 export interface PrReviewResult {
@@ -64,6 +77,8 @@ export interface PrReviewResult {
   approved?: boolean;
   skipped?: string;
   error?: string;
+  /** Compact, non-sensitive finding projection for the PR console. */
+  findingsDetail?: PrReviewFindingDetail[];
 }
 
 // Back-compat aliases (the security lens was the original single kind).
@@ -87,6 +102,10 @@ export function runPrCodeReview(input: PrReviewInput, deps: PrReviewDeps): Promi
 
 /** Run one review lens end-to-end: diff → LLM → inline suggestions + summary + check-run. */
 export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens: ReviewLens): Promise<PrReviewResult> {
+  const progress = (kind: string, msg: string, data?: Record<string, unknown>) => {
+    try { deps.onProgress?.({ kind, msg, ...(data ? { data } : {}) }); } catch { /* observability is best effort */ }
+  };
+  progress("queued", `${lens.name} review started`);
   const repo = String(input.repo ?? '').trim();
   const prNumber = Number(input.prNumber);
   if (!/^[^/\s]+\/[^/\s]+$/.test(repo) || !Number.isInteger(prNumber) || prNumber <= 0) {
@@ -104,7 +123,8 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
   let token: string;
   try {
     token = (await mintInstallationToken({ appId, privateKey, apiBase }, String(input.installationId), { fetchImpl: deps.fetchImpl as never, nowSec: deps.nowSec })).token;
-  } catch (e) { return { ok: false, findings: 0, posted: false, error: e instanceof Error ? e.message : 'token mint failed' }; }
+  } catch (e) { const error = e instanceof Error ? e.message : 'token mint failed'; progress("error", error); return { ok: false, findings: 0, posted: false, error }; }
+  progress("token-minted", "Installation token minted");
 
   // Resolve the head SHA if the caller didn't supply it (a `/review` comment re-run comes
   // from an issue_comment webhook, which carries no head sha). Needed for the check-run's
@@ -116,24 +136,31 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
       if (pr.ok) { const j = (await pr.json()) as { head?: { sha?: string } }; headSha = String(j?.head?.sha ?? ''); }
     } catch { /* headSha stays '' → check-run skipped, comments still post */ }
   }
+  progress("head-resolved", headSha ? "PR head resolved" : "PR head unavailable", headSha ? { sha: headSha } : undefined);
 
   // 1. Fetch the unified diff for the PR.
   let diff = '';
   try {
     const r = await deps.fetchImpl(`${apiBase}/repos/${repo}/pulls/${prNumber}`, { headers: ghHeaders(token, 'application/vnd.github.diff') });
-    if (!r.ok) return { ok: false, findings: 0, posted: false, error: `diff HTTP ${r.status}` };
+    if (!r.ok) { const error = `diff HTTP ${r.status}`; progress("error", error); return { ok: false, findings: 0, posted: false, error }; }
     diff = await r.text();
-  } catch (e) { return { ok: false, findings: 0, posted: false, error: e instanceof Error ? e.message : 'diff fetch failed' }; }
+  } catch (e) { const error = e instanceof Error ? e.message : 'diff fetch failed'; progress("error", error); return { ok: false, findings: 0, posted: false, error }; }
   if (!diff.trim()) return { ok: true, findings: 0, posted: false, skipped: 'empty-diff' };
 
   // 2. Run the single-shot reviewer (this lens) over the diff.
   const cap = deps.maxDiffChars ?? 60_000;
+  progress("diff-fetched", "PR diff fetched", { bytes: diff.length, truncated: diff.length > cap, files: addedLinesByPath(diff).size });
   const prompt = `You are reviewing pull request #${prNumber} in ${repo}. Here is the unified diff:\n\n\`\`\`diff\n${diff.slice(0, cap)}\n\`\`\`\n\n${lens.buildContract()}`;
   let reviewText = '';
+  const startedAt = Date.now();
+  progress("llm-started", "Review model started", { provider: "review", model: "configured" });
   try {
-    reviewText = await deps.llmRunner.run({ prompt, systemPrompt: lens.systemPrompt, taskId: `pr-${lens.id}-review:${repo}#${prNumber}`, timeoutMs: 120_000 });
-  } catch (e) { return { ok: false, findings: 0, posted: false, error: e instanceof Error ? e.message : 'review failed' }; }
+    reviewText = await deps.llmRunner.run({ prompt, systemPrompt: lens.systemPrompt, taskId: `pr-${lens.id}-review:${repo}#${prNumber}`, timeoutMs: deps.timeoutMs ?? 120_000 });
+  } catch (e) { const error = e instanceof Error ? e.message : 'review failed'; progress("error", error); return { ok: false, findings: 0, posted: false, error }; }
+  progress("llm-finished", "Review model finished", { ms: Date.now() - startedAt });
   const findings = parseReviewFindings(stripReasoning(reviewText));
+  const blocking = findings.filter((f) => lens.isBlocking(f)).length;
+  progress("findings-parsed", "Findings parsed", { total: findings.length, blocking });
 
   // 3. Post inline review comments (with GitHub ```suggestion blocks) anchored to the
   //    diff, grouped as ONE PR review — deduped against inline comments we already
@@ -165,11 +192,13 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
       for (const c of inline) if (await postSingleInlineComment(deps.fetchImpl, apiBase, repo, prNumber, headSha, c, token)) inlinePosted++;
     }
   }
+  progress("inline-posted", "Inline comments posted", { n: inlinePosted, skippedAnchors: findings.length - inline.length });
 
   // 4. Post/update ONE idempotent PINNED SUMMARY comment (keyed by the lens marker) with
   //    the full tally — the single place to read this lens's status for the whole PR.
   const body = formatReviewSummaryComment(lens, { findings, headSha });
   const posted = await upsertReviewComment(deps.fetchImpl, apiBase, repo, prNumber, body, token, lens.summaryMarker);
+  progress("summary-posted", posted ? "Review summary posted" : "Review summary could not be posted");
 
   // 4b. Approve the PR from this lens when it's clean AND the repo opts in (Strix
   //     "Approve clean PRs"). Approvals only on a green lens; noise otherwise.
@@ -177,15 +206,23 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
   if (findings.length === 0 && policy.approveClean) {
     approved = await postGroupedReview(deps.fetchImpl, apiBase, repo, prNumber, headSha, buildReviewIntro(lens, 0), [], token, 'APPROVE');
   }
+  if (reviewPosted) progress("review-posted", "Grouped review posted");
+  if (approved) progress("approved", "Clean PR approved");
 
   // 5. Post a gating CHECK-RUN so the PR's Checks box reflects the review and branch
   //    protection can REQUIRE it (Strix-style). Blocking findings ⇒ failure; findings
   //    with none blocking ⇒ neutral; clean ⇒ success. When the repo's `blockOnFindings`
   //    is off, the check is advisory (never 'failure'). No-op (false) without `checks: write`.
-  const blocking = findings.filter((f) => lens.isBlocking(f)).length;
   const checkPosted = await postCheckRun(deps.fetchImpl, apiBase, repo, headSha, lens, findings, blocking, policy.blockOnFindings, token);
+  progress("check-posted", checkPosted ? "Check run posted" : "Check run could not be posted", { conclusion: blocking > 0 && policy.blockOnFindings && !lens.advisory ? "failure" : findings.length > 0 ? "neutral" : "success" });
+  const findingsDetail = findings.slice(0, 50).map((finding) => ({
+    file: finding.file, ...(finding.line ? { line: finding.line } : {}), severity: finding.severity, title: finding.summary,
+    ...(finding.summary.match(/\b(CWE-\d+)\b/i)?.[1] ? { cwe: finding.summary.match(/\b(CWE-\d+)\b/i)?.[1] } : {}),
+    ...(finding.preExisting ? { preExisting: true } : {}), ...(finding.replacement ? { suggestable: true } : {}),
+  }));
+  progress("done", "Review completed");
 
-  return { ok: true, findings: findings.length, blocking, posted, inlinePosted, reviewPosted, checkPosted, approved };
+  return { ok: true, findings: findings.length, blocking, posted, inlinePosted, reviewPosted, checkPosted, approved, findingsDetail };
 }
 
 interface InlineReviewComment {

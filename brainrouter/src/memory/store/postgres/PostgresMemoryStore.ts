@@ -484,6 +484,9 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public getDefaultResolvedProvider(orgId: string, kind: ProviderKind): Promise<ResolvedProviderConfig | null> {
     return providerCfg.getDefaultResolvedProvider(this.exec, orgId, kind);
   }
+  public getResolvedProvider(id: string): Promise<ResolvedProviderConfig | null> {
+    return providerCfg.getResolvedProvider(this.exec, id);
+  }
 
   // ── integrations (ADR-010 P6: org-scoped GitHub App etc.) ────────────────
 
@@ -801,6 +804,10 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
 
   public listMemoryJobs(filters?: MemoryJobListFilters): Promise<MemoryJobRecord[]> {
     return job.listMemoryJobs(this.exec, filters);
+  }
+
+  public appendJobProgress(id: string, event: import("@kinqs/brainrouter-types").MemoryJobProgressEvent): Promise<void> {
+    return job.appendJobProgress(this.exec, id, event);
   }
 
   /** ADR-017 D5 — recent PR-review jobs for an org's Reviews dashboard (newest-first). */

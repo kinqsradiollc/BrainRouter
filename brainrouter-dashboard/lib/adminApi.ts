@@ -138,10 +138,22 @@ export interface ReviewJob {
   prNumber: number | null;
   findings: number | null;
   blocking: number | null;
+  findingsDetail?: { file: string; line?: number; severity: string; title: string; cwe?: string; preExisting?: boolean; suggestable?: boolean }[];
+  progress?: { ts: string; kind: string; msg: string; data?: Record<string, unknown> }[];
   skipped: string | null;
   error: string | null;
   updatedAt: string;
   createdAt: string;
+}
+
+export interface ReviewPullRequest {
+  repo: string; number: number; title: string; author: string | null; headSha: string | null; updatedAt: string | null; url: string | null;
+  security: ReviewJob | null; code: ReviewJob | null;
+}
+export interface ReviewPullRequestDetail {
+  repo: string; number: number; title: string; author: string | null; branch: string | null; headSha: string | null; url: string | null;
+  checks: { id?: number; name?: string; conclusion?: string | null; status?: string; html_url?: string }[];
+  reviews: ReviewJob[];
 }
 
 export const adminApi = {
@@ -172,9 +184,9 @@ export const adminApi = {
     authFetch<{ providers: { id: string; label: string; endpoint: string; local: boolean; requestFormat?: string; capabilities?: string[]; defaultModels?: string[] }[] }>(`/api/admin/providers/catalog${kind ? `?kind=${encodeURIComponent(kind)}` : ""}`),
   /** Per-subagent-role model routing (desktop/CLI parity). */
   getAgentModels: (orgId?: string) =>
-    authFetch<{ roles: string[]; assignments: Record<string, { provider?: string; model?: string }> }>("/api/admin/agent-models", { orgId }),
-  setAgentModels: (assignments: Record<string, { provider?: string; model?: string }>, orgId?: string) =>
-    authFetch<{ assignments: Record<string, { provider?: string; model?: string }> }>("/api/admin/agent-models", { method: "PUT", body: { assignments }, orgId }),
+    authFetch<{ roles: string[]; assignments: Record<string, { provider?: string; model?: string; maxDiffChars?: number; timeoutMs?: number }> }>("/api/admin/agent-models", { orgId }),
+  setAgentModels: (assignments: Record<string, { provider?: string; model?: string; maxDiffChars?: number; timeoutMs?: number }>, orgId?: string) =>
+    authFetch<{ assignments: Record<string, { provider?: string; model?: string; maxDiffChars?: number; timeoutMs?: number }> }>("/api/admin/agent-models", { method: "PUT", body: { assignments }, orgId }),
   // GitHub App / integration configs (RBAC: triggers:manage).
   listIntegrations: (orgId?: string) =>
     authFetch<{ integrations: IntegrationConfig[]; secretStorageReady: boolean }>("/api/admin/integrations", { orgId }),
@@ -186,7 +198,15 @@ export const adminApi = {
     authFetch(`/api/admin/integrations/${id}`, { method: "DELETE", orgId }),
   // ADR-017 D5 — recent PR reviews (both lenses) for the Reviews dashboard.
   listReviewJobs: (orgId?: string, limit = 30) =>
-    authFetch<{ reviews: ReviewJob[] }>(`/api/admin/reviews/jobs?limit=${limit}`, { orgId }),
+    authFetch<{ reviews: ReviewJob[]; canRun: boolean }>(`/api/admin/reviews/jobs?limit=${limit}`, { orgId }),
+  listReviewPrs: (orgId?: string) => authFetch<{ prs: ReviewPullRequest[]; canRun: boolean }>("/api/admin/reviews/prs", { orgId }),
+  getReviewPr: (repo: string, number: number, orgId?: string) => {
+    const [owner, name] = repo.split("/");
+    return authFetch<{ pr: ReviewPullRequestDetail; canRun: boolean }>(`/api/admin/reviews/prs/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/${number}`, { orgId });
+  },
+  getReviewJob: (id: string, orgId?: string) => authFetch<{ review: ReviewJob; canRun: boolean }>(`/api/admin/reviews/jobs/${encodeURIComponent(id)}`, { orgId }),
+  runReview: (body: { repo: string; prNumber: number; lens: "security" | "code" | "both" }, orgId?: string) =>
+    authFetch<{ jobs: { id: string; lens: "security" | "code" }[] }>("/api/admin/reviews/run", { method: "POST", body, orgId }),
   // ADR-016 — the deployment's GitHub OAuth App (for per-user "Connect GitHub").
   getGithubOAuthApp: () =>
     authFetch<{ configured: boolean; clientId: string; hasSecret: boolean; redirectBase: string; secretStorageReady: boolean }>("/api/admin/connectors/github/app"),

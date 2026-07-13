@@ -68,6 +68,9 @@ export class MemoryEngine {
   private embeddingService!: EmbeddingService; // MEM-VEC — reused for embed-on-import
   private extractionRunner: LLMRunner;
   private synthesisRunner: LLMRunner;
+  private securityReviewRunner: LLMRunner;
+  private codeReviewRunner: LLMRunner;
+  private reviewAssignments: Record<"security" | "code", { maxDiffChars?: number; timeoutMs?: number }> = { security: {}, code: {} };
   private sweeperTimer?: NodeJS.Timeout;
   private activeSessionSweeperTimer?: NodeJS.Timeout;
   private sessionInboxSweeperTimer?: NodeJS.Timeout;
@@ -117,6 +120,8 @@ export class MemoryEngine {
     this.synthesisRunner = new ModelLLMRunner(
       process.env.BRAINROUTER_SYNTHESIS_MODEL
     );
+    this.securityReviewRunner = new ModelLLMRunner();
+    this.codeReviewRunner = new ModelLLMRunner();
 
     // REFAC-ENGINE-SPLIT (0.4.17) — every env-configured service + pipeline is
     // built in lifecycleOps.buildServices; the engine just wires the results
@@ -455,7 +460,7 @@ export class MemoryEngine {
       const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
       // Brain agent-models (BRAIN_AGENT_ROLES): per-role model overrides on the
       // shared LLM provider (extraction / synthesis / judge are brain sub-agents).
-      const assigns = (await this.emailAuth.getSetting<Record<string, { model?: string }>>(`agentModels:${orgId}`)) ?? {};
+      const assigns = (await this.emailAuth.getSetting<Record<string, { provider?: string; model?: string; maxDiffChars?: number; timeoutMs?: number }>>(`agentModels:${orgId}`)) ?? {};
       const llm = await resolveProviderConfig(store, orgId, "llm");
       if (llm) {
         const o = {
@@ -473,6 +478,18 @@ export class MemoryEngine {
           const set = (runner as { setProviderOverride?: (x: typeof o) => void }).setProviderOverride;
           if (typeof set === "function") set.call(runner, o);
         }
+        const configureReview = async (lens: "security" | "code", runner: LLMRunner, role: "security-review" | "code-review") => {
+          const assign = assigns[role] ?? {};
+          const namedRecord = assign.provider ? await this.providers.getProviderConfig(assign.provider) : null;
+          const named = namedRecord?.orgId === orgId && assign.provider ? await this.providers.getResolvedProvider(assign.provider) : null;
+          const selected = named ?? llm;
+          const override = { endpoint: selected.endpoint, apiKey: selected.apiKey, model: selected.model, wireFormat: str(selected.wireFormat), fallbackModel: str(selected.extra?.fallbackModel), fallbackEndpoint: str(selected.extra?.fallbackEndpoint), fallbackApiKey: str(selected.extra?.fallbackApiKey) };
+          (runner as { setProviderOverride?: (x: typeof override) => void }).setProviderOverride?.(override);
+          (runner as { setModelOverride?: (m?: string) => void }).setModelOverride?.(str(assign.model));
+          this.reviewAssignments[lens] = { ...(typeof assign.maxDiffChars === "number" ? { maxDiffChars: assign.maxDiffChars } : {}), ...(typeof assign.timeoutMs === "number" ? { timeoutMs: assign.timeoutMs } : {}) };
+        };
+        await configureReview("security", this.securityReviewRunner, "security-review");
+        await configureReview("code", this.codeReviewRunner, "code-review");
         // Register the LLM provider in the single gateway (the one authority).
         modelGateway.configure("llm", { endpoint: llm.endpoint, apiKey: llm.apiKey, model: llm.model, wireFormat: str(llm.wireFormat) });
         // Extraction + synthesis brain sub-agents: per-role model on the LLM provider.
@@ -493,6 +510,36 @@ export class MemoryEngine {
     } catch {
       /* best-effort — keep the env-built config on any DB error */
     }
+  }
+
+  /**
+   * Build a job-local review runner for the requesting org. A shared mutable
+   * runner would let simultaneous organizations overwrite each other's provider
+   * assignment, so only the system-org runners are long-lived; queued reviews get
+   * an isolated configured runner.
+   */
+  public async reviewRunner(lens: "security" | "code", orgId = systemProviderOrgId()): Promise<LLMRunner> {
+    if (orgId === systemProviderOrgId()) return lens === "security" ? this.securityReviewRunner : this.codeReviewRunner;
+    const runner = new ModelLLMRunner();
+    const assigns = (await this.emailAuth.getSetting<Record<string, { provider?: string; model?: string }>>(`agentModels:${orgId}`)) ?? {};
+    const assign = assigns[lens === "security" ? "security-review" : "code-review"] ?? {};
+    const base = await resolveProviderConfig(this.providers, orgId, "llm");
+    const record = assign.provider ? await this.providers.getProviderConfig(assign.provider) : null;
+    const selected = record?.orgId === orgId && assign.provider ? await this.providers.getResolvedProvider(assign.provider) : null;
+    const provider = selected ?? base;
+    if (provider) {
+      runner.setProviderOverride({ endpoint: provider.endpoint, apiKey: provider.apiKey, model: provider.model, wireFormat: provider.wireFormat, fallbackModel: typeof provider.extra?.fallbackModel === "string" ? provider.extra.fallbackModel : undefined, fallbackEndpoint: typeof provider.extra?.fallbackEndpoint === "string" ? provider.extra.fallbackEndpoint : undefined, fallbackApiKey: typeof provider.extra?.fallbackApiKey === "string" ? provider.extra.fallbackApiKey : undefined });
+      runner.setModelOverride(assign.model);
+    }
+    return runner;
+  }
+
+  /** Non-secret per-lens execution knobs, loaded in the same org scope as the runner. */
+  public async reviewAssignment(lens: "security" | "code", orgId = systemProviderOrgId()): Promise<{ maxDiffChars?: number; timeoutMs?: number }> {
+    if (orgId === systemProviderOrgId()) return this.reviewAssignments[lens];
+    const assigns = (await this.emailAuth.getSetting<Record<string, { maxDiffChars?: unknown; timeoutMs?: unknown }>>(`agentModels:${orgId}`)) ?? {};
+    const assign = assigns[lens === "security" ? "security-review" : "code-review"] ?? {};
+    return { ...(typeof assign.maxDiffChars === "number" ? { maxDiffChars: assign.maxDiffChars } : {}), ...(typeof assign.timeoutMs === "number" ? { timeoutMs: assign.timeoutMs } : {}) };
   }
 
   public createUser(userId: string, apiKey: string, displayName = "", isAdmin = false): Promise<UserRecord> {

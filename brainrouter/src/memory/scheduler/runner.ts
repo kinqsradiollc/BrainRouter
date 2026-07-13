@@ -206,9 +206,12 @@ export class MemoryJobRunner {
       return;
     }
     try {
-      const output = await executor(job.input, this.ctx);
+      const output = await executor(job.input, { ...this.ctx, jobId: job.id });
       await this.store.completeMemoryJob(job.id, output ?? { ok: true });
     } catch (err: any) {
+      // Keep a terminal timeline event even for executors that throw before they
+      // can emit their own progress (best effort; never mask the job failure).
+      void this.store.appendJobProgress(job.id, { ts: new Date().toISOString(), kind: "error", msg: err?.message ?? String(err) }).catch(() => {});
       // failAgentJob applies backoff and re-arms while attempts remain,
       // else marks terminal failed.
       await failAgentJob(this.store, job.id, err?.message ?? String(err));

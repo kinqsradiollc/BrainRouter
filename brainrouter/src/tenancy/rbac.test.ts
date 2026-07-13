@@ -30,6 +30,8 @@ describe("RBAC roles + capabilities (ADR-010)", () => {
     expect(can("developer", "providers:manage")).toBe(false);
     expect(can("developer", "triggers:manage")).toBe(false);
     expect(can("developer", "members:manage")).toBe(false);
+    expect(can("developer", "reviews:read")).toBe(true);
+    expect(can("developer", "reviews:run")).toBe(false);
   });
 
   it("legacy role names map to canonical ones (member→developer, manager→admin)", () => {
@@ -45,7 +47,18 @@ describe("RBAC roles + capabilities (ADR-010)", () => {
     expect(can("viewer", "memory:write")).toBe(false);
     expect(can("viewer", "memory:share")).toBe(false);
     expect(can("viewer", "providers:manage")).toBe(false);
+    expect(can("viewer", "reviews:read")).toBe(false);
+    expect(can("viewer", "reviews:run")).toBe(false);
     expect(capabilitiesFor("viewer")).toEqual(["memory:read"]);
+  });
+
+  it("review capabilities intentionally separate read access from manual runs", () => {
+    expect(can("owner", "reviews:read")).toBe(true);
+    expect(can("owner", "reviews:run")).toBe(true);
+    expect(can("admin", "reviews:read")).toBe(true);
+    expect(can("admin", "reviews:run")).toBe(true);
+    expect(can("developer", "reviews:read")).toBe(true);
+    expect(can("developer", "reviews:run")).toBe(false);
   });
 
   it("providers:manage + triggers:manage are admin-or-above only (the goal's 'only admin can do it')", () => {

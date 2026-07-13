@@ -19,4 +19,6 @@ export interface ProviderStore {
   setDefaultProvider(orgId: string, kind: ProviderKind, id: string): Promise<void>;
   /** Decrypted default provider for (org, kind), or null when none is configured. */
   getDefaultResolvedProvider(orgId: string, kind: ProviderKind): Promise<ResolvedProviderConfig | null>;
+  /** Resolve one named config for a role assignment; callers must still enforce org scope. */
+  getResolvedProvider(id: string): Promise<ResolvedProviderConfig | null>;
 }

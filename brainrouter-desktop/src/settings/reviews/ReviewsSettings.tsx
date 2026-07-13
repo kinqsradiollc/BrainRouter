@@ -64,7 +64,7 @@ export function ReviewsSettings(): React.ReactElement {
     <>
       <div className="set-h">PR Reviews</div>
       <div className="set-desc" style={{ marginBottom: 10 }}>
-        Pull requests the bot has reviewed — 🛡️ <b>security</b> (gates the merge) and 🔎 <b>code review</b> (advisory suggestions). Click a row to open the PR on GitHub. Re-run any review by commenting <code>/review</code> on the PR; choose which repos and per-repo policies in the BrainRouter dashboard → Reviews.
+        Pull requests the bot has reviewed — 🛡️ <b>security</b> (gates the merge) and 🔎 <b>code review</b> (advisory suggestions). Click a row to open the PR on GitHub. Re-run security with <code>/security-review</code>, code review with <code>/code-review</code>, or both with legacy <code>/review</code>; choose repos and policies in Dashboard → Reviews.
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
