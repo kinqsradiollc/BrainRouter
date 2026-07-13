@@ -51,22 +51,31 @@ function saveFlows(f: Record<string, FlowStep[]>): void {
   try { localStorage.setItem(FLOWS_KEY, JSON.stringify(f)); } catch { /* ignore */ }
 }
 
+function isLoopbackHost(u: URL): boolean {
+  const h = u.hostname.toLowerCase();
+  return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]' || h === '0.0.0.0';
+}
+
 /**
- * The one choke-point every navigation passes through. Electron's guest throws
- * ERR_INVALID_URL for an empty or scheme-less string, so we NEVER hand a raw
- * value to `loadURL`/`src`. Returns a loadable URL, or null when there is
- * nothing valid to load (caller falls back to about:blank). A bare host gets a
- * scheme: loopback → http, anything else → https.
+ * The one choke-point every navigation passes through. Two jobs: (1) never hand
+ * an empty/scheme-less value to `loadURL`/`src` (Electron throws ERR_INVALID_URL
+ * for '' — the crash this fixes), and (2) stay inside the main-process webview
+ * policy, which permits only LOOPBACK dev-server origins and self-contained
+ * data:text/html docs — so remote http(s), file://, and other schemes are
+ * refused here for honest UX instead of being silently blocked at the guest.
+ * Returns a loadable URL or null (caller falls back to a blank data: doc).
  */
 function normalizeUrl(raw: string | null | undefined): string | null {
   const s = (raw ?? '').trim();
   if (!s) return null;
-  if (/^(https?|data|about|file):/i.test(s)) return s;
+  if (/^data:text\/html/i.test(s)) return s;
+  if (/^https?:\/\//i.test(s)) { try { return isLoopbackHost(new URL(s)) ? s : null; } catch { return null; } }
   if (/^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:\d+)?(\/|$)/i.test(s)) return `http://${s}`;
-  if (/^[\w.-]+(:\d+)?(\/|$)/.test(s)) return `https://${s}`;
   return null;
 }
-const BROWSER_BLANK = 'about:blank';
+// A self-contained blank document. NOT about:blank — the main-process attach
+// gate only permits data:text/html / loopback / workspace-prototype sources.
+const BROWSER_BLANK = 'data:text/html,%3C!doctype%20html%3E%3Cmeta%20charset%3Dutf-8%3E%3Ctitle%3ENew%20tab%3C%2Ftitle%3E';
 
 export function BrowserPanel(): React.ReactElement {
   const [url, setUrl] = useState(() => localStorage.getItem(URL_KEY) || 'http://localhost:5173');
@@ -150,7 +159,7 @@ export function BrowserPanel(): React.ReactElement {
   // Navigate when the committed URL changes.
   const go = (next: string): void => {
     const u = normalizeUrl(next);
-    if (!u) { setStatus('Enter a valid URL (e.g. localhost:5173 or https://example.com).'); return; }
+    if (!u) { setStatus('Enter a loopback dev-server URL (e.g. localhost:5173 or http://127.0.0.1:3000).'); return; }
     setStatus('');
     setUrl(u);
     setUrlDraft(u);

@@ -664,17 +664,23 @@ export class MemoryEngine {
   }): Promise<number> {
     const skip = new Set(["dismissed", "disputed", "out-of-scope"]);
     let recorded = 0;
-    for (const f of params.findings) {
+    // Bound org-memory writes so a hostile target that steers the agent into
+    // emitting a huge finding set cannot amplify into unbounded ingestion.
+    for (const f of params.findings.slice(0, 100)) {
       if (f.status && skip.has(f.status)) continue;
+      // NOTE: the raw proof-of-concept is deliberately NOT composed into this
+      // org-shared record — a captured session cookie / JWT / cloud key inside a
+      // PoC would otherwise be promoted org-wide into recall + briefings, and the
+      // memory redaction denylist cannot catch every secret shape. The full PoC
+      // stays only in the local workspace SARIF (.brainrouter/findings.sarif).
       const content = [
         `SECURITY FINDING (${String(f.severity).toUpperCase()}): ${f.summary}`,
         f.cwe ? `CWE: ${f.cwe}` : "",
         typeof f.cvss === "number" ? `CVSS: ${f.cvss}${f.cvssVector ? ` (${f.cvssVector})` : ""}` : "",
         f.file ? `Location: ${f.file}${f.line ? `:${f.line}` : ""}` : "",
         `Target: ${params.target}`,
-        f.details ? `Impact: ${f.details}` : "",
-        f.poc ? `PoC: ${f.poc.slice(0, 800)}` : "",
-        f.remediation ? `Remediation: ${f.remediation}` : "",
+        f.details ? `Impact: ${f.details.slice(0, 1200)}` : "",
+        f.remediation ? `Remediation: ${f.remediation.slice(0, 800)}` : "",
       ].filter(Boolean).join("\n");
       const rec = await this.upsertEngineeringMemory({
         userId: params.userId,
