@@ -480,6 +480,39 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const status = typeof args.status === 'string' ? args.status as never : undefined;
         return { connectors: listConnectors(workspaceRoot, { source, status }) };
       },
+      // ADR-016 C5 — migrate this workspace's LOCAL connectors to the signed-in
+      // backend (server-only model). Pushes the non-secret definition of each local
+      // connector to POST /api/connectors; credentials are NOT shipped — the user
+      // re-authorizes each source through the server OAuth broker. The local copy is
+      // kept as a fallback until the server sync is confirmed.
+      'action:migrate-connectors': async () => {
+        const cfg = loadConfig() as { cli?: { account?: { url?: string } }; servers?: Record<string, { apiKey?: string; identity?: string }> };
+        const url = cfg.cli?.account?.url?.replace(/\/+$/, '');
+        if (!url) return { ok: false, error: 'Sign in to BrainRouter first (Settings → Account).' };
+        const brain = cfg.servers ? Object.values(cfg.servers).find((s) => s?.identity === 'brainrouter') : undefined;
+        const apiKey = brain?.apiKey ?? '';
+        if (!apiKey) return { ok: false, error: 'No API key for the signed-in backend — sign in again.' };
+        let local: Array<{ source: string; name: string; config: Record<string, unknown> }> = [];
+        try { local = listConnectors(workspaceRoot) as never; } catch { local = []; }
+        // Never ship secret-ish fields — the server re-authorizes each source through the
+        // OAuth broker, so only the NON-secret definition migrates (CWE-200). This makes
+        // the "credentials are not shipped" guarantee true in code, not just the comment.
+        const SECRET_KEY_RE = /(token|secret|password|passphrase|apikey|api[_-]?key|credential|refresh|client[_-]?secret|private[_-]?key)/i;
+        const stripSecrets = (o: Record<string, unknown>): Record<string, unknown> =>
+          Object.fromEntries(Object.entries(o ?? {}).filter(([k]) => !SECRET_KEY_RE.test(k)));
+        let migrated = 0; const failed: string[] = [];
+        for (const c of local) {
+          try {
+            const res = await fetch(`${url}/api/connectors`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+              body: JSON.stringify({ source: c.source, name: c.name, config: stripSecrets(c.config) }),
+            });
+            if (res.ok) migrated++; else failed.push(`${c.source}: HTTP ${res.status}`);
+          } catch (e) { failed.push(`${c.source}: ${e instanceof Error ? e.message : 'error'}`); }
+        }
+        return { ok: true, total: local.length, migrated, failed, note: 'Reconnect each source in Settings to re-authorize — credentials are re-entered through the server, never shipped from the desktop.' };
+      },
       'connector-detail': (args) => {
         const id = typeof args.id === 'string' ? args.id : '';
         const connector = id ? getConnector(workspaceRoot, id) : undefined;

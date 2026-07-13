@@ -13,6 +13,7 @@ import { wireBadge, type CommandsCatalog, type DeskCommand, type SettingsSection
 import { Icon } from './icons.js';
 import { ShortcutsReference } from './components/dialogs/ShortcutsReference.js';
 import { Row, Toggle, Select, ChoiceControl, KnobText, KnobNumber, SetGroup } from './settings/shared/controls.js';
+import { AccountSettings } from './settings/account/AccountSettings.js';
 import { PermissionModeCards } from './settings/permissions/PermissionModeCards.js';
 import { ComputerUseSettings } from './settings/permissions/ComputerUseSettings.js';
 import { CliConfigEditor } from './settings/cli/CliConfigEditor.js';
@@ -21,7 +22,6 @@ import { ConnectorSettings } from './settings/connectors/ConnectorSettings.js';
 import { MarketplaceSettings, type MarketplaceState } from './settings/marketplace/index.js';
 import { McpServersSection } from './settings/connectors/McpServersSection.js';
 import { ModelsSection } from './settings/models/ModelsSection.js';
-import { AccountSettings } from './settings/account/AccountSettings.js';
 import { ReviewsSettings } from './settings/reviews/ReviewsSettings.js';
 import { RuntimeSection } from './settings/runtime/RuntimeSection.js';
 import { AutomationsSection } from './settings/automations/AutomationsSection.js';
