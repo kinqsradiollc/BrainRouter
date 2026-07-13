@@ -18,6 +18,7 @@ import {
   exportConnectorDocumentsForMemory,
   githubTokenClient,
 } from "@kinqs/brainrouter-core/connectors";
+import { validateGithubApiBase } from "@kinqs/brainrouter-core/track";
 
 const SERVER_CONNECTORS_ROOT = path.join(
   process.env.BRAINROUTER_HOME ?? path.join(process.env.HOME ?? ".", ".brainrouter"),
@@ -60,7 +61,10 @@ export async function runConnectorSync(connectorId: string): Promise<ConnectorSy
     }
   }
 
-  const apiBase = typeof config.baseUrl === "string" ? config.baseUrl : undefined;
+  // config.baseUrl is user-controlled (set via the connector CRUD API); validate it so a
+  // spoofed base can't make the server fetch an internal/metadata host with the sealed
+  // token (SSRF, CWE-918). Invalid ⇒ undefined ⇒ the client's default api.github.com.
+  const apiBase = validateGithubApiBase(typeof config.baseUrl === "string" ? config.baseUrl : "") ?? undefined;
   try {
     const runResult = await runConnectorCheckpointCore(workspaceRoot, fileId, {
       // Inject the sealed DB token — never env/keychain (that's desktop-only).
@@ -87,6 +91,10 @@ export async function runConnectorSync(connectorId: string): Promise<ConnectorSy
     return { ok: runResult.ok, documents: runResult.documents.length, imported };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    // The core run may have ADVANCED the file connector's checkpoint before the import
+    // step threw. Roll it back to the DB's last-good checkpoint so the next sync
+    // re-fetches the un-imported documents instead of skipping them (no data loss).
+    try { updateFileConnector(workspaceRoot, fileId, { checkpoint: (conn.checkpoint ?? {}) as never }); } catch { /* best-effort rollback */ }
     await memoryEngine.connectors.updateConnector(connectorId, { status: "error", lastError: msg, lastRunAt: new Date().toISOString() });
     return { ok: false, documents: 0, imported: 0, error: msg };
   }
