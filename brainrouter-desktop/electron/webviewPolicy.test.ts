@@ -23,6 +23,16 @@ test('isAllowedWebviewSrc: refuses non-html data, empty, and dangerous schemes',
   assert.equal(isAllowedWebviewSrc('about:blank', '/repo'), false);
 });
 
+test('isAllowedWebviewSrc: refuses link-local / cloud-metadata (SSRF) even in general mode', () => {
+  assert.equal(isAllowedWebviewSrc('http://169.254.169.254/latest/meta-data/', '/repo'), false, 'AWS/GCP/Azure metadata refused');
+  assert.equal(isAllowedWebviewSrc('http://169.254.0.1/', '/repo'), false, 'IPv4 link-local refused');
+  assert.equal(isAllowedWebviewSrc('http://[fd00:ec2::254]/', '/repo'), false, 'EC2 IPv6 metadata refused');
+  assert.equal(isAllowedWebviewSrc('http://[fe80::1]/', '/repo'), false, 'IPv6 link-local refused');
+  // ...but ordinary public + loopback + LAN stay reachable (it is a real browser)
+  assert.equal(isAllowedWebviewSrc('https://example.com/', '/repo'), true);
+  assert.equal(isAllowedWebviewSrc('http://192.168.1.5/', '/repo'), true);
+});
+
 test('isAllowedWebviewSrc: allows an authorized prototype file inside the workspace', () => {
   assert.equal(isAllowedWebviewSrc('file:///repo/proto/12345678.html', '/repo'), true);
 });

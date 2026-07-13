@@ -38,6 +38,24 @@ export function isHttpSrc(src: string): boolean {
   return url.protocol === 'http:' || url.protocol === 'https:';
 }
 
+/**
+ * Link-local / cloud-metadata literals (IPv4 169.254.0.0/16 incl. the
+ * 169.254.169.254 metadata endpoint; IPv6 fe80::/10 + the fd00:ec2::254 EC2
+ * literal). These are the classic SSRF credential-theft target and have no
+ * legitimate browsing use, so they're refused even in general-browsing mode.
+ * (Public, loopback, and normal LAN hosts stay reachable — this is a real
+ * browser, not a locked-down viewer.) A hostname that DNS-resolves to a
+ * metadata IP is a residual gap a sync gate can't close.
+ */
+export function isMetadataOrLinkLocalHost(src: string): boolean {
+  let url: URL;
+  try { url = new URL(src); } catch { return false; }
+  const h = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (/^169\.254\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
+  if (h.startsWith('fe80:') || h === 'fd00:ec2::254') return true;
+  return false;
+}
+
 /** A loopback dev-server origin — a subset of {@link isHttpSrc}, kept for callers
  * that specifically want the "workspace's own dev server" narrowing. */
 export function isLoopbackHttpSrc(src: string): boolean {
@@ -59,7 +77,7 @@ export function isLoopbackHttpSrc(src: string): boolean {
 export function isAllowedWebviewSrc(src: string, workspaceRoot: string): boolean {
   if (typeof src !== 'string' || !src) return false;
   if (src.startsWith('data:text/html')) return true;
-  if (isHttpSrc(src)) return true;
+  if (isHttpSrc(src)) return !isMetadataOrLinkLocalHost(src);
   if (src.startsWith('file://')) {
     let filePath: string;
     try { filePath = decodeURIComponent(new URL(src).pathname); } catch { return false; }
