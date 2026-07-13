@@ -57,7 +57,7 @@ import {
 import { callOpenAI } from '@kinqs/brainrouter-core/agent';
 // UI-TEST fusion — story prompt/validation helpers + the driver step types the
 // uitest:* handlers below use. The host instance itself arrives via ctx.uitest.
-import { buildStoryPrompt, validateStories, FlowStepSchema, DeviceSchema, type Story } from '@kinqs/brainrouter-ui-test/dist/index.js';
+import { buildStoryPrompt, validateStories, FlowStepSchema, DeviceSchema, type Story } from '@kinqs/brainrouter-core/uitest';
 // IPC boundary: the uitest:* channel is agent-reachable, so validate every input.
 import { isLoopbackHttpSrc } from '../webviewPolicy.js';
 import type { UiTestStep, UiTestStepResult } from '../uitestHost.js';

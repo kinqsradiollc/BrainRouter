@@ -7,7 +7,7 @@
  */
 import type { AtlasGroup } from "./grouping.js";
 // Type-only (erased at build) — the generated UI map the Screens mode renders.
-import type { UiMap } from "@kinqs/brainrouter-ui-test/dist/types.js";
+import type { UiMap } from "@kinqs/brainrouter-core/uitest";
 
 /** Element action → node colour for the Screens map. */
 export const ATLAS_ELEMENT_COLORS: Record<string, string> = {

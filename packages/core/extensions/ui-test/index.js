@@ -31,7 +31,7 @@ function formatResult(r) {
 export async function activate(host) {
   let pkg;
   try {
-    pkg = await import('@kinqs/brainrouter-ui-test/dist/index.js');
+    pkg = await import('../../dist/uitest/index.js');
   } catch (err) {
     host.log('ui-test engine not built — ui_* tools unavailable', { error: String((err && err.message) || err) });
     return;
