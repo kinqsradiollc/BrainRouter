@@ -1,3 +1,2 @@
-// GitHub integration settings — token/save panel + repo picker.
+// GitHub integration settings — connect panel.
 export * from './GithubIntegration.js';
-export * from './GithubRepoPicker.js';

@@ -2,19 +2,32 @@ import React, { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ConnectorDefinitionBundle, ConnectorRecord } from '@kinqs/brainrouter-types';
 import { Icon } from '../../icons.js';
+import { bridgeQuery } from '../../lib/bridgeQuery.js';
 import { Row, ChoiceControl } from '../shared/controls.js';
 import { GithubIntegration } from '../github/GithubIntegration.js';
-import { GithubRepoPicker } from '../github/GithubRepoPicker.js';
 import {
   connectorConfigString,
   connectorConfigList,
-  splitConnectorRepos,
   CHECKPOINT_RUNTIME_SOURCES,
   type ConfigSnapshot,
   type GithubIntegrationSnapshot,
   type GithubSaveArgs,
   type GithubOauthState,
 } from '../shared/types.js';
+
+/** Friendly "5 minutes ago" for the connector card (no dev timestamps). */
+function relTime(iso?: string): string {
+  if (!iso) return 'never';
+  const then = Date.parse(iso);
+  if (!Number.isFinite(then)) return 'never';
+  const s = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (s < 60) return 'just now';
+  const m = Math.floor(s / 60); if (m < 60) return `${m} min ago`;
+  const h = Math.floor(m / 60); if (h < 24) return `${h} hour${h === 1 ? '' : 's'} ago`;
+  const d = Math.floor(h / 24); if (d < 30) return `${d} day${d === 1 ? '' : 's'} ago`;
+  return new Date(then).toLocaleDateString();
+}
+const CRED_LABEL: Record<string, string> = { oauth: 'OAuth account', dynamic: 'GitHub CLI', static: 'access token', none: '' };
 
 export function ConnectorSettings({ connectors, githubIntegration, githubOauthClientId, onGithubSave, onAction, refreshSnapshot }: {
   connectors: NonNullable<ConfigSnapshot['connectors']>;
@@ -30,7 +43,6 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
   const selectedEntry = connectors.catalog.find((entry) => entry.source === selectedSource) ?? github ?? connectors.catalog[0];
   const [name, setName] = useState(firstGithub?.name ?? 'GitHub connector');
   const [owner, setOwner] = useState(firstGithub ? connectorConfigString(firstGithub, 'owner') : '');
-  const [repos, setRepos] = useState(firstGithub ? connectorConfigList(firstGithub, 'repositories').join('\n') : '');
   const [includeIssues, setIncludeIssues] = useState(firstGithub ? firstGithub.config.includeIssues !== false : true);
   const [includePrs, setIncludePrs] = useState(firstGithub ? firstGithub.config.includePullRequests !== false : true);
   const [includeFiles, setIncludeFiles] = useState(Boolean(firstGithub?.config.includeFiles));
@@ -44,6 +56,10 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
   const [genericConfig, setGenericConfig] = useState<Record<string, string | boolean>>({});
   const [definitionJson, setDefinitionJson] = useState('');
   const [oauthState, setOauthState] = useState<GithubOauthState>({ status: 'idle' });
+  // Public install page for the BrainRouter GitHub App — lets the user grant the App
+  // access to more repos. Constant regardless of connection status, so it lives in its
+  // own state rather than the oauth-status union.
+  const [githubInstallUrl, setGithubInstallUrl] = useState('');
   // Connector config moved out of the inline panel into a modal (matching the
   // Models provider dialog): a catalog card / "Configure" opens this editor.
   const [editorOpen, setEditorOpen] = useState(false);
@@ -56,7 +72,6 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
     if (!firstGithub) return;
     setName(firstGithub.name);
     setOwner(connectorConfigString(firstGithub, 'owner'));
-    setRepos(connectorConfigList(firstGithub, 'repositories').join('\n'));
     setIncludeIssues(firstGithub.config.includeIssues !== false);
     setIncludePrs(firstGithub.config.includePullRequests !== false);
     setIncludeFiles(Boolean(firstGithub.config.includeFiles));
@@ -67,13 +82,11 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
   }, [firstGithub?.id, firstGithub?.updatedAt]);
 
   React.useEffect(() => {
-    if (!firstGithub?.id || !window.brainrouter.ghOauth) {
-      setOauthState({ status: 'idle' });
-      return;
-    }
-    void window.brainrouter.ghOauth({ op: 'status', connectorId: firstGithub.id })
-      .then((res) => setOauthState({ status: 'idle', hasToken: res.hasToken === true, storageMode: typeof res.storageMode === 'string' ? res.storageMode : undefined }))
-      .catch((err) => setOauthState({ status: 'error', error: err instanceof Error ? err.message : String(err) }));
+    // Server-mediated OAuth: the GitHub token lives in your BrainRouter account,
+    // not on this machine. Reflect whether it's connected (requires being signed in).
+    void bridgeQuery<{ signedIn?: boolean; connected?: boolean; installUrl?: string }>('github-connect-status')
+      .then((res) => { setOauthState({ status: 'idle', hasToken: !!res.connected, storageMode: 'BrainRouter account' }); setGithubInstallUrl(res.installUrl ?? ''); })
+      .catch(() => setOauthState({ status: 'idle' }));
   }, [firstGithub?.id, firstGithub?.credential.mode, firstGithub?.updatedAt]);
 
   React.useEffect(() => {
@@ -87,13 +100,11 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
     ])));
   }, [selectedEntry?.source]);
 
-  const selectedGithubRepos = splitConnectorRepos(repos);
   const saveGithubConnector = (): void => {
     const poll = Number(pollMinutes);
-    const ownerHint = owner.trim() || selectedGithubRepos[0]?.split('/')[0] || '';
     const config = {
-      owner: ownerHint,
-      repositories: selectedGithubRepos,
+      owner: owner.trim(),
+      repositories: [] as string[],
       includeIssues,
       includePullRequests: includePrs,
       includeFiles,
@@ -122,7 +133,7 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
     }
     setTimeout(refreshSnapshot, 120);
   };
-  const canSave = Boolean(github && (owner.trim() || selectedGithubRepos.length) && (includeIssues || includePrs || includeFiles));
+  const canSave = Boolean(github && (includeIssues || includePrs || includeFiles));
 
   const markGithubOauthCredential = (hasSecret: boolean): void => {
     if (!firstGithub) return;
@@ -135,66 +146,48 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
     setTimeout(refreshSnapshot, 120);
   };
 
+  // Connect GitHub through BrainRouter's server-mediated broker (device flow). No
+  // client id/secret on this machine; the token is stored in your account. Requires
+  // being signed in (Settings → Account).
   const startGithubOauth = async (): Promise<void> => {
-    if (!firstGithub) {
-      setOauthState({ status: 'error', error: 'Save the GitHub connector before connecting OAuth.' });
-      return;
-    }
-    if (!window.brainrouter.ghOauth) {
-      setOauthState({ status: 'error', error: 'GitHub OAuth requires the Electron app.' });
-      return;
-    }
-    if (!githubOauthClientId.trim()) {
-      setOauthState({ status: 'error', error: 'Set cli.github.oauthClientId in Advanced before connecting OAuth.' });
-      return;
-    }
     setOauthState({ status: 'starting' });
-    const res = await window.brainrouter.ghOauth({ op: 'start', connectorId: firstGithub.id, clientId: githubOauthClientId.trim() });
-    if (typeof res.error === 'string') {
-      setOauthState({ status: 'error', error: res.error });
-      return;
+    try {
+      const res = await bridgeQuery<{ ok: boolean; userCode?: string; verificationUri?: string; interval?: number; error?: string }>('github-device-start');
+      if (!res.ok || !res.userCode) {
+        setOauthState({ status: 'error', error: res.error || 'Sign in to your BrainRouter account (Settings → Account) to connect GitHub.' });
+        return;
+      }
+      const uri = res.verificationUri || 'https://github.com/login/device';
+      setOauthState({ status: 'pending', userCode: res.userCode, verificationUri: uri, intervalSec: Number(res.interval) > 0 ? Number(res.interval) : 5, expiresAtMs: Date.now() + 15 * 60_000 });
+      await bridgeQuery('action:open-external', { url: uri });
+    } catch (e) {
+      setOauthState({ status: 'error', error: e instanceof Error ? e.message : 'Could not start the GitHub connection.' });
     }
-    setOauthState({
-      status: 'pending',
-      userCode: String(res.userCode ?? ''),
-      verificationUri: String(res.verificationUri ?? 'https://github.com/login/device'),
-      intervalSec: Number(res.intervalSec) > 0 ? Number(res.intervalSec) : 5,
-      expiresAtMs: Number(res.expiresAtMs) || Date.now() + 15 * 60_000,
-    });
   };
 
   const cancelGithubOauth = async (): Promise<void> => {
-    if (firstGithub?.id && window.brainrouter.ghOauth) await window.brainrouter.ghOauth({ op: 'cancel', connectorId: firstGithub.id }).catch(() => undefined);
     setOauthState({ status: 'idle' });
   };
 
   const disconnectGithubOauth = async (): Promise<void> => {
-    if (firstGithub?.id && window.brainrouter.ghOauth) await window.brainrouter.ghOauth({ op: 'disconnect', connectorId: firstGithub.id }).catch(() => undefined);
+    await bridgeQuery('action:github-disconnect').catch(() => undefined);
     markGithubOauthCredential(false);
     setOauthState({ status: 'idle', hasToken: false });
   };
 
   React.useEffect(() => {
-    if (oauthState.status !== 'pending' || !firstGithub?.id || !window.brainrouter.ghOauth) return;
+    if (oauthState.status !== 'pending') return;
     const delay = Math.max(1, oauthState.intervalSec) * 1000;
     const timer = window.setTimeout(() => {
-      void window.brainrouter.ghOauth?.({ op: 'poll', connectorId: firstGithub.id }).then((res) => {
-        if (res.status === 'pending') {
-          setOauthState((cur) => cur.status === 'pending'
-            ? { ...cur, intervalSec: Number(res.nextIntervalSec) > 0 ? Number(res.nextIntervalSec) : cur.intervalSec, expiresAtMs: Number(res.expiresAtMs) || cur.expiresAtMs }
-            : cur);
-          return;
-        }
-        if (res.status === 'authorized') {
-          markGithubOauthCredential(true);
-          setOauthState({ status: 'authorized', scope: typeof res.scope === 'string' ? res.scope : undefined, storageMode: typeof res.storageMode === 'string' ? res.storageMode : undefined });
-          return;
-        }
-        setOauthState({ status: 'error', error: typeof res.error === 'string' ? res.error : `OAuth ${String(res.status ?? 'failed')}.` });
+      void bridgeQuery<{ status?: string; login?: string }>('github-device-poll').then((res) => {
+        // Re-trigger the effect (new object) so polling continues until authorized.
+        if (res.status === 'pending') { setOauthState((cur) => (cur.status === 'pending' ? { ...cur } : cur)); return; }
+        if (res.status === 'connected') { markGithubOauthCredential(true); setOauthState({ status: 'authorized', storageMode: 'BrainRouter account' }); setTimeout(refreshSnapshot, 120); return; }
+        setOauthState({ status: 'error', error: 'That code expired — click Connect to try again.' });
       }).catch((err) => setOauthState({ status: 'error', error: err instanceof Error ? err.message : String(err) }));
     }, delay);
     return () => window.clearTimeout(timer);
-  }, [oauthState, firstGithub?.id]);
+  }, [oauthState]);
 
   const saveGenericConnector = (): void => {
     if (!selectedEntry || selectedEntry.source === 'github') return;
@@ -282,39 +275,38 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
         <div className="provider-gallery connector-configured-grid">
           {connectors.items.map((connector) => (
             <div key={connector.id} className="provider-card saved">
-              <span className="pc-name">{connector.name}<span className={`pc-tag ${connector.status === 'active' ? 'ok' : connector.status === 'error' ? 'danger' : 'default'}`}>{connector.status}</span></span>
-              <span className="pc-host">{connector.source} · {connector.flows.join(', ')}</span>
-              <span className="pc-wire">
-                {connector.lastSuccessAt ? `last success ${new Date(connector.lastSuccessAt).toLocaleString()}` : connector.lastRunAt ? `last run ${new Date(connector.lastRunAt).toLocaleString()}` : 'not run yet'}
-              </span>
-              <span className="pc-wire">{(connectors.documentCounts?.[connector.id] ?? 0).toLocaleString()} documents</span>
-              <span className="pc-wire">{(connectors.permissionCounts?.[connector.id] ?? 0).toLocaleString()} permissions</span>
-              {typeof connector.config.pollMinutes === 'number' && connector.config.pollMinutes > 0 ? <span className="pc-wire">auto every {connector.config.pollMinutes}m</span> : null}
-              {(() => {
-                const latest = connectors.runPreviews?.[connector.id]?.[0];
-                return latest ? (
-                  <span className="pc-wire">
-                    latest {latest.flow}: {latest.status}{latest.completedAt ? ` · ${new Date(latest.completedAt).toLocaleString()}` : ''}
-                  </span>
-                ) : null;
-              })()}
-              {(connectors.documentPreviews?.[connector.id] ?? []).slice(0, 3).map((doc) => (
-                <span key={doc.id} className="pc-wire">
-                  {doc.kind} · {doc.repository ? `${doc.repository} · ` : ''}{doc.title}
+              <span className="pc-name">
+                {connector.name}
+                <span className={`pc-tag ${connector.status === 'active' ? 'ok' : connector.status === 'error' ? 'danger' : 'default'}`}>
+                  {connector.status === 'active' ? 'Connected' : connector.status === 'paused' ? 'Paused' : connector.status === 'error' ? 'Needs attention' : connector.status}
                 </span>
-              ))}
-              {connector.lastError ? <span className="pc-host" style={{ color: 'var(--warn)' }}>{connector.lastError}</span> : null}
+              </span>
+              <span className="pc-host">
+                {connector.source === 'github' ? 'GitHub' : connector.source}
+                {connector.credential.mode && CRED_LABEL[connector.credential.mode] ? ` · via ${CRED_LABEL[connector.credential.mode]}` : ''}
+              </span>
+              {(() => {
+                const rs = connectorConfigList(connector, 'repositories');
+                const owner = connectorConfigString(connector, 'owner');
+                return <span className="pc-wire">{rs.length ? `${rs.length} repositor${rs.length === 1 ? 'y' : 'ies'} synced` : owner ? `All repos under ${owner}` : 'All repos the app can access'}</span>;
+              })()}
+              <span className="pc-wire">
+                Last synced {relTime(connector.lastSuccessAt)}
+                {(connectors.documentCounts?.[connector.id] ?? 0) > 0 ? ` · ${(connectors.documentCounts?.[connector.id] ?? 0).toLocaleString()} items in memory` : ''}
+              </span>
+              {typeof connector.config.pollMinutes === 'number' && connector.config.pollMinutes > 0 && connector.status !== 'paused'
+                ? <span className="pc-wire" style={{ opacity: 0.6 }}>Auto-syncs every {connector.config.pollMinutes} min</span> : null}
+              {(!!connector.lastError || connector.status === 'error') ? (
+                <span className="pc-host" style={{ color: 'var(--warn)' }}>Last sync didn’t finish{connector.lastError ? ` — ${connector.lastError}` : ''}</span>
+              ) : null}
               <span className="pc-actions">
+                {CHECKPOINT_RUNTIME_SOURCES.has(connector.source) ? <button className="btn primary" onClick={() => { onAction('a-connector-run', 'action:connector-run', { id: connector.id }); setTimeout(refreshSnapshot, 1200); }}>Sync now</button> : null}
                 <button className="btn" onClick={() => { setSelectedSource(connector.source); setEditorOpen(true); }}>Configure</button>
                 <button className="btn" onClick={() => {
                   onAction('a-connector-update', 'action:connector-update', { id: connector.id, patch: { status: connector.status === 'paused' ? 'active' : 'paused' } });
                   setTimeout(refreshSnapshot, 120);
                 }}>{connector.status === 'paused' ? 'Resume' : 'Pause'}</button>
-                {connector.source === 'github' ? <button className="btn" onClick={() => { onAction('a-connector-validate', 'action:connector-validate', { id: connector.id }); setTimeout(refreshSnapshot, 700); }}>Validate</button> : null}
-                {CHECKPOINT_RUNTIME_SOURCES.has(connector.source) ? <button className="btn" onClick={() => { onAction('a-connector-run', 'action:connector-run', { id: connector.id }); setTimeout(refreshSnapshot, 1200); }}>Run</button> : null}
-                <button className="btn" disabled={(connectors.documentCounts?.[connector.id] ?? 0) === 0} title="Send stored connector documents to the active BrainRouter memory server for recall" onClick={() => { onAction('a-connector-index-memory', 'action:connector-index-memory', { id: connector.id }); setTimeout(refreshSnapshot, 700); }}>Index memory</button>
-                {connector.source === 'github' ? <button className="btn" onClick={() => { onAction('a-connector-sync-permissions', 'action:connector-sync-permissions', { id: connector.id }); setTimeout(refreshSnapshot, 1200); }}>Sync permissions</button> : null}
-                <button className="btn danger" onClick={() => { onAction('a-connector-delete', 'action:connector-delete', { id: connector.id }); setTimeout(refreshSnapshot, 120); }}>Remove</button>
+                <button className="btn danger" onClick={() => { if (window.confirm(`Remove the ${connector.name} connector?`)) { onAction('a-connector-delete', 'action:connector-delete', { id: connector.id }); setTimeout(refreshSnapshot, 120); } }}>Remove</button>
               </span>
             </div>
           ))}
@@ -364,14 +356,13 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
           <Row title="Name" desc="Local display name for this connector instance.">
             <input className="ctl" value={name} onChange={(e) => setName(e.target.value)} placeholder="GitHub connector" />
           </Row>
-          <Row title="Owner / organization" desc="Optional hint. Used when no repositories are selected.">
-            <input className="ctl mono" value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="owner-or-org" spellCheck={false} autoCapitalize="off" />
-          </Row>
-          <Row title="Repositories" desc="Tick repositories from the connected account. Empty means every accessible repo under the owner hint.">
-            <GithubRepoPicker connector={firstGithub} value={selectedGithubRepos} onChange={(next) => {
-              setRepos(next.join('\n'));
-              if (!owner.trim() && next[0]?.includes('/')) setOwner(next[0].split('/')[0]);
-            }} />
+          <Row title="Repositories" desc="Auto-detected over OAuth — BrainRouter syncs every repository your GitHub app can access. No owner or repo to set.">
+            {githubInstallUrl ? (
+              <button type="button" onClick={() => void bridgeQuery('action:open-external', { url: githubInstallUrl })}
+                style={{ background: 'none', border: 0, padding: 0, color: 'var(--accent, #6ea8fe)', cursor: 'pointer', font: 'inherit', textDecoration: 'underline', justifySelf: 'start' }}>
+                Manage on GitHub ↗
+              </button>
+            ) : <span className="set-desc">Connect GitHub above; repositories are detected automatically.</span>}
           </Row>
           <Row title="Content" desc="Choose what the connector ingests for memory and recall.">
             <div className="connector-toggles">
@@ -383,7 +374,7 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
           <Row title="Auto run" desc="Optional polling cadence in minutes. Blank disables background connector runs.">
             <input className="ctl mono" type="number" min={1} step={1} value={pollMinutes} onChange={(e) => setPollMinutes(e.target.value)} placeholder="disabled" />
           </Row>
-          <Row title="Credential provider" desc="Dynamic uses the GitHub CLI account. Static reads an environment token. OAuth stores a per-connector token in the OS keychain.">
+          <Row title="Credential provider" desc="OAuth connects through your BrainRouter account (recommended — no token on this machine). GitHub CLI uses gh auth; Token reads an environment token.">
             <ChoiceControl
               value={credentialMode}
               options={[
@@ -402,7 +393,7 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
             </Row>
           ) : null}
           {credentialMode === 'oauth' ? (
-            <Row title="OAuth account" desc={oauthState.status === 'idle' && oauthState.hasToken ? `Token stored via ${oauthState.storageMode ?? 'keychain'}.` : 'Device-flow authorization stores the token in the OS keychain.'}>
+            <Row title="OAuth account" desc={oauthState.status === 'idle' && oauthState.hasToken ? 'Connected through your BrainRouter account.' : 'Connect GitHub through BrainRouter — no token is stored on this machine. Requires being signed in (Account).'}>
               <div style={{ display: 'grid', gap: 8, minWidth: 300 }}>
                 {oauthState.status === 'pending' ? (
                   <div className="gh-int-status ok">
@@ -418,7 +409,7 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
                 <span className="pc-actions">
                   {oauthState.status === 'pending'
                     ? <button type="button" className="btn" onClick={() => void cancelGithubOauth()}>Cancel</button>
-                    : <button type="button" className="btn" disabled={!firstGithub || oauthState.status === 'starting'} onClick={() => void startGithubOauth()}>{oauthState.status === 'starting' ? 'Starting...' : (oauthState.status === 'idle' && oauthState.hasToken ? 'Reconnect' : 'Connect')}</button>}
+                    : <button type="button" className="btn" disabled={oauthState.status === 'starting'} onClick={() => void startGithubOauth()}>{oauthState.status === 'starting' ? 'Starting...' : (oauthState.status === 'idle' && oauthState.hasToken ? 'Reconnect' : 'Connect')}</button>}
                   {oauthState.status === 'idle' && oauthState.hasToken ? <button type="button" className="btn danger" onClick={() => void disconnectGithubOauth()}>Disconnect</button> : null}
                 </span>
               </div>

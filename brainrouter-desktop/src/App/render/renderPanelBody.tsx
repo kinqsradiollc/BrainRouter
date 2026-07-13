@@ -21,12 +21,19 @@ import type { useCi } from '../../lib/ci/useCi.js';
 import { type DashTab, type DashTask, type WorkspaceDash } from '../../lib/workspace/dashboard.js';
 import type { AtlasChangeAssessment } from '../../lib/atlas/atlasView.js';
 import { buildTrackOps } from '../track/trackOps.js';
+// UI-TEST fusion — the Atlas Screens map + user-journey stories the Atlas panel
+// renders, and the Browser panel that replays them live.
+import type { UiMap } from '@kinqs/brainrouter-ui-test/dist/types.js';
+import type { Story } from '@kinqs/brainrouter-ui-test/dist/flow/storySchema.js';
 
 // Monaco is ~5MB — lazy-load the editor panel so it only loads when first opened.
 const EditorPanel = lazy(() => import('../../panels/editing/EditorPanel.js').then((m) => ({ default: m.EditorPanel })));
 // CI is an optional panel rarely opened on load — lazy so it stays out of the
 // initial bundle / first paint.
 const CIPanel = lazy(() => import('../../panels/ci/CIPanel.js').then((m) => ({ default: m.CIPanel })));
+// UI-TEST fusion — the embedded Browser panel (webview + tool rail) is only
+// opened for UI testing; lazy so its webview bridge stays out of first paint.
+const BrowserPanel = lazy(() => import('../../panels/BrowserPanel.js').then((m) => ({ default: m.BrowserPanel })));
 
 type Query = (id: string, name: string, args?: Record<string, unknown>) => void;
 
@@ -111,6 +118,9 @@ export interface RenderPanelBodyCtx {
   setAtlasBuilding: (v: boolean) => void;
   setAtlasEnriching: (v: boolean) => void;
   setAtlasAssessing: (v: string | null) => void;
+  atlasUiMap: UiMap | null;
+  atlasStories: Story[];
+  runStory: (story: Story) => void;
   requirements: RequirementRecord[];
   annotations: AnnotationRecord[];
   artifacts: ArtifactRecord[];
@@ -128,7 +138,7 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId) => 
     lastPlan, planHistory, planFeedbackRef, searchHits, schedules, worktrees, worktreeDiffs, openWorktree,
     review, reviewRunning, setReviewRunningByWs, setReviewByWs, setDraft, atlasGraph, atlasBuilding, atlasEnriching,
     atlasAssessments, atlasAssessing, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, requirements,
-    annotations, artifacts,
+    annotations, artifacts, atlasUiMap, atlasStories, runStory,
   } = ctx;
 
   // DESK-5f — tab CONTENT only; the tab strip owns titles and closing.
@@ -292,7 +302,24 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId) => 
           onEnrich={() => { setAtlasEnriching(true); q('q-atlas-enrich', 'atlas-enrich'); }}
           onOpenFile={openFile} changedFiles={changedFiles}
           assessments={atlasAssessments} assessing={atlasAssessing}
-          onAssess={(path) => { setAtlasAssessing(path); q('q-atlas-explain', 'atlas-explain-change', { path }); }} />;
+          onAssess={(path) => { setAtlasAssessing(path); q('q-atlas-explain', 'atlas-explain-change', { path }); }}
+          uiMap={atlasUiMap}
+          onLoadUiMap={() => q('q-uitest-manifest', 'uitest:manifest')}
+          onExtractUi={(opts) => q('q-uitest-extract', 'uitest:extract', { ...(opts?.only?.length ? { only: opts.only } : {}), broad: !!opts?.broad })}
+          onDriveElement={(el) => {
+            ensurePanel('uitest');
+            try { localStorage.setItem('br-browser-focus', JSON.stringify({ ...el, at: Date.now() })); } catch { /* ignore */ }
+            window.dispatchEvent(new CustomEvent('br-browser-focus'));
+            setToast(`Sent "${el.testID}" to the Browser panel`);
+          }}
+          stories={atlasStories}
+          onLoadStories={() => q('q-uitest-stories', 'uitest:list-stories')}
+          onSuggestStories={() => q('q-uitest-suggest', 'uitest:suggest-stories')}
+          onRunStory={(story) => runStory(story)} />;
+      // UI-TEST fusion — the embedded Browser panel (propless; talks to App via
+      // localStorage + br-browser-* window events). Lazy + Suspense like Editor/CI.
+      case 'uitest':
+        return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading…</div>}><BrowserPanel /></Suspense>;
       case 'requirements': {
         const refresh = () => setTimeout(() => q('q-req', 'requirement-list'), 150);
         return <RequirementsPanel requirements={requirements}

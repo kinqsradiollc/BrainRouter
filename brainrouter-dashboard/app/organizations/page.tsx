@@ -6,6 +6,7 @@
  * invite members by email, change their role, or remove them. Premium blocks.
  */
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
 import { PremiumCard } from "../../components/PremiumCard";
@@ -267,6 +268,13 @@ function OrgsInner() {
                   </div>
                 </div>
                 <div className="settings-actions">
+                  {/* ADR-016 — only owner/admin (triggers:manage) can connect the org's
+                      GitHub App/bot; it then syncs to the desktop for signed-in members. */}
+                  {org.capabilities.includes("triggers:manage") && (
+                    <Link href={`/integrations/github?org=${encodeURIComponent(org.orgId)}`}>
+                      <PremiumButton size="small" variant="ghost">Connect GitHub →</PremiumButton>
+                    </Link>
+                  )}
                   {!org.isDefault && (
                     <PremiumButton size="small" variant="ghost" disabled={busyDefault === org.orgId} onClick={() => makeDefault(org.orgId)}>
                       {busyDefault === org.orgId ? "Setting…" : "Make default"}

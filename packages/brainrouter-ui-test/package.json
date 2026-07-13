@@ -1,0 +1,62 @@
+{
+  "name": "@kinqs/brainrouter-ui-test",
+  "version": "0.4.16",
+  "description": "Web UI-testing engine for BrainRouter — a data-testid extractor, a named command layer, and a headed Playwright driver shared verbatim by the Desktop panel and the agent.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./dist/*": "./dist/*"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "clean": "node -e \"fs.rmSync('dist',{recursive:true,force:true})\"",
+    "build": "npm run clean && tsc -p tsconfig.json",
+    "test": "npm run build && node --test \"dist/**/*.test.js\"",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "yaml": "^2.0.0",
+    "zod": "^4.0.0"
+  },
+  "peerDependencies": {
+    "playwright": "^1.40.0",
+    "typescript": "^5.5.4"
+  },
+  "peerDependenciesMeta": {
+    "playwright": {
+      "optional": true
+    },
+    "typescript": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "typescript": "^5.5.4"
+  },
+  "keywords": [
+    "brainrouter",
+    "ui-testing",
+    "playwright",
+    "data-testid"
+  ],
+  "license": "MIT",
+  "author": "BrainRouter contributors",
+  "homepage": "https://github.com/kinqsradiollc/BrainRouter#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kinqsradiollc/BrainRouter.git",
+    "directory": "packages/brainrouter-ui-test"
+  },
+  "bugs": {
+    "url": "https://github.com/kinqsradiollc/BrainRouter/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false
+}

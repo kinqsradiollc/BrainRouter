@@ -23,13 +23,21 @@ describe("RBAC roles + capabilities (ADR-010)", () => {
     expect(can("admin", "org:manage")).toBe(false);
   });
 
-  it("member can read/write/share memory but cannot configure providers or triggers", () => {
+  it("developer can read/write/share memory but cannot configure providers or triggers", () => {
+    expect(can("developer", "memory:write")).toBe(true);
+    expect(can("developer", "memory:read")).toBe(true);
+    expect(can("developer", "memory:share")).toBe(true);
+    expect(can("developer", "providers:manage")).toBe(false);
+    expect(can("developer", "triggers:manage")).toBe(false);
+    expect(can("developer", "members:manage")).toBe(false);
+  });
+
+  it("legacy role names map to canonical ones (member→developer, manager→admin)", () => {
     expect(can("member", "memory:write")).toBe(true);
-    expect(can("member", "memory:read")).toBe(true);
-    expect(can("member", "memory:share")).toBe(true);
     expect(can("member", "providers:manage")).toBe(false);
-    expect(can("member", "triggers:manage")).toBe(false);
-    expect(can("member", "members:manage")).toBe(false);
+    expect(can("manager", "triggers:manage")).toBe(true);
+    expect(can("manager", "org:manage")).toBe(false);
+    expect(capabilitiesFor("member")).toEqual(capabilitiesFor("developer"));
   });
 
   it("viewer is read-only", () => {
@@ -47,11 +55,11 @@ describe("RBAC roles + capabilities (ADR-010)", () => {
     expect(canConfigTriggers.sort()).toEqual(["admin", "owner"]);
   });
 
-  it("roleAtLeast respects the owner > admin > member > viewer order", () => {
+  it("roleAtLeast respects the owner > admin > developer > viewer order", () => {
     expect(roleAtLeast("owner", "admin")).toBe(true);
     expect(roleAtLeast("admin", "admin")).toBe(true);
-    expect(roleAtLeast("member", "admin")).toBe(false);
-    expect(roleAtLeast("viewer", "member")).toBe(false);
+    expect(roleAtLeast("developer", "admin")).toBe(false);
+    expect(roleAtLeast("viewer", "developer")).toBe(false);
     expect(roleAtLeast("admin", "viewer")).toBe(true);
   });
 
@@ -73,7 +81,7 @@ describe("RBAC roles + capabilities (ADR-010)", () => {
   });
 
   it("every role's capability set is a subset of the more-privileged role (monotonic)", () => {
-    const order: Role[] = ["viewer", "member", "admin", "owner"];
+    const order: Role[] = ["viewer", "developer", "admin", "owner"];
     for (let i = 0; i < order.length - 1; i++) {
       const lower = ROLE_CAPABILITIES[order[i]];
       const higher = ROLE_CAPABILITIES[order[i + 1]];

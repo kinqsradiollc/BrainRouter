@@ -18,18 +18,34 @@ import type { ConnectorTokenSecret } from "../../../connectors/store.js";
 
 export const connectorOauthRouter = Router();
 
-const stateSecret = (): string => (process.env.BRAINROUTER_SECRET_KEY ?? "brainrouter-dev-oauth-state").trim();
+// The OAuth `state` is HMAC-signed with this secret; a KNOWN fallback would let an
+// attacker forge a state (any userId/connectorId) and defeat the ownership check
+// below. Require a real secret in production; only fall back for local dev.
+const stateSecret = (): string => {
+  const s = process.env.BRAINROUTER_SECRET_KEY?.trim();
+  if (s) return s;
+  if (process.env.NODE_ENV === "production") throw new Error("BRAINROUTER_SECRET_KEY is required to sign OAuth state");
+  return "brainrouter-dev-oauth-state";
+};
 const nowSec = (): number => Math.floor(Date.now() / 1000);
 
 function baseUrlOf(req: AuthedRequest): string {
+  // The OAuth redirect_uri must not be built from an untrusted Host header — a
+  // spoofed Host would send the authorization code to an attacker (CWE-20). Prefer
+  // the configured public URL; otherwise fall back to a FORMAT-validated Host (dev
+  // localhost), never a raw one.
+  const publicUrl = process.env.BRAINROUTER_PUBLIC_URL?.trim();
+  if (publicUrl) return publicUrl.replace(/\/+$/, "");
   const proto = (req.headers["x-forwarded-proto"] as string | undefined)?.split(",")[0]?.trim() || req.protocol || "http";
-  const host = req.headers.host ?? "localhost:3747";
+  const rawHost = req.headers.host ?? "";
+  const host = /^[a-z0-9.-]+(:\d+)?$/i.test(rawHost) ? rawHost : "localhost:3747";
   return `${proto}://${host}`;
 }
 const redirectUri = (req: AuthedRequest, source: string): string => `${baseUrlOf(req)}/api/connectors/${source}/oauth/callback`;
 
 async function resolveOrgId(req: AuthedRequest): Promise<string | undefined> {
-  const requested = (req.headers["x-brainrouter-org"] as string | undefined)?.trim() || undefined;
+  const orgHeader = req.headers["x-brainrouter-org"]; // string[] if the header repeats
+  const requested = (Array.isArray(orgHeader) ? orgHeader[0] : orgHeader)?.trim() || undefined;
   const ctx = await resolveOrgContext(memoryEngine.tenancy, req.userId!, requested).catch(() => null);
   return ctx?.orgId;
 }
@@ -41,7 +57,8 @@ async function resolveOrgId(req: AuthedRequest): Promise<string | undefined> {
 connectorOauthRouter.post("/:source/oauth/app", requireJwt, async (req: AuthedRequest, res) => {
   const source = String(req.params.source);
   if (!isOAuthSource(source)) { res.status(400).json({ error: `No OAuth broker for source "${source}"` }); return; }
-  const requested = (req.headers["x-brainrouter-org"] as string | undefined)?.trim() || undefined;
+  const orgHeader = req.headers["x-brainrouter-org"]; // string[] if the header repeats
+  const requested = (Array.isArray(orgHeader) ? orgHeader[0] : orgHeader)?.trim() || undefined;
   const ctx = await resolveOrgContext(memoryEngine.tenancy, req.userId!, requested).catch(() => null);
   if (!ctx?.orgId) { res.status(400).json({ error: "No active org" }); return; }
   if (!req.isAdmin && !can(ctx.role, "triggers:manage")) { res.status(403).json({ error: "Requires the 'triggers:manage' capability" }); return; }
@@ -61,11 +78,19 @@ connectorOauthRouter.get("/:source/oauth/start", requireJwt, async (req: AuthedR
   if (!orgId) { res.status(400).json({ error: "No active org" }); return; }
   const app = await memoryEngine.connectors.getResolvedOAuthApp(orgId, source);
   if (!app?.clientId) { res.status(409).json({ error: `OAuth for "${source}" isn't configured for this org — an admin must set its client id/secret first.` }); return; }
+  // Re-connecting an existing connector? Verify the caller OWNS it before we bind
+  // its id into the signed state — otherwise an attacker could enumerate ids and
+  // overwrite someone else's connector credentials on callback (IDOR, CWE-639).
+  const connectorId = String(req.query.connectorId ?? "").trim() || undefined;
+  if (connectorId) {
+    const conn = await memoryEngine.connectors.getConnector(connectorId);
+    if (!conn || conn.userId !== req.userId) { res.status(403).json({ error: "Connector not found or access denied." }); return; }
+  }
   const provider = OAUTH_PROVIDERS[source];
   const pkce = provider.usesPkce ? makePkce() : undefined;
   const state = signState({
     userId: req.userId!, orgId, source,
-    connectorId: (String(req.query.connectorId ?? "").trim() || undefined),
+    connectorId,
     verifier: pkce?.verifier, iat: nowSec(),
   }, stateSecret());
   const scopes = app.scopes ? app.scopes.split(/\s+/).filter(Boolean) : provider.scopes;
@@ -75,6 +100,9 @@ connectorOauthRouter.get("/:source/oauth/start", requireJwt, async (req: AuthedR
 /** GET /api/connectors/:source/oauth/callback — validate state, exchange, store. */
 connectorOauthRouter.get("/:source/oauth/callback", async (req: AuthedRequest, res) => {
   const source = String(req.params.source);
+  // Reject unknown sources up front so `source` (reflected in the success HTML
+  // below) is always a known, safe token — no reflected XSS.
+  if (!isOAuthSource(source)) { res.status(400).send("Unknown OAuth source."); return; }
   const code = String(req.query.code ?? "");
   const state = verifyState(String(req.query.state ?? ""), stateSecret(), 600, nowSec());
   if (!state || state.source !== source || !code || !state.orgId) { res.status(400).send("Invalid or expired OAuth state — restart the connection."); return; }

@@ -101,6 +101,11 @@ export async function removeOrgMember(exec: Executor, orgId: string, userId: str
 
 /** The caller's role in an org, or null when they are not a member. */
 export async function getMemberRole(exec: Executor, orgId: string, userId: string): Promise<Role | null> {
+  // A user is, by construction, the sole owner of their own personal org (the org
+  // id encodes the owner). Honor that invariant regardless of any stale/missing
+  // membership row, so a solo / local-first user always has full rights in their
+  // own space — this is the documented model (see rbac.ts).
+  if (orgId === personalOrgId(userId)) return "owner";
   const row = await exec.one(`SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2`, [orgId, userId]);
   return row && isRole(row.role) ? (row.role as Role) : null;
 }
@@ -123,7 +128,8 @@ export async function listOrgMembershipsForUser(exec: Executor, userId: string):
   );
   return rows.map((row) => ({
     org: orgRowToRecord(row),
-    role: (isRole(row.member_role) ? row.member_role : "viewer") as Role,
+    // Same invariant as getMemberRole: a user owns their own personal org.
+    role: (row.org_id === personalOrgId(userId) ? "owner" : (isRole(row.member_role) ? row.member_role : "viewer")) as Role,
   }));
 }
 
