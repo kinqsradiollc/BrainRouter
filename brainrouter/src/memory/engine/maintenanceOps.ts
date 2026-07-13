@@ -1,6 +1,7 @@
 import type { BlackboardItem, BlackboardItemInput, BlackboardStatus } from "@kinqs/brainrouter-types";
 import type { MemoryEngine } from "../engine.js";
 import { enqueueAgentJob } from "../scheduler/jobs.js";
+import { enqueueConnectorSyncs } from "../../connectors/syncExecutor.js";
 import { parentDomain, SCENE_LEAF_DOMAIN } from "../tree/policy.js";
 
 /**
@@ -81,5 +82,7 @@ export async function enqueueScheduledMaintenance(engine: MemoryEngine, force = 
       console.error("[BrainRouter] global rollup failed:", err?.message ?? err);
     }
   }
+  // ADR-016 C3 — fan out a connector_sync job per enabled server-side connector.
+  try { enqueued.connector_sync = await enqueueConnectorSyncs(engine.store); } catch { /* connectors optional */ }
   return { enqueued };
 }

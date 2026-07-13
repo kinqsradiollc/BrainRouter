@@ -22,6 +22,7 @@ import { distillCoreIdentity } from "../pipeline/identity/identity-distiller.js"
 import { distillFocusScenes } from "../pipeline/focus/contextual-focus-builder.js";
 import { digestTreeNodes } from "../tree/digest.js";
 import { enqueueAgentJob } from "./jobs.js";
+import { runConnectorSync } from "../../connectors/syncExecutor.js";
 import { runPrSecurityReview, runPrCodeReview, type PrReviewInput, type PrReviewDeps } from "../../integrations/prSecurityReview.js";
 
 /**
@@ -161,6 +162,9 @@ const EXECUTORS: Record<string, JobExecutor> = {
     const sampleSize = typeof input?.sampleSize === "number" ? input.sampleSize : undefined;
     return requireEngine(ctx).runRetrievalBenchmark(userIdOf(input), sampleSize !== undefined ? { sampleSize } : undefined);
   },
+  // ADR-016 C3 — sync one server-side connector (DB config + sealed token → core
+  // runtime → owner's memory), persisting the checkpoint back to the DB.
+  connector_sync: async (input) => runConnectorSync(String(input?.connectorId ?? "")),
 
   // ADR-017 D5 — the GitHub App bot's automatic PR reviews. Both are enqueued by the
   // pull_request webhook; each mints the installation token, reviews the diff with its

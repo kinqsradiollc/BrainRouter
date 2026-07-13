@@ -48,6 +48,7 @@ import { decideMcpAcceptPromotion } from './api/mcpAcceptHeader.js';
 import { authRouter, usersRouter, sessionsRouter } from './api/routes/identity/index.js';
 import { orgsRouter, projectsRouter, githubReposRouter } from './api/routes/tenancy/index.js';
 import { connectorOauthRouter } from './api/routes/connectors/oauth.js';
+import { connectorManageRouter } from './api/routes/connectors/manage.js';
 import { githubConnectorRouter, githubConnectorAdminRouter } from './api/routes/connectors/github.js';
 import { providersRouter, agentModelsRouter, integrationsRouter, reviewsRouter, adminEmailRouter, adminOrgsRouter } from './api/routes/admin/index.js';
 import { triggersRouter } from './api/routes/triggers/index.js';
@@ -226,6 +227,7 @@ if (USE_HTTP) {
   app.use("/api/admin/agent-models", agentModelsRouter);
   app.use("/api/admin/integrations", integrationsRouter);
   app.use("/api/connectors", connectorOauthRouter);
+  app.use("/api/connectors", connectorManageRouter);
   app.use("/api/admin/reviews", reviewsRouter);
   app.use("/api/admin/email", adminEmailRouter);
   app.use("/api/admin/orgs", adminOrgsRouter);
