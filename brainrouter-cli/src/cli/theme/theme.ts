@@ -16,8 +16,8 @@ import { getCliKnobs } from '@kinqs/brainrouter-core/config';
  * color reaches for a SEMANTIC token (primary, success, danger, …) instead
  * of a raw chalk call. Three palettes ship in-tree:
  *
- *   - `dark`  — original Midnight Ledger / Obsidian Surface (matches what
- *               the CLI has rendered since 0.3.x). Default.
+ *   - `dark`  — shared BrainRouter workbench spectrum on a neutral terminal
+ *               canvas. Default.
  *   - `light` — darker accents + bolder weights so the palette stays
  *               legible on white terminals (solarized-light, GitHub light,
  *               Apple Terminal "Basic").
@@ -33,8 +33,20 @@ import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 
 export type ThemeMode = 'dark' | 'light' | 'mono';
 
+export interface ThemeColors {
+  readonly primary?: string;
+  readonly secondary?: string;
+  readonly info?: string;
+  readonly automation?: string;
+  readonly success?: string;
+  readonly warning?: string;
+  readonly danger?: string;
+}
+
 export interface Theme {
   readonly mode: ThemeMode;
+  /** Raw Ink-compatible colors for TUI components. Empty in byte-plain mono mode. */
+  readonly colors: Readonly<ThemeColors>;
   /** Brand accent — used for the banner header, "brainrouter>" prompt, key callouts. */
   readonly primary: ChalkInstance;
   /** Secondary accent — supporting brand color (e.g. agent role tags). */
@@ -60,35 +72,54 @@ export interface Theme {
 const identity = ((s: string) => s) as unknown as ChalkInstance;
 
 function buildDark(): Theme {
+  const colors = {
+    primary: '#8B7CFF',
+    secondary: '#FF8B73',
+    info: '#4DD8FF',
+    automation: '#A3E635',
+    success: '#22C55E',
+    warning: '#EAB308',
+    danger: '#EF4444',
+  } as const;
   return {
     mode: 'dark',
-    primary: chalk.hex('#CC9166'),
-    secondary: chalk.magenta,
-    success: chalk.green,
-    warning: chalk.yellow,
-    danger: chalk.red,
-    info: chalk.cyan,
+    colors,
+    primary: chalk.hex(colors.primary),
+    secondary: chalk.hex(colors.secondary),
+    success: chalk.hex(colors.success),
+    warning: chalk.hex(colors.warning),
+    danger: chalk.hex(colors.danger),
+    info: chalk.hex(colors.info),
     muted: chalk.gray,
     dim: chalk.hex('#666666'),
-    heading: chalk.bold.hex('#CC9166'),
+    heading: chalk.bold.hex(colors.primary),
     plain: identity,
   };
 }
 
 function buildLight(): Theme {
+  const colors = {
+    primary: '#5D49C7',
+    secondary: '#B3422E',
+    info: '#006A80',
+    automation: '#4D7100',
+    success: '#137A2D',
+    warning: '#7A5A00',
+    danger: '#B4232E',
+  } as const;
   return {
     mode: 'light',
-    // Saturated orange-brown — still readable on white because chalk emits
-    // a TrueColor sequence the terminal renders as-is.
-    primary: chalk.hex('#A24E1F'),
-    secondary: chalk.hex('#7B2CBF'),
-    success: chalk.hex('#0F7B3E'),
-    warning: chalk.hex('#8A6300'),
-    danger: chalk.hex('#A4161A'),
-    info: chalk.hex('#005F8C'),
+    colors,
+    // Darker counterparts preserve contrast on white terminal themes.
+    primary: chalk.hex(colors.primary),
+    secondary: chalk.hex(colors.secondary),
+    success: chalk.hex(colors.success),
+    warning: chalk.hex(colors.warning),
+    danger: chalk.hex(colors.danger),
+    info: chalk.hex(colors.info),
     muted: chalk.hex('#4A4A4A'),
     dim: chalk.hex('#7A7A7A'),
-    heading: chalk.bold.hex('#A24E1F'),
+    heading: chalk.bold.hex(colors.primary),
     plain: identity,
   };
 }
@@ -96,6 +127,7 @@ function buildLight(): Theme {
 function buildMono(): Theme {
   return {
     mode: 'mono',
+    colors: {},
     primary: identity,
     secondary: identity,
     success: identity,
@@ -104,7 +136,7 @@ function buildMono(): Theme {
     info: identity,
     muted: identity,
     dim: identity,
-    heading: chalk.bold,
+    heading: identity,
     plain: identity,
   };
 }

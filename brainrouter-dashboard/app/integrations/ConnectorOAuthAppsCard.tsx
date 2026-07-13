@@ -6,10 +6,11 @@
  * (client_id + sealed client_secret) — exactly like the GitHub OAuth App — before any
  * signed-in user can "Connect" it. Global/org admin only; secrets are write-only.
  */
-import { useCallback, useEffect, useState } from "react";
+import { type KeyboardEvent, useCallback, useEffect, useState } from "react";
 import { PremiumCard } from "../../components/PremiumCard";
 import { PremiumButton } from "../../components/PremiumButton";
 import { adminApi } from "../../lib/adminApi";
+import { GithubOAuthAppCard } from "./GithubOAuthAppCard";
 
 interface AppStatus {
   source: string; configured: boolean; hasSecret: boolean;
@@ -20,13 +21,13 @@ interface AppStatus {
 const SOURCE_META: Record<string, { name: string; where: string }> = {
   gitlab: { name: "GitLab", where: "GitLab → Preferences → Applications" },
   slack: { name: "Slack", where: "api.slack.com → Your Apps → OAuth & Permissions" },
-  gdrive: { name: "Google Drive", where: "Google Cloud Console → APIs & Services → Credentials" },
+  "google-drive": { name: "Google Drive", where: "Google Cloud Console → APIs & Services → Credentials" },
   gmail: { name: "Gmail", where: "Google Cloud Console → APIs & Services → Credentials" },
   notion: { name: "Notion", where: "notion.so/my-integrations (public OAuth integration)" },
   linear: { name: "Linear", where: "linear.app → Settings → API → OAuth applications" },
 };
 
-function SourceForm({ app, onSaved }: { app: AppStatus; onSaved: () => void }): React.ReactElement {
+function SourceForm({ app, orgId, onSaved }: { app: AppStatus; orgId?: string; onSaved: () => void }): React.ReactElement {
   const [clientId, setClientId] = useState(app.clientId);
   const [clientSecret, setClientSecret] = useState("");
   const [scopes, setScopes] = useState(app.scopes || app.defaultScopes);
@@ -44,11 +45,11 @@ function SourceForm({ app, onSaved }: { app: AppStatus; onSaved: () => void }): 
         clientId: clientId.trim(),
         clientSecret: clientSecret.trim() || undefined,
         scopes: scopes.trim() || undefined,
-      });
+      }, orgId);
       setClientSecret(""); setSaved(true); onSaved();
     } catch (e) { setError(e instanceof Error ? e.message : "Failed to save"); }
     finally { setSaving(false); }
-  }, [app.source, clientId, clientSecret, scopes, onSaved]);
+  }, [app.source, clientId, clientSecret, scopes, orgId, onSaved]);
 
   return (
     <form onSubmit={save} style={{ padding: "12px 0", borderTop: "1px solid var(--border-dim, rgba(255,255,255,0.06))" }}>
@@ -79,20 +80,38 @@ function SourceForm({ app, onSaved }: { app: AppStatus; onSaved: () => void }): 
   );
 }
 
-export function ConnectorOAuthAppsCard(): React.ReactElement | null {
+export function ConnectorOAuthAppsCard({ orgId }: { orgId?: string }): React.ReactElement | null {
   const [apps, setApps] = useState<AppStatus[]>([]);
+  const [activeSource, setActiveSource] = useState("github");
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(false);
 
   const load = useCallback(async () => {
+    setLoaded(false);
+    setError("");
     try {
-      const r = await adminApi.getConnectorOAuthApps();
-      // GitHub has its own card above; show the rest of the OAuth-broker connectors here.
-      setApps((r.apps ?? []).filter((a) => a.source !== "github"));
+      const r = await adminApi.getConnectorOAuthApps(orgId);
+      const nextApps = (r.apps ?? []).filter((a) => a.source !== "github");
+      setApps(nextApps);
+      setActiveSource((current) => current === "github" || nextApps.some((app) => app.source === current) ? current : "github");
     } catch (e) { setError(e instanceof Error ? e.message : "Failed to load"); }
     finally { setLoaded(true); }
-  }, []);
+  }, [orgId]);
   useEffect(() => { void load(); }, [load]);
+
+  const providers = ["github", ...apps.map((app) => app.source)];
+  const moveProvider = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowRight") nextIndex = (index + 1) % providers.length;
+    else if (event.key === "ArrowLeft") nextIndex = (index - 1 + providers.length) % providers.length;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = providers.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const next = providers[nextIndex];
+    setActiveSource(next);
+    requestAnimationFrame(() => document.getElementById(`oauth-provider-tab-${next}`)?.focus());
+  };
 
   if (!loaded && !error) return null;
 
@@ -100,12 +119,40 @@ export function ConnectorOAuthAppsCard(): React.ReactElement | null {
     <PremiumCard level={2} style={{ marginTop: "var(--spacing-16)" }}>
       <div className="settings-cardhead">
         <div>
-          <h3>Connector OAuth Apps <span className="settings-hint">— lets signed-in users “Connect” each source</span></h3>
-          <div className="settings-hint">One shared OAuth app per source for this org, brokered server-side (no secret ever touches a client). Configure the ones you use; leave the rest unset.</div>
+          <h3>Connector OAuth apps <span className="settings-hint">— shared sign-in for every connected source</span></h3>
+          <div className="settings-hint">GitHub and every other provider live in one place. Credentials stay server-side; signed-in users only approve the account they want to connect.</div>
         </div>
       </div>
       {error && <div className="settings-note settings-note--error">{error}</div>}
-      {apps.map((a) => <SourceForm key={a.source} app={a} onSaved={load} />)}
+      <div className="settings-provider-tabs" role="tablist" aria-label="OAuth provider">
+        <button type="button" role="tab" id="oauth-provider-tab-github" aria-controls="oauth-provider-panel-github" aria-selected={activeSource === "github"} tabIndex={activeSource === "github" ? 0 : -1} className={activeSource === "github" ? "active" : ""} onKeyDown={(event) => moveProvider(event, 0)} onClick={() => setActiveSource("github")}>
+          <span className="provider-status-dot" /> GitHub
+        </button>
+        {apps.map((app) => (
+          <button
+            key={app.source}
+            type="button"
+            role="tab"
+            id={`oauth-provider-tab-${app.source}`}
+            aria-controls={`oauth-provider-panel-${app.source}`}
+            aria-selected={activeSource === app.source}
+            tabIndex={activeSource === app.source ? 0 : -1}
+            className={activeSource === app.source ? "active" : ""}
+            onKeyDown={(event) => moveProvider(event, providers.indexOf(app.source))}
+            onClick={() => setActiveSource(app.source)}
+          >
+            <span className={app.configured ? "provider-status-dot ready" : "provider-status-dot"} />
+            {SOURCE_META[app.source]?.name ?? app.source}
+          </button>
+        ))}
+      </div>
+      <div id={`oauth-provider-panel-${activeSource}`} role="tabpanel" aria-labelledby={`oauth-provider-tab-${activeSource}`}>
+        {activeSource === "github" && <GithubOAuthAppCard embedded />}
+        {apps.filter((app) => app.source === activeSource).map((app) => <SourceForm key={`${orgId ?? "default"}-${app.source}`} app={app} orgId={orgId} onSaved={load} />)}
+        {apps.length === 0 && activeSource !== "github" && (
+          <div className="settings-empty-inline">No OAuth connector definitions were returned by the server.</div>
+        )}
+      </div>
     </PremiumCard>
   );
 }

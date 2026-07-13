@@ -58,12 +58,12 @@ export function TopbarRight(p: TopbarRightProps): React.ReactElement {
   return (
     <span className="topbar-right" style={offRail ? { right: sideWidth + 12 } : undefined}>
       {showEnv ? (
-        <button type="button" className={`app-switcher${envOpen ? ' active' : ''}`} title="Environment" onClick={() => {
+        <button type="button" className={`app-switcher${envOpen ? ' active' : ''}`} title="Environment"
+          aria-label="Environment" aria-expanded={envOpen} onClick={() => {
           if (!envOpen) { q('q-gitlog', 'git-log'); q('q-git', 'git-info'); q('q-branches', 'git-branches'); }
           setEnvOpen((o) => !o);
         }}>
           <Icon name="brain" size={15} />
-          <Icon name="chev-down" size={11} />
         </button>
       ) : null}
       {/* Environment is a workbench toggle, not a window/layout control — divide

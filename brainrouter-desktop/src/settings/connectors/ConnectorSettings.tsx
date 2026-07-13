@@ -4,14 +4,11 @@ import type { ConnectorDefinitionBundle, ConnectorRecord } from '@kinqs/brainrou
 import { Icon } from '../../icons.js';
 import { bridgeQuery } from '../../lib/bridgeQuery.js';
 import { Row, ChoiceControl } from '../shared/controls.js';
-import { GithubIntegration } from '../github/GithubIntegration.js';
 import {
   connectorConfigString,
   connectorConfigList,
   CHECKPOINT_RUNTIME_SOURCES,
   type ConfigSnapshot,
-  type GithubIntegrationSnapshot,
-  type GithubSaveArgs,
   type GithubOauthState,
 } from '../shared/types.js';
 
@@ -29,12 +26,16 @@ function relTime(iso?: string): string {
 }
 const CRED_LABEL: Record<string, string> = { oauth: 'OAuth account', dynamic: 'GitHub CLI', static: 'access token', none: '' };
 const SERVER_OAUTH_SOURCES = new Set(['gitlab', 'slack', 'google-drive', 'gmail', 'notion', 'linear']);
+type AccountConnectorSnapshot = {
+  source: ConnectorRecord['source'];
+  connected: boolean;
+  connector: { id: string; name: string; status: string; enabled: boolean; config: Record<string, unknown>; lastRunAt: string | null; lastError: string | null } | null;
+  account?: string | null;
+  error?: string;
+};
 
-export function ConnectorSettings({ connectors, githubIntegration, githubOauthClientId, onGithubSave, onAction, refreshSnapshot }: {
+export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
   connectors: NonNullable<ConfigSnapshot['connectors']>;
-  githubIntegration: GithubIntegrationSnapshot;
-  githubOauthClientId: string;
-  onGithubSave: (args: GithubSaveArgs) => void;
   onAction: (id: string, name: string, args?: Record<string, unknown>) => void;
   refreshSnapshot: () => void;
 }): React.ReactElement {
@@ -58,6 +59,10 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
   const [genericOauth, setGenericOauth] = useState<{ signedIn: boolean; connected: boolean; busy: boolean; error?: string }>({ signedIn: false, connected: false, busy: false });
   const [definitionJson, setDefinitionJson] = useState('');
   const [oauthState, setOauthState] = useState<GithubOauthState>({ status: 'idle' });
+  const [githubAccount, setGithubAccount] = useState<{ signedIn: boolean; connected: boolean; login?: string; error?: string }>({ signedIn: false, connected: false });
+  const [accountConnectors, setAccountConnectors] = useState<AccountConnectorSnapshot[]>([]);
+  const [accountConnectorError, setAccountConnectorError] = useState('');
+  const [detectedGithubRepo, setDetectedGithubRepo] = useState<string | null>(null);
   // Public install page for the BrainRouter GitHub App — lets the user grant the App
   // access to more repos. Constant regardless of connection status, so it lives in its
   // own state rather than the oauth-status union.
@@ -65,10 +70,22 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
   // Connector config moved out of the inline panel into a modal (matching the
   // Models provider dialog): a catalog card / "Configure" opens this editor.
   const [editorOpen, setEditorOpen] = useState(false);
-  // The connector form is tall (GitHub config + Track sync); always open the
+  // The connector form can be tall; always open the
   // dialog scrolled to its title rather than wherever a re-render left it.
   const editorRef = useRef<HTMLDivElement>(null);
   React.useEffect(() => { if (editorOpen) editorRef.current?.scrollTo({ top: 0 }); }, [editorOpen, selectedSource]);
+
+  const refreshAccountConnectors = React.useCallback(async (): Promise<void> => {
+    try {
+      const result = await bridgeQuery<{ signedIn?: boolean; connectors?: AccountConnectorSnapshot[]; error?: string }>('account-connectors-status');
+      setAccountConnectors(Array.isArray(result.connectors) ? result.connectors.filter((item) => item.connector || item.connected) : []);
+      setAccountConnectorError(result.error ?? '');
+    } catch (error) {
+      setAccountConnectors([]);
+      setAccountConnectorError(error instanceof Error ? error.message : 'Unable to load account connectors.');
+    }
+  }, []);
+  React.useEffect(() => { void refreshAccountConnectors(); }, [refreshAccountConnectors]);
 
   React.useEffect(() => {
     if (!firstGithub) return;
@@ -86,9 +103,19 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
   React.useEffect(() => {
     // Server-mediated OAuth: the GitHub token lives in your BrainRouter account,
     // not on this machine. Reflect whether it's connected (requires being signed in).
-    void bridgeQuery<{ signedIn?: boolean; connected?: boolean; installUrl?: string }>('github-connect-status')
-      .then((res) => { setOauthState({ status: 'idle', hasToken: !!res.connected, storageMode: 'BrainRouter account' }); setGithubInstallUrl(res.installUrl ?? ''); })
-      .catch(() => setOauthState({ status: 'idle' }));
+    void bridgeQuery<{ signedIn?: boolean; connected?: boolean; login?: string; installUrl?: string; error?: string }>('github-connect-status')
+      .then((res) => {
+        setGithubAccount({ signedIn: !!res.signedIn, connected: !!res.connected, login: res.login, error: res.error });
+        setOauthState({ status: 'idle', hasToken: !!res.connected, storageMode: 'BrainRouter account' });
+        setGithubInstallUrl(res.installUrl ?? '');
+      })
+      .catch((error) => {
+        setGithubAccount({ signedIn: false, connected: false, error: error instanceof Error ? error.message : 'Unable to read GitHub account status.' });
+        setOauthState({ status: 'idle' });
+      });
+    void bridgeQuery<{ githubRepo?: string }>('track-git-context')
+      .then((res) => setDetectedGithubRepo(res.githubRepo ?? null))
+      .catch(() => setDetectedGithubRepo(null));
   }, [firstGithub?.id, firstGithub?.credential.mode, firstGithub?.updatedAt]);
 
   React.useEffect(() => {
@@ -190,6 +217,7 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
   const disconnectGithubOauth = async (): Promise<void> => {
     await bridgeQuery('action:github-disconnect').catch(() => undefined);
     markGithubOauthCredential(false);
+    setGithubAccount((current) => ({ ...current, connected: false, login: undefined }));
     setOauthState({ status: 'idle', hasToken: false });
   };
 
@@ -200,7 +228,7 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
       void bridgeQuery<{ status?: string; login?: string }>('github-device-poll').then((res) => {
         // Re-trigger the effect (new object) so polling continues until authorized.
         if (res.status === 'pending') { setOauthState((cur) => (cur.status === 'pending' ? { ...cur } : cur)); return; }
-        if (res.status === 'connected') { markGithubOauthCredential(true); setOauthState({ status: 'authorized', storageMode: 'BrainRouter account' }); setTimeout(refreshSnapshot, 120); return; }
+        if (res.status === 'connected') { markGithubOauthCredential(true); setGithubAccount({ signedIn: true, connected: true, login: res.login }); setOauthState({ status: 'authorized', storageMode: 'BrainRouter account' }); setTimeout(refreshSnapshot, 120); return; }
         setOauthState({ status: 'error', error: 'That code expired — click Connect to try again.' });
       }).catch((err) => setOauthState({ status: 'error', error: err instanceof Error ? err.message : String(err) }));
     }, delay);
@@ -226,6 +254,7 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
       const result = await bridgeQuery<{ ok?: boolean; error?: string }>('action:connector-oauth-save', { source: selectedEntry.source, name: genericName.trim() || `${selectedEntry.title} connector`, config });
       if (!result.ok) { setGenericOauth((s) => ({ ...s, error: result.error || 'Could not save connector settings.' })); return false; }
       setTimeout(refreshSnapshot, 150);
+      setTimeout(() => void refreshAccountConnectors(), 150);
       return true;
     }
     onAction('a-connector-create', 'action:connector-create', {
@@ -254,6 +283,12 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
     if (!selectedEntry) return;
     await bridgeQuery('action:connector-oauth-disconnect', { source: selectedEntry.source });
     await refreshGenericOauth();
+    await refreshAccountConnectors();
+  };
+  const disconnectAccountConnector = async (source: string): Promise<void> => {
+    await bridgeQuery('action:connector-oauth-disconnect', { source });
+    await refreshAccountConnectors();
+    if (selectedEntry?.source === source) await refreshGenericOauth();
   };
   const exportDefinitions = (): void => {
     const bundle: ConnectorDefinitionBundle = {
@@ -279,12 +314,14 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
   return (
     <>
       <div className="set-h">Connectors</div>
-      <div className="set-desc" style={{ marginBottom: 10 }}>Workspace data connectors for indexed sources, Track sync, permissions, and recall. MCP tool servers live in <b>MCP Servers</b>.</div>
+      <div className="set-desc" style={{ marginBottom: 10 }}>Workspace data connectors for indexed sources, permissions, and recall. Track sync uses your account connection and active workspace remote automatically. MCP tool servers live in <b>MCP Servers</b>.</div>
 
       <div className="connector-shell">
         <div className="connector-catalog">
           {connectors.catalog.map((entry) => {
-            const configured = connectors.items.filter((item) => item.source === entry.source).length;
+            const configured = connectors.items.filter((item) => item.source === entry.source).length
+              + accountConnectors.filter((item) => item.source === entry.source).length
+              + (entry.source === 'github' && githubAccount.connected && !connectors.items.some((item) => item.source === 'github') ? 1 : 0);
             const ready = CHECKPOINT_RUNTIME_SOURCES.has(entry.source);
             return (
               <button
@@ -308,9 +345,42 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
       </div>
 
       <div className="set-h2">Configured</div>
-      {connectors.items.length === 0 ? <div className="empty">No connectors configured yet.</div> : null}
-      {connectors.items.length ? (
+      {accountConnectorError ? <div className="set-desc" role="alert" style={{ color: 'var(--warn)', marginBottom: 8 }}>{accountConnectorError}</div> : null}
+      {connectors.items.length === 0 && accountConnectors.length === 0 && !githubAccount.connected ? <div className="empty">No connectors configured yet.</div> : null}
+      {connectors.items.length || accountConnectors.length || githubAccount.connected ? (
         <div className="provider-gallery connector-configured-grid">
+          {githubAccount.connected && !connectors.items.some((connector) => connector.source === 'github') ? (
+            <div className="provider-card saved">
+              <span className="pc-name">GitHub account <span className="pc-tag ok">Connected</span></span>
+              <span className="pc-host">OAuth via BrainRouter{githubAccount.login ? ` · ${githubAccount.login}` : ''}</span>
+              <span className="pc-wire">Credential sealed server-side{detectedGithubRepo ? ` · detected ${detectedGithubRepo}` : ''}</span>
+              <span className="pc-actions">
+                <button className="btn" onClick={() => { setSelectedSource('github'); setEditorOpen(true); }}>Configure source</button>
+                <button className="btn danger" onClick={() => void disconnectGithubOauth()}>Disconnect</button>
+              </span>
+            </div>
+          ) : null}
+          {accountConnectors.map((item) => {
+            const entry = connectors.catalog.find((candidate) => candidate.source === item.source);
+            const connector = item.connector;
+            const status = item.connected && connector?.enabled ? 'Connected' : item.connected ? 'Paused' : 'Needs attention';
+            return (
+              <div key={`account-${item.source}-${connector?.id ?? 'connection'}`} className="provider-card saved">
+                <span className="pc-name">
+                  {connector?.name || `${entry?.title ?? item.source} account`}
+                  <span className={`pc-tag ${item.connected ? 'ok' : 'danger'}`}>{status}</span>
+                </span>
+                <span className="pc-host">{entry?.title ?? item.source} · OAuth via BrainRouter account</span>
+                <span className="pc-wire">Credential sealed server-side · schedule {connector?.enabled ? 'on' : 'paused'}</span>
+                <span className="pc-wire">Last synced {relTime(connector?.lastRunAt ?? undefined)}</span>
+                {(item.error || connector?.lastError) ? <span className="pc-host" style={{ color: 'var(--warn)' }}>Last sync didn’t finish — {item.error || connector?.lastError}</span> : null}
+                <span className="pc-actions">
+                  <button className="btn" onClick={() => { setSelectedSource(item.source); setEditorOpen(true); }}>Configure</button>
+                  {item.connected ? <button className="btn danger" onClick={() => void disconnectAccountConnector(item.source)}>Disconnect</button> : null}
+                </span>
+              </div>
+            );
+          })}
           {connectors.items.map((connector) => (
             <div key={connector.id} className="provider-card saved">
               <span className="pc-name">
@@ -362,14 +432,6 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
         </div>
       </Row>
 
-      {github ? (
-        <>
-          <div className="set-h2">GitHub Track sync</div>
-          <div className="set-desc" style={{ marginBottom: 8 }}>Track issue import/export uses the same GitHub area. Connector-backed repositories are listed here, while write tokens remain local to this machine.</div>
-          <GithubIntegration gh={githubIntegration} onSave={onGithubSave} />
-        </>
-      ) : null}
-
       {editorOpen && selectedEntry ? createPortal((
         // Portal to <body>: the Settings modal carries a transient `transform`
         // (the popIn animation) which would make this fixed overlay resolve
@@ -389,7 +451,7 @@ export function ConnectorSettings({ connectors, githubIntegration, githubOauthCl
             {selectedEntry.source === 'github' ? (
         <>
           <div className="set-h2" style={{ marginTop: 2 }}>GitHub source</div>
-          <div className="set-desc" style={{ marginBottom: 8 }}>Configure a GitHub identity and the repositories it can index for memory and Track sync.</div>
+          <div className="set-desc" style={{ marginBottom: 8 }}>Choose what this source indexes for knowledge. Track uses your BrainRouter OAuth connection and the current workspace remote automatically.</div>
           {!github ? <div className="empty">GitHub is not available in the connector catalog.</div> : null}
           <Row title="Name" desc="Local display name for this connector instance.">
             <input className="ctl" value={name} onChange={(e) => setName(e.target.value)} placeholder="GitHub connector" />

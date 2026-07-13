@@ -40,16 +40,7 @@ function FilterRow({ children, align = "start", gap = 8, style }: FilterRowProps
   const justifyContent =
     align === "end" ? "flex-end" : align === "between" ? "space-between" : "flex-start";
   return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: `${gap}px`,
-        flexWrap: "wrap",
-        justifyContent,
-        ...style,
-      }}
-    >
+    <div className="filter-bar__row" style={{ gap: `${gap}px`, justifyContent, ...style }}>
       {children}
     </div>
   );
@@ -63,17 +54,8 @@ interface FilterLabelProps {
 /** Pair a small uppercase caption with an input/select. Stack within a row. */
 function FilterLabel({ text, children }: FilterLabelProps) {
   return (
-    <label style={{ display: "flex", flexDirection: "column", gap: "4px", minWidth: 0 }}>
-      <span
-        style={{
-          color: "var(--color-stone-text)",
-          fontSize: "11px",
-          textTransform: "uppercase",
-          letterSpacing: "0.06em",
-        }}
-      >
-        {text}
-      </span>
+    <label className="filter-bar__label">
+      <span>{text}</span>
       {children}
     </label>
   );
@@ -81,18 +63,7 @@ function FilterLabel({ text, children }: FilterLabelProps) {
 
 export function FilterBar({ children, card = true, style }: FilterBarProps) {
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: "12px",
-        padding: card ? "16px 20px" : 0,
-        borderRadius: card ? "var(--radius-md)" : 0,
-        background: card ? "var(--color-obsidian-surface)" : "transparent",
-        border: card ? "1px solid var(--border-dim)" : "none",
-        ...style,
-      }}
-    >
+    <div className={`filter-bar${card ? " filter-bar--card" : ""}`} style={style}>
       {children}
     </div>
   );

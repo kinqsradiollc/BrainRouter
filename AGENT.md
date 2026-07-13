@@ -1,6 +1,6 @@
 # BrainRouter Development Manual
 
-**AGENT INSTRUCTION:** This is your primary instruction hub for developing, maintaining, and building the **BrainRouter** repository. You are the AI engineer building BrainRouter, not a client using its MCP server. 
+**AGENT INSTRUCTION:** This is your primary instruction hub for developing, maintaining, and building the **BrainRouter** repository. You are the AI engineer building BrainRouter, not a client using its MCP server.
 
 > **Audience**: AI Coding Agents and Developers building BrainRouter.
 
@@ -19,7 +19,8 @@
 - **`skills/`**: Universal skill workflows and markdown definitions (organized by category: `agent`, `api`, `codebase`, `design`, `devops`, `lifecycle`, `memory`, `qa`, `ux`).
 - **`brainrouter-cli/`**: Node.js/TypeScript CLI interface for working with local session memories and skills.
 - **`brainrouter/`**: Model Context Protocol (MCP) server implementations and tool definitions — the BrainRouter core (memory engine + tool registry). The recall pipeline lives in `src/memory/recall.ts` and runs four stages: keyword/vector/filepath retrieval → reranker → optional LLM relevance judge → graph expansion.
-- **`brainrouter-dashboard/`**: React/Vite/Next.js dashboard for visualizing cognitive graphs, recall histories, and memory states.
+- **`brainrouter-dashboard/`**: Next.js dashboard for authenticated chat, organizations/projects, connections, repositories, scoped knowledge, reviews, operations, and memory inspection.
+- **`brainrouter-desktop/`**: Electron + React workbench for Chat, Code, Track, project context, terminal, tools, automation, and reviews over the shared core runtime.
 - **`packages/`**: Shared core utility libraries and modules.
 
 ---
@@ -29,26 +30,34 @@
 When you are assigned a development task in this codebase, look up the scenario below and read the corresponding skill file directly from the filesystem:
 
 ### 🔍 Scenario: Planning & Architecture
-*Focus: Clarifying ambiguous requirements, creating specs, and defining tasks.*
+
+_Focus: Clarifying ambiguous requirements, creating specs, and defining tasks._
+
 - **[planning-skill](skills/agent/planning-skill/SKILL.md)**: Standard planning mode, tracking progress in `task.md`.
 - **[spec-driven-skill](skills/agent/spec-driven-skill/SKILL.md)**: Creating specs under `brainrouter-docs/specs/` before writing core code.
 - **[adr-skill](skills/agent/adr-skill/SKILL.md)**: Creating ADRs under `brainrouter-docs/decisions/` for major database or routing decisions.
 
 ### 💻 Scenario: Code Implementation & Cleanups
-*Focus: Writing robust code, refactoring layers, and codebase cleanup.*
+
+_Focus: Writing robust code, refactoring layers, and codebase cleanup._
+
 - **[incremental-skill](skills/lifecycle/incremental-skill/SKILL.md)**: Implementing features in small, vertical micro-slices.
 - **[code-structure-cleanup](skills/codebase/code-structure-cleanup/SKILL.md)**: Cleaning structural entropy, removing dead code, and standardizing service layers.
 - **[code-simplification](skills/codebase/code-simplification/SKILL.md)**: Refactoring complex routines for high comprehension speed.
 - **[conventions-skill](skills/codebase/conventions-skill/SKILL.md)**: Checking import order, type annotations, and naming style.
 
 ### 🧪 Scenario: Testing, Debugging & QA
-*Focus: Running test runners, browser test cases, and error recovery.*
+
+_Focus: Running test runners, browser test cases, and error recovery._
+
 - **[debugging-and-error-recovery](skills/agent/debugging-and-error-recovery/SKILL.md)**: Systematic Reproduce → Localize → Fix → Guard debugging.
 - **[testing-skill](skills/api/testing-skill/SKILL.md)**: Writing Vitest/Jest unit and integration tests.
 - **[browser-testing-skill](skills/qa/browser-testing-skill/SKILL.md)**: Inspecting and testing dashboard UI.
 
 ### 🚀 Scenario: Shipping & Handovers
-*Focus: Creating changelogs, preparing rollouts, and documenting changes.*
+
+_Focus: Creating changelogs, preparing rollouts, and documenting changes._
+
 - **[shipping-skill](skills/lifecycle/shipping-skill/SKILL.md)**: Pre-flight checklist before finishing tasks.
 - **[changelog-generator](skills/lifecycle/changelog-generator/SKILL.md)**: Compiling structured release changelogs.
 - **[handover-skill](skills/agent/handover-skill/SKILL.md)**: Summarizing accomplishments in `walkthrough.md`.
@@ -58,15 +67,18 @@ When you are assigned a development task in this codebase, look up the scenario 
 ## ⚡ Development Workflow Checklists
 
 ### Phase 1: Planning
+
 1. Create a `task.md` checklist in the workspace to track progress.
 2. If the user request is ambiguous, draft a micro-specification file and get explicit user approval.
 
 ### Phase 2: Execution
+
 1. Implement in small, verifiable steps.
 2. Run build scripts (`npm run build` or equivalent) and local tests after each significant change.
 3. Write test cases for any new functionality added to `brainrouter-cli` or core packages.
 
 ### Phase 3: Handover & Walkthrough
+
 1. Run linting and formatting suites to keep codebase clean.
 2. Record all completed checklist items in `task.md`.
 3. Generate a structured summary of changes in `walkthrough.md` for human review.

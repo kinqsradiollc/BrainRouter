@@ -35,7 +35,8 @@ export async function searchCognitiveFts(exec: Executor, userId: string, query: 
   const scope = orgId ? `(r.user_id = $1 OR (r.org_id = $4 AND r.visibility = 'org'))` : `r.user_id = $1`;
   const params = orgId ? [userId, query, limit, orgId] : [userId, query, limit];
   const rows = await exec.rows<any>(
-    `SELECT r.record_id, r.user_id, r.org_id, r.visibility, r.content, r.type, r.priority, r.scene_name, r.skill_tag,
+    `SELECT r.record_id, r.user_id, r.org_id, r.visibility, r.workspace_tag, r.project_tag,
+            r.content, r.type, r.priority, r.scene_name, r.skill_tag,
             r.session_key, r.timestamp_str, r.created_time, r.citation_count,
             ts_rank(r.content_tsv, plainto_tsquery('english', $2)) AS rank
        FROM cognitive_records r
@@ -56,6 +57,10 @@ export async function searchCognitiveFts(exec: Executor, userId: string, query: 
     // Attach org scope for applyFilters (not on the shared type — read via cast).
     (out as unknown as Record<string, unknown>).org_id = r.org_id ?? null;
     (out as unknown as Record<string, unknown>).visibility = r.visibility ?? null;
+    // Keep scope tags on org-shared candidates. The later fallback lookup is
+    // owner-scoped, so it cannot recover another member's tags for us.
+    (out as unknown as Record<string, unknown>).workspace_tag = r.workspace_tag ?? null;
+    (out as unknown as Record<string, unknown>).project_tag = r.project_tag ?? null;
     return out;
   });
 }
@@ -112,7 +117,8 @@ export async function searchCognitiveVec(exec: Executor, vec: VecContext, userId
       : [toVectorLiteral(queryEmbedding), userId, limit];
     const rows = await exec.rows<any>(
       `SELECT v.record_id, (v.embedding <=> $1::vector) AS distance,
-              r.user_id, r.org_id, r.visibility, r.content, r.type, r.priority, r.scene_name, r.skill_tag,
+              r.user_id, r.org_id, r.visibility, r.workspace_tag, r.project_tag,
+              r.content, r.type, r.priority, r.scene_name, r.skill_tag,
               r.session_key, r.timestamp_str, r.created_time
          FROM cognitive_vec v
          JOIN cognitive_records r ON v.record_id = r.record_id
@@ -131,6 +137,8 @@ export async function searchCognitiveVec(exec: Executor, vec: VecContext, userId
       };
       (out as unknown as Record<string, unknown>).org_id = r.org_id ?? null;
       (out as unknown as Record<string, unknown>).visibility = r.visibility ?? null;
+      (out as unknown as Record<string, unknown>).workspace_tag = r.workspace_tag ?? null;
+      (out as unknown as Record<string, unknown>).project_tag = r.project_tag ?? null;
       return out;
     });
   } catch (e) {

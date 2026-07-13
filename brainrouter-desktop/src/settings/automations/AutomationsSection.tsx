@@ -10,14 +10,26 @@
  * Writes go through `setPath` (sibling-safe), so setting `enabled` never wipes
  * a secret.
  */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Row, Toggle, KnobNumber, KnobText, SetGroup } from '../shared/controls.js';
 import { Icon } from '../../icons.js';
+import { bridgeQuery } from '../../lib/bridgeQuery.js';
 
 type Dict = Record<string, unknown>;
 type SecretsSet = { github: boolean; slack: boolean; gitlab: boolean; jira: boolean };
 type RuleRow = { id: string; name: string; on: string; when: string; do: string; enabled: boolean; sourcePath: string };
 type ServeStatus = { running: boolean; host: string | null; port: number | null; startedAt: string | null; providers: string[]; recentEvents: string[]; lastError: string | null };
+type AccountAutomationStatus = {
+  signedIn: boolean;
+  githubOauthConnected: boolean;
+  githubLogin?: string;
+  orgId?: string;
+  orgName?: string;
+  githubAppConfigured: boolean;
+  githubAppInstalled: boolean;
+  installUrl?: string;
+  error?: string;
+};
 
 export function AutomationsSection({ knobs, setPath, secretsSet, rules = [], serve, onAction, refreshSnapshot }: {
   knobs: Dict;
@@ -33,24 +45,69 @@ export function AutomationsSection({ knobs, setPath, secretsSet, rules = [], ser
   const triggers = (knobs.triggers ?? {}) as Dict;
   const enabled = triggers.enabled === true;
   const allowedRepos = (Array.isArray(triggers.allowedRepos) ? triggers.allowedRepos : []).filter((r): r is string => typeof r === 'string');
+  const [accountStatus, setAccountStatus] = useState<AccountAutomationStatus | null>(null);
+
+  useEffect(() => {
+    let current = true;
+    void bridgeQuery<AccountAutomationStatus>('automation-account-status')
+      .then((status) => { if (current) setAccountStatus(status); })
+      .catch((error) => {
+        if (current) setAccountStatus({
+          signedIn: false,
+          githubOauthConnected: false,
+          githubAppConfigured: false,
+          githubAppInstalled: false,
+          error: error instanceof Error ? error.message : 'Unable to read account automation status.',
+        });
+      });
+    return () => { current = false; };
+  }, []);
+
+  const openInstall = (): void => {
+    if (accountStatus?.installUrl) void bridgeQuery('action:open-external', { url: accountStatus.installUrl });
+  };
 
   return (
     <>
       <div className="set-h">Automations</div>
       <div className="set-desc" style={{ marginBottom: 8 }}>
-        Inbound triggers turn signed webhooks into agent jobs — a label or <code>@mention</code>
-        on a GitHub issue/PR, a Slack message, a failing CI run. Everything is
-        <b> default-deny</b>: nothing listens until enabled, it binds loopback, and only
-        allow-listed repos are processed. (cli.triggers)
+        Account automations use the BrainRouter GitHub App for server-managed events.
+        A self-hosted local webhook listener remains available below as an advanced fallback.
       </div>
 
-      <SetGroup title="Trigger ingress">
+      <SetGroup title="Account automation">
+        <Row
+          title={<>GitHub App {accountStatus?.githubAppInstalled
+            ? <span className="badge native" style={{ marginLeft: 6 }}>ready</span>
+            : <span className="badge cli" style={{ marginLeft: 6 }}>{accountStatus ? 'not installed' : 'checking'}</span>}</>}
+          desc={accountStatus?.githubAppInstalled
+            ? <>Managed by your BrainRouter account{accountStatus.orgName ? <> for <b>{accountStatus.orgName}</b></> : null}. GitHub delivers events and BrainRouter verifies them server-side; no OAuth token or webhook signing secret is stored in this desktop app.</>
+            : accountStatus?.githubOauthConnected
+              ? <>GitHub OAuth is connected{accountStatus.githubLogin ? <> as <b>{accountStatus.githubLogin}</b></> : null} for interactive sync. Install the GitHub App for event-driven account automations.</>
+              : accountStatus?.signedIn
+                ? <>Connect GitHub in <b>Settings → Connections → Connectors</b>, then install the GitHub App for account-managed events.</>
+                : <>Sign in under <b>Settings → Account</b> to use server-managed GitHub automations.</>}>
+          {accountStatus?.installUrl && !accountStatus.githubAppInstalled
+            ? <button className="btn" onClick={openInstall}>Install GitHub App</button>
+            : null}
+        </Row>
+        {accountStatus?.error ? <div className="set-desc" style={{ color: 'var(--danger, #e66)', padding: '0 12px 12px' }}>{accountStatus.error}</div> : null}
+      </SetGroup>
+
+      <SetGroup title="Advanced local webhook listener" collapsible defaultOpen={false}>
+        <div className="set-desc" style={{ margin: '0 12px 10px' }}>
+          For self-hosted providers and GitHub Enterprise. Everything is <b>default-deny</b>:
+          nothing listens until enabled, the default bind is loopback, and only allow-listed repos are processed.
+          These settings are separate from account OAuth. (cli.triggers)
+        </div>
+
+      <SetGroup title="Local trigger ingress">
         <Row title="Enable trigger ingress" desc="Master switch for the webhook listener. Off = nothing listens, whatever else is set. (cli.triggers.enabled)">
           <Toggle on={enabled} onChange={(v) => setPath('triggers.enabled', v)} />
         </Row>
       </SetGroup>
 
-      <SetGroup title="Listener daemon">
+      <SetGroup title="Local listener daemon">
         <Row
           title={<>Webhook listener {serve?.running
             ? <span className="badge native" style={{ marginLeft: 6 }}>running</span>
@@ -77,11 +134,11 @@ export function AutomationsSection({ knobs, setPath, secretsSet, rules = [], ser
           </Row>
         </SetGroup>
 
-        <SetGroup title="Signing secrets">
+        <SetGroup title="Webhook signing secrets (local only)">
           <div className="set-desc" style={{ marginBottom: 8 }}>
-            Per-provider webhook verification. A provider with no secret rejects every delivery (401) — never "let through".
-            Secrets are write-only: type to set or replace; they're never shown back. If blank, the matching connector's
-            <code> webhookSecret</code> is used.
+            These secrets verify inbound webhook signatures; they are not OAuth tokens. A provider with no secret rejects
+            every local delivery (401). Secrets are write-only and never shown back. If blank, the matching connector's
+            <code> webhookSecret</code> is used. BrainRouter account automations keep their signing material server-side.
           </div>
           <SecretRow label="GitHub" desc="Verifies X-Hub-Signature-256." isSet={secretsSet.github} onSave={(v) => setPath('triggers.githubSecret', v)} onClear={() => setPath('triggers.githubSecret', null)} />
           <SecretRow label="Slack" desc="Verifies X-Slack-Signature." isSet={secretsSet.slack} onSave={(v) => setPath('triggers.slackSigningSecret', v)} onClear={() => setPath('triggers.slackSigningSecret', null)} />
@@ -100,6 +157,7 @@ export function AutomationsSection({ knobs, setPath, secretsSet, rules = [], ser
           </Row>
         </SetGroup>
       </div>
+      </SetGroup>
 
       <SetGroup title="Automation rules">
         <div className="set-desc" style={{ marginBottom: 8 }}>

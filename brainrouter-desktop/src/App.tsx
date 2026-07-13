@@ -83,7 +83,14 @@ export function App(): React.ReactElement {
   // so the Background panel shows verification/review/revision outcomes, not just
   // what's running. Sourced from the durable `tasks-list` query (status: all).
   const [recentTasks, setRecentTasks] = useState<FleetRow[]>([]);
-  const [info, setInfo] = useState<{ sessionKey?: string; model?: string; workspaceRoot?: string; username?: string }>({});
+  const [info, setInfo] = useState<{
+    sessionKey?: string;
+    model?: string;
+    workspaceRoot?: string;
+    username?: string;
+    accountSignedIn?: boolean;
+    accountEmail?: string;
+  }>({});
   const [hostUp, setHostUp] = useState(false);
   const [interaction, setInteraction] = useState<InteractionRequest | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
@@ -573,7 +580,7 @@ export function App(): React.ReactElement {
         setShowArchived={setShowArchived} showArchived={showArchived}
         expandedProjects={expandedProjects} projSessions={projSessions} runningWs={runningWorkspaces} runningSessions={runningSessions} workspaceRunCount={workspaceRunCount}
         openProject={openProject} toggleProject={toggleProject} reorderProject={reorderProject} addProject={addProject}
-        mode={mode} setMode={setMode} />
+        mode={mode} setMode={setMode} openAccountSettings={() => openSettings('account')} />
 
       <MainContent
         mode={mode} setMode={setMode} workrowRef={workrowRef} track={track} trackOps={trackOps}

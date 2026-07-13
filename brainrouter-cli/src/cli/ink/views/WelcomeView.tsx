@@ -1,80 +1,54 @@
+import path from 'node:path';
 import React from 'react';
 import { Box, Text } from 'ink';
+import type { Theme } from '../../theme/theme.js';
 
 interface WelcomeViewProps {
   workspaceRoot: string;
-  accentColor: string;
+  accentColor?: string;
+  theme?: Theme;
 }
 
-export function WelcomeView({ workspaceRoot, accentColor }: WelcomeViewProps) {
+/** Compact home surface for orientation; the session remains the primary workspace. */
+export function WelcomeView({ workspaceRoot, accentColor, theme }: WelcomeViewProps) {
+  const primary = accentColor ?? (theme ? theme.colors.primary : '#8B7CFF');
+  const plan = theme ? theme.colors.secondary : '#FF8B73';
+  const knowledge = theme ? theme.colors.info : '#4DD8FF';
+  const automation = theme ? theme.colors.automation : '#A3E635';
+  const project = path.basename(workspaceRoot) || workspaceRoot;
+
   return (
-    <Box flexDirection="column" padding={1}>
-      {/* Welcome Banner */}
-      <Box flexDirection="column" marginBottom={1}>
-        <Text color={accentColor} bold>
-          {'██████╗ ██████╗  █████╗ ██╗███╗   ██╗██████╗  ██████╗ ██╗   ██╗████████╗███████╗██████╗'}
-        </Text>
-        <Text color={accentColor} bold>
-          {'██╔══██╗██╔══██╗██╔══██╗██║████╗  ██║██╔══██╗██╔═══██╗██║   ██║╚══██╔══╝██╔════╝██╔══██╗'}
-        </Text>
-        <Text color={accentColor} bold>
-          {'██████╔╝██████╔╝███████║██║██╔██╗ ██║██████╔╝██║   ██║██║   ██║   ██║   █████╗  ██████╔╝'}
-        </Text>
-        <Text color={accentColor} bold>
-          {'██╔══██╗██╔══██╗██╔══██║██║██║╚██╗██║██╔══██╗██║   ██║██║   ██║   ██║   ██╔══╝  ██╔══██╗'}
-        </Text>
-        <Text color={accentColor} bold>
-          {'██████╔╝██║  ██║██║  ██║██║██║ ╚████║██║  ██║╚██████╔╝╚██████╔╝   ██║   ███████╗██║  ██║'}
-        </Text>
-        <Text color={accentColor} bold>
-          {'╚══════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝  ╚═════╝    ╚═╝   ╚══════╝╚═╝  ╚═╝'}
-        </Text>
+    <Box flexDirection='column' paddingX={2} paddingY={1}>
+      <Box flexDirection='column' marginBottom={1}>
+        <Text bold color={primary}>Ready to build</Text>
+        <Text color='gray'>Work in <Text bold>{project}</Text>, with project context kept in view.</Text>
+        <Text color='gray' dimColor wrap='truncate'>{workspaceRoot}</Text>
+      </Box>
+
+      <Box flexDirection='column' marginBottom={1}>
+        <Text bold>Choose a workspace</Text>
         <Box marginTop={1}>
-          <Text color="gray" dimColor>
-            The Memory-Native Cognitive Router and Multi-Agent Orchestrator
-          </Text>
+          <Text color={primary}>●  Session      </Text>
+          <Text color='gray'>Ask, edit, run, and review in one thread</Text>
+        </Box>
+        <Box>
+          <Text color={plan}>●  Plan & track  </Text>
+          <Text color='gray'>Inspect requirements and active work</Text>
+        </Box>
+        <Box>
+          <Text color={automation}>●  Workflows     </Text>
+          <Text color='gray'>Watch automations, workers, and agents</Text>
+        </Box>
+        <Box>
+          <Text color={knowledge}>●  Connections   </Text>
+          <Text color='gray'>Check MCP and knowledge availability</Text>
         </Box>
       </Box>
 
-      {/* active workspace */}
-      <Box flexDirection="column" marginBottom={1}>
-        <Text color="cyan" bold>WORKSPACE INFO</Text>
-        <Text color="gray">  Root: <Text color="white">{workspaceRoot}</Text></Text>
-      </Box>
-
-      {/* Navigation shortcuts */}
-      <Box flexDirection="column" marginBottom={1}>
-        <Text color="cyan" bold>TUI NAVIGATION SHORTCUTS</Text>
-
-        <Box flexDirection="column" marginLeft={2} marginTop={1} gap={0}>
-          <Box>
-            <Text color={accentColor} bold>Ctrl + Tab  </Text>
-            <Text color="gray">─  Cycle workspace view (Home, Session, Workflows, MCP)</Text>
-          </Box>
-          <Box>
-            <Text color={accentColor} bold>Ctrl + P    </Text>
-            <Text color="gray">─  Toggle Search / Command Palette overlay</Text>
-          </Box>
-          <Box>
-            <Text color={accentColor} bold>Shift + Tab </Text>
-            <Text color="gray">─  Cycle access permissions (read → write → shell)</Text>
-          </Box>
-          <Box>
-            <Text color={accentColor} bold>Ctrl + L    </Text>
-            <Text color="gray">─  Clear current session chat scrollback view</Text>
-          </Box>
-          <Box>
-            <Text color={accentColor} bold>Ctrl + C    </Text>
-            <Text color="gray">─  Exit BrainRouter CLI and disconnect MCP links</Text>
-          </Box>
-        </Box>
-      </Box>
-
-      {/* Next steps hint */}
-      <Box marginTop={1}>
-        <Text color="gray" italic>
-          To get started, switch to the Chat Session (Ctrl+Tab) and type your first instruction.
-        </Text>
+      <Box flexDirection='column'>
+        <Text bold>Keyboard</Text>
+        <Text color='gray'><Text color={primary}>Ctrl+Tab</Text> view  ·  <Text color={primary}>Ctrl+P</Text> commands  ·  <Text color={primary}>Shift+Tab</Text> access</Text>
+        <Text color='gray' dimColor>Start typing in Session. Use / for actions and ? for shortcuts.</Text>
       </Box>
     </Box>
   );

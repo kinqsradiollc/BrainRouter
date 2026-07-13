@@ -22,7 +22,14 @@ import { type WorktreeEntry } from '../../worktree/worktreeParser.js';
 import type { UiMap, Story } from '@kinqs/brainrouter-core/uitest';
 import { type ProjectSessionsByRoot } from '../../session/workspaces/projectSessionsView.js';
 
-export type InfoState = { sessionKey?: string; model?: string; workspaceRoot?: string; username?: string };
+export type InfoState = {
+  sessionKey?: string;
+  model?: string;
+  workspaceRoot?: string;
+  username?: string;
+  accountSignedIn?: boolean;
+  accountEmail?: string;
+};
 export type GitInfoState = { repo: string; branch: string | null; insertions: number; deletions: number; gitRoot?: string | null; repoRelativePath?: string; isSubdir?: boolean } | null;
 export type HomeStatsState = {
   sessions: number; turns: number; activeDays: number; currentStreak: number;

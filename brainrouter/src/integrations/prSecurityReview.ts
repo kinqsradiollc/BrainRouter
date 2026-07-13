@@ -25,8 +25,10 @@ import {
   resolveInlineAnchor,
   SECURITY_LENS,
   stripReasoning,
+  formatVulnerabilityIntelligenceContext,
   type ParsedReviewFinding,
   type ReviewLens,
+  type VulnerabilityIntelligenceResult,
 } from '@kinqs/brainrouter-core/review';
 import type { LLMRunner } from '@kinqs/brainrouter-types';
 import { resolveReviewPolicy } from './githubWebhook.js';
@@ -50,6 +52,11 @@ export interface PrReviewDeps {
   timeoutMs?: number;
   /** Best-effort durable job activity callback (must never affect review output). */
   onProgress?: (event: { kind: string; msg: string; data?: Record<string, unknown> }) => void;
+  /**
+   * Best-effort current vulnerability catalog. Injected by the worker so unit
+   * tests never use the network and an unavailable feed never blocks reviews.
+   */
+  getVulnerabilityIntelligence?: () => Promise<VulnerabilityIntelligenceResult | null>;
 }
 
 export interface PrReviewFindingDetail {
@@ -158,7 +165,27 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
   // 2. Run the single-shot reviewer (this lens) over the diff.
   const cap = deps.maxDiffChars ?? 60_000;
   progress("diff-fetched", "PR diff fetched", { bytes: diff.length, truncated: diff.length > cap, files: addedLinesByPath(diff).size });
-  const prompt = `You are reviewing pull request #${prNumber} in ${repo}. Here is the unified diff:\n\n\`\`\`diff\n${diff.slice(0, cap)}\n\`\`\`\n\n${lens.buildContract()}`;
+  let intelligenceContext = '';
+  if ((lens.id === 'security' || lens.id === 'code') && deps.getVulnerabilityIntelligence) {
+    try {
+      const intelligence = await deps.getVulnerabilityIntelligence();
+      if (intelligence) {
+        intelligenceContext = formatVulnerabilityIntelligenceContext(intelligence, diff.slice(0, cap), { lensId: lens.id });
+        progress('intelligence-ready', 'Current vulnerability intelligence loaded', {
+          source: intelligence.provenance.sourceId,
+          fetchedAt: intelligence.provenance.fetchedAt,
+          cacheState: intelligence.cacheState,
+          entries: intelligence.entries.length,
+        });
+      } else {
+        progress('intelligence-unavailable', 'No verified vulnerability intelligence cache is available');
+      }
+    } catch {
+      progress('intelligence-unavailable', 'Vulnerability intelligence refresh failed; continuing evidence-only review');
+    }
+  }
+  const intelligenceAppendix = intelligenceContext ? `${intelligenceContext}\n\n` : '';
+  const prompt = `You are reviewing pull request #${prNumber} in ${repo}. Here is the unified diff:\n\n\`\`\`diff\n${diff.slice(0, cap)}\n\`\`\`\n\n${intelligenceAppendix}${lens.buildContract()}`;
   let reviewText = '';
   const startedAt = Date.now();
   progress("llm-started", "Review model started", { provider: "review", model: "configured" });

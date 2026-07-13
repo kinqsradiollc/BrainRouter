@@ -25,10 +25,12 @@ export class CaptureExtraction extends CapturePersistence {
     sessionId?: string;
     activeSkill?: string;
     skillHints?: string;
+    orgId?: string | null;
+    projectId?: string | null;
     workspaceTag?: string | null;
     projectTag?: string | null;
   }): Promise<{ triggered: boolean; extractedCount: number; status: CognitiveExtractionStatus; errorMessage?: string }> {
-    const { userId, sessionKey, sessionId = "", activeSkill, skillHints, workspaceTag, projectTag } = params;
+    const { userId, sessionKey, sessionId = "", activeSkill, skillHints, orgId, projectId, workspaceTag, projectTag } = params;
     const recentSensory = await this.store.getRecentSensoryMessages(userId, sessionKey, 20);
     if (recentSensory.length === 0) {
       return { triggered: false, extractedCount: 0, status: "skipped" };
@@ -50,6 +52,7 @@ export class CaptureExtraction extends CapturePersistence {
           activeSkill,
           existingSceneNames,
           skillHints: resolvedSkillHints,
+          orgId,
           workspaceTag,
           projectTag
         }),
@@ -192,7 +195,7 @@ export class CaptureExtraction extends CapturePersistence {
     }
 
     // MEM-15 — link each record to the source chunk(s) it actually derives from.
-    await this.linkRecordProvenance(userId, recentSensory, uniqueRecords);
+    await this.linkRecordProvenance(userId, recentSensory, uniqueRecords, { orgId, projectId, workspaceTag });
 
     const cognitiveExtractedCount = uniqueRecords.length;
     if (cognitiveExtractedCount === 0) {

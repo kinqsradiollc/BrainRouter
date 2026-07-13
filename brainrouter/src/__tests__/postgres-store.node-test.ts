@@ -151,13 +151,21 @@ test("PostgresMemoryStore: core round-trip against a fresh pgvector database", a
   assert.match(version, /PostgreSQL/i, "getSqliteVersion returns the pg version banner");
 
   // ── cognitive upsert → getMemoryById ──
-  const r1 = cog({ id: "rec-1", content: "the recall pipeline reranks keyword and vector candidates", filePaths: ["src/memory/recall.ts"] });
+  const r1 = cog({
+    id: "rec-1",
+    content: "the recall pipeline reranks keyword and vector candidates",
+    filePaths: ["src/memory/recall.ts"],
+    orgId: "org-pentest",
+    visibility: "private",
+  });
   await store.upsertCognitive(r1);
   const fetched = await store.getMemoryById("u1", "rec-1");
   assert.ok(fetched, "getMemoryById returns the upserted record");
   assert.equal(fetched!.content, r1.content);
   assert.equal(fetched!.type, "episodic");
   assert.deepEqual(fetched!.filePaths, ["src/memory/recall.ts"]);
+  assert.equal(fetched!.orgId, "org-pentest", "cognitive records retain their organization scope");
+  assert.equal(fetched!.visibility, "private", "cognitive records retain their visibility");
 
   // tenant isolation: another user can't read it.
   assert.equal(await store.getMemoryById("other", "rec-1"), null, "record is user-scoped");

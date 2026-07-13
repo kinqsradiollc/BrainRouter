@@ -11,7 +11,7 @@ export function progressBadge(step: Step): string | undefined {
 }
 
 export const ACCENT: Record<ThemeMode, string> = {
-  dark: '#CC9166',
-  light: '#A24E1F',
+  dark: '#8B7CFF',
+  light: '#5D49C7',
   mono: 'white',
 };

@@ -46,6 +46,6 @@ if (envFile) {
     `  $BRAINROUTER_ENV_FILE  (${process.env.BRAINROUTER_ENV_FILE ? 'set, but missing' : 'unset'})\n` +
     `  ~/.config/brainrouter/server.env\n` +
     `  ${path.join(process.cwd(), '.env')}\n` +
-    `Run 'brainrouter-mcp init' to scaffold one (or set BRAINROUTER_LLM_API_KEY and friends in your shell).\n`
+    `Run 'brainrouter-mcp init' to scaffold one (or set the required database/auth variables in your service environment).\n`
   );
 }

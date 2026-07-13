@@ -21,14 +21,9 @@ export function PremiumCard({
   if (customClassName) className = `${className} ${customClassName}`;
 
   const hoverProps = (hoverEffect || onClick) ? {
-    whileHover: { 
-      y: -2, 
-      borderColor: "rgba(52, 194, 142, 0.2)",
-      boxShadow: "0 20px 40px rgba(0, 0, 0, 0.6)",
-      ...(props.whileHover as any)
-    },
-    whileTap: { scale: 0.99, ...(props.whileTap as any) },
-    transition: { type: "spring" as const, stiffness: 350, damping: 25, ...(props.transition as any) }
+    whileHover: { borderColor: "rgba(255, 255, 255, 0.18)", ...(props.whileHover as object) },
+    whileTap: { opacity: 0.88, ...(props.whileTap as object) },
+    transition: { duration: 0.15, ...(props.transition as object) }
   } : {};
 
   return (
@@ -37,8 +32,6 @@ export function PremiumCard({
       onClick={onClick}
       style={{
         cursor: onClick ? "pointer" : "default",
-        position: "relative",
-        overflow: "hidden",
         ...style
       }}
       {...hoverProps}

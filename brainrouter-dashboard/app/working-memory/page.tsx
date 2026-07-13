@@ -86,7 +86,7 @@ export default function WorkingMemoryPage() {
   return (
     <AuthGuard>
       <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-        <PageHeader title="Working Memory" description="Short-term session refs, step summaries, and Mermaid task canvas.">
+        <PageHeader title="Current task context" description="See the steps, references, and short-term notes BrainRouter is using for this session.">
           <button
             onClick={() => setShowAdvanced(!showAdvanced)}
             className="pill-btn pill-btn-ghost"

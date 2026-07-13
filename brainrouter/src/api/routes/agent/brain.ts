@@ -10,13 +10,89 @@
  */
 
 import { Router } from "express";
+import { z } from "zod";
+import { projectTagFromName } from "@kinqs/brainrouter-types";
 import { memoryEngine } from "../../../memory/engine.js";
 import { requireAnyAuth, type AuthedRequest } from "../../middleware/auth.js";
+import { withOrgContext } from "../../middleware/tenancy.js";
 import { buildBrainAgentStatuses } from "../../../memory/agents/status.js";
 import { sendError } from "../../../contracts/http.js";
+import { roleAtLeast } from "../../../tenancy/rbac.js";
+import { resolveProviderConfig } from "../../../providers/resolver.js";
+import { modelGateway } from "../../../services/modelGateway/modelGateway.js";
+import { runBrainChat } from "./brainChatService.js";
 
 export const brainRouter = Router();
 brainRouter.use(requireAnyAuth);
+
+const ChatRequestSchema = z.object({
+  messages: z.array(z.object({
+    role: z.enum(["user", "assistant"]),
+    content: z.string().trim().min(1).max(12_000),
+  })).min(1).max(30),
+  sessionKey: z.string().trim().min(1).max(160).regex(/^[A-Za-z0-9._:-]+$/, "sessionKey contains unsupported characters"),
+  projectId: z.string().trim().min(1).max(160).optional(),
+  workspaceTag: z.string().trim().min(1).max(160).regex(/^[A-Za-z0-9._:-]+$/, "workspaceTag contains unsupported characters").optional(),
+}).superRefine((body, ctx) => {
+  if (body.messages.at(-1)?.role !== "user") {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["messages"], message: "the latest message must be from the user" });
+  }
+  const total = body.messages.reduce((sum, message) => sum + message.content.length, 0);
+  if (total > 80_000) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["messages"], message: "message history is too large" });
+  }
+});
+
+async function accessibleProject(req: AuthedRequest, projectId: string) {
+  const projects = await memoryEngine.projects.listAccessibleProjects(
+    req.orgId!,
+    req.userId!,
+    Boolean(req.isAdmin || roleAtLeast(req.role, "admin")),
+  );
+  return projects.find((project) => project.projectId === projectId) ?? null;
+}
+
+/** POST /api/brain/chat — authenticated, org/project/workspace-scoped agent chat. */
+brainRouter.post("/chat", withOrgContext, async (req: AuthedRequest, res) => {
+  try {
+    const body = ChatRequestSchema.parse(req.body ?? {});
+    const project = body.projectId ? await accessibleProject(req, body.projectId) : null;
+    if (body.projectId && !project) {
+      sendError(res, 404, "project not found or not accessible");
+      return;
+    }
+    const provider = await resolveProviderConfig(memoryEngine.providers, req.orgId!, "llm");
+    if (!provider) {
+      sendError(res, 503, "No chat model is configured for this organization. Configure an LLM provider in Intelligence settings.");
+      return;
+    }
+    const result = await runBrainChat({
+      userId: req.userId!,
+      orgId: req.orgId!,
+      sessionKey: body.sessionKey,
+      projectId: project?.projectId,
+      projectTag: project ? projectTagFromName(project.name) ?? undefined : undefined,
+      workspaceTag: body.workspaceTag,
+      provider,
+      messages: body.messages,
+    }, {
+      recall: (input) => memoryEngine.recall(input),
+      dispatch: (input) => modelGateway.dispatch(input),
+      capture: (input) => memoryEngine.capture(input),
+    });
+    res.json(result);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      sendError(res, 400, error.issues.map((issue) => issue.message).join("; "));
+      return;
+    }
+    // Provider failures can include upstream response bodies. Keep those details
+    // server-side so a dashboard caller never receives vendor diagnostics or
+    // reflected sensitive data in the public error envelope.
+    console.error("[BrainRouter] dashboard chat request failed:", error instanceof Error ? error.message : error);
+    sendError(res, 502, "Chat request failed. Check the active model provider and try again.");
+  }
+});
 
 brainRouter.get("/agents", async (_req, res) => {
   try {
@@ -40,35 +116,59 @@ brainRouter.get("/jobs", async (req, res) => {
 // 0.4.3 — source documents + chunks (the captured, citable source layer the
 // dashboard Sources view drills into). Read-only; capability-detected so a
 // store without the 0.4.3 tables degrades to empty rather than erroring.
-brainRouter.get("/sources", async (req: AuthedRequest, res) => {
+brainRouter.get("/sources", withOrgContext, async (req: AuthedRequest, res) => {
   try {
     const limitRaw = Number(req.query.limit);
     const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(500, Math.floor(limitRaw)) : 100;
-    const store = memoryEngine.store as Partial<{ getSourceDocuments(userId: string, limit?: number): Promise<unknown[]> }>;
-    const documents = typeof store.getSourceDocuments === "function" ? await store.getSourceDocuments(req.userId!, limit) : [];
+    const projectId = typeof req.query.projectId === "string" ? req.query.projectId.trim().slice(0, 160) : "";
+    const workspaceTag = typeof req.query.workspaceTag === "string" ? req.query.workspaceTag.trim().slice(0, 160) : "";
+    if (projectId && !(await accessibleProject(req, projectId))) {
+      sendError(res, 404, "project not found or not accessible");
+      return;
+    }
+    const defaultOrgId = await memoryEngine.tenancy.getDefaultOrgId(req.userId!);
+    const store = memoryEngine.store as Partial<{
+      getSourceDocuments(userId: string, limit?: number, filters?: {
+        orgId?: string;
+        projectId?: string;
+        workspaceTag?: string;
+        includeUnscoped?: boolean;
+      }): Promise<unknown[]>;
+    }>;
+    const documents = typeof store.getSourceDocuments === "function" ? await store.getSourceDocuments(req.userId!, limit, {
+      orgId: req.orgId!,
+      ...(projectId ? { projectId } : {}),
+      ...(workspaceTag ? { workspaceTag } : {}),
+      includeUnscoped: defaultOrgId === req.orgId && !projectId && !workspaceTag,
+    }) : [];
     res.json({ documents });
-  } catch (err: any) {
-    sendError(res, 500, `brain sources failed: ${err?.message ?? err}`);
+  } catch (error) {
+    console.error("[BrainRouter] source listing failed:", error instanceof Error ? error.message : error);
+    sendError(res, 500, "Could not load sources");
   }
 });
 
-brainRouter.get("/sources/:id/chunks", async (req: AuthedRequest, res) => {
+brainRouter.get("/sources/:id/chunks", withOrgContext, async (req: AuthedRequest, res) => {
   try {
     const store = memoryEngine.store as Partial<{
-      getSourceDocument(id: string): Promise<{ userId: string } | null>;
+      getSourceDocument(id: string): Promise<{ userId: string; orgId?: string | null; projectId?: string | null } | null>;
       getSourceChunksByDocument(documentId: string): Promise<unknown[]>;
     }>;
     // Ownership gate: only the document's owner may read its chunks (cross-user
     // IDOR otherwise — the chunk query isn't user-scoped on its own).
     const doc = typeof store.getSourceDocument === "function" ? await store.getSourceDocument(String(req.params.id)) : null;
-    if (!doc || doc.userId !== req.userId) {
+    const defaultOrgId = await memoryEngine.tenancy.getDefaultOrgId(req.userId!);
+    const orgAllowed = doc?.orgId ? doc.orgId === req.orgId : defaultOrgId === req.orgId;
+    const projectAllowed = !doc?.projectId || Boolean(await accessibleProject(req, doc.projectId));
+    if (!doc || doc.userId !== req.userId || !orgAllowed || !projectAllowed) {
       sendError(res, 404, "source document not found");
       return;
     }
     const chunks = typeof store.getSourceChunksByDocument === "function" ? await store.getSourceChunksByDocument(String(req.params.id)) : [];
     res.json({ chunks });
-  } catch (err: any) {
-    sendError(res, 500, `brain source chunks failed: ${err?.message ?? err}`);
+  } catch (error) {
+    console.error("[BrainRouter] source chunk loading failed:", error instanceof Error ? error.message : error);
+    sendError(res, 500, "Could not load source chunks");
   }
 });
 

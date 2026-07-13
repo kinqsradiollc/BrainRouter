@@ -1076,8 +1076,8 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
 
   // ── source documents + chunks ───────────────────────────────────────────
 
-  public getSourceDocumentByHash(userId: string, hash: string): Promise<SourceDocument | null> {
-    return sourcesTree.getSourceDocumentByHash(this.exec, userId, hash);
+  public getSourceDocumentByHash(userId: string, hash: string, scope?: sourcesTree.SourceDocumentScope): Promise<SourceDocument | null> {
+    return sourcesTree.getSourceDocumentByHash(this.exec, userId, hash, scope);
   }
 
   public getSourceDocument(id: string): Promise<SourceDocument | null> {
@@ -1096,8 +1096,12 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
     return sourcesTree.getRecordsMaxChurn(this.exec, userId, recordIds);
   }
 
-  public getSourceDocuments(userId: string, limit = 100): Promise<Array<SourceDocument & { chunkCount: number }>> {
-    return sourcesTree.getSourceDocuments(this.exec, userId, limit);
+  public getSourceDocuments(
+    userId: string,
+    limit = 100,
+    filters: sourcesTree.SourceDocumentListFilters = {},
+  ): Promise<Array<SourceDocument & { chunkCount: number }>> {
+    return sourcesTree.getSourceDocuments(this.exec, userId, limit, filters);
   }
 
   public pruneTranscriptSources(userId: string, beforeIso: string): Promise<{ prunedDocs: number; prunedChunks: number }> {

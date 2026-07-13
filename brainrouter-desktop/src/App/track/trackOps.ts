@@ -1,6 +1,7 @@
 /**
  * App shell — Track mode operations. Every method issues a host `track-*` query
- * via the injected `q`; a real `sync` also re-fetches the board shortly after.
+ * via the injected `q`. Sync completion includes the updated board, so callers
+ * never race a network operation with a guessed refresh delay.
  * Extracted from App.tsx verbatim (the object literal is unchanged).
  */
 import type {
@@ -33,11 +34,7 @@ export function buildTrackOps(q: Query) {
     updateMemberRole: (id: string, role: ProjectRole) => q('q-track-update-member-role', 'track-update-member-role', { id, role }),
     removeMember: (id: string) => q('q-track-remove-member', 'track-remove-member', { id }),
     syncMembers: () => q('q-track-sync-members', 'track-sync-members', {}),
-    sync: (direction: 'import' | 'export' | 'sync', dryRun: boolean) => {
-      q('q-track-sync', 'track-sync', { direction, dryRun });
-      // A real run can create/modify items — refresh the board shortly after.
-      if (!dryRun) window.setTimeout(() => { q('q-track-items', 'track-items'); }, 600);
-    },
+    sync: (direction: 'import' | 'export' | 'sync', dryRun: boolean) => q('q-track-sync', 'track-sync', { direction, dryRun }),
     importGhIssues: () => q('q-track-gh-issues', 'track-gh-issues-import', {}),
     scanCommits: () => q('q-track-scan', 'track-scan-commits'),
     refreshGit: () => q('q-track-git-context', 'track-git-context'),

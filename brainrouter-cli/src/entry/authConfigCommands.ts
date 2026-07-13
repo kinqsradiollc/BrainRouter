@@ -10,7 +10,7 @@ export function registerLoginCommand(program: Command): void {
     .command('login')
     .description('Configure and authenticate connection to a hosted HTTP/SSE BrainRouter server')
     .action(async () => {
-      console.log(chalk.bold.hex('#CC9166')('\n🔑 hosted BrainRouter Authentication Setup'));
+      console.log(chalk.bold.hex('#8B7CFF')('\nHosted authentication'));
 
       const answers = await inquirer.prompt([
         {

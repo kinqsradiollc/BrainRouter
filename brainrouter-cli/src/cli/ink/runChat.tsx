@@ -368,7 +368,7 @@ export async function runChat(opts: RunChatOptions): Promise<void> {
       } catch { /* hook errors must not block REPL shutdown */ }
       // Goodbye line is intentionally printed AFTER Ink unmounts so it
       // doesn't get caught inside the redraw region.
-      process.stdout.write(chalk.bold.hex('#CC9166')('Goodbye!\n'));
+      process.stdout.write(chalk.bold.hex('#8B7CFF')('Goodbye.\n'));
       resolve();
     }).catch(async () => {
       ctx.exited = true;

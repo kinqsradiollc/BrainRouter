@@ -41,6 +41,7 @@ export class CapturePersistence extends CaptureBase {
     userId: string,
     sessionKey: string,
     messages: { role: string; content: string; timestamp: number }[],
+    scope: { orgId?: string | null; projectId?: string | null; workspaceTag?: string | null } = {},
   ): Promise<void> {
     const sourceStore = this.asSourceStore();
     if (!sourceStore) return;
@@ -52,8 +53,9 @@ export class CapturePersistence extends CaptureBase {
           sourceStore,
           {
             userId,
-            // Turn transcripts are workspace-agnostic for now; MEM-14 plumbs scope later.
-            workspaceTag: null,
+            orgId: scope.orgId ?? null,
+            projectId: scope.projectId ?? null,
+            workspaceTag: scope.workspaceTag ?? null,
             kind: "transcript",
             uri: null,
             hash: contentHash(text),
@@ -102,6 +104,7 @@ export class CapturePersistence extends CaptureBase {
     userId: string,
     windowSensory: SensoryRecord[],
     records: { id: string; content: string }[],
+    scope: { orgId?: string | null; projectId?: string | null; workspaceTag?: string | null } = {},
   ): Promise<void> {
     const store = this.asProvenanceStore();
     if (!store || records.length === 0) return;
@@ -112,7 +115,7 @@ export class CapturePersistence extends CaptureBase {
       for (const s of windowSensory) {
         const text = s.messageText ?? "";
         if (text.trim().length < MIN_SOURCE_CHARS) continue;
-        const doc = await store.getSourceDocumentByHash(userId, contentHash(text));
+        const doc = await store.getSourceDocumentByHash(userId, contentHash(text), scope);
         if (!doc) continue;
         for (const c of await store.getSourceChunksByDocument(doc.id)) {
           if (seen.has(c.id)) continue;

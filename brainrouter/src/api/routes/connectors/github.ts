@@ -34,6 +34,7 @@ import { memoryEngine } from "../../../memory/engine.js";
 import { requireAnyAuth, JWT_SECRET, type AuthedRequest } from "../../middleware/auth.js";
 import { sendError } from "../../../contracts/http.js";
 import { seal, open, isSecretBoxConfigured } from "../../../security/secretBox.js";
+import { probeGithubConnection } from "./githubConnection.js";
 
 const APP_KEY = "connectorOAuthApp:github";
 const tokenKey = (userId: string) => `connectorToken:github:${userId}`;
@@ -180,7 +181,14 @@ githubConnectorRouter.post("/github/device/poll", requireAnyAuth, async (req: Au
 githubConnectorRouter.get("/github/status", requireAnyAuth, async (req: AuthedRequest, res) => {
   const app = await getApp();
   const tok = await getUserToken(req.userId!);
-  res.json({ appConfigured: !!app?.clientId, connected: !!tok, login: tok?.login ?? null, scope: tok?.scope ?? null, installUrl: installUrl(app) });
+  const probe = tok ? await probeGithubConnection(tok.accessToken) : { connected: false };
+  res.json({
+    appConfigured: !!app?.clientId,
+    ...probe,
+    login: probe.login ?? (probe.connected ? tok?.login ?? null : null),
+    scope: probe.connected ? tok?.scope ?? null : null,
+    installUrl: installUrl(app),
+  });
 });
 
 githubConnectorRouter.get("/github/repos", requireAnyAuth, async (req: AuthedRequest, res) => {

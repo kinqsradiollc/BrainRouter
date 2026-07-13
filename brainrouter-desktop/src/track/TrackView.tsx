@@ -10,7 +10,7 @@
  * `./TrackView/`, and re-exports the module's public surface (types + icons)
  * so existing importers of `./TrackView.js` are unaffected.
  */
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import type { TrackProject, WorkItem, WorkItemType, WorkItemPriority, Sprint, Module, SavedView, TrackLayout, AutomationRule, ProjectMember } from '@kinqs/brainrouter-types';
 import { parseTrackQuery } from '../lib/track/query.js';
 import { Icon } from '../icons.js';
@@ -64,9 +64,18 @@ const TABS: Array<{ id: TrackTab; label: string; icon: string }> = [
   { id: 'members', label: 'Members', icon: 'shield' },
   { id: 'sync', label: 'Sync', icon: 'refresh' },
 ];
+const PRIMARY_TAB_IDS = new Set<TrackTab>(['board', 'list', 'backlog', 'sprint', 'roadmap']);
+const PRIMARY_TABS = TABS.filter((tab) => PRIMARY_TAB_IDS.has(tab.id));
+const MORE_TAB_GROUPS: Array<{ label: string; tabs: TrackTab[] }> = [
+  { label: 'Alternate views', tabs: ['spreadsheet', 'calendar', 'gantt'] },
+  { label: 'Insights', tabs: ['modules', 'reports'] },
+  { label: 'Project', tabs: ['automation', 'members', 'sync'] },
+];
 
 export function TrackView({ project, items, sprints, modules, views, automations, members, sync, git, pr, ops, railOpen = true, onOpenRail }: TrackViewProps): React.ReactElement {
   const [tab, setTab] = useState<TrackTab>('board');
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreToggleRef = useRef<HTMLButtonElement | null>(null);
   const [filter, setFilter] = useState<Filter>({});
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [composing, setComposing] = useState<string | null>(null);
@@ -129,11 +138,17 @@ export function TrackView({ project, items, sprints, modules, views, automations
     for (const l of project?.labels ?? []) m.set(l.name.toLowerCase(), l.color);
     return m;
   }, [project]);
+  const activeMoreTab = TABS.find((item) => item.id === tab && !PRIMARY_TAB_IDS.has(item.id));
+  const selectTab = (next: TrackTab, restoreMoreFocus = false): void => {
+    setTab(next);
+    setMoreOpen(false);
+    if (restoreMoreFocus) requestAnimationFrame(() => moreToggleRef.current?.focus());
+  };
 
   return (
     <div className="track">
       <header className="track-head">
-        {!railOpen && onOpenRail ? <button className="icon-btn track-rail-open" title="Open sidebar" onClick={onOpenRail}><Icon name="layout" size={15} /></button> : null}
+        {!railOpen && onOpenRail ? <button className="icon-btn track-rail-open" title="Open sidebar" aria-label="Open sidebar" onClick={onOpenRail}><Icon name="layout" size={15} /></button> : null}
         <div className="track-title">
           <span className="track-key">{project?.key ?? '—'}</span>
           <span className="track-name">{project?.name ?? 'Project'}</span>
@@ -142,10 +157,32 @@ export function TrackView({ project, items, sprints, modules, views, automations
         <ViewsMenu views={views} onApply={applyView} onSave={saveCurrentView} onDelete={(id) => ops.deleteView(id)} />
       </header>
       <div className="track-tabbar">
-        {TABS.map((tb) => (
-          <button key={tb.id} className={`track-tab${tab === tb.id ? ' active' : ''}`} onClick={() => setTab(tb.id)}><Icon name={tb.icon} size={12} /> {tb.label}</button>
+        {PRIMARY_TABS.map((tb) => (
+          <button key={tb.id} className={`track-tab${tab === tb.id ? ' active' : ''}`} onClick={() => selectTab(tb.id)}><Icon name={tb.icon} size={12} /> {tb.label}</button>
         ))}
+        <button ref={moreToggleRef} type="button" className={`track-tab track-more-toggle${activeMoreTab ? ' active' : ''}`} aria-expanded={moreOpen} aria-controls="track-more-navigation" onClick={() => setMoreOpen((open) => !open)}>
+          <Icon name={activeMoreTab?.icon ?? 'panels'} size={12} /> {activeMoreTab?.label ?? 'More'} <Icon name="chev-down" size={9} />
+        </button>
       </div>
+      {moreOpen ? (
+        <div id="track-more-navigation" className="track-more-menu" aria-label="More project views">
+          {MORE_TAB_GROUPS.map((group) => (
+            <div key={group.label} className="track-more-group">
+              <span className="track-more-label">{group.label}</span>
+              <div className="track-more-options">
+                {group.tabs.map((id) => {
+                  const option = TABS.find((item) => item.id === id)!;
+                  return (
+                    <button key={id} type="button" className={`track-tab${tab === id ? ' active' : ''}`} onClick={() => selectTab(id, true)}>
+                      <Icon name={option.icon} size={12} /> {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       {tab !== 'automation' && tab !== 'members' && tab !== 'sync' ? (
       <div className="track-filter">

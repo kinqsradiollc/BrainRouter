@@ -77,6 +77,8 @@ export interface ComposerProps {
   componentTags?: Array<{ id: string; name: string; kind?: string; ref: string; steps?: Array<{ action: string; target: string; text?: string }> }>;
   onDropTag?: (tag: { name: string; kind?: string; ref: string; filePath?: string; line?: number; steps?: Array<{ action: string; target: string; text?: string }> }) => void;
   onClearComponentTag?: (id: string) => void;
+  /** Allows shell-level start actions to focus the message input without DOM queries. */
+  inputRef?: React.RefObject<HTMLTextAreaElement>;
 }
 
 function formatBytes(size: number): string {
@@ -86,6 +88,33 @@ function formatBytes(size: number): string {
   return `${(size / (1024 * 1024)).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 
+const CHANGE_POLICIES = [
+  {
+    modeLabel: 'Plan mode',
+    label: 'Plan first',
+    detail: 'Review the plan and approve routine actions as work proceeds.',
+    executionMode: 'planning',
+    reviewPolicy: 'request',
+    shortcut: '1',
+  },
+  {
+    modeLabel: 'Accept edits',
+    label: 'Change directly',
+    detail: 'Apply edits and routine commands while keeping plan review.',
+    executionMode: 'fast',
+    reviewPolicy: 'request',
+    shortcut: '2',
+  },
+  {
+    modeLabel: 'Auto mode',
+    label: 'Continue automatically',
+    detail: 'Skip plan review and handle routine actions automatically.',
+    executionMode: 'fast',
+    reviewPolicy: 'proceed',
+    shortcut: '3',
+  },
+] as const;
+
 export function Composer(p: ComposerProps): React.ReactElement {
   const {
     draft, setDraft, running, stopping, submit, requestStop, slashActive, slashMatches, commands,
@@ -93,11 +122,12 @@ export function Composer(p: ComposerProps): React.ReactElement {
     info, branches, endpointModels, allowedModels, connectedProviders, defaultProviderName, routerCatalog, routerFallback, modelsLoading, setModelsLoading, modelChoices, modelScope, setModelScope,
     hasConversation, contextUsage, tokens, openSettings, onAttach, attachments = [], onClearAttachment, canSubmit = false,
     pastedImages = [], onPasteImages, onClearPastedImage,
-    componentTags = [], onDropTag, onClearComponentTag,
+    componentTags = [], onDropTag, onClearComponentTag, inputRef,
   } = p;
   const { fmt } = usePlatform(); // §shortcuts — OS-correct menu hint glyphs
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
-  const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const internalTextareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const textareaRef = inputRef ?? internalTextareaRef;
   const mirrorRef = React.useRef<HTMLDivElement | null>(null);
   const modelMenuRef = React.useRef<HTMLDivElement | null>(null);
   const [dragOver, setDragOver] = React.useState(false);
@@ -203,6 +233,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
   // mode (a Settings toggle) only changes the agentic strategy, not the thinking.
   const reasoningProfile = reasoningProfileForModel(info.model);
   const reasoningPill = reasoningPillLabel(reasoningProfile, effort, false);
+  const selectedChangePolicy = CHANGE_POLICIES.find((policy) => policy.modeLabel === modeLabel) ?? CHANGE_POLICIES[0];
   return (
     <div className="composer">
       <div
@@ -354,30 +385,31 @@ export function Composer(p: ComposerProps): React.ReactElement {
           onClick={() => running ? requestStop() : submit()}
           disabled={(!running && !draft.trim() && !canSubmit && pastedImages.length === 0) || stopping}>{running ? <Icon name="stop" size={14} /> : <Icon name="arrow-up" size={14} />}</button>
         <div className="composer-controls">
-          <span className="pop-wrap">
+          <span className="pop-wrap composer-policy">
             {pop === 'mode' ? (
-              <div className="menu-pop left">
-                <div className="menu-head"><span>Mode</span><span>{fmt('Mod+Shift+M')}</span></div>
-                {([['Plan mode', 'planning', 'request', '1'], ['Accept edits', 'fast', 'request', '2'], ['Auto mode', 'fast', 'proceed', '3']] as const).map(([label, em, rp, num]) => (
-                  <button key={label} className="menu-item" onClick={() => {
-                    q('a-mode', 'action:set-session-mode', { executionMode: em, reviewPolicy: rp });
+              <div className="menu-pop left change-policy-menu">
+                <div className="menu-head"><span>Change policy</span><span>{fmt('Mod+Shift+M')}</span></div>
+                {CHANGE_POLICIES.map((policy) => (
+                  <button key={policy.modeLabel} className="menu-item" onClick={() => {
+                    q('a-mode', 'action:set-session-mode', { executionMode: policy.executionMode, reviewPolicy: policy.reviewPolicy });
                     setPop('');
                   }}>
-                    <span className="mi-check">{modeLabel === label ? '✓' : ''}</span>{label}
-                    <span className="mi-hint">{num}</span>
+                    <span className="mi-check">{modeLabel === policy.modeLabel ? '✓' : ''}</span>
+                    <span className="change-policy-copy">{policy.label}<span className="choice-detail">{policy.detail}</span></span>
+                    <span className="mi-hint">{policy.shortcut}</span>
                   </button>
                 ))}
               </div>
             ) : null}
-            <button type="button" className="chip dim" onClick={() => setPop(pop === 'mode' ? '' : 'mode')}>
-              {modeLabel}<Icon name="chev-down" size={9} />
+            <button type="button" className="chip dim" title={`Change policy: ${selectedChangePolicy.label}`} aria-label={`Change policy: ${selectedChangePolicy.label}`} onClick={() => setPop(pop === 'mode' ? '' : 'mode')}>
+              {selectedChangePolicy.label}<Icon name="chev-down" size={9} />
             </button>
           </span>
-          <button type="button" className="ctx-chip" title={info.workspaceRoot}>
+          <button type="button" className="ctx-chip composer-workspace" title={info.workspaceRoot}>
             <Icon name="folder" size={11} />
             <span>{info.workspaceRoot?.split('/').pop() ?? 'workspace'}</span>
           </button>
-          <span className="pop-wrap">
+          <span className="pop-wrap composer-branch">
             {pop === 'branch' ? (
               <div className="menu-pop left" style={{ bottom: 'calc(100% + 8px)' }}>
                 <div className="menu-head"><span>Branches</span></div>
@@ -412,7 +444,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
               "Always on", or nothing for non-reasoning models. Always live
               (decoupled from Fast mode); only an always-on reasoner locks it. */}
           {reasoningPill ? (
-            <span className="pop-wrap">
+            <span className="pop-wrap composer-effort">
               {pop === 'effort' && reasoningProfile.options.length ? (
                 <div className="menu-pop effort-menu">
                   <ReasoningSlider
@@ -435,7 +467,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
             </span>
           ) : null}
           {/* model selection is now separate from effort */}
-          <span className="pop-wrap">
+          <span className="pop-wrap composer-model">
             {pop === 'model' ? (
               <div className="menu-pop model-menu" ref={modelMenuRef}>
                 {(() => {

@@ -29,6 +29,7 @@ export function cognitiveUpsertParams(record: CognitiveRecord): any[] {
     record.status ?? "active", record.sourceKind ?? "", record.verificationStatus ?? "",
     JSON.stringify(record.repoPaths ?? []), JSON.stringify(record.filePaths ?? []),
     JSON.stringify(record.commands ?? []), record.workspaceTag ?? null, record.projectTag ?? null,
+    record.orgId ?? null, record.visibility ?? "private",
   ];
 }
 
@@ -38,8 +39,8 @@ export async function upsertCognitiveMeta(client: PoolClient, record: CognitiveR
        record_id, user_id, session_key, session_id, content, type, priority, scene_name, skill_tag,
        half_life_days, superseded_by, invalid_at, timestamp_str, timestamp_start, timestamp_end,
        created_time, updated_time, metadata_json, confidence, status, source_kind, verification_status,
-       repo_paths_json, file_paths_json, commands_json, workspace_tag, project_tag
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
+       repo_paths_json, file_paths_json, commands_json, workspace_tag, project_tag, org_id, visibility
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)
      ON CONFLICT (record_id) DO UPDATE SET
        content=EXCLUDED.content,
        type=EXCLUDED.type,
@@ -62,7 +63,9 @@ export async function upsertCognitiveMeta(client: PoolClient, record: CognitiveR
        file_paths_json=EXCLUDED.file_paths_json,
        commands_json=EXCLUDED.commands_json,
        workspace_tag=COALESCE(EXCLUDED.workspace_tag, cognitive_records.workspace_tag),
-       project_tag=COALESCE(EXCLUDED.project_tag, cognitive_records.project_tag)`,
+       project_tag=COALESCE(EXCLUDED.project_tag, cognitive_records.project_tag),
+       org_id=COALESCE(EXCLUDED.org_id, cognitive_records.org_id),
+       visibility=EXCLUDED.visibility`,
     cognitiveUpsertParams(record),
   );
 }

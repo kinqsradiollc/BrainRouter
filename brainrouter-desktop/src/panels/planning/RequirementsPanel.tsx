@@ -186,7 +186,7 @@ function RequirementDetail({ req, criterion, setCriterion, onSetStatus, onSetPri
       <div className="req-links">
         <Chip>{links.tasks} task{links.tasks === 1 ? '' : 's'}</Chip>
         <Chip>{links.artifacts} artifact{links.artifacts === 1 ? '' : 's'}</Chip>
-        <Chip>{links.memory} memor{links.memory === 1 ? 'y' : 'ies'}</Chip>
+        <Chip>{links.memory} knowledge record{links.memory === 1 ? '' : 's'}</Chip>
       </div>
 
       <div className="tasks-section"><span>Automation audit</span></div>
@@ -195,7 +195,7 @@ function RequirementDetail({ req, criterion, setCriterion, onSetStatus, onSetPri
         <div className="req-audit-line">source event: <code>{provenance.sourceEventId ?? 'none'}</code></div>
         {provenance.memoryIds.length ? <div className="req-memory-ids">
           {provenance.memoryIds.map((id) => <Chip key={id} className="req-memory-id">{id}</Chip>)}
-        </div> : <div className="req-audit-line">no linked memory records</div>}
+        </div> : <div className="req-audit-line">no linked knowledge records</div>}
       </div>
     </div>
   );

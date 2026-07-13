@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "./AuthProvider";
-import { useTheme } from "./ThemeProvider";
+import { PRODUCT_NAV_GROUPS, SETTINGS_NAV_GROUPS } from "./dashboardNavigation";
 
 /**
  * CommandPalette — ⌘K / Ctrl+K fast navigation across the dashboard.
@@ -20,44 +20,38 @@ interface Cmd {
   keywords?: string;
 }
 
-const ROUTES: { label: string; group: string; href: string }[] = [
-  { label: "Overview", group: "Workspace", href: "/overview" },
-  { label: "Memories", group: "Memory", href: "/memories" },
-  { label: "Focus Scenes", group: "Memory", href: "/scenes" },
-  { label: "Core Identity", group: "Memory", href: "/persona" },
-  { label: "Working Memory", group: "Memory", href: "/working-memory" },
-  { label: "Blackboard", group: "Memory", href: "/blackboard" },
-  { label: "Vault", group: "Memory", href: "/vault" },
-  { label: "Recall Inspector", group: "Graph & Recall", href: "/recall-inspector" },
-  { label: "Timeline", group: "Graph & Recall", href: "/timeline" },
-  { label: "Graph Intelligence", group: "Graph & Recall", href: "/intelligence" },
-  { label: "Memory Tree", group: "Graph & Recall", href: "/tree" },
-  { label: "Contradictions", group: "Integrity", href: "/contradictions" },
-  { label: "Evidence", group: "Integrity", href: "/evidence" },
-  { label: "Sources", group: "Integrity", href: "/sources" },
-  { label: "Hooks", group: "Integrity", href: "/hooks" },
-  { label: "Skill Routing", group: "System", href: "/skills" },
-  { label: "Profile", group: "System", href: "/profile" },
-  { label: "Users", group: "System", href: "/users" },
+const KNOWLEDGE_DETAIL_ROUTES: Cmd[] = [
+  { label: "Saved knowledge", group: "Knowledge details", href: "/memories", keywords: "decisions preferences lessons" },
+  { label: "Connected sources", group: "Knowledge details", href: "/sources", keywords: "documents conversations" },
+  { label: "Current task context", group: "Knowledge details", href: "/working-memory" },
+  { label: "Recall details", group: "Knowledge details", href: "/recall-inspector", keywords: "why recalled" },
+  { label: "Topic summaries", group: "Knowledge details", href: "/scenes" },
+  { label: "Knowledge map", group: "Knowledge details", href: "/tree" },
 ];
 
 export function CommandPalette() {
   const router = useRouter();
-  const { logout } = useAuth();
-  const { theme, toggleTheme } = useTheme();
+  const { logout, user } = useAuth();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const titleId = useId();
+  const listId = useId();
 
   const commands: Cmd[] = useMemo(
     () => [
-      ...ROUTES.map((r) => ({ label: r.label, group: r.group, href: r.href })),
-      { label: theme === "light" ? "Switch to dark theme" : "Switch to light theme", group: "Actions", action: toggleTheme, keywords: "theme dark light appearance" },
+      ...PRODUCT_NAV_GROUPS.flatMap((group) => group.items
+        .filter((item) => !item.adminOnly || user?.isAdmin)
+        .map((item) => ({ label: item.label, group: group.label, href: item.href, keywords: item.keywords }))),
+      ...KNOWLEDGE_DETAIL_ROUTES,
+      ...SETTINGS_NAV_GROUPS.flatMap((group) => group.items
+        .filter((item) => !item.adminOnly || user?.isAdmin)
+        .map((item) => ({ label: item.label, group: `Settings · ${group.label}`, href: item.href, keywords: item.keywords }))),
       { label: "Go to landing page", group: "Actions", action: () => router.push("/"), keywords: "home marketing" },
       { label: "Sign out", group: "Actions", action: () => logout(), keywords: "logout exit" },
     ],
-    [theme, toggleTheme, router, logout],
+    [router, logout, user?.isAdmin],
   );
 
   const filtered = useMemo(() => {
@@ -106,7 +100,7 @@ export function CommandPalette() {
   const onListKey = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setActive((a) => Math.min(a + 1, filtered.length - 1));
+      setActive((a) => Math.max(0, Math.min(a + 1, filtered.length - 1)));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       setActive((a) => Math.max(a - 1, 0));
@@ -122,53 +116,32 @@ export function CommandPalette() {
   return (
     <div
       onMouseDown={() => setOpen(false)}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 1000,
-        background: "rgba(0,0,0,0.5)",
-        backdropFilter: "blur(3px)",
-        display: "flex",
-        alignItems: "flex-start",
-        justifyContent: "center",
-        paddingTop: "12vh",
-      }}
+      className="command-palette-backdrop"
     >
       <div
         onMouseDown={(e) => e.stopPropagation()}
         onKeyDown={onListKey}
-        style={{
-          width: "min(560px, 92vw)",
-          maxHeight: "62vh",
-          display: "flex",
-          flexDirection: "column",
-          background: "var(--surface-overlay)",
-          border: "1px solid var(--border-strong)",
-          borderRadius: "var(--radius-panel)",
-          boxShadow: "var(--shadow-lg)",
-          overflow: "hidden",
-        }}
+        className="command-palette"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
       >
+        <div className="command-palette-heading"><span id={titleId}>Quick switch</span><kbd>⌘ K</kbd></div>
         <input
           ref={inputRef}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search pages and actions…"
-          style={{
-            width: "100%",
-            padding: "16px 18px",
-            background: "transparent",
-            border: "none",
-            borderBottom: "1px solid var(--border)",
-            color: "var(--text)",
-            fontSize: "15px",
-            outline: "none",
-            fontFamily: "var(--font-sans)",
-          }}
+          role="combobox"
+          aria-expanded="true"
+          aria-autocomplete="list"
+          aria-controls={listId}
+          aria-activedescendant={filtered[active] ? `command-palette-option-${active}` : undefined}
+          className="command-palette-input"
         />
-        <div style={{ overflowY: "auto", padding: "8px" }}>
+        <div id={listId} role="listbox" className="command-palette-list">
           {filtered.length === 0 && (
-            <div style={{ padding: "20px", textAlign: "center", color: "var(--text-muted)", fontSize: "13px" }}>No matches</div>
+            <div className="command-palette-empty">No matching page or action</div>
           )}
           {filtered.map((c, i) => {
             const showGroup = c.group !== lastGroup;
@@ -177,38 +150,25 @@ export function CommandPalette() {
             return (
               <div key={c.label}>
                 {showGroup && (
-                  <div style={{ fontFamily: "var(--font-mono)", fontSize: "10px", letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--text-muted)", padding: "10px 10px 4px" }}>
-                    {c.group}
-                  </div>
+                  <div className="command-palette-group">{c.group}</div>
                 )}
                 <button
+                  id={`command-palette-option-${i}`}
+                  role="option"
+                  aria-selected={isActive}
                   onMouseEnter={() => setActive(i)}
                   onClick={() => run(c)}
-                  style={{
-                    width: "100%",
-                    textAlign: "left",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "10px",
-                    padding: "9px 12px",
-                    borderRadius: "var(--radius-control)",
-                    border: "none",
-                    cursor: "pointer",
-                    background: isActive ? "var(--accent-wash)" : "transparent",
-                    color: isActive ? "var(--text)" : "var(--text-secondary)",
-                    fontSize: "13.5px",
-                    fontFamily: "var(--font-sans)",
-                  }}
+                  className={`command-palette-option${isActive ? " active" : ""}`}
                 >
-                  <span style={{ width: "5px", height: "5px", borderRadius: "9999px", background: isActive ? "var(--accent)" : "var(--text-muted)", flexShrink: 0 }} />
+                  <span className="command-palette-option-dot" />
                   {c.label}
-                  {c.href && <span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--text-muted)" }}>{c.href}</span>}
+                  {c.href && <span className="command-palette-path">{c.href}</span>}
                 </button>
               </div>
             );
           })}
         </div>
-        <div style={{ display: "flex", gap: "14px", padding: "8px 14px", borderTop: "1px solid var(--border)", fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--text-muted)" }}>
+        <div className="command-palette-footer">
           <span>↑↓ navigate</span>
           <span>↵ open</span>
           <span>esc close</span>

@@ -28,7 +28,7 @@ export default function RecallInspectorPage() {
   return (
     <AuthGuard>
       <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-        <PageHeader title="Recall Inspector" description="Explain-mode recall with retrieval counts, intent boosts, reranker status, and final memory scores.">
+        <PageHeader title="Recall details" description="Ask a question and see which knowledge BrainRouter chose, how useful it looked, and why it was included.">
           <button onClick={() => setShowAdvanced(!showAdvanced)} className="pill-btn pill-btn-ghost">
             {showAdvanced ? "Hide advanced" : "Advanced filters"}
           </button>

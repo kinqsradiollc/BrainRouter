@@ -80,6 +80,8 @@ export function cognitiveRowToRecord(row: any): CognitiveRecord {
     archived: Boolean(row.archived),
     workspaceTag: row.workspace_tag ?? null,
     projectTag: row.project_tag ?? null,
+    orgId: row.org_id ?? null,
+    visibility: row.visibility ?? "private",
   };
 }
 

@@ -22,12 +22,12 @@ export interface FrameProps {
   badge?: string;
   subtitle?: string;
   footer?: string;
-  /** Border color — defaults to brand orange. */
+  /** Border color — defaults to the shared interaction accent. */
   accentColor?: string;
   children?: React.ReactNode;
 }
 
-export function Frame({ title, badge, subtitle, footer, accentColor = '#CC9166', children }: FrameProps) {
+export function Frame({ title, badge, subtitle, footer, accentColor = '#8B7CFF', children }: FrameProps) {
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={accentColor} paddingX={1} marginY={0}>
       <Box justifyContent="space-between" marginBottom={subtitle ? 0 : 0}>

@@ -123,7 +123,7 @@ export default function MemoriesPage() {
   return (
     <AuthGuard>
       <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-        <PageHeader title="Memories" description="Search, filter, edit, and archive semantic memories extracted from agent sessions.">
+        <PageHeader title="Saved knowledge" description="Find and manage the decisions, preferences, facts, and lessons BrainRouter remembers across sessions.">
           <input
             className="pill-input"
             value={query}
