@@ -70,6 +70,33 @@ connectorOauthRouter.post("/:source/oauth/app", requireJwt, async (req: AuthedRe
   res.json({ app });
 });
 
+/**
+ * GET /api/connectors/oauth/apps — the org's per-source OAuth-app config STATUS for the
+ * dashboard Integrations screen (mirrors the GitHub OAuth App card, per connector). Returns
+ * NO secrets — only whether each source is configured + the (public) client id + scopes.
+ */
+connectorOauthRouter.get("/oauth/apps", requireJwt, async (req: AuthedRequest, res) => {
+  const orgHeader = req.headers["x-brainrouter-org"]; // string[] if the header repeats
+  const requested = (Array.isArray(orgHeader) ? orgHeader[0] : orgHeader)?.trim() || undefined;
+  const ctx = await resolveOrgContext(memoryEngine.tenancy, req.userId!, requested).catch(() => null);
+  if (!ctx?.orgId) { res.status(400).json({ error: "No active org" }); return; }
+  if (!req.isAdmin && !can(ctx.role, "triggers:manage")) { res.status(403).json({ error: "Requires the 'triggers:manage' capability" }); return; }
+  const orgId = ctx.orgId;
+  const apps = await Promise.all(Object.entries(OAUTH_PROVIDERS).map(async ([source, provider]) => {
+    const app = await memoryEngine.connectors.getResolvedOAuthApp(orgId, source).catch(() => null);
+    return {
+      source,
+      configured: !!app?.clientId,
+      hasSecret: !!app?.clientSecret, // boolean only — the secret itself never leaves the server
+      clientId: app?.clientId ?? "",  // client id is public in OAuth, safe to return
+      scopes: app?.scopes ?? "",
+      defaultScopes: provider.scopes.join(" "),
+      usesPkce: !!provider.usesPkce,
+    };
+  }));
+  res.json({ apps });
+});
+
 /** GET /api/connectors/:source/oauth/start — build the authorize URL + redirect. */
 connectorOauthRouter.get("/:source/oauth/start", requireJwt, async (req: AuthedRequest, res) => {
   const source = String(req.params.source);

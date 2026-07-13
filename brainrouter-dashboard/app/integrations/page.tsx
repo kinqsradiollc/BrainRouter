@@ -14,6 +14,7 @@ import { PremiumCard } from "../../components/PremiumCard";
 import { PremiumButton } from "../../components/PremiumButton";
 import { adminApi, type IntegrationConfig, type IntegrationInput } from "../../lib/adminApi";
 import { GithubOAuthAppCard } from "./GithubOAuthAppCard";
+import { ConnectorOAuthAppsCard } from "./ConnectorOAuthAppsCard";
 
 interface FormState {
   appId: string;
@@ -115,6 +116,7 @@ function IntegrationsInner() {
       </PremiumCard>
 
       {user?.isAdmin && <GithubOAuthAppCard />}
+      {user?.isAdmin && <ConnectorOAuthAppsCard />}
 
       <div className="settings-stack">
         <PremiumCard level={2}>
