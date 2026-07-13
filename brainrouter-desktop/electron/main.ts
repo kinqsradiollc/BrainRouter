@@ -376,7 +376,13 @@ function openWorkspaceWindow(workspaceRoot: string): void {
     };
     guest.on('will-navigate', gate);
     guest.on('will-redirect', gate);
-    guest.setWindowOpenHandler(() => ({ action: 'deny' }));
+    // A target=_blank / window.open link opens IN the same browser view (like a
+    // real browser's "open here"), never a floating BrowserWindow — but only for
+    // an allowed URL, so the policy still holds.
+    guest.setWindowOpenHandler(({ url }) => {
+      if (isAllowedWebviewSrc(url, workspaceRoot)) void guest.loadURL(url).catch(() => undefined);
+      return { action: 'deny' };
+    });
   });
   const wp: WinPool = { win, hosts: new Map(), lastSession: new Map(), pool: emptyPool(), retiring: new Set() };
   wins.set(win.webContents.id, wp);
