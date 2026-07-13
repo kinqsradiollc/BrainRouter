@@ -44,7 +44,8 @@ function baseUrlOf(req: AuthedRequest): string {
 const redirectUri = (req: AuthedRequest, source: string): string => `${baseUrlOf(req)}/api/connectors/${source}/oauth/callback`;
 
 async function resolveOrgId(req: AuthedRequest): Promise<string | undefined> {
-  const requested = (req.headers["x-brainrouter-org"] as string | undefined)?.trim() || undefined;
+  const orgHeader = req.headers["x-brainrouter-org"]; // string[] if the header repeats
+  const requested = (Array.isArray(orgHeader) ? orgHeader[0] : orgHeader)?.trim() || undefined;
   const ctx = await resolveOrgContext(memoryEngine.tenancy, req.userId!, requested).catch(() => null);
   return ctx?.orgId;
 }
@@ -56,7 +57,8 @@ async function resolveOrgId(req: AuthedRequest): Promise<string | undefined> {
 connectorOauthRouter.post("/:source/oauth/app", requireJwt, async (req: AuthedRequest, res) => {
   const source = String(req.params.source);
   if (!isOAuthSource(source)) { res.status(400).json({ error: `No OAuth broker for source "${source}"` }); return; }
-  const requested = (req.headers["x-brainrouter-org"] as string | undefined)?.trim() || undefined;
+  const orgHeader = req.headers["x-brainrouter-org"]; // string[] if the header repeats
+  const requested = (Array.isArray(orgHeader) ? orgHeader[0] : orgHeader)?.trim() || undefined;
   const ctx = await resolveOrgContext(memoryEngine.tenancy, req.userId!, requested).catch(() => null);
   if (!ctx?.orgId) { res.status(400).json({ error: "No active org" }); return; }
   if (!req.isAdmin && !can(ctx.role, "triggers:manage")) { res.status(403).json({ error: "Requires the 'triggers:manage' capability" }); return; }
