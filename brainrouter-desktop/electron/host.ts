@@ -19,11 +19,15 @@ import { createComputerUseBridge, createSecretBridge, git, type ParentPortLike, 
 // `queries` object). host.ts assembles the HostContext bag below and folds
 // buildQueries(ctx) into createHostCore({ queries }).
 import { buildQueries } from './host/queries.js';
+import { ensureBrainSession } from './host/brainSession.js';
 // host/github-track-services — the extracted gh-CLI / connector / Track-PR
 // service layer. host.ts builds it with its runtime deps and folds the returned
 // functions into the HostContext.
 import { buildGithubTrackServices } from './host/github-track-services.js';
 import type { HostContext } from './host/context.js';
+// UI-TEST fusion — the web UI-testing host (extract, drive, flows/stories, run
+// reports, auto-host). Wired into the query router via HostContext.uitest.
+import { createUiTestHost } from './uitestHost.js';
 import { exec, execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { InteractionBroker, type AgentEvent, type RecordLifecycleAction } from '@kinqs/brainrouter-agent-protocol';
 // Deep imports into the CLI's built runtime (no "exports" field = allowed).
@@ -294,6 +298,9 @@ async function main(): Promise<void> {
     await mcpClient.connectAll(config.servers ?? {}, llm, { timeoutMs: 5_000 });
     mcpClient.startReconnectSupervisor(); // WS9 — auto-reconnect dropped MCP servers in the background
   } catch { /* offline-mode: local tools only, same as the CLI */ }
+  // FED — register this desktop as an active session for the signed-in user, so it
+  // appears on the Account page + dashboard "Devices & sessions" (heartbeats itself).
+  void ensureBrainSession(mcpClient, workspaceRoot);
 
   // REMOTE-BRAIN Phase 3d — call a brain Atlas tool via the MCP pool, parsing its
   // JSON text result. Best-effort: null on any failure so the local artifact path
@@ -943,7 +950,12 @@ async function main(): Promise<void> {
   // this bag. Stable bindings pass by shorthand; the few that are REASSIGNED over
   // the process lifetime (the viewed agent, the global llm, the PR caches, the
   // terminal sequence) pass as live accessors so behavior is unchanged.
+  // UI-TEST fusion — one host per workspace; the query router drives it and it
+  // owns the (lazy) Playwright driver + auto-hosted dev server, disposed on quit.
+  const uitest = createUiTestHost(workspaceRoot);
+
   const ctx: HostContext = {
+    uitest,
     workspaceRoot, wsGit, fileListCache, listWorkspaceFilesCached, send,
     computerUseBridge, secretBridge, config,
     getLlm: () => llm, setLlm: (next) => { llm = next; },
@@ -1018,6 +1030,7 @@ async function main(): Promise<void> {
       clearInterval(connectorSchedulerTimer);
       clearTimeout(connectorSchedulerBootTimer);
       stopWorkspaceWatcher();
+      uitest.dispose();
       void mcpClient.close?.();
       process.exit(0);
     },

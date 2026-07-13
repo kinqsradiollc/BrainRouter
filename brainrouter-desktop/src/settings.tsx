@@ -21,6 +21,8 @@ import { ConnectorSettings } from './settings/connectors/ConnectorSettings.js';
 import { MarketplaceSettings, type MarketplaceState } from './settings/marketplace/index.js';
 import { McpServersSection } from './settings/connectors/McpServersSection.js';
 import { ModelsSection } from './settings/models/ModelsSection.js';
+import { AccountSettings } from './settings/account/AccountSettings.js';
+import { ReviewsSettings } from './settings/reviews/ReviewsSettings.js';
 import { RuntimeSection } from './settings/runtime/RuntimeSection.js';
 import { AutomationsSection } from './settings/automations/AutomationsSection.js';
 import { UsageHeatmap } from './settings/usage/UsageHeatmap.js';
@@ -122,6 +124,7 @@ export function SettingsDialog(props: {
 
   const body = (() => {
     switch (section) {
+      case 'account': return <AccountSettings />;
       case 'general': return (
         <>
           <div className="set-h">General</div>
@@ -312,6 +315,21 @@ export function SettingsDialog(props: {
           onAction={props.onAction}
           refreshSnapshot={refreshSnapshot}
         />
+      );
+      case 'reviews': return (
+        <>
+          <ReviewsSettings />
+          <SetGroup title="What runs on every reviewed PR">
+            <Row title="🛡️ Security review" desc="Vulnerability findings (injection, secrets, auth, SSRF, …), CWE-tagged." />
+            <Row title="🔎 Code review" desc="Correctness, clarity, architecture, performance, and test coverage." />
+            <Row title="Block on blocking findings" desc="A critical/high finding fails the check-run so branch protection can hold the merge." />
+            <Row title="Re-review on every push" desc="Each new commit re-runs both lenses on the new diff." />
+          </SetGroup>
+          <SetGroup title="Manage">
+            <Row title="Choose which repos are reviewed" desc="Open the BrainRouter dashboard → Reviews to toggle auto-review per repository and browse recent reviews + findings." />
+            <Row title="Connect / configure the GitHub App" desc="Settings → Automations wires the same GitHub App (installation, webhook) this reviewer runs on." />
+          </SetGroup>
+        </>
       );
       case 'extensions': {
         const ext = snapshot?.extensions;

@@ -1,0 +1,39 @@
+{
+  "_comment": "Tracked example UI journeys for the mock app. The desktop host reads this as a seed for the Stories panel, so these survive a `git clean` of the gitignored .brainrouter/ dir. Targets must exist in the mock's ui-map (see src/pages.ts).",
+  "stories": [
+    {
+      "id": "log-in",
+      "title": "Log in",
+      "description": "Open Login, enter valid credentials, submit, and confirm the message.",
+      "steps": [
+        { "action": "navigate", "target": "login" },
+        { "action": "type", "target": "email-field", "text": "a@b.co" },
+        { "action": "type", "target": "password-field", "text": "secret" },
+        { "action": "tap", "target": "login-submit" },
+        { "action": "assertVisible", "target": "login-message" }
+      ]
+    },
+    {
+      "id": "add-a-todo",
+      "title": "Add a todo",
+      "description": "Go to Todos, type a new item, add it, and confirm the count updates.",
+      "steps": [
+        { "action": "navigate", "target": "todos" },
+        { "action": "type", "target": "todo-input", "text": "Buy milk" },
+        { "action": "tap", "target": "todo-add" },
+        { "action": "assertVisible", "target": "todo-count" }
+      ]
+    },
+    {
+      "id": "count-up",
+      "title": "Count up",
+      "description": "On Home, increment the counter twice and confirm the value stays visible.",
+      "steps": [
+        { "action": "navigate", "target": "home" },
+        { "action": "tap", "target": "counter-increment" },
+        { "action": "tap", "target": "counter-increment" },
+        { "action": "assertVisible", "target": "counter-value" }
+      ]
+    }
+  ]
+}

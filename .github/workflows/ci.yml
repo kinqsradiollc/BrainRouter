@@ -93,3 +93,50 @@ jobs:
           # drop their own scratch databases off this admin connection.
           BRAINROUTER_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
           BRAINROUTER_TEST_PG_ADMIN_URL: postgres://postgres:postgres@localhost:5432/postgres
+
+  lint-and-typecheck:
+    # A separate required check so a type error / lint failure is a distinct,
+    # fast red X — independent of the (slower, Postgres-backed) test job.
+    name: Lint & Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      - name: Build all workspaces
+        # tsc --noEmit resolves cross-workspace types from each package's built
+        # dist (package exports), so the graph must be built before typecheck.
+        run: npm run build
+      - name: Typecheck (all workspaces)
+        run: npm run typecheck
+      - name: Lint
+        run: npm run lint
+
+  security-audit:
+    # Dependency-vulnerability gate (the AI SECURITY REVIEW of the *code* is a
+    # separate check-run posted by the GitHub App bot). Blocks on CRITICAL prod-dep
+    # advisories — the tier that warrants stopping a merge — while still surfacing
+    # high/moderate in the log. Gating at "high" would be a permanent red X on
+    # unfixable transitive advisories, which defeats the point of a required check.
+    name: Security Audit (deps)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+      - name: Report high/moderate advisories (non-blocking visibility)
+        run: npm audit --omit=dev --audit-level=high || true
+      - name: Fail on CRITICAL production advisories
+        run: npm audit --omit=dev --audit-level=critical

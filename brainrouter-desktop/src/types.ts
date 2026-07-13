@@ -66,6 +66,22 @@ export interface AttachmentUpload {
   dataBase64?: string;
 }
 
+/**
+ * §a11y-inspect (UI-TEST fusion) — a reference tag dragged from the Browser
+ * panel's Accessibility list (a source symbol → `ref` = `path:line#id`) or a UI
+ * Story chip (carries ordered `steps`). Rendered as a chip in the composer and
+ * serialized into the outgoing prompt on send.
+ */
+export interface ComponentTag {
+  id: string;
+  name: string;
+  kind?: string;
+  ref: string;
+  filePath?: string;
+  line?: number;
+  steps?: Array<{ action: string; target: string; text?: string }>;
+}
+
 export interface TaskViewState {
   id: string;
   kind: string;

@@ -389,12 +389,33 @@ export function buildGithubTrackServices(deps: GithubTrackDeps) {
     return { ...result, connector: updated };
   };
 
+  // ADR-017 D1 — every repo the signed-in user's GitHub App connection can access,
+  // via the server-side broker (no owner needed). Empty when not signed in / not
+  // OAuth-connected, so non-OAuth connectors fall back to the owner path.
+  const listAccessibleReposViaBroker = async (limit?: number): Promise<string[]> => {
+    const cfg = loadConfig() as { cli?: { account?: { url?: string } }; servers?: Record<string, { identity?: string; apiKey?: string }> };
+    const base = String(cfg.cli?.account?.url ?? '').replace(/\/+$/, '');
+    const bId = Object.keys(cfg.servers ?? {}).find((k) => (cfg.servers![k]?.identity === 'brainrouter') || /^brainrouter/i.test(k));
+    const apiKey = bId ? String(cfg.servers![bId]?.apiKey ?? '') : '';
+    if (!base || !apiKey) return [];
+    try {
+      const r = await fetch(`${base}/api/connectors/github/repos`, { headers: { Authorization: `Bearer ${apiKey}` } });
+      if (!r.ok) return [];
+      const j = await r.json() as { repos?: Array<{ fullName?: string }> };
+      const names = (j.repos ?? []).map((x) => String(x.fullName ?? '')).filter(Boolean);
+      return typeof limit === 'number' ? names.slice(0, limit) : names;
+    } catch { return []; }
+  };
+
   const githubConnectorClient = (): GithubConnectorClient => ({
     async listRepositories(owner, opts) {
       const limit = Math.max(1, Math.min(1000, opts?.limit ?? 100));
       const listed = await ghJson<Array<{ nameWithOwner?: string }>>(['repo', 'list', owner, '--limit', String(limit), '--json', 'nameWithOwner'], { timeout: 20_000, maxBuffer: 4_000_000 });
       if (listed.error) throw new Error(listed.error);
       return (listed.data ?? []).map((repo) => repo.nameWithOwner ?? '').filter(Boolean);
+    },
+    async listAccessibleRepositories(opts) {
+      return listAccessibleReposViaBroker(opts?.limit);
     },
     async listIssues(repo, opts) {
       const args = ['issue', 'list', '--repo', repo, '--state', 'all', '--limit', '100', '--json', 'number,title,body,state,url,updatedAt,labels,assignees'];

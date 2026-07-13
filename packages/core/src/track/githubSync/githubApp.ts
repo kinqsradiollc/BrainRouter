@@ -36,6 +36,28 @@ export interface GithubAppCredentials {
   apiBase?: string;
 }
 
+/**
+ * Harden `apiBase` against SSRF + credential exfiltration (CWE-918). The App JWT
+ * and installation tokens are sent to this host, so an admin (or anyone who can
+ * edit the org integration) could otherwise point it at cloud-metadata / internal
+ * services or an attacker's server and leak the credential. Allow only an https
+ * GitHub API host — the default or a GitHub Enterprise domain; reject non-https,
+ * IP literals (loopback / private / link-local like 169.254.169.254), `localhost`,
+ * and bare internal hostnames. Returns the trusted base (no trailing slash) or null.
+ */
+export function validateGithubApiBase(raw?: string | null): string | null {
+  const s = (raw ?? '').trim();
+  if (!s) return DEFAULT_API_BASE;
+  let u: URL;
+  try { u = new URL(s); } catch { return null; }
+  if (u.protocol !== 'https:') return null;
+  const host = u.hostname.toLowerCase();
+  if (!host || host === 'localhost' || host.endsWith('.localhost')) return null;
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(':')) return null; // no IP literals
+  if (!host.includes('.')) return null; // require a real domain, not a bare internal name
+  return s.replace(/\/+$/, '');
+}
+
 function b64url(input: Buffer | string): string {
   return Buffer.from(input).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
@@ -75,7 +97,8 @@ export async function resolveInstallationId(
   if (creds.installationId?.trim()) return creds.installationId.trim();
   const owner = target.owner.trim();
   if (!owner) throw new Error('GitHub App: cannot resolve installation without an owner');
-  const base = creds.apiBase?.trim() || DEFAULT_API_BASE;
+  const base = validateGithubApiBase(creds.apiBase);
+  if (!base) throw new Error('GitHub App: refusing an untrusted apiBase (must be an https GitHub API host)');
   const jwt = buildAppJwt(creds, deps.nowSec());
   const url = target.repo
     ? `${base}/repos/${owner}/${target.repo.trim()}/installation`
@@ -93,7 +116,8 @@ export async function mintInstallationToken(
   installationId: string,
   deps: AppTokenDeps,
 ): Promise<InstallationToken> {
-  const base = creds.apiBase?.trim() || DEFAULT_API_BASE;
+  const base = validateGithubApiBase(creds.apiBase);
+  if (!base) throw new Error('GitHub App: refusing an untrusted apiBase (must be an https GitHub API host)');
   const jwt = buildAppJwt(creds, deps.nowSec());
   const res = await deps.fetchImpl(`${base}/app/installations/${installationId}/access_tokens`, {
     method: 'POST',

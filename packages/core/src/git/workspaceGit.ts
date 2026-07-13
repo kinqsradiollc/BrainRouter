@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { normalizeRepoUrl, repoTag as toRepoTag } from '../track/git/repoIdentity.js';
 
 /**
  * Git/workspace identity for an EXPLICITLY selected workspace folder.
@@ -26,6 +27,14 @@ export interface WorkspaceGitInfo {
   repoName: string;
   /** POSIX path from gitRoot → workspaceRoot ('' at the repo root / no git). */
   repoRelativePath: string;
+  /** `origin` remote URL as git reports it, or null (no remote / no repo). */
+  remoteUrl: string | null;
+  /** Canonical `host/owner/repo` identity from the remote — the join key to a
+   *  linked repo / cloud Project.repoUrl (ADR-015). '' when there is no remote. */
+  repoIdentity: string;
+  /** Stable 16-char per-repo scope key from the remote (scopes memory by REPO,
+   *  surviving a moved folder or second clone). '' when there is no remote. */
+  repoTag: string;
 }
 
 function realpath(p: string): string {
@@ -60,6 +69,18 @@ export function gitHeadSha(dir: string): string | undefined {
   return sha || undefined;
 }
 
+/** `origin` remote URL for a repo (via `git config --get remote.origin.url`), or
+ *  null when there is no `origin` / no repo. Kept separate so callers can read a
+ *  remote without re-resolving the whole workspace. */
+export function readGitRemoteUrl(gitRoot: string): string | null {
+  const result = spawnSync('git', ['-C', gitRoot, 'config', '--get', 'remote.origin.url'], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15_000,
+  });
+  if (result.status !== 0) return null;
+  const url = (result.stdout ?? '').trim();
+  return url || null;
+}
+
 /** Resolve how a selected workspace folder relates to its owning git repo. */
 export function resolveWorkspaceGit(selectedRoot: string): WorkspaceGitInfo {
   const workspaceRoot = realpath(selectedRoot);
@@ -68,15 +89,20 @@ export function resolveWorkspaceGit(selectedRoot: string): WorkspaceGitInfo {
     return {
       workspaceRoot, gitRoot: null, hasGit: false, isRepoRoot: false, isSubdir: false,
       repoName: path.basename(workspaceRoot), repoRelativePath: '',
+      remoteUrl: null, repoIdentity: '', repoTag: '',
     };
   }
   const isRepoRoot = gitRoot === workspaceRoot;
   const rel = path.relative(gitRoot, workspaceRoot);
   const isSubdir = !isRepoRoot && rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+  const remoteUrl = readGitRemoteUrl(gitRoot);
   return {
     workspaceRoot, gitRoot, hasGit: true, isRepoRoot, isSubdir,
     repoName: path.basename(gitRoot),
     repoRelativePath: isSubdir ? rel.split(path.sep).join('/') : '',
+    remoteUrl,
+    repoIdentity: remoteUrl ? normalizeRepoUrl(remoteUrl) : '',
+    repoTag: remoteUrl ? toRepoTag(remoteUrl) : '',
   };
 }
 

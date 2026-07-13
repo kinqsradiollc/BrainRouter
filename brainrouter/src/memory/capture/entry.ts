@@ -18,8 +18,10 @@ export class MemoryCapturePipeline extends CaptureExtraction {
     messages: { role: string; content: string; timestamp: number }[];
     activeSkill?: string;
     skillHints?: string;
+    workspaceTag?: string | null;
+    projectTag?: string | null;
   }): Promise<CaptureResult> {
-    const { userId, sessionKey, sessionId = "", messages, activeSkill, skillHints } = params;
+    const { userId, sessionKey, sessionId = "", messages, activeSkill, skillHints, workspaceTag, projectTag } = params;
 
     const nowStr = new Date().toISOString();
     const sensoryRecords: SensoryRecord[] = [];
@@ -70,13 +72,13 @@ export class MemoryCapturePipeline extends CaptureExtraction {
       cognitiveExtractionTriggered = true;
       const inflightKey = `${userId}${sessionKey}`;
       if (process.env.BRAINROUTER_INLINE_EXTRACTION === "on") {
-        const result = await this.extractPendingSensory({ userId, sessionKey, sessionId, activeSkill, skillHints });
+        const result = await this.extractPendingSensory({ userId, sessionKey, sessionId, activeSkill, skillHints, workspaceTag, projectTag });
         cognitiveExtractedCount = result.extractedCount;
         cognitiveExtractionStatus = result.status;
         cognitiveExtractionError = result.errorMessage;
       } else if (!this.extractionInFlight.has(inflightKey)) {
         this.extractionInFlight.add(inflightKey);
-        void this.extractPendingSensory({ userId, sessionKey, sessionId, activeSkill, skillHints })
+        void this.extractPendingSensory({ userId, sessionKey, sessionId, activeSkill, skillHints, workspaceTag, projectTag })
           .catch((err: unknown) => console.error("[BrainRouter] background extraction failed:", err instanceof Error ? err.message : err))
           .finally(() => this.extractionInFlight.delete(inflightKey));
         cognitiveExtractionStatus = "deferred";

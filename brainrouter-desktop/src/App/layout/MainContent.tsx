@@ -141,6 +141,10 @@ export interface MainContentProps {
   pastedImages: Array<{ id: string; mediaType: string; dataBase64: string }>;
   addPastedImages: CP['onPasteImages'];
   setPastedImages: React.Dispatch<React.SetStateAction<Array<{ id: string; mediaType: string; dataBase64: string }>>>;
+  // §a11y-inspect — composer component/journey tag chips.
+  componentTags: CP['componentTags'];
+  onDropTag: CP['onDropTag'];
+  onClearComponentTag: CP['onClearComponentTag'];
   // EnvironmentPanel
   envAnim: EP['envAnim'];
   setTermDockOpen: EP['setTermDockOpen'];
@@ -179,7 +183,7 @@ export function MainContent(p: MainContentProps): React.ReactElement {
     setSlashSel, setSlashDismissed, runSlash, pop, setPop, modeLabel, effort, branches, endpointModels,
     defaultProviderModels, routerCatalog, routerFallback, modelsLoading, setModelsLoading, modelChoices, modelScope, setModelScope, contextUsage,
     tokens, openSettings, attachFiles, attachmentUploads, canSubmit, setAttachmentUploads, pastedImages,
-    addPastedImages, setPastedImages, envAnim, setTermDockOpen, commitSubjects, openCiPanel, lastTurnFails, openTask,
+    addPastedImages, setPastedImages, componentTags, onDropTag, onClearComponentTag, envAnim, setTermDockOpen, commitSubjects, openCiPanel, lastTurnFails, openTask,
     dockAnim, termDockHeight, resizeTerminal, termTabs, activeTerm, setActiveTerm, closeBottomTab, addBottomTab,
     envOpen, setEnvOpen, termDockOpen, setSideFullScreen, openBottomDock,
   } = p;
@@ -246,7 +250,10 @@ export function MainContent(p: MainContentProps): React.ReactElement {
               onClearAttachment={(id) => setAttachmentUploads((prev) => prev.filter((u) => u.id !== id))}
               pastedImages={pastedImages}
               onPasteImages={addPastedImages}
-              onClearPastedImage={(id) => setPastedImages((prev) => prev.filter((pi) => pi.id !== id))} />
+              onClearPastedImage={(id) => setPastedImages((prev) => prev.filter((pi) => pi.id !== id))}
+              componentTags={componentTags}
+              onDropTag={onDropTag}
+              onClearComponentTag={onClearComponentTag} />
             </>
           } />
 
