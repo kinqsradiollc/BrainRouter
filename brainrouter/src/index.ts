@@ -302,7 +302,9 @@ if (USE_HTTP) {
     const effectiveUserId = user.userId;
     // C1 (ADR-016) — resolve the caller's active org (X-BrainRouter-Org header,
     // else their default org) so the MCP recall path can surface org-shared memory.
-    const requestedOrg = (req.headers['x-brainrouter-org'] as string | undefined)?.trim() || undefined;
+    // A repeated header arrives as string[] — coerce safely so `.trim()` can't throw.
+    const orgHeader = req.headers['x-brainrouter-org'];
+    const requestedOrg = (Array.isArray(orgHeader) ? orgHeader[0] : orgHeader)?.trim() || undefined;
     const orgCtx = await resolveOrgContext(memoryEngine.tenancy, effectiveUserId, requestedOrg).catch(() => null);
     const defaultOrgId = orgCtx?.orgId;
 

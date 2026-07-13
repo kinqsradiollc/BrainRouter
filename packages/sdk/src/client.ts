@@ -86,7 +86,9 @@ export class BrainRouterClient {
    *  so org-shared memory + org-scoped routes resolve for a signed-in client. */
   private activeOrg = "";
   withActiveOrg(orgId: string) {
-    this.activeOrg = orgId?.trim() ?? "";
+    // Allowlist to id-safe chars so a stray value can't inject a CRLF / extra
+    // header when this is sent as X-BrainRouter-Org (org ids are uuid/slug shaped).
+    this.activeOrg = (orgId ?? "").trim().replace(/[^A-Za-z0-9_-]/g, "");
     return this;
   }
 
