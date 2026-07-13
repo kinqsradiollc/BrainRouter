@@ -37,6 +37,7 @@ export function ReviewsSettings(): React.ReactElement {
   const [reviews, setReviews] = useState<ReviewRow[]>([]);
   const [state, setState] = useState<LoadState>('loading');
   const [error, setError] = useState('');
+  const [running, setRunning] = useState('');
 
   const load = useCallback(async () => {
     setState('loading');
@@ -54,6 +55,20 @@ export function ReviewsSettings(): React.ReactElement {
     void bridgeQuery('action:open-external', { what: `https://github.com/${r.repo}/pull/${r.prNumber}` });
   };
 
+  // Re-run THIS row's lens straight from the desktop. The backend re-gates on the
+  // account's reviews:run capability — the button is only a trigger.
+  const rerun = async (r: ReviewRow, ev: React.MouseEvent): Promise<void> => {
+    ev.stopPropagation(); // don't also open the PR
+    if (!r.repo || !r.prNumber) return;
+    setRunning(r.id); setError('');
+    try {
+      const res = await bridgeQuery<{ ok: boolean; error?: string }>('reviews-run', { repo: r.repo, prNumber: r.prNumber, lens: r.lens });
+      if (!res.ok) setError(res.error ?? 'run failed');
+      else setTimeout(() => void load(), 1500); // let the queued job surface
+    } catch (e) { setError(e instanceof Error ? e.message : 'run failed'); }
+    finally { setRunning(''); }
+  };
+
   const detail = (r: ReviewRow): string =>
     r.error ? `error: ${r.error}`
       : r.skipped ? `skipped: ${r.skipped}`
@@ -64,7 +79,7 @@ export function ReviewsSettings(): React.ReactElement {
     <>
       <div className="set-h">PR Reviews</div>
       <div className="set-desc" style={{ marginBottom: 10 }}>
-        Pull requests the bot has reviewed — 🛡️ <b>security</b> (gates the merge) and 🔎 <b>code review</b> (advisory suggestions). Click a row to open the PR on GitHub. Re-run security with <code>/security-review</code>, code review with <code>/code-review</code>, or both with legacy <code>/review</code>; choose repos and policies in Dashboard → Reviews.
+        Pull requests the bot has reviewed — 🛡️ <b>security</b> (gates the merge) and 🔎 <b>code review</b> (advisory suggestions). Click a row to open the PR on GitHub, or hit <b>Re-run</b> to run that lens again right here. You can also comment <code>/security-review</code> / <code>/code-review</code> on the PR. Choose repos and policies in Dashboard → Reviews.
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -97,6 +112,13 @@ export function ReviewsSettings(): React.ReactElement {
                 {detail(r)} · {relTime(r.updatedAt)}
               </div>
             </div>
+            {clickable && (
+              <button className="btn btn-ghost" onClick={(e) => void rerun(r, e)} disabled={running === r.id}
+                title={`Re-run the ${r.lens === 'security' ? 'security' : 'code'} review on ${r.repo} #${r.prNumber}`}
+                style={{ fontSize: 11, padding: '2px 8px', whiteSpace: 'nowrap' }}>
+                {running === r.id ? '…' : 'Re-run'}
+              </button>
+            )}
             <span style={{ fontSize: 11, color: badgeColor, whiteSpace: 'nowrap' }}>{r.status}</span>
           </div>
         );
