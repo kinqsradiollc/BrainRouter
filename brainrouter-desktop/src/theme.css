@@ -210,7 +210,11 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .check-row { display: flex; align-items: center; gap: 9px; font-size: 13px; cursor: pointer; }
 .check-row input[type="checkbox"] { accent-color: var(--accent); flex: none; }
 /* Scrolling list of selectable rows (model checklist, chain, provider order) */
-.scroll-list { max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 5px; padding: 1px; }
+/* flex-shrink:0 is load-bearing: this list lives inside a column flexbox
+   (.mcp-add) whose min-height:0 + this list's overflow-y:auto would otherwise let
+   the flexbox crush it to ~0px height when the fetched model set is long, hiding
+   every row. Keep its own max-height/overflow scroll instead of being shrunk. */
+.scroll-list { flex-shrink: 0; max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 5px; padding: 1px; }
 .list-row-card { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--input); font-size: 13px; }
 .list-row-card.selected { border-color: var(--accent-soft); background: var(--accent-soft); }
 .list-row-card.default { border-color: var(--accent); } /* AFTER .selected so ★ default wins the border */
