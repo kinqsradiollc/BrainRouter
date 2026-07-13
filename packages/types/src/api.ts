@@ -206,6 +206,28 @@ export interface ExplainRecallRequest {
 
 export type ExplainRecallResponse = RecallResult;
 
+/** Authenticated dashboard/SDK chat turn, scoped by the active org header. */
+export interface BrainChatRequest {
+  messages: Array<{ role: "user" | "assistant"; content: string }>;
+  sessionKey: string;
+  projectId?: string;
+  workspaceTag?: string;
+}
+
+export interface BrainChatCitation {
+  recordId: string;
+  title?: string;
+  excerpt: string;
+  type?: string;
+  score?: number;
+}
+
+export interface BrainChatResponse {
+  message: { role: "assistant"; content: string };
+  citations: BrainChatCitation[];
+  recallStrategy: string;
+}
+
 export interface WorkingStep {
   nodeId: string;
   title: string;

@@ -6,6 +6,7 @@ import type {
   MemoryImport,
   MemoryOperation,
   MemoryType,
+  MemoryVisibility,
 } from '@kinqs/brainrouter-types';
 import { workspaceTagFromPath } from '@kinqs/brainrouter-types';
 import { searchConnectorDocuments, type ConnectorDocumentSearchFilter } from '../store/documentStore.js';
@@ -14,6 +15,12 @@ export interface ConnectorMemoryExportOptions extends ConnectorDocumentSearchFil
   userId?: string;
   sessionKey?: string;
   now?: string;
+  /** Explicit tenant scope for server-hosted connectors. */
+  orgId?: string | null;
+  visibility?: MemoryVisibility;
+  /** `undefined` keeps the local workspace hash; `null` is intentionally org-wide. */
+  workspaceTag?: string | null;
+  projectTag?: string | null;
 }
 
 export interface ConnectorMemoryExportResult {
@@ -34,6 +41,10 @@ export function exportConnectorDocumentsForMemory(
     userId,
     workspaceRoot,
     sessionKey: options?.sessionKey,
+    orgId: options?.orgId,
+    visibility: options?.visibility,
+    workspaceTag: options?.workspaceTag,
+    projectTag: options?.projectTag,
     now,
   }));
   const evidence = documents.flatMap((doc) => connectorDocumentEvidence(doc, {
@@ -67,7 +78,16 @@ export function exportConnectorDocumentsForMemory(
 
 export function connectorDocumentToMemoryRecord(
   doc: ConnectorDocumentRecord,
-  options: { userId: string; workspaceRoot?: string; sessionKey?: string; now?: string },
+  options: {
+    userId: string;
+    workspaceRoot?: string;
+    sessionKey?: string;
+    now?: string;
+    orgId?: string | null;
+    visibility?: MemoryVisibility;
+    workspaceTag?: string | null;
+    projectTag?: string | null;
+  },
 ): CognitiveRecord {
   const now = options.now ?? new Date().toISOString();
   const filePath = typeof doc.metadata.path === 'string' ? doc.metadata.path : undefined;
@@ -110,8 +130,12 @@ export function connectorDocumentToMemoryRecord(
     lastCitedAt: null,
     neverCitedCount: 0,
     archived: false,
-    workspaceTag: workspaceTagFromPath(options.workspaceRoot),
-    projectTag: null,
+    workspaceTag: options.workspaceTag === undefined
+      ? workspaceTagFromPath(options.workspaceRoot)
+      : options.workspaceTag,
+    projectTag: options.projectTag ?? null,
+    orgId: options.orgId ?? null,
+    visibility: options.visibility ?? 'private',
   };
 }
 

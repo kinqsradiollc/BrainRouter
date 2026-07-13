@@ -1,744 +1,321 @@
-# BrainRouter — Setup & Operations Guide
+# BrainRouter setup and operations
 
-Operational runbook for the maintainer. **First-time setup, daily run,
-upgrade, publish, and recovery — everything in one file.** Skim the
-table of contents and jump to the section you need.
-
-For end-user install (`npm install -g @kinqs/brainrouter-cli`), see
-[README.md](README.md). For architecture, see
-[BRAINROUTER.md](BRAINROUTER.md). For env-var reference, see
-[brainrouter-docs/configuration.md](brainrouter-docs/configuration.md).
-
----
-
-## Table of contents
-
-1. [Prerequisites](#1-prerequisites)
-2. First-time setup
-   - [§2A — Install from npm (end users)](#2a-end-user-install-from-npm)
-   - [§2B — Clone and build (development)](#2b-clone-and-build-for-development)
-3. [Daily run](#3-daily-run)
-4. [Upgrading (pull new code)](#4-upgrading-pull-new-code)
-5. [Publishing a new release to npm](#5-publishing-a-new-release-to-npm)
-6. [Troubleshooting](#6-troubleshooting)
-7. [Nuclear options (reset state)](#7-nuclear-options-reset-state)
-
----
+This runbook covers a source checkout. It is organized around the current architecture: PostgreSQL + pgvector, database-backed provider and connector configuration, a shared brain service, and desktop/CLI/dashboard clients.
 
 ## 1. Prerequisites
 
-| Tool | Min version | How to check | Why |
-|---|---|---|---|
-| Node.js | 22 | `node -v` | SQLite (`node:sqlite`), `fetch`, `--test` runner |
-| npm | 10 | `npm -v` | workspaces, `publishConfig`, `prepack` |
-| git | any | `git --version` | clone, branches, tags |
-| LM Studio | latest | open the app | local LLM endpoint at `http://localhost:1234/v1` (or use a cloud key instead) |
+| Requirement | Minimum | Check |
+| --- | --- | --- |
+| Node.js | 22 | `node -v` |
+| npm | 10 | `npm -v` |
+| Git | current | `git --version` |
+| PostgreSQL | 14+ with pgvector | `psql --version` |
+| Docker | optional local database/stack | `docker version` |
 
-Optional but recommended:
-- **`gh`** (GitHub CLI) — for tagging releases and creating PRs.
-- **An OpenAI-compatible API key** — OpenRouter, OpenAI, or Anthropic — if
-  you don't want to run a local model in LM Studio.
+The packaged desktop targets macOS and Windows. Electron source development requires the same Node/npm toolchain.
 
----
-
-## 2. First-time setup
-
-Two paths:
-
-- **§2A — Install from npm** (recommended for end users). Use this if
-  you just want to run the agent against a local MCP server, not hack
-  on the codebase.
-- **§2B — Clone the monorepo** (for development). Use this if you're
-  going to edit BrainRouter itself, run the dashboard, or work on
-  multiple packages together.
-
-Pick one and skip the other.
-
-### 2A. End-user install (from npm)
-
-```bash
-# 1. Install both packages globally. The -g is critical — without it
-#    npm installs into ./node_modules and the binaries never reach
-#    your $PATH. Symptom: "brainrouter: command not found" after install.
-npm install -g @kinqs/brainrouter-cli @kinqs/brainrouter-mcp-server
-
-# 2. Scaffold the MCP server's config (one-time, creates a user-editable file).
-brainrouter-mcp init
-$EDITOR ~/.config/brainrouter/server.env
-# At minimum set BRAINROUTER_LLM_API_KEY, BRAINROUTER_ADMIN_PASSWORD,
-# BRAINROUTER_JWT_SECRET. See the file for full inline docs.
-
-# 3. Run the CLI. The first launch drops you into the in-terminal wizard
-#    (theme → provider → API key → model → MCP → AGENT.md) — no separate
-#    `brainrouter login` / `brainrouter config` step needed. Re-run the
-#    wizard any time with `/init`; tweak individual knobs with `/config`.
-brainrouter
-```
-
-> **Legacy subcommands.** `brainrouter login` and `brainrouter config`
-> still work for users who scripted them, but the in-REPL wizard +
-> `/config` + `/login` slash commands are the recommended path since
-> 0.3.7. See
-> [`brainrouter-docs/cli.md#first-run-wizard-037`](brainrouter-docs/cli.md#first-run-wizard-037)
-> for the full breakdown.
-
-**Sudo for step 1?** Run `npm config get prefix`. If the path is under
-your home dir or `/opt/homebrew` → no sudo. If it's `/usr/local/...` →
-yes sudo. nvm and Homebrew Node users should never sudo (it breaks the
-npm cache later).
-
-Skip to [§3 Daily run](#3-daily-run).
-
-### 2B. Clone and build (for development)
+## 2. Install the workspace
 
 ```bash
 git clone https://github.com/kinqsradiollc/BrainRouter.git
 cd BrainRouter
 npm install
-npm run build
 ```
 
-`npm run build` walks every workspace (`brainrouter`, `brainrouter-cli`,
-`brainrouter-dashboard`, `packages/*`). Expect 30–60 seconds the first
-time. If the dashboard build complains about a missing port, ignore it —
-it only matters at runtime.
+This is an npm workspace. Install once at the repository root; do not run independent installs in every package unless a package-specific recovery step says to.
 
-### 2B.1 Configure the MCP server — `brainrouter/.env`
+Build shared packages before applications that consume their compiled output:
 
-In the monorepo, the MCP server still loads its `.env` from
-`brainrouter/.env` (cwd-relative dotenv default). This is the third
-priority slot — the env-loader also looks at `$BRAINROUTER_ENV_FILE`
-and `~/.config/brainrouter/server.env` first, in that order.
+```bash
+npm run build:packages
+```
+
+## 3. Start PostgreSQL + pgvector
+
+For local development:
+
+```bash
+docker compose -f deploy/postgres/docker-compose.yml up -d
+docker compose -f deploy/postgres/docker-compose.yml ps
+```
+
+The default development URL is:
+
+```text
+postgres://postgres:postgres@localhost:5432/brainrouter
+```
+
+Use a real password and a managed/secured database for shared or production deployments. The complete production compose stack is documented in [`deploy/stack/README.md`](deploy/stack/README.md).
+
+## 4. Configure the brain service
 
 ```bash
 cp brainrouter/.env.example brainrouter/.env
-$EDITOR brainrouter/.env
 ```
 
-Minimum fields to set:
+Set at least:
 
 ```bash
-# Cognitive extraction LLM (any OpenAI-compatible endpoint)
-BRAINROUTER_LLM_API_KEY=sk-...
-BRAINROUTER_LLM_ENDPOINT=https://api.openai.com/v1/chat/completions
-BRAINROUTER_LLM_MODEL=gpt-4o-mini
-
-# Embeddings — required for vector recall
-BRAINROUTER_EMBEDDING_ENDPOINT=https://api.openai.com/v1/embeddings
-BRAINROUTER_EMBEDDING_MODEL=text-embedding-3-small
-BRAINROUTER_EMBEDDING_DIMENSIONS=1536
-
-# Server auth — change before exposing the server
-BRAINROUTER_ADMIN_PASSWORD=change_me_before_use
-BRAINROUTER_JWT_SECRET=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
+BRAINROUTER_DATABASE_URL=postgres://postgres:postgres@localhost:5432/brainrouter
+BRAINROUTER_SECRET_KEY=<32-byte base64-or-hex-key>
+BRAINROUTER_JWT_SECRET=<strong-random-signing-secret>
+BRAINROUTER_ADMIN_EMAIL=you@example.com
+BRAINROUTER_ADMIN_PASSWORD=<first-boot-password>
 ```
 
-**Local-model alternative** (LM Studio / Ollama):
+Generate development secrets without putting them in shell history:
 
 ```bash
-BRAINROUTER_LLM_ENDPOINT=http://localhost:1234/v1/chat/completions
-BRAINROUTER_LLM_MODEL=google/gemma-4-e2b   # whatever LM Studio is serving
-BRAINROUTER_LLM_API_KEY=sk-local            # LM Studio ignores the value but needs one
+openssl rand -base64 32
+openssl rand -hex 32
 ```
 
-Everything else (reranker, prewarming, sweep intervals, JWT lifetime) is
-commented inline in `.env.example` and safe to leave at defaults.
+`BRAINROUTER_SECRET_KEY` seals provider, integration, and connector credentials at rest. `BRAINROUTER_JWT_SECRET` signs browser/account sessions and is required in production. The admin password is a first-boot seed; clear it from the deployment environment after the account exists.
 
-### 2B.2 Configure the CLI — `~/.config/brainrouter/config.json`
+For a global `brainrouter-mcp` installation, run `brainrouter-mcp init`. It creates `~/.config/brainrouter/server.env`; the same required infrastructure values apply.
 
-The CLI's chat LLM and MCP connection live in `config.json`, **not in
-`.env`**. Use the interactive setup:
+### Providers are configured after sign-in
+
+LLM, embedding, reranker, and judge providers are normal database records—not the primary `.env` configuration path. After the server and dashboard are running:
+
+1. sign in as the seeded admin;
+2. select the active organization;
+3. open **Settings → Intelligence**;
+4. add an LLM provider and make it default;
+5. optionally add embedding, reranker, and judge providers.
+
+Keys are write-only in the UI and remain sealed server-side.
+
+## 5. Run the product
+
+### Brain service
 
 ```bash
-# Set up the chat LLM (provider, model, endpoint, API key)
-node brainrouter-cli/dist/index.js config
-
-# Point at the MCP server (HTTP transport, default port 3747)
-node brainrouter-cli/dist/index.js login
+npm run dev:http -w @kinqs/brainrouter-mcp-server
 ```
 
-`config` walks you through choosing OpenAI / Anthropic / local. `login`
-asks for the MCP URL (defaults to `http://localhost:3747/mcp`) and an
-API key (any non-empty string is fine for a local dev server until you
-set `BRAINROUTER_ADMIN_PASSWORD` and rotate).
+Default endpoints:
 
-To inspect what got saved:
+- `GET http://localhost:3747/health`
+- `GET http://localhost:3747/api/status`
+- `POST http://localhost:3747/mcp`
+- authenticated REST under `http://localhost:3747/api/*`
+
+### Dashboard
 
 ```bash
-cat ~/.config/brainrouter/config.json
+npm run dev -w dashboard
 ```
 
-You should see an `llm` block (provider, apiKey, model, endpoint) plus
-at least one server profile under `servers` and an `activeServer` field.
+Open <http://localhost:3000>. The development server accepts localhost CORS origins; production must set `BRAINROUTER_CORS_ORIGIN` to the deployed dashboard origin.
 
-### 2B.3 Verify
+### CLI
 
 ```bash
-# Terminal A — start the MCP server (cognitive memory engine)
-cd brainrouter && npm run start:http
-
-# Terminal B — start the CLI in another terminal
-cd /path/to/BrainRouter
 npm run cli
 ```
 
-Expected CLI banner:
+On first run, the terminal wizard writes `~/.config/brainrouter/config.json` and workspace preferences under `<workspace>/.brainrouter/`. Use `/init` to repeat onboarding, `/config` for runtime settings, and `/login` for brain profiles.
 
-```
-🧠 BRAINROUTER TERMINAL AGENT CLIENT v0.3.5
-Midnight Ledger / Obsidian Surface theme active.
-Workspace root: /path/to/your/project
-brainrouter[shell]>
-```
-
-If you see `⚠️  OFFLINE MODE`, the CLI couldn't reach the MCP server.
-Jump to [§6 Troubleshooting](#6-troubleshooting).
-
-Sanity-check from inside the REPL:
-
-```
-/doctor       # config, connectivity, memory-extraction health
-/status       # active server, LLM config, DB stats
-/tools        # local + MCP tools the agent can call
-```
-
-Setup is done.
-
----
-
-## 3. Daily run
-
-You almost always need **two terminals** open: one for the MCP server,
-one for the CLI. Optionally a third for the dashboard.
-
-### 3.1 Start the MCP server (Terminal A)
+### Desktop
 
 ```bash
-cd brainrouter
-npm run start:http   # HTTP on :3747
+npm run start -w brainrouter-desktop
 ```
 
-Leave it running. The server writes logs to stderr.
+This command rebuilds the shared types/core dependencies, the Electron host, and the renderer before launching. Use `npm run start:fast -w brainrouter-desktop` only after a successful current build.
 
-Alternative — stdio mode (CLI spawns the server as a child instead):
-switch `activeServer` in `~/.config/brainrouter/config.json` to a stdio
-profile (the default one is `default`). The CLI will spawn
-`node brainrouter/dist/index.js` itself; you don't run anything in
-Terminal A. **Tradeoff:** stdio dies when the CLI dies, so memory state
-isn't shared across CLI restarts.
+## 6. Configure account connections
 
-### 3.2 Start the CLI (Terminal B)
+Dashboard and desktop consume the same server-side connection records.
 
-```bash
-npm run cli                                  # from repo root
-# OR
-node brainrouter-cli/dist/index.js          # equivalent
+1. In Dashboard → **Connections**, choose an OAuth provider.
+2. An organization admin configures its OAuth application. Client secrets are write-only.
+3. Each user chooses **Connect** and completes the provider authorization.
+4. Select resources and run/schedule sync.
+5. Verify the same provider status appears in desktop settings.
+
+Supported OAuth providers include GitHub, GitLab, Slack, Google Drive, Gmail, Notion, and Linear. Account OAuth is the default for API sync. A webhook signing secret is separate: it authenticates inbound events and is only needed when an inbound webhook automation is enabled.
+
+GitHub has additional installation credentials for repository linking, check-runs, and pull-request automation. Follow [`brainrouter-docs/setup/github-app-setup.md`](brainrouter-docs/setup/github-app-setup.md).
+
+## 7. Organization, project, and workspace scope
+
+- The active organization travels in `X-BrainRouter-Org` for REST/SDK requests.
+- Dashboard projects are organization-owned and can be restricted by membership.
+- Desktop/CLI workspaces use a stable workspace tag.
+- A `.brainrouter/project.json` marker can group local workspaces under one project tag.
+- Knowledge and sources expose organization/project/workspace filters. Switching organization must replace, not reuse, cached scoped results.
+
+Example local project marker:
+
+```json
+{
+  "name": "brainrouter"
+}
 ```
 
-Inside the REPL:
+## 8. Validation
 
-| Command | Use |
-|---|---|
-| `/help` | Full slash-command reference. |
-| `/doctor` | Validate everything is wired up. |
-| `/permissions [read\|write\|shell]` | Adjust agent access level (default: `shell`). Shift+Tab cycles. |
-| `/tools` | What tools the agent has loaded this turn. |
-| `/memory <q>` / `/recall <q>` | Search long-term memory. |
-| `/scenes` / `/working` / `/briefing` | Inspect cognitive state. |
-| `/spawn <role> <prompt>` | Delegate to a child agent. |
-| `/yolo on` | Auto-approve `run_command` shell calls. |
-| `/exit` | Quit cleanly. |
-
-### 3.3 (Optional) Start the dashboard (Terminal C)
+Use the smallest relevant check while iterating, then run the full gate before shipping.
 
 ```bash
-cd brainrouter-dashboard
-npm install   # only the first time
-npm run dev   # Next.js dev server on :3000
-```
+# All workspace typechecks.
+npm run typecheck
 
-Open <http://localhost:3000>. Surfaces: `/chat` for hosted chat,
-`/memories`, `/scenes`, `/contradictions`, `/recall-inspector`,
-`/working-memory`, `/timeline`, `/persona`, `/hooks`, `/users`,
-`/profile`.
+# Full test suites (packages and apps with tests).
+npm run test
 
-Log in with the admin email/password you set in
-`brainrouter/.env`'s `BRAINROUTER_ADMIN_EMAIL` / `BRAINROUTER_ADMIN_PASSWORD`.
-
-### 3.4 Stop everything
-
-`Ctrl-C` in each terminal. The MCP server flushes pending writes to
-`~/.brainrouter/memory.db` cleanly.
-
----
-
-## 4. Upgrading (pull new code)
-
-When you pull a change from `main` (or someone else does), follow this
-sequence. The build script clears `dist/` so stale artifacts can't
-linger.
-
-```bash
-git pull
-npm install      # picks up any new workspace deps
-npm run build    # rebuild every workspace
-```
-
-If you had the MCP server or CLI running, stop them with `Ctrl-C` and
-restart them — neither has a hot-reload watcher in production mode.
-
-If you want to develop against the MCP server with live reload, use
-`npm run dev:http` in `brainrouter/` instead of `npm run start:http` —
-that uses `tsx watch` and restarts on save.
-
-### 4.1 Schema migrations
-
-The MCP server runs SQLite migrations automatically on startup. If a
-migration fails, the server refuses to start with a loud error. To
-diagnose:
-
-```bash
-node -e "const db = require('node:sqlite').DatabaseSync; const d = new db(process.env.HOME + '/.brainrouter/memory.db'); console.log(d.prepare('SELECT version FROM migration_state').all());"
-```
-
-If you need to nuke the DB and re-migrate from scratch, see
-[§7 Nuclear options](#7-nuclear-options-reset-state).
-
----
-
-## 5. Publishing a new release to npm
-
-We publish 4 packages: [`@kinqs/brainrouter-cli`](https://www.npmjs.com/package/@kinqs/brainrouter-cli),
-[`@kinqs/brainrouter-mcp-server`](https://www.npmjs.com/package/@kinqs/brainrouter-mcp-server),
-[`@kinqs/brainrouter-sdk`](https://www.npmjs.com/package/@kinqs/brainrouter-sdk),
-[`@kinqs/brainrouter-types`](https://www.npmjs.com/package/@kinqs/brainrouter-types).
-The dashboard and React hooks stay private.
-
-### 5.1 Pre-flight
-
-```bash
-# Make sure main is clean and current
-git status
-git pull
-
-# Run the full test suite
-cd brainrouter-cli && npm test && cd ..
-cd brainrouter      && npm test && cd ..   # (when MCP tests exist)
-
-# Rebuild every workspace from clean dist
+# Full production builds in dependency order.
 npm run build
+
+# Repository lint.
+npm run lint
 ```
 
-All three must be green before continuing.
-
-### 5.2 Bump versions
-
-Choose a version per [semver](https://semver.org/):
-
-- **Patch** (`0.3.4 → 0.3.5`) — bug fixes, no breaking changes.
-- **Minor** (`0.3.4 → 0.4.0`) — new features, backward-compatible.
-- **Major** (`0.3.4 → 1.0.0`) — breaking API changes.
-
-Update **every** `package.json` AND the hardcoded version strings in
-source. There are 7 `package.json` files and 5 source-code references:
+Useful focused checks:
 
 ```bash
-# 7 package.json files
-brainrouter/package.json
-brainrouter-cli/package.json
-brainrouter-dashboard/package.json
-packages/hooks/package.json
-packages/sdk/package.json
-packages/types/package.json
-package.json                    # the monorepo root
-
-# 5 source-code references
-brainrouter-cli/src/index.ts            # `.version('0.3.X')`
-brainrouter-cli/src/runtime/mcpClient.ts # client metadata
-brainrouter-cli/src/cli/repl.ts          # banner string
-brainrouter-cli/src/agent/agent.ts       # 2× User-Agent strings
-brainrouter/src/index.ts                 # MCP server metadata
+npm run test -w @kinqs/brainrouter-core
+npm run test -w @kinqs/brainrouter-mcp-server
+npm run test -w @kinqs/brainrouter-cli
+npm run test -w brainrouter-desktop
+npm run typecheck -w dashboard
+npm run build -w dashboard
 ```
 
-Also bump the workspace-dep version pins in the 4 publishable packages —
-e.g. `"@kinqs/brainrouter-types": "^0.3.4"` → `"^0.3.5"` — so a fresh install
-from npm pulls the right inter-package versions.
+The server integration tests create temporary PostgreSQL databases. Set `BRAINROUTER_TEST_PG_ADMIN_URL` when the default local admin URL is not appropriate.
 
-Quick sanity grep to catch stragglers:
+## 9. Production build and run
 
 ```bash
-grep -rn "0\.3\.4" brainrouter brainrouter-cli packages --include="*.ts" --include="*.json" | grep -v node_modules | grep -v dist
+npm run build
+
+# Built brain service
+npm run start:http -w @kinqs/brainrouter-mcp-server
+
+# Built dashboard
+npm run start -w dashboard
 ```
 
-### 5.3 Update CHANGELOG and ROADMAP
-
-Add a `## [X.Y.Z] - YYYY-MM-DD` section to [CHANGELOG.md](CHANGELOG.md)
-with the user-facing changes. Move the "Up Next" line into "Recently
-Completed" in [ROADMAP.md](ROADMAP.md) if the release ships something
-listed there.
-
-### 5.4 Dry-pack and inspect
+For Cloudflare/OpenNext dashboard verification:
 
 ```bash
-# Per package — confirm size and file list before publishing for real
-cd packages/types && npm pack --dry-run 2>&1 | grep "npm notice"
-cd ../sdk         && npm pack --dry-run 2>&1 | grep "npm notice"
-cd ../../brainrouter      && npm pack --dry-run 2>&1 | grep "npm notice"
-cd ../brainrouter-cli     && npm pack --dry-run 2>&1 | grep "npm notice"
+npm run cf:build
 ```
 
-Look for:
-- Right `name`, `version`, `filename`.
-- No `*.test.*` files (CLI has a `prepack` hook that strips them).
-- No `.env`, `node_modules/`, or stray credentials.
-- Sensible package size — CLI ≈ 170 kB, MCP ≈ 450 kB, sdk/types tiny.
-
-### 5.5 Publish in dependency order
-
-We use a **granular access token with "Bypass 2FA" enabled** — the path
-of least friction for a solo maintainer. No interactive `npm login`, no
-OTP per publish, just `npm publish`.
-
-#### 5.5.1 First-time: install the access token
-
-Do this once per machine (or after rotating the token).
-
-1. Generate a token at <https://www.npmjs.com/settings/kinqs/tokens>:
-   - **Type**: Granular Access Token
-   - **Expiration**: 90 days (or whatever you're comfortable with)
-   - **Packages scope**: `@kinqs/*`
-   - **Permissions**: Read and write
-   - **Bypass 2FA on token**: ✅ (this is the key — without it you'd
-     still get per-publish OTP prompts)
-2. Copy the token (`npm_...` prefix) — npm only shows it once.
-3. Write it into `~/.npmrc`:
+Desktop packages:
 
 ```bash
-echo "//registry.npmjs.org/:_authToken=npm_PASTE_TOKEN_HERE" >> ~/.npmrc
-npm whoami
+npm run dist:mac -w brainrouter-desktop
+npm run dist:win -w brainrouter-desktop
 ```
 
-`npm whoami` should print `kinqs`. If it returns `E401`, the token line
-is wrong — re-check it. (No 6-digit OTP code is needed; the token IS
-the credential, and the "Bypass 2FA" flag tells npm to accept it
-without further challenge.)
+Signing and notarization require platform credentials; unsigned local builds do not grant permission to publish artifacts.
 
-#### 5.5.2 Publish (every release)
-
-**Two gotchas — read before pasting:**
-
-1. **Use absolute paths.** Relative `cd` chains break when cwd isn't
-   where you assumed, and on macOS the case-insensitive filesystem
-   makes `cd ../brainrouter` silently land on the monorepo root
-   `BrainRouter/` (which is `"private": true`), triggering `EPRIVATE`
-   on the wrong package.json.
-2. **No inline `#` comments.** zsh interactive mode treats `# foo` as
-   positional args, not a comment, unless you've enabled
-   `setopt interactive_comments`. The commands below have none —
-   paste them as-is.
+## 10. Upgrade
 
 ```bash
-cd /Users/anhdang/Documents/Github/BrainRouter/packages/types     && npm publish
-cd /Users/anhdang/Documents/Github/BrainRouter/packages/sdk       && npm publish
-cd /Users/anhdang/Documents/Github/BrainRouter/packages/hooks     && npm publish
-cd /Users/anhdang/Documents/Github/BrainRouter/brainrouter        && npm publish
-cd /Users/anhdang/Documents/Github/BrainRouter/brainrouter-cli    && npm publish
-```
-
-The order matters because each package's `dependencies` reference real
-semver of the prior ones; publishing in dependency order guarantees the
-registry resolves cleanly.
-
-Each `package.json` has `publishConfig.access: public` (required because
-`@kinqs/*` is a scoped namespace — npm defaults scoped packages to
-restricted). You don't need `--access public` on the command line.
-
-#### 5.5.3 Verify
-
-```bash
-for p in @kinqs/brainrouter-types @kinqs/brainrouter-sdk @kinqs/brainrouter-mcp-server @kinqs/brainrouter-cli; do
-  echo -n "$p: "; npm view "$p" version 2>&1 | head -1
-done
-```
-
-Should print `0.3.X` four times.
-
-#### 5.5.4 Common errors
-
-| Error | Cause | Fix |
-|---|---|---|
-| `E401 Unauthorized` on `npm whoami` | Token line missing or malformed in `~/.npmrc` | Re-run the `echo "//registry.npmjs.org/:_authToken=..." >> ~/.npmrc` line |
-| `404 Not Found - PUT @kinqs%2f...` | npm reads `404` instead of `401` when auth is missing on a write. Almost always means token isn't installed | Re-run §5.5.1 |
-| `EPRIVATE` | You're in the monorepo root (which is `"private": true`), not a publishable workspace | Check `pwd` — must be one of the 4 paths in §5.5.2 |
-| `--otp required` | Token doesn't have "Bypass 2FA" enabled | Regenerate the token at npm.com with the bypass flag checked |
-| `EUSAGE` from a pasted command | zsh ate `#` as args, or a `cd` failed silently | Use absolute paths, no inline comments |
-
-#### 5.5.5 Without a token (fallback)
-
-If you prefer interactive login + per-publish OTP, skip §5.5.1 and use:
-
-```bash
-npm login --auth-type=legacy   # username, password, OTP — token lands in ~/.npmrc
-npm whoami
-# Then publish each one, passing a fresh 6-digit code per command:
-cd /Users/anhdang/Documents/Github/BrainRouter/packages/types     && npm publish --otp=PASTE_6_DIGIT_CODE
-cd /Users/anhdang/Documents/Github/BrainRouter/packages/sdk       && npm publish --otp=PASTE_6_DIGIT_CODE
-cd /Users/anhdang/Documents/Github/BrainRouter/packages/hooks     && npm publish --otp=PASTE_6_DIGIT_CODE
-cd /Users/anhdang/Documents/Github/BrainRouter/brainrouter        && npm publish --otp=PASTE_6_DIGIT_CODE
-cd /Users/anhdang/Documents/Github/BrainRouter/brainrouter-cli    && npm publish --otp=PASTE_6_DIGIT_CODE
-```
-
-`--otp=` takes a **6-digit TOTP code from your authenticator app**, NOT
-an access token. The two are different things — tokens replace the
-need for OTP entirely.
-
-### 5.6 Tag and push
-
-```bash
-git add -A
-git commit -m "release: 0.3.X"
-git tag "v0.3.X"
-git push
-git push --tags
-```
-
-If you use the GitHub CLI:
-
-```bash
-gh release create "v0.3.X" --title "0.3.X" --notes-from-tag
-```
-
-### 5.7 Verify it landed
-
-```bash
-npm view @kinqs/brainrouter-cli version            # should print the new version
-npx @kinqs/brainrouter-cli@latest --version        # smoke test
-```
-
-### 5.8 Rolling back a bad publish
-
-npm allows unpublishing within 72 hours, but it breaks anyone who already
-pulled. Prefer publishing a patch over a deprecation:
-
-```bash
-# Bump patch, fix the bug, re-publish — preferred path
-npm version patch && npm publish
-
-# Last resort within 72h, if no users yet
-npm unpublish @kinqs/brainrouter-cli@0.3.X
-```
-
-After 72 hours `npm deprecate @kinqs/brainrouter-cli@0.3.X "reason"` is the
-right move.
-
----
-
-## 6. Troubleshooting
-
-### 6.1 "Failed to connect to MCP server: fetch failed"
-
-The CLI couldn't reach the MCP server on the configured profile. Causes,
-in order of likelihood:
-
-1. **MCP server isn't running.** Start it: `cd brainrouter && npm run start:http`.
-2. **Wrong port.** Check `~/.config/brainrouter/config.json` — the
-   `local-http` profile should point at `http://localhost:3747/mcp`.
-3. **Port conflict.** `lsof -i :3747` to see what's holding it. Stop
-   the offender or change the port via `BRAINROUTER_PORT=…` and update
-   the profile URL.
-4. **You wanted offline mode anyway.** The CLI keeps running with local
-   tools only — that's intentional. Pass `--strict-mcp` if you'd rather
-   the CLI exit hard.
-
-### 6.2 "💾 Captured turn → 0 cognitive records extracted"
-
-The MCP child is alive but its cognitive extractor isn't running. Almost
-always means the LLM API key didn't reach the child process.
-
-```bash
-# Check that brainrouter/.env has a real value
-grep BRAINROUTER_LLM_API_KEY brainrouter/.env
-
-# Restart the MCP server so it picks up the .env change
-# (Ctrl-C in Terminal A, then `npm run start:http` again)
-```
-
-If you're using a local model (LM Studio), make sure LM Studio is
-actually running and serving the model named in `BRAINROUTER_LLM_MODEL`.
-
-### 6.3 "Tool list_dir completed: …" but no output visible
-
-Small chat models sometimes forget to echo content. The CLI now renders
-a short preview for `list_dir`, `grep_search`, `glob_files` regardless.
-If you want full output, just ask the agent: "show me the result of
-that list_dir verbatim."
-
-### 6.4 Dashboard login fails with "Invalid credentials"
-
-The seeded admin lives at `BRAINROUTER_ADMIN_EMAIL` /
-`BRAINROUTER_ADMIN_PASSWORD` in `brainrouter/.env`. If you changed the
-.env after first boot, the existing DB still has the old admin row.
-Reset it:
-
-```bash
-cd brainrouter
-node scripts/setup-admin.js --reset --email <new-email>
-```
-
-### 6.5 "EADDRINUSE: address already in use :::3747"
-
-Another MCP server (or another process) is on that port. Find and stop
-it, or pick a different port:
-
-```bash
-lsof -i :3747            # see what's there
-kill <PID>               # stop it cleanly
-# OR
-BRAINROUTER_PORT=3748 npm run start:http   # use a different port
-# then update ~/.config/brainrouter/config.json → servers.local-http.url
-```
-
-### 6.6 Workspace deps fail to resolve after `git pull`
-
-Symptoms: `Cannot find module '@kinqs/brainrouter-sdk'` or similar. Solution:
-
-```bash
-npm install           # rebuilds the workspace symlink tree
-npm run build         # rebuild dist trees so the symlinks have targets
-```
-
-If still broken:
-
-```bash
-rm -rf node_modules package-lock.json
+git pull --ff-only
 npm install
+npm run build:packages
+npm run typecheck
+npm run test
+npm run build:apps
+```
+
+The brain applies numbered PostgreSQL migrations on startup. Back up the database before upgrading a shared deployment.
+
+## 11. Troubleshooting
+
+### Brain fails with a missing database URL
+
+Set `BRAINROUTER_DATABASE_URL` (or `DATABASE_URL`) in `brainrouter/.env`, `~/.config/brainrouter/server.env`, or the service environment. SQLite is not a fallback.
+
+### Secret-backed settings will not save
+
+Set a valid 32-byte `BRAINROUTER_SECRET_KEY` and restart the brain. Existing saved secrets require the same key; rotating it without a migration makes them unreadable.
+
+### Dashboard cannot reach the API
+
+Check both endpoints and the browser origin:
+
+```bash
+curl http://localhost:3747/health
+curl http://localhost:3747/api/status
+```
+
+For production, verify `BRAINROUTER_CORS_ORIGIN` exactly matches the dashboard origin.
+
+### Dashboard chat says no model is configured
+
+Sign in, select the intended organization, and configure a default LLM provider in **Settings → Intelligence**. Chat resolves the active organization’s provider rather than reading a browser key.
+
+### Desktop imports fail after shared-core edits
+
+Rebuild shared dependencies first:
+
+```bash
+npm run build:deps -w brainrouter-desktop
+npm run typecheck -w brainrouter-desktop
+```
+
+### Track reports no account connection
+
+Confirm the desktop is signed in, GitHub is connected in the same organization, and the workspace has an unambiguous `git remote`. Local PAT fields are an advanced fallback, not the normal account path.
+
+### OAuth works but webhook automation does not
+
+OAuth authorizes outbound API calls. Inbound webhooks additionally require a public callback URL and the matching signing secret. Configure it only for the enabled inbound trigger.
+
+### PostgreSQL test databases remain after interruption
+
+Integration tests normally clean up. Remove only known temporary databases named `br_test_*`; do not drop the main `brainrouter` database.
+
+## 12. Reset and data safety
+
+These actions are destructive. Back up first.
+
+Reset only build output:
+
+```bash
+rm -rf brainrouter/dist brainrouter-cli/dist brainrouter-dashboard/.next brainrouter-desktop/dist brainrouter-desktop/dist-electron
 npm run build
 ```
 
-### 6.7 Tests fail with "Cannot find module 'dist/agent.test.js'"
-
-The build cleared dist but the test runner can't see fresh artifacts.
-Re-run the test (which builds + runs):
+Reset local PostgreSQL data:
 
 ```bash
-cd brainrouter-cli && npm test
+docker compose -f deploy/postgres/docker-compose.yml down
+docker volume rm brainrouter-pg
+docker compose -f deploy/postgres/docker-compose.yml up -d
 ```
 
----
-
-## 7. Nuclear options (reset state)
-
-Use only when nothing else has worked. **These delete data.** Back up
-first if you care.
-
-### 7.1 Reset the CLI's local config
+Reset CLI settings only:
 
 ```bash
-rm -rf ~/.config/brainrouter
-# Re-run brainrouter-cli/dist/index.js login + config to recreate
+mv ~/.config/brainrouter/config.json ~/.config/brainrouter/config.json.backup
 ```
 
-### 7.2 Reset cognitive memory (memory.db)
+Reset desktop application state with the bundled script:
 
 ```bash
-# Stops everything, then nukes the SQLite database
-rm ~/.brainrouter/memory.db
-# Restart the MCP server — it'll re-run migrations and seed a fresh admin
-cd brainrouter && npm run start:http
+npm run reset:desktop -w brainrouter-desktop
 ```
 
-You lose all captured memories, focus scenes, contradictions, persona,
-and skill prewarming history.
+Workspace-local state lives under `<workspace>/.brainrouter/`; remove it only when you intentionally want to discard local sessions, workflow runs, Track data, plans, UI-test artifacts, and other workspace state.
 
-### 7.3 Reset per-workspace CLI state
+## 13. Reference paths
 
-CLI state lives at `~/.brainrouter/workspaces/<encoded-path>/cli/` — one
-folder per project. Each has `tasks.json`, transcripts, goal state.
-
-```bash
-# Nuke a specific workspace
-rm -rf ~/.brainrouter/workspaces/<encoded-path>
-
-# OR nuke all CLI workspace state
-rm -rf ~/.brainrouter/workspaces
-```
-
-The next CLI launch re-creates the folder for whatever workspace you
-start in. You lose plan history, session transcripts, and goal state.
-
-### 7.4 Re-bootstrap the whole stack
-
-```bash
-# From repo root
-git pull
-rm -rf node_modules package-lock.json
-rm -rf brainrouter/dist brainrouter-cli/dist packages/*/dist
-rm -rf brainrouter-dashboard/.next brainrouter-dashboard/node_modules
-rm ~/.brainrouter/memory.db
-rm -rf ~/.config/brainrouter
-
-npm install
-npm run build
-
-cp brainrouter/.env.example brainrouter/.env
-# Re-edit brainrouter/.env (§2.2)
-# Re-run config + login (§2.3)
-```
-
-This is the closest you can get to "uninstall + reinstall" without
-touching `~/.brainrouter/` data you might want to keep. If you also want
-to drop the global state directory:
-
-```bash
-rm -rf ~/.brainrouter
-```
-
-That removes the SQLite DB, all workspace state, every cached persona,
-and the migration state. The next MCP start re-creates it.
-
----
-
-## Appendix: ports and paths
-
-| Port | What | Configurable via |
-|---|---|---|
-| 3747 | MCP HTTP server | `BRAINROUTER_PORT` |
-| 3000 | Dashboard (Next.js) | `next.config.ts` / env |
-| 1234 | LM Studio (if local) | LM Studio app settings |
-
-| Path | What |
-|---|---|
-| `~/.config/brainrouter/config.json` | CLI's chat LLM + MCP server profiles |
-| `~/.brainrouter/memory.db` | SQLite cognitive memory store |
-| `~/.brainrouter/workspaces/<encoded>/cli/` | Per-workspace CLI state (tasks, transcripts, goals) |
-| `brainrouter/.env` | MCP server config (cognitive engine LLM, embeddings, auth) |
-| `brainrouter-cli/.env` (optional) | CLI runtime knobs (sandbox, trace, web-search) |
-| `<workspace>/.brainrouter/cli/workflows/` | Durable spec/tasks/walkthrough artifacts |
-| `<workspace>/.brainrouter/cli/sessions/` | Session transcripts (committable) |
-
----
-
-## Appendix: useful one-liners
-
-```bash
-# Tail MCP server logs while it's running
-cd brainrouter && npm run start:http 2>&1 | tee mcp.log
-
-# Run a single agent turn non-interactively
-node brainrouter-cli/dist/index.js run "summarize the changes in src/"
-
-# List child agent sessions in this workspace
-node brainrouter-cli/dist/index.js agents
-
-# Inspect the SQLite memory.db
-sqlite3 ~/.brainrouter/memory.db ".tables"
-sqlite3 ~/.brainrouter/memory.db "SELECT COUNT(*) FROM cognitive_records;"
-
-# Tail the trace log (if BRAINROUTER_TRACE_LOG is set)
-tail -f $BRAINROUTER_TRACE_LOG
-
-# Test that a chat-completion endpoint is alive
-curl -s $BRAINROUTER_LLM_ENDPOINT -H "Authorization: Bearer $BRAINROUTER_LLM_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"'"$BRAINROUTER_LLM_MODEL"'","messages":[{"role":"user","content":"hi"}]}' | head -c 500
-```
+| Area | Path |
+| --- | --- |
+| Brain environment template | `brainrouter/.env.example` |
+| Brain migrations | `brainrouter/src/memory/store/postgres/migrations/` |
+| Dashboard | `brainrouter-dashboard/` |
+| Desktop host and renderer | `brainrouter-desktop/electron/`, `brainrouter-desktop/src/` |
+| CLI config/runtime | `brainrouter-cli/src/config/`, `brainrouter-cli/src/runtime/` |
+| Shared runtime | `packages/core/` |
+| Public SDK/types | `packages/sdk/`, `packages/types/` |
+| Production stack | `deploy/stack/` |
+| Detailed configuration | `brainrouter-docs/configuration.md` |
+| Design contract | `design.md` |

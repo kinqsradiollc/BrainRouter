@@ -36,8 +36,8 @@ export default function ScenesPage() {
       >
         {/* Title block */}
         <PageHeader 
-          title="Contextual Focus" 
-          description="Consolidated narrative themes and high-level episodic contexts summarizing memory logs." 
+          title="Topic summaries"
+          description="Read the recurring themes BrainRouter has condensed from related work and conversations."
         />
 
         {/* Grid container with stagger entries */}

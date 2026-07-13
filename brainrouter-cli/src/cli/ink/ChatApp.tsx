@@ -120,7 +120,7 @@ function ChatAppContent({
   initialHint,
   slashCommands,
   promptLabel,
-  accentColor = '#CC9166',
+  accentColor,
   onSubmit,
   onReady,
   onAccessModeCycle,
@@ -141,6 +141,7 @@ function ChatAppContent({
   // useTerminalSize.ts for the full rationale.
   const { columns: cols, rows } = useTerminalSize();
   const theme = useMemo(() => resolveTheme(workspaceRoot), [workspaceRoot]);
+  const activeAccent = accentColor ?? theme.colors.primary ?? 'white';
   const showSidebar = cols >= 100;
   const mainWidth = showSidebar ? Math.floor(cols * 0.7) - 4 : cols;
   const sidebarWidth = showSidebar ? Math.floor(cols * 0.3) - 3 : 0;
@@ -441,7 +442,7 @@ function ChatAppContent({
           <FooterStatus
             promptLabel={promptLabel}
             phase={phase}
-            accentColor={accentColor}
+            accentColor={activeAccent}
             accessMode={accessMode}
             footer={footer}
             cols={cols}
@@ -452,7 +453,7 @@ function ChatAppContent({
           <TuiHeader
             cols={cols}
             theme={theme}
-            accentColor={accentColor}
+            accentColor={activeAccent}
             mcpProfile={bannerInputs?.mcpProfile}
             mcpTransport={bannerInputs?.mcpTransport}
             mcpOnline={bannerInputs?.mcpOnline}
@@ -478,16 +479,17 @@ function ChatAppContent({
                 mcpOnline={bannerInputs?.mcpOnline}
                 mcpIdentity={bannerInputs?.mcpIdentity}
                 width={sidebarWidth}
+                theme={theme}
               />
             }
           >
             {/* The active route view */}
             {activeRoute === 'home' ? (
-              <WelcomeView workspaceRoot={workspaceRoot ?? process.cwd()} accentColor={accentColor} />
+              <WelcomeView workspaceRoot={workspaceRoot ?? process.cwd()} accentColor={activeAccent} theme={theme} />
             ) : activeRoute === 'session' ? (
               <SessionView
                 visibleScrollback={visibleScrollback}
-                accentColor={accentColor}
+                accentColor={activeAccent}
                 mainWidth={mainWidth}
                 verboseTranscript={verboseTranscript}
                 liveReasoning={liveReasoning}
@@ -507,7 +509,7 @@ function ChatAppContent({
             turnElapsedMs={turnElapsedMs}
             spinnerLabel={spinnerLabel}
             cols={cols}
-            accentColor={accentColor}
+            accentColor={activeAccent}
             histSearch={histSearch}
             histEntries={histEntries}
             scrollMode={scrollMode}

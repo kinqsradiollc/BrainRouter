@@ -427,9 +427,24 @@ export function useAppEffects(ctx: AppEffectsCtx): void {
     if (accent) {
       root.setProperty('--accent', accent);
       root.setProperty('--accent-soft', `${accent}21`);
+      // Keep text/icons readable for the full color-picker range. The threshold
+      // is the point where near-black and white have equal WCAG contrast.
+      const hex = accent.trim().replace(/^#/, '');
+      const expanded = hex.length === 3 ? hex.split('').map((part) => `${part}${part}`).join('') : hex;
+      if (/^[0-9a-f]{6}$/i.test(expanded)) {
+        const channels = [0, 2, 4].map((offset) => {
+          const value = Number.parseInt(expanded.slice(offset, offset + 2), 16) / 255;
+          return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+        });
+        const luminance = (0.2126 * channels[0]) + (0.7152 * channels[1]) + (0.0722 * channels[2]);
+        root.setProperty('--accent-fg', luminance > 0.184 ? '#07070b' : '#ffffff');
+      } else {
+        root.removeProperty('--accent-fg');
+      }
     } else {
       root.removeProperty('--accent');
       root.removeProperty('--accent-soft');
+      root.removeProperty('--accent-fg');
     }
     localStorage.setItem('br-accent', accent);
   }, [accent]);

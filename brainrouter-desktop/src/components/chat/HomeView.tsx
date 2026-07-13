@@ -1,84 +1,89 @@
-/** DESK-4d — the greeting/home view shown on an empty session. */
+/** Empty-session workspace home. It orients around the active task and project. */
 import React from 'react';
 import { fmtAge } from '../../lib/format.js';
 import { sendReleaseNotes } from '../../lib/releaseNotes.js';
+import { Icon } from '../../icons.js';
+import type { PanelId } from '../../panels/Panel.js';
 
-export function HomeView({ username, stats, tab, setTab, range, setRange, model, provider, repo, recents, onResume }: {
+type Mode = 'chat' | 'track' | 'code';
+
+export function HomeView(props: {
   username?: string;
   repo?: string;
   recents?: Array<{ sessionKey: string; firstUserMessage?: string; modifiedAt?: string }>;
   onResume?: (key: string) => void;
+  onMode: (mode: Mode) => void;
+  onStartBuild: () => void;
+  onOpenView: (panel: PanelId) => void;
   stats: { sessions: number; turns: number; activeDays: number; currentStreak: number; longestStreak: number; model: string; perDay: Record<string, number> } | null;
   tab: 'overview' | 'models';
-  setTab: (t: 'overview' | 'models') => void;
+  setTab: (tab: 'overview' | 'models') => void;
   range: 'all' | '30d' | '7d';
-  setRange: (r: 'all' | '30d' | '7d') => void;
+  setRange: (range: 'all' | '30d' | '7d') => void;
   model?: string;
   provider?: string;
 }): React.ReactElement {
-  const name = username ? username.charAt(0).toUpperCase() + username.slice(1) : 'there';
-  const days = range === '7d' ? 7 : range === '30d' ? 30 : 119;
-  const cells: Array<{ day: string; n: number }> = [];
-  const today = new Date();
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(today);
-    d.setDate(d.getDate() - i);
-    const key = d.toISOString().slice(0, 10);
-    cells.push({ day: key, n: stats?.perDay[key] ?? 0 });
-  }
-  const inRange = cells.filter((c) => c.n > 0);
-  const turnsInRange = cells.reduce((s, c) => s + c.n, 0);
-  const lvl = (n: number) => (n === 0 ? '' : n <= 2 ? ' h1' : n <= 5 ? ' h2' : ' h3');
+  const name = props.username ? props.username.charAt(0).toUpperCase() + props.username.slice(1) : 'there';
+  const project = props.repo || 'your workspace';
+  const recents = props.recents?.slice(0, 3) ?? [];
+
   return (
-    <div className="home">
+    <section className="home">
+      <div className="home-kicker-row">
+        <span className="home-kicker"><i /> Welcome back, {name}</span>
+        <button type="button" className="whatsnew" onClick={() => sendReleaseNotes()}>What&apos;s new</button>
+      </div>
       <div className="home-greet">
-        <span className="spark">✺</span>
-        <span>{repo ? `What should we build in ${repo}?` : `What's up next, ${name}?`}</span>
-        <span className="whatsnew" onClick={() => sendReleaseNotes()}>What's new</span>
+        <h1>What should we move forward in {project}?</h1>
+        <p>Start from the outcome you want. BrainRouter keeps project files, useful context, tools, and review close to the task.</p>
       </div>
-      <div className="stats-card">
-        <div className="stats-head">
-          <div className="seg">
-            <button className={tab === 'overview' ? 'active' : ''} onClick={() => setTab('overview')}>Overview</button>
-            <button className={tab === 'models' ? 'active' : ''} onClick={() => setTab('models')}>Models</button>
-          </div>
-          <div className="seg">
-            {(['all', '30d', '7d'] as const).map((r) => (
-              <button key={r} className={range === r ? 'active' : ''} onClick={() => setRange(r)}>{r === 'all' ? 'All' : r}</button>
-            ))}
-          </div>
-        </div>
-        {tab === 'overview' ? (
-          <>
-            <div className="stat-grid">
-              <div className="stat-card"><div className="stat-label">Sessions</div><div className="stat-value">{stats?.sessions ?? 0}</div></div>
-              <div className="stat-card"><div className="stat-label">Turns</div><div className="stat-value">{range === 'all' ? stats?.turns ?? 0 : turnsInRange}</div></div>
-              <div className="stat-card"><div className="stat-label">Active days</div><div className="stat-value">{range === 'all' ? stats?.activeDays ?? 0 : inRange.length}</div></div>
-              <div className="stat-card"><div className="stat-label">Streak</div><div className="stat-value">{stats?.currentStreak ?? 0}d <span className="stat-sub">· best {stats?.longestStreak ?? 0}d</span></div></div>
-            </div>
-            <div className="heatmap" title="Turns per day">
-              {cells.map((c) => <span key={c.day} className={`heat-cell${lvl(c.n)}`} title={`${c.day}: ${c.n}`} />)}
-            </div>
-          </>
-        ) : (
-          <div className="stat-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
-            <div className="stat-card"><div className="stat-label">Active model</div><div className="stat-value" style={{ fontSize: 14 }}>{model ?? '—'}</div></div>
-            <div className="stat-card"><div className="stat-label">Provider</div><div className="stat-value" style={{ fontSize: 14 }}>{provider ?? '—'}</div></div>
-          </div>
-        )}
+
+      <div className="home-mode-grid" aria-label="Start a workspace mode">
+        <button type="button" className="home-mode-card tone-build primary" data-mode="code" onClick={props.onStartBuild}>
+          <span><Icon name="code" size={15} /></span><strong>Build or change code</strong><small>Edit files, run commands, and verify the result in one focused workspace.</small><b>Start building →</b>
+        </button>
+        <button type="button" className="home-mode-card tone-plan" data-mode="track" onClick={() => props.onMode('track')}>
+          <span><Icon name="tasks" size={15} /></span><strong>Plan and organize</strong><small>Turn an idea into requirements, tasks, and a delivery path.</small><b>Open Track →</b>
+        </button>
+        <button type="button" className="home-mode-card tone-explore" data-mode="chat" onClick={() => props.onMode('chat')}>
+          <span><Icon name="bubble" size={15} /></span><strong>Ask or explore</strong><small>Understand the project and discuss options without changing files.</small><b>Open Chat →</b>
+        </button>
       </div>
-      {recents && recents.length ? (
-        <div className="home-recents">
-          <div className="rail-section" style={{ margin: '0 0 6px' }}>Pick up where you left off</div>
-          {recents.slice(0, 3).map((r) => (
-            <button key={r.sessionKey} className="home-recent" onClick={() => onResume?.(r.sessionKey)}>
+
+      <div className="home-context-strip" aria-label="Workspace context">
+        <span className="home-context-label">Open task context</span>
+        <button type="button" className="tone-files" onClick={() => props.onOpenView('files')}><Icon name="folder" size={13} /><span><strong>Project files</strong><small>Browse the workspace</small></span><b>→</b></button>
+        <button type="button" className="tone-knowledge" onClick={() => props.onOpenView('memory')}><Icon name="pin" size={13} /><span><strong>Saved knowledge</strong><small>Find useful context</small></span><b>→</b></button>
+        <button type="button" className="tone-review" onClick={() => props.onOpenView('review')}><Icon name="review" size={13} /><span><strong>Review</strong><small>Check work before it ships</small></span><b>→</b></button>
+      </div>
+
+      <div className="home-lower-grid">
+        <div className="home-recent-panel">
+          <div className="home-panel-head"><span>Continue recent work</span><small>{props.stats?.sessions ?? 0} sessions</small></div>
+          {recents.length ? recents.map((recent) => (
+            <button key={recent.sessionKey} className="home-recent" onClick={() => props.onResume?.(recent.sessionKey)}>
               <span className="session-dot" />
-              <span className="hr-title">{r.firstUserMessage || r.sessionKey}</span>
-              {r.modifiedAt ? <span className="session-age">{fmtAge(r.modifiedAt)}</span> : null}
+              <span className="hr-title">{recent.firstUserMessage || recent.sessionKey}</span>
+              {recent.modifiedAt ? <span className="session-age">{fmtAge(recent.modifiedAt)}</span> : null}
             </button>
-          ))}
+          )) : <div className="home-empty">Your recent tasks will appear here.</div>}
         </div>
-      ) : null}
-    </div>
+
+        <div className="home-view-panel">
+          <div className="home-panel-head"><span>Open a workspace view</span><small>{props.model ?? 'Default model'}</small></div>
+          <div className="home-view-links">
+            <button type="button" className="tone-plan" onClick={() => props.onOpenView('plan')}><Icon name="plan" size={13} />Plan</button>
+            <button type="button" className="tone-tasks" onClick={() => props.onOpenView('tasks')}><Icon name="tasks" size={13} />Tasks</button>
+            <button type="button" className="tone-automation" onClick={() => props.onOpenView('workflows')}><Icon name="bolt" size={13} />Workflows</button>
+            <button type="button" className="tone-review" onClick={() => props.onOpenView('ci')}><Icon name="review" size={13} />Checks</button>
+          </div>
+          <div className="home-signal-row">
+            <span><b>{props.stats?.turns ?? 0}</b> turns</span>
+            <span><b>{props.stats?.activeDays ?? 0}</b> active days</span>
+            <span><b>{props.provider ?? 'local'}</b> provider</span>
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }

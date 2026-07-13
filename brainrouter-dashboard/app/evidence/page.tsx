@@ -40,7 +40,7 @@ export default function EvidencePage() {
   return (
     <AuthGuard>
       <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-        <PageHeader title="Evidence" description="File, command, test, URL, benchmark, and memory references attached to cognitive records.">
+        <PageHeader title="Supporting evidence" description="See the files, commands, tests, links, and records that support saved knowledge.">
           <PremiumButton size="small" variant="ghost" onClick={() => void refresh()} disabled={isLoading}>
             {isLoading ? "Loading…" : "Refresh"}
           </PremiumButton>

@@ -26,6 +26,9 @@ type InteractionResponse = { type: 'confirm'; approved: boolean } | { type: 'cho
 
 export interface ChatThreadProps {
   homeMode: boolean;
+  onMode: (mode: 'chat' | 'track' | 'code') => void;
+  onStartBuild: () => void;
+  onOpenHomeView: (id: PanelId) => void;
   railOpen: boolean;
   setRailOpen: Dispatch<SetStateAction<boolean>>;
   gitInfo: GitInfo;
@@ -79,7 +82,7 @@ export interface ChatThreadProps {
 export function ChatThread(p: ChatThreadProps): React.ReactElement {
   const [reasoningExpanded, setReasoningExpanded] = useState(false);
   const {
-    homeMode, railOpen, setRailOpen, gitInfo, info, sessionTitle, chatRef, atBottomRef,
+    homeMode, onMode, onStartBuild, onOpenHomeView, railOpen, setRailOpen, gitInfo, info, sessionTitle, chatRef, atBottomRef,
     setAtBottom, workflowView, setWorkflowView, homeStats, statsTab, setStatsTab, statsRange, setStatsRange,
     snapshot, sessions, viewKey, onRenameCurrent,
     resumeSession, forkParent, transcriptEls, liveText, running, turnStart, reasoningTail,
@@ -105,7 +108,7 @@ export function ChatThread(p: ChatThreadProps): React.ReactElement {
   return (
     <main className={`center${homeMode ? ' home-mode' : ''}${railOpen ? '' : ' no-rail'}`}>
       <header className="chat-head">
-        {!railOpen ? <button className="icon-btn" title="Open sidebar" onClick={() => setRailOpen(true)}><Icon name="layout" size={15} /></button> : null}
+        {!railOpen ? <button className="icon-btn chat-rail-open" title="Open sidebar" aria-label="Open sidebar" onClick={() => setRailOpen(true)}><Icon name="layout" size={15} /></button> : null}
         <span className="crumb">
           <b>{gitInfo?.repo ?? info.workspaceRoot?.split('/').pop() ?? 'BrainRouter'}</b>
           <span className="crumb-sep">/</span>
@@ -146,7 +149,7 @@ export function ChatThread(p: ChatThreadProps): React.ReactElement {
                 range={statsRange} setRange={setStatsRange} model={info.model} provider={snapshot?.provider}
                 repo={gitInfo?.repo ?? info.workspaceRoot?.split('/').pop()}
                 recents={sessions}
-                onResume={(key) => resumeSession(key)} />
+                onResume={(key) => resumeSession(key)} onMode={onMode} onStartBuild={onStartBuild} onOpenView={onOpenHomeView} />
             ) : null}
             {!homeMode && forkParent ? (
               <button className="fork-banner" onClick={() => resumeSession(forkParent.key)}

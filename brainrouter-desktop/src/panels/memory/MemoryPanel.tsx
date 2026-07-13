@@ -33,7 +33,7 @@ export function MemoryPanel(): React.ReactElement {
     if (!query.trim()) return;
     setBusy(true);
     const res = await hostQuery<SearchResult>('memory-search', { query: query.trim() });
-    setResult(res ?? { error: 'No response from the brain.' });
+    setResult(res ?? { error: 'Saved knowledge did not respond.' });
     setBusy(false);
   };
 
@@ -44,7 +44,7 @@ export function MemoryPanel(): React.ReactElement {
         <div className="sched-add-row">
           <input
             className="filter"
-            placeholder="search the brain memory…"
+            placeholder="Search saved knowledge…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') void search(); }}
@@ -53,8 +53,8 @@ export function MemoryPanel(): React.ReactElement {
         </div>
       </div>
 
-      {result?.error ? <div className="mem-error">{result.error} — is the BrainRouter brain connected?</div> : null}
-      {result && !result.error && records.length === 0 && !result.raw ? <div className="empty">No memories matched.</div> : null}
+      {result?.error ? <div className="mem-error">{result.error} — is Saved knowledge connected?</div> : null}
+      {result && !result.error && records.length === 0 && !result.raw ? <div className="empty">No saved knowledge matched.</div> : null}
 
       {records.map((m, i) => (
         <div key={m.id ?? i} className="mem-row">
@@ -70,7 +70,7 @@ export function MemoryPanel(): React.ReactElement {
 
       {result?.raw ? <pre className="mem-raw">{result.raw}</pre> : null}
 
-      <div className="sched-note">Reads the brain memory engine via <code>memory_search</code> (shared with the CLI <code>/memory</code>). Create / update / delete + user/workspace/project scopes follow as the brain exposes them.</div>
+      <div className="sched-note">Searches Saved knowledge through <code>memory_search</code> (shared with the CLI <code>/memory</code>). Create, update, delete, and scoped knowledge controls will appear here as the brain exposes them.</div>
     </div>
   );
 }

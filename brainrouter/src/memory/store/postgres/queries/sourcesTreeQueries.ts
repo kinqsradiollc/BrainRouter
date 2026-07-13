@@ -29,6 +29,8 @@ function rowToSourceDocument(row: any): SourceDocument {
   return {
     id: row.id,
     userId: row.user_id,
+    orgId: row.org_id ?? null,
+    projectId: row.project_id ?? null,
     workspaceTag: row.workspace_tag ?? null,
     kind: row.kind,
     uri: row.uri ?? null,
@@ -54,8 +56,37 @@ function rowToSourceChunk(row: any): SourceChunk {
   };
 }
 
-export async function getSourceDocumentByHash(exec: Executor, userId: string, hash: string): Promise<SourceDocument | null> {
-  const row = await exec.one("SELECT * FROM source_documents WHERE user_id = $1 AND hash = $2 LIMIT 1", [userId, hash]);
+export interface SourceDocumentScope {
+  orgId?: string | null;
+  projectId?: string | null;
+  workspaceTag?: string | null;
+}
+
+export interface SourceDocumentListFilters {
+  orgId?: string;
+  projectId?: string;
+  workspaceTag?: string;
+  /** Surface legacy/local rows only in the owner's default organization. */
+  includeUnscoped?: boolean;
+}
+
+export async function getSourceDocumentByHash(
+  exec: Executor,
+  userId: string,
+  hash: string,
+  scope?: SourceDocumentScope,
+): Promise<SourceDocument | null> {
+  const row = scope
+    ? await exec.one(
+      `SELECT * FROM source_documents
+        WHERE user_id = $1 AND hash = $2
+          AND org_id IS NOT DISTINCT FROM $3
+          AND project_id IS NOT DISTINCT FROM $4
+          AND workspace_tag IS NOT DISTINCT FROM $5
+        LIMIT 1`,
+      [userId, hash, scope.orgId ?? null, scope.projectId ?? null, scope.workspaceTag ?? null],
+    )
+    : await exec.one("SELECT * FROM source_documents WHERE user_id = $1 AND hash = $2 ORDER BY created_at DESC LIMIT 1", [userId, hash]);
   return row ? rowToSourceDocument(row) : null;
 }
 
@@ -90,11 +121,32 @@ export async function getRecordsMaxChurn(exec: Executor, userId: string, recordI
   return out;
 }
 
-export async function getSourceDocuments(exec: Executor, userId: string, limit = 100): Promise<Array<SourceDocument & { chunkCount: number }>> {
+export async function getSourceDocuments(
+  exec: Executor,
+  userId: string,
+  limit = 100,
+  filters: SourceDocumentListFilters = {},
+): Promise<Array<SourceDocument & { chunkCount: number }>> {
+  const clauses = ["d.user_id = $1"];
+  const params: unknown[] = [userId];
+  const add = (value: unknown) => {
+    params.push(value);
+    return `$${params.length}`;
+  };
+  if (filters.orgId) {
+    const org = add(filters.orgId);
+    clauses.push(filters.includeUnscoped ? `(d.org_id = ${org} OR d.org_id IS NULL)` : `d.org_id = ${org}`);
+  }
+  if (filters.projectId) clauses.push(`d.project_id = ${add(filters.projectId)}`);
+  if (filters.workspaceTag) clauses.push(`d.workspace_tag = ${add(filters.workspaceTag)}`);
+  const limitParam = add(limit);
   const rows = await exec.rows<any>(
     `SELECT d.*, (SELECT COUNT(*) FROM source_chunks c WHERE c.document_id = d.id) AS chunk_count
-       FROM source_documents d WHERE d.user_id = $1 ORDER BY d.created_at DESC LIMIT $2`,
-    [userId, limit],
+       FROM source_documents d
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY d.created_at DESC
+      LIMIT ${limitParam}`,
+    params,
   );
   return rows.map((r) => ({ ...rowToSourceDocument(r), chunkCount: asNumber(r.chunk_count) }));
 }
@@ -123,11 +175,17 @@ export async function pruneTranscriptSources(exec: Executor, userId: string, bef
 }
 
 export async function createSourceDocument(exec: Executor, input: Omit<SourceDocument, "id" | "createdAt"> & { id?: string; createdAt?: string }): Promise<SourceDocument> {
-  const existing = await getSourceDocumentByHash(exec, input.userId, input.hash);
+  const existing = await getSourceDocumentByHash(exec, input.userId, input.hash, {
+    orgId: input.orgId ?? null,
+    projectId: input.projectId ?? null,
+    workspaceTag: input.workspaceTag ?? null,
+  });
   if (existing) return existing;
   const doc: SourceDocument = {
     id: input.id ?? randomUUID(),
     userId: input.userId,
+    orgId: input.orgId ?? null,
+    projectId: input.projectId ?? null,
     workspaceTag: input.workspaceTag ?? null,
     kind: input.kind,
     uri: input.uri ?? null,
@@ -137,9 +195,9 @@ export async function createSourceDocument(exec: Executor, input: Omit<SourceDoc
     metadata: input.metadata,
   };
   await exec.run(
-    `INSERT INTO source_documents (id, user_id, workspace_tag, kind, uri, hash, title, created_at, metadata_json)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-    [doc.id, doc.userId, doc.workspaceTag, doc.kind, doc.uri, doc.hash, doc.title, doc.createdAt, JSON.stringify(doc.metadata ?? {})],
+    `INSERT INTO source_documents (id, user_id, org_id, project_id, workspace_tag, kind, uri, hash, title, created_at, metadata_json)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    [doc.id, doc.userId, doc.orgId, doc.projectId, doc.workspaceTag, doc.kind, doc.uri, doc.hash, doc.title, doc.createdAt, JSON.stringify(doc.metadata ?? {})],
   );
   return doc;
 }

@@ -77,6 +77,85 @@ function makeDeps(routes: Routes, over: Partial<PrSecurityReviewDeps> = {}): PrS
 }
 
 describe("PR security review executor (ADR-017 D5)", () => {
+  it("injects bounded, provenance-bearing vulnerability intelligence into the review turn", async () => {
+    const routes: Routes = { calls: [], diff: DIFF_ADDED };
+    let prompt = "";
+    const intelligence = {
+      schemaVersion: 1 as const,
+      provenance: {
+        sourceId: "cisa-kev",
+        sourceLabel: "CISA Known Exploited Vulnerabilities Catalog",
+        sourceUrl: "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
+        sourceHomepage: "https://www.cisa.gov/known-exploited-vulnerabilities-catalog",
+        catalogVersion: "2026.07.13",
+        fetchedAt: "2026-07-13T11:00:00.000Z",
+      },
+      cacheState: "refreshed" as const,
+      entries: [{
+        id: "CVE-2026-12345",
+        vendorProject: "ExampleJS",
+        product: "x.ts",
+        title: "Example parser issue",
+        description: "A crafted payload reaches an unsafe parser.",
+        requiredAction: "Apply vendor mitigations.",
+        dateAdded: "2026-07-13",
+        cwes: ["CWE-502"],
+      }],
+    };
+    const r = await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "sha" },
+      makeDeps(routes, {
+        getVulnerabilityIntelligence: async () => intelligence,
+        llmRunner: { run: async (input) => { prompt = input.prompt; return REVIEW_OUT; } },
+      }),
+    );
+    expect(r.ok).toBe(true);
+    expect(prompt).toContain("CURRENT VULNERABILITY INTELLIGENCE");
+    expect(prompt).toContain("CVE-2026-12345");
+    expect(prompt).toContain("UNTRUSTED REFERENCE DATA");
+  });
+
+  it("keeps reviews working when intelligence refresh is unavailable", async () => {
+    const routes: Routes = { calls: [], diff: DIFF_ADDED };
+    const events: string[] = [];
+    const r = await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "sha" },
+      makeDeps(routes, {
+        getVulnerabilityIntelligence: async () => { throw new Error("feed offline"); },
+        onProgress: (event) => events.push(event.kind),
+      }),
+    );
+    expect(r.ok).toBe(true);
+    expect(events).toContain("intelligence-unavailable");
+  });
+
+  it("gives the code-quality lens current context without letting it duplicate security findings", async () => {
+    const routes: Routes = { calls: [], diff: DIFF_ADDED };
+    let prompt = "";
+    const intelligence = {
+      schemaVersion: 1 as const,
+      provenance: {
+        sourceId: "cisa-kev", sourceLabel: "CISA KEV", sourceUrl: "https://www.cisa.gov/feed.json",
+        sourceHomepage: "https://www.cisa.gov/known-exploited-vulnerabilities-catalog", fetchedAt: "2026-07-13T11:00:00.000Z",
+      },
+      cacheState: "fresh-cache" as const,
+      entries: [{
+        id: "CVE-2026-12345", vendorProject: "Example", product: "x.ts", title: "Example issue",
+        description: "Reference description", requiredAction: "Apply mitigations", dateAdded: "2026-07-13", cwes: [],
+      }],
+    };
+    await runPrCodeReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "sha" },
+      makeDeps(routes, {
+        getVulnerabilityIntelligence: async () => intelligence,
+        llmRunner: { run: async (input) => { prompt = input.prompt; return CODE_INLINE; } },
+      }),
+    );
+    expect(prompt).toContain("CURRENT VULNERABILITY INTELLIGENCE");
+    expect(prompt).toContain("do not emit security findings");
+    expect(prompt).toContain("leave vulnerability reporting to the security lens");
+  });
+
   it("mints a token, reviews the diff, and posts a new comment", async () => {
     const routes: Routes = { calls: [] };
     const r = await runPrSecurityReview({ installationId: "42", repo: "o/r", prNumber: 7, headSha: "abcdef1234" }, makeDeps(routes));

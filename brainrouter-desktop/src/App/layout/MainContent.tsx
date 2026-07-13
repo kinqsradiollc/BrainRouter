@@ -187,6 +187,15 @@ export function MainContent(p: MainContentProps): React.ReactElement {
     dockAnim, termDockHeight, resizeTerminal, termTabs, activeTerm, setActiveTerm, closeBottomTab, addBottomTab,
     envOpen, setEnvOpen, termDockOpen, setSideFullScreen, openBottomDock,
   } = p;
+  const composerInputRef = React.useRef<HTMLTextAreaElement>(null);
+  const startBuild = React.useCallback((): void => {
+    setMode('code');
+    requestAnimationFrame(() => composerInputRef.current?.focus());
+  }, [setMode]);
+  const openHomeView = React.useCallback((id: PanelId): void => {
+    setMode('code');
+    ensurePanel(id);
+  }, [ensurePanel, setMode]);
 
   return (
     <div className="main">
@@ -208,7 +217,8 @@ export function MainContent(p: MainContentProps): React.ReactElement {
       ) : (<>
       <div className="workrow" ref={workrowRef}>
         <ChatThread
-          homeMode={homeMode} railOpen={railOpen} setRailOpen={setRailOpen} gitInfo={gitInfo} info={info}
+          homeMode={homeMode} onMode={setMode} onStartBuild={startBuild} onOpenHomeView={openHomeView}
+          railOpen={railOpen} setRailOpen={setRailOpen} gitInfo={gitInfo} info={info}
           sessionTitle={sessionTitle} taskView={taskView} setTaskView={setTaskView} chatRef={chatRef}
           atBottomRef={atBottomRef} setAtBottom={setAtBottom} workflowView={workflowView} setWorkflowView={setWorkflowView}
           renderRow={renderRow} homeStats={homeStats} statsTab={statsTab} setStatsTab={setStatsTab}
@@ -253,7 +263,8 @@ export function MainContent(p: MainContentProps): React.ReactElement {
               onClearPastedImage={(id) => setPastedImages((prev) => prev.filter((pi) => pi.id !== id))}
               componentTags={componentTags}
               onDropTag={onDropTag}
-              onClearComponentTag={onClearComponentTag} />
+              onClearComponentTag={onClearComponentTag}
+              inputRef={composerInputRef} />
             </>
           } />
 

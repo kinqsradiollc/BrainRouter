@@ -72,7 +72,7 @@ export function filterCommands(commands: SlashCommandDef[], query: string): Slas
   return scored.slice(0, MAX_VISIBLE).map((x) => x.c);
 }
 
-export function SlashPalette({ initialQuery, commands, accentColor = '#CC9166', onResolve }: SlashPaletteProps) {
+export function SlashPalette({ initialQuery, commands, accentColor = '#8B7CFF', onResolve }: SlashPaletteProps) {
   const [value, setValue] = useState(initialQuery);
   const [cursor, setCursor] = useState(0);
   const { exit } = useApp();

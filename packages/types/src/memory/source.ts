@@ -16,6 +16,10 @@ export type SourceDocumentKind = "transcript" | "file" | "tool_output" | "import
 export interface SourceDocument {
   id: string;
   userId: string;
+  /** Organization that owns this source. NULL is retained for legacy/local captures. */
+  orgId?: string | null;
+  /** Dashboard project id when the source was captured in a managed project. */
+  projectId?: string | null;
   /** 16-char workspace hash (NULL-tolerant, like cognitive records). */
   workspaceTag: string | null;
   kind: SourceDocumentKind;

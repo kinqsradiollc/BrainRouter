@@ -12,7 +12,7 @@ import { adminApi } from "../../lib/adminApi";
 
 interface State { configured: boolean; clientId: string; hasSecret: boolean; redirectBase: string; secretStorageReady: boolean }
 
-export function GithubOAuthAppCard() {
+export function GithubOAuthAppCard({ embedded = false }: { embedded?: boolean }) {
   const [state, setState] = useState<State | null>(null);
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
@@ -40,8 +40,8 @@ export function GithubOAuthAppCard() {
 
   const callback = `${(state?.redirectBase || redirectBase || "http://localhost:3747").replace(/\/+$/, "")}/api/connectors/github/oauth/callback`;
 
-  return (
-    <PremiumCard level={2} style={{ marginTop: "var(--spacing-16)" }}>
+  const content = (
+    <div className={embedded ? "oauth-app-embedded" : undefined}>
       <div className="settings-cardhead">
         <div>
           <h3>GitHub OAuth App <span className="settings-hint">— lets any signed-in user “Connect GitHub”</span></h3>
@@ -70,6 +70,7 @@ export function GithubOAuthAppCard() {
           <PremiumButton type="submit" variant="primary" disabled={saving || !clientId.trim()}>{saving ? "Saving…" : "Save OAuth App"}</PremiumButton>
         </div>
       </form>
-    </PremiumCard>
+    </div>
   );
+  return embedded ? content : <PremiumCard level={2} style={{ marginTop: "var(--spacing-16)" }}>{content}</PremiumCard>;
 }

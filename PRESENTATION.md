@@ -1,138 +1,206 @@
 # BrainRouter
 
-### Cognitive memory for LLM agents
+### One workspace for agent work that has to stay connected
 
 ---
 
 ## The problem
 
-Agents forget. Every session starts from zero, and the workarounds are bad:
+Software work is split across chat, terminals, issue trackers, repositories,
+knowledge stores, model providers, and review tools. An agent can be capable in
+one turn and still lose the project, permissions, evidence, or decision that
+made the work correct.
 
-- Dumping chat history → blows the context window and burns tokens.
-- Flat vector DB → returns whatever's cosine-close, not what's actually useful.
-- Static system prompts → no feedback loop, no learning.
+The result is familiar:
 
-Result: your agent re-discovers the same project facts every conversation.
+- plans drift away from implementation;
+- task state and code state disagree;
+- connected services require repeated credentials and setup;
+- useful context is copied into prompts without scope or provenance;
+- reviews arrive as isolated comments instead of part of the work history.
 
 ---
 
-## The idea
+## The product
 
-Model agent memory like human memory: short-term feeds long-term, unused
-facts fade, used ones get reinforced.
+BrainRouter is an open agent operations workspace built around one loop:
+
+**Plan → Build → Connect → Track → Know → Verify**
+
+It brings the agent runtime, model routing, projects, connectors, task tracking,
+knowledge, memory, automation, and review evidence into one system while keeping
+their trust boundaries explicit.
+
+---
+
+## Four ways to work
+
+| Surface              | Role                                                                                                                                        |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Desktop**          | Primary Chat · Code · Track workbench with projects, sessions, files, plans, tools, terminal, automations, connectors, and reviews          |
+| **CLI**              | Terminal-native coding agent using the same runtime, routing, permissions, workflows, and memory lifecycle                                  |
+| **Dashboard**        | Authenticated operations surface for organizations, projects, chat, providers, connections, knowledge, repositories, fleet, and review jobs |
+| **MCP + REST brain** | PostgreSQL-backed service for cognition, tenancy, integrations, jobs, and third-party clients                                               |
+
+These are different interfaces over shared contracts, not independent products.
+
+---
+
+## One work loop
 
 ```mermaid
-graph LR
-    Dialogue[Dialogue] --> Sensory[Sensory buffer]
-    Sensory --> Cognitive[(Long-term store)]
-    Cognitive --> Identity[Identity / rules]
-    Cognitive --> Focus[Active task]
+flowchart LR
+  Intent[Intent] --> Plan[Plan]
+  Plan --> Build[Build]
+  Build --> Connect[Connect systems]
+  Connect --> Track[Track state]
+  Track --> Know[Recall knowledge]
+  Know --> Verify[Review and verify]
+  Verify -->|evidence and outcomes| Plan
 ```
 
-Three things make this work: decay, citation feedback, and a 2-hop graph
-walk.
+The active organization, project, workspace, user, and source travel with the
+work. A review finding can link back to the repository change; a Track item can
+link to its branch or pull request; a chat answer can link to the source chunks
+that informed it.
 
 ---
 
-## Four memory layers
+## The shared runtime
 
-| Layer | Role |
-| --- | --- |
-| **SensoryStream** | Raw dialogue buffer |
-| **CognitiveRecord** | Classified facts with priority and decay |
-| **ContextualFocus** | Heat-scored scenes around active tasks |
-| **CoreIdentity** | Stable user profile + hard rules |
+Desktop and CLI use the same agent turn engine:
 
-Each layer has a distinct lifetime. The first two are short; the last two
-persist or evict based on activity.
+- provider and model routing;
+- permissions, approvals, sandboxing, and path policy;
+- tools, skills, hooks, workers, and multi-agent workflows;
+- goal, plan, requirement, and artifact state;
+- bounded context, compaction, recall, and capture;
+- verification gates and durable handoff.
+
+Changing interface does not change the behavioral contract.
 
 ---
 
-## Recall, simplified
+## Knowledge that remains attributable
+
+BrainRouter does more than append chat history to a prompt.
 
 ```mermaid
-graph LR
-    Q[Query] --> R[Keyword + vector + filepath]
-    R --> F[Fuse + rank by decay & freshness]
-    F --> J[LLM relevance judge]
-    J --> G[2-hop graph walk]
-    G --> P[Prompt context]
+flowchart LR
+  Sources[Connected and local sources] --> Scope[Organization · project · workspace]
+  Scope --> Retrieve[Keyword · vector · path retrieval]
+  Retrieve --> Rank[Freshness · rerank · relevance]
+  Rank --> Relate[Graph expansion]
+  Relate --> Context[Attributable task context]
+  Context --> Capture[Outcome and provenance capture]
 ```
 
-- **Fuse** three retrievers with Reciprocal Rank Fusion.
-- **Rerank** by decayed priority, citation boost, freshness, query intent.
-- **Judge** each finalist with a binary "is this actually relevant?" check —
-  rejected candidates get dropped. The reranker reorders; the judge filters.
-- **Expand** via the knowledge graph to pull in related facts.
+Raw source documents and chunks remain available for inspection. Recall can be
+filtered to the active project and workspace, and the service validates that
+scope instead of trusting browser state.
 
 ---
 
-## Two feedback loops
+## Connections without passing secrets around
 
-**Reinforcement.** When the agent cites a memory in its answer, that
-memory's priority gets boosted (up to +30%). Its decay clock resets.
+The normal account connection path is server-managed OAuth:
 
-**Pruning.** When a memory is surfaced repeatedly but never cited (10+
-times), it's archived — the index stays high-fidelity over time.
+1. an organization administrator configures the provider's OAuth application;
+2. a user authorizes their account;
+3. BrainRouter seals the credential server-side;
+4. the user selects repositories, channels, drives, or other resources;
+5. sync jobs checkpoint authorized content into scoped knowledge.
 
-That's the difference from a flat vector DB: the memory store actually
-*learns* which records matter — and the relevance judge stops the ones it
-gets wrong from polluting the prompt.
-
----
-
-## The terminal CLI
-
-Ships at [`brainrouter-cli/`](brainrouter-cli/). Memory-native coding
-agent.
-
-- Slash commands for session, memory, workflow, orchestration.
-- Markdown-rule guardrails (hookify) — drop a `.md` file to install a
-  warn/block guard on any tool call.
-- Multi-agent fan-out — `spawn_agents` runs explorers / architects /
-  reviewers / workers / verifiers in parallel.
-- **Deterministic multi-phase workflows** — one `run_workflow` call fans
-  out per phase, barrier-waits, synthesizes, and feeds the result forward;
-  durable + crash-resumable, with `compare` / `review-wide` / `research`
-  templates and a next-action planner that triggers it automatically.
-- Codex-grade execution safety — fail-closed sandboxing, command-segment
-  approval, atomic `apply_patch`, per-child git worktree isolation.
-- Durable workflow artifacts (`spec.md`, `tasks.md`, `walkthrough.md`) and
-  an LLM-driven `/compact` that replaces verbose history with a summary.
+Desktop and dashboard read the same non-secret connection state. Webhook signing
+secrets authenticate inbound events; they are not a substitute for account API
+credentials.
 
 ---
 
-## Surfaces
+## Track closes the loop
 
-| | Where | Use it for |
-| --- | --- | --- |
-| **MCP server** | `brainrouter/` | Plug into any MCP client (Claude Desktop, etc.) |
-| **CLI** | `brainrouter-cli/` | Terminal coding agent |
-| **Web chat** | `brainrouter-dashboard` | Dashboard for memory management |
+Track is a code-aware project surface inside Desktop:
 
-All four share the same memory store.
+- board, list, backlog, sprint, roadmap, reports, automation, members, and sync;
+- configurable work items, priorities, labels, relationships, and project roles;
+- repository detection from the active workspace;
+- account-backed issue synchronization;
+- links between requirements, tasks, branches, commits, pull requests, findings,
+  and artifacts.
+
+The agent can query and update the same project state the human sees.
 
 ---
 
-## Status
+## Review is evidence, not a detached bot comment
 
-**v0.4.8 shipped.** All four `@kinqs/brainrouter-*` packages are live on npm;
-the memory engine, CLI, MCP server, and dashboard are in active use. Recent
-milestones: Codex-grade coding-agent parity (0.4.7), deterministic multi-phase
-workflow orchestration + the next-action planner (0.4.8). **0.4.9 in progress:**
-a full dashboard redesign + modernization in its own "Memory Instrument" design
-language — modern app shell (grouped sidebar, ⌘K command palette), full-bleed
-landing with presentation-slide scroll motion, token-refresh sessions, and an
-optional backend-free static preview mode — plus an API-hardening pass (request
-validation, fail-closed JWT secret, refresh tokens, security headers + strict
-CORS, rate limiting, security audit).
+BrainRouter has two distinct review paths:
 
-See [ROADMAP.md](ROADMAP.md) for the live list.
+- **Local workspace review** inspects uncommitted changes in Desktop or through
+  CLI `/review`, follows repository review policy, and can apply narrowly scoped
+  fixes only when explicitly requested.
+- **Server-side pull-request review** runs dedicated security and code-review
+  lenses through the GitHub App, records job progress, posts attributable
+  findings, and exposes policy and history in Dashboard and Desktop.
+
+The security lens owns vulnerability gating. The code-review lens owns
+correctness, clarity, architecture, performance, and test feedback. Their
+contracts and status stay separate.
+
+---
+
+## Trust boundaries
+
+- Organizations, projects, workspaces, owners, sources, and integrations are
+  explicit server-validated scope.
+- Model and connector secrets are write-only or sealed and are never returned to
+  clients after storage.
+- Local execution passes through permission, approval, sandbox, and filesystem
+  policy before a tool runs.
+- Expanded authority—containers, hosted runtimes, and inbound automation—stays
+  opt-in.
+- Review claims stay tied to changed code, source metadata, and job evidence.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+  Desktop[Desktop] --> Runtime[Shared agent runtime]
+  CLI[CLI] --> Runtime
+  Dashboard[Dashboard] --> API[Authenticated REST API]
+  MCP[MCP clients] --> Brain[Brain service]
+  Runtime --> Brain
+  API --> Brain
+  Brain --> PG[(PostgreSQL + pgvector)]
+  Brain --> Models[Model providers]
+  Brain --> OAuth[OAuth connections]
+  Brain --> Jobs[Automation and review workers]
+```
+
+---
+
+## Current status
+
+**0.4.16 is the latest tagged release.** It shipped the unified desktop,
+autonomous fleet, mature Track surface, PostgreSQL brain, remote-brain support,
+and Atlas codebase knowledge.
+
+**0.4.17 is in development.** It extends the runtime plane, automations,
+connectors, review operations, scoped dashboard chat and knowledge, and the
+shared dashboard/desktop interface system. Development-branch behavior remains
+unreleased until the full acceptance gate passes.
+
+See [`ROADMAP.md`](ROADMAP.md) for planned work and
+[`CHANGELOG.md`](CHANGELOG.md) for shipped behavior.
 
 ---
 
 ## Learn more
 
-- **[BRAINROUTER.md](BRAINROUTER.md)** — the concepts on one page.
-- **[brainrouter-docs/](brainrouter-docs/)** — math, env vars, CLI internals.
-- **[README.md](README.md)** — quick start.
+- [`README.md`](README.md) — product overview and quick start.
+- [`BRAINROUTER.md`](BRAINROUTER.md) — brain, memory, REST, and MCP behavior.
+- [`SYSTEM_WORKFLOWS.md`](SYSTEM_WORKFLOWS.md) — end-to-end runtime flows.
+- [`SECURITY.md`](SECURITY.md) — security policy and trust boundaries.
+- [`design.md`](design.md) — shared dashboard and desktop interface contract.

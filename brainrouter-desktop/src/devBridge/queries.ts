@@ -310,7 +310,7 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       return { ok: true, newKey };
     },
     'action:session-groups': () => ({ groups: devGroups() }),
-    'action:open-external': (a) => ({ ok: true, what: String(a.what ?? '') }),
+    'action:open-external': (a) => ({ ok: true, what: String(a.what ?? ''), url: typeof a.url === 'string' ? a.url : undefined }),
     'git-pr': () => (S.wsCurrent === '/Users/dev/BrainRouter'
       ? { pr: { number: 395, state: 'OPEN', title: 'feat(desktop): DESK-4l — interactive views rail' } }
       : { pr: null }),
@@ -469,7 +469,7 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
         ],
       };
     },
-    'session-info': () => ({ sessionKey: 'dev:demo', model: resolvedModel(S.activeSession), workspaceRoot: S.wsCurrent, username: 'anhdang' }),
+    'session-info': () => ({ sessionKey: 'dev:demo', model: resolvedModel(S.activeSession), workspaceRoot: S.wsCurrent, username: 'Anh Dang', accountSignedIn: true, accountEmail: 'anh@example.test' }),
     'home-stats': () => {
       const perDay: Record<string, number> = {};
       const today = new Date();
@@ -723,7 +723,33 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     },
     'track-submit-pr-review': () => ({ ok: true, pr: { number: 42, state: 'OPEN', title: 'BR-3: Streaming retry fix', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/42', headRefName: 'track/br-3-streaming-retry-fix', baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: [] }, branch: 'track/br-3-streaming-retry-fix', itemKey: 'BR-3' }),
     'track-fix-failing-checks': () => ({ ok: true, task: { id: 'btask_fix_ci' }, pr: { number: 42, state: 'OPEN', title: 'BR-3: Streaming retry fix', url: 'https://github.com/kinqsradiollc/BrainRouter/pull/42', headRefName: 'track/br-3-streaming-retry-fix', baseRefName: 'main', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: [] }, branch: 'track/br-3-streaming-retry-fix', itemKey: 'BR-3' }),
-    'track-sync-config': () => ({ ...devGithub }),
+    'track-sync-config': () => ({
+      ...devGithub,
+      detectedRepo: 'kinqsradiollc/BrainRouter',
+      account: { signedIn: true, connected: true, login: 'kinqsradio' },
+    }),
+    'github-connect-status': () => ({ signedIn: true, connected: true, login: 'kinqsradio', installUrl: 'https://github.com/apps/brainrouter/installations/new' }),
+    'action:github-disconnect': () => ({ ok: true }),
+    'github-device-start': () => ({ ok: true, userCode: 'BR-D3MO', verificationUri: 'https://github.com/login/device', interval: 2 }),
+    'github-device-poll': () => ({ status: 'connected', login: 'kinqsradio' }),
+    'automation-account-status': () => ({
+      signedIn: true,
+      githubOauthConnected: true,
+      githubLogin: 'kinqsradio',
+      orgId: 'org_demo',
+      orgName: 'BrainRouter',
+      githubAppConfigured: true,
+      githubAppInstalled: true,
+      installUrl: 'https://github.com/apps/brainrouter/installations/new',
+    }),
+    'reviews': () => ({
+      signedIn: true,
+      canRun: true,
+      reviews: [
+        { id: 'review-dev-1', lens: 'code', status: 'completed', repo: 'kinqsradiollc/BrainRouter', prNumber: 42, findings: 2, blocking: 0, skipped: null, error: null, updatedAt: new Date(Date.now() - 180_000).toISOString(), createdAt: new Date(Date.now() - 240_000).toISOString() },
+      ],
+    }),
+    'reviews-run': () => ({ ok: true, jobs: 1 }),
     'track-scan-commits': () => ({ scanned: 12, linked: [{ sha: 'abc1234', key: 'BR-3', workItemKey: 'BR-3' }], transitioned: [{ key: 'BR-3', from: 'todo', to: 'in-progress' }], items: [...devTrack.items] }),
     'track-sync-members': (a) => {
       const members = devTrack.project.members as Record<string, unknown>[];

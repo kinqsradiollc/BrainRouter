@@ -143,27 +143,69 @@ export const SUBAGENT_ROLE_LABELS: Record<SubagentRole, string> = {
   verifier: 'verifier',
 };
 
-export const NAV: Array<{ section: SettingsSection; icon: string; title: string; group: 'Settings' | 'Desktop app' }> = [
-  { section: 'account', icon: 'shield', title: 'Account', group: 'Settings' },
-  { section: 'general', icon: 'gear', title: 'General', group: 'Settings' },
-  { section: 'models', icon: 'spark', title: 'Models', group: 'Settings' },
-  { section: 'permissions', icon: 'shield', title: 'Permissions', group: 'Settings' },
-  { section: 'memory', icon: 'brain', title: 'Memory', group: 'Settings' },
-  { section: 'hooks', icon: 'link', title: 'Hooks', group: 'Settings' },
-  { section: 'workflow-automation', icon: 'fork', title: 'Auto-planning', group: 'Settings' },
-  { section: 'runtime', icon: 'terminal', title: 'Runtime', group: 'Settings' },
-  { section: 'automations', icon: 'globe', title: 'Automations', group: 'Settings' },
-  { section: 'reviews', icon: 'shield', title: 'PR Reviews', group: 'Settings' },
-  { section: 'extensions', icon: 'plug', title: 'Extensions', group: 'Settings' },
-  { section: 'connectors', icon: 'bolt', title: 'MCP Servers', group: 'Settings' },
-  { section: 'tools', icon: 'gear', title: 'Tools', group: 'Settings' },
-  { section: 'data-connectors', icon: 'branch', title: 'Connectors', group: 'Settings' },
-  { section: 'marketplace', icon: 'plug', title: 'Marketplace', group: 'Settings' },
-  { section: 'advanced', icon: 'gear', title: 'Advanced', group: 'Settings' },
-  { section: 'observability', icon: 'chart', title: 'Usage', group: 'Settings' },
-  { section: 'appearance', icon: 'palette', title: 'Appearance', group: 'Desktop app' },
-  { section: 'commands', icon: 'command', title: 'Commands', group: 'Desktop app' },
+export type SettingsGroup = 'Account' | 'Agent' | 'Automation' | 'Connections' | 'System';
+
+export interface SettingsNavItem {
+  section: SettingsSection;
+  icon: string;
+  title: string;
+  group: SettingsGroup;
+  description: string;
+  /** Search aliases mirror the controls inside each page without exposing a
+   * second, easily-drifted list of individual setting rows in the shell. */
+  keywords: string;
+}
+
+export const NAV_GROUPS: Array<{ group: SettingsGroup; icon: string; description: string }> = [
+  { group: 'Account', icon: 'shield', description: 'Identity and defaults' },
+  { group: 'Agent', icon: 'spark', description: 'Defaults, models, permissions, and memory' },
+  { group: 'Automation', icon: 'bolt', description: 'Plans, routines, and reviews' },
+  { group: 'Connections', icon: 'plug', description: 'Connected tools and add-ons' },
+  { group: 'System', icon: 'gear', description: 'Usage, appearance, and controls' },
 ];
+
+export const NAV: SettingsNavItem[] = [
+  { section: 'account', icon: 'shield', title: 'Account', group: 'Account', description: 'Sign-in, organization, and devices', keywords: 'email password hosted memory teams sessions logout plan role organization id' },
+  { section: 'general', icon: 'gear', title: 'General', group: 'Agent', description: 'Agent defaults and chat lifecycle', keywords: 'reasoning effort personality tier fast mode new chat compact clear history safe mode attribution provenance commits prs' },
+  { section: 'models', icon: 'spark', title: 'Models', group: 'Agent', description: 'Providers, routes, and model profiles', keywords: 'api key endpoint provider openai anthropic azure ollama routing chain gateway sub-agent profiles wire format' },
+  { section: 'permissions', icon: 'shield', title: 'Permissions', group: 'Agent', description: 'Approvals, sandbox, and computer use', keywords: 'execution review yolo delegation children auto-chain filesystem external writes allow deny rules shell access native screen accessibility' },
+  { section: 'memory', icon: 'brain', title: 'Memory', group: 'Agent', description: 'Recall, briefing, and persona behavior', keywords: 'pipeline memories persona quiet mode brain forget export import blackboard consolidation' },
+  { section: 'tools', icon: 'gear', title: 'Tools', group: 'Agent', description: 'Built-in and connected tool access', keywords: 'enable disable override protected mcp local model read edit run plan goal' },
+  { section: 'workflow-automation', icon: 'fork', title: 'Auto-planning', group: 'Automation', description: 'Requirements, plans, and sprint flow', keywords: 'autopilot propose detect requirements sync track reconcile sprints stages' },
+  { section: 'runtime', icon: 'terminal', title: 'Runtime', group: 'Automation', description: 'Execution backends and isolated runs', keywords: 'container host worktree archive jit secrets serve remote preview ports budget critic hosted cli agents' },
+  { section: 'automations', icon: 'globe', title: 'Automations', group: 'Automation', description: 'Inbound triggers, webhooks, and jobs', keywords: 'github slack gitlab jira signing secret listener daemon rules allowed repos' },
+  { section: 'reviews', icon: 'shield', title: 'PR reviews', group: 'Automation', description: 'Automated GitHub review behavior', keywords: 'security code review findings branch protection push repositories app installation webhook' },
+  { section: 'hooks', icon: 'link', title: 'Hooks', group: 'Automation', description: 'Agent lifecycle hook commands', keywords: 'session start stop turn tool command scripts timeout lifecycle' },
+  { section: 'connectors', icon: 'bolt', title: 'MCP servers', group: 'Connections', description: 'Model Context Protocol servers', keywords: 'brain tools stdio http url command environment env enabled disabled' },
+  { section: 'data-connectors', icon: 'branch', title: 'Connectors', group: 'Connections', description: 'Knowledge and repository sources', keywords: 'github gitlab slack jira confluence notion linear google drive gmail filesystem web sync checkpoint oauth' },
+  { section: 'extensions', icon: 'plug', title: 'Extensions', group: 'Connections', description: 'Workspace add-ons, trust, and skills', keywords: 'discover enable disable bundled keyword triggers stack org convention repo' },
+  { section: 'marketplace', icon: 'plug', title: 'Marketplace', group: 'Connections', description: 'Find and manage plugins', keywords: 'install update registry publish manifest organization scope source community' },
+  { section: 'observability', icon: 'chart', title: 'Usage', group: 'System', description: 'Tokens, activity, and diagnostics', keywords: 'heatmap week month year telemetry workspace doctor debug trace latency calls turns' },
+  { section: 'appearance', icon: 'palette', title: 'Appearance', group: 'System', description: 'Theme, typography, and transcript layout', keywords: 'accent color desktop theme graphite mono high contrast dark code font transcript width transcript text size terminal cli markdown theme raw scrollback vi composer vim experimental features' },
+  { section: 'commands', icon: 'command', title: 'Commands', group: 'System', description: 'Slash-command reference and launcher', keywords: 'catalog native panel settings cli run palette shortcuts' },
+  { section: 'advanced', icon: 'gear', title: 'Advanced', group: 'System', description: 'Technical and raw CLI configuration', keywords: 'model limits agents notifications github oauth client keyboard shortcuts config json schema developer cli knobs' },
+];
+
+export function settingsGroupForSection(section: SettingsSection): SettingsGroup {
+  return NAV.find((item) => item.section === section)?.group ?? 'Account';
+}
+
+export function settingsSectionForGroup(group: SettingsGroup, remembered?: SettingsSection): SettingsSection {
+  if (remembered && NAV.some((item) => item.group === group && item.section === remembered)) return remembered;
+  return NAV.find((item) => item.group === group)?.section ?? 'general';
+}
+
+/** Search settings pages (not slash commands). All whitespace-separated terms
+ * must match the page's title, summary, category, or control aliases. */
+export function searchSettings(query: string): SettingsNavItem[] {
+  const normalize = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const terms = normalize(query).split(/\s+/).filter(Boolean);
+  if (!terms.length) return [];
+  return NAV.filter((item) => {
+    const haystack = normalize(`${item.title} ${item.description} ${item.group} ${item.keywords}`);
+    return terms.every((term) => haystack.includes(term));
+  });
+}
 
 // WS11 — knobs that have a dedicated structured editor elsewhere (Permissions,
 // Workflow automation, Models, Connectors). Never shown as raw JSON here.

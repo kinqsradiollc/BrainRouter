@@ -2,6 +2,7 @@ import React from 'react';
 import { Box, Text } from 'ink';
 import type { ScrollbackEntry } from '../ChatApp.js';
 import { GLYPH, groupTasksByKind, type BackgroundTask, type BackgroundTaskKind } from '@kinqs/brainrouter-core/background';
+import type { Theme } from '../../theme/theme.js';
 
 interface SidebarProps {
   model?: string;
@@ -17,6 +18,7 @@ interface SidebarProps {
   mcpOnline?: boolean;
   mcpIdentity?: 'brainrouter' | 'third-party' | 'unknown';
   width?: number;
+  theme?: Theme;
 }
 
 export function Sidebar({
@@ -32,7 +34,14 @@ export function Sidebar({
   mcpOnline = false,
   mcpIdentity = 'unknown',
   width = 30,
+  theme,
 }: SidebarProps) {
+  const primary = theme ? theme.colors.primary : '#8B7CFF';
+  const review = theme ? theme.colors.secondary : '#FF8B73';
+  const info = theme ? theme.colors.info : '#4DD8FF';
+  const automation = theme ? theme.colors.automation : '#A3E635';
+  const success = theme ? theme.colors.success : 'green';
+  const danger = theme ? theme.colors.danger : 'red';
   // Extract active memories (last 3 items of kind 'memory')
   const memories = scrollback
     .filter((entry): entry is Extract<ScrollbackEntry, { kind: 'memory' }> => entry.kind === 'memory')
@@ -45,9 +54,9 @@ export function Sidebar({
   };
 
   const getModeColor = (mode: string) => {
-    if (mode === 'shell') return 'red';
-    if (mode === 'write') return 'yellow';
-    return 'green';
+    if (mode === 'shell') return danger;
+    if (mode === 'write') return review;
+    return success;
   };
 
   // Helper to extract parent path and active repository folder name
@@ -91,11 +100,11 @@ export function Sidebar({
     if (m < 60) return `${m}m`;
     return `${Math.floor(m / 60)}h`;
   };
-  const renderFleetGroup = (title: string, bg: string, kind: BackgroundTaskKind) => {
+  const renderFleetGroup = (title: string, tone: string | undefined, kind: BackgroundTaskKind) => {
     const items = fleet[kind];
     return (
       <Box flexDirection="column" gap={0} marginBottom={1} key={kind}>
-        <Text color="black" backgroundColor={bg} bold>{`  ${GLYPH[kind]} ${title} (${items.length})  `}</Text>
+        <Text color={tone} bold>{`  ${GLYPH[kind]} ${title} · ${items.length}`}</Text>
         <Box flexDirection="column" marginLeft={1}>
           {items.length === 0 ? (
             <Text color="gray" italic>  · idle</Text>
@@ -133,7 +142,7 @@ export function Sidebar({
     <Box flexDirection="column" gap={0} flexGrow={1} flexShrink={1} overflow="hidden" width="100%">
       {/* 1. ACTIVE CONTEXT */}
       <Box flexDirection="column" gap={0} marginBottom={1}>
-        <Text color="black" backgroundColor="cyan" bold>  🧠 ACTIVE CONTEXT  </Text>
+        <Text color={primary} bold>  ACTIVE CONTEXT</Text>
         <Box flexDirection="column" marginLeft={1}>
           <Box>
             <Text color="gray">  ├─ Model:   </Text>
@@ -156,7 +165,7 @@ export function Sidebar({
 
       {/* 2. WORKSPACE */}
       <Box flexDirection="column" gap={0} marginBottom={1}>
-        <Text color="black" backgroundColor="yellow" bold>  📂 ACTIVE PROJECT  </Text>
+        <Text color={review} bold>  ACTIVE PROJECT</Text>
         <Box flexDirection="column" marginLeft={1}>
           <Box>
             <Text color="gray">  ├─ Branch: </Text>
@@ -172,19 +181,19 @@ export function Sidebar({
 
       {/* 3. CONNECTIONS */}
       <Box flexDirection="column" gap={0} marginBottom={1}>
-        <Text color="black" backgroundColor="green" bold>  📡 CONNECTIONS     </Text>
+        <Text color={info} bold>  CONNECTIONS</Text>
         <Box flexDirection="column" marginLeft={1}>
           {showBrain && (
             <Box>
               <Text color="gray">  ├─ Brain: </Text>
-              <Text color={mcpOnline ? 'green' : 'red'} bold>
+              <Text color={mcpOnline ? success : danger} bold>
                 {mcpOnline ? '🟢 online' : '🔴 offline'}
               </Text>
             </Box>
           )}
           <Box>
             <Text color="gray">{showBrain ? '  └─ MCP:   ' : '  └─ MCP:   '}</Text>
-            <Text color={mcpOnline ? 'green' : 'red'} bold>
+            <Text color={mcpOnline ? success : danger} bold>
               {mcpOnline ? '🟢' : '🔴'}
             </Text>
             <Text color="gray"> ({truncate(mcpProfile, Math.max(4, width - 17))})</Text>
@@ -194,7 +203,7 @@ export function Sidebar({
 
       {/* 4. RECALLED MEMORIES */}
       <Box flexDirection="column" gap={0} marginBottom={1}>
-        <Text color="black" backgroundColor="magenta" bold>  💾 MEMORY BRIEFS   </Text>
+        <Text color={info} bold>  MEMORY BRIEFS</Text>
         <Box flexDirection="column" marginLeft={1}>
           {memories.length === 0 ? (
             <Text color="gray" italic>  · No memories recalled</Text>
@@ -214,9 +223,9 @@ export function Sidebar({
       </Box>
 
       {/* 5. RUNNING FLEET — separated by kind */}
-      {renderFleetGroup('SUB-AGENTS', 'blue', 'agent')}
-      {renderFleetGroup('WORKERS', 'cyan', 'worker')}
-      {renderFleetGroup('WORKFLOWS', 'magenta', 'workflow')}
+      {renderFleetGroup('SUB-AGENTS', primary, 'agent')}
+      {renderFleetGroup('WORKERS', review, 'worker')}
+      {renderFleetGroup('WORKFLOWS', automation, 'workflow')}
     </Box>
   );
 }

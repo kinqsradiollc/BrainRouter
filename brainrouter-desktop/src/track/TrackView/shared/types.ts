@@ -7,9 +7,17 @@ import type { WorkItem, WorkItemType, WorkItemPriority, SprintState, Module, Tra
 
 // External sync (GitHub) — view-side shapes mirroring core's githubSync results.
 export interface SyncRepoConfig { repo: string; hasToken: boolean; tokenSource: string | null; active?: boolean; label?: string | null; source?: string | null; connectorId?: string | null }
-export interface SyncConfig { repo: string | null; hasToken: boolean; tokenSource: string | null; repos?: SyncRepoConfig[]; caBundle?: string | null }
+export interface SyncConfig {
+  repo: string | null;
+  hasToken: boolean;
+  tokenSource: string | null;
+  repos?: SyncRepoConfig[];
+  caBundle?: string | null;
+  detectedRepo?: string | null;
+  account?: { signedIn: boolean; connected: boolean; login?: string; error?: string };
+}
 export interface SyncRow { key?: string; issueNumber?: number; title: string; action: 'create' | 'update' }
-export interface SyncResult { direction: 'export' | 'import' | 'sync'; dryRun: boolean; exported?: SyncRow[]; imported?: SyncRow[]; pushed?: number; pulled?: number; created?: { local: number; remote: number }; conflicts?: Array<{ key: string; field: string }>; errors: string[] }
+export interface SyncResult { direction: 'export' | 'import' | 'sync'; dryRun: boolean; exported?: SyncRow[]; imported?: SyncRow[]; comments?: { pushed: number; pulled: number }; pushed?: number; pulled?: number; created?: { local: number; remote: number }; conflicts?: Array<{ key: string; field: string }>; errors: string[]; items?: WorkItem[] }
 export interface GitTrackRemote { name: string; url: string; githubRepo?: string }
 export interface GitTrackContext {
   ok: boolean;

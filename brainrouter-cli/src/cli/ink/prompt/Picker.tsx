@@ -47,7 +47,7 @@ export interface PickerProps {
   otherDescription?: string;
   prefilledOther?: string;
   onCursorChange?: (id: string, index: number) => string[] | undefined;
-  /** Hex / named color for the panel border + title. Defaults to brand orange. */
+  /** Hex / named color for the panel border + title. Defaults to the interaction accent. */
   accentColor?: string;
   /**
    * Back-compat: callers from `commands/config.ts` etc. pass a Theme
@@ -84,9 +84,9 @@ function pickMaxVisible(terminalRows: number, withDescriptions: boolean): number
 }
 
 function themeToAccent(mode?: string): string | undefined {
-  if (mode === 'light') return '#A24E1F';
+  if (mode === 'light') return '#5D49C7';
   if (mode === 'mono') return 'white';
-  if (mode === 'dark') return '#CC9166';
+  if (mode === 'dark') return '#8B7CFF';
   return undefined;
 }
 
@@ -233,7 +233,7 @@ export function Picker(props: PickerProps) {
     }
   });
 
-  const accent = props.accentColor ?? themeToAccent(props.theme?.mode) ?? '#CC9166';
+  const accent = props.accentColor ?? themeToAccent(props.theme?.mode) ?? '#8B7CFF';
   const { rows: termRows } = useTerminalSize();
   const hasDescriptions = augmentedRows.some((r) => !!r.description);
   const maxVisible = pickMaxVisible(termRows, hasDescriptions);

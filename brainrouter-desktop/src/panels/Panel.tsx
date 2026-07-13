@@ -34,7 +34,7 @@ export const PANEL_DEFS: Array<{ id: PanelId; title: string; icon: string }> = [
   { id: 'ci', title: 'PR / Checks', icon: 'check-circle' },
   { id: 'atlas', title: 'Atlas', icon: 'atlas' },
   { id: 'workflows', title: 'Workflows', icon: 'bolt' },
-  { id: 'memory', title: 'Memory', icon: 'pin' },
+  { id: 'memory', title: 'Saved knowledge', icon: 'pin' },
   { id: 'prototype', title: 'Prototype', icon: 'bolt' },
   { id: 'uitest', title: 'Browser', icon: 'globe' },
 ];

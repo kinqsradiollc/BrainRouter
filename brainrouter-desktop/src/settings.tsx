@@ -8,7 +8,7 @@
  * Models/Connectors panels live in cohesive siblings under `./settings/`,
  * re-exported here so the public surface is unchanged.
  */
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { wireBadge, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
 import { Icon } from './icons.js';
 import { ShortcutsReference } from './components/dialogs/ShortcutsReference.js';
@@ -26,7 +26,17 @@ import { ReviewsSettings } from './settings/reviews/ReviewsSettings.js';
 import { RuntimeSection } from './settings/runtime/RuntimeSection.js';
 import { AutomationsSection } from './settings/automations/AutomationsSection.js';
 import { UsageHeatmap } from './settings/usage/UsageHeatmap.js';
-import { NAV, type ConfigSnapshot, type GithubSaveArgs, type UsageHistory } from './settings/shared/types.js';
+import {
+  NAV,
+  NAV_GROUPS,
+  searchSettings,
+  settingsGroupForSection,
+  settingsSectionForGroup,
+  type ConfigSnapshot,
+  type GithubSaveArgs,
+  type SettingsGroup,
+  type UsageHistory,
+} from './settings/shared/types.js';
 
 // §public-surface — types consumed by App.tsx and the agent/composer hooks are
 // re-exported so importers keep resolving them from `./settings.js` unchanged.
@@ -83,8 +93,15 @@ export function SettingsDialog(props: {
   onAccent: (a: string) => void;
 }): React.ReactElement | null {
   const { snapshot, section } = props;
-  const [search, setSearch] = useState('');
+  const [settingsSearch, setSettingsSearch] = useState('');
+  const [settingsReveal, setSettingsReveal] = useState('');
+  const [commandSearch, setCommandSearch] = useState('');
   const [zoomed, setZoomed] = useState(false);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const settingsSearchRef = useRef<HTMLInputElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const lastSectionByGroup = useRef<Partial<Record<SettingsGroup, SettingsSection>>>({});
   // T7 — permission-rule editor draft.
   const [ruleKind, setRuleKind] = useState<'allow' | 'deny'>('deny');
   const [ruleDraft, setRuleDraft] = useState('');
@@ -115,10 +132,69 @@ export function SettingsDialog(props: {
   const saveGithubOauthClientId = (clientId: string | null): void => { props.onAction('a-gh-oauth-client', 'action:set-github-oauth-client-id', { clientId: clientId ?? '' }); setTimeout(refreshSnapshot, 100); };
 
   const filteredCommands = useMemo(() => {
-    const q = search.trim().toLowerCase();
+    const q = commandSearch.trim().toLowerCase();
     if (!q) return props.commands;
     return props.commands.filter((c) => `${c.base} ${c.desc} ${c.category}`.toLowerCase().includes(q));
-  }, [props.commands, search]);
+  }, [props.commands, commandSearch]);
+  const settingsSearchResults = useMemo(() => searchSettings(settingsSearch), [settingsSearch]);
+  const revealSearchResult = settingsReveal.trim().length > 0;
+  const activeGroup = settingsGroupForSection(section);
+  const activeNavItems = NAV.filter((item) => item.group === activeGroup);
+  const selectSection = useCallback((nextSection: SettingsSection): void => {
+    lastSectionByGroup.current[settingsGroupForSection(nextSection)] = nextSection;
+    if (bodyRef.current) bodyRef.current.scrollTop = 0;
+    props.setSection(nextSection);
+  }, [props.setSection]);
+  const selectGroup = useCallback((group: SettingsGroup): void => {
+    selectSection(settingsSectionForGroup(group, lastSectionByGroup.current[group]));
+  }, [selectSection]);
+  const moveSubnavFocus = (event: React.KeyboardEvent<HTMLButtonElement>, index: number): void => {
+    let nextIndex: number | null = null;
+    if (event.key === 'ArrowRight') nextIndex = (index + 1) % activeNavItems.length;
+    else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + activeNavItems.length) % activeNavItems.length;
+    else if (event.key === 'Home') nextIndex = 0;
+    else if (event.key === 'End') nextIndex = activeNavItems.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const next = activeNavItems[nextIndex];
+    if (!next) return;
+    setSettingsReveal('');
+    selectSection(next.section);
+    requestAnimationFrame(() => document.getElementById(`settings-tab-${next.section}`)?.focus());
+  };
+
+  useEffect(() => {
+    if (!props.open) return;
+    lastSectionByGroup.current[activeGroup] = section;
+    if (bodyRef.current) bodyRef.current.scrollTop = 0;
+  }, [activeGroup, props.open, section]);
+
+  useEffect(() => {
+    if (!props.open) return;
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    requestAnimationFrame(() => settingsSearchRef.current?.focus());
+    return () => previousFocusRef.current?.focus();
+  }, [props.open]);
+
+  const handleDialogKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      if (settingsSearch) { setSettingsSearch(''); return; }
+      if (settingsReveal) { setSettingsReveal(''); return; }
+      props.onClose();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+    ) ?? []).filter((element) => element.getAttribute('aria-hidden') !== 'true' && element.offsetParent !== null);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  };
 
   if (!props.open) return null;
 
@@ -155,7 +231,7 @@ export function SettingsDialog(props: {
               <button className="btn danger" onClick={() => props.onAction('a-clear', 'action:clear')}>Clear</button>
             </Row>
           </SetGroup>
-          <SetGroup title="Troubleshooting &amp; provenance">
+          <SetGroup title="Troubleshooting &amp; provenance" collapsible defaultOpen={false} forceOpen={revealSearchResult}>
             <Row title="Safe mode" desc="Boot WITHOUT memory briefing, skills, lifecycle hooks and custom MCP servers — a minimal harness to isolate a misbehaving briefing/skill/hook/MCP. Takes effect on the next launch. (cli.safeMode)">
               <Toggle on={knobs.safeMode === true} onChange={(v) => setPath('safeMode', v)} />
             </Row>
@@ -214,7 +290,7 @@ export function SettingsDialog(props: {
               <Select value={ps('autoChain', 'off')} options={['off', 'review', 'verify', 'both']} onChange={(v) => props.onPref('autoChain', v)} />
             </Row>
           </SetGroup>
-          <SetGroup title="Filesystem & sandbox">
+          <SetGroup title="Filesystem & sandbox" collapsible defaultOpen={false} forceOpen={revealSearchResult}>
             <Row title="Access mode (this session)" desc="read = look only · write = edit files · shell = run commands. (/permissions)">
               <Select value="—" options={['—', 'read', 'write', 'shell']} onChange={(v) => v !== '—' && props.onAction('a-access', 'action:set-access', { mode: v })} />
             </Row>
@@ -225,8 +301,10 @@ export function SettingsDialog(props: {
               <Select value={ks('externalDirWrites', 'ask')} options={['ask', 'allow', 'deny']} onChange={(v) => setKnob('externalDirWrites', v)} />
             </Row>
           </SetGroup>
-          <ComputerUseSettings knobs={knobs} refreshSnapshot={refreshSnapshot} />
-          <SetGroup title="Permission rules (cli.permissions)">
+          <SetGroup title="Computer use" collapsible defaultOpen={false} forceOpen={revealSearchResult}>
+            <ComputerUseSettings knobs={knobs} refreshSnapshot={refreshSnapshot} showHeading={false} />
+          </SetGroup>
+          <SetGroup title="Permission rules (cli.permissions)" collapsible defaultOpen={false} forceOpen={revealSearchResult}>
           <div className="set-desc" style={{ marginBottom: 8 }}>Glob rules evaluated at the unified execution-policy gate. Deny wins; allow downgrades ask. Shared with the CLI.</div>
           {(snapshot?.permissionRules?.deny ?? []).map((r) => (
             <div key={`d${r}`} className="rule-row"><span className="rule-kind deny">deny</span><span className="rule-text">{r}</span>
@@ -359,7 +437,7 @@ export function SettingsDialog(props: {
                 </Row>
               ))}
             </SetGroup>
-            <SetGroup title="Skills">
+            <SetGroup title="Skills" collapsible defaultOpen={false} forceOpen={revealSearchResult}>
               <Row title="Keyword-triggered skills" desc="When a SKILL.md declares triggers:/keywords: in its frontmatter, a plain prompt containing one of those words injects that skill — like an explicit /skill. Additive; nothing fires unless a skill opts in. (cli.skillsKeywordTriggers)">
                 <Toggle on={knobs.skillsKeywordTriggers !== false} onChange={(v) => setPath('skillsKeywordTriggers', v)} />
               </Row>
@@ -430,7 +508,7 @@ export function SettingsDialog(props: {
             <div className="set-desc" style={{ marginBottom: 10 }}>
               Enable or disable individual agent tools. Local models hide some by default — set those to <b>On</b> to force-enable them. Core tools (read / edit / run + plan / goal) are always on.
             </div>
-            <SetGroup title="Built-in tools">
+            <SetGroup title="Built-in tools" collapsible forceOpen={revealSearchResult}>
               {cat.builtin.length === 0
                 ? <Row title="Loading…" desc="" />
                 : cat.builtin.map((t) => (
@@ -439,7 +517,7 @@ export function SettingsDialog(props: {
                     </Row>
                   ))}
             </SetGroup>
-            <SetGroup title="MCP tools" collapsible defaultOpen={cat.mcp.length > 0}>
+            <SetGroup title="MCP tools" collapsible defaultOpen={cat.mcp.length > 0} forceOpen={revealSearchResult}>
               {cat.mcp.length === 0
                 ? <Row title="No MCP tools" desc="Connect MCP servers under “MCP Servers” to see their tools here." />
                 : cat.mcp.map((t) => (
@@ -457,9 +535,6 @@ export function SettingsDialog(props: {
       case 'data-connectors': return (
         <ConnectorSettings
           connectors={snapshot?.connectors ?? { catalog: [], items: [] }}
-          githubIntegration={github}
-          githubOauthClientId={githubOauthClientId}
-          onGithubSave={saveGithub}
           onAction={props.onAction}
           refreshSnapshot={refreshSnapshot}
         />
@@ -474,7 +549,7 @@ export function SettingsDialog(props: {
               refreshInstalled={() => props.onAction('q-plugin-list', 'plugin-list')}
               refreshSearch={(a) => props.onAction('q-plugin-search', 'plugin-search', a)}
             />
-            <SetGroup title="Scope &amp; sources">
+            <SetGroup title="Scope &amp; sources" collapsible defaultOpen={false} forceOpen={revealSearchResult}>
               <Row title="Org convention scope" desc="Surface your org's read-only `.brainrouter` convention repos as an extra plugin/skill scope. (cli.plugins.orgScope)">
                 <Toggle on={plugins.orgScope === true} onChange={(v) => setPath('plugins.orgScope', v)} />
               </Row>
@@ -504,21 +579,21 @@ export function SettingsDialog(props: {
             <div className="set-h">Advanced</div>
             <div className="set-desc" style={{ marginBottom: 6 }}>Everything else under <code>cli.*</code> in <code>~/.config/brainrouter/config.json</code> — shared with the CLI (<code>/config</code>). Leave a number blank to use its default.</div>
 
-            <SetGroup title="Model &amp; limits" collapsible>
+            <SetGroup title="Model &amp; limits" collapsible defaultOpen={false} forceOpen={revealSearchResult}>
               <SchemaCliFields schema={snapshot?.cliSchema} section="modelLimits" cli={knobs} onChange={setSchemaKnob} />
             </SetGroup>
-            <SetGroup title="Agents" collapsible defaultOpen={false}>
+            <SetGroup title="Agents" collapsible defaultOpen={false} forceOpen={revealSearchResult}>
               <SchemaCliFields schema={snapshot?.cliSchema} section="agents" cli={knobs} onChange={setSchemaKnob} />
             </SetGroup>
-            <SetGroup title="Notifications" collapsible defaultOpen={false}>
+            <SetGroup title="Notifications" collapsible defaultOpen={false} forceOpen={revealSearchResult}>
               <SchemaCliFields schema={snapshot?.cliSchema} section="notifications" cli={knobs} onChange={setSchemaKnob} />
             </SetGroup>
-            <SetGroup title="GitHub">
+            <SetGroup title="GitHub" collapsible defaultOpen={false} forceOpen={revealSearchResult}>
               <Row title="OAuth client ID" desc="GitHub OAuth App client id with device flow enabled (cli.github.oauthClientId).">
                 <KnobText value={githubOauthClientId} onSave={saveGithubOauthClientId} placeholder="Iv1..." />
               </Row>
             </SetGroup>
-            <SetGroup title="Keyboard shortcuts" collapsible defaultOpen={false}>
+            <SetGroup title="Keyboard shortcuts" collapsible defaultOpen={false} forceOpen={revealSearchResult}>
               <ShortcutsReference />
             </SetGroup>
 
@@ -526,7 +601,7 @@ export function SettingsDialog(props: {
                 disclosure: most users never need it, and the JSON-valued knobs
                 (permissions, automation) + internal safety knobs are handled by
                 their own panels and hidden from this list. */}
-            <details className="set-dev-raw">
+            <details className="set-dev-raw" open={revealSearchResult ? true : undefined}>
               <summary className="set-h2" style={{ cursor: 'pointer' }}>Developer — raw <code>cli.*</code> config</summary>
               <div className="set-desc" style={{ marginBottom: 8 }}>Advanced: edit any remaining <code>cli</code> knob directly. Permissions, workflow automation, models and connectors have their own panels above and aren't shown here; internal safety knobs are hidden. Only change these if you know what they do.</div>
               <CliConfigEditor
@@ -571,7 +646,7 @@ export function SettingsDialog(props: {
               <pre className="usage-pre">Loading cross-session usage…</pre>
             )}
           </SetGroup>
-          <SetGroup title="Diagnostics">
+          <SetGroup title="Diagnostics" collapsible defaultOpen={false} forceOpen={revealSearchResult}>
             <Row title="Workspace" desc={<code>{snapshot?.workspaceRoot ?? '—'}</code>} />
             <Row title="Local telemetry" desc="Privacy-conscious local-only task/latency log — no network (cli.telemetry.enabled).">
               <Toggle on={telemetryOn} onChange={(v) => setKnob('telemetry', { enabled: v })} />
@@ -585,7 +660,7 @@ export function SettingsDialog(props: {
           <div className="set-h">Appearance</div>
           <SetGroup title="Desktop">
             <Row title="Accent color" desc="Interactive accent across the app — pick anything. Empty resets to the theme default.">
-              <input type="color" className="ctl color-ctl" value={props.accent || '#7aa2f7'} onChange={(e) => props.onAccent(e.target.value)} />
+              <input type="color" className="ctl color-ctl" value={props.accent || (props.theme === 'hc' ? '#a79cff' : '#8b7cff')} onChange={(e) => props.onAccent(e.target.value)} />
               {props.accent ? <button className="btn" onClick={() => props.onAccent('')}>Reset</button> : null}
             </Row>
             <Row title="Desktop theme" desc="Graphite Mono = near-black neutral with an indigo accent (the desktop default). High-contrast = pure near-black.">
@@ -610,7 +685,7 @@ export function SettingsDialog(props: {
               </div>
             </Row>
           </SetGroup>
-          <SetGroup title="Terminal (CLI)">
+          <SetGroup title="Terminal (CLI)" collapsible defaultOpen={false} forceOpen={revealSearchResult}>
             <Row title="Markdown theme" desc="Syntax highlighting theme the terminal CLI uses for markdown output. (/theme)">
               <Select value={ps('theme', 'dark')} options={['auto', 'light', 'dark', 'mono']} onChange={(v) => props.onPref('theme', v)} />
             </Row>
@@ -631,6 +706,17 @@ export function SettingsDialog(props: {
           <div className="set-h">Commands</div>
           <div className="set-desc" style={{ marginBottom: 4 }}>
             Every CLI slash command, live from the CLI's own catalog ({props.commands.length} commands).
+          </div>
+          <div className="settings-command-filter" role="search">
+            <input
+              className="ctl settings-command-search"
+              type="search"
+              aria-label="Filter slash commands"
+              placeholder="Filter slash commands…"
+              value={commandSearch}
+              onChange={(event) => setCommandSearch(event.target.value)}
+            />
+            {commandSearch ? <button className="btn" type="button" onClick={() => setCommandSearch('')}>Clear</button> : null}
           </div>
           <div className="legend-row">
             <span><span className="badge native">native</span> runs here</span>
@@ -655,6 +741,9 @@ export function SettingsDialog(props: {
               </div>
             );
           })}
+          {commandSearch && filteredCommands.length === 0 ? (
+            <div className="empty settings-command-empty">No slash commands match “{commandSearch}”.</div>
+          ) : null}
         </>
       );
     }
@@ -662,22 +751,90 @@ export function SettingsDialog(props: {
 
   return (
     <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) props.onClose(); }}>
-      <div className={`settings-modal settings-wrap${zoomed ? ' zoomed' : ''}`}>
+      <div
+        ref={dialogRef}
+        className={`settings-modal settings-wrap settings-group-${activeGroup.toLowerCase()} settings-section-${section}${zoomed ? ' zoomed' : ''}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-dialog-title"
+        onKeyDown={handleDialogKeyDown}
+        data-category={activeGroup.toLowerCase()}
+        data-settings-group={activeGroup}
+        data-settings-section={section}
+      >
         <nav className="settings-nav">
-          <input className="settings-search" placeholder="Search commands…" value={search}
-            onChange={(e) => { setSearch(e.target.value); if (e.target.value.trim()) props.setSection('commands'); }} />
-          {(['Settings', 'Desktop app'] as const).map((group) => (
-            <React.Fragment key={group}>
-              <div className="nav-head">{group}</div>
-              {NAV.filter((n) => n.group === group).map((n) => (
-                <button key={n.section} className={`nav-item${section === n.section ? ' active' : ''}`} onClick={() => props.setSection(n.section)}>
-                  <span className="nav-icon"><Icon name={n.icon} size={14} /></span>{n.title}
+          <div className="settings-brand">
+            <span className="settings-brand-mark">B</span>
+            <div><strong id="settings-dialog-title">Settings</strong></div>
+          </div>
+          <input
+            ref={settingsSearchRef}
+            className="settings-search"
+            type="search"
+            aria-label="Search settings"
+            placeholder="Search settings…"
+            value={settingsSearch}
+            onChange={(event) => { setSettingsSearch(event.target.value); setSettingsReveal(''); }}
+          />
+          {settingsSearch.trim() ? (
+            <>
+              <div className="nav-head">Settings results · {settingsSearchResults.length}</div>
+              <div className="settings-search-results" aria-live="polite" style={{ minHeight: 0, overflowY: 'auto' }}>
+                {settingsSearchResults.map((item) => (
+                  <button
+                    key={item.section}
+                    type="button"
+                    data-category={item.group.toLowerCase()}
+                    data-section={item.section}
+                    className={`nav-item settings-category settings-search-result${section === item.section ? ' active' : ''}`}
+                    onClick={() => { setSettingsReveal(settingsSearch); selectSection(item.section); setSettingsSearch(''); }}
+                  >
+                    <span className="nav-icon"><Icon name={item.icon} size={14} /></span>
+                    <span><strong>{item.title}</strong><small>{item.group} · {item.description}</small></span>
+                    <Icon name="chev-right" size={10} />
+                  </button>
+                ))}
+                {settingsSearchResults.length === 0 ? <div className="empty settings-search-empty">No settings found.</div> : null}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="nav-head">Categories</div>
+              {NAV_GROUPS.map((item) => (
+                <button
+                  key={item.group}
+                  type="button"
+                  data-category={item.group.toLowerCase()}
+                  aria-current={activeGroup === item.group ? 'page' : undefined}
+                  className={`nav-item settings-category${activeGroup === item.group ? ' active' : ''}`}
+                  onClick={() => { setSettingsReveal(''); selectGroup(item.group); }}
+                >
+                  <span className="nav-icon"><Icon name={item.icon} size={14} /></span>
+                  <span><strong>{item.group}</strong><small>{item.description}</small></span>
+                  <Icon name="chev-right" size={10} />
                 </button>
               ))}
-            </React.Fragment>
-          ))}
+            </>
+          )}
         </nav>
-        <div className="settings-content"><div className="set-body">{body}</div></div>
+        <div className="settings-content">
+          <div className="settings-subnav" role="tablist" aria-label={`${activeGroup} settings`} data-category={activeGroup.toLowerCase()} data-section={section}>
+            {activeNavItems.map((item, index) => (
+              <button key={item.section} type="button" role="tab" aria-selected={section === item.section}
+                id={`settings-tab-${item.section}`} aria-controls={`settings-panel-${item.section}`} tabIndex={section === item.section ? 0 : -1}
+                data-section={item.section}
+                className={section === item.section ? 'active' : ''}
+                onKeyDown={(event) => moveSubnavFocus(event, index)}
+                onClick={() => { setSettingsReveal(''); selectSection(item.section); }}>
+                {item.title}
+              </button>
+            ))}
+          </div>
+          <div key={section} id={`settings-panel-${section}`} role="tabpanel" aria-labelledby={`settings-tab-${section}`} ref={bodyRef} className={`set-body settings-page settings-page-${section}`} data-category={activeGroup.toLowerCase()} data-section={section} tabIndex={-1}>
+            {settingsReveal ? <div className="settings-reveal-note" role="status"><Icon name="search" size={12} />Opened all controls in this section for “{settingsReveal}”.</div> : null}
+            {body}
+          </div>
+        </div>
         <span className="settings-actions panel-chrome-actions">
           <button className={`icon-btn${zoomed ? ' active' : ''}`} title={zoomed ? 'Restore settings' : 'Enlarge settings'}
             aria-label={zoomed ? 'Restore settings' : 'Enlarge settings'} onClick={() => setZoomed((v) => !v)}>

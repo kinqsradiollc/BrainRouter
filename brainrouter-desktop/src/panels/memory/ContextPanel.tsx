@@ -98,8 +98,8 @@ export function ContextPanel(props: ContextPanelProps): React.ReactElement {
               </div>
             ) : null}
             {efficiency.memoriesRecalled > 0 ? (
-              <div className="ctx-save-row" title="Memories recalled into context instead of re-explaining">
-                <span className="ctx-save-label">Memory recall</span>
+              <div className="ctx-save-row" title="Saved knowledge recalled into context instead of re-explaining">
+                <span className="ctx-save-label">Knowledge recall</span>
                 <span className="ctx-save-val"><b>{efficiency.memoriesRecalled}</b> records</span>
               </div>
             ) : null}

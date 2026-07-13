@@ -34,6 +34,7 @@ import { memoryEngine } from "../../../memory/engine.js";
 import { requireAnyAuth, JWT_SECRET, type AuthedRequest } from "../../middleware/auth.js";
 import { sendError } from "../../../contracts/http.js";
 import { seal, open, isSecretBoxConfigured } from "../../../security/secretBox.js";
+import { probeGithubConnection } from "./githubConnection.js";
 
 const APP_KEY = "connectorOAuthApp:github";
 const tokenKey = (userId: string) => `connectorToken:github:${userId}`;
@@ -132,8 +133,14 @@ function redirectUri(app: AppConfig | null, req: AuthedRequest): string {
   const base = (app?.redirectBase || `${req.protocol}://${req.get("host") ?? "localhost:3747"}`).replace(/\/+$/, "");
   return `${base}/api/connectors/github/oauth/callback`;
 }
+function escHtml(s: string): string {
+  return String(s).replace(/[&<>"']/g, (c) => (({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c));
+}
+// title/msg may carry a provider-derived value (a GitHub login, an error text) —
+// escape both so this HTML response can never reflect markup.
 function resultPage(title: string, msg: string): string {
-  return `<!doctype html><meta charset="utf-8"><title>${title}</title><body style="font-family:system-ui;background:#0d0f13;color:#e6e6e6;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center;max-width:440px;padding:24px"><h2>${title}</h2><p style="opacity:.85">${msg}</p><p style="opacity:.55;font-size:13px;margin-top:18px">You can close this tab and return to BrainRouter.</p></div>`;
+  const t = escHtml(title), m = escHtml(msg);
+  return `<!doctype html><meta charset="utf-8"><title>${t}</title><body style="font-family:system-ui;background:#0d0f13;color:#e6e6e6;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center;max-width:440px;padding:24px"><h2>${t}</h2><p style="opacity:.85">${m}</p><p style="opacity:.55;font-size:13px;margin-top:18px">You can close this tab and return to BrainRouter.</p></div>`;
 }
 
 export const githubConnectorRouter = Router();
@@ -153,7 +160,7 @@ githubConnectorRouter.post("/github/device/start", requireAnyAuth, async (req: A
     if (!d.device_code || !d.user_code) { sendError(res, 400, d.error || "GitHub returned no device code — is Device Flow enabled on the App?"); return; }
     await memoryEngine.emailAuth.setSetting(deviceKey(req.userId!), { deviceCode: d.device_code, exp: Math.floor(Date.now() / 1000) + (d.expires_in ?? 900) });
     res.json({ userCode: d.user_code, verificationUri: d.verification_uri ?? "https://github.com/login/device", interval: d.interval ?? 5 });
-  } catch (e) { sendError(res, 500, e instanceof Error ? e.message : "device start failed"); }
+  } catch (e) { console.error("[github] device start failed:", e); sendError(res, 500, "Could not start the GitHub device flow."); }
 });
 
 githubConnectorRouter.post("/github/device/poll", requireAnyAuth, async (req: AuthedRequest, res) => {
@@ -174,13 +181,20 @@ githubConnectorRouter.post("/github/device/poll", requireAnyAuth, async (req: Au
     await memoryEngine.emailAuth.setSetting(tokenKey(req.userId!), { sealed: seal(JSON.stringify({ accessToken: d.access_token, login, scope: d.scope ?? "", connectedAt: new Date().toISOString() })) });
     await memoryEngine.emailAuth.setSetting(deviceKey(req.userId!), {});
     res.json({ status: "connected", login });
-  } catch (e) { res.json({ status: "error", error: e instanceof Error ? e.message : "poll failed" }); }
+  } catch (e) { console.error("[github] device poll failed:", e); res.json({ status: "error", error: "Could not complete the GitHub sign-in." }); }
 });
 
 githubConnectorRouter.get("/github/status", requireAnyAuth, async (req: AuthedRequest, res) => {
   const app = await getApp();
   const tok = await getUserToken(req.userId!);
-  res.json({ appConfigured: !!app?.clientId, connected: !!tok, login: tok?.login ?? null, scope: tok?.scope ?? null, installUrl: installUrl(app) });
+  const probe = tok ? await probeGithubConnection(tok.accessToken) : { connected: false };
+  res.json({
+    appConfigured: !!app?.clientId,
+    ...probe,
+    login: probe.login ?? (probe.connected ? tok?.login ?? null : null),
+    scope: probe.connected ? tok?.scope ?? null : null,
+    installUrl: installUrl(app),
+  });
 });
 
 githubConnectorRouter.get("/github/repos", requireAnyAuth, async (req: AuthedRequest, res) => {
@@ -191,7 +205,8 @@ githubConnectorRouter.get("/github/repos", requireAnyAuth, async (req: AuthedReq
     const repos = app?.isGithubApp ? await listReposViaInstallations(tok.accessToken) : await listReposViaUser(tok.accessToken);
     res.json({ connected: true, repos, installUrl: installUrl(app) });
   } catch (e) {
-    res.json({ connected: true, repos: [], installUrl: installUrl(app), error: e instanceof Error ? e.message : "failed" });
+    console.error("[github] repo list failed:", e);
+    res.json({ connected: true, repos: [], installUrl: installUrl(app), error: "Could not list repositories." });
   }
 });
 
@@ -268,7 +283,7 @@ githubConnectorRouter.get("/github/oauth/callback", async (req: AuthedRequest, r
     const login = (ur.ok ? ((await ur.json()) as { login?: string }).login : "") || "";
     const stored: UserToken = { accessToken: td.access_token, login, scope: td.scope ?? LEGACY_SCOPE, connectedAt: new Date().toISOString() };
     await memoryEngine.emailAuth.setSetting(tokenKey(userId), { sealed: seal(JSON.stringify(stored)) });
-    res.send(resultPage("GitHub connected ✓", `Signed in as <b>${login || "your account"}</b>. BrainRouter can now read your repositories.`));
+    res.send(resultPage("GitHub connected ✓", `Signed in as ${login || "your account"}. BrainRouter can now read your repositories.`));
   } catch {
     res.status(500).send(resultPage("Connection failed", "Could not complete the exchange with GitHub."));
   }

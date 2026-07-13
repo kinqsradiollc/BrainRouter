@@ -1,198 +1,148 @@
-# BrainRouter — Benchmarks
+# BrainRouter benchmarks
 
-Public, reproducible proof for the "memory-native" claims. Every number below
-comes from a committed result set under
-[`brainrouter/benchmark/results/`](brainrouter/benchmark/results/) — this page
-consolidates them into one comparison-grade view. Where a row compares against
-"built-in memory," that means the file-dump strategies used by common coding
-agents (a `CLAUDE.md` / `.cursorrules` / `memory-bank` loaded wholesale into the
-prompt), not a tuned external retriever.
+This is the evidence index for BrainRouter performance claims. It separates current reproducible suites from archived measurements so backend or harness changes are not presented as an apples-to-apples continuation.
 
-| Suite | Date | Platform | Commit | Raw data |
-|---|---|---|---|---|
-| Retrieval / scale / load / e2e / real-embeddings | 2026-05-17 | darwin arm64, Node 22.16 | `864751d` | [`results/2026-05-17/1/`](brainrouter/benchmark/results/2026-05-17/1/) |
-| Code-recall (symbol isolation) | 2026-05-31 | darwin arm64, Node 22.16 | — | [`results/2026-05-31/`](brainrouter/benchmark/results/2026-05-31/) |
+## Reading the results correctly
 
-Headlines (full detail in each section):
+- `brainrouter-benchmark/` is the current comparison harness. It drives BrainRouter through the public authenticated MCP transport and compares it with deterministic baseline adapters.
+- `brainrouter/benchmark/results/` contains committed reference artifacts produced by the earlier in-process memory harness. Those results remain useful historical evidence, but they used the former SQLite/FTS5 backend and do not measure the current Postgres runtime.
+- A result is only current when its artifact records the tested commit, configuration, dataset, platform, and date.
+- The `tiny` fixture is a smoke test. Do not use it for product claims.
+- A system reported as `unavailable` was not silently replaced by a fallback.
 
-- **Retrieval quality** — Recall@10 **0.986–0.990** on LongMemEval-S (500
-  questions); the FTS lexical stage already hits 0.990 Recall@10.
-- **Code-recall** — **100%** symbol isolation at **1.13** chunks/symbol over
-  the TS/Python/Rust fixtures.
-- **Context efficiency** — top-10 recall holds a **~450-token** budget at any
-  corpus size; built-in dumps reach **2.2M tokens** at 50k observations
-  (**100% token savings**, and 80–100% of that history is unreachable anyway).
-- **End-to-end** — **95.1%** fewer prompt tokens and **73% faster** responses
-  vs. a full workspace dump, at near-parity judged accuracy.
+## Current benchmark harness
 
----
+The harness covers two tracks:
 
-## 1. Retrieval quality — LongMemEval-S (500 questions)
+| Track  | What it measures                                                                                                                                                 | Main commands    |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| Memory | Recall, precision, ranking, latency, and bounded load behavior across full-dump, capped-dump, BM25, deterministic-vector, hybrid, and live BrainRouter adapters. | `bench:memory:*` |
+| CLI    | Deterministic command behavior, live behavior, transcript scoring, and decision-trace comparison.                                                                | `bench:cli:*`    |
 
-Three pipelines: FTS-only (SQLite FTS5), Hybrid (BM25 + dense vectors via
-Reciprocal Rank Fusion), and Hybrid + cross-encoder rerank.
-
-| Pipeline | Recall@5 | Recall@10 | Recall@20 | NDCG@10 | MRR |
-|---|---:|---:|---:|---:|---:|
-| FTS-only | **0.970** | 0.990 | 0.996 | 0.8989 | 0.9138 |
-| Hybrid (RRF) | 0.966 | 0.986 | **0.998** | **0.9068** | **0.9209** |
-| Hybrid + rerank | 0.948 | 0.990 | **0.998** | 0.8862 | 0.8860 |
-
-**Finding:** a general-purpose cross-encoder reranker *degrades* Recall@5
-(0.970 → 0.948) on identifier-heavy developer memories (exact var names, config
-keys, IDs) by smoothing exact matches into semantically-near-but-wrong ones.
-Hybrid wins on multi-session and preference tracing where terms drift; FTS wins
-on exact keyword recall. BrainRouter keeps rerank as an opt-in Stage 3.
-
-Raw: [`longmemeval_fts.json`](brainrouter/benchmark/results/2026-05-17/1/longmemeval_fts.json) ·
-[`longmemeval_hybrid.json`](brainrouter/benchmark/results/2026-05-17/1/longmemeval_hybrid.json) ·
-[`longmemeval_hybrid+rerank.json`](brainrouter/benchmark/results/2026-05-17/1/longmemeval_hybrid+rerank.json)
-
-Regenerate:
+List available datasets:
 
 ```bash
-cd brainrouter
-npm run bench:longmemeval          # FTS mode
-npm run bench:longmemeval:hybrid   # hybrid mode
-npm run bench:summary -- benchmark/results/<dir>   # comparison table + thresholds
+npm run bench:datasets:list
 ```
 
-## 2. Code-recall — chunk symbol isolation (new in 0.4.x)
-
-Measures whether the code chunker isolates the right top-level symbols as their
-own labelled chunks — the metric the codegraph-style tools don't publish.
-
-| Metric | Value |
-|---|---:|
-| Samples (TS / Python / Rust) | 3 |
-| Expected symbols | 8 |
-| Isolated symbols | 8 |
-| **Symbol recall** | **100.0%** |
-| Chunks per isolated symbol (1.0 ideal) | 1.13 |
-
-Raw: [`2026-05-31/code-recall.json`](brainrouter/benchmark/results/2026-05-31/code-recall.json).
-Reproduce:
+Run a smoke preflight:
 
 ```bash
-npx tsx -e "import {benchmarkCodeChunking, DEFAULT_CODE_SAMPLES, formatCodeRecallMd} from './brainrouter/src/memory/bench/code-recall.ts'; console.log(formatCodeRecallMd(benchmarkCodeChunking(DEFAULT_CODE_SAMPLES)))"
+npm run bench:memory:dry-run -- --fixture tiny
+npm run bench:cli:dry-run -- --fixture tiny
 ```
 
-### 2b. Repo-scale retrieval — `find_related` ranking
-
-Chunking quality is necessary but not sufficient; this measures *retrieval* at
-repo scale. The fixture is 8 independent clusters × 5 files (40 files): within a
-cluster, files import each other and share a symbol prefix; across clusters
-there is no shared vocabulary. Gold relevance for a seed = the rest of its
-cluster.
-
-| Metric | Value |
-|---|---:|
-| Queries | 8 |
-| **Recall@10** | **100.0%** |
-| Precision@10 | 40.0% |
-| MRR | 1.000 |
-| nDCG@10 | 1.000 |
-| Token efficiency (returned ÷ whole-repo dump) | **19.4%** (792 vs 4,080 tokens) |
-
-`find_related` recalls every in-cluster file and ranks a relevant hit first
-(MRR/nDCG = 1.0) while returning ~1/5 the tokens a full dump costs. Precision@10
-of 40% is a conservative floor — the fixture deliberately shares boilerplate
-(`trim().toLowerCase()`) across clusters; real repos separate cleaner.
-
-**Build vs. integrate:** BrainRouter *builds* code retrieval into the memory
-plane (one FTS index + a call/import symbol graph + the same recall ranking),
-rather than bolting on an external code-graph service. That keeps code and
-conversational/decision memory in one store with one provenance and ownership
-model, and lets code chunks participate in the same graph expansion as every
-other memory — at the cost of not (yet) being a dedicated repo-scale semantic
-index. The numbers above are the bar a future external integration would have
-to beat to justify the added moving parts.
-
-Raw: [`2026-05-31/code-scale.json`](brainrouter/benchmark/results/2026-05-31/code-scale.json).
-Reproduce:
+Run the current memory comparison against a bounded dataset:
 
 ```bash
-cd brainrouter && npx tsx -e "import {SqliteMemoryStore} from './src/memory/store/sqlite.js'; import {MemoryEngine} from './src/memory/engine.js'; const s=new SqliteMemoryStore(':memory:'); s.init(); console.log(new MemoryEngine(s).runCodeScaleBenchmark({k:10}))"
+export BRAINROUTER_BENCH_MCP_URL=http://127.0.0.1:3747/mcp
+export BRAINROUTER_BENCH_API_KEY=<benchmark-only-api-key>
+
+npm run bench:memory:retrieval -- \
+  --fixture longmemeval \
+  --max-records 3000 \
+  --max-queries 100 \
+  --progress
 ```
 
-## 3. Scale & context efficiency
+Use a disposable benchmark organization and database. The live adapter imports records through `memory_import`; never target production data.
 
-Built-in memory loads *all* history every session; BrainRouter retrieves only
-the top-10, holding a fixed token budget as the corpus grows.
-
-| Observations | Index build | FTS5 search | Hybrid search | Disk | Built-in ctx tokens | BrainRouter ctx tokens | Savings | Built-in unreachable |
-|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 240 | 60ms | 0.235ms | 0.486ms | 4 KB | 10,504 | 450 | 96% | 17% |
-| 1,000 | 405ms | 0.322ms | 1.002ms | 4.3 MB | 43,834 | 450 | 99% | 80% |
-| 5,000 | 6.4s | 0.861ms | 3.799ms | 20.6 MB | 220,335 | 450 | 100% | 96% |
-| 10,000 | 25.7s | 1.735ms | 9.693ms | 41.0 MB | 440,973 | 450 | 100% | 98% |
-| 50,000 | 678.6s | 6.493ms | 39.708ms | 203.1 MB | 2,216,173 | 450 | 100% | 100% |
-
-Cross-session retrieval (12 target queries, up to 29 sessions back): FTS **12/12
-at rank #1**, Hybrid **12/12 at rank #1**, built-in (200-line cap) only **10/12**.
-
-Raw: [`SCALE.md`](brainrouter/benchmark/results/2026-05-17/1/SCALE.md). Regenerate
-with `npm run bench:scale`.
-
-## 4. Load & concurrency (in-process SQLite)
-
-Zero write failures across every cell, up to 100k records at C=100.
-
-| Scale (N) | C | Op | Throughput | p50 | p99 | Errors |
-|---:|---:|---|---:|---:|---:|---:|
-| 1,000 | 1 | hybridSearch | 401 ops/s | 2.42ms | 3.26ms | 0 |
-| 1,000 | 100 | hybridSearch | 319 ops/s | 307.2ms | 324.4ms | 0 |
-| 10,000 | 1 | hybridSearch | 49 ops/s | 19.8ms | 32.3ms | 0 |
-| 100,000 | 1 | hybridSearch | 5 ops/s | 194.6ms | 244.7ms | 0 |
-| 100,000 | 1 | upsertL1 | 31 ops/s | 31.5ms | 41.5ms | 0 |
-
-Raw: [`load-100k-864751d.json`](brainrouter/benchmark/results/2026-05-17/1/load-100k-864751d.json).
-Regenerate with `npm run bench:load`.
-
-## 5. Real embeddings — quality matrix
-
-768-dim dense vectors over a 240-observation synthetic project (20 labelled
-queries), comparing built-in dump strategies against BrainRouter modes.
-
-| Configuration | Recall@5 | Recall@10 | Precision@5 | NDCG@10 | Latency | Tokens/query |
-|---|---:|---:|---:|---:|---:|---:|
-| Built-in (workspace grep) | 37.0% | 55.8% | 78.0% | 80.3% | 0.5ms | 22,610 |
-| Built-in (truncated MEMORY.md) | 27.4% | 37.8% | 63.0% | 56.4% | 0.2ms | 7,938 |
-| BrainRouter FTS5 | 42.3% | 61.4% | 95.0% | 91.5% | 0.4ms | 450 |
-| BrainRouter Hybrid (RRF) | 42.3% | 60.9% | 95.0% | 90.8% | 1.2ms | 450 |
-| Hybrid + decay + skill boost | 36.5% | **62.1%** | 85.0% | 87.7% | 1.4ms | 450 |
-| + Stage 3 reranker | 42.3% | 59.6% | 95.0% | 89.7% | 179.8ms | 450 |
-
-Raw: [`REAL-EMBEDDINGS.md`](brainrouter/benchmark/results/2026-05-17/1/REAL-EMBEDDINGS.md) ·
-[`QUALITY.md`](brainrouter/benchmark/results/2026-05-17/1/QUALITY.md). Regenerate
-with `npm run bench:real-embeddings` / `npm run bench:quality`.
-
-## 6. End-to-end generative lift
-
-Local model (`gemma`-class), full workspace dump vs. BrainRouter RAG over the
-same 5 queries.
-
-| Metric | Baseline (dump) | BrainRouter | Lift |
-|---|---:|---:|---|
-| LLM-as-judge (1–5) | 3.8 | 3.4 | −10.5% (near-parity, far less noise) |
-| Request latency | 9,430ms | 2,545ms | **73.0% faster** |
-| Prompt tokens | 14,767 | 717 | **95.1% fewer** |
-| Output speed | 91.6 tok/s | 109.2 tok/s | 1.2× |
-
-Raw: [`END-TO-END.md`](brainrouter/benchmark/results/2026-05-17/1/END-TO-END.md).
-Regenerate with `npm run bench:e2e`.
-
----
-
-## Reproducing the full overnight suite
+Generate reports from completed runs:
 
 ```bash
-cd brainrouter
-npm run bench:overnight     # scale + quality + real-embeddings + load + e2e → results/<date>/
-npm run bench:summary -- benchmark/results/<date>/<run>   # regression gate
+npm run bench:report
 ```
 
-Results write to `brainrouter/benchmark/results/<date>/<run>/`. The committed
-sets above are the reference runs; re-run on your hardware to compare. Embedding
-and end-to-end suites need an OpenAI-compatible endpoint (local LM Studio /
-Ollama work); retrieval, scale, load, and code-recall run fully offline.
+Results are written beneath `brainrouter-benchmark/results/`; generated summaries are written beneath `brainrouter-benchmark/reports/`.
+
+### Current harness configuration
+
+| Variable                                             | Purpose                                                                            |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `BRAINROUTER_BENCH_MCP_URL`                          | Streamable HTTP MCP endpoint for the tested BrainRouter server.                    |
+| `BRAINROUTER_BENCH_API_KEY` or `BRAINROUTER_API_KEY` | Benchmark-only credential.                                                         |
+| `BRAINROUTER_BENCH_SYSTEM_ID`                        | Stable ID for the tested configuration in comparison reports.                      |
+| `BRAINROUTER_BENCH_SYSTEM_LABEL`                     | Human-readable configuration label.                                                |
+| `BRAINROUTER_BENCH_MCP_TIMEOUT_MS`                   | Per-call timeout; defaults to five minutes for local model stacks.                 |
+| `BRAINROUTER_BENCH_IMPORT_BATCH_SIZE`                | Import batch size; defaults to 500.                                                |
+| `BRAINROUTER_BENCH_SKIP_IMPORT=1`                    | Reuse an already imported dataset. Use only when its identity and scope are known. |
+| `BRAINROUTER_BENCH_FORCE_UNAVAILABLE`                | Record why a configuration must not be scored.                                     |
+
+## Archived reference results
+
+The following artifacts were produced before the Postgres migration. Their raw files are retained for auditability; they are not current production-runtime measurements.
+
+| Suite                                               | Date       | Backend                                 | Platform                 | Commit       | Raw data                                                                                     |
+| --------------------------------------------------- | ---------- | --------------------------------------- | ------------------------ | ------------ | -------------------------------------------------------------------------------------------- |
+| Retrieval, scale, load, end-to-end, real embeddings | 2026-05-17 | SQLite/FTS5 in-process harness          | Darwin arm64, Node 22.16 | `864751d`    | [`brainrouter/benchmark/results/2026-05-17/1/`](brainrouter/benchmark/results/2026-05-17/1/) |
+| Code symbol isolation and related-file ranking      | 2026-05-31 | In-process code chunk/retrieval fixture | Darwin arm64, Node 22.16 | Not recorded | [`brainrouter/benchmark/results/2026-05-31/`](brainrouter/benchmark/results/2026-05-31/)     |
+
+### Archived retrieval quality
+
+LongMemEval-S, 500 questions:
+
+| Pipeline        |  Recall@5 | Recall@10 | Recall@20 |    NDCG@10 |        MRR |
+| --------------- | --------: | --------: | --------: | ---------: | ---------: |
+| FTS-only        | **0.970** |     0.990 |     0.996 |     0.8989 |     0.9138 |
+| Hybrid (RRF)    |     0.966 |     0.986 | **0.998** | **0.9068** | **0.9209** |
+| Hybrid + rerank |     0.948 |     0.990 | **0.998** |     0.8862 |     0.8860 |
+
+The archived result found that a general-purpose cross-encoder reduced Recall@5 on identifier-heavy records. That is why reranking remains explicit and must be benchmarked for the deployed corpus rather than assumed to help.
+
+Raw artifacts:
+
+- [`longmemeval_fts.json`](brainrouter/benchmark/results/2026-05-17/1/longmemeval_fts.json)
+- [`longmemeval_hybrid.json`](brainrouter/benchmark/results/2026-05-17/1/longmemeval_hybrid.json)
+- [`longmemeval_hybrid+rerank.json`](brainrouter/benchmark/results/2026-05-17/1/longmemeval_hybrid+rerank.json)
+
+### Archived code recall
+
+| Metric                                      |      Value |
+| ------------------------------------------- | ---------: |
+| Samples across TypeScript, Python, and Rust |          3 |
+| Expected symbols                            |          8 |
+| Isolated symbols                            |          8 |
+| Symbol recall                               | **100.0%** |
+| Chunks per isolated symbol                  |       1.13 |
+
+The related-file fixture used 40 files in eight independent clusters. Its recorded Recall@10 was 100%, MRR was 1.0, and returned context was 19.4% of the whole-repository fixture. See [`code-recall.json`](brainrouter/benchmark/results/2026-05-31/code-recall.json) and [`code-scale.json`](brainrouter/benchmark/results/2026-05-31/code-scale.json).
+
+### Archived scale and context efficiency
+
+The older top-10 retrieval harness held recalled context near 450 tokens while the synthetic full-history baseline grew with corpus size.
+
+| Observations | FTS5 search | Hybrid search | Full-history tokens | Retrieved tokens |
+| -----------: | ----------: | ------------: | ------------------: | ---------------: |
+|          240 |    0.235 ms |      0.486 ms |              10,504 |              450 |
+|        1,000 |    0.322 ms |      1.002 ms |              43,834 |              450 |
+|        5,000 |    0.861 ms |      3.799 ms |             220,335 |              450 |
+|       10,000 |    1.735 ms |      9.693 ms |             440,973 |              450 |
+|       50,000 |    6.493 ms |     39.708 ms |           2,216,173 |              450 |
+
+These are in-process latency measurements, not HTTP/Postgres service latency. Full details are in [`SCALE.md`](brainrouter/benchmark/results/2026-05-17/1/SCALE.md).
+
+### Archived end-to-end result
+
+The local-model fixture compared a full workspace dump with retrieved context over five questions.
+
+| Metric           | Full dump | Retrieved context | Recorded change |
+| ---------------- | --------: | ----------------: | --------------: |
+| Judge score, 1–5 |       3.8 |               3.4 |          -10.5% |
+| Request latency  |  9,430 ms |          2,545 ms |    73.0% faster |
+| Prompt tokens    |    14,767 |               717 |     95.1% fewer |
+
+This is a small historical fixture and should be read as evidence of the latency/context trade-off, not a general accuracy guarantee. See [`END-TO-END.md`](brainrouter/benchmark/results/2026-05-17/1/END-TO-END.md).
+
+## Publishing a new claim
+
+Before changing a public number:
+
+1. build the exact commit being measured;
+2. use a disposable Postgres database and benchmark organization;
+3. record provider/model IDs, retrieval configuration, dataset version, hardware, and date;
+4. include failures and unavailable adapters in the result set;
+5. run enough queries for the stated conclusion;
+6. commit the raw machine-readable result and generated report; and
+7. update this file without overwriting older evidence.
+
+Never compare a new Postgres/MCP run directly with an archived in-process SQLite latency as if the harness were unchanged.

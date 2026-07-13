@@ -18,10 +18,12 @@ export class MemoryCapturePipeline extends CaptureExtraction {
     messages: { role: string; content: string; timestamp: number }[];
     activeSkill?: string;
     skillHints?: string;
+    orgId?: string | null;
+    projectId?: string | null;
     workspaceTag?: string | null;
     projectTag?: string | null;
   }): Promise<CaptureResult> {
-    const { userId, sessionKey, sessionId = "", messages, activeSkill, skillHints, workspaceTag, projectTag } = params;
+    const { userId, sessionKey, sessionId = "", messages, activeSkill, skillHints, orgId, projectId, workspaceTag, projectTag } = params;
 
     const nowStr = new Date().toISOString();
     const sensoryRecords: SensoryRecord[] = [];
@@ -49,7 +51,7 @@ export class MemoryCapturePipeline extends CaptureExtraction {
     // message as a source document + chunks so the raw content stays
     // retrievable and citable (record→chunk provenance lands in MEM-3).
     // Best-effort + idempotent; never blocks the rest of the turn.
-    await this.ingestTurnSources(userId, sessionKey, messages);
+    await this.ingestTurnSources(userId, sessionKey, messages, { orgId, projectId, workspaceTag });
 
     // 2. Decide if we should trigger Cognitive extraction
     const unextractedCount = await this.store.getUnextractedSensoryCount(userId, sessionKey);
@@ -72,13 +74,13 @@ export class MemoryCapturePipeline extends CaptureExtraction {
       cognitiveExtractionTriggered = true;
       const inflightKey = `${userId}${sessionKey}`;
       if (process.env.BRAINROUTER_INLINE_EXTRACTION === "on") {
-        const result = await this.extractPendingSensory({ userId, sessionKey, sessionId, activeSkill, skillHints, workspaceTag, projectTag });
+        const result = await this.extractPendingSensory({ userId, sessionKey, sessionId, activeSkill, skillHints, orgId, projectId, workspaceTag, projectTag });
         cognitiveExtractedCount = result.extractedCount;
         cognitiveExtractionStatus = result.status;
         cognitiveExtractionError = result.errorMessage;
       } else if (!this.extractionInFlight.has(inflightKey)) {
         this.extractionInFlight.add(inflightKey);
-        void this.extractPendingSensory({ userId, sessionKey, sessionId, activeSkill, skillHints, workspaceTag, projectTag })
+        void this.extractPendingSensory({ userId, sessionKey, sessionId, activeSkill, skillHints, orgId, projectId, workspaceTag, projectTag })
           .catch((err: unknown) => console.error("[BrainRouter] background extraction failed:", err instanceof Error ? err.message : err))
           .finally(() => this.extractionInFlight.delete(inflightKey));
         cognitiveExtractionStatus = "deferred";
@@ -104,6 +106,10 @@ export class MemoryCapturePipeline extends CaptureExtraction {
     sessionId?: string;
     activeSkill?: string;
     skillHints?: string;
+    orgId?: string | null;
+    projectId?: string | null;
+    workspaceTag?: string | null;
+    projectTag?: string | null;
   }): Promise<{ triggered: boolean; extractedCount: number; status: CognitiveExtractionStatus; errorMessage?: string }> {
     return this.extractPendingSensory(params);
   }

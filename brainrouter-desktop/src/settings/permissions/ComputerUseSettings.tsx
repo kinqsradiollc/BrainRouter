@@ -1,7 +1,11 @@
 import React, { useState } from 'react';
 import { Row, Toggle, ChoiceControl } from '../shared/controls.js';
 
-export function ComputerUseSettings({ knobs, refreshSnapshot }: { knobs: Record<string, unknown>; refreshSnapshot: () => void }): React.ReactElement {
+export function ComputerUseSettings({ knobs, refreshSnapshot, showHeading = true }: {
+  knobs: Record<string, unknown>;
+  refreshSnapshot: () => void;
+  showHeading?: boolean;
+}): React.ReactElement {
   const cfg = (knobs.computerUse && typeof knobs.computerUse === 'object' ? knobs.computerUse : {}) as { enabled?: boolean; mode?: string };
   const [permissions, setPermissions] = useState<any>(null);
   const [busy, setBusy] = useState(false);
@@ -21,7 +25,7 @@ export function ComputerUseSettings({ knobs, refreshSnapshot }: { knobs: Record<
   const screenOk = permissions?.screen?.granted !== false;
   return (
     <>
-      <div className="set-h2">Computer use</div>
+      {showHeading ? <div className="set-h2">Computer use</div> : null}
       <Row title="Enable computer use" desc="OFF by default. Exposes the shell-tier local tool only in the desktop app when the native host is available.">
         <Toggle on={cfg.enabled === true} onChange={(v) => save({ enabled: v })} />
       </Row>

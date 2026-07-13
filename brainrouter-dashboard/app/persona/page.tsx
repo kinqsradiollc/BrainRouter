@@ -32,8 +32,8 @@ export default function PersonaPage() {
       >
         {/* Editorial Title Block */}
         <PageHeader 
-          title="Core Identity" 
-          description="Distilled cognitive agent profile consolidating recurring scenes into a unified persistent identity." 
+          title="Agent profile"
+          description="Review the stable preferences and working patterns BrainRouter uses to make responses feel consistent."
         />
 
         <motion.div 
