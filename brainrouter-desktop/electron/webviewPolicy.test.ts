@@ -7,19 +7,20 @@ test('isAllowedWebviewSrc: allows self-contained data:text/html', () => {
   assert.equal(isAllowedWebviewSrc('data:text/html;charset=utf-8,<h1>hi</h1>', '/repo'), true);
 });
 
-test('isAllowedWebviewSrc: refuses REMOTE network + non-html data + empty', () => {
-  assert.equal(isAllowedWebviewSrc('https://evil.example/x', '/repo'), false);
-  assert.equal(isAllowedWebviewSrc('http://192.168.1.5:5173/', '/repo'), false, 'LAN ip refused');
-  assert.equal(isAllowedWebviewSrc('http://example.com:5173/', '/repo'), false, 'remote host refused');
-  assert.equal(isAllowedWebviewSrc('data:image/svg+xml,<svg/>', '/repo'), false);
-  assert.equal(isAllowedWebviewSrc('', '/repo'), false);
-  assert.equal(isAllowedWebviewSrc('javascript:alert(1)', '/repo'), false);
-});
-
-test('isAllowedWebviewSrc: allows a LOOPBACK dev-server URL for the Browser panel', () => {
-  assert.equal(isAllowedWebviewSrc('http://localhost:5173/', '/repo'), true);
+test('isAllowedWebviewSrc: allows ANY http(s) origin (general browsing)', () => {
+  assert.equal(isAllowedWebviewSrc('https://example.com/', '/repo'), true);
+  assert.equal(isAllowedWebviewSrc('https://news.ycombinator.com/item?id=1', '/repo'), true);
+  assert.equal(isAllowedWebviewSrc('http://192.168.1.5:5173/', '/repo'), true, 'LAN ip allowed');
+  assert.equal(isAllowedWebviewSrc('http://localhost:5173/', '/repo'), true, 'loopback still allowed');
   assert.equal(isAllowedWebviewSrc('http://127.0.0.1:5174/todos', '/repo'), true);
   assert.equal(isAllowedWebviewSrc('http://[::1]:5173/', '/repo'), true);
+});
+
+test('isAllowedWebviewSrc: refuses non-html data, empty, and dangerous schemes', () => {
+  assert.equal(isAllowedWebviewSrc('data:image/svg+xml,<svg/>', '/repo'), false, 'non-html data refused');
+  assert.equal(isAllowedWebviewSrc('', '/repo'), false);
+  assert.equal(isAllowedWebviewSrc('javascript:alert(1)', '/repo'), false);
+  assert.equal(isAllowedWebviewSrc('about:blank', '/repo'), false);
 });
 
 test('isAllowedWebviewSrc: allows an authorized prototype file inside the workspace', () => {
