@@ -6,7 +6,7 @@
  * ever reaches a client. Mounted at /api/connectors.
  */
 import { Router } from "express";
-import { requireJwt, type AuthedRequest } from "../../middleware/auth.js";
+import { requireAnyAuth, requireJwt, type AuthedRequest } from "../../middleware/auth.js";
 import { memoryEngine } from "../../../memory/engine.js";
 import { resolveOrgContext } from "../../../tenancy/context.js";
 import { can } from "../../../tenancy/rbac.js";
@@ -15,6 +15,7 @@ import {
   buildAuthorizeUrl, exchangeCode,
 } from "../../../connectors/oauthBroker.js";
 import type { ConnectorTokenSecret } from "../../../connectors/store.js";
+import { enqueueAgentJob } from "../../../memory/scheduler/jobs.js";
 
 export const connectorOauthRouter = Router();
 
@@ -97,21 +98,20 @@ connectorOauthRouter.get("/oauth/apps", requireJwt, async (req: AuthedRequest, r
   res.json({ apps });
 });
 
-/** GET /api/connectors/:source/oauth/start — build the authorize URL + redirect. */
-connectorOauthRouter.get("/:source/oauth/start", requireJwt, async (req: AuthedRequest, res) => {
+async function beginOauth(req: AuthedRequest, res: import("express").Response): Promise<string | null> {
   const source = String(req.params.source);
-  if (!isOAuthSource(source)) { res.status(400).json({ error: `No OAuth broker for source "${source}"` }); return; }
+  if (!isOAuthSource(source)) { res.status(400).json({ error: `No OAuth broker for source "${source}"` }); return null; }
   const orgId = await resolveOrgId(req);
-  if (!orgId) { res.status(400).json({ error: "No active org" }); return; }
+  if (!orgId) { res.status(400).json({ error: "No active org" }); return null; }
   const app = await memoryEngine.connectors.getResolvedOAuthApp(orgId, source);
-  if (!app?.clientId) { res.status(409).json({ error: `OAuth for "${source}" isn't configured for this org — an admin must set its client id/secret first.` }); return; }
+  if (!app?.clientId) { res.status(409).json({ error: `OAuth for "${source}" isn't configured for this org — an admin must set its client id/secret first.` }); return null; }
   // Re-connecting an existing connector? Verify the caller OWNS it before we bind
   // its id into the signed state — otherwise an attacker could enumerate ids and
   // overwrite someone else's connector credentials on callback (IDOR, CWE-639).
   const connectorId = String(req.query.connectorId ?? "").trim() || undefined;
   if (connectorId) {
     const conn = await memoryEngine.connectors.getConnector(connectorId);
-    if (!conn || conn.userId !== req.userId) { res.status(403).json({ error: "Connector not found or access denied." }); return; }
+    if (!conn || conn.userId !== req.userId) { res.status(403).json({ error: "Connector not found or access denied." }); return null; }
   }
   const provider = OAUTH_PROVIDERS[source];
   const pkce = provider.usesPkce ? makePkce() : undefined;
@@ -121,7 +121,20 @@ connectorOauthRouter.get("/:source/oauth/start", requireJwt, async (req: AuthedR
     verifier: pkce?.verifier, iat: nowSec(),
   }, stateSecret());
   const scopes = app.scopes ? app.scopes.split(/\s+/).filter(Boolean) : provider.scopes;
-  res.redirect(buildAuthorizeUrl(source, app.clientId, redirectUri(req, source), state, scopes, pkce?.challenge));
+  return buildAuthorizeUrl(source, app.clientId, redirectUri(req, source), state, scopes, pkce?.challenge);
+}
+
+/** GET /api/connectors/:source/oauth/start — browser redirect for desktop/native callers. */
+connectorOauthRouter.get("/:source/oauth/start", requireAnyAuth, async (req: AuthedRequest, res) => {
+  const url = await beginOauth(req, res);
+  if (url) res.redirect(url);
+});
+
+/** POST /api/connectors/:source/oauth/start — authenticated JSON form for a web
+ * dashboard, which must attach its bearer token before opening the provider URL. */
+connectorOauthRouter.post("/:source/oauth/start", requireAnyAuth, async (req: AuthedRequest, res) => {
+  const url = await beginOauth(req, res);
+  if (url) res.json({ url });
 });
 
 /** GET /api/connectors/:source/oauth/callback — validate state, exchange, store. */
@@ -138,13 +151,18 @@ connectorOauthRouter.get("/:source/oauth/callback", async (req: AuthedRequest, r
   let credential: ConnectorTokenSecret;
   try {
     const token = await exchangeCode(source, { clientId: app.clientId, clientSecret: app.clientSecret, code, redirectUri: redirectUri(req, source), codeVerifier: state.verifier }, { fetchImpl: fetch });
-    credential = { accessToken: token.accessToken, refreshToken: token.refreshToken, expiresAt: token.expiresAt, scope: token.scope };
+    credential = { accessToken: token.accessToken, refreshToken: token.refreshToken, expiresAt: token.expiresAt, scope: token.scope, redirectUri: redirectUri(req, source) };
   } catch (e) { res.status(502).send(`OAuth exchange failed: ${e instanceof Error ? e.message : "unknown error"}`); return; }
+  let connectorId: string;
   if (state.connectorId) {
-    await memoryEngine.connectors.updateConnector(state.connectorId, { credential, status: "connected", lastError: null });
+    await memoryEngine.connectors.updateConnector(state.connectorId, { credential, status: "connected", enabled: true, lastError: null });
+    connectorId = state.connectorId;
   } else {
-    await memoryEngine.connectors.createConnector(state.userId, { source, name: source, orgId: state.orgId, credential });
+    connectorId = (await memoryEngine.connectors.createConnector(state.userId, { source, name: source, orgId: state.orgId, credential })).id;
   }
+  // A newly connected account should begin ingesting immediately; the periodic
+  // maintenance scheduler remains the retry/continuation path.
+  await enqueueAgentJob(memoryEngine.store, "connector_sync", { connectorId, userId: state.userId }).catch(() => undefined);
   res.set("Content-Type", "text/html").send(
     `<!doctype html><meta charset="utf-8"><body style="font-family:system-ui;padding:2rem;background:#0b0b0f;color:#e6e6ea">` +
     `<h3>Connected ${source} ✓</h3><p>You can close this window and return to BrainRouter.</p></body>`,

@@ -98,6 +98,20 @@ test('runGitlabConnectorCheckpoint resolves owner projects and records per-conte
   assert.deepEqual(result.checkpoint.projects, ['org/a', 'org/b']);
 });
 
+test('runGitlabConnectorCheckpoint accepts fully-qualified selected projects without an owner', async () => {
+  const calls: string[] = [];
+  const client: GitlabConnectorClient = {
+    async listProjects() { throw new Error('selected projects should skip owner discovery'); },
+    async listIssues(project) { calls.push(project); return []; },
+    async listMergeRequests() { return []; },
+  };
+  const result = await runGitlabConnectorCheckpoint(connector({
+    config: { projects: ['group/project'], includeIssues: true, includeMergeRequests: false },
+  }), client, { now: '2026-02-03T00:00:00.000Z' });
+  assert.deepEqual(calls, ['group/project']);
+  assert.deepEqual(result.checkpoint.projects, ['group/project']);
+});
+
 test('runGitlabConnectorCheckpoint validates source, owner, and selected content types', async () => {
   const client = {} as GitlabConnectorClient;
   await assert.rejects(
@@ -106,7 +120,7 @@ test('runGitlabConnectorCheckpoint validates source, owner, and selected content
   );
   await assert.rejects(
     () => runGitlabConnectorCheckpoint(connector({ config: { owner: '' } }), client),
-    /owner is required/,
+    /owner or project selection is required/,
   );
   await assert.rejects(
     () => runGitlabConnectorCheckpoint(connector({ config: { owner: 'org', includeIssues: false, includeMergeRequests: false } }), client),
@@ -197,6 +211,17 @@ test('gitlabTokenClient hits the v4 REST API with PRIVATE-TOKEN and maps rows', 
   ]);
 
   assert.throws(() => gitlabTokenClient('   '), /token is required/);
+});
+
+test('gitlabTokenClient uses bearer authentication for server OAuth tokens', async () => {
+  let headers: Record<string, string> = {};
+  const fetchImpl = (async (_input: unknown, init?: RequestInit) => {
+    headers = (init?.headers ?? {}) as Record<string, string>;
+    return new Response(JSON.stringify([]), { status: 200 });
+  }) as typeof fetch;
+  await gitlabTokenClient('oauth-token', undefined, { fetchImpl, authMode: 'bearer' }).listProjects('org');
+  assert.equal(headers.Authorization, 'Bearer oauth-token');
+  assert.equal(headers['PRIVATE-TOKEN'], undefined);
 });
 
 test('gitlabTokenClient falls back to the users projects endpoint when the group lookup fails', async () => {

@@ -19,6 +19,8 @@ import {
   githubTokenClient,
 } from "@kinqs/brainrouter-core/connectors";
 import { validateGithubApiBase } from "@kinqs/brainrouter-core/track";
+import { refreshToken } from "./oauthBroker.js";
+import type { ConnectorStore } from "./store.js";
 
 const SERVER_CONNECTORS_ROOT = path.join(
   process.env.BRAINROUTER_HOME ?? path.join(process.env.HOME ?? ".", ".brainrouter"),
@@ -32,7 +34,31 @@ export async function runConnectorSync(connectorId: string): Promise<ConnectorSy
   const conn = await memoryEngine.connectors.getResolvedConnector(connectorId);
   if (!conn) return { ok: false, documents: 0, imported: 0, error: "connector not found" };
   if (!conn.enabled) return { ok: true, documents: 0, imported: 0 };
-  const accessToken = conn.credential?.accessToken ?? "";
+  let credential = conn.credential;
+  if (credential && needsRefresh(credential.expiresAt) && credential.refreshToken) {
+    const app = conn.orgId
+      ? await memoryEngine.connectors.getResolvedOAuthApp(conn.orgId, conn.source)
+      : null;
+    if (!app?.clientId) {
+      await memoryEngine.connectors.updateConnector(connectorId, { status: "error", lastError: "OAuth app is unavailable — reconnect the source" });
+      return { ok: false, documents: 0, imported: 0, error: "OAuth app unavailable" };
+    }
+    try {
+      const refreshed = await refreshToken(conn.source, {
+        clientId: app.clientId,
+        clientSecret: app.clientSecret,
+        refreshToken: credential.refreshToken,
+        redirectUri: credential.redirectUri,
+      }, { fetchImpl: fetch });
+      credential = { ...credential, ...refreshed, refreshToken: refreshed.refreshToken ?? credential.refreshToken };
+      await memoryEngine.connectors.updateConnector(connectorId, { credential, status: "connected", lastError: null });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await memoryEngine.connectors.updateConnector(connectorId, { status: "error", lastError: `token refresh failed: ${message}` });
+      return { ok: false, documents: 0, imported: 0, error: message };
+    }
+  }
+  const accessToken = credential?.accessToken ?? "";
   if (!accessToken) {
     await memoryEngine.connectors.updateConnector(connectorId, { status: "error", lastError: "no credential — reconnect the source" });
     return { ok: false, documents: 0, imported: 0, error: "no credential" };
@@ -68,7 +94,7 @@ export async function runConnectorSync(connectorId: string): Promise<ConnectorSy
   try {
     const runResult = await runConnectorCheckpointCore(workspaceRoot, fileId, {
       // Inject the sealed DB token — never env/keychain (that's desktop-only).
-      envToken: () => ({ token: accessToken }),
+      oauthToken: () => ({ token: accessToken }),
       githubClient: () => githubTokenClient(accessToken, { apiBase }),
     });
 
@@ -100,12 +126,24 @@ export async function runConnectorSync(connectorId: string): Promise<ConnectorSy
   }
 }
 
+/** Refresh a little before expiry so a long checkpoint never starts with a token
+ * that will expire mid-request.  OAuth providers may omit expiry for durable
+ * tokens, in which case we leave the token alone. */
+function needsRefresh(expiresAt: string | undefined, skewMs = 120_000): boolean {
+  if (!expiresAt) return false;
+  const expiry = Date.parse(expiresAt);
+  return Number.isFinite(expiry) && expiry <= Date.now() + skewMs;
+}
+
 /** Enqueue a `connector_sync` job per enabled connector — called from the
  *  maintenance tick (mirrors the per-user maintenance fan-out). Returns the count. */
-export async function enqueueConnectorSyncs(store: IMemoryStore): Promise<number> {
-  const connectors = await memoryEngine.connectors.listAllEnabledConnectors();
+export async function enqueueConnectorSyncs(store: IMemoryStore, connectorStore: Pick<ConnectorStore, "listAllEnabledConnectors"> = memoryEngine.connectors): Promise<number> {
+  const connectors = await connectorStore.listAllEnabledConnectors();
+  const inflight = await store.listMemoryJobs({ kind: "connector_sync", status: ["pending", "running"], limit: 10_000 }).catch(() => []);
+  const activeIds = new Set(inflight.map((job) => String((job.input as { connectorId?: unknown } | null)?.connectorId ?? "")).filter(Boolean));
   let n = 0;
   for (const c of connectors) {
+    if (activeIds.has(c.id)) continue;
     try { await enqueueAgentJob(store, "connector_sync", { connectorId: c.id, userId: c.userId }); n++; } catch { /* one bad row shouldn't stop the rest */ }
   }
   return n;

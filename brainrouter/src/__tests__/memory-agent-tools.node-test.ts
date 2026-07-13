@@ -88,10 +88,10 @@ function parse(result: any): any {
   return JSON.parse(result.content[0].text);
 }
 
-test("memory_agent_status lists all 14 agents, idle before any jobs", async () => {
+test("memory_agent_status lists all 15 agents, idle before any jobs", async () => {
   const res = await handleMemoryAgentStatus({});
   const { agents } = parse(res);
-  assert.equal(agents.length, 14);
+  assert.equal(agents.length, 15);
   const extractor = agents.find((a: any) => a.id === "cognitive_extractor");
   assert.equal(extractor.lastJobStatus, "idle");
   assert.equal(extractor.pendingJobs, 0);

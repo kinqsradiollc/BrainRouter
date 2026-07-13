@@ -39,8 +39,9 @@ export async function runLinearConnectorCheckpoint(
   return apiResult(documents, failures, now, { highWatermark: maxIso([since, ...documents.map((doc) => doc.updatedAt), now]), issueCount: documents.length });
 }
 
-export function linearTokenClient(token: string, options?: TokenClientOptions): LinearConnectorClient {
-  const client = tokenJsonClient('https://api.linear.app', { Authorization: requireToken(token, 'Linear token') }, options);
+export function linearTokenClient(token: string, options?: TokenClientOptions & { oauth?: boolean }): LinearConnectorClient {
+  const value = requireToken(token, 'Linear token');
+  const client = tokenJsonClient('https://api.linear.app', { Authorization: options?.oauth ? `Bearer ${value}` : value }, options);
   return {
     async listIssues(opts) {
       const filter: Record<string, unknown> = {};

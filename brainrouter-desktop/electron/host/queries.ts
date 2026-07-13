@@ -3440,6 +3440,33 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // ADR-016 C2 — GitHub connector via the backend's server-mediated OAuth broker.
       // The desktop is a thin client: it asks the backend (with the signed-in apiKey)
       // for the authorize URL, opens it in the system browser, then polls status.
+      'connector-oauth-status': async (args) => {
+        const source = String(args.source ?? '').trim();
+        if (!['gitlab','slack','google-drive','gmail','notion','linear'].includes(source)) return { signedIn: false, connected: false, error: 'Unsupported OAuth connector source.' };
+        const cfg = loadConfig() as { cli?: { account?: { url?: string } }; servers?: Record<string, { identity?: string; apiKey?: string }> };
+        const base = String(cfg.cli?.account?.url ?? '').replace(/\/+$/, '');
+        const bId = Object.keys(cfg.servers ?? {}).find((k) => cfg.servers![k]?.identity === 'brainrouter' || /^brainrouter/i.test(k));
+        const token = bId ? String(cfg.servers![bId]?.apiKey ?? '') : '';
+        if (!base || !token) return { signedIn: false, connected: false };
+        try { const r=await fetch(`${base}/api/connectors/${encodeURIComponent(source)}/status`,{headers:{Authorization:`Bearer ${token}`}});const data=await r.json() as Record<string,unknown>;return r.ok?{signedIn:true,...data}:{signedIn:true,connected:false,error:String(data.error??`HTTP ${r.status}`)}; }
+        catch(e){return{signedIn:true,connected:false,error:e instanceof Error?e.message:'failed'};}
+      },
+      'connector-oauth-start': async (args) => {
+        const source=String(args.source??'').trim();
+        if (!['gitlab','slack','google-drive','gmail','notion','linear'].includes(source)) return {ok:false,error:'Unsupported OAuth connector source.'};
+        const cfg=loadConfig() as {cli?:{account?:{url?:string}};servers?:Record<string,{identity?:string;apiKey?:string}>};const base=String(cfg.cli?.account?.url??'').replace(/\/+$/,'');const bId=Object.keys(cfg.servers??{}).find(k=>cfg.servers![k]?.identity==='brainrouter'||/^brainrouter/i.test(k));const token=bId?String(cfg.servers![bId]?.apiKey??''):'';
+        if(!base||!token)return{ok:false,error:'Sign in to BrainRouter first (Settings → Account).'};
+        try{const r=await fetch(`${base}/api/connectors/${encodeURIComponent(source)}/oauth/start`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'}});const data=await r.json() as {url?:string;error?:string};return r.ok&&data.url?{ok:true,url:data.url}:{ok:false,error:data.error??`HTTP ${r.status}`};}catch(e){return{ok:false,error:e instanceof Error?e.message:'failed'};}
+      },
+      'action:connector-oauth-disconnect': async (args) => {
+        const source=String(args.source??'').trim();const cfg=loadConfig() as {cli?:{account?:{url?:string}};servers?:Record<string,{identity?:string;apiKey?:string}>};const base=String(cfg.cli?.account?.url??'').replace(/\/+$/,'');const bId=Object.keys(cfg.servers??{}).find(k=>cfg.servers![k]?.identity==='brainrouter'||/^brainrouter/i.test(k));const token=bId?String(cfg.servers![bId]?.apiKey??''):'';
+        if(!base||!token)return{ok:false};try{const r=await fetch(`${base}/api/connectors/${encodeURIComponent(source)}/disconnect`,{method:'POST',headers:{Authorization:`Bearer ${token}`}});return{ok:r.ok};}catch{return{ok:false};}
+      },
+      'action:connector-oauth-save': async (args) => {
+        const source=String(args.source??'').trim();const cfg=loadConfig() as {cli?:{account?:{url?:string}};servers?:Record<string,{identity?:string;apiKey?:string}>};const base=String(cfg.cli?.account?.url??'').replace(/\/+$/,'');const bId=Object.keys(cfg.servers??{}).find(k=>cfg.servers![k]?.identity==='brainrouter'||/^brainrouter/i.test(k));const token=bId?String(cfg.servers![bId]?.apiKey??''):'';
+        if(!base||!token)return{ok:false,error:'Sign in to BrainRouter first.'};
+        try{const status=await fetch(`${base}/api/connectors/${encodeURIComponent(source)}/status`,{headers:{Authorization:`Bearer ${token}`}});const data=await status.json() as {connector?:{id?:string}|null};if(!status.ok||!data.connector?.id)return{ok:false,error:'Connect this OAuth account before saving sync settings.'};const r=await fetch(`${base}/api/connectors/${encodeURIComponent(data.connector.id)}`,{method:'PATCH',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({name:String(args.name??source),enabled:true,config:args.config??{}})});return r.ok?{ok:true}:{ok:false,error:`HTTP ${r.status}`};}catch(e){return{ok:false,error:e instanceof Error?e.message:'failed'};}
+      },
       'github-connect-status': async () => {
         const cfg = loadConfig() as { cli?: { account?: { url?: string } }; servers?: Record<string, { identity?: string; apiKey?: string }> };
         const base = String(cfg.cli?.account?.url ?? '').replace(/\/+$/, '');

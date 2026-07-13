@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import crypto from "node:crypto";
 import {
-  signState, verifyState, makePkce, buildAuthorizeUrl, exchangeCode,
+  signState, verifyState, makePkce, buildAuthorizeUrl, exchangeCode, refreshToken,
   isOAuthSource, OAUTH_PROVIDERS, type OAuthState,
 } from "../connectors/oauthBroker.js";
 
@@ -54,6 +54,12 @@ describe("oauth broker — PKCE + authorize URL", () => {
     expect(u.searchParams.get("code_challenge")).toBeNull();
     expect(u.searchParams.get("scope")).toBe(OAUTH_PROVIDERS.github.scopes.join(" "));
   });
+  it("uses provider-specific comma-delimited scopes", () => {
+    const slack = new URL(buildAuthorizeUrl("slack", "cid", "http://localhost/cb", "S", ["channels:read", "files:read"]));
+    const linear = new URL(buildAuthorizeUrl("linear", "cid", "http://localhost/cb", "S", ["read", "write"], "CHAL"));
+    expect(slack.searchParams.get("scope")).toBe("channels:read,files:read");
+    expect(linear.searchParams.get("scope")).toBe("read,write");
+  });
 });
 
 describe("oauth broker — source registry + exchange", () => {
@@ -78,5 +84,48 @@ describe("oauth broker — source registry + exchange", () => {
       { status: 200, headers: { "Content-Type": "application/json" } },
     )) as unknown as typeof fetch;
     await expect(exchangeCode("github", { clientId: "c", clientSecret: "s", code: "x", redirectUri: "http://localhost/cb" }, { fetchImpl })).rejects.toThrow(/expired/);
+  });
+  it("uses Notion's Basic-auth JSON exchange contract", async () => {
+    let request: RequestInit | undefined;
+    const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+      request = init;
+      return new Response(JSON.stringify({ access_token: "notion-token" }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as unknown as typeof fetch;
+    await expect(exchangeCode("notion", { clientId: "id", clientSecret: "secret", code: "code", redirectUri: "http://localhost/cb" }, { fetchImpl })).resolves.toMatchObject({ accessToken: "notion-token" });
+    expect(request?.headers).toMatchObject({ "Content-Type": "application/json", Authorization: `Basic ${Buffer.from("id:secret").toString("base64")}` });
+    expect(JSON.parse(String(request?.body))).toMatchObject({ grant_type: "authorization_code", code: "code" });
+  });
+  it("rejects Slack's ok:false token response", async () => {
+    const fetchImpl = (async () => new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), { status: 200, headers: { "Content-Type": "application/json" } })) as unknown as typeof fetch;
+    await expect(exchangeCode("slack", { clientId: "c", clientSecret: "s", code: "x", redirectUri: "http://localhost/cb" }, { fetchImpl })).rejects.toThrow(/invalid_auth/);
+  });
+  it("accepts Slack's nested authed_user token shape", async () => {
+    const fetchImpl = (async () => new Response(JSON.stringify({ ok: true, authed_user: { access_token: "user-token", refresh_token: "user-refresh", expires_in: 3600, scope: "channels:read" } }), { status: 200, headers: { "Content-Type": "application/json" } })) as unknown as typeof fetch;
+    await expect(exchangeCode("slack", { clientId: "c", clientSecret: "s", code: "x", redirectUri: "http://localhost/cb" }, { fetchImpl, nowSec: () => 100 })).resolves.toMatchObject({ accessToken: "user-token", refreshToken: "user-refresh", expiresAt: new Date(3700 * 1000).toISOString(), scope: "channels:read" });
+  });
+  for (const source of ["gitlab", "google-drive", "gmail", "linear"] as const) {
+    it(`${source} supports a public PKCE exchange without client_secret`, async () => {
+      let body = "";
+      const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+        body = String(init?.body ?? "");
+        return new Response(JSON.stringify({ access_token: `${source}-token`, refresh_token: "refresh", expires_in: 3600 }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }) as unknown as typeof fetch;
+      const token = await exchangeCode(source, { clientId: "public-client", clientSecret: "", code: "code", redirectUri: "http://localhost/cb", codeVerifier: "verifier" }, { fetchImpl });
+      expect(token.accessToken).toBe(`${source}-token`);
+      expect(body).toContain("code_verifier=verifier");
+      expect(body).not.toContain("client_secret=");
+    });
+  }
+  it("refreshes expiring OAuth tokens", async () => {
+    let body = "";
+    const fetchImpl = (async (_url: string | URL | Request, init?: RequestInit) => {
+      body = String(init?.body ?? "");
+      return new Response(JSON.stringify({ access_token: "fresh", refresh_token: "new-refresh", expires_in: 60 }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const token = await refreshToken("google-drive", { clientId: "c", clientSecret: "s", refreshToken: "old", redirectUri: "http://localhost/cb" }, { fetchImpl, nowSec: () => 100 });
+    expect(token).toMatchObject({ accessToken: "fresh", refreshToken: "new-refresh" });
+    expect(body).toContain("grant_type=refresh_token");
+    expect(body).toContain("refresh_token=old");
+    expect(body).toContain("redirect_uri=http%3A%2F%2Flocalhost%2Fcb");
   });
 });
