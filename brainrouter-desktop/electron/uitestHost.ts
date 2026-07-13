@@ -34,7 +34,7 @@ import {
   type UiCommandResult,
   type ManifestDiff,
   type Story,
-} from '@kinqs/brainrouter-ui-test/dist/index.js';
+} from '@kinqs/brainrouter-core/uitest';
 import { shouldIgnoreWatchPath } from './fileWatch.js';
 import { findFreePort, isPortFree } from './portUtil.js';
 // IPC is agent-reachable — names + extract paths it receives are untrusted.
