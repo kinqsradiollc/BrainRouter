@@ -9,6 +9,19 @@ type ToolCaller = { callTool(name: string, args: Record<string, unknown>): Promi
 
 let sessionKey = '';
 let heartbeat: ReturnType<typeof setInterval> | null = null;
+let relayInfo: { endpoints: string[]; publicKey: string } | null = null;
+
+/** This desktop's active-session key (empty until registered). The mobile relay
+ * uses it to prove a would-be remote peer is on the SAME account: a same-account
+ * token's GET /api/sessions returns this key; another account's never will. */
+export function getBrainSessionKey(): string { return sessionKey; }
+
+/** Publish (or clear) the running mobile relay's connect info so a same-account
+ * device can DISCOVER this desktop via GET /api/sessions — no manual QR. Re-runs
+ * ensureBrainSession-style metadata on the next heartbeat/registration. */
+export function setBrainSessionRelay(info: { endpoints: string[]; publicKey: string } | null): void {
+  relayInfo = info;
+}
 
 function extractSessionKey(res: unknown): string {
   try {
@@ -25,7 +38,7 @@ export async function ensureBrainSession(mcp: ToolCaller, workspaceRoot: string)
       ...(sessionKey ? { sessionKey } : {}),
       clientKind: 'electron-desktop',
       workspaceRoot: workspaceRoot || '',
-      metadata: { app: 'brainrouter-desktop' },
+      metadata: { app: 'brainrouter-desktop', ...(relayInfo ? { remoteRelay: relayInfo } : {}) },
     });
     const key = extractSessionKey(res);
     if (key) sessionKey = key;

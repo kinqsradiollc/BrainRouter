@@ -24,7 +24,8 @@ import { HostedAgentManager } from './host/hostedAgents.js';
 import { FanoutManager } from './host/fanoutManager.js';
 import { RemoteWorktreeManager } from './host/sshRemote.js';
 import { MobileRelayServer } from './host/mobileRelayServer.js';
-import { ensureBrainSession } from './host/brainSession.js';
+import { ensureBrainSession, getBrainSessionKey } from './host/brainSession.js';
+import { resolveBrainRouterAccountApi } from './accountIntegration.js';
 // host/github-track-services — the extracted gh-CLI / connector / Track-PR
 // service layer. host.ts builds it with its runtime deps and folds the returned
 // functions into the HostContext.
@@ -673,6 +674,21 @@ async function main(): Promise<void> {
     },
     terminalInput: (candidateId, data) => fanoutManager.writeTerminal(candidateId, data),
     agentControl: (candidateId, action, text) => fanoutManager.control(candidateId, action, text),
+    // Account-based pairing: a peer is trusted if its BrainRouter account token
+    // resolves to the SAME account as this desktop — proven by the account-scoped
+    // GET /api/sessions returning THIS desktop's own session key (another
+    // account's token never sees it). No manual QR required.
+    verifyAccountPeer: async (accountToken) => {
+      const api = resolveBrainRouterAccountApi(loadConfig());
+      const ownKey = getBrainSessionKey();
+      if (!api?.baseUrl || !ownKey) return false;
+      try {
+        const res = await fetch(`${api.baseUrl.replace(/\/+$/, '')}/api/sessions`, { headers: { Authorization: `Bearer ${accountToken}` } });
+        if (!res.ok) return false;
+        const data = (await res.json()) as { sessions?: Array<{ sessionKey?: string }> };
+        return Array.isArray(data.sessions) && data.sessions.some((s) => s.sessionKey === ownKey);
+      } catch { return false; }
+    },
   });
   // Per-endpoint /models cache ('' = the active llm; otherwise a named provider).
   const modelsCacheByKey = new Map<string, { models: string[]; at: number }>();
