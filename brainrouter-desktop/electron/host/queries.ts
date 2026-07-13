@@ -494,13 +494,19 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         if (!apiKey) return { ok: false, error: 'No API key for the signed-in backend — sign in again.' };
         let local: Array<{ source: string; name: string; config: Record<string, unknown> }> = [];
         try { local = listConnectors(workspaceRoot) as never; } catch { local = []; }
+        // Never ship secret-ish fields — the server re-authorizes each source through the
+        // OAuth broker, so only the NON-secret definition migrates (CWE-200). This makes
+        // the "credentials are not shipped" guarantee true in code, not just the comment.
+        const SECRET_KEY_RE = /(token|secret|password|passphrase|apikey|api[_-]?key|credential|refresh|client[_-]?secret|private[_-]?key)/i;
+        const stripSecrets = (o: Record<string, unknown>): Record<string, unknown> =>
+          Object.fromEntries(Object.entries(o ?? {}).filter(([k]) => !SECRET_KEY_RE.test(k)));
         let migrated = 0; const failed: string[] = [];
         for (const c of local) {
           try {
             const res = await fetch(`${url}/api/connectors`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-              body: JSON.stringify({ source: c.source, name: c.name, config: c.config }),
+              body: JSON.stringify({ source: c.source, name: c.name, config: stripSecrets(c.config) }),
             });
             if (res.ok) migrated++; else failed.push(`${c.source}: HTTP ${res.status}`);
           } catch (e) { failed.push(`${c.source}: ${e instanceof Error ? e.message : 'error'}`); }
