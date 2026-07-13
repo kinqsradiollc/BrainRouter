@@ -181,8 +181,10 @@ export interface ConnectorStatus {
 export interface PentestTarget {
   id: string; orgId: string; createdBy: string; kind: "domain" | "repository"; value: string; normalizedValue: string; label: string | null; authorizedAt: string; createdAt: string; updatedAt: string;
 }
+export type PentestScanMode = "code-review" | "standard" | "full-audit";
+export const PENTEST_SCAN_MODE_LABELS: Record<PentestScanMode, string> = { "code-review": "Code Review", standard: "Standard Pentest", "full-audit": "Full Audit Pentest" };
 export interface PentestRun {
-  id: string; status: string; targetId: string; target: string; kind: string; findings: number; error: string | null; createdAt: string; updatedAt: string;
+  id: string; status: string; targetId: string; target: string; kind: string; scanMode?: PentestScanMode; findings: number; error: string | null; createdAt: string; updatedAt: string;
 }
 
 export const adminApi = {
@@ -267,7 +269,7 @@ export const adminApi = {
   createPentestTarget: (body: { kind: "domain" | "repository"; value: string; label?: string; authorized: true }, orgId?: string) => authFetch<{ target: PentestTarget }>("/api/admin/pentests/targets", { method: "POST", body, orgId }),
   deletePentestTarget: (id: string, orgId?: string) => authFetch<{ ok: boolean }>(`/api/admin/pentests/targets/${encodeURIComponent(id)}`, { method: "DELETE", orgId }),
   listPentestRuns: (orgId?: string, limit = 100) => authFetch<{ runs: PentestRun[] }>(`/api/admin/pentests/runs?limit=${limit}`, { orgId }),
-  startPentestRun: (targetId: string, orgId?: string) => authFetch<{ run: PentestRun }>("/api/admin/pentests/runs", { method: "POST", body: { targetId }, orgId }),
+  startPentestRun: (targetId: string, scanMode: PentestScanMode = "standard", orgId?: string) => authFetch<{ run: PentestRun }>("/api/admin/pentests/runs", { method: "POST", body: { targetId, scanMode }, orgId }),
   listOrgs: (signal?: AbortSignal) => authFetch<{ orgs: OrgSummary[] }>("/api/orgs", { signal }),
   createOrg: (name: string, plan: OrgPlan = "team") =>
     authFetch<{ org: OrgSummary }>("/api/orgs", { method: "POST", body: { name, plan } }),

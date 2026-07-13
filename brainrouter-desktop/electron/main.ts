@@ -370,6 +370,18 @@ function openWorkspaceWindow(workspaceRoot: string): void {
       event.preventDefault();
     }
   });
+  // The attach gate only vets the INITIAL src. A guest's own loadURL()/link
+  // click/redirect must be gated too, or the omnibox could navigate to a remote
+  // origin or file:// outside the workspace (arbitrary local-file read). Re-apply
+  // the same policy to every guest navigation, and deny guest window.open.
+  win.webContents.on('did-attach-webview', (_event, guest) => {
+    const gate = (e: { preventDefault: () => void }, url: string): void => {
+      if (!isAllowedWebviewSrc(url, workspaceRoot)) e.preventDefault();
+    };
+    guest.on('will-navigate', gate);
+    guest.on('will-redirect', gate);
+    guest.setWindowOpenHandler(() => ({ action: 'deny' }));
+  });
   const wp: WinPool = { win, hosts: new Map(), lastSession: new Map(), pool: emptyPool(), retiring: new Set() };
   wins.set(win.webContents.id, wp);
 

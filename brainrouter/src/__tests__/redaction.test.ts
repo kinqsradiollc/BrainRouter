@@ -19,4 +19,29 @@ describe("memory redaction", () => {
     expect(redacted).toContain("[REDACTED_CONN_STR]");
     expect(redacted).toContain("[REDACTED_IP]");
   });
+
+  it("redacts the secret shapes a pentest PoC captures (JWT, cookie, Basic, cloud keys, IPv6)", () => {
+    const jwt = "eyJhbGciOiJIUzI1NiJ9.eyJ1c2VyIjoiYWRtaW4ifQ.s3cr3tSignatureValue";
+    const r = redactSensitiveMemoryText(
+      [
+        `PoC: curl https://t/api -H 'Cookie: sessionid=${jwt}'`,
+        "Authorization: Basic YWRtaW46c3VwZXJzZWNyZXQ=",
+        "aws AKIAIOSFODNN7EXAMPLE key AIzaSyD-1234567890abcdefghijklmnopqrstuv slack xoxb-1111-2222-abcdef",
+        "host 2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+      ].join("\n")
+    );
+    expect(r).not.toContain(jwt);
+    expect(r).not.toContain("sessionid=");
+    expect(r).not.toContain("YWRtaW46c3VwZXJzZWNyZXQ");
+    expect(r).not.toContain("AKIAIOSFODNN7EXAMPLE");
+    expect(r).not.toContain("AIzaSyD-1234567890abcdefghijklmnopqrstuv");
+    expect(r).not.toContain("xoxb-1111-2222-abcdef");
+    expect(r).not.toContain("2001:0db8:85a3");
+  });
+
+  it("does not over-redact ordinary prose (timestamp, 'Basic understanding')", () => {
+    const r = redactSensitiveMemoryText("Deploy finished at 12:34:56 with a Basic understanding of the flow");
+    expect(r).toContain("12:34:56");
+    expect(r).toContain("Basic understanding");
+  });
 });

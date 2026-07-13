@@ -1097,9 +1097,11 @@ export async function executeLocalToolLegacy(this: Agent, name: string, args: Re
         if (!run || run.status !== 'running') throw new Error('finish_scan requires an active pentest review run.');
         const executiveSummary = String(args.executiveSummary ?? '').trim();
         const methodology = String(args.methodology ?? '').trim();
+        const technicalAnalysis = String(args.technicalAnalysis ?? '').trim();
+        const recommendations = String(args.recommendations ?? '').trim();
         const limitations = String(args.limitations ?? '').trim();
-        if (!executiveSummary || !methodology || !limitations) throw new Error('finish_scan requires executiveSummary, methodology, and limitations.');
-        const summary = `${executiveSummary}\n\nMethodology: ${methodology}\n\nLimitations: ${limitations}`;
+        if (!executiveSummary || !methodology || !technicalAnalysis || !recommendations || !limitations) throw new Error('finish_scan requires executiveSummary, methodology, technicalAnalysis, recommendations, and limitations.');
+        const summary = `${executiveSummary}\n\n## Methodology\n${methodology}\n\n## Technical analysis\n${technicalAnalysis}\n\n## Recommendations\n${recommendations}\n\n## Limitations\n${limitations}`;
         saveReview(this.workspaceRoot, { ...run, status: 'completed', updatedAt: new Date().toISOString(), summary });
         return JSON.stringify({ completed: true, findings: run.findings.length, sarif: '.brainrouter/findings.sarif' });
       }
