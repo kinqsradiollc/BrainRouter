@@ -51,6 +51,23 @@ function saveFlows(f: Record<string, FlowStep[]>): void {
   try { localStorage.setItem(FLOWS_KEY, JSON.stringify(f)); } catch { /* ignore */ }
 }
 
+/**
+ * The one choke-point every navigation passes through. Electron's guest throws
+ * ERR_INVALID_URL for an empty or scheme-less string, so we NEVER hand a raw
+ * value to `loadURL`/`src`. Returns a loadable URL, or null when there is
+ * nothing valid to load (caller falls back to about:blank). A bare host gets a
+ * scheme: loopback → http, anything else → https.
+ */
+function normalizeUrl(raw: string | null | undefined): string | null {
+  const s = (raw ?? '').trim();
+  if (!s) return null;
+  if (/^(https?|data|about|file):/i.test(s)) return s;
+  if (/^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:\d+)?(\/|$)/i.test(s)) return `http://${s}`;
+  if (/^[\w.-]+(:\d+)?(\/|$)/.test(s)) return `https://${s}`;
+  return null;
+}
+const BROWSER_BLANK = 'about:blank';
+
 export function BrowserPanel(): React.ReactElement {
   const [url, setUrl] = useState(() => localStorage.getItem(URL_KEY) || 'http://localhost:5173');
   const [urlDraft, setUrlDraft] = useState(url);
@@ -86,8 +103,11 @@ export function BrowserPanel(): React.ReactElement {
     const host = hostRef.current;
     if (!host) return;
     const wv = document.createElement('webview') as unknown as WebviewEl;
-    wv.setAttribute('src', urlRef.current);
+    // partition MUST be set before src — Electron re-attaches the guest if the
+    // partition changes after a load, which itself can fire a spurious
+    // loadURL('') and the ERR_INVALID_URL the user was seeing.
     wv.setAttribute('partition', 'persist:browser-panel');
+    wv.setAttribute('src', normalizeUrl(urlRef.current) ?? BROWSER_BLANK);
     wv.style.width = '100%';
     wv.style.height = '100%';
     wv.style.border = '0';
@@ -96,19 +116,32 @@ export function BrowserPanel(): React.ReactElement {
       const ev = e as { level: number; message: string };
       setConsoleMsgs((m) => [...m, { level: ev.level, text: ev.message }].slice(-200));
     };
-    const onNav = (): void => { try { setUrl(wv.getURL()); setUrlDraft(wv.getURL()); } catch { /* ignore */ } };
+    // getURL() is '' until a document commits (and on a failed provisional load).
+    // Never write that back into state or it re-enters the sinks as an empty load.
+    const onNav = (): void => { try { const u = wv.getURL(); if (u && u !== BROWSER_BLANK) { setUrl(u); setUrlDraft(u); } } catch { /* ignore */ } };
     const onFail = (e: unknown): void => {
-      const ev = e as { errorDescription?: string; validatedURL?: string };
-      if (ev.validatedURL && ev.validatedURL === urlRef.current) setStatus(`load failed: ${ev.errorDescription || 'unreachable'} — is the dev server running?`);
+      const ev = e as { errorDescription?: string; validatedURL?: string; errorCode?: number };
+      // errorCode -3 is ABORTED (a superseded navigation) — not a real failure.
+      if (ev.errorCode === -3) return;
+      setStatus(`load failed: ${ev.errorDescription || 'unreachable'}${ev.validatedURL ? ` (${ev.validatedURL})` : ''} — check the URL or that the server is running.`);
     };
     wv.addEventListener('dom-ready', onReady);
     wv.addEventListener('console-message', onConsole as EventListener);
     wv.addEventListener('did-navigate', onNav as EventListener);
     wv.addEventListener('did-navigate-in-page', onNav as EventListener);
     wv.addEventListener('did-fail-load', onFail as EventListener);
+    // did-fail-provisional-load fires for connection-refused on the INITIAL load
+    // (the most common failure) which did-fail-load misses.
+    wv.addEventListener('did-fail-provisional-load', onFail as EventListener);
     host.appendChild(wv);
     wvRef.current = wv;
     return () => {
+      wv.removeEventListener('dom-ready', onReady);
+      wv.removeEventListener('console-message', onConsole as EventListener);
+      wv.removeEventListener('did-navigate', onNav as EventListener);
+      wv.removeEventListener('did-navigate-in-page', onNav as EventListener);
+      wv.removeEventListener('did-fail-load', onFail as EventListener);
+      wv.removeEventListener('did-fail-provisional-load', onFail as EventListener);
       try { host.removeChild(wv); } catch { /* ignore */ }
       wvRef.current = null;
     };
@@ -116,8 +149,8 @@ export function BrowserPanel(): React.ReactElement {
 
   // Navigate when the committed URL changes.
   const go = (next: string): void => {
-    const u = next.trim();
-    if (!u) return;
+    const u = normalizeUrl(next);
+    if (!u) { setStatus('Enter a valid URL (e.g. localhost:5173 or https://example.com).'); return; }
     setStatus('');
     setUrl(u);
     setUrlDraft(u);
@@ -252,7 +285,7 @@ export function BrowserPanel(): React.ReactElement {
   const runFlow = (name: string) => withWv(async (wv) => {
     const steps = flows[name] || [];
     for (const s of steps) {
-      if (s.action === 'navigate') { await wv.loadURL(s.target).catch(() => undefined); continue; }
+      if (s.action === 'navigate') { const nav = normalizeUrl(s.target); if (nav) await wv.loadURL(nav).catch(() => undefined); continue; }
       const r = s.action === 'type' ? await typeText(wv, s.target, s.text ?? '') : s.action === 'assertVisible' ? await assertVisible(wv, s.target) : await tap(wv, s.target);
       setStatus(`flow ${name}: ${s.action} ${s.target} → ${r.ok ? 'ok' : 'fail'}`);
       if (!r.ok) break;
@@ -267,9 +300,10 @@ export function BrowserPanel(): React.ReactElement {
   };
 
   // Load a URL and resolve once the page is ready (or a safety timeout).
-  const loadAndWait = (u: string): Promise<void> => new Promise((resolve) => {
+  const loadAndWait = (raw: string): Promise<void> => new Promise((resolve) => {
     const wv = wvRef.current;
-    if (!wv) { resolve(); return; }
+    const u = normalizeUrl(raw);
+    if (!wv || !u) { resolve(); return; }
     let done = false;
     const finish = (): void => { if (done) return; done = true; wv.removeEventListener('dom-ready', finish); resolve(); };
     wv.addEventListener('dom-ready', finish);
