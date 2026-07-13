@@ -2,7 +2,11 @@ export interface ExternalApiRetryOptions {
   label: string;
   maxRetries?: number;
   baseDelayMs?: number;
+  /** Upper bound on any single backoff wait (also caps a huge server Retry-After). */
+  maxDelayMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  /** Deterministic jitter source for tests; defaults to Math.random. */
+  random?: () => number;
 }
 
 export class ExternalApiError extends Error {
@@ -11,15 +15,51 @@ export class ExternalApiError extends Error {
     public readonly status?: number,
     /** Set when the failure is a recoverable blip (status- or body-detected). */
     public readonly retryable: boolean = false,
+    /** Server-requested wait before retrying (from a `Retry-After` header), in ms. */
+    public readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = "ExternalApiError";
   }
 }
 
-const DEFAULT_MAX_RETRIES = 3;
+const DEFAULT_MAX_RETRIES = 4;
 const DEFAULT_BASE_DELAY_MS = 2_000;
+const DEFAULT_MAX_DELAY_MS = 30_000;
 const RETRYABLE_HTTP_STATUSES = new Set([429, 503]);
+
+/**
+ * Parse a `Retry-After` header into ms. GitHub / OpenAI-compatible gateways send
+ * either delta-seconds (`"5"`) or an HTTP-date. Returns undefined when absent /
+ * unparseable so the caller falls back to exponential backoff.
+ */
+export function parseRetryAfterMs(header: string | null | undefined, nowMs: number = Date.now()): number | undefined {
+  if (!header) return undefined;
+  const s = header.trim();
+  if (/^\d+$/.test(s)) return Math.max(0, Number(s) * 1000);
+  const at = Date.parse(s);
+  if (Number.isFinite(at)) return Math.max(0, at - nowMs);
+  return undefined;
+}
+
+/**
+ * Backoff for one attempt: exponential base with EQUAL JITTER (half fixed, half
+ * random) so concurrent callers retrying the same overloaded endpoint don't
+ * re-collide in lockstep. A server `Retry-After` (when present) takes precedence.
+ * Everything is capped at `maxDelayMs`.
+ */
+export function computeBackoffMs(
+  attempt: number,
+  baseDelayMs: number,
+  maxDelayMs: number,
+  retryAfterMs: number | undefined,
+  random: () => number,
+): number {
+  const exp = Math.min(maxDelayMs, baseDelayMs * 2 ** attempt);
+  const jittered = exp / 2 + random() * (exp / 2);
+  const withServerHint = retryAfterMs !== undefined ? Math.max(retryAfterMs, jittered) : jittered;
+  return Math.min(maxDelayMs, Math.round(withServerHint));
+}
 
 // Statuses that must carry an empty body — passing text to `new Response()` with
 // one of these throws, so we rebuild them with a null body.
@@ -63,7 +103,9 @@ export async function retryExternalCall<T>(
 ): Promise<T> {
   const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
   const baseDelayMs = options.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
+  const maxDelayMs = options.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
   const sleep = options.sleep ?? defaultSleep;
+  const random = options.random ?? Math.random;
 
   let attempt = 0;
   while (true) {
@@ -74,7 +116,10 @@ export async function retryExternalCall<T>(
         throw error;
       }
 
-      const delayMs = baseDelayMs * (2 ** attempt);
+      // A 429/503 may carry a server-requested wait; honor it (capped), otherwise
+      // fall back to jittered exponential backoff.
+      const retryAfterMs = error instanceof ExternalApiError ? error.retryAfterMs : undefined;
+      const delayMs = computeBackoffMs(attempt, baseDelayMs, maxDelayMs, retryAfterMs, random);
       attempt += 1;
       console.error(`[BrainRouter] ${options.label} failed with a retryable error. Retrying in ${delayMs}ms (attempt ${attempt}/${maxRetries}).`);
       await sleep(delayMs);
@@ -100,12 +145,15 @@ export async function fetchWithExternalRetry(
     const bodyText = await response.text().catch(() => "");
     const transient = isTransientConnectionBody(bodyText);
     if (transient || RETRYABLE_HTTP_STATUSES.has(response.status)) {
+      // Respect the provider's backpressure hint when it sends one (429/503 often do).
+      const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
       throw new ExternalApiError(
         `${options.label} failed with HTTP ${response.status} ${response.statusText}`
           + (transient ? " (transient connection drop)" : "")
           + (bodyText ? ` - ${bodyText.slice(0, 200)}` : ""),
         response.status,
         true,
+        retryAfterMs,
       );
     }
 

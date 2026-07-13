@@ -34,6 +34,34 @@ export function isRepoLinkedForReview(config: Record<string, unknown> | undefine
   return raw.map(String).includes(repoFullName);
 }
 
+/** Per-repo review behavior (Strix-style Approve / Block / Re-review), resolved per PR. */
+export interface ReviewPolicy {
+  /** Post an APPROVE review when a lens finds nothing (vs. a silent pass). */
+  approveClean: boolean;
+  /** A blocking finding fails the check-run (gates merge). Off ⇒ neutral (advisory only). */
+  blockOnFindings: boolean;
+  /** Re-run the review on every push (pull_request.synchronize). Off ⇒ only on open/reopen. */
+  reReviewOnPush: boolean;
+}
+
+const REVIEW_POLICY_DEFAULTS: ReviewPolicy = { approveClean: false, blockOnFindings: true, reReviewOnPush: true };
+
+/**
+ * Resolve the effective review policy for a repo: a per-repo override
+ * (`config.reviewPolicies[repo]`) falls back to the org default
+ * (`config.reviewPolicyDefaults`), which falls back to the built-in defaults. Each field
+ * is resolved independently so "Default" on one toggle doesn't reset the others.
+ */
+export function resolveReviewPolicy(config: Record<string, unknown> | undefined, repoFullName: string): ReviewPolicy {
+  const defaults = (config?.reviewPolicyDefaults ?? {}) as Partial<ReviewPolicy>;
+  const perRepo = (((config?.reviewPolicies ?? {}) as Record<string, Partial<ReviewPolicy>>)[repoFullName]) ?? {};
+  const pick = (k: keyof ReviewPolicy): boolean => {
+    const v = perRepo[k] ?? defaults[k];
+    return typeof v === "boolean" ? v : REVIEW_POLICY_DEFAULTS[k];
+  };
+  return { approveClean: pick("approveClean"), blockOnFindings: pick("blockOnFindings"), reReviewOnPush: pick("reReviewOnPush") };
+}
+
 export interface WebhookRequest {
   body: Record<string, any>;
   rawBody: Buffer;
@@ -99,10 +127,12 @@ export async function processGithubDelivery(deps: WebhookDeps, req: WebhookReque
     }
   };
 
-  // A PR open/update auto-reviews with both lenses.
+  // A PR open/update auto-reviews with both lenses. A push (synchronize) only re-reviews
+  // when the repo's policy allows it (Strix "Re-review on push"); open/reopen always review.
   if (req.event === "pull_request" && (action === "opened" || action === "synchronize" || action === "reopened")) {
     const pr = (req.body?.pull_request ?? {}) as { number?: number; head?: { sha?: string } };
-    await fireReviews(pr.number, pr.head?.sha);
+    const reReview = action !== "synchronize" || resolveReviewPolicy(integ.config, String(repoFullName ?? "")).reReviewOnPush;
+    if (reReview) await fireReviews(pr.number, pr.head?.sha);
   }
 
   // Re-run on demand: a `/review` or `@brainrouter review` comment on a PR re-triggers both

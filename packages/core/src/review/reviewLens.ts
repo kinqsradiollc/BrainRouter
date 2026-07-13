@@ -34,6 +34,11 @@ export interface ReviewLens {
   footerLabel: string;
   /** System prompt for the reviewer LLM turn. */
   systemPrompt: string;
+  /**
+   * Advisory lens: its check-run NEVER fails (findings are suggestions, not merge gates),
+   * so it isn't a required CI check. Security gates; code review advises.
+   */
+  advisory: boolean;
   /** The single-shot, diff-only review contract appended after the diff. */
   buildContract(): string;
   /** Whether a finding should BLOCK the merge (drives the check-run conclusion). */

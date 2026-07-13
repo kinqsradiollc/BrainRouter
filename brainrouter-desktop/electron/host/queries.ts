@@ -3332,6 +3332,21 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         } catch { /* sessions optional */ }
         return out;
       },
+      // ADR-017 D5 — recent PR reviews the bot ran (for the desktop PR Reviews panel),
+      // read with the signed-in apiKey (requirePermission triggers:manage on the org).
+      'reviews': async () => {
+        const cfg = loadConfig() as { cli?: { account?: { url?: string } }; servers?: Record<string, { identity?: string; apiKey?: string }> };
+        const base = String(cfg.cli?.account?.url ?? '').replace(/\/+$/, '');
+        const bId = Object.keys(cfg.servers ?? {}).find((k) => (cfg.servers![k]?.identity === 'brainrouter') || /^brainrouter/i.test(k));
+        const apiKey = bId ? String(cfg.servers![bId]?.apiKey ?? '') : '';
+        if (!base || !apiKey) return { signedIn: false, reviews: [] };
+        try {
+          const r = await fetch(`${base}/api/admin/reviews/jobs?limit=40`, { headers: { Authorization: `Bearer ${apiKey}` } });
+          if (!r.ok) return { signedIn: true, reviews: [], error: r.status === 403 ? 'Owner/admin only' : `HTTP ${r.status}` };
+          const j = await r.json() as { reviews?: unknown[] };
+          return { signedIn: true, reviews: Array.isArray(j.reviews) ? j.reviews : [] };
+        } catch (e) { return { signedIn: true, reviews: [], error: e instanceof Error ? e.message : 'fetch failed' }; }
+      },
       // Log out of all OTHER devices — rotate the account's API key so every other
       // client (CLI, other desktops) using the old key is invalidated, then re-key
       // THIS device so it stays signed in. Refreshes the short-lived jwt first.

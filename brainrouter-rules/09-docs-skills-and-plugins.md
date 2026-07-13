@@ -1,0 +1,245 @@
+# 09 — Docs, Skills, Agents & Plugins
+
+Where documentation lives, how skills/ADRs/specs are authored, and the plugin +
+marketplace conventions.
+
+---
+
+## Documentation topology
+
+### 1. Know the three doc trees
+
+- **`docs/`** = universal **TEMPLATES only** (contains a literal "TEMPLATE ONLY"
+  marker; categories `api/design/schema/deployment/hooks/strategy` are served
+  read-only via the MCP doc tools to *downstream* projects). Do **not** put
+  BrainRouter's own living docs here — that leaks internal content to clients.
+- **`brainrouter-docs/`** = living deep docs (memory-engine.md, cli.md, hooks.md,
+  federation.md, configuration.md, policy.md, specs/, decisions/).
+- **`brainrouter-changelog/<version>.md`** = per-release notes; root `CHANGELOG.md`
+  is the current-release view (Keep-a-Changelog). See [`08`](08-git-release-and-changelog.md).
+- **Evidence:** `docs/TEMPLATE ONLY`, `brainrouter-docs/README.md`, `CHANGELOG.md:1`
+
+### 2. `brainrouter-docs/README.md` is the mandatory index; top-level docs stay short
+
+Top-level repo docs (README, BRAINROUTER, PRESENTATION) deliberately stay short;
+deep dives live in `brainrouter-docs/`. **Every new deep doc, spec, or ADR must be
+linked from `brainrouter-docs/README.md`** with a 1–3 line summary — the README is
+the navigation surface, not an afterthought. Unindexed docs are effectively lost.
+
+- **Evidence:** `brainrouter-docs/README.md:1,46`
+
+### 3. `architecture-folder-structure-rules.md` is the boundary law — reference it, don't restate it
+
+For structural questions, defer to
+[`brainrouter-docs/architecture-folder-structure-rules.md`](../brainrouter-docs/architecture-folder-structure-rules.md).
+Its layer model: **domain** (pure, no I/O) ← **contracts** (wire/store payloads,
+type guards, stable IDs) ← **ports** (interfaces) ← **services** (use-cases
+coordinating ports + domain) ← **presentation** (CLI/TUI/Desktop), with adapters
+implementing ports and owning side effects; domain must be unit-testable without
+mocks. Non-negotiables: memory stays central; all three apps follow the same
+layered ownership; no new god files; no cosmetic folder moves; committed files
+never name external reference projects nor copy their code; workflow state is
+durable and linkable (requirements↔tasks↔artifacts↔reviews↔memory IDs);
+branch/workspace state is read live from git, cached only with invalidation. New
+convention docs link to it instead of duplicating it (this folder does exactly
+that).
+
+- **Evidence:** `brainrouter-docs/architecture-folder-structure-rules.md:7,77,216`
+
+### 4. `task.md` and `walkthrough.md` are the living workflow artifacts at repo root
+
+Track release work in a root `task.md`: a header block restating the binding rules
+(target branch, one feature per PR, CI gates, no AI attribution), then checkbox
+sections using the legend `[ ]` todo, `[x]` done, `[~]` in progress, `[U]` blocked
+on user. On handover, write/update `walkthrough.md` with two sections: "## Completed
+Changes" (behavior-level bullets, not raw diffs) and "## Verification" (the exact
+commands run, one per line). Verify tests/lint green before writing the walkthrough.
+
+- **Why:** these files are the contract between sessions/agents; `CLAUDE.md`'s
+  workflow phases and the handover-skill assume this exact shape.
+- **Evidence:** `task.md:1`, `walkthrough.md:1`, `CLAUDE.md`
+
+### 5. Specs and ADRs live in `brainrouter-docs/` and are never deleted
+
+- **Specs:** `brainrouter-docs/specs/<kebab-feature>.md`, titled `# Spec: …`,
+  immediately followed by a `> Status:` blockquote tracking lifecycle
+  ("in progress on `<branch>`" / "SHIPPED in 0.4.12" with links). Write + get
+  approval on the spec **before** core code (SPECIFY→PLAN→TASKS→IMPLEMENT); retain
+  it as the design of record after shipping.
+- **ADRs:** `brainrouter-docs/decisions/ADR-NNN-<kebab-title>.md`, sequential
+  three-digit numbering, header with a bold Status line + explicit `Supersedes:` /
+  `Builds on:` links, a blockquote TL;DR, then Context / Decision / consequences.
+  **Never delete** an ADR — write a new one that supersedes it. Match existing ADR
+  style (the real files use a compact one-line header that differs slightly from
+  the skill's fuller template).
+- **Evidence:** `brainrouter-docs/specs/memory-accuracy.md`, `brainrouter-docs/decisions/ADR-007-postgres-memory-store.md:1`
+
+---
+
+## Skills & agent personas
+
+### 6. CLAUDE.md is the scenario→skill routing hub; develop locally, never via MCP tools
+
+Treat `CLAUDE.md` as the primary agent instruction hub: when a dev task matches a
+scenario, read the mapped `SKILL.md` **directly from the filesystem** and follow
+it. **Never invoke `mcp_brainrouter_*` tools while developing this repo** (you're
+building BrainRouter, not a client of it). When you add a development-relevant
+skill, register it in CLAUDE.md's Scenario Mapping with a relative link
+`skills/<category>/<name>/SKILL.md`.
+
+- **Evidence:** `CLAUDE.md`
+
+### 7. Skill layout: `skills/<category>/<kebab-name>/SKILL.md`, name matches directory
+
+Every skill is a directory containing exactly one `SKILL.md` at
+`skills/<category>/<skill-name>/SKILL.md`. The frontmatter `name` must be a
+kebab-case slug **identical to the directory name**; the category is the first path
+segment under the skills root (agent, api, codebase, communication, design, devops,
+lifecycle, memory, qa, ux). Discovery walks max 5 levels and skips
+`node_modules`/`.git`.
+
+- **Why:** both the MCP registry and the CLI catalog derive name/category from the
+  path; a mismatched frontmatter name breaks listing and resolution.
+- **Evidence:** `brainrouter/src/registry.ts:61`, `brainrouter-cli/src/prompt/skillCatalog.ts:160`
+
+### 8. SKILL.md frontmatter must stay regex-parseable — no full YAML
+
+All frontmatter (SKILL.md, agent files, plugin `.local.md`) is parsed by small
+dependency-free **regex** parsers, NOT a YAML library. Restrict frontmatter to
+simple `key: value` scalars, block scalars (`key: |` with 2-space indented lines),
+and simple `- item` lists. Required keys: `name`, `description`. Optional: `hints`
+(agent guidance), `memory_hints` (a **separate** key the brain's
+`memory_register_skill_hints` tool reads — don't confuse the two),
+`disallowed-tools`.
+
+- **Why:** nested/advanced YAML silently fails to parse; the codebase deliberately
+  avoids pulling a YAML engine.
+- **Evidence:** `brainrouter/src/memory/skills/skill-hints-loader.ts:15`, `packages/core/src/plugin/localConfig.ts:11`
+
+### 9. SKILL.md body sections are machine-addressable — use the canonical `##` headings
+
+The MCP `get_skill`/`update_skill` tools extract sections by heading name:
+`## Overview`, `## When to Use`, `## Workflow` (the DEFAULT section served to
+agents), `## Usage`, `## Detailed Instructions`, `### Phase N` blocks,
+`## Verification` (checklist), `## Red Flags`, `## Common Rationalizations`. Keep
+these exact heading names; a skill without a `## Workflow` section serves nothing
+useful by default. Skills may declare `disallowed-tools` to blacklist tools for the
+turn they run; slash commands map to skills via `SLASH_TO_SKILL` in
+`skillRunner.ts` — author heavy workflow content in the skill body (the single
+source of truth), keep the CLI prompt thin.
+
+- **Evidence:** `brainrouter/src/types.ts:20`, `brainrouter/src/loader.ts:187`, `brainrouter-cli/src/prompt/skillRunner.ts:29`
+
+### 10. Skill names are globally unique; know the shadowing precedence
+
+Resolution is first-match-wins across ordered roots: workspace `<ws>/skills/` →
+local `<ws>/.brainrouter/skills/` → plugin roots
+(`.brainrouter/plugins/<name>/skills/`) → bundled (installed MCP package + monorepo
+root `skills/`). A same-named skill in a lower-precedence root is **shadowed**
+(surfaced as `<scope>:<name>` with a collision flag, not silently dropped). Don't
+create two skills with the same name expecting both to load. `create_skill`
+scaffolds with scope `global` (this repo) vs `local` (downstream project) and
+refuses name collisions.
+
+- **Evidence:** `brainrouter-cli/src/prompt/skillCatalog.ts:31,96,146`
+
+### 11. Agent personas are single-role markdown; personas never call personas
+
+Agent personas live as flat files at `agents/<kebab-name>.md` with `name` +
+`description` frontmatter and a body written as a system prompt for **one** role
+with one perspective and a defined output format. Respect the three-layer
+composition: **Skill** = the *how* (workflow steps), **Persona** = the *who*
+(viewpoint + report), **Command** = the *when* (user-facing entry composing the
+other two). The user or a slash command orchestrates — **personas must not invoke
+other personas**; skills are the only mandatory hops inside a persona's workflow.
+
+- **Evidence:** `agents/README.md`, `agents/code-reviewer.md:1`
+
+---
+
+## Plugins & marketplace
+
+### 12. Plugin manifest is `.brainrouter-plugin/plugin.json` — never `.claude`
+
+A BrainRouter plugin is a folder whose manifest lives at
+`.brainrouter-plugin/plugin.json` (the code repeatedly stresses: **never `.claude`
+naming**). The only required field is `name` (kebab-case, validated by
+`KEBAB_CASE_RE`); bad version/category produce **warnings, not hard failures**.
+Component dirs are auto-discovered by convention when `contributes` omits them:
+`skills/`, `agents/` (.md), `commands/` (.md), `hooks/hooks.json`, `workflows/`,
+`connectors/`, `mcp.json` — so a skills-only plugin is just `plugin.json` +
+`skills/`. Any explicit `contributes` path must be relative and stay inside the
+plugin root (absolute and `..`-escaping paths are rejected at parse **and**
+discovery time).
+
+> Not to be confused with the repo's OWN `.claude-plugin/plugin.json` at the root,
+> which distributes *this repo* as a Claude Code plugin — a different artifact.
+
+- **Why:** the installer is deliberately warn-not-fail for soft fields; the path
+  guards are a security boundary.
+- **Evidence:** `packages/core/src/plugin/manifest.ts:18-20,137`, `packages/core/src/plugin/discovery.ts:85`
+
+### 13. Use `${BRAINROUTER_PLUGIN_ROOT}` for portable paths in plugin assets
+
+Hooks, `mcp.json`, and connector assets inside a plugin must reference their own
+files via the `${BRAINROUTER_PLUGIN_ROOT}` token (bare `$BRAINROUTER_PLUGIN_ROOT`
+also expands), which the loader replaces with the plugin's absolute install root.
+**Never hardcode absolute paths in plugin assets** (they break on install into a
+different root per scope/machine).
+
+- **Evidence:** `packages/core/src/plugin/manifest.ts:21,228`
+
+### 14. Plugin storage scopes and sidecar files
+
+Plugins install to exactly two scopes: user `~/.brainrouter/plugins/<name>/`
+(override home with `BRAINROUTER_HOME`) and workspace
+`<ws>/.brainrouter/plugins/<name>/` (committable, project-pinned). Install
+provenance is `install.json` in the plugin root; installs stage atomically via
+`~/.brainrouter/plugins/.staging`. Per-project plugin config is
+`<ws>/.brainrouter/plugins/<name>.local.md` — YAML frontmatter (machine config) +
+Markdown body (human notes), inert unless a component reads it. Marketplaces are
+indexed by a `brainrouter-marketplace.json` at the source root and recorded in
+`cli.plugins.marketplaces[]` in `config.json`.
+
+- **Why:** everything plugin-related keys off `.brainrouter/` conventions +
+  `config.json` knobs; inventing new locations/env vars breaks loader resolution
+  and the CLI-knobs-in-config rule.
+- **Evidence:** `packages/core/src/plugin/paths.ts:1`, `packages/core/src/plugin/marketplace.ts:1`
+
+### 15. Plugins are packaging, not a runtime; loading is additive and never fatal
+
+A plugin contributes paths that feed the **existing** subsystems (the same skill
+catalog, agents, hooks, MCP, connectors, workflows) — **never build a parallel
+plugin runtime**. Plugin loading in consumers must be best-effort (wrap in
+try/catch so config or filesystem trouble never breaks the host feature — skill
+discovery explicitly swallows plugin-loading errors). Plugin skill roots slot
+between workspace roots (which still win) and bundled roots. `safeMode` disables all
+skills and plugin loading entirely.
+
+- **Evidence:** `packages/core/src/plugin/discovery.ts:1`, `brainrouter-cli/src/prompt/skillCatalog.ts:104`
+
+### 16. ⛔ Executable plugin capabilities are consent-gated through the existing exec policy
+
+Command-type hooks and MCP command-servers shipped by a plugin stay **disabled**
+until the user approves them via `cli.plugins.approved[name].{shell,mcp}`; enabling
+a plugin first produces a disclosure summary ("3 skills, 2 hooks running `<cmd>`, …")
+with a `requiresConsent` flag. Managed gating uses `allowedMarketplaces`/
+`blockedMarketplaces`/`allowManagedHooksOnly` knobs. Compatibility mismatches
+(`compatibility.brainrouterVersion`/`agentApiVersion`) warn but never hard-fail.
+Keep the trust functions **pure** (no side effects) so they stay trivially testable.
+
+- **Why:** plugins can ship arbitrary shell commands; the consent layer decides
+  whether a contribution is even registered, while the normal two-axis exec policy
+  gates the runtime call.
+- **Evidence:** `packages/core/src/plugin/trust.ts:1`, `packages/core/src/plugin/trust.test.ts`
+
+### 17. Tag plugin/feature modules with their phase and colocate node tests
+
+Every module in `packages/core/src/plugin/` opens with a doc comment tagged
+`PLUGIN-MARKETPLACE P<n>` naming the phase, and cross-cutting call sites reuse the
+same tag. Behavior ships with colocated `*.test.ts` in the same folder
+(`plugin.test.ts`, `marketplace.test.ts`, `trust.test.ts`). Follow the same
+feature-code tagging (`CC-SKILLS-D2`, `CC-CONFIG-A1`) when extending tagged
+features elsewhere — the tags make a feature's slices greppable across packages.
+
+- **Evidence:** `packages/core/src/plugin/manifest.ts:2`, `packages/core/src/plugin/plugin.test.ts`

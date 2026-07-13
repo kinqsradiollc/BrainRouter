@@ -18,6 +18,34 @@ import { adminApi, type OrgSummary, type IntegrationConfig, type ReviewJob } fro
 
 interface Repo { fullName: string; url: string; private: boolean; defaultBranch: string }
 
+const POLICY_DEFAULTS = { approveClean: false, blockOnFindings: true, reReviewOnPush: true } as const;
+type PolicyField = keyof typeof POLICY_DEFAULTS;
+const POLICY_META: { f: PolicyField; label: string; hint: string }[] = [
+  { f: "approveClean", label: "Approve clean PRs", hint: "Post an approving review when a lens finds nothing." },
+  { f: "blockOnFindings", label: "Block on findings", hint: "A critical/high finding fails the check-run (gates merge)." },
+  { f: "reReviewOnPush", label: "Re-review on push", hint: "Re-run both lenses on every new commit." },
+];
+
+/** A compact segmented control; the active option is filled. */
+function Segmented<T extends string>({ value, options, onChange, disabled }: {
+  value: T; options: { v: T; label: string }[]; onChange: (v: T) => void; disabled?: boolean;
+}) {
+  return (
+    <span style={{ display: "inline-flex", gap: 2, background: "var(--surface-2, rgba(255,255,255,0.04))", borderRadius: 6, padding: 2 }}>
+      {options.map((o) => (
+        <button key={o.v} type="button" disabled={disabled} onClick={() => onChange(o.v)}
+          style={{
+            cursor: disabled ? "default" : "pointer", border: 0, padding: "3px 10px", borderRadius: 4, fontSize: 12,
+            background: value === o.v ? "var(--surface-4, rgba(255,255,255,0.12))" : "transparent",
+            color: value === o.v ? "var(--text, #fff)" : "var(--text-muted, #999)", fontWeight: value === o.v ? 600 : 400,
+          }}>
+          {o.label}
+        </button>
+      ))}
+    </span>
+  );
+}
+
 function ReviewsInner() {
   const [orgs, setOrgs] = useState<OrgSummary[]>([]);
   const [activeOrg, setActiveOrg] = useState("");
@@ -80,6 +108,35 @@ function ReviewsInner() {
     finally { setBusy(""); }
   }
 
+  // ── Per-repo review policy (Strix Approve / Block / Re-review) ────────────────
+  const cfgDefaults = (integ?.config?.reviewPolicyDefaults ?? {}) as Partial<Record<PolicyField, boolean>>;
+  const cfgRepo = (integ?.config?.reviewPolicies ?? {}) as Record<string, Partial<Record<PolicyField, boolean>>>;
+  const orgDefault = (f: PolicyField): boolean => cfgDefaults[f] ?? POLICY_DEFAULTS[f];
+  const repoOverride = (repo: string, f: PolicyField): boolean | undefined => cfgRepo[repo]?.[f];
+  // Every config write (auto-review toggle AND policy) is computed from the render-time
+  // integ.config snapshot, so any two overlapping writes would each merge into the same
+  // stale snapshot and the later one would clobber the earlier (lost update). `busy` is
+  // set at the start of EVERY write and cleared in its finally, so gating all config
+  // controls on `busy !== ""` serialises writes to one at a time — load() refetches
+  // between them — which removes the race entirely.
+  const configBusy = busy !== "";
+
+  async function patchConfig(next: Record<string, unknown>, key: string) {
+    if (!integ) { setError("Configure the GitHub App first on the Integrations page."); return; }
+    setBusy(key);
+    try { await adminApi.updateIntegration(integ.id, { config: { ...integ.config, ...next } }, activeOrg); await load(activeOrg); }
+    catch (e) { setError(e instanceof Error ? e.message : "Failed to update"); }
+    finally { setBusy(""); }
+  }
+  const setDefault = (f: PolicyField, v: boolean) => patchConfig({ reviewPolicyDefaults: { ...cfgDefaults, [f]: v } }, `def:${f}`);
+  const setRepoPolicy = (repo: string, f: PolicyField, v: boolean | undefined) => {
+    const cur = { ...(cfgRepo[repo] ?? {}) };
+    if (v === undefined) delete cur[f]; else cur[f] = v;
+    const nextRepos = { ...cfgRepo };
+    if (Object.keys(cur).length === 0) delete nextRepos[repo]; else nextRepos[repo] = cur;
+    return patchConfig({ reviewPolicies: nextRepos }, `repo:${repo}:${f}`);
+  };
+
   const shown = search.trim() ? repos.filter((r) => r.fullName.toLowerCase().includes(search.trim().toLowerCase())) : repos;
 
   return (
@@ -101,10 +158,21 @@ function ReviewsInner() {
       {/* What the bot does — the effective, shipped behavior. */}
       <PremiumCard level={2} style={{ marginTop: "var(--spacing-24)" }}>
         <div className="settings-cardhead"><div><h3>How reviews work</h3><div className="settings-hint">Two lenses run on every reviewed PR; each posts inline suggestions + a gating check-run. Re-run any time with a <code>/review</code> PR comment.</div></div></div>
-        <div className="settings-item"><span className="settings-row__title">🛡️ Security review — vulnerability findings</span><span className="settings-flag-ok">on</span></div>
-        <div className="settings-item"><span className="settings-row__title">🔎 Code review — correctness · clarity · perf · tests</span><span className="settings-flag-ok">on</span></div>
-        <div className="settings-item"><span className="settings-row__title">Block the merge on critical/high findings</span><span className="settings-flag-ok">on</span></div>
-        <div className="settings-item"><span className="settings-row__title">Re-review on every push</span><span className="settings-flag-ok">on</span></div>
+        <div className="settings-item"><span className="settings-row__title">🛡️ Security review — vulnerability findings</span><span className="settings-flag-ok">gates the merge</span></div>
+        <div className="settings-item"><span className="settings-row__title">🔎 Code review — correctness · clarity · perf · tests</span><span className="settings-badge settings-badge--muted">advisory</span></div>
+      </PremiumCard>
+
+      {/* Policy defaults — org-wide; per-repo overrides live in the repo list below. */}
+      <PremiumCard level={2} style={{ marginTop: "var(--spacing-20)" }}>
+        <div className="settings-cardhead"><div><h3>Policy defaults</h3><div className="settings-hint">Applied to every reviewed repo unless a repo overrides it below.</div></div></div>
+        {POLICY_META.map(({ f, label, hint }) => (
+          <div key={f} className="settings-item">
+            <div className="min-w-0"><span className="settings-row__title">{label}</span><div className="settings-row__sub">{hint}</div></div>
+            <Segmented value={orgDefault(f) ? "on" : "off"} disabled={configBusy}
+              options={[{ v: "on", label: "On" }, { v: "off", label: "Off" }]}
+              onChange={(v) => setDefault(f, v === "on")} />
+          </div>
+        ))}
       </PremiumCard>
 
       {/* Recent reviews — read from the review jobs the bot has run. */}
@@ -153,14 +221,32 @@ function ReviewsInner() {
             {shown.map((r) => {
               const on = isAuto(r.fullName);
               return (
-                <div key={r.fullName} className="settings-item">
-                  <div className="min-w-0">
-                    <span className="settings-row__title truncate" title={r.fullName}>{r.fullName}</span>
-                    {r.private && <span className="settings-badge settings-badge--muted" style={{ marginLeft: 6 }}>private</span>}
+                <div key={r.fullName} style={{ padding: "8px 0", borderBottom: "1px solid var(--border-dim, rgba(255,255,255,0.06))" }}>
+                  <div className="settings-item" style={{ borderBottom: 0, padding: 0 }}>
+                    <div className="min-w-0">
+                      <span className="settings-row__title truncate" title={r.fullName}>{r.fullName}</span>
+                      {r.private && <span className="settings-badge settings-badge--muted" style={{ marginLeft: 6 }}>private</span>}
+                    </div>
+                    <PremiumButton size="small" variant={on ? "ghost" : "primary"} disabled={configBusy} onClick={() => toggle(r, !on)}>
+                      {busy === r.fullName ? "…" : on ? "Auto-review: On" : "Auto-review: Off"}
+                    </PremiumButton>
                   </div>
-                  <PremiumButton size="small" variant={on ? "ghost" : "primary"} disabled={busy === r.fullName} onClick={() => toggle(r, !on)}>
-                    {busy === r.fullName ? "…" : on ? "Auto-review: On" : "Auto-review: Off"}
-                  </PremiumButton>
+                  {on && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 14, marginTop: 8, paddingLeft: 2 }}>
+                      {POLICY_META.map(({ f, label }) => {
+                        const ov = repoOverride(r.fullName, f);
+                        const cur = ov === undefined ? "default" : ov ? "on" : "off";
+                        return (
+                          <span key={f} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                            <span className="settings-row__sub">{label}</span>
+                            <Segmented value={cur} disabled={configBusy}
+                              options={[{ v: "default", label: `Default (${orgDefault(f) ? "On" : "Off"})` }, { v: "on", label: "On" }, { v: "off", label: "Off" }]}
+                              onChange={(v) => setRepoPolicy(r.fullName, f, v === "default" ? undefined : v === "on")} />
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               );
             })}

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import crypto from "node:crypto";
-import { verifyGithubSignature, processGithubDelivery, isRepoLinkedForReview, type WebhookDeps } from "./githubWebhook.js";
+import { verifyGithubSignature, processGithubDelivery, isRepoLinkedForReview, resolveReviewPolicy, type WebhookDeps } from "./githubWebhook.js";
 
 const SECRET = "whsec_test_123";
 function sign(raw: Buffer, secret = SECRET): string {
@@ -114,6 +114,32 @@ describe("ADR-010 P6b — GitHub webhook core", () => {
     const rerun = (d.enqueue as any).mock.calls.find((c: any[]) => c[0].kind === "pr-code-review")[0];
     expect(rerun.input.prNumber).toBe(12);
     expect(rerun.input.headSha).toBe(""); // resolved later by the executor
+  });
+
+  it("resolveReviewPolicy: per-repo override beats org default beats built-in", () => {
+    expect(resolveReviewPolicy(undefined, "a/b")).toEqual({ approveClean: false, blockOnFindings: true, reReviewOnPush: true });
+    expect(resolveReviewPolicy({ reviewPolicyDefaults: { blockOnFindings: false } }, "a/b").blockOnFindings).toBe(false);
+    expect(resolveReviewPolicy({ reviewPolicyDefaults: { blockOnFindings: false }, reviewPolicies: { "a/b": { blockOnFindings: true } } }, "a/b").blockOnFindings).toBe(true);
+    expect(resolveReviewPolicy({ reviewPolicies: { "a/b": { approveClean: true } } }, "a/b").approveClean).toBe(true);
+  });
+
+  it("synchronize with reReviewOnPush OFF → no re-review; but `opened` still reviews", async () => {
+    const noRe = { ...integ, config: { installationId: "42", reviewPolicyDefaults: { reReviewOnPush: false } } };
+    const mk = () => deps({ findIntegrationByInstallation: async (id) => (id === "42" ? noRe : null) });
+    const base = { installation: { id: 42 }, repository: { full_name: "acme/app" }, pull_request: { number: 12, head: { sha: "s" } } };
+    const d1 = mk();
+    const raw1 = Buffer.from(JSON.stringify({ ...base, action: "synchronize" }));
+    await processGithubDelivery(d1, { body: { ...base, action: "synchronize" }, rawBody: raw1, signature: sign(raw1), event: "pull_request", delivery: "d-6" });
+    // reReviewOnPush OFF on a synchronize skips BOTH review lenses. (The always-on
+    // trigger.github job still enqueues, so assert on the review kinds specifically —
+    // neither lens — which also catches a regression that leaks only the code-review job.)
+    const d1Kinds = (d1.enqueue as any).mock.calls.map((c: any[]) => c[0].kind);
+    expect(d1Kinds).not.toContain("pr-security-review");
+    expect(d1Kinds).not.toContain("pr-code-review");
+    const d2 = mk();
+    const raw2 = Buffer.from(JSON.stringify({ ...base, action: "opened" }));
+    await processGithubDelivery(d2, { body: { ...base, action: "opened" }, rawBody: raw2, signature: sign(raw2), event: "pull_request", delivery: "d-7" });
+    expect((d2.enqueue as any).mock.calls.map((c: any[]) => c[0].kind)).toContain("pr-security-review");
   });
 
   it("a non-review comment does NOT trigger a review", async () => {

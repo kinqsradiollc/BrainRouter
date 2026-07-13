@@ -90,6 +90,7 @@ export const SECURITY_LENS: ReviewLens = {
   sweepLabel: 'security sweep',
   footerLabel: '🛡️ BrainRouter security',
   systemPrompt: 'You are a meticulous application-security reviewer for pull requests.',
+  advisory: false, // security GATES the merge
   buildContract: buildSecurityReviewContract,
   isBlocking: isBlockingSecurityFinding,
 };

@@ -183,11 +183,17 @@ export class ModelLLMRunner implements LLMRunner {
     const jsonMode = process.env.BRAINROUTER_LLM_JSON_MODE === "on" && taskId === "cognitive-extraction";
     // Acquire an LLM semaphore slot BEFORE dispatch (consumer-GPU thrash guard —
     // see llm-semaphore.ts); release in finally so the queue keeps moving on throw.
+    // PR-review jobs run in the background off a webhook, and a single PR event can
+    // fan out several large-diff reviews at once (security + code-review lenses, on
+    // multiple PRs). Give them a more generous retry budget so a transient provider
+    // 429/503 recovers within the job instead of exhausting the default budget and
+    // silently dropping the review. Interactive cognition keeps the default.
+    const retry = taskId.startsWith("pr-") ? { maxRetries: 6, baseDelayMs: 3_000, maxDelayMs: 45_000 } : undefined;
     const release = await acquireLLMSlot();
     try {
       return await modelGateway.dispatch({
         endpoint, apiKey, model, wireFormat, messages, tool, maxTokens, jsonMode,
-        timeoutMs: effectiveTimeoutMs, label: `BrainRouter:${taskId}`,
+        timeoutMs: effectiveTimeoutMs, label: `BrainRouter:${taskId}`, retry,
       });
     } finally {
       release();
