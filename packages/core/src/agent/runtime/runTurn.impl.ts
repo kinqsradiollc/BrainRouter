@@ -224,6 +224,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       // HARD gates first — a user override can never escalate past these.
       const hardVisible =
         allowed.has(t.name) &&
+        (!this.toolScope?.local.length || this.toolScope.local.includes(t.name)) &&
         !disallowedLocalSet.has(t.name) &&
         !MODEL_HIDDEN_TOOLS.has(t.name) &&
         !(hideWorkerTools && WORKER_THREAD_TOOLS.has(t.name)) &&
@@ -1155,7 +1156,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           source: cache.source,
         });
         enforceTaskBudget({
-          caps: getCliKnobs().budget,
+          caps: this.taskBudgetCaps ?? getCliKnobs().budget,
           modelId: this.llmConfig.model,
           usage: {
             promptTokens: this.sessionUsage.promptTokens + this.lastTurnUsage.promptTokens,

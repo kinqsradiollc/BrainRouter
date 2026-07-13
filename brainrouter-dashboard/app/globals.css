@@ -148,6 +148,26 @@ html, body {
   scroll-behavior: smooth;
 }
 
+/* Security analytics — deliberately quiet surfaces with thin dividers. */
+.analytics-grid { display:grid; gap:16px; }
+.kpi-row { grid-template-columns:repeat(6,minmax(145px,1fr)); overflow-x:auto; padding-bottom:2px; }
+.metric-tile { min-width:145px; padding:16px; border:1px solid var(--border); border-radius:var(--radius-card); background:var(--surface-raised); box-shadow:var(--shadow-sm); }
+.metric-tile > span { display:block; color:var(--text-secondary); font-size:12px; font-weight:600; letter-spacing:.02em; }
+.metric-tile strong { display:block; font-size:28px; line-height:1.2; margin:10px 0 8px; font-weight:600; letter-spacing:-.04em; }
+.metric-tile__delta { display:flex; gap:6px; font-size:12px; font-weight:600; align-items:center; }.metric-tile__delta small { color:var(--text-muted); font-weight:400; }.metric-tile__delta--up { color:var(--ok); }.metric-tile__delta--down { color:var(--danger); }.metric-tile__delta--flat { color:var(--text-muted); }
+.analytics-panel { padding:18px; border:1px solid var(--border); border-radius:var(--radius-card); background:var(--surface-raised); min-width:0; }.analytics-panel h2 { margin:0 0 16px; font-size:14px; font-weight:600; }.analytics-panel--wide { grid-column:span 2; }
+.analytics-split { grid-template-columns:minmax(0,2fr) minmax(260px,1fr); }.analytics-bottom { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.insight-bar { padding:13px 16px; border:1px solid var(--border); border-radius:var(--radius-control); color:var(--text-secondary); background:var(--surface-overlay); font-size:13px; }.insight-bar strong { color:var(--text); }
+.chart { position:relative; min-height:250px; }.chart svg { width:100%; height:230px; display:block; }.chart__axis { stroke:var(--border); stroke-width:1; }.chart__legend { display:flex; flex-wrap:wrap; gap:10px; color:var(--text-secondary); font-size:11px; }.chart__legend-item { display:inline-flex; align-items:center; gap:5px; text-transform:capitalize; }.chart__legend-item i { display:inline-block; width:7px; height:7px; border-radius:99px; }.chart__empty { position:absolute; inset:50% 0 auto; text-align:center; transform:translateY(-50%); color:var(--text-muted); font-size:13px; }
+.donut { display:grid; grid-template-columns:140px 1fr; align-items:center; gap:14px; min-height:210px; }.donut svg { width:140px; height:140px; }.donut__track { stroke:var(--surface-overlay); }.donut__center { position:absolute; width:140px; text-align:center; display:flex; flex-direction:column; pointer-events:none; }.donut__center strong { font-size:28px; }.donut__center span { color:var(--text-muted); font-size:11px; }.donut__legend { display:flex; flex-direction:column; gap:8px; }
+.stacked { display:flex; min-height:160px; flex-direction:column; justify-content:center; gap:22px; }.stacked__bar { display:flex; height:24px; overflow:hidden; border-radius:var(--radius-chip); background:var(--surface-overlay); }.stacked__bar span { min-width:2px; }.line-chart { width:100%; height:160px; }
+.analytics-table-wrap { overflow:auto; }.analytics-table { width:100%; border-collapse:collapse; font-size:13px; }.analytics-table th { color:var(--text-muted); text-align:left; padding:0 0 10px; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; }.analytics-table td { padding:12px 0; border-top:1px solid var(--border-dim); color:var(--text-secondary); }.analytics-table td:first-child { color:var(--text); font-weight:500; }
+.analytics-badge { display:inline-flex; align-items:center; border:1px solid var(--border); padding:2px 7px; border-radius:var(--radius-chip); font-size:11px; font-weight:600; text-transform:capitalize; }.analytics-badge--ok { color:var(--ok); border-color:color-mix(in srgb,var(--ok) 35%,transparent); }.analytics-badge--warn { color:var(--warn); }.analytics-badge--danger { color:var(--danger); }.analytics-badge--info { color:#5A9BDB; }.analytics-badge--severity { color:var(--badge-color); border-color:color-mix(in srgb,var(--badge-color) 40%,transparent); }
+.connector-resource + .connector-resource { border-top:1px solid var(--border-dim); }.connector-resource__picker { display:grid; gap:10px; margin:0 16px 14px; padding:14px; border:1px solid var(--border-dim); border-radius:var(--radius-control); background:var(--surface-overlay); max-height:280px; overflow:auto; }.connector-resource__picker .settings-check { justify-content:flex-start; }.connector-resource__picker small { margin-left:auto; color:var(--text-muted); text-transform:capitalize; }.connector-resource__actions { position:sticky; bottom:-14px; margin:4px -14px -14px; padding:12px 14px; border-top:1px solid var(--border-dim); background:var(--surface-overlay); }
+.issue-tabs { display:flex; gap:4px; overflow:auto; margin:-4px 0 14px; padding-bottom:2px; }.issue-tab { border:0; border-radius:var(--radius-chip); padding:6px 10px; background:transparent; color:var(--text-muted); cursor:pointer; text-transform:capitalize; white-space:nowrap; }.issue-tab--active { background:var(--accent-wash); color:var(--accent); }.issue-filters { display:grid; grid-template-columns:minmax(0,1fr) 160px 220px; gap:10px; margin-bottom:16px; }.issue-filters .settings-input,.issue-filters .settings-select { margin-top:0; }@media(max-width:760px){.issue-filters{grid-template-columns:1fr;}}
+@media (max-width:1000px) { .analytics-split,.analytics-bottom { grid-template-columns:1fr; }.analytics-panel--wide { grid-column:auto; } }
+@media (prefers-reduced-motion:reduce) { .chart *, .line-chart * { transition:none!important; animation:none!important; } }
+
 a {
   color: inherit;
   text-decoration: none;
@@ -284,6 +304,7 @@ a {
 }
 .content-scroll {
   flex: 1;
+  min-width: 0;
   width: 100%;
   max-width: 1600px;
   margin: 0 auto;
@@ -570,7 +591,7 @@ h5, h6 { font-size: 13px; line-height: 1.4; font-weight: 600; letter-spacing: 0;
    Theme-token primitives so the admin pages match the app's design language
    (surface tokens + green accent) and follow light/dark. Layout stays in JSX;
    responsive: the field grid collapses to one column below 640px. */
-.settings-page { max-width: 64rem; margin-inline: auto; padding: var(--spacing-32) var(--spacing-24); }
+.settings-page { width: 100%; min-width: 0; max-width: 64rem; margin-inline: auto; padding: var(--spacing-32) var(--spacing-24); }
 .settings-lede { color: var(--text-secondary); font-size: 14px; line-height: 1.55; margin-top: var(--spacing-4); }
 .settings-note { margin-top: var(--spacing-16); border-radius: var(--radius-md); padding: var(--spacing-12) var(--spacing-16); font-size: 13px; }
 .settings-note--warn { border: 1px solid rgba(217, 164, 65, 0.35); background: rgba(217, 164, 65, 0.10); color: var(--warn); }

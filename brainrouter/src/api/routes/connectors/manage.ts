@@ -5,13 +5,40 @@
  * Mounted at /api/connectors alongside the OAuth broker.
  */
 import { Router, type Response } from "express";
-import { requireJwt, type AuthedRequest } from "../../middleware/auth.js";
+import { requireAnyAuth, type AuthedRequest } from "../../middleware/auth.js";
+import { requirePermission } from "../../middleware/tenancy.js";
 import { memoryEngine } from "../../../memory/engine.js";
 import { resolveOrgContext } from "../../../tenancy/context.js";
 import { runConnectorSync } from "../../../connectors/syncExecutor.js";
+import { isOAuthSource } from "../../../connectors/oauthBroker.js";
+import { CONNECTOR_RESOURCE_FIELDS, discoverConnectorAccount, discoverConnectorResources } from "../../../connectors/resources.js";
+import { enqueueAgentJob } from "../../../memory/scheduler/jobs.js";
 
 export const connectorManageRouter = Router();
-connectorManageRouter.use(requireJwt);
+connectorManageRouter.use(requireAnyAuth);
+// Connector credentials control what external data enters an organization.  Keep
+// this surface aligned with the OAuth-app configuration endpoints: a valid JWT
+// alone is not sufficient; the active org role must be allowed to manage
+// triggers/integrations.
+connectorManageRouter.use(requirePermission("triggers:manage"));
+
+function orgHeader(req: AuthedRequest): string | undefined {
+  const value = req.headers["x-brainrouter-org"];
+  return (Array.isArray(value) ? value[0] : value)?.trim() || undefined;
+}
+
+async function currentOrg(req: AuthedRequest): Promise<string | null> {
+  return (await resolveOrgContext(memoryEngine.tenancy, req.userId!, orgHeader(req)).catch(() => null))?.orgId ?? null;
+}
+
+async function sourceConnector(req: AuthedRequest, res: Response) {
+  const source = String(req.params.source ?? "").trim();
+  if (!isOAuthSource(source)) { res.status(404).json({ error: "Unknown OAuth connector source" }); return null; }
+  const orgId = await currentOrg(req);
+  const candidates = (await memoryEngine.connectors.listConnectors(req.userId!)).filter((item) => item.source === source);
+  const connector = candidates.find((item) => item.orgId === orgId) ?? candidates.find((item) => item.orgId === null) ?? candidates[0];
+  return { source, connector, orgId };
+}
 
 /** The connector exists and belongs to the caller (or the caller is a global admin). */
 async function ownedConnector(req: AuthedRequest, res: Response) {
@@ -25,6 +52,65 @@ async function ownedConnector(req: AuthedRequest, res: Response) {
 connectorManageRouter.get("/", async (req: AuthedRequest, res) => {
   const connectors = await memoryEngine.connectors.listConnectors(req.userId!);
   res.json({ connectors });
+});
+
+/** GET /api/connectors/:source/status — public connector state for desktop and dashboard.
+ * This intentionally returns only metadata: credentials remain server-only. */
+connectorManageRouter.get("/:source/status", async (req: AuthedRequest, res) => {
+  const found = await sourceConnector(req, res);
+  if (!found) return;
+  const orgId = await currentOrg(req);
+  if (found.connector && found.connector.orgId && orgId && found.connector.orgId !== orgId && !req.isAdmin) {
+    res.status(403).json({ error: "Connector is not in the active organization" }); return;
+  }
+  const c = found.connector;
+  const resolved = c?.hasCredential ? await memoryEngine.connectors.getResolvedConnector(c.id) : null;
+  const account = resolved ? await discoverConnectorAccount(resolved).catch(() => null) : null;
+  res.json({ source: found.source, connected: !!c?.hasCredential, connector: c ?? null, account, scopes: resolved?.credential?.scope ?? null });
+});
+
+/** GET /api/connectors/:source/resources — selection state safe for a browser UI.
+ * Source runtimes persist their selected repositories/projects/channels in config;
+ * the endpoint never attempts to expose an OAuth token to enumerate them client-side. */
+connectorManageRouter.get("/:source/resources", async (req: AuthedRequest, res) => {
+  const found = await sourceConnector(req, res);
+  if (!found) return;
+  if (!found.connector?.hasCredential) { res.json({ source: found.source, connected: false, resources: [] }); return; }
+  const resolved = await memoryEngine.connectors.getResolvedConnector(found.connector.id);
+  try { res.json({ source: found.source, connected: true, resources: resolved ? await discoverConnectorResources(resolved) : [] }); }
+  catch (error) { res.status(502).json({ error: error instanceof Error ? error.message : 'Resource discovery failed' }); }
+});
+
+/** PUT /api/connectors/:source/resources — persist the source-specific selection
+ * while retaining all unrelated sync configuration. */
+connectorManageRouter.put("/:source/resources", async (req: AuthedRequest, res) => {
+  const found = await sourceConnector(req, res);
+  if (!found?.connector) { res.status(404).json({ error: 'Connector not found' }); return; }
+  const field = CONNECTOR_RESOURCE_FIELDS[found.source];
+  if (!field) { res.status(400).json({ error: `${found.source} does not expose a selectable resource filter` }); return; }
+  const resourceIds = Array.isArray(req.body?.resourceIds) ? req.body.resourceIds.filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0).map((item: string) => item.trim()).slice(0, 200) : null;
+  if (!resourceIds) { res.status(400).json({ error: 'resourceIds must be an array' }); return; }
+  const connector = await memoryEngine.connectors.updateConnector(found.connector.id, { config: { ...found.connector.config, [field]: [...new Set(resourceIds)] } });
+  if (!connector) { res.status(404).json({ error: 'Connector not found' }); return; }
+  if (connector.enabled && connector.hasCredential) {
+    await enqueueAgentJob(memoryEngine.store, "connector_sync", { connectorId: connector.id, userId: connector.userId }).catch(() => undefined);
+  }
+  res.json({ connector });
+});
+
+/** POST /api/connectors/:source/disconnect — clear the sealed token but retain
+ * selection/checkpoint history, so reconnecting is an explicit, reversible action. */
+connectorManageRouter.post("/:source/disconnect", async (req: AuthedRequest, res) => {
+  const found = await sourceConnector(req, res);
+  if (!found) return;
+  if (!found.connector) { res.json({ ok: true, connector: null }); return; }
+  const connector = await memoryEngine.connectors.updateConnector(found.connector.id, {
+    credential: null,
+    status: "disconnected",
+    enabled: false,
+    lastError: null,
+  });
+  res.json({ ok: true, connector });
 });
 
 /** POST /api/connectors — create (the token is attached later via the OAuth broker). */
@@ -57,6 +143,10 @@ connectorManageRouter.patch("/:id", async (req: AuthedRequest, res) => {
   if (req.body?.config && typeof req.body.config === "object") patch.config = req.body.config;
   if (req.body?.visibility === "private" || req.body?.visibility === "org") patch.visibility = req.body.visibility;
   const connector = await memoryEngine.connectors.updateConnector(String(req.params.id), patch);
+  if (!connector) { res.status(404).json({ error: 'Connector not found' }); return; }
+  if (connector.enabled && connector.hasCredential) {
+    await enqueueAgentJob(memoryEngine.store, "connector_sync", { connectorId: connector.id, userId: connector.userId }).catch(() => undefined);
+  }
   res.json({ connector });
 });
 

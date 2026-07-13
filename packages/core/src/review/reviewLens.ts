@@ -56,7 +56,7 @@ const CWE_RE = /\[(CWE-\d+)\]/i;
  * third party). The command names match the webhook parser (ADR-017 review console).
  */
 export function reviewActionFooter(lens: ReviewLens): string {
-  const cmd = lens.id === 'security' ? '/security-review' : '/code-review';
+  const cmd = lens.id === 'security' ? '/security-review' : lens.id === 'pentest' ? '/pentest' : '/code-review';
   return `🔁 **Re-run:** comment \`${cmd}\` (or \`/review\` for both) · ⚙️ **Manage:** BrainRouter app → Reviews or the dashboard`;
 }
 

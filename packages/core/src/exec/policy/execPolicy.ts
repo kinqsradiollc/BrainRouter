@@ -93,6 +93,11 @@ export function actionKindForTool(name: string): ActionKind {
     // connector_run does network ingestion + memory writes; its shell-tier
     // exposure (registry) gates WHO sees it, `network` lets it execute once seen.
     case 'connector_run':
+    case 'list_requests':
+    case 'view_request':
+    case 'repeat_request':
+    case 'list_sitemap':
+    case 'scope_rules':
       return 'network';
     default:
       // Observation / planning orchestration tools (wait_*, list_agents,

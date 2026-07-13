@@ -21,6 +21,7 @@ import {
   inlineFindingMarker,
   inlineMarkerRegex,
   parseReviewFindings,
+  PENTEST_LENS,
   resolveInlineAnchor,
   SECURITY_LENS,
   stripReasoning,
@@ -98,6 +99,13 @@ export function runPrSecurityReview(input: PrReviewInput, deps: PrReviewDeps): P
 /** Run the general CODE-REVIEW lens over a PR (webhook `pr-code-review` job). */
 export function runPrCodeReview(input: PrReviewInput, deps: PrReviewDeps): Promise<PrReviewResult> {
   return runPrReview(input, deps, CODE_REVIEW_LENS);
+}
+
+/** Run the pentest lens against an explicitly linked repository.  Network probes
+ * are deliberately unavailable in this PR path; it is an authorized white-box
+ * assessment sharing the same reporting, audit, and merge-gate infrastructure. */
+export function runPrPentest(input: PrReviewInput, deps: PrReviewDeps): Promise<PrReviewResult> {
+  return runPrReview(input, deps, PENTEST_LENS);
 }
 
 /** Run one review lens end-to-end: diff → LLM → inline suggestions + summary + check-run. */

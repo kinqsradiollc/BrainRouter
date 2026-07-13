@@ -19,6 +19,7 @@ const EXPECTED = [
   { id: "tree_digest", modelClass: "synthesis", dependsOn: ["tree_sealer"] },
   { id: "vault_exporter", modelClass: "none", dependsOn: [] },
   { id: "benchmark_eval", modelClass: "none", dependsOn: [] },
+  { id: "connector_sync", modelClass: "none", dependsOn: [] },
 ];
 
 describe("brain agent registry", () => {
@@ -64,6 +65,6 @@ describe("brain agent registry", () => {
   it("listBrainAgents returns a fresh array (callers can't mutate the registry)", () => {
     const first = listBrainAgents();
     first.push({} as any);
-    expect(listBrainAgents()).toHaveLength(14);
+    expect(listBrainAgents()).toHaveLength(15);
   });
 });

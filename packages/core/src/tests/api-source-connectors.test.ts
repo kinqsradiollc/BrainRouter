@@ -8,6 +8,7 @@ import {
   runNotionConnectorCheckpoint,
   runSlackConnectorCheckpoint,
   confluenceTokenClient,
+  linearTokenClient,
   notionTokenClient,
   slackTokenClient,
   type ConfluenceConnectorClient,
@@ -131,6 +132,16 @@ test('runLinearConnectorCheckpoint maps issues and truncates', async () => {
   assert.equal(result.documents.length, 1);
   assert.equal(result.documents[0].id, 'linear:i1');
   assert.deepEqual(result.failures, ['Stopped after 1 Linear issues.']);
+});
+
+test('linearTokenClient prefixes server OAuth tokens with Bearer', async () => {
+  let auth = '';
+  const fetchImpl = async (_url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    auth = String((init?.headers as Record<string, string>).Authorization ?? '');
+    return Response.json({ data: { issues: { nodes: [] } } });
+  };
+  await linearTokenClient('oauth-token', { fetchImpl, oauth: true }).listIssues({ teamKeys: [], includeArchived: false, includeComments: false });
+  assert.equal(auth, 'Bearer oauth-token');
 });
 
 test('slackTokenClient sends bearer auth and maps paginated channels/messages', async () => {

@@ -9,6 +9,13 @@ export * from './reviewModel.js';
 export * from './reviewLens.js';
 export * from './securityReview.js';
 export * from './codeReviewContract.js';
+export * from './pentestReview.js';
+export * from './pentestFinding.js';
+export * from './sarif.js';
+export * from './pentestAgent.js';
+export * from './pentestSandbox.js';
+export * from './pentestProxy.js';
+export * from './pentestProxySession.js';
 export * from './reviewStore.js';
 export * from './reviewSynthesis.js';
 // reviewModel and reviewSynthesis both declare an unrelated `ReviewFinding`

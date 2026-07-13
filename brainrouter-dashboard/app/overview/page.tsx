@@ -1,245 +1,46 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import type { MemoryListItem } from "@kinqs/brainrouter-types";
-import { motion } from "framer-motion";
-import { useDiagnostics, useStats } from "@kinqs/brainrouter-hooks";
-import { getClient } from "../../lib/client";
-import { StatCard } from "../../components/StatCard";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
-import { PremiumCard } from "../../components/PremiumCard";
-import { LiveSessionsPanel } from "../../components/LiveSessionsPanel";
-import { BrainAgentsPanel } from "../../components/BrainAgentsPanel";
-import { useAuth } from "../../components/AuthProvider";
+import { PremiumButton } from "../../components/PremiumButton";
+import { AreaChart, DataTable, Donut, LineChart, MetricTile, StackedBar } from "../../components/Analytics";
+import { adminApi, type ReviewSummary } from "../../lib/adminApi";
 
-const containerVariants = {
-  hidden: { opacity: 0 },
-  show: {
-    opacity: 1,
-    transition: {
-      staggerChildren: 0.08
-    }
-  }
-};
+const EMPTY: ReviewSummary = { periodDays: 30, metrics: { securityScore: 100, openIssues: 0, issuesFound: 0, fixRate: 100, prsReviewed: 0, pentests: 0 }, severity: { critical: 0, high: 0, medium: 0, low: 0, info: 0 }, verdicts: { approved: 0, commented: 0, changesRequested: 0 }, history: [], repositories: [] };
 
-const itemVariants = {
-  hidden: { opacity: 0, y: 20 },
-  show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 260, damping: 20 } }
-} as const;
-
-export default function Page() {
-  const client = useMemo(() => getClient(), []);
-  const { user } = useAuth();
-  const { data } = useStats(client);
-  const [recentMemories, setRecentMemories] = useState<MemoryListItem[]>([]);
-  const { data: diagnostics, error: diagnosticsError, isLoading: diagnosticsLoading } = useDiagnostics(
-    client,
-    undefined,
-    { enabled: !!user?.isAdmin }
-  );
-
-  const formattedDate = useMemo(() => {
-    if (!data?.lastRecallAt) return "Never";
-    try {
-      const d = new Date(data.lastRecallAt);
-      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + " " + d.toLocaleDateString([], { month: 'short', day: 'numeric' });
-    } catch {
-      return String(data.lastRecallAt);
-    }
-  }, [data?.lastRecallAt]);
-
-  const envKeys = diagnostics?.envKeys ?? [];
-  const recentErrors = diagnostics?.recentErrors ?? [];
-  const sqliteVersion = diagnostics?.sqliteVersion ?? (diagnosticsLoading ? "Loading" : "Unavailable");
-  const nodeVersion = diagnostics?.nodeVersion ?? (diagnosticsLoading ? "Loading" : "Unavailable");
-  const activeCount = Math.max(0, (data?.total ?? 0) - (data?.archived ?? 0));
-  const activePct = data?.total ? Math.round((activeCount / data.total) * 100) : 0;
-  const archivedPct = data?.total ? 100 - activePct : 0;
-
-  useEffect(() => {
-    // Fetch more than needed to ensure we have enough after filtering internal system ops
-    client.getMemories({ limit: 25 })
-      .then((page) => setRecentMemories(
-        page.memories.filter((m) => m.type !== "cognitive_upsert" && m.type !== "system")
-      ))
-      .catch(() => setRecentMemories([]));
-  }, [client]);
-
-  return (
-    <AuthGuard>
-      <motion.div 
-        style={{ display: "flex", flexDirection: "column", gap: "28px" }}
-        variants={containerVariants}
-        initial="hidden"
-        animate="show"
-      >
-        {/* Editorial Welcome Header */}
-        <motion.div variants={itemVariants}>
-          <PageHeader
-            title="Overview"
-            description="LTM (Long Term Memory) observability telemetry and citation graph analysis."
-          />
-        </motion.div>
-
-        {/* Stats Cards Bento Row */}
-        <motion.div className="grid" variants={containerVariants} style={{ display: "grid", gap: "20px" }}>
-          <StatCard title="Total Cognitive Records" value={data?.total ?? "0"} />
-          <StatCard title="Archived Records" value={data?.archived ?? "0"} />
-          <StatCard title="Citation Rate" value={typeof data?.citationRate === "number" ? `${(data.citationRate * 100).toFixed(1)}%` : "0.0%"} />
-          <StatCard title="Last Memory Recall" value={formattedDate} />
-        </motion.div>
-
-        {/* Federation Stage 2 (FED-S2-T7): live peer sessions */}
-        <motion.div variants={itemVariants}>
-          <LiveSessionsPanel client={client} />
-        </motion.div>
-
-        {/* BRAIN-P1-T5 (0.4.1): brain-agent health */}
-        <motion.div variants={itemVariants}>
-          <BrainAgentsPanel />
-        </motion.div>
-
-        {/* Asymmetric Bento Grid Details */}
-        <div className="grid-asymmetric" style={{ alignItems: "start" }}>
-          {/* Left Column: Operational Telemetry */}
-          <PremiumCard level={2} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <h3 className="serif-display" style={{ fontSize: "20px", fontWeight: 500, margin: 0 }}>
-                {user?.isAdmin ? "System Health & Signals" : "Memory Engine Status"}
-              </h3>
-              <span style={{ fontSize: "12px", color: "var(--color-golden-accent)", border: "1px solid var(--border-hover-accent)", borderRadius: "var(--radius-pill)", padding: "2px 8px", whiteSpace: "nowrap" }}>
-                {user?.isAdmin && diagnosticsLoading ? "Checking" : "Active"}
-              </span>
-            </div>
-
-            <p style={{ color: "var(--color-porcelain-text)", fontSize: "14px", margin: 0 }}>
-              BrainRouter integrates a multi-layered hierarchical memory subsystem. The SensoryStream buffer captures user turns, consolidating them into CognitiveRecord files. Over time, recurring cognitive records are clustered by the background worker into ContextualFocus scenes and distilled into a CoreIdentity profile.
-            </p>
-
-            {user?.isAdmin ? (
-              <>
-                <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginTop: "12px" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", padding: "8px 0", borderBottom: "1px solid var(--border-dim)" }}>
-                    <span style={{ color: "var(--color-stone-text)" }}>Database Engine</span>
-                    <span style={{ color: "var(--color-white-frost)", fontWeight: 500 }}>SQLite {sqliteVersion}</span>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", padding: "8px 0", borderBottom: "1px solid var(--border-dim)" }}>
-                    <span style={{ color: "var(--color-stone-text)" }}>Node Runtime</span>
-                    <span style={{ color: "var(--color-white-frost)", fontWeight: 500 }}>{nodeVersion}</span>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", padding: "8px 0", borderBottom: "1px solid var(--border-dim)" }}>
-                    <span style={{ color: "var(--color-stone-text)" }}>Citation Feedback loop</span>
-                    <span style={{ color: "var(--color-white-frost)", fontWeight: 500 }}>ACE Algorithm (Active)</span>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", padding: "8px 0", borderBottom: "1px solid var(--border-dim)" }}>
-                    <span style={{ color: "var(--color-stone-text)" }}>Auto-Archive Decay Limit</span>
-                    <span style={{ color: "var(--color-white-frost)", fontWeight: 500 }}>10 non-cited turns</span>
-                  </div>
-                </div>
-
-                <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginTop: "6px" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "center" }}>
-                    <span style={{ color: "var(--color-stone-text)", fontSize: "13px" }}>Environment Flags</span>
-                    <span style={{ color: "var(--color-white-frost)", fontSize: "12px" }}>{envKeys.length}</span>
-                  </div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
-                    {envKeys.length > 0 ? envKeys.map((key) => (
-                      <span key={key} style={{ maxWidth: "100%", overflowWrap: "anywhere", fontSize: "11px", color: "var(--color-porcelain-text)", border: "1px solid var(--border-med)", borderRadius: "6px", padding: "4px 7px", background: "var(--overlay-bg)" }}>
-                        {key}
-                      </span>
-                    )) : (
-                      <span style={{ color: "var(--color-stone-text)", fontSize: "12px" }}>
-                        No BrainRouter environment flags reported.
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {(diagnosticsError || recentErrors.length > 0) && (
-                  <div style={{ marginTop: "4px", border: "1px solid rgba(229, 103, 95, 0.22)", borderRadius: "8px", background: "rgba(229, 103, 95, 0.06)", maxHeight: "180px", overflowY: "auto" }}>
-                    {diagnosticsError && (
-                      <div style={{ padding: "10px 12px", color: "#E5675F", fontSize: "12px", borderBottom: recentErrors.length > 0 ? "1px solid rgba(229, 103, 95, 0.14)" : undefined }}>
-                        Diagnostics unavailable: {diagnosticsError}
-                      </div>
-                    )}
-                    {recentErrors.map((operation) => (
-                      <div key={operation.id} style={{ padding: "10px 12px", borderBottom: "1px solid rgba(229, 103, 95, 0.12)" }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", fontSize: "12px" }}>
-                          <span style={{ color: "var(--color-white-frost)", fontWeight: 500, overflowWrap: "anywhere" }}>{operation.operation}</span>
-                          <span style={{ color: "var(--color-stone-text)", whiteSpace: "nowrap" }}>
-                            {new Date(operation.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                          </span>
-                        </div>
-                        <p style={{ color: "var(--color-porcelain-text)", fontSize: "12px", lineHeight: 1.45, margin: "6px 0 0", overflowWrap: "anywhere" }}>
-                          {operation.reason || "No reason recorded"}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginTop: "12px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", padding: "8px 0", borderBottom: "1px solid var(--border-dim)" }}>
-                  <span style={{ color: "var(--color-stone-text)" }}>Citation Feedback loop</span>
-                  <span style={{ color: "var(--color-white-frost)", fontWeight: 500 }}>ACE Algorithm (Active)</span>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", padding: "8px 0" }}>
-                  <span style={{ color: "var(--color-stone-text)" }}>Auto-Archive Decay Limit</span>
-                  <span style={{ color: "var(--color-white-frost)", fontWeight: 500 }}>10 non-cited turns</span>
-                </div>
-              </div>
-            )}
-          </PremiumCard>
-
-          {/* Right Column: Mini Guidelines */}
-          {/* Right Column: API Status + Memory Health stacked */}
-          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-            <PremiumCard level={3} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-              <h3 className="serif-display" style={{ fontSize: "20px", fontWeight: 500, margin: 0 }}>
-                API Status
-              </h3>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "8px" }}>
-                <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: "#34C28E" }} />
-                <span style={{ fontSize: "14px", fontWeight: 500, color: "var(--color-pure-white)" }}>Server Connected</span>
-              </div>
-              <p style={{ color: "var(--color-stone-text)", fontSize: "12px", lineHeight: 1.5, margin: 0, marginTop: "8px" }}>
-                All telemetry metrics are fetched securely from the active BrainRouter daemon running on port 3747.
-              </p>
-            </PremiumCard>
-
-            <PremiumCard level={3} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-              <h3 className="serif-display" style={{ fontSize: "20px", fontWeight: 500, margin: 0 }}>Memory Health</h3>
-              <div style={{ height: "8px", borderRadius: "9999px", background: "rgba(226,227,233,0.1)", overflow: "hidden" }}>
-                <div style={{ width: `${activePct}%`, height: "100%", background: "var(--color-golden-gradient)" }} />
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", color: "var(--color-silver-text)", fontSize: "13px" }}>
-                <span>Active: {activePct}%</span>
-                <span>Archived: {archivedPct}%</span>
-              </div>
-            </PremiumCard>
-          </div>
-        </div>
-
-        {/* Recent Activity — full width */}
-        <PremiumCard level={2} style={{ display: "flex", flexDirection: "column", gap: "0" }}>
-          <h3 className="serif-display" style={{ fontSize: "20px", fontWeight: 500, margin: 0, marginBottom: "12px" }}>Recent Activity</h3>
-          <div style={{ overflowY: "auto", maxHeight: "320px", display: "flex", flexDirection: "column", gap: "0", paddingRight: "2px" }}>
-            {recentMemories.length > 0 ? recentMemories.slice(0, 10).map((memory) => (
-              <div key={memory.recordId} style={{ borderTop: "1px solid var(--border-dim)", paddingTop: "10px", paddingBottom: "10px" }}>
-                <div style={{ color: "var(--color-golden-accent)", fontSize: "11px", textTransform: "uppercase", fontWeight: 700, letterSpacing: "0.05em" }}>
-                  {memory.type.replace(/_/g, " ")}
-                </div>
-                <p style={{ margin: "4px 0", color: "var(--color-white-frost)", fontSize: "13px", lineHeight: 1.45 }}>{memory.content.slice(0, 200)}</p>
-                <span style={{ color: "var(--color-stone-text)", fontSize: "11px" }}>{new Date(memory.createdTime).toLocaleString()}</span>
-              </div>
-            )) : (
-              <p style={{ margin: 0, color: "var(--color-stone-text)", fontSize: "13px", paddingTop: "10px", borderTop: "1px solid var(--border-dim)" }}>No recent memories recorded.</p>
-            )}
-          </div>
-        </PremiumCard>
-      </motion.div>
-    </AuthGuard>
-  );
+function Overview() {
+  const [summary, setSummary] = useState<ReviewSummary>(EMPTY);
+  const [loading, setLoading] = useState(true);
+  const [period, setPeriod] = useState(30);
+  const load = useCallback(async () => { setLoading(true); try { setSummary(await adminApi.reviewSummary(undefined, period)); } catch { setSummary(EMPTY); } finally { setLoading(false); } }, [period]);
+  useEffect(() => { void load(); }, [load]);
+  const addressed = useMemo(() => summary.history.map((day) => Math.max(0, 100 - (day.critical * 18 + day.high * 8 + day.medium * 3 + day.low))).slice(-12), [summary]);
+  return <div className="settings-page">
+    <PageHeader title="Security dashboard" description="A clear view of review posture, findings, and remediation momentum.">
+      <select aria-label="Date range" className="settings-input" value={period} onChange={(e) => setPeriod(Number(e.target.value))} style={{ width: 142 }}><option value={7}>Last 7 days</option><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option></select>
+      <Link href="/pentests"><PremiumButton variant="primary">+ New Pentest</PremiumButton></Link>
+    </PageHeader>
+    <div className="insight-bar"><strong>In a nutshell:</strong> {summary.metrics.openIssues ? `${summary.metrics.openIssues} open finding${summary.metrics.openIssues === 1 ? "" : "s"} need attention across your reviewed work.` : "No open findings in the selected period — keep review coverage running."}</div>
+    <div className="analytics-grid kpi-row" style={{ marginTop: 16 }}>
+      <MetricTile label="Security score" value={summary.metrics.securityScore} delta={summary.metrics.securityScore >= 80 ? "Healthy" : "Needs attention"} trend={summary.metrics.securityScore >= 80 ? "up" : "down"} />
+      <MetricTile label="Open issues" value={summary.metrics.openIssues} delta="Current backlog" trend={summary.metrics.openIssues ? "down" : "up"} />
+      <MetricTile label="Issues found" value={summary.metrics.issuesFound} delta={`${period} day period`} trend="flat" />
+      <MetricTile label="Fix rate" value={`${summary.metrics.fixRate}%`} delta="Addressed" trend="up" />
+      <MetricTile label="PRs reviewed" value={summary.metrics.prsReviewed} delta="Automated reviews" trend="flat" />
+      <MetricTile label="Pentests" value={summary.metrics.pentests} delta="Completed runs" trend="flat" />
+    </div>
+    <div className="analytics-grid analytics-split" style={{ marginTop: 16 }}>
+      <section className="analytics-panel"><h2>Issues over time</h2><AreaChart data={summary.history} /></section>
+      <section className="analytics-panel"><h2>Open issues by severity</h2><Donut values={summary.severity} /></section>
+    </div>
+    <div className="analytics-grid analytics-bottom" style={{ marginTop: 16 }}>
+      <section className="analytics-panel"><h2>PRs reviewed</h2><StackedBar values={summary.verdicts} /></section>
+      <section className="analytics-panel"><h2>Findings addressed rate</h2><LineChart points={addressed.length ? addressed : [100]} /></section>
+      <section className="analytics-panel"><h2>Top repositories</h2><DataTable headers={["Repository", "PRs", "Findings", "Addressed"]}>{summary.repositories.length ? summary.repositories.map((repo) => <tr key={repo.repository}><td>{repo.repository}</td><td>{repo.prs}</td><td>{repo.findings}</td><td>{repo.addressed}</td></tr>) : <tr><td colSpan={4}>{loading ? "Loading analytics…" : "No review activity yet."}</td></tr>}</DataTable></section>
+    </div>
+  </div>;
 }
+
+export default function OverviewPage() { return <AuthGuard><Overview /></AuthGuard>; }

@@ -128,6 +128,19 @@ test('buildCheckpointRunner invokes the envToken resolver with the source label 
   assert.deepEqual(labels, ['Slack']);
 });
 
+test('buildCheckpointRunner prefers the caller-injected sealed OAuth token for every OAuth runtime', async () => {
+  const labels: string[] = [];
+  const sources = ['gitlab', 'slack', 'google-drive', 'gmail', 'notion', 'linear'] as const;
+  for (const source of sources) {
+    const run = buildCheckpointRunner({
+      oauthToken: (_connector, label) => { labels.push(`${source}:${label}`); return { error: `sealed:${source}` }; },
+      envToken: () => { throw new Error('environment resolver must not be called'); },
+    });
+    await assert.rejects(run(connector({ source, credential: { mode: 'static', ref: 'SERVER_OAUTH' } })), new RegExp(`sealed:${source}`));
+  }
+  assert.equal(labels.length, sources.length);
+});
+
 test('buildCheckpointRunner defaults envToken to process.env when the caller omits it', async () => {
   const ref = 'BR_TEST_LINEAR_' + Math.random().toString(36).slice(2);
   delete process.env[ref];

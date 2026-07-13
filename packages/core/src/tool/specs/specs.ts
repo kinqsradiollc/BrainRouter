@@ -107,6 +107,59 @@ export const LOCAL_TOOLS = [
     }
   },
   {
+    name: 'file_vulnerability',
+    description: 'Record one verified pentest finding. A reproducible proof of concept, CVSS 3.1 vector, CWE, and remediation are mandatory. Duplicate root causes are returned without creating a second finding.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        file: { type: 'string', description: 'Affected file or target path.' },
+        line: { type: 'integer', description: 'Optional affected line.' },
+        summary: { type: 'string', description: 'Concise vulnerability summary.' },
+        details: { type: 'string', description: 'Impact and technical evidence.' },
+        confidence: { type: 'integer', description: 'Evidence confidence from 0 to 100.' },
+        cvssVector: { type: 'string', description: 'CVSS 3.1 base vector.' },
+        cwe: { type: 'string', description: 'CWE identifier, for example CWE-79.' },
+        cve: { type: 'string', description: 'Optional CVE identifier.' },
+        poc: { type: 'string', description: 'Safe, reproducible proof of concept.' },
+        remediation: { type: 'string', description: 'Specific remediation.' }
+      },
+      required: ['file', 'summary', 'confidence', 'cvssVector', 'cwe', 'poc', 'remediation']
+    }
+  },
+  {
+    name: 'finish_scan',
+    description: 'Complete the active pentest only after every worker is terminal and an executive summary, methodology, and limitations have been supplied. Emits findings.sarif.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        executiveSummary: { type: 'string' },
+        methodology: { type: 'string' },
+        limitations: { type: 'string' }
+      },
+      required: ['executiveSummary', 'methodology', 'limitations']
+    }
+  },
+  {
+    name: 'list_requests', description: 'List HTTP requests captured by the authorized pentest proxy.',
+    inputSchema: { type: 'object', properties: { limit: { type: 'integer' }, cursor: { type: 'string' } } }
+  },
+  {
+    name: 'view_request', description: 'View one captured HTTP request and response by proxy request id.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] }
+  },
+  {
+    name: 'repeat_request', description: 'Replay a captured request through the authorized pentest proxy, optionally with a safe mutation.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, mutation: { type: 'object' } }, required: ['id'] }
+  },
+  {
+    name: 'list_sitemap', description: 'List the authorized target sitemap recorded by the pentest proxy.',
+    inputSchema: { type: 'object', properties: { limit: { type: 'integer' } } }
+  },
+  {
+    name: 'scope_rules', description: 'Read or replace the proxy scope rules for the authorized target.',
+    inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['get', 'set'] }, rules: { type: 'array', items: { type: 'string' } } } }
+  },
+  {
     name: 'task_output',
     description: 'Read incremental output of a background run_command: returns { status, exitCode, chunk, nextOffset, complete }. Pass the previous nextOffset as fromByte to read only new output.',
     inputSchema: {

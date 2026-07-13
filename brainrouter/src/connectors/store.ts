@@ -10,6 +10,9 @@ export interface ConnectorTokenSecret {
   /** ISO expiry; absent = non-expiring (e.g. a GitHub OAuth-App token). */
   expiresAt?: string;
   scope?: string;
+  /** Exact callback used for providers (notably GitLab) that require it again
+   * during refresh-token rotation. */
+  redirectUri?: string;
 }
 
 export type ConnectorVisibility = "private" | "org";
@@ -48,7 +51,9 @@ export interface ConnectorConfigInput {
   credential?: ConnectorTokenSecret;
 }
 
-export interface ConnectorConfigPatch extends Partial<ConnectorConfigInput> {
+export interface ConnectorConfigPatch extends Omit<Partial<ConnectorConfigInput>, "credential"> {
+  /** `null` explicitly removes a sealed credential (disconnect); omitted leaves it unchanged. */
+  credential?: ConnectorTokenSecret | null;
   status?: string;
   checkpoint?: Record<string, unknown>;
   lastRunAt?: string;

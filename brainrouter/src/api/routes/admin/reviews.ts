@@ -18,15 +18,15 @@ type Store = Partial<{
   listMemoryJobs(filters?: { kind?: string; status?: string[]; limit?: number }): Promise<MemoryJobRecord[]>;
   enqueueMemoryJob(input: { kind: string; input: Record<string, unknown>; maxAttempts?: number }): Promise<MemoryJobRecord>;
 }>;
-type Lens = "security" | "code" | "both";
+type Lens = "security" | "code" | "pentest" | "both";
 const cache = new Map<string, { until: number; prs: unknown[] }>();
 
 function reviewRecord(job: MemoryJobRecord): ReviewJobDto {
-  const input = (job.input ?? {}) as { repo?: string; prNumber?: number };
+  const input = (job.input ?? {}) as { repo?: string; prNumber?: number; target?: string };
   const output = (job.output ?? {}) as { findings?: number; blocking?: number; posted?: boolean; error?: string; skipped?: string; findingsDetail?: unknown[] };
   return {
-    id: job.id, lens: job.kind === "pr-code-review" ? "code" : "security", status: job.status,
-    repo: input.repo ?? null, prNumber: input.prNumber ?? null,
+    id: job.id, lens: job.kind === "pr-code-review" ? "code" : (job.kind === "pr-pentest" || job.kind === "domain-pentest") ? "pentest" : "security", status: job.status,
+    repo: input.repo ?? input.target ?? null, prNumber: input.prNumber ?? null,
     findings: typeof output.findings === "number" ? output.findings : null,
     blocking: typeof output.blocking === "number" ? output.blocking : null,
     findingsDetail: Array.isArray(output.findingsDetail) ? output.findingsDetail as ReviewJobDto["findingsDetail"] : [], progress: job.progress ?? [],
@@ -69,11 +69,53 @@ reviewsRouter.get("/jobs", requirePermission("reviews:read"), async (req: Authed
   res.json({ reviews: jobs.map(reviewRecord), canRun: await canRun(req) });
 });
 
+/** GET /summary — analytics-friendly rollup for the dashboard.  The raw jobs
+ * remain the source of truth; this route keeps the browser from reimplementing
+ * time bucketing and severity parsing on every render. */
+reviewsRouter.get("/summary", requirePermission("reviews:read"), async (req: AuthedRequest, res) => {
+  const days = Math.min(Math.max(Number(req.query.days) || 30, 7), 90);
+  const jobs = (await (memoryEngine.store as Store).listReviewJobsForOrg?.(req.orgId!, 500)) ?? [];
+  const since = Date.now() - days * 86_400_000;
+  const recent = jobs.map(reviewRecord).filter((job) => Date.parse(job.createdAt) >= since);
+  const severity = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+  const verdicts = { approved: 0, commented: 0, changesRequested: 0 };
+  const byDay = new Map<string, { critical: number; high: number; medium: number; low: number }>();
+  for (const job of recent) {
+    const day = job.createdAt.slice(0, 10);
+    const bucket = byDay.get(day) ?? { critical: 0, high: 0, medium: 0, low: 0 };
+    for (const finding of job.findingsDetail ?? []) {
+      const key = String(finding.severity ?? "").toLowerCase() as keyof typeof severity;
+      if (key in severity) severity[key] += 1;
+      if (key in bucket) bucket[key as keyof typeof bucket] += 1;
+    }
+    byDay.set(day, bucket);
+    if (job.status === "completed" && !job.blocking) verdicts.approved += 1;
+    else if ((job.blocking ?? 0) > 0) verdicts.changesRequested += 1;
+    else verdicts.commented += 1;
+  }
+  const repos = new Map<string, { repository: string; prs: number; findings: number; addressed: number }>();
+  for (const job of recent) {
+    if (!job.repo) continue;
+    const row = repos.get(job.repo) ?? { repository: job.repo, prs: 0, findings: 0, addressed: 0 };
+    row.prs += 1; row.findings += job.findings ?? 0;
+    if (job.status === "completed" && !(job.blocking ?? 0)) row.addressed += job.findings ?? 0;
+    repos.set(job.repo, row);
+  }
+  const totalFindings = Object.values(severity).reduce((a, b) => a + b, 0);
+  res.json({
+    periodDays: days,
+    metrics: { securityScore: Math.max(0, 100 - severity.critical * 18 - severity.high * 8 - severity.medium * 3 - severity.low), openIssues: severity.critical + severity.high + severity.medium + severity.low, issuesFound: totalFindings, fixRate: totalFindings ? Math.round(([...repos.values()].reduce((n, r) => n + r.addressed, 0) / totalFindings) * 100) : 100, prsReviewed: recent.length, pentests: recent.filter((job) => job.lens === "pentest").length },
+    severity, verdicts,
+    history: [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, values]) => ({ date, ...values })),
+    repositories: [...repos.values()].sort((a, b) => b.findings - a.findings || b.prs - a.prs).slice(0, 8),
+  });
+});
+
 /** GET /jobs/:id — only return a job from the active org. */
 reviewsRouter.get("/jobs/:id", requirePermission("reviews:read"), async (req: AuthedRequest, res) => {
   const job = await (memoryEngine.store as Store).getMemoryJob?.(String(req.params.id));
   const input = (job?.input ?? {}) as { orgId?: unknown };
-  if (!job || (input.orgId !== req.orgId) || !["pr-security-review", "pr-code-review"].includes(job.kind)) { sendError(res, 404, "Review job not found"); return; }
+  if (!job || (input.orgId !== req.orgId) || !["pr-security-review", "pr-code-review", "pr-pentest", "domain-pentest"].includes(job.kind)) { sendError(res, 404, "Review job not found"); return; }
   res.json({ review: reviewRecord(job), canRun: await canRun(req) });
 });
 
@@ -83,14 +125,14 @@ reviewsRouter.post("/run", async (req: AuthedRequest, res) => {
   const repo = req.body?.repo;
   const prNumber = Number(req.body?.prNumber);
   const lens = req.body?.lens as Lens;
-  if (!validRepo(repo) || !Number.isInteger(prNumber) || prNumber <= 0 || !["security", "code", "both"].includes(lens)) { sendError(res, 400, "repo, positive prNumber, and lens are required"); return; }
+  if (!validRepo(repo) || !Number.isInteger(prNumber) || prNumber <= 0 || !["security", "code", "pentest", "both"].includes(lens)) { sendError(res, 400, "repo, positive prNumber, and lens are required"); return; }
   const token = await githubToken(req.orgId!);
   if (!token || !isRepoLinkedForReview(token.integ.config, repo)) { sendError(res, 400, "Repository is not linked for review"); return; }
   const requested = lens === "both" ? ["security", "code"] as const : [lens] as const;
   const store = memoryEngine.store as Store;
-  const jobs: Array<{ id: string; lens: "security" | "code" }> = [];
+  const jobs: Array<{ id: string; lens: "security" | "code" | "pentest" }> = [];
   for (const one of requested) {
-    const kind = one === "security" ? "pr-security-review" : "pr-code-review";
+    const kind = one === "security" ? "pr-security-review" : one === "pentest" ? "pr-pentest" : "pr-code-review";
     const inflight = (await store.listMemoryJobs?.({ kind, status: ["pending", "running"], limit: 500 })) ?? [];
     const duplicate = inflight.find((job) => { const input = job.input as { orgId?: unknown; repo?: unknown; prNumber?: unknown }; return input.orgId === req.orgId && input.repo === repo && Number(input.prNumber) === prNumber; });
     if (duplicate) { jobs.push({ id: duplicate.id, lens: one }); continue; }

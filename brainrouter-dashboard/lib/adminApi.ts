@@ -132,13 +132,13 @@ export interface OrgMember {
 
 export interface ReviewJob {
   id: string;
-  lens: "security" | "code";
+  lens: "security" | "code" | "pentest";
   status: string;
   repo: string | null;
   prNumber: number | null;
   findings: number | null;
   blocking: number | null;
-  findingsDetail?: { file: string; line?: number; severity: string; title: string; cwe?: string; preExisting?: boolean; suggestable?: boolean }[];
+  findingsDetail?: { file: string; line?: number; severity: string; title?: string; summary?: string; status?: string; cwe?: string; preExisting?: boolean; suggestable?: boolean }[];
   progress?: { ts: string; kind: string; msg: string; data?: Record<string, unknown> }[];
   skipped: string | null;
   error: string | null;
@@ -154,6 +154,30 @@ export interface ReviewPullRequestDetail {
   repo: string; number: number; title: string; author: string | null; branch: string | null; headSha: string | null; url: string | null;
   checks: { id?: number; name?: string; conclusion?: string | null; status?: string; html_url?: string }[];
   reviews: ReviewJob[];
+}
+
+export interface ReviewSummary {
+  periodDays: number;
+  metrics: { securityScore: number; openIssues: number; issuesFound: number; fixRate: number; prsReviewed: number; pentests: number };
+  severity: { critical: number; high: number; medium: number; low: number; info: number };
+  verdicts: { approved: number; commented: number; changesRequested: number };
+  history: Array<{ date: string; critical: number; high: number; medium: number; low: number }>;
+  repositories: Array<{ repository: string; prs: number; findings: number; addressed: number }>;
+}
+
+export interface ConnectorStatus {
+  source: string;
+  connected: boolean;
+  connector: { id: string; name: string; status: string; enabled: boolean; hasCredential: boolean; config: Record<string, unknown>; lastRunAt: string | null; lastError: string | null } | null;
+  account: string | null;
+  scopes: string | null;
+}
+
+export interface PentestTarget {
+  id: string; orgId: string; createdBy: string; kind: "domain" | "repository"; value: string; normalizedValue: string; label: string | null; authorizedAt: string; createdAt: string; updatedAt: string;
+}
+export interface PentestRun {
+  id: string; status: string; targetId: string; target: string; kind: string; findings: number; error: string | null; createdAt: string; updatedAt: string;
 }
 
 export const adminApi = {
@@ -199,14 +223,16 @@ export const adminApi = {
   // ADR-017 D5 — recent PR reviews (both lenses) for the Reviews dashboard.
   listReviewJobs: (orgId?: string, limit = 30) =>
     authFetch<{ reviews: ReviewJob[]; canRun: boolean }>(`/api/admin/reviews/jobs?limit=${limit}`, { orgId }),
+  reviewSummary: (orgId?: string, days = 30) =>
+    authFetch<ReviewSummary>(`/api/admin/reviews/summary?days=${days}`, { orgId }),
   listReviewPrs: (orgId?: string) => authFetch<{ prs: ReviewPullRequest[]; canRun: boolean }>("/api/admin/reviews/prs", { orgId }),
   getReviewPr: (repo: string, number: number, orgId?: string) => {
     const [owner, name] = repo.split("/");
     return authFetch<{ pr: ReviewPullRequestDetail; canRun: boolean }>(`/api/admin/reviews/prs/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/${number}`, { orgId });
   },
   getReviewJob: (id: string, orgId?: string) => authFetch<{ review: ReviewJob; canRun: boolean }>(`/api/admin/reviews/jobs/${encodeURIComponent(id)}`, { orgId }),
-  runReview: (body: { repo: string; prNumber: number; lens: "security" | "code" | "both" }, orgId?: string) =>
-    authFetch<{ jobs: { id: string; lens: "security" | "code" }[] }>("/api/admin/reviews/run", { method: "POST", body, orgId }),
+  runReview: (body: { repo: string; prNumber: number; lens: "security" | "code" | "pentest" | "both" }, orgId?: string) =>
+    authFetch<{ jobs: { id: string; lens: "security" | "code" | "pentest" }[] }>("/api/admin/reviews/run", { method: "POST", body, orgId }),
   // ADR-016 — the deployment's GitHub OAuth App (for per-user "Connect GitHub").
   getGithubOAuthApp: () =>
     authFetch<{ configured: boolean; clientId: string; hasSecret: boolean; redirectBase: string; secretStorageReady: boolean }>("/api/admin/connectors/github/app"),
@@ -218,6 +244,21 @@ export const adminApi = {
     authFetch<{ apps: Array<{ source: string; configured: boolean; hasSecret: boolean; clientId: string; scopes: string; defaultScopes: string; usesPkce: boolean }> }>("/api/connectors/oauth/apps", { orgId }),
   setConnectorOAuthApp: (source: string, body: { clientId: string; clientSecret?: string; scopes?: string }, orgId?: string) =>
     authFetch<{ app: unknown }>(`/api/connectors/${source}/oauth/app`, { method: "POST", body, orgId }),
+  startConnectorOAuth: (source: string, connectorId?: string, orgId?: string) =>
+    authFetch<{ url: string }>(`/api/connectors/${encodeURIComponent(source)}/oauth/start${connectorId ? `?connectorId=${encodeURIComponent(connectorId)}` : ""}`, { method: "POST", orgId }),
+  connectorStatus: (source: string, orgId?: string) =>
+    authFetch<ConnectorStatus>(`/api/connectors/${encodeURIComponent(source)}/status`, { orgId }),
+  connectorResources: (source: string, orgId?: string) =>
+    authFetch<{ source: string; connected: boolean; resources: { id: string; label: string; selected: boolean; kind?: string }[] }>(`/api/connectors/${encodeURIComponent(source)}/resources`, { orgId }),
+  setConnectorResources: (source: string, resourceIds: string[], orgId?: string) =>
+    authFetch<{ connector: ConnectorStatus["connector"] }>(`/api/connectors/${encodeURIComponent(source)}/resources`, { method: "PUT", body: { resourceIds }, orgId }),
+  disconnectConnector: (source: string, orgId?: string) =>
+    authFetch<{ ok: boolean; connector: ConnectorStatus["connector"] }>(`/api/connectors/${encodeURIComponent(source)}/disconnect`, { method: "POST", orgId }),
+  listPentestTargets: (orgId?: string) => authFetch<{ targets: PentestTarget[] }>("/api/admin/pentests/targets", { orgId }),
+  createPentestTarget: (body: { kind: "domain" | "repository"; value: string; label?: string; authorized: true }, orgId?: string) => authFetch<{ target: PentestTarget }>("/api/admin/pentests/targets", { method: "POST", body, orgId }),
+  deletePentestTarget: (id: string, orgId?: string) => authFetch<{ ok: boolean }>(`/api/admin/pentests/targets/${encodeURIComponent(id)}`, { method: "DELETE", orgId }),
+  listPentestRuns: (orgId?: string, limit = 100) => authFetch<{ runs: PentestRun[] }>(`/api/admin/pentests/runs?limit=${limit}`, { orgId }),
+  startPentestRun: (targetId: string, orgId?: string) => authFetch<{ run: PentestRun }>("/api/admin/pentests/runs", { method: "POST", body: { targetId }, orgId }),
   listOrgs: () => authFetch<{ orgs: OrgSummary[] }>("/api/orgs"),
   createOrg: (name: string, plan: OrgPlan = "team") =>
     authFetch<{ org: OrgSummary }>("/api/orgs", { method: "POST", body: { name, plan } }),

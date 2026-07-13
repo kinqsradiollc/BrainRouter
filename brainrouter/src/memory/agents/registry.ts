@@ -267,6 +267,25 @@ const benchmarkEval: BrainAgent = {
   dependsOn: [],
 };
 
+const connectorSync: BrainAgent = {
+  id: "connector_sync",
+  description: "Imports an enabled server-side connector through its checkpoint runtime.",
+  inputSchema: { type: "object", properties: { connectorId: { type: "string" }, userId: { type: "string" } }, required: ["connectorId"] },
+  outputSchema: { type: "object", properties: { ok: { type: "boolean" }, documents: { type: "number" }, imported: { type: "number" } } },
+  modelClass: "none",
+  maxAttempts: 3,
+  timeoutMs: 300_000,
+  batchSize: 1,
+  idempotencyKey: (input) => {
+    const connectorId = (input as Record<string, unknown> | null)?.connectorId;
+    return typeof connectorId === "string" && connectorId ? `connector:${connectorId}` : "";
+  },
+  reads: ["connector_configs"],
+  writes: ["source_documents", "source_chunks", "cognitive_records", "connector_configs"],
+  emits: [],
+  dependsOn: [],
+};
+
 const BUILT_IN_AGENTS: readonly BrainAgent[] = Object.freeze([
   cognitiveExtractor,
   memoryDeduper,
@@ -282,6 +301,7 @@ const BUILT_IN_AGENTS: readonly BrainAgent[] = Object.freeze([
   treeDigest,
   vaultExporter,
   benchmarkEval,
+  connectorSync,
 ]);
 
 const BY_ID: ReadonlyMap<string, BrainAgent> = new Map(BUILT_IN_AGENTS.map((a) => [a.id, a]));

@@ -11,7 +11,7 @@ import { getClient } from "../lib/client";
 const links = [
   {
     href: "/overview",
-    label: "Overview",
+    label: "Dashboard",
     icon: (
       <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <rect x="3" y="3" width="7" height="9" rx="1.5" />
@@ -21,6 +21,13 @@ const links = [
       </svg>
     )
   },
+  { href: "/pentests", label: "Pentests", icon: <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2 4 5v6c0 5 3.4 9 8 11 4.6-2 8-6 8-11V5l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg> },
+  { href: "/issues", label: "Issues", icon: <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg> },
+  { href: "/domains", label: "Domains & APIs", icon: <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.6 3 14.4 0 18M12 3c-3 3.6-3 14.4 0 18"/></svg> },
+  { href: "/repositories", label: "Repositories", icon: <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 4h16v16H4zM8 8h8M8 12h8M8 16h5"/></svg> },
+  { href: "/networks", label: "Networks", icon: <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="6" cy="12" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="m8 11 8-4M8 13l8 4"/></svg> },
+  { href: "/knowledge", label: "Knowledge", icon: <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 5a3 3 0 0 1 3-3h13v18H7a3 3 0 0 0-3 3V5Z"/><path d="M7 2v18"/></svg> },
+  { href: "/chat", label: "Chat", icon: <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 11a8 8 0 0 1-8 8H5l-2 2v-8a8 8 0 1 1 17-2Z"/></svg> },
   {
     href: "/memories",
     label: "Memories",
@@ -298,17 +305,17 @@ export function Sidebar({ isCollapsed: isCollapsedProp, onToggleCollapse, isMobi
   };
 
   const visibleLinks = links.filter((link) => {
-    if ((link.href === "/users" || link.href === "/brand" || link.href === "/providers" || link.href === "/integrations") && !user?.isAdmin) return false;
+    if ((link.href === "/users" || link.href === "/brand" || link.href === "/providers") && !user?.isAdmin) return false;
     return true;
   });
 
   // Group the routes into labelled sections instead of one flat 20-item wall.
   const NAV_GROUPS: { title: string; hrefs: string[] }[] = [
-    { title: "Workspace", hrefs: ["/overview"] },
-    { title: "Memory", hrefs: ["/memories", "/scenes", "/persona", "/working-memory", "/blackboard", "/vault"] },
-    { title: "Graph & Recall", hrefs: ["/recall-inspector", "/timeline", "/intelligence", "/tree"] },
-    { title: "Integrity", hrefs: ["/contradictions", "/evidence", "/sources"] },
-    { title: "System", hrefs: ["/reviews", "/hooks", "/fleet", "/skills", "/profile", "/providers", "/integrations", "/organizations", "/users", "/brand"] },
+    { title: "Security", hrefs: ["/overview", "/pentests", "/reviews", "/issues", "/domains", "/repositories", "/networks"] },
+    { title: "Context", hrefs: ["/chat", "/knowledge", "/memories", "/sources", "/scenes", "/working-memory"] },
+    { title: "Integrations", hrefs: ["/integrations", "/providers", "/organizations"] },
+    { title: "Memory system", hrefs: ["/persona", "/recall-inspector", "/timeline", "/intelligence", "/tree", "/blackboard", "/vault", "/contradictions", "/evidence"] },
+    { title: "Settings", hrefs: ["/profile", "/hooks", "/fleet", "/skills", "/users", "/brand"] },
   ];
   const linkByHref = new Map<string, (typeof visibleLinks)[number]>(visibleLinks.map((l) => [l.href, l]));
 

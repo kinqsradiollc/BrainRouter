@@ -23,6 +23,8 @@ export interface OAuthProvider {
   usesPkce?: boolean;
   /** Extra static params on the authorize URL (e.g. Google's access_type=offline). */
   authorizeExtra?: Record<string, string>;
+  /** Provider-specific scope delimiter (OAuth itself leaves this extensible). */
+  scopeSeparator?: string;
 }
 
 /** The subset of connector sources that authorize via OAuth. API-key sources
@@ -43,6 +45,7 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
     authorizeUrl: 'https://slack.com/oauth/v2/authorize',
     tokenUrl: 'https://slack.com/api/oauth.v2.access',
     scopes: ['channels:history', 'channels:read', 'files:read'],
+    scopeSeparator: ',',
   },
   'google-drive': {
     authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
@@ -68,6 +71,7 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
     tokenUrl: 'https://api.linear.app/oauth/token',
     scopes: ['read'],
     usesPkce: true,
+    scopeSeparator: ',',
   },
 };
 
@@ -137,7 +141,7 @@ export function buildAuthorizeUrl(source: string, clientId: string, redirectUri:
   url.searchParams.set('client_id', clientId);
   url.searchParams.set('redirect_uri', redirectUri);
   url.searchParams.set('response_type', 'code');
-  url.searchParams.set('scope', (scopes.length ? scopes : p.scopes).join(' '));
+  url.searchParams.set('scope', (scopes.length ? scopes : p.scopes).join(p.scopeSeparator ?? ' '));
   url.searchParams.set('state', state);
   if (p.usesPkce && pkceChallenge) { url.searchParams.set('code_challenge', pkceChallenge); url.searchParams.set('code_challenge_method', 'S256'); }
   for (const [k, v] of Object.entries(p.authorizeExtra ?? {})) url.searchParams.set(k, v);
@@ -145,6 +149,24 @@ export function buildAuthorizeUrl(source: string, clientId: string, redirectUri:
 }
 
 export interface TokenSet { accessToken: string; refreshToken?: string; expiresAt?: string; scope?: string; raw?: unknown }
+
+type TokenResponse = { access_token?: string; refresh_token?: string; expires_in?: number; scope?: string; error?: string; error_description?: string; ok?: boolean; authed_user?: { access_token?: string; refresh_token?: string; expires_in?: number; scope?: string } };
+
+function tokenSet(source: string, data: TokenResponse, now: number): TokenSet {
+  const accessToken = data.access_token ?? (source === 'slack' ? data.authed_user?.access_token : undefined);
+  if (data.error || data.ok === false || !accessToken) {
+    throw new Error(`${source} token exchange error: ${data.error_description ?? data.error ?? 'no access_token'}`);
+  }
+  return {
+    accessToken,
+    refreshToken: data.refresh_token ?? (source === 'slack' ? data.authed_user?.refresh_token : undefined),
+    expiresAt: typeof (data.expires_in ?? (source === 'slack' ? data.authed_user?.expires_in : undefined)) === 'number'
+      ? new Date((now + (data.expires_in ?? data.authed_user!.expires_in!)) * 1000).toISOString()
+      : undefined,
+    scope: data.scope ?? (source === 'slack' ? data.authed_user?.scope : undefined),
+    raw: data,
+  };
+}
 
 /** Exchange an auth code for tokens. `fetchImpl` injected for tests. */
 export async function exchangeCode(
@@ -154,27 +176,48 @@ export async function exchangeCode(
 ): Promise<TokenSet> {
   const p = OAUTH_PROVIDERS[source];
   if (!p) throw new Error(`unknown OAuth source: ${source}`);
-  const body = new URLSearchParams({
-    client_id: args.clientId,
-    client_secret: args.clientSecret,
-    code: args.code,
-    redirect_uri: args.redirectUri,
-    grant_type: 'authorization_code',
-    ...(args.codeVerifier ? { code_verifier: args.codeVerifier } : {}),
-  });
+  const body = new URLSearchParams({ client_id: args.clientId, code: args.code, redirect_uri: args.redirectUri, grant_type: 'authorization_code' });
+  // Public PKCE clients intentionally have no secret. Some providers reject an
+  // explicitly-empty client_secret even though omitting it is valid.
+  if (args.clientSecret) body.set('client_secret', args.clientSecret);
+  if (args.codeVerifier) body.set('code_verifier', args.codeVerifier);
+  // Notion requires a JSON request body plus HTTP Basic authentication.  Its
+  // endpoint otherwise returns an opaque 400, which made a correctly configured
+  // connector look like a failed user authorization.
+  const notion = source === 'notion';
+  if (notion && !args.clientSecret) throw new Error('notion token exchange requires a client secret');
   const res = await deps.fetchImpl(p.tokenUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-    body: body.toString(),
+    headers: notion
+      ? { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: `Basic ${Buffer.from(`${args.clientId}:${args.clientSecret}`).toString('base64')}` }
+      : { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: notion
+      ? JSON.stringify({ grant_type: 'authorization_code', code: args.code, redirect_uri: args.redirectUri })
+      : body.toString(),
   });
   if (!res.ok) throw new Error(`${source} token exchange failed (HTTP ${res.status})`);
-  const data = (await res.json()) as { access_token?: string; refresh_token?: string; expires_in?: number; scope?: string; error?: string; error_description?: string };
-  if (data.error || !data.access_token) throw new Error(`${source} token exchange error: ${data.error_description ?? data.error ?? 'no access_token'}`);
+  const data = (await res.json()) as TokenResponse;
   const now = (deps.nowSec ?? (() => Math.floor(Date.now() / 1000)))();
-  return {
-    accessToken: data.access_token,
-    refreshToken: data.refresh_token,
-    expiresAt: typeof data.expires_in === 'number' ? new Date((now + data.expires_in) * 1000).toISOString() : undefined,
-    scope: data.scope,
-  };
+  return tokenSet(source, data, now);
+}
+
+/** Refresh a short-lived OAuth token.  This follows each provider's normal form
+ * exchange; Notion tokens are non-refreshable, so returning an explicit error is
+ * safer than silently retrying a stale credential. */
+export async function refreshToken(
+  source: string,
+  args: { clientId: string; clientSecret: string; refreshToken: string; redirectUri?: string },
+  deps: { fetchImpl: typeof fetch; nowSec?: () => number } = { fetchImpl: fetch },
+): Promise<TokenSet> {
+  const provider = OAUTH_PROVIDERS[source];
+  if (!provider) throw new Error(`unknown OAuth source: ${source}`);
+  if (source === 'notion') throw new Error('Notion access tokens cannot be refreshed');
+  const body = new URLSearchParams({ grant_type: 'refresh_token', refresh_token: args.refreshToken, client_id: args.clientId });
+  if (args.clientSecret) body.set('client_secret', args.clientSecret);
+  if (args.redirectUri) body.set('redirect_uri', args.redirectUri);
+  const res = await deps.fetchImpl(provider.tokenUrl, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' }, body: body.toString(),
+  });
+  if (!res.ok) throw new Error(`${source} token refresh failed (HTTP ${res.status})`);
+  return tokenSet(source, await res.json() as TokenResponse, (deps.nowSec ?? (() => Math.floor(Date.now() / 1000)))());
 }

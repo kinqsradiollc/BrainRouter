@@ -4,6 +4,7 @@
 // private helpers resolve exactly as before.
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
 import type { Agent } from '../agent.js';
 import { NoTTYError } from '../support/prompter.js';
@@ -24,6 +25,11 @@ import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } 
 import { evaluateDestructiveCommand } from '../../exec/guard/destructiveCommandGuard.js';
 import { decideExecutionPolicy, egressDecision } from '../../exec/policy/execPolicy.js';
 import { resolveSandboxConfig, runShell } from '../../exec/runtime/sandbox.js';
+import { resolvePentestSandbox, runPentestCommand } from '../../review/pentestSandbox.js';
+import { proxyControl } from '../../review/pentestProxy.js';
+import { buildPentestDedupeMessages, findingKey, parsePentestDedupeDecision } from '../../review/reviewSynthesis.js';
+import { callOpenAI } from '../transport/llmTransport.js';
+import { enforceTaskBudget } from '../../provider/budget.js';
 import { recordDenial } from '../../exec/runtime/recentDenials.js';
 import { gitHeadSha } from '../../git/workspaceGit.js';
 import { readGoal, blockGoal, completeGoal } from '../../goal/store/goalStore.js';
@@ -70,6 +76,9 @@ import { waitUntilCondition } from '../../util/agentloop/waitUntil.js';
 import { fetchAndExtract } from '../../websearch/crawler.js';
 import { buildSearchProvider } from '../../websearch/factory.js';
 import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../../worker/workerStore.js';
+import { listWorkers } from '../../worker/workerStore.js';
+import { getLatestReview, saveReview } from '../../review/reviewStore.js';
+import { validatePentestFinding } from '../../review/pentestFinding.js';
 import { getCurrentWorkflow } from '../../workflow/run/workflowArtifacts.js';
 import { advanceRunStep, summarizeRun } from '../../workflow/run/workflowRun.js';
 import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from '../fs/applyPatch.js';
@@ -373,6 +382,7 @@ export async function executeLocalToolLegacy(this: Agent, name: string, args: Re
         // past it here), but detach instead of blocking the turn. v1 runs
         // unsandboxed, so it is refused while cli.sandbox=on.
         if (args.background === true) {
+          if (this.pentestMode) return 'Background run_command is disabled for pentests; commands must remain in the Docker/proxy perimeter.';
           // CODEX-SANDBOX-UNATTENDED — background runs are unsandboxed (v1), so
           // they are refused whenever the sandbox is active: either the user
           // turned it on, or this is a silent/unattended agent where the
@@ -394,6 +404,12 @@ export async function executeLocalToolLegacy(this: Agent, name: string, args: Re
             logPath: bg.logPath,
             note: 'Detached. Poll with task_output({ id }) — pass back nextOffset as fromByte to read incrementally. The turn is NOT blocked.',
           });
+        }
+        if (this.pentestMode) {
+          const result = runPentestCommand(cmd, this.pentestSandbox
+            ? { ...this.pentestSandbox, workspaceRoot: this.workspaceRoot }
+            : resolvePentestSandbox(this.workspaceRoot));
+          return `[pentest Docker/proxy sandbox] Exit Code: ${result.exitCode}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`;
         }
         const sandboxConfig = resolveSandboxConfig(
           this.workspaceRoot,
@@ -464,6 +480,11 @@ export async function executeLocalToolLegacy(this: Agent, name: string, args: Re
         return JSON.stringify({ action: action.action, ...result }, null, 2);
       }
       case 'fetch_url': {
+        // A pentest turn must never reach the network from the HOST — that path
+        // bypasses the scope-pinned Docker/proxy sandbox entirely (SSRF to
+        // internal services / cloud metadata). Force target interaction through
+        // the sandboxed run_command or the scoped proxy tools.
+        if (this.pentestMode) return 'fetch_url is disabled for pentests; reach the target via run_command inside the sandbox, or view_request/repeat_request through the scoped proxy.';
         const url = args.url;
         // POLICY-3 — per-host egress allowlist (empty = unrestricted).
         const egress = egressDecision(url, getCliKnobs().egressAllowlist);
@@ -478,6 +499,8 @@ export async function executeLocalToolLegacy(this: Agent, name: string, args: Re
         return JSON.stringify(result, null, 2);
       }
       case 'web_search': {
+        // Host-side egress; disabled in a pentest for the same reason as fetch_url.
+        if (this.pentestMode) return 'web_search is disabled for pentests; stay inside the authorized target using the sandboxed tools.';
         const query = String(args.query ?? '').trim();
         if (!query) throw new Error('web_search requires a non-empty query.');
         const knobs = getCliKnobs();
@@ -1029,6 +1052,83 @@ export async function executeLocalToolLegacy(this: Agent, name: string, args: Re
         if (importError) lines.push(`Memory import error: ${importError}`);
         return lines.join('\n');
       }
+      case 'file_vulnerability': {
+        const run = getLatestReview(this.workspaceRoot);
+        if (!run || run.status !== 'running') throw new Error('file_vulnerability requires an active pentest review run.');
+        const input = validatePentestFinding({
+          file: String(args.file ?? ''), line: Number.isInteger(args.line) ? Number(args.line) : undefined,
+          endLine: Number.isInteger(args.endLine) ? Number(args.endLine) : undefined,
+          summary: String(args.summary ?? ''), details: typeof args.details === 'string' ? args.details : undefined,
+          confidence: Math.max(0, Math.min(100, Number(args.confidence) || 0)),
+          cvssVector: String(args.cvssVector ?? ''), cwe: String(args.cwe ?? ''),
+          cve: typeof args.cve === 'string' ? args.cve : undefined,
+          poc: String(args.poc ?? ''), remediation: String(args.remediation ?? ''),
+        });
+        const key = findingKey({ file: input.file, line: input.line, lineEnd: input.endLine, severity: input.severity, confidence: input.confidence, summary: input.summary, rootCause: input.cwe });
+        const duplicate = run.findings.find((existing) => findingKey({ file: existing.file, line: existing.line, lineEnd: existing.endLine, severity: existing.severity, confidence: existing.confidence, summary: existing.summary, rootCause: existing.cwe }) === key);
+        if (duplicate) return JSON.stringify({ accepted: false, duplicate_of: duplicate.id, reason: 'Same file, location, and root cause already recorded.' });
+        if (run.findings.length) {
+          try {
+            const judged: any = await callOpenAI(this.llmConfig, buildPentestDedupeMessages(input, run.findings.map((finding) => ({ id: finding.id, file: finding.file, line: finding.line, endLine: finding.endLine, summary: finding.summary, details: finding.details, cwe: finding.cwe, poc: finding.poc }))), [], { effort: 'low', signal: this.turnAbort?.signal });
+            if (judged?.usage) {
+              this.lastTurnUsage.promptTokens += judged.usage.prompt_tokens ?? 0;
+              this.lastTurnUsage.completionTokens += judged.usage.completion_tokens ?? 0;
+              this.lastTurnUsage.calls += 1;
+              enforceTaskBudget({ caps: this.taskBudgetCaps ?? getCliKnobs().budget, modelId: this.llmConfig.model, usage: { promptTokens: this.sessionUsage.promptTokens + this.lastTurnUsage.promptTokens, completionTokens: this.sessionUsage.completionTokens + this.lastTurnUsage.completionTokens, cachedTokens: this.sessionUsage.cachedTokens + this.lastTurnUsage.cachedTokens, missedTokens: this.sessionUsage.missedTokens + this.lastTurnUsage.missedTokens } });
+            }
+            const decision = parsePentestDedupeDecision(String(judged?.content ?? ''));
+            if (decision?.is_duplicate && decision.duplicate_id && decision.confidence >= 0.75 && run.findings.some((finding) => finding.id === decision.duplicate_id)) {
+              return JSON.stringify({ accepted: false, duplicate_of: decision.duplicate_id, confidence: decision.confidence, reason: decision.reason });
+            }
+          } catch (error) {
+            // Deterministic same-location/root-cause protection above remains
+            // authoritative if the optional semantic judge is unavailable.
+            if (error instanceof Error && error.name === 'BudgetExceededError') throw error;
+          }
+        }
+        const finding = { ...input, id: `pentest_${randomUUID().slice(0, 12)}` };
+        saveReview(this.workspaceRoot, { ...run, updatedAt: new Date().toISOString(), findings: [...run.findings, finding] });
+        return JSON.stringify({ accepted: true, finding: { id: finding.id, severity: finding.severity, cvss: finding.cvss } });
+      }
+      case 'finish_scan': {
+        const activeWorkers = listWorkers(this.workspaceRoot).filter((worker) => worker.status === 'running');
+        if (activeWorkers.length) throw new Error(`finish_scan refused while ${activeWorkers.length} worker(s) are still running: ${activeWorkers.map((worker) => worker.id).join(', ')}`);
+        const run = getLatestReview(this.workspaceRoot);
+        if (!run || run.status !== 'running') throw new Error('finish_scan requires an active pentest review run.');
+        const executiveSummary = String(args.executiveSummary ?? '').trim();
+        const methodology = String(args.methodology ?? '').trim();
+        const limitations = String(args.limitations ?? '').trim();
+        if (!executiveSummary || !methodology || !limitations) throw new Error('finish_scan requires executiveSummary, methodology, and limitations.');
+        const summary = `${executiveSummary}\n\nMethodology: ${methodology}\n\nLimitations: ${limitations}`;
+        saveReview(this.workspaceRoot, { ...run, status: 'completed', updatedAt: new Date().toISOString(), summary });
+        return JSON.stringify({ completed: true, findings: run.findings.length, sarif: '.brainrouter/findings.sarif' });
+      }
+      case 'list_requests':
+        return JSON.stringify(await proxyControl('requests', { method: 'GET' }, this.pentestProxyControl()));
+      case 'view_request': {
+        const id = String(args.id ?? '').trim();
+        if (!id) throw new Error('view_request requires an id.');
+        return JSON.stringify(await proxyControl(`requests/${encodeURIComponent(id)}`, { method: 'GET' }, this.pentestProxyControl()));
+      }
+      case 'repeat_request': {
+        const id = String(args.id ?? '').trim();
+        if (!id) throw new Error('repeat_request requires an id.');
+        // A replay may tweak headers/body/query but must NOT retarget the request
+        // to another host — that pivots outside the authorized scope. Reject any
+        // absolute url/host/authority in the mutation.
+        const mutation = (args.mutation && typeof args.mutation === 'object' && !Array.isArray(args.mutation)) ? args.mutation as Record<string, unknown> : null;
+        if (mutation && (['url', 'host', 'authority', 'origin'] as const).some((k) => k in mutation)) {
+          throw new Error('repeat_request mutation must not change the target host/url; only headers, body, or query may be altered.');
+        }
+        return JSON.stringify(await proxyControl(`requests/${encodeURIComponent(id)}/repeat`, { method: 'POST', body: JSON.stringify({ mutation }) }, this.pentestProxyControl()));
+      }
+      case 'list_sitemap':
+        return JSON.stringify(await proxyControl('sitemap', { method: 'GET' }, this.pentestProxyControl()));
+      case 'scope_rules':
+        // Read-only from the agent. The authorized scope is pinned to the target
+        // origin at sandbox creation (BRAINROUTER_PENTEST_SCOPE); letting the
+        // model widen it would enable a pivot/SSRF to arbitrary hosts.
+        return JSON.stringify(await proxyControl('scope', { method: 'GET' }, this.pentestProxyControl()));
       case 'artifact_write': {
         // §AV-4 — in-band artifact authoring. With `id` it grows an EXISTING
         // artifact (a new version, editedBy 'agent') — this is how a later turn

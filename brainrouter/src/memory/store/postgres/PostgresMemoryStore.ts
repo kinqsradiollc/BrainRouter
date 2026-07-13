@@ -87,6 +87,8 @@ import type {
   AtlasWorkspaceSummary,
   FleetSnapshotEntry,
   IMemoryStore,
+  PentestTargetInput,
+  PentestTargetRecord,
 } from "@kinqs/brainrouter-types";
 import { createPgPool } from "./connection.js";
 import { loadMigrations, applyMigrations } from "./migrate.js";
@@ -127,6 +129,7 @@ import * as adminConsole from "./queries/adminConsoleQueries.js";
 import * as providerCfg from "./queries/providerConfigQueries.js";
 import * as integrationCfg from "./queries/integrationConfigQueries.js";
 import * as connectorCfg from "./queries/connectorConfigQueries.js";
+import * as pentestTargets from "./queries/pentestTargetQueries.js";
 import type { TenancyStore } from "../../../tenancy/store.js";
 import type { Role } from "../../../tenancy/rbac.js";
 import type { OrganizationRecord, OrgMemberRecord, OrgMembership, OrgPlan } from "../../../tenancy/types.js";
@@ -814,6 +817,12 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public listReviewJobsForOrg(orgId: string, limit?: number): Promise<MemoryJobRecord[]> {
     return job.listReviewJobsForOrg(this.exec, orgId, limit);
   }
+  public listPentestJobsForOrg(orgId: string, limit?: number): Promise<MemoryJobRecord[]> { return job.listPentestJobsForOrg(this.exec, orgId, limit); }
+
+  public createPentestTarget(orgId: string, createdBy: string, input: PentestTargetInput): Promise<PentestTargetRecord> { return pentestTargets.createPentestTarget(this.exec, orgId, createdBy, input); }
+  public getPentestTarget(id: string): Promise<PentestTargetRecord | null> { return pentestTargets.getPentestTarget(this.exec, id); }
+  public listPentestTargets(orgId: string): Promise<PentestTargetRecord[]> { return pentestTargets.listPentestTargets(this.exec, orgId); }
+  public deletePentestTarget(orgId: string, id: string): Promise<boolean> { return pentestTargets.deletePentestTarget(this.exec, orgId, id); }
 
   public claimNextMemoryJob(options?: { now?: string }): Promise<MemoryJobRecord | null> {
     return job.claimNextMemoryJob(this.exec, options);

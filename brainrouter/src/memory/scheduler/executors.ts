@@ -18,12 +18,14 @@
  */
 
 import type { IMemoryStore, LLMRunner } from "@kinqs/brainrouter-types";
+import type { LLMConfig } from "@kinqs/brainrouter-core/config";
 import { distillCoreIdentity } from "../pipeline/identity/identity-distiller.js";
 import { distillFocusScenes } from "../pipeline/focus/contextual-focus-builder.js";
 import { digestTreeNodes } from "../tree/digest.js";
 import { enqueueAgentJob } from "./jobs.js";
 import { runConnectorSync } from "../../connectors/syncExecutor.js";
-import { runPrSecurityReview, runPrCodeReview, type PrReviewInput, type PrReviewDeps } from "../../integrations/prSecurityReview.js";
+import { runPrSecurityReview, runPrCodeReview, runPrPentest, type PrReviewInput, type PrReviewDeps } from "../../integrations/prSecurityReview.js";
+import { runDomainPentest } from "../../integrations/domainPentest.js";
 
 /**
  * 0.4.3 (MEM-10) — engine operations the depth-agent executors call. Declared
@@ -40,8 +42,9 @@ export interface JobEngineOps {
   runRetrievalBenchmark(userId: string, opts?: { sampleSize?: number; baseDir?: string }): Promise<{ summaryPath: string | null; statsByMode: Record<string, unknown>; sampled: number; passed: boolean }>;
   /** ADR-017 D5 — the org's GitHub App creds (non-secret config + opened secret) for a webhook installation. */
   findGithubAppByInstallation(installationId: string): Promise<{ config: Record<string, unknown>; secret: Record<string, string> } | null>;
-  reviewRunner?(lens: "security" | "code", orgId?: string): LLMRunner | Promise<LLMRunner | undefined> | undefined;
-  reviewAssignment?(lens: "security" | "code", orgId?: string): { maxDiffChars?: number; timeoutMs?: number } | Promise<{ maxDiffChars?: number; timeoutMs?: number } | undefined> | undefined;
+  reviewRunner?(lens: "security" | "code" | "pentest", orgId?: string): LLMRunner | Promise<LLMRunner | undefined> | undefined;
+  reviewAssignment?(lens: "security" | "code" | "pentest", orgId?: string): { maxDiffChars?: number; timeoutMs?: number } | Promise<{ maxDiffChars?: number; timeoutMs?: number } | undefined> | undefined;
+  pentestAgentConfig?(orgId: string): Promise<LLMConfig | null>;
 }
 
 export interface JobExecContext {
@@ -75,7 +78,7 @@ function prReviewInput(input: any): PrReviewInput {
     headSha: String(input?.headSha ?? ""),
   };
 }
-async function prReviewDeps(ctx: JobExecContext, lens: "security" | "code", orgId?: string): Promise<PrReviewDeps> {
+async function prReviewDeps(ctx: JobExecContext, lens: "security" | "code" | "pentest", orgId?: string): Promise<PrReviewDeps> {
   const engine = requireEngine(ctx);
   const assignment = await engine.reviewAssignment?.(lens, orgId);
   const reviewRunner = await engine.reviewRunner?.(lens, orgId);
@@ -171,6 +174,8 @@ const EXECUTORS: Record<string, JobExecutor> = {
   // LENS, and posts back inline suggestions + a summary + a gating check-run.
   "pr-security-review": async (input, ctx) => runPrSecurityReview(prReviewInput(input), await prReviewDeps(ctx, "security", typeof input?.orgId === "string" ? input.orgId : undefined)),
   "pr-code-review": async (input, ctx) => runPrCodeReview(prReviewInput(input), await prReviewDeps(ctx, "code", typeof input?.orgId === "string" ? input.orgId : undefined)),
+  "pr-pentest": async (input, ctx) => runPrPentest(prReviewInput(input), await prReviewDeps(ctx, "pentest", typeof input?.orgId === "string" ? input.orgId : undefined)),
+  "domain-pentest": async (input, ctx) => runDomainPentest(input, ctx),
 };
 
 export function getJobExecutor(agentId: string): JobExecutor | undefined {

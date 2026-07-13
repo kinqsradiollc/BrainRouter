@@ -51,7 +51,8 @@ export async function runGitlabConnectorCheckpoint(
 ): Promise<GitlabConnectorRunResult> {
   if (connector.source !== 'gitlab') throw new Error(`Connector source ${connector.source} is not gitlab.`);
   const owner = configString(connector, 'owner');
-  if (!owner) throw new Error('GitLab connector owner is required.');
+  const configuredProjects = configStringList(connector, 'projects');
+  if (!owner && configuredProjects.length === 0) throw new Error('GitLab connector owner or project selection is required.');
   const includeIssues = connector.config.includeIssues !== false;
   const includeMergeRequests = connector.config.includeMergeRequests !== false;
   if (!includeIssues && !includeMergeRequests) {
@@ -105,6 +106,7 @@ export async function runGitlabConnectorCheckpoint(
 export interface GitlabTokenClientOptions {
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  authMode?: 'private-token' | 'bearer';
 }
 
 export function gitlabTokenClient(token: string, baseUrl?: string, options?: GitlabTokenClientOptions): GitlabConnectorClient {
@@ -116,7 +118,7 @@ export function gitlabTokenClient(token: string, baseUrl?: string, options?: Git
 
   async function requestJson(pathAndQuery: string): Promise<unknown> {
     const res = await fetcher(`${apiRoot}${pathAndQuery}`, {
-      headers: { 'PRIVATE-TOKEN': trimmedToken, Accept: 'application/json' },
+      headers: { ...(options?.authMode === 'bearer' ? { Authorization: `Bearer ${trimmedToken}` } : { 'PRIVATE-TOKEN': trimmedToken }), Accept: 'application/json' },
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) throw new Error(`GitLab API ${res.status} ${res.statusText} for ${pathAndQuery}`);
@@ -156,13 +158,13 @@ export function gitlabTokenClient(token: string, baseUrl?: string, options?: Git
 async function resolveProjects(
   connector: ConnectorRecord,
   client: Pick<GitlabConnectorClient, 'listProjects'>,
-  owner: string,
+  owner: string | undefined,
   maxProjects: number,
 ): Promise<string[]> {
   const configured = configStringList(connector, 'projects');
   const projects = configured.length
-    ? configured.map((project) => project.includes('/') ? project : `${owner}/${project}`)
-    : await client.listProjects(owner, { limit: maxProjects });
+    ? configured.map((project) => project.includes('/') || !owner ? project : `${owner}/${project}`)
+    : await client.listProjects(owner!, { limit: maxProjects });
   const unique: string[] = [];
   for (const project of projects) {
     const trimmed = project.trim();

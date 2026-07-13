@@ -87,6 +87,13 @@ export interface CheckpointRunnerDeps {
    * Never mutate; only reads the env var named by the connector's credential ref.
    */
   envToken?: EnvTokenResolver;
+  /**
+   * Server-side OAuth token resolver.  The backend passes a token it opened from
+   * its sealed connector record; desktop and CLI intentionally leave this unset
+   * and retain their existing credential resolution behaviour.  Keeping the
+   * value behind a callback prevents it from being retained in a connector file.
+   */
+  oauthToken?: (connector: ConnectorRecord, label: string) => { token?: string; error?: string };
   /** Root the workspace lives at — used to resolve relative filesystem-connector roots. */
   workspaceRoot?: string;
 }
@@ -152,10 +159,13 @@ export function buildCheckpointRunner(
   deps: CheckpointRunnerDeps = {},
 ): (connector: ConnectorRecord) => Promise<CheckpointResult> {
   const envToken: EnvTokenResolver = deps.envToken ?? defaultEnvTokenResolver;
-  const requireStaticToken = (connector: ConnectorRecord, label: string): string => {
+  const requireStaticToken = (connector: ConnectorRecord, label: string): { token: string; oauth: boolean } => {
+    const oauth = deps.oauthToken?.(connector, label);
+    if (oauth?.token) return { token: oauth.token, oauth: true };
+    if (oauth?.error) throw new Error(oauth.error);
     const cred = envToken(connector, label);
     if (!cred.token) throw new Error(cred.error ?? `${label} connector requires a static token credential.`);
-    return cred.token;
+    return { token: cred.token, oauth: false };
   };
 
   return async (connector: ConnectorRecord): Promise<CheckpointResult> => {
@@ -180,29 +190,31 @@ export function buildCheckpointRunner(
         return await runWebConnectorCheckpoint(connector, fetchWebClient({ headerToken: cred.token }));
       }
       case 'gitlab': {
-        const token = requireStaticToken(connector, 'GitLab');
+        const credential = requireStaticToken(connector, 'GitLab');
         const hostUrl = typeof connector.config.hostUrl === 'string' ? connector.config.hostUrl : undefined;
-        return await runGitlabConnectorCheckpoint(connector, gitlabTokenClient(token, hostUrl));
+        return await runGitlabConnectorCheckpoint(connector, gitlabTokenClient(credential.token, hostUrl, { authMode: credential.oauth ? 'bearer' : 'private-token' }));
       }
       case 'slack':
-        return await runSlackConnectorCheckpoint(connector, slackTokenClient(requireStaticToken(connector, 'Slack')));
+        return await runSlackConnectorCheckpoint(connector, slackTokenClient(requireStaticToken(connector, 'Slack').token));
       case 'jira':
         return await runJiraConnectorCheckpoint(
           connector,
-          jiraTokenClient(requireStaticToken(connector, 'Jira'), requireConnectorConfig(connector, 'baseUrl', 'Jira')),
+          jiraTokenClient(requireStaticToken(connector, 'Jira').token, requireConnectorConfig(connector, 'baseUrl', 'Jira')),
         );
       case 'confluence':
         return await runConfluenceConnectorCheckpoint(
           connector,
           confluenceTokenClient(
-            requireStaticToken(connector, 'Confluence'),
+            requireStaticToken(connector, 'Confluence').token,
             requireConnectorConfig(connector, 'baseUrl', 'Confluence'),
           ),
         );
       case 'notion':
-        return await runNotionConnectorCheckpoint(connector, notionTokenClient(requireStaticToken(connector, 'Notion')));
-      case 'linear':
-        return await runLinearConnectorCheckpoint(connector, linearTokenClient(requireStaticToken(connector, 'Linear')));
+        return await runNotionConnectorCheckpoint(connector, notionTokenClient(requireStaticToken(connector, 'Notion').token));
+      case 'linear': {
+        const credential = requireStaticToken(connector, 'Linear');
+        return await runLinearConnectorCheckpoint(connector, linearTokenClient(credential.token, { oauth: credential.oauth }));
+      }
       case 'mcp': {
         const client = deps.mcpClient?.(connector);
         if (!client) {
@@ -213,10 +225,10 @@ export function buildCheckpointRunner(
       case 'google-drive':
         return await runGoogleDriveConnectorCheckpoint(
           connector,
-          googleDriveTokenClient(requireStaticToken(connector, 'Google Drive')),
+          googleDriveTokenClient(requireStaticToken(connector, 'Google Drive').token),
         );
       case 'gmail':
-        return await runGmailConnectorCheckpoint(connector, gmailTokenClient(requireStaticToken(connector, 'Gmail')));
+        return await runGmailConnectorCheckpoint(connector, gmailTokenClient(requireStaticToken(connector, 'Gmail').token));
       default:
         throw new Error(`Connector runtime is not implemented for ${connector.source}.`);
     }

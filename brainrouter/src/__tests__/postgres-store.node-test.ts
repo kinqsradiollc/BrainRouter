@@ -137,6 +137,15 @@ test("PostgresMemoryStore: core round-trip against a fresh pgvector database", a
   await store.init();
   await store.initVec(8);
 
+  // Pentest targets are org/user scoped and therefore exercise the tenancy FKs.
+  await store.createUser('u1', 'br_test_u1', 'Pentest owner');
+  await store.createOrganization({ orgId: 'org-pentest', name: 'Pentest Org', slug: 'pentest-org', plan: 'team' });
+  await store.addOrgMember('org-pentest', 'u1', 'owner');
+  const target = await store.createPentestTarget('org-pentest', 'u1', { kind: 'domain', value: 'https://Example.test/path', authorized: true });
+  assert.equal(target.normalizedValue, 'https://example.test');
+  assert.equal((await store.listPentestTargets('org-pentest')).length, 1);
+  assert.equal((await store.getPentestTarget(target.id))?.orgId, 'org-pentest');
+
   // version() works (sqlite_version → version()).
   const version = await store.getSqliteVersion();
   assert.match(version, /PostgreSQL/i, "getSqliteVersion returns the pg version banner");
