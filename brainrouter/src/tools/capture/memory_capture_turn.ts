@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { memoryEngine } from "../../memory/engine.js";
+import { workspaceTagFromPath, projectTagFromName } from "@kinqs/brainrouter-types";
 
 export const memoryCaptureTurnToolSchema = {
   name: "memory_capture_turn",
@@ -39,6 +40,14 @@ export const memoryCaptureTurnToolSchema = {
       skillHints: {
         type: "string",
         description: "Skill-specific extraction hints provided by the active skill."
+      },
+      workspaceRoot: {
+        type: "string",
+        description: "Absolute path of the workspace this turn belongs to — hashed to a stable workspace_tag for per-workspace scoping."
+      },
+      projectName: {
+        type: "string",
+        description: "Project name (from .brainrouter/project.json) — hashed to a stable project_tag."
       }
     },
     required: ["sessionKey", "messages"]
@@ -60,7 +69,9 @@ export async function handleMemoryCaptureTurn(args: any, options?: { defaultUser
       timestamp: z.number()
     })).transform((a) => a.slice(0, 1000)),
     activeSkill: z.string().optional(),
-    skillHints: z.string().optional()
+    skillHints: z.string().optional(),
+    workspaceRoot: z.string().optional(),
+    projectName: z.string().optional()
   }).parse(args);
   const effectiveUserId = params.userId ?? options?.defaultUserId ?? "default";
 
@@ -75,7 +86,9 @@ export async function handleMemoryCaptureTurn(args: any, options?: { defaultUser
       sessionId: params.sessionId,
       messages: params.messages,
       activeSkill: params.activeSkill,
-      skillHints: params.skillHints
+      skillHints: params.skillHints,
+      workspaceTag: workspaceTagFromPath(params.workspaceRoot),
+      projectTag: projectTagFromName(params.projectName)
     });
 
     return {

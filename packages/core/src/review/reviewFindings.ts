@@ -18,6 +18,13 @@ export interface ParsedReviewFinding {
   summary: string;
   details?: string;
   suggestion?: string;
+  /**
+   * The EXACT replacement code for lines [line..endLine], with NO diff prefixes —
+   * dropped verbatim into a GitHub ```suggestion block so the author can click
+   * "Apply suggestion". Distinct from `suggestion` (prose rationale). Only set when
+   * the fix is a safe, self-contained line replacement.
+   */
+  replacement?: string;
   /** A few verbatim lines of the affected code, for in-panel context. */
   codeExcerpt?: string;
   /** An optional unified-diff hunk (problem `-` lines + suggested `+` lines). */
@@ -65,6 +72,7 @@ function coerce(raw: unknown): ParsedReviewFinding | null {
     summary,
     details: str(o.details),
     suggestion: str(o.suggestion),
+    replacement: str(o.replacement) ?? str(o.suggestedCode) ?? str(o.fix),
     codeExcerpt: str(o.codeExcerpt) ?? str(o.excerpt),
     diffHunk: str(o.diffHunk) ?? str(o.hunk),
     patch: str(o.patch),
@@ -83,6 +91,75 @@ export function parseReviewFindings(text: string): ParsedReviewFinding[] {
     : (parsed && typeof parsed === 'object' && Array.isArray((parsed as { findings?: unknown }).findings)
         ? (parsed as { findings: unknown[] }).findings : []);
   return arr.map(coerce).filter((f): f is ParsedReviewFinding => f !== null);
+}
+
+/**
+ * Parse a unified diff into the set of NEW-file line numbers that are commentable
+ * on the RIGHT side (the added `+` lines), keyed by repo-relative path. GitHub's
+ * Reviews API only accepts an inline comment whose `line` is part of the diff for
+ * that file + commit; anchoring to an added line is always valid. Used to keep a
+ * finding's inline comment (and its ```suggestion) from 422-ing the whole review.
+ */
+export function addedLinesByPath(diff: string): Map<string, Set<number>> {
+  const out = new Map<string, Set<number>>();
+  let path: string | null = null;
+  let newLine = 0;
+  let inHunk = false;
+  for (const raw of (diff ?? '').split('\n')) {
+    if (raw.startsWith('diff --git')) { path = null; inHunk = false; continue; }
+    if (raw.startsWith('+++ ')) {
+      const p = raw.slice(4).replace(/^b\//, '').trim();
+      path = p === '/dev/null' ? null : p; // added-file target; deletions have no RIGHT side
+      inHunk = false;
+      continue;
+    }
+    if (raw.startsWith('--- ')) { inHunk = false; continue; }
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw);
+    if (hunk) { newLine = Number(hunk[1]); inHunk = true; continue; }
+    if (!inHunk || !path) continue;
+    if (raw.startsWith('+')) {
+      let set = out.get(path);
+      if (!set) { set = new Set<number>(); out.set(path, set); }
+      set.add(newLine);
+      newLine++;
+    } else if (raw.startsWith('-')) {
+      // removed line — old side only; the new-file counter does not advance
+    } else if (raw.startsWith('\\')) {
+      // "\ No newline at end of file" — not a real line
+    } else {
+      newLine++; // context line advances the new-file counter
+    }
+  }
+  return out;
+}
+
+/** A resolved GitHub inline-comment anchor within the diff. */
+export interface InlineAnchor {
+  path: string;
+  line: number;
+  startLine?: number;
+  side: 'RIGHT';
+  /** Whether it is safe to attach a ```suggestion (the exact [start..line] range is in the diff). */
+  suggestable: boolean;
+}
+
+/**
+ * Resolve a finding to a valid GitHub inline-comment anchor, or null when it can't
+ * anchor inside the diff (→ the caller keeps it in the summary comment only). A
+ * ```suggestion is only `suggestable` when BOTH the finding's line and endLine are
+ * added lines in the diff — otherwise the suggestion range would be wrong and we
+ * degrade to a plain inline comment.
+ */
+export function resolveInlineAnchor(f: ParsedReviewFinding, added: Map<string, Set<number>>): InlineAnchor | null {
+  const set = added.get(f.file);
+  if (!set || set.size === 0) return null;
+  const start = f.line;
+  const end = f.endLine && start && f.endLine >= start ? f.endLine : start;
+  if (start && end && set.has(start) && set.has(end)) {
+    return { path: f.file, line: end, startLine: end > start ? start : undefined, side: 'RIGHT', suggestable: !!f.replacement };
+  }
+  if (start && set.has(start)) return { path: f.file, line: start, side: 'RIGHT', suggestable: false };
+  return null;
 }
 
 /** The instruction appended to the review prompt so output is parseable + rich. */

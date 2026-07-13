@@ -21,6 +21,7 @@ import { findMentionToken, rankFileMatches, applyMention } from '../../lib/compo
 import { hostQuery } from '../../lib/hostQuery.js';
 import { usePlatform } from '../../lib/shortcuts/shortcuts.js';
 import type { ConfigSnapshot } from '../../settings.js';
+import { symbolKindIcon } from '../../lib/uitest/rowSource.js';
 
 export interface ComposerProps {
   draft: string;
@@ -72,6 +73,10 @@ export interface ComposerProps {
   pastedImages?: Array<{ id: string; mediaType: string; dataBase64: string }>;
   onPasteImages?: (files: File[]) => void;
   onClearPastedImage?: (id: string) => void;
+  /** §a11y-inspect — component reference tags dragged from the Browser panel. */
+  componentTags?: Array<{ id: string; name: string; kind?: string; ref: string; steps?: Array<{ action: string; target: string; text?: string }> }>;
+  onDropTag?: (tag: { name: string; kind?: string; ref: string; filePath?: string; line?: number; steps?: Array<{ action: string; target: string; text?: string }> }) => void;
+  onClearComponentTag?: (id: string) => void;
 }
 
 function formatBytes(size: number): string {
@@ -88,6 +93,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
     info, branches, endpointModels, allowedModels, connectedProviders, defaultProviderName, routerCatalog, routerFallback, modelsLoading, setModelsLoading, modelChoices, modelScope, setModelScope,
     hasConversation, contextUsage, tokens, openSettings, onAttach, attachments = [], onClearAttachment, canSubmit = false,
     pastedImages = [], onPasteImages, onClearPastedImage,
+    componentTags = [], onDropTag, onClearComponentTag,
   } = p;
   const { fmt } = usePlatform(); // §shortcuts — OS-correct menu hint glyphs
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -201,9 +207,20 @@ export function Composer(p: ComposerProps): React.ReactElement {
     <div className="composer">
       <div
         className={`box${dragOver ? ' drag-over' : ''}`}
-        onDragOver={onAttach ? (e) => { e.preventDefault(); if (!dragOver) setDragOver(true); } : undefined}
-        onDragLeave={onAttach ? () => setDragOver(false) : undefined}
-        onDrop={onAttach ? (e) => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); } : undefined}
+        onDragOver={onAttach || onDropTag ? (e) => { e.preventDefault(); if (!dragOver) setDragOver(true); } : undefined}
+        onDragLeave={onAttach || onDropTag ? () => setDragOver(false) : undefined}
+        onDrop={onAttach || onDropTag ? (e) => {
+          e.preventDefault(); setDragOver(false);
+          if (e.dataTransfer.files.length) { handleFiles(e.dataTransfer.files); return; }
+          // §a11y-inspect — a dragged Accessibility row becomes a component tag chip;
+          // any other dragged text falls back to appending its reference to the draft.
+          const tagJson = e.dataTransfer.getData('application/x-brainrouter-tag');
+          if (tagJson && onDropTag) {
+            try { onDropTag(JSON.parse(tagJson)); return; } catch { /* fall through to text */ }
+          }
+          const ref = e.dataTransfer.getData('application/x-brainrouter-ref') || e.dataTransfer.getData('text/plain');
+          if (ref) setDraft(draft ? draft.replace(/\s*$/, '') + ' ' + ref : ref);
+        } : undefined}
       >
         {slashActive && slashMatches.length ? (
           <div className="slash-pop">
@@ -253,6 +270,22 @@ export function Composer(p: ComposerProps): React.ReactElement {
                 <img src={`data:${img.mediaType};base64,${img.dataBase64}`} alt="Pasted screenshot" />
                 {onClearPastedImage ? (
                   <button type="button" className="attachment-clear" aria-label="Remove image" onClick={() => onClearPastedImage(img.id)}>
+                    <Icon name="close" size={11} />
+                  </button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {componentTags.length ? (
+          <div className="attachment-strip" aria-label="Tagged components">
+            {componentTags.map((t) => (
+              <div key={t.id} className="tag-chip" title={t.ref}>
+                <Icon name={symbolKindIcon(t.kind)} size={13} />
+                <span className="attachment-name">{t.name}</span>
+                {t.kind ? <span className="attachment-meta">{t.kind}</span> : null}
+                {onClearComponentTag ? (
+                  <button type="button" className="attachment-clear" aria-label={`Remove ${t.name}`} onClick={() => onClearComponentTag(t.id)}>
                     <Icon name="close" size={11} />
                   </button>
                 ) : null}

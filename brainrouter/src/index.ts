@@ -47,7 +47,8 @@ import path from 'node:path';
 import { decideMcpAcceptPromotion } from './api/mcpAcceptHeader.js';
 import { authRouter, usersRouter, sessionsRouter } from './api/routes/identity/index.js';
 import { orgsRouter, projectsRouter, githubReposRouter } from './api/routes/tenancy/index.js';
-import { providersRouter, agentModelsRouter, integrationsRouter, adminEmailRouter, adminOrgsRouter } from './api/routes/admin/index.js';
+import { githubConnectorRouter, githubConnectorAdminRouter } from './api/routes/connectors/github.js';
+import { providersRouter, agentModelsRouter, integrationsRouter, reviewsRouter, adminEmailRouter, adminOrgsRouter } from './api/routes/admin/index.js';
 import { triggersRouter } from './api/routes/triggers/index.js';
 import {
   memoriesRouter,
@@ -218,9 +219,12 @@ if (USE_HTTP) {
   app.use("/api/orgs", orgsRouter);
   app.use("/api/orgs", projectsRouter);
   app.use("/api/orgs", githubReposRouter);
+  app.use("/api/connectors", githubConnectorRouter);
+  app.use("/api/admin/connectors", githubConnectorAdminRouter);
   app.use("/api/admin/providers", providersRouter);
   app.use("/api/admin/agent-models", agentModelsRouter);
   app.use("/api/admin/integrations", integrationsRouter);
+  app.use("/api/admin/reviews", reviewsRouter);
   app.use("/api/admin/email", adminEmailRouter);
   app.use("/api/admin/orgs", adminOrgsRouter);
   // Hosted webhook ingress — unauthenticated by JWT (verifies the App's HMAC).

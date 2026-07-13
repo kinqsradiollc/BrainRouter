@@ -39,14 +39,18 @@ function GithubInner() {
   const [search, setSearch] = useState("");
   const [busy, setBusy] = useState<string>("");
 
-  useEffect(() => { if (user && !user.isAdmin) router.replace("/overview"); }, [router, user]);
+  // No global-admin gate — an org owner/admin manages their OWN org's GitHub here;
+  // the backend enforces triggers:manage per-org (non-managers just see it read-only).
   useEffect(() => {
     (async () => {
       try {
         const res = await adminApi.listOrgs();
         setOrgs(res.orgs ?? []);
-        const def = res.orgs?.find((o) => o.isDefault) ?? res.orgs?.[0];
-        if (def) setActiveOrg(def.orgId);
+        // Honor ?org=<id> (deep-linked from the Organizations page), else the default.
+        const wanted = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("org") : null;
+        const pick = (wanted && res.orgs?.find((o) => o.orgId === wanted))
+          ?? res.orgs?.find((o) => o.isDefault) ?? res.orgs?.[0];
+        if (pick) setActiveOrg(pick.orgId);
       } catch (e) { setError(e instanceof Error ? e.message : "Failed to load organizations"); }
     })();
   }, []);

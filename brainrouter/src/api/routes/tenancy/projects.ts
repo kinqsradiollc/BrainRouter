@@ -9,8 +9,9 @@ import { randomUUID } from "node:crypto";
 import { memoryEngine } from "../../../memory/engine.js";
 import { requireAnyAuth, type AuthedRequest } from "../../middleware/auth.js";
 import { sendError } from "../../../contracts/http.js";
-import { can, roleAtLeast, isRole, ROLES } from "../../../tenancy/rbac.js";
+import { can, roleAtLeast, normalizeRole, ROLES } from "../../../tenancy/rbac.js";
 import { planHasFeature, withinLimit, entitlementsFor } from "../../../tenancy/entitlements.js";
+import { normalizeRepoUrl } from "@kinqs/brainrouter-core/track";
 
 export const projectsRouter = Router();
 projectsRouter.use(requireAnyAuth);
@@ -19,8 +20,18 @@ projectsRouter.use(requireAnyAuth);
 projectsRouter.get("/:orgId/projects", async (req: AuthedRequest, res) => {
   const orgId = String(req.params.orgId);
   const role = await memoryEngine.tenancy.getMemberRole(orgId, req.userId!);
-  if (!role) { sendError(res, 403, "You are not a member of that team"); return; }
-  const projects = await memoryEngine.projects.listAccessibleProjects(orgId, req.userId!, roleAtLeast(role, "admin"));
+  if (!req.isAdmin && !role) { sendError(res, 403, "You are not a member of that team"); return; }
+  // Global admins see every project (parity with requirePermission's admin bypass).
+  const seeAll = !!req.isAdmin || roleAtLeast(role, "admin");
+  let projects = await memoryEngine.projects.listAccessibleProjects(orgId, req.userId!, seeAll);
+  // ADR-015 — `repoUrl` is finally consumed: `?repo=<git remote>` resolves which
+  // project a local checkout maps to, matching on the canonical repo identity so an
+  // ssh `git@…` workspace remote matches an https linked url (and vice-versa).
+  const repo = String(req.query.repo ?? "").trim();
+  if (repo) {
+    const want = normalizeRepoUrl(repo);
+    projects = want ? projects.filter((p) => normalizeRepoUrl(p.repoUrl ?? "") === want) : [];
+  }
   res.json({ projects });
 });
 
@@ -28,7 +39,7 @@ projectsRouter.get("/:orgId/projects", async (req: AuthedRequest, res) => {
 projectsRouter.post("/:orgId/projects", async (req: AuthedRequest, res) => {
   const orgId = String(req.params.orgId);
   const role = await memoryEngine.tenancy.getMemberRole(orgId, req.userId!);
-  if (!can(role, "members:manage")) { sendError(res, 403, "This action requires the 'members:manage' capability"); return; }
+  if (!req.isAdmin && !can(role, "members:manage")) { sendError(res, 403, "This action requires the 'members:manage' capability"); return; }
   const name = String(req.body?.name ?? "").trim();
   if (!name) { sendError(res, 400, "name is required"); return; }
   const restricted = Boolean(req.body?.restricted);
@@ -63,7 +74,7 @@ projectsRouter.post("/:orgId/projects", async (req: AuthedRequest, res) => {
 async function requireProjectAdmin(req: AuthedRequest, res: import("express").Response) {
   const orgId = String(req.params.orgId);
   const role = await memoryEngine.tenancy.getMemberRole(orgId, req.userId!);
-  if (!can(role, "members:manage")) { sendError(res, 403, "This action requires the 'members:manage' capability"); return null; }
+  if (!req.isAdmin && !can(role, "members:manage")) { sendError(res, 403, "This action requires the 'members:manage' capability"); return null; }
   const project = await memoryEngine.projects.getProject(String(req.params.projectId));
   if (!project || project.orgId !== orgId) { sendError(res, 404, "project not found"); return null; }
   return { orgId, project };
@@ -107,9 +118,9 @@ projectsRouter.post("/:orgId/projects/:projectId/members", async (req: AuthedReq
   const ctx = await requireProjectAdmin(req, res);
   if (!ctx) return;
   const userId = String(req.body?.userId ?? "").trim();
-  const role = String(req.body?.role ?? "member").trim();
+  const role = normalizeRole(String(req.body?.role ?? "developer").trim());
   if (!userId) { sendError(res, 400, "userId is required"); return; }
-  if (!isRole(role)) { sendError(res, 400, `a valid role (${ROLES.join(", ")}) is required`); return; }
+  if (!role) { sendError(res, 400, `a valid role (${ROLES.join(", ")}) is required`); return; }
   // The user must belong to the Team first.
   const memberRole = await memoryEngine.tenancy.getMemberRole(ctx.orgId, userId);
   if (!memberRole) { sendError(res, 400, "That user is not a member of the team"); return; }

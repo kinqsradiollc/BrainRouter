@@ -144,6 +144,7 @@ export const SUBAGENT_ROLE_LABELS: Record<SubagentRole, string> = {
 };
 
 export const NAV: Array<{ section: SettingsSection; icon: string; title: string; group: 'Settings' | 'Desktop app' }> = [
+  { section: 'account', icon: 'shield', title: 'Account', group: 'Settings' },
   { section: 'general', icon: 'gear', title: 'General', group: 'Settings' },
   { section: 'models', icon: 'spark', title: 'Models', group: 'Settings' },
   { section: 'permissions', icon: 'shield', title: 'Permissions', group: 'Settings' },
@@ -152,6 +153,7 @@ export const NAV: Array<{ section: SettingsSection; icon: string; title: string;
   { section: 'workflow-automation', icon: 'fork', title: 'Auto-planning', group: 'Settings' },
   { section: 'runtime', icon: 'terminal', title: 'Runtime', group: 'Settings' },
   { section: 'automations', icon: 'globe', title: 'Automations', group: 'Settings' },
+  { section: 'reviews', icon: 'shield', title: 'PR Reviews', group: 'Settings' },
   { section: 'extensions', icon: 'plug', title: 'Extensions', group: 'Settings' },
   { section: 'connectors', icon: 'bolt', title: 'MCP Servers', group: 'Settings' },
   { section: 'tools', icon: 'gear', title: 'Tools', group: 'Settings' },

@@ -348,8 +348,10 @@ function openWorkspaceWindow(workspaceRoot: string): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-      // §3 D3 — allow <webview> ONLY for the prototype preview; every attach is
-      // hardened + src-gated by the will-attach-webview handler below.
+      // §3 D3 — allow <webview>, hardened + src-gated by the will-attach-webview
+      // handler below. Used by the prototype preview AND the Browser panel, which
+      // renders the workspace's running web app (e.g. http://localhost:5173) for
+      // UI testing.
       webviewTag: true,
     },
   });

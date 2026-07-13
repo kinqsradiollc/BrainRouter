@@ -275,7 +275,7 @@ export function autoCaptureRequirement(this: Agent, prompt: string, callbacks: R
     }
     const provenance = { actor: 'agent', reason: autopilot ? 'auto-detect:autopilot' : 'auto-detect:draft' };
     void emitAgentEvent(
-      { mcpClient: this.mcpClient, sessionKey: this.sessionKey },
+      { mcpClient: this.mcpClient, sessionKey: this.sessionKey, workspaceRoot: this.workspaceRoot },
       {
         kind: 'agent_output',
         summary: `Requirement ${record.id}: ${record.title} [${record.status}] (auto-detect)`,
@@ -310,7 +310,7 @@ export function autoSynchronizeRequirementPlanTrack(this: Agent, callbacks: RunT
         reason: 'plan-track-sync',
       };
       void emitAgentEvent(
-        { mcpClient: this.mcpClient, sessionKey: this.sessionKey },
+        { mcpClient: this.mcpClient, sessionKey: this.sessionKey, workspaceRoot: this.workspaceRoot },
         {
           kind: 'agent_output',
           summary: `Requirement automation ${action.kind}: ${action.title}`,
@@ -374,7 +374,7 @@ export function autoSynchronizeSprints(this: Agent, callbacks: RunTurnCallbacks)
         ? action.workItemKey
         : action.sprintName;
       void emitAgentEvent(
-        { mcpClient: this.mcpClient, sessionKey: this.sessionKey },
+        { mcpClient: this.mcpClient, sessionKey: this.sessionKey, workspaceRoot: this.workspaceRoot },
         {
           kind: 'agent_output',
           summary: `Sprint automation ${action.kind}: ${actionLabel}`,
@@ -413,7 +413,7 @@ export function autoReconcileGoalCompletion(this: Agent, callbacks: RunTurnCallb
       reason: 'goal-complete-reconcile',
     };
     void emitAgentEvent(
-      { mcpClient: this.mcpClient, sessionKey: this.sessionKey },
+      { mcpClient: this.mcpClient, sessionKey: this.sessionKey, workspaceRoot: this.workspaceRoot },
       {
         kind: 'agent_output',
         summary: `Requirement completed from goal: ${completed.title}`,
@@ -498,7 +498,7 @@ export function captureTrackAutomationEvent(this: Agent, input: {
       reason: input.action,
     };
     void emitAgentEvent(
-      { mcpClient: this.mcpClient, sessionKey: this.sessionKey },
+      { mcpClient: this.mcpClient, sessionKey: this.sessionKey, workspaceRoot: this.workspaceRoot },
       {
         kind: 'agent_output',
         summary: `Track automation ${input.action}: ${input.item.key}`,

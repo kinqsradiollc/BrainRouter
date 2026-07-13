@@ -1,0 +1,61 @@
+:root {
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  color: #1c2128;
+  background: #f6f8fa;
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+#app { max-width: 640px; margin: 0 auto; padding: 24px 20px; }
+
+[data-testid='main-nav'] {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid #d0d7de;
+  padding-bottom: 12px;
+  margin-bottom: 20px;
+}
+[data-testid='main-nav'] a {
+  padding: 6px 12px;
+  border-radius: 8px;
+  text-decoration: none;
+  color: #57606a;
+  font-weight: 600;
+}
+[data-testid='main-nav'] a.active { background: #0969da; color: #fff; }
+[data-testid='main-nav'] a:hover:not(.active) { background: #eaeef2; }
+
+h1 { font-size: 22px; margin: 0 0 8px; }
+main section { background: #fff; border: 1px solid #d0d7de; border-radius: 12px; padding: 20px; }
+
+input {
+  padding: 8px 11px;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  font-size: 14px;
+  width: 100%;
+  margin: 6px 0;
+}
+button {
+  padding: 8px 14px;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  background: #f6f8fa;
+  font-weight: 600;
+  cursor: pointer;
+}
+button:hover { background: #eaeef2; }
+[data-testid='login-submit'], [data-testid='todo-add'] { background: #1f883d; color: #fff; border-color: transparent; }
+
+.counter { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+[data-testid='counter-value'] { font-size: 22px; font-weight: 700; min-width: 28px; text-align: center; }
+
+.todo-row { display: flex; gap: 8px; align-items: center; }
+.todo-row input { margin: 0; }
+[data-testid='todo-list'] { list-style: none; padding: 0; margin: 12px 0 0; }
+[data-testid='todo-item'] { display: flex; align-items: center; justify-content: space-between; padding: 8px 4px; border-bottom: 1px solid #eaeef2; }
+[data-testid='todo-remove'] { padding: 2px 8px; }
+[data-testid='todo-count'] { color: #57606a; font-size: 13px; margin-top: 10px; }
+
+[data-testid='login-message'] { margin-top: 12px; font-size: 14px; min-height: 18px; }
+[data-testid='login-message'].ok { color: #1a7f37; }
+[data-testid='login-message'].err { color: #cf222e; }
