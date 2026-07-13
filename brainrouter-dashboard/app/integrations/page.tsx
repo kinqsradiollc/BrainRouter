@@ -15,6 +15,7 @@ import { PremiumButton } from "../../components/PremiumButton";
 import { adminApi, type IntegrationConfig, type IntegrationInput } from "../../lib/adminApi";
 import { GithubOAuthAppCard } from "./GithubOAuthAppCard";
 import { ConnectorOAuthAppsCard } from "./ConnectorOAuthAppsCard";
+import { ConnectorRows } from "./ConnectorRows";
 
 interface FormState {
   appId: string;
@@ -99,7 +100,7 @@ function IntegrationsInner() {
 
   return (
     <div className="settings-page">
-      <PageHeader title="Integrations" description="Configure the org's GitHub App bot — the single identity that verifies incoming webhooks and posts back on @mention triggers. Secrets are stored encrypted and never shown again." />
+      <PageHeader title="Integrations" description="Connect the sources that feed review context and security analysis. Tokens are sealed server-side and never returned to the browser." />
 
       {!secretReady && (
         <div className="settings-note settings-note--warn">
@@ -115,6 +116,7 @@ function IntegrationsInner() {
         </div>
       </PremiumCard>
 
+      <ConnectorRows />
       {user?.isAdmin && <GithubOAuthAppCard />}
       {user?.isAdmin && <ConnectorOAuthAppsCard />}
 
