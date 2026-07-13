@@ -85,7 +85,7 @@ export interface ReviewProgressEventDto {
 }
 export interface ReviewJobDto {
   id: string;
-  lens: "security" | "code";
+  lens: "security" | "code" | "pentest";
   status: string;
   repo: string | null;
   prNumber: number | null;
@@ -98,7 +98,7 @@ export interface ReviewJobDto {
   updatedAt: string;
   createdAt: string;
 }
-export interface ManualReviewRunRequest { repo: string; prNumber: number; lens: "security" | "code" | "both"; }
+export interface ManualReviewRunRequest { repo: string; prNumber: number; lens: "security" | "code" | "pentest" | "both"; }
 
 export interface CursorPaginationParams {
   cursor?: string;

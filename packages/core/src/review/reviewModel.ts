@@ -58,6 +58,13 @@ export interface ReviewFinding {
    * (unresolvedBlocking / reviewGate key off status + severity, not this flag).
    */
   preExisting?: boolean;
+  /** Pentest evidence fields.  Optional for existing PR-review findings. */
+  cvss?: number;
+  cvssVector?: string;
+  cwe?: string;
+  cve?: string;
+  poc?: string;
+  remediation?: string;
 }
 
 export interface ReviewRun {

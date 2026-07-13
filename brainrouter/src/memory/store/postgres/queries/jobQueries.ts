@@ -71,7 +71,18 @@ export async function listMemoryJobs(exec: Executor, filters?: MemoryJobListFilt
 export async function listReviewJobsForOrg(exec: Executor, orgId: string, limit = 30): Promise<MemoryJobRecord[]> {
   const rows = await exec.rows(
     pg(`SELECT ${JOB_COLUMNS} FROM memory_jobs
-          WHERE kind IN ('pr-security-review','pr-code-review')
+          WHERE kind IN ('pr-security-review','pr-code-review','pr-pentest','domain-pentest')
+            AND (input_json::jsonb ->> 'orgId') = ?
+         ORDER BY created_at DESC, id DESC LIMIT ?`),
+    [orgId, limit],
+  );
+  return rows.map((r) => jobRowToRecord(r as any));
+}
+
+export async function listPentestJobsForOrg(exec: Executor, orgId: string, limit = 100): Promise<MemoryJobRecord[]> {
+  const rows = await exec.rows(
+    pg(`SELECT ${JOB_COLUMNS} FROM memory_jobs
+          WHERE kind IN ('domain-pentest','pr-pentest')
             AND (input_json::jsonb ->> 'orgId') = ?
          ORDER BY created_at DESC, id DESC LIMIT ?`),
     [orgId, limit],

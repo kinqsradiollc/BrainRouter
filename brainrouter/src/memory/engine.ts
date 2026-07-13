@@ -70,7 +70,8 @@ export class MemoryEngine {
   private synthesisRunner: LLMRunner;
   private securityReviewRunner: LLMRunner;
   private codeReviewRunner: LLMRunner;
-  private reviewAssignments: Record<"security" | "code", { maxDiffChars?: number; timeoutMs?: number }> = { security: {}, code: {} };
+  private pentestReviewRunner: LLMRunner;
+  private reviewAssignments: Record<"security" | "code" | "pentest", { maxDiffChars?: number; timeoutMs?: number }> = { security: {}, code: {}, pentest: {} };
   private sweeperTimer?: NodeJS.Timeout;
   private activeSessionSweeperTimer?: NodeJS.Timeout;
   private sessionInboxSweeperTimer?: NodeJS.Timeout;
@@ -122,6 +123,7 @@ export class MemoryEngine {
     );
     this.securityReviewRunner = new ModelLLMRunner();
     this.codeReviewRunner = new ModelLLMRunner();
+    this.pentestReviewRunner = new ModelLLMRunner();
 
     // REFAC-ENGINE-SPLIT (0.4.17) — every env-configured service + pipeline is
     // built in lifecycleOps.buildServices; the engine just wires the results
@@ -478,7 +480,7 @@ export class MemoryEngine {
           const set = (runner as { setProviderOverride?: (x: typeof o) => void }).setProviderOverride;
           if (typeof set === "function") set.call(runner, o);
         }
-        const configureReview = async (lens: "security" | "code", runner: LLMRunner, role: "security-review" | "code-review") => {
+        const configureReview = async (lens: "security" | "code" | "pentest", runner: LLMRunner, role: "security-review" | "code-review" | "pentest") => {
           const assign = assigns[role] ?? {};
           const namedRecord = assign.provider ? await this.providers.getProviderConfig(assign.provider) : null;
           const named = namedRecord?.orgId === orgId && assign.provider ? await this.providers.getResolvedProvider(assign.provider) : null;
@@ -490,6 +492,7 @@ export class MemoryEngine {
         };
         await configureReview("security", this.securityReviewRunner, "security-review");
         await configureReview("code", this.codeReviewRunner, "code-review");
+        await configureReview("pentest", this.pentestReviewRunner, "pentest");
         // Register the LLM provider in the single gateway (the one authority).
         modelGateway.configure("llm", { endpoint: llm.endpoint, apiKey: llm.apiKey, model: llm.model, wireFormat: str(llm.wireFormat) });
         // Extraction + synthesis brain sub-agents: per-role model on the LLM provider.
@@ -518,11 +521,11 @@ export class MemoryEngine {
    * assignment, so only the system-org runners are long-lived; queued reviews get
    * an isolated configured runner.
    */
-  public async reviewRunner(lens: "security" | "code", orgId = systemProviderOrgId()): Promise<LLMRunner> {
-    if (orgId === systemProviderOrgId()) return lens === "security" ? this.securityReviewRunner : this.codeReviewRunner;
+  public async reviewRunner(lens: "security" | "code" | "pentest", orgId = systemProviderOrgId()): Promise<LLMRunner> {
+    if (orgId === systemProviderOrgId()) return lens === "security" ? this.securityReviewRunner : lens === "code" ? this.codeReviewRunner : this.pentestReviewRunner;
     const runner = new ModelLLMRunner();
     const assigns = (await this.emailAuth.getSetting<Record<string, { provider?: string; model?: string }>>(`agentModels:${orgId}`)) ?? {};
-    const assign = assigns[lens === "security" ? "security-review" : "code-review"] ?? {};
+    const assign = assigns[lens === "security" ? "security-review" : lens === "code" ? "code-review" : "pentest"] ?? {};
     const base = await resolveProviderConfig(this.providers, orgId, "llm");
     const record = assign.provider ? await this.providers.getProviderConfig(assign.provider) : null;
     const selected = record?.orgId === orgId && assign.provider ? await this.providers.getResolvedProvider(assign.provider) : null;
@@ -535,11 +538,29 @@ export class MemoryEngine {
   }
 
   /** Non-secret per-lens execution knobs, loaded in the same org scope as the runner. */
-  public async reviewAssignment(lens: "security" | "code", orgId = systemProviderOrgId()): Promise<{ maxDiffChars?: number; timeoutMs?: number }> {
+  public async reviewAssignment(lens: "security" | "code" | "pentest", orgId = systemProviderOrgId()): Promise<{ maxDiffChars?: number; timeoutMs?: number }> {
     if (orgId === systemProviderOrgId()) return this.reviewAssignments[lens];
     const assigns = (await this.emailAuth.getSetting<Record<string, { maxDiffChars?: unknown; timeoutMs?: unknown }>>(`agentModels:${orgId}`)) ?? {};
-    const assign = assigns[lens === "security" ? "security-review" : "code-review"] ?? {};
+    const assign = assigns[lens === "security" ? "security-review" : lens === "code" ? "code-review" : "pentest"] ?? {};
     return { ...(typeof assign.maxDiffChars === "number" ? { maxDiffChars: assign.maxDiffChars } : {}), ...(typeof assign.timeoutMs === "number" ? { timeoutMs: assign.timeoutMs } : {}) };
+  }
+
+  /** Resolve an immutable, org-scoped LLM configuration for an unattended
+   * agentic pentest. The key is returned only to the in-process executor and is
+   * never written into the job payload or progress stream. */
+  public async pentestAgentConfig(orgId: string): Promise<{ provider: string; apiKey: string; model: string; endpoint?: string } | null> {
+    const assignments = (await this.emailAuth.getSetting<Record<string, { provider?: string; model?: string }>>(`agentModels:${orgId}`)) ?? {};
+    const assignment = assignments.pentest ?? {};
+    const record = assignment.provider ? await this.providers.getProviderConfig(assignment.provider) : null;
+    const selected = record?.orgId === orgId && assignment.provider ? await this.providers.getResolvedProvider(assignment.provider) : null;
+    const resolved = selected ?? await resolveProviderConfig(this.providers, orgId, "llm");
+    if (!resolved) return null;
+    return {
+      provider: record?.providerId ?? "openai-compatible",
+      apiKey: resolved.apiKey,
+      model: assignment.model?.trim() || resolved.model,
+      ...(resolved.endpoint ? { endpoint: resolved.endpoint } : {}),
+    };
   }
 
   public createUser(userId: string, apiKey: string, displayName = "", isAdmin = false): Promise<UserRecord> {

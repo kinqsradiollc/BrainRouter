@@ -70,6 +70,15 @@ export const LOCAL_TOOL_REGISTRY: LocalToolEntry[] = [
   // (connectors.json); running one is shell-tier (network I/O + memory writes),
   // registered further below with the command-execution surface.
   { name: 'connector_list', accessTier: 'read', actionKind: 'read_only', parallelSafe: true },
+  // Pentest findings and finalization write only to the isolated review state;
+  // the pentest runtime's allowlist is the security boundary around them.
+  { name: 'file_vulnerability', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  { name: 'finish_scan', accessTier: 'read', actionKind: 'read_only', parallelSafe: false },
+  { name: 'list_requests', accessTier: 'read', actionKind: 'network', parallelSafe: true },
+  { name: 'view_request', accessTier: 'read', actionKind: 'network', parallelSafe: true },
+  { name: 'repeat_request', accessTier: 'read', actionKind: 'network', parallelSafe: false },
+  { name: 'list_sitemap', accessTier: 'read', actionKind: 'network', parallelSafe: true },
+  { name: 'scope_rules', accessTier: 'read', actionKind: 'network', parallelSafe: false },
   // Orchestration surface (added dynamically as specs, but access-gated here).
   // NB: child-spawn action kind is resolved per-call from the requested child
   // `access` (REVIEW-FIX); `child_write` is the name-only default they share.

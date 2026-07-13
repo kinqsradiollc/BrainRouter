@@ -8,6 +8,7 @@ import {
   SECURITY_VULN_CLASSES,
 } from '../review/securityReview.js';
 import { buildCodeReviewContract, CODE_REVIEW_LENS, CODE_REVIEW_AXES, CODE_REVIEW_MARKER } from '../review/codeReviewContract.js';
+import { buildPentestContract, PENTEST_LENS, PENTEST_REVIEW_MARKER } from '../review/pentestReview.js';
 import {
   buildReviewIntro,
   formatInlineFinding,
@@ -33,6 +34,15 @@ test('security contract is self-contained, diff-focused, and requests a suggesti
 test('security lens gates; code-review lens is advisory', () => {
   assert.equal(SECURITY_LENS.advisory, false);
   assert.equal(CODE_REVIEW_LENS.advisory, true);
+});
+
+test('pentest lens gates only verified high-severity findings and has an isolated marker', () => {
+  assert.equal(PENTEST_LENS.advisory, false);
+  assert.equal(PENTEST_LENS.summaryMarker, PENTEST_REVIEW_MARKER);
+  assert.equal(PENTEST_LENS.isBlocking(f({ severity: 'high' })), true);
+  assert.equal(PENTEST_LENS.isBlocking(f({ severity: 'medium' })), false);
+  assert.match(buildPentestContract(), /CVSS 3\.1/);
+  assert.match(buildPentestContract(), /authorized target/i);
 });
 
 test('code-review contract is self-contained, quality-focused, and defers security', () => {
