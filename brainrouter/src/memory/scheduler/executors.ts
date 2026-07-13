@@ -46,6 +46,11 @@ export interface JobEngineOps {
   reviewRunner?(lens: "security" | "code" | "pentest", orgId?: string): LLMRunner | Promise<LLMRunner | undefined> | undefined;
   reviewAssignment?(lens: "security" | "code" | "pentest", orgId?: string): { maxDiffChars?: number; timeoutMs?: number } | Promise<{ maxDiffChars?: number; timeoutMs?: number } | undefined> | undefined;
   pentestAgentConfig?(orgId: string): Promise<LLMConfig | null>;
+  /** Ingest completed pentest findings into the org's cognitive memory (redacted, org-scoped). */
+  recordPentestFindings?(params: {
+    orgId: string; userId: string; target: string; reviewId: string;
+    findings: Array<{ id: string; severity: string; summary: string; details?: string; file?: string; line?: number; cvss?: number; cvssVector?: string; cwe?: string; cve?: string; poc?: string; remediation?: string; status?: string; confidence?: number }>;
+  }): Promise<number>;
 }
 
 export interface JobExecContext {
