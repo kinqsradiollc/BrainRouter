@@ -174,15 +174,7 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
         </button>
       </div>
       {activeSideTab ? (
-        // §panel-persist — keep every open tab mounted (inactive ones hidden) so
-        // switching tabs preserves each panel's state: drawers, scroll position,
-        // and the Browser's live <webview>. Each panel is still a direct child of
-        // its own `.side-body panel-body`, so no layout/CSS change is needed.
-        <>{sideTabs.map((t) => (
-          <div key={t} className="side-body panel-body" style={{ display: t === activeSideTab ? undefined : 'none' }}>
-            {renderPanelBody(t)}
-          </div>
-        ))}</>
+        <div className="side-body panel-body" key={activeSideTab}>{renderPanelBody(activeSideTab)}</div>
       ) : (
         /* §panel-drawer — no active tab: the searchable, keyboard-navigable tools chooser. */
         <div className="side-chooser">

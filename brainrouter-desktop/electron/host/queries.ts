@@ -55,12 +55,6 @@ import {
 // Deep imports into the CLI's built runtime (no "exports" field = allowed).
 // Extracting a proper @kinqs/brainrouter-agent package is tracked for 0.4.16.
 import { callOpenAI } from '@kinqs/brainrouter-core/agent';
-// UI-TEST fusion — story prompt/validation helpers + the driver step types the
-// uitest:* handlers below use. The host instance itself arrives via ctx.uitest.
-import { buildStoryPrompt, validateStories, FlowStepSchema, DeviceSchema, type Story } from '@kinqs/brainrouter-ui-test/dist/index.js';
-// IPC boundary: the uitest:* channel is agent-reachable, so validate every input.
-import { isLoopbackHttpSrc } from '../webviewPolicy.js';
-import type { UiTestStep, UiTestStepResult } from '../uitestHost.js';
 import {
   CLI_CONFIG_SCHEMA,
   findConfigSchemaField,
@@ -334,7 +328,6 @@ import type { QueryHandler } from '../hostCore.js';
 
 export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
   const {
-    uitest,
     workspaceRoot,
     wsGit,
     fileListCache,
@@ -3008,127 +3001,6 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // WS2 2.4 / WS6 6.3 — stop a background shell (e.g. a dev server an agent
       // started) from the Background-tasks panel. Kills the whole process group.
       'action:kill-bgshell': (args) => ({ ok: killBackgroundShell(String(args.id ?? '')) }),
-      // UI-TESTING (P4) — the panel's controls (extract / set-url / run / device /
-      // stop). Every command routes through the shared command layer, never a
-      // backend directly. They ride the query channel like the other host actions.
-      'uitest:extract': (args) => {
-        try {
-          const only = Array.isArray(args.only) ? (args.only as unknown[]).map(String) : undefined;
-          return uitest.extract({ only: only && only.length ? only : undefined, broad: !!args.broad });
-        } catch (err) { return { error: err instanceof Error ? err.message : String(err) }; }
-      },
-      'uitest:manifest': () => uitest.manifest(),
-      'uitest:set-url': (args) => {
-        const url = typeof args.url === 'string' ? args.url.trim() : '';
-        // Only a LOOPBACK http(s) URL may be loaded into the webview. An empty
-        // string clears the base; reject javascript:/data:/remote schemes an
-        // agent could otherwise get loaded via a later story run.
-        if (url && !isLoopbackHttpSrc(url)) {
-          return { ok: false, url: '', error: 'Only loopback http(s) URLs are allowed (localhost / 127.0.0.1 / [::1]).' };
-        }
-        return uitest.setUrl(url);
-      },
-      'uitest:run-command': async (args) => {
-        // Validate against the step schema — action ∈ {navigate,tap,type,assertVisible}
-        // and `type` requires text. An agent must not drive an unknown action.
-        const parsed = FlowStepSchema.safeParse(args.step);
-        if (!parsed.success) return { result: null, error: 'invalid UI-test step (unknown action or missing field)' };
-        return uitest.runCommand(parsed.data as UiTestStep);
-      },
-      'uitest:set-device': async (args) => {
-        const parsed = DeviceSchema.safeParse(args.device);
-        if (!parsed.success) return { result: null, error: 'invalid device (need a valid name + numeric width/height)' };
-        return uitest.setDevice(parsed.data);
-      },
-      'uitest:list-flows': () => uitest.listFlows(),
-      'uitest:save-flow': (args) => {
-        // Validate every step against the schema before it's written to YAML —
-        // an agent must not persist malformed/unexpected step structures.
-        const raw = Array.isArray(args.steps) ? args.steps : [];
-        const steps: UiTestStep[] = [];
-        for (const s of raw) {
-          const p = FlowStepSchema.safeParse(s);
-          if (!p.success) return { ok: false, name: typeof args.name === 'string' ? args.name : 'flow', error: 'one or more flow steps are invalid (unknown action or missing field)' };
-          steps.push(p.data as UiTestStep);
-        }
-        return uitest.saveFlow(typeof args.name === 'string' ? args.name : 'flow', steps);
-      },
-      'uitest:run-flow': async (args) =>
-        uitest.runFlow({
-          name: typeof args.name === 'string' ? args.name : undefined,
-          steps: Array.isArray(args.steps) ? (args.steps as UiTestStep[]) : undefined,
-        }),
-      // UI STORIES — named user journeys: list/save on disk, LLM-suggest from the
-      // current screen map, and ensure the app is hosted before a run.
-      'uitest:list-stories': () => uitest.listStories(),
-      'uitest:save-story': (args) => {
-        // Agent-supplied stories pass the SAME validation as LLM-suggested ones:
-        // every target must exist in the current map, ≥2 valid steps, and titled.
-        const manifest = uitest.manifest().manifest;
-        if (!manifest) return { ok: false, error: 'No screen map yet — extract one before saving a story.' };
-        const [story] = validateStories(args.story ? [args.story] : [], manifest);
-        if (!story) return { ok: false, error: 'story failed validation (unknown targets, fewer than 2 valid steps, or missing title).' };
-        return uitest.saveStory(story);
-      },
-      'uitest:suggest-stories': async () => {
-        try {
-          const manifest = uitest.manifest().manifest;
-          if (!manifest || manifest.screens.length === 0) return { error: 'No screen map yet — Extract first.' };
-          const llm = llmForSession(getActiveAgent().sessionKey);
-          if (!llm || (!llm.apiKey && (llm.provider ?? 'openai') === 'openai')) {
-            return { error: 'No model configured — set a provider/model (and API key) in Settings before suggesting stories.' };
-          }
-          const p = buildStoryPrompt(manifest, { count: 6 });
-          const resp = await callOpenAI(
-            llm,
-            [{ role: 'system', content: p.system }, { role: 'user', content: p.user }],
-            [{ name: p.toolName, description: p.toolDescription, inputSchema: p.toolSchema }],
-            { effort: 'low', tool_choice: { type: 'function' as const, function: { name: p.toolName } } },
-          );
-          const argsText = (resp as { tool_calls?: Array<{ function?: { arguments?: string } }> })?.tool_calls?.[0]?.function?.arguments;
-          const raw = typeof argsText === 'string' && argsText.trim() ? argsText : ((resp?.content as string) ?? '');
-          const stories = validateStories(extractAtlasJson(raw) ?? raw, manifest);
-          for (const s of stories) uitest.saveStory(s);
-          return { stories, count: stories.length };
-        } catch (err) { return { error: err instanceof Error ? err.message : String(err) }; }
-      },
-      'uitest:ensure-app': async (args) => uitest.ensureApp({
-        name: typeof args.name === 'string' ? args.name : undefined,
-        url: typeof args.url === 'string' ? args.url : undefined,
-      }),
-      // Save a Browser-panel screenshot to disk (`.brainrouter/ui-tests/screenshots/`).
-      'uitest:save-screenshot': (args) => uitest.saveScreenshot({
-        dataUrl: typeof args.dataUrl === 'string' ? args.dataUrl : undefined,
-        base64: typeof args.base64 === 'string' ? args.base64 : undefined,
-        name: typeof args.name === 'string' ? args.name : undefined,
-      }),
-      // Turn a finished story run into a markdown report on disk, then register it
-      // as a path-backed Artifact Record (shared artifacts.json — reuses the same
-      // store the CLI + Artifacts panel already use).
-      'uitest:run-report': async (args) => {
-        const story = (args.story && typeof args.story === 'object' ? args.story : {}) as { id?: string; title?: string };
-        const out = uitest.runReport({
-          story,
-          baseUrl: typeof args.baseUrl === 'string' ? args.baseUrl : undefined,
-          results: Array.isArray(args.results) ? (args.results as UiTestStepResult[]) : [],
-          screenshots: Array.isArray(args.screenshots) ? (args.screenshots as Array<{ name: string; dataUrl: string }>) : [],
-        });
-        if (out.error || !out.reportPath) return out;
-        try {
-          const created = createArtifact(workspaceRoot, {
-            kind: 'markdown-report',
-            title: `UI run: ${story.title ?? out.reportPath}`,
-            format: 'markdown',
-            path: out.reportPath,
-            sessionKey: getActiveAgent()?.sessionKey,
-          });
-          await captureArtifactNote(created, 'created');
-          return { ...out, artifactId: created.id };
-        } catch (err) {
-          return { ...out, artifactError: err instanceof Error ? err.message : String(err) };
-        }
-      },
-      'uitest:driver-stop': async () => uitest.stopDriver(),
       // Actions — host-side mutations the Settings dialog / palette trigger.
       // They ride the query channel (free-form names, result routing by id).
       'action:clear': () => { getActiveAgent().clearHistory(); return { ok: true }; },

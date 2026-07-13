@@ -31,4 +31,3 @@ export { ContextPanel } from './memory/ContextPanel.js';
 export { AtlasPanel, type AtlasPanelProps } from './atlas/AtlasPanel.js';
 export { CIPanel } from './ci/CIPanel.js';
 export { EditorPanel } from './editing/EditorPanel.js';
-export { BrowserPanel } from './BrowserPanel.js';

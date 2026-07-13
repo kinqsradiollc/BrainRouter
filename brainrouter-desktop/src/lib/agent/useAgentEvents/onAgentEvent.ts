@@ -36,7 +36,7 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
     setDraft, planFeedbackRef, goalContPendingRef, setProjSessions, setSessions, setPrInfo, setContextUsage, setFleet, setRecentTasks, setChangedFiles,
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
     setBranches, setModelsLoading, setEndpointModels, setToolCatalog, setProviderModels, setProbedModels, setProbeLoading, setProbeError, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
-    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setAtlasUiMap, setAtlasStories, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
+    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
     setAtBottom,
@@ -312,12 +312,7 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
           // explicitly Rebuilds/Enriches. Clear transient + path-keyed state too.
           setAtlasGraph(null); setAtlasBuilding(false); setAtlasEnriching(false);
           setAtlasAssessing(null); setAtlasAssessments({});
-          // UI-TEST fusion — the screen map + stories are per-workspace too; clear
-          // the old project's and load the NEW workspace's stored ones.
-          setAtlasUiMap(null); setAtlasStories([]);
           q('q-atlas', 'atlas-graph');
-          q('q-uitest-manifest', 'uitest:manifest');
-          q('q-uitest-stories', 'uitest:list-stories');
           refreshSidebar();
         } else refreshSession();
         break;

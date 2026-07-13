@@ -8,7 +8,7 @@ import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 
 import type { PanelId } from '../../panels/index.js';
 import { devPanels, devFlag } from '../devFlags.js';
 import { VALID_PANEL_IDS } from '../../constants.js';
-import { clampSideRailWidth, openWidthFor, reorderByValue, SIDE_RAIL_MIN } from './sideRailLayout.js';
+import { clampSideRailWidth, reorderByValue, SIDE_RAIL_MIN } from './sideRailLayout.js';
 
 // Persisted layouts can carry renamed/retired panel ids. The Markdown writing
 // experience ('write' → 'docs') folded into the Editor, so both map to 'editor'.
@@ -177,10 +177,6 @@ export function usePanels(q: (id: string, name: string, args?: Record<string, un
     setSideTabs((t) => (t.includes(id) ? t : [...t, id]));
     setActiveSideTab(id);
     setSidePanelOpen(true);
-    // §panel-width — open certain panels (e.g. the Browser) at a comfortable
-    // width; widen-only, so a manual resize is never overridden, and a no-op
-    // returns the same number so React skips the re-render.
-    setSideWidth((w) => openWidthFor(id, w));
   }
   function closeSideTab(id: PanelId): void {
     setSideTabs((tabs) => {

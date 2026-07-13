@@ -9,7 +9,7 @@ import { mergeOptimistic } from '../../lib/session/list/sessionOrder.js';
 import { withCachedProjectSessions } from '../../lib/session/workspaces/projectSessionsView.js';
 import { runCommand, resolveSlashInput, type CmdCtx, type DeskCommand } from '../../lib/commands/commands.js';
 import { buildPromptWithAttachments, readyAttachments } from '../../lib/attachments/attachmentPrompt.js';
-import type { AttachmentUpload, ChatRow, SessionRow, ComponentTag } from '../../types.js';
+import type { AttachmentUpload, ChatRow, SessionRow } from '../../types.js';
 import type { PanelId } from '../../panels/index.js';
 import type { ProjectSessionsByRoot } from '../../lib/session/workspaces/projectSessionsView.js';
 
@@ -48,8 +48,6 @@ export interface AppHandlersCtx {
   refreshSession: () => void;
   ensurePanel: (id: PanelId) => void;
   viewKey: string;
-  componentTags: ComponentTag[];
-  setComponentTags: React.Dispatch<React.SetStateAction<ComponentTag[]>>;
 }
 
 export interface AppHandlers {
@@ -66,7 +64,7 @@ export function useAppHandlers(ctx: AppHandlersCtx): AppHandlers {
     running, stopping, setToast, commands, cmdCtx, runBridge, sessionKeyRef, setRows, lastPromptRef,
     goalContPendingRef, setRunning, setSessionRunning, info, setTurnStart, turnFailsRef, branches,
     pendingSessionsRef, setSessions, sessionsRef, setProjSessions, activeWsRef, workspaces, refreshSession,
-    ensurePanel, viewKey, componentTags, setComponentTags,
+    ensurePanel, viewKey,
   } = ctx;
 
   function submit(override?: string): void {
@@ -85,7 +83,7 @@ export function useAppHandlers(ctx: AppHandlersCtx): AppHandlers {
       ...attachedImages,
     ];
     if (running || stopping) return;
-    if (!typedPrompt && attached.length === 0 && imagesToSend.length === 0 && componentTags.length === 0) return;
+    if (!typedPrompt && attached.length === 0 && imagesToSend.length === 0) return;
     if (pendingAttachments.length > 0) {
       setToast(pendingAttachments.length === 1 ? `Still attaching ${pendingAttachments[0].name}…` : `Still attaching ${pendingAttachments.length} files…`);
       return;
@@ -98,33 +96,19 @@ export function useAppHandlers(ctx: AppHandlersCtx): AppHandlers {
     // sensible default question so the model has something to answer about it.
     const promptText = typedPrompt || (imagesToSend.length > 0 && attached.length === 0 ? "What's in this image?" : typedPrompt);
     const prompt = buildPromptWithAttachments(promptText, attached);
-    // §a11y-inspect — dragged tags become reference blocks appended to the prompt:
-    // component tags (open & fix, ref = `path:line#id`) and journey tags (explain
-    // the ordered flow). Cleared after send.
-    const compTags = componentTags.filter((t) => !t.steps);
-    const journeyTags = componentTags.filter((t) => t.steps && t.steps.length);
-    let finalPrompt = prompt;
-    if (compTags.length) {
-      finalPrompt += `\n\nTagged UI components (open & fix):\n${compTags.map((t) => `- ${t.name}${t.kind ? ` (${t.kind})` : ''} — ${t.ref}`).join('\n')}`;
-    }
-    if (journeyTags.length) {
-      finalPrompt += `\n\nExplain these UI journeys (steps in order):\n${journeyTags.map((t) => `- ${t.name}:\n${(t.steps ?? []).map((st, i) => `    ${i + 1}. ${st.action} ${st.target}${st.text != null ? ` "${st.text}"` : ''}`).join('\n')}`).join('\n')}`;
-    }
     const displayPrompt = typedPrompt
       || (attached.length === 1 ? `Use attached file: ${attached[0].name}`
         : attached.length > 1 ? `Use ${attached.length} attached files`
         : imagesToSend.length === 1 ? 'Pasted an image'
-        : imagesToSend.length > 1 ? `Pasted ${imagesToSend.length} images`
-        : componentTags.length === 1 ? `${componentTags[0].steps ? 'Explain' : 'Fix'} ${componentTags[0].name}`
-        : `${componentTags.length} tagged UI items`);
+        : `Pasted ${imagesToSend.length} images`);
     // T8 — a slash command is NEVER sent to the LLM. Route it through the
     // command registry: bridge runs against the CLI stores, known commands run
     // their wire (panel/settings/native/cli fallback), and an UNKNOWN slash
     // surfaces a command-output card instead of becoming a chat prompt.
     const slash = resolveSlashInput(typedPrompt, commands);
     if (slash.kind !== 'not-slash') {
-      if (attached.length > 0 || imagesToSend.length > 0 || componentTags.length > 0) {
-        setToast('Attachments, images, and tagged UI items are sent with chat messages, not slash commands.');
+      if (attached.length > 0 || imagesToSend.length > 0) {
+        setToast('Attachments and images are sent with chat messages, not slash commands.');
         return;
       }
       setDraft('');
@@ -147,7 +131,6 @@ export function useAppHandlers(ctx: AppHandlersCtx): AppHandlers {
     if (!override) setDraft('');
     if (attached.length > 0) setAttachmentUploads((prev) => prev.filter((a) => !attached.some((sent) => sent.id === a.id)));
     if (imagesToSend.length > 0) setPastedImages([]);
-    if (componentTags.length > 0) setComponentTags([]);
     setRunning(true);
     // DESK-5v — mark THIS session running so its spinner survives a switch away.
     setSessionRunning(sessionKeyRef.current ?? info.sessionKey ?? '', true);
@@ -176,7 +159,7 @@ export function useAppHandlers(ctx: AppHandlersCtx): AppHandlers {
       });
       setTimeout(() => refreshSession(), 400);
     }
-    window.brainrouter.send({ kind: 'start-turn', prompt: finalPrompt, ...(imagesToSend.length ? { images: imagesToSend } : {}) });
+    window.brainrouter.send({ kind: 'start-turn', prompt, ...(imagesToSend.length ? { images: imagesToSend } : {}) });
   }
 
   // AI PR review — kick the agent to review a PR on an ISOLATED git worktree so

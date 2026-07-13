@@ -24,9 +24,6 @@ import { parseQueryId, isStaleQueryResult } from '../../workspace/workspaceEvent
 import { fmt, download } from '../../format.js';
 import { rid } from '../../rid.js';
 import { type AgentEventsCtx, type ToolCatalog, getStableRowId, isWorkspaceScopedReviewQuery } from './types.js';
-// UI-TEST fusion — the screen map + story journeys the uitest:* results carry.
-import type { UiMap } from '@kinqs/brainrouter-ui-test/dist/types.js';
-import type { Story } from '@kinqs/brainrouter-ui-test/dist/flow/storySchema.js';
 
 export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, result: unknown, error?: string, resultWorkspaceRoot?: string) => void {
   const {
@@ -37,7 +34,7 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
     setBranches, setModelsLoading, setEndpointModels, setToolCatalog, setProviderModels, setProbedModels, setProbeLoading, setProbeError, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
     setMarket,
-    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setAtlasUiMap, setAtlasStories, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
+    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
     setAtBottom,
@@ -449,47 +446,6 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
         setAtlasAssessing(null);
         if (r?.error) { setToast(`⚠ ${r.error}`); return; }
         if (r?.path && r.assessment) setAtlasAssessments((prev) => ({ ...prev, [r.path as string]: r.assessment! }));
-        return;
-      }
-      // UI-TEST fusion — the Atlas "Screens" map + user-journey stories, and the
-      // Browser panel's run/extract/suggest/report round-trips.
-      case 'q-uitest-manifest': { const m = (result as { manifest?: UiMap } | null)?.manifest ?? null; setAtlasUiMap(m); return; }
-      case 'q-uitest-extract': {
-        const r = result as { manifest?: UiMap; error?: string; degraded?: boolean } | null;
-        if (r?.error) { setToast(`⚠ UI extract: ${r.error}`); return; }
-        if (r?.manifest) setAtlasUiMap(r.manifest);
-        return;
-      }
-      case 'q-uitest-stories': { const st = (result as { stories?: Story[] } | null)?.stories; setAtlasStories(Array.isArray(st) ? st : []); return; }
-      case 'q-uitest-suggest': {
-        const r = result as { stories?: Story[]; count?: number; error?: string } | null;
-        if (r?.error) { setToast(`⚠ Suggest stories: ${r.error}`); return; }
-        const n = r?.count ?? r?.stories?.length ?? 0;
-        setToast(n ? `✓ ${n} stor${n === 1 ? 'y' : 'ies'} suggested` : 'No stories suggested — try extracting first.');
-        q('q-uitest-stories', 'uitest:list-stories');
-        return;
-      }
-      case 'q-uitest-ensure': {
-        const r = result as { url?: string; started?: boolean; error?: string; note?: string } | null;
-        const log = (message: string): void => { window.dispatchEvent(new CustomEvent('br-browser-log', { detail: { message } })); };
-        if (r?.error) { setToast(`⚠ ${r.error}`); log(`⚠ App not ready: ${r.error}`); return; }
-        if (r?.url) {
-          if (r.note) { setToast(r.note); log(r.note); }
-          log(`App ready on ${r.url}${r.started ? ' (started dev server)' : ''} — running the story…`);
-          window.dispatchEvent(new CustomEvent('br-browser-runstory', { detail: { url: r.url, started: !!r.started } }));
-        }
-        return;
-      }
-      case 'q-uitest-shot': {
-        const r = result as { path?: string; error?: string } | null;
-        setToast(r?.error ? `⚠ Screenshot: ${r.error}` : r?.path ? `✓ Screenshot saved → ${r.path}` : 'Screenshot saved');
-        return;
-      }
-      case 'q-uitest-report': {
-        const r = result as { reportPath?: string; error?: string } | null;
-        const msg = r?.error ? `⚠ Report: ${r.error}` : r?.reportPath ? `✓ Run report saved → Artifacts (${r.reportPath})` : 'Run report saved';
-        setToast(msg);
-        window.dispatchEvent(new CustomEvent('br-browser-log', { detail: { message: msg } }));
         return;
       }
       case 'q-req-create': case 'q-req-update': case 'q-req-seed': {

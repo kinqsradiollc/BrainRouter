@@ -86,9 +86,7 @@ export function useAtlasGraph(args: UseAtlasGraphArgs) {
 
   const hasLayers = !!graph && graph.layers.length > 0;
   const effMode: Mode =
-    mode === "screens" ? "screens"
-      : mode === "services" ? (hasServices ? "services" : "structural")
-      : hasLayers ? mode : "structural";
+    mode === "services" ? (hasServices ? "services" : "structural") : hasLayers ? mode : "structural";
 
   // Categories actually present (for the filter pills).
   const presentCats = useMemo(() => {
@@ -292,9 +290,6 @@ export function useAtlasGraph(args: UseAtlasGraphArgs) {
     structural,
     rfNodes,
     rfEdges,
-    // canvas dimensions (for the Screens-mode layout, computed in the panel)
-    containerW,
-    containerH,
     // handlers
     toggleCat,
   };

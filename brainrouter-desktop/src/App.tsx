@@ -4,12 +4,8 @@
  * edge to resize). Every CLI slash command surfaces here: ⌘K palette, the
  * composer "/" popup, and the categorized Settings modal.
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import type { InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
-// UI-TEST fusion — the generated screen map + user-journey stories the Atlas
-// Screens mode + Browser panel render, and that runStory replays.
-import type { UiMap } from '@kinqs/brainrouter-ui-test/dist/types.js';
-import type { Story } from '@kinqs/brainrouter-ui-test/dist/flow/storySchema.js';
 import { PANEL_DEFS, type PanelId, type SearchHit } from './panels/index.js';
 import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph, TrackProject, WorkItem, Sprint, Module, SavedView, AutomationRule, ProjectMember } from '@kinqs/brainrouter-types';
 import type { GitTrackContext, SyncConfig, SyncResult, TrackPrStatus } from './track/TrackView.js';
@@ -22,7 +18,7 @@ import { duplicateTitleKeys } from './lib/session/list/sessionDisplay.js';
 import { type ConfigSnapshot, type UsageHistory } from './settings.js';
 import type { MarketplaceState } from './settings/marketplace/index.js';
 import { installDevBridge } from './devBridge.js';
-import type { AttachmentUpload, PlanItem, ChatRow, FleetRow, PopId, ComponentTag } from './types.js';
+import type { AttachmentUpload, PlanItem, ChatRow, FleetRow, PopId } from './types.js';
 import type { PlanDecisionView } from './lib/plan/planReviewView.js';
 import { useClosable } from './lib/useClosable.js';
 import { useAgentEvents, type ToolCatalog } from './lib/agent/useAgentEvents.js';
@@ -207,11 +203,6 @@ export function App(): React.ReactElement {
   const [atlasEnriching, setAtlasEnriching] = useState(false); // ATLAS-4b — LLM enrichment in flight
   const [atlasAssessing, setAtlasAssessing] = useState<string | null>(null); // ATLAS-14 — path being assessed
   const [atlasAssessments, setAtlasAssessments] = useState<Record<string, import('./lib/atlas/atlasView.js').AtlasChangeAssessment>>({});
-  const [atlasUiMap, setAtlasUiMap] = useState<UiMap | null>(null); // UI-TEST fusion — generated screen map for the Atlas Screens mode
-  const [atlasStories, setAtlasStories] = useState<Story[]>([]); // UI Stories — named user journeys for the Atlas Screens mode
-  // §a11y-inspect — component reference tags dragged from the Browser panel's
-  // Accessibility list (and story chips); serialized into the prompt on send.
-  const [componentTags, setComponentTags] = useState<ComponentTag[]>([]);
   // ANNOTATION-RECORDS — this workspace's durable feedback records, from the CLI store.
   const [annotations, setAnnotations] = useState<AnnotationRecord[]>([]);
   // ARTIFACT-RECORDS — this workspace's durable Artifact Records, from the CLI store.
@@ -365,7 +356,7 @@ export function App(): React.ReactElement {
     setDiffView, setInlineDiffs, setAllFiles, setFileView, setGitInfo, setCommitSubjects, setHomeStats,
     setBranches, setModelsLoading, setEndpointModels, setToolCatalog, setProviderModels, setProbedModels, setProbeLoading, setProbeError, setCatalog, setSnapshot, setUsageLines, setUsageHistory,
     setMarket,
-    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setAtlasUiMap, setAtlasStories, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
+    setSearchHits, setSchedules, setRequirements, setAnnotations, setArtifacts, setAtlasGraph, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, setAtlasAssessments, setWorktrees, setWorktreeDiffs, setReviewRunningByWs, setReviewByWs,
     setReviewGateByWs, setGateBlock, setGrepHits, setSessionGroups, setGitBusy, setInfoDialog, setToast,
     setFilesLoading, setFilesTruncated, setFilesError, setAttachmentUploads,
     setAtBottom,
@@ -383,7 +374,7 @@ export function App(): React.ReactElement {
     running, stopping, setToast, commands, cmdCtx, runBridge, sessionKeyRef, setRows, lastPromptRef,
     goalContPendingRef, setRunning, setSessionRunning, info, setTurnStart, turnFailsRef, branches,
     pendingSessionsRef, setSessions, sessionsRef, setProjSessions, activeWsRef, workspaces, refreshSession,
-    ensurePanel, viewKey, componentTags, setComponentTags,
+    ensurePanel, viewKey,
   });
 
   // T-dashtasks — the background/dashboard task derivations (Running list, boards,
@@ -459,78 +450,6 @@ export function App(): React.ReactElement {
   // DESK-5f — tab CONTENT only; the tab strip owns titles and closing. The
   // switch body lives in buildRenderPanelBody now (every value it closes over is
   // passed on the ctx), so both the side rail and the terminal dock share it.
-  // Run a UI Story: enrich its steps with resolver hints (label/type/route) from
-  // the current map, hand them to the Browser panel, and ask the host to ensure
-  // the app is served (probe → start the dev server → wait). The ensure-app result
-  // carries the resolved URL back to the Browser panel, which replays it live.
-  const enrichStorySteps = (story: Story, uiMap: UiMap | null): Array<Record<string, unknown>> => {
-    const elByTestId = new Map<string, { label?: string; type?: string }>();
-    const routeById = new Map<string, string | null>();
-    for (const s of uiMap?.screens ?? []) {
-      routeById.set(s.id, s.route ?? null);
-      for (const e of s.elements) if (!elByTestId.has(e.testID)) elByTestId.set(e.testID, { label: e.label, type: e.type });
-    }
-    return story.steps.map((st) => {
-      if (st.action === 'navigate') return { action: 'navigate', target: st.target, route: routeById.get(st.target) ?? null };
-      const el = elByTestId.get(st.target);
-      const base: Record<string, unknown> = { action: st.action, target: st.target, label: el?.label, type: el?.type };
-      if (st.action === 'type') base.text = st.text;
-      return base;
-    });
-  };
-  const runStory = (story: Story): void => {
-    const url = (localStorage.getItem('br-browser-url') || '').trim();
-    try { localStorage.setItem('br-browser-runstory', JSON.stringify({ id: story.id, title: story.title, steps: enrichStorySteps(story, atlasUiMap) })); } catch { /* ignore */ }
-    ensurePanel('uitest');
-    setToast(`Preparing "${story.title}"…`);
-    window.dispatchEvent(new CustomEvent('br-browser-log', { detail: { message: `▶ Preparing "${story.title}" — ensuring the app is served…` } }));
-    q('q-uitest-ensure', 'uitest:ensure-app', url ? { url } : {});
-  };
-
-  // The Browser panel takes no props, so its "save this screenshot" and "story run
-  // finished" handoffs arrive as window events carrying the payload; forward each
-  // to the host, which writes files under .brainrouter/ui-tests/ (a report run also
-  // registers a markdown Artifact). Results toast via useAgentEvents.
-  useEffect(() => {
-    const onSaveShot = (e: Event): void => {
-      const d = (e as CustomEvent<{ dataUrl?: string; name?: string }>).detail;
-      if (d?.dataUrl) q('q-uitest-shot', 'uitest:save-screenshot', { dataUrl: d.dataUrl, name: d.name });
-    };
-    const onRunResult = (e: Event): void => {
-      const d = (e as CustomEvent<Record<string, unknown>>).detail;
-      if (d) q('q-uitest-report', 'uitest:run-report', d);
-    };
-    // A11y-row -> source: the Browser panel asks App to open a file at a line.
-    const onOpenFile = (e: Event): void => {
-      const d = (e as CustomEvent<{ path?: string; line?: number }>).detail;
-      if (d?.path) openFile(d.path, typeof d.line === 'number' ? d.line : undefined);
-    };
-    // The Browser panel wants the UI map but has none yet -> load the manifest;
-    // its result lands in atlasUiMap and is mirrored back via localStorage.
-    const onLoadUiMap = (): void => { q('q-uitest-manifest', 'uitest:manifest'); };
-    window.addEventListener('br-browser-savescreenshot', onSaveShot);
-    window.addEventListener('br-browser-runresult', onRunResult);
-    window.addEventListener('br-browser-openfile', onOpenFile);
-    window.addEventListener('br-browser-loaduimap', onLoadUiMap);
-    return () => {
-      window.removeEventListener('br-browser-savescreenshot', onSaveShot);
-      window.removeEventListener('br-browser-runresult', onRunResult);
-      window.removeEventListener('br-browser-openfile', onOpenFile);
-      window.removeEventListener('br-browser-loaduimap', onLoadUiMap);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Mirror the generated UI map to localStorage so the (propless) Browser panel
-  // can resolve Accessibility rows to their source files, and notify an open panel.
-  useEffect(() => {
-    try {
-      if (atlasUiMap) localStorage.setItem('br-browser-uimap', JSON.stringify(atlasUiMap));
-      else localStorage.removeItem('br-browser-uimap');
-    } catch { /* ignore quota / serialization errors */ }
-    window.dispatchEvent(new CustomEvent('br-browser-uimap'));
-  }, [atlasUiMap]);
-
   const renderPanelBody = buildRenderPanelBody({
     q, hostUp, running, info, gitInfo, branches, tokens, liveTurn, contextUsage, efficiency, runningTasks,
     allFiles, statuses, openFile, grepHits, filesLoading, filesTruncated, filesError, fileView, editor,
@@ -543,7 +462,6 @@ export function App(): React.ReactElement {
     review, reviewRunning, setReviewRunningByWs, setReviewByWs, setDraft, atlasGraph, atlasBuilding, atlasEnriching,
     atlasAssessments, atlasAssessing, setAtlasBuilding, setAtlasEnriching, setAtlasAssessing, requirements,
     annotations, artifacts,
-    atlasUiMap, atlasStories, runStory,
   });
   const tabTitle = (id: PanelId): string =>
     id === 'file' && fileView?.path ? fileView.path.split('/').pop()!
@@ -603,11 +521,7 @@ export function App(): React.ReactElement {
         setModelScope={setModelScope} contextUsage={contextUsage} tokens={tokens} openSettings={openSettings}
         attachFiles={attachFiles} attachmentUploads={attachmentUploads} canSubmit={readyAttachments(attachmentUploads).length > 0}
         setAttachmentUploads={setAttachmentUploads} pastedImages={pastedImages} addPastedImages={addPastedImages}
-        setPastedImages={setPastedImages}
-        componentTags={componentTags}
-        onDropTag={(tag) => setComponentTags((prev) => prev.some((t) => t.ref === tag.ref) ? prev : [...prev, { ...tag, id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` }])}
-        onClearComponentTag={(id) => setComponentTags((prev) => prev.filter((t) => t.id !== id))}
-        envAnim={envAnim} setTermDockOpen={setTermDockOpen} commitSubjects={commitSubjects}
+        setPastedImages={setPastedImages} envAnim={envAnim} setTermDockOpen={setTermDockOpen} commitSubjects={commitSubjects}
         openCiPanel={openCiPanel} lastTurnFails={lastTurnFails} openTask={openTask} dockAnim={dockAnim}
         termDockHeight={termDockHeight} resizeTerminal={resizeTerminal} termTabs={termTabs} activeTerm={activeTerm}
         setActiveTerm={setActiveTerm} closeBottomTab={closeBottomTab} addBottomTab={addBottomTab} envOpen={envOpen}

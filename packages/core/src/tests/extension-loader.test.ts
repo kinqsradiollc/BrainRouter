@@ -27,39 +27,34 @@ const TOOL_EXT = `export const activate = (host) => {
     accessTier: 'read', actionKind: 'read_only', handle: async () => 'ok' });
 };`;
 
-// NOTE: assertions target THIS test's fixture extension by name (membership),
-// not the exact activated/error lists — the binary now ships built-in extensions
-// (e.g. `ui-test`) that also load here, so a whole-list equality would be brittle.
-
 test('a workspace extension activates only when the workspace is TRUSTED', async () => {
   const ws = mkWorkspaceExt('w-tool', TOOL_EXT);
 
   const untrusted = await loadExtensions(ws);
-  assert.ok(!untrusted.activated.includes('w-tool'), 'untrusted workspace: not activated');
-  assert.ok(untrusted.skippedUntrusted.some((e) => e.name === 'w-tool'), 'untrusted workspace: listed as skipped');
+  assert.equal(untrusted.activated.length, 0, 'untrusted workspace: not activated');
+  assert.equal(untrusted.skippedUntrusted.length, 1, 'untrusted workspace: listed as skipped');
 
   trustWorkspace(ws);
   const trusted = await loadExtensions(ws);
-  assert.ok(trusted.activated.includes('w-tool'), 'trusted workspace: activated');
-  assert.ok(!trusted.skippedUntrusted.some((e) => e.name === 'w-tool'));
+  assert.deepEqual(trusted.activated, ['w-tool'], 'trusted workspace: activated');
+  assert.equal(trusted.skippedUntrusted.length, 0);
 });
 
 test('a throwing activate is fault-isolated (recorded as an error, never fatal)', async () => {
   const ws = mkWorkspaceExt('w-throw', `export const activate = () => { throw new Error('boom'); };`);
   trustWorkspace(ws);
   const r = await loadExtensions(ws);
-  assert.ok(!r.activated.includes('w-throw'));
-  const e = r.errors.find((x) => x.name === 'w-throw');
-  assert.ok(e && /boom/.test(e.error), 'w-throw recorded with its error');
+  assert.equal(r.activated.length, 0);
+  assert.equal(r.errors.length, 1);
+  assert.match(r.errors[0].error, /boom/);
 });
 
 test('a module without activate is rejected, not crashed', async () => {
   const ws = mkWorkspaceExt('w-noact', `export const notActivate = () => {};`);
   trustWorkspace(ws);
   const r = await loadExtensions(ws);
-  assert.ok(!r.activated.includes('w-noact'));
-  const e = r.errors.find((x) => x.name === 'w-noact');
-  assert.ok(e && /does not export activate/.test(e.error), 'w-noact rejected for missing activate');
+  assert.equal(r.activated.length, 0);
+  assert.match(r.errors[0].error, /does not export activate/);
 });
 
 test('a disabled extension is skipped even in a trusted workspace', async () => {
@@ -67,7 +62,7 @@ test('a disabled extension is skipped even in a trusted workspace', async () => 
   trustWorkspace(ws);
   setExtensionEnabled('w-disabled', false);
   const r = await loadExtensions(ws);
-  assert.ok(r.skippedDisabled.includes('w-disabled'));
-  assert.ok(!r.activated.includes('w-disabled'));
+  assert.deepEqual(r.skippedDisabled, ['w-disabled']);
+  assert.equal(r.activated.length, 0);
   setExtensionEnabled('w-disabled', true); // restore
 });
