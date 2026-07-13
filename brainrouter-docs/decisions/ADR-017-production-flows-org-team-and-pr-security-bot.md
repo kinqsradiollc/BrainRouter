@@ -1,5 +1,12 @@
 # ADR-017 — Production Flows: Auto-OAuth Sync, Tenanted Memory, and the PR-Security Bot
 
+> **As-built update (2026-07-13):** The PR Review Console separates the automatic
+> gating security lens from command-driven code review (manual by default), checks
+> GitHub commenters' installation-token repo permission, exposes org-scoped
+> `reviews:read`/`reviews:run` capabilities, persists job progress and compact
+> finding detail, and provides dashboard manual runs, PR details/timelines, and
+> per-lens provider/model/diff/timeout assignments.
+
 **Status:** Proposed (design; phased) · **Extends** ADR-016 (server-side connectors + desktop backend
 client), ADR-010 (tenancy/RBAC), ADR-009 (trigger ingress + GitHub App), ADR-015 (repo linking + local
 sync). **No commits merged until each phase is green.** Verify backend via `tsc` + `build` + `vitest`

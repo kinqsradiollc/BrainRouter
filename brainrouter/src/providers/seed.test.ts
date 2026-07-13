@@ -11,6 +11,7 @@ function fakeStore(): ProviderStore & { rows: Map<string, ResolvedProviderConfig
   return {
     rows,
     async getDefaultResolvedProvider(orgId, kind) { return rows.get(`${orgId}:${kind}`) ?? null; },
+    async getResolvedProvider() { return null; },
     async createProviderConfig(orgId, input) {
       const rec: ProviderConfigRecord = {
         id: `p${++n}`, orgId, kind: input.kind, label: input.label ?? "", baseUrl: input.baseUrl ?? "",

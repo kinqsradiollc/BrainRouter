@@ -115,6 +115,14 @@ export interface BrainAgentStatus {
  */
 export type MemoryJobStatus = "pending" | "running" | "done" | "failed" | "cancelled";
 
+/** Best-effort, append-only activity emitted by long-running jobs. */
+export interface MemoryJobProgressEvent {
+  ts: string;
+  kind: string;
+  msg: string;
+  data?: Record<string, unknown>;
+}
+
 /**
  * One row in the brain's `memory_jobs` table. The scheduler picks
  * the highest-priority `pending` job whose `runAfter` is in the
@@ -142,6 +150,8 @@ export interface MemoryJobRecord {
   parentJobId: string | null;
   input: unknown;
   output: unknown;
+  /** Ordered timeline events for dashboard polling. */
+  progress: MemoryJobProgressEvent[];
   error: string | null;
   createdAt: string;
   updatedAt: string;

@@ -3347,6 +3347,30 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           return { signedIn: true, reviews: Array.isArray(j.reviews) ? j.reviews : [] };
         } catch (e) { return { signedIn: true, reviews: [], error: e instanceof Error ? e.message : 'fetch failed' }; }
       },
+      // Run a review on demand from the desktop (Dashboard → Reviews parity). POSTs to
+      // the org's /run endpoint with the signed-in account key; the BACKEND re-gates on
+      // the reviews:run capability + the repo being linked, and dedups an in-flight job —
+      // the desktop is just a trigger, it grants no authority the account doesn't have.
+      'reviews-run': async (a) => {
+        const cfg = loadConfig() as { cli?: { account?: { url?: string } }; servers?: Record<string, { identity?: string; apiKey?: string }> };
+        const base = String(cfg.cli?.account?.url ?? '').replace(/\/+$/, '');
+        const bId = Object.keys(cfg.servers ?? {}).find((k) => (cfg.servers![k]?.identity === 'brainrouter') || /^brainrouter/i.test(k));
+        const apiKey = bId ? String(cfg.servers![bId]?.apiKey ?? '') : '';
+        if (!base || !apiKey) return { ok: false, error: 'Sign in under Settings → Account first.' };
+        const repo = String(a.repo ?? '');
+        const prNumber = Number(a.prNumber);
+        const lens = a.lens === 'security' || a.lens === 'code' || a.lens === 'both' ? a.lens : 'both';
+        if (!/^[^/\s]+\/[^/\s]+$/.test(repo) || !Number.isInteger(prNumber) || prNumber <= 0) return { ok: false, error: 'bad repo/prNumber' };
+        try {
+          const r = await fetch(`${base}/api/admin/reviews/run`, {
+            method: 'POST', headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ repo, prNumber, lens }),
+          });
+          if (!r.ok) return { ok: false, error: r.status === 403 ? 'Your account needs the reviews:run role.' : `HTTP ${r.status}` };
+          const j = await r.json() as { jobs?: unknown[] };
+          return { ok: true, jobs: Array.isArray(j.jobs) ? j.jobs.length : 0 };
+        } catch (e) { return { ok: false, error: e instanceof Error ? e.message : 'run failed' }; }
+      },
       // Log out of all OTHER devices — rotate the account's API key so every other
       // client (CLI, other desktops) using the old key is invalidated, then re-key
       // THIS device so it stays signed in. Refreshes the short-lived jwt first.

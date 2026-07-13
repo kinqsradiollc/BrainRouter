@@ -29,6 +29,8 @@ export const CAPABILITIES = [
   'members:manage',   // invite / remove members, set roles
   'providers:manage', // create/update/delete LLM/embeddings/reranker/judge configs
   'triggers:manage',  // GitHub App / webhook / automation-rule config + linked repos
+  'reviews:read',     // PR review console, job details and live timelines
+  'reviews:run',      // manually enqueue a security/code review
   'memory:write',     // create/update one's own memory records
   'memory:read',      // read own + org-shared memory
   'memory:share',     // mark a record org-visible (private → org)
@@ -46,11 +48,13 @@ export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
     'members:manage',
     'providers:manage',
     'triggers:manage',
+    'reviews:read',
+    'reviews:run',
     'memory:write',
     'memory:read',
     'memory:share',
   ]),
-  developer: new Set<Capability>(['memory:write', 'memory:read', 'memory:share']),
+  developer: new Set<Capability>(['reviews:read', 'memory:write', 'memory:read', 'memory:share']),
   viewer: new Set<Capability>(['memory:read']),
 };
 

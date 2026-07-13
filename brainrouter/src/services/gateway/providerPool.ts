@@ -37,6 +37,7 @@ export function makePoolProviderStore(exec: Executor): ProviderStore {
     deleteProviderConfig: (id) => providerCfg.deleteProviderConfig(exec, id),
     setDefaultProvider: (orgId, kind, id) => providerCfg.setDefaultProvider(exec, orgId, kind, id),
     getDefaultResolvedProvider: (orgId, kind) => providerCfg.getDefaultResolvedProvider(exec, orgId, kind),
+    getResolvedProvider: (id) => providerCfg.getResolvedProvider(exec, id),
   };
 }
 

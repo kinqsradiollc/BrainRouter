@@ -67,6 +67,39 @@ export interface UserResetKeyResponse {
   apiKey: string;
 }
 
+/** PR Review Console contracts. Findings deliberately exclude model-generated bodies. */
+export interface ReviewFindingDetailDto {
+  file: string;
+  line?: number;
+  severity: string;
+  title: string;
+  cwe?: string;
+  preExisting?: boolean;
+  suggestable?: boolean;
+}
+export interface ReviewProgressEventDto {
+  ts: string;
+  kind: string;
+  msg: string;
+  data?: Record<string, unknown>;
+}
+export interface ReviewJobDto {
+  id: string;
+  lens: "security" | "code";
+  status: string;
+  repo: string | null;
+  prNumber: number | null;
+  findings: number | null;
+  blocking: number | null;
+  findingsDetail: ReviewFindingDetailDto[];
+  progress: ReviewProgressEventDto[];
+  skipped: string | null;
+  error: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+export interface ManualReviewRunRequest { repo: string; prNumber: number; lens: "security" | "code" | "both"; }
+
 export interface CursorPaginationParams {
   cursor?: string;
   limit?: number;

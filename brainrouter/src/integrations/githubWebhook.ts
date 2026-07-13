@@ -6,6 +6,7 @@
  */
 import crypto from "node:crypto";
 import type { ResolvedIntegration } from "./types.js";
+import { mintInstallationToken, validateGithubApiBase } from "@kinqs/brainrouter-core/track";
 
 /** Constant-time verify of GitHub's `sha256=<hex>` HMAC over the raw body. */
 export function verifyGithubSignature(secret: string, raw: Buffer, header: string | undefined): boolean {
@@ -19,6 +20,9 @@ export function verifyGithubSignature(secret: string, raw: Buffer, header: strin
 export interface WebhookDeps {
   findIntegrationByInstallation(installationId: string): Promise<(ResolvedIntegration & { orgId: string }) | null>;
   enqueue(job: { kind: string; input: Record<string, unknown> }): Promise<void>;
+  /** Injectable for permission-gate tests; production uses the global fetch. */
+  fetchImpl?: typeof fetch;
+  nowSec?: () => number;
 }
 
 /**
@@ -42,9 +46,11 @@ export interface ReviewPolicy {
   blockOnFindings: boolean;
   /** Re-run the review on every push (pull_request.synchronize). Off ⇒ only on open/reopen. */
   reReviewOnPush: boolean;
+  /** Code review is command-driven by default; opt in to auto review per repo. */
+  codeReviewTrigger: "auto" | "manual";
 }
 
-const REVIEW_POLICY_DEFAULTS: ReviewPolicy = { approveClean: false, blockOnFindings: true, reReviewOnPush: true };
+const REVIEW_POLICY_DEFAULTS: ReviewPolicy = { approveClean: false, blockOnFindings: true, reReviewOnPush: true, codeReviewTrigger: "manual" };
 
 /**
  * Resolve the effective review policy for a repo: a per-repo override
@@ -55,11 +61,92 @@ const REVIEW_POLICY_DEFAULTS: ReviewPolicy = { approveClean: false, blockOnFindi
 export function resolveReviewPolicy(config: Record<string, unknown> | undefined, repoFullName: string): ReviewPolicy {
   const defaults = (config?.reviewPolicyDefaults ?? {}) as Partial<ReviewPolicy>;
   const perRepo = (((config?.reviewPolicies ?? {}) as Record<string, Partial<ReviewPolicy>>)[repoFullName]) ?? {};
-  const pick = (k: keyof ReviewPolicy): boolean => {
+  const pick = (k: "approveClean" | "blockOnFindings" | "reReviewOnPush"): boolean => {
     const v = perRepo[k] ?? defaults[k];
     return typeof v === "boolean" ? v : REVIEW_POLICY_DEFAULTS[k];
   };
-  return { approveClean: pick("approveClean"), blockOnFindings: pick("blockOnFindings"), reReviewOnPush: pick("reReviewOnPush") };
+  const trigger = perRepo.codeReviewTrigger ?? defaults.codeReviewTrigger;
+  return {
+    approveClean: pick("approveClean"),
+    blockOnFindings: pick("blockOnFindings"),
+    reReviewOnPush: pick("reReviewOnPush"),
+    codeReviewTrigger: trigger === "auto" ? "auto" : "manual",
+  };
+}
+
+export type ReviewCommand = "security" | "code" | "both";
+
+/** Parse only supported PR commands; legacy /review never consumes /code-review. */
+export function parseReviewCommand(body: string): ReviewCommand | null {
+  const text = String(body ?? "");
+  if (/(^|\s)\/security-review\b/i.test(text) || /@\S*brainrouter\S*\s+security-review\b/i.test(text)) return "security";
+  if (/(^|\s)\/code-review\b/i.test(text) || /@\S*brainrouter\S*\s+code-review\b/i.test(text)) return "code";
+  if (/(^|\s)\/review(?!-)\b/i.test(text) || /@\S*brainrouter\S*\s+review(?!-)\b/i.test(text)) return "both";
+  return null;
+}
+
+type GithubPermission = "admin" | "maintain" | "write" | "read" | "none";
+const PERMISSION_RANK: Record<GithubPermission, number> = { none: 0, read: 1, write: 2, maintain: 3, admin: 4 };
+
+function githubHeaders(token: string): Record<string, string> {
+  return { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" };
+}
+
+/** Server-side repository-permission lookup for comment commands. */
+export async function resolveCommenterPermission(
+  fetchImpl: typeof fetch, apiBase: string, repo: string, username: string, token: string,
+): Promise<GithubPermission> {
+  try {
+    const res = await fetchImpl(`${apiBase}/repos/${repo}/collaborators/${encodeURIComponent(username)}/permission`, { headers: githubHeaders(token) });
+    if (!res.ok) return "none";
+    const json = await res.json() as { permission?: unknown };
+    const permission = String(json.permission ?? "none").toLowerCase();
+    return permission in PERMISSION_RANK ? permission as GithubPermission : "none";
+  } catch { return "none"; }
+}
+
+async function commentCommandAllowed(
+  deps: WebhookDeps, integ: ResolvedIntegration & { orgId: string }, repo: string, username: string,
+): Promise<boolean> {
+  const config = integ.config ?? {};
+  const runners = (config.manualReviewRunners ?? {}) as { minPermission?: unknown; allowlist?: unknown };
+  const allowlist = Array.isArray(runners.allowlist) ? runners.allowlist.map((x) => String(x).toLowerCase()) : [];
+  if (allowlist.includes(username.toLowerCase())) return true;
+  const min = runners.minPermission === "admin" || runners.minPermission === "write" || runners.minPermission === "maintain"
+    ? runners.minPermission : "maintain";
+  const appId = String(config.appId ?? "").trim();
+  const privateKey = String(integ.secret?.privateKey ?? "").trim();
+  const installationId = String(config.installationId ?? "").trim();
+  if (!appId || !privateKey || !installationId) return false;
+  const apiBase = validateGithubApiBase(typeof config.apiBase === "string" ? config.apiBase : "") ?? "https://api.github.com";
+  try {
+    const token = await mintInstallationToken({ appId, privateKey, apiBase }, installationId, {
+      fetchImpl: (deps.fetchImpl ?? fetch) as never,
+      nowSec: deps.nowSec ?? (() => Math.floor(Date.now() / 1000)),
+    });
+    return PERMISSION_RANK[await resolveCommenterPermission(deps.fetchImpl ?? fetch, apiBase, repo, username, token.token)] >= PERMISSION_RANK[min];
+  } catch { return false; }
+}
+
+async function postDeniedReply(deps: WebhookDeps, integ: ResolvedIntegration & { orgId: string }, repo: string, prNumber: number, username: string): Promise<void> {
+  const config = integ.config ?? {};
+  const appId = String(config.appId ?? "").trim();
+  const privateKey = String(integ.secret?.privateKey ?? "").trim();
+  const installationId = String(config.installationId ?? "").trim();
+  if (!appId || !privateKey || !installationId) return;
+  const apiBase = validateGithubApiBase(typeof config.apiBase === "string" ? config.apiBase : "") ?? "https://api.github.com";
+  const marker = "<!-- brainrouter-review-command-denied -->";
+  try {
+    const token = await mintInstallationToken({ appId, privateKey, apiBase }, installationId, { fetchImpl: (deps.fetchImpl ?? fetch) as never, nowSec: deps.nowSec ?? (() => Math.floor(Date.now() / 1000)) });
+    const list = await (deps.fetchImpl ?? fetch)(`${apiBase}/repos/${repo}/issues/${prNumber}/comments?per_page=100`, { headers: githubHeaders(token.token) });
+    if (list.ok && (await list.json() as Array<{ body?: string }>).some((comment) => comment.body?.includes(marker))) return;
+    const min = ((config.manualReviewRunners ?? {}) as { minPermission?: unknown }).minPermission;
+    const required = min === "admin" || min === "write" || min === "maintain" ? min : "maintain";
+    await (deps.fetchImpl ?? fetch)(`${apiBase}/repos/${repo}/issues/${prNumber}/comments`, {
+      method: "POST", headers: { ...githubHeaders(token.token), "Content-Type": "application/json" },
+      body: JSON.stringify({ body: `${marker}\n@${username} you need ${required} access to run reviews.` }),
+    });
+  } catch { /* permission denial must never fail a webhook */ }
 }
 
 export interface WebhookRequest {
@@ -108,41 +195,45 @@ export async function processGithubDelivery(deps: WebhookDeps, req: WebhookReque
     });
   } catch { /* best-effort; the endpoint still acks */ }
 
-  // ADR-017 D5 — PR reviews fan out to both lenses, each a headless job that posts back
-  // via the installation token: a SECURITY lens (vulnerabilities) + a general CODE-REVIEW
-  // lens (correctness / clarity / architecture / perf / tests). Only repos LINKED in our
-  // system are reviewed (like the rest of BrainRouter's repo scoping); unlinked repos are
-  // ignored even though the App can see all of them.
+  // PR reviews are independent jobs. Security is always automatic; code review is
+  // manual by default and can be opted into automatic runs per repository.
   const action = String(req.body?.action ?? "");
   const orgId = integ.orgId;
   const repoFullName = req.body?.repository?.full_name;
   const repoLinked = isRepoLinkedForReview(integ.config, String(repoFullName ?? ""));
-  const fireReviews = async (prNumber: unknown, headSha: unknown) => {
+  const fireReviews = async (prNumber: unknown, headSha: unknown, lenses: Array<"security" | "code">) => {
     if (!repoLinked) return; // repo not linked to our system → do not review
     const reviewInput = { orgId, installationId, repo: repoFullName, prNumber, headSha };
-    for (const kind of ["pr-security-review", "pr-code-review"] as const) {
+    for (const lens of lenses) {
       try {
-        await deps.enqueue({ kind, input: reviewInput });
+        await deps.enqueue({ kind: lens === "security" ? "pr-security-review" : "pr-code-review", input: reviewInput });
       } catch { /* best-effort; each lens is independent */ }
     }
   };
 
-  // A PR open/update auto-reviews with both lenses. A push (synchronize) only re-reviews
-  // when the repo's policy allows it (Strix "Re-review on push"); open/reopen always review.
+  // Security runs on open/reopen and configured pushes. Code only joins automatic
+  // events when the repo explicitly opts into `codeReviewTrigger: auto`.
   if (req.event === "pull_request" && (action === "opened" || action === "synchronize" || action === "reopened")) {
     const pr = (req.body?.pull_request ?? {}) as { number?: number; head?: { sha?: string } };
-    const reReview = action !== "synchronize" || resolveReviewPolicy(integ.config, String(repoFullName ?? "")).reReviewOnPush;
-    if (reReview) await fireReviews(pr.number, pr.head?.sha);
+    const policy = resolveReviewPolicy(integ.config, String(repoFullName ?? ""));
+    const isPush = action === "synchronize";
+    const lenses: Array<"security" | "code"> = [];
+    if (!isPush || policy.reReviewOnPush) lenses.push("security");
+    if (policy.codeReviewTrigger === "auto" && (!isPush || policy.reReviewOnPush)) lenses.push("code");
+    if (lenses.length) await fireReviews(pr.number, pr.head?.sha, lenses);
   }
 
-  // Re-run on demand: a `/review` or `@brainrouter review` comment on a PR re-triggers both
-  // lenses (Strix-style "Re-run review"). issue_comment carries no head SHA, so the executor
-  // resolves it from the PR.
+  // Command runs are gated by the install token's repository permission, never by
+  // GitHub's user-controlled author_association field.
   if (req.event === "issue_comment" && action === "created" && req.body?.issue?.pull_request) {
-    const body = String(req.body?.comment?.body ?? "");
-    const isReviewCmd =
-      /(^|\s)\/review\b/i.test(body) || /@\S*brainrouter\S*\s+review\b/i.test(body) || /\bbrainrouter\s+review\b/i.test(body);
-    if (isReviewCmd) await fireReviews(req.body?.issue?.number, "");
+    const command = parseReviewCommand(String(req.body?.comment?.body ?? ""));
+    const commenter = req.body?.comment?.user as { login?: unknown; type?: unknown } | undefined;
+    const username = typeof commenter?.login === "string" ? commenter.login.trim() : "";
+    if (command && username && String(commenter?.type ?? "").toLowerCase() !== "bot") {
+      const allowed = await commentCommandAllowed(deps, integ, String(repoFullName ?? ""), username);
+      if (!allowed) await postDeniedReply(deps, integ, String(repoFullName ?? ""), Number(req.body?.issue?.number), username);
+      else await fireReviews(req.body?.issue?.number, "", command === "both" ? ["security", "code"] : [command]);
+    }
   }
 
   return { status: 202, body: { ok: true, orgId } };

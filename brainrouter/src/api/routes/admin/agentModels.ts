@@ -18,7 +18,7 @@ import { BRAIN_AGENT_ROLES, isBrainAgentRole } from "@kinqs/brainrouter-core/pro
 export const agentModelsRouter = Router();
 agentModelsRouter.use(requireAnyAuth, requirePermission("providers:manage"));
 
-interface AgentModelAssignment { provider?: string; model?: string }
+interface AgentModelAssignment { provider?: string; model?: string; maxDiffChars?: number; timeoutMs?: number }
 const settingsKey = (orgId: string) => `agentModels:${orgId}`;
 
 /** GET /api/admin/agent-models — the roles + the org's current per-role assignments. */
@@ -37,8 +37,11 @@ agentModelsRouter.put("/", async (req: AuthedRequest, res) => {
     const a = raw as AgentModelAssignment;
     const provider = typeof a.provider === "string" && a.provider.trim() ? a.provider.trim() : undefined;
     const model = typeof a.model === "string" && a.model.trim() ? a.model.trim() : undefined;
-    if (provider || model) clean[role] = { ...(provider ? { provider } : {}), ...(model ? { model } : {}) };
+    const maxDiffChars = typeof a.maxDiffChars === "number" && Number.isInteger(a.maxDiffChars) && a.maxDiffChars >= 1 && a.maxDiffChars <= 500_000 ? a.maxDiffChars : undefined;
+    const timeoutMs = typeof a.timeoutMs === "number" && Number.isInteger(a.timeoutMs) && a.timeoutMs >= 1_000 && a.timeoutMs <= 600_000 ? a.timeoutMs : undefined;
+    if (provider || model || maxDiffChars || timeoutMs) clean[role] = { ...(provider ? { provider } : {}), ...(model ? { model } : {}), ...(maxDiffChars ? { maxDiffChars } : {}), ...(timeoutMs ? { timeoutMs } : {}) };
   }
   await memoryEngine.emailAuth.setSetting(settingsKey(req.orgId!), clean);
+  await memoryEngine.applyProviderOverrides();
   res.json({ assignments: clean });
 });

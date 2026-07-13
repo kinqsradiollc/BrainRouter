@@ -7,7 +7,7 @@ in the reference deployment. That single App backs three capabilities:
 |---|---|---|
 | **Connect GitHub** (per user) | **device flow** → short-lived *user* token, sealed server-side | Track sync, connectors, repo pickers |
 | **Repo linking → memory** | **installation** token (App ID + private key) | Indexing linked repos into the memory engine |
-| **PR-review bot** | **installation** token + **check-runs** | Automatic security + code review on pull requests (ADR-017 D5) |
+| **PR-review bot** | **installation** token + **check-runs** | Automatic security review; command-driven code review (ADR-017) |
 
 A GitHub App is the right primitive because it issues **short-lived, per-installation
 tokens** scoped only to the repos you grant — no broad personal access token sitting
@@ -55,7 +55,7 @@ Example org used throughout: **`kinqsradiollc`**. Substitute your own.
    | **Issues** | Read & write | Track sync (issues) + @mention triggers. |
    | **Checks** | Read & write | Post the gating **check-runs** the PR-review bot relies on. |
 7. **Subscribe to events** (only if the webhook is Active): **Pull request**,
-   **Issue comment** (drives the `/review` re-run), **Issues**, **Push**.
+   **Issue comment** (drives review commands), **Issues**, **Push**.
 8. **Where can this GitHub App be installed?** → **Only on this account**.
 9. Click **Create GitHub App**.
 
@@ -157,12 +157,20 @@ every pull request on a **reviewed** repo gets two automatic passes:
 **Per-repo policies** (dashboard → **Reviews**), each independent:
 - **Approve when clean** — post an `APPROVE` review when a lens finds nothing.
 - **Block on findings** — a blocking finding fails the check-run (default **on**).
-- **Re-review on push** — re-run both lenses on every new commit (default **on**).
+- **Re-review on push** — re-run security on every new commit (default **on**).
+- **Code review trigger** — **Manual** by default; switch to Auto to also run code review on PR events.
 
-**Re-run a review** any time by commenting **`/review`** on the PR.
+**Run a review from GitHub:** a user with the configured repository permission (default
+**maintain**) may comment **`/security-review`** for the gating lens,
+**`/code-review`** for the advisory lens, or legacy **`/review`** for both. The
+permission is checked server-side with an installation token; owners can configure
+Admin/Maintain/Write and an explicit GitHub-login allowlist in Dashboard → Reviews.
 
-**Manage from the desktop:** **Settings → PR Reviews** lists the PRs the bot has
-reviewed (lens, findings, blocking count, status) and links straight to each PR.
+**Dashboard console:** Dashboard → **Reviews** lists linked repositories' open PRs,
+checks and compact findings. Owners/admins can run either lens manually; developers
+can be permitted per org. Opening a PR shows its polling live timeline. Configure the
+security-review and code-review providers/models plus diff/timeout knobs in **AI
+Providers → Subagents**. The desktop **Settings → PR Reviews** remains read-only.
 
 ## 9. Branch protection (make the gate real)
 
@@ -199,7 +207,7 @@ gh api -X PUT repos/<org>/<repo>/branches/<branch>/protection/required_status_ch
   review request (step 3.4).
 - **Security review never posts on a big PR:** the review is a background job; a
   transient provider overload is retried with jittered backoff + a larger budget, then a
-  `/review` comment re-runs it. If it *fails* (blocking findings), that's the gate doing
+  `/security-review` (or legacy `/review`) comment re-runs it. If it *fails* (blocking findings), that's the gate doing
   its job — fix the findings and push.
 - **localhost + webhooks:** GitHub can't POST to `localhost`. Device flow and
   repo-linking work without webhooks; only the PR-review bot and @mention triggers need a

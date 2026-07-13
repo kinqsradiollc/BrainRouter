@@ -14,7 +14,7 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
 import { PremiumCard } from "../../components/PremiumCard";
 import { PremiumButton } from "../../components/PremiumButton";
-import { adminApi, type OrgSummary, type IntegrationConfig, type ReviewJob } from "../../lib/adminApi";
+import { adminApi, type OrgSummary, type IntegrationConfig, type ReviewJob, type ReviewPullRequest } from "../../lib/adminApi";
 
 interface Repo { fullName: string; url: string; private: boolean; defaultBranch: string }
 
@@ -52,6 +52,8 @@ function ReviewsInner() {
   const [repos, setRepos] = useState<Repo[]>([]);
   const [integ, setInteg] = useState<IntegrationConfig | null>(null);
   const [reviews, setReviews] = useState<ReviewJob[]>([]);
+  const [prs, setPrs] = useState<ReviewPullRequest[]>([]);
+  const [canRun, setCanRun] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
@@ -73,14 +75,17 @@ function ReviewsInner() {
     if (!orgId) return;
     setLoading(true); setError("");
     try {
-      const [rp, ig, rv] = await Promise.all([
+      const [rp, ig, rv, pullRequests] = await Promise.all([
         adminApi.githubRepos(orgId).catch(() => ({ repos: [] as Repo[] })),
         adminApi.listIntegrations(orgId).catch(() => ({ integrations: [] as IntegrationConfig[] })),
         adminApi.listReviewJobs(orgId, 30).catch(() => ({ reviews: [] as ReviewJob[] })),
+        adminApi.listReviewPrs(orgId).catch(() => ({ prs: [] as ReviewPullRequest[], canRun: false })),
       ]);
       setRepos(((rp as { repos?: Repo[] }).repos) ?? []);
       setInteg((ig.integrations ?? []).find((i) => i.kind === "github_app") ?? null);
       setReviews(rv.reviews ?? []);
+      setPrs(pullRequests.prs ?? []);
+      setCanRun(Boolean(pullRequests.canRun));
     } catch (e) { setError(e instanceof Error ? e.message : "Failed to load"); }
     finally { setLoading(false); }
   }, []);
@@ -136,12 +141,24 @@ function ReviewsInner() {
     if (Object.keys(cur).length === 0) delete nextRepos[repo]; else nextRepos[repo] = cur;
     return patchConfig({ reviewPolicies: nextRepos }, `repo:${repo}:${f}`);
   };
+  const setCodeTrigger = (repo: string | null, value: "auto" | "manual") => {
+    if (repo === null) return patchConfig({ reviewPolicyDefaults: { ...cfgDefaults, codeReviewTrigger: value } }, "def:code-trigger");
+    const next = { ...cfgRepo, [repo]: { ...(cfgRepo[repo] ?? {}), codeReviewTrigger: value } };
+    return patchConfig({ reviewPolicies: next }, `repo:${repo}:code-trigger`);
+  };
+  const setManualRunners = (minPermission: "admin" | "maintain" | "write", allowlist: string) => patchConfig({ manualReviewRunners: { minPermission, allowlist: allowlist.split(/[,\s]+/).map((v) => v.trim()).filter(Boolean) } }, "manual-runners");
+  const run = async (pr: ReviewPullRequest, lens: "security" | "code" | "both") => {
+    setBusy(`run:${pr.repo}:${pr.number}`);
+    try { await adminApi.runReview({ repo: pr.repo, prNumber: pr.number, lens }, activeOrg); await load(activeOrg); }
+    catch (e) { setError(e instanceof Error ? e.message : "Failed to queue review"); }
+    finally { setBusy(""); }
+  };
 
   const shown = search.trim() ? repos.filter((r) => r.fullName.toLowerCase().includes(search.trim().toLowerCase())) : repos;
 
   return (
     <div className="settings-page">
-      <PageHeader title="Reviews" description="Automatic AI review of every pull request — a security pass and a general code-review pass — with inline suggestions and gating checks. Choose which repos are reviewed." />
+      <PageHeader title="Reviews" description="Security reviews run automatically; code reviews are command-driven by default. Inspect PR findings, queue a lens, and watch each review progress live." />
       <div className="settings-hint" style={{ marginTop: "calc(-1 * var(--spacing-8))" }}>
         <Link href="/integrations" className="settings-link">Configure the GitHub App →</Link>
       </div>
@@ -157,9 +174,19 @@ function ReviewsInner() {
 
       {/* What the bot does — the effective, shipped behavior. */}
       <PremiumCard level={2} style={{ marginTop: "var(--spacing-24)" }}>
-        <div className="settings-cardhead"><div><h3>How reviews work</h3><div className="settings-hint">Two lenses run on every reviewed PR; each posts inline suggestions + a gating check-run. Re-run any time with a <code>/review</code> PR comment.</div></div></div>
+        <div className="settings-cardhead"><div><h3>How reviews work</h3><div className="settings-hint">Security runs on PR events. Code review is manual unless enabled below. Use <code>/security-review</code>, <code>/code-review</code>, or legacy <code>/review</code>.</div></div></div>
         <div className="settings-item"><span className="settings-row__title">🛡️ Security review — vulnerability findings</span><span className="settings-flag-ok">gates the merge</span></div>
         <div className="settings-item"><span className="settings-row__title">🔎 Code review — correctness · clarity · perf · tests</span><span className="settings-badge settings-badge--muted">advisory</span></div>
+      </PremiumCard>
+
+      <PremiumCard level={2} style={{ marginTop: "var(--spacing-20)" }}>
+        <div className="settings-cardhead"><div><h3>Pull requests</h3><div className="settings-hint">Open pull requests on reviewed repositories. Open one for findings, checks, and its live timeline.</div></div><span className="settings-badge settings-badge--muted">{prs.length}</span></div>
+        {loading ? <div className="settings-empty-inline">Loading…</div> : prs.length === 0 ? <div className="settings-empty-inline">No open pull requests on linked repositories.</div> : prs.map((pr) => (
+          <div key={`${pr.repo}#${pr.number}`} className="settings-item" style={{ alignItems: "center" }}>
+            <div className="min-w-0"><Link className="settings-row__title truncate" href={`/reviews/pr?repo=${encodeURIComponent(pr.repo)}&number=${pr.number}`}>{pr.repo} #{pr.number} · {pr.title}</Link><div className="settings-row__sub">{pr.author ?? "unknown"} · 🛡️ {pr.security?.status ?? "none"} · 🔎 {pr.code?.status ?? "none"}</div></div>
+            {canRun && <div className="settings-actions"><PremiumButton size="small" variant="ghost" disabled={configBusy} onClick={() => run(pr, "security")}>Security</PremiumButton><PremiumButton size="small" variant="ghost" disabled={configBusy} onClick={() => run(pr, "code")}>Code</PremiumButton><PremiumButton size="small" variant="primary" disabled={configBusy} onClick={() => run(pr, "both")}>{busy === `run:${pr.repo}:${pr.number}` ? "…" : "Run both"}</PremiumButton></div>}
+          </div>
+        ))}
       </PremiumCard>
 
       {/* Policy defaults — org-wide; per-repo overrides live in the repo list below. */}
@@ -173,6 +200,10 @@ function ReviewsInner() {
               onChange={(v) => setDefault(f, v === "on")} />
           </div>
         ))}
+        <div className="settings-item"><div><span className="settings-row__title">Code review trigger</span><div className="settings-row__sub">Manual requires <code>/code-review</code>; auto also runs on PR events.</div></div><Segmented value={(cfgDefaults as any).codeReviewTrigger === "auto" ? "auto" : "manual"} disabled={configBusy} options={[{ v: "manual", label: "Manual" }, { v: "auto", label: "Auto" }]} onChange={(v) => setCodeTrigger(null, v)} /></div>
+        <div className="settings-item"><div><span className="settings-row__title">Developers can run from dashboard</span><div className="settings-row__sub">Otherwise only owners and admins can manually queue reviews.</div></div><Segmented value={(cfgDefaults as any).developersCanRun ? "on" : "off"} disabled={configBusy} options={[{ v: "on", label: "On" }, { v: "off", label: "Off" }]} onChange={(v) => patchConfig({ reviewPolicyDefaults: { ...cfgDefaults, developersCanRun: v === "on" } }, "def:developers-run")} /></div>
+        <div className="settings-item"><div><span className="settings-row__title">Manual GitHub runners</span><div className="settings-row__sub">Minimum repository permission for commands. Optional allowlist can bypass it.</div></div><Segmented value={((integ?.config?.manualReviewRunners as any)?.minPermission ?? "maintain")} disabled={configBusy} options={[{ v: "admin", label: "Admin" }, { v: "maintain", label: "Maintain" }, { v: "write", label: "Write" }]} onChange={(v) => setManualRunners(v, String((integ?.config?.manualReviewRunners as any)?.allowlist?.join(", ") ?? ""))} /></div>
+        <input className="settings-input" disabled={configBusy} defaultValue={String((integ?.config?.manualReviewRunners as any)?.allowlist?.join(", ") ?? "")} placeholder="GitHub allowlist (comma-separated)" onBlur={(e) => setManualRunners(((integ?.config?.manualReviewRunners as any)?.minPermission ?? "maintain"), e.currentTarget.value)} />
       </PremiumCard>
 
       {/* Recent reviews — read from the review jobs the bot has run. */}
@@ -233,6 +264,7 @@ function ReviewsInner() {
                   </div>
                   {on && (
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 14, marginTop: 8, paddingLeft: 2 }}>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span className="settings-row__sub">Code trigger</span><Segmented value={(cfgRepo[r.fullName] as any)?.codeReviewTrigger === "auto" ? "auto" : "manual"} disabled={configBusy} options={[{ v: "manual", label: "Manual" }, { v: "auto", label: "Auto" }]} onChange={(v) => setCodeTrigger(r.fullName, v)} /></span>
                       {POLICY_META.map(({ f, label }) => {
                         const ov = repoOverride(r.fullName, f);
                         const cur = ov === undefined ? "default" : ov ? "on" : "off";

@@ -87,6 +87,20 @@ describe("PR security review executor (ADR-017 D5)", () => {
     expect(routes.calls.some((c) => c.includes("POST /repos/o/r/issues/7/comments"))).toBe(true);
   });
 
+  it("emits ordered progress and persists a compact, body-free finding projection", async () => {
+    const events: string[] = [];
+    const r = await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "abcdef1234" },
+      { ...makeDeps({ calls: [] }), onProgress: (event) => events.push(event.kind) },
+    );
+    expect(events).toContain("token-minted");
+    expect(events).toContain("diff-fetched");
+    expect(events).toContain("llm-started");
+    expect(events.at(-1)).toBe("done");
+    expect(r.findingsDetail?.[0]).toMatchObject({ file: "x.ts", severity: "high" });
+    expect(r.findingsDetail?.[0]).not.toHaveProperty("details");
+  });
+
   it("updates its existing comment in place (idempotent by marker)", async () => {
     const routes: Routes = { calls: [], comments: [{ id: 55, body: "<!-- brainrouter-security-review -->\nold review" }] };
     const r = await runPrSecurityReview({ installationId: "42", repo: "o/r", prNumber: 7, headSha: "x" }, makeDeps(routes));

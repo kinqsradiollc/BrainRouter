@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import crypto from "node:crypto";
-import { verifyGithubSignature, processGithubDelivery, isRepoLinkedForReview, resolveReviewPolicy, type WebhookDeps } from "./githubWebhook.js";
+import { verifyGithubSignature, processGithubDelivery, isRepoLinkedForReview, parseReviewCommand, resolveCommenterPermission, resolveReviewPolicy, type WebhookDeps } from "./githubWebhook.js";
 
 const SECRET = "whsec_test_123";
 function sign(raw: Buffer, secret = SECRET): string {
@@ -67,7 +67,7 @@ describe("ADR-010 P6b — GitHub webhook core", () => {
     expect(job.input.number).toBe(7);
   });
 
-  it("pull_request opened → enqueues both security + code review jobs (ADR-017 D5)", async () => {
+  it("pull_request opened → enqueues security only when code review defaults to manual", async () => {
     const d = deps();
     const payload = { installation: { id: 42 }, action: "opened", repository: { full_name: "acme/app" }, pull_request: { number: 12, head: { sha: "abc123" } } };
     const raw = Buffer.from(JSON.stringify(payload));
@@ -75,7 +75,7 @@ describe("ADR-010 P6b — GitHub webhook core", () => {
     expect(out.status).toBe(202);
     const kinds = (d.enqueue as any).mock.calls.map((c: any[]) => c[0].kind);
     expect(kinds).toContain("pr-security-review");
-    expect(kinds).toContain("pr-code-review"); // both lenses fan out from one PR event
+    expect(kinds).not.toContain("pr-code-review");
     const review = (d.enqueue as any).mock.calls.find((c: any[]) => c[0].kind === "pr-security-review")[0];
     expect(review.input.repo).toBe("acme/app");
     expect(review.input.prNumber).toBe(12);
@@ -103,24 +103,62 @@ describe("ADR-010 P6b — GitHub webhook core", () => {
     expect(kinds).not.toContain("pr-code-review");
   });
 
-  it("`/review` comment on a PR re-triggers both review lenses (Strix re-run)", async () => {
-    const d = deps();
-    const payload = { installation: { id: 42 }, action: "created", repository: { full_name: "acme/app" }, issue: { number: 12, pull_request: { url: "x" } }, comment: { body: "please /review this" } };
+  it("commands select a lens and the allowlist permits a dashboard-configured runner", async () => {
+    const allowed = { ...integ, config: { installationId: "42", manualReviewRunners: { allowlist: ["maintainer"] } } };
+    const d = deps({ findIntegrationByInstallation: async (id) => (id === "42" ? allowed : null) });
+    const payload = { installation: { id: 42 }, action: "created", repository: { full_name: "acme/app" }, issue: { number: 12, pull_request: { url: "x" } }, comment: { body: "please /code-review this", user: { login: "maintainer", type: "User" } } };
     const raw = Buffer.from(JSON.stringify(payload));
     await processGithubDelivery(d, { body: payload, rawBody: raw, signature: sign(raw), event: "issue_comment", delivery: "d-4" });
     const kinds = (d.enqueue as any).mock.calls.map((c: any[]) => c[0].kind);
-    expect(kinds).toContain("pr-security-review");
     expect(kinds).toContain("pr-code-review");
     const rerun = (d.enqueue as any).mock.calls.find((c: any[]) => c[0].kind === "pr-code-review")[0];
     expect(rerun.input.prNumber).toBe(12);
     expect(rerun.input.headSha).toBe(""); // resolved later by the executor
   });
 
+  it("ignores bot commenters and denies users without configured permission/allowlist", async () => {
+    const makePayload = (user: { login: string; type: string }) => ({ installation: { id: 42 }, action: "created", repository: { full_name: "acme/app" }, issue: { number: 12, pull_request: { url: "x" } }, comment: { body: "/security-review", user } });
+    const human = makePayload({ login: "reader", type: "User" });
+    const humanRaw = Buffer.from(JSON.stringify(human));
+    const denied = deps();
+    await processGithubDelivery(denied, { body: human, rawBody: humanRaw, signature: sign(humanRaw), event: "issue_comment" });
+    expect((denied.enqueue as any).mock.calls.map((c: any[]) => c[0].kind)).not.toContain("pr-security-review");
+    const bot = makePayload({ login: "dependabot[bot]", type: "Bot" });
+    const botRaw = Buffer.from(JSON.stringify(bot));
+    const ignored = deps();
+    await processGithubDelivery(ignored, { body: bot, rawBody: botRaw, signature: sign(botRaw), event: "issue_comment" });
+    expect((ignored.enqueue as any).mock.calls.map((c: any[]) => c[0].kind)).not.toContain("pr-security-review");
+  });
+
+  it("parser separates /security-review, /code-review and legacy /review", () => {
+    expect(parseReviewCommand("/security-review")).toBe("security");
+    expect(parseReviewCommand("@brainrouter code-review please")).toBe("code");
+    expect(parseReviewCommand("/review")).toBe("both");
+    expect(parseReviewCommand("/code-review")).not.toBe("both");
+    expect(parseReviewCommand("/review-later")).toBeNull();
+  });
+
+  it("resolveCommenterPermission treats unavailable or unknown permissions as none", async () => {
+    const ok = await resolveCommenterPermission((async () => ({ ok: true, json: async () => ({ permission: "maintain" }) })) as any, "https://api.github.com", "a/b", "u", "t");
+    const denied = await resolveCommenterPermission((async () => ({ ok: false, json: async () => ({}) })) as any, "https://api.github.com", "a/b", "u", "t");
+    expect(ok).toBe("maintain");
+    expect(denied).toBe("none");
+  });
+
   it("resolveReviewPolicy: per-repo override beats org default beats built-in", () => {
-    expect(resolveReviewPolicy(undefined, "a/b")).toEqual({ approveClean: false, blockOnFindings: true, reReviewOnPush: true });
+    expect(resolveReviewPolicy(undefined, "a/b")).toEqual({ approveClean: false, blockOnFindings: true, reReviewOnPush: true, codeReviewTrigger: "manual" });
     expect(resolveReviewPolicy({ reviewPolicyDefaults: { blockOnFindings: false } }, "a/b").blockOnFindings).toBe(false);
     expect(resolveReviewPolicy({ reviewPolicyDefaults: { blockOnFindings: false }, reviewPolicies: { "a/b": { blockOnFindings: true } } }, "a/b").blockOnFindings).toBe(true);
     expect(resolveReviewPolicy({ reviewPolicies: { "a/b": { approveClean: true } } }, "a/b").approveClean).toBe(true);
+  });
+
+  it("code review joins auto events only when codeReviewTrigger is auto", async () => {
+    const auto = { ...integ, config: { installationId: "42", reviewPolicyDefaults: { codeReviewTrigger: "auto" } } };
+    const d = deps({ findIntegrationByInstallation: async (id) => (id === "42" ? auto : null) });
+    const payload = { installation: { id: 42 }, action: "opened", repository: { full_name: "acme/app" }, pull_request: { number: 12, head: { sha: "s" } } };
+    const raw = Buffer.from(JSON.stringify(payload));
+    await processGithubDelivery(d, { body: payload, rawBody: raw, signature: sign(raw), event: "pull_request" });
+    expect((d.enqueue as any).mock.calls.map((c: any[]) => c[0].kind)).toContain("pr-code-review");
   });
 
   it("synchronize with reReviewOnPush OFF → no re-review; but `opened` still reviews", async () => {
@@ -130,9 +168,7 @@ describe("ADR-010 P6b — GitHub webhook core", () => {
     const d1 = mk();
     const raw1 = Buffer.from(JSON.stringify({ ...base, action: "synchronize" }));
     await processGithubDelivery(d1, { body: { ...base, action: "synchronize" }, rawBody: raw1, signature: sign(raw1), event: "pull_request", delivery: "d-6" });
-    // reReviewOnPush OFF on a synchronize skips BOTH review lenses. (The always-on
-    // trigger.github job still enqueues, so assert on the review kinds specifically —
-    // neither lens — which also catches a regression that leaks only the code-review job.)
+    // reReviewOnPush OFF on a synchronize skips the automatic security review.
     const d1Kinds = (d1.enqueue as any).mock.calls.map((c: any[]) => c[0].kind);
     expect(d1Kinds).not.toContain("pr-security-review");
     expect(d1Kinds).not.toContain("pr-code-review");

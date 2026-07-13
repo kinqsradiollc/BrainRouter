@@ -12,6 +12,7 @@ import type {
   MemoryJobEnqueueInput,
   MemoryJobListFilters,
   MemoryJobKindAggregate,
+  MemoryJobProgressEvent,
   GraphEdge,
   GraphNode,
   ContradictionRecord,
@@ -256,6 +257,7 @@ export interface IMemoryStore {
   enqueueMemoryJob(input: MemoryJobEnqueueInput, options?: { idGenerator?: () => string; now?: string }): Promise<MemoryJobRecord>;
   getMemoryJob(id: string): Promise<MemoryJobRecord | null>;
   listMemoryJobs(filters?: MemoryJobListFilters): Promise<MemoryJobRecord[]>;
+  appendJobProgress(id: string, event: MemoryJobProgressEvent): Promise<void>;
   claimNextMemoryJob(options?: { now?: string }): Promise<MemoryJobRecord | null>;
   /**
    * Transition a specific `pending` job to `running` (stamps

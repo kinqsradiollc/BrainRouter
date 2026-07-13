@@ -168,3 +168,12 @@ export async function getDefaultResolvedProvider(
     source: "db",
   };
 }
+
+/** Decrypt one enabled provider config selected by a role assignment. */
+export async function getResolvedProvider(exec: Executor, id: string): Promise<ResolvedProviderConfig | null> {
+  const row = await exec.one(`SELECT ${COLS} FROM provider_configs WHERE id = $1 AND enabled`, [id]);
+  if (!row) return null;
+  const rec = rowToRecord(row);
+  const cipher = String(row.api_key_ciphertext ?? "");
+  return { kind: rec.kind, endpoint: rec.baseUrl, apiKey: cipher ? open(cipher) : "", model: rec.model, models: rec.models, wireFormat: rec.wireFormat || undefined, reasoningEffort: rec.reasoningEffort || undefined, extra: rec.extra, source: "db" };
+}
