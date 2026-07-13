@@ -130,7 +130,12 @@ describe("ADR-010 P6b — GitHub webhook core", () => {
     const d1 = mk();
     const raw1 = Buffer.from(JSON.stringify({ ...base, action: "synchronize" }));
     await processGithubDelivery(d1, { body: { ...base, action: "synchronize" }, rawBody: raw1, signature: sign(raw1), event: "pull_request", delivery: "d-6" });
-    expect((d1.enqueue as any).mock.calls.map((c: any[]) => c[0].kind)).not.toContain("pr-security-review");
+    // reReviewOnPush OFF on a synchronize skips BOTH review lenses. (The always-on
+    // trigger.github job still enqueues, so assert on the review kinds specifically —
+    // neither lens — which also catches a regression that leaks only the code-review job.)
+    const d1Kinds = (d1.enqueue as any).mock.calls.map((c: any[]) => c[0].kind);
+    expect(d1Kinds).not.toContain("pr-security-review");
+    expect(d1Kinds).not.toContain("pr-code-review");
     const d2 = mk();
     const raw2 = Buffer.from(JSON.stringify({ ...base, action: "opened" }));
     await processGithubDelivery(d2, { body: { ...base, action: "opened" }, rawBody: raw2, signature: sign(raw2), event: "pull_request", delivery: "d-7" });

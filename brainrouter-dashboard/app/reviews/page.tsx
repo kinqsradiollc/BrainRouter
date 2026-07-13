@@ -113,10 +113,13 @@ function ReviewsInner() {
   const cfgRepo = (integ?.config?.reviewPolicies ?? {}) as Record<string, Partial<Record<PolicyField, boolean>>>;
   const orgDefault = (f: PolicyField): boolean => cfgDefaults[f] ?? POLICY_DEFAULTS[f];
   const repoOverride = (repo: string, f: PolicyField): boolean | undefined => cfgRepo[repo]?.[f];
-  // Each patch is computed from the render-time cfg snapshot, so a second toggle fired
-  // before the first request lands would overwrite it (lost update). Disable ALL policy
-  // controls while any policy patch is in flight.
-  const policyBusy = busy.startsWith("def:") || busy.startsWith("repo:");
+  // Every config write (auto-review toggle AND policy) is computed from the render-time
+  // integ.config snapshot, so any two overlapping writes would each merge into the same
+  // stale snapshot and the later one would clobber the earlier (lost update). `busy` is
+  // set at the start of EVERY write and cleared in its finally, so gating all config
+  // controls on `busy !== ""` serialises writes to one at a time — load() refetches
+  // between them — which removes the race entirely.
+  const configBusy = busy !== "";
 
   async function patchConfig(next: Record<string, unknown>, key: string) {
     if (!integ) { setError("Configure the GitHub App first on the Integrations page."); return; }
@@ -165,7 +168,7 @@ function ReviewsInner() {
         {POLICY_META.map(({ f, label, hint }) => (
           <div key={f} className="settings-item">
             <div className="min-w-0"><span className="settings-row__title">{label}</span><div className="settings-row__sub">{hint}</div></div>
-            <Segmented value={orgDefault(f) ? "on" : "off"} disabled={policyBusy}
+            <Segmented value={orgDefault(f) ? "on" : "off"} disabled={configBusy}
               options={[{ v: "on", label: "On" }, { v: "off", label: "Off" }]}
               onChange={(v) => setDefault(f, v === "on")} />
           </div>
@@ -224,7 +227,7 @@ function ReviewsInner() {
                       <span className="settings-row__title truncate" title={r.fullName}>{r.fullName}</span>
                       {r.private && <span className="settings-badge settings-badge--muted" style={{ marginLeft: 6 }}>private</span>}
                     </div>
-                    <PremiumButton size="small" variant={on ? "ghost" : "primary"} disabled={busy === r.fullName} onClick={() => toggle(r, !on)}>
+                    <PremiumButton size="small" variant={on ? "ghost" : "primary"} disabled={configBusy} onClick={() => toggle(r, !on)}>
                       {busy === r.fullName ? "…" : on ? "Auto-review: On" : "Auto-review: Off"}
                     </PremiumButton>
                   </div>
@@ -236,7 +239,7 @@ function ReviewsInner() {
                         return (
                           <span key={f} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                             <span className="settings-row__sub">{label}</span>
-                            <Segmented value={cur} disabled={policyBusy}
+                            <Segmented value={cur} disabled={configBusy}
                               options={[{ v: "default", label: `Default (${orgDefault(f) ? "On" : "Off"})` }, { v: "on", label: "On" }, { v: "off", label: "Off" }]}
                               onChange={(v) => setRepoPolicy(r.fullName, f, v === "default" ? undefined : v === "on")} />
                           </span>
