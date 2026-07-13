@@ -642,6 +642,57 @@ export class MemoryEngine {
     return memoryOps.upsertEngineeringMemory(this, params);
   }
 
+  /**
+   * Ingest verified pentest findings into the org's cognitive memory so future
+   * scans and code reviews can recall "we already found X against this target".
+   * Routes every record through upsertEngineeringMemory (the redaction + length
+   * chokepoint — Bearer/sk-/ghp_/PEM/API_KEY/IPv4 in a PoC are scrubbed), then
+   * promotes it to org visibility so the whole org can recall it. Best-effort;
+   * findings whose final status is dismissed/disputed/out-of-scope are skipped.
+   */
+  public async recordPentestFindings(params: {
+    orgId: string;
+    userId: string;
+    target: string;
+    reviewId: string;
+    findings: Array<{
+      id: string; severity: string; summary: string; details?: string;
+      file?: string; line?: number; cvss?: number; cvssVector?: string;
+      cwe?: string; cve?: string; poc?: string; remediation?: string;
+      status?: string; confidence?: number;
+    }>;
+  }): Promise<number> {
+    const skip = new Set(["dismissed", "disputed", "out-of-scope"]);
+    let recorded = 0;
+    for (const f of params.findings) {
+      if (f.status && skip.has(f.status)) continue;
+      const content = [
+        `SECURITY FINDING (${String(f.severity).toUpperCase()}): ${f.summary}`,
+        f.cwe ? `CWE: ${f.cwe}` : "",
+        typeof f.cvss === "number" ? `CVSS: ${f.cvss}${f.cvssVector ? ` (${f.cvssVector})` : ""}` : "",
+        f.file ? `Location: ${f.file}${f.line ? `:${f.line}` : ""}` : "",
+        `Target: ${params.target}`,
+        f.details ? `Impact: ${f.details}` : "",
+        f.poc ? `PoC: ${f.poc.slice(0, 800)}` : "",
+        f.remediation ? `Remediation: ${f.remediation}` : "",
+      ].filter(Boolean).join("\n");
+      const rec = await this.upsertEngineeringMemory({
+        userId: params.userId,
+        type: "bug_finding",
+        content,
+        priority: f.severity === "critical" ? 95 : f.severity === "high" ? 90 : 75,
+        confidence: Math.max(0.5, Math.min(1, (f.confidence ?? 70) / 100)),
+        sourceKind: "model_inference",
+        verificationStatus: f.poc ? "verified" : "unverified",
+        filePaths: f.file ? [f.file] : [],
+        metadata: { kind: "pentest-finding", source: "pentest", cwe: f.cwe, cve: f.cve, cvss: f.cvss, severity: f.severity, target: params.target, reviewId: params.reviewId, findingId: f.id },
+      });
+      await this.sharing.setMemoryVisibility(rec.id, params.userId, params.orgId, "org");
+      recorded += 1;
+    }
+    return recorded;
+  }
+
   /** MEM-32 — record a durable, fingerprint-reinforcing lesson/insight; see lessons/lessonOps.ts. */
   public recordLesson(
     userId: string,

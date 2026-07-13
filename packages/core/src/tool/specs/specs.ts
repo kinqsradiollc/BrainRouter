@@ -128,15 +128,17 @@ export const LOCAL_TOOLS = [
   },
   {
     name: 'finish_scan',
-    description: 'Complete the active pentest only after every worker is terminal and an executive summary, methodology, and limitations have been supplied. Emits findings.sarif.',
+    description: 'Complete the active pentest only after every worker is terminal. Before finishing, consider whether individually-confirmed findings chain into higher-impact end-to-end paths and record those chains. Emits findings.sarif.',
     inputSchema: {
       type: 'object',
       properties: {
-        executiveSummary: { type: 'string' },
-        methodology: { type: 'string' },
-        limitations: { type: 'string' }
+        executiveSummary: { type: 'string', description: 'Business-level summary of security posture and the most material risks. If nothing was confirmed, characterize the posture positively.' },
+        methodology: { type: 'string', description: 'What was tested and how — attack surface mapped, techniques and tools used.' },
+        technicalAnalysis: { type: 'string', description: 'Systemic root-cause themes across findings and any confirmed attack chains (how lower-severity issues combine).' },
+        recommendations: { type: 'string', description: 'Prioritized remediation guidance grouped as Immediate / Short-term / Medium-term.' },
+        limitations: { type: 'string', description: 'Scope boundaries, blind spots, and what was explicitly NOT covered.' }
       },
-      required: ['executiveSummary', 'methodology', 'limitations']
+      required: ['executiveSummary', 'methodology', 'technicalAnalysis', 'recommendations', 'limitations']
     }
   },
   {
