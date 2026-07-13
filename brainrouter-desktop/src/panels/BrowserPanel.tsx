@@ -68,7 +68,10 @@ function isLoopbackHost(u: URL): boolean {
 function normalizeUrl(raw: string | null | undefined): string | null {
   const s = (raw ?? '').trim();
   if (!s) return null;
-  if (/^data:text\/html/i.test(s)) return s;
+  // Only loopback http(s) is navigable from the omnibox. data:/file:/about:/
+  // remote are all refused here — a user-typed `data:text/html,<script>` or
+  // `file:///etc/passwd` must never reach a sink. The blank fallback uses the
+  // BROWSER_BLANK constant directly (it is not routed through normalizeUrl).
   if (/^https?:\/\//i.test(s)) { try { return isLoopbackHost(new URL(s)) ? s : null; } catch { return null; } }
   if (/^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:\d+)?(\/|$)/i.test(s)) return `http://${s}`;
   return null;
