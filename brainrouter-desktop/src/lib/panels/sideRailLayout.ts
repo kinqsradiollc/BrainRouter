@@ -1,3 +1,5 @@
+import type { PanelId } from '../../panels/index.js';
+
 // Min matches the left sidebar's floor (~220) so the two panels feel consistent
 // when shrunk; a touch wider keeps the panel labels + badges comfortable.
 export const SIDE_RAIL_MIN = 240;
@@ -6,6 +8,18 @@ export const SIDE_RAIL_MAX = 760;
 export function clampSideRailWidth(width: number): number {
   if (!Number.isFinite(width)) return 330;
   return Math.max(SIDE_RAIL_MIN, Math.min(SIDE_RAIL_MAX, Math.floor(width)));
+}
+
+/** Comfortable minimum width to open certain panels at — the Browser (uitest)
+ *  needs room for its icon rail + URL bar + webview. Panels not listed keep the
+ *  current width. */
+const OPEN_WIDTH: Partial<Record<PanelId, number>> = { uitest: 500 };
+
+/** The side width to use when a panel is opened: at least its comfortable
+ *  default (if it has one), but never shrinking the user's current width. */
+export function openWidthFor(id: PanelId, currentWidth: number): number {
+  const pref = OPEN_WIDTH[id];
+  return pref ? Math.max(currentWidth, clampSideRailWidth(pref)) : currentWidth;
 }
 
 export function sideRailClassName(closing: boolean, fullscreen: boolean): string {

@@ -45,6 +45,9 @@ export interface GithubConnectorCollaborator {
 
 export interface GithubConnectorClient {
   listRepositories(owner: string, opts?: { limit?: number }): Promise<string[]>;
+  /** OAuth/App clients only: every repo the credential can access, NO owner needed
+   *  (ADR-017 D1 — auto-sync all installation repos). Absent ⇒ owner is still required. */
+  listAccessibleRepositories?(opts?: { limit?: number }): Promise<string[]>;
   listIssues(repo: string, opts?: { since?: string }): Promise<GithubConnectorIssue[]>;
   listPullRequests(repo: string, opts?: { since?: string }): Promise<GithubConnectorPullRequest[]>;
   listFiles(repo: string, opts?: { since?: string }): Promise<GithubConnectorFile[]>;
@@ -52,11 +55,13 @@ export interface GithubConnectorClient {
 
 export interface GithubConnectorPermissionClient {
   listRepositories(owner: string, opts?: { limit?: number }): Promise<string[]>;
+  listAccessibleRepositories?(opts?: { limit?: number }): Promise<string[]>;
   listCollaborators(repo: string): Promise<GithubConnectorCollaborator[]>;
 }
 
 export interface GithubConnectorValidationClient {
   listRepositories(owner: string, opts?: { limit?: number }): Promise<string[]>;
+  listAccessibleRepositories?(opts?: { limit?: number }): Promise<string[]>;
   getRepository(repo: string): Promise<string | undefined>;
 }
 
@@ -83,6 +88,22 @@ export interface GithubConnectorRunOptions {
   maxRepositories?: number;
 }
 
+/**
+ * True when the run can resolve repos WITHOUT a manual owner (ADR-017 D1): explicit
+ * fully-qualified `owner/repo` entries, or an OAuth/App client that enumerates its
+ * accessible repos. A static-token (CLI) client with no owner + no repos still needs
+ * an owner — that path keeps the "owner is required" error.
+ */
+function canResolveRepositories(
+  connector: ConnectorRecord,
+  client: { listAccessibleRepositories?: unknown },
+  owner: string,
+): boolean {
+  return !!owner
+    || configStringList(connector, 'repositories').some((r) => r.includes('/'))
+    || typeof client.listAccessibleRepositories === 'function';
+}
+
 export async function validateGithubConnectorAccess(
   connector: ConnectorRecord,
   client: GithubConnectorValidationClient,
@@ -90,18 +111,20 @@ export async function validateGithubConnectorAccess(
 ): Promise<GithubConnectorValidationResult> {
   if (connector.source !== 'github') return { ok: false, checked: [], errors: [`Validation is not implemented for ${connector.source}.`] };
   const owner = configString(connector, 'owner');
-  if (!owner) return { ok: false, checked: [], errors: ['GitHub connector owner is required.'] };
+  if (!canResolveRepositories(connector, client, owner)) return { ok: false, checked: [], errors: ['GitHub connector owner is required.'] };
 
   const checked: string[] = [];
   const errors: string[] = [];
   const maxRepositories = Math.max(1, options?.maxRepositories ?? 50);
-  const targets = configStringList(connector, 'repositories').map((repo) => repo.includes('/') ? repo : `${owner}/${repo}`);
+  const targets = configStringList(connector, 'repositories').map((repo) => repo.includes('/') ? repo : (owner ? `${owner}/${repo}` : repo)).filter((r) => r.includes('/'));
   if (targets.length === 0) {
     try {
-      const repos = await client.listRepositories(owner, { limit: 1 });
+      const repos = owner
+        ? await client.listRepositories(owner, { limit: 1 })
+        : (client.listAccessibleRepositories ? await client.listAccessibleRepositories({ limit: 1 }) : []);
       const first = repos[0]?.trim();
       if (first) checked.push(first);
-      else errors.push(`No accessible repositories found for ${owner}.`);
+      else errors.push(owner ? `No accessible repositories found for ${owner}.` : 'No accessible repositories found for this GitHub connection.');
     } catch (err) {
       errors.push(err instanceof Error ? err.message : String(err));
     }
@@ -128,7 +151,7 @@ export async function runGithubConnectorPermissionSync(
 ): Promise<GithubConnectorPermissionSyncResult> {
   if (connector.source !== 'github') throw new Error(`Connector source ${connector.source} is not github.`);
   const owner = configString(connector, 'owner');
-  if (!owner) throw new Error('GitHub connector owner is required.');
+  if (!canResolveRepositories(connector, client, owner)) throw new Error('GitHub connector owner is required.');
 
   const now = options?.now ?? new Date().toISOString();
   const repositories = await resolveRepositories(connector, client, owner, options?.maxRepositories ?? 100);
@@ -162,7 +185,7 @@ export async function runGithubConnectorCheckpoint(
 ): Promise<GithubConnectorRunResult> {
   if (connector.source !== 'github') throw new Error(`Connector source ${connector.source} is not github.`);
   const owner = configString(connector, 'owner');
-  if (!owner) throw new Error('GitHub connector owner is required.');
+  if (!canResolveRepositories(connector, client, owner)) throw new Error('GitHub connector owner is required.');
   const includeIssues = connector.config.includeIssues !== false;
   const includePullRequests = connector.config.includePullRequests !== false;
   const includeFiles = connector.config.includeFiles === true;
@@ -219,14 +242,21 @@ export async function runGithubConnectorCheckpoint(
 
 async function resolveRepositories(
   connector: ConnectorRecord,
-  client: Pick<GithubConnectorClient, 'listRepositories'>,
+  client: Pick<GithubConnectorClient, 'listRepositories' | 'listAccessibleRepositories'>,
   owner: string,
   maxRepositories: number,
 ): Promise<string[]> {
   const configured = configStringList(connector, 'repositories');
-  const repos = configured.length
-    ? configured.map((repo) => repo.includes('/') ? repo : `${owner}/${repo}`)
-    : await client.listRepositories(owner, { limit: maxRepositories });
+  let repos: string[];
+  if (configured.length) {
+    repos = configured.map((repo) => repo.includes('/') ? repo : (owner ? `${owner}/${repo}` : repo)).filter((r) => r.includes('/'));
+  } else if (owner) {
+    repos = await client.listRepositories(owner, { limit: maxRepositories });
+  } else if (client.listAccessibleRepositories) {
+    repos = await client.listAccessibleRepositories({ limit: maxRepositories });
+  } else {
+    repos = [];
+  }
   const unique: string[] = [];
   for (const repo of repos) {
     const trimmed = repo.trim();

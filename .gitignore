@@ -19,6 +19,10 @@ yarn-error.log*
 
 # Build/Dist
 dist/
+# Compiled Electron output — always rebuilt by `npm start` / `build:electron` /
+# electron-builder, so it's never used fresh. Tracking it bloated diffs and made
+# the PR-review bot review compiled JS (flagging pre-existing source as new).
+dist-electron/
 build/
 # …but the desktop's electron-builder resources (entitlements, notarize hook,
 # packaging docs) are source, not build output — they must be tracked.

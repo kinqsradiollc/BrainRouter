@@ -1,0 +1,7 @@
+{
+  "name": "ui-test",
+  "version": "0.4.16",
+  "description": "Web UI testing — drive the workspace app in a headed browser by data-testid, sharing one browser + manifest with the Desktop UI Tests panel.",
+  "main": "index.js",
+  "contributes": ["tools"]
+}

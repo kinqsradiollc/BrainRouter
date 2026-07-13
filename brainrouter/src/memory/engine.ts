@@ -23,6 +23,7 @@ import type { CursorPaginationOptions, DiagnosticsBundle, EvidenceListFilters, I
 import type { TenancyStore, EmailAuthStore, OrgPersonaStore, MemorySharingStore, ProjectStore, AdminConsoleStore } from "../tenancy/store.js";
 import type { ProviderStore } from "../providers/store.js";
 import type { IntegrationStore } from "../integrations/store.js";
+import type { ConnectorStore } from "../connectors/store.js";
 import { resolveProviderConfig } from "../providers/resolver.js";
 import { seedProvidersFromEnv } from "../providers/seed.js";
 import { systemProviderOrgId } from "../providers/runtime.js";
@@ -434,6 +435,11 @@ export class MemoryEngine {
     return this.store as unknown as IntegrationStore;
   }
 
+  /** ADR-016 C2 — per-user connectors + sealed OAuth tokens (server-side). */
+  public get connectors(): ConnectorStore {
+    return this.store as unknown as ConnectorStore;
+  }
+
   /**
    * ADR-010 P2 — the ".env retired" cutover. Resolve the system org's DB provider
    * configs (llm/embedding/reranker/judge) and apply any that exist over the
@@ -785,6 +791,12 @@ export class MemoryEngine {
     opts?: { sampleSize?: number; baseDir?: string },
   ): Promise<{ summaryPath: string | null; statsByMode: Record<string, ModeStats>; sampled: number; passed: boolean; skippedModes: string[]; latencyMsByMode: Record<string, number> }> {
     return benchOps.runRetrievalBenchmark(this, userId, opts);
+  }
+
+  /** ADR-017 D5 — the org's GitHub App creds (config + opened secret) for a webhook installation. */
+  public async findGithubAppByInstallation(installationId: string): Promise<{ config: Record<string, unknown>; secret: Record<string, string> } | null> {
+    const r = await this.integrations.findIntegrationByInstallation("github_app", installationId);
+    return r ? { config: r.config, secret: r.secret } : null;
   }
 
   /** MEM-25 code-recall benchmark over built-in fixtures; see engine/benchOps.ts. */

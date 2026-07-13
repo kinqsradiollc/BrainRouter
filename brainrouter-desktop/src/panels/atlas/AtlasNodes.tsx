@@ -149,10 +149,63 @@ export function AtlasServiceCard({ data }: NodeProps): React.ReactElement {
   );
 }
 
+// --- Screens mode (UI-TEST fusion) ---------------------------------------
+
+interface ScreenData {
+  title: string;
+  route?: string | null;
+  count: number;
+  hidden?: number;
+  selected?: boolean;
+  hasFile?: boolean;
+}
+
+/** A screen CONTAINER — clusters one screen's data-testid elements. Selectable
+ *  (single-click toggles it for "extract selected"); double-click opens its
+ *  source file. Mirrors AtlasGroupNode's container chrome. */
+export function AtlasScreenNode({ data }: NodeProps): React.ReactElement {
+  const d = data as unknown as ScreenData;
+  return (
+    <div className={`atlas-snode${d.selected ? " sel" : ""}`} title={d.hasFile ? "Double-click to open source" : undefined}>
+      <div className="atlas-snode-head">
+        <span className="atlas-snode-title" title={d.title}>{d.title}</span>
+        <span className="atlas-snode-meta">
+          {d.route ? <span className="atlas-snode-route" title={d.route}>{d.route}</span> : null}
+          <span className="atlas-snode-count">{d.count}</span>
+          {d.hidden ? <span className="atlas-snode-more" title={`${d.hidden} more not drawn — open Command Layer to see all ${d.count}`}>+{d.hidden}</span> : null}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+interface ElementData {
+  label: string; // testID
+  action: string;
+  color: string;
+  selected?: boolean;
+}
+
+/** A single interactive element — a leaf pill coloured by its inferred action
+ *  (tap/type/navigate/assert). Mirrors AtlasFileNode. */
+export function AtlasElementNode({ data }: NodeProps): React.ReactElement {
+  const d = data as unknown as ElementData;
+  return (
+    <div className={`atlas-enode${d.selected ? " sel" : ""}`} style={{ borderColor: d.color }} title={`${d.label} · ${d.action} — double-click to drive in the Browser`}>
+      <Handle type="target" position={Position.Top} className="atlas-handle" isConnectable={false} />
+      <span className="atlas-enode-label">{d.label}</span>
+      <span className="atlas-enode-act" style={{ color: d.color }}>{d.action}</span>
+      <Handle type="source" position={Position.Bottom} className="atlas-handle" isConnectable={false} />
+    </div>
+  );
+}
+
 export const ATLAS_NODE_TYPES = {
   atlasFile: AtlasFileNode,
   atlasGroup: AtlasGroupNode,
   atlasLayer: AtlasLayerCard,
   atlasDomain: AtlasDomainCard,
   atlasService: AtlasServiceCard,
+  atlasScreen: AtlasScreenNode,
+  atlasElement: AtlasElementNode,
 };

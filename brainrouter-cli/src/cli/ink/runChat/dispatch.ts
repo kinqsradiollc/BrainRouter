@@ -126,6 +126,7 @@ export function createOnSubmit(ctx: RunChatContext): (text: string, push: PushSc
       try {
         const res = await mcpClient.callTool('memory_capture_turn', {
           sessionKey: agent.sessionKey,
+          workspaceRoot: agent.workspaceRoot,
           messages: [
             { role: 'user', content: `[user note — remember this] ${noteCmd.note}`, timestamp: Date.now() },
             { role: 'assistant', content: 'Noted and saved to memory.', timestamp: Date.now() },

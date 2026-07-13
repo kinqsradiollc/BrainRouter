@@ -1,0 +1,299 @@
+/**
+ * PR-review executor core (ADR-017 D5). Driven by a `pull_request` webhook, it runs a
+ * single review LENS over the PR's unified diff — a SECURITY lens (vulnerabilities) and
+ * a general CODE-REVIEW lens (correctness / clarity / architecture / perf / tests) —
+ * and posts back like a human reviewer: a grouped PR review with inline ```suggestion
+ * comments, an idempotent pinned summary, and a gating check-run. Pure + dependency-
+ * injected (fetch / clock / LLM / integration lookup) so it unit-tests without the
+ * network or a DB. The lens is the ONLY thing that varies between review kinds — see
+ * `@kinqs/brainrouter-core/review` (reviewLens.ts).
+ *
+ * Least privilege: only the installation token for this repo is used; secrets are never
+ * echoed into a comment; the diff is capped before it reaches the model.
+ */
+import { mintInstallationToken, validateGithubApiBase } from '@kinqs/brainrouter-core/track';
+import {
+  addedLinesByPath,
+  buildReviewIntro,
+  CODE_REVIEW_LENS,
+  formatInlineFinding,
+  formatReviewSummaryComment,
+  inlineFindingMarker,
+  inlineMarkerRegex,
+  parseReviewFindings,
+  resolveInlineAnchor,
+  SECURITY_LENS,
+  stripReasoning,
+  type ParsedReviewFinding,
+  type ReviewLens,
+} from '@kinqs/brainrouter-core/review';
+import type { LLMRunner } from '@kinqs/brainrouter-types';
+import { resolveReviewPolicy } from './githubWebhook.js';
+
+export interface PrReviewInput {
+  orgId?: string;
+  installationId: string;
+  repo: string; // "owner/name"
+  prNumber: number;
+  headSha: string;
+}
+
+export interface PrReviewDeps {
+  llmRunner: LLMRunner;
+  fetchImpl: typeof fetch;
+  nowSec: () => number;
+  /** Resolve the org's GitHub App creds for this installation (non-secret config + opened secret). */
+  getIntegration: (installationId: string) => Promise<{ config: Record<string, unknown>; secret: Record<string, string> } | null>;
+  /** Cap on the diff (chars) sent to the model — a huge PR must not blow the context. */
+  maxDiffChars?: number;
+}
+
+export interface PrReviewResult {
+  ok: boolean;
+  findings: number;
+  /** Findings that block the merge (drive the check-run conclusion). */
+  blocking?: number;
+  posted: boolean;
+  /** Inline review comments (with suggestions) newly posted this run. */
+  inlinePosted?: number;
+  /** Whether the grouped PR review was posted. */
+  reviewPosted?: boolean;
+  /** Whether a gating check-run was posted (requires the App's `checks: write`). */
+  checkPosted?: boolean;
+  /** Whether an APPROVE review was posted (repo policy `approveClean` + a clean lens). */
+  approved?: boolean;
+  skipped?: string;
+  error?: string;
+}
+
+// Back-compat aliases (the security lens was the original single kind).
+export type PrSecurityReviewInput = PrReviewInput;
+export type PrSecurityReviewDeps = PrReviewDeps;
+export type PrSecurityReviewResult = PrReviewResult;
+
+function ghHeaders(token: string, accept = 'application/vnd.github+json'): Record<string, string> {
+  return { Authorization: `Bearer ${token}`, Accept: accept, 'X-GitHub-Api-Version': '2022-11-28' };
+}
+
+/** Run the SECURITY lens over a PR (webhook `pr-security-review` job). */
+export function runPrSecurityReview(input: PrReviewInput, deps: PrReviewDeps): Promise<PrReviewResult> {
+  return runPrReview(input, deps, SECURITY_LENS);
+}
+
+/** Run the general CODE-REVIEW lens over a PR (webhook `pr-code-review` job). */
+export function runPrCodeReview(input: PrReviewInput, deps: PrReviewDeps): Promise<PrReviewResult> {
+  return runPrReview(input, deps, CODE_REVIEW_LENS);
+}
+
+/** Run one review lens end-to-end: diff → LLM → inline suggestions + summary + check-run. */
+export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens: ReviewLens): Promise<PrReviewResult> {
+  const repo = String(input.repo ?? '').trim();
+  const prNumber = Number(input.prNumber);
+  if (!/^[^/\s]+\/[^/\s]+$/.test(repo) || !Number.isInteger(prNumber) || prNumber <= 0) {
+    return { ok: false, findings: 0, posted: false, skipped: 'bad-input' };
+  }
+
+  const integ = await deps.getIntegration(String(input.installationId));
+  if (!integ) return { ok: false, findings: 0, posted: false, skipped: 'no-integration' };
+  const appId = String(integ.config.appId ?? '').trim();
+  const privateKey = String(integ.secret.privateKey ?? '').trim();
+  const apiBase = validateGithubApiBase(typeof integ.config.apiBase === 'string' ? integ.config.apiBase : '') ?? 'https://api.github.com';
+  if (!appId || !privateKey) return { ok: false, findings: 0, posted: false, skipped: 'no-app-creds' };
+  const policy = resolveReviewPolicy(integ.config, repo);
+
+  let token: string;
+  try {
+    token = (await mintInstallationToken({ appId, privateKey, apiBase }, String(input.installationId), { fetchImpl: deps.fetchImpl as never, nowSec: deps.nowSec })).token;
+  } catch (e) { return { ok: false, findings: 0, posted: false, error: e instanceof Error ? e.message : 'token mint failed' }; }
+
+  // Resolve the head SHA if the caller didn't supply it (a `/review` comment re-run comes
+  // from an issue_comment webhook, which carries no head sha). Needed for the check-run's
+  // head_sha and the "Reviewed <sha>" staleness footer.
+  let headSha = String(input.headSha ?? '');
+  if (!headSha) {
+    try {
+      const pr = await deps.fetchImpl(`${apiBase}/repos/${repo}/pulls/${prNumber}`, { headers: ghHeaders(token) });
+      if (pr.ok) { const j = (await pr.json()) as { head?: { sha?: string } }; headSha = String(j?.head?.sha ?? ''); }
+    } catch { /* headSha stays '' → check-run skipped, comments still post */ }
+  }
+
+  // 1. Fetch the unified diff for the PR.
+  let diff = '';
+  try {
+    const r = await deps.fetchImpl(`${apiBase}/repos/${repo}/pulls/${prNumber}`, { headers: ghHeaders(token, 'application/vnd.github.diff') });
+    if (!r.ok) return { ok: false, findings: 0, posted: false, error: `diff HTTP ${r.status}` };
+    diff = await r.text();
+  } catch (e) { return { ok: false, findings: 0, posted: false, error: e instanceof Error ? e.message : 'diff fetch failed' }; }
+  if (!diff.trim()) return { ok: true, findings: 0, posted: false, skipped: 'empty-diff' };
+
+  // 2. Run the single-shot reviewer (this lens) over the diff.
+  const cap = deps.maxDiffChars ?? 60_000;
+  const prompt = `You are reviewing pull request #${prNumber} in ${repo}. Here is the unified diff:\n\n\`\`\`diff\n${diff.slice(0, cap)}\n\`\`\`\n\n${lens.buildContract()}`;
+  let reviewText = '';
+  try {
+    reviewText = await deps.llmRunner.run({ prompt, systemPrompt: lens.systemPrompt, taskId: `pr-${lens.id}-review:${repo}#${prNumber}`, timeoutMs: 120_000 });
+  } catch (e) { return { ok: false, findings: 0, posted: false, error: e instanceof Error ? e.message : 'review failed' }; }
+  const findings = parseReviewFindings(stripReasoning(reviewText));
+
+  // 3. Post inline review comments (with GitHub ```suggestion blocks) anchored to the
+  //    diff, grouped as ONE PR review — deduped against inline comments we already
+  //    posted for THIS lens so a re-run only surfaces NEW findings (Strix-style).
+  const added = addedLinesByPath(diff);
+  const alreadyPosted = await listOurInlineMarkers(deps.fetchImpl, apiBase, repo, prNumber, token, lens);
+  const inline: InlineReviewComment[] = [];
+  for (const f of findings) {
+    const anchor = resolveInlineAnchor(f, added);
+    if (!anchor) continue; // no valid diff anchor → summary-only
+    if (alreadyPosted.has(inlineFindingMarker(lens, f))) continue; // already surfaced on a prior run
+    inline.push({
+      path: anchor.path,
+      line: anchor.line,
+      side: 'RIGHT',
+      ...(anchor.startLine ? { start_line: anchor.startLine, start_side: 'RIGHT' as const } : {}),
+      body: formatInlineFinding(lens, f, { suggestable: anchor.suggestable }),
+    });
+  }
+  let reviewPosted = false;
+  let inlinePosted = 0;
+  if (inline.length > 0) {
+    reviewPosted = await postGroupedReview(deps.fetchImpl, apiBase, repo, prNumber, headSha, buildReviewIntro(lens, inline.length), inline, token);
+    if (reviewPosted) {
+      inlinePosted = inline.length;
+    } else {
+      // A single bad anchor 422s the whole grouped review — fall back to posting each
+      // inline comment on its own so one dud can't sink the rest.
+      for (const c of inline) if (await postSingleInlineComment(deps.fetchImpl, apiBase, repo, prNumber, headSha, c, token)) inlinePosted++;
+    }
+  }
+
+  // 4. Post/update ONE idempotent PINNED SUMMARY comment (keyed by the lens marker) with
+  //    the full tally — the single place to read this lens's status for the whole PR.
+  const body = formatReviewSummaryComment(lens, { findings, headSha });
+  const posted = await upsertReviewComment(deps.fetchImpl, apiBase, repo, prNumber, body, token, lens.summaryMarker);
+
+  // 4b. Approve the PR from this lens when it's clean AND the repo opts in (Strix
+  //     "Approve clean PRs"). Approvals only on a green lens; noise otherwise.
+  let approved = false;
+  if (findings.length === 0 && policy.approveClean) {
+    approved = await postGroupedReview(deps.fetchImpl, apiBase, repo, prNumber, headSha, buildReviewIntro(lens, 0), [], token, 'APPROVE');
+  }
+
+  // 5. Post a gating CHECK-RUN so the PR's Checks box reflects the review and branch
+  //    protection can REQUIRE it (Strix-style). Blocking findings ⇒ failure; findings
+  //    with none blocking ⇒ neutral; clean ⇒ success. When the repo's `blockOnFindings`
+  //    is off, the check is advisory (never 'failure'). No-op (false) without `checks: write`.
+  const blocking = findings.filter((f) => lens.isBlocking(f)).length;
+  const checkPosted = await postCheckRun(deps.fetchImpl, apiBase, repo, headSha, lens, findings, blocking, policy.blockOnFindings, token);
+
+  return { ok: true, findings: findings.length, blocking, posted, inlinePosted, reviewPosted, checkPosted, approved };
+}
+
+interface InlineReviewComment {
+  path: string;
+  line: number;
+  side: 'RIGHT';
+  start_line?: number;
+  start_side?: 'RIGHT';
+  body: string;
+}
+
+/** Inline review comments we've already posted FOR THIS LENS, by per-finding marker (dedup across runs). */
+async function listOurInlineMarkers(fetchImpl: typeof fetch, apiBase: string, repo: string, prNumber: number, token: string, lens: ReviewLens): Promise<Set<string>> {
+  const markers = new Set<string>();
+  const re = inlineMarkerRegex(lens);
+  try {
+    const r = await fetchImpl(`${apiBase}/repos/${repo}/pulls/${prNumber}/comments?per_page=100`, { headers: ghHeaders(token) });
+    if (!r.ok) return markers;
+    const arr = (await r.json()) as Array<{ body?: string }>;
+    for (const c of Array.isArray(arr) ? arr : []) {
+      const m = typeof c.body === 'string' ? re.exec(c.body) : null;
+      if (m) markers.add(m[0]);
+    }
+  } catch { /* best-effort dedup */ }
+  return markers;
+}
+
+/** POST one grouped PR review carrying every inline comment + a top-level body. */
+async function postGroupedReview(
+  fetchImpl: typeof fetch, apiBase: string, repo: string, prNumber: number, commitId: string, body: string, comments: InlineReviewComment[], token: string,
+  event: 'COMMENT' | 'APPROVE' = 'COMMENT',
+): Promise<boolean> {
+  try {
+    const r = await fetchImpl(`${apiBase}/repos/${repo}/pulls/${prNumber}/reviews`, {
+      method: 'POST',
+      headers: { ...ghHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...(commitId ? { commit_id: commitId } : {}), event, body, comments }),
+    });
+    return r.ok;
+  } catch { return false; }
+}
+
+/** POST one standalone inline review comment (fallback when the grouped review 422s). */
+async function postSingleInlineComment(
+  fetchImpl: typeof fetch, apiBase: string, repo: string, prNumber: number, commitId: string, c: InlineReviewComment, token: string,
+): Promise<boolean> {
+  try {
+    const r = await fetchImpl(`${apiBase}/repos/${repo}/pulls/${prNumber}/comments`, {
+      method: 'POST',
+      headers: { ...ghHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body: c.body, ...(commitId ? { commit_id: commitId } : {}), path: c.path, line: c.line, side: c.side, ...(c.start_line ? { start_line: c.start_line, start_side: 'RIGHT' } : {}) }),
+    });
+    return r.ok;
+  } catch { return false; }
+}
+
+/** Find our previous SUMMARY comment (by the lens marker) and PATCH it; else POST a new one. */
+async function upsertReviewComment(fetchImpl: typeof fetch, apiBase: string, repo: string, prNumber: number, body: string, token: string, marker: string): Promise<boolean> {
+  try {
+    const list = await fetchImpl(`${apiBase}/repos/${repo}/issues/${prNumber}/comments?per_page=100`, { headers: ghHeaders(token) });
+    if (list.ok) {
+      const arr = (await list.json()) as Array<{ id?: number; body?: string }>;
+      const mine = (Array.isArray(arr) ? arr : []).find((c) => typeof c.body === 'string' && c.body.includes(marker));
+      if (mine?.id) {
+        const patch = await fetchImpl(`${apiBase}/repos/${repo}/issues/comments/${mine.id}`, {
+          method: 'PATCH', headers: { ...ghHeaders(token), 'Content-Type': 'application/json' }, body: JSON.stringify({ body }),
+        });
+        return patch.ok;
+      }
+    }
+    const create = await fetchImpl(`${apiBase}/repos/${repo}/issues/${prNumber}/comments`, {
+      method: 'POST', headers: { ...ghHeaders(token), 'Content-Type': 'application/json' }, body: JSON.stringify({ body }),
+    });
+    return create.ok;
+  } catch { return false; }
+}
+
+/**
+ * POST a gating check-run for this lens so the PR's Checks box reflects the review and
+ * branch protection can require it. Conclusion: blocking ⇒ failure, findings-but-none-
+ * blocking ⇒ neutral, clean ⇒ success. Returns false (graceful) until the App has
+ * `checks: write`.
+ */
+async function postCheckRun(
+  fetchImpl: typeof fetch, apiBase: string, repo: string, headSha: string, lens: ReviewLens, findings: ParsedReviewFinding[], blocking: number, blockOnFindings: boolean, token: string,
+): Promise<boolean> {
+  if (!headSha) return false;
+  // Advisory lenses (code review) never fail — findings are suggestions. Security gates,
+  // unless the repo opts out of blocking (then a blocking finding is neutral/advisory).
+  const gates = blockOnFindings && !lens.advisory;
+  const conclusion = (blocking > 0 && gates) ? 'failure' : findings.length > 0 ? 'neutral' : 'success';
+  const title = lens.advisory
+    ? (findings.length > 0 ? `${findings.length} suggestion(s)` : 'No suggestions')
+    : blocking > 0 ? `${blocking} blocking · ${findings.length} finding(s)${blockOnFindings ? '' : ' (advisory)'}`
+      : findings.length > 0 ? `${findings.length} finding(s), none blocking`
+        : 'No issues found';
+  const bySev = findings.reduce<Record<string, number>>((a, f) => { a[f.severity] = (a[f.severity] ?? 0) + 1; return a; }, {});
+  const tally = Object.entries(bySev).map(([s, n]) => `${n} ${s}`).join(' · ') || '0';
+  const summary =
+    findings.length === 0
+      ? lens.noFindingsLine
+      : `**${blocking} blocking** · ${tally}\n\nSee the pinned **${lens.name}** summary comment and the inline suggestions on this PR.`;
+  try {
+    const r = await fetchImpl(`${apiBase}/repos/${repo}/check-runs`, {
+      method: 'POST',
+      headers: { ...ghHeaders(token), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: lens.name, head_sha: headSha, status: 'completed', conclusion, output: { title, summary } }),
+    });
+    return r.ok;
+  } catch { return false; }
+}
