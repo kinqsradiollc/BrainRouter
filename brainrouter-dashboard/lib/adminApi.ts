@@ -212,6 +212,12 @@ export const adminApi = {
     authFetch<{ configured: boolean; clientId: string; hasSecret: boolean; redirectBase: string; secretStorageReady: boolean }>("/api/admin/connectors/github/app"),
   setGithubOAuthApp: (body: { clientId: string; clientSecret?: string; redirectBase?: string }) =>
     authFetch<{ ok: boolean; configured: boolean; hasSecret: boolean }>("/api/admin/connectors/github/app", { method: "POST", body }),
+  // ADR-016 — per-source connector OAuth apps (GitLab / Slack / Drive / Gmail / Notion /
+  // Linear), configured in Integrations just like the GitHub OAuth App. No secrets returned.
+  getConnectorOAuthApps: (orgId?: string) =>
+    authFetch<{ apps: Array<{ source: string; configured: boolean; hasSecret: boolean; clientId: string; scopes: string; defaultScopes: string; usesPkce: boolean }> }>("/api/connectors/oauth/apps", { orgId }),
+  setConnectorOAuthApp: (source: string, body: { clientId: string; clientSecret?: string; scopes?: string }, orgId?: string) =>
+    authFetch<{ app: unknown }>(`/api/connectors/${source}/oauth/app`, { method: "POST", body, orgId }),
   listOrgs: () => authFetch<{ orgs: OrgSummary[] }>("/api/orgs"),
   createOrg: (name: string, plan: OrgPlan = "team") =>
     authFetch<{ org: OrgSummary }>("/api/orgs", { method: "POST", body: { name, plan } }),
