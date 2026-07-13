@@ -306,6 +306,13 @@ if (USE_HTTP) {
     const orgHeader = req.headers['x-brainrouter-org'];
     const requestedOrg = (Array.isArray(orgHeader) ? orgHeader[0] : orgHeader)?.trim() || undefined;
     const orgCtx = await resolveOrgContext(memoryEngine.tenancy, effectiveUserId, requestedOrg).catch(() => null);
+    // If the caller EXPLICITLY requested an org it can't access, fail loud instead of
+    // silently falling back to no-org (defense-in-depth over the recall layer, which
+    // already refuses any client-supplied filters.orgId — org is server-pinned). CWE-284.
+    if (requestedOrg && !orgCtx?.orgId) {
+      res.status(403).json({ error: 'Not a member of the requested organization.' });
+      return;
+    }
     const defaultOrgId = orgCtx?.orgId;
 
     if (req.method === 'POST' && !sessionId) {
