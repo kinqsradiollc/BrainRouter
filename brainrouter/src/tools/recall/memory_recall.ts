@@ -73,9 +73,16 @@ export async function handleMemoryRecall(args: any, options?: { defaultUserId?: 
       sessionKey: params.sessionKey,
       query: params.query,
       activeSkill: params.activeSkill,
-      // C1 (ADR-016) — inject the server-pinned org so org-shared memory is
-      // merged in (pipeline gates on filters.orgId; callerUserId is auto-set).
-      filters: options?.defaultOrgId ? { ...params.filters, orgId: options.defaultOrgId } : params.filters,
+      // C1 (ADR-016) — the org is ALWAYS server-pinned from validated membership.
+      // Explicitly drop any client-supplied `orgId` before injecting the resolved
+      // one, so a client can never read another org's shared memory by passing
+      // `filters.orgId` (defense-in-depth: the schema already omits it, but this
+      // keeps the access-control boundary correct even if the schema ever changes).
+      // No resolved org ⇒ no org filter at all (non-org data only).
+      filters: (() => {
+        const { orgId: _clientOrg, ...safe } = (params.filters ?? {}) as Record<string, unknown>;
+        return options?.defaultOrgId ? { ...safe, orgId: options.defaultOrgId } : safe;
+      })(),
     });
 
     return {
