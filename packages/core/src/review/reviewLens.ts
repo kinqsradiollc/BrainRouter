@@ -50,13 +50,15 @@ const SEV_EMOJI: Record<string, string> = { critical: '🔴', high: '🟠', medi
 const CWE_RE = /\[(CWE-\d+)\]/i;
 
 /**
- * The Strix-style action row on every summary: re-run on demand (a `/review` or
- * `@brainrouter review` PR comment re-triggers both lenses) + where to manage the bot
- * (the BrainRouter desktop/CLI app, which owns the review config — this bot is driven
- * by our system, not a third-party dashboard).
+ * The Strix-style action row on every summary — LENS-AWARE: re-run THIS lens on
+ * demand (security → `/security-review`, code → `/code-review`; legacy `/review`
+ * runs both) + where to manage the bot (BrainRouter's own app/dashboard, not a
+ * third party). The command names match the webhook parser (ADR-017 review console).
  */
-export const REVIEW_ACTION_FOOTER =
-  '🔁 **Re-run:** comment `/review` (or `@brainrouter review`) · ⚙️ **Manage:** BrainRouter app → Reviews';
+export function reviewActionFooter(lens: ReviewLens): string {
+  const cmd = lens.id === 'security' ? '/security-review' : '/code-review';
+  return `🔁 **Re-run:** comment \`${cmd}\` (or \`/review\` for both) · ⚙️ **Manage:** BrainRouter app → Reviews or the dashboard`;
+}
 
 /** Default blocking rule shared by lenses: a genuine (not pre-existing) critical/high issue. */
 export function isBlockingBySeverity(f: ParsedReviewFinding): boolean {
@@ -147,7 +149,7 @@ export function formatReviewSummaryComment(lens: ReviewLens, input: ReviewSummar
   const out: string[] = [lens.summaryMarker, `## ${lens.emoji} ${lens.name}`, ''];
 
   if (findings.length === 0) {
-    out.push(lens.noFindingsLine, '', REVIEW_ACTION_FOOTER, '', `<sub>Reviewed \`${head}\` — read-only ${lens.sweepLabel}.</sub>`);
+    out.push(lens.noFindingsLine, '', reviewActionFooter(lens), '', `<sub>Reviewed \`${head}\` — read-only ${lens.sweepLabel}.</sub>`);
     return out.join('\n');
   }
 
@@ -165,7 +167,7 @@ export function formatReviewSummaryComment(lens: ReviewLens, input: ReviewSummar
     out.push('');
   }
   if (findings.length > cap) out.push(`…plus ${findings.length - cap} more finding(s) not shown.`, '');
-  out.push(REVIEW_ACTION_FOOTER, '');
+  out.push(reviewActionFooter(lens), '');
   out.push(`<sub>Reviewed \`${head}\` — read-only ${lens.sweepLabel}; verify before acting.</sub>`);
   return out.join('\n');
 }
