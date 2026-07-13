@@ -104,9 +104,12 @@ import {
 const STDIO_DEFAULT_USER_ID = process.env.BRAINROUTER_USER_ID ?? "default";
 
 export // ─── Server factory ───────────────────────────────────────────────────────────
-function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; isAdmin?: boolean }): Server {
+function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; isAdmin?: boolean; defaultOrgId?: string }): Server {
   const defaultUserId = options?.defaultUserId ?? STDIO_DEFAULT_USER_ID;
   const isAdmin = options?.isAdmin ?? false;
+  // C1 (ADR-016) — the caller's active org, pinned server-side so recall can
+  // surface org-shared memory. Never client-supplied (not in any tool schema).
+  const defaultOrgId = options?.defaultOrgId;
   // Connectors are workspace-scoped file state (connectors.json under the
   // BrainRouter home). Use the resolved local workspace root; fall back to cwd.
   const connectorWorkspaceRoot = registry.getLocalRoot() ?? process.cwd();
@@ -340,7 +343,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           }
           return await updateSkill(registry, updateSkillSchema.parse(request.params.arguments));
         case 'memory_capture_turn': return await handleMemoryCaptureTurn(request.params.arguments, { defaultUserId });
-        case 'memory_recall': return await handleMemoryRecall(request.params.arguments, { defaultUserId });
+        case 'memory_recall': return await handleMemoryRecall(request.params.arguments, { defaultUserId, defaultOrgId });
         case 'memory_persona': return await handleMemoryPersona(request.params.arguments, { defaultUserId });
         case 'memory_persona_refresh': return await handleMemoryPersonaRefresh(request.params.arguments, { defaultUserId });
         case 'session_register': return await handleSessionRegister(request.params.arguments, { defaultUserId });

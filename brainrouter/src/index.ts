@@ -42,6 +42,7 @@ import { collectSystemStatus } from './observability/status.js';
 import { modelGateway } from './services/modelGateway/modelGateway.js';
 
 import { memoryEngine, closeMemoryEngine } from './memory/engine.js';
+import { resolveOrgContext } from './tenancy/context.js';
 import path from 'node:path';
 import { decideMcpAcceptPromotion } from './api/mcpAcceptHeader.js';
 import { authRouter, usersRouter, sessionsRouter } from './api/routes/identity/index.js';
@@ -301,6 +302,20 @@ if (USE_HTTP) {
       return;
     }
     const effectiveUserId = user.userId;
+    // C1 (ADR-016) — resolve the caller's active org (X-BrainRouter-Org header,
+    // else their default org) so the MCP recall path can surface org-shared memory.
+    // A repeated header arrives as string[] — coerce safely so `.trim()` can't throw.
+    const orgHeader = req.headers['x-brainrouter-org'];
+    const requestedOrg = (Array.isArray(orgHeader) ? orgHeader[0] : orgHeader)?.trim() || undefined;
+    const orgCtx = await resolveOrgContext(memoryEngine.tenancy, effectiveUserId, requestedOrg).catch(() => null);
+    // If the caller EXPLICITLY requested an org it can't access, fail loud instead of
+    // silently falling back to no-org (defense-in-depth over the recall layer, which
+    // already refuses any client-supplied filters.orgId — org is server-pinned). CWE-284.
+    if (requestedOrg && !orgCtx?.orgId) {
+      res.status(403).json({ error: 'Not a member of the requested organization.' });
+      return;
+    }
+    const defaultOrgId = orgCtx?.orgId;
 
     if (req.method === 'POST' && !sessionId) {
       // New session — initialise
@@ -311,7 +326,7 @@ if (USE_HTTP) {
         },
       });
 
-      const mcpServer = buildMcpServer(registry, { defaultUserId: effectiveUserId, isAdmin: user.isAdmin });
+      const mcpServer = buildMcpServer(registry, { defaultUserId: effectiveUserId, isAdmin: user.isAdmin, defaultOrgId });
 
       transport.onclose = () => {
         const id = [...sessions.entries()].find(([, v]) => v.transport === transport)?.[0];

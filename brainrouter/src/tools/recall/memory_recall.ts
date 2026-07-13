@@ -43,7 +43,7 @@ export const memoryRecallToolSchema = {
   }
 } as const;
 
-export async function handleMemoryRecall(args: any, options?: { defaultUserId?: string }) {
+export async function handleMemoryRecall(args: any, options?: { defaultUserId?: string; defaultOrgId?: string }) {
   const params = z.object({
     userId: z.string().optional(),
     sessionKey: z.string(),
@@ -73,7 +73,16 @@ export async function handleMemoryRecall(args: any, options?: { defaultUserId?: 
       sessionKey: params.sessionKey,
       query: params.query,
       activeSkill: params.activeSkill,
-      filters: params.filters,
+      // C1 (ADR-016) — the org is ALWAYS server-pinned from validated membership.
+      // Explicitly drop any client-supplied `orgId` before injecting the resolved
+      // one, so a client can never read another org's shared memory by passing
+      // `filters.orgId` (defense-in-depth: the schema already omits it, but this
+      // keeps the access-control boundary correct even if the schema ever changes).
+      // No resolved org ⇒ no org filter at all (non-org data only).
+      filters: (() => {
+        const { orgId: _clientOrg, ...safe } = (params.filters ?? {}) as Record<string, unknown>;
+        return options?.defaultOrgId ? { ...safe, orgId: options.defaultOrgId } : safe;
+      })(),
     });
 
     return {
