@@ -480,6 +480,11 @@ export async function executeLocalToolLegacy(this: Agent, name: string, args: Re
         return JSON.stringify({ action: action.action, ...result }, null, 2);
       }
       case 'fetch_url': {
+        // A pentest turn must never reach the network from the HOST — that path
+        // bypasses the scope-pinned Docker/proxy sandbox entirely (SSRF to
+        // internal services / cloud metadata). Force target interaction through
+        // the sandboxed run_command or the scoped proxy tools.
+        if (this.pentestMode) return 'fetch_url is disabled for pentests; reach the target via run_command inside the sandbox, or view_request/repeat_request through the scoped proxy.';
         const url = args.url;
         // POLICY-3 — per-host egress allowlist (empty = unrestricted).
         const egress = egressDecision(url, getCliKnobs().egressAllowlist);
@@ -494,6 +499,8 @@ export async function executeLocalToolLegacy(this: Agent, name: string, args: Re
         return JSON.stringify(result, null, 2);
       }
       case 'web_search': {
+        // Host-side egress; disabled in a pentest for the same reason as fetch_url.
+        if (this.pentestMode) return 'web_search is disabled for pentests; stay inside the authorized target using the sandboxed tools.';
         const query = String(args.query ?? '').trim();
         if (!query) throw new Error('web_search requires a non-empty query.');
         const knobs = getCliKnobs();
@@ -1097,24 +1104,31 @@ export async function executeLocalToolLegacy(this: Agent, name: string, args: Re
         return JSON.stringify({ completed: true, findings: run.findings.length, sarif: '.brainrouter/findings.sarif' });
       }
       case 'list_requests':
-        return JSON.stringify(await proxyControl('requests', { method: 'GET' }, this.pentestProxyApiUrl ? { apiUrl: this.pentestProxyApiUrl } : undefined));
+        return JSON.stringify(await proxyControl('requests', { method: 'GET' }, this.pentestProxyControl()));
       case 'view_request': {
         const id = String(args.id ?? '').trim();
         if (!id) throw new Error('view_request requires an id.');
-        return JSON.stringify(await proxyControl(`requests/${encodeURIComponent(id)}`, { method: 'GET' }, this.pentestProxyApiUrl ? { apiUrl: this.pentestProxyApiUrl } : undefined));
+        return JSON.stringify(await proxyControl(`requests/${encodeURIComponent(id)}`, { method: 'GET' }, this.pentestProxyControl()));
       }
       case 'repeat_request': {
         const id = String(args.id ?? '').trim();
         if (!id) throw new Error('repeat_request requires an id.');
-        return JSON.stringify(await proxyControl(`requests/${encodeURIComponent(id)}/repeat`, { method: 'POST', body: JSON.stringify({ mutation: args.mutation ?? null }) }, this.pentestProxyApiUrl ? { apiUrl: this.pentestProxyApiUrl } : undefined));
+        // A replay may tweak headers/body/query but must NOT retarget the request
+        // to another host — that pivots outside the authorized scope. Reject any
+        // absolute url/host/authority in the mutation.
+        const mutation = (args.mutation && typeof args.mutation === 'object' && !Array.isArray(args.mutation)) ? args.mutation as Record<string, unknown> : null;
+        if (mutation && (['url', 'host', 'authority', 'origin'] as const).some((k) => k in mutation)) {
+          throw new Error('repeat_request mutation must not change the target host/url; only headers, body, or query may be altered.');
+        }
+        return JSON.stringify(await proxyControl(`requests/${encodeURIComponent(id)}/repeat`, { method: 'POST', body: JSON.stringify({ mutation }) }, this.pentestProxyControl()));
       }
       case 'list_sitemap':
-        return JSON.stringify(await proxyControl('sitemap', { method: 'GET' }, this.pentestProxyApiUrl ? { apiUrl: this.pentestProxyApiUrl } : undefined));
-      case 'scope_rules': {
-        const action = args.action === 'set' ? 'set' : 'get';
-        if (action === 'set' && (!Array.isArray(args.rules) || !args.rules.every((rule: unknown) => typeof rule === 'string'))) throw new Error('scope_rules set requires a string rules array.');
-        return JSON.stringify(await proxyControl('scope', action === 'set' ? { method: 'PUT', body: JSON.stringify({ rules: args.rules }) } : { method: 'GET' }, this.pentestProxyApiUrl ? { apiUrl: this.pentestProxyApiUrl } : undefined));
-      }
+        return JSON.stringify(await proxyControl('sitemap', { method: 'GET' }, this.pentestProxyControl()));
+      case 'scope_rules':
+        // Read-only from the agent. The authorized scope is pinned to the target
+        // origin at sandbox creation (BRAINROUTER_PENTEST_SCOPE); letting the
+        // model widen it would enable a pivot/SSRF to arbitrary hosts.
+        return JSON.stringify(await proxyControl('scope', { method: 'GET' }, this.pentestProxyControl()));
       case 'artifact_write': {
         // §AV-4 — in-band artifact authoring. With `id` it grows an EXISTING
         // artifact (a new version, editedBy 'agent') — this is how a later turn

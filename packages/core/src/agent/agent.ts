@@ -449,6 +449,9 @@ export interface AgentOptions {
   pentestSandbox?: { image: string; network: string; proxyUrl: string };
   /** Job-local proxy control plane for list/view/repeat/sitemap tools. */
   pentestProxyApiUrl?: string;
+  /** Per-session bearer token the proxy control plane requires (defense against
+   * another host-local process reaching the loopback control API). */
+  pentestProxyToken?: string;
   /** Optional per-agent spend ceiling. Unattended jobs use this instead of the
    * interactive CLI's process-wide budget knobs. */
   taskBudgetCaps?: { maxPerTaskUSD: number; maxPerTaskTokens: number };
@@ -776,7 +779,13 @@ export class Agent {
   public readonly pentestMode: boolean;
   public readonly pentestSandbox?: { image: string; network: string; proxyUrl: string };
   public readonly pentestProxyApiUrl?: string;
+  public readonly pentestProxyToken?: string;
   public readonly taskBudgetCaps?: { maxPerTaskUSD: number; maxPerTaskTokens: number };
+  /** Proxy control-plane config for the pentest proxy tools (undefined outside a
+   * pentest, which makes those tools fall back to the env-configured proxy). */
+  public pentestProxyControl(): { apiUrl: string; token?: string } | undefined {
+    return this.pentestProxyApiUrl ? { apiUrl: this.pentestProxyApiUrl, token: this.pentestProxyToken } : undefined;
+  }
   public enableRecall: boolean;
   public systemPromptOverride?: string;
   /**
@@ -858,6 +867,7 @@ export class Agent {
     this.pentestMode = options.pentestMode ?? false;
     this.pentestSandbox = options.pentestSandbox;
     this.pentestProxyApiUrl = options.pentestProxyApiUrl;
+    this.pentestProxyToken = options.pentestProxyToken;
     this.taskBudgetCaps = options.taskBudgetCaps;
     // Children default to no recall (their seed context already covers the parent's recall).
     // Parents (non-silent) always recall.
