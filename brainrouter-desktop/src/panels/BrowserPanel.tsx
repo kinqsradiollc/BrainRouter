@@ -26,7 +26,7 @@ import {
   highlightEl,
   clearHighlight,
 } from '../lib/uitest/webviewBridge.js';
-import type { UiMap } from '@kinqs/brainrouter-ui-test/dist/types.js';
+import type { UiMap } from '@kinqs/brainrouter-ui-test';
 import { rowSource, symbolKindIcon } from '../lib/uitest/rowSource.js';
 
 type Drawer = 'elements' | 'console' | 'network' | 'a11y' | 'shot' | 'flows' | null;

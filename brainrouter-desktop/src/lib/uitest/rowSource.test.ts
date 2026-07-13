@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { rowSource, matchScreen, routeOfUrl, normRoute, slug, symbolKindIcon } from './rowSource.js';
-import type { UiMap } from '@kinqs/brainrouter-ui-test/dist/types.js';
+import type { UiMap } from '@kinqs/brainrouter-ui-test';
 
 const MAP: UiMap = {
   version: 1,

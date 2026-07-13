@@ -25,8 +25,7 @@ import { fmt, download } from '../../format.js';
 import { rid } from '../../rid.js';
 import { type AgentEventsCtx, type ToolCatalog, getStableRowId, isWorkspaceScopedReviewQuery } from './types.js';
 // UI-TEST fusion — the screen map + story journeys the uitest:* results carry.
-import type { UiMap } from '@kinqs/brainrouter-ui-test/dist/types.js';
-import type { Story } from '@kinqs/brainrouter-ui-test/dist/flow/storySchema.js';
+import type { UiMap, Story } from '@kinqs/brainrouter-ui-test';
 
 export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, result: unknown, error?: string, resultWorkspaceRoot?: string) => void {
   const {

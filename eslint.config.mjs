@@ -59,6 +59,10 @@ export default [
             group: ['@kinqs/brainrouter-core/dist/**'],
             message: 'Import from a curated entrypoint (e.g. @kinqs/brainrouter-core/agent), not compiled dist/* internals. The core public API is the per-subsystem entrypoints (Refactor P1).',
           },
+          {
+            group: ['@kinqs/brainrouter-ui-test/dist/**'],
+            message: 'Import from the @kinqs/brainrouter-ui-test barrel, not compiled dist/* internals (brainrouter-rules/01 §3). The barrel re-exports the full public surface and is browser-safe (no node built-ins).',
+          },
         ],
       }],
     },
@@ -72,7 +76,17 @@ export default [
     // deep-imported). Exempt it from the core deep-import ban. The Electron host
     // (electron/**) runs in Node and DOES use the curated entrypoints.
     files: ['brainrouter-desktop/src/**/*.ts', 'brainrouter-desktop/src/**/*.tsx'],
-    rules: { 'no-restricted-imports': 'off' },
+    // The renderer keeps the CORE deep-import exception (core's full surface pulls
+    // node:fs/crypto that vite can't externalize). But @kinqs/brainrouter-ui-test's
+    // barrel is browser-safe, so its dist/* stays banned here too — use the barrel.
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: [{
+          group: ['@kinqs/brainrouter-ui-test/dist/**'],
+          message: 'Import from the @kinqs/brainrouter-ui-test barrel, not compiled dist/* internals (brainrouter-rules/01 §3).',
+        }],
+      }],
+    },
   },
   // Keep ESLint out of Prettier's lane (must be last).
   prettier,

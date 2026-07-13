@@ -8,8 +8,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 // UI-TEST fusion — the generated screen map + user-journey stories the Atlas
 // Screens mode + Browser panel render, and that runStory replays.
-import type { UiMap } from '@kinqs/brainrouter-ui-test/dist/types.js';
-import type { Story } from '@kinqs/brainrouter-ui-test/dist/flow/storySchema.js';
+import type { UiMap, Story } from '@kinqs/brainrouter-ui-test';
 import { PANEL_DEFS, type PanelId, type SearchHit } from './panels/index.js';
 import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph, TrackProject, WorkItem, Sprint, Module, SavedView, AutomationRule, ProjectMember } from '@kinqs/brainrouter-types';
 import type { GitTrackContext, SyncConfig, SyncResult, TrackPrStatus } from './track/TrackView.js';

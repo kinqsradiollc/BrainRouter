@@ -23,8 +23,7 @@ import type { AtlasChangeAssessment } from '../../lib/atlas/atlasView.js';
 import { buildTrackOps } from '../track/trackOps.js';
 // UI-TEST fusion — the Atlas Screens map + user-journey stories the Atlas panel
 // renders, and the Browser panel that replays them live.
-import type { UiMap } from '@kinqs/brainrouter-ui-test/dist/types.js';
-import type { Story } from '@kinqs/brainrouter-ui-test/dist/flow/storySchema.js';
+import type { UiMap, Story } from '@kinqs/brainrouter-ui-test';
 
 // Monaco is ~5MB — lazy-load the editor panel so it only loads when first opened.
 const EditorPanel = lazy(() => import('../../panels/editing/EditorPanel.js').then((m) => ({ default: m.EditorPanel })));
