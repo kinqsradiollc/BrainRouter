@@ -26,6 +26,7 @@ import { enqueueAgentJob } from "./jobs.js";
 import { runConnectorSync } from "../../connectors/syncExecutor.js";
 import { runPrSecurityReview, runPrCodeReview, runPrPentest, type PrReviewInput, type PrReviewDeps } from "../../integrations/prSecurityReview.js";
 import { runDomainPentest } from "../../integrations/domainPentest.js";
+import { loadVulnerabilityIntelligence } from "@kinqs/brainrouter-core/review";
 
 /**
  * 0.4.3 (MEM-10) — engine operations the depth-agent executors call. Declared
@@ -92,6 +93,7 @@ async function prReviewDeps(ctx: JobExecContext, lens: "security" | "code" | "pe
     fetchImpl: fetch,
     nowSec: () => Math.floor(Date.now() / 1000),
     getIntegration: (installationId) => engine.findGithubAppByInstallation(installationId),
+    getVulnerabilityIntelligence: () => loadVulnerabilityIntelligence(),
     maxDiffChars: assignment?.maxDiffChars,
     timeoutMs: assignment?.timeoutMs,
     onProgress: (event) => {

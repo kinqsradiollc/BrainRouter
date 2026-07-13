@@ -35,8 +35,8 @@ export default function BlackboardPage() {
     <AuthGuard>
       <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} style={{ display: "flex", flexDirection: "column", gap: "28px" }}>
         <PageHeader
-          title="Blackboard"
-          description="Extracted memory candidates staged for review — reconciled (dedup/score), then committed to cognitive records or rejected."
+          title="Knowledge review queue"
+          description="Check new knowledge candidates before they become part of the durable record. Keep useful items and reject the rest."
         />
         {error && <p style={{ color: "#E5675F", fontSize: "13px" }}>Could not load blackboard: {error}</p>}
         {!items && !error && <p style={{ color: "var(--color-stone-text)", fontSize: "13px" }}>Loading…</p>}

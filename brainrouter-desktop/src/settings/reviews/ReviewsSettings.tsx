@@ -5,6 +5,7 @@
 // dashboard; this is the "what did the bot just flag, and jump to it" surface.
 import { useCallback, useEffect, useState } from 'react';
 import { bridgeQuery } from '../../lib/bridgeQuery.js';
+import { githubPullRequestUrl, normalizeReviewListResponse } from './reviewPresentation.js';
 
 interface ReviewRow {
   id: string;
@@ -38,28 +39,38 @@ export function ReviewsSettings(): React.ReactElement {
   const [state, setState] = useState<LoadState>('loading');
   const [error, setError] = useState('');
   const [running, setRunning] = useState('');
+  const [canRun, setCanRun] = useState(false);
 
   const load = useCallback(async () => {
     setState('loading');
+    setError('');
     try {
-      const res = await bridgeQuery<{ signedIn: boolean; reviews: ReviewRow[]; error?: string }>('reviews');
-      if (!res.signedIn) { setState('signed-out'); return; }
-      setReviews(Array.isArray(res.reviews) ? res.reviews : []);
+      const res = normalizeReviewListResponse<ReviewRow>(await bridgeQuery('reviews'));
+      setCanRun(res.canRun);
+      if (!res.signedIn) { setReviews([]); setState('signed-out'); return; }
+      setReviews(res.reviews);
       if (res.error) { setError(res.error); setState('error'); } else setState('ready');
-    } catch (e) { setError(e instanceof Error ? e.message : 'failed to load'); setState('error'); }
+    } catch (e) { setCanRun(false); setError(e instanceof Error ? e.message : 'failed to load'); setState('error'); }
   }, []);
   useEffect(() => { void load(); }, [load]);
 
-  const openPr = (r: ReviewRow): void => {
+  const openPr = async (r: ReviewRow): Promise<void> => {
     if (!r.repo || !r.prNumber) return;
-    void bridgeQuery('action:open-external', { what: `https://github.com/${r.repo}/pull/${r.prNumber}` });
+    const url = githubPullRequestUrl(r.repo, r.prNumber);
+    if (!url) return;
+    try {
+      const result = await bridgeQuery<{ ok?: boolean; error?: string }>('action:open-external', { url });
+      if (result.ok === false) setError(result.error ?? 'Could not open the pull request.');
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : 'Could not open the pull request.');
+    }
   };
 
   // Re-run THIS row's lens straight from the desktop. The backend re-gates on the
   // account's reviews:run capability — the button is only a trigger.
   const rerun = async (r: ReviewRow, ev: React.MouseEvent): Promise<void> => {
     ev.stopPropagation(); // don't also open the PR
-    if (!r.repo || !r.prNumber) return;
+    if (!canRun || !r.repo || !r.prNumber) return;
     setRunning(r.id); setError('');
     try {
       const res = await bridgeQuery<{ ok: boolean; error?: string }>('reviews-run', { repo: r.repo, prNumber: r.prNumber, lens: r.lens });
@@ -94,16 +105,18 @@ export function ReviewsSettings(): React.ReactElement {
           {error === 'Owner/admin only' ? 'Only org owners/admins can view reviews.' : `Couldn't load reviews: ${error}`}
         </div>
       )}
+      {state === 'ready' && error && (
+        <div className="set-desc" role="alert" style={{ color: 'var(--danger, #e66)', marginBottom: 8 }}>{error}</div>
+      )}
       {state === 'ready' && reviews.length === 0 && (
         <div className="set-desc">No reviews yet — open or push a PR on an auto-reviewed repo, and it'll appear here.</div>
       )}
       {state === 'ready' && reviews.map((r) => {
         const clickable = !!(r.repo && r.prNumber);
         const badgeColor = r.status !== 'done' ? 'var(--text-muted, #999)' : (r.blocking && r.lens === 'security') ? 'var(--danger, #e66)' : 'var(--ok, #6c9)';
-        return (
-          <div key={r.id} onClick={() => openPr(r)} title={clickable ? 'Open PR on GitHub' : undefined}
-            style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 2px', borderBottom: '1px solid var(--border-dim, rgba(255,255,255,0.06))', cursor: clickable ? 'pointer' : 'default' }}>
-            <span style={{ fontSize: 15 }}>{r.lens === 'security' ? '🛡️' : '🔎'}</span>
+        const summary = (
+          <>
+            <span aria-hidden style={{ fontSize: 15 }}>{r.lens === 'security' ? '🛡️' : '🔎'}</span>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {r.repo ?? '—'}{r.prNumber ? ` #${r.prNumber}` : ''}
@@ -112,8 +125,21 @@ export function ReviewsSettings(): React.ReactElement {
                 {detail(r)} · {relTime(r.updatedAt)}
               </div>
             </div>
-            {clickable && (
-              <button className="btn btn-ghost" onClick={(e) => void rerun(r, e)} disabled={running === r.id}
+          </>
+        );
+        return (
+          <div key={r.id}
+            style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 2px', borderBottom: '1px solid var(--border-dim, rgba(255,255,255,0.06))' }}>
+            {clickable ? (
+              <button type="button" onClick={() => void openPr(r)} title="Open PR on GitHub" aria-label={`Open ${r.repo} pull request ${r.prNumber} on GitHub`}
+                style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: 10, padding: 0, textAlign: 'left', color: 'inherit', background: 'transparent', border: 0, cursor: 'pointer' }}>
+                {summary}
+              </button>
+            ) : (
+              <div style={{ minWidth: 0, flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}>{summary}</div>
+            )}
+            {clickable && canRun && (
+              <button type="button" className="btn btn-ghost" onClick={(e) => void rerun(r, e)} disabled={running === r.id}
                 title={`Re-run the ${r.lens === 'security' ? 'security' : 'code'} review on ${r.repo} #${r.prNumber}`}
                 style={{ fontSize: 11, padding: '2px 8px', whiteSpace: 'nowrap' }}>
                 {running === r.id ? '…' : 'Re-run'}

@@ -3,7 +3,7 @@
  * toggle, and the portal-free ChoiceControl / ComboInput pickers. Extracted from
  * settings.tsx byte-for-byte so every section renders identical controls.
  */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Icon } from '../../icons.js';
 import type { ChoiceOption, WireFormatOverride } from './types.js';
 
@@ -160,21 +160,42 @@ export function ComboInput({ value, options, onChange, placeholder, disabled, st
 /** A titled settings CARD — the grouping primitive for the Settings overhaul.
  *  Wrap a related run of <Row>/controls in one to turn the flat divided list into
  *  scannable blocks. `collapsible` folds the body under the title (default open). */
-export function SetGroup({ title, children, collapsible, defaultOpen = true, right }: {
+export function SetGroup({ title, children, collapsible, defaultOpen = true, forceOpen = false, right }: {
   title: React.ReactNode;
   children: React.ReactNode;
   collapsible?: boolean;
   defaultOpen?: boolean;
+  forceOpen?: boolean;
   right?: React.ReactNode;
 }): React.ReactElement {
   const [open, setOpen] = useState(defaultOpen);
+  useEffect(() => { if (forceOpen) setOpen(true); }, [forceOpen]);
   const showBody = !collapsible || open;
+  const toggle = (): void => setOpen((value) => !value);
+  const groupLabel = typeof title === 'string' ? title : 'settings';
   return (
-    <div className={`set-group${collapsible ? ' collapsible' : ''}${collapsible && open ? ' open' : ''}`}>
-      <div className="set-h2" onClick={collapsible ? () => setOpen((v) => !v) : undefined}>
+    <div
+      className={`set-group${collapsible ? ' collapsible' : ''}${collapsible && open ? ' open' : ''}`}
+      data-collapsible={collapsible ? 'true' : undefined}
+      data-expanded={collapsible ? String(open) : undefined}
+    >
+      <div
+        className={`set-h2${collapsible ? ' set-group-trigger' : ''}`}
+        onClick={collapsible ? toggle : undefined}
+      >
         <span style={{ display: 'flex', alignItems: 'center', gap: 7, flex: 1, minWidth: 0 }}>{title}</span>
-        {right ?? null}
-        {collapsible ? <Icon name="chev-down" size={13} className="chev" /> : null}
+        {right ? <span className="set-group-actions" onClick={(event) => event.stopPropagation()}>{right}</span> : null}
+        {collapsible ? (
+          <button
+            type="button"
+            className="icon-btn set-group-toggle"
+            aria-label={`${open ? 'Collapse' : 'Expand'} ${groupLabel}`}
+            aria-expanded={open}
+            onClick={(event) => { event.stopPropagation(); toggle(); }}
+          >
+            <Icon name="chev-down" size={13} className="chev" />
+          </button>
+        ) : null}
       </div>
       {showBody ? children : null}
     </div>

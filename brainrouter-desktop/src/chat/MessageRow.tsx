@@ -97,13 +97,13 @@ export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onOpenFile
         <div className="row">
           <details className="briefing-block">
             <summary>
-              <span className="briefing-title">Memory briefing</span>
-              <span className="briefing-count">{n} {n === 1 ? 'memory' : 'memories'}</span>
+              <span className="briefing-title">Knowledge briefing</span>
+              <span className="briefing-count">{n} saved {n === 1 ? 'item' : 'items'}</span>
               {r.sources.length ? <span className="briefing-sources" title={r.sources.join(', ')}>{r.sources.map((s) => s.replace(/^memory_/, '')).join(' · ')}</span> : null}
             </summary>
             <div className="briefing-body">
               {n === 0 ? (
-                <div className="briefing-empty">No memories were recalled for this turn.</div>
+                <div className="briefing-empty">No saved knowledge was recalled for this turn.</div>
               ) : recs.map((rec, i) => (
                 <div className="briefing-rec" key={rec.id || i}>
                   <div className="briefing-rec-head">

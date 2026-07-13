@@ -49,8 +49,8 @@ export default function ContradictionsPage() {
       >
         {/* Editorial Title */}
         <PageHeader 
-          title="Contradictions" 
-          description="Unresolved semantic conflicts detected in the L1/L2 memory layer." 
+          title="Conflicts to review"
+          description="Review places where newer information disagrees with something BrainRouter already remembers."
         />
 
         <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>

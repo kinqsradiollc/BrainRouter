@@ -113,7 +113,7 @@ function ReviewsInner() {
     finally { setBusy(""); }
   }
 
-  // ── Per-repo review policy (Strix Approve / Block / Re-review) ────────────────
+  // ── Per-repo review policy (Approve / Block / Re-review) ─────────────────────
   const cfgDefaults = (integ?.config?.reviewPolicyDefaults ?? {}) as Partial<Record<PolicyField, boolean>>;
   const cfgRepo = (integ?.config?.reviewPolicies ?? {}) as Record<string, Partial<Record<PolicyField, boolean>>>;
   const orgDefault = (f: PolicyField): boolean => cfgDefaults[f] ?? POLICY_DEFAULTS[f];

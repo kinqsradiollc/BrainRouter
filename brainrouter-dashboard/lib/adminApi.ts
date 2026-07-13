@@ -13,12 +13,17 @@ interface FetchOpts {
   method?: string;
   body?: unknown;
   orgId?: string;
+  signal?: AbortSignal;
 }
 
-async function authFetch<T = unknown>(path: string, opts: FetchOpts = {}): Promise<T> {
+/** Shared authenticated request path for dashboard-only API surfaces that have
+ * not landed in the public SDK yet. Keeping refresh/retry and org pinning here
+ * prevents feature pages from growing subtly different auth behavior. */
+export async function authFetch<T = unknown>(path: string, opts: FetchOpts = {}): Promise<T> {
   const doFetch = (token: string): Promise<Response> =>
     fetch(`${BASE_URL}${path}`, {
       method: opts.method ?? "GET",
+      signal: opts.signal,
       headers: {
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -254,6 +259,10 @@ export const adminApi = {
     authFetch<{ source: string; connected: boolean; resources: { id: string; label: string; selected: boolean; kind?: string }[] }>(`/api/connectors/${encodeURIComponent(source)}/resources`, { orgId }),
   setConnectorResources: (source: string, resourceIds: string[], orgId?: string) =>
     authFetch<{ connector: ConnectorStatus["connector"] }>(`/api/connectors/${encodeURIComponent(source)}/resources`, { method: "PUT", body: { resourceIds }, orgId }),
+  setConnectorSchedule: (id: string, enabled: boolean, orgId?: string) =>
+    authFetch<{ connector: ConnectorStatus["connector"] }>(`/api/connectors/${encodeURIComponent(id)}`, { method: "PATCH", body: { enabled }, orgId }),
+  runConnector: (id: string, orgId?: string) =>
+    authFetch<{ result: { ok: boolean; documents: number; imported: number; error?: string } }>(`/api/connectors/${encodeURIComponent(id)}/run`, { method: "POST", orgId }),
   disconnectConnector: (source: string, orgId?: string) =>
     authFetch<{ ok: boolean; connector: ConnectorStatus["connector"] }>(`/api/connectors/${encodeURIComponent(source)}/disconnect`, { method: "POST", orgId }),
   listPentestTargets: (orgId?: string) => authFetch<{ targets: PentestTarget[] }>("/api/admin/pentests/targets", { orgId }),
@@ -261,7 +270,7 @@ export const adminApi = {
   deletePentestTarget: (id: string, orgId?: string) => authFetch<{ ok: boolean }>(`/api/admin/pentests/targets/${encodeURIComponent(id)}`, { method: "DELETE", orgId }),
   listPentestRuns: (orgId?: string, limit = 100) => authFetch<{ runs: PentestRun[] }>(`/api/admin/pentests/runs?limit=${limit}`, { orgId }),
   startPentestRun: (targetId: string, scanMode: PentestScanMode = "standard", orgId?: string) => authFetch<{ run: PentestRun }>("/api/admin/pentests/runs", { method: "POST", body: { targetId, scanMode }, orgId }),
-  listOrgs: () => authFetch<{ orgs: OrgSummary[] }>("/api/orgs"),
+  listOrgs: (signal?: AbortSignal) => authFetch<{ orgs: OrgSummary[] }>("/api/orgs", { signal }),
   createOrg: (name: string, plan: OrgPlan = "team") =>
     authFetch<{ org: OrgSummary }>("/api/orgs", { method: "POST", body: { name, plan } }),
   updateOrgPlan: (orgId: string, plan: OrgPlan) =>
@@ -304,8 +313,8 @@ export const adminApi = {
   unshareMemory: (recordId: string, orgId: string) =>
     authFetch(`/api/memories/${encodeURIComponent(recordId)}/unshare`, { method: "POST", body: { orgId }, orgId }),
   // Projects (ADR-014 Phase E).
-  listProjects: (orgId: string) =>
-    authFetch<{ projects: Project[] }>(`/api/orgs/${orgId}/projects`, { orgId }),
+  listProjects: (orgId: string, signal?: AbortSignal) =>
+    authFetch<{ projects: Project[] }>(`/api/orgs/${orgId}/projects`, { orgId, signal }),
   createProject: (orgId: string, body: { name: string; repoUrl?: string; restricted?: boolean }) =>
     authFetch<{ project: Project }>(`/api/orgs/${orgId}/projects`, { method: "POST", body, orgId }),
   updateProject: (orgId: string, projectId: string, patch: { name?: string; repoUrl?: string | null; restricted?: boolean }) =>

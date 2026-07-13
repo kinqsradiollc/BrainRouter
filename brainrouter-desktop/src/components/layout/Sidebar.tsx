@@ -34,7 +34,7 @@ export interface SidebarProps {
   recentsSort: 'recent' | 'alpha';
   setRecentsSort: Dispatch<SetStateAction<'recent' | 'alpha'>>;
   workspaces: { current: string | null; recents: string[] };
-  info: { workspaceRoot?: string; username?: string };
+  info: { workspaceRoot?: string; username?: string; accountSignedIn?: boolean; accountEmail?: string };
   projectRoots: string[];
   activeReviewBadge: string | null;
   prInfo: { number: number; state: string; title?: string } | null;
@@ -75,6 +75,7 @@ export interface SidebarProps {
   /** Workspace mode — Chat · Track · Code (the left-sidebar switcher). */
   mode: 'chat' | 'track' | 'code';
   setMode: Dispatch<SetStateAction<'chat' | 'track' | 'code'>>;
+  openAccountSettings: () => void;
 }
 
 export function Sidebar(p: SidebarProps): React.ReactElement | null {
@@ -142,20 +143,22 @@ export function Sidebar(p: SidebarProps): React.ReactElement | null {
           window.addEventListener('pointerup', up);
         }} />
       <div className="rail-top">
-        <button className="icon-btn" title="Toggle sidebar" onClick={() => setRailOpen(false)}><Icon name="layout" size={15} /></button>
+        <button className="icon-btn" title="Collapse sidebar" aria-label="Collapse sidebar" onClick={() => setRailOpen(false)}>
+          <Icon name="layout" size={15} />
+        </button>
       </div>
       <div className="rail-card">
         {/* Workspace mode switcher — Chat · Track · Code over the same workspace. */}
         <div className="mode-switch" role="tablist" aria-label="Workspace mode">
           {([['chat', 'bubble', 'Chat'], ['code', 'code', 'Code'], ['track', 'tasks', 'Track']] as const).map(([m, icon, label]) => (
-            <button key={m} role="tab" aria-selected={p.mode === m} className={`mode-seg${p.mode === m ? ' active' : ''}`}
+            <button key={m} role="tab" data-mode={m} aria-selected={p.mode === m} className={`mode-seg${p.mode === m ? ' active' : ''}`}
               onClick={() => p.setMode(m)} title={`${label} mode`}>
               <Icon name={icon} size={13} /><span>{label}</span>
             </button>
           ))}
         </div>
         <div className="rail-actions">
-          <button className="rail-action primary" onClick={() => window.brainrouter.send({ kind: 'new-session' })}><Icon name="plus" size={13} />New chat</button>
+          <button className="rail-action primary" onClick={() => window.brainrouter.send({ kind: 'new-session' })}><Icon name="plus" size={13} />New conversation</button>
         </div>
         <div className="projects-head">
           <span>Projects</span>
@@ -309,10 +312,14 @@ export function Sidebar(p: SidebarProps): React.ReactElement | null {
         </div>
       {/* DESK-5m — plain identity row: Settings lives in the top-right
           gear and All commands in ⌘K, so no menu and no chevron here. */}
-      <div className="account-row" title={workspaces.current ?? info.workspaceRoot}>
-        <span className="avatar">{(info.username ?? 'br').slice(0, 2)}</span>
-        <span className="account-name">{info.username ?? 'BrainRouter'}</span>
-      </div>
+      <button type="button" className="account-row" onClick={p.openAccountSettings}
+        title={info.accountSignedIn ? `BrainRouter account${info.accountEmail ? ` · ${info.accountEmail}` : ''}` : 'Sign in for OAuth connectors and account sync (desktop use remains available)'}>
+        <span className="avatar">{(info.accountSignedIn ? info.username : 'br')?.slice(0, 2)}</span>
+        <span className="account-copy">
+          <strong className="account-name">{info.accountSignedIn ? info.username ?? 'BrainRouter account' : 'Sign in to BrainRouter'}</strong>
+          <small>{info.accountSignedIn ? 'BrainRouter account' : 'Optional · OAuth and sync'}</small>
+        </span>
+      </button>
       </div>
     </nav>
   );

@@ -21,6 +21,11 @@ import {
 import { validateGithubApiBase } from "@kinqs/brainrouter-core/track";
 import { refreshToken } from "./oauthBroker.js";
 import type { ConnectorStore } from "./store.js";
+import {
+  connectorRecordIdsByDocument,
+  ingestConnectorSources,
+  type ConnectorSourceStore,
+} from "./knowledgeImport.js";
 
 const SERVER_CONNECTORS_ROOT = path.join(
   process.env.BRAINROUTER_HOME ?? path.join(process.env.HOME ?? ".", ".brainrouter"),
@@ -100,9 +105,34 @@ export async function runConnectorSync(connectorId: string): Promise<ConnectorSy
 
     let imported = 0;
     if (runResult.documents.length > 0) {
-      const bundle = exportConnectorDocumentsForMemory(workspaceRoot, { connectorId: fileId, userId: conn.userId });
+      // A server connector workspace is an implementation detail, not a user
+      // workspace. Import at the connector's explicit tenant scope and keep the
+      // knowledge org-wide (workspace/project NULL) unless a future connector
+      // contract supplies a real product scope.
+      const bundle = exportConnectorDocumentsForMemory(workspaceRoot, {
+        connectorId: fileId,
+        userId: conn.userId,
+        orgId: conn.orgId,
+        visibility: conn.visibility,
+        workspaceTag: null,
+        projectTag: null,
+      });
       if (bundle.recordCount > 0) {
+        const recordIdsByDocument = connectorRecordIdsByDocument(bundle.data.memories);
         await memoryEngine.importMemories(conn.userId, bundle.data as never);
+        await ingestConnectorSources(
+          memoryEngine.store as unknown as ConnectorSourceStore,
+          runResult.documents,
+          {
+            connectorId: conn.id,
+            userId: conn.userId,
+            orgId: conn.orgId,
+            visibility: conn.visibility,
+            projectId: null,
+            workspaceTag: null,
+          },
+          recordIdsByDocument,
+        );
         imported = bundle.recordCount;
       }
     }

@@ -12,7 +12,11 @@ export const MIN_SOURCE_CHARS = 120;
  * and is runtime-detected, like the source-ingest capability.
  */
 export interface ProvenanceStore {
-  getSourceDocumentByHash(userId: string, hash: string): Promise<{ id: string } | null>;
+  getSourceDocumentByHash(
+    userId: string,
+    hash: string,
+    scope?: { orgId?: string | null; projectId?: string | null; workspaceTag?: string | null },
+  ): Promise<{ id: string } | null>;
   getSourceChunksByDocument(documentId: string): Promise<{ id: string; content: string }[]>;
   linkRecordSources(userId: string, recordId: string, chunkIds: string[]): Promise<void>;
 }

@@ -18,6 +18,7 @@ import { loadConfig } from '@kinqs/brainrouter-core/config';
 import type { BackgroundTaskRecord } from '@kinqs/brainrouter-types';
 import type { AgentLike } from '../hostCore.js';
 import { mergeGithubCliEnv, normalizeGithubCliError } from '../ghCli.js';
+import { brainRouterAccountHeaders, resolveBrainRouterAccountContext } from '../accountIntegration.js';
 import { git, type TrackGithubConfig, type SecretBridge } from './helpers.js';
 import { createBackgroundTask, updateBackgroundTask } from '@kinqs/brainrouter-core/background';
 import {
@@ -393,13 +394,12 @@ export function buildGithubTrackServices(deps: GithubTrackDeps) {
   // via the server-side broker (no owner needed). Empty when not signed in / not
   // OAuth-connected, so non-OAuth connectors fall back to the owner path.
   const listAccessibleReposViaBroker = async (limit?: number): Promise<string[]> => {
-    const cfg = loadConfig() as { cli?: { account?: { url?: string } }; servers?: Record<string, { identity?: string; apiKey?: string }> };
-    const base = String(cfg.cli?.account?.url ?? '').replace(/\/+$/, '');
-    const bId = Object.keys(cfg.servers ?? {}).find((k) => (cfg.servers![k]?.identity === 'brainrouter') || /^brainrouter/i.test(k));
-    const apiKey = bId ? String(cfg.servers![bId]?.apiKey ?? '') : '';
-    if (!base || !apiKey) return [];
     try {
-      const r = await fetch(`${base}/api/connectors/github/repos`, { headers: { Authorization: `Bearer ${apiKey}` } });
+      const account = await resolveBrainRouterAccountContext(loadConfig());
+      if (!account) return [];
+      const r = await fetch(`${account.baseUrl}/api/connectors/github/repos`, {
+        headers: brainRouterAccountHeaders(account),
+      });
       if (!r.ok) return [];
       const j = await r.json() as { repos?: Array<{ fullName?: string }> };
       const names = (j.repos ?? []).map((x) => String(x.fullName ?? '')).filter(Boolean);

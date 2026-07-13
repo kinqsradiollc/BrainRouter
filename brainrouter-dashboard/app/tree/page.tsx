@@ -79,8 +79,8 @@ export default function TreePage() {
     <AuthGuard>
       <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} style={{ display: "flex", flexDirection: "column", gap: "28px" }}>
         <PageHeader
-          title="Memory Tree"
-          description="The durable summary hierarchy — leaves roll up into sealed, summarized parents across source / topic / global scope. Click a node to drill into its children."
+          title="Knowledge map"
+          description="Browse how detailed notes roll up into topics and larger summaries. Select any item to explore what sits beneath it."
         />
         {error && <p style={{ color: "#E5675F", fontSize: "13px" }}>Could not load tree: {error}</p>}
         {!roots && !error && <p style={{ color: "var(--color-stone-text)", fontSize: "13px" }}>Loading…</p>}

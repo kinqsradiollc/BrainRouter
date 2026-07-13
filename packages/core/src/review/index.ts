@@ -18,6 +18,7 @@ export * from './pentestProxy.js';
 export * from './pentestProxySession.js';
 export * from './reviewStore.js';
 export * from './reviewSynthesis.js';
+export * from './vulnerabilityIntelligence.js';
 // reviewModel and reviewSynthesis both declare an unrelated `ReviewFinding`
 // interface (UI review-model vs multi-reviewer synthesis). No consumer imports
 // the synthesis one by name, so the public `ReviewFinding` is reviewModel's.

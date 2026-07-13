@@ -5,6 +5,28 @@
  */
 import { useEffect, useState } from 'react';
 
+export const MIN_ZOOM = 0.5;
+export const MAX_ZOOM = 2.5;
+export const ZOOM_STEP = 0.1;
+// The native macOS traffic lights do not participate in Electron's web-content
+// zoom. Keep the first application control anchored just beyond their logical
+// right edge by expressing that edge in inverse-zoomed CSS pixels.
+export const MAC_WINDOW_CONTROLS_END = 74;
+
+export function normalizeZoom(value: unknown): number {
+  const parsed = typeof value === 'number' ? value : Number.parseFloat(String(value ?? ''));
+  if (!Number.isFinite(parsed)) return 1;
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.round(parsed * 10) / 10));
+}
+
+export function stepZoom(value: unknown, direction: 1 | -1): number {
+  return normalizeZoom(normalizeZoom(value) + direction * ZOOM_STEP);
+}
+
+export function windowControlsInlineEnd(value: unknown): number {
+  return Number((MAC_WINDOW_CONTROLS_END / normalizeZoom(value)).toFixed(3));
+}
+
 export interface ZoomControls {
   zoomFactor: number;
   zoomIn: () => void;
@@ -15,12 +37,12 @@ export interface ZoomControls {
 export function useZoom(): ZoomControls {
   const [zoomFactor, setZoomFactorState] = useState(() => {
     const saved = localStorage.getItem('br-zoom-factor');
-    return saved ? parseFloat(saved) : 1.0;
+    return normalizeZoom(saved ?? 1);
   });
 
   const zoomIn = () => {
     setZoomFactorState((z) => {
-      const next = Math.min(2.5, z + 0.1);
+      const next = stepZoom(z, 1);
       localStorage.setItem('br-zoom-factor', next.toFixed(1));
       return next;
     });
@@ -28,7 +50,7 @@ export function useZoom(): ZoomControls {
 
   const zoomOut = () => {
     setZoomFactorState((z) => {
-      const next = Math.max(0.5, z - 0.1);
+      const next = stepZoom(z, -1);
       localStorage.setItem('br-zoom-factor', next.toFixed(1));
       return next;
     });
@@ -40,6 +62,10 @@ export function useZoom(): ZoomControls {
   };
 
   useEffect(() => {
+    document.documentElement.style.setProperty(
+      '--window-controls-inline-end',
+      `${windowControlsInlineEnd(zoomFactor)}px`,
+    );
     if (window.brainrouter && typeof window.brainrouter.setZoomFactor === 'function') {
       window.brainrouter.setZoomFactor(zoomFactor);
     } else if (document.body) {

@@ -69,3 +69,38 @@ test("0.4.3 getSourceDocuments: lists a user's docs newest-first with chunk coun
     await cleanup();
   }
 });
+
+test("source documents are deduplicated and listed within an explicit org/project/workspace scope", async () => {
+  const { store, cleanup } = await createTestStore();
+  try {
+    const scoped = await store.createSourceDocument({
+      userId: "u1", orgId: "org-a", projectId: "project-a", workspaceTag: "workspace-a",
+      kind: "file", uri: "src/a.ts", hash: "same-content", title: "a.ts",
+    });
+    const sameScope = await store.createSourceDocument({
+      userId: "u1", orgId: "org-a", projectId: "project-a", workspaceTag: "workspace-a",
+      kind: "file", uri: "src/a.ts", hash: "same-content", title: "a.ts",
+    });
+    const otherOrg = await store.createSourceDocument({
+      userId: "u1", orgId: "org-b", projectId: "project-b", workspaceTag: "workspace-b",
+      kind: "file", uri: "src/a.ts", hash: "same-content", title: "a.ts",
+    });
+    await store.createSourceDocument({
+      userId: "u1", orgId: "org-a", projectId: "project-a", workspaceTag: "workspace-other",
+      kind: "file", uri: "src/other.ts", hash: "other-content", title: "other.ts",
+    });
+
+    assert.equal(sameScope.id, scoped.id, "same content in the same scope remains idempotent");
+    assert.notEqual(otherOrg.id, scoped.id, "the same content in another organization is isolated");
+
+    const documents = await store.getSourceDocuments("u1", 100, {
+      orgId: "org-a", projectId: "project-a", workspaceTag: "workspace-a",
+    });
+    assert.deepEqual(documents.map((document) => document.id), [scoped.id]);
+    assert.equal(documents[0].orgId, "org-a");
+    assert.equal(documents[0].projectId, "project-a");
+    assert.equal(documents[0].workspaceTag, "workspace-a");
+  } finally {
+    await cleanup();
+  }
+});

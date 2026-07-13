@@ -9,11 +9,11 @@ import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 
 export const metadata: Metadata = {
-  title: "BrainRouter | Cognitive Memory Engine",
-  description: "The decentralized cognitive gateway. Establish your local memory routing core to synchronize multiple autonomous agents and maintain persistent identity context.",
+  title: "BrainRouter | Agent operations workspace",
+  description: "Plan, build, connect, remember, and verify agent work across one desktop, CLI, dashboard, and MCP operating layer.",
   openGraph: {
     title: "BrainRouter",
-    description: "The Cognitive Memory Layer for Autonomous AI Assistants.",
+    description: "The operating workspace for agentic work.",
     type: "website",
   },
   twitter: {
@@ -34,17 +34,17 @@ export const metadata: Metadata = {
 export const viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#06120D",
+  themeColor: "#000000",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" data-scroll-behavior="smooth" className={`${GeistSans.variable} ${GeistMono.variable}`} suppressHydrationWarning>
+    <html lang="en" data-theme="dark" data-scroll-behavior="smooth" className={`${GeistSans.variable} ${GeistMono.variable}`} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: `
           (function() {
-            var theme = localStorage.getItem('theme') || 'dark';
-            document.documentElement.setAttribute('data-theme', theme);
+            localStorage.setItem('theme', 'dark');
+            document.documentElement.setAttribute('data-theme', 'dark');
           })()
         `}} />
       </head>

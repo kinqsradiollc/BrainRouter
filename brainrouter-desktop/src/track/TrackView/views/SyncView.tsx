@@ -5,6 +5,7 @@
  */
 import React, { useState } from 'react';
 import { Icon } from '../../../icons.js';
+import { isTrackSyncAuthFailure, resolveTrackSyncAvailability } from '../../../lib/track/syncAvailability.js';
 import type { SyncConfig, SyncResult, GitTrackContext, TrackOps } from '../shared/types.js';
 
 type SyncBusy = 'import' | 'export' | 'sync' | 'gh-import' | 'scan' | 'refresh-git' | null;
@@ -13,7 +14,8 @@ export function SyncView({ sync, git, ops }: { sync: { config: SyncConfig | null
   const [busy, setBusy] = useState<SyncBusy>(null);
   const cfg = sync.config;
   const result = sync.result;
-  const configured = !!(cfg?.repo && cfg?.hasToken);
+  const availability = resolveTrackSyncAvailability(cfg);
+  const { configured } = availability;
   const gitLabel = git?.githubRepo ?? git?.root;
   const repos = cfg?.repos?.length ? cfg.repos : (cfg?.repo ? [{ repo: cfg.repo, hasToken: cfg.hasToken, tokenSource: cfg.tokenSource, active: true }] : []);
 
@@ -32,6 +34,7 @@ export function SyncView({ sync, git, ops }: { sync: { config: SyncConfig | null
   };
   const iconFor = (kind: Exclude<SyncBusy, null>, icon: string): React.ReactNode => busy === kind ? <span className="spinner sm" /> : <Icon name={icon} size={12} />;
   const rows = result ? (result.exported ?? result.imported ?? []) : [];
+  const authFailure = isTrackSyncAuthFailure(result?.errors);
 
   return (
     <div className="track-sync">
@@ -58,10 +61,16 @@ export function SyncView({ sync, git, ops }: { sync: { config: SyncConfig | null
       <div className="track-sync-config">
         <div className="track-sync-conn">
           <span className={`track-sync-dot${configured ? ' on' : ''}`} />
-          {cfg?.repo ? (
+          {availability.repo ? (
             <>
-              <span className="track-sync-repo mono">{cfg.repo}</span>
-              <span className={`track-sync-token${cfg.hasToken ? ' ok' : ''}`}>{cfg.hasToken ? `active · token via ${cfg.tokenSource}` : 'active · no token'}</span>
+              <span className="track-sync-repo mono">{availability.repo}</span>
+              <span className={`track-sync-token${configured ? ' ok' : ''}`}>
+                {availability.accountManaged
+                  ? `${availability.source} · OAuth credential sealed in your account`
+                  : configured
+                    ? `active · token via ${availability.source}`
+                    : 'detected · connect GitHub to sync'}
+              </span>
             </>
           ) : <span className="track-sync-unset">No repository configured</span>}
         </div>
@@ -69,18 +78,30 @@ export function SyncView({ sync, git, ops }: { sync: { config: SyncConfig | null
           <div className="track-sync-repos">
             {repos.map((r) => (
               <div key={r.repo} className={`track-sync-repo-row${r.active ? ' active' : ''}`}>
-                <span className={`track-sync-dot${r.hasToken ? ' on' : ''}`} />
+                <span className={`track-sync-dot${r.hasToken || (availability.accountManaged && r.repo === availability.repo) ? ' on' : ''}`} />
                 <span className="track-sync-repo mono">{r.repo}</span>
                 {r.label ? <span className="track-sync-token">{r.source === 'connector' ? `connector · ${r.label}` : r.label}</span> : null}
                 {r.active ? <span className="track-sync-token ok">active</span> : null}
-                <span className={`track-sync-token${r.hasToken ? ' ok' : ''}`}>{r.hasToken ? `token via ${r.tokenSource}` : 'no token'}</span>
+                <span className={`track-sync-token${r.hasToken || (availability.accountManaged && r.repo === availability.repo) ? ' ok' : ''}`}>
+                  {availability.accountManaged && r.repo === availability.repo
+                    ? 'OAuth via account'
+                    : r.hasToken ? `token via ${r.tokenSource}` : 'no local credential'}
+                </span>
               </div>
             ))}
           </div>
         ) : null}
         {!configured ? (
           <p className="track-sync-help">
-            Connect a repository in <b>Settings → Connectors → GitHub Track sync</b>, then reopen this tab.
+            {cfg?.account?.signedIn
+              ? <>Connect GitHub in <b>Settings → Connections → Connectors</b>. This workspace's GitHub remote is detected automatically.</>
+              : <>Sign in and connect GitHub in <b>Settings → Connections → Connectors</b>, or configure a local GitHub credential.</>}
+            {cfg?.account?.error ? <><br />Account status: {cfg.account.error}</> : null}
+          </p>
+        ) : null}
+        {authFailure ? (
+          <p className="track-sync-help track-sync-auth-error" role="alert">
+            GitHub authorization is no longer valid. Reconnect GitHub in <b>Settings → Connections → Connectors</b>, then run the dry-run again. No sync changes were applied.
           </p>
         ) : null}
       </div>
@@ -131,6 +152,8 @@ export function SyncView({ sync, git, ops }: { sync: { config: SyncConfig | null
                     </div>
                   ))}
                 </div>
+              ) : result.errors.length ? (
+                <div className="track-sync-conflict-label">Sync completed with errors — review the details below and retry after resolving them.</div>
               ) : <div className="track-col-empty">In sync — nothing to reconcile.</div>}
             </>
           ) : (

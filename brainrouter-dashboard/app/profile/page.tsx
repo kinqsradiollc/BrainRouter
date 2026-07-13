@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { type KeyboardEvent, useEffect, useState } from "react";
+import { motion } from "framer-motion";
+import type { MeResponse } from "@kinqs/brainrouter-types";
 import { getClient, BASE_URL } from "../../lib/client";
 import { getApiKey, setApiKey } from "../../lib/client-auth";
 import { useAuth } from "../../components/AuthProvider";
@@ -9,8 +11,15 @@ import { PageHeader } from "../../components/PageHeader";
 import { PremiumCard } from "../../components/PremiumCard";
 import { PremiumButton } from "../../components/PremiumButton";
 import { PremiumModal } from "../../components/PremiumModal";
-import { motion } from "framer-motion";
-import { MeResponse } from "@kinqs/brainrouter-types";
+
+type ProfilePanel = "account" | "api" | "clients";
+type ClientTransport = "http" | "stdio";
+
+const PROFILE_PANELS: Array<{ id: ProfilePanel; label: string; description: string }> = [
+  { id: "account", label: "Account", description: "Identity and session" },
+  { id: "api", label: "API access", description: "Keys and authentication" },
+  { id: "clients", label: "Client setup", description: "Desktop and MCP clients" },
+];
 
 function maskKey(key: string) {
   if (!key) return "";
@@ -25,44 +34,47 @@ function highlightJson(json: string) {
   let lastIndex = 0;
   let match;
   let keyCounter = 0;
-  
+
   while ((match = regex.exec(json)) !== null) {
-    const matchIndex = match.index;
-    const matchText = match[0];
-    if (matchIndex > lastIndex) {
-      parts.push(json.substring(lastIndex, matchIndex));
-    }
-    if (/^"/.test(matchText)) {
-      if (/:$/.test(matchText)) {
-        const keyText = matchText.slice(0, -1);
-        parts.push(
-          <span key={`key-${keyCounter++}`} style={{ color: "#34C28E", fontWeight: 600 }}>{keyText}</span>
-        );
-        parts.push(":");
-      } else {
-        parts.push(
-          <span key={`str-${keyCounter++}`} style={{ color: "#34C28E" }}>{matchText}</span>
-        );
-      }
-    } else if (/true|false/.test(matchText)) {
-      parts.push(
-        <span key={`bool-${keyCounter++}`} style={{ color: "#E5675F", fontWeight: "bold" }}>{matchText}</span>
-      );
-    } else if (/null/.test(matchText)) {
-      parts.push(
-        <span key={`null-${keyCounter++}`} style={{ color: "#6B7480", fontStyle: "italic" }}>{matchText}</span>
-      );
+    if (match.index > lastIndex) parts.push(json.substring(lastIndex, match.index));
+    const value = match[0];
+    if (/^"/.test(value)) {
+      const isKey = /:$/.test(value);
+      parts.push(<span key={`json-${keyCounter++}`} className={isKey ? "profile-json-key" : "profile-json-string"}>{isKey ? value.slice(0, -1) : value}</span>);
+      if (isKey) parts.push(":");
+    } else if (/true|false/.test(value)) {
+      parts.push(<span key={`json-${keyCounter++}`} className="profile-json-boolean">{value}</span>);
+    } else if (/null/.test(value)) {
+      parts.push(<span key={`json-${keyCounter++}`} className="profile-json-null">{value}</span>);
     } else {
-      parts.push(
-        <span key={`num-${keyCounter++}`} style={{ color: "#60a5fa" }}>{matchText}</span>
-      );
+      parts.push(<span key={`json-${keyCounter++}`} className="profile-json-number">{value}</span>);
     }
     lastIndex = regex.lastIndex;
   }
-  if (lastIndex < json.length) {
-    parts.push(json.substring(lastIndex));
-  }
+  if (lastIndex < json.length) parts.push(json.substring(lastIndex));
   return parts;
+}
+
+function clientConfig(transport: ClientTransport, apiKey: string, mcpPath?: string) {
+  return transport === "http"
+    ? {
+        mcpServers: {
+          brainrouter: {
+            type: "sse",
+            url: `${BASE_URL}/mcp`,
+            headers: { Authorization: `Bearer ${apiKey}` },
+          },
+        },
+      }
+    : {
+        mcpServers: {
+          brainrouter: {
+            command: "node",
+            args: [mcpPath || "/path/to/BrainRouter/brainrouter/dist/index.js"],
+            env: { BRAINROUTER_API_KEY: apiKey },
+          },
+        },
+      };
 }
 
 export default function ProfilePage() {
@@ -70,367 +82,222 @@ export default function ProfilePage() {
   const [me, setMe] = useState<MeResponse | null>(null);
   const [cachedApiKey, setCachedApiKey] = useState("");
   const [reveal, setReveal] = useState(false);
-  const [msg, setMsg] = useState("");
+  const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"http" | "stdio">("http");
+  const [panel, setPanel] = useState<ProfilePanel>("account");
+  const [transport, setTransport] = useState<ClientTransport>("http");
   const [displayName, setDisplayName] = useState("");
   const [confirmRotate, setConfirmRotate] = useState(false);
 
-  async function load() {
-    setCachedApiKey(getApiKey());
-    try {
-      const client = getClient();
-      const data = await client.me();
-      setMe(data);
-      setDisplayName(data.displayName || "");
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
-    }
-  }
-
   useEffect(() => {
+    async function load() {
+      setCachedApiKey(getApiKey());
+      try {
+        const data = await getClient().me();
+        setMe(data);
+        setDisplayName(data.displayName || "");
+      } catch (error) {
+        console.error(error);
+      } finally {
+        setLoading(false);
+      }
+    }
     void load();
   }, []);
 
   async function generateOrRotate() {
     try {
-      const client = getClient();
-      const data = await client.rotateApiKey();
+      const data = await getClient().rotateApiKey();
       setApiKey(data.apiKey);
       setCachedApiKey(data.apiKey);
-      setMe((prev) => (prev ? { ...prev, apiKey: data.apiKey } : prev));
+      setMe((previous) => previous ? { ...previous, apiKey: data.apiKey } : previous);
       setReveal(true);
-      setMsg(cachedApiKey ? "Your old API key has been revoked and replaced successfully." : "Your new MCP API key has been generated successfully.");
-    } catch (e) {
-      console.error(e);
+      setMessage(cachedApiKey ? "The old API key was revoked and replaced." : "A new API key is ready.");
+    } catch (error) {
+      console.error(error);
+      setMessage("We could not update the API key. Try again.");
     }
   }
 
   async function saveDisplayName() {
     if (!displayName.trim()) return;
-    const client = getClient();
-    await client.updateMe({ displayName: displayName.trim() });
-    setMe((prev) => prev ? { ...prev, displayName: displayName.trim() } : prev);
-    setMsg("Display name updated.");
+    await getClient().updateMe({ displayName: displayName.trim() });
+    setMe((previous) => previous ? { ...previous, displayName: displayName.trim() } : previous);
+    setMessage("Display name updated.");
   }
 
   async function copyKey() {
     if (!cachedApiKey) return;
     await navigator.clipboard.writeText(cachedApiKey);
     setApiKey(cachedApiKey);
-    setMsg("API key copied to clipboard and saved locally for MCP sessions.");
+    setMessage("API key copied and saved for local MCP sessions.");
+  }
+
+  async function copyConfiguration() {
+    if (!me || !cachedApiKey) return;
+    await navigator.clipboard.writeText(JSON.stringify(clientConfig(transport, cachedApiKey, me.mcpPath), null, 2));
+    setMessage("Client configuration copied.");
+  }
+
+  function selectPanel(next: ProfilePanel) {
+    setPanel(next);
+    setMessage("");
+  }
+
+  function movePanel(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowRight") nextIndex = (index + 1) % PROFILE_PANELS.length;
+    else if (event.key === "ArrowLeft") nextIndex = (index - 1 + PROFILE_PANELS.length) % PROFILE_PANELS.length;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = PROFILE_PANELS.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const next = PROFILE_PANELS[nextIndex];
+    selectPanel(next.id);
+    requestAnimationFrame(() => document.getElementById(`profile-tab-${next.id}`)?.focus());
   }
 
   return (
     <AuthGuard>
-      <motion.div 
-        initial={{ opacity: 0, y: 15 }}
-        animate={{ opacity: 1, y: 0 }}
-        style={{ display: "flex", flexDirection: "column", gap: "28px", maxWidth: "800px" }}
-      >
-        {/* Editorial Header */}
-        <PageHeader 
-          title="Profile Settings" 
-          description="Manage your personal workspace settings and local daemon connection keys." 
-        />
+      <motion.div className="settings-page profile-settings" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
+        <PageHeader title="Settings" description="Personal account, API access, and client setup—one focused section at a time." />
 
-        {loading ? (
-          <div style={{ color: "var(--color-stone-text)", padding: "40px 0" }}>Loading user details...</div>
-        ) : !me ? (
-          <div style={{ color: "var(--color-stone-text)", padding: "40px 0" }}>Failed to retrieve session. Please sign in again.</div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-            
-            {/* Identity Card */}
-            <PremiumCard level={1} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                <div>
-                  <h3 className="serif-display" style={{ fontSize: "22px", margin: 0, fontWeight: 500, color: "var(--color-pure-white)" }}>
-                    {me.displayName || me.userId}
-                  </h3>
-                  <p style={{ color: "var(--color-stone-text)", fontSize: "13px", margin: "4px 0 0 0" }}>
-                    ID: <code>{me.userId}</code>
-                  </p>
-                </div>
-                <span className={me.isAdmin ? "badge-gold" : "badge"} style={{ fontSize: "12px", textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 600 }}>
-                  {me.isAdmin ? "Administrator" : "Standard Workspace"}
-                </span>
-              </div>
-              <div style={{ fontSize: "14px", borderTop: "1px solid rgba(226,227,233,0.04)", paddingTop: "14px", display: "grid", gap: "8px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ color: "var(--color-stone-text)" }}>Email Address</span>
-                  <span style={{ color: "var(--color-white-frost)" }}>{me.email}</span>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ color: "var(--color-stone-text)" }}>Vault Created</span>
-                  <span style={{ color: "var(--color-white-frost)" }}>{new Date(me.createdAt).toLocaleDateString([], { year: "numeric", month: "long", day: "numeric" })}</span>
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", borderTop: "1px solid rgba(226,227,233,0.04)", paddingTop: "14px" }}>
-                <input
-                  className="pill-input"
-                  value={displayName}
-                  onChange={(event) => setDisplayName(event.target.value)}
-                  placeholder="Display name"
-                  style={{ flex: "1 1 240px" }}
-                />
-                <PremiumButton variant="ghost" onClick={saveDisplayName}>
-                  Save Display Name
-                </PremiumButton>
-              </div>
-            </PremiumCard>
+        <div className="settings-section-tabs" role="tablist" aria-label="Profile settings sections">
+          {PROFILE_PANELS.map((item, index) => (
+            <button
+              key={item.id}
+              type="button"
+              role="tab"
+              id={`profile-tab-${item.id}`}
+              aria-controls={`profile-panel-${item.id}`}
+              aria-selected={panel === item.id}
+              tabIndex={panel === item.id ? 0 : -1}
+              className={`settings-section-tab${panel === item.id ? " active" : ""}`}
+              onKeyDown={(event) => movePanel(event, index)}
+              onClick={() => selectPanel(item.id)}
+            >
+              <strong>{item.label}</strong>
+              <span>{item.description}</span>
+            </button>
+          ))}
+        </div>
 
-            {/* API Key Panel */}
-            <PremiumCard level={2} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-              <h3 className="serif-display" style={{ fontSize: "20px", margin: 0, fontWeight: 500 }}>
-                Model Context Protocol API Key
-              </h3>
-              <p style={{ color: "var(--color-stone-text)", fontSize: "13px", marginTop: "6px", lineHeight: 1.5 }}>
-                Use this API key to configure local desktop clients (e.g. Claude Desktop, Cursor) to connect to your BrainRouter memory core. Keep this credential extremely secure.
-              </p>
+        {message && <div className="settings-note profile-message" role="status">{message}</div>}
 
-              <div style={{ marginTop: "20px", display: "flex", flexDirection: "column", gap: "16px" }}>
-                {cachedApiKey ? (
-                  <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-                    <div style={{ display: "flex", gap: "10px", alignItems: "center", background: "rgba(0,0,0,0.2)", padding: "12px 16px", borderRadius: "var(--radius-md)", border: "1px solid rgba(226,227,233,0.06)" }}>
-                      <code style={{ flex: 1, wordBreak: "break-all", color: "var(--color-pure-white)", fontSize: "14px", letterSpacing: "0.03em" }}>
-                        {reveal ? cachedApiKey : maskKey(cachedApiKey)}
-                      </code>
-                    </div>
-                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                      <PremiumButton 
-                        variant="ghost" 
-                        style={{ padding: "8px 18px", fontSize: "13px" }}
-                        onClick={() => setReveal((v) => !v)}
-                      >
-                        {reveal ? "Hide Secret" : "Reveal Key"}
-                      </PremiumButton>
-                      <PremiumButton 
-                        variant="ghost" 
-                        style={{ padding: "8px 18px", fontSize: "13px" }}
-                        onClick={copyKey}
-                      >
-                        Copy to Clipboard
-                      </PremiumButton>
-                      <PremiumButton 
-                        variant="primary" 
-                        style={{ padding: "8px 18px", fontSize: "13px" }}
-                        onClick={() => setConfirmRotate(true)}
-                      >
-                        Rotate API Key
-                      </PremiumButton>
-                    </div>
+        <div key={panel} id={`profile-panel-${panel}`} role="tabpanel" aria-labelledby={`profile-tab-${panel}`} className="settings-panel-stage">
+          {loading ? (
+            <div className="settings-panel-loading">Loading user details…</div>
+          ) : !me ? (
+            <div className="settings-panel-loading">We could not retrieve this session. Sign in again.</div>
+          ) : (
+            <>
+            {panel === "account" && (
+              <PremiumCard level={1} className="profile-panel-card">
+                <div className="settings-cardhead profile-cardhead">
+                  <div>
+                    <span className="settings-eyebrow">Account</span>
+                    <h2>{me.displayName || me.userId}</h2>
+                    <div className="settings-hint">User ID <code>{me.userId}</code></div>
                   </div>
-                ) : (
-                  <div style={{ display: "flex", flexDirection: "column", gap: "14px", alignItems: "flex-start" }}>
-                    <p style={{ margin: 0, color: "var(--color-stone-text)", fontSize: "14px" }}>
-                      No active API key is currently saved. Generate one to authenticate local instances.
-                    </p>
-                    <PremiumButton 
-                      variant="primary" 
-                      style={{ padding: "10px 22px", fontSize: "13px", fontWeight: 600 }}
-                      onClick={() => setConfirmRotate(true)}
-                    >
-                      Generate API Key
-                    </PremiumButton>
-                  </div>
-                )}
+                  <span className="settings-badge settings-badge--muted">{me.isAdmin ? "Administrator" : "Member"}</span>
+                </div>
 
-                {msg && (
-                  <motion.p 
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    style={{ color: "var(--color-golden-accent)", margin: 0, fontSize: "13px", fontWeight: 500 }}
-                  >
-                    {msg}
-                  </motion.p>
-                )}
-              </div>
-            </PremiumCard>
+                <dl className="profile-facts">
+                  <div><dt>Email</dt><dd>{me.email}</dd></div>
+                  <div><dt>Workspace created</dt><dd>{new Date(me.createdAt).toLocaleDateString([], { year: "numeric", month: "long", day: "numeric" })}</dd></div>
+                </dl>
 
-            {/* Model Context Protocol Client Integration Guide */}
-            {cachedApiKey && (
-              <PremiumCard level={3} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px" }}>
-                  <h3 className="serif-display" style={{ fontSize: "20px", margin: 0, fontWeight: 500, color: "var(--color-pure-white)" }}>
-                    💡 Client Integration Config Generator
-                  </h3>
-                  
-                  {/* Dynamic Tab Switchers */}
-                  <div style={{ display: "flex", background: "rgba(0,0,0,0.25)", border: "1px solid rgba(226,227,233,0.06)", borderRadius: "var(--radius-pill)", padding: "2px" }}>
-                    <button
-                      onClick={() => setActiveTab("http")}
-                      style={{
-                        padding: "6px 14px",
-                        fontSize: "12px",
-                        fontWeight: 600,
-                        borderRadius: "var(--radius-pill)",
-                        cursor: "pointer",
-                        border: "none",
-                        outline: "none",
-                        transition: "all 0.2s ease",
-                        background: activeTab === "http" ? "rgba(52, 194, 142, 0.2)" : "transparent",
-                        color: activeTab === "http" ? "var(--color-golden-accent)" : "var(--color-stone-text)"
-                      }}
-                    >
-                      HTTP / SSE (Daemon)
-                    </button>
-                    <button
-                      onClick={() => setActiveTab("stdio")}
-                      style={{
-                        padding: "6px 14px",
-                        fontSize: "12px",
-                        fontWeight: 600,
-                        borderRadius: "var(--radius-pill)",
-                        cursor: "pointer",
-                        border: "none",
-                        outline: "none",
-                        transition: "all 0.2s ease",
-                        background: activeTab === "stdio" ? "rgba(52, 194, 142, 0.2)" : "transparent",
-                        color: activeTab === "stdio" ? "var(--color-golden-accent)" : "var(--color-stone-text)"
-                      }}
-                    >
-                      Stdio (Local Process)
-                    </button>
+                <div className="profile-edit-row">
+                  <label className="settings-label" htmlFor="display-name">Display name</label>
+                  <div>
+                    <input id="display-name" className="settings-input" value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Display name" />
+                    <PremiumButton variant="ghost" onClick={saveDisplayName}>Save</PremiumButton>
                   </div>
                 </div>
 
-                <p style={{ color: "var(--color-stone-text)", fontSize: "13px", margin: 0, lineHeight: 1.5 }}>
-                  {activeTab === "http" ? (
-                    <>
-                      Exposes the BrainRouter MCP server over a high-performance HTTP/SSE daemon (<b>recommended</b>). Keep the daemon running in the background and connect cleanly from any environment without local node processes.
-                    </>
-                  ) : (
-                    <>
-                      Spawns the MCP server as a local node process managed by the desktop client. Resolves paths dynamically on your local filesystem.
-                    </>
-                  )}
-                </p>
-
-                {/* Pre-formatted configuration block */}
-                <div style={{ position: "relative" }}>
-                  <pre style={{
-                    margin: 0,
-                    padding: "16px 16px 40px 16px",
-                    background: "rgba(0,0,0,0.3)",
-                    border: "1px solid rgba(226, 227, 233, 0.08)",
-                    borderRadius: "var(--radius-md)",
-                    overflowX: "auto",
-                    fontFamily: "var(--font-mono), monospace",
-                    fontSize: "13px",
-                    color: "var(--color-porcelain-text)",
-                    lineHeight: 1.6
-                  }}>
-                    {highlightJson(
-                      activeTab === "http" 
-                        ? JSON.stringify({
-                            mcpServers: {
-                              brainrouter: {
-                                type: "sse",
-                                url: `${BASE_URL}/mcp`,
-                                // serverURL: `${BASE_URL}/mcp`,
-                                headers: {
-                                  Authorization: `Bearer ${reveal ? cachedApiKey : maskKey(cachedApiKey)}`
-                                }
-                              }
-                            }
-                          }, null, 2)
-                        : JSON.stringify({
-                            mcpServers: {
-                              brainrouter: {
-                                command: "node",
-                                args: [me.mcpPath || "/path/to/BrainRouter/brainrouter/dist/index.js"],
-                                env: {
-                                  BRAINROUTER_API_KEY: reveal ? cachedApiKey : maskKey(cachedApiKey)
-                                }
-                              }
-                            }
-                          }, null, 2)
-                    )}
-                  </pre>
-                  
-                  {/* Floating Action Button for copying the entire JSON */}
-                  <div style={{ position: "absolute", bottom: "12px", right: "12px" }}>
-                    <PremiumButton
-                      variant="ghost"
-                      style={{ padding: "4px 10px", fontSize: "11px", height: "26px" }}
-                      onClick={async () => {
-                        const configJson = activeTab === "http"
-                          ? JSON.stringify({
-                              mcpServers: {
-                                brainrouter: {
-                                  type: "sse",
-                                  url: `${BASE_URL}/mcp`,
-                                  serverURL: `${BASE_URL}/mcp`,
-                                  headers: {
-                                    Authorization: `Bearer ${cachedApiKey}`
-                                  }
-                                }
-                              }
-                            }, null, 2)
-                          : JSON.stringify({
-                              mcpServers: {
-                                brainrouter: {
-                                  command: "node",
-                                  args: [me.mcpPath || "/path/to/BrainRouter/brainrouter/dist/index.js"],
-                                  env: {
-                                    BRAINROUTER_API_KEY: cachedApiKey
-                                  }
-                                }
-                              }
-                            }, null, 2);
-                        await navigator.clipboard.writeText(configJson);
-                        setMsg(`MCP Server ${activeTab === "http" ? "HTTP/SSE" : "Stdio"} configuration copied successfully!`);
-                      }}
-                    >
-                      Copy Configuration JSON
-                    </PremiumButton>
-                  </div>
-                </div>
-                
-                {/* Filepath helper tip */}
-                <div style={{ fontSize: "12px", display: "flex", gap: "6px", alignItems: "center", color: "var(--color-ash-text)", marginTop: "4px" }}>
-                  <span style={{ color: "var(--color-golden-accent)", fontWeight: 600 }}>Tip:</span>
-                  <span>Claude Desktop Config location: <code>~/Library/Application Support/Claude/claude_desktop_config.json</code></span>
+                <div className="profile-danger-row">
+                  <div><strong>Current session</strong><span>Sign out of this browser and clear the active dashboard session.</span></div>
+                  <PremiumButton variant="danger" onClick={logout}>Sign out</PremiumButton>
                 </div>
               </PremiumCard>
             )}
 
-            {/* Logout Panel */}
-            <div style={{ marginTop: "12px", borderTop: "1px solid rgba(226,227,233,0.05)", paddingTop: "24px" }}>
-              <PremiumButton 
-                variant="danger" 
-                style={{ padding: "10px 24px", fontSize: "13px", fontWeight: 600 }}
-                onClick={logout}
-              >
-                Sign Out from Console
+            {panel === "api" && (
+              <PremiumCard level={2} className="profile-panel-card">
+                <div className="settings-cardhead profile-cardhead">
+                  <div>
+                    <span className="settings-eyebrow">API access</span>
+                    <h2>BrainRouter API key</h2>
+                    <div className="settings-hint">Authenticate local desktop clients, tools, and MCP sessions. Store this key as a secret.</div>
+                  </div>
+                </div>
+
+                {cachedApiKey ? (
+                  <div className="profile-key-block">
+                    <code>{reveal ? cachedApiKey : maskKey(cachedApiKey)}</code>
+                    <div className="profile-key-actions">
+                      <PremiumButton variant="ghost" onClick={() => setReveal((value) => !value)}>{reveal ? "Hide key" : "Reveal key"}</PremiumButton>
+                      <PremiumButton variant="ghost" onClick={copyKey}>Copy</PremiumButton>
+                      <PremiumButton variant="primary" onClick={() => setConfirmRotate(true)}>Rotate key</PremiumButton>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="profile-empty-panel">
+                    <div><strong>No API key saved</strong><span>Generate a key before connecting local tools or desktop clients.</span></div>
+                    <PremiumButton variant="primary" onClick={() => setConfirmRotate(true)}>Generate key</PremiumButton>
+                  </div>
+                )}
+              </PremiumCard>
+            )}
+
+            {panel === "clients" && (
+              cachedApiKey ? (
+                <PremiumCard level={3} className="profile-panel-card">
+                  <div className="settings-cardhead profile-cardhead">
+                    <div>
+                      <span className="settings-eyebrow">Client setup</span>
+                      <h2>Configuration generator</h2>
+                      <div className="settings-hint">Choose one transport. The preview stays masked until you reveal the key in API access.</div>
+                    </div>
+                    <div className="settings-inline-tabs" role="group" aria-label="MCP transport">
+                      <button type="button" aria-pressed={transport === "http"} className={transport === "http" ? "active" : ""} onClick={() => setTransport("http")}>HTTP / SSE</button>
+                      <button type="button" aria-pressed={transport === "stdio"} className={transport === "stdio" ? "active" : ""} onClick={() => setTransport("stdio")}>Stdio</button>
+                    </div>
+                  </div>
+
+                  <p className="profile-transport-copy">
+                    {transport === "http"
+                      ? "Connect to the running BrainRouter daemon from any supported client. This is the recommended setup."
+                      : "Let the client spawn a local BrainRouter process from this machine."}
+                  </p>
+                  <div className="profile-code-block">
+                    <pre>{highlightJson(JSON.stringify(clientConfig(transport, reveal ? cachedApiKey : maskKey(cachedApiKey), me.mcpPath), null, 2))}</pre>
+                    <PremiumButton variant="ghost" size="small" onClick={copyConfiguration}>Copy JSON</PremiumButton>
+                  </div>
+                  <div className="settings-hint">Claude Desktop config: <code>~/Library/Application Support/Claude/claude_desktop_config.json</code></div>
+                </PremiumCard>
+              ) : (
+                <PremiumCard level={2} className="profile-panel-card profile-empty-panel">
+                  <div><strong>Create an API key first</strong><span>Client configuration requires an API key from the API access section.</span></div>
+                  <PremiumButton variant="primary" onClick={() => selectPanel("api")}>Open API access</PremiumButton>
+                </PremiumCard>
+              )
+            )}
+            </>
+          )}
+        </div>
+
+        <PremiumModal isOpen={confirmRotate} onClose={() => setConfirmRotate(false)} title={cachedApiKey ? "Rotate API key" : "Generate API key"}>
+          <div className="profile-confirm">
+            <p>{cachedApiKey ? "This invalidates the current key and replaces it with a new one." : "This creates a new key for local tools and MCP clients."}</p>
+            <div>
+              <PremiumButton variant="ghost" onClick={() => setConfirmRotate(false)}>Cancel</PremiumButton>
+              <PremiumButton variant="primary" onClick={async () => { setConfirmRotate(false); await generateOrRotate(); }}>
+                {cachedApiKey ? "Rotate key" : "Generate key"}
               </PremiumButton>
             </div>
-
-            <PremiumModal isOpen={confirmRotate} onClose={() => setConfirmRotate(false)} title="Rotate API Key">
-              <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-                <p style={{ margin: 0, color: "var(--color-stone-text)", fontSize: "14px", lineHeight: 1.5 }}>
-                  This will invalidate your current API key and replace it with a new key.
-                </p>
-                <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
-                  <PremiumButton variant="ghost" onClick={() => setConfirmRotate(false)}>Cancel</PremiumButton>
-                  <PremiumButton
-                    variant="primary"
-                    onClick={async () => {
-                      setConfirmRotate(false);
-                      await generateOrRotate();
-                    }}
-                  >
-                    Rotate Key
-                  </PremiumButton>
-                </div>
-              </div>
-            </PremiumModal>
-
           </div>
-        )}
+        </PremiumModal>
       </motion.div>
     </AuthGuard>
   );

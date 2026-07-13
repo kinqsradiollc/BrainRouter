@@ -60,9 +60,10 @@ function runInit(): void {
     `\n` +
     `Next steps:\n` +
     `  1. Edit it:                 $EDITOR ${userEnvFile}\n` +
-    `  2. Set BRAINROUTER_LLM_API_KEY (required for cognitive extraction)\n` +
-    `  3. Change BRAINROUTER_ADMIN_PASSWORD and BRAINROUTER_JWT_SECRET\n` +
+    `  2. Set BRAINROUTER_DATABASE_URL and BRAINROUTER_SECRET_KEY\n` +
+    `  3. Set BRAINROUTER_ADMIN_PASSWORD and BRAINROUTER_JWT_SECRET\n` +
     `  4. Start the server:        brainrouter-mcp --http --port 3747\n` +
+    `  5. Sign in and configure the organization's AI providers in the dashboard\n` +
     `\n` +
     `The server auto-finds this file via ~/.config/brainrouter/server.env\n` +
     `(or set BRAINROUTER_ENV_FILE=/some/other/path to override).\n`

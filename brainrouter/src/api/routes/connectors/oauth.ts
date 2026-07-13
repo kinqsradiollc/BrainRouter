@@ -111,7 +111,15 @@ async function beginOauth(req: AuthedRequest, res: import("express").Response): 
   const connectorId = String(req.query.connectorId ?? "").trim() || undefined;
   if (connectorId) {
     const conn = await memoryEngine.connectors.getConnector(connectorId);
-    if (!conn || conn.userId !== req.userId) { res.status(403).json({ error: "Connector not found or access denied." }); return null; }
+    if (
+      !conn
+      || conn.userId !== req.userId
+      || conn.orgId !== orgId
+      || conn.source !== source
+    ) {
+      res.status(403).json({ error: "Connector not found or access denied." });
+      return null;
+    }
   }
   const provider = OAUTH_PROVIDERS[source];
   const pkce = provider.usesPkce ? makePkce() : undefined;
@@ -146,6 +154,23 @@ connectorOauthRouter.get("/:source/oauth/callback", async (req: AuthedRequest, r
   const code = String(req.query.code ?? "");
   const state = verifyState(String(req.query.state ?? ""), stateSecret(), 600, nowSec());
   if (!state || state.source !== source || !code || !state.orgId) { res.status(400).send("Invalid or expired OAuth state — restart the connection."); return; }
+  // Signed state authenticates what the browser left with, but the connector can
+  // still be deleted or changed while the user is at the provider. Re-read it
+  // before exchanging the code and require the same user, org, and route source.
+  // This prevents a valid state from ever authorizing a connector in another
+  // tenant or attaching the wrong provider credential.
+  if (state.connectorId) {
+    const connector = await memoryEngine.connectors.getConnector(state.connectorId);
+    if (
+      !connector
+      || connector.userId !== state.userId
+      || connector.orgId !== state.orgId
+      || connector.source !== state.source
+    ) {
+      res.status(403).send("Connector not found or access denied.");
+      return;
+    }
+  }
   const app = await memoryEngine.connectors.getResolvedOAuthApp(state.orgId, source);
   if (!app) { res.status(409).send("OAuth app not configured."); return; }
   let credential: ConnectorTokenSecret;
@@ -155,10 +180,17 @@ connectorOauthRouter.get("/:source/oauth/callback", async (req: AuthedRequest, r
   } catch (e) { res.status(502).send(`OAuth exchange failed: ${e instanceof Error ? e.message : "unknown error"}`); return; }
   let connectorId: string;
   if (state.connectorId) {
-    await memoryEngine.connectors.updateConnector(state.connectorId, { credential, status: "connected", enabled: true, lastError: null });
+    const updated = await memoryEngine.connectors.updateConnector(state.connectorId, { credential, status: "connected", enabled: true, lastError: null });
+    if (!updated) { res.status(409).send("Connector changed while authorization was in progress — restart the connection."); return; }
     connectorId = state.connectorId;
   } else {
-    connectorId = (await memoryEngine.connectors.createConnector(state.userId, { source, name: source, orgId: state.orgId, credential })).id;
+    connectorId = (await memoryEngine.connectors.createConnector(state.userId, {
+      source,
+      name: source,
+      orgId: state.orgId,
+      visibility: "private",
+      credential,
+    })).id;
   }
   // A newly connected account should begin ingesting immediately; the periodic
   // maintenance scheduler remains the retry/continuation path.

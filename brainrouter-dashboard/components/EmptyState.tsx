@@ -1,5 +1,4 @@
 import React from "react";
-import { motion } from "framer-motion";
 
 interface EmptyStateProps {
   icon?: React.ReactNode;
@@ -10,34 +9,11 @@ interface EmptyStateProps {
 
 export function EmptyState({ icon, title, description, children }: EmptyStateProps) {
   return (
-    <motion.div 
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      className="card"
-      style={{ 
-        padding: "56px 24px", 
-        textAlign: "center",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: "14px",
-        background: "var(--color-obsidian-surface)",
-        border: "1px solid rgba(226, 227, 233, 0.04)"
-      }}
-    >
-      {icon && (
-        <div style={{ color: "var(--color-stone-text)", display: "flex", justifyContent: "center" }}>
-          {icon}
-        </div>
-      )}
-      <h3 className="serif-display" style={{ margin: 0, fontSize: "20px", fontWeight: 400, color: "var(--color-pure-white)" }}>
-        {title}
-      </h3>
-      <p style={{ color: "var(--color-stone-text)", fontSize: "13px", margin: 0, maxWidth: "340px", lineHeight: 1.5 }}>
-        {description}
-      </p>
-      {children}
-    </motion.div>
+    <div className="empty-state">
+      <div className="empty-state__icon" aria-hidden>{icon ?? <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><circle cx="12" cy="12" r="8" /><path d="M8.5 12h7M12 8.5v7" /></svg>}</div>
+      <h3>{title}</h3>
+      <p>{description}</p>
+      {children && <div className="empty-state__actions">{children}</div>}
+    </div>
   );
 }

@@ -10,6 +10,9 @@ import { PANEL_DEFS, type PanelId } from '../../panels/index.js';
 import { clampSideRailWidth, sideRailClassName } from '../../lib/panels/sideRailLayout.js';
 import { usePlatform } from '../../lib/shortcuts/shortcuts.js';
 
+const LAUNCHER_GROUPS = ['Work', 'Plan', 'Knowledge', 'Quality', 'Advanced'] as const;
+type LauncherGroup = (typeof LAUNCHER_GROUPS)[number];
+
 function setQuietDragImage(e: React.DragEvent<HTMLElement>): void {
   const canvas = document.createElement('canvas');
   canvas.width = 1;
@@ -60,6 +63,7 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
   // §panel-search — filter + keyboard-select state for the tools chooser.
   const [chooserQuery, setChooserQuery] = useState('');
   const [chooserSel, setChooserSel] = useState(0);
+  const chooserRef = useRef<HTMLDivElement | null>(null);
   const { fmt } = usePlatform(); // §shortcuts — OS-correct hint glyphs
   const lastDropSideTab = useRef<PanelId | null>(null);
   const clearSideDrag = (): void => {
@@ -77,40 +81,44 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
   // §panel-search — the full tools list (badges from live props), filtered by the
   // chooser search box and keyboard-navigable (↑/↓ + Enter).
   const launchers = ([
-    { id: 'plan' as PanelId, title: 'Plan', hint: fmt('Mod+Shift+G'), icon: 'review',
-      badge: lastPlan?.items.length ? `${lastPlan.items.filter((it) => it.status === 'completed').length}/${lastPlan.items.length}` : '' },
-    { id: 'terminal' as PanelId, title: 'Terminal', hint: fmt('Ctrl+Backtick'), icon: 'terminal', badge: '' },
-    { id: 'files' as PanelId, title: 'Files', hint: fmt('Mod+P'), icon: 'folder', badge: '' },
-    { id: 'diff' as PanelId, title: 'Changes', hint: fmt('Mod+Shift+D'), icon: 'diff',
+    { id: 'files' as PanelId, title: 'Files', hint: fmt('Mod+P'), icon: 'folder', badge: '', group: 'Work' },
+    { id: 'diff' as PanelId, title: 'Changes', hint: fmt('Mod+Shift+D'), icon: 'diff', group: 'Work',
       badge: changedFiles.length ? String(changedFiles.length) : '' },
-    { id: 'tasks' as PanelId, title: 'Tasks', hint: '', icon: 'tasks',
+    { id: 'terminal' as PanelId, title: 'Terminal', hint: fmt('Ctrl+Backtick'), icon: 'terminal', badge: '', group: 'Work' },
+    { id: 'search' as PanelId, title: 'Search session', hint: '', icon: 'search', badge: '', group: 'Work' },
+    { id: 'plan' as PanelId, title: 'Plan', hint: fmt('Mod+Shift+G'), icon: 'review', group: 'Plan',
+      badge: lastPlan?.items.length ? `${lastPlan.items.filter((it) => it.status === 'completed').length}/${lastPlan.items.length}` : '' },
+    { id: 'tasks' as PanelId, title: 'Tasks', hint: '', icon: 'tasks', group: 'Plan',
       badge: backgroundTasks.length ? String(backgroundTasks.length) : '', live: backgroundTasks.length > 0 },
-    { id: 'tools' as PanelId, title: 'Tool calls', hint: '', icon: 'bolt',
-      badge: toolLog.length ? String(toolLog.length) : '' },
-    { id: 'search' as PanelId, title: 'Search session', hint: '', icon: 'search', badge: '' },
-    { id: 'schedule' as PanelId, title: 'Schedules', hint: '', icon: 'clock',
+    { id: 'workflows' as PanelId, title: 'Workflows', hint: '', icon: 'bolt', badge: '', group: 'Plan' },
+    { id: 'schedule' as PanelId, title: 'Schedules', hint: '', icon: 'clock', group: 'Plan',
       badge: schedules.filter((s) => s.enabled).length ? String(schedules.filter((s) => s.enabled).length) : '' },
-    { id: 'workflows' as PanelId, title: 'Workflows', hint: '', icon: 'bolt', badge: '' },
-    { id: 'memory' as PanelId, title: 'Memory', hint: '', icon: 'pin', badge: '' },
-    { id: 'prototype' as PanelId, title: 'Prototype', hint: '', icon: 'bolt', badge: '' },
-    { id: 'worktrees' as PanelId, title: 'Worktrees', hint: '', icon: 'branch',
-      badge: worktrees.length ? String(worktrees.length) : '' },
-    { id: 'review' as PanelId, title: 'Review', hint: '', icon: 'review',
-      badge: review?.findings.length ? String(review.findings.length) : '' },
-    { id: 'requirements' as PanelId, title: 'Requirements', hint: '', icon: 'tasks',
+    { id: 'requirements' as PanelId, title: 'Requirements', hint: '', icon: 'tasks', group: 'Plan',
       badge: requirements.length ? String(requirements.length) : '' },
-    { id: 'annotations' as PanelId, title: 'Annotations', hint: '', icon: 'review',
-      badge: annotations.filter((a) => a.status === 'open').length ? String(annotations.filter((a) => a.status === 'open').length) : '' },
-    { id: 'artifacts' as PanelId, title: 'Artifacts', hint: '', icon: 'file',
+    { id: 'memory' as PanelId, title: 'Saved knowledge', hint: '', icon: 'pin', badge: '', group: 'Knowledge' },
+    { id: 'context' as PanelId, title: 'Context', hint: '', icon: 'layout-right', badge: '', group: 'Knowledge' },
+    { id: 'atlas' as PanelId, title: 'Atlas', hint: '', icon: 'atlas', badge: '', group: 'Knowledge' },
+    { id: 'artifacts' as PanelId, title: 'Artifacts', hint: '', icon: 'file', group: 'Knowledge',
       badge: artifacts.filter((a) => a.status === 'draft').length ? String(artifacts.filter((a) => a.status === 'draft').length) : '' },
-    { id: 'ci' as PanelId, title: 'PR / Checks', hint: '', icon: 'check-circle',
+    { id: 'annotations' as PanelId, title: 'Annotations', hint: '', icon: 'review', group: 'Knowledge',
+      badge: annotations.filter((a) => a.status === 'open').length ? String(annotations.filter((a) => a.status === 'open').length) : '' },
+    { id: 'review' as PanelId, title: 'Review', hint: '', icon: 'review', group: 'Quality',
+      badge: review?.findings.length ? String(review.findings.length) : '' },
+    { id: 'ci' as PanelId, title: 'PR / Checks', hint: '', icon: 'check-circle', group: 'Quality',
       badge: ci.checks.length ? String(ci.checks.length) : '' },
-    { id: 'atlas' as PanelId, title: 'Atlas', hint: '', icon: 'atlas', badge: '' },
-    { id: 'context' as PanelId, title: 'Context', hint: '', icon: 'layout-right', badge: '' },
-  ] as Array<{ id: PanelId; title: string; hint: string; icon: string; badge: string; live?: boolean }>);
+    { id: 'prototype' as PanelId, title: 'Prototype', hint: '', icon: 'bolt', badge: '', group: 'Quality' },
+    { id: 'tools' as PanelId, title: 'Tool calls', hint: '', icon: 'bolt', group: 'Advanced',
+      badge: toolLog.length ? String(toolLog.length) : '' },
+    { id: 'worktrees' as PanelId, title: 'Worktrees', hint: '', icon: 'branch', group: 'Advanced',
+      badge: worktrees.length ? String(worktrees.length) : '' },
+  ] as Array<{ id: PanelId; title: string; hint: string; icon: string; badge: string; group: LauncherGroup; live?: boolean }>);
   const cq = chooserQuery.trim().toLowerCase();
   const shownLaunchers = cq ? launchers.filter((l) => l.title.toLowerCase().includes(cq)) : launchers;
-  const launchSel = Math.min(chooserSel, Math.max(0, shownLaunchers.length - 1));
+  const launchSel = shownLaunchers.length ? Math.min(Math.max(chooserSel, 0), shownLaunchers.length - 1) : 0;
+  const setVisibleChooserSelection = (next: number): void => {
+    setChooserSel(next);
+    requestAnimationFrame(() => chooserRef.current?.querySelector<HTMLElement>(`[data-launch-index="${next}"]`)?.scrollIntoView({ block: 'nearest' }));
+  };
   return (
     <aside className={`${sideRailClassName(sideAnim.closing, sideFullScreen)}${!sidePinned && !sideFullScreen ? ' drawer' : ''}`} style={sideFullScreen ? undefined : { width: sideWidth }}>
       <div className="col-grip" title="Drag to resize · drag far right to hide"
@@ -133,7 +141,7 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
           (when inside a panel), the open tabs, then pin (dock⇄drawer) + close. */}
       <div className={`side-tabs side-head${envRoom ? ' has-env' : ''}`}>
         {activeSideTab ? null : (
-          <span className="side-head-title">Tools</span>
+          <span className="side-head-title">Views</span>
         )}
         {sideTabs.length ? (
           <div className="side-tabs-list">
@@ -185,27 +193,45 @@ export function ViewsRail(p: ViewsRailProps): React.ReactElement | null {
         ))}</>
       ) : (
         /* §panel-drawer — no active tab: the searchable, keyboard-navigable tools chooser. */
-        <div className="side-chooser">
-          <input className="chooser-search" autoFocus placeholder="Search tools…" value={chooserQuery}
-            onChange={(e) => { setChooserQuery(e.target.value); setChooserSel(0); }}
+        <div ref={chooserRef} className="side-chooser">
+          <input className="chooser-search" autoFocus placeholder="Search views…" value={chooserQuery}
+            role="combobox" aria-label="Search views" aria-autocomplete="list" aria-expanded="true"
+            aria-controls="side-view-options"
+            aria-activedescendant={shownLaunchers.length ? `side-launcher-${shownLaunchers[launchSel].id}` : undefined}
+            onChange={(e) => { setChooserQuery(e.target.value); setVisibleChooserSelection(0); }}
             onKeyDown={(e) => {
-              if (e.key === 'ArrowDown') { e.preventDefault(); setChooserSel((s) => Math.min(s + 1, shownLaunchers.length - 1)); }
-              else if (e.key === 'ArrowUp') { e.preventDefault(); setChooserSel((s) => Math.max(s - 1, 0)); }
-              else if (e.key === 'Enter') { e.preventDefault(); const l = shownLaunchers[launchSel]; if (l) { setChooserQuery(''); openSideView(l.id); } }
-              else if (e.key === 'Escape') { e.preventDefault(); if (chooserQuery) setChooserQuery(''); else setSidePanelOpen(false); }
+              if (e.key === 'ArrowDown') { e.preventDefault(); setVisibleChooserSelection(Math.max(0, Math.min(launchSel + 1, shownLaunchers.length - 1))); }
+              else if (e.key === 'ArrowUp') { e.preventDefault(); setVisibleChooserSelection(Math.max(launchSel - 1, 0)); }
+              else if (e.key === 'Enter') { e.preventDefault(); const l = shownLaunchers[launchSel]; if (l) { setChooserQuery(''); setChooserSel(0); openSideView(l.id); } }
+              else if (e.key === 'Escape') { e.preventDefault(); if (chooserQuery) { setChooserQuery(''); setChooserSel(0); } else setSidePanelOpen(false); }
             }} />
-          {shownLaunchers.length === 0 ? <div className="chooser-empty">No tools match “{chooserQuery}”.</div> : shownLaunchers.map((l, i) => (
-              <button key={l.id} className={`side-launcher${i === launchSel ? ' sel' : ''}`}
-                onClick={() => { setChooserQuery(''); openSideView(l.id); }} onMouseMove={() => setChooserSel(i)}>
-                <Icon name={l.icon} size={18} />
-                <span>{l.title}</span>
-                <span className="launcher-meta">
-                  {l.live ? <span className="live-dot" title="running" /> : null}
-                  {l.badge ? <span className="launcher-badge">{l.badge}</span> : null}
-                  {l.hint ? <kbd>{l.hint}</kbd> : null}
-                </span>
-              </button>
-            ))}
+          <div id="side-view-options" className="side-chooser-options" role="listbox" aria-label="Available views">
+            {shownLaunchers.length === 0 ? <div className="chooser-empty" role="status">No views match “{chooserQuery}”.</div> : LAUNCHER_GROUPS.map((group) => {
+              const groupLaunchers = shownLaunchers.filter((launcher) => launcher.group === group);
+              if (!groupLaunchers.length) return null;
+              return (
+                <div key={group} className="side-launcher-group" data-group={group.toLowerCase()} role="group" aria-label={group}>
+                  <div className="side-launcher-group-title" aria-hidden="true">{group}</div>
+                  {groupLaunchers.map((l) => {
+                    const i = shownLaunchers.indexOf(l);
+                    return (
+                      <button key={l.id} id={`side-launcher-${l.id}`} data-launch-index={i} role="option" aria-selected={i === launchSel}
+                        className={`side-launcher${i === launchSel ? ' sel' : ''}`}
+                        onClick={() => { setChooserQuery(''); setChooserSel(0); openSideView(l.id); }} onMouseMove={() => setChooserSel(i)}>
+                        <Icon name={l.icon} size={18} />
+                        <span>{l.title}</span>
+                        <span className="launcher-meta">
+                          {l.live ? <span className="live-dot" title="running" /> : null}
+                          {l.badge ? <span className="launcher-badge">{l.badge}</span> : null}
+                          {l.hint ? <kbd>{l.hint}</kbd> : null}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </aside>

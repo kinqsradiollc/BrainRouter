@@ -8,7 +8,6 @@ import { Router, type Response } from "express";
 import { requireAnyAuth, type AuthedRequest } from "../../middleware/auth.js";
 import { requirePermission } from "../../middleware/tenancy.js";
 import { memoryEngine } from "../../../memory/engine.js";
-import { resolveOrgContext } from "../../../tenancy/context.js";
 import { runConnectorSync } from "../../../connectors/syncExecutor.js";
 import { isOAuthSource } from "../../../connectors/oauthBroker.js";
 import { CONNECTOR_RESOURCE_FIELDS, discoverConnectorAccount, discoverConnectorResources } from "../../../connectors/resources.js";
@@ -22,35 +21,38 @@ connectorManageRouter.use(requireAnyAuth);
 // triggers/integrations.
 connectorManageRouter.use(requirePermission("triggers:manage"));
 
-function orgHeader(req: AuthedRequest): string | undefined {
-  const value = req.headers["x-brainrouter-org"];
-  return (Array.isArray(value) ? value[0] : value)?.trim() || undefined;
-}
-
-async function currentOrg(req: AuthedRequest): Promise<string | null> {
-  return (await resolveOrgContext(memoryEngine.tenancy, req.userId!, orgHeader(req)).catch(() => null))?.orgId ?? null;
+function activeOrgId(req: AuthedRequest): string {
+  // `requirePermission` immediately above resolves and attaches this value. Keep
+  // every subsequent lookup pinned to that single request context instead of
+  // resolving again (or silently degrading to an unscoped query on an error).
+  if (!req.orgId) throw new Error("Connector route is missing its organization context");
+  return req.orgId;
 }
 
 async function sourceConnector(req: AuthedRequest, res: Response) {
   const source = String(req.params.source ?? "").trim();
   if (!isOAuthSource(source)) { res.status(404).json({ error: "Unknown OAuth connector source" }); return null; }
-  const orgId = await currentOrg(req);
+  const orgId = activeOrgId(req);
   const candidates = (await memoryEngine.connectors.listConnectors(req.userId!)).filter((item) => item.source === source);
-  const connector = candidates.find((item) => item.orgId === orgId) ?? candidates.find((item) => item.orgId === null) ?? candidates[0];
+  const connector = candidates.find((item) => item.orgId === orgId);
   return { source, connector, orgId };
 }
 
-/** The connector exists and belongs to the caller (or the caller is a global admin). */
+/** The connector exists in the active org and belongs to the caller (or the
+ * caller is a global admin acting inside that same active org). */
 async function ownedConnector(req: AuthedRequest, res: Response) {
   const c = await memoryEngine.connectors.getConnector(String(req.params.id));
   if (!c) { res.status(404).json({ error: "Connector not found" }); return null; }
+  if (c.orgId !== activeOrgId(req)) { res.status(404).json({ error: "Connector not found" }); return null; }
   if (c.userId !== req.userId && !req.isAdmin) { res.status(403).json({ error: "Not your connector" }); return null; }
   return c;
 }
 
 /** GET /api/connectors — the caller's connectors (no secrets). */
 connectorManageRouter.get("/", async (req: AuthedRequest, res) => {
-  const connectors = await memoryEngine.connectors.listConnectors(req.userId!);
+  const orgId = activeOrgId(req);
+  const connectors = (await memoryEngine.connectors.listConnectors(req.userId!))
+    .filter((connector) => connector.orgId === orgId);
   res.json({ connectors });
 });
 
@@ -59,10 +61,6 @@ connectorManageRouter.get("/", async (req: AuthedRequest, res) => {
 connectorManageRouter.get("/:source/status", async (req: AuthedRequest, res) => {
   const found = await sourceConnector(req, res);
   if (!found) return;
-  const orgId = await currentOrg(req);
-  if (found.connector && found.connector.orgId && orgId && found.connector.orgId !== orgId && !req.isAdmin) {
-    res.status(403).json({ error: "Connector is not in the active organization" }); return;
-  }
   const c = found.connector;
   const resolved = c?.hasCredential ? await memoryEngine.connectors.getResolvedConnector(c.id) : null;
   const account = resolved ? await discoverConnectorAccount(resolved).catch(() => null) : null;
@@ -118,16 +116,12 @@ connectorManageRouter.post("/", async (req: AuthedRequest, res) => {
   const source = String(req.body?.source ?? "").trim();
   if (!source) { res.status(400).json({ error: "source is required" }); return; }
   const wantsOrg = req.body?.visibility === "org";
-  let orgId: string | null = null;
-  if (wantsOrg) {
-    const requested = (req.headers["x-brainrouter-org"] as string | undefined)?.trim() || undefined;
-    const ctx = await resolveOrgContext(memoryEngine.tenancy, req.userId!, requested).catch(() => null);
-    orgId = ctx?.orgId ?? null;
-  }
   const connector = await memoryEngine.connectors.createConnector(req.userId!, {
     source,
     name: String(req.body?.name ?? source),
-    orgId,
+    // Private controls who can read the connector inside an org; it must not
+    // erase the tenant boundary itself.
+    orgId: activeOrgId(req),
     visibility: wantsOrg ? "org" : "private",
     config: (req.body?.config && typeof req.body.config === "object") ? req.body.config as Record<string, unknown> : {},
   });

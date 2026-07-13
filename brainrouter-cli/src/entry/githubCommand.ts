@@ -45,7 +45,7 @@ async function githubLogin(t: HttpTarget): Promise<void> {
   const uri = start.verificationUri || 'https://github.com/login/device';
   const interval = Number(start.interval) > 0 ? Number(start.interval) : 5;
 
-  console.log(chalk.bold.hex('#CC9166')('\n🔗 Connect GitHub to BrainRouter'));
+  console.log(chalk.bold.hex('#8B7CFF')('\nConnect GitHub'));
   console.log(`\n  1. Open  ${chalk.cyan(uri)}`);
   console.log(`  2. Enter the code:  ${chalk.bold.green(start.userCode)}\n`);
   console.log(chalk.gray('Waiting for you to authorize in the browser… (Ctrl-C to cancel)'));

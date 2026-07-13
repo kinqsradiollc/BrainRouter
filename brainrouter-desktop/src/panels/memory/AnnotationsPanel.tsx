@@ -181,7 +181,7 @@ function AnnotationDetail({ ann, onSetStatus, onSelectTarget, onAddComment }: {
         {ann.requirementId ? <Chip>req {ann.requirementId}</Chip> : null}
         {ann.taskId ? <Chip>task {ann.taskId}</Chip> : null}
         {ann.artifactId ? <Chip>artifact {ann.artifactId}</Chip> : null}
-        <Chip>{links.memory} memor{links.memory === 1 ? 'y' : 'ies'}</Chip>
+        <Chip>{links.memory} knowledge record{links.memory === 1 ? '' : 's'}</Chip>
       </div>
     </div>
   );
