@@ -36,6 +36,7 @@ import {
 import { isAllowedNavigation, allowedOriginFor } from './windowSecurity.js';
 import { addOpened, noteActivity, reorderWorkspace, type ActivityReason } from './recents.js';
 import { createComputerUsePort } from './computerUse.js';
+import { registerMeetingsBridge } from './meetingsBridge.js';
 import { checkComputerUsePermissions, openAccessibilitySettings, openScreenRecordingSettings } from './computerUsePermissions.js';
 import { setupTray } from './tray.js';
 import { hardenWebviewPreferences, isAllowedWebviewSrc } from './webviewPolicy.js';
@@ -540,6 +541,7 @@ app.whenReady().then(() => {
     if (typeof dragged !== 'string' || typeof target !== 'string') return { recents: readRecents() };
     return { recents: markWorkspaceReordered(dragged, target) };
   });
+  registerMeetingsBridge();
   ipcMain.handle('computerUse:checkPermissions', () => checkComputerUsePermissions());
   ipcMain.handle('computerUse:openAccessibilitySettings', () => openAccessibilitySettings());
   ipcMain.handle('computerUse:openScreenRecordingSettings', () => openScreenRecordingSettings());
