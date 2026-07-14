@@ -120,6 +120,29 @@ jobs:
       - name: Lint
         run: npm run lint
 
+  mobile:
+    # brainrouter-mobile is OUTSIDE the root npm workspace (Expo/RN React 19 would
+    # hoist over the React-18 apps), so it needs its own install/typecheck/test
+    # job (spec §11, Task 33).
+    name: Mobile (typecheck + tests)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+      - name: Install mobile dependencies
+        run: npm ci --no-audit --no-fund
+        working-directory: brainrouter-mobile
+      - name: Typecheck
+        run: npx tsc --noEmit -p tsconfig.json
+        working-directory: brainrouter-mobile
+      - name: Tests
+        run: npm test
+        working-directory: brainrouter-mobile
+
   security-audit:
     # Dependency-vulnerability gate (the AI SECURITY REVIEW of the *code* is a
     # separate check-run posted by the GitHub App bot). Blocks on CRITICAL prod-dep
