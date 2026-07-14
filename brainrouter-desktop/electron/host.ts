@@ -682,8 +682,15 @@ async function main(): Promise<void> {
       const api = resolveBrainRouterAccountApi(loadConfig());
       const ownKey = getBrainSessionKey();
       if (!api?.baseUrl || !ownKey) return false;
+      const base = api.baseUrl.replace(/\/+$/, '');
+      // The account token is a long-lived credential — never send it over
+      // cleartext http (except loopback dev) and never follow a redirect that
+      // could carry it to an attacker host (CWE-601).
+      let u: URL; try { u = new URL(base); } catch { return false; }
+      const loopback = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(u.hostname);
+      if (u.protocol !== 'https:' && !(u.protocol === 'http:' && loopback)) return false;
       try {
-        const res = await fetch(`${api.baseUrl.replace(/\/+$/, '')}/api/sessions`, { headers: { Authorization: `Bearer ${accountToken}` } });
+        const res = await fetch(`${base}/api/sessions`, { headers: { Authorization: `Bearer ${accountToken}` }, redirect: 'error' });
         if (!res.ok) return false;
         const data = (await res.json()) as { sessions?: Array<{ sessionKey?: string }> };
         return Array.isArray(data.sessions) && data.sessions.some((s) => s.sessionKey === ownKey);

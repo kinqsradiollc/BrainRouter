@@ -24,7 +24,7 @@ export interface HostCredential {
 
 export interface RelayEvent { type: 'event'; event: string; [key: string]: unknown }
 
-function privateHost(hostname: string): boolean {
+export function privateHost(hostname: string): boolean {
   if (hostname === 'localhost' || hostname === '127.0.0.1') return true;
   const p = hostname.split('.').map(Number);
   return p.length === 4 && (p[0] === 10 || (p[0] === 172 && p[1]! >= 16 && p[1]! <= 31) || (p[0] === 192 && p[1] === 168) || (p[0] === 100 && p[1]! >= 64 && p[1]! <= 127));

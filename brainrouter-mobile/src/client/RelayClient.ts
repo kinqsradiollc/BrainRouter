@@ -1,5 +1,5 @@
 import { createDeviceKeyPair, decryptPayload, encryptPayload, b64, fromB64 } from '../protocol/crypto';
-import { parsePairingPayload, type HostCredential, type PairingPayload, type RelayEvent } from '../protocol/types';
+import { parsePairingPayload, privateHost, type HostCredential, type PairingPayload, type RelayEvent } from '../protocol/types';
 import type { CredentialStore } from '../storage/credentials';
 
 export interface SocketLike {
@@ -64,10 +64,17 @@ export class RelayClient {
   /** Account-based pairing (no QR): the desktop was discovered via the account's
    * device list; prove same-account with the account token instead of a QR token. */
   async pairViaAccount(input: { endpoints: string[]; serverPublicKey: string; accountToken: string }, name: string): Promise<HostCredential> {
+    // The account token is a long-lived credential: allow cleartext ws: only on a
+    // private LAN (same as QR pairing); any public host must use wss: so the token
+    // never crosses the internet in the clear (CWE-319).
     const endpoints = input.endpoints.filter((endpoint) => {
-      try { const url = new URL(endpoint); return url.protocol === 'ws:' || url.protocol === 'wss:'; } catch { return false; }
+      try {
+        const url = new URL(endpoint);
+        if (url.protocol === 'wss:') return true;
+        return url.protocol === 'ws:' && privateHost(url.hostname);
+      } catch { return false; }
     });
-    if (!endpoints.length) throw new Error('This desktop has no reachable relay endpoint.');
+    if (!endpoints.length) throw new Error('This desktop has no reachable, secure relay endpoint.');
     if (!input.serverPublicKey || !input.accountToken) throw new Error('Missing desktop key or account token.');
     return this.runPairing(endpoints, input.serverPublicKey, { accountToken: input.accountToken }, name);
   }

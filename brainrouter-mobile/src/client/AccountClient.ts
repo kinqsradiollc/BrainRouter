@@ -18,6 +18,20 @@ export interface RemoteDesktop {
   lastSeenAt?: string;
 }
 
+/** The account base URL carries credentials (password on sign-in, long-lived
+ * token on every call) — require https so they never travel in cleartext, except
+ * loopback for local dev. Returns the trimmed base or throws (CWE-319). */
+function safeBase(baseUrl: string): string {
+  const base = baseUrl.replace(/\/+$/, '');
+  let u: URL;
+  try { u = new URL(base); } catch { throw new Error('Enter a valid server URL.'); }
+  const loopback = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(u.hostname);
+  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && loopback)) {
+    throw new Error('Server URL must use https.');
+  }
+  return base;
+}
+
 export class AccountClient {
   constructor(
     private readonly baseUrl: string,
@@ -28,16 +42,18 @@ export class AccountClient {
   /** Sign in with email + password; returns a client holding the stable apiKey
    * (preferred) or jwt. `POST /api/auth/signin` → { jwt, apiKey, ... }. */
   static async signIn(baseUrl: string, email: string, password: string, fetchImpl: typeof fetch = fetch): Promise<AccountClient> {
-    const res = await fetchImpl(`${baseUrl.replace(/\/+$/, '')}/api/auth/signin`, {
+    const base = safeBase(baseUrl);
+    const res = await fetchImpl(`${base}/api/auth/signin`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
+      redirect: 'error',
     });
     if (!res.ok) throw new Error('Sign-in failed — check your email and password.');
     const data = (await res.json()) as { apiKey?: string; jwt?: string };
     const token = data.apiKey || data.jwt || '';
     if (!token) throw new Error('Sign-in did not return a usable credential.');
-    return new AccountClient(baseUrl, token, fetchImpl);
+    return new AccountClient(base, token, fetchImpl);
   }
 
   /** The bearer this account presents to a desktop's relay for account-pairing. */
@@ -45,8 +61,9 @@ export class AccountClient {
 
   /** This account's desktops that currently advertise a reachable mobile relay. */
   async listDesktops(): Promise<RemoteDesktop[]> {
-    const res = await this.fetchImpl(`${this.baseUrl.replace(/\/+$/, '')}/api/sessions`, {
+    const res = await this.fetchImpl(`${safeBase(this.baseUrl)}/api/sessions`, {
       headers: { Authorization: `Bearer ${this.token}` },
+      redirect: 'error',
     });
     if (!res.ok) throw new Error('Could not load your desktops.');
     const data = (await res.json()) as {
