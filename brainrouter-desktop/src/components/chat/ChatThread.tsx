@@ -26,7 +26,7 @@ type InteractionResponse = { type: 'confirm'; approved: boolean } | { type: 'cho
 
 export interface ChatThreadProps {
   homeMode: boolean;
-  onMode: (mode: 'chat' | 'track' | 'code') => void;
+  onMode: (mode: 'chat' | 'track' | 'code' | 'meetings') => void;
   onStartBuild: () => void;
   onOpenHomeView: (id: PanelId) => void;
   railOpen: boolean;

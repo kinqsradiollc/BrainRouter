@@ -5,7 +5,7 @@ import { sendReleaseNotes } from '../../lib/releaseNotes.js';
 import { Icon } from '../../icons.js';
 import type { PanelId } from '../../panels/Panel.js';
 
-type Mode = 'chat' | 'track' | 'code';
+type Mode = 'chat' | 'track' | 'code' | 'meetings';
 
 export function HomeView(props: {
   username?: string;
@@ -47,6 +47,9 @@ export function HomeView(props: {
         </button>
         <button type="button" className="home-mode-card tone-explore" data-mode="chat" onClick={() => props.onMode('chat')}>
           <span><Icon name="bubble" size={15} /></span><strong>Ask or explore</strong><small>Understand the project and discuss options without changing files.</small><b>Open Chat →</b>
+        </button>
+        <button type="button" className="home-mode-card tone-plan" data-mode="meetings" onClick={() => props.onMode('meetings')}>
+          <span><Icon name="mic" size={15} /></span><strong>Capture a meeting</strong><small>Record or paste a transcript, get a summary, and share it.</small><b>Open Meetings →</b>
         </button>
       </div>
 

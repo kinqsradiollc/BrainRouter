@@ -23,7 +23,7 @@ type Query = (id: string, name: string, args?: Record<string, unknown>) => void;
 export interface AppEffectsCtx {
   q: Query;
   settingsOpen: boolean;
-  mode: 'chat' | 'track' | 'code';
+  mode: 'chat' | 'track' | 'code' | 'meetings';
   info: { workspaceRoot?: string; sessionKey?: string };
   hostUp: boolean;
   refreshGit: () => void;
