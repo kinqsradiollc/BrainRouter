@@ -109,6 +109,7 @@ import {
 } from "./queries/compressionQueries.js";
 import * as sensory from "./queries/sensoryQueries.js";
 import * as meetings from "./queries/meetingsQueries.js";
+import * as vulnerability from "./queries/vulnerabilityQueries.js";
 import * as cognitive from "./queries/cognitiveQueries.js";
 import * as operations from "./queries/operationsQueries.js";
 import * as search from "./queries/searchQueries.js";
@@ -457,6 +458,16 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public revokeMeetingShareTokens(meetingId: string): Promise<number> { return meetings.revokeShareTokens(this.exec, meetingId); }
   public getMeetingActiveShareToken(meetingId: string): Promise<{ token: string; expiresAt: string | null } | null> { return meetings.getActiveShareToken(this.exec, meetingId); }
   public getMeetingByShareToken(token: string): Promise<meetings.MeetingRow | null> { return meetings.getMeetingByShareToken(this.exec, token); }
+  // CVE catalog (spec §10, Task 26) — global world data, no org scoping.
+  public ensureVulnerabilitySource(source: { id: import("../../../vulnerability/types.js").VulnerabilitySourceId; displayName: string; kind: string }): Promise<void> { return vulnerability.ensureVulnerabilitySource(this.exec, source); }
+  public getVulnerabilitySource(id: string) { return vulnerability.getVulnerabilitySource(this.exec, id); }
+  public listVulnerabilitySources() { return vulnerability.listVulnerabilitySources(this.exec); }
+  public startVulnerabilityFeedRun(sourceId: string) { return vulnerability.startVulnerabilityFeedRun(this.exec, sourceId); }
+  public finishVulnerabilityFeedRun(runId: string, outcome: Parameters<typeof vulnerability.finishVulnerabilityFeedRun>[2]) { return vulnerability.finishVulnerabilityFeedRun(this.exec, runId, outcome); }
+  public upsertVulnerabilityObservation(observation: import("../../../vulnerability/types.js").VulnerabilityObservation) { return vulnerability.upsertVulnerabilityObservation(this.exec, observation); }
+  public listVulnerabilities(filters: vulnerability.VulnerabilityListFilters) { return vulnerability.listVulnerabilities(this.exec, filters); }
+  public getVulnerability(cveId: string) { return vulnerability.getVulnerability(this.exec, cveId); }
+  public listVulnerabilityRangesForPackage(ecosystem: string, packageName: string) { return vulnerability.listRangesForPackage(this.exec, ecosystem, packageName); }
   public listProjectMembers(projectId: string): Promise<projects.ProjectMemberRecord[]> { return projects.listProjectMembers(this.exec, projectId); }
 
   // ── admin console + audit (ADR-014 P-F) ──────────────────────────────────

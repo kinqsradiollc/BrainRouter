@@ -55,7 +55,7 @@ describe("RBAC roles + capabilities (ADR-010)", () => {
     expect(can("viewer", "models:manage")).toBe(false);
     expect(can("viewer", "reviews:read")).toBe(false);
     expect(can("viewer", "reviews:run")).toBe(false);
-    expect(capabilitiesFor("viewer")).toEqual(["models:read", "remote:read", "memory:read"]);
+    expect(capabilitiesFor("viewer")).toEqual(["models:read", "remote:read", "memory:read", "vulnerabilities:read"]);
   });
 
   it("every member can read the safe model catalog while only admins manage it", () => {
@@ -66,6 +66,24 @@ describe("RBAC roles + capabilities (ADR-010)", () => {
       "viewer",
     ]);
     expect(ROLES.filter((role) => can(role, "models:manage")).sort()).toEqual([
+      "admin",
+      "owner",
+    ]);
+  });
+
+  it("separates vulnerability browsing, scanning, and source management (spec §10.3)", () => {
+    expect(ROLES.filter((role) => can(role, "vulnerabilities:read")).sort()).toEqual([
+      "admin",
+      "developer",
+      "owner",
+      "viewer",
+    ]);
+    expect(ROLES.filter((role) => can(role, "vulnerabilities:scan")).sort()).toEqual([
+      "admin",
+      "developer",
+      "owner",
+    ]);
+    expect(ROLES.filter((role) => can(role, "vulnerabilities:manage")).sort()).toEqual([
       "admin",
       "owner",
     ]);
