@@ -1,4 +1,4 @@
--- 030_meetings_sharing (ADR-018) — Meetings capability.
+-- 025_meetings_sharing (ADR-018) — Meetings capability.
 -- Additive. `cognitive_records.visibility` is a plain text column (008_memory_org_scope.sql:11,
 -- no CHECK), so the new 'team'/'public' scope values need no constraint change — only a team_id.
 
