@@ -261,6 +261,11 @@ function createAccountTrackProxyFetch(
       try { requestBody = JSON.parse(init.body); }
       catch { requestBody = init.body; }
     }
+    // URL() already normalizes, but reject any traversal segment as defense-in-depth
+    // so a crafted path can never walk outside the provider API (CWE-22).
+    if (/(^|\/)\.\.(\/|$)/.test(providerUrl.pathname)) {
+      throw new Error('Invalid provider path.');
+    }
     const providerPath = source === 'gitlab'
       ? providerUrl.pathname.replace(/^\/api\/v4(?=\/)/, '') + providerUrl.search
       : providerUrl.pathname + providerUrl.search;
