@@ -5,10 +5,10 @@
  * full). Pure — no React.
  */
 
-import { guillocheMarkup } from "./brandMark";
+import { ROUTED_B_ACCENT, routedBMarkup } from "../../../packages/brand/routedB";
 import type { LockupKey } from "./brandPresets";
 
-export const FONT = "Geist, Inter, -apple-system, system-ui, 'Segoe UI', Roboto, sans-serif";
+export const FONT = "Geist, -apple-system, BlinkMacSystemFont, system-ui, 'Segoe UI', sans-serif";
 export const MONO = "'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace";
 
 export const esc = (s: string) =>
@@ -72,7 +72,8 @@ export function tspans(lines: string[], x: number, lineH: number): string {
 /**
  * Rendered width of the logo lockup at height `h` — the single source of truth
  * shared by `lockupMarkup` (centering) and the editor's selection box, so the
- * box hugs the actual logo in every mode. The mark is square (width = h);
+ * box hugs the actual logo in every mode. The coded Routed B is square
+ * (width = h); every export consumes the same canonical paths as product UI.
  * "BrainRouter" in Geist 600 (-0.02em tracking) measures ≈ 4.85× the font size
  * (fontSize = round(h·0.66)), not the looser 6.6× the old estimate used.
  */
@@ -92,12 +93,12 @@ export function lockupMarkup(opts: {
   textColor: string;
   lockup: LockupKey;
 }): { svg: string; width: number } {
-  const { x, y, h, accent, textColor, lockup } = opts;
+  const { x, y, h, textColor, lockup } = opts;
   const gap = h * 0.3;
   let svg = "";
   let cursor = x;
   if (lockup !== "wordmark") {
-    svg += guillocheMarkup({ cx: x + h / 2, cy: y, scale: h / 88, accent });
+    svg += routedBMarkup({ x, y: y - h / 2, size: h, color: textColor, accent: ROUTED_B_ACCENT });
     cursor = x + h + gap;
   }
   if (lockup !== "mark") {

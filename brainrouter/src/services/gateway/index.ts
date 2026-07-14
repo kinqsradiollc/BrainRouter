@@ -18,8 +18,8 @@ function main(): void {
     process.exit(1);
   }
   const port = parseInt(process.env.GATEWAY_PORT ?? "3748", 10);
-  const svc = new GatewayProviderService(url);
-  const app = createGatewayApp(svc, jwtSecret);
+  const svc = new GatewayProviderService(url, jwtSecret);
+  const app = createGatewayApp(svc);
   const server = app.listen(port, () => console.error(`[provider-gateway] listening on :${port}`));
 
   const shutdown = () => {

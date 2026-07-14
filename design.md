@@ -39,6 +39,7 @@ Dashboard and desktop must resolve to these perceptual values even when their va
 | Strong divider      | `rgba(255,255,255,.14)` | Hover/focus/important boundaries                        |
 | Selection fill      | `rgba(216,219,226,.08)` | Active navigation and segmented controls                |
 | Interaction accent  | `#D8DBE2`               | Focus, selected controls, primary actions               |
+| Route accent        | `#7C4DFF`               | Optional second flat path in the coded Routed B only    |
 | Build / agent work  | `#B8BEC8`               | Rare diagrams and data visualization only               |
 | Plan / review       | `#B9B1AF`               | Rare diagrams and data visualization only               |
 | Knowledge / explore | `#ADB9BC`               | Rare diagrams and data visualization only               |
@@ -47,7 +48,21 @@ Dashboard and desktop must resolve to these perceptual values even when their va
 | Warning             | `#EAB308`               | Attention without failure                               |
 | Danger              | `#EF4444`               | Destructive actions and failures                        |
 
-The BrainRouter mark may use the violet-to-pink brand gradient in marketing. Authenticated product surfaces, navigation, composers, cards, avatars, and buttons stay neutral. Data visualizations may use desaturated series colors when labels and shapes also distinguish them.
+The BrainRouter mark is flat and code-rendered on every surface, including marketing. Authenticated product surfaces, navigation, composers, cards, avatars, and buttons stay neutral. Data visualizations may use desaturated series colors when labels and shapes also distinguish them.
+
+### Coded Routed B
+
+`packages/brand/routedB.ts` is the canonical brand source. It owns the `24 × 24` view box, the two typed path strings, the optional flat route-violet color, and the pure SVG-markup adapter used by Brand Studio. React consumers render those paths inline; non-React exports call the same adapter.
+
+- Use the two canonical paths without redrawing, tracing, or approximating them.
+- The mark must remain legible as a one-color `16px` glyph. The lower path may use the one flat route-violet token at larger sizes; the upper path follows `currentColor` or the export foreground.
+- Do not render the logo from PNG, JPEG, WebP, AVIF, base64/data URIs, SVG `<image>`, CSS `background-image`, canvas snapshots, icon fonts, letter tiles, or runtime image requests.
+- Do not apply linear/radial gradients, masks, drop shadows, glows, guilloché geometry, or animated effects to the logo, including on public and marketing surfaces.
+- Brand Studio logo, avatar, poster, and lockup layers consume the canonical coded geometry. Poster templates and avatar photos may contain user images, but those images never replace or contain the BrainRouter logo.
+- Logo mode exports vector SVG/code only. Raster export remains available for poster and avatar compositions, whose Routed B is rasterized from the canonical code at the explicit export boundary; no rasterized mark is shipped back into product code.
+- Wordmark lockups use Geist/SF UI at weight 600 with tight tracking. Safe area around a standalone mark is at least one quarter of its width.
+
+`packages/brand/tokens.css` is the cross-surface semantic input. Dashboard and desktop map its `--br-*` roles to their local CSS vocabulary rather than cloning color or geometry literals.
 
 ### Color grammar
 
@@ -57,6 +72,7 @@ The BrainRouter mark may use the violet-to-pink brand gradient in marketing. Aut
 - Desaturated series colors are allowed in charts, graphs, diffs, or timelines where several datasets must be distinguished. Always pair them with labels, shapes, or patterns.
 - Ambient color is off in authenticated work surfaces. Marketing may use one low-opacity brand light, never multiple competing auras.
 - Dashboard and desktop use the same neutral interaction hierarchy and the same factual status meanings.
+- Status always combines words or an accessible label with shape, icon, or boundary treatment. Green, yellow, red, violet, and neutral accent colors never carry status meaning by themselves.
 
 ## Typography
 
@@ -76,6 +92,7 @@ The BrainRouter mark may use the violet-to-pink brand gradient in marketing. Aut
 - Dashboard page gutters: `64px` wide, `32px` medium, `18px` mobile.
 - Main content may grow to the available workspace. Long-form text remains bounded to about 65 characters per line.
 - Control radius: `6–8px`; cards: `10px`; large panels/modals: `12–14px`.
+- Dashboard buttons and icon controls use a `32 × 32px` standard hit box or `32px` text-control height. Desktop uses `30 × 30px` / `30px` so application controls align with native window chrome. Adjacent controls in the same group may not mix these heights.
 - Avoid pill shapes except status dots, avatars, and genuinely circular controls.
 - Use borders and spacing before shadows. Shadows are reserved for overlays or floating desktop panels.
 

@@ -13,9 +13,10 @@
  * import into the bundle, and so it unit-tests under `tsx --test`.
  */
 import { modelFamily } from './modelFamily.js';
+import type { ModelPolicy, ModelReasoningEffort } from '@kinqs/brainrouter-types';
 
 export type ReasoningControlKind = 'none' | 'always-on' | 'binary' | 'graded';
-export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultracode';
+export type EffortLevel = ModelReasoningEffort;
 
 export interface ReasoningOption {
   /** The canonical EffortLevel this option maps to (the session/wire value). */
@@ -37,6 +38,8 @@ export interface ReasoningProfile {
   xhigh: boolean;
   /** Locked pill label for non-choosable kinds ('Always on'), else null. */
   lockedLabel: string | null;
+  /** Server policies are authoritative; custom/BYOK profiles are heuristic. */
+  source: 'server' | 'inferred';
 }
 
 /** Lower-case + strip a `vendor/` prefix (matches core normalizeModelName). */
@@ -65,22 +68,18 @@ const NON_REASONING: RegExp[] = [
 const XHIGH: RegExp[] = [/^gpt-5\.1-codex-max/, /^gpt-5\.[2-9]/];
 
 const GRADED_LABELS: Record<EffortLevel, string> = {
-  low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max', ultracode: 'Ultracode',
+  none: 'None', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max',
 };
 
-// Claude gets a richer scale than the generic graded set: Opus goes up to
-// "Ultracode", other Claude models top out at "Max" (product spec). These extra
-// tiers cap to xhigh on the wire (see core effortToWireLevel) but persist
-// distinctly so the slider remembers the position.
-const CLAUDE_OPUS_OPTIONS: ReasoningOption[] = [
+// Custom Claude ids use a conservative inferred scale. Managed Claude/Fable
+// models always use the exact server policy instead.
+const CLAUDE_OPTIONS: ReasoningOption[] = [
   { level: 'low', label: 'Low' },
   { level: 'medium', label: 'Medium' },
   { level: 'high', label: 'High' },
   { level: 'xhigh', label: 'Extra' },
   { level: 'max', label: 'Max' },
-  { level: 'ultracode', label: 'Ultracode' },
 ];
-const CLAUDE_OPTIONS: ReasoningOption[] = CLAUDE_OPUS_OPTIONS.slice(0, 5); // up to Max
 
 function classify(m: string): ReasoningControlKind {
   if (NON_REASONING.some((re) => re.test(m))) return 'none';
@@ -90,30 +89,53 @@ function classify(m: string): ReasoningControlKind {
 }
 
 /** The reasoning profile for a model id (the composer's currently-active model). */
-export function reasoningProfileForModel(model: string | undefined | null): ReasoningProfile {
+export function reasoningProfileForModel(model: string | undefined | null, policy?: ModelPolicy | null): ReasoningProfile {
   const raw = (model ?? '').trim();
   const family = raw ? modelFamily(raw) : null;
+  if (policy) {
+    if (!policy.capabilities.reasoning || !policy.reasoning) {
+      return { family, kind: 'none', options: [], min: 'medium', xhigh: false, lockedLabel: null, source: 'server' };
+    }
+    const options = policy.reasoning.allowed.map(({ id, label }) => ({ level: id, label }));
+    if (options.length === 1) {
+      return {
+        family,
+        kind: 'always-on',
+        options: [],
+        min: options[0].level,
+        xhigh: options[0].level === 'xhigh' || options[0].level === 'max',
+        lockedLabel: options[0].label,
+        source: 'server',
+      };
+    }
+    return {
+      family,
+      kind: options.length ? 'graded' : 'none',
+      options,
+      min: options[0]?.level ?? 'medium',
+      xhigh: options.some(({ level }) => level === 'xhigh' || level === 'max'),
+      lockedLabel: null,
+      source: 'server',
+    };
+  }
   if (!raw) {
-    return { family, kind: 'none', options: [], min: 'medium', xhigh: false, lockedLabel: null };
+    return { family, kind: 'none', options: [], min: 'medium', xhigh: false, lockedLabel: null, source: 'inferred' };
   }
   const m = bareName(raw);
-  // Claude gets the extended UI scale (Opus → Ultracode; other Claude → Max),
-  // overriding the generic graded classification below.
   if (family === 'claude') {
-    const options = /opus/.test(m) ? CLAUDE_OPUS_OPTIONS : CLAUDE_OPTIONS;
-    return { family, kind: 'graded', options, min: 'low', xhigh: true, lockedLabel: null };
+    return { family, kind: 'graded', options: CLAUDE_OPTIONS, min: 'low', xhigh: true, lockedLabel: null, source: 'inferred' };
   }
   const kind = classify(m);
 
   if (kind === 'none') {
-    return { family, kind, options: [], min: 'medium', xhigh: false, lockedLabel: null };
+    return { family, kind, options: [], min: 'medium', xhigh: false, lockedLabel: null, source: 'inferred' };
   }
   if (kind === 'always-on') {
-    return { family, kind, options: [], min: 'medium', xhigh: false, lockedLabel: 'Always on' };
+    return { family, kind, options: [], min: 'medium', xhigh: false, lockedLabel: 'Always on', source: 'inferred' };
   }
   if (kind === 'binary') {
     return {
-      family, kind, min: 'medium', xhigh: false, lockedLabel: null,
+      family, kind, min: 'medium', xhigh: false, lockedLabel: null, source: 'inferred',
       options: [{ level: 'medium', label: 'Off' }, { level: 'high', label: 'On' }],
     };
   }
@@ -121,7 +143,7 @@ export function reasoningProfileForModel(model: string | undefined | null): Reas
   const xhigh = XHIGH.some((re) => re.test(m));
   const levels: EffortLevel[] = xhigh ? ['low', 'medium', 'high', 'xhigh'] : ['low', 'medium', 'high'];
   return {
-    family, kind, min: 'low', xhigh, lockedLabel: null,
+    family, kind, min: 'low', xhigh, lockedLabel: null, source: 'inferred',
     options: levels.map((level) => ({ level, label: GRADED_LABELS[level] })),
   };
 }
@@ -135,8 +157,7 @@ export function reasoningPillLabel(profile: ReasoningProfile, effort: string, fa
   if (fast) return 'Fast';                                  // Fast = minimal reasoning
   if (profile.kind === 'always-on') return profile.lockedLabel;   // 'Always on'
   if (profile.kind === 'binary') return effort === 'medium' ? 'Off' : 'On';
-  // graded: prefer the family's own stop label (Claude shows 'Extra' / 'Max' /
-  // 'Ultracode'); when the stored effort isn't a stop for this model (e.g. xhigh
+  // graded: prefer the family's own stop label. When the stored effort isn't a stop for this model (e.g. xhigh
   // on a non-xhigh model) clamp the display to the top stop.
   const opt = profile.options.find((o) => o.level === effort);
   if (opt) return opt.label;
@@ -144,7 +165,7 @@ export function reasoningPillLabel(profile: ReasoningProfile, effort: string, fa
   return GRADED_LABELS[effort as EffortLevel] ?? (effort ? effort[0].toUpperCase() + effort.slice(1) : '');
 }
 
-const EFFORT_RANK: Record<string, number> = { low: 0, medium: 1, high: 2, xhigh: 3, max: 4, ultracode: 5 };
+const EFFORT_RANK: Record<string, number> = { none: 0, minimal: 1, low: 2, medium: 3, high: 4, xhigh: 5, max: 6 };
 
 /**
  * The slider STOP index for the active effort under this profile's options.

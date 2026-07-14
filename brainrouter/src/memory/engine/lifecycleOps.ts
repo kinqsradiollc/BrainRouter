@@ -36,7 +36,12 @@ export interface EngineServices {
  * Only OPERATIONAL knobs (dimensions/timeouts/concurrency/opt-in flags), which
  * are not credentials, remain env-driven.
  */
-export function buildServices(store: IMemoryStore, extractionRunner: ConstructorParameters<typeof MemoryCapturePipeline>[1], synthesisRunner: unknown): EngineServices {
+export function buildServices(
+  store: IMemoryStore,
+  extractionRunner: ConstructorParameters<typeof MemoryCapturePipeline>[1],
+  synthesisRunner: unknown,
+  resolveLlmRunner?: ConstructorParameters<typeof MemoryCapturePipeline>[4],
+): EngineServices {
   const embeddingService = new EmbeddingService({
     // dimensions is a SCHEMA knob (the pgvector column width), not a credential.
     dimensions: process.env.BRAINROUTER_EMBEDDING_DIMENSIONS ? parseInt(process.env.BRAINROUTER_EMBEDDING_DIMENSIONS, 10) : undefined,
@@ -69,7 +74,7 @@ export function buildServices(store: IMemoryStore, extractionRunner: Constructor
       : undefined,
   });
 
-  const capturePipeline = new MemoryCapturePipeline(store, extractionRunner, embeddingService, 1);
+  const capturePipeline = new MemoryCapturePipeline(store, extractionRunner, embeddingService, 1, resolveLlmRunner);
   const recallPipeline = new MemoryRecallPipeline(store, embeddingService, rerankerService, relevanceJudge);
 
   return { embeddingService, rerankerService, relevanceJudge, capturePipeline, recallPipeline };

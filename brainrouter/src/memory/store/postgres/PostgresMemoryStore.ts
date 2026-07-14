@@ -127,6 +127,9 @@ import * as sharing from "./queries/memorySharingQueries.js";
 import * as projects from "./queries/projectQueries.js";
 import * as adminConsole from "./queries/adminConsoleQueries.js";
 import * as providerCfg from "./queries/providerConfigQueries.js";
+import * as modelPolicy from "./queries/modelPolicyQueries.js";
+import * as remoteAccess from "./queries/remoteAccessQueries.js";
+import * as remoteControl from "./queries/remoteControlQueries.js";
 import * as integrationCfg from "./queries/integrationConfigQueries.js";
 import * as connectorCfg from "./queries/connectorConfigQueries.js";
 import * as pentestTargets from "./queries/pentestTargetQueries.js";
@@ -135,6 +138,32 @@ import type { Role } from "../../../tenancy/rbac.js";
 import type { OrganizationRecord, OrgMemberRecord, OrgMembership, OrgPlan } from "../../../tenancy/types.js";
 import type { ProviderStore } from "../../../providers/store.js";
 import type { ProviderConfigRecord, ProviderConfigInput, ProviderKind, ResolvedProviderConfig } from "../../../providers/types.js";
+import type {
+  ModelPolicyStore,
+  ProviderModelInput,
+  ProviderModelPatch,
+  ProviderModelRecord,
+} from "../../../providers/modelPolicyStore.js";
+import type {
+  DeviceSessionInput,
+  DeviceSessionRecord,
+  DeviceSessionRotationInput,
+  DeviceSessionRotationResult,
+  RemoteAccessAuditInput,
+  RemoteAccessAuditRecord,
+  RemoteAccessGrantInput,
+  RemoteAccessGrantRecord,
+  RemoteAccessStore,
+  RemoteDeviceInput,
+  RemoteDeviceKind,
+  RemoteDeviceRecord,
+  RemoteEnrollmentChallengeInput,
+  RemoteEnrollmentChallengeRecord,
+  RemoteGrantDecision,
+  RemoteRelayTicketInput,
+  RemoteRelayTicketRecord,
+  RemoteRelayTicketRevocation,
+} from "../../../remote/store.js";
 import type { IntegrationStore } from "../../../integrations/store.js";
 import type { ConnectorStore, ConnectorConfigRecord, ConnectorConfigInput, ConnectorConfigPatch, ResolvedConnector, OAuthAppConfig, ResolvedOAuthApp } from "../../../connectors/store.js";
 import type { IntegrationConfigRecord, IntegrationConfigInput, IntegrationKind, ResolvedIntegration } from "../../../integrations/types.js";
@@ -172,7 +201,7 @@ export interface PostgresMemoryStoreOptions {
   compressionStore?: { ttlSeconds?: number; maxEntries?: number; now?: () => number };
 }
 
-export class PostgresMemoryStore implements IMemoryStore, TenancyStore, ProviderStore, IntegrationStore, ConnectorStore {
+export class PostgresMemoryStore implements IMemoryStore, TenancyStore, ProviderStore, ModelPolicyStore, RemoteAccessStore, IntegrationStore, ConnectorStore {
   private readonly pool: Pool;
   private readonly ownsPool: boolean;
   private vecReady = false;
@@ -489,6 +518,112 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   }
   public getResolvedProvider(id: string): Promise<ResolvedProviderConfig | null> {
     return providerCfg.getResolvedProvider(this.exec, id);
+  }
+
+  // ── server-managed model policies ─────────────────────────────────────────
+
+  public listProviderModels(orgId: string, enabledOnly = false): Promise<ProviderModelRecord[]> {
+    return modelPolicy.listProviderModels(this.exec, orgId, enabledOnly);
+  }
+  public getProviderModel(orgId: string, id: string): Promise<ProviderModelRecord | null> {
+    return modelPolicy.getProviderModel(this.exec, orgId, id);
+  }
+  public getProviderModelByPublicId(orgId: string, publicModelId: string, enabledOnly = false): Promise<ProviderModelRecord | null> {
+    return modelPolicy.getProviderModelByPublicId(this.exec, orgId, publicModelId, enabledOnly);
+  }
+  public createProviderModel(orgId: string, input: ProviderModelInput): Promise<ProviderModelRecord> {
+    return modelPolicy.createProviderModel(this.exec, orgId, input);
+  }
+  public updateProviderModel(orgId: string, id: string, patch: ProviderModelPatch): Promise<ProviderModelRecord | null> {
+    return modelPolicy.updateProviderModel(this.exec, orgId, id, patch);
+  }
+  public deleteProviderModel(orgId: string, id: string): Promise<boolean> {
+    return modelPolicy.deleteProviderModel(this.exec, orgId, id);
+  }
+  public setDefaultProviderModel(orgId: string, id: string): Promise<boolean> {
+    return modelPolicy.setDefaultProviderModel(this.exec, orgId, id);
+  }
+  public reorderProviderModels(orgId: string, ids: readonly string[]): Promise<void> {
+    return modelPolicy.reorderProviderModels(this.exec, orgId, ids);
+  }
+  public ensureModelGatewayServicePrincipal(orgId: string): Promise<string> {
+    return modelPolicy.ensureModelGatewayServicePrincipal(this.exec, orgId);
+  }
+
+  // ── remote device identities, sessions, grants, and metadata audit ────────
+
+  public createRemoteDevice(orgId: string, userId: string, input: RemoteDeviceInput): Promise<RemoteDeviceRecord> {
+    return remoteAccess.createRemoteDevice(this.exec, orgId, userId, input);
+  }
+  public getRemoteDevice(orgId: string, userId: string, deviceId: string): Promise<RemoteDeviceRecord | null> {
+    return remoteAccess.getRemoteDevice(this.exec, orgId, userId, deviceId);
+  }
+  public getRemoteDeviceByInstallation(orgId: string, userId: string, installationId: string): Promise<RemoteDeviceRecord | null> {
+    return remoteAccess.getRemoteDeviceByInstallation(this.exec, orgId, userId, installationId);
+  }
+  public listRemoteDevices(orgId: string, userId: string, kind?: RemoteDeviceKind): Promise<RemoteDeviceRecord[]> {
+    return remoteAccess.listRemoteDevices(this.exec, orgId, userId, kind);
+  }
+  public touchRemoteDevice(orgId: string, userId: string, deviceId: string, at?: string): Promise<boolean> {
+    return remoteAccess.touchRemoteDevice(this.exec, orgId, userId, deviceId, at);
+  }
+  public revokeRemoteDevice(orgId: string, userId: string, deviceId: string, reasonCode: string, at?: string): Promise<boolean> {
+    return remoteAccess.revokeRemoteDevice(this.exec, orgId, userId, deviceId, reasonCode, at);
+  }
+  public createDeviceSession(orgId: string, userId: string, input: DeviceSessionInput): Promise<DeviceSessionRecord> {
+    return remoteAccess.createDeviceSession(this.exec, orgId, userId, input);
+  }
+  public getDeviceSession(orgId: string, userId: string, sessionId: string): Promise<DeviceSessionRecord | null> {
+    return remoteAccess.getDeviceSession(this.exec, orgId, userId, sessionId);
+  }
+  public getDeviceSessionByTokenHash(orgId: string, userId: string, tokenHash: string): Promise<DeviceSessionRecord | null> {
+    return remoteAccess.getDeviceSessionByTokenHash(this.exec, orgId, userId, tokenHash);
+  }
+  public rotateDeviceSession(orgId: string, userId: string, input: DeviceSessionRotationInput, at?: string): Promise<DeviceSessionRotationResult> {
+    return remoteAccess.rotateDeviceSession(this.exec, orgId, userId, input, at);
+  }
+  public revokeDeviceSessionFamily(orgId: string, userId: string, familyId: string, reasonCode: string, at?: string): Promise<boolean> {
+    return remoteAccess.revokeDeviceSessionFamily(this.exec, orgId, userId, familyId, reasonCode, at);
+  }
+  public createRemoteAccessGrant(orgId: string, userId: string, input: RemoteAccessGrantInput): Promise<RemoteAccessGrantRecord> {
+    return remoteAccess.createRemoteAccessGrant(this.exec, orgId, userId, input);
+  }
+  public getRemoteAccessGrant(orgId: string, userId: string, grantId: string): Promise<RemoteAccessGrantRecord | null> {
+    return remoteAccess.getRemoteAccessGrant(this.exec, orgId, userId, grantId);
+  }
+  public listRemoteAccessGrants(orgId: string, userId: string): Promise<RemoteAccessGrantRecord[]> {
+    return remoteAccess.listRemoteAccessGrants(this.exec, orgId, userId);
+  }
+  public decideRemoteAccessGrant(orgId: string, userId: string, grantId: string, desktopDeviceId: string, decision: RemoteGrantDecision, at?: string): Promise<RemoteAccessGrantRecord | null> {
+    return remoteAccess.decideRemoteAccessGrant(this.exec, orgId, userId, grantId, desktopDeviceId, decision, at);
+  }
+  public revokeRemoteAccessGrant(orgId: string, userId: string, grantId: string, reasonCode: string, at?: string): Promise<boolean> {
+    return remoteAccess.revokeRemoteAccessGrant(this.exec, orgId, userId, grantId, reasonCode, at);
+  }
+  public appendRemoteAccessAudit(orgId: string, userId: string, input: RemoteAccessAuditInput, at?: string): Promise<RemoteAccessAuditRecord> {
+    return remoteAccess.appendRemoteAccessAudit(this.exec, orgId, userId, input, at);
+  }
+  public listRemoteAccessAudit(orgId: string, userId: string, limit?: number): Promise<RemoteAccessAuditRecord[]> {
+    return remoteAccess.listRemoteAccessAudit(this.exec, orgId, userId, limit);
+  }
+
+  public createRemoteEnrollmentChallenge(orgId: string, userId: string, input: RemoteEnrollmentChallengeInput, at?: string): Promise<RemoteEnrollmentChallengeRecord> {
+    return remoteControl.createRemoteEnrollmentChallenge(this.exec, orgId, userId, input, at);
+  }
+  public getRemoteEnrollmentChallenge(orgId: string, userId: string, challengeId: string): Promise<RemoteEnrollmentChallengeRecord | null> {
+    return remoteControl.getRemoteEnrollmentChallenge(this.exec, orgId, userId, challengeId);
+  }
+  public consumeRemoteEnrollmentChallenge(orgId: string, userId: string, challengeId: string, challengeHash: string, at?: string): Promise<boolean> {
+    return remoteControl.consumeRemoteEnrollmentChallenge(this.exec, orgId, userId, challengeId, challengeHash, at);
+  }
+  public createRemoteRelayTicket(orgId: string, userId: string, input: RemoteRelayTicketInput, at?: string): Promise<RemoteRelayTicketRecord> {
+    return remoteControl.createRemoteRelayTicket(this.exec, orgId, userId, input, at);
+  }
+  public consumeRemoteRelayTicket(tokenHash: string, audience: "remote-relay", presentingDeviceId: string, at?: string): Promise<RemoteRelayTicketRecord | null> {
+    return remoteControl.consumeRemoteRelayTicket(this.exec, tokenHash, audience, presentingDeviceId, at);
+  }
+  public revokeRemoteRelayTickets(orgId: string, userId: string, selector: RemoteRelayTicketRevocation, reasonCode: string, at?: string): Promise<number> {
+    return remoteControl.revokeRemoteRelayTickets(this.exec, orgId, userId, selector, reasonCode, at);
   }
 
   // ── integrations (ADR-010 P6: org-scoped GitHub App etc.) ────────────────

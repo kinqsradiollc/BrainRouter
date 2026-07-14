@@ -93,21 +93,40 @@ async function handleComputerUseRequest(wp: WinPool, host: UtilityProcess, reque
 
 // ── Connector Phase 2: keychain secrets (host → main) ─────────────────────────
 // safeStorage only exists in the main process; the agent host requests values
-// over its parent port (mirroring the computer-use bridge). Only `get` is
-// exposed to hosts — writes happen exclusively through the OAuth flow below.
+// over its parent port (mirroring the computer-use bridge). Account sign-in is
+// also hosted, so its two bounded account credentials may be set/deleted here.
 
-type SecretRequest = { kind: 'secret-request'; id: string; op: 'get'; key: string };
+type SecretRequest =
+  | { kind: 'secret-request'; id: string; op: 'get'; key: string }
+  | { kind: 'secret-request'; id: string; op: 'set'; key: string; value: string }
+  | { kind: 'secret-request'; id: string; op: 'delete'; key: string };
+
+const HOST_WRITABLE_ACCOUNT_SECRETS = new Set(['account:access-token', 'account:refresh-token']);
 
 function isSecretRequest(value: unknown): value is SecretRequest {
   if (!value || typeof value !== 'object') return false;
   const v = value as Record<string, unknown>;
-  return v.kind === 'secret-request' && typeof v.id === 'string' && v.op === 'get' && typeof v.key === 'string';
+  if (v.kind !== 'secret-request' || typeof v.id !== 'string' || typeof v.key !== 'string') return false;
+  if (v.op === 'get' || v.op === 'delete') return true;
+  return v.op === 'set' && typeof v.value === 'string';
 }
 
 function handleSecretRequest(host: UtilityProcess, request: SecretRequest): void {
   try {
-    const value = getSecret(app.getPath('userData'), request.key);
-    host.postMessage({ kind: 'secret-response', id: request.id, ok: true, value });
+    if (request.op === 'get') {
+      const value = getSecret(app.getPath('userData'), request.key);
+      host.postMessage({ kind: 'secret-response', id: request.id, ok: true, value });
+      return;
+    }
+    if (!HOST_WRITABLE_ACCOUNT_SECRETS.has(request.key)) throw new Error('Host secret write is not allowed for this key.');
+    if (request.op === 'delete') {
+      deleteSecret(app.getPath('userData'), request.key);
+      host.postMessage({ kind: 'secret-response', id: request.id, ok: true });
+      return;
+    }
+    if (secretStorageMode() !== 'keychain') throw new Error('OS-protected credential storage is unavailable on this device.');
+    setSecret(app.getPath('userData'), request.key, request.value);
+    host.postMessage({ kind: 'secret-response', id: request.id, ok: true });
   } catch (err) {
     host.postMessage({ kind: 'secret-response', id: request.id, ok: false, error: err instanceof Error ? err.message : String(err) });
   }

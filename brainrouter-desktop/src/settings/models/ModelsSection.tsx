@@ -11,6 +11,7 @@ import { Row, Toggle, ChoiceControl, ComboInput } from '../shared/controls.js';
 import { WireFormatSelect } from '../shared/controls.js';
 import { LlmProfilesCard } from './LlmProfilesCard.js';
 import { RoutingChainEditor, routerCatalogChoiceOptions } from './RoutingChainEditor.js';
+import { MODEL_TABS, nextModelTabIndex, type ModelTab } from './modelTabs.js';
 import {
   SUBAGENT_ROLES,
   SUBAGENT_ROLE_LABELS,
@@ -55,9 +56,8 @@ export function ModelsSection({ snapshot, knobs, setKnob, setPath, refreshSnapsh
   // WS12 — provider configure modal + delete confirmation.
   const [provModalOpen, setProvModalOpen] = useState(false);
   const [confirmDeleteProvider, setConfirmDeleteProvider] = useState<string | null>(null);
-  // Sub-tab within the Models panel: 'providers' (default) | 'subagents'. Keeps
-  // per-role sub-agent routing tucked away so the main view stays provider-focused.
-  const [modelsTab, setModelsTab] = useState<'providers' | 'subagents'>('providers');
+  const [modelsTab, setModelsTab] = useState<ModelTab>('managed');
+  const rootRef = useRef<HTMLDivElement>(null);
   // §multi-select-models — the checked allowlist in the setup dialog (ordered).
   // On a probe it's reconciled to the freshly-fetched list (keeping prior picks
   // that still exist); on Connect it's sent as `models[]`.
@@ -199,20 +199,72 @@ export function ModelsSection({ snapshot, knobs, setKnob, setPath, refreshSnapsh
   };
   for (const provider of providerCatalog) addProviderFormatRow(provider.id, provider.label);
   for (const id of savedByProvider.keys()) addProviderFormatRow(id);
+  const selectModelsTab = (tab: ModelTab): void => {
+    setModelsTab(tab);
+    setProvModalOpen(false);
+    setConfirmDeleteProvider(null);
+    requestAnimationFrame(() => {
+      const scroller = rootRef.current?.closest('.set-body') as HTMLElement | null;
+      if (scroller) scroller.scrollTop = 0;
+    });
+  };
+  const onModelsTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number): void => {
+    const next = nextModelTabIndex(index, event.key);
+    if (next === null) return;
+    event.preventDefault();
+    selectModelsTab(MODEL_TABS[next][0]);
+    requestAnimationFrame(() => {
+      rootRef.current?.querySelectorAll<HTMLButtonElement>('[data-model-tab]')[next]?.focus();
+    });
+  };
+  const accountModels = snapshot?.accountModels;
   return (
-    <>
+    <div className="models-section" ref={rootRef}>
       <div className="set-h">Models</div>
-      <div className="set-desc set-desc--mb6">Configure provider endpoints, choose the primary route, and set provider-level request routing.</div>
+      <div className="set-desc set-desc--mb6">Use managed account models, connect personal providers, or tune routing without one long settings page.</div>
 
-      {/* Sub-tabs: provider setup vs. per-sub-agent model routing. */}
-      <div className="models-subtabs">
-        {([['providers', 'Providers'], ['subagents', 'Sub-agents']] as const).map(([key, label]) => (
-          <button key={key} type="button" className={`models-subtab${modelsTab === key ? ' active' : ''}`} onClick={() => setModelsTab(key)}>{label}</button>
+      <div className="models-subtabs" role="tablist" aria-label="Model settings">
+        {MODEL_TABS.map(([key, label], index) => (
+          <button key={key} type="button" role="tab" data-model-tab
+            id={`models-tab-${key}`} aria-controls={`models-panel-${key}`} aria-selected={modelsTab === key}
+            tabIndex={modelsTab === key ? 0 : -1}
+            className={`models-subtab${modelsTab === key ? ' active' : ''}`}
+            onKeyDown={(event) => onModelsTabKeyDown(event, index)}
+            onClick={() => selectModelsTab(key)}>{label}</button>
         ))}
       </div>
 
-      {modelsTab === 'providers' ? (
-      <>
+      {modelsTab === 'managed' ? (
+        <div id="models-panel-managed" role="tabpanel" aria-labelledby="models-tab-managed">
+          <div className="set-h2">BrainRouter managed models</div>
+          <div className="set-desc set-desc--mb8">Read-only models provided by your BrainRouter account. Availability and reasoning choices refresh automatically from the server.</div>
+          {!accountModels?.signedIn ? (
+            <div className="managed-model-state">Sign in to BrainRouter to use managed models.</div>
+          ) : accountModels.models.length === 0 ? (
+            <div className="managed-model-state">{accountModels.error ?? 'No managed models are available for this account.'}</div>
+          ) : (
+            <div className="managed-model-list">
+              {accountModels.models.map((model) => (
+                <div className="managed-model-row" key={model.id}>
+                  <span className="managed-provider-mark" aria-hidden="true">BR</span>
+                  <span className="managed-model-main">
+                    <span className="managed-model-title">{model.label}<code>{model.id}</code></span>
+                    <span className="managed-model-meta">
+                      {model.reasoning ? model.reasoning.allowed.map((effort) => effort.label).join(' · ') : 'No reasoning control'}
+                    </span>
+                  </span>
+                  <span className="pc-tag default no-shrink">Managed</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {accountModels?.stale ? <div className="set-desc set-desc--warn set-desc--mt2">Showing the last known catalog. {accountModels.error}</div> : null}
+          {accountModels?.refreshedAt ? <div className="set-desc set-desc--mt2">Updated {new Date(accountModels.refreshedAt).toLocaleTimeString()} · revision {accountModels.revision}</div> : null}
+        </div>
+      ) : null}
+
+      {modelsTab === 'personal' ? (
+      <div id="models-panel-personal" role="tabpanel" aria-labelledby="models-tab-personal">
       {/* 1. Set up a provider — the primary path leads (moved above routing/gateway). */}
       <div className="set-h2">Set up a provider</div>
       <div className="set-desc set-desc--mb8">Pick one — the dialog pre-fills the endpoint, then enter your key to pull the models it unlocks.</div>
@@ -279,7 +331,11 @@ export function ModelsSection({ snapshot, knobs, setKnob, setPath, refreshSnapsh
         </div>
       ) : null}
       <button className="btn btn--start" onClick={() => openProviderModal({ provider: '' })}>+ Add custom provider</button>
+      </div>
+      ) : null}
 
+      {modelsTab === 'routing' ? (
+      <div id="models-panel-routing" role="tabpanel" aria-labelledby="models-tab-routing">
       {/* 3. Routing — how the configured providers are chained (demoted below setup). */}
       <RoutingChainEditor
         catalog={routerCatalog}
@@ -325,8 +381,10 @@ export function ModelsSection({ snapshot, knobs, setKnob, setPath, refreshSnapsh
             : <>Bound to <code>{routerServeHost}</code> — a bearer key is <strong>required</strong> because the port is reachable off-machine.</>}
         </div>
       </div>
+      </div>
+      ) : null}
 
-      {provModalOpen ? (() => {
+      {modelsTab === 'personal' && provModalOpen ? (() => {
         const cat = providerCatalog.find((c) => c.id === provDraft.provider);
         const headerLabel = cat?.label ?? (editingProvider ?? (provDraft.provider || 'provider'));
         const catalogLocal = !!cat?.local;
@@ -517,7 +575,7 @@ export function ModelsSection({ snapshot, knobs, setKnob, setPath, refreshSnapsh
         ), document.body);
       })() : null}
 
-      {confirmDeleteProvider ? createPortal((
+      {modelsTab === 'personal' && confirmDeleteProvider ? createPortal((
         <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) setConfirmDeleteProvider(null); }}>
           <div className="dialog dangerous dialog--narrow">
             <div className="dialog-title">Remove “{confirmDeleteProvider}”?</div>
@@ -530,7 +588,7 @@ export function ModelsSection({ snapshot, knobs, setKnob, setPath, refreshSnapsh
         </div>
       ), document.body) : null}
 
-      {(() => {
+      {modelsTab === 'routing' ? (() => {
         if (providerFormatRows.length === 0) return null;
         return (
           <div className="wire-format-section">
@@ -568,11 +626,10 @@ export function ModelsSection({ snapshot, knobs, setKnob, setPath, refreshSnapsh
             </div>
           </div>
         );
-      })()}
+      })() : null}
 
-      {/* LLM profiles — named model/endpoint/effort presets. Rendered INSIDE the
-          Providers tab so it's tab-aware (previously a sibling of ModelsSection,
-          which leaked it onto the Sub-agents tab too). */}
+      {modelsTab === 'profiles' ? (
+      <div id="models-panel-profiles" role="tabpanel" aria-labelledby="models-tab-profiles">
       <LlmProfilesCard
         profiles={(knobs.llmProfiles ?? {}) as Record<string, { model?: string; endpoint?: string; reasoningEffort?: string; fast?: boolean }>}
         active={String(knobs.activeLlmProfile ?? '')}
@@ -580,9 +637,11 @@ export function ModelsSection({ snapshot, knobs, setKnob, setPath, refreshSnapsh
         routerCatalog={routerCatalog}
         setPath={setPath}
       />
-      </>
-      ) : (
-      <>
+      </div>
+      ) : null}
+
+      {modelsTab === 'subagents' ? (
+      <div id="models-panel-subagents" role="tabpanel" aria-labelledby="models-tab-subagents">
       <div className="set-h2">Sub-agent models</div>
       <div className="set-desc set-desc--mb6">Optional routing for spawned agents. Leave roles unset to inherit the main primary route. Pick a bare model to let the router choose a provider, or pick provider/model to pin one.</div>
       {SUBAGENT_ROLES.map((role) => {
@@ -615,8 +674,8 @@ export function ModelsSection({ snapshot, knobs, setKnob, setPath, refreshSnapsh
           </Row>
         );
       })}
-      </>
-      )}
-    </>
+      </div>
+      ) : null}
+    </div>
   );
 }

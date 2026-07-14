@@ -34,6 +34,7 @@ import type { FanoutManager } from './fanoutManager.js';
 import type { RemoteWorktreeManager } from './sshRemote.js';
 import type { MobileRelayServer } from './mobileRelayServer.js';
 import type { UiTestHost } from '../uitestHost.js';
+import type { DesktopAccountModelCatalog } from '../accountIntegration.js';
 
 type WsGit = ReturnType<typeof resolveWorkspaceGit>;
 
@@ -84,7 +85,8 @@ export interface HostContext {
   getActiveAgent: () => Agent;
   loadGlobalLlm: () => LLMConfig;
   llmForSession: (sessionKey: string) => LLMConfig;
-  resolveProviderLlm: (providerName: string, model: string) => LLMConfig | undefined;
+  resolveProviderLlm: (providerName: string, model: string) => Promise<LLMConfig | undefined> | LLMConfig | undefined;
+  refreshAccountModelCatalog: (force?: boolean) => Promise<DesktopAccountModelCatalog>;
   syncActiveSessionLlm: (base?: LLMConfig) => LLMConfig;
   spawnAgent: (sessionKey: string) => AgentLike;
   spawnReviewer: (sessionKey?: string) => AgentLike;

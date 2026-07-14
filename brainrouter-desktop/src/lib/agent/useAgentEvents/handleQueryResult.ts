@@ -402,6 +402,10 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
       }
       case 'q-catalog': if (result && typeof result === 'object') setCatalog(result as CommandsCatalog); return;
       case 'q-snapshot': if (result && typeof result === 'object') setSnapshot(result as ConfigSnapshot); return;
+      case 'q-account-models': if (result && typeof result === 'object') {
+        setSnapshot((current) => current ? { ...current, accountModels: result as ConfigSnapshot['accountModels'] } : current);
+        return;
+      }
       case 'q-usage': if (Array.isArray(result)) setUsageLines(result as string[]); return;
       case 'q-usage-hist': if (result && typeof result === 'object') setUsageHistory(result as UsageHistory); return;
       // PLUGIN-MARKETPLACE P4-desktop — Marketplace panel results. The host does

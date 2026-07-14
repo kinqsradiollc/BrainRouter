@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import React, { type ReactNode } from "react";
 
 export type DashboardNavItem = {
   href: string;
@@ -83,6 +83,7 @@ export const SETTINGS_NAV_GROUPS: DashboardNavGroup[] = [
     items: [
       { href: "/organizations", label: "Organizations" },
       { href: "/users", label: "Members", adminOnly: true },
+      { href: "/review-automation", label: "Review automation", keywords: "pull request review policy repositories" },
     ],
   },
   { label: "Intelligence", items: [{ href: "/providers", label: "Models & providers", keywords: "llm", adminOnly: true }] },

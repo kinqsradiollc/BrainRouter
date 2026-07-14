@@ -8,6 +8,14 @@
  */
 import { BASE_URL, refreshAccessToken } from "./client";
 import { getApiKey, getJwt } from "./client-auth";
+import type {
+  ModelCapabilityProvenanceSource,
+  ModelCatalogEnvelope,
+  ModelCapabilities,
+  ModelReasoningEffort,
+  ModelReasoningMode,
+  RepositoryReviewAvailability,
+} from "@kinqs/brainrouter-types";
 
 interface FetchOpts {
   method?: string;
@@ -78,6 +86,36 @@ export interface ProviderInput {
   enabled?: boolean;
   isDefault?: boolean;
 }
+
+export type ManagedModelCapabilitySource = Exclude<ModelCapabilityProvenanceSource, "inferred">;
+export type ManagedModelEffortWireMap = Partial<
+  Record<ModelReasoningEffort, Record<string, string>>
+>;
+export interface ManagedModelCapabilities extends ModelCapabilities {
+  reasoningMode?: ModelReasoningMode;
+  manualBudgetTokens?: "supported" | "unsupported";
+}
+export interface ManagedModelRecord {
+  id: string;
+  orgId: string;
+  providerConfigId: string;
+  publicModelId: string;
+  upstreamModelId: string;
+  displayName: string;
+  enabled: boolean;
+  isDefault: boolean;
+  sortOrder: number;
+  allowedEfforts: ModelReasoningEffort[];
+  defaultEffort: ModelReasoningEffort | null;
+  effortWireMap: ManagedModelEffortWireMap;
+  capabilities: ManagedModelCapabilities;
+  capabilitySource: ManagedModelCapabilitySource;
+  sourceUrl?: string;
+  verifiedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+export type ManagedModelInput = Omit<ManagedModelRecord, "id" | "orgId" | "createdAt" | "updatedAt">;
 
 export type IntegrationKind = "github_app";
 
@@ -153,10 +191,12 @@ export interface ReviewJob {
 
 export interface ReviewPullRequest {
   repo: string; number: number; title: string; author: string | null; headSha: string | null; updatedAt: string | null; url: string | null;
+  availability: RepositoryReviewAvailability;
   security: ReviewJob | null; code: ReviewJob | null;
 }
 export interface ReviewPullRequestDetail {
   repo: string; number: number; title: string; author: string | null; branch: string | null; headSha: string | null; url: string | null;
+  availability: RepositoryReviewAvailability;
   checks: { id?: number; name?: string; conclusion?: string | null; status?: string; html_url?: string }[];
   reviews: ReviewJob[];
 }
@@ -198,6 +238,23 @@ export const adminApi = {
     authFetch(`/api/admin/providers/${id}`, { method: "DELETE", orgId }),
   setDefaultProvider: (id: string, orgId?: string) =>
     authFetch(`/api/admin/providers/${id}/default`, { method: "POST", orgId }),
+  modelCatalog: (orgId?: string) =>
+    authFetch<ModelCatalogEnvelope>("/api/models/catalog", { orgId }),
+  listManagedModels: (orgId?: string) =>
+    authFetch<{ models: ManagedModelRecord[] }>("/api/admin/models", { orgId }),
+  discoverManagedModels: (providerConfigId: string, orgId?: string) =>
+    authFetch<{ models: string[]; selection: { mode: "explicit"; upstreamModelIds: string[] } }>(
+      "/api/admin/models/discover",
+      { method: "POST", body: { providerConfigId }, orgId },
+    ),
+  createManagedModel: (body: ManagedModelInput, orgId?: string) =>
+    authFetch<{ model: ManagedModelRecord }>("/api/admin/models", { method: "POST", body, orgId }),
+  updateManagedModel: (id: string, body: Partial<ManagedModelInput>, orgId?: string) =>
+    authFetch<{ model: ManagedModelRecord }>(`/api/admin/models/${encodeURIComponent(id)}`, { method: "PATCH", body, orgId }),
+  deleteManagedModel: (id: string, orgId?: string) =>
+    authFetch<{ ok: true }>(`/api/admin/models/${encodeURIComponent(id)}`, { method: "DELETE", orgId }),
+  setDefaultManagedModel: (id: string, orgId?: string) =>
+    authFetch<{ ok: true }>(`/api/admin/models/${encodeURIComponent(id)}/default`, { method: "POST", orgId }),
   /** Discover the models an endpoint exposes (GET /models / LM Studio), reusing core. */
   probeModels: (baseUrl: string, apiKey: string, kind = "llm", orgId?: string) =>
     authFetch<{ ok: boolean; models?: { id: string; reasoning?: boolean }[]; error?: string }>(

@@ -54,13 +54,15 @@ function Segmented<T extends string>({
           <button
             key={o.v}
             type="button"
+            aria-pressed={active}
             onClick={() => onChange(o.v)}
             style={{
               display: "flex",
               flexDirection: "column",
               alignItems: "flex-start",
               gap: "1px",
-              padding: "8px 10px",
+              minHeight: "var(--control-size)",
+              padding: "6px 10px",
               borderRadius: "var(--radius-control)",
               cursor: "pointer",
               textAlign: "left",
@@ -85,8 +87,9 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
   return (
     <button
       type="button"
+      aria-pressed={checked}
       onClick={() => onChange(!checked)}
-      style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px", padding: "8px 12px", borderRadius: "var(--radius-control)", background: "var(--surface-overlay)", border: "1px solid var(--border)", color: "var(--text-secondary)", cursor: "pointer", fontSize: "13px" }}
+      style={{ minHeight: "var(--control-size)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "10px", padding: "0 12px", borderRadius: "var(--radius-control)", background: "var(--surface-overlay)", border: "1px solid var(--border)", color: "var(--text-secondary)", cursor: "pointer", fontSize: "13px" }}
     >
       <span>{label}</span>
       <span style={{ width: "34px", height: "20px", borderRadius: "9999px", background: checked ? "var(--accent)" : "var(--border-strong)", position: "relative", transition: "background 0.15s ease", flexShrink: 0 }}>
@@ -107,8 +110,10 @@ function Swatches({ value, onChange, themeAccent }: { value: AccentKey; onChange
             key={k}
             type="button"
             title={ACCENTS[k].label}
+            aria-label={ACCENTS[k].label}
+            aria-pressed={active}
             onClick={() => onChange(k)}
-            style={{ width: "26px", height: "26px", borderRadius: "50%", background: hex, border: "2px solid var(--surface-raised)", boxShadow: active ? "0 0 0 2px var(--accent)" : "0 0 0 1px var(--border)", cursor: "pointer", padding: 0 }}
+            style={{ width: "var(--control-size)", height: "var(--control-size)", borderRadius: "8px", background: hex, border: active ? "2px solid var(--text)" : "1px solid var(--border-strong)", outline: active ? "1px solid var(--surface-raised)" : "none", outlineOffset: "-3px", cursor: "pointer", padding: 0 }}
           />
         );
       })}
@@ -142,12 +147,12 @@ function Upload({ imageDataUrl, set }: { imageDataUrl: string | null; set: (p: P
   };
   return (
     <div style={{ display: "flex", gap: "8px" }}>
-      <label style={{ flex: 1, textAlign: "center", padding: "10px 12px", borderRadius: "var(--radius-control)", background: "var(--accent-wash)", border: "1px solid var(--border-hover-accent)", color: "var(--accent)", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}>
+      <label style={{ flex: 1, minHeight: "var(--control-size)", display: "grid", placeItems: "center", textAlign: "center", padding: "0 12px", borderRadius: "var(--radius-control)", background: "var(--accent-wash)", border: "1px solid var(--border-hover-accent)", color: "var(--accent)", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}>
         {imageDataUrl ? "Replace photo" : "Upload photo"}
         <input type="file" accept="image/*" onChange={onFile} style={{ display: "none" }} />
       </label>
       {imageDataUrl && (
-        <button type="button" onClick={() => set({ imageDataUrl: null })} style={{ padding: "10px 14px", borderRadius: "var(--radius-control)", background: "var(--surface-overlay)", border: "1px solid var(--border)", color: "var(--text-secondary)", fontSize: "13px", cursor: "pointer" }}>
+        <button type="button" onClick={() => set({ imageDataUrl: null })} style={{ minHeight: "var(--control-size)", padding: "0 12px", borderRadius: "var(--radius-control)", background: "var(--surface-overlay)", border: "1px solid var(--border)", color: "var(--text-secondary)", fontSize: "13px", cursor: "pointer" }}>
           Remove
         </button>
       )}

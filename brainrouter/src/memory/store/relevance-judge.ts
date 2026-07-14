@@ -1,4 +1,4 @@
-import type { RelevanceJudgeServiceConfig, RelevanceVerdict } from "@kinqs/brainrouter-types";
+import type { LLMRunner, RelevanceJudgeServiceConfig, RelevanceVerdict } from "@kinqs/brainrouter-types";
 import { acquireLLMSlot } from "../llm/llm-semaphore.js";
 import { resolveLLMTimeoutMs } from "../llm/llm-response.js";
 import { normalizeRequestTimeoutMs } from "../util/request-timeout.js";
@@ -52,6 +52,7 @@ export class RelevanceJudgeService {
   private readonly maxCandidates: number;
   private readonly timeoutMs: number;
   private ready: boolean;
+  private runnerResolver?: (orgId: string) => Promise<LLMRunner>;
 
   constructor(config: RelevanceJudgeServiceConfig) {
     this.enabled = config.enabled ?? false;
@@ -86,6 +87,12 @@ export class RelevanceJudgeService {
     this.ready = this.enabled && !!this.apiKey;
   }
 
+  /** Tenant-safe brain path: resolve an immutable runner for each recall org. */
+  setRunnerResolver(resolve: (orgId: string) => Promise<LLMRunner>): void {
+    this.runnerResolver = resolve;
+    this.ready = this.enabled;
+  }
+
   getMaxCandidates(): number {
     return this.maxCandidates;
   }
@@ -95,7 +102,7 @@ export class RelevanceJudgeService {
    * subset of indices approved as relevant. Throws on transport/parsing
    * failure — callers are expected to fall back to pre-judge results.
    */
-  async judge(params: { query: string; candidates: JudgeCandidate[] }): Promise<JudgeResult> {
+  async judge(params: { query: string; candidates: JudgeCandidate[]; orgId?: string }): Promise<JudgeResult> {
     if (!this.ready) {
       throw new Error("RelevanceJudgeService is not ready (disabled or missing API key)");
     }
@@ -138,18 +145,8 @@ export class RelevanceJudgeService {
     // owns the wire format, the forced-tool structured output (schema'd so the shape
     // is consistent across models), the LM-Studio unload retry and the tool-drop
     // fallback — no more duplicated transport here.
-    const release = await acquireLLMSlot();
     let raw: string;
-    try {
-      raw = await modelGateway.dispatch({
-        endpoint: this.endpoint,
-        apiKey: this.apiKey,
-        model: this.model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        tool: {
+    const tool = {
           name: "report_relevance",
           description: "Return one relevance verdict per candidate, as described in the prompt.",
           parameters: {
@@ -158,12 +155,34 @@ export class RelevanceJudgeService {
             required: ["verdicts"],
             additionalProperties: false,
           },
-        },
+        };
+    if (this.runnerResolver && params.orgId) {
+      const runner = await this.runnerResolver(params.orgId);
+      raw = await runner.run({
+        systemPrompt,
+        prompt: userPrompt,
+        tool,
         timeoutMs: this.timeoutMs,
-        label: "Relevance Judge",
+        taskId: "relevance-judge",
       });
-    } finally {
-      release();
+    } else {
+      const release = await acquireLLMSlot();
+      try {
+        raw = await modelGateway.dispatch({
+          endpoint: this.endpoint,
+          apiKey: this.apiKey,
+          model: this.model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+          tool,
+          timeoutMs: this.timeoutMs,
+          label: "Relevance Judge",
+        });
+      } finally {
+        release();
+      }
     }
 
     const parsed = this.parseVerdicts(raw, candidates.length);

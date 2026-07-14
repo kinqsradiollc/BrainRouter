@@ -30,6 +30,17 @@ export function sideRailFullscreenTitle(fullscreen: boolean): string {
   return fullscreen ? 'Restore panel width' : 'Enlarge panel';
 }
 
+/** A requested Environment surface never vanishes at a narrow effective width:
+ * it changes from a layout column to a dismissible drawer. */
+export function environmentPanelLayout(
+  open: boolean,
+  homeMode: boolean,
+  hasColumnRoom: boolean,
+): { mounted: boolean; drawer: boolean } {
+  const mounted = open && !homeMode;
+  return { mounted, drawer: mounted && !hasColumnRoom };
+}
+
 export function reorderByValue<T>(items: T[], dragged: T, target: T): T[] {
   const from = items.indexOf(dragged);
   const to = items.indexOf(target);

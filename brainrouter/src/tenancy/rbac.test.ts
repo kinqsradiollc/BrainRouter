@@ -18,6 +18,8 @@ describe("RBAC roles + capabilities (ADR-010)", () => {
 
   it("admin can configure providers/triggers/members but NOT org:manage", () => {
     expect(can("admin", "providers:manage")).toBe(true);
+    expect(can("admin", "models:read")).toBe(true);
+    expect(can("admin", "models:manage")).toBe(true);
     expect(can("admin", "triggers:manage")).toBe(true);
     expect(can("admin", "members:manage")).toBe(true);
     expect(can("admin", "org:manage")).toBe(false);
@@ -28,6 +30,8 @@ describe("RBAC roles + capabilities (ADR-010)", () => {
     expect(can("developer", "memory:read")).toBe(true);
     expect(can("developer", "memory:share")).toBe(true);
     expect(can("developer", "providers:manage")).toBe(false);
+    expect(can("developer", "models:read")).toBe(true);
+    expect(can("developer", "models:manage")).toBe(false);
     expect(can("developer", "triggers:manage")).toBe(false);
     expect(can("developer", "members:manage")).toBe(false);
     expect(can("developer", "reviews:read")).toBe(true);
@@ -47,9 +51,24 @@ describe("RBAC roles + capabilities (ADR-010)", () => {
     expect(can("viewer", "memory:write")).toBe(false);
     expect(can("viewer", "memory:share")).toBe(false);
     expect(can("viewer", "providers:manage")).toBe(false);
+    expect(can("viewer", "models:read")).toBe(true);
+    expect(can("viewer", "models:manage")).toBe(false);
     expect(can("viewer", "reviews:read")).toBe(false);
     expect(can("viewer", "reviews:run")).toBe(false);
-    expect(capabilitiesFor("viewer")).toEqual(["memory:read"]);
+    expect(capabilitiesFor("viewer")).toEqual(["models:read", "remote:read", "memory:read"]);
+  });
+
+  it("every member can read the safe model catalog while only admins manage it", () => {
+    expect(ROLES.filter((role) => can(role, "models:read")).sort()).toEqual([
+      "admin",
+      "developer",
+      "owner",
+      "viewer",
+    ]);
+    expect(ROLES.filter((role) => can(role, "models:manage")).sort()).toEqual([
+      "admin",
+      "owner",
+    ]);
   });
 
   it("review capabilities intentionally separate read access from manual runs", () => {
@@ -59,6 +78,25 @@ describe("RBAC roles + capabilities (ADR-010)", () => {
     expect(can("admin", "reviews:run")).toBe(true);
     expect(can("developer", "reviews:read")).toBe(true);
     expect(can("developer", "reviews:run")).toBe(false);
+  });
+
+  it("separates remote visibility, connection, and management authority", () => {
+    expect(ROLES.filter((role) => can(role, "remote:read")).sort()).toEqual([
+      "admin",
+      "developer",
+      "owner",
+      "viewer",
+    ]);
+    expect(ROLES.filter((role) => can(role, "remote:connect")).sort()).toEqual([
+      "admin",
+      "developer",
+      "owner",
+    ]);
+    expect(ROLES.filter((role) => can(role, "remote:manage")).sort()).toEqual([
+      "admin",
+      "developer",
+      "owner",
+    ]);
   });
 
   it("providers:manage + triggers:manage are admin-or-above only (the goal's 'only admin can do it')", () => {

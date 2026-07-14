@@ -32,17 +32,22 @@ export interface EnvironmentPanelProps {
   lastTurnFails: number | null;
   backgroundTasks: FleetRow[];
   openTask: (f: FleetRow) => void;
+  drawer: boolean;
+  onClose: () => void;
 }
 
 export function EnvironmentPanel(p: EnvironmentPanelProps): React.ReactElement | null {
-  const { envAnim, openSettings, gitInfo, ensurePanel, setTermDockOpen, branches, pop, setPop, q, commitSubjects, ci, openCiPanel, lastTurnFails, backgroundTasks, openTask } = p;
+  const { envAnim, openSettings, gitInfo, ensurePanel, setTermDockOpen, branches, pop, setPop, q, commitSubjects, ci, openCiPanel, lastTurnFails, backgroundTasks, openTask, drawer, onClose } = p;
   if (!envAnim.mounted) return null;
   return (
-    <aside className={`env-col${envAnim.closing ? ' closing' : ''}`}>
+    <aside className={`env-col${drawer ? ' drawer' : ''}${envAnim.closing ? ' closing' : ''}`} aria-label="Environment panel">
       <div className="env-pop">
         <div className="env-head">
           <span>Environment</span>
-          <button className="icon-btn" title="Settings" onClick={() => openSettings('general')}><Icon name="gear" size={13} /></button>
+          <span className="env-head-actions">
+            <button className="icon-btn" title="Settings" aria-label="Environment settings" onClick={() => openSettings('general')}><Icon name="gear" size={13} /></button>
+            <button className="icon-btn" title="Close Environment" aria-label="Close Environment" onClick={onClose}><Icon name="close" size={13} /></button>
+          </span>
         </div>
         {/* Sections render only when they apply: git rows need a
             repo, the checks row needs a finished turn. */}

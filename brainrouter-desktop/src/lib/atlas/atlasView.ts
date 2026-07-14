@@ -18,7 +18,7 @@
 // Import from the atlas-ops SUBPATH, not the package barrel: the barrel's
 // `export *` pulls `memory.js`, whose top-level `node:crypto` import breaks the
 // browser (vite) bundle. atlas-ops only depends on the pure `atlas.js` types.
-export { atlasSearchMatches, atlasImpact, atlasImpactOf, type AtlasImpact } from "@kinqs/brainrouter-types/dist/atlas-ops.js";
+export { atlasSearchMatches, atlasImpact, atlasImpactOf, type AtlasImpact } from "@kinqs/brainrouter-types/atlas-ops";
 
 // Node-type + file-category colours.
 export { ATLAS_NODE_COLORS, atlasNodeColor, ATLAS_FILE_CATEGORIES, ATLAS_CATEGORY_COLORS } from "./atlasView/colors.js";

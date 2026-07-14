@@ -6,6 +6,7 @@
  * handlers and the renderSessionNode closure, passed through as props.
  */
 import React, { useMemo, useState, type Dispatch, type SetStateAction } from 'react';
+import { ROUTED_B_ACCENT, ROUTED_B_PATHS, ROUTED_B_VIEWBOX } from '../../../../packages/brand/routedB.js';
 import { Icon } from '../../icons.js';
 import { SessionStatus } from '../status/SessionStatus.js';
 import { fmtAge } from '../../lib/format.js';
@@ -146,6 +147,19 @@ export function Sidebar(p: SidebarProps): React.ReactElement | null {
         <button className="icon-btn" title="Collapse sidebar" aria-label="Collapse sidebar" onClick={() => setRailOpen(false)}>
           <Icon name="layout" size={15} />
         </button>
+        <svg
+          className="rail-brand-mark"
+          data-brand-mark="routed-b"
+          width="20"
+          height="20"
+          viewBox={ROUTED_B_VIEWBOX}
+          role="img"
+          aria-label="BrainRouter"
+          focusable="false"
+        >
+          <path d={ROUTED_B_PATHS.upper} fill="currentColor" />
+          <path d={ROUTED_B_PATHS.lower} fill={ROUTED_B_ACCENT} />
+        </svg>
       </div>
       <div className="rail-card">
         {/* Workspace mode switcher — Chat · Track · Code over the same workspace. */}

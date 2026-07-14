@@ -10,11 +10,13 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import { MODEL_REASONING_EFFORTS } from "@kinqs/brainrouter-types/models";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
 import { PremiumCard } from "../../components/PremiumCard";
 import { PremiumButton } from "../../components/PremiumButton";
 import { adminApi, type ProviderConfig, type ProviderKind } from "../../lib/adminApi";
+import { ManagedModelsPanel } from "./ManagedModelsPanel";
 
 // Judge is NOT a provider kind — it's a brain sub-agent (Subagents tab). The
 // configurable provider kinds are the LLM + the two vector stages.
@@ -23,7 +25,7 @@ const KINDS: { kind: ProviderKind; label: string; hint: string }[] = [
   { kind: "embedding", label: "Embeddings", hint: "Vector recall" },
   { kind: "reranker", label: "Reranker", hint: "Cross-encoder rescoring" },
 ];
-const REASONING = ["", "low", "medium", "high", "xhigh"];
+const REASONING = ["", ...MODEL_REASONING_EFFORTS];
 
 // Brain sub-agent roles (packages/core BRAIN_AGENT_ROLES) — the list arrives from
 // the backend; these are the labels. Each picks a model on the LLM provider.
@@ -48,12 +50,6 @@ const EMPTY_DRAFT: Draft = {
   apiVersion: "", wireFormat: "", reasoningEffort: "", isDefault: true, enabled: true,
 };
 
-const ICON_GRADIENTS = [["#34C28E", "#1E9C74"], ["#5B8DEF", "#3B6FD4"], ["#B57BEE", "#8A4FD8"], ["#E8925A", "#D46E38"], ["#4FB3C4", "#2E8FA0"], ["#E5675F", "#C7463E"]];
-function providerGradient(id: string): string {
-  let h = 0; for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
-  const [a, b] = ICON_GRADIENTS[h % ICON_GRADIENTS.length];
-  return `linear-gradient(135deg, ${a}, ${b})`;
-}
 const monogram = (s: string) => (s || "?").trim().slice(0, 2).toUpperCase();
 const hostOf = (url: string) => url.replace(/^https?:\/\//, "").replace(/\/.*$/, "") || "custom endpoint";
 
@@ -64,9 +60,10 @@ function ProvidersInner() {
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [secretReady, setSecretReady] = useState(true);
+  const [canManageProviders, setCanManageProviders] = useState(true);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"providers" | "subagents">("providers");
+  const [tab, setTab] = useState<"managed" | "personal" | "subagents">("managed");
   const [galleryKind, setGalleryKind] = useState<ProviderKind>("llm");
 
   // Modal state.
@@ -92,8 +89,16 @@ function ProvidersInner() {
       const res = await adminApi.listProviders();
       setProviders(res.providers ?? []);
       setSecretReady(res.secretStorageReady);
+      setCanManageProviders(true);
       setError("");
-    } catch (e) { setError(e instanceof Error ? e.message : "Failed to load providers"); }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Failed to load providers";
+      if (/providers:manage|permission|forbidden/i.test(message)) {
+        setCanManageProviders(false);
+        setProviders([]);
+        setError("");
+      } else setError(message);
+    }
     finally { setLoading(false); }
   }, []);
 
@@ -210,17 +215,20 @@ function ProvidersInner() {
 
   return (
     <div className="settings-page">
-      <PageHeader title="AI Providers" description="Connect the providers the desktop/CLI supports, fetch the models each key unlocks, and route the brain's workers — stored encrypted in the database, no .env." />
+      <PageHeader title="Models & providers" description="Review organization-managed models, keep personal provider custody separate, and route specialist workers from focused panels." />
 
-      {!secretReady && <div className="settings-note settings-note--warn"><code>BRAINROUTER_SECRET_KEY</code> is not set on the server — provider keys cannot be stored until it is.</div>}
+      {tab === "personal" && !secretReady && <div className="settings-note settings-note--warn"><code>BRAINROUTER_SECRET_KEY</code> is not set on the server — provider keys cannot be stored until it is.</div>}
       {error && <div className="settings-note settings-note--error">{error}</div>}
 
       <div className="models-tabs" role="tablist">
-        <button type="button" className={`models-tab ${tab === "providers" ? "models-tab--active" : ""}`} onClick={() => setTab("providers")}>Providers</button>
-        <button type="button" className={`models-tab ${tab === "subagents" ? "models-tab--active" : ""}`} onClick={() => setTab("subagents")}>Subagents</button>
+        <button type="button" role="tab" aria-selected={tab === "managed"} className={`models-tab ${tab === "managed" ? "models-tab--active" : ""}`} onClick={() => setTab("managed")}>Managed models</button>
+        <button type="button" role="tab" aria-selected={tab === "personal"} disabled={!canManageProviders} title={canManageProviders ? undefined : "Organization administrators manage provider custody"} className={`models-tab ${tab === "personal" ? "models-tab--active" : ""}`} onClick={() => setTab("personal")}>Personal / BYOK</button>
+        <button type="button" role="tab" aria-selected={tab === "subagents"} disabled={!canManageProviders} title={canManageProviders ? undefined : "Organization administrators manage subagent routing"} className={`models-tab ${tab === "subagents" ? "models-tab--active" : ""}`} onClick={() => setTab("subagents")}>Subagents</button>
       </div>
 
-      {tab === "providers" && (
+      {tab === "managed" && <ManagedModelsPanel providers={providers} />}
+
+      {tab === "personal" && canManageProviders && (
         <>
           {/* Catalog gallery — pick a kind, then a provider; the dialog pre-fills the endpoint. */}
           <PremiumCard level={2} style={{ marginTop: "var(--spacing-24)" }}>
@@ -237,7 +245,7 @@ function ProvidersInner() {
                 const done = configuredIds.has(c.id);
                 return (
                   <button key={c.id} type="button" className="prov-card" onClick={() => openCatalog(c)} title={`Set up ${c.label}`}>
-                    <span className="prov-icon" style={{ background: providerGradient(c.id) }} aria-hidden>{monogram(c.label)}</span>
+                    <span className="prov-icon" aria-hidden>{monogram(c.label)}</span>
                     <span className="prov-meta">
                       <span className="prov-name">{c.label}</span>
                       <span className="prov-host">{hostOf(c.endpoint)}</span>
@@ -266,7 +274,7 @@ function ProvidersInner() {
                     : rows.length === 0 ? <div className="settings-empty-inline">No {label} provider yet — pick one above.</div>
                       : rows.map((p) => (
                         <div key={p.id} className="org-member">
-                          <span className="prov-icon prov-icon--sm" style={{ background: providerGradient(p.providerId || p.label) }} aria-hidden>{monogram(p.label || p.providerId)}</span>
+                          <span className="prov-icon prov-icon--sm" aria-hidden>{monogram(p.label || p.providerId)}</span>
                           <div className="org-member__id" style={{ whiteSpace: "normal" }}>
                             <strong>{p.label || p.providerId}</strong>
                             {p.isDefault && <span className="settings-badge settings-badge--default" style={{ marginLeft: 6 }}>default</span>}
@@ -286,13 +294,13 @@ function ProvidersInner() {
         </>
       )}
 
-      {tab === "subagents" && (() => {
+      {tab === "subagents" && canManageProviders && (() => {
         const llmProvider = providers.find((p) => p.kind === "llm" && p.isDefault) ?? providers.find((p) => p.kind === "llm");
         const llmProviders = providers.filter((p) => p.kind === "llm");
         return (
           <PremiumCard level={2} style={{ marginTop: "var(--spacing-24)" }}>
             <div className="settings-cardhead"><div><h3>Brain worker models</h3><div className="settings-hint">Route the brain&apos;s cognitive workers to different models on your LLM provider — the same routing mechanism as the desktop/CLI agent.</div></div></div>
-            {!llmProvider ? <div className="settings-empty-inline">Configure an LLM provider first (Providers tab).</div>
+            {!llmProvider ? <div className="settings-empty-inline">Configure an LLM provider first (Personal / BYOK tab).</div>
               : roles.length === 0 ? <div className="settings-empty-inline">Loading roles…</div>
                 : roles.map((role) => {
                   const a = assignments[role] ?? {};
@@ -332,7 +340,7 @@ function ProvidersInner() {
         <div className="prov-overlay" onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}>
           <div className="prov-dialog" role="dialog" aria-modal>
             <div className="prov-dialog__head">
-              <span className="prov-icon" style={{ background: providerGradient(draft.providerId || "openai-compatible") }} aria-hidden>{monogram(draft.label || draft.providerId || "?")}</span>
+              <span className="prov-icon" aria-hidden>{monogram(draft.label || draft.providerId || "?")}</span>
               <div>
                 <h3 style={{ margin: 0 }}>{editingId ? `Configure ${draft.label}` : draft.providerId ? `Connect ${draft.label || draft.providerId}` : "Add a custom provider"}</h3>
                 <div className="settings-hint">{editingId ? "Update its key, models, and routing." : "Enter your key, then fetch the models it unlocks."}</div>

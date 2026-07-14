@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { dimsFor, type BrandConfig } from "./brandPresets";
+import { allowsRasterExport, dimsFor, type BrandConfig } from "./brandPresets";
 import { buildSVG } from "./buildSVG";
 import { downloadSVGString, downloadPNGFromSVG, copyText } from "./exportUtil";
 
@@ -14,6 +14,7 @@ export function useBrandExport(cfg: BrandConfig) {
   const downloadSVG = () => downloadSVGString(buildSVG(cfg), `${base}.svg`);
 
   const downloadPNG = async (scale = 2) => {
+    if (!allowsRasterExport(cfg.mode)) return;
     setBusy(true);
     try {
       const { w, h } = dimsFor(cfg);

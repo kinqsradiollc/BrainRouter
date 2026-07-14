@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { RecallResult } from "@kinqs/brainrouter-types";
-import type { ResolvedProviderConfig } from "../../../providers/types.js";
-import type { GatewayDispatchOptions } from "../../../services/modelGateway/modelGateway.js";
+import type { ModelReasoningEffort } from "@kinqs/brainrouter-types";
+import type { ScopedGatewayDispatchOptions } from "../../../services/modelGateway/modelGateway.js";
 
 export interface BrainChatMessage {
   role: "user" | "assistant";
@@ -15,7 +15,9 @@ export interface BrainChatInput {
   projectId?: string;
   projectTag?: string;
   workspaceTag?: string;
-  provider: ResolvedProviderConfig;
+  model: string;
+  reasoningEffort?: ModelReasoningEffort;
+  servicePrincipalId: string;
   messages: BrainChatMessage[];
 }
 
@@ -45,7 +47,7 @@ interface BrainChatDependencies {
       scope: "project" | "workspace";
     };
   }): Promise<RecallResult>;
-  dispatch(input: GatewayDispatchOptions): Promise<string>;
+  dispatch(input: ScopedGatewayDispatchOptions): Promise<string>;
   capture?(input: {
     userId: string;
     sessionKey: string;
@@ -121,10 +123,10 @@ export async function runBrainChat(input: BrainChatInput, deps: BrainChatDepende
   });
 
   const answer = (await deps.dispatch({
-    endpoint: input.provider.endpoint,
-    apiKey: input.provider.apiKey,
-    model: input.provider.model,
-    wireFormat: input.provider.wireFormat,
+    orgId: input.orgId,
+    servicePrincipalId: input.servicePrincipalId,
+    model: input.model,
+    reasoningEffort: input.reasoningEffort,
     messages: [
       { role: "system", content: systemPrompt(recall) },
       ...input.messages.map((message) => ({ role: message.role, content: message.content })),

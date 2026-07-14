@@ -373,6 +373,24 @@ test('set-model: switches + persists; persist failure degrades gracefully', asyn
   assert.ok(out.some((m) => m.event.kind === 'status' && (m.event as { text: string }).text.includes('persisting failed')));
 });
 
+test('start-turn is blocked before agent execution when active model policy is invalid', async () => {
+  const sent: AgentEventMessage[] = [];
+  let runs = 0;
+  const fake = fakeAgent(async () => { runs += 1; return 'should not run'; });
+  const core = createHostCore({
+    agent: fake,
+    send: (message) => sent.push(message),
+    validateTurn: () => 'This managed model is no longer available. Choose another model before sending.',
+  });
+
+  await core.handle({ kind: 'start-turn', prompt: 'hello' });
+
+  assert.equal(runs, 0);
+  assert.equal(sent.some((message) => message.event.kind === 'turn-start'), false);
+  assert.equal(sent.some((message) => message.event.kind === 'turn-error'
+    && /choose another model/i.test(message.event.message)), true);
+});
+
 test('createBrokerPort: confirm/choice round-trip + dismissal fails closed', async () => {
   const broker = new InteractionBroker();
   const emitted: Array<{ kind: string; request: { id: string; type: string } }> = [];
@@ -473,6 +491,22 @@ test('set-model providerName + persist:false → cross-provider PER-SESSION (reb
   assert.equal(rebuilt[0]?.apiKey, 'sk-x', 'incl. the resolved key (main-process only)');
   assert.deepEqual(sessionLlms, [['sess-test', { provider: 'anthropic', model: 'claude-opus-4-8', endpoint: 'https://api.anthropic.com' }]], 'wrote the FULL session override (no secret)');
   assert.deepEqual(global, [], 'never touched the global default → no sync to other sessions');
+});
+
+test('set-model with an unavailable named provider fails closed without changing the model', async () => {
+  const { out, send } = collect();
+  const agent = modelAgent();
+  const core = createHostCore({
+    agent,
+    send,
+    resolveProviderLlm: async () => undefined,
+  });
+
+  await core.handle({ kind: 'set-model', model: 'removed-managed-model', persist: false, providerName: 'brainrouter-account' });
+
+  assert.equal(agent.getModel?.(), 'init-model');
+  assert.ok(out.some((message) => message.event.kind === 'turn-error'
+    && (message.event as { message: string }).message.includes('unavailable')));
 });
 
 test('set-model providerName + persist:true → cross-provider GLOBAL default (persistProviderModel + clears session)', async () => {

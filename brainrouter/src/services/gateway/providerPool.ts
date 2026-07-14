@@ -8,9 +8,29 @@
 import pg from "pg";
 import type { Executor } from "../../memory/store/postgres/queries/executor.js";
 import * as providerCfg from "../../memory/store/postgres/queries/providerConfigQueries.js";
+import * as modelPolicy from "../../memory/store/postgres/queries/modelPolicyQueries.js";
+import * as tenancy from "../../memory/store/postgres/queries/tenancyQueries.js";
+import * as users from "../../memory/store/postgres/queries/userStatsQueries.js";
 import { resolveProviderConfig } from "../../providers/resolver.js";
 import type { ProviderStore } from "../../providers/store.js";
 import type { ProviderKind, ResolvedProviderConfig } from "../../providers/types.js";
+import {
+  authenticateGatewayCredential,
+  type GatewayAuthContext,
+  type GatewayIdentityStore,
+} from "./auth.js";
+import {
+  resolveGatewayModel,
+  type GatewayResolvedModel,
+} from "./modelPolicy.js";
+import {
+  acquireGatewayRequest,
+  DEFAULT_GATEWAY_QUOTA_LIMITS,
+  recordGatewayUsage,
+  releaseGatewayRequest,
+  type GatewayQuotaLimits,
+  type GatewayUsageEvent,
+} from "./accounting.js";
 
 /** A minimal Executor over a `pg.Pool` (mirrors PostgresMemoryStore's `this.exec`). */
 export function makePoolExecutor(pool: pg.Pool): Executor {
@@ -41,18 +61,111 @@ export function makePoolProviderStore(exec: Executor): ProviderStore {
   };
 }
 
+/** Identity lookups stay on the gateway's own pool and re-check every request. */
+export function makePoolGatewayIdentityStore(exec: Executor): GatewayIdentityStore {
+  return {
+    getUserByApiKey: (apiKey) => users.getUserByApiKey(exec, apiKey),
+    getUserById: (userId) => users.getUserById(exec, userId),
+    getDefaultOrgId: (userId) => tenancy.getDefaultOrgId(exec, userId),
+    getMemberRole: (orgId, userId) => tenancy.getMemberRole(exec, orgId, userId),
+    async getServicePrincipal(id) {
+      const row = await exec.one<{
+        id: string;
+        org_id: string;
+        active: boolean;
+        scopes_json: string;
+      }>(
+        `SELECT id, org_id, active, scopes_json
+           FROM model_gateway_service_principals
+          WHERE id = $1`,
+        [id],
+      );
+      if (!row) return null;
+      let scopes: string[] = [];
+      try {
+        const parsed = JSON.parse(row.scopes_json);
+        if (Array.isArray(parsed)) scopes = parsed.filter((value): value is string => typeof value === "string");
+      } catch { /* malformed persistence fails closed through an empty scope set */ }
+      return { id: row.id, orgId: row.org_id, active: Boolean(row.active), scopes };
+    },
+  };
+}
+
 export class GatewayProviderService {
   private readonly pool: pg.Pool;
+  private readonly exec: Executor;
   private readonly store: ProviderStore;
+  private readonly identityStore: GatewayIdentityStore;
+  private readonly jwtSecret: string;
+  private readonly quotaLimits: GatewayQuotaLimits;
 
-  constructor(connectionString: string) {
+  constructor(
+    connectionString: string,
+    jwtSecret: string,
+    quotaLimits: GatewayQuotaLimits = DEFAULT_GATEWAY_QUOTA_LIMITS,
+  ) {
     this.pool = new pg.Pool({ connectionString });
-    this.store = makePoolProviderStore(makePoolExecutor(this.pool));
+    const exec = makePoolExecutor(this.pool);
+    this.exec = exec;
+    this.store = makePoolProviderStore(exec);
+    this.identityStore = makePoolGatewayIdentityStore(exec);
+    this.jwtSecret = jwtSecret;
+    this.quotaLimits = quotaLimits;
+  }
+
+  authenticate(bearer: string, requestedOrgId?: string): Promise<GatewayAuthContext> {
+    return authenticateGatewayCredential({
+      bearer,
+      requestedOrgId,
+      jwtSecret: this.jwtSecret,
+      store: this.identityStore,
+    });
   }
 
   /** DB-first (env fallback) resolved provider for (org, kind). */
   resolve(orgId: string, kind: ProviderKind): Promise<ResolvedProviderConfig | null> {
     return resolveProviderConfig(this.store, orgId, kind);
+  }
+
+  /** Member-safe source rows; the HTTP route serializes public ids only. */
+  listModels(auth: GatewayAuthContext) {
+    return modelPolicy.listProviderModels(this.exec, auth.orgId, true);
+  }
+
+  /** Internal-only model resolution; callers must never serialize this result. */
+  resolveModel(
+    auth: GatewayAuthContext,
+    publicModelId: string,
+    reasoningEffort?: unknown,
+  ): Promise<GatewayResolvedModel> {
+    return resolveGatewayModel({
+      auth,
+      publicModelId,
+      reasoningEffort,
+      store: {
+        getProviderModelByPublicId: (orgId, modelId, enabledOnly) => (
+          modelPolicy.getProviderModelByPublicId(this.exec, orgId, modelId, enabledOnly)
+        ),
+        getResolvedProvider: (id) => providerCfg.getResolvedProvider(this.exec, id),
+      },
+    });
+  }
+
+  acquireRequest(auth: GatewayAuthContext, requestId: string, leaseMs: number): Promise<void> {
+    return acquireGatewayRequest(this.exec, {
+      auth,
+      requestId,
+      leaseMs,
+      limits: this.quotaLimits,
+    });
+  }
+
+  releaseRequest(orgId: string, requestId: string): Promise<void> {
+    return releaseGatewayRequest(this.exec, orgId, requestId);
+  }
+
+  recordUsage(event: GatewayUsageEvent): Promise<void> {
+    return recordGatewayUsage(this.exec, event);
   }
 
   async ping(): Promise<boolean> {

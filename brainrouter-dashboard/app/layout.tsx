@@ -20,13 +20,8 @@ export const metadata: Metadata = {
     card: "summary_large_image",
   },
   icons: {
-    icon: [
-      { url: "/ico.svg", type: "image/svg+xml" },
-      { url: "/favicon.ico", sizes: "any" },
-      { url: "/icon-192.png", type: "image/png", sizes: "192x192" },
-    ],
-    apple: "/apple-touch-icon.png",
-    shortcut: "/favicon.ico",
+    icon: [{ url: "/ico.svg", type: "image/svg+xml", sizes: "any" }],
+    shortcut: "/ico.svg",
   },
   manifest: "/site.webmanifest",
 };

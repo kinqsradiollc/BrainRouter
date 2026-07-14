@@ -65,6 +65,7 @@ export interface MainContentProps {
   artifacts: VR['artifacts'];
   ci: ReturnType<typeof useCi>;
   envRoom: boolean;
+  envDrawer: boolean;
   // ChatThread
   homeMode: CT['homeMode'];
   gitInfo: CT['gitInfo'];
@@ -174,7 +175,7 @@ export function MainContent(p: MainContentProps): React.ReactElement {
     mode, setMode, workrowRef, track, trackOps, railOpen, setRailOpen, sidePanelOpen, sidePinned, sideFullScreen,
     setSidePanelOpen, setSidePinned, sideAnim, sideWidth, setSideWidth, activeSideTab, sideTabs, setActiveSideTab,
     closeSideTab, reorderSideTab, tabTitle, renderPanelBody, openSideView, lastPlan, changedFiles, backgroundTasks,
-    fleet, toolLog, schedules, worktrees, review, requirements, annotations, artifacts, ci, envRoom, homeMode,
+    fleet, toolLog, schedules, worktrees, review, requirements, annotations, artifacts, ci, envRoom, envDrawer, homeMode,
     gitInfo, info, sessionTitle, taskView, setTaskView, chatRef, atBottomRef, setAtBottom, workflowView,
     setWorkflowView, renderRow, homeStats, statsTab, setStatsTab, statsRange, setStatsRange, snapshot, sessions,
     viewKey, renameCurrentSession, resumeSession, forkParent, transcriptEls, liveText, goalState, runBridge, q,
@@ -252,6 +253,7 @@ export function MainContent(p: MainContentProps): React.ReactElement {
               modeLabel={modeLabel} effort={effort} info={info} branches={branches}
               endpointModels={endpointModels} allowedModels={defaultProviderModels} routerCatalog={routerCatalog} routerFallback={routerFallback} modelsLoading={modelsLoading} setModelsLoading={setModelsLoading}
               connectedProviders={snapshot?.providers ?? []} defaultProviderName={snapshot?.defaultProviderName ?? null}
+              accountModels={snapshot?.accountModels}
               modelChoices={modelChoices} modelScope={modelScope} setModelScope={setModelScope}
               hasConversation={hasConversation} contextUsage={contextUsage} tokens={tokens} openSettings={openSettings}
               onAttach={attachFiles}
@@ -271,11 +273,15 @@ export function MainContent(p: MainContentProps): React.ReactElement {
         {/* Chat mode is a FOCUSED conversation — the code workbench (Environment
             column, side panels, terminal) appears only in Code mode. */}
         {mode === 'code' ? (<>
-        {/* DESK-5h — Environment as a LAYOUT COLUMN: the chat reflows next
-            to it; it can never cover content. Yields via envRoom. */}
+        {envDrawer && envAnim.mounted ? (
+          <button type="button" className="env-scrim" aria-label="Close Environment" onClick={() => setEnvOpen(false)} />
+        ) : null}
+        {/* Environment is a layout column when room exists and an explicit,
+            dismissible drawer when zoom reduces the effective viewport. */}
         <EnvironmentPanel envAnim={envAnim} openSettings={openSettings} gitInfo={gitInfo} ensurePanel={ensurePanel}
           setTermDockOpen={setTermDockOpen} branches={branches} pop={pop} setPop={setPop} q={q} commitSubjects={commitSubjects} ci={ci}
-          openCiPanel={openCiPanel} lastTurnFails={lastTurnFails} backgroundTasks={backgroundTasks} openTask={openTask} />
+          openCiPanel={openCiPanel} lastTurnFails={lastTurnFails} backgroundTasks={backgroundTasks} openTask={openTask}
+          drawer={envDrawer} onClose={() => setEnvOpen(false)} />
 
         {/* §panel-drawer — scrim over the chat when the panel is an unpinned
             drawer; clicking it (i.e. clicking outside the panel) closes it. */}

@@ -1,298 +1,245 @@
 "use client";
 
-/**
- * Reviews — the dashboard surface for the GitHub App's automatic PR reviewer
- * (ADR-017 D5). Two lenses run on every reviewed PR (SECURITY + CODE-REVIEW), each
- * posting inline ```suggestion comments and a gating check-run. This page controls
- * WHICH repos are auto-reviewed: the toggle writes the org's `github_app` integration
- * `config.linkedRepositories` allowlist that the webhook gates on (`isRepoLinkedForReview`).
- * Org owner/admin only (backend enforces triggers:manage per org).
- */
-import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AuthGuard } from "../../components/AuthGuard";
+import { EmptyState } from "../../components/EmptyState";
 import { PageHeader } from "../../components/PageHeader";
-import { PremiumCard } from "../../components/PremiumCard";
 import { PremiumButton } from "../../components/PremiumButton";
-import { adminApi, type OrgSummary, type IntegrationConfig, type ReviewJob, type ReviewPullRequest } from "../../lib/adminApi";
+import { StatusBadge } from "../../components/Analytics";
+import { adminApi, type OrgSummary, type ReviewJob, type ReviewPullRequest } from "../../lib/adminApi";
+import {
+  REVIEW_ACTION_LABELS,
+  filterReviewPullRequests,
+  reviewActionPresentation,
+  reviewStatus,
+  reviewsReturnPath,
+  type ReviewAutomationFilter,
+  type ReviewListFilters,
+  type ReviewStatusFilter,
+} from "./reviewPresentation";
 
-interface Repo { fullName: string; url: string; private: boolean; defaultBranch: string }
+const STATUS_FILTERS = new Set<ReviewStatusFilter>(["all", "attention", "running", "complete", "not-reviewed"]);
+const AUTOMATION_FILTERS = new Set<ReviewAutomationFilter>(["all", "automatic", "on-demand"]);
 
-const POLICY_DEFAULTS = { approveClean: false, blockOnFindings: true, reReviewOnPush: true } as const;
-type PolicyField = keyof typeof POLICY_DEFAULTS;
-const POLICY_META: { f: PolicyField; label: string; hint: string }[] = [
-  { f: "approveClean", label: "Approve clean PRs", hint: "Post an approving review when a lens finds nothing." },
-  { f: "blockOnFindings", label: "Block on findings", hint: "A critical/high finding fails the check-run (gates merge)." },
-  { f: "reReviewOnPush", label: "Re-review on push", hint: "Re-run both lenses on every new commit." },
-];
+function initialParam(name: string): string {
+  return typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get(name) ?? "";
+}
 
-/** A compact segmented control; the active option is filled. */
-function Segmented<T extends string>({ value, options, onChange, disabled }: {
-  value: T; options: { v: T; label: string }[]; onChange: (v: T) => void; disabled?: boolean;
-}) {
-  return (
-    <span style={{ display: "inline-flex", gap: 2, background: "var(--surface-2, rgba(255,255,255,0.04))", borderRadius: 6, padding: 2 }}>
-      {options.map((o) => (
-        <button key={o.v} type="button" disabled={disabled} onClick={() => onChange(o.v)}
-          style={{
-            cursor: disabled ? "default" : "pointer", border: 0, padding: "3px 10px", borderRadius: 4, fontSize: 12,
-            background: value === o.v ? "var(--surface-4, rgba(255,255,255,0.12))" : "transparent",
-            color: value === o.v ? "var(--text, #fff)" : "var(--text-muted, #999)", fontWeight: value === o.v ? 600 : 400,
-          }}>
-          {o.label}
-        </button>
-      ))}
-    </span>
-  );
+function initialStatus(): ReviewStatusFilter {
+  const value = initialParam("status") as ReviewStatusFilter;
+  return STATUS_FILTERS.has(value) ? value : "all";
+}
+
+function initialAutomation(): ReviewAutomationFilter {
+  const value = initialParam("automation") as ReviewAutomationFilter;
+  return AUTOMATION_FILTERS.has(value) ? value : "all";
+}
+
+function lensLabel(job: ReviewJob | null): string {
+  if (!job) return "Not run";
+  if (job.error) return "Failed";
+  const status = job.status.toLowerCase();
+  if (status === "pending" || status === "queued") return "Queued";
+  if (status === "running") return "Running";
+  if ((job.blocking ?? 0) > 0) return `${job.blocking} blocking`;
+  if (job.findings !== null) return `${job.findings} finding${job.findings === 1 ? "" : "s"}`;
+  return status || "Not run";
+}
+
+function updatedLabel(value: string | null): string {
+  if (!value) return "Unknown";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "Unknown";
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: date.getFullYear() === new Date().getFullYear() ? undefined : "numeric" });
 }
 
 function ReviewsInner() {
   const [orgs, setOrgs] = useState<OrgSummary[]>([]);
   const [activeOrg, setActiveOrg] = useState("");
-  const [repos, setRepos] = useState<Repo[]>([]);
-  const [integ, setInteg] = useState<IntegrationConfig | null>(null);
-  const [reviews, setReviews] = useState<ReviewJob[]>([]);
   const [prs, setPrs] = useState<ReviewPullRequest[]>([]);
   const [canRun, setCanRun] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
-  const [search, setSearch] = useState("");
+  const [query, setQuery] = useState(() => initialParam("q"));
+  const [repository, setRepository] = useState(() => initialParam("repository") || "all");
+  const [status, setStatus] = useState<ReviewStatusFilter>(initialStatus);
+  const [automation, setAutomation] = useState<ReviewAutomationFilter>(initialAutomation);
 
   useEffect(() => {
-    (async () => {
+    void (async () => {
       try {
-        const res = await adminApi.listOrgs();
-        setOrgs(res.orgs ?? []);
-        const wanted = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("org") : null;
-        const pick = (wanted && res.orgs?.find((o) => o.orgId === wanted)) ?? res.orgs?.find((o) => o.isDefault) ?? res.orgs?.[0];
-        if (pick) setActiveOrg(pick.orgId);
-      } catch (e) { setError(e instanceof Error ? e.message : "Failed to load organizations"); }
+        const response = await adminApi.listOrgs();
+        const available = response.orgs ?? [];
+        setOrgs(available);
+        const requested = initialParam("org");
+        const selected = available.find((org) => org.orgId === requested)
+          ?? available.find((org) => org.isDefault)
+          ?? available[0];
+        if (selected) setActiveOrg(selected.orgId);
+        else setLoading(false);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : "Failed to load organizations");
+        setLoading(false);
+      }
     })();
   }, []);
 
   const load = useCallback(async (orgId: string) => {
     if (!orgId) return;
-    setLoading(true); setError("");
+    setLoading(true);
+    setError("");
     try {
-      const [rp, ig, rv, pullRequests] = await Promise.all([
-        adminApi.githubRepos(orgId).catch(() => ({ repos: [] as Repo[] })),
-        adminApi.listIntegrations(orgId).catch(() => ({ integrations: [] as IntegrationConfig[] })),
-        adminApi.listReviewJobs(orgId, 30).catch(() => ({ reviews: [] as ReviewJob[] })),
-        adminApi.listReviewPrs(orgId).catch(() => ({ prs: [] as ReviewPullRequest[], canRun: false })),
-      ]);
-      setRepos(((rp as { repos?: Repo[] }).repos) ?? []);
-      setInteg((ig.integrations ?? []).find((i) => i.kind === "github_app") ?? null);
-      setReviews(rv.reviews ?? []);
-      setPrs(pullRequests.prs ?? []);
-      setCanRun(Boolean(pullRequests.canRun));
-    } catch (e) { setError(e instanceof Error ? e.message : "Failed to load"); }
-    finally { setLoading(false); }
+      const response = await adminApi.listReviewPrs(orgId);
+      setPrs(response.prs ?? []);
+      setCanRun(Boolean(response.canRun));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Failed to load pull requests");
+      setPrs([]);
+      setCanRun(false);
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
   useEffect(() => { void load(activeOrg); }, [activeOrg, load]);
 
-  // null → allowlist absent → ALL accessible repos are reviewed (opt-out default).
-  const linked = useMemo(() => {
-    const raw = integ?.config?.linkedRepositories;
-    return Array.isArray(raw) ? (raw as string[]) : null;
-  }, [integ]);
-  const isAuto = (full: string) => linked === null || linked.includes(full);
-  const autoCount = repos.filter((r) => isAuto(r.fullName)).length;
+  const filters: ReviewListFilters = useMemo(() => ({ query, repository, status, automation }), [query, repository, status, automation]);
+  const returnPath = useMemo(() => reviewsReturnPath(filters, activeOrg), [filters, activeOrg]);
+  const repositories = useMemo(() => [...new Set(prs.map((pr) => pr.repo))].sort((a, b) => a.localeCompare(b)), [prs]);
+  const displayed = useMemo(() => filterReviewPullRequests(prs, filters), [prs, filters]);
 
-  async function toggle(repo: Repo, on: boolean) {
-    if (!integ) { setError("Configure the GitHub App first on the Integrations page."); return; }
-    setBusy(repo.fullName);
-    try {
-      // From all-on (null) the first toggle-off MATERIALIZES the full list minus this
-      // repo; thereafter it's plain add/remove on an explicit allowlist.
-      const base = linked ?? repos.map((r) => r.fullName);
-      const next = on ? Array.from(new Set([...base, repo.fullName])) : base.filter((f) => f !== repo.fullName);
-      await adminApi.updateIntegration(integ.id, { config: { ...integ.config, linkedRepositories: next } }, activeOrg);
-      await load(activeOrg);
-    } catch (e) { setError(e instanceof Error ? e.message : "Failed to update"); }
-    finally { setBusy(""); }
-  }
+  useEffect(() => {
+    if (typeof window !== "undefined" && activeOrg && window.location.pathname === "/reviews") {
+      window.history.replaceState(window.history.state, "", returnPath);
+    }
+  }, [activeOrg, returnPath]);
 
-  // ── Per-repo review policy (Approve / Block / Re-review) ─────────────────────
-  const cfgDefaults = (integ?.config?.reviewPolicyDefaults ?? {}) as Partial<Record<PolicyField, boolean>>;
-  const cfgRepo = (integ?.config?.reviewPolicies ?? {}) as Record<string, Partial<Record<PolicyField, boolean>>>;
-  const orgDefault = (f: PolicyField): boolean => cfgDefaults[f] ?? POLICY_DEFAULTS[f];
-  const repoOverride = (repo: string, f: PolicyField): boolean | undefined => cfgRepo[repo]?.[f];
-  // Every config write (auto-review toggle AND policy) is computed from the render-time
-  // integ.config snapshot, so any two overlapping writes would each merge into the same
-  // stale snapshot and the later one would clobber the earlier (lost update). `busy` is
-  // set at the start of EVERY write and cleared in its finally, so gating all config
-  // controls on `busy !== ""` serialises writes to one at a time — load() refetches
-  // between them — which removes the race entirely.
-  const configBusy = busy !== "";
-
-  async function patchConfig(next: Record<string, unknown>, key: string) {
-    if (!integ) { setError("Configure the GitHub App first on the Integrations page."); return; }
-    setBusy(key);
-    try { await adminApi.updateIntegration(integ.id, { config: { ...integ.config, ...next } }, activeOrg); await load(activeOrg); }
-    catch (e) { setError(e instanceof Error ? e.message : "Failed to update"); }
-    finally { setBusy(""); }
-  }
-  const setDefault = (f: PolicyField, v: boolean) => patchConfig({ reviewPolicyDefaults: { ...cfgDefaults, [f]: v } }, `def:${f}`);
-  const setRepoPolicy = (repo: string, f: PolicyField, v: boolean | undefined) => {
-    const cur = { ...(cfgRepo[repo] ?? {}) };
-    if (v === undefined) delete cur[f]; else cur[f] = v;
-    const nextRepos = { ...cfgRepo };
-    if (Object.keys(cur).length === 0) delete nextRepos[repo]; else nextRepos[repo] = cur;
-    return patchConfig({ reviewPolicies: nextRepos }, `repo:${repo}:${f}`);
-  };
-  const setCodeTrigger = (repo: string | null, value: "auto" | "manual") => {
-    if (repo === null) return patchConfig({ reviewPolicyDefaults: { ...cfgDefaults, codeReviewTrigger: value } }, "def:code-trigger");
-    const next = { ...cfgRepo, [repo]: { ...(cfgRepo[repo] ?? {}), codeReviewTrigger: value } };
-    return patchConfig({ reviewPolicies: next }, `repo:${repo}:code-trigger`);
-  };
-  const setManualRunners = (minPermission: "admin" | "maintain" | "write", allowlist: string) => patchConfig({ manualReviewRunners: { minPermission, allowlist: allowlist.split(/[,\s]+/).map((v) => v.trim()).filter(Boolean) } }, "manual-runners");
   const run = async (pr: ReviewPullRequest, lens: "security" | "code" | "both") => {
-    setBusy(`run:${pr.repo}:${pr.number}`);
-    try { await adminApi.runReview({ repo: pr.repo, prNumber: pr.number, lens }, activeOrg); await load(activeOrg); }
-    catch (e) { setError(e instanceof Error ? e.message : "Failed to queue review"); }
-    finally { setBusy(""); }
+    const key = `${pr.repo}#${pr.number}`;
+    setBusy(key);
+    setError("");
+    try {
+      await adminApi.runReview({ repo: pr.repo, prNumber: pr.number, lens }, activeOrg);
+      await load(activeOrg);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Failed to queue review");
+    } finally {
+      setBusy("");
+    }
   };
 
-  const shown = search.trim() ? repos.filter((r) => r.fullName.toLowerCase().includes(search.trim().toLowerCase())) : repos;
+  const clearFilters = () => {
+    setQuery("");
+    setRepository("all");
+    setStatus("all");
+    setAutomation("all");
+  };
 
   return (
-    <div className="settings-page">
-      <PageHeader title="Reviews" description="Security reviews run automatically; code reviews are command-driven by default. Inspect PR findings, queue a lens, and watch each review progress live." />
-      <div className="settings-hint" style={{ marginTop: "calc(-1 * var(--spacing-8))" }}>
-        <Link href="/integrations" className="settings-link">Configure the GitHub App →</Link>
-      </div>
+    <div className="settings-page review-console">
+      <PageHeader title="PR reviews" description="Open pull requests you can access, their latest review state, and the actions available to your role.">
+        <Link className="premium-button premium-button--ghost premium-button--medium" href={`/review-automation${activeOrg ? `?org=${encodeURIComponent(activeOrg)}` : ""}`}>Review automation</Link>
+      </PageHeader>
 
       {orgs.length > 1 && (
-        <label className="settings-label" style={{ maxWidth: "22rem", marginTop: "var(--spacing-16)" }}>Team
-          <select className="settings-select" value={activeOrg} onChange={(e) => setActiveOrg(e.target.value)}>
-            {orgs.map((o) => <option key={o.orgId} value={o.orgId}>{o.name}</option>)}
+        <label className="settings-label review-console__org">Team
+          <select className="settings-select" value={activeOrg} onChange={(event) => setActiveOrg(event.target.value)}>
+            {orgs.map((org) => <option key={org.orgId} value={org.orgId}>{org.name}</option>)}
           </select>
         </label>
       )}
-      {error && <div className="settings-note settings-note--error">{error}</div>}
 
-      {/* What the bot does — the effective, shipped behavior. */}
-      <PremiumCard level={2} style={{ marginTop: "var(--spacing-24)" }}>
-        <div className="settings-cardhead"><div><h3>How reviews work</h3><div className="settings-hint">Security runs on PR events. Code review is manual unless enabled below. Use <code>/security-review</code>, <code>/code-review</code>, or legacy <code>/review</code>.</div></div></div>
-        <div className="settings-item"><span className="settings-row__title">🛡️ Security review — vulnerability findings</span><span className="settings-flag-ok">gates the merge</span></div>
-        <div className="settings-item"><span className="settings-row__title">🔎 Code review — correctness · clarity · perf · tests</span><span className="settings-badge settings-badge--muted">advisory</span></div>
-      </PremiumCard>
+      {error && <div className="settings-note settings-note--error" role="alert">{error}</div>}
 
-      <PremiumCard level={2} style={{ marginTop: "var(--spacing-20)" }}>
-        <div className="settings-cardhead"><div><h3>Pull requests</h3><div className="settings-hint">Open pull requests on reviewed repositories. Open one for findings, checks, and its live timeline.</div></div><span className="settings-badge settings-badge--muted">{prs.length}</span></div>
-        {loading ? <div className="settings-empty-inline">Loading…</div> : prs.length === 0 ? <div className="settings-empty-inline">No open pull requests on linked repositories.</div> : prs.map((pr) => (
-          <div key={`${pr.repo}#${pr.number}`} className="settings-item" style={{ alignItems: "center" }}>
-            <div className="min-w-0"><Link className="settings-row__title truncate" href={`/reviews/pr?repo=${encodeURIComponent(pr.repo)}&number=${pr.number}`}>{pr.repo} #{pr.number} · {pr.title}</Link><div className="settings-row__sub">{pr.author ?? "unknown"} · 🛡️ {pr.security?.status ?? "none"} · 🔎 {pr.code?.status ?? "none"}</div></div>
-            {canRun && <div className="settings-actions"><PremiumButton size="small" variant="ghost" disabled={configBusy} onClick={() => run(pr, "security")}>Security</PremiumButton><PremiumButton size="small" variant="ghost" disabled={configBusy} onClick={() => run(pr, "code")}>Code</PremiumButton><PremiumButton size="small" variant="primary" disabled={configBusy} onClick={() => run(pr, "both")}>{busy === `run:${pr.repo}:${pr.number}` ? "…" : "Run both"}</PremiumButton></div>}
-          </div>
-        ))}
-      </PremiumCard>
+      <section className="review-console__filters" aria-label="Pull request filters">
+        <label className="settings-label review-console__search">Search
+          <input className="settings-input" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Title, repository, author, or PR number" />
+        </label>
+        <label className="settings-label">Repository
+          <select className="settings-select" value={repository} onChange={(event) => setRepository(event.target.value)}>
+            <option value="all">All repositories</option>
+            {repositories.map((repo) => <option key={repo} value={repo}>{repo}</option>)}
+          </select>
+        </label>
+        <label className="settings-label">Review state
+          <select className="settings-select" value={status} onChange={(event) => setStatus(event.target.value as ReviewStatusFilter)}>
+            <option value="all">All states</option>
+            <option value="attention">Needs attention</option>
+            <option value="running">Running</option>
+            <option value="complete">Both complete</option>
+            <option value="not-reviewed">Not reviewed</option>
+          </select>
+        </label>
+        <label className="settings-label">Automation
+          <select className="settings-select" value={automation} onChange={(event) => setAutomation(event.target.value as ReviewAutomationFilter)}>
+            <option value="all">Automatic and on demand</option>
+            <option value="automatic">Automatic</option>
+            <option value="on-demand">On demand</option>
+          </select>
+        </label>
+      </section>
 
-      {/* Policy defaults — org-wide; per-repo overrides live in the repo list below. */}
-      <PremiumCard level={2} style={{ marginTop: "var(--spacing-20)" }}>
-        <div className="settings-cardhead"><div><h3>Policy defaults</h3><div className="settings-hint">Applied to every reviewed repo unless a repo overrides it below.</div></div></div>
-        {POLICY_META.map(({ f, label, hint }) => (
-          <div key={f} className="settings-item">
-            <div className="min-w-0"><span className="settings-row__title">{label}</span><div className="settings-row__sub">{hint}</div></div>
-            <Segmented value={orgDefault(f) ? "on" : "off"} disabled={configBusy}
-              options={[{ v: "on", label: "On" }, { v: "off", label: "Off" }]}
-              onChange={(v) => setDefault(f, v === "on")} />
-          </div>
-        ))}
-        <div className="settings-item"><div><span className="settings-row__title">Code review trigger</span><div className="settings-row__sub">Manual requires <code>/code-review</code>; auto also runs on PR events.</div></div><Segmented value={(cfgDefaults as any).codeReviewTrigger === "auto" ? "auto" : "manual"} disabled={configBusy} options={[{ v: "manual", label: "Manual" }, { v: "auto", label: "Auto" }]} onChange={(v) => setCodeTrigger(null, v)} /></div>
-        <div className="settings-item"><div><span className="settings-row__title">Developers can run from dashboard</span><div className="settings-row__sub">Otherwise only owners and admins can manually queue reviews.</div></div><Segmented value={(cfgDefaults as any).developersCanRun ? "on" : "off"} disabled={configBusy} options={[{ v: "on", label: "On" }, { v: "off", label: "Off" }]} onChange={(v) => patchConfig({ reviewPolicyDefaults: { ...cfgDefaults, developersCanRun: v === "on" } }, "def:developers-run")} /></div>
-        <div className="settings-item"><div><span className="settings-row__title">Manual GitHub runners</span><div className="settings-row__sub">Minimum repository permission for commands. Optional allowlist can bypass it.</div></div><Segmented value={((integ?.config?.manualReviewRunners as any)?.minPermission ?? "maintain")} disabled={configBusy} options={[{ v: "admin", label: "Admin" }, { v: "maintain", label: "Maintain" }, { v: "write", label: "Write" }]} onChange={(v) => setManualRunners(v, String((integ?.config?.manualReviewRunners as any)?.allowlist?.join(", ") ?? ""))} /></div>
-        <input className="settings-input" disabled={configBusy} defaultValue={String((integ?.config?.manualReviewRunners as any)?.allowlist?.join(", ") ?? "")} placeholder="GitHub allowlist (comma-separated)" onBlur={(e) => setManualRunners(((integ?.config?.manualReviewRunners as any)?.minPermission ?? "maintain"), e.currentTarget.value)} />
-      </PremiumCard>
+      <div className="review-console__summary">
+        <span>{loading ? "Loading pull requests…" : `${displayed.length} of ${prs.length} open pull request${prs.length === 1 ? "" : "s"}`}</span>
+        {(query || repository !== "all" || status !== "all" || automation !== "all") && <button type="button" onClick={clearFilters}>Clear filters</button>}
+      </div>
 
-      {/* Recent reviews — read from the review jobs the bot has run. */}
-      <PremiumCard level={2} style={{ marginTop: "var(--spacing-20)" }}>
-        <div className="settings-cardhead">
-          <div><h3>Recent reviews</h3><div className="settings-hint">The latest pull-request reviews the bot has run (both lenses).</div></div>
-          <span className="settings-badge settings-badge--muted">{reviews.length}</span>
+      {!loading && displayed.length === 0 ? (
+        <EmptyState
+          title={prs.length ? "No pull requests match these filters" : "No open pull requests"}
+          description={prs.length ? "Clear or adjust the filters to return to the operational list." : "Connect GitHub and grant repository access. Automatic enrollment is optional for manual reviews."}
+        >
+          {prs.length ? <PremiumButton size="small" onClick={clearFilters}>Clear filters</PremiumButton> : <Link className="settings-link" href="/integrations">Open connections</Link>}
+        </EmptyState>
+      ) : (
+        <div className="review-console__table-shell" aria-busy={loading}>
+          <table className="review-console__table">
+            <thead><tr><th>Pull request</th><th>Repository</th><th>Review state</th><th>Updated</th><th>Actions</th></tr></thead>
+            <tbody>
+              {loading ? (
+                <tr><td colSpan={5} className="review-console__loading">Loading open pull requests…</td></tr>
+              ) : displayed.map((pr) => {
+                const key = `${pr.repo}#${pr.number}`;
+                const presentation = reviewStatus(pr);
+                const action = reviewActionPresentation(canRun, pr.availability, busy === key);
+                const detailQuery = new URLSearchParams({ repo: pr.repo, number: String(pr.number), from: returnPath });
+                if (activeOrg) detailQuery.set("org", activeOrg);
+                return (
+                  <tr key={key}>
+                    <td>
+                      <Link className="review-console__title" href={`/reviews/pr?${detailQuery.toString()}`}>{pr.title}</Link>
+                      <div className="review-console__meta">#{pr.number} · {pr.author ?? "Unknown author"}</div>
+                    </td>
+                    <td>
+                      <span className="review-console__repo" title={pr.repo}>{pr.repo}</span>
+                      <div><StatusBadge tone={pr.availability.autoReviewEnabled ? "ok" : "neutral"}>{pr.availability.autoReviewEnabled ? "Automatic" : "On demand"}</StatusBadge></div>
+                    </td>
+                    <td>
+                      <StatusBadge tone={presentation.tone}>{presentation.label}</StatusBadge>
+                      <div className="review-console__lens-state"><span>Security: {lensLabel(pr.security)}</span><span>Code: {lensLabel(pr.code)}</span></div>
+                    </td>
+                    <td className="review-console__date">{updatedLabel(pr.updatedAt)}</td>
+                    <td>
+                      <div className="review-console__actions">
+                        <PremiumButton size="small" title={action.help} disabled={!action.enabled} onClick={() => void run(pr, "security")}>{REVIEW_ACTION_LABELS.security}</PremiumButton>
+                        <PremiumButton size="small" title={action.help} disabled={!action.enabled} onClick={() => void run(pr, "code")}>{REVIEW_ACTION_LABELS.code}</PremiumButton>
+                        <PremiumButton size="small" variant="primary" title={action.help} disabled={!action.enabled} onClick={() => void run(pr, "both")}>{busy === key ? "Queuing…" : REVIEW_ACTION_LABELS.both}</PremiumButton>
+                      </div>
+                      {!action.enabled && <div className="review-console__action-help">{action.help}</div>}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
-        {loading ? (
-          <div className="settings-empty-inline">Loading…</div>
-        ) : reviews.length === 0 ? (
-          <div className="settings-empty-inline">No reviews yet — open or push a PR on an auto-reviewed repo.</div>
-        ) : (
-          <div>
-            {reviews.map((r) => (
-              <div key={r.id} className="settings-item">
-                <div className="min-w-0">
-                  <span className="settings-row__title truncate">{r.lens === "security" ? "🛡️" : "🔎"} {r.repo ?? "—"}{r.prNumber ? ` #${r.prNumber}` : ""}</span>
-                  <div className="settings-row__sub truncate">
-                    {r.error ? `error: ${r.error}` : r.skipped ? `skipped: ${r.skipped}` : r.findings !== null ? `${r.findings} finding(s)${r.blocking ? ` · ${r.blocking} blocking` : ""}` : r.status}
-                  </div>
-                </div>
-                <span className={r.status === "done" ? (r.blocking ? "settings-flag-muted" : "settings-flag-ok") : "settings-badge settings-badge--muted"}>{r.status}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </PremiumCard>
-
-      {/* Per-repo auto-review — writes the linkedRepositories allowlist. */}
-      <PremiumCard level={2} style={{ marginTop: "var(--spacing-20)" }}>
-        <div className="settings-cardhead">
-          <div>
-            <h3>Auto-review repositories</h3>
-            <div className="settings-hint">{linked === null ? "All accessible repos are reviewed. Turn one off to review only a chosen set." : `${autoCount} of ${repos.length} repositories reviewed.`}</div>
-          </div>
-          <span className="settings-badge settings-badge--muted">{autoCount} on</span>
-        </div>
-        <input className="settings-input" placeholder="Search repositories…" value={search} onChange={(e) => setSearch(e.target.value)} style={{ margin: "8px 0" }} />
-        {loading ? (
-          <div className="settings-empty-inline">Loading…</div>
-        ) : shown.length === 0 ? (
-          <div className="settings-empty-inline">{repos.length === 0 ? "No repositories — install the GitHub App and grant it repo access on the Integrations page." : `No repositories match “${search}”.`}</div>
-        ) : (
-          <div>
-            {shown.map((r) => {
-              const on = isAuto(r.fullName);
-              return (
-                <div key={r.fullName} style={{ padding: "8px 0", borderBottom: "1px solid var(--border-dim, rgba(255,255,255,0.06))" }}>
-                  <div className="settings-item" style={{ borderBottom: 0, padding: 0 }}>
-                    <div className="min-w-0">
-                      <span className="settings-row__title truncate" title={r.fullName}>{r.fullName}</span>
-                      {r.private && <span className="settings-badge settings-badge--muted" style={{ marginLeft: 6 }}>private</span>}
-                    </div>
-                    <PremiumButton size="small" variant={on ? "ghost" : "primary"} disabled={configBusy} onClick={() => toggle(r, !on)}>
-                      {busy === r.fullName ? "…" : on ? "Auto-review: On" : "Auto-review: Off"}
-                    </PremiumButton>
-                  </div>
-                  {on && (
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 14, marginTop: 8, paddingLeft: 2 }}>
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span className="settings-row__sub">Code trigger</span><Segmented value={(cfgRepo[r.fullName] as any)?.codeReviewTrigger === "auto" ? "auto" : "manual"} disabled={configBusy} options={[{ v: "manual", label: "Manual" }, { v: "auto", label: "Auto" }]} onChange={(v) => setCodeTrigger(r.fullName, v)} /></span>
-                      {POLICY_META.map(({ f, label }) => {
-                        const ov = repoOverride(r.fullName, f);
-                        const cur = ov === undefined ? "default" : ov ? "on" : "off";
-                        return (
-                          <span key={f} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                            <span className="settings-row__sub">{label}</span>
-                            <Segmented value={cur} disabled={configBusy}
-                              options={[{ v: "default", label: `Default (${orgDefault(f) ? "On" : "Off"})` }, { v: "on", label: "On" }, { v: "off", label: "Off" }]}
-                              onChange={(v) => setRepoPolicy(r.fullName, f, v === "default" ? undefined : v === "on")} />
-                          </span>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </PremiumCard>
+      )}
     </div>
   );
 }
 
 export default function ReviewsPage() {
-  return (
-    <AuthGuard>
-      <ReviewsInner />
-    </AuthGuard>
-  );
+  return <AuthGuard><ReviewsInner /></AuthGuard>;
 }

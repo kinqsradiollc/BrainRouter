@@ -11,7 +11,7 @@ import { getRawCliKnobs } from '../../config/config.js';
 
 export type ExecutionMode = 'planning' | 'fast';
 export type ReviewPolicy = 'request' | 'proceed';
-export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultracode';
+export type EffortLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export interface Preferences {
   /** When true, every worker spawn is auto-followed by a reviewer pass on the diff. */
@@ -193,28 +193,38 @@ export interface ResolvedEffort {
 
 /**
  * Normalize a raw effort string to a canonical `EffortLevel`, or undefined if
- * unrecognized. Case-insensitive. `xhigh`/`max`/`ultracode` are DISTINCT top
- * tiers (the desktop Claude slider) — `max` is no longer an alias for `xhigh`,
- * so the slider position persists. They cap to xhigh on the wire + prompt via
- * `effortToWireLevel`. Exported for tests.
+ * unrecognized. Case-insensitive. Every API-contract effort stays distinct;
+ * notably `max` is never aliased to `xhigh`. Legacy `ultracode` is rejected so
+ * persisted old values fail closed instead of silently changing meaning.
  */
 export function normalizeEffort(raw: unknown): EffortLevel | undefined {
   if (typeof raw !== 'string') return undefined;
   const v = raw.trim().toLowerCase();
-  if (v === 'xhigh') return 'xhigh';
-  if (v === 'max') return 'max';
-  if (v === 'ultracode') return 'ultracode';
-  return v === 'low' || v === 'medium' || v === 'high' ? v : undefined;
+  return v === 'none' || v === 'minimal' || v === 'low' || v === 'medium'
+    || v === 'high' || v === 'xhigh' || v === 'max'
+    ? v
+    : undefined;
 }
 
 /**
- * Collapse an EffortLevel to the 4 levels the WIRE (`reasoning_effort`) and the
- * system-prompt overlay understand. The Claude slider's `max`/`ultracode` tiers
- * sit ABOVE xhigh in the UI but have no distinct wire value, so they cap to
- * xhigh here while still persisting distinctly (see `normalizeEffort`).
+ * Validate and preserve a reasoning effort for provider transport. This is
+ * intentionally an identity transform: provider/model policy owns the wire
+ * vocabulary, so `max` must remain `max`.
  */
-export function effortToWireLevel(effort: EffortLevel): 'low' | 'medium' | 'high' | 'xhigh' {
-  return effort === 'max' || effort === 'ultracode' ? 'xhigh' : effort;
+export function effortToWireLevel(effort: EffortLevel): EffortLevel {
+  const normalized = normalizeEffort(effort);
+  if (!normalized) throw new Error(`Unsupported reasoning effort "${String(effort)}". Choose a current effort value.`);
+  return normalized;
+}
+
+/** Prompt overlays predate the provider effort contract and have four prose
+ * intensities. Keep that lossy mapping isolated from the exact wire value. */
+export function effortToPromptLevel(effort: EffortLevel): 'low' | 'medium' | 'high' | 'xhigh' {
+  const exact = effortToWireLevel(effort);
+  if (exact === 'none' || exact === 'medium') return 'medium';
+  if (exact === 'minimal') return 'low';
+  if (exact === 'max') return 'xhigh';
+  return exact;
 }
 
 /**
