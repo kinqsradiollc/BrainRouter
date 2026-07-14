@@ -84,7 +84,10 @@ export function createRemoteAccessClient(mobileRelay: MobileRelayServer, home = 
     accountFetch: remoteAccountFetch,
     secrets: fileSecrets(path.join(home, 'mobile', 'remote-device.json')),
     relayUrl: relayUrlFromConfig,
-    attachLocal: (socket) => mobileRelay.attachBrokerSocket(socket as unknown as WebSocket),
+    attachLocal: (socket, scopes) => mobileRelay.attachBrokerSocket(
+      socket as unknown as WebSocket,
+      { scopes: scopes.filter((scope): scope is 'monitor' | 'control' | 'approve' => ['monitor', 'control', 'approve'].includes(scope)) },
+    ),
     wsFactory: (url) => new WebSocket(url) as unknown as BrokerSocketLike,
   });
 }

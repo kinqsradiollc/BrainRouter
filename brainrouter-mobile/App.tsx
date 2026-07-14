@@ -4,14 +4,19 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Notifications from 'expo-notifications';
 import * as Speech from 'expo-speech';
 import { RelayClient } from './src/client/RelayClient';
-import { SecureCredentialStore } from './src/storage/credentials';
+import { AccountClient } from './src/client/AccountClient';
+import { RemoteAccessClient, type RemoteDesktopSummary } from './src/client/RemoteAccessClient';
+import { SecureCredentialStore, SecureRemoteSecrets } from './src/storage/credentials';
 import type { HostCredential, RelayEvent } from './src/protocol/types';
 
 Notifications.setNotificationHandler({ handleNotification: async () => ({ shouldShowBanner: true, shouldShowList: true, shouldPlaySound: false, shouldSetBadge: false }) });
 
 type Run = { id: string; task: string; status: string; candidates: Candidate[] };
 type Candidate = { id: string; adapterId: string; status: string; changedFiles: number; rank?: number; score?: number };
-type Tab = 'hosts' | 'terminal' | 'pair';
+type Tab = 'desktops' | 'hosts' | 'terminal' | 'pair';
+
+/** Broker URL knob (wss). The relay only ever sees single-use tickets + ciphertext. */
+const DEFAULT_RELAY_URL = 'wss://relay.brainrouter.ai/remote-relay';
 
 export default function App(): React.ReactElement {
   const store = React.useMemo(() => new SecureCredentialStore(), []);
@@ -23,10 +28,19 @@ export default function App(): React.ReactElement {
   const [candidate, setCandidate] = React.useState<Candidate>();
   const [terminal, setTerminal] = React.useState('');
   const [followup, setFollowup] = React.useState('');
-  const [tab, setTab] = React.useState<Tab>('hosts');
+  const [tab, setTab] = React.useState<Tab>('desktops');
   const [voice, setVoice] = React.useState(false);
   const [manualCode, setManualCode] = React.useState('');
   const [pairing, setPairing] = React.useState(false);
+  // Account remote access (primary flow): sign in → enroll → discover → connect.
+  const remoteSecrets = React.useMemo(() => new SecureRemoteSecrets(), []);
+  const [serverUrl, setServerUrl] = React.useState('https://api.brainrouter.ai');
+  const [email, setEmail] = React.useState('');
+  const [password, setPassword] = React.useState('');
+  const [account, setAccount] = React.useState<AccountClient | null>(null);
+  const [remote, setRemote] = React.useState<RemoteAccessClient | null>(null);
+  const [desktops, setDesktops] = React.useState<RemoteDesktopSummary[]>([]);
+  const [busyDesktop, setBusyDesktop] = React.useState('');
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const scanLock = React.useRef(false);
   const voiceRef = React.useRef(false);
@@ -69,6 +83,61 @@ export default function App(): React.ReactElement {
     finally { setPairing(false); setTimeout(() => { scanLock.current = false; }, 1_000); }
   };
 
+  // ---- Account remote access (spec §9, Task 24) — the primary flow ----
+  const signIn = async (): Promise<void> => {
+    try {
+      const signedIn = await AccountClient.signIn(serverUrl, email.trim(), password);
+      setAccount(signedIn);
+      setPassword('');
+      const remoteClient = new RemoteAccessClient(serverUrl, signedIn.accountToken, remoteSecrets);
+      setRemote(remoteClient);
+      if (!(await remoteClient.isEnrolled())) await remoteClient.enroll('BrainRouter Mobile');
+      setDesktops(await remoteClient.listDesktops());
+    } catch (error) { Alert.alert('Sign-in failed', (error as Error).message); }
+  };
+
+  const refreshDesktops = async (): Promise<void> => {
+    if (!remote) return;
+    try { setDesktops(await remote.listDesktops()); } catch (error) { Alert.alert('Refresh failed', (error as Error).message); }
+  };
+
+  /** Request access → wait for the desktop's signed approval → broker connect. */
+  const connectRemote = async (desktop: RemoteDesktopSummary): Promise<void> => {
+    if (!remote) return;
+    setBusyDesktop(desktop.id);
+    try {
+      const grants = await remote.listGrants();
+      let grant = grants.find((g) => g.desktopDeviceId === desktop.id && g.approvalStatus === 'approved');
+      if (!grant) {
+        const pending = grants.find((g) => g.desktopDeviceId === desktop.id && g.approvalStatus === 'pending')
+          ?? await remote.requestGrant(desktop.id, ['monitor', 'control']);
+        if (pending.approvalStatus !== 'approved') {
+          Alert.alert('Approval needed', 'Confirm this phone on your desktop, then tap Connect again.');
+          return;
+        }
+        grant = pending;
+      }
+      const ticket = await remote.requestRelayTicket(desktop.id, grant.id, grant.scopes);
+      const broker = { url: DEFAULT_RELAY_URL, ticket: ticket.relayTicket, deviceId: ticket.presentingDeviceId };
+      const knownHostId = await remoteSecrets.get(`host.${desktop.id}`);
+      if (knownHostId && (await store.get(knownHostId))) {
+        await client.connectViaBroker(knownHostId, broker);
+        setActiveHost(knownHostId);
+      } else {
+        const credential = await client.pairViaBroker(broker, desktop.displayName);
+        await remoteSecrets.set(`host.${desktop.id}`, credential.id);
+        refreshHosts();
+        // Pairing consumed this ticket's session — connect on a fresh one.
+        const next = await remote.requestRelayTicket(desktop.id, grant.id, grant.scopes);
+        await client.connectViaBroker(credential.id, { url: DEFAULT_RELAY_URL, ticket: next.relayTicket, deviceId: next.presentingDeviceId });
+        setActiveHost(credential.id);
+      }
+      setRuns(await client.rpc<Run[]>('fanout.list'));
+      setTab('hosts');
+    } catch (error) { Alert.alert('Could not connect', (error as Error).message); }
+    finally { setBusyDesktop(''); }
+  };
+
   const selectCandidate = async (next: Candidate): Promise<void> => {
     try {
       if (!await client.acquireFloor(next.id)) { Alert.alert('Terminal busy', 'Another paired device currently holds the input floor.'); return; }
@@ -85,10 +154,48 @@ export default function App(): React.ReactElement {
     catch (error) { Alert.alert('Action failed', (error as Error).message); }
   };
 
+  const DesktopsView = (): React.ReactElement => (
+    <ScrollView style={styles.screen} contentContainerStyle={{ gap: 10, paddingBottom: 24 }}>
+      {!account ? (
+        <>
+          <Text style={styles.title}>Sign in to BrainRouter</Text>
+          <Text style={styles.muted}>Your laptops appear here — no QR code, no tunnel, works across networks.</Text>
+          <Text style={styles.label}>Server</Text>
+          <TextInput style={styles.input} autoCapitalize="none" value={serverUrl} onChangeText={setServerUrl} placeholder="https://api.brainrouter.ai" placeholderTextColor="#6d6d76" />
+          <Text style={styles.label}>Email</Text>
+          <TextInput style={styles.input} autoCapitalize="none" keyboardType="email-address" value={email} onChangeText={setEmail} placeholder="you@company.com" placeholderTextColor="#6d6d76" />
+          <Text style={styles.label}>Password</Text>
+          <TextInput style={styles.input} secureTextEntry value={password} onChangeText={setPassword} placeholder="••••••••" placeholderTextColor="#6d6d76" />
+          <Pressable disabled={!email.trim() || !password} style={[styles.primary, (!email.trim() || !password) && styles.disabled]} onPress={() => void signIn()}><Text style={styles.primaryText}>Sign in</Text></Pressable>
+        </>
+      ) : (
+        <>
+          <View style={styles.rowBetween}><Text style={styles.title}>My desktops</Text><Pressable style={styles.smallButton} onPress={() => void refreshDesktops()}><Text style={styles.buttonText}>Refresh</Text></Pressable></View>
+          {desktops.length === 0 ? <Text style={styles.empty}>No enrolled desktop yet. Turn on Remote access in Desktop settings.</Text> : null}
+          {desktops.map((desktop) => (
+            <View key={desktop.id} style={styles.card}>
+              <View style={styles.rowBetween}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cardTitle}>{desktop.displayName}</Text>
+                  <Text style={desktop.presence === 'online' ? styles.online : styles.muted}>
+                    {desktop.presence === 'online' ? '● Online' : `○ Offline${desktop.lastSeenAt ? ` · seen ${desktop.lastSeenAt.slice(0, 16).replace('T', ' ')}` : ''}`}
+                  </Text>
+                </View>
+                <Pressable disabled={busyDesktop === desktop.id || desktop.presence !== 'online'} style={[styles.smallButton, (busyDesktop === desktop.id || desktop.presence !== 'online') && styles.disabled]} onPress={() => void connectRemote(desktop)}>
+                  <Text style={styles.buttonText}>{busyDesktop === desktop.id ? 'Connecting…' : 'Connect'}</Text>
+                </Pressable>
+              </View>
+            </View>
+          ))}
+        </>
+      )}
+    </ScrollView>
+  );
+
   const PairView = (): React.ReactElement => (
     <View style={styles.screen}>
-      <Text style={styles.title}>Pair this phone</Text>
-      <Text style={styles.muted}>Start Mobile steering in Desktop, then scan its one-time encrypted QR code.</Text>
+      <Text style={styles.title}>Manual pairing (fallback)</Text>
+      <Text style={styles.muted}>Prefer Desktops: sign in and connect across any network. This LAN-only QR path remains for offline setups.</Text>
       {!cameraPermission?.granted ? <Pressable style={styles.primary} onPress={() => void requestCameraPermission()}><Text style={styles.primaryText}>Allow camera</Text></Pressable> : (
         <CameraView style={styles.camera} barcodeScannerSettings={{ barcodeTypes: ['qr'] }} onBarcodeScanned={({ data }) => void pair(data)} />
       )}
@@ -101,8 +208,8 @@ export default function App(): React.ReactElement {
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.header}><View><Text style={styles.brand}>BR</Text></View><View style={{ flex: 1 }}><Text style={styles.headerTitle}>BrainRouter</Text><Text style={styles.muted}>{connection}</Text></View><View style={styles.voice}><Text style={styles.muted}>Voice</Text><Switch value={voice} onValueChange={setVoice} /></View></View>
-      <View style={styles.tabs}>{(['hosts', 'terminal', 'pair'] as Tab[]).map((item) => <Pressable key={item} onPress={() => setTab(item)} style={[styles.tab, tab === item && styles.tabActive]}><Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item === 'hosts' ? 'Hosts' : item === 'terminal' ? 'Terminal' : 'Pair'}</Text></Pressable>)}</View>
-      {tab === 'pair' ? <PairView /> : tab === 'terminal' ? (
+      <View style={styles.tabs}>{(['desktops', 'hosts', 'terminal', 'pair'] as Tab[]).map((item) => <Pressable key={item} onPress={() => setTab(item)} style={[styles.tab, tab === item && styles.tabActive]}><Text style={[styles.tabText, tab === item && styles.tabTextActive]}>{item === 'desktops' ? 'Desktops' : item === 'hosts' ? 'Hosts' : item === 'terminal' ? 'Terminal' : 'Manual'}</Text></Pressable>)}</View>
+      {tab === 'desktops' ? <DesktopsView /> : tab === 'pair' ? <PairView /> : tab === 'terminal' ? (
         <View style={styles.screen}>
           <View style={styles.rowBetween}><View><Text style={styles.title}>{candidate?.adapterId ?? 'No candidate selected'}</Text><Text style={styles.muted}>{candidate?.status ?? 'Choose a candidate from Hosts'}</Text></View></View>
           <ScrollView style={styles.terminal}><Text selectable style={styles.terminalText}>{terminal || 'Waiting for terminal output…'}</Text></ScrollView>
@@ -126,6 +233,7 @@ const styles = StyleSheet.create({
   tab: { flex: 1, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 8 }, tabActive: { backgroundColor: '#202024' },
   tabText: { color: '#85858f', fontWeight: '600' }, tabTextActive: { color: '#f5f5f7' },
   screen: { flex: 1, padding: 14 }, title: { color: '#f5f5f7', fontSize: 18, fontWeight: '700' }, muted: { color: '#92929c', fontSize: 12 },
+  online: { color: '#4eca7a', fontSize: 12, fontWeight: '600' },
   label: { color: '#c5c5cc', fontSize: 12, fontWeight: '600', marginTop: 12 },
   primary: { height: 44, backgroundColor: '#7167f5', alignItems: 'center', justifyContent: 'center', borderRadius: 9, marginTop: 12 }, primaryText: { color: 'white', fontWeight: '700' }, disabled: { opacity: 0.45 },
   camera: { height: 330, borderRadius: 12, overflow: 'hidden', marginTop: 14 },

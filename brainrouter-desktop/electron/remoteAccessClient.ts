@@ -42,8 +42,8 @@ export interface RemoteAccessClientDeps {
   secrets: RemoteSecretsPort;
   /** Broker base, e.g. wss://relay.brainrouter.ai — null when remote access is off. */
   relayUrl(): string | null;
-  /** Hand an attached broker socket to the local E2EE/RPC allowlist. */
-  attachLocal(socket: BrokerSocketLike): void;
+  /** Hand an attached broker socket (+ its ticket scopes) to the local E2EE/RPC allowlist. */
+  attachLocal(socket: BrokerSocketLike, scopes: string[]): void;
   wsFactory(url: string): BrokerSocketLike;
   displayName?: () => string;
   random?: (size: number) => Buffer;
@@ -229,9 +229,10 @@ export class RemoteAccessClient {
     });
     socket.once('message', () => {
       // First relay reply = attached. From here the socket speaks the existing
-      // LAN protocol (E2EE pairing + scoped RPC) — hand it to the allowlist.
+      // LAN protocol (E2EE pairing + scoped RPC) — hand it to the allowlist with
+      // the ticket's scopes so broker pairing needs no token on the wire.
       this.reconnectDelayMs = 1_000;
-      this.deps.attachLocal(socket);
+      this.deps.attachLocal(socket, scopes);
     });
     socket.once('close', (...args: unknown[]) => {
       const code = typeof args[0] === 'number' ? args[0] : 0;
