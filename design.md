@@ -295,6 +295,24 @@ Motion communicates entrance, selection, progress, and continuity. It must never
 - Preserve logical keyboard order through rail, header, active work surface, and composer.
 - Respect reduced motion; no required information may depend on animation.
 
+## Server-managed models, reviews, remote access, and CVE
+
+### Model-policy UX
+
+Model and Effort render as one adjacent composite control (30px desktop, 32px dashboard) with separate keyboard/focus targets; the model name truncates first and the effort stays visible. Server-managed entries come from `GET /api/models/catalog` with `verified`/`discovered`/`manual` provenance and never regex inference; custom/BYOK entries may carry an explicit `Inferred` badge. When policy disables the active model or effort, the next request is blocked with a clear selection prompt — never a silent mid-conversation switch. Settings vocabulary is Managed models · Personal/BYOK · Routing · Profiles · Subagents on both surfaces.
+
+### Review-state vocabulary
+
+Three distinct states, never collapsed into one "linked" boolean: **Account connected** (a user completed GitHub/GitLab authorization), **Repository accessible** (the App or account credential can read the repository now — gates manual PR list/detail and manual reviews), and **Automatic review enabled** (the repository is in the org's webhook policy — gates event-driven reviews only). Product copy names the state that is missing, not a generic error.
+
+### Account-based remote access
+
+The flow is sign in → enroll this device (explicit opt-in) → discover desktops with presence → request scopes → desktop-confirmed grant → connect. Discovery shows display name, presence dot, and last-seen time — never IPs, ports, workspace roots, or relay endpoints. `monitor`, `control`, and `approve` are separate visible scopes; elevated grants show the desktop-confirmation requirement. Revocation is immediate and reads as "session ended", not an error. QR/manual pairing is a labelled fallback ("Manual pairing (fallback)"), not the primary path.
+
+### CVE provenance and freshness
+
+Catalog rows show severity (color = factual status only), CVSS, EPSS (3 decimals), a KEV dot, and modified date; withdrawn entries dim with an explicit "(withdrawn)" suffix. Source freshness (last success + consecutive failures) is always visible beside the catalog with a per-source refresh. Exposure ("My exposure") rows always carry component, installed version, fixed version, and file evidence — a catalog entry with no version evidence must never render as a finding. Dismissed findings dim but remain visible for reopen.
+
 ## Content voice
 
 Write directly and specifically. Name the task, state, or consequence. Avoid AI marketing clichés, exclamation marks in status messages, and memory-only descriptions of BrainRouter.
