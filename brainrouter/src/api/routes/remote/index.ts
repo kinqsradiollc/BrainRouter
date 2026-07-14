@@ -78,6 +78,12 @@ const createRelaySessionSchema = z.object({
   scopes: scopesSchema,
 }).strict();
 
+/** Desktop side of the same relay session — device ids derive from the grant. */
+const createDesktopTicketSchema = z.object({
+  deviceSessionId: idSchema,
+  scopes: scopesSchema,
+}).strict();
+
 export interface RemoteRouterDependencies {
   store: RemoteAccessStore;
   controlPlane: RemoteControlPlaneService;
@@ -401,6 +407,55 @@ export function createRemoteRouter(deps: RemoteRouterDependencies) {
       const ticket = await deps.controlPlane.issueRelayTicket(req.orgId!, req.userId!, {
         presentingDeviceId: mobile.id,
         peerDeviceId: desktop.id,
+        grantId: grant.id,
+        deviceSessionId: deviceSession.id,
+        scopes: requestedScopes,
+      });
+      res.status(201).json(ticket);
+    } catch (error) { routeError(res, error); }
+  });
+
+  // The desktop's attach ticket for the SAME grant/relay session: presenting and
+  // peer swap relative to the mobile ticket, and the presented device session must
+  // belong to the grant's DESKTOP device. The relay pairs the two by grant id.
+  router.post("/grants/:id/desktop-tickets", requirePermission("remote:connect"), async (req: AuthedRequest, res) => {
+    try {
+      const grantId = idSchema.parse(req.params.id);
+      const input = createDesktopTicketSchema.parse(req.body);
+      const requestedScopes = normalizeRemoteAccessScopes(input.scopes);
+      const grant = await deps.store.getRemoteAccessGrant(req.orgId!, req.userId!, grantId);
+      const current = now();
+      if (!grant) {
+        sendError(res, 404, "Remote access grant was not found");
+        return;
+      }
+      if (grant.approvalStatus !== "approved" || Boolean(grant.revokedAt) || Date.parse(grant.expiresAt) <= current) {
+        sendError(res, 403, "Remote access grant is not active for this device pair");
+        return;
+      }
+      if (requestedScopes.some((scope) => !grant.scopes.includes(scope))) {
+        sendError(res, 403, "Requested relay scopes exceed the approved grant");
+        return;
+      }
+      const [desktop, deviceSession] = await Promise.all([
+        deps.store.getRemoteDevice(req.orgId!, req.userId!, grant.desktopDeviceId),
+        deps.store.getDeviceSession(req.orgId!, req.userId!, input.deviceSessionId),
+      ]);
+      if (!desktop || !deviceSession) {
+        sendError(res, 404, "Remote session prerequisites were not found");
+        return;
+      }
+      if (desktop.kind !== "desktop" || desktop.status !== "active") {
+        sendError(res, 403, "Remote session devices are disabled or revoked");
+        return;
+      }
+      if (!isCurrentSession(deviceSession, desktop.id, current)) {
+        sendError(res, 403, "Device session is expired, rotated, reused, or revoked");
+        return;
+      }
+      const ticket = await deps.controlPlane.issueRelayTicket(req.orgId!, req.userId!, {
+        presentingDeviceId: desktop.id,
+        peerDeviceId: grant.mobileDeviceId,
         grantId: grant.id,
         deviceSessionId: deviceSession.id,
         scopes: requestedScopes,

@@ -363,6 +363,51 @@ describe("remote control-plane API", () => {
     expect(JSON.stringify(valid.body)).not.toMatch(/refresh|accessJwt|workspace|endpoint|ipAddress/i);
   });
 
+  it("issues the desktop's attach ticket for the same grant with presenting/peer swapped", async () => {
+    const desktop = remoteDevice("desktop");
+    const activeGrant = grant({ scopes: ["monitor", "control"] });
+    const desktopSession = deviceSession({ id: "rds-desktop", familyId: "rfs-desktop", deviceId: desktop.id });
+    store.getRemoteAccessGrant.mockResolvedValue(activeGrant);
+    store.getRemoteDevice.mockResolvedValue(desktop);
+    store.getDeviceSession.mockResolvedValue(desktopSession);
+    controlPlane.issueRelayTicket.mockResolvedValue({
+      relayTicket: `rrt_${"B".repeat(43)}`,
+      relaySessionId: "rrs-b",
+      audience: "remote-relay",
+      scopes: ["monitor"],
+      presentingDeviceId: desktop.id,
+      peerDeviceId: activeGrant.mobileDeviceId,
+      expiresAt: new Date(nowMs + 45_000).toISOString(),
+    });
+
+    // Scope escalation beyond the grant fails closed.
+    const escalated = await requestJson(new URL(`${baseUrl}/api/remote/grants/${activeGrant.id}/desktop-tickets`), "POST", accessHeaders(), {
+      deviceSessionId: desktopSession.id,
+      scopes: ["approve"],
+    });
+    // A session belonging to a different device (e.g. the mobile) fails closed.
+    store.getDeviceSession.mockResolvedValueOnce(deviceSession());
+    const wrongDevice = await requestJson(new URL(`${baseUrl}/api/remote/grants/${activeGrant.id}/desktop-tickets`), "POST", accessHeaders(), {
+      deviceSessionId: "rds-mobile",
+      scopes: ["monitor"],
+    });
+    const valid = await requestJson(new URL(`${baseUrl}/api/remote/grants/${activeGrant.id}/desktop-tickets`), "POST", accessHeaders(), {
+      deviceSessionId: desktopSession.id,
+      scopes: ["monitor"],
+    });
+
+    expect(escalated.status).toBe(403);
+    expect(wrongDevice.status).toBe(403);
+    expect(valid.status).toBe(201);
+    expect(controlPlane.issueRelayTicket).toHaveBeenCalledTimes(1);
+    expect(controlPlane.issueRelayTicket).toHaveBeenCalledWith("org-a", "user-a", expect.objectContaining({
+      presentingDeviceId: desktop.id,
+      peerDeviceId: activeGrant.mobileDeviceId,
+      grantId: activeGrant.id,
+    }));
+    expect(JSON.stringify(valid.body)).not.toMatch(/refresh|accessJwt|workspace|endpoint|ipAddress/i);
+  });
+
   it("returns fixed audit metadata only", async () => {
     const record = {
       id: "raud-a",
