@@ -8,6 +8,8 @@
 import React from 'react';
 import { Icon } from '../../icons.js';
 import { TrackView } from '../../track/TrackView.js';
+import { MeetingsView } from '../../components/meetings/MeetingsView.js';
+import { createMeetingsOps } from '../../components/meetings/meetingsOps.js';
 import { ChatThread } from '../../components/chat/ChatThread.js';
 import { Composer } from '../../components/chat/Composer.js';
 import { EnvironmentPanel } from '../../components/layout/EnvironmentPanel.js';
@@ -27,8 +29,8 @@ type TR = React.ComponentProps<typeof TopbarRight>;
 type TV = React.ComponentProps<typeof TrackView>;
 
 export interface MainContentProps {
-  mode: 'chat' | 'track' | 'code';
-  setMode: (m: 'chat' | 'track' | 'code') => void;
+  mode: 'chat' | 'track' | 'code' | 'meetings';
+  setMode: (m: 'chat' | 'track' | 'code' | 'meetings') => void;
   workrowRef: React.RefObject<HTMLDivElement>;
   // Track view
   track: { project: TV['project']; items: TV['items']; sprints: TV['sprints']; modules: TV['modules']; views: TV['views']; automations: TV['automations']; members: TV['members']; sync: TV['sync']; git: TV['git']; pr: TV['pr'] };
@@ -197,10 +199,16 @@ export function MainContent(p: MainContentProps): React.ReactElement {
     setMode('code');
     ensurePanel(id);
   }, [ensurePanel, setMode]);
+  // Meetings mode (ADR-018) — data flows through the injected ops bridge.
+  const meetingsOps = React.useMemo(() => createMeetingsOps(), []);
 
   return (
     <div className="main">
-      {mode === 'track' ? (
+      {mode === 'meetings' ? (
+        <div className="workrow" ref={workrowRef}>
+          <MeetingsView ops={meetingsOps} />
+        </div>
+      ) : mode === 'track' ? (
         <div className="workrow track-workrow" ref={workrowRef}>
           <TrackView project={track.project} items={track.items} sprints={track.sprints} modules={track.modules} views={track.views} automations={track.automations} members={track.members} sync={track.sync} git={track.git} pr={track.pr} ops={trackOps} railOpen={railOpen} onOpenRail={() => setRailOpen(true)} />
           {sidePanelOpen && !sidePinned && !sideFullScreen ? (

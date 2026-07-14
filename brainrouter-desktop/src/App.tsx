@@ -120,7 +120,7 @@ export function App(): React.ReactElement {
   const [efficiency, setEfficiency] = useState<{ compactions: number; droppedMessages: number; memoriesRecalled: number }>({ compactions: 0, droppedMessages: 0, memoriesRecalled: 0 });
   // Workspace MODE — Chat · Track · Code, switched from the left sidebar (each
   // swaps the whole main surface). Code is the default agentic-coding view.
-  const [mode, setMode] = useState<'chat' | 'track' | 'code'>('code');
+  const [mode, setMode] = useState<'chat' | 'track' | 'code' | 'meetings'>('code');
   // Track mode data (the per-workspace project + its work items), fed by the
   // host `track-*` queries. Mutations re-fetch the item list.
   const [track, setTrack] = useState<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; modules: Module[]; views: SavedView[]; automations: AutomationRule[]; members: ProjectMember[]; sync: { config: SyncConfig | null; result: SyncResult | null }; git: GitTrackContext | null; pr: TrackPrStatus | null }>({ project: null, items: [], sprints: [], modules: [], views: [], automations: [], members: [], sync: { config: null, result: null }, git: null, pr: null });

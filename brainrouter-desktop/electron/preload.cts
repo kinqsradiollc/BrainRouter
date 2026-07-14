@@ -85,4 +85,15 @@ contextBridge.exposeInMainWorld('brainrouter', {
       return ipcRenderer.invoke('computerUse:setMode', args);
     },
   },
+  // Meetings (ADR-018) — the renderer never holds the account bearer, so meeting
+  // reads/writes are proxied through the main process to the account backend.
+  meetings: {
+    list(): Promise<unknown> { return ipcRenderer.invoke('meetings:list'); },
+    get(id: string): Promise<unknown> { return ipcRenderer.invoke('meetings:get', id); },
+    create(input: { title: string; transcript: string }): Promise<unknown> { return ipcRenderer.invoke('meetings:create', input); },
+    regenerate(id: string): Promise<unknown> { return ipcRenderer.invoke('meetings:regenerate', id); },
+    setScope(id: string, scope: string, opts?: { teamId?: string }): Promise<unknown> { return ipcRenderer.invoke('meetings:setScope', id, scope, opts); },
+    actionToTrack(meetingId: string, actionId: string): Promise<unknown> { return ipcRenderer.invoke('meetings:actionToTrack', meetingId, actionId); },
+    toggleAction(meetingId: string, actionId: string, done: boolean): Promise<unknown> { return ipcRenderer.invoke('meetings:toggleAction', meetingId, actionId, done); },
+  },
 });

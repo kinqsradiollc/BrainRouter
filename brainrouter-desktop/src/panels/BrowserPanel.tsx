@@ -51,30 +51,26 @@ function saveFlows(f: Record<string, FlowStep[]>): void {
   try { localStorage.setItem(FLOWS_KEY, JSON.stringify(f)); } catch { /* ignore */ }
 }
 
-function isLoopbackHost(u: URL): boolean {
-  const h = u.hostname.toLowerCase();
-  return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]' || h === '0.0.0.0';
-}
-
 /**
- * The one choke-point every navigation passes through. Two jobs: (1) never hand
- * an empty/scheme-less value to `loadURL`/`src` (Electron throws ERR_INVALID_URL
- * for '' — the crash this fixes), and (2) stay inside the main-process webview
- * policy, which permits only LOOPBACK dev-server origins and self-contained
- * data:text/html docs — so remote http(s), file://, and other schemes are
- * refused here for honest UX instead of being silently blocked at the guest.
- * Returns a loadable URL or null (caller falls back to a blank data: doc).
+ * The one choke-point every omnibox entry passes through — a real browser
+ * address bar. Resolves, in order: an explicit http(s) URL (any origin); a
+ * data:text/html document; a bare loopback host → http; a hostname-looking token
+ * → https; and anything else (words, a query) → a web search. Never returns an
+ * empty/scheme-less string (Electron throws ERR_INVALID_URL for '') and never a
+ * dangerous scheme (javascript:/file: fall through to search). null only for
+ * empty input, where the caller uses the BROWSER_BLANK fallback.
  */
 function normalizeUrl(raw: string | null | undefined): string | null {
   const s = (raw ?? '').trim();
   if (!s) return null;
-  // Only loopback http(s) is navigable from the omnibox. data:/file:/about:/
-  // remote are all refused here — a user-typed `data:text/html,<script>` or
-  // `file:///etc/passwd` must never reach a sink. The blank fallback uses the
-  // BROWSER_BLANK constant directly (it is not routed through normalizeUrl).
-  if (/^https?:\/\//i.test(s)) { try { return isLoopbackHost(new URL(s)) ? s : null; } catch { return null; } }
+  if (/^https?:\/\//i.test(s)) { try { return new URL(s).href; } catch { return null; } }
+  if (/^data:text\/html/i.test(s)) return s;
   if (/^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:\d+)?(\/|$)/i.test(s)) return `http://${s}`;
-  return null;
+  // A hostname-looking token (a dot, no whitespace, URL-safe chars) → https.
+  if (!/\s/.test(s) && /\./.test(s) && /^[\w.\-~:/?#[\]@!$&'()*+,;=%]+$/.test(s)) {
+    try { return new URL(`https://${s}`).href; } catch { /* fall through to search */ }
+  }
+  return `https://www.google.com/search?q=${encodeURIComponent(s)}`;
 }
 // A self-contained blank document. NOT about:blank — the main-process attach
 // gate only permits data:text/html / loopback / workspace-prototype sources.
@@ -162,7 +158,7 @@ export function BrowserPanel(): React.ReactElement {
   // Navigate when the committed URL changes.
   const go = (next: string): void => {
     const u = normalizeUrl(next);
-    if (!u) { setStatus('Enter a loopback dev-server URL (e.g. localhost:5173 or http://127.0.0.1:3000).'); return; }
+    if (!u) { setStatus('Enter a URL or a search term.'); return; }
     setStatus('');
     setUrl(u);
     setUrlDraft(u);
@@ -404,7 +400,7 @@ export function BrowserPanel(): React.ReactElement {
         <input
           className="browser-url"
           value={urlDraft}
-          placeholder="http://localhost:5173"
+          placeholder="Search or enter address"
           onChange={(e) => setUrlDraft(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') go(urlDraft); }}
         />

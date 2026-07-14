@@ -47,6 +47,7 @@ export const PRODUCT_NAV_GROUPS: DashboardNavGroup[] = [
     items: [
       { href: "/overview", label: "Overview", keywords: "dashboard home", icon: <svg {...iconProps}><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg> },
       { href: "/chat", label: "Agent workbench", keywords: "chat ask build task", icon: <svg {...iconProps}><path d="M21 11.5a8.5 8.5 0 0 1-9 8.5 9.4 9.4 0 0 1-4-.9L3 21l1.7-4.5A8.5 8.5 0 1 1 21 11.5Z" /></svg> },
+      { href: "/meetings", label: "Meetings", keywords: "record transcript summary notes", icon: <svg {...iconProps}><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></svg> },
     ],
   },
   {

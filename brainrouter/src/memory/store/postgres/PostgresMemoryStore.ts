@@ -108,6 +108,7 @@ import {
   type CcrContext,
 } from "./queries/compressionQueries.js";
 import * as sensory from "./queries/sensoryQueries.js";
+import * as meetings from "./queries/meetingsQueries.js";
 import * as cognitive from "./queries/cognitiveQueries.js";
 import * as operations from "./queries/operationsQueries.js";
 import * as search from "./queries/searchQueries.js";
@@ -447,6 +448,15 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public listAccessibleProjects(orgId: string, userId: string, isOrgAdmin: boolean): Promise<projects.ProjectRecord[]> { return projects.listAccessibleProjects(this.exec, orgId, userId, isOrgAdmin); }
   public addProjectMember(projectId: string, userId: string, role: string, now: string): Promise<void> { return projects.addProjectMember(this.exec, projectId, userId, role, now); }
   public removeProjectMember(projectId: string, userId: string): Promise<void> { return projects.removeProjectMember(this.exec, projectId, userId); }
+  // Meetings (ADR-018) — index table + revocable public share tokens.
+  public createMeeting(m: meetings.CreateMeetingInput): Promise<void> { return meetings.createMeeting(this.exec, m); }
+  public listMeetings(orgId: string, userId: string, limit?: number): Promise<meetings.MeetingRow[]> { return meetings.listMeetings(this.exec, orgId, userId, limit); }
+  public getMeeting(orgId: string, userId: string, id: string): Promise<meetings.MeetingRow | null> { return meetings.getMeeting(this.exec, orgId, userId, id); }
+  public setMeetingScope(id: string, userId: string, scope: meetings.MeetingScope, teamId: string | null): Promise<boolean> { return meetings.setMeetingScope(this.exec, id, userId, scope, teamId); }
+  public createMeetingShareToken(s: { token: string; meetingId: string; orgId: string; createdBy: string; expiresAt?: string }): Promise<void> { return meetings.createShareToken(this.exec, s); }
+  public revokeMeetingShareTokens(meetingId: string): Promise<number> { return meetings.revokeShareTokens(this.exec, meetingId); }
+  public getMeetingActiveShareToken(meetingId: string): Promise<{ token: string; expiresAt: string | null } | null> { return meetings.getActiveShareToken(this.exec, meetingId); }
+  public getMeetingByShareToken(token: string): Promise<meetings.MeetingRow | null> { return meetings.getMeetingByShareToken(this.exec, token); }
   public listProjectMembers(projectId: string): Promise<projects.ProjectMemberRecord[]> { return projects.listProjectMembers(this.exec, projectId); }
 
   // ── admin console + audit (ADR-014 P-F) ──────────────────────────────────
