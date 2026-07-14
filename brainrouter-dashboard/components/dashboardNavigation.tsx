@@ -56,6 +56,7 @@ export const PRODUCT_NAV_GROUPS: DashboardNavGroup[] = [
       { href: "/reviews", label: "PR reviews", keywords: "pull request quality", icon: <svg {...iconProps}><path d="M6 3v12" /><circle cx="6" cy="18" r="2" /><circle cx="18" cy="6" r="2" /><path d="M8 6h8M18 8v10" /></svg> },
       { href: "/issues", label: "Issues", keywords: "findings attention", icon: <svg {...iconProps}><path d="M12 3 2.8 20h18.4L12 3Z" /><path d="M12 9v4M12 17h.01" /></svg> },
       { href: "/pentests", label: "Pentests", keywords: "assessment", icon: <svg {...iconProps}><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg> },
+      { href: "/vulnerabilities", label: "CVE", keywords: "cve vulnerability exposure kev epss", icon: <svg {...iconProps}><path d="M12 3l8 4v5c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V7l8-4Z" /><path d="M12 8v4M12 15h.01" /></svg> },
     ],
   },
   {

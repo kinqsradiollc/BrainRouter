@@ -110,6 +110,7 @@ import {
 import * as sensory from "./queries/sensoryQueries.js";
 import * as meetings from "./queries/meetingsQueries.js";
 import * as vulnerability from "./queries/vulnerabilityQueries.js";
+import * as vulnScans from "./queries/vulnerabilityScanQueries.js";
 import * as cognitive from "./queries/cognitiveQueries.js";
 import * as operations from "./queries/operationsQueries.js";
 import * as search from "./queries/searchQueries.js";
@@ -468,6 +469,20 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public listVulnerabilities(filters: vulnerability.VulnerabilityListFilters) { return vulnerability.listVulnerabilities(this.exec, filters); }
   public getVulnerability(cveId: string) { return vulnerability.getVulnerability(this.exec, cveId); }
   public listVulnerabilityRangesForPackage(ecosystem: string, packageName: string) { return vulnerability.listRangesForPackage(this.exec, ecosystem, packageName); }
+  // Org-scoped exposure (spec §10, Tasks 29-31).
+  public createVulnerabilityScan(input: { orgId: string; userId: string; repo: string }) { return vulnScans.createVulnerabilityScan(this.exec, input); }
+  public finishVulnerabilityScan(orgId: string, scanId: string, outcome: Parameters<typeof vulnScans.finishVulnerabilityScan>[3]) { return vulnScans.finishVulnerabilityScan(this.exec, orgId, scanId, outcome); }
+  public getVulnerabilityScan(orgId: string, scanId: string) { return vulnScans.getVulnerabilityScan(this.exec, orgId, scanId); }
+  public listVulnerabilityScans(orgId: string, limit?: number) { return vulnScans.listVulnerabilityScans(this.exec, orgId, limit); }
+  public replaceAssetComponents(orgId: string, repo: string, scanId: string, components: Parameters<typeof vulnScans.replaceAssetComponents>[4]) { return vulnScans.replaceAssetComponents(this.exec, orgId, repo, scanId, components); }
+  public listAssetComponents(filters: Parameters<typeof vulnScans.listAssetComponents>[1]) { return vulnScans.listAssetComponents(this.exec, filters); }
+  public listVulnerabilityMatches(orgId: string, filters?: Parameters<typeof vulnScans.listVulnerabilityMatches>[2]) { return vulnScans.listVulnerabilityMatches(this.exec, orgId, filters); }
+  public upsertVulnerabilityMatch(orgId: string, repo: string, scanId: string, match: import("../../../vulnerability/types.js").VulnerabilityMatch) { return vulnScans.upsertVulnerabilityMatch(this.exec, orgId, repo, scanId, match); }
+  public setVulnerabilityMatchStatus(orgId: string, matchId: string, status: "open" | "dismissed", reason?: string) { return vulnScans.setVulnerabilityMatchStatus(this.exec, orgId, matchId, status, reason); }
+  public upsertVulnerabilityWatch(input: { orgId: string; userId: string; repo: string }) { return vulnScans.upsertVulnerabilityWatch(this.exec, input); }
+  public listVulnerabilityWatches(orgId: string) { return vulnScans.listVulnerabilityWatches(this.exec, orgId); }
+  public deleteVulnerabilityWatch(orgId: string, watchId: string) { return vulnScans.deleteVulnerabilityWatch(this.exec, orgId, watchId); }
+  public recordVulnerabilityWatchEvent(event: { watchId: string; matchId: string; transition: string }) { return vulnScans.recordWatchEvent(this.exec, event); }
   public listProjectMembers(projectId: string): Promise<projects.ProjectMemberRecord[]> { return projects.listProjectMembers(this.exec, projectId); }
 
   // ── admin console + audit (ADR-014 P-F) ──────────────────────────────────
