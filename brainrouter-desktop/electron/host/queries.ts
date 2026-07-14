@@ -377,6 +377,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
     hostedAgents,
     fanoutManager, remoteWorktrees,
     mobileRelay,
+    remoteAccess,
     modelsCacheByKey,
     isoNow,
     runReview,
@@ -3194,6 +3195,23 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         return { payload, qrDataUrl };
       },
       'mobile-relay-revoke': (args) => ({ ok: mobileRelay.revoke(String(args.deviceId ?? '')) }),
+      // Account-based remote access (spec §9, Task 23) — explicit opt-in
+      // enrollment + outbound broker connections. The account bearer and the
+      // rotating device refresh token never reach the renderer or the wire.
+      'remote-access-status': () => ({ enrolled: remoteAccess.isEnrolled(), deviceId: remoteAccess.deviceId() }),
+      'remote-access-enroll': async () => {
+        const result = await remoteAccess.enroll();
+        return { ok: true, deviceId: result.deviceId };
+      },
+      'remote-access-approve-grant': async (args) => ({ ok: await remoteAccess.approveGrant(String(args.grantId ?? '')) }),
+      'remote-access-connect': async (args) => {
+        const scopes = Array.isArray(args.scopes)
+          ? args.scopes.map(String).filter((scope) => ['monitor', 'control', 'approve'].includes(scope))
+          : ['monitor'];
+        await remoteAccess.connect(String(args.grantId ?? ''), scopes);
+        return { ok: true };
+      },
+      'remote-access-stop': () => { remoteAccess.stop(); return { ok: true }; },
       // WS2 2.4 / WS6 6.3 — stop a background shell (e.g. a dev server an agent
       // started) from the Background-tasks panel. Kills the whole process group.
       'action:kill-bgshell': (args) => ({ ok: killBackgroundShell(String(args.id ?? '')) }),

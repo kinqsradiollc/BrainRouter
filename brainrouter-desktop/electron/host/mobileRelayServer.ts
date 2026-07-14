@@ -155,6 +155,16 @@ export class MobileRelayServer {
     return this.registry.revoke(deviceId);
   }
 
+  /**
+   * Broker path (spec §9, Task 23): an OUTBOUND connection to the remote-relay
+   * edge is handled exactly like an inbound LAN socket — same pairing, E2EE
+   * frames, replay counters, and scoped RPC allowlist. The relay only splices
+   * opaque frames, so the phone speaks this same protocol end-to-end.
+   */
+  attachBrokerSocket(socket: WebSocket): void {
+    this.onConnection(socket);
+  }
+
   private onConnection(socket: WebSocket): void {
     this.sockets.set(socket, { authenticated: false, serverCounter: 0, rates: [], subscriptions: new Map(), lastStatusAt: 0, lastStatusHash: '', candidateStates: new Map() });
     socket.on('message', (data) => this.onMessage(socket, data));

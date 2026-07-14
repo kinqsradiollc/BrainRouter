@@ -24,6 +24,7 @@ import { HostedAgentManager } from './host/hostedAgents.js';
 import { FanoutManager } from './host/fanoutManager.js';
 import { RemoteWorktreeManager } from './host/sshRemote.js';
 import { MobileRelayServer } from './host/mobileRelayServer.js';
+import { createRemoteAccessClient } from './host/remoteAccessWiring.js';
 import { ensureBrainSession, getBrainSessionKey } from './host/brainSession.js';
 import {
   fetchAccountModelCatalog,
@@ -769,6 +770,9 @@ async function main(): Promise<void> {
       } catch { return false; }
     },
   });
+  // Enrolled-device broker client (spec §9, Task 23): outbound WSS to the
+  // remote-relay edge; attached sockets reuse mobileRelay's E2EE/RPC allowlist.
+  const remoteAccess = createRemoteAccessClient(mobileRelay);
   // Per-endpoint /models cache ('' = the active llm; otherwise a named provider).
   const modelsCacheByKey = new Map<string, { models: string[]; at: number }>();
   // DESK-5d — PR state cache (gh is a network call; the sidebar refreshes often).
@@ -1095,7 +1099,7 @@ async function main(): Promise<void> {
     lifecycleActionFor, emitRecordEvent, taskEventView, emitTaskEvent, taskProgress,
     verifyTitle, observeVerificationEvent, goalStrikes,
     captureRequirementNote, captureAnnotationNote, captureAnnotationExportNote, captureArtifactNote,
-    ptyRegistry, hostedAgents, fanoutManager, remoteWorktrees, mobileRelay, modelsCacheByKey,
+    ptyRegistry, hostedAgents, fanoutManager, remoteWorktrees, mobileRelay, remoteAccess, modelsCacheByKey,
     getPrCache: () => prCache, setPrCache: (v) => { prCache = v; },
     getPrStatusMapCache: () => prStatusMapCache, setPrStatusMapCache: (v) => { prStatusMapCache = v; },
     readTranscriptCached, isoNow, collectWorkingDiff,
