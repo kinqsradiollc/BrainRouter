@@ -10,6 +10,7 @@ test('Track sync uses the signed-in account OAuth and detected git remote withou
     detectedRepo: 'openai/codex',
     account: { signedIn: true, connected: true, login: 'octocat' },
   }), {
+    provider: 'github',
     configured: true,
     repo: 'openai/codex',
     source: 'BrainRouter account · octocat',
@@ -25,6 +26,7 @@ test('Track sync preserves an explicit connector/PAT target as a supported fallb
     detectedRepo: 'acme/other',
     account: { signedIn: true, connected: false },
   }), {
+    provider: 'github',
     configured: true,
     repo: 'acme/private',
     source: 'connector-env',
@@ -40,10 +42,28 @@ test('Track sync remains unavailable when neither account OAuth nor a local cred
     detectedRepo: 'acme/repo',
     account: { signedIn: true, connected: false },
   }), {
+    provider: 'github',
     configured: false,
     repo: 'acme/repo',
     source: null,
     accountManaged: false,
+  });
+});
+
+test('Track sync treats a connected GitLab account and detected nested project as configured', () => {
+  assert.deepEqual(resolveTrackSyncAvailability({
+    provider: 'gitlab',
+    repo: null,
+    hasToken: false,
+    tokenSource: null,
+    detectedRepo: 'platform/group/service',
+    account: { signedIn: true, connected: true, login: 'ada' },
+  }), {
+    provider: 'gitlab',
+    configured: true,
+    repo: 'platform/group/service',
+    source: 'BrainRouter account · ada',
+    accountManaged: true,
   });
 });
 

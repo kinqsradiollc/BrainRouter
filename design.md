@@ -164,9 +164,23 @@ Native window chrome is part of the desktop layout contract. On macOS, the sideb
 
 The desktop identity comes from the signed-in BrainRouter account when one exists. The operating-system username is only a local fallback. A signed-out desktop remains fully usable; the account row invites sign-in and explains that account authentication is optional except for account-backed OAuth connectors and sync.
 
-Account-backed OAuth is the default connector contract. The normal Connectors surface shows connection health, indexed scope, last sync, and connect/disconnect actions; it must not duplicate repository, PAT, certificate, or Track configuration after OAuth succeeds. Track derives its repository from the active workspace remote and receives the updated work-item list from the completed sync response. A zero-delta sync says that both sides are already in sync; errors and conflicts remain visible instead of looking like an inert button.
+Account-backed OAuth is the default connector contract. The normal Connectors surface shows connection health, indexed scope, last sync, and connect/disconnect actions; it must not duplicate repository, PAT, certificate, or Track configuration after OAuth succeeds. Track derives its provider and repository from the active workspace remote and receives the updated work-item list from the completed sync response. GitHub and GitLab use the same visible import, export, two-way sync, conflict, and member-role states; provider-specific API details stay behind the account connector. A zero-delta sync says that both sides are already in sync; errors and conflicts remain visible instead of looking like an inert button.
 
-PR / Checks always exposes the named **Security review** and **Code review** actions beside the pull request context. The desktop reads `reviews:read` / `reviews:run` capability from the active BrainRouter organization and never infers authority locally. Signed-out, read-only, unavailable-repository, loading, queued, and backend-error states stay visible; unauthorized actions are disabled with an explanation, not silently hidden. The backend remains the final authorization and linked-repository gate.
+PR / Checks always exposes the named **Security review** and **Code review** actions beside the change-request context. The desktop reads `reviews:read` / `reviews:run` capability from the active BrainRouter organization and never infers authority locally. Signed-out, read-only, unavailable-repository, loading, queued, and backend-error states stay visible; unauthorized actions are disabled with an explanation, not silently hidden. The backend remains the final authorization gate. Automatic GitHub webhook reviews obey the organization App's linked-repository policy; an RBAC-authorized manual GitHub or GitLab review may instead reuse the requester's connected account after the provider confirms that credential can access the repository. Review rows retain their forge so Open and Re-run resolve the correct pull-request or merge-request URL. Sealed tokens are resolved inside the worker and are never copied into a job payload or renderer response.
+
+### Hosted agents, fan-out, and remote control
+
+Hosted agent CLIs are workbench sessions, not background subprocesses. Each session has one visible adapter identity, status, terminal attachment, worktree, and execution host. Use the same status vocabulary everywhere: starting, working, waiting, permission needed, done, failed, and stopped. A follow-up writes to the existing terminal; interrupt and approve remain explicit adjacent actions. Never infer completion by scraping terminal prose when a native lifecycle hook is available.
+
+The terminal is a real PTY surface. Preserve scrollback and dimensions across panel detach/reattach, show a recoverable stopped state after exit, and terminate every owned PTY when its workspace closes. Terminal output may be visually dense, but controls use the shared 30px geometry and remain reachable at every supported zoom. Raw input and remote steering must always identify which session receives the bytes.
+
+Fan-out follows one task → two to eight isolated candidates → compare → promote one winner. Candidate cards show adapter, execution host, status, changed-file count, bounded diff summary, rank, and terminal attachment. Comparison never auto-selects a winner. Promotion freezes the candidate first, captures committed and uncommitted work relative to its exact launch commit, then either applies the patch locally or opens a draft change request. Cleanup failures retain the worktree and show a recovery notice; they never silently delete work.
+
+Execution host selection lives in a compact disclosure beside fan-out, not in the primary Settings flow. Local is the default. A remote host row contains only a label, host, port, username, workspace path, and pinned host-key fingerprint. Authentication comes from the operating-system SSH agent; passwords, private keys, and tokens are never stored in the workspace registry. Discovery, Save and verify, Test, and Remove are distinct actions with inline results. A remote launch is allowed only after local and remote base commit IDs match.
+
+The mobile companion is a monitoring and steering surface for the same sessions. Pairing uses a short-lived QR trust ceremony; paired hosts, status, terminal, follow-up, approve, interrupt, and completion notifications mirror desktop nouns and states. A terminal floor indicator makes the active controller visible. Reconnection restores subscriptions and terminal snapshot before accepting new input. Voice capture is optional and must not reconnect or close the encrypted channel when toggled.
+
+Remote control is opt-in and default-deny. The desktop binds the relay locally, encrypts every application frame, authenticates each device separately, caps message size/rate, and exposes a mobile-specific RPC allowlist. Regenerating pairing rotates pending trust material. Device removal is immediate and visible. UI copy says whether a failure is pairing, connection, permission, terminal ownership, or agent state; never collapse these into a generic offline badge.
 
 Window zoom is a product layout state, not a browser afterthought. `⌘+`, `⌘-`, and `⌘0` must preserve one primary vertical scroll surface and must never introduce page-level horizontal scrolling. Composer controls compress in this order: ellipsize long repository/model text, collapse workspace labels to icons, then hide redundant branch/workspace context at the smallest center width. Action controls remain reachable. Settings, Track views, dialogs, and panels use container or viewport breakpoints that still apply at the supported `0.5–2.5×` zoom range.
 
@@ -194,18 +208,20 @@ CLI components consume semantic roles from `brainrouter-cli/src/cli/theme/theme.
 
 Dashboard and Desktop should feel related without forcing identical layout. Keep these mappings stable:
 
-| Product concept    | Dashboard                               | Desktop                              | Shared rule                                             |
-| ------------------ | --------------------------------------- | ------------------------------------ | ------------------------------------------------------- |
-| Primary navigation | Left product rail                       | Left workbench rail                  | Same naming and semantic tones                          |
-| Settings category  | Category rail in profile/settings shell | Category rail in settings window     | One active category and subsection only                 |
-| Subsection choice  | Short tab row                           | Short tab row                        | Resets content scroll on change                         |
-| Connected account  | Connections provider row/card           | Account-backed connection state      | Never reveal stored credentials                         |
-| Connector sync     | OAuth connection and sync health         | Workspace remote and sync result     | No duplicate PAT or repository setup in the normal path |
-| PR review actions  | Org review console                       | PR / Checks security and code actions| Backend RBAC and linked-repository gate are authoritative|
-| Knowledge scope    | Organization, project, workspace picker | Active account and workspace context | Server validates every scope                            |
-| Status             | Inline badge and explanatory text       | Inline badge and explanatory text    | Color never carries meaning alone                       |
-| Select/menu        | Styled trigger and popover              | Styled trigger and popover           | Keyboard operation, focus ring, loading/disabled states |
-| Motion             | Page/panel reveal                       | Panel/view transition                | Same duration families and reduced-motion behavior      |
+| Product concept    | Dashboard                                | Desktop                               | Shared rule                                             |
+| ------------------ | ---------------------------------------- | ------------------------------------- | ------------------------------------------------------- |
+| Primary navigation | Left product rail                        | Left workbench rail                   | Same naming and semantic tones                          |
+| Settings category  | Category rail in profile/settings shell  | Category rail in settings window      | One active category and subsection only                 |
+| Subsection choice  | Short tab row                            | Short tab row                         | Resets content scroll on change                         |
+| Connected account  | Connections provider row/card            | Account-backed connection state       | Never reveal stored credentials                         |
+| Connector sync     | OAuth connection and sync health         | Workspace remote and sync result      | No duplicate PAT or repository setup in the normal path |
+| PR review actions  | Org review console                       | PR / Checks security and code actions | Backend RBAC plus live connected-credential access gate |
+| Hosted agents      | Session and review visibility            | PTY session and fan-out candidates    | Same adapter, host, status, and recovery vocabulary     |
+| Mobile steering    | Device/session visibility where relevant | Pairing and controller-floor state    | Same scoped permissions and terminal ownership          |
+| Knowledge scope    | Organization, project, workspace picker  | Active account and workspace context  | Server validates every scope                            |
+| Status             | Inline badge and explanatory text        | Inline badge and explanatory text     | Color never carries meaning alone                       |
+| Select/menu        | Styled trigger and popover               | Styled trigger and popover            | Keyboard operation, focus ring, loading/disabled states |
+| Motion             | Page/panel reveal                        | Panel/view transition                 | Same duration families and reduced-motion behavior      |
 
 When a feature exists in both applications, align its nouns, status model, empty/error copy, and semantic color before aligning pixels. Platform-specific controls are acceptable only when they preserve the same behavior and information hierarchy.
 

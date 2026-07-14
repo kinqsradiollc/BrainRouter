@@ -15,6 +15,7 @@
     "start": "npm run build:deps && npm run build && electron .",
     "start:fast": "electron .",
     "electron": "electron .",
+    "rebuild:native": "npx --yes electron-builder install-app-deps",
     "reset:desktop": "node scripts/reset-desktop.mjs",
     "dist:mac": "npm run build && npx --yes electron-builder --mac --publish never",
     "dist:win": "npm run build && npx --yes electron-builder --win --publish never",
@@ -23,6 +24,7 @@
   "build": {
     "appId": "com.brainrouter.desktop",
     "productName": "BrainRouter",
+    "electronVersion": "33.4.11",
     "afterSign": "build/notarize.cjs",
     "directories": {
       "output": "release"
@@ -79,22 +81,31 @@
     "@nut-tree-fork/provider-interfaces": "^4.2.6",
     "@nut-tree-fork/shared": "^4.2.6",
     "@types/react-syntax-highlighter": "^15.5.13",
+    "@types/ssh2": "^1.15.5",
     "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-serialize": "^0.14.0",
     "@xterm/xterm": "^6.0.0",
     "@xyflow/react": "^12.11.0",
     "d3-force": "^3.0.0",
     "monaco-editor": "^0.55.1",
+    "node-pty": "^1.1.0",
+    "qrcode": "^1.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
     "react-syntax-highlighter": "^16.1.1",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "ssh2": "^1.17.0",
+    "tweetnacl": "^1.0.3",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@types/d3-force": "^3.0.10",
     "@types/node": "^22.5.0",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^4.3.1",
     "electron": "^33.0.0",
     "tsx": "^4.7.0",

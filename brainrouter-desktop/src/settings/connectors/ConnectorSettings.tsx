@@ -381,12 +381,17 @@ export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
               </div>
             );
           })}
-          {connectors.items.map((connector) => (
+          {connectors.items.map((connector) => {
+            const accountOauthUnavailable = connector.source === 'github'
+              && connector.credential.mode === 'oauth'
+              && !githubAccount.connected;
+            const displayStatus = accountOauthUnavailable ? 'error' : connector.status;
+            return (
             <div key={connector.id} className="provider-card saved">
               <span className="pc-name">
                 {connector.name}
-                <span className={`pc-tag ${connector.status === 'active' ? 'ok' : connector.status === 'error' ? 'danger' : 'default'}`}>
-                  {connector.status === 'active' ? 'Connected' : connector.status === 'paused' ? 'Paused' : connector.status === 'error' ? 'Needs attention' : connector.status}
+                <span className={`pc-tag ${displayStatus === 'active' ? 'ok' : displayStatus === 'error' ? 'danger' : 'default'}`}>
+                  {displayStatus === 'active' ? 'Connected' : displayStatus === 'paused' ? 'Paused' : displayStatus === 'error' ? 'Needs attention' : displayStatus}
                 </span>
               </span>
               <span className="pc-host">
@@ -404,7 +409,9 @@ export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
               </span>
               {typeof connector.config.pollMinutes === 'number' && connector.config.pollMinutes > 0 && connector.status !== 'paused'
                 ? <span className="pc-wire" style={{ opacity: 0.6 }}>Auto-syncs every {connector.config.pollMinutes} min</span> : null}
-              {(!!connector.lastError || connector.status === 'error') ? (
+              {accountOauthUnavailable ? (
+                <span className="pc-host" role="alert" style={{ color: 'var(--warn)' }}>{githubAccount.error || 'GitHub authorization needs to be reconnected.'}</span>
+              ) : (!!connector.lastError || connector.status === 'error') ? (
                 <span className="pc-host" style={{ color: 'var(--warn)' }}>Last sync didn’t finish{connector.lastError ? ` — ${connector.lastError}` : ''}</span>
               ) : null}
               <span className="pc-actions">
@@ -417,7 +424,7 @@ export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
                 <button className="btn danger" onClick={() => { if (window.confirm(`Remove the ${connector.name} connector?`)) { onAction('a-connector-delete', 'action:connector-delete', { id: connector.id }); setTimeout(refreshSnapshot, 120); } }}>Remove</button>
               </span>
             </div>
-          ))}
+          );})}
         </div>
       ) : null}
 

@@ -8,6 +8,7 @@ import type { WorkItem, WorkItemType, WorkItemPriority, SprintState, Module, Tra
 // External sync (GitHub) — view-side shapes mirroring core's githubSync results.
 export interface SyncRepoConfig { repo: string; hasToken: boolean; tokenSource: string | null; active?: boolean; label?: string | null; source?: string | null; connectorId?: string | null }
 export interface SyncConfig {
+  provider?: 'github' | 'gitlab';
   repo: string | null;
   hasToken: boolean;
   tokenSource: string | null;

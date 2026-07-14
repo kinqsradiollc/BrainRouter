@@ -242,7 +242,7 @@ export function TrackView({ project, items, sprints, modules, views, automations
       ) : tab === 'automation' ? (
         <AutomationView automations={automations} states={states} ops={ops} />
       ) : tab === 'members' ? (
-        <MembersView members={members} ops={ops} />
+        <MembersView members={members} ops={ops} provider={sync.config?.provider} />
       ) : (
         <SyncView sync={sync} git={git} ops={ops} />
       )}

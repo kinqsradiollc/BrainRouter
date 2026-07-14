@@ -343,6 +343,10 @@ function openWorkspaceWindow(workspaceRoot: string): void {
     title: `BrainRouter — ${path.basename(workspaceRoot)}`,
     backgroundColor: '#262624',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    // Pin the macOS traffic lights so their centre (~y20) sits on the 40px
+    // titlebar band's centre regardless of macOS version — keeps the top row
+    // consistent instead of the lights floating in the top third.
+    ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 16, y: 13 } } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,

@@ -35,9 +35,16 @@ import { requireAnyAuth, JWT_SECRET, type AuthedRequest } from "../../middleware
 import { sendError } from "../../../contracts/http.js";
 import { seal, open, isSecretBoxConfigured } from "../../../security/secretBox.js";
 import { probeGithubConnection } from "./githubConnection.js";
+import {
+  githubAccountTokenFromResponse,
+  githubAccountTokenSettingKey,
+  githubAppClientId,
+  resolveGithubAccountToken,
+  type GithubAccountToken,
+} from "../../../connectors/githubAccountToken.js";
 
 const APP_KEY = "connectorOAuthApp:github";
-const tokenKey = (userId: string) => `connectorToken:github:${userId}`;
+const tokenKey = githubAccountTokenSettingKey;
 const deviceKey = (userId: string) => `connectorDevice:github:${userId}`;
 const GH = "https://github.com";
 const GH_API = "https://api.github.com";
@@ -47,16 +54,15 @@ const LEGACY_SCOPE = "repo read:org";
 interface OAuthApp { clientId: string; clientSecretSealed: string; redirectBase?: string }
 /** Unified view the routes use: env GitHub App (device flow) or legacy DB OAuth App. */
 interface AppConfig { clientId: string; slug: string; isGithubApp: boolean; clientSecretSealed?: string; redirectBase?: string }
-interface UserToken { accessToken: string; login: string; scope: string; connectedAt: string }
+type UserToken = GithubAccountToken;
 interface RepoRow { fullName: string; url: string; private: boolean; defaultBranch: string }
 
 // The BrainRouter GitHub App is bundled by default — a GitHub App's client_id and
 // slug are PUBLIC (not secrets), so shipping them means GitHub connect works with zero
 // config, the same way `gh`/`claude` bundle their own client_id. A self-hosted
 // deployment can point at its own App with one env var each (the "single .env" knob).
-const DEFAULT_APP_CLIENT_ID = "Iv23ligghGTjBPtQEkiq";
 const DEFAULT_APP_SLUG = "brainrouter-memory-kinqsradiollc";
-const APP_CLIENT_ID = process.env.BRAINROUTER_GITHUB_APP_CLIENT_ID?.trim() || DEFAULT_APP_CLIENT_ID;
+const APP_CLIENT_ID = githubAppClientId();
 const APP_SLUG = process.env.BRAINROUTER_GITHUB_APP_SLUG?.trim() || DEFAULT_APP_SLUG;
 
 async function getDbApp(): Promise<OAuthApp | null> {
@@ -74,9 +80,15 @@ function installUrl(app: AppConfig | null): string | null {
   return app?.isGithubApp && app.slug ? `${GH}/apps/${app.slug}/installations/new` : null;
 }
 async function getUserToken(userId: string): Promise<UserToken | null> {
-  const rec = await memoryEngine.emailAuth.getSetting<{ sealed?: string }>(tokenKey(userId));
-  if (!rec?.sealed) return null;
-  try { return JSON.parse(open(rec.sealed)) as UserToken; } catch { return null; }
+  const app = await getApp();
+  let clientSecret: string | undefined;
+  if (app && !app.isGithubApp && app.clientSecretSealed) {
+    try { clientSecret = open(app.clientSecretSealed); } catch { /* the probe will surface reconnect */ }
+  }
+  return resolveGithubAccountToken(memoryEngine.emailAuth, userId, {
+    clientId: app?.clientId ?? APP_CLIENT_ID,
+    ...(clientSecret ? { clientSecret } : {}),
+  });
 }
 
 // ---- GitHub REST helpers (fixed api.github.com host — no user-controlled base) ----
@@ -173,12 +185,15 @@ githubConnectorRouter.post("/github/device/poll", requireAnyAuth, async (req: Au
       method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ client_id: app.clientId, device_code: dev.deviceCode, grant_type: "urn:ietf:params:oauth:grant-type:device_code" }),
     });
-    const d = await r.json() as { access_token?: string; scope?: string; error?: string };
+    const d = await r.json() as { access_token?: string; scope?: string; expires_in?: number; refresh_token?: string; refresh_token_expires_in?: number; error?: string };
     if (d.error === "authorization_pending" || d.error === "slow_down") { res.json({ status: "pending" }); return; }
     if (!d.access_token) { res.json({ status: "error", error: d.error || "no token" }); return; }
     const ur = await fetch(`${GH_API}/user`, { headers: { Authorization: `Bearer ${d.access_token}`, Accept: "application/vnd.github+json" } });
     const login = (ur.ok ? ((await ur.json()) as { login?: string }).login : "") || "";
-    await memoryEngine.emailAuth.setSetting(tokenKey(req.userId!), { sealed: seal(JSON.stringify({ accessToken: d.access_token, login, scope: d.scope ?? "", connectedAt: new Date().toISOString() })) });
+    const connectedAt = new Date().toISOString();
+    const stored = githubAccountTokenFromResponse(d, { login, scope: d.scope ?? "", connectedAt, flow: "device" });
+    if (!stored) { res.json({ status: "error", error: "GitHub returned no usable access token." }); return; }
+    await memoryEngine.emailAuth.setSetting(tokenKey(req.userId!), { sealed: seal(JSON.stringify(stored)) });
     await memoryEngine.emailAuth.setSetting(deviceKey(req.userId!), {});
     res.json({ status: "connected", login });
   } catch (e) { console.error("[github] device poll failed:", e); res.json({ status: "error", error: "Could not complete the GitHub sign-in." }); }
@@ -277,11 +292,12 @@ githubConnectorRouter.get("/github/oauth/callback", async (req: AuthedRequest, r
       method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({ client_id: app.clientId, client_secret: clientSecret, code, redirect_uri: redirectUri(app, req) }),
     });
-    const td = await tr.json() as { access_token?: string; scope?: string; error_description?: string };
+    const td = await tr.json() as { access_token?: string; scope?: string; expires_in?: number; refresh_token?: string; refresh_token_expires_in?: number; error_description?: string };
     if (!td.access_token) { res.status(400).send(resultPage("Connection failed", td.error_description || "GitHub did not return a token.")); return; }
     const ur = await fetch(`${GH_API}/user`, { headers: { Authorization: `Bearer ${td.access_token}`, Accept: "application/vnd.github+json" } });
     const login = (ur.ok ? ((await ur.json()) as { login?: string }).login : "") || "";
-    const stored: UserToken = { accessToken: td.access_token, login, scope: td.scope ?? LEGACY_SCOPE, connectedAt: new Date().toISOString() };
+    const stored = githubAccountTokenFromResponse(td, { login, scope: td.scope ?? LEGACY_SCOPE, connectedAt: new Date().toISOString(), flow: "web" });
+    if (!stored) { res.status(400).send(resultPage("Connection failed", "GitHub did not return a usable token.")); return; }
     await memoryEngine.emailAuth.setSetting(tokenKey(userId), { sealed: seal(JSON.stringify(stored)) });
     res.send(resultPage("GitHub connected ✓", `Signed in as ${login || "your account"}. BrainRouter can now read your repositories.`));
   } catch {

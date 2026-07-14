@@ -284,6 +284,8 @@ export interface RemoveChildWorktreeResult {
   applyError?: string;
   /** Worktree-removal notice (force-removal fallback). */
   notice?: string;
+  /** Recovery ref created when the worktree HEAD contained commits not reachable from the parent. */
+  recoveryRef?: string;
 }
 
 /**
@@ -300,7 +302,7 @@ export function worktreePatchFile(workspaceRoot: string, childId: string): strin
 
 /** What `captureWorktreeChanges` found (and persisted) in a working tree. */
 export interface WorktreeChangeCapture {
-  /** Number of files changed vs HEAD (0 = clean tree — nothing captured). */
+  /** Number of files changed vs the requested base (0 = nothing captured). */
   changedFiles: number;
   /** Where the FULL binary-safe patch landed (iff changes + writable `patchFile`). */
   patchPath?: string;
@@ -319,7 +321,7 @@ export interface WorktreeChangeCapture {
  */
 export function captureWorktreeChanges(
   worktreeRoot: string,
-  opts: { patchFile?: string } = {},
+  opts: { patchFile?: string; baseRef?: string } = {},
 ): WorktreeChangeCapture {
   const capture: WorktreeChangeCapture = { changedFiles: 0 };
   try {
@@ -328,13 +330,13 @@ export function captureWorktreeChanges(
     // COMPLETE. `.gitignore` is still honored, so node_modules/build output
     // stays out — the patch only carries real source changes.
     runGit(worktreeRoot, ['add', '-A']);
-    const stat = runGit(worktreeRoot, ['diff', '--cached', '--stat', 'HEAD']);
-    if (!stat.ok || !stat.stdout.trim()) return capture;
-    const lines = stat.stdout.trim().split('\n');
-    capture.changedFiles = Math.max(0, lines.length - 1); // last line is the summary
+    const baseRef = opts.baseRef?.trim() || 'HEAD';
+    const names = runGit(worktreeRoot, ['diff', '--cached', '--name-only', baseRef]);
+    if (!names.ok || !names.stdout.trim()) return capture;
+    capture.changedFiles = names.stdout.split(/\r?\n/).filter(Boolean).length;
 
     // Full, binary-safe patch — used for both persistence and apply. Never capped.
-    const fullRes = runGit(worktreeRoot, ['diff', '--cached', '--binary', 'HEAD']);
+    const fullRes = runGit(worktreeRoot, ['diff', '--cached', '--binary', baseRef]);
     const fullPatch = fullRes.ok ? fullRes.stdout : '';
     if (fullPatch.trim() && opts.patchFile) {
       try {
@@ -345,8 +347,8 @@ export function captureWorktreeChanges(
     }
 
     // Human preview: plain text diff, uncapped here (callers cap).
-    const previewRes = runGit(worktreeRoot, ['diff', '--cached', 'HEAD']);
-    capture.preview = (previewRes.ok ? previewRes.stdout : stat.stdout).trim();
+    const previewRes = runGit(worktreeRoot, ['diff', '--cached', baseRef]);
+    capture.preview = (previewRes.ok ? previewRes.stdout : names.stdout).trim();
   } catch { /* capture is best-effort — never throw at teardown/archive time */ }
   return capture;
 }
@@ -364,7 +366,7 @@ export function createDetachedWorktree(
   parentWorkspaceRoot: string,
   childId: string,
   ref = 'HEAD',
-): { sourceRoot: string; worktreeRoot: string } | null {
+): { sourceRoot: string; worktreeRoot: string; baseOid: string } | null {
   let root: string;
   try {
     root = fs.realpathSync(parentWorkspaceRoot);
@@ -380,11 +382,14 @@ export function createDetachedWorktree(
   } catch {
     return null;
   }
-  const created = runGit(repoRoot, ['worktree', 'add', '--detach', worktreeRoot, ref]);
+  const base = runGit(repoRoot, ['rev-parse', '--verify', `${ref}^{commit}`]);
+  if (!base.ok || !/^[a-f0-9]{40,64}$/i.test(base.stdout.trim())) return null;
+  const baseOid = base.stdout.trim();
+  const created = runGit(repoRoot, ['worktree', 'add', '--detach', worktreeRoot, baseOid]);
   if (!created.ok) return null;
   let real = worktreeRoot;
   try { real = fs.realpathSync(worktreeRoot); } catch { /* use the raw path */ }
-  return { sourceRoot: repoRoot, worktreeRoot: real };
+  return { sourceRoot: repoRoot, worktreeRoot: real, baseOid };
 }
 
 /** Why an isolated child's clean changes were HELD instead of merged back:
@@ -446,6 +451,7 @@ export function removeChildWorktree(
   let patchPath: string | undefined;
   let applied: boolean | undefined;
   let applyError: string | undefined;
+  let recoveryRef: string | undefined;
 
   try {
     if (fs.existsSync(worktreeRoot)) {
@@ -479,10 +485,37 @@ export function removeChildWorktree(
     }
   } catch { /* capture/apply is best-effort — never block teardown */ }
 
+  // Preserve committed work before destructive removal. A detached child may
+  // have created commits that are not reachable from the parent branch; pin
+  // those commits under a CAS-created recovery ref. If that proof/write fails,
+  // retain the whole worktree rather than relying on reflog luck.
+  if (fs.existsSync(worktreeRoot)) {
+    const childHead = runGit(worktreeRoot, ['rev-parse', '--verify', 'HEAD']);
+    const parentHead = runGit(sourceRoot, ['rev-parse', '--verify', 'HEAD']);
+    if (childHead.ok && parentHead.ok && childHead.stdout.trim() !== parentHead.stdout.trim()) {
+      const head = childHead.stdout.trim();
+      const preserved = runGit(sourceRoot, ['merge-base', '--is-ancestor', head, parentHead.stdout.trim()]);
+      if (!preserved.ok) {
+        recoveryRef = `refs/brainrouter/recovery/${safeName(path.basename(worktreeRoot))}-${head.slice(0, 12)}`;
+        const zero = '0'.repeat(head.length);
+        const pinned = runGit(sourceRoot, ['update-ref', recoveryRef, head, zero]);
+        if (!pinned.ok) {
+          return {
+            ok: false, diff, changedFiles, patchPath, applied, applyError,
+            notice: `Worktree retained: could not prove or create a recovery ref for committed HEAD ${head.slice(0, 12)}.`,
+          };
+        }
+      }
+    }
+  }
+
   // Remove the worktree, then prune the admin entry so `git worktree list` stays honest.
   const removed = runGit(sourceRoot, ['worktree', 'remove', '--force', worktreeRoot]);
   if (!removed.ok) {
-    try { if (fs.existsSync(worktreeRoot)) fs.rmSync(worktreeRoot, { recursive: true, force: true }); } catch { /* noop */ }
+    return {
+      ok: false, diff, changedFiles, patchPath, applied, applyError, recoveryRef,
+      notice: `Worktree retained because git worktree remove failed: ${removed.stderr.trim() || 'non-zero exit'}`,
+    };
   }
   runGit(sourceRoot, ['worktree', 'prune']);
   return {
@@ -492,7 +525,7 @@ export function removeChildWorktree(
     patchPath,
     applied,
     applyError,
-    notice: removed.ok ? undefined : `git worktree remove reported: ${removed.stderr.trim() || 'non-zero exit'} (force-removed the directory)`,
+    recoveryRef,
   };
 }
 

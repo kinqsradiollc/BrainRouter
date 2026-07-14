@@ -12,6 +12,7 @@ import { runConnectorSync } from "../../../connectors/syncExecutor.js";
 import { isOAuthSource } from "../../../connectors/oauthBroker.js";
 import { CONNECTOR_RESOURCE_FIELDS, discoverConnectorAccount, discoverConnectorResources } from "../../../connectors/resources.js";
 import { enqueueAgentJob } from "../../../memory/scheduler/jobs.js";
+import { gitlabTrackProxyTarget } from "../../../connectors/gitlabTrackProxy.js";
 
 export const connectorManageRouter = Router();
 connectorManageRouter.use(requireAnyAuth);
@@ -156,4 +157,33 @@ connectorManageRouter.post("/:id/run", async (req: AuthedRequest, res) => {
   if (!(await ownedConnector(req, res))) return;
   const result = await runConnectorSync(String(req.params.id));
   res.json({ result });
+});
+
+/** Bounded GitLab Track proxy. The desktop's provider adapter emits only
+ * project issue/note/member calls; the sealed connector credential never
+ * leaves this worker and the target host is the connector's fixed HTTPS host. */
+connectorManageRouter.post("/:source/track/proxy", async (req: AuthedRequest, res) => {
+  if (String(req.params.source) !== "gitlab") { res.status(404).json({ error: "Track proxy is not available for this connector" }); return; }
+  const found = await sourceConnector(req, res);
+  if (!found?.connector?.hasCredential) { res.json({ ok: false, status: 401, error: "GitLab is not connected." }); return; }
+  const resolved = await memoryEngine.connectors.getResolvedConnector(found.connector.id);
+  const token = resolved?.credential?.accessToken?.trim();
+  if (!resolved || !token) { res.json({ ok: false, status: 401, error: "GitLab is not connected." }); return; }
+  const method = String(req.body?.method ?? "GET").toUpperCase();
+  if (!["GET", "POST", "PUT"].includes(method)) { res.json({ ok: false, status: 405, error: "method not allowed" }); return; }
+  const url = gitlabTrackProxyTarget(resolved.config.hostUrl, req.body?.path);
+  if (!url) { res.json({ ok: false, status: 400, error: "path not allowed" }); return; }
+  try {
+    const upstream = await fetch(url, {
+      method,
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/json", "Content-Type": "application/json" },
+      body: method === "GET" ? undefined : JSON.stringify(req.body?.body ?? {}),
+    });
+    const text = await upstream.text();
+    let data: unknown = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    res.json({ ok: upstream.ok, status: upstream.status, data });
+  } catch (error) {
+    res.json({ ok: false, status: 502, error: error instanceof Error ? error.message : "proxy failed" });
+  }
 });

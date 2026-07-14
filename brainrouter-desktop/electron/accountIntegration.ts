@@ -14,10 +14,13 @@ export type AccountFetch = (
   init?: { method?: string; headers?: Record<string, string>; body?: string },
 ) => Promise<FetchResponse>;
 
-export type GithubTrackFetch = (
+export type AccountTrackFetch = (
   url: string,
   init?: { method?: string; headers?: Record<string, string>; body?: string },
 ) => Promise<FetchResponse & { text(): Promise<string> }>;
+
+/** @deprecated Use AccountTrackFetch for provider-neutral connector traffic. */
+export type GithubTrackFetch = AccountTrackFetch;
 
 export interface BrainRouterAccountApi {
   baseUrl: string;
@@ -245,24 +248,33 @@ export async function fetchAccountConnectorStatuses(
   }
 }
 
-export function createGithubTrackProxyFetch(
+function createAccountTrackProxyFetch(
+  source: 'github' | 'gitlab',
   account: BrainRouterAccountContext,
   fetchImpl: AccountFetch = globalThis.fetch as unknown as AccountFetch,
-): GithubTrackFetch {
+): AccountTrackFetch {
   return async (url, init) => {
-    const githubUrl = new URL(url);
+    const providerUrl = new URL(url);
     const method = (init?.method ?? 'GET').toUpperCase();
     let requestBody: unknown;
     if (init?.body) {
       try { requestBody = JSON.parse(init.body); }
       catch { requestBody = init.body; }
     }
-    const response = await fetchImpl(`${account.baseUrl}/api/connectors/github/track/proxy`, {
+    // URL() already normalizes, but reject any traversal segment as defense-in-depth
+    // so a crafted path can never walk outside the provider API (CWE-22).
+    if (/(^|\/)\.\.(\/|$)/.test(providerUrl.pathname)) {
+      throw new Error('Invalid provider path.');
+    }
+    const providerPath = source === 'gitlab'
+      ? providerUrl.pathname.replace(/^\/api\/v4(?=\/)/, '') + providerUrl.search
+      : providerUrl.pathname + providerUrl.search;
+    const response = await fetchImpl(`${account.baseUrl}/api/connectors/${source}/track/proxy`, {
       method: 'POST',
       headers: brainRouterAccountHeaders(account, true),
       body: JSON.stringify({
         method,
-        path: githubUrl.pathname + githubUrl.search,
+        path: providerPath,
         ...(requestBody !== undefined ? { body: requestBody } : {}),
       }),
     });
@@ -276,6 +288,20 @@ export function createGithubTrackProxyFetch(
       text: async () => typeof data === 'string' ? data : JSON.stringify(data ?? ''),
     };
   };
+}
+
+export function createGithubTrackProxyFetch(
+  account: BrainRouterAccountContext,
+  fetchImpl: AccountFetch = globalThis.fetch as unknown as AccountFetch,
+): AccountTrackFetch {
+  return createAccountTrackProxyFetch('github', account, fetchImpl);
+}
+
+export function createGitlabTrackProxyFetch(
+  account: BrainRouterAccountContext,
+  fetchImpl: AccountFetch = globalThis.fetch as unknown as AccountFetch,
+): AccountTrackFetch {
+  return createAccountTrackProxyFetch('gitlab', account, fetchImpl);
 }
 
 export async function fetchGithubAccountStatus(
@@ -303,12 +329,14 @@ export async function fetchGithubAccountStatus(
     }
 
     const login = typeof body.login === 'string' ? body.login.trim() : '';
+    const providerError = typeof body.error === 'string' ? body.error.trim() : '';
     return {
       signedIn: true,
       connected: body.connected === true,
       ...(login ? { login } : {}),
       orgId: context.orgId,
       ...(context.orgName ? { orgName: context.orgName } : {}),
+      ...(providerError ? { error: providerError } : {}),
     };
   } catch (error) {
     return {

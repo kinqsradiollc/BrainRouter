@@ -24,8 +24,11 @@ import {
  *   - Linux: `bwrap` (bubblewrap) when available; falls back to `firejail`.
  *            Sets up a fresh mount namespace with the workspace mounted rw and
  *            the rest of the FS bind-mounted ro.
- *   - Windows / no sandboxer: there is no portable sandbox. Rather than
- *            SILENTLY running unsandboxed, `cli.sandboxUnavailable` decides:
+ *   - Windows: WSL + `bwrap` when both are installed. Windows workspace and
+ *            grant paths are mapped to `/mnt/<drive>/...`; execution stays in
+ *            the same network/mount-isolated Linux sandbox used natively.
+ *   - No sandboxer: rather than SILENTLY running unsandboxed,
+ *            `cli.sandboxUnavailable` decides:
  *            `'deny'` (default) / `'ask'` refuse to run; `'warn'` runs
  *            unsandboxed with a loud notice (CODEX-SANDBOX-FAILCLOSED).
  *
@@ -215,7 +218,7 @@ export interface SandboxRunResult {
   stderr: string;
   exitCode: number;
   sandboxed: boolean;
-  sandboxTool?: 'sandbox-exec' | 'bwrap' | 'firejail' | 'none';
+  sandboxTool?: 'sandbox-exec' | 'bwrap' | 'firejail' | 'wsl-bwrap' | 'none';
   notice?: string;
   /** CODEX-SANDBOX-FAILCLOSED — true when the command never ran (refused). */
   refused?: boolean;
@@ -266,7 +269,17 @@ export async function runShell(command: string, config: SandboxConfig, timeoutMs
     return handleUnavailableSandbox(config, command, cwd, timeoutMs, 'Linux (no bwrap/firejail)', signal, runEnv);
   }
 
-  // Windows / other — no portable sandbox in stdlib.
+  if (process.platform === 'win32') {
+    const plan = windowsWslSandboxPlan(config, command);
+    if (plan && await binaryAvailableInWsl('bwrap')) {
+      const r = await execShell(plan.executable, plan.args, cwd, timeoutMs, true, 'wsl-bwrap', signal, runEnv);
+      r.sandboxDenied = detectSandboxDenial(r.stderr);
+      return r;
+    }
+    return handleUnavailableSandbox(config, command, cwd, timeoutMs, 'Windows (WSL + bwrap unavailable)', signal, runEnv);
+  }
+
+  // Other platforms retain the explicit fail-closed policy.
   return handleUnavailableSandbox(config, command, cwd, timeoutMs, process.platform, signal, runEnv);
 }
 
@@ -376,6 +389,44 @@ function binaryAvailable(name: string): Promise<boolean> {
     child.on('close', (code) => resolve(code === 0));
     child.on('error', () => resolve(false));
   });
+}
+
+function binaryAvailableInWsl(name: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn('wsl.exe', ['--exec', 'sh', '-lc', `command -v ${name} >/dev/null 2>&1`], {
+      shell: false,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    child.on('close', (code) => resolve(code === 0));
+    child.on('error', () => resolve(false));
+  });
+}
+
+/** Map a normal drive-backed Windows path into WSL's default mount. UNC and
+ * device paths are rejected because their WSL mount is host-config-dependent;
+ * the caller then fails closed instead of granting the wrong directory. */
+export function windowsPathToWsl(input: string): string | undefined {
+  const normalized = input.replace(/\\/g, '/');
+  const match = normalized.match(/^([A-Za-z]):\/(.*)$/);
+  if (!match) return undefined;
+  const tail = match[2]!.split('/').filter((part) => part && part !== '.');
+  if (tail.some((part) => part === '..')) return undefined;
+  return `/mnt/${match[1]!.toLowerCase()}${tail.length ? `/${tail.join('/')}` : ''}`;
+}
+
+export function windowsWslSandboxPlan(config: SandboxConfig, command: string): { executable: 'wsl.exe'; args: string[] } | undefined {
+  const workspaceRoot = windowsPathToWsl(config.workspaceRoot);
+  const readPaths = config.readPaths.map(windowsPathToWsl);
+  const writePaths = config.writePaths.map(windowsPathToWsl);
+  if (!workspaceRoot || readPaths.some((value) => !value) || writePaths.some((value) => !value)) return undefined;
+  const mapped: SandboxConfig = {
+    ...config,
+    workspaceRoot,
+    readPaths: readPaths as string[],
+    writePaths: writePaths as string[],
+  };
+  return { executable: 'wsl.exe', args: ['--exec', 'bwrap', ...buildBwrapArgs(mapped, command)] };
 }
 
 /**

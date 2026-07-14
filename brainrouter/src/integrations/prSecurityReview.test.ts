@@ -308,4 +308,68 @@ describe("PR security review executor (ADR-017 D5)", () => {
     const r = await runPrSecurityReview({ installationId: "42", repo: "o/r", prNumber: 1, headSha: "x" }, makeDeps({ calls: [] }, { getIntegration: async () => ({ config: {}, secret: {} }) }));
     expect(r.skipped).toBe("no-app-creds");
   });
+
+  it("uses the signed-in GitHub connector for a manual review without a separate App integration", async () => {
+    const routes: Routes = { calls: [], diff: DIFF_ADDED };
+    let integrationLookups = 0;
+    const r = await runPrSecurityReview(
+      {
+        installationId: "",
+        repo: "o/r",
+        prNumber: 7,
+        headSha: "sha",
+        credentialSource: "github_account",
+        requestedBy: "user-1",
+      },
+      makeDeps(routes, {
+        getIntegration: async () => { integrationLookups += 1; return null; },
+        getUserAuthorization: async (userId) => userId === "user-1"
+          ? { token: "github-account-token", apiBase: "https://api.github.com" }
+          : null,
+      }),
+    );
+
+    expect(r.ok).toBe(true);
+    expect(integrationLookups).toBe(0);
+    expect(routes.calls.some((call) => call.includes("/access_tokens"))).toBe(false);
+    expect(routes.calls).toContain("GET /repos/o/r/pulls/7");
+  });
+
+  it("reviews a nested GitLab merge request through the sealed account connector", async () => {
+    const calls: string[] = [];
+    const bodies: Record<string, string> = {};
+    const fetchImpl = (async (url: string, init?: { method?: string; body?: string }) => {
+      const method = (init?.method ?? "GET").toUpperCase();
+      const path = url.replace("https://gitlab.example/api/v4", "");
+      calls.push(`${method} ${path}`);
+      if (init?.body) bodies[`${method} ${path}`] = init.body;
+      if (path.endsWith("/merge_requests/9")) return { ok: true, status: 200, json: async () => ({ diff_refs: { base_sha: "base", start_sha: "start", head_sha: "head" } }) };
+      if (path.endsWith("/merge_requests/9/changes")) return { ok: true, status: 200, json: async () => ({ changes: [{ old_path: "x.ts", new_path: "x.ts", diff: DIFF_ADDED.split("\n").slice(4).join("\n") }] }) };
+      if (path.includes("/discussions") && method === "GET") return { ok: true, status: 200, json: async () => [] };
+      if (path.includes("/discussions") && method === "POST") return { ok: true, status: 201, json: async () => ({ id: "discussion-1" }) };
+      if (path.endsWith("/notes?per_page=100")) return { ok: true, status: 200, json: async () => [] };
+      if (path.endsWith("/notes") && method === "POST") return { ok: true, status: 201, json: async () => ({ id: 5 }) };
+      if (path.includes("/statuses/head") && method === "POST") return { ok: true, status: 201, json: async () => ({ id: 6 }) };
+      return { ok: false, status: 404, json: async () => ({}) };
+    }) as unknown as typeof fetch;
+
+    const result = await runPrSecurityReview({
+      forge: "gitlab", credentialSource: "gitlab_account", requestedBy: "user-1", orgId: "org-1",
+      installationId: "", repo: "acme/platform/service", prNumber: 9, headSha: "",
+    }, {
+      llmRunner: llm(REVIEW_INLINE), fetchImpl, nowSec: () => 1_700_000_000,
+      getIntegration: async () => null,
+      getGitlabAuthorization: async (userId, orgId) => userId === "user-1" && orgId === "org-1"
+        ? { token: "sealed-gitlab-token", apiBase: "https://gitlab.example/api/v4" }
+        : null,
+    });
+
+    expect(result).toMatchObject({ ok: true, posted: true, reviewPosted: true, inlinePosted: 1, checkPosted: true });
+    expect(calls).toContain("GET /projects/acme%2Fplatform%2Fservice/merge_requests/9/changes");
+    expect(calls).toContain("POST /projects/acme%2Fplatform%2Fservice/merge_requests/9/discussions");
+    expect(calls).toContain("POST /projects/acme%2Fplatform%2Fservice/merge_requests/9/notes");
+    expect(calls).toContain("POST /projects/acme%2Fplatform%2Fservice/statuses/head");
+    expect(bodies["POST /projects/acme%2Fplatform%2Fservice/merge_requests/9/discussions"]).toContain('"new_line":2');
+    expect(calls.some((call) => call.includes("/repos/"))).toBe(false);
+  });
 });

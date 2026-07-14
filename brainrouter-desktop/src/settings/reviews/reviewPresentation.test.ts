@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { githubPullRequestUrl, normalizeReviewListResponse, pullRequestReviewTarget, reviewActionAvailability } from './reviewPresentation.js';
+import { changeRequestUrl, githubPullRequestUrl, normalizeReviewListResponse, pullRequestReviewTarget, reviewActionAvailability } from './reviewPresentation.js';
 
 test('PR review links use an explicit HTTPS URL accepted by the desktop host', () => {
   assert.equal(githubPullRequestUrl('openai/codex', 42), 'https://github.com/openai/codex/pull/42');
@@ -30,9 +30,11 @@ test('review backend response rejects malformed list payloads safely', () => {
   });
 });
 
-test('PR review targets support GitHub and GitHub Enterprise without trusting a mismatched number', () => {
-  assert.deepEqual(pullRequestReviewTarget('https://github.com/openai/codex/pull/42', 42), { repo: 'openai/codex', prNumber: 42 });
-  assert.deepEqual(pullRequestReviewTarget('https://github.example.test/acme/service/pull/7/files', 7), { repo: 'acme/service', prNumber: 7 });
+test('PR review targets support GitHub, GitHub Enterprise, and nested GitLab projects without trusting a mismatched number', () => {
+  assert.deepEqual(pullRequestReviewTarget('https://github.com/openai/codex/pull/42', 42), { repo: 'openai/codex', prNumber: 42, forge: 'github' });
+  assert.deepEqual(pullRequestReviewTarget('https://github.example.test/acme/service/pull/7/files', 7), { repo: 'acme/service', prNumber: 7, forge: 'github' });
+  assert.deepEqual(pullRequestReviewTarget('https://gitlab.com/acme/platform/service/-/merge_requests/9/diffs', 9), { repo: 'acme/platform/service', prNumber: 9, forge: 'gitlab' });
+  assert.equal(changeRequestUrl('acme/platform/service', 9, 'gitlab'), 'https://gitlab.com/acme/platform/service/-/merge_requests/9');
   assert.equal(pullRequestReviewTarget('https://github.com/openai/codex/pull/42', 41), null);
   assert.equal(pullRequestReviewTarget('http://github.com/openai/codex/pull/42', 42), null);
   assert.equal(pullRequestReviewTarget('https://github.com/../codex/pull/42', 42), null);
@@ -48,7 +50,7 @@ test('review capability normalization keeps signed-out, read-only RBAC, and back
 });
 
 test('review actions remain visible but disabled with an exact auth or RBAC explanation', () => {
-  const target = { repo: 'openai/codex', prNumber: 42 };
+  const target = { repo: 'openai/codex', prNumber: 42, forge: 'github' as const };
   assert.deepEqual(reviewActionAvailability({ loading: false, signedIn: false, canRun: false }, target), {
     enabled: false, help: 'Sign in to BrainRouter to use organization reviews.',
   });

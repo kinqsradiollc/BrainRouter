@@ -35,7 +35,8 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getBrainrouterHome } from '../storage/store.js';
-import { parseGitHubRemote, slugifyBranchPart } from '../track/git/index.js';
+import { slugifyBranchPart } from '../track/git/index.js';
+import { detectForgeProvider, type ForgeId } from '../forge/forge.js';
 
 /** Injectable command runner so tests can drive the flow without real git/gh. */
 export type CmdRunner = (
@@ -115,8 +116,9 @@ export interface EmitPrResult {
   prNumber?: number;
   branch?: string;
   pushed?: boolean;
+  forge?: ForgeId;
   /** Why the emit was a no-op / declined (distinct from a hard error). */
-  skipped?: 'no-gh' | 'no-remote' | 'no-patch' | 'base-unknown';
+  skipped?: 'no-gh' | 'no-forge-cli' | 'unsupported-forge' | 'no-remote' | 'no-patch' | 'base-unknown';
   error?: string;
 }
 
@@ -180,6 +182,15 @@ export function parsePrUrl(stdout: string): { url?: string; number?: number } {
   return { url, number: Number.isFinite(num) ? num : undefined };
 }
 
+export function parseChangeRequestUrl(stdout: string): { url?: string; number?: number } {
+  const github = parsePrUrl(stdout);
+  if (github.url) return github;
+  const url = (stdout.match(/https:\/\/[^\s]+\/-\/merge_requests\/\d+/) ?? [])[0];
+  if (!url) return {};
+  const number = Number(url.match(/\/merge_requests\/(\d+)/)?.[1]);
+  return { url, number: Number.isFinite(number) ? number : undefined };
+}
+
 /** Resolve the base branch: explicit override → current branch → undefined; validated as a safe ref. */
 function resolveBaseBranch(run: CmdRunner, sourceRoot: string, override?: string): string | undefined {
   const explicit = override && override.trim();
@@ -206,12 +217,24 @@ export function emitPrFromPatch(input: EmitPrInput, run: CmdRunner = defaultCmdR
   const redactErr = (s: string): string => redactSecrets((s ?? '').trim());
 
   if (!patchPath || !fs.existsSync(patchPath)) return { ok: false, skipped: 'no-patch' };
-  if (!isGhAvailable(run, sourceRoot)) return { ok: false, skipped: 'no-gh', error: 'GitHub CLI (gh) not found on PATH' };
 
-  // Require a GitHub remote — without one there's nothing to open a PR against.
+  // Detect the forge from origin. GitHub and GitLab are implemented; other
+  // detected forges remain explicitly capability-gated instead of guessing.
   const remote = run('git', ['remote', 'get-url', 'origin'], sourceRoot);
-  const gh = remote.ok ? parseGitHubRemote(remote.stdout.trim()) : undefined;
-  if (!gh) return { ok: false, skipped: 'no-remote', error: 'origin is not a GitHub remote' };
+  const remoteUrl = remote.ok ? remote.stdout.trim() : '';
+  const forge = detectForgeProvider(remoteUrl);
+  if (!forge) {
+    return { ok: false, skipped: 'no-remote', error: 'origin is not a recognized forge remote' };
+  }
+  if (!forge.capabilities['change-request:create'] || !forge.createChangeRequest || !forge.cli) {
+    return { ok: false, forge: forge.id, skipped: 'unsupported-forge', error: `${forge.id} change-request creation is capability-gated` };
+  }
+  const cliAvailable = forge.id === 'github' ? isGhAvailable(run, sourceRoot) : run(forge.cli, ['--version'], sourceRoot).ok;
+  if (!cliAvailable) {
+    return forge.id === 'github'
+      ? { ok: false, forge: forge.id, skipped: 'no-gh', error: 'GitHub CLI (gh) not found on PATH' }
+      : { ok: false, forge: forge.id, skipped: 'no-forge-cli', error: `${forge.cli} not found on PATH` };
+  }
 
   const base = resolveBaseBranch(run, sourceRoot, baseBranch);
   if (!base) return { ok: false, skipped: 'base-unknown', error: 'could not resolve a safe base branch (detached HEAD or unsafe ref?)' };
@@ -258,13 +281,13 @@ export function emitPrFromPatch(input: EmitPrInput, run: CmdRunner = defaultCmdR
   const push = run('git', ['push', '-u', 'origin', branch], wt);
   if (!push.ok) { cleanup(); return { ok: false, branch, pushed: false, error: `git push failed: ${redactErr(push.stderr)}` }; }
 
-  const createArgs = ['pr', 'create', '--base', base, '--head', branch, '--title', title, '--body', body];
-  if (input.draft !== false) createArgs.push('--draft');
-  const pr = run('gh', createArgs, wt);
+  const pr = forge.createChangeRequest({ remote: remoteUrl, cwd: wt, run }, {
+    base, head: branch, title, body, draft: input.draft !== false,
+  });
   cleanup();
   if (!pr.ok) {
-    return { ok: false, branch, pushed: true, error: `gh pr create failed: ${redactErr(pr.stderr || pr.stdout)}` };
+    return { ok: false, forge: forge.id, branch, pushed: true, error: `${forge.cli} change-request create failed: ${redactErr(pr.stderr || pr.stdout)}` };
   }
-  const { url, number } = parsePrUrl(pr.stdout);
-  return { ok: true, branch, pushed: true, prUrl: url, prNumber: number };
+  const { url, number } = parseChangeRequestUrl(pr.stdout);
+  return { ok: true, forge: forge.id, branch, pushed: true, prUrl: url, prNumber: number };
 }

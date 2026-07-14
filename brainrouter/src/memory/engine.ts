@@ -24,6 +24,8 @@ import type { TenancyStore, EmailAuthStore, OrgPersonaStore, MemorySharingStore,
 import type { ProviderStore } from "../providers/store.js";
 import type { IntegrationStore } from "../integrations/store.js";
 import type { ConnectorStore } from "../connectors/store.js";
+import { resolveGithubAccountToken } from "../connectors/githubAccountToken.js";
+import { isSsrfBlockedHost } from "../connectors/gitlabTrackProxy.js";
 import { resolveProviderConfig } from "../providers/resolver.js";
 import { seedProvidersFromEnv } from "../providers/seed.js";
 import { systemProviderOrgId } from "../providers/runtime.js";
@@ -922,6 +924,33 @@ export class MemoryEngine {
   public async findGithubAppByInstallation(installationId: string): Promise<{ config: Record<string, unknown>; secret: Record<string, string> } | null> {
     const r = await this.integrations.findIntegrationByInstallation("github_app", installationId);
     return r ? { config: r.config, secret: r.secret } : null;
+  }
+
+  /** Manual review jobs may reuse the requester's existing GitHub connector.
+   * The sealed credential is resolved only inside the worker and never stored in
+   * the job input or returned through an API. */
+  public async findGithubAccountAuthorization(userId: string): Promise<{ token: string; apiBase: string } | null> {
+    const account = await resolveGithubAccountToken(this.emailAuth, userId);
+    return account ? { token: account.accessToken, apiBase: "https://api.github.com" } : null;
+  }
+
+  /** GitLab manual-review jobs resolve the requester's sealed OAuth connector
+   * only inside the worker. The provider host is fixed by connector config and
+   * must be HTTPS; neither it nor the credential is accepted from the job. */
+  public async findGitlabAccountAuthorization(userId: string, orgId: string): Promise<{ token: string; apiBase: string; config: Record<string, unknown> } | null> {
+    const rows = await this.connectors.listConnectors(userId);
+    const row = rows.find((item) => item.orgId === orgId && item.source === "gitlab" && item.hasCredential);
+    if (!row) return null;
+    const resolved = await this.connectors.getResolvedConnector(row.id);
+    const token = resolved?.credential?.accessToken?.trim();
+    if (!resolved || !token) return null;
+    let host: URL;
+    try { host = new URL(typeof resolved.config.hostUrl === "string" && resolved.config.hostUrl.trim() ? resolved.config.hostUrl.trim() : "https://gitlab.com"); }
+    catch { return null; }
+    if (host.protocol !== "https:" || host.username || host.password) return null;
+    if (isSsrfBlockedHost(host)) return null;
+    const basePath = host.pathname.replace(/\/+$/, "").replace(/\/api\/v4$/i, "");
+    return { token, apiBase: `${host.origin}${basePath}/api/v4`, config: resolved.config };
   }
 
   /** MEM-25 code-recall benchmark over built-in fixtures; see engine/benchOps.ts. */

@@ -224,17 +224,6 @@ export function createSecretBridge(port: ParentPortLike | undefined): SecretBrid
 }
 
 /**
- * DESK-5c — real terminal sessions: a persistent interactive shell per
- * terminal panel (default shell on mac/linux, PowerShell on Windows),
- * stdout/stderr accumulated in a ring buffer the renderer polls with
- * `term-read {id, from}` — the same offset-poll contract as the CLI's
- * background-shell store. Not a full pty (raw-mode apps like vim won't
- * run), but a real stateful shell: cwd, env and history persist.
- */
-export interface TermSession { proc: ChildProcessWithoutNullStreams; buf: string; alive: boolean }
-export const TERM_BUF_CAP = 400_000;
-
-/**
  * DESK-5c — live model list, same endpoint contract as the CLI wizard's
  * fetchOpenAiCompatibleModels (cli/wizard/modelsApi.ts, not imported here
  * because it pulls the ink picker): derive `GET <endpoint>/models` by

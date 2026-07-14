@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   brainRouterAccountHeaders,
   createGithubTrackProxyFetch,
+  createGitlabTrackProxyFetch,
   fetchAccountConnectorStatuses,
   fetchAutomationAccountStatus,
   fetchGithubAccountStatus,
@@ -123,6 +124,20 @@ test('account integration reads degrade to explicit signed-out or disconnected s
   );
 });
 
+test('fetchGithubAccountStatus preserves a provider reconnect reason returned with HTTP 200', async () => {
+  const status = await fetchGithubAccountStatus(config, async (url) => {
+    if (url.endsWith('/api/orgs')) return response(200, { orgs: [{ orgId: 'org-main', name: 'Main org', isDefault: true }] });
+    return response(200, { connected: false, error: 'GitHub authorization expired or was revoked. Reconnect GitHub.' });
+  });
+  assert.deepEqual(status, {
+    signedIn: true,
+    connected: false,
+    orgId: 'org-main',
+    orgName: 'Main org',
+    error: 'GitHub authorization expired or was revoked. Reconnect GitHub.',
+  });
+});
+
 test('createGithubTrackProxyFetch tunnels collaborator reads without exposing the provider token', async () => {
   const calls: Array<{ url: string; authorization?: string; orgId?: string; body?: string }> = [];
   const fetchImpl = async (url: string, init?: { headers?: Record<string, string>; body?: string }) => {
@@ -139,6 +154,28 @@ test('createGithubTrackProxyFetch tunnels collaborator reads without exposing th
     authorization: 'Bearer account-key',
     orgId: 'org-main',
     body: JSON.stringify({ method: 'GET', path: '/repos/openai/codex/collaborators?per_page=100' }),
+  }]);
+});
+
+test('createGitlabTrackProxyFetch tunnels provider paths through the sealed account connector', async () => {
+  const calls: Array<{ url: string; authorization?: string; orgId?: string; body?: string }> = [];
+  const fetchImpl = async (url: string, init?: { headers?: Record<string, string>; body?: string }) => {
+    calls.push({ url, authorization: init?.headers?.Authorization, orgId: init?.headers?.['X-BrainRouter-Org'], body: init?.body });
+    return response(200, { ok: true, status: 201, data: { iid: 7 } });
+  };
+  const proxy = createGitlabTrackProxyFetch({ baseUrl: 'https://account.brainrouter.test', apiKey: 'account-key', orgId: 'org-main' }, fetchImpl);
+
+  const result = await proxy('https://gitlab.test/api/v4/projects/acme%2Frepo/issues', {
+    method: 'POST',
+    body: JSON.stringify({ title: 'Ship it' }),
+  });
+  assert.equal(result.status, 201);
+  assert.deepEqual(await result.json(), { iid: 7 });
+  assert.deepEqual(calls, [{
+    url: 'https://account.brainrouter.test/api/connectors/gitlab/track/proxy',
+    authorization: 'Bearer account-key',
+    orgId: 'org-main',
+    body: JSON.stringify({ method: 'POST', path: '/projects/acme%2Frepo/issues', body: { title: 'Ship it' } }),
   }]);
 });
 

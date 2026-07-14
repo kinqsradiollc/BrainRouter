@@ -18,6 +18,7 @@ import { shellQuoteArg } from '../shellQuote.js';
 import {
   brainRouterAccountHeaders,
   createGithubTrackProxyFetch,
+  createGitlabTrackProxyFetch,
   fetchAccountConnectorStatuses,
   fetchAutomationAccountStatus,
   fetchGithubAccountStatus,
@@ -34,7 +35,6 @@ import {
   normalizeTrackGithubRepos,
   syncLegacyTrackGithubFields,
   githubIntegrationSnapshot,
-  TERM_BUF_CAP,
   fetchEndpointModels,
   matchingDefaultProvider,
   reconstructTranscriptRows,
@@ -47,13 +47,13 @@ import {
   git,
   sessionRows,
   type TrackGithubConfig,
-  type TermSession,
 } from './helpers.js';
-import { exec, spawn, execFileSync } from 'node:child_process';
+import { exec, execFileSync } from 'node:child_process';
 import { ensureBrainSession, endBrainSession } from './brainSession.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import QRCode from 'qrcode';
 import {
   InteractionBroker,
   type AgentEvent,
@@ -127,6 +127,8 @@ import {
   exportTranscriptJson,
   exportFileName,
   listChapters,
+  getSessionRuntime,
+  setSessionRuntime,
 } from '@kinqs/brainrouter-core/session';
 import { readUsageHistory, totalUsage } from '@kinqs/brainrouter-core/usage';
 import { readWorkspaceEntry, isWorkspaceDirectory, statWorkspaceEntry, writeWorkspaceEntry } from '../fsRead.js';
@@ -264,9 +266,12 @@ import {
   resolveGithubConfigForWorkspace,
   migrateTrackGithubToConnector,
   setGithubSyncTarget,
+  createGitlabTrackCompatFetch,
+  normalizeRepoUrl,
 } from '@kinqs/brainrouter-core/track';
 import { scanGitCommitsForTrack } from '@kinqs/brainrouter-core/track';
 import { readGitTrackContext, startGitWorkForTrackItem } from '@kinqs/brainrouter-core/track';
+import { detectForgeProvider } from '@kinqs/brainrouter-core/forge';
 import { listConnectorCatalog } from '@kinqs/brainrouter-core/connectors';
 import {
   createConnector,
@@ -366,7 +371,10 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
     captureAnnotationNote,
     captureAnnotationExportNote,
     captureArtifactNote,
-    terms,
+    ptyRegistry,
+    hostedAgents,
+    fanoutManager, remoteWorktrees,
+    mobileRelay,
     modelsCacheByKey,
     isoNow,
     runReview,
@@ -394,7 +402,6 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
     setPrCache,
     getPrStatusMapCache,
     setPrStatusMapCache,
-    nextTermSeq,
     resetGhEnvCache,
   } = ctx;
   let runtimeRunnerClient: RuntimeRunnerClient | null = null;
@@ -414,6 +421,35 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       });
     }
     return runtimeRunnerClient;
+  };
+  const resolveGitlabTrackContext = async () => {
+    const gitContext = readGitTrackContext(workspaceRoot);
+    const remote = wsGit.remoteUrl ?? gitContext.remotes[0]?.url ?? '';
+    if (detectForgeProvider(remote)?.id !== 'gitlab') return null;
+    const normalized = normalizeRepoUrl(remote);
+    const slash = normalized.indexOf('/');
+    if (slash <= 0 || slash === normalized.length - 1) return null;
+    const host = normalized.slice(0, slash);
+    const repo = normalized.slice(slash + 1);
+    const config = loadConfig();
+    const status = await fetchAccountConnectorStatuses(config, ['gitlab']);
+    const connector = status.connectors.find((entry) => entry.source === 'gitlab');
+    const accountApi = resolveBrainRouterAccountApi(config);
+    const oauth = connector?.connected && accountApi && status.orgId
+      ? { ...accountApi, orgId: status.orgId, ...(status.orgName ? { orgName: status.orgName } : {}) }
+      : null;
+    return {
+      provider: 'gitlab' as const,
+      repo,
+      apiBase: `https://${host}/api/v4`,
+      oauth,
+      account: {
+        signedIn: status.signedIn,
+        connected: connector?.connected === true,
+        ...(connector?.account ? { login: connector.account } : {}),
+        ...(connector?.error || status.error ? { error: connector?.error ?? status.error } : {}),
+      },
+    };
   };
   return {
       // Read-only surfaces — same pure modules the TUI commands use.
@@ -1341,6 +1377,23 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // Pull repo collaborators into the roster (role-mapped). Token resolved
       // server-side; never returned to the renderer.
       'track-sync-members': async (a) => {
+        const gitlab = await resolveGitlabTrackContext();
+        const failure = (message: string) => ({ members: listMembers(workspaceRoot), added: [], errors: [message] });
+        if (gitlab) {
+          if (!gitlab.oauth) return failure('Connect GitLab in Settings → Connections → Connectors.');
+          const fetchImpl = createGitlabTrackCompatFetch({
+            apiBase: gitlab.apiBase,
+            token: 'via-oauth-broker',
+            authMode: 'bearer',
+            fetchImpl: createGitlabTrackProxyFetch(gitlab.oauth) as never,
+          });
+          return await importMembersFromGithub(workspaceRoot, {
+            repo: gitlab.repo,
+            token: 'via-oauth-broker',
+            fetchImpl,
+            dryRun: a.dryRun === true,
+          });
+        }
         migrateTrackGithubToConnector(workspaceRoot);
         const cfg = resolveGithubConfigForWorkspace(workspaceRoot, typeof a.repo === 'string' ? a.repo : undefined);
         const config = loadConfig();
@@ -1350,7 +1403,6 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           ? { ...accountApi, orgId: accountStatus.orgId, ...(accountStatus.orgName ? { orgName: accountStatus.orgName } : {}) }
           : null;
         const repo = cfg.repo || (oauth ? readGitTrackContext(workspaceRoot).githubRepo ?? '' : '');
-        const failure = (message: string) => ({ members: listMembers(workspaceRoot), added: [], errors: [message] });
         if (!oauth && cfg.error) return failure(cfg.error);
         if (!repo) return failure('No GitHub repository detected or configured for this workspace.');
         if (oauth) {
@@ -1369,12 +1421,25 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // adopts any legacy cli.track.github* config into the workspace's
       // connector the first time the Sync surface is opened (idempotent).
       'track-sync-config': async () => {
+        const gitlab = await resolveGitlabTrackContext();
+        if (gitlab) {
+          return {
+            provider: gitlab.provider,
+            repo: null,
+            hasToken: false,
+            tokenSource: null,
+            repos: [],
+            detectedRepo: gitlab.repo,
+            account: gitlab.account,
+          };
+        }
         migrateTrackGithubToConnector(workspaceRoot);
         const local = githubIntegrationSnapshot(workspaceRoot);
         const gitContext = readGitTrackContext(workspaceRoot);
         const account = await fetchGithubAccountStatus(loadConfig());
         return {
           ...local,
+          provider: 'github' as const,
           detectedRepo: gitContext.githubRepo ?? null,
           account,
         };
@@ -1481,6 +1546,20 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         // refreshed before GitHub finished and made a successful sync look inert.
         const withItems = <T extends object>(result: T) => ({ ...result, items: listWorkItems(workspaceRoot) });
         const failure = (message: string) => withItems({ direction, dryRun, errors: [message] });
+        const gitlab = await resolveGitlabTrackContext();
+        if (gitlab) {
+          if (!gitlab.oauth) return failure('Connect GitLab in Settings → Connections → Connectors.');
+          const fetchImpl = createGitlabTrackCompatFetch({
+            apiBase: gitlab.apiBase,
+            token: 'via-oauth-broker',
+            authMode: 'bearer',
+            fetchImpl: createGitlabTrackProxyFetch(gitlab.oauth) as never,
+          });
+          const opts = { repo: gitlab.repo, token: 'via-oauth-broker', fetchImpl, dryRun };
+          if (direction === 'export') return withItems(await exportToGithub(workspaceRoot, opts));
+          if (direction === 'sync') return withItems(await syncBidirectional(workspaceRoot, opts));
+          return withItems(await importFromGithub(workspaceRoot, opts));
+        }
         migrateTrackGithubToConnector(workspaceRoot);
         const cfg = resolveGithubConfigForWorkspace(workspaceRoot, typeof a.repo === 'string' ? a.repo : undefined);
 
@@ -3004,60 +3083,99 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const reason = error ? 'unreachable' : (typeof status === 'number' && status >= 400 ? `http-${status}` : undefined);
         return { models, count: models.length, provider: provId || null, probe: true, ...(reason ? { error: reason } : {}) };
       },
-      // DESK-5c — real terminal sessions (offset-poll streaming).
-      'term-open': () => {
-        const id = `t${nextTermSeq()}`;
-        const isWin = process.platform === 'win32';
-        const shell = isWin ? 'powershell.exe' : (process.env.SHELL || '/bin/zsh');
-        const args = isWin ? ['-NoLogo'] : ['-i'];
-        const proc = spawn(shell, args, {
-          cwd: workspaceRoot,
-          env: { ...process.env, TERM: 'xterm-256color', FORCE_COLOR: '1' },
-        });
-        const sess: TermSession = { proc, buf: '', alive: true };
-        const append = (d: Buffer | string) => {
-          sess.buf += typeof d === 'string' ? d : d.toString('utf-8');
-          if (sess.buf.length > TERM_BUF_CAP) sess.buf = sess.buf.slice(-TERM_BUF_CAP);
-        };
-        // CRITICAL — a spawn failure (shell missing, EACCES) is emitted as an
-        // ASYNC 'error' event AFTER this handler returns. With no listener Node
-        // treats it as an unhandled error and crashes the whole host process,
-        // which takes down `npm start`. Catch it: mark the session dead and put
-        // the reason in the buffer so the panel shows an error, not a blank hang.
-        proc.on('error', (err) => {
-          sess.alive = false;
-          append(`\r\n[terminal failed to start ${shell}: ${err instanceof Error ? err.message : String(err)}]\r\n`);
-        });
-        proc.stdout.on('data', append);
-        proc.stderr.on('data', append);
-        // A bare stream 'error' (e.g. EPIPE when the shell dies mid-write) also
-        // throws if unlistened — swallow it; `exit`/`error` above own recovery.
-        proc.stdin.on('error', () => { sess.alive = false; });
-        proc.stdout.on('error', () => { /* stream closed; exit handler cleans up */ });
-        proc.stderr.on('error', () => { /* stream closed; exit handler cleans up */ });
-        proc.on('exit', (code) => { sess.alive = false; append(`\r\n[shell exited ${code ?? '?'}]\r\n`); });
-        terms.set(id, sess);
-        return { id, shell };
-      },
+      // A true pseudo-terminal: interactive programs see a TTY, resize reaches
+      // the child process, and a host-owned bounded snapshot survives panel
+      // remounts without writing terminal contents to disk.
+      'term-open': (args) => ptyRegistry.open({
+        cols: Number(args.cols) || undefined,
+        rows: Number(args.rows) || undefined,
+        reuseKey: typeof args.reuseKey === 'string' ? args.reuseKey : undefined,
+      }),
       'term-write': (args) => {
-        const sess = terms.get(String(args.id));
-        if (!sess?.alive) return { ok: false };
-        // Guard stdin.write — writing to a shell that just died raises EPIPE,
-        // which (unguarded) would crash the host the same way the spawn error did.
-        try { sess.proc.stdin.write(String(args.data ?? '')); } catch { sess.alive = false; return { ok: false }; }
-        return { ok: true };
+        return { ok: ptyRegistry.write(String(args.id), String(args.data ?? '')) };
       },
-      'term-read': (args) => {
-        const sess = terms.get(String(args.id));
-        if (!sess) return { chunk: '', next: 0, alive: false };
-        const from = Math.max(0, Math.min(Number(args.from) || 0, sess.buf.length));
-        return { chunk: sess.buf.slice(from), next: sess.buf.length, alive: sess.alive };
+      'term-read': (args) => ptyRegistry.read(String(args.id), Number(args.from) || 0),
+      'term-resize': (args) => ({ ok: ptyRegistry.resize(String(args.id), Number(args.cols), Number(args.rows)) }),
+      'term-kill': (args) => ({ ok: ptyRegistry.kill(String(args.id)) }),
+      'hosted-agent-catalog': () => {
+        const sessionKey = getActiveAgent().sessionKey;
+        return { adapters: hostedAgents.catalog(), selected: getSessionRuntime(workspaceRoot, sessionKey).agentAdapter ?? 'brainrouter' };
       },
-      'term-kill': (args) => {
-        const sess = terms.get(String(args.id));
-        if (sess) { try { sess.proc.kill(); } catch { /* already gone */ } terms.delete(String(args.id)); }
-        return { ok: true };
+      'hosted-agent-start': (args) => {
+        const sessionKey = getActiveAgent().sessionKey;
+        const adapterId = String(args.adapterId ?? getSessionRuntime(workspaceRoot, sessionKey).agentAdapter ?? 'brainrouter');
+        setSessionRuntime(workspaceRoot, sessionKey, { agentAdapter: adapterId });
+        return hostedAgents.start({
+          sessionKey, adapterId,
+          prompt: typeof args.prompt === 'string' ? args.prompt : undefined,
+          resumeSessionId: typeof args.resumeSessionId === 'string' ? args.resumeSessionId : undefined,
+          trusted: args.trusted === true,
+          cols: Number(args.cols) || undefined,
+          rows: Number(args.rows) || undefined,
+        });
       },
+      'hosted-agent-attach': () => hostedAgents.attach(getActiveAgent().sessionKey),
+      'hosted-agent-status': () => hostedAgents.refresh(getActiveAgent().sessionKey),
+      'hosted-agent-control': (args) => ({
+        ok: hostedAgents.control(
+          getActiveAgent().sessionKey,
+          args.action === 'interrupt' || args.action === 'approve' ? args.action : 'follow-up',
+          typeof args.text === 'string' ? args.text : undefined,
+        ),
+      }),
+      'hosted-agent-setup': (args) => hostedAgents.setup(String(args.adapterId ?? '')),
+      'ssh-host-list': () => remoteWorktrees.registry.list(),
+      'ssh-host-discover-key': async (args) => ({
+        fingerprint: await remoteWorktrees.transport.discoverHostKey({
+          host: String(args.host ?? ''),
+          port: Number(args.port) || 22,
+          username: String(args.username ?? ''),
+        }),
+      }),
+      'ssh-host-save': (args) => remoteWorktrees.registry.put({
+        id: typeof args.id === 'string' ? args.id : undefined,
+        label: typeof args.label === 'string' ? args.label : undefined,
+        host: String(args.host ?? ''),
+        port: Number(args.port) || 22,
+        username: String(args.username ?? ''),
+        workspaceRoot: String(args.workspaceRoot ?? ''),
+        hostKeySha256: String(args.hostKeySha256 ?? ''),
+      }),
+      'ssh-host-test': (args) => remoteWorktrees.test(String(args.id ?? '')),
+      'ssh-host-remove': (args) => ({ ok: remoteWorktrees.registry.remove(String(args.id ?? '')) }),
+      'fanout-list': () => fanoutManager.list(),
+      'fanout-start': (args) => fanoutManager.start({
+        task: String(args.task ?? ''),
+        adapterIds: Array.isArray(args.adapterIds) ? args.adapterIds.map(String) : [],
+        baseRef: typeof args.baseRef === 'string' ? args.baseRef : undefined,
+        trusted: args.trusted === true,
+        executionHostId: typeof args.executionHostId === 'string' ? args.executionHostId : 'local',
+        sessionKey: getActiveAgent().sessionKey,
+      }),
+      'fanout-rank': (args) => fanoutManager.rank(String(args.runId ?? '')),
+      'fanout-promote': (args) => fanoutManager.promote(
+        String(args.runId ?? ''), String(args.candidateId ?? ''), args.mode === 'pr' ? 'pr' : 'merge',
+      ),
+      'fanout-cleanup': (args) => fanoutManager.cleanup(String(args.runId ?? ''), String(args.candidateId ?? '')),
+      'fanout-terminal': (args) => fanoutManager.attach(String(args.candidateId ?? '')),
+      'fanout-control': (args) => ({
+        ok: fanoutManager.control(
+          String(args.candidateId ?? ''),
+          args.action === 'interrupt' || args.action === 'approve' ? args.action : 'follow-up',
+          typeof args.text === 'string' ? args.text : undefined,
+        ),
+      }),
+      'mobile-relay-status': () => mobileRelay.status(),
+      'mobile-relay-start': (args) => mobileRelay.start({ lan: args.lan === true, port: Number(args.port) || 0 }),
+      'mobile-relay-stop': () => { mobileRelay.stop(); return mobileRelay.status(); },
+      'mobile-relay-pairing': async (args) => {
+        const scopes = Array.isArray(args.scopes) ? args.scopes.map(String).filter((scope) => ['monitor', 'control', 'approve'].includes(scope)) : ['monitor', 'control'];
+        const payload = mobileRelay.createPairing(scopes as Array<'monitor' | 'control' | 'approve'>);
+        const encoded = JSON.stringify(payload);
+        const qrDataUrl = await QRCode.toDataURL(encoded, { errorCorrectionLevel: 'M', margin: 1, width: 280 });
+        return { payload, qrDataUrl };
+      },
+      'mobile-relay-revoke': (args) => ({ ok: mobileRelay.revoke(String(args.deviceId ?? '')) }),
       // WS2 2.4 / WS6 6.3 — stop a background shell (e.g. a dev server an agent
       // started) from the Background-tasks panel. Kills the whole process group.
       'action:kill-bgshell': (args) => ({ ok: killBackgroundShell(String(args.id ?? '')) }),
@@ -3411,14 +3529,16 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         if (!resolveBrainRouterAccountApi(config)) return { ok: false, error: 'Sign in under Settings → Account first.' };
         const repo = String(a.repo ?? '');
         const prNumber = Number(a.prNumber);
+        const forge = a.forge === 'gitlab' ? 'gitlab' : 'github';
         const lens = a.lens === 'security' || a.lens === 'code' || a.lens === 'both' ? a.lens : 'both';
-        if (!/^[^/\s]+\/[^/\s]+$/.test(repo) || !Number.isInteger(prNumber) || prNumber <= 0) return { ok: false, error: 'bad repo/prNumber' };
+        const segments = repo.split('/');
+        if (segments.length < 2 || (forge === 'github' && segments.length !== 2) || segments.some((part) => !/^[A-Za-z0-9_.-]+$/.test(part) || part === '.' || part === '..') || !Number.isInteger(prNumber) || prNumber <= 0) return { ok: false, error: 'bad repo/prNumber' };
         try {
           const account = await resolveBrainRouterAccountContext(config);
           if (!account) return { ok: false, error: 'No active BrainRouter organization.' };
           const r = await fetch(`${account.baseUrl}/api/admin/reviews/run`, {
             method: 'POST', headers: brainRouterAccountHeaders(account, true),
-            body: JSON.stringify({ repo, prNumber, lens }),
+            body: JSON.stringify({ repo, prNumber, lens, forge }),
           });
           const j = await r.json().catch(() => ({})) as { jobs?: unknown[]; error?: string };
           if (!r.ok) return { ok: false, error: j.error || `HTTP ${r.status}` };
