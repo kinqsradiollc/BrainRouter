@@ -1,0 +1,68 @@
+/**
+ * Meetings API (ADR-018). Authenticated, org-scoped list/detail/create/scope; plus a
+ * separate UNAUTHENTICATED public read for a share token (redacted summary only).
+ */
+import { Router } from "express";
+import { requireAnyAuth, type AuthedRequest } from "../middleware/auth.js";
+import { attachOrgContext } from "../middleware/tenancy.js";
+import * as meetings from "../../memory/meetings/backend.js";
+import { isMeetingVisibility } from "../../memory/meetings/sharing.js";
+
+export const meetingsRouter = Router();
+meetingsRouter.use(requireAnyAuth);
+
+meetingsRouter.get("/", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  res.json({ meetings: await meetings.listMeetings(req.userId!, req.orgId!) });
+});
+
+meetingsRouter.post("/", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  const body = (req.body ?? {}) as { title?: unknown; transcript?: unknown; scope?: unknown; teamId?: unknown; date?: unknown; attendees?: unknown };
+  const title = typeof body.title === "string" ? body.title.trim() : "";
+  const transcript = typeof body.transcript === "string" ? body.transcript : "";
+  if (!title || !transcript.trim()) { res.status(400).json({ error: "title and transcript are required" }); return; }
+  const scope = isMeetingVisibility(body.scope) ? body.scope : "private";
+  try {
+    const out = await meetings.createMeeting({
+      userId: req.userId!, orgId: req.orgId!, title, transcript, scope,
+      teamId: typeof body.teamId === "string" ? body.teamId : undefined,
+      date: typeof body.date === "string" ? body.date : undefined,
+      attendees: Array.isArray(body.attendees) ? body.attendees.filter((a): a is string => typeof a === "string") : undefined,
+    });
+    res.status(201).json(out);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Could not create meeting." });
+  }
+});
+
+meetingsRouter.get("/:id", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  const detail = await meetings.getMeeting(req.userId!, req.orgId!, String(req.params.id));
+  if (!detail) { res.status(404).json({ error: "Meeting not found" }); return; }
+  res.json(detail);
+});
+
+meetingsRouter.post("/:id/scope", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  const body = (req.body ?? {}) as { scope?: unknown; teamId?: unknown; from?: unknown };
+  if (!isMeetingVisibility(body.scope)) { res.status(400).json({ error: "invalid scope" }); return; }
+  try {
+    const share = await meetings.setScope({
+      userId: req.userId!, orgId: req.orgId!, id: String(req.params.id), scope: body.scope,
+      teamId: typeof body.teamId === "string" ? body.teamId : undefined,
+      from: isMeetingVisibility(body.from) ? body.from : undefined,
+    });
+    res.json(share);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : "Could not change sharing." });
+  }
+});
+
+/** Unauthenticated public read — redacted summary only, for an active share token. */
+export const publicMeetingsRouter = Router();
+publicMeetingsRouter.get("/:token", async (req, res) => {
+  const meeting = await meetings.getByShareToken(String(req.params.token));
+  if (!meeting) { res.status(404).json({ error: "This link is invalid or has expired." }); return; }
+  res.json(meeting);
+});
