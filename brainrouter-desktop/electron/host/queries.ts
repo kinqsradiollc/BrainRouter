@@ -49,7 +49,7 @@ import {
   type TrackGithubConfig,
 } from './helpers.js';
 import { exec, execFileSync } from 'node:child_process';
-import { ensureBrainSession, endBrainSession } from './brainSession.js';
+import { ensureBrainSession, endBrainSession, setBrainSessionRelay } from './brainSession.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -3166,8 +3166,20 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         ),
       }),
       'mobile-relay-status': () => mobileRelay.status(),
-      'mobile-relay-start': (args) => mobileRelay.start({ lan: args.lan === true, port: Number(args.port) || 0 }),
-      'mobile-relay-stop': () => { mobileRelay.stop(); return mobileRelay.status(); },
+      'mobile-relay-start': async (args) => {
+        const status = await mobileRelay.start({ lan: args.lan === true, port: Number(args.port) || 0 });
+        // Publish the relay into this desktop's active session so a same-account
+        // device discovers it via GET /api/sessions — no manual QR needed.
+        setBrainSessionRelay({ endpoints: status.endpoints, publicKey: status.publicKey });
+        await ensureBrainSession(mcpClient, workspaceRoot);
+        return status;
+      },
+      'mobile-relay-stop': async () => {
+        mobileRelay.stop();
+        setBrainSessionRelay(null);
+        await ensureBrainSession(mcpClient, workspaceRoot);
+        return mobileRelay.status();
+      },
       'mobile-relay-pairing': async (args) => {
         const scopes = Array.isArray(args.scopes) ? args.scopes.map(String).filter((scope) => ['monitor', 'control', 'approve'].includes(scope)) : ['monitor', 'control'];
         const payload = mobileRelay.createPairing(scopes as Array<'monitor' | 'control' | 'approve'>);

@@ -1,5 +1,5 @@
 import { createDeviceKeyPair, decryptPayload, encryptPayload, b64, fromB64 } from '../protocol/crypto';
-import { parsePairingPayload, type HostCredential, type PairingPayload, type RelayEvent } from '../protocol/types';
+import { parsePairingPayload, privateHost, type HostCredential, type PairingPayload, type RelayEvent } from '../protocol/types';
 import type { CredentialStore } from '../storage/credentials';
 
 export interface SocketLike {
@@ -27,31 +27,56 @@ export class RelayClient {
 
   subscribe(listener: Listener): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
 
-  async pair(rawPayload: string | PairingPayload, name: string): Promise<HostCredential> {
-    const pairing = typeof rawPayload === 'string' ? parsePairingPayload(rawPayload) : parsePairingPayload(JSON.stringify(rawPayload));
+  /** Shared pairing handshake: open a relay endpoint, send a `pair` frame (with
+   * either a QR `pairingToken` or an account token), decrypt the reply, persist. */
+  private async runPairing(endpoints: string[], serverPublicKey: string, pairFields: Record<string, unknown>, name: string): Promise<HostCredential> {
     const pair = createDeviceKeyPair();
-    const socket = await this.openFirst(pairing.endpoints);
+    const socket = await this.openFirst(endpoints);
     const response = new Promise<Record<string, unknown>>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('Pairing timed out.')), 10_000);
       socket.onmessage = (event) => { clearTimeout(timer); try { resolve(JSON.parse(event.data) as Record<string, unknown>); } catch { reject(new Error('Invalid pairing response.')); } };
       socket.onerror = () => { clearTimeout(timer); reject(new Error('Pairing connection failed.')); };
     });
-    socket.send(JSON.stringify({ kind: 'pair', pairingToken: pairing.pairingToken, clientPublicKey: b64(pair.publicKey), deviceName: name.slice(0, 80) }));
+    socket.send(JSON.stringify({ kind: 'pair', ...pairFields, clientPublicKey: b64(pair.publicKey), deviceName: name.slice(0, 80) }));
     const frame = await response;
     const paired = decryptPayload<{ deviceId: string; deviceToken: string; scopes: HostCredential['scopes'] }>(
       { nonce: String(frame.nonce), ciphertext: String(frame.ciphertext) },
-      fromB64(pairing.serverPublicKey), pair.secretKey,
+      fromB64(serverPublicKey), pair.secretKey,
     );
     socket.close(1000, 'paired');
     if (!paired?.deviceId || !paired.deviceToken) throw new Error('Pairing response could not be authenticated.');
     const credential: HostCredential = {
-      id: paired.deviceId, name: name.trim() || 'BrainRouter Desktop', endpoints: pairing.endpoints,
-      serverPublicKey: pairing.serverPublicKey, clientPublicKey: b64(pair.publicKey), clientSecretKey: b64(pair.secretKey),
+      id: paired.deviceId, name: name.trim() || 'BrainRouter Desktop', endpoints,
+      serverPublicKey, clientPublicKey: b64(pair.publicKey), clientSecretKey: b64(pair.secretKey),
       deviceId: paired.deviceId, deviceToken: paired.deviceToken, scopes: paired.scopes,
       counter: 0, pairedAt: new Date().toISOString(),
     };
     await this.store.put(credential);
     return credential;
+  }
+
+  /** Manual-QR pairing (scan/paste a pairing code). */
+  async pair(rawPayload: string | PairingPayload, name: string): Promise<HostCredential> {
+    const pairing = typeof rawPayload === 'string' ? parsePairingPayload(rawPayload) : parsePairingPayload(JSON.stringify(rawPayload));
+    return this.runPairing(pairing.endpoints, pairing.serverPublicKey, { pairingToken: pairing.pairingToken }, name);
+  }
+
+  /** Account-based pairing (no QR): the desktop was discovered via the account's
+   * device list; prove same-account with the account token instead of a QR token. */
+  async pairViaAccount(input: { endpoints: string[]; serverPublicKey: string; accountToken: string }, name: string): Promise<HostCredential> {
+    // The account token is a long-lived credential: allow cleartext ws: only on a
+    // private LAN (same as QR pairing); any public host must use wss: so the token
+    // never crosses the internet in the clear (CWE-319).
+    const endpoints = input.endpoints.filter((endpoint) => {
+      try {
+        const url = new URL(endpoint);
+        if (url.protocol === 'wss:') return true;
+        return url.protocol === 'ws:' && privateHost(url.hostname);
+      } catch { return false; }
+    });
+    if (!endpoints.length) throw new Error('This desktop has no reachable, secure relay endpoint.');
+    if (!input.serverPublicKey || !input.accountToken) throw new Error('Missing desktop key or account token.');
+    return this.runPairing(endpoints, input.serverPublicKey, { accountToken: input.accountToken }, name);
   }
 
   async connect(hostId: string): Promise<void> {

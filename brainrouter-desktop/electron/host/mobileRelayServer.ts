@@ -90,6 +90,11 @@ export class MobileRelayServer {
     terminalSnapshot: (candidateId: string) => { snapshot: string; start: number; next: number; alive: boolean } | null;
     terminalInput: (candidateId: string, data: string) => boolean;
     agentControl: (candidateId: string, action: 'follow-up' | 'interrupt' | 'approve', text?: string) => boolean;
+    /** Account-based pairing (no QR): verify a would-be peer's BrainRouter account
+     * token belongs to the SAME account as this desktop. The host wires this to a
+     * backend check (GET /api/sessions with the token must return this desktop's
+     * own session key). Absent → only manual-QR pairing is accepted. */
+    verifyAccountPeer?: (accountToken: string) => Promise<boolean>;
     home?: string;
   }) {
     const home = options.home ?? getBrainrouterHome();
@@ -168,7 +173,12 @@ export class MobileRelayServer {
     if (raw.byteLength > MAX_FRAME_BYTES || !this.takeRate(state)) { socket.close(1008, 'policy limit'); return; }
     let frame: Record<string, unknown>;
     try { frame = JSON.parse(raw.toString('utf8')) as Record<string, unknown>; } catch { socket.close(1003, 'invalid json'); return; }
-    if (frame.kind === 'pair') { this.handlePair(socket, frame); return; }
+    if (frame.kind === 'pair') {
+      // Account-based pairing: same-account token, no manual QR token.
+      if (typeof frame.accountToken === 'string' && frame.accountToken) { void this.handleAccountPair(socket, frame); return; }
+      this.handlePair(socket, frame);
+      return;
+    }
     if (frame.kind !== 'box' || typeof frame.deviceId !== 'string' || typeof frame.nonce !== 'string' || typeof frame.ciphertext !== 'string') {
       socket.close(1008, 'invalid frame'); return;
     }
@@ -195,22 +205,41 @@ export class MobileRelayServer {
     void this.handleRpc(socket, payload);
   }
 
+  /** Mint + persist a device record and return the encrypted `paired` reply.
+   * Shared by manual-QR ({@link handlePair}) and account ({@link handleAccountPair}) pairing. */
+  private finalizePairing(socket: WebSocket, clientPublicKey: Uint8Array, deviceName: string, scopes: MobileScope[]): void {
+    const deviceToken = randomToken();
+    const device: MobileDeviceRecord = {
+      id: `device_${randomUUID().slice(0, 12)}`,
+      name: deviceName.slice(0, 80) || 'Mobile device',
+      publicKey: b64(clientPublicKey), tokenHash: hashDeviceToken(deviceToken), scopes,
+      lastCounter: 0, createdAt: new Date().toISOString(),
+    };
+    this.registry.put(device);
+    const encrypted = encryptRelayPayload({ type: 'paired', deviceId: device.id, deviceToken, scopes: device.scopes }, clientPublicKey, this.keys.secretKey);
+    socket.send(JSON.stringify({ kind: 'paired', deviceId: device.id, serverPublicKey: b64(this.keys.publicKey), ...encrypted }));
+  }
+
   private handlePair(socket: WebSocket, frame: Record<string, unknown>): void {
     const token = typeof frame.pairingToken === 'string' ? frame.pairingToken : '';
     const pending = this.pairing.get(token);
     const clientPublicKey = typeof frame.clientPublicKey === 'string' ? fromB64(frame.clientPublicKey) : new Uint8Array();
     if (!pending || pending.expiresAt < Date.now() || clientPublicKey.length !== 32) { socket.close(1008, 'invalid pairing'); return; }
     this.pairing.delete(token);
-    const deviceToken = randomToken();
-    const device: MobileDeviceRecord = {
-      id: `device_${randomUUID().slice(0, 12)}`,
-      name: typeof frame.deviceName === 'string' ? frame.deviceName.slice(0, 80) : 'Mobile device',
-      publicKey: b64(clientPublicKey), tokenHash: hashDeviceToken(deviceToken), scopes: pending.scopes,
-      lastCounter: 0, createdAt: new Date().toISOString(),
-    };
-    this.registry.put(device);
-    const encrypted = encryptRelayPayload({ type: 'paired', deviceId: device.id, deviceToken, scopes: device.scopes }, clientPublicKey, this.keys.secretKey);
-    socket.send(JSON.stringify({ kind: 'paired', deviceId: device.id, serverPublicKey: b64(this.keys.publicKey), ...encrypted }));
+    this.finalizePairing(socket, clientPublicKey, typeof frame.deviceName === 'string' ? frame.deviceName : 'Mobile device', pending.scopes);
+  }
+
+  /** Account-based pairing: no QR token — the peer proves it's on the SAME
+   * BrainRouter account (verifyAccountPeer → backend GET /api/sessions must return
+   * this desktop's own session key). Same-account devices get monitor+control. */
+  private async handleAccountPair(socket: WebSocket, frame: Record<string, unknown>): Promise<void> {
+    const accountToken = typeof frame.accountToken === 'string' ? frame.accountToken : '';
+    const clientPublicKey = typeof frame.clientPublicKey === 'string' ? fromB64(frame.clientPublicKey) : new Uint8Array();
+    if (!accountToken || clientPublicKey.length !== 32 || !this.options.verifyAccountPeer) { socket.close(1008, 'invalid pairing'); return; }
+    let ok = false;
+    try { ok = await this.options.verifyAccountPeer(accountToken); } catch { ok = false; }
+    if (!ok) { socket.close(1008, 'account verification failed'); return; }
+    this.finalizePairing(socket, clientPublicKey, typeof frame.deviceName === 'string' ? frame.deviceName : 'Account device', ['monitor', 'control']);
   }
 
   private async handleRpc(socket: WebSocket, payload: Extract<RelayPayload, { type: 'rpc' }>): Promise<void> {
