@@ -3188,6 +3188,13 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         return mobileRelay.status();
       },
       'mobile-relay-pairing': async (args) => {
+        // Migration cutover (spec §9 / Task 25): account-based enrollment + the
+        // broker is the primary path. Legacy LAN/QR pairing stays available for
+        // ONE migration release behind cli.remote.legacyLanPairing (default off).
+        const remoteConfig = (loadConfig() as { cli?: { remote?: { legacyLanPairing?: unknown } } }).cli?.remote;
+        if (remoteConfig?.legacyLanPairing !== true) {
+          return { error: 'legacy-pairing-disabled', message: 'QR pairing is retired. Sign in on your phone (Desktops tab) to connect — or set cli.remote.legacyLanPairing=true during migration.' };
+        }
         const scopes = Array.isArray(args.scopes) ? args.scopes.map(String).filter((scope) => ['monitor', 'control', 'approve'].includes(scope)) : ['monitor', 'control'];
         const payload = mobileRelay.createPairing(scopes as Array<'monitor' | 'control' | 'approve'>);
         const encoded = JSON.stringify(payload);
