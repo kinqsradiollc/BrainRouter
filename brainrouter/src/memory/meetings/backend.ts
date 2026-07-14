@@ -81,7 +81,10 @@ function parseActionItems(md: string): MeetingRow["actionItems"] {
 }
 
 async function summarize(orgId: string, title: string, transcript: string): Promise<{ markdown: string; actionItems: MeetingRow["actionItems"] }> {
-  const runner = await memoryEngine.reviewRunner("code", orgId);
+  // Server-managed model path (Task 11): an immutable org-scoped runner that
+  // dispatches through the internal gateway — admins can assign a dedicated model
+  // via agentModels["meeting-summary"], else the org's default model policy applies.
+  const runner = await memoryEngine.modelRunner("meeting-summary", orgId);
   const systemPrompt =
     "You summarize meeting transcripts. Return concise markdown: a short paragraph, then a '### Decisions' " +
     "bullet list, then a '### Action items' bullet list where each item is '- <task> — @<assignee>'. No preamble.";
