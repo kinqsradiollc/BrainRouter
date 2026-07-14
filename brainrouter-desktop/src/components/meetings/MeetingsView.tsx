@@ -172,7 +172,7 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
                 <div className="mv-card-lab">
                   <span className="mv-lt"><svg className="mv-li" viewBox="0 0 24 24"><path d="M4 4h16v4H4zM4 12h10M4 17h16" /></svg>Summary</span>
                   <div className="mv-cardacts">
-                    <button type="button" className="mv-ghost" onClick={() => void ops.regenerateSummary(detail.id)}>
+                    <button type="button" className="mv-ghost" onClick={() => void ops.regenerateSummary(detail.id).then(() => ops.get(detail.id)).then(setDetail)}>
                       <svg viewBox="0 0 24 24"><path d="M4 4v6h6M20 20v-6h-6M20 9a8 8 0 0 0-14-3M4 15a8 8 0 0 0 14 3" /></svg>Regenerate
                     </button>
                     <button type="button" className="mv-ghost" onClick={() => void navigator.clipboard?.writeText(detail.summaryMarkdown)}>

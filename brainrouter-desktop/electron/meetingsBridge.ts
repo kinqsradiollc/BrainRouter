@@ -58,10 +58,27 @@ export function registerMeetingsBridge(): void {
     return await r.json();
   });
 
-  // Secondary interactions — persisted server-side in a later slice (task #8 tail).
-  // They resolve optimistically so the UI stays responsive; the core list/detail/
-  // create/scope/public flow above is fully backend-backed.
-  ipcMain.handle('meetings:regenerate', async () => { /* re-summarize route: pending */ });
-  ipcMain.handle('meetings:toggleAction', async () => { /* action-item persistence: pending */ });
-  ipcMain.handle('meetings:actionToTrack', async (_e, _meetingId: unknown, actionId: unknown) => ({ trackItemId: `pending-${String(actionId)}` }));
+  ipcMain.handle('meetings:regenerate', async (_e, meetingId: unknown) => {
+    const r = await accountFetch(`/api/meetings/${id(meetingId)}/regenerate`, { method: 'POST' });
+    if (!r?.ok) throw new Error('Could not regenerate the summary.');
+    return await r.json();
+  });
+
+  ipcMain.handle('meetings:toggleAction', async (_e, meetingId: unknown, actionId: unknown, done: unknown) => {
+    const r = await accountFetch(`/api/meetings/${id(meetingId)}/actions/${id(actionId)}`, {
+      method: 'POST', body: JSON.stringify({ done: done === true }),
+    });
+    if (!r?.ok) throw new Error('Could not update the action item.');
+  });
+
+  // Track lives in the WORKSPACE host process, not the backend — creating the
+  // work item is wired through the host bridge in a follow-up slice. Persist the
+  // link intent server-side so the UI state survives reloads meanwhile.
+  ipcMain.handle('meetings:actionToTrack', async (_e, meetingId: unknown, actionId: unknown) => {
+    const trackItemId = `meeting-action:${String(actionId)}`;
+    await accountFetch(`/api/meetings/${id(meetingId)}/actions/${id(actionId)}`, {
+      method: 'POST', body: JSON.stringify({ trackItemId }),
+    });
+    return { trackItemId };
+  });
 }

@@ -134,6 +134,24 @@ export async function revokeShareTokens(exec: Executor, meetingId: string): Prom
   );
 }
 
+/** Owner-only summary rewrite (regenerate). Returns true when a row updated. */
+export async function updateMeetingSummary(exec: Executor, id: string, userId: string, summaryMarkdown: string, actionItems: MeetingRow["actionItems"]): Promise<boolean> {
+  const n = await exec.run(
+    `UPDATE meetings SET summary_markdown = $3, action_items_json = $4, updated_at = now() WHERE id = $1 AND user_id = $2`,
+    [id, userId, summaryMarkdown, JSON.stringify(actionItems)],
+  );
+  return n > 0;
+}
+
+/** Owner-only action-item state write (done toggles / track links persist). */
+export async function updateMeetingActionItems(exec: Executor, id: string, userId: string, actionItems: MeetingRow["actionItems"]): Promise<boolean> {
+  const n = await exec.run(
+    `UPDATE meetings SET action_items_json = $3, updated_at = now() WHERE id = $1 AND user_id = $2`,
+    [id, userId, JSON.stringify(actionItems)],
+  );
+  return n > 0;
+}
+
 /** The current active public token for a meeting (newest), if any. */
 export async function getActiveShareToken(exec: Executor, meetingId: string): Promise<{ token: string; expiresAt: string | null } | null> {
   const rows = await exec.rows<Record<string, unknown>>(

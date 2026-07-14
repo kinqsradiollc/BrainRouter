@@ -43,6 +43,24 @@ meetingsRouter.get("/:id", async (req: AuthedRequest, res) => {
   res.json(detail);
 });
 
+meetingsRouter.post("/:id/regenerate", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  const detail = await meetings.regenerateSummary(req.userId!, req.orgId!, String(req.params.id));
+  if (!detail) { res.status(404).json({ error: "Meeting not found, or you are not its owner." }); return; }
+  res.json(detail);
+});
+
+meetingsRouter.post("/:id/actions/:actionId", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  const body = (req.body ?? {}) as { done?: unknown; trackItemId?: unknown };
+  const ok = await meetings.setActionItemState(req.userId!, req.orgId!, String(req.params.id), String(req.params.actionId), {
+    ...(typeof body.done === "boolean" ? { done: body.done } : {}),
+    ...(typeof body.trackItemId === "string" ? { trackItemId: body.trackItemId } : {}),
+  });
+  if (!ok) { res.status(404).json({ error: "Action item not found, or you are not the owner." }); return; }
+  res.json({ ok: true });
+});
+
 meetingsRouter.post("/:id/scope", async (req: AuthedRequest, res) => {
   if (!(await attachOrgContext(req, res))) return;
   const body = (req.body ?? {}) as { scope?: unknown; teamId?: unknown; from?: unknown };

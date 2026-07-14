@@ -458,6 +458,8 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public createMeetingShareToken(s: { token: string; meetingId: string; orgId: string; createdBy: string; expiresAt?: string }): Promise<void> { return meetings.createShareToken(this.exec, s); }
   public revokeMeetingShareTokens(meetingId: string): Promise<number> { return meetings.revokeShareTokens(this.exec, meetingId); }
   public getMeetingActiveShareToken(meetingId: string): Promise<{ token: string; expiresAt: string | null } | null> { return meetings.getActiveShareToken(this.exec, meetingId); }
+  public updateMeetingSummary(id: string, userId: string, summaryMarkdown: string, actionItems: meetings.MeetingRow["actionItems"]): Promise<boolean> { return meetings.updateMeetingSummary(this.exec, id, userId, summaryMarkdown, actionItems); }
+  public updateMeetingActionItems(id: string, userId: string, actionItems: meetings.MeetingRow["actionItems"]): Promise<boolean> { return meetings.updateMeetingActionItems(this.exec, id, userId, actionItems); }
   public getMeetingByShareToken(token: string): Promise<meetings.MeetingRow | null> { return meetings.getMeetingByShareToken(this.exec, token); }
   // CVE catalog (spec §10, Task 26) — global world data, no org scoping.
   public ensureVulnerabilitySource(source: { id: import("../../../vulnerability/types.js").VulnerabilitySourceId; displayName: string; kind: string }): Promise<void> { return vulnerability.ensureVulnerabilitySource(this.exec, source); }

@@ -22,6 +22,8 @@ interface MeetingsStore {
   revokeMeetingShareTokens(meetingId: string): Promise<number>;
   getMeetingByShareToken(token: string): Promise<MeetingRow | null>;
   getMeetingActiveShareToken(meetingId: string): Promise<{ token: string; expiresAt: string | null } | null>;
+  updateMeetingSummary(id: string, userId: string, summaryMarkdown: string, actionItems: MeetingRow["actionItems"]): Promise<boolean>;
+  updateMeetingActionItems(id: string, userId: string, actionItems: MeetingRow["actionItems"]): Promise<boolean>;
 }
 const store = (): MeetingsStore => memoryEngine.store as unknown as MeetingsStore;
 
@@ -92,7 +94,9 @@ async function summarize(orgId: string, title: string, transcript: string): Prom
   try {
     markdown = await runner.run({ systemPrompt, prompt: `Meeting: ${title}\n\nTranscript:\n${transcript.slice(0, 40_000)}`, taskId: `meeting-summary:${orgId}` });
   } catch {
-    markdown = `Summary pending — the transcript was captured but summarization failed. ${transcript.slice(0, 400)}…`;
+    markdown = "Summary pending — the transcript was captured, but no summary model responded. "
+      + "An organization admin can enable a managed model under Settings → Models & providers "
+      + "(or assign one to the meeting-summary role), then use Regenerate.";
   }
   return { markdown: markdown.trim(), actionItems: parseActionItems(markdown) };
 }
@@ -194,6 +198,39 @@ export async function setScope(params: { userId: string; orgId: string; id: stri
     share.expiresAt = "in 30 days";
   }
   return share;
+}
+
+/** Owner-only: re-run summarization on the stored transcript (D5 lifecycle). */
+export async function regenerateSummary(userId: string, orgId: string, id: string): Promise<MeetingDetailDTO | null> {
+  requireAccount(userId, orgId);
+  const row = await store().getMeeting(orgId, userId, id);
+  if (!row || row.userId !== userId) return null;
+  const { markdown, actionItems } = await summarize(orgId, row.title, row.transcriptText);
+  // Preserve done/track state for action items that survived the regeneration.
+  const previous = new Map(row.actionItems.map((item) => [item.title.toLowerCase(), item]));
+  const merged = actionItems.map((item) => {
+    const before = previous.get(item.title.toLowerCase());
+    return before ? { ...item, done: before.done, trackItemId: before.trackItemId } : item;
+  });
+  const ok = await store().updateMeetingSummary(id, userId, markdown, merged);
+  if (!ok) return null;
+  const updated = await store().getMeeting(orgId, userId, id);
+  return updated ? await toDetail(updated) : null;
+}
+
+/** Owner-only: persist an action item's done state (or a Track link). */
+export async function setActionItemState(userId: string, orgId: string, id: string, actionId: string, patch: { done?: boolean; trackItemId?: string }): Promise<boolean> {
+  requireAccount(userId, orgId);
+  const row = await store().getMeeting(orgId, userId, id);
+  if (!row || row.userId !== userId) return false;
+  let found = false;
+  const next = row.actionItems.map((item) => {
+    if (item.id !== actionId) return item;
+    found = true;
+    return { ...item, ...(patch.done !== undefined ? { done: patch.done } : {}), ...(patch.trackItemId ? { trackItemId: patch.trackItemId } : {}) };
+  });
+  if (!found) return false;
+  return store().updateMeetingActionItems(id, userId, next);
 }
 
 /** Public read — the redacted summary only, for an active share token. No auth. */

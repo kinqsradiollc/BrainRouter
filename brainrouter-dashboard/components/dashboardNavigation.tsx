@@ -88,7 +88,13 @@ export const SETTINGS_NAV_GROUPS: DashboardNavGroup[] = [
       { href: "/review-automation", label: "Review automation", keywords: "pull request review policy repositories" },
     ],
   },
-  { label: "Intelligence", items: [{ href: "/providers", label: "Models & providers", keywords: "llm", adminOnly: true }] },
+  { label: "Intelligence", items: [
+    // Visible to every member: the backend gates writes per-org (models:manage /
+    // providers:manage), and the page itself disables admin-only tabs. Gating the
+    // NAV on the instance-admin flag hid the managed-models editor from org
+    // owners entirely (the "can't configure managed models anywhere" bug).
+    { href: "/providers", label: "Models & providers", keywords: "llm managed models byok" },
+  ] },
   { label: "Notifications", items: [{ href: "/email-settings", label: "Email", adminOnly: true }] },
   {
     label: "Advanced",
