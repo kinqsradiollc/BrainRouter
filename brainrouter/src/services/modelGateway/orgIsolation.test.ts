@@ -5,9 +5,18 @@
  * and each run() dispatches with its own org's binding through the gateway.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MemoryEngine } from "../../memory/engine.js";
 import { modelGateway } from "./modelGateway.js";
 import type { ProviderModelRecord } from "../../providers/modelPolicyStore.js";
+
+// The DB-provider fallback path resolves through resolveProviderConfig — mock it
+// so the "no managed model configured" backward-compat test has a provider to fall
+// back to (and returns null in the isolation tests, where a managed model exists).
+const { resolveProviderConfigMock } = vi.hoisted(() => ({
+  resolveProviderConfigMock: vi.fn(async (): Promise<unknown> => null),
+}));
+vi.mock("../../providers/resolver.js", () => ({ resolveProviderConfig: resolveProviderConfigMock }));
+
+const { MemoryEngine } = await import("../../memory/engine.js");
 
 function policy(orgId: string, id: string, isDefault = true): ProviderModelRecord {
   return {
@@ -43,16 +52,42 @@ function fakeEngine(models: Record<string, ProviderModelRecord[]>, assigns: Reco
       listProviderModels: vi.fn(async (orgId: string) => models[orgId] ?? []),
       ensureModelGatewayServicePrincipal: vi.fn(async (orgId: string) => `brain-worker:${orgId}`),
     },
+    providers: { kind: "fake-provider-store" },
+    // modelRunner delegates to the private configureRunner; borrow the real one so
+    // `.call(fakeEngine)` resolves it (the method itself only touches models/providers).
+    configureRunner: (MemoryEngine.prototype as unknown as Record<string, unknown>).configureRunner,
   } as unknown as MemoryEngine;
 }
 
-afterEach(() => { vi.restoreAllMocks(); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resolveProviderConfigMock.mockResolvedValue(null); });
 
 describe("Task 11 — internal egress org isolation", () => {
   const models = {
     "org-a": [policy("org-a", "a-default"), policy("org-a", "a-review", false)],
     "org-b": [policy("org-b", "b-default")],
   };
+
+  it("falls back to the DB provider when the org has NO managed model (no hard failure)", async () => {
+    // No provider_models for this org — the pre-Task-11 (ADR-012) direct dispatch.
+    resolveProviderConfigMock.mockResolvedValue({ endpoint: "https://byok.example/v1/chat/completions", apiKey: "sk-byok", model: "gpt-x", wireFormat: "chat", source: "db", extra: {} });
+    const engine = fakeEngine({}, {});
+    const scoped = vi.spyOn(modelGateway, "dispatchScoped").mockResolvedValue("scoped");
+    const runner = await MemoryEngine.prototype.modelRunner.call(engine, "code-review", "org-x");
+    // Direct dispatch, NOT the gateway — proven by patching global fetch.
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: "byok reply" } }] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const out = await runner.run({ prompt: "review this", taskId: "fallback-test" });
+    expect(out).toBe("byok reply");
+    expect(scoped).not.toHaveBeenCalled();
+    expect(String(fetchSpy.mock.calls[0][0])).toContain("byok.example");
+    vi.unstubAllGlobals();
+  });
+
+  it("still throws when NEITHER a managed model NOR a DB provider exists", async () => {
+    resolveProviderConfigMock.mockResolvedValue(null);
+    const engine = fakeEngine({}, {});
+    await expect(MemoryEngine.prototype.modelRunner.call(engine, "synthesis", "org-empty")).rejects.toMatchObject({ code: "model_not_configured" });
+  });
 
   it("modelRunner builds independent runners bound to each org's own assignment", async () => {
     const engine = fakeEngine(models, { "org-a": { "code-review": { model: "a-review" } }, "org-b": {} });

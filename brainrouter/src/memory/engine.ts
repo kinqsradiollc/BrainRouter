@@ -31,7 +31,7 @@ import { isSsrfBlockedHost } from "../connectors/gitlabTrackProxy.js";
 import { resolveProviderConfig } from "../providers/resolver.js";
 import { seedProvidersFromEnv } from "../providers/seed.js";
 import { systemProviderOrgId } from "../providers/runtime.js";
-import { modelGateway, resolveScopedModelSelection } from "../services/modelGateway/modelGateway.js";
+import { modelGateway, resolveScopedModelSelection, ScopedModelSelectionError } from "../services/modelGateway/modelGateway.js";
 import { MemoryCapturePipeline } from "./capture.js";
 import { MemoryRecallPipeline } from "./recall.js";
 import { MemoryJobRunner } from "./scheduler/runner.js";
@@ -486,17 +486,8 @@ export class MemoryEngine {
       // shared LLM provider (extraction / synthesis / judge are brain sub-agents).
       const assigns = (await this.emailAuth.getSetting<Record<string, { provider?: string; model?: string; maxDiffChars?: number; timeoutMs?: number }>>(`agentModels:${orgId}`)) ?? {};
       const bind = async (runner: LLMRunner, role: string) => {
-        const selection = await resolveScopedModelSelection({
-          store: this.models,
-          orgId,
-          assignedModel: str(assigns[role]?.model),
-        });
-        (runner as ModelLLMRunner).setScopedBinding({
-          orgId: selection.orgId,
-          servicePrincipalId: selection.servicePrincipalId,
-          publicModelId: selection.publicModelId,
-          reasoningEffort: selection.reasoningEffort,
-        });
+        // Managed model when configured, else the org's DB provider (backward-compat).
+        await this.configureRunner(runner as ModelLLMRunner, role, orgId, str(assigns[role]?.model));
       };
       await bind(this.extractionRunner, "extraction");
       await bind(this.synthesisRunner, "synthesis");
@@ -533,21 +524,45 @@ export class MemoryEngine {
     return this.modelRunner(lens === "security" ? "security-review" : lens === "code" ? "code-review" : "pentest", orgId);
   }
 
-  /** Construct one immutable org-scoped worker runner from public policy only. */
+  /**
+   * Bind a runner to the org's model for `role`. Prefers a server-managed model
+   * (dispatch via the internal gateway); but if the org has NO `provider_models`
+   * policy yet, falls back to dispatching its DB provider config directly — the
+   * pre-Task-11 (ADR-012) behavior. Without this, every internal LLM call
+   * (reviews, meetings, extraction) hard-fails with "No managed model is
+   * configured" for any org that hasn't set up managed models. Throws only when
+   * NEITHER a managed model NOR a DB provider exists.
+   */
+  private async configureRunner(runner: ModelLLMRunner, role: string, orgId: string, assignedModel?: string): Promise<void> {
+    try {
+      const selection = await resolveScopedModelSelection({ store: this.models, orgId, assignedModel });
+      runner.setProviderOverride(null);
+      runner.setScopedBinding({
+        orgId: selection.orgId,
+        servicePrincipalId: selection.servicePrincipalId,
+        publicModelId: selection.publicModelId,
+        reasoningEffort: selection.reasoningEffort,
+      });
+    } catch (error) {
+      if (!(error instanceof ScopedModelSelectionError)) throw error;
+      const provider = await resolveProviderConfig(this.providers, orgId, "llm");
+      if (!provider) throw error; // truly nothing configured — surface the real reason
+      runner.setScopedBinding(null);
+      runner.setProviderOverride({
+        endpoint: provider.endpoint, apiKey: provider.apiKey, model: provider.model, wireFormat: provider.wireFormat,
+        fallbackModel: typeof provider.extra?.fallbackModel === "string" ? provider.extra.fallbackModel : undefined,
+        fallbackEndpoint: typeof provider.extra?.fallbackEndpoint === "string" ? provider.extra.fallbackEndpoint : undefined,
+        fallbackApiKey: typeof provider.extra?.fallbackApiKey === "string" ? provider.extra.fallbackApiKey : undefined,
+      });
+      runner.setModelOverride(assignedModel);
+    }
+  }
+
+  /** Construct one immutable org-scoped worker runner (managed model, else DB provider). */
   public async modelRunner(role: string, orgId = systemProviderOrgId()): Promise<LLMRunner> {
     const assigns = (await this.emailAuth.getSetting<Record<string, { model?: string }>>(`agentModels:${orgId}`)) ?? {};
-    const selection = await resolveScopedModelSelection({
-      store: this.models,
-      orgId,
-      assignedModel: typeof assigns[role]?.model === "string" ? assigns[role].model : undefined,
-    });
     const runner = new ModelLLMRunner();
-    runner.setScopedBinding({
-      orgId: selection.orgId,
-      servicePrincipalId: selection.servicePrincipalId,
-      publicModelId: selection.publicModelId,
-      reasoningEffort: selection.reasoningEffort,
-    });
+    await this.configureRunner(runner, role, orgId, typeof assigns[role]?.model === "string" ? assigns[role].model : undefined);
     return runner;
   }
 
