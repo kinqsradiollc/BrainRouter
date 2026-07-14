@@ -225,6 +225,31 @@ command/worker glue and the import/enhance *entry points* are Tauri-coupled — 
      capture+VAD local in BOTH modes                          summary = an org-resolved routed call
 ```
 
+## Where Meetings lives (desktop primary, dashboard secondary)
+
+Users interact with Meetings **mostly through the desktop app**, so the desktop is the primary
+surface and the dashboard mirrors it.
+
+- **Desktop — a fourth workspace mode.** Today the shell is `mode: 'chat' | 'track' | 'code'`
+  (`brainrouter-desktop/src/App.tsx:121`, switched in `App/layout/MainContent.tsx`, toggled by the
+  `.mode-seg` tabs in `components/layout/Sidebar.tsx:154`, carded on `components/chat/HomeView.tsx`).
+  Meetings adds **`'meetings'`** as a peer mode: a left meetings list + a detail pane (live/loaded
+  transcript, the generated summary, action items, and the **sharing scope control**). New-meeting
+  entry points: **Record** (M2+, live capture), **Import audio** (M1), **Paste transcript** (M0). The
+  same right-hand contextual panels (provenance, linked Track items) reuse the existing `ViewsRail`.
+  *(Coordinates with Codex's shell redesign — spec §8.3 keeps Chat/Code/Track; Meetings is the new
+  4th mode and its mode-tab + view branch are the only shell edits.)*
+- **Dashboard — a `Meetings` nav item + `/meetings` route.** A list page (search, date, scope badge,
+  attendees) and a detail page (summary, transcript, action-items → Track, and the scope control) —
+  a new `brainrouter-dashboard/app/meetings/page.tsx` + one Sidebar nav entry, alongside
+  Overview/Chat/Reviews.
+- **The Model/Effort control** (Codex's server-managed selector) sits on the summary action, so a user
+  picks which BrainRouter/BYOK model summarizes — consistent with Chat.
+- **Sharing control (D8)** is one segmented control — **Private · Team · Org · Public** — with Public
+  revealing a copyable link + revoke; it appears in both surfaces on the meeting detail.
+- **Public read** is its own minimal unauthenticated page (`/m/:token` or `GET /api/public/meetings/:token`)
+  showing the redacted summary only.
+
 ## Phased plan (cheapest-first; each verified locally; no commits until approved)
 
 | Phase | Scope | Anchors | Verify |
