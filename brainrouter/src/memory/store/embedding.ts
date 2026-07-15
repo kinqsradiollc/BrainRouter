@@ -51,7 +51,12 @@ export class EmbeddingService {
     if (cfg.endpoint) this.endpoint = cfg.endpoint;
     if (cfg.apiKey) this.apiKey = cfg.apiKey;
     if (cfg.model) this.model = cfg.model;
-    this.ready = !!this.apiKey;
+    // A DB-configured provider is intentional, so it's ready with a valid endpoint
+    // + model even WITHOUT an api key — local embedders (LM Studio, Ollama, etc.)
+    // are keyless. The key is only sent when present. This clears the startup
+    // "API key not set" warning for admin-configured local embedders.
+    this.ready = !!(this.endpoint && this.model);
+    if (this.ready) console.error(`[BrainRouter] Embedding configured from DB provider (${this.model}). Vector search enabled.`);
   }
 
   /**

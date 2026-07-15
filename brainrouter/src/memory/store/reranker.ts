@@ -118,7 +118,10 @@ export class RerankerService {
     if (cfg.endpoint) this.endpoint = cfg.endpoint;
     if (cfg.apiKey) this.apiKey = cfg.apiKey;
     if (cfg.model) this.model = cfg.model;
-    this.ready = !!this.apiKey;
+    // A DB-configured reranker is intentional: ready with a valid endpoint + model
+    // even WITHOUT an api key — a local reranker (bge-reranker, etc.) is keyless.
+    this.ready = !!(this.endpoint && this.model);
+    if (this.ready) console.error(`[BrainRouter] Reranker configured from DB provider (${this.model}). Stage-3 reranking enabled.`);
   }
 
   /**
