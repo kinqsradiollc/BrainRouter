@@ -3,7 +3,6 @@ import os from "node:os";
 import fs from "node:fs";
 import type { MemoryEngine } from "../engine.js";
 import type { RerankerService } from "../store/reranker.js";
-import type { RelevanceJudgeService } from "../store/relevance-judge.js";
 import { deriveBenchQuery, aggregateRanks } from "../bench/run.js";
 import { formatModesSummaryMd, checkThresholds, type ModeStats } from "../bench/regression.js";
 import { benchmarkCodeChunking, DEFAULT_CODE_SAMPLES, formatCodeRecallMd, type CodeRecallResult } from "../bench/code-recall.js";
@@ -15,12 +14,12 @@ import { buildCodeScaleFixture } from "../bench/code-scale-fixture.js";
  * benchmark engine operations, extracted verbatim from MemoryEngine as free
  * functions taking the engine instance (type-only import → no runtime cycle).
  * `engine.ts`'s methods are now thin wrappers delegating here. No behavior
- * change. The reranker/judge readiness (private services) is reached through a
- * narrow cast — the readiness getters drive benchmark-mode selection.
+ * change. The reranker readiness (private service) is reached through a
+ * narrow cast — the readiness getter drives benchmark-mode selection.
  */
 
 /** Narrow view of the private services the benchmark needs (readiness only). */
-type BenchServices = { rerankerService: RerankerService; relevanceJudge: RelevanceJudgeService };
+type BenchServices = { rerankerService: RerankerService };
 
 export async function runRetrievalBenchmark(
   engine: MemoryEngine,
@@ -38,24 +37,18 @@ export async function runRetrievalBenchmark(
     name: string;
     selection: { diversity: boolean };
     disableReranker: boolean;
-    disableJudge: boolean;
   }
   const modes: BenchMode[] = [
-    { name: "baseline", selection: { diversity: false }, disableReranker: true, disableJudge: true },
-    { name: "lexmmr", selection: { diversity: true }, disableReranker: true, disableJudge: true },
+    { name: "baseline", selection: { diversity: false }, disableReranker: true },
+    { name: "lexmmr", selection: { diversity: true }, disableReranker: true },
   ];
   const skippedModes: string[] = [];
   // Augmentation modes run only when their service is actually configured —
   // otherwise they'd duplicate baseline and overstate coverage.
   if (svc.rerankerService.isReady()) {
-    modes.push({ name: "rerank", selection: { diversity: true }, disableReranker: false, disableJudge: true });
+    modes.push({ name: "rerank", selection: { diversity: true }, disableReranker: false });
   } else {
     skippedModes.push("rerank (no reranker configured)");
-  }
-  if (svc.relevanceJudge.isReady()) {
-    modes.push({ name: "judge", selection: { diversity: true }, disableReranker: false, disableJudge: false });
-  } else {
-    skippedModes.push("judge (relevance judge disabled)");
   }
 
   const statsByMode: Record<string, ModeStats> = {};
@@ -73,7 +66,6 @@ export async function runRetrievalBenchmark(
         limitsOverride: { topResults: 20 }, // @20 coverage, per-call (no env mutation)
         selectionOverride: mode.selection,
         disableReranker: mode.disableReranker,
-        disableJudge: mode.disableJudge,
       });
       const ranked = (result.recalledCognitiveMemories ?? []).map((m) => m.recordId);
       ranks.push(ranked.indexOf(rec.recordId)); // 0-based rank, -1 if not resurfaced

@@ -11,12 +11,47 @@ import type {
   MemoryJobEnqueueInput,
   MemoryJobListFilters,
   MemoryJobKindAggregate,
+  MemoryJobProgressEvent,
 } from "@kinqs/brainrouter-types";
 import { jobRowToRecord, asNumber, pg } from "../converters.js";
 import type { Executor } from "./executor.js";
 
 const JOB_COLUMNS =
   "id, kind, status, priority, attempts, max_attempts, run_after, locked_at, parent_job_id, input_json, output_json, progress_json, error, created_at, updated_at";
+
+const REVIEW_JOB_KINDS = "'pr-security-review','pr-code-review','pr-pentest'";
+const REVIEW_ALL_KINDS = `${REVIEW_JOB_KINDS},'domain-pentest'`;
+
+export interface ReviewFindingCursor {
+  createdAt: string;
+  reviewId: string;
+  ordinal: number;
+}
+
+export interface ReviewFindingQuery {
+  limit?: number;
+  severity?: string;
+  repo?: string;
+  status?: string;
+  search?: string;
+  cursor?: ReviewFindingCursor;
+  sort?: "newest" | "oldest";
+}
+
+export interface ReviewFindingRow {
+  reviewId: string;
+  lens: "security" | "code" | "pentest";
+  reviewStatus: string;
+  repo: string | null;
+  prNumber: number | null;
+  issueStatus: string;
+  ordinal: number;
+  finding: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  total: number;
+  severityCounts: { critical: number; high: number; medium: number; low: number; info: number };
+}
 
 export async function enqueueMemoryJob(exec: Executor, input: MemoryJobEnqueueInput, options?: { idGenerator?: () => string; now?: string }): Promise<MemoryJobRecord> {
   const now = options?.now ?? new Date().toISOString();
@@ -35,7 +70,7 @@ export async function getMemoryJob(exec: Executor, id: string): Promise<MemoryJo
 }
 
 /** Append an activity event atomically; progress is observability, never control flow. */
-export async function appendJobProgress(exec: Executor, id: string, event: { ts: string; kind: string; msg: string; data?: Record<string, unknown> }): Promise<void> {
+export async function appendJobProgress(exec: Executor, id: string, event: MemoryJobProgressEvent): Promise<void> {
   await exec.run(
     "UPDATE memory_jobs SET progress_json = ((progress_json::jsonb || $1::jsonb)::text), updated_at = $2 WHERE id = $3",
     [JSON.stringify([event]), new Date().toISOString(), id],
@@ -77,6 +112,153 @@ export async function listReviewJobsForOrg(exec: Executor, orgId: string, limit 
     [orgId, limit],
   );
   return rows.map((r) => jobRowToRecord(r as any));
+}
+
+/** Latest state per repository/PR/lens for the PR list. Deliberately projects
+ * counts/verdict fields only: list pages must not deserialize progress arrays or
+ * up to fifty finding-detail objects for every historical job. */
+export async function listReviewJobSummariesForOrg(exec: Executor, orgId: string, limit = 2_000): Promise<MemoryJobRecord[]> {
+  const rows = await exec.rows(
+    pg(`SELECT DISTINCT ON (
+            (input_json::jsonb ->> 'repo'),
+            (input_json::jsonb ->> 'prNumber'),
+            kind
+          )
+          id, kind, status, 0 AS priority, 0 AS attempts, 0 AS max_attempts,
+          created_at AS run_after, NULL::text AS locked_at, parent_job_id, input_json,
+          jsonb_build_object(
+            'findings', output_json::jsonb -> 'findings',
+            'blocking', output_json::jsonb -> 'blocking',
+            'posted', output_json::jsonb -> 'posted',
+            'error', output_json::jsonb -> 'error',
+            'skipped', output_json::jsonb -> 'skipped'
+          )::text AS output_json,
+          '[]'::text AS progress_json, error, created_at, updated_at
+       FROM memory_jobs
+      WHERE kind IN (${REVIEW_JOB_KINDS})
+        AND (input_json::jsonb ->> 'orgId') = ?
+      ORDER BY (input_json::jsonb ->> 'repo'),
+               (input_json::jsonb ->> 'prNumber'), kind, created_at DESC, id DESC
+      LIMIT ?`),
+    [orgId, limit],
+  );
+  return rows.map((row) => jobRowToRecord(row as any));
+}
+
+/** Compact analytics projection: retains severity/status facts but omits finding
+ * bodies, progress timelines, prompts, and unrelated output fields. */
+export async function listReviewAnalyticsForOrg(exec: Executor, orgId: string, since: string, limit = 1_000): Promise<MemoryJobRecord[]> {
+  const rows = await exec.rows(
+    pg(`SELECT id, kind, status, priority, attempts, max_attempts, run_after, locked_at, parent_job_id,
+        jsonb_build_object('orgId', input_json::jsonb ->> 'orgId', 'repo', input_json::jsonb ->> 'repo',
+          'prNumber', input_json::jsonb ->> 'prNumber', 'forge', input_json::jsonb ->> 'forge')::text AS input_json,
+        jsonb_build_object(
+          'findings', output_json::jsonb -> 'findings', 'blocking', output_json::jsonb -> 'blocking',
+          'findingsDetail', COALESCE((SELECT jsonb_agg(jsonb_build_object('severity', finding ->> 'severity', 'status', finding ->> 'status'))
+            FROM jsonb_array_elements(COALESCE(output_json::jsonb -> 'findingsDetail', '[]'::jsonb)) AS finding), '[]'::jsonb)
+        )::text AS output_json,
+        '[]'::text AS progress_json, error, created_at, updated_at
+       FROM memory_jobs
+      WHERE kind IN (${REVIEW_ALL_KINDS}) AND (input_json::jsonb ->> 'orgId') = ? AND created_at >= ?
+      ORDER BY created_at DESC LIMIT ?`),
+    [orgId, since, limit],
+  );
+  return rows.map((row) => jobRowToRecord(row as any));
+}
+
+/** Full durable activity for exactly one PR. This powers detail and polling
+ * without scanning every review job in an organization. */
+export async function listReviewJobsForPr(
+  exec: Executor,
+  orgId: string,
+  repo: string,
+  prNumber: number,
+  limit = 50,
+): Promise<MemoryJobRecord[]> {
+  const rows = await exec.rows(
+    pg(`SELECT ${JOB_COLUMNS} FROM memory_jobs
+      WHERE kind IN (${REVIEW_JOB_KINDS})
+        AND (input_json::jsonb ->> 'orgId') = ?
+        AND (input_json::jsonb ->> 'repo') = ?
+        AND (input_json::jsonb ->> 'prNumber') = ?
+      ORDER BY created_at DESC, id DESC LIMIT ?`),
+    [orgId, repo, String(prNumber), limit],
+  );
+  return rows.map((row) => jobRowToRecord(row as any));
+}
+
+/** Cursor-paginated finding projection for Issues. Filtering stays in Postgres
+ * so the browser never downloads unrelated review jobs or progress payloads. */
+export async function listReviewFindingsForOrg(
+  exec: Executor,
+  orgId: string,
+  query: ReviewFindingQuery = {},
+): Promise<ReviewFindingRow[]> {
+  const limit = Math.min(Math.max(query.limit ?? 50, 1), 100);
+  const where: string[] = [];
+  const params: unknown[] = [orgId];
+  if (query.severity) { where.push("LOWER(finding ->> 'severity') = ?"); params.push(query.severity.toLowerCase()); }
+  if (query.repo) { where.push("repo = ?"); params.push(query.repo); }
+  if (query.status) { where.push("LOWER(issue_status) = ?"); params.push(query.status.toLowerCase()); }
+  if (query.search) {
+    where.push("(COALESCE(finding ->> 'title','') || ' ' || COALESCE(finding ->> 'summary','') || ' ' || COALESCE(finding ->> 'file','') || ' ' || COALESCE(repo,'')) ILIKE ?");
+    params.push(`%${query.search}%`);
+  }
+  if (query.cursor) {
+    where.push(`(created_at, review_id, ordinal) ${query.sort === "oldest" ? ">" : "<"} (?, ?, ?)`);
+    params.push(query.cursor.createdAt, query.cursor.reviewId, query.cursor.ordinal);
+  }
+  params.push(limit + 1);
+
+  const rows = await exec.rows<Record<string, unknown>>(
+    pg(`WITH expanded AS (
+      SELECT j.id AS review_id, j.kind, j.status AS review_status,
+             j.input_json::jsonb ->> 'repo' AS repo,
+             NULLIF(j.input_json::jsonb ->> 'prNumber','')::integer AS pr_number,
+             j.created_at, j.updated_at, f.ordinality::integer AS ordinal,
+             f.value AS finding,
+             COALESCE(f.value ->> 'status', CASE WHEN j.status IN ('pending','running') THEN 'in progress' ELSE 'open' END) AS issue_status
+        FROM memory_jobs j
+        CROSS JOIN LATERAL jsonb_array_elements(COALESCE(j.output_json::jsonb -> 'findingsDetail', '[]'::jsonb))
+          WITH ORDINALITY AS f(value, ordinality)
+       WHERE j.kind IN (${REVIEW_ALL_KINDS})
+         AND (j.input_json::jsonb ->> 'orgId') = ?
+    ), filtered AS (
+      SELECT * FROM expanded ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+    )
+    SELECT *, COUNT(*) OVER() AS total,
+           SUM(CASE WHEN LOWER(finding ->> 'severity') = 'critical' THEN 1 ELSE 0 END) OVER() AS critical_count,
+           SUM(CASE WHEN LOWER(finding ->> 'severity') = 'high' THEN 1 ELSE 0 END) OVER() AS high_count,
+           SUM(CASE WHEN LOWER(finding ->> 'severity') = 'medium' THEN 1 ELSE 0 END) OVER() AS medium_count,
+           SUM(CASE WHEN LOWER(finding ->> 'severity') = 'low' THEN 1 ELSE 0 END) OVER() AS low_count,
+           SUM(CASE WHEN LOWER(finding ->> 'severity') = 'info' THEN 1 ELSE 0 END) OVER() AS info_count
+      FROM filtered
+     ORDER BY created_at ${query.sort === "oldest" ? "ASC" : "DESC"}, review_id ${query.sort === "oldest" ? "ASC" : "DESC"}, ordinal ${query.sort === "oldest" ? "ASC" : "DESC"}
+     LIMIT ?`),
+    params,
+  );
+  const parseFinding = (value: unknown): Record<string, unknown> => {
+    if (value && typeof value === "object") return value as Record<string, unknown>;
+    if (typeof value === "string") { try { return JSON.parse(value) as Record<string, unknown>; } catch { return {}; } }
+    return {};
+  };
+  return rows.map((row) => ({
+    reviewId: String(row.review_id),
+    lens: row.kind === "pr-code-review" ? "code" : row.kind === "pr-pentest" || row.kind === "domain-pentest" ? "pentest" : "security",
+    reviewStatus: String(row.review_status),
+    repo: row.repo == null ? null : String(row.repo),
+    prNumber: row.pr_number == null ? null : Number(row.pr_number),
+    issueStatus: String(row.issue_status),
+    ordinal: Number(row.ordinal),
+    finding: parseFinding(row.finding),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    total: asNumber(row.total),
+    severityCounts: {
+      critical: asNumber(row.critical_count), high: asNumber(row.high_count), medium: asNumber(row.medium_count),
+      low: asNumber(row.low_count), info: asNumber(row.info_count),
+    },
+  }));
 }
 
 export async function listPentestJobsForOrg(exec: Executor, orgId: string, limit = 100): Promise<MemoryJobRecord[]> {

@@ -13,6 +13,7 @@ import { PageHeader } from "../../components/PageHeader";
 import { authFetch } from "../../lib/adminApi";
 import { BASE_URL } from "../../lib/client";
 import { getApiKey, getJwt } from "../../lib/client-auth";
+import { invalidateDashboardQueries, queryDashboard } from "../../lib/dashboardQuery";
 import styles from "./meetings.module.css";
 
 type Scope = "private" | "team" | "org" | "public";
@@ -28,6 +29,8 @@ interface Detail {
   share: Share;
   summaryStatus: SummaryStatus; summaryError?: string;
 }
+type Overview = Omit<Detail, "transcript">;
+interface TranscriptPage { segments: Array<{ ordinal: number; at: string; speaker: string; text: string }>; total: number; nextCursor: string | null }
 
 const SCOPE_META: Record<Scope, { label: string; blurb: string; badge: string; dot: string; icon: string }> = {
   private: { label: "Private", blurb: "Only you can see this meeting.", badge: styles.bPrivate, dot: "", icon: "🔒" },
@@ -42,10 +45,39 @@ function ScopeBadge({ scope }: { scope: Scope }) {
   return <span className={`${styles.badge} ${m.badge}`}>{scope === "org" ? "Org" : m.label}</span>;
 }
 
+function TranscriptLines({ segments }: { segments: Detail["transcript"] }) {
+  const [scrollTop, setScrollTop] = useState(0);
+  const rowHeight = 58;
+  const viewportHeight = 520;
+  const overscan = 5;
+  if (segments.length <= 40) return <>{segments.map((line, index) => <TranscriptLine key={index} line={line} />)}</>;
+  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
+  const visible = Math.ceil(viewportHeight / rowHeight) + overscan * 2;
+  const end = Math.min(segments.length, start + visible);
+  return (
+    <div className={styles.transcriptViewport} style={{ height: viewportHeight }} onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)} role="list" aria-label={`${segments.length} loaded transcript segments`}>
+      <div style={{ height: segments.length * rowHeight, position: "relative" }}>
+        <div style={{ position: "absolute", top: start * rowHeight, right: 0, left: 0 }}>
+          {segments.slice(start, end).map((line, offset) => <TranscriptLine key={start + offset} line={line} />)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TranscriptLine({ line }: { line: Detail["transcript"][number] }) {
+  return <div className={styles.trLine} role="listitem">{line.at ? <span className={styles.trTs}>{line.at}</span> : null}{line.speaker ? <span className={styles.trSp}>{line.speaker}</span> : null}<span className={styles.trTx}>{line.text}</span></div>;
+}
+
 export default function MeetingsPage() {
   const [items, setItems] = useState<ListItem[]>([]);
+  const [meetingsNext, setMeetingsNext] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
+  const [transcriptSegments, setTranscriptSegments] = useState<Detail["transcript"]>([]);
+  const [transcriptNext, setTranscriptNext] = useState<string | null>(null);
+  const [transcriptTotal, setTranscriptTotal] = useState(0);
+  const [transcriptLoading, setTranscriptLoading] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -55,10 +87,31 @@ export default function MeetingsPage() {
   const [draftTranscript, setDraftTranscript] = useState("");
   const [createErr, setCreateErr] = useState("");
   const [recording, setRecording] = useState(false);
+  const [recordingPaused, setRecordingPaused] = useState(false);
+  const [language, setLanguage] = useState("auto");
+  const [summaryTemplate, setSummaryTemplate] = useState("general");
   const [editing, setEditing] = useState(false);
   const [draftSummary, setDraftSummary] = useState("");
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("brainrouter:meeting-draft") ?? "null") as { title?: string; transcript?: string; language?: string; template?: string } | null;
+      if (saved?.title) setDraftTitle(saved.title);
+      if (saved?.transcript) setDraftTranscript(saved.transcript);
+      if (saved?.language) setLanguage(saved.language);
+      if (saved?.template) setSummaryTemplate(saved.template);
+    } catch { /* a malformed local draft should not block Meetings */ }
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (draftTitle || draftTranscript) localStorage.setItem("brainrouter:meeting-draft", JSON.stringify({ title: draftTitle, transcript: draftTranscript, language, template: summaryTemplate }));
+      else localStorage.removeItem("brainrouter:meeting-draft");
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [draftTitle, draftTranscript, language, summaryTemplate]);
 
   // Poll while notes are generating — the server keeps summarizing across refreshes,
   // so this converges the status without the user re-triggering anything.
@@ -68,10 +121,10 @@ export default function MeetingsPage() {
     let alive = true;
     const timer = setInterval(async () => {
       try {
-        const d = await authFetch<Detail>(`/api/meetings/${id}`);
+        const overview = await authFetch<Overview>(`/api/meetings/${id}/overview`);
         if (!alive) return;
-        setDetail((cur) => (cur && cur.id === id ? d : cur));
-        setItems((list) => list.map((m) => (m.id === id ? { ...m, summaryStatus: d.summaryStatus } : m)));
+        setDetail((cur) => (cur && cur.id === id ? { ...cur, ...overview } : cur));
+        setItems((list) => list.map((m) => (m.id === id ? { ...m, summaryStatus: overview.summaryStatus } : m)));
       } catch { /* transient — keep polling */ }
     }, 3000);
     return () => { alive = false; clearInterval(timer); };
@@ -82,6 +135,7 @@ export default function MeetingsPage() {
     setBusy("save-summary");
     try {
       const d = await authFetch<Detail>(`/api/meetings/${detail.id}/summary`, { method: "PATCH", body: { summaryMarkdown: draftSummary } });
+      invalidateDashboardQueries(`meetings:overview:${detail.id}`);
       setDetail(d);
       setEditing(false);
     } catch (caught) {
@@ -96,7 +150,7 @@ export default function MeetingsPage() {
     setCreateErr("");
     try {
       const token = getJwt() || getApiKey() || "";
-      const res = await fetch(`${BASE_URL}/v1/audio/transcriptions`, {
+      const res = await fetch(`${BASE_URL}/v1/audio/transcriptions${language === "auto" ? "" : `?language=${encodeURIComponent(language)}`}`, {
         method: "POST",
         headers: { "Content-Type": blob.type || "audio/webm", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
         body: blob,
@@ -111,7 +165,7 @@ export default function MeetingsPage() {
     } finally {
       setBusy("");
     }
-  }, []);
+  }, [language]);
 
   const startRecording = useCallback(async () => {
     setCreateErr("");
@@ -127,6 +181,7 @@ export default function MeetingsPage() {
       recorderRef.current = rec;
       rec.start();
       setRecording(true);
+      setRecordingPaused(false);
     } catch {
       setCreateErr("Microphone access was denied or is unavailable.");
     }
@@ -136,14 +191,23 @@ export default function MeetingsPage() {
     recorderRef.current?.stop();
     recorderRef.current = null;
     setRecording(false);
+    setRecordingPaused(false);
+  }, []);
+
+  const toggleRecordingPause = useCallback(() => {
+    const recorder = recorderRef.current;
+    if (!recorder) return;
+    if (recorder.state === "recording") { recorder.pause(); setRecordingPaused(true); }
+    else if (recorder.state === "paused") { recorder.resume(); setRecordingPaused(false); }
   }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await authFetch<{ meetings: ListItem[] }>("/api/meetings");
+      const r = await queryDashboard("meetings:list", () => authFetch<{ meetings: ListItem[]; nextCursor: string | null }>("/api/meetings?limit=50"), { ttlMs: 30_000 });
       const list = r.meetings ?? [];
       setItems(list);
+      setMeetingsNext(r.nextCursor);
       setSelectedId((cur) => (cur && list.some((m) => m.id === cur) ? cur : list[0]?.id ?? null));
       setError("");
     } catch (caught) {
@@ -156,24 +220,62 @@ export default function MeetingsPage() {
 
   useEffect(() => { void load(); }, [load]);
 
+  const loadMoreMeetings = useCallback(async () => {
+    if (!meetingsNext || busy === "more-meetings") return;
+    setBusy("more-meetings");
+    try {
+      const page = await authFetch<{ meetings: ListItem[]; nextCursor: string | null }>(`/api/meetings?limit=50&cursor=${encodeURIComponent(meetingsNext)}`);
+      setItems((current) => [...current, ...page.meetings.filter((item) => !current.some((existing) => existing.id === item.id))]);
+      setMeetingsNext(page.nextCursor);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not load more meetings.");
+    } finally {
+      setBusy("");
+    }
+  }, [meetingsNext, busy]);
+
   useEffect(() => {
     if (!selectedId) { setDetail(null); return; }
-    let live = true;
-    void (async () => {
-      try {
-        const d = await authFetch<Detail>(`/api/meetings/${selectedId}`);
-        if (live) { setDetail(d); setShareOpen(false); }
-      } catch {
-        if (live) setDetail(null);
-      }
-    })();
-    return () => { live = false; };
+    const controller = new AbortController();
+    const id = selectedId;
+    setDetail(null);
+    setTranscriptSegments([]);
+    setTranscriptNext(null);
+    setTranscriptTotal(0);
+    setTranscriptLoading(true);
+    void queryDashboard(`meetings:overview:${id}`, () => authFetch<Overview>(`/api/meetings/${id}/overview`, { signal: controller.signal }), { ttlMs: 30_000 }).then((overview) => {
+      if (!controller.signal.aborted) { setDetail({ ...overview, transcript: [] }); setShareOpen(false); }
+    }).catch(() => { if (!controller.signal.aborted) setDetail(null); });
+    void authFetch<TranscriptPage>(`/api/meetings/${id}/transcript?limit=100`, { signal: controller.signal }).then((page) => {
+      if (controller.signal.aborted) return;
+      setTranscriptSegments(page.segments);
+      setTranscriptNext(page.nextCursor);
+      setTranscriptTotal(page.total);
+    }).catch(() => {}).finally(() => { if (!controller.signal.aborted) setTranscriptLoading(false); });
+    return () => controller.abort();
   }, [selectedId]);
+
+  const loadMoreTranscript = useCallback(async () => {
+    if (!detail || !transcriptNext || transcriptLoading) return;
+    const id = detail.id;
+    setTranscriptLoading(true);
+    try {
+      const page = await authFetch<TranscriptPage>(`/api/meetings/${id}/transcript?limit=100&cursor=${encodeURIComponent(transcriptNext)}`);
+      if (detail.id === id) setTranscriptSegments((current) => [...current, ...page.segments]);
+      setTranscriptNext(page.nextCursor);
+      setTranscriptTotal(page.total);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not load more transcript.");
+    } finally {
+      setTranscriptLoading(false);
+    }
+  }, [detail, transcriptNext, transcriptLoading]);
 
   const setScope = useCallback(async (scope: Scope) => {
     if (!detail) return;
     try {
       const share = await authFetch<Share>(`/api/meetings/${detail.id}/scope`, { method: "POST", body: { scope } });
+      invalidateDashboardQueries(`meetings:overview:${detail.id}`);
       setDetail((d) => (d ? { ...d, share } : d));
       setItems((list) => list.map((m) => (m.id === detail.id ? { ...m, scope } : m)));
     } catch (caught) {
@@ -186,6 +288,7 @@ export default function MeetingsPage() {
     setBusy("regen");
     try {
       const d = await authFetch<Detail>(`/api/meetings/${detail.id}/regenerate`, { method: "POST" });
+      invalidateDashboardQueries(`meetings:overview:${detail.id}`);
       setDetail(d);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not regenerate the summary.");
@@ -199,6 +302,7 @@ export default function MeetingsPage() {
     const done = !action.done;
     try {
       await authFetch(`/api/meetings/${detail.id}/actions/${action.id}`, { method: "POST", body: { done } });
+      invalidateDashboardQueries(`meetings:overview:${detail.id}`);
       setDetail((d) => (d ? { ...d, actionItems: d.actionItems.map((x) => (x.id === action.id ? { ...x, done } : x)) } : d));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not update the action item.");
@@ -210,10 +314,12 @@ export default function MeetingsPage() {
     setBusy("create");
     setCreateErr("");
     try {
-      const out = await authFetch<{ id: string }>("/api/meetings", { method: "POST", body: { title: draftTitle.trim(), transcript: draftTranscript } });
+      const out = await authFetch<{ id: string }>("/api/meetings", { method: "POST", body: { title: draftTitle.trim(), transcript: draftTranscript, template: summaryTemplate } });
+      invalidateDashboardQueries("meetings:");
       setCreateOpen(false);
       setDraftTitle("");
       setDraftTranscript("");
+      localStorage.removeItem("brainrouter:meeting-draft");
       await load();
       setSelectedId(out.id);
     } catch (caught) {
@@ -221,7 +327,7 @@ export default function MeetingsPage() {
     } finally {
       setBusy("");
     }
-  }, [draftTitle, draftTranscript, load]);
+  }, [draftTitle, draftTranscript, summaryTemplate, load]);
 
   const summaryBlocks = useMemo(() => renderSummary(detail?.summaryMarkdown ?? ""), [detail?.summaryMarkdown]);
 
@@ -246,6 +352,7 @@ export default function MeetingsPage() {
           {items.length === 0 ? (
             <div className={styles.empty}>{loading ? "Loading…" : "No meetings yet. Click + New to add one."}</div>
           ) : null}
+          {meetingsNext ? <button type="button" className={styles.listMore} disabled={busy === "more-meetings"} onClick={() => void loadMoreMeetings()}>{busy === "more-meetings" ? "Loading…" : "Load more meetings"}</button> : null}
         </div>
 
         {detail ? (
@@ -341,14 +448,9 @@ export default function MeetingsPage() {
                 ) : null}
               </div>
               <div className={styles.card}>
-                <div className={styles.cardLab}>Transcript</div>
-                {detail.transcript.length ? detail.transcript.map((l, i) => (
-                  <div key={i} className={styles.trLine}>
-                    {l.at ? <span className={styles.trTs}>{l.at}</span> : null}
-                    {l.speaker ? <span className={styles.trSp}>{l.speaker}</span> : null}
-                    <span className={styles.trTx}>{l.text}</span>
-                  </div>
-                )) : <div className={styles.empty}>No transcript.</div>}
+                <div className={styles.cardLab}>Transcript {transcriptTotal ? <span className={styles.transcriptCount}>{transcriptSegments.length} / {transcriptTotal}</span> : null}</div>
+                {transcriptSegments.length ? <TranscriptLines segments={transcriptSegments} /> : <div className={styles.empty}>{transcriptLoading ? "Loading transcript…" : "No transcript."}</div>}
+                {transcriptNext ? <button type="button" className={styles.loadMore} disabled={transcriptLoading} onClick={() => void loadMoreTranscript()}>{transcriptLoading ? "Loading…" : "Load 100 more"}</button> : null}
               </div>
             </div>
           </div>
@@ -376,11 +478,15 @@ export default function MeetingsPage() {
               rows={10}
               aria-label="Transcript"
             />
+            <div className={styles.captureOptions}>
+              <label>Template<select value={summaryTemplate} onChange={(event) => setSummaryTemplate(event.target.value)} aria-label="Meeting summary template"><option value="general">General notes</option><option value="standup">Standup</option><option value="one-on-one">1:1</option><option value="retrospective">Retrospective</option></select></label>
+              <label>Language<select value={language} onChange={(event) => setLanguage(event.target.value)} aria-label="Transcription language"><option value="auto">Auto detect</option><option value="en">English</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option><option value="ja">Japanese</option><option value="ko">Korean</option><option value="zh">Chinese</option></select></label>
+              <label className={styles.importAudio}>Import audio<input type="file" accept="audio/*,.webm,.m4a,.mp3,.wav,.ogg" onChange={(event) => { const file = event.target.files?.[0]; if (file) void transcribe(file); event.target.value = ""; }} /></label>
+              <span>{draftTranscript ? "Draft recovered automatically" : "Drafts are saved on this device"}</span>
+            </div>
             {createErr ? <div className={styles.errorBar} role="alert">{createErr}</div> : null}
             <div className={styles.modalActions} style={{ justifyContent: "space-between" }}>
-              <button type="button" className={styles.track} onClick={() => (recording ? stopRecording() : void startRecording())} disabled={busy === "transcribe"}>
-                {recording ? "■ Stop recording" : busy === "transcribe" ? "Transcribing…" : "🎙 Record"}
-              </button>
+              <div className={styles.recordActions}><button type="button" className={styles.track} onClick={() => (recording ? stopRecording() : void startRecording())} disabled={busy === "transcribe"}>{recording ? "■ Stop recording" : busy === "transcribe" ? "Transcribing…" : "🎙 Record"}</button>{recording ? <button type="button" className={styles.track} onClick={toggleRecordingPause}>{recordingPaused ? "▶ Resume" : "Ⅱ Pause"}</button> : null}</div>
               <div style={{ display: "flex", gap: 8 }}>
                 <button type="button" className={styles.track} onClick={() => { if (recording) stopRecording(); setCreateOpen(false); }}>Cancel</button>
                 <button type="button" className={styles.newBtn} onClick={() => void submitCreate()} disabled={busy === "create" || recording}>

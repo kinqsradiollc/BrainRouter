@@ -8,8 +8,8 @@ import {
 } from '@kinqs/brainrouter-types';
 
 type AccountConfig = {
-  cli?: { account?: { url?: string; displayName?: string; email?: string } };
-  servers?: Record<string, { identity?: string; apiKey?: string }>;
+  cli?: { account?: { url?: string; userId?: string; displayName?: string; email?: string } };
+  servers?: Record<string, { identity?: string; apiKey?: string; url?: string }>;
 };
 
 type FetchResponse = {
@@ -62,6 +62,20 @@ export interface DesktopAccountIdentity {
   signedIn: boolean;
   username: string;
   email?: string;
+}
+
+/** Credential-free state Electron can expose synchronously before the utility
+ * host boots. It is intentionally limited to durable display identity. */
+export interface DesktopBootstrapState {
+  accountStatus: {
+    signedIn: boolean;
+    account: {
+      url: string;
+      userId: string;
+      displayName: string;
+      email: string;
+    } | null;
+  };
 }
 
 /** Renderer-safe snapshot for the built-in, read-only BrainRouter provider. */
@@ -272,9 +286,44 @@ export async function fetchAccountModelCatalog(
   }
 }
 
+function normalizeAccountBaseUrl(value: unknown, fromMcpProfile = false): string {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
+    url.hash = '';
+    url.search = '';
+    // A BrainRouter MCP profile normally points at `<account>/mcp`. Keep any
+    // deployment path prefix, but remove the MCP endpoint before calling the
+    // account REST API. Explicit cli.account URLs are already API bases and
+    // retain their path unchanged.
+    const pathname = url.pathname.replace(/\/+$/, '');
+    url.pathname = fromMcpProfile && /\/mcp$/i.test(pathname)
+      ? pathname.slice(0, -4) || '/'
+      : (fromMcpProfile ? '/' : pathname || '/');
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return '';
+  }
+}
+
+/** Resolve the account API base from either modern account metadata or an
+ * existing BrainRouter MCP profile. The latter keeps older CLI/desktop logins
+ * fully usable instead of reporting "signed out" while their server key works. */
+export function resolveBrainRouterAccountBaseUrl(config: unknown): string {
+  const candidate = asRecord(config) as AccountConfig;
+  const serverId = Object.keys(candidate.servers ?? {}).find((id) => {
+    const server = candidate.servers?.[id];
+    return server?.identity === 'brainrouter' || /^brainrouter/i.test(id);
+  });
+  return normalizeAccountBaseUrl(candidate.cli?.account?.url)
+    || normalizeAccountBaseUrl(serverId ? candidate.servers?.[serverId]?.url : '', true);
+}
+
 export function resolveBrainRouterAccountApi(config: unknown): BrainRouterAccountApi | null {
   const candidate = asRecord(config) as AccountConfig;
-  const baseUrl = String(candidate.cli?.account?.url ?? '').trim().replace(/\/+$/, '');
+  const baseUrl = resolveBrainRouterAccountBaseUrl(candidate);
   const serverId = Object.keys(candidate.servers ?? {}).find((id) => {
     const server = candidate.servers?.[id];
     return server?.identity === 'brainrouter' || /^brainrouter/i.test(id);
@@ -293,9 +342,30 @@ export function resolveDesktopAccountIdentity(config: unknown, fallbackUsername:
   const email = String(account?.email ?? '').trim();
   const fallback = String(fallbackUsername ?? '').trim() || 'BrainRouter user';
   return {
-    signedIn: account !== undefined,
+    signedIn: account !== undefined || resolveBrainRouterAccountApi(candidate) !== null,
     username: displayName || email || fallback,
     ...(email ? { email } : {}),
+  };
+}
+
+/** Build the renderer's launch snapshot from local config only. No network or
+ * safe-storage read is required, and no bearer/API key crosses the bridge. */
+export function resolveDesktopBootstrapState(config: unknown, fallbackUsername: string): DesktopBootstrapState {
+  const candidate = asRecord(config) as AccountConfig;
+  const identity = resolveDesktopAccountIdentity(candidate, fallbackUsername);
+  if (!identity.signedIn) return { accountStatus: { signedIn: false, account: null } };
+  const stored = candidate.cli?.account;
+  const connected = resolveBrainRouterAccountApi(candidate);
+  return {
+    accountStatus: {
+      signedIn: true,
+      account: {
+        url: normalizeAccountBaseUrl(stored?.url) || connected?.baseUrl || '',
+        userId: String(stored?.userId ?? '').trim(),
+        displayName: String(stored?.displayName ?? '').trim() || identity.username,
+        email: String(stored?.email ?? '').trim(),
+      },
+    },
   };
 }
 

@@ -1,6 +1,7 @@
-# ── BrainRouter FULL backend in Docker (production image, monolith) ───────────
-# Runs the whole backend (MCP + REST + /v1 gateway + job runner) in one container
-# on :3747, plus the Whisper STT sidecar — reusing your already-running host
+# ── BrainRouter FULL backend in Docker (production image) ──────────────────
+# Runs MCP + REST + /v1 on :3747 and durable jobs (including CVE feed sync,
+# repository scans, and future-CVE re-evaluation) in a separate worker, plus
+# the Whisper STT sidecar — reusing your already-running host
 # postgres + bge-reranker via host.docker.internal. Uses your real secrets from
 # deploy/dev/.env (copied from brainrouter/.env, DB host rewritten).
 #
@@ -9,11 +10,13 @@
 #   docker compose -f docker-compose.full.yml logs -f brain
 #
 # Code changed? Rebuild: `docker compose -f docker-compose.full.yml up -d --build brain`.
-# (For live-reload dev instead, use docker-compose.dev.yml's `brain` profile.)
+# (For LIVE-RELOAD instead — code edits reflect with no rebuild — run the
+#  bind-mount + tsx-watch stack in docker-compose.dev.yml. That is the daily
+#  driver; this file is for production-image parity.)
 name: brainrouter-full
 
 services:
-  # One-shot: apply DB migrations (incl. 028 meeting summary status) before serving.
+  # One-shot: apply every pending DB migration before serving.
   migrator:
     build:
       context: ../..
@@ -43,7 +46,8 @@ services:
       start_period: 40s
       retries: 5
 
-  # The full backend monolith (SERVICE defaults to `brain`).
+  # HTTP/MCP/model-gateway process (SERVICE defaults to `brain`). Async work is
+  # delegated so feed refreshes and repository scans never delay API traffic.
   brain:
     build:
       context: ../..
@@ -52,8 +56,7 @@ services:
     restart: unless-stopped
     env_file: [.env]
     environment:
-      # Ensure the background job runner is on so meeting notes generate.
-      BRAINROUTER_JOB_RUNNER: ${BRAINROUTER_JOB_RUNNER:-on}
+      BRAINROUTER_JOB_RUNNER: "off"
       BRAINROUTER_STT_URL: ${BRAINROUTER_STT_URL:-http://stt:3752}
     ports:
       - "3747:3747"
@@ -62,3 +65,24 @@ services:
     depends_on:
       migrator:
         condition: service_completed_successfully
+
+  # Durable-job worker and vulnerability-sync responsibility. PostgreSQL queue
+  # claims and per-source feed leases make additional replicas safe.
+  worker:
+    build:
+      context: ../..
+      dockerfile: deploy/brain/Dockerfile
+      target: worker
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      BRAINROUTER_JOB_RUNNER: "on"
+      BRAINROUTER_VULNERABILITY_SYNC: ${BRAINROUTER_VULNERABILITY_SYNC:-on}
+      BRAINROUTER_STT_URL: ${BRAINROUTER_STT_URL:-http://stt:3752}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      migrator:
+        condition: service_completed_successfully
+      stt:
+        condition: service_healthy

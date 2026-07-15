@@ -11,7 +11,7 @@
 # gateway, sandboxed exec, retrieval, workers) is activated per its scale drivers
 # — see README.md for the roadmap and how to split a module out.
 #
-# Providers (LLM / embeddings / reranker / judge) are now configured in the
+# Providers (LLM / embeddings / reranker) are now configured in the
 # DATABASE by an admin (dashboard → AI Providers, or POST /api/admin/providers),
 # NOT via .env. The BRAINROUTER_*_LLM/EMBEDDING/... vars below are an OPTIONAL
 # bootstrap fallback only — leave them empty for a pure DB-configured deployment.
@@ -78,7 +78,7 @@ services:
       # First-admin seed (clear after first boot; the API key prints once in logs).
       BRAINROUTER_ADMIN_PASSWORD: ${BRAINROUTER_ADMIN_PASSWORD:-}
       BRAINROUTER_ADMIN_EMAIL: ${BRAINROUTER_ADMIN_EMAIL:-admin@example.com}
-      # AI providers (LLM / embeddings / reranker / judge) are configured in the
+      # AI providers (LLM / embeddings / reranker) are configured in the
       # DB by an admin (dashboard → AI Providers), NOT via env — see ADR-012.
       # Observability + browser CORS.
       BRAINROUTER_METRICS: ${BRAINROUTER_METRICS:-}

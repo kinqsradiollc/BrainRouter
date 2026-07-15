@@ -6,8 +6,9 @@
 #   docker build -f deploy/brain/Dockerfile -t brainrouter-brain .
 #
 # or via the compose in this directory (brain + pgvector together).
-# Configure at runtime with BRAINROUTER_DATABASE_URL (+ optional LLM keys) — see
-# brainrouter/.env.example for the full set.
+# Configure at runtime with BRAINROUTER_DATABASE_URL + BRAINROUTER_SECRET_KEY /
+# JWT_SECRET — see brainrouter/.env.example. AI providers are configured in the
+# DB via the dashboard (ADR-012), NOT via env.
 
 # ── build ─────────────────────────────────────────────────────────────────────
 FROM node:22-bookworm-slim AS build
@@ -44,6 +45,7 @@ RUN npm --prefix packages/types run build \
  && npm --prefix brainrouter run build \
  && npm prune --omit=dev --ignore-scripts \
  && test -f brainrouter/dist/migrate.js \
+ && test -f brainrouter/dist/services/worker/index.js \
  && test -f brainrouter/dist/memory/store/postgres/migrations/001_init.sql
 
 # ── runtime ─────────────────────────────────────────────────────────────────────
@@ -68,6 +70,13 @@ COPY --from=build /app/brainrouter/dist /app/brainrouter/dist
 # Deterministic one-shot target used by Compose/CI before any serving process.
 FROM runtime-base AS migrator
 CMD ["node", "dist/migrate.js"]
+
+# Independently deployable durable-job worker. This drains repository scans,
+# vulnerability-source refresh/re-evaluation, meetings, and other async jobs.
+FROM runtime-base AS worker
+HEALTHCHECK --interval=15s --timeout=3s --start-period=30s --retries=5 \
+  CMD test -s /tmp/brainrouter-worker-ready || exit 1
+CMD ["node", "dist/services/worker/index.js"]
 
 # Default production target remains the HTTP/MCP service.
 FROM runtime-base AS runtime

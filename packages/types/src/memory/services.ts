@@ -25,21 +25,6 @@ export interface RerankerServiceConfig {
   timeoutMs?: number;
 }
 
-export interface RelevanceJudgeServiceConfig {
-  /** Enable flag — when false, the judge stage is skipped entirely. */
-  enabled?: boolean;
-  /** OpenAI-compatible chat-completions endpoint. Falls back to BRAINROUTER_LLM_ENDPOINT. */
-  endpoint?: string;
-  /** API key. Falls back to BRAINROUTER_LLM_API_KEY. */
-  apiKey?: string;
-  /** Model id for the judge. Defaults to a fast/cheap model. */
-  model?: string;
-  /** Max candidates sent to the judge in a single batched call. Default 10. */
-  maxCandidates?: number;
-  /** Per-call timeout in ms. Default 15000. */
-  timeoutMs?: number;
-}
-
 export interface SkillHintsRecord {
   skillName: string;
   hints: string;

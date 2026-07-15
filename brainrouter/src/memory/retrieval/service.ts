@@ -6,19 +6,18 @@
  *
  * Additive and behaviour-preserving: `recall.ts` is untouched. The facade holds
  * a pipeline instance and delegates; the factory centralises construction (store
- * + embedding + reranker + optional relevance judge) so callers depend on the
- * port, not the concrete pipeline.
+ * + embedding + reranker) so callers depend on the port, not the concrete
+ * pipeline.
  */
 import type { IMemoryStore, RecallResult } from "@kinqs/brainrouter-types";
 import { MemoryRecallPipeline } from "../recall.js";
 import type { EmbeddingService } from "../store/embedding.js";
 import type { RerankerService } from "../store/reranker.js";
-import type { RelevanceJudgeService } from "../store/relevance-judge.js";
 
 /** The exact parameter shape accepted by the recall pipeline. */
 export type RecallParams = Parameters<MemoryRecallPipeline["recall"]>[0];
 
-/** The retrieval contract — query → ranked, judged, graph-expanded memories. */
+/** The retrieval contract — query → ranked, graph-expanded memories. */
 export interface IRetrievalService {
   recall(params: RecallParams): Promise<RecallResult>;
 }
@@ -40,9 +39,8 @@ export function createRetrievalService(
   store: IMemoryStore,
   embeddingService: EmbeddingService,
   rerankerService: RerankerService,
-  relevanceJudge?: RelevanceJudgeService,
 ): IRetrievalService {
   return new RetrievalService(
-    new MemoryRecallPipeline(store, embeddingService, rerankerService, relevanceJudge),
+    new MemoryRecallPipeline(store, embeddingService, rerankerService),
   );
 }

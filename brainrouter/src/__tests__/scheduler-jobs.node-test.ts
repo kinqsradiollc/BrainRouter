@@ -8,7 +8,7 @@
  *   - idempotency dedup: a second enqueue with the same key while one
  *     is pending/running returns the existing job (deduped: true).
  *   - distinct inputs (distinct keys) enqueue separately.
- *   - relevance_judge (empty key) never dedupes.
+ *   - an agent whose idempotencyKey resolves empty never dedupes.
  *   - UnknownBrainAgentError for unknown ids.
  *   - failAgentJob re-arms with a backoff'd runAfter.
  */
@@ -76,10 +76,11 @@ test("dedup only holds while the prior job is pending/running", async () => {
 test("agents with an empty idempotency key never dedupe", async () => {
   const { store, cleanup } = await createTestStore();
   try {
-    await enqueueAgentJob(store as unknown as IMemoryStore, "relevance_judge", { query: "x", candidateIds: ["c1"] });
-    const second = await enqueueAgentJob(store as unknown as IMemoryStore, "relevance_judge", { query: "x", candidateIds: ["c1"] });
+    // cognitive_extractor with no sensoryIds → idempotencyKey resolves "" → no dedup.
+    await enqueueAgentJob(store as unknown as IMemoryStore, "cognitive_extractor", {});
+    const second = await enqueueAgentJob(store as unknown as IMemoryStore, "cognitive_extractor", {});
     assert.equal(second.deduped, false);
-    assert.equal((await store.listMemoryJobs({ kind: "relevance_judge" })).length, 2);
+    assert.equal((await store.listMemoryJobs({ kind: "cognitive_extractor" })).length, 2);
   } finally {
     await cleanup();
   }

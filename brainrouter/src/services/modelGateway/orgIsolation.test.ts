@@ -3,7 +3,7 @@
  *
  * Product decision: server-managed models exist only for BrainRouter to act as a
  * model *provider* to the desktop app. Internal sub-agents (extraction, synthesis,
- * judge, reviews, meeting summaries) must run off each org's OWN provider (BYOK /
+ * reviews, meeting summaries) must run off each org's OWN provider (BYOK /
  * personal, ADR-012) plus its per-role model override (ADR-014) — never a managed
  * model, and never the scoped gateway. Two organizations must not observe or use
  * one another's provider/model state, and an org with no managed model (or none at

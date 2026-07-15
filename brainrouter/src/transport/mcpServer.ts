@@ -40,6 +40,7 @@ import {
   memoryFindRelatedToolSchema, handleMemoryFindRelated,
   memoryGraphQueryToolSchema, handleMemoryGraphQuery,
   memoryGraphAnalyticsToolSchema, handleMemoryGraphAnalytics,
+  vulnerabilityIntelligenceToolSchema, handleVulnerabilityIntelligence,
 } from '../tools/recall/index.js';
 import {
   memoryCaptureTurnToolSchema, handleMemoryCaptureTurn,
@@ -258,6 +259,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       sessionDelegateTaskToolSchema,
       sessionDelegationsToolSchema,
       memorySearchToolSchema,
+      vulnerabilityIntelligenceToolSchema,
       memoryContradictionsToolSchema,
       memoryRegisterSkillHintsToolSchema,
       memoryResolveSessionToolSchema,
@@ -356,6 +358,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         case 'session_delegate_task': return await handleSessionDelegateTask(request.params.arguments, { defaultUserId });
         case 'session_delegations': return await handleSessionDelegations(request.params.arguments, { defaultUserId });
         case 'memory_search': return await handleMemorySearch(request.params.arguments, { defaultUserId });
+        case 'vulnerability_intelligence': return await handleVulnerabilityIntelligence(request.params.arguments);
         case 'memory_contradictions': return await handleMemoryContradictions(request.params.arguments, { defaultUserId });
         case 'memory_register_skill_hints': return await handleMemoryRegisterSkillHints(request.params.arguments);
         case 'memory_resolve_session': return await handleMemoryResolveSession(request.params.arguments);

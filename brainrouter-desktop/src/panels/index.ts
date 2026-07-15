@@ -30,5 +30,7 @@ export { MemoryPanel } from './memory/MemoryPanel.js';
 export { ContextPanel } from './memory/ContextPanel.js';
 export { AtlasPanel, type AtlasPanelProps } from './atlas/AtlasPanel.js';
 export { CIPanel } from './ci/CIPanel.js';
-export { EditorPanel } from './editing/EditorPanel.js';
+// EditorPanel intentionally is not re-exported here: it owns Monaco (~5 MB)
+// and is loaded through React.lazy in renderPanelBody. A barrel re-export made
+// Vite treat it as both static and dynamic, pulling Monaco into first paint.
 export { BrowserPanel } from './BrowserPanel.js';

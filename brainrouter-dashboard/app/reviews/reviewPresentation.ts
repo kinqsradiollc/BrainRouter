@@ -3,6 +3,8 @@ import type { ReviewJob, ReviewPullRequest } from "../../lib/adminApi";
 
 export type ReviewStatusFilter = "all" | "attention" | "running" | "complete" | "not-reviewed";
 export type ReviewAutomationFilter = "all" | "automatic" | "on-demand";
+export type ReviewDraftFilter = "all" | "ready" | "draft";
+export type ReviewSort = "updated-desc" | "updated-asc" | "created-desc" | "created-asc" | "comments-desc";
 
 export const REVIEW_ACTION_LABELS = {
   security: "Security review",
@@ -13,8 +15,12 @@ export const REVIEW_ACTION_LABELS = {
 export interface ReviewListFilters {
   query: string;
   repository: string;
+  author: string;
+  label: string;
+  draft: ReviewDraftFilter;
   status: ReviewStatusFilter;
   automation: ReviewAutomationFilter;
+  sort: ReviewSort;
 }
 
 export interface ReviewActionPresentation {
@@ -78,8 +84,12 @@ export function reviewActionPresentation(
 
 export function filterReviewPullRequests(prs: ReviewPullRequest[], filters: ReviewListFilters): ReviewPullRequest[] {
   const query = filters.query.trim().toLowerCase();
-  return prs.filter((pr) => {
+  const filtered = prs.filter((pr) => {
     if (filters.repository !== "all" && pr.repo !== filters.repository) return false;
+    if (filters.author !== "all" && pr.author !== filters.author) return false;
+    if (filters.label !== "all" && !pr.labels.includes(filters.label)) return false;
+    if (filters.draft === "draft" && !pr.draft) return false;
+    if (filters.draft === "ready" && pr.draft) return false;
     if (filters.automation === "automatic" && !pr.availability.autoReviewEnabled) return false;
     if (filters.automation === "on-demand" && pr.availability.autoReviewEnabled) return false;
     if (filters.status === "attention" && !reviewNeedsAttention(pr)) return false;
@@ -87,8 +97,19 @@ export function filterReviewPullRequests(prs: ReviewPullRequest[], filters: Revi
     if (filters.status === "complete" && reviewStatus(pr).tone !== "ok") return false;
     if (filters.status === "not-reviewed" && jobsFor(pr).length > 0) return false;
     if (!query) return true;
-    return [pr.repo, pr.title, pr.author ?? "", String(pr.number)]
+    return [pr.repo, pr.title, pr.author ?? "", String(pr.number), ...pr.labels]
       .some((value) => value.toLowerCase().includes(query));
+  });
+  const time = (value: string | null): number => {
+    const parsed = value ? Date.parse(value) : Number.NaN;
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+  return [...filtered].sort((left, right) => {
+    if (filters.sort === "updated-asc") return time(left.updatedAt) - time(right.updatedAt);
+    if (filters.sort === "created-desc") return time(right.createdAt) - time(left.createdAt);
+    if (filters.sort === "created-asc") return time(left.createdAt) - time(right.createdAt);
+    if (filters.sort === "comments-desc") return right.comments - left.comments || time(right.updatedAt) - time(left.updatedAt);
+    return time(right.updatedAt) - time(left.updatedAt);
   });
 }
 
@@ -97,8 +118,12 @@ export function reviewsReturnPath(filters: ReviewListFilters, orgId?: string): s
   if (orgId) query.set("org", orgId);
   if (filters.query.trim()) query.set("q", filters.query.trim());
   if (filters.repository !== "all") query.set("repository", filters.repository);
+  if (filters.author !== "all") query.set("author", filters.author);
+  if (filters.label !== "all") query.set("label", filters.label);
+  if (filters.draft !== "all") query.set("draft", filters.draft);
   if (filters.status !== "all") query.set("status", filters.status);
   if (filters.automation !== "all") query.set("automation", filters.automation);
+  if (filters.sort !== "updated-desc") query.set("sort", filters.sort);
   const encoded = query.toString();
   return encoded ? `/reviews?${encoded}` : "/reviews";
 }

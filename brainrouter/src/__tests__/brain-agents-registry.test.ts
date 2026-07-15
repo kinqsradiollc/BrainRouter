@@ -11,7 +11,6 @@ const EXPECTED = [
   { id: "focus_shift_judge", modelClass: "judge", dependsOn: ["cognitive_extractor"] },
   { id: "focus_distiller", modelClass: "synthesis", dependsOn: ["focus_shift_judge"] },
   { id: "identity_distiller", modelClass: "synthesis", dependsOn: ["cognitive_extractor"] },
-  { id: "relevance_judge", modelClass: "judge", dependsOn: [] },
   // 0.4.3 (MEM-10) — depth-pipeline agents
   { id: "source_chunker", modelClass: "none", dependsOn: [] },
   { id: "blackboard_reconciler", modelClass: "none", dependsOn: [] },
@@ -20,10 +19,12 @@ const EXPECTED = [
   { id: "vault_exporter", modelClass: "none", dependsOn: [] },
   { id: "benchmark_eval", modelClass: "none", dependsOn: [] },
   { id: "connector_sync", modelClass: "none", dependsOn: [] },
+  { id: "vulnerability_sync", modelClass: "none", dependsOn: [] },
+  { id: "vulnerability_scan", modelClass: "none", dependsOn: [] },
 ];
 
 describe("brain agent registry", () => {
-  it("registers exactly the eight locked built-in agents", () => {
+  it("registers exactly the locked built-in agents", () => {
     const ids = listBrainAgents().map((a) => a.id);
     expect(ids).toEqual(EXPECTED.map((e) => e.id));
   });
@@ -58,13 +59,11 @@ describe("brain agent registry", () => {
     expect(k1).toBe("extract:a,b");
     // Empty / missing ids ⇒ no in-flight dedup.
     expect(extractor.idempotencyKey({})).toBe("");
-    // relevance_judge opts out of dedup entirely.
-    expect(findBrainAgentById("relevance_judge")!.idempotencyKey({ query: "x" })).toBe("");
   });
 
   it("listBrainAgents returns a fresh array (callers can't mutate the registry)", () => {
     const first = listBrainAgents();
     first.push({} as any);
-    expect(listBrainAgents()).toHaveLength(15);
+    expect(listBrainAgents()).toHaveLength(16);
   });
 });

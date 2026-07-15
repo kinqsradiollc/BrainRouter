@@ -112,7 +112,10 @@ export interface OperationLogFilters {
  */
 export interface IMemoryStore {
   init(): Promise<void>;
-  initVec(dimensions: number): Promise<void>;
+  /** Build/adopt the pgvector table. `allowRebuild` (default true) permits a
+   *  destructive rebuild on a confirmed dimension change (write path); pass false
+   *  at boot so a stale hint never drops a populated store. */
+  initVec(dimensions: number, opts?: { allowRebuild?: boolean }): Promise<void>;
   /** Close the underlying connection pool. Idempotent; the store must not be used after. */
   close(): Promise<void>;
   reembedStaleRecords(embedder: (text: string) => Promise<Float32Array>): Promise<number>;

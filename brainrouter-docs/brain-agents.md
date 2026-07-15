@@ -45,7 +45,7 @@ contract early.
 The current pipeline already runs several specialist stages:
 `cognitive_extractor`, `memory_deduper`, `contradiction_checker`,
 `graph_extractor`, `focus_shift_judge`, `focus_distiller`,
-`identity_distiller`, `relevance_judge`. They're scattered across
+`identity_distiller`. They're scattered across
 the `brainrouter/src/memory/` modules with their own ad-hoc
 schedulers + retry semantics. Three observable failures of that
 shape:
@@ -115,7 +115,6 @@ hard-code them:
 | `focus_shift_judge` | judge | `cognitive_records` | `contextual_focus` (write activate) | `cognitive_extractor` |
 | `focus_distiller` | synthesis | `cognitive_records`, `contextual_focus` | `contextual_focus` (summary) | `focus_shift_judge` |
 | `identity_distiller` | synthesis | `cognitive_records` | `core_identity` | `cognitive_extractor` |
-| `relevance_judge` | judge | `cognitive_records` (incoming candidates) | recall annotations (in-memory) | — |
 
 Three more land as Phase 3+ (`source_chunker`, `tree_summarizer`,
 `topic_curator`) and one as Phase 6 (`situation_reporter`).
@@ -325,7 +324,6 @@ brainrouter/src/memory/
     focus_shift_judge.ts
     focus_distiller.ts
     identity_distiller.ts
-    relevance_judge.ts
   scheduler/
     jobs.ts            # enqueue / lock / heartbeat / retry
     runner.ts          # main loop; picks eligible jobs, dispatches

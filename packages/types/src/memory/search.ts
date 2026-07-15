@@ -122,14 +122,6 @@ export interface RecallExplanation {
    * exclusive with `rerankerUsed` (the cross-encoder path wins when a key is set).
    */
   diversityApplied?: boolean;
-  /** Whether the LLM relevance judge was used in Stage 4. */
-  judgeUsed?: boolean;
-  /** How many candidates the judge approved as relevant. */
-  judgeApproved?: number;
-  /** How many candidates the judge rejected as not relevant. */
-  judgeRejected?: number;
-  /** Per-candidate verdicts (index, relevant, reason) for audit/tuning. */
-  judgeVerdicts?: RelevanceVerdict[];
   /** Whether graph context expansion was appended. */
   graphExpansion: boolean;
   /** Per-record citation boost contribution (recordId → boost). */
@@ -208,13 +200,4 @@ export interface CaptureResult {
   cognitiveExtractionStatus?: CognitiveExtractionStatus;
   /** Error string when status === "failed", for diagnostic display. */
   cognitiveExtractionError?: string;
-}
-
-export interface RelevanceVerdict {
-  /** Index into the candidate list passed to the judge. */
-  index: number;
-  /** Whether the judge approves this candidate as relevant to the query. */
-  relevant: boolean;
-  /** Short justification from the judge (for audit + tuning). */
-  reason: string;
 }

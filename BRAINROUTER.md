@@ -40,17 +40,14 @@ graph LR
     Path --> Fuse
     Fuse --> Rank[Decay + freshness + intent]
     Rank --> Rerank[Cross-encoder rerank]
-    Rerank --> Judge[LLM relevance judge]
-    Judge --> Graph[2-hop graph walk]
+    Rerank --> Graph[2-hop graph walk]
     Graph --> Out[Prompt context]
 ```
 
 Three retrievers run in parallel and get fused. The fused list is rescored
 against each record's decayed priority and citation count, optionally
-reranked by a cross-encoder, then optionally gated by an LLM relevance
-judge that drops candidates the reranker ranked highly but which aren't
-actually about the query. The survivors get expanded via the knowledge
-graph to pull in related facts.
+reranked by a cross-encoder, then expanded via the knowledge graph to pull
+in related facts.
 
 ## What makes it different
 
@@ -58,10 +55,8 @@ graph to pull in related facts.
   never decay; codebase facts decay over 60 days; task state over 14.
 - **It reinforces.** When the agent actually cites a memory, that memory
   gets a boost. When it ignores one repeatedly, the memory archives itself.
-- **It judges.** An optional LLM judge filters the final list for actual
-  semantic relevance — the reranker only reorders, it never filters, so
-  keyword-matched but off-topic memories used to slip through. Now they
-  don't.
+- **It ranks.** Reciprocal-rank fusion + a decayed-priority/citation/freshness
+  blend, then an optional cross-encoder reranker before the top-K is cut.
 - **It connects.** A 2-hop graph walk pulls in related facts the keyword /
   vector search wouldn't have surfaced on their own.
 

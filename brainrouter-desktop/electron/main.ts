@@ -12,6 +12,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell, utilityProcess, type Utilit
 import { requestDeviceCode, pollOnce, type DeviceCodeGrant } from './githubOauth.js';
 import { getSecret, setSecret, deleteSecret, hasSecret, secretStorageMode } from './secretStore.js';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isAgentCommand } from '@kinqs/brainrouter-agent-protocol';
@@ -40,6 +41,7 @@ import { registerMeetingsBridge } from './meetingsBridge.js';
 import { checkComputerUsePermissions, openAccessibilitySettings, openScreenRecordingSettings } from './computerUsePermissions.js';
 import { setupTray } from './tray.js';
 import { hardenWebviewPreferences, isAllowedWebviewSrc } from './webviewPolicy.js';
+import { resolveDesktopBootstrapState } from './accountIntegration.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -63,6 +65,17 @@ interface WinPool {
   retiring: Set<string>;               // roots whose host we're intentionally killing
 }
 const wins = new Map<number, WinPool>(); // webContents.id → WinPool
+
+// PERF — preload asks once, synchronously, before React renders. This is a tiny
+// local config read (no network/keychain/host dependency) so the first frame can
+// already show the durable signed-in identity instead of flashing signed-out.
+ipcMain.on('desktop-bootstrap-state', (event) => {
+  if (event.senderFrame !== event.sender.mainFrame) {
+    event.returnValue = null;
+    return;
+  }
+  event.returnValue = resolveDesktopBootstrapState(loadConfig(), os.userInfo().username);
+});
 
 const recentsPath = (): string => path.join(app.getPath('userData'), 'recent-workspaces.json');
 type WorkspaceSessionRow = TranscriptSummary & { lastRole?: string };

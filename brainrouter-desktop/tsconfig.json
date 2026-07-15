@@ -5,6 +5,7 @@
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
     "paths": {
       "react": ["./node_modules/@types/react"],
       "react/*": ["./node_modules/@types/react/*"],

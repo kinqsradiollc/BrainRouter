@@ -87,6 +87,30 @@ function makeDeps(routes: Routes, over: Partial<PrSecurityReviewDeps> = {}): PrS
 }
 
 describe("PR security review executor (ADR-017 D5)", () => {
+  it("prefers the persisted catalog/exposure context and passes org/repository scope", async () => {
+    const routes: Routes = { calls: [], diff: DIFF_ADDED };
+    let prompt = "";
+    let inputSeen: unknown;
+    let legacyCalls = 0;
+    await runPrSecurityReview(
+      { orgId: "org-a", installationId: "42", repo: "o/r", prNumber: 7, headSha: "sha" },
+      makeDeps(routes, {
+        getVulnerabilityContext: async (input) => {
+          inputSeen = input;
+          return {
+            text: "<brainrouter-current-vulnerability-intelligence>\nEXACT REPOSITORY EXPOSURE: CVE-2026-9999 npm/demo@1.0.0\n</brainrouter-current-vulnerability-intelligence>",
+            metadata: { sources: 4, unhealthySources: 0, exactExposures: 1, diffReferencedCves: 0, freshestSuccessAt: "2026-07-15T00:00:00Z" },
+          };
+        },
+        getVulnerabilityIntelligence: async () => { legacyCalls += 1; return null; },
+        llmRunner: { run: async (input) => { prompt = input.prompt; return REVIEW_OUT; } },
+      }),
+    );
+    expect(inputSeen).toMatchObject({ orgId: "org-a", repo: "o/r", diff: DIFF_ADDED });
+    expect(prompt).toContain("EXACT REPOSITORY EXPOSURE: CVE-2026-9999");
+    expect(legacyCalls).toBe(0);
+  });
+
   it("injects bounded, provenance-bearing vulnerability intelligence into the review turn", async () => {
     const routes: Routes = { calls: [], diff: DIFF_ADDED };
     let prompt = "";

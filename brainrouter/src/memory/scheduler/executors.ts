@@ -26,7 +26,9 @@ import { enqueueAgentJob } from "./jobs.js";
 import { runConnectorSync } from "../../connectors/syncExecutor.js";
 import { runPrSecurityReview, runPrCodeReview, runPrPentest, type PrReviewInput, type PrReviewDeps } from "../../integrations/prSecurityReview.js";
 import { runDomainPentest } from "../../integrations/domainPentest.js";
-import { loadVulnerabilityIntelligence } from "@kinqs/brainrouter-core/review";
+import { runVulnerabilitySync, type VulnerabilitySyncStore } from "../../services/vulnerabilitySync/executor.js";
+import { buildVulnerabilityReviewContext, type VulnerabilityReviewContextStore } from "../../vulnerability/context.js";
+import { runVulnerabilityScan, type VulnerabilityScanStore } from "../../services/vulnerabilitySync/scan.js";
 
 /**
  * 0.4.3 (MEM-10) — engine operations the depth-agent executors call. Declared
@@ -104,7 +106,12 @@ async function prReviewDeps(ctx: JobExecContext, lens: "security" | "code" | "pe
     getIntegration: (installationId) => engine.findGithubAppByInstallation(installationId),
     getUserAuthorization: (userId) => engine.findGithubAccountAuthorization?.(userId) ?? Promise.resolve(null),
     getGitlabAuthorization: (userId, requestedOrgId) => engine.findGitlabAccountAuthorization?.(userId, requestedOrgId) ?? Promise.resolve(null),
-    getVulnerabilityIntelligence: () => loadVulnerabilityIntelligence(),
+    getVulnerabilityContext: (input) => buildVulnerabilityReviewContext({
+      store: ctx.store as unknown as VulnerabilityReviewContextStore,
+      orgId: input.orgId,
+      repo: input.repo,
+      diff: input.diff,
+    }),
     maxDiffChars: assignment?.maxDiffChars,
     timeoutMs: assignment?.timeoutMs,
     onProgress: (event) => {
@@ -196,6 +203,19 @@ const EXECUTORS: Record<string, JobExecutor> = {
   // ADR-016 C3 — sync one server-side connector (DB config + sealed token → core
   // runtime → owner's memory), persisting the checkpoint back to the DB.
   connector_sync: async (input) => runConnectorSync(String(input?.connectorId ?? "")),
+  vulnerability_sync: async (input, ctx) => runVulnerabilitySync({
+    store: ctx.store as unknown as VulnerabilitySyncStore,
+    nvdApiKey: process.env.NVD_API_KEY?.trim() || undefined,
+    sourceId: input?.sourceId === "nvd" || input?.sourceId === "cisa-kev" || input?.sourceId === "first-epss"
+      ? input.sourceId
+      : undefined,
+  }),
+  vulnerability_scan: async (input, ctx) => runVulnerabilityScan({
+    store: ctx.store as unknown as VulnerabilityScanStore,
+    orgId: String(input?.orgId ?? ""),
+    repo: String(input?.repo ?? ""),
+    scanId: String(input?.scanId ?? ""),
+  }),
 
   // ADR-017 D5 — the GitHub App bot's automatic PR reviews. Both are enqueued by the
   // pull_request webhook; each mints the installation token, reviews the diff with its

@@ -44,7 +44,7 @@ export interface StatusProbes {
   pingDb: () => Promise<boolean>;
   uptimeSec: number;
   checkedAt: string;
-  /** Which model kinds are live behind the single gateway (llm/embedding/reranker/judge). */
+  /** Which model kinds are live behind the single gateway (llm/embedding/reranker). */
   modelKinds?: Record<string, boolean>;
 }
 
@@ -76,13 +76,13 @@ export async function collectSystemStatus(p: StatusProbes): Promise<SystemStatus
     detail: db ? undefined : "backing store unreachable",
   });
 
-  // Model providers behind the single gateway (llm / embedding / reranker / judge).
+  // Model providers behind the single gateway (llm / embedding / reranker).
   // "not configured" is reported as degraded (informational), never down — a
   // deployment can run with a subset configured.
   if (p.modelKinds) {
     const KIND_LABELS: Record<string, string> = {
       llm: "LLM provider", embedding: "Embedding provider",
-      reranker: "Reranker provider", judge: "Judge provider",
+      reranker: "Reranker provider",
     };
     for (const [kind, live] of Object.entries(p.modelKinds)) {
       components.push({

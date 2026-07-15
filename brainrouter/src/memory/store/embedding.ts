@@ -14,6 +14,16 @@ export function embeddingTimeoutMs(env: NodeJS.ProcessEnv = process.env): number
   return parseRequestTimeoutMs(env.BRAINROUTER_EMBEDDING_TIMEOUT_MS);
 }
 
+/**
+ * Fallback pgvector column width for a BRAND-NEW store when the real embedder
+ * dimension isn't known yet (nothing embedded, no recorded meta). It is NOT a
+ * source of truth: `cognitive_vec` adopts whatever a running store already has
+ * at boot, and the write path re-dimensions it to the live embedder's actual
+ * output length. 768 matches common local embedders (nomic-embed-text, bge).
+ * The dimension is DB-driven — never set from env.
+ */
+export const DEFAULT_EMBEDDING_DIMENSIONS = 768;
+
 export class EmbeddingService {
   private endpoint: string;
   private apiKey: string;
@@ -26,15 +36,15 @@ export class EmbeddingService {
     this.endpoint = config.endpoint ?? "https://api.openai.com/v1/embeddings";
     this.apiKey = config.apiKey ?? "";
     this.model = config.model ?? "text-embedding-3-small";
-    this.dimensions = config.dimensions ?? 768;
+    this.dimensions = config.dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
     // 0 = no timeout: wait for the server (see embeddingTimeoutMs / request-timeout.ts).
     this.timeoutMs = normalizeRequestTimeoutMs(config.timeoutMs ?? embeddingTimeoutMs());
 
-    // Graceful fallback: If no API key is provided, we disable the embedding service.
+    // Providers live in the DB (dashboard → AI Providers), applied a moment later
+    // by applyProviderOverrides → reconfigure(). Starting unconfigured is the
+    // EXPECTED ADR-012 path, not a fault — stay silent here. A single accurate
+    // provider summary is logged once after applyProviderOverrides settles.
     this.ready = !!this.apiKey;
-    if (!this.ready) {
-      console.error("[BrainRouter] Embedding API key not set. Vector search will be disabled. Falling back to FTS-only mode.");
-    }
   }
 
   getDimensions(): number {
@@ -53,10 +63,10 @@ export class EmbeddingService {
     if (cfg.model) this.model = cfg.model;
     // A DB-configured provider is intentional, so it's ready with a valid endpoint
     // + model even WITHOUT an api key — local embedders (LM Studio, Ollama, etc.)
-    // are keyless. The key is only sent when present. This clears the startup
-    // "API key not set" warning for admin-configured local embedders.
+    // are keyless. The key is only sent when present. Silent: reconfigure() runs
+    // on every admin provider save, so the boot summary (engine) is the one place
+    // that reports readiness, once.
     this.ready = !!(this.endpoint && this.model);
-    if (this.ready) console.error(`[BrainRouter] Embedding configured from DB provider (${this.model}). Vector search enabled.`);
   }
 
   /**

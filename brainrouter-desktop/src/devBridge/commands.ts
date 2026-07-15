@@ -9,6 +9,19 @@ export function installBridge(S: DevState, queries: Record<string, (args: Record
     listeners, recentsListeners, runningSessions, emit, devSessionModels, resolvedModel, trustedRoots, SESSIONS_BY_ROOT, mergeMeta,
   } = S;
   (window as unknown as { brainrouter: unknown }).brainrouter = {
+    getBootstrapState() {
+      return {
+        accountStatus: {
+          signedIn: true,
+          account: {
+            url: 'http://localhost:3747',
+            userId: 'dev-user',
+            displayName: 'BrainRouter Developer',
+            email: 'developer@brainrouter.local',
+          },
+        },
+      };
+    },
     send(command: AgentCommand): void {
       switch (command.kind) {
         case 'query': {

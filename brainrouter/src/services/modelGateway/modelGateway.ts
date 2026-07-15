@@ -1,10 +1,10 @@
 /**
  * ModelGateway (ADR-014) — the SINGLE gateway every model provider routes through.
  *
- * Before this, the four model callers (LLM extraction/synthesis, embedding,
- * reranker, judge) each resolved their own DB provider and dispatched their own
+ * Before this, the model callers (LLM extraction/synthesis, embedding,
+ * reranker) each resolved their own DB provider and dispatched their own
  * request. This module is the one authority:
- *   - `engine.applyProviderOverrides()` registers all four resolved configs here,
+ *   - `engine.applyProviderOverrides()` registers the resolved configs here,
  *     so there is a single registry of what's routed;
  *   - `dispatch()` is the one code path that issues a chat call — honoring the
  *     provider's wire format (chat-completions or /responses), forced-tool
@@ -24,8 +24,8 @@ import { MODEL_GATEWAY_AUDIENCE, MODEL_INVOKE_SCOPE } from "../gateway/auth.js";
 import type { ModelReasoningEffort } from "@kinqs/brainrouter-types";
 import type { ModelPolicyStore, ProviderModelRecord } from "../../providers/modelPolicyStore.js";
 
-export type ModelKind = "llm" | "embedding" | "reranker" | "judge";
-export const MODEL_KINDS: ModelKind[] = ["llm", "embedding", "reranker", "judge"];
+export type ModelKind = "llm" | "embedding" | "reranker";
+export const MODEL_KINDS: ModelKind[] = ["llm", "embedding", "reranker"];
 
 export interface GatewayProviderConfig {
   endpoint: string;
@@ -217,7 +217,6 @@ class ModelGateway {
       llm: this.isConfigured("llm"),
       embedding: this.isConfigured("embedding"),
       reranker: this.isConfigured("reranker"),
-      judge: this.isConfigured("judge"),
     };
   }
 

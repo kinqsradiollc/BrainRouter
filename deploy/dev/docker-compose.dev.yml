@@ -1,19 +1,22 @@
-# ── BrainRouter local DEV in Docker ──────────────────────────────────────────
-# Reuses your already-running `brainrouter-postgres` + `bge-reranker` containers
-# (reached via host.docker.internal) and adds the one thing `npm run dev:http`
-# can't run itself: the Whisper STT sidecar. Optionally runs the whole backend
-# monolith in a container too (profile "brain") — bind-mounted + tsx-watch, so a
-# code edit reflects live with NO image rebuild.
+# ── BrainRouter FULL backend in Docker — LIVE-RELOAD ─────────────────────────
+# The whole backend (MCP + REST + /v1 gateway + job runner) on :3747 PLUS the
+# Whisper STT sidecar — but the brain runs from a BIND-MOUNT under `tsx watch`,
+# so every edit to brainrouter/src reflects live with NO image rebuild. Reuses
+# your already-running host postgres + bge-reranker via host.docker.internal and
+# your real secrets from deploy/dev/.env.
 #
-#   # STT only (recommended — keep `npm run dev:http` on the host):
-#   cd deploy/dev && cp .env.example .env   # fill the secrets
+#   cd deploy/dev
+#   cp .env.example .env          # first time — or regenerate from brainrouter/.env
 #   docker compose -f docker-compose.dev.yml up -d
+#   docker compose -f docker-compose.dev.yml logs -f brain
 #
-#   # …or run the backend in Docker too:
-#   docker compose -f docker-compose.dev.yml --profile brain up
+# Edit brainrouter/src/**  → tsx watch restarts the brain in-place (seconds).
+# Edit packages/*/src/**   → rebuild the deps once: `docker compose -f
+#   docker-compose.dev.yml exec brain npm run build:packages` (brain restarts).
 #
-# The host `npm run dev:http` (or the brain container) serves :3747 = MCP + REST +
-# /v1 gateway + job runner. It reaches the STT sidecar at BRAINROUTER_STT_URL.
+# The brain applies DB migrations itself on boot (advisory-lock-safe), so no
+# separate migrator is needed here. For a PRODUCTION-image run (baked dist, no
+# live-reload) use docker-compose.full.yml instead.
 name: brainrouter-dev
 
 services:
@@ -27,12 +30,11 @@ services:
       STT_PORT: "3752"
       WHISPER_MODEL: ${WHISPER_MODEL:-/models/ggml-base.en.bin}
       WHISPER_THREADS: ${WHISPER_THREADS:-}
-    # Published to the host so a host-run `npm run dev:http` can reach it at
-    # http://127.0.0.1:3752 (its default BRAINROUTER_STT_URL). Drop this and use
-    # the internal name when running the brain in-container (see below).
+    # Published so a host-run `npm run dev:http` could also reach it at
+    # http://127.0.0.1:3752. The in-container brain reaches it as http://stt:3752.
     ports:
       - "127.0.0.1:${STT_PORT:-3752}:3752"
-    # To offer MORE models (selectable via ?model=<name>), mount a dir of
+    # To offer MORE models (selectable via x-model), mount a dir of
     # ggml-<name>.bin files and point WHISPER_MODELS_DIR at it — but DON'T mount
     # over /models or you hide the baked-in default. e.g.:
     #   volumes: [ "./whisper-models:/extra-models:ro" ]
@@ -44,34 +46,75 @@ services:
       start_period: 30s
       retries: 5
 
-  # OPTIONAL — the backend monolith in a container (profile "brain"). Bind-mounts
-  # the repo; a container-owned node_modules volume keeps host (macOS) + container
-  # (linux) native deps separate. tsx watch reflects edits live; no image build.
+  # The full backend monolith, LIVE from the bind-mounted repo under tsx watch.
+  # A container-owned node_modules volume keeps host (macOS) + container (linux)
+  # deps separate. First boot runs `npm ci` + `build:packages` (a few minutes);
+  # after that every brainrouter/src edit reflects in seconds.
   brain:
-    profiles: ["brain"]
     image: node:22-bookworm-slim
     working_dir: /repo
-    command: sh -lc "npm ci && npm run build:deps && npm --prefix brainrouter run dev:http"
+    # First boot (empty node_modules volume): install + build the deps, then run.
+    # `--ignore-scripts` skips native module builds (node-pty is a DESKTOP-only dep
+    # the brain never imports; the slim image has no C++ toolchain to compile it).
+    # The brain's own deps are pure JS (pg) or ship prebuilt platform binaries
+    # (esbuild under tsx). A lockfile-keyed marker makes restarts fast while
+    # still invalidating correctly after dependency changes.
+    command: >
+      sh -lc 'set -eu; lock_hash=$$(sha256sum package-lock.json | cut -c1-16); marker=node_modules/.brain-deps-v2-$$lock_hash; if [ ! -f "$$marker" ]; then rm -f node_modules/.brain-deps-*; npm ci --ignore-scripts; touch "$$marker"; fi; if [ ! -f packages/types/dist/index.js ] || [ ! -f packages/agent-protocol/dist/index.js ] || [ ! -f packages/core/dist/review/index.js ]; then npm run build -w @kinqs/brainrouter-types && npm run build -w @kinqs/brainrouter-agent-protocol && npm run build -w @kinqs/brainrouter-core; fi; exec npm --prefix brainrouter run dev:http'
     restart: unless-stopped
+    env_file: [.env]
+    environment:
+      NODE_ENV: development
+      # Job runner ON so meeting notes + depth agents generate in-process.
+      BRAINROUTER_JOB_RUNNER: ${BRAINROUTER_JOB_RUNNER:-on}
+      BRAINROUTER_STT_URL: ${BRAINROUTER_STT_URL:-http://stt:3752}
     volumes:
       - ../../:/repo
       - brain_node_modules:/repo/node_modules
+      # npm workspaces may place version-specific tools in child node_modules.
+      # Isolate every workspace path so Linux installs never overwrite the
+      # developer's macOS node_modules through the repository bind mount.
+      - brain_server_node_modules:/repo/brainrouter/node_modules
+      - brain_dashboard_node_modules:/repo/brainrouter-dashboard/node_modules
+      - brain_desktop_node_modules:/repo/brainrouter-desktop/node_modules
+      - brain_cli_node_modules:/repo/brainrouter-cli/node_modules
+      - brain_agent_protocol_node_modules:/repo/packages/agent-protocol/node_modules
+      - brain_core_node_modules:/repo/packages/core/node_modules
+      - brain_hooks_node_modules:/repo/packages/hooks/node_modules
+      - brain_sdk_node_modules:/repo/packages/sdk/node_modules
+      - brain_types_node_modules:/repo/packages/types/node_modules
+      # Isolate generated runtime packages from host builds. The package build
+      # scripts clean dist first; sharing those folders used to crash the live
+      # container mid-build with ERR_MODULE_NOT_FOUND.
+      - brain_types_dist:/repo/packages/types/dist
+      - brain_agent_protocol_dist:/repo/packages/agent-protocol/dist
+      - brain_core_dist:/repo/packages/core/dist
     ports:
       - "3747:3747"
-    environment:
-      NODE_ENV: development
-      # Reuse the host's running postgres + bge-reranker. (The reranker provider row
-      # in the DB must then use http://host.docker.internal:8000, not localhost.)
-      BRAINROUTER_DATABASE_URL: ${BRAINROUTER_DATABASE_URL:-postgres://postgres:postgres@host.docker.internal:5432/brainrouter}
-      BRAINROUTER_JWT_SECRET: ${BRAINROUTER_JWT_SECRET:?set BRAINROUTER_JWT_SECRET in deploy/dev/.env}
-      BRAINROUTER_SECRET_KEY: ${BRAINROUTER_SECRET_KEY:?set BRAINROUTER_SECRET_KEY in deploy/dev/.env}
-      BRAINROUTER_STT_URL: ${BRAINROUTER_STT_URL:-http://stt:3752}
-      BRAINROUTER_CORS_ORIGIN: ${BRAINROUTER_CORS_ORIGIN:-}
-      BRAINROUTER_PUBLIC_URL: ${BRAINROUTER_PUBLIC_URL:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
       - stt
+    # node-based probe (the slim image has no curl). start_period covers the
+    # first-boot npm ci + build:packages before /health answers.
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:3747/health',r=>process.exit(r.statusCode>=200&&r.statusCode<300?0:1)).on('error',()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      start_period: 300s
+      retries: 3
 
 volumes:
   brain_node_modules:
+  brain_server_node_modules:
+  brain_dashboard_node_modules:
+  brain_desktop_node_modules:
+  brain_cli_node_modules:
+  brain_agent_protocol_node_modules:
+  brain_core_node_modules:
+  brain_hooks_node_modules:
+  brain_sdk_node_modules:
+  brain_types_node_modules:
+  brain_types_dist:
+  brain_agent_protocol_dist:
+  brain_core_dist:

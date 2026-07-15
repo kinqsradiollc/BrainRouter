@@ -42,7 +42,7 @@ cover.
 
 | What | Where | Owns |
 | --- | --- | --- |
-| **MCP server env** | `~/.config/brainrouter/server.env` (global install) **or** `brainrouter/.env` (monorepo dev) | LLM credentials, retrieval pipeline (embeddings + reranker + relevance judge), memory engine knobs, server auth, JWT, admin seed. |
+| **MCP server env** | `~/.config/brainrouter/server.env` (global install) **or** `brainrouter/.env` (monorepo dev) | Infra + tuning only: DB URL, encryption/JWT secrets, admin seed, CORS, and the optional memory-engine/recall tuning knobs. **AI providers moved to the DB (dashboard → AI Providers, ADR-012)** — the LLM/embedding/reranker env recipes below are a one-time seed / reference, not the live config. |
 | **CLI credentials + transport** | `~/.config/brainrouter/config.json` (`llm.*`, `servers.*`, `activeServer`) | Chat model, endpoint, API key, MCP server profiles, active profile — the CLI's single source of truth since 0.3.7. |
 | **CLI runtime knobs** | `~/.config/brainrouter/config.json` (`cli.*` block) | Tool-loop limits, sandbox, trace log, workspace override, quiet/theme overrides, recall mode, parallel-safe tools, child-drain / shrink ratios, etc. Behaviour env vars were retired in 0.3.9 — the full field list is the `CliKnobs` interface in [`brainrouter-cli/src/config/config.ts`](../brainrouter-cli/src/config/config.ts). The CLI no longer reads any `.env` file. |
 | **MCP client transport** | `~/.config/brainrouter/config.json` (`servers` / `activeServer`) | Stdio vs HTTP MCP transport profile selection. |
@@ -77,8 +77,9 @@ brainrouter-mcp init
 
 This copies the bundled `.env.example` to
 `~/.config/brainrouter/server.env` with mode `0600`. It refuses to
-overwrite an existing file. Edit the new file to set
-`BRAINROUTER_LLM_API_KEY` and any optional knobs.
+overwrite an existing file. Edit the new file to set `BRAINROUTER_DATABASE_URL`,
+`BRAINROUTER_SECRET_KEY`, `BRAINROUTER_JWT_SECRET`, and the admin seed. **AI
+providers are added in the dashboard after first boot (ADR-012), not here.**
 
 ## Two processes, one env boundary
 
@@ -87,7 +88,7 @@ concerns and a strict env boundary since 0.3.7:
 
 | Process | Config source |
 | --- | --- |
-| **MCP server** | `brainrouter/.env` (monorepo dev) or `~/.config/brainrouter/server.env` (global install) — LLM credentials, retrieval pipeline, memory engine, auth, JWT, admin seed. |
+| **MCP server** | `brainrouter/.env` (monorepo dev) or `~/.config/brainrouter/server.env` (global install) — DB URL, encryption/JWT secrets, admin seed, CORS, and optional memory-engine/recall tuning knobs. **AI providers live in the DB (dashboard), not here (ADR-012).** |
 | **CLI agent** | `~/.config/brainrouter/config.json` — `llm.*` for chat-LLM creds / endpoint / model, `servers.*` + `activeServer` for MCP transport, and `cli.*` for every behaviour knob (tool-loop limits, sandbox, trace log, theme, quiet, etc.). The CLI reads **no `.env` file at all**. |
 
 Why the hard split?
@@ -116,15 +117,18 @@ Why the hard split?
 ## Quick start (minimal)
 
 ```env
-# ~/.config/brainrouter/server.env  (MCP server)
-BRAINROUTER_LLM_API_KEY=sk-...
+# ~/.config/brainrouter/server.env  (MCP server) — infrastructure only
+BRAINROUTER_DATABASE_URL=postgres://postgres:postgres@localhost:5432/brainrouter
+BRAINROUTER_SECRET_KEY=...     # openssl rand -base64 32  (encrypts DB-stored provider keys)
+BRAINROUTER_JWT_SECRET=...     # openssl rand -hex 32
+BRAINROUTER_ADMIN_PASSWORD=... # seeds the first admin on first boot
 ```
 
-That's the minimum for the server, plus `BRAINROUTER_DATABASE_URL` — the memory
-store now runs on Postgres + pgvector (SQLite has been removed), so the server
-requires a connection string. Other defaults: OpenAI
-`https://api.openai.com/v1/chat/completions` with `gpt-4o-mini`, no embeddings,
-no reranker.
+That's the minimum for the server — the memory store runs on Postgres + pgvector
+(SQLite has been removed), so a connection string is required. **AI providers
+(LLM / embeddings / reranker) are NOT set here** — after first boot, sign in to
+the dashboard as the seeded admin → **Intelligence → Models & providers** and add
+them there (stored encrypted in the DB, ADR-012).
 
 For the CLI, run `brainrouter` and complete the wizard — it writes
 `~/.config/brainrouter/config.json` with your provider, key, and model.
@@ -132,6 +136,15 @@ For the CLI, run `brainrouter` and complete the wizard — it writes
 ---
 
 ## LLM provider recipes
+
+> **Providers live in the DATABASE now (ADR-012).** Configure the LLM,
+> embeddings, and reranker in the **dashboard → AI Providers** (or
+> `POST /api/admin/providers`), and per-role sub-agent models under
+> **AI Providers → Subagents**. The `BRAINROUTER_*_LLM/EMBEDDING/RERANKER_*`
+> env vars below are **(a)** a handy reference for the endpoint/model values you
+> enter in the dashboard, and **(b)** a one-time seed — if they're still set on a
+> legacy deployment they're migrated into the DB on first boot, then ignored.
+> Don't set them for a fresh install.
 
 The chat LLM, the cognitive extractor, and the synthesis distillers can all
 target different OpenAI-compatible endpoints. Most users point them at one
@@ -272,7 +285,6 @@ embedding key. Any OpenAI-compatible `/v1/embeddings` endpoint works.
 BRAINROUTER_EMBEDDING_ENDPOINT=https://api.openai.com/v1/embeddings
 BRAINROUTER_EMBEDDING_API_KEY=sk-...       # falls back to BRAINROUTER_LLM_API_KEY
 BRAINROUTER_EMBEDDING_MODEL=text-embedding-3-small
-BRAINROUTER_EMBEDDING_DIMENSIONS=1536      # set to your model's width (3-small = 1536; server default 768)
 ```
 
 ### Custom embedding endpoints
@@ -284,12 +296,12 @@ LM Studio, vLLM, Infinity, BAAI/bge-* via TEI — anything that speaks
 BRAINROUTER_EMBEDDING_ENDPOINT=http://localhost:8081/v1/embeddings
 BRAINROUTER_EMBEDDING_API_KEY=local
 BRAINROUTER_EMBEDDING_MODEL=BAAI/bge-large-en-v1.5
-BRAINROUTER_EMBEDDING_DIMENSIONS=1024
 ```
 
-`BRAINROUTER_EMBEDDING_DIMENSIONS` falls back to **768** when unset, so set
-it to match your model's output width — a mismatch corrupts vector recall,
-and changing it later rebuilds the vector table.
+The **vector width is derived from the embedder automatically** — there is no
+dimension to configure. `cognitive_vec` adopts the running store's width at boot
+and re-dimensions to the embedder's real output length on the first write, so
+swapping embedders just re-embeds; nothing to set (or mismatch) by hand.
 
 ---
 
@@ -297,7 +309,7 @@ and changing it later rebuilds the vector table.
 
 A cross-encoder reranker rescores the top-K candidates before the final
 gate. Optional but recommended for noisy stores. The reranker only
-**reorders** — it never filters; that's the judge's job (next section).
+**reorders** — it never drops candidates.
 
 ### Cohere
 
@@ -319,66 +331,6 @@ BRAINROUTER_RERANKER_TOP_N=20
 
 Custom rerankers must accept `POST { model, query, documents: string[], top_n }`
 and return `{ results: [{ index, relevance_score }] }`.
-
----
-
-## Relevance judge
-
-The final retrieval stage. An LLM grades each rerank finalist with a
-binary verdict (`relevant: true | false`) plus a short reason, and any
-candidate the judge rejects is dropped before the memories ever reach the
-agent's context window. Off by default — opt in with the `_ENABLED` flag.
-
-When to enable it:
-
-- Your memory store has grown noisy and false-positive recalls keep
-  surfacing memories that share vocabulary with the query but aren't
-  actually about the same subject.
-- Accuracy matters more than ~500ms-1s of extra recall latency.
-
-How it works:
-
-1. The reranker hands the judge its top-K candidates (default 10).
-2. The judge sends them in a **single batched LLM call** with the query
-   and returns one verdict per candidate.
-3. Rejected candidates are dropped. If the judge rejects everything, the
-   `<relevant-memories>` block is omitted entirely — an empty block is
-   misleading.
-4. If the judge call errors or times out, the reranker output passes
-   through unchanged. A flaky judge never breaks recall.
-
-Verdicts (with reasons) land in `recallExplanation.judgeVerdicts` so you
-can audit and tune the prompt without code changes.
-
-### Default (reuses BRAINROUTER_LLM_*)
-
-```env
-BRAINROUTER_RELEVANCE_JUDGE_ENABLED=true
-# Everything else inherits from BRAINROUTER_LLM_* — endpoint, key, model.
-```
-
-### Dedicated fast model
-
-Use a cheaper model for judging so you don't pay GPT-4o prices on every
-recall:
-
-```env
-BRAINROUTER_RELEVANCE_JUDGE_ENABLED=true
-BRAINROUTER_RELEVANCE_JUDGE_MODEL=gpt-4o-mini
-BRAINROUTER_RELEVANCE_JUDGE_MAX_CANDIDATES=10
-BRAINROUTER_RELEVANCE_JUDGE_TIMEOUT_MS=15000
-```
-
-### Dedicated endpoint + key
-
-For a fully separate judging backend (e.g. a local Haiku replica):
-
-```env
-BRAINROUTER_RELEVANCE_JUDGE_ENABLED=true
-BRAINROUTER_RELEVANCE_JUDGE_ENDPOINT=http://localhost:1234/v1/chat/completions
-BRAINROUTER_RELEVANCE_JUDGE_API_KEY=lm-studio
-BRAINROUTER_RELEVANCE_JUDGE_MODEL=google/gemma-2-2b-it
-```
 
 ---
 
@@ -405,13 +357,20 @@ Each section header tags which file the vars belong in.
 
 | Var | Purpose |
 | --- | --- |
-| `BRAINROUTER_LLM_API_KEY` | **Server-side** LLM credential (the cognitive extractor). Falls back to `OPENAI_API_KEY`. Set in `brainrouter/.env` / `~/.config/brainrouter/server.env`. The **CLI** chat agent's credential is unrelated — it lives in `config.json` `llm.apiKey`, never an env var. |
+| `BRAINROUTER_DATABASE_URL` | Postgres + pgvector connection (the memory store). The server will not start without it. |
+| `BRAINROUTER_SECRET_KEY` | AES-256-GCM key that encrypts the DB-stored provider / integration keys. Required to save any secret from the dashboard. `openssl rand -base64 32`. |
+| `BRAINROUTER_JWT_SECRET` | Session signing (sessions reset every boot without it). Required for any shared/hosted deploy. |
 
-### LLM core — server `.env` (`brainrouter/.env`)
+The LLM credential is **not** required here — AI providers are configured in the
+dashboard (**Intelligence → Models & providers**) and stored in the DB (ADR-012).
 
-These configure the **MCP server's** cognitive extractor. The CLI chat agent
-is configured separately in `config.json` `llm.*` (see above). The
-CLI's LLM is the chat agent.
+### LLM core — server `.env` (`brainrouter/.env`) — SEED-ONLY / legacy
+
+> These `BRAINROUTER_LLM_*` vars are **not** the live config path. Set the LLM
+> provider in the dashboard instead; if these are still present on a legacy
+> deployment they're migrated into the DB once on first boot, then ignored. Kept
+> here as a reference for the endpoint/model values you'll enter in the dashboard.
+> (The CLI chat agent is configured separately in `config.json` `llm.*`.)
 
 | Var | Default | Purpose |
 | --- | --- | --- |
@@ -419,23 +378,27 @@ CLI's LLM is the chat agent.
 | `BRAINROUTER_LLM_MODEL` | `gpt-4o-mini` | Chat model. |
 | `BRAINROUTER_EXTRACTION_MODEL` (`brainrouter/.env`) | inherits | Cheaper/faster model for cognitive extraction. |
 | `BRAINROUTER_SYNTHESIS_MODEL` (`brainrouter/.env`) | inherits | Smarter model for scene/identity distillation. |
-| `BRAINROUTER_LLM_TIMEOUT_MS` | _(none — no timeout)_ | Per-call LLM timeout (extraction / synthesis / judge). **Default: none — the call waits for the server** (a local LLM or a saturated backend can take minutes; aborting just drops the extraction). Set a positive ms value to bound all generative calls. Not propagated CLI → MCP. |
+| `BRAINROUTER_LLM_TIMEOUT_MS` | _(none — no timeout)_ | Per-call LLM timeout (extraction / synthesis). **Default: none — the call waits for the server** (a local LLM or a saturated backend can take minutes; aborting just drops the extraction). Set a positive ms value to bound all generative calls. Not propagated CLI → MCP. |
 | `BRAINROUTER_LOCAL_LLM_MIN_TIMEOUT_MS` | _(none)_ | **Opt-in** timeout floor for **local** backends (`localhost`/`127.0.0.1`/`::1`). Unset = no floor (wait for the server). Set e.g. `600000` to floor local-endpoint calls at 10 min. |
 | `BRAINROUTER_EXTRACTION_TIMEOUT_MS` | inherits `BRAINROUTER_LLM_TIMEOUT_MS` (none) | Override the per-call timeout for cognitive-extraction calls specifically. Default none — set a positive ms value to bound. |
 | `BRAINROUTER_LLM_MAX_CONCURRENT` | `2` | Global cap on in-flight LLM calls **from the MCP process**; `<1` = uncapped. 1 for single-GPU LM Studio, 16+ for cloud. (The CLI pool is a separate `cli.*` knob.) |
 | `BRAINROUTER_INLINE_EXTRACTION` | _(unset → deferred)_ | `on` blocks the `memory_capture_turn` reply on cognitive extraction (synchronous; debug only). Default backgrounds it so the MCP reply never waits on the LLM. |
 
-### Embedding — `brainrouter/.env`
+### Embedding — `brainrouter/.env` — SEED-ONLY / legacy (set the embedder in the dashboard)
 
 | Var | Default | Purpose |
 | --- | --- | --- |
 | `BRAINROUTER_EMBEDDING_ENDPOINT` | `https://api.openai.com/v1/embeddings` | OpenAI-compatible `/v1/embeddings`. Vector search stays inactive until an embedding key is configured. |
 | `BRAINROUTER_EMBEDDING_API_KEY` | inherits `BRAINROUTER_LLM_API_KEY` | Embedding credential. |
 | `BRAINROUTER_EMBEDDING_MODEL` | `text-embedding-3-small` | e.g. `text-embedding-3-small`, `BAAI/bge-large-en-v1.5`. |
-| `BRAINROUTER_EMBEDDING_DIMENSIONS` | `768` | Vector width. Code falls back to **768** when unset — set it to match your model (OpenAI `text-embedding-3-small` is natively 1536). Changing it rebuilds the vector table. |
 | `BRAINROUTER_EMBEDDING_TIMEOUT_MS` | _(none — no timeout)_ | Per-call embedding timeout. **Default: none — the embed call waits for the server** rather than degrading recall to FTS-only on a slow-but-alive embedder (0.4.15). Set a positive ms value (floored to 1000) as an opt-in backstop. |
 
-### Reranker — `brainrouter/.env`
+> The vector **width** is DB-driven — derived from the embedder automatically
+> (no `BRAINROUTER_EMBEDDING_DIMENSIONS` any more). `cognitive_vec` adopts the
+> running store's width at boot and re-dimensions to the embedder's real output
+> length on the first write.
+
+### Reranker — `brainrouter/.env` — SEED-ONLY / legacy (set the reranker in the dashboard); the tuning knobs below are live
 
 | Var | Default | Purpose |
 | --- | --- | --- |
@@ -451,7 +414,7 @@ CLI's LLM is the chat agent.
 | `BRAINROUTER_RERANKER_MAX_DOC_CHARS` | `1500` | Per-doc chars sent to the cross-encoder (0.4.14). Covers a whole chunk instead of the old hardcoded 700; clamped [100, 8000]. Raise for larger-context rerankers, lower for strict 512-token ones. |
 | `BRAINROUTER_RECALL_RERANK_BLEND_ALPHA` | `1.0` | MEM-BLEND (0.4.14): weight of the cross-encoder relevance vs the pre-rerank score (RRF + half-life recency), by **reciprocal rank** (cross-encoder scores are bimodal, so a raw-score blend is a no-op). `1` = pure reranker; `0` = pure retriever order. Default **1.0** (trust the reranker — on reranker-favorable queries blending in the weaker lexical order hurts); MEM-ROUTE lowers it per query type so the retriever/recency wins for reflective/synthesis. Clamp [0,1]. |
 | `BRAINROUTER_RECALL_RERANK_CHAR_BUDGET` | `30000` | MEM-RERANK2 (0.4.14): total character budget sent to the cross-encoder (latency ∝ Σ doc-chars). Budgeting by chars rather than a fixed count adapts to doc length — long-doc corpora send ~20 candidates (cuts long-session latency ~1.5×: 22.7s→14.8s, recall fully held), short-doc corpora send the whole pool (deep gold still rescued). The tail keeps its pre-score order and is appended (no recall loss). Clamp [1500, 500000]. |
-| `BRAINROUTER_RECALL_QUERY_ROUTING` | `on` | MEM-ROUTE (0.4.14): query-type routing. Reflective/analytical queries ("most likely sentiment", "overall pattern", "how do they feel") are detected by a zero-cost heuristic and **skip the cross-encoder** — its surface-similarity scoring demotes their low-overlap gold, and the retriever+judge path measurably beats it there (os-rm `full` R-any@10 0.73→0.87). Factual/conversational queries keep the reranker. `off` to always rerank. |
+| `BRAINROUTER_RECALL_QUERY_ROUTING` | `on` | MEM-ROUTE (0.4.14): query-type routing. Reflective/analytical queries ("most likely sentiment", "overall pattern", "how do they feel") are detected by a zero-cost heuristic and **skip the cross-encoder** — its surface-similarity scoring demotes their low-overlap gold, and the plain retriever path measurably beats it there (os-rm `full` R-any@10 0.73→0.87). Factual/conversational queries keep the reranker. `off` to always rerank. |
 
 ### Recall pipeline widths — `brainrouter/.env`
 
@@ -462,24 +425,10 @@ no-cross-encoder diversity selector.
 | --- | --- | --- |
 | `BRAINROUTER_RECALL_FTS_LIMIT` | `15` | Stage-1 FTS5/BM25 keyword candidate pool. Clamp [1, 200]. |
 | `BRAINROUTER_RECALL_VEC_LIMIT` | `15` | Stage-1 vector candidate pool. Clamp [1, 200]. |
-| `BRAINROUTER_RECALL_RERANK_POOL` | `20` | Merged RRF pool fed to the reranker/judge. Clamp [1, 200]. |
+| `BRAINROUTER_RECALL_RERANK_POOL` | `20` | Merged RRF pool fed to the reranker. Clamp [1, 200]. |
 | `BRAINROUTER_RECALL_TOP_RESULTS` | `5` | Final result count when the reranker is off. Clamp [1, 200]. |
 | `BRAINROUTER_RECALL_DIVERSITY` | `on` | MMR diversity selection on the no-cross-encoder path. `off` ranks by score alone. |
 | `BRAINROUTER_RECALL_DIVERSITY_LAMBDA` | `0.7` | Diversity↔relevance tradeoff (0 = diversity-only, 1 = relevance-only). Clamp [0, 1]. |
-
-### Relevance judge — `brainrouter/.env`
-
-| Var | Default | Purpose |
-| --- | --- | --- |
-| `BRAINROUTER_RELEVANCE_JUDGE_ENABLED` | `false` | Master flag. When false the judge stage is skipped entirely. |
-| `BRAINROUTER_RELEVANCE_JUDGE_API_KEY` | inherits `BRAINROUTER_LLM_API_KEY` | Judge credential. |
-| `BRAINROUTER_RELEVANCE_JUDGE_ENDPOINT` | inherits `BRAINROUTER_LLM_ENDPOINT` | OpenAI-compatible chat-completions endpoint. |
-| `BRAINROUTER_RELEVANCE_JUDGE_MODEL` | inherits `BRAINROUTER_LLM_MODEL` | Model id. A fast/cheap model is usually right. |
-| `BRAINROUTER_RELEVANCE_JUDGE_MAX_CANDIDATES` | `10` | Max candidates batched into a single judge call. |
-| `BRAINROUTER_RELEVANCE_JUDGE_TIMEOUT_MS` | _(none — no timeout)_ | Per-call judge timeout. **Default: none — waits for the judge LLM** (falls back to `BRAINROUTER_LLM_TIMEOUT_MS`). Set a positive ms value to bound; on a genuine failure the reranker output passes through unchanged. |
-| `BRAINROUTER_RELEVANCE_JUDGE_MIN_KEEP` | `1` | Result floor (0.4.14): if the judge approves fewer than this, backfill from the top pre-judge results so recall never collapses to 0 on long records it can't verify. `0` = old collapse-to-zero. Short-record precision is unaffected. Only applies in `filter` mode. |
-| `BRAINROUTER_RELEVANCE_JUDGE_MODE` | `reorder` | How verdicts apply (MEM-JUDGE2, 0.4.14). `reorder` (default) keeps every candidate and promotes the approved ones to the front — recall-safe (top-K gains precision, recall@k never drops below the retriever). `filter` drops the rejects (legacy, floored by `MIN_KEEP`). |
-| `BRAINROUTER_RELEVANCE_JUDGE_DOC_CHARS` | `1200` | Chars of each candidate shown to the judge (MEM-JUDGE2, 0.4.14). The old hardcoded 600 showed ~40% of a 1500-char chunk, so the judge rejected text it never saw. Clamp [200, 4000]. |
 
 ### Memory engine — `brainrouter/.env`
 
@@ -924,6 +873,41 @@ Tuning:
 - Cloud APIs: `16+`.
 
 ---
+
+## Vulnerability intelligence
+
+BrainRouter keeps a durable global CVE catalog current in the background and
+uses organization-scoped inventories for exact repository exposure. NVD is the
+catalog source, CISA KEV supplies exploited-in-the-wild priority, FIRST EPSS
+supplies probability, and OSV matches exact package versions. Catalog presence
+or a product-name mention never proves that a repository is affected.
+
+The job runner schedules a source refresh automatically. A production Compose
+deployment runs this responsibility in the dedicated `worker` service; a
+single-process deployment may leave `BRAINROUTER_JOB_RUNNER=on`. Source cursors,
+last success, failures, and checksums/ETags where available are stored in
+PostgreSQL and displayed at Dashboard → Vulnerabilities.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `NVD_API_KEY` | _(unset)_ | Optional server-only NVD API key. Recommended for production rate limits; never returned to clients. |
+| `BRAINROUTER_VULNERABILITY_SYNC` | `on` | Enables scheduled NVD, KEV, and EPSS refresh plus watched-inventory re-evaluation. Set `off` only for an intentional maintenance stop. |
+| `BRAINROUTER_VULNERABILITY_SYNC_INTERVAL_MS` | `900000` | Eligibility interval for a normal source refresh. The shared maintenance runner checks on its own bounded cadence. |
+| `BRAINROUTER_VULNERABILITY_PARTIAL_SYNC_INTERVAL_MS` | `60000` | Eligibility interval while an NVD pagination/window cursor is incomplete. |
+
+Manual source refresh requires `vulnerabilities:manage`. Repository scanning
+requires `vulnerabilities:scan` and current repository access; reading the
+catalog/findings requires `vulnerabilities:read`. The scanner accepts supported
+lockfiles/manifests or CycloneDX SBOMs, persists only exact component versions,
+and executes OSV matching as a background `vulnerability_scan` job. A future-CVE
+watch rechecks that stored inventory after feed refresh; error rows remain
+visible and retry through the durable job queue.
+
+Agents do not need a separate toggle. CVE/security/advisory/exploit/affected-
+version turns automatically receive a bounded `vulnerability_intelligence`
+briefing from the persisted catalog, including freshness warnings. Security and
+code reviews use the same catalog and exact repository matches without fetching
+public feeds on the review request path.
 
 ## Diagnostics
 

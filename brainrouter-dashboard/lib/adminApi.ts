@@ -24,6 +24,8 @@ interface FetchOpts {
   signal?: AbortSignal;
 }
 
+const DASHBOARD_REQUEST_TIMEOUT_MS = 10_000;
+
 /** Shared authenticated request path for dashboard-only API surfaces that have
  * not landed in the public SDK yet. Keeping refresh/retry and org pinning here
  * prevents feature pages from growing subtly different auth behavior. */
@@ -31,7 +33,10 @@ export async function authFetch<T = unknown>(path: string, opts: FetchOpts = {})
   const doFetch = (token: string): Promise<Response> =>
     fetch(`${BASE_URL}${path}`, {
       method: opts.method ?? "GET",
-      signal: opts.signal,
+      // Never leave a dashboard panel (or the global auth bootstrap) spinning
+      // on the browser's multi-minute socket timeout. Callers that own a
+      // shorter cancellation policy can still provide their own signal.
+      signal: opts.signal ?? AbortSignal.timeout(DASHBOARD_REQUEST_TIMEOUT_MS),
       headers: {
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -48,13 +53,15 @@ export async function authFetch<T = unknown>(path: string, opts: FetchOpts = {})
   if (!res.ok) {
     let msg = `Request failed (${res.status})`;
     try { const j = await res.json(); if (j?.error) msg = j.error; } catch { /* keep default */ }
-    throw new Error(msg);
+    const error = new Error(msg) as Error & { status: number };
+    error.status = res.status;
+    throw error;
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
 
-export type ProviderKind = "llm" | "embedding" | "reranker" | "judge";
+export type ProviderKind = "llm" | "embedding" | "reranker";
 
 export interface ProviderConfig {
   id: string;
@@ -182,7 +189,7 @@ export interface ReviewJob {
   findings: number | null;
   blocking: number | null;
   findingsDetail?: { file: string; line?: number; severity: string; title?: string; summary?: string; status?: string; cwe?: string; preExisting?: boolean; suggestable?: boolean }[];
-  progress?: { ts: string; kind: string; msg: string; data?: Record<string, unknown> }[];
+  progress?: { ts: string; kind: string; msg: string; data?: Record<string, unknown>; traceId?: string; spanId?: string; parentSpanId?: string; role?: string; status?: "pending" | "running" | "succeeded" | "failed" | "skipped"; durationMs?: number }[];
   skipped: string | null;
   error: string | null;
   updatedAt: string;
@@ -190,7 +197,8 @@ export interface ReviewJob {
 }
 
 export interface ReviewPullRequest {
-  repo: string; number: number; title: string; author: string | null; headSha: string | null; updatedAt: string | null; url: string | null;
+  repo: string; number: number; title: string; author: string | null; headSha: string | null; updatedAt: string | null; createdAt: string | null; url: string | null;
+  state: string; draft: boolean; comments: number; labels: string[];
   availability: RepositoryReviewAvailability;
   security: ReviewJob | null; code: ReviewJob | null;
 }
@@ -199,6 +207,25 @@ export interface ReviewPullRequestDetail {
   availability: RepositoryReviewAvailability;
   checks: { id?: number; name?: string; conclusion?: string | null; status?: string; html_url?: string }[];
   reviews: ReviewJob[];
+}
+
+export interface ReviewIssue {
+  reviewId: string;
+  lens: ReviewJob["lens"];
+  reviewStatus: string;
+  repo: string | null;
+  prNumber: number | null;
+  issueStatus: string;
+  finding: NonNullable<ReviewJob["findingsDetail"]>[number];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReviewIssuesResponse {
+  issues: ReviewIssue[];
+  total: number;
+  severity: { critical: number; high: number; medium: number; low: number; info: number };
+  nextCursor: string | null;
 }
 
 export interface ReviewSummary {
@@ -289,12 +316,29 @@ export const adminApi = {
     authFetch<{ reviews: ReviewJob[]; canRun: boolean }>(`/api/admin/reviews/jobs?limit=${limit}`, { orgId }),
   reviewSummary: (orgId?: string, days = 30) =>
     authFetch<ReviewSummary>(`/api/admin/reviews/summary?days=${days}`, { orgId }),
-  listReviewPrs: (orgId?: string) => authFetch<{ prs: ReviewPullRequest[]; canRun: boolean }>("/api/admin/reviews/prs", { orgId }),
+  listReviewPrs: (orgId?: string, refresh = false) => authFetch<{
+    prs: ReviewPullRequest[]; canRun: boolean; cache?: { fresh: boolean; refreshing: boolean }; partial?: boolean; failedRepositories?: string[];
+  }>(`/api/admin/reviews/prs${refresh ? "?refresh=1" : ""}`, { orgId }),
   getReviewPr: (repo: string, number: number, orgId?: string) => {
     const [owner, name] = repo.split("/");
     return authFetch<{ pr: ReviewPullRequestDetail; canRun: boolean }>(`/api/admin/reviews/prs/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/${number}`, { orgId });
   },
   getReviewJob: (id: string, orgId?: string) => authFetch<{ review: ReviewJob; canRun: boolean }>(`/api/admin/reviews/jobs/${encodeURIComponent(id)}`, { orgId }),
+  getReviewPrActivity: (repo: string, number: number, orgId?: string) => {
+    const [owner, name] = repo.split("/");
+    return authFetch<{ reviews: ReviewJob[]; canRun: boolean }>(`/api/admin/reviews/prs/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/${number}/activity`, { orgId });
+  },
+  listReviewIssues: (filters: { limit?: number; severity?: string; repo?: string; status?: string; q?: string; cursor?: string; sort?: "newest" | "oldest" }, orgId?: string, signal?: AbortSignal) => {
+    const query = new URLSearchParams();
+    if (filters.limit) query.set("limit", String(filters.limit));
+    if (filters.severity && filters.severity !== "all") query.set("severity", filters.severity);
+    if (filters.repo && filters.repo !== "all") query.set("repo", filters.repo);
+    if (filters.status && filters.status !== "all") query.set("status", filters.status);
+    if (filters.q?.trim()) query.set("q", filters.q.trim());
+    if (filters.cursor) query.set("cursor", filters.cursor);
+    if (filters.sort && filters.sort !== "newest") query.set("sort", filters.sort);
+    return authFetch<ReviewIssuesResponse>(`/api/admin/reviews/issues?${query.toString()}`, { orgId, signal });
+  },
   runReview: (body: { repo: string; prNumber: number; lens: "security" | "code" | "pentest" | "both" }, orgId?: string) =>
     authFetch<{ jobs: { id: string; lens: "security" | "code" | "pentest" }[] }>("/api/admin/reviews/run", { method: "POST", body, orgId }),
   // ADR-016 — the deployment's GitHub OAuth App (for per-user "Connect GitHub").

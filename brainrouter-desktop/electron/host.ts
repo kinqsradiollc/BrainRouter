@@ -30,6 +30,7 @@ import {
   fetchAccountModelCatalog,
   emptyAccountModelCatalog,
   resolveBrainRouterAccountApi,
+  resolveBrainRouterAccountBaseUrl,
   type BrainRouterAccountContext,
   type DesktopAccountModelCatalog,
 } from './accountIntegration.js';
@@ -331,33 +332,35 @@ async function main(): Promise<void> {
   }
   let accountModelCatalog: DesktopAccountModelCatalog | null = null;
   let accountModelCatalogAt = 0;
+  let accountModelCatalogRefresh: Promise<DesktopAccountModelCatalog> | null = null;
   const accountContext = (): BrainRouterAccountContext | null => {
-    const baseUrl = String((loadConfig() as typeof accountConfig).cli?.account?.url ?? '').trim().replace(/\/+$/, '');
-    return baseUrl && accountAccessToken
-      ? { baseUrl, apiKey: accountAccessToken, orgId: '' }
+    const fresh = loadConfig();
+    const configured = resolveBrainRouterAccountApi(fresh);
+    const baseUrl = configured?.baseUrl ?? resolveBrainRouterAccountBaseUrl(fresh);
+    // Prefer the durable per-user API key from the active BrainRouter profile.
+    // The secure access token is normally a short-lived JWT and may expire while
+    // the desktop stays open; it remains a fallback for profiles without a key.
+    const apiKey = configured?.apiKey ?? accountAccessToken;
+    return baseUrl && apiKey
+      ? { baseUrl, apiKey, orgId: '' }
       : null;
   };
   // Synchronous, no-network read of the last-known managed catalog — lets the
   // config snapshot return instantly (BYOK/router models render immediately) while
   // the real refresh runs in the background.
   const peekAccountModelCatalog = (): DesktopAccountModelCatalog =>
-    accountModelCatalog ?? emptyAccountModelCatalog(Boolean(accountAccessToken));
+    accountModelCatalog ?? emptyAccountModelCatalog(accountContext() !== null);
   // Keep config.providers.brainrouter synced to the managed catalog so the router
   // resolves BrainRouter at turn time. Runs on the (background) catalog refresh,
   // NOT on the snapshot critical path. Field-level change detection avoids churn.
   const syncBrainrouterProvider = (catalog: DesktopAccountModelCatalog): void => {
     try {
       const cfg = loadConfig() as typeof accountConfig & { providers?: Record<string, LLMConfig>; servers?: Record<string, { identity?: string; apiKey?: string }> };
-      const accountUrl = String(cfg.cli?.account?.url ?? '').trim().replace(/\/+$/, '');
-      const brainServerId = Object.keys(cfg.servers ?? {}).find((id) => {
-        const s = cfg.servers?.[id];
-        return s?.identity === 'brainrouter' || /^brainrouter/i.test(id);
-      });
-      const brApiKey = brainServerId ? cfg.servers?.[brainServerId]?.apiKey : undefined;
+      const account = resolveBrainRouterAccountApi(cfg);
       const ids = catalog.signedIn ? catalog.models.map((m) => m.id) : [];
       const providers = (cfg.providers = (cfg.providers ?? {}) as Record<string, LLMConfig>);
-      const desired: LLMConfig | undefined = (accountUrl && brApiKey && ids.length)
-        ? { provider: 'brainrouter', endpoint: `${accountUrl}/v1/chat/completions`, apiKey: brApiKey, model: ids[0], models: ids }
+      const desired: LLMConfig | undefined = (account && ids.length)
+        ? { provider: 'brainrouter', endpoint: `${account.baseUrl}/v1/chat/completions`, apiKey: account.apiKey, model: ids[0], models: ids }
         : undefined;
       const current = providers.brainrouter;
       const unchanged = !!desired && !!current && current.endpoint === desired.endpoint && current.apiKey === desired.apiKey
@@ -367,15 +370,26 @@ async function main(): Promise<void> {
     } catch { /* best effort — the picker still works from the live catalog */ }
   };
   const refreshAccountModelCatalog = async (force = false): Promise<DesktopAccountModelCatalog> => {
-    if (force || !accountAccessToken) {
-      accountAccessToken = await secretBridge?.get('account:access-token').catch(() => undefined);
-    }
     const now = Date.now();
     if (!force && accountModelCatalog && now - accountModelCatalogAt < 30_000) return accountModelCatalog;
-    accountModelCatalog = await fetchAccountModelCatalog(accountContext(), accountModelCatalog);
-    accountModelCatalogAt = now;
-    syncBrainrouterProvider(accountModelCatalog);
-    return accountModelCatalog;
+    // Config snapshot, the 30s renderer poll, and opening the model menu can all
+    // request a refresh together. Coalesce them into one bounded network call.
+    if (accountModelCatalogRefresh) return accountModelCatalogRefresh;
+    const pending = (async (): Promise<DesktopAccountModelCatalog> => {
+      if (force || !accountAccessToken) {
+        accountAccessToken = await secretBridge?.get('account:access-token').catch(() => undefined);
+      }
+      accountModelCatalog = await fetchAccountModelCatalog(accountContext(), accountModelCatalog);
+      accountModelCatalogAt = Date.now();
+      syncBrainrouterProvider(accountModelCatalog);
+      return accountModelCatalog;
+    })();
+    accountModelCatalogRefresh = pending;
+    try {
+      return await pending;
+    } finally {
+      if (accountModelCatalogRefresh === pending) accountModelCatalogRefresh = null;
+    }
   };
   let llm: LLMConfig = config.llm || { provider: 'openai', model: 'gpt-4o-mini', apiKey: '' };
   const mcpClient = new McpClientPool();

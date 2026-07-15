@@ -6,7 +6,7 @@ deep dives.
 
 - **[memory-engine.md](memory-engine.md)** — the 4-layer stack, forgetting
   curve, ACE reinforcement loop, recall pipeline (FTS5 + vector + filepath
-  → RRF → priority blend → rerank → relevance judge → graph), ranking
+  → RRF → priority blend → rerank → graph), ranking
   blend, extraction robustness.
 - **[cli.md](cli.md)** — the terminal agent: startup banner & statusline,
   `/where` and `/quiet`, tool loop, access modes, `/compact`, hookify

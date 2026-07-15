@@ -123,6 +123,11 @@ AWSPrep
 FULL_TASKS_*.md
 FULL_TASKS_*.MD
 walkthrough.md
+IMPLEMENTATION_PLAN_*.md
+*_CODEX_BRIEF.md
+MOTOR_CORTEX_*.md
+GREP_SEARCH_*.md
+task-*.md
 
 # Local-only research/audit artifacts + scratch (consult, never commit)
 audit-*.json

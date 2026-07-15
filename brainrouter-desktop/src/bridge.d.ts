@@ -4,6 +4,13 @@ declare global {
   interface Window {
     /** The preload bridge — the renderer's only capability surface. */
     brainrouter: {
+      /** Credential-free local identity available before the utility host boots. */
+      getBootstrapState?(): {
+        accountStatus: {
+          signedIn: boolean;
+          account: { url: string; userId: string; displayName: string; email: string } | null;
+        };
+      } | null;
       send(command: AgentCommand): void;
       onEvent(listener: (msg: AgentEventMessage) => void): () => void;
       /** Project order/membership updates from main. May be absent on older preloads. */

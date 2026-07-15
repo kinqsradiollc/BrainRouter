@@ -26,6 +26,7 @@ import {
   resolveBrainRouterAccountContext,
   resolveDesktopAccountIdentity,
   startAccountConnectorOAuth,
+  timeoutFetch,
 } from '../accountIntegration.js';
 // host/helpers — pure, closure-free helpers (config scrubbing, Track↔GitHub
 // normalization, computer-use/secret bridges, endpoint model probing, transcript
@@ -455,6 +456,23 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       },
     };
   };
+  // PERF — the connector document/permission stores can be large. Keep their
+  // counts and previews out of the app-wide config snapshot and only scan them
+  // when Settings -> Data connectors is actually visible.
+  const connectorSnapshot = () => {
+    const items = listConnectors(workspaceRoot);
+    return {
+      catalog: listConnectorCatalog(),
+      items,
+      documentCounts: Object.fromEntries(items.map((connector) => [connector.id, countConnectorDocuments(workspaceRoot, { connectorId: connector.id })])),
+      permissionCounts: Object.fromEntries(items.map((connector) => [connector.id, countConnectorPermissions(workspaceRoot, { connectorId: connector.id })])),
+      runPreviews: Object.fromEntries(items.map((connector) => [connector.id, listConnectorRuns(workspaceRoot, connector.id).slice(0, 3)])),
+      documentPreviews: Object.fromEntries(items.map((connector) => [
+        connector.id,
+        retrieveConnectorSlimDocuments(workspaceRoot, { connectorId: connector.id, limit: 3, maxSnippetChars: 180 }),
+      ])),
+    };
+  };
   return {
       // Read-only surfaces — same pure modules the TUI commands use.
       // DESK-6m — sidebar sessions merged with their UI meta (title override,
@@ -531,6 +549,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const status = typeof args.status === 'string' ? args.status as never : undefined;
         return { connectors: listConnectors(workspaceRoot, { source, status }) };
       },
+      'connectors-snapshot': connectorSnapshot,
       // ADR-016 C5 — migrate this workspace's LOCAL connectors to the signed-in
       // backend (server-only model). Pushes the non-secret definition of each local
       // connector to POST /api/connectors; credentials are NOT shipped — the user
@@ -2121,13 +2140,6 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           connectors: {
             catalog: listConnectorCatalog(),
             items: connectorItems,
-            documentCounts: Object.fromEntries(connectorItems.map((connector) => [connector.id, countConnectorDocuments(workspaceRoot, { connectorId: connector.id })])),
-            permissionCounts: Object.fromEntries(connectorItems.map((connector) => [connector.id, countConnectorPermissions(workspaceRoot, { connectorId: connector.id })])),
-            runPreviews: Object.fromEntries(connectorItems.map((connector) => [connector.id, listConnectorRuns(workspaceRoot, connector.id).slice(0, 3)])),
-            documentPreviews: Object.fromEntries(connectorItems.map((connector) => [
-              connector.id,
-              retrieveConnectorSlimDocuments(workspaceRoot, { connectorId: connector.id, limit: 3, maxSnippetChars: 180 }),
-            ])),
           },
           permissionRules: { allow: cli?.permissions?.allow ?? [], deny: cli?.permissions?.deny ?? [] },
           hooks: readHooks(workspaceRoot),
@@ -3470,9 +3482,9 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         // signing in stays simple: email + password.
         const baseUrl = (process.env.BRAINROUTER_URL ?? 'http://localhost:3747').replace(/\/+$/, '');
         if (!email || !password) return { ok: false, error: 'Email and password are required.' };
-        let res: Response;
+        let res: Awaited<ReturnType<typeof timeoutFetch>>;
         try {
-          res = await fetch(`${baseUrl}/api/auth/signin`, {
+          res = await timeoutFetch(`${baseUrl}/api/auth/signin`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email, password }),
           });
@@ -3509,11 +3521,17 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         fresh.cli.account = { ...account, prevBrain };
         saveConfig(fresh as never);
         _resetCliKnobsCache();
-        try { await mcpClient.disconnectOne(brainId); } catch { /* not connected */ }
-        try { await mcpClient.connectOne(brainId, fresh.servers[brainId] as never, loadConfig().llm ?? getLlm(), 5_000); }
-        catch { return { ok: false, error: `Signed in, but couldn't reach the brain at ${mcpUrl}. Is the backend running?` }; }
-        void ensureBrainSession(mcpClient, workspaceRoot); // show this device on the Account page
-        await refreshAccountModelCatalog(true);
+        // Credential persistence is the sign-in commit point. MCP reconnect and
+        // model-catalog hydration are independent background work: neither may
+        // keep the Account screen spinning or hide already-usable BYOK models.
+        void (async () => {
+          try { await mcpClient.disconnectOne(brainId); } catch { /* not connected */ }
+          try {
+            await mcpClient.connectOne(brainId, fresh.servers![brainId] as never, loadConfig().llm ?? getLlm(), 5_000);
+            await ensureBrainSession(mcpClient, workspaceRoot); // show this device on the Account page
+          } catch { /* normal offline degradation; reconnect remains best-effort */ }
+        })();
+        void refreshAccountModelCatalog(true);
         return { ok: true, account };
       },
       'action:auth-signout': async () => {
@@ -3542,23 +3560,32 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         return { ok: true };
       },
       'auth-status': () => {
-        const account = (loadConfig() as { cli?: { account?: { url?: string; userId?: string; displayName?: string; email?: string } } }).cli?.account;
+        const fresh = loadConfig() as { cli?: { account?: { url?: string; userId?: string; displayName?: string; email?: string } }; servers?: Record<string, { identity?: string; apiKey?: string; url?: string }> };
+        const account = fresh.cli?.account;
+        const connected = resolveBrainRouterAccountApi(fresh);
         return account
           ? { signedIn: true, account: { url: account.url ?? '', userId: account.userId ?? '', displayName: account.displayName ?? '', email: account.email ?? '' } }
-          : { signedIn: false, account: null };
+          : connected
+            ? { signedIn: true, account: { url: connected.baseUrl, userId: '', displayName: 'BrainRouter account', email: '' } }
+            : { signedIn: false, account: null };
       },
       // Account overview — the org id + the account's active sessions/devices, read
       // from the backend with the signed-in apiKey (both endpoints are requireAnyAuth).
       'account-overview': async () => {
-        const cfg = loadConfig() as { cli?: { account?: { url?: string } }; servers?: Record<string, { identity?: string; apiKey?: string }> };
-        const base = String(cfg.cli?.account?.url ?? '').replace(/\/+$/, '');
-        const bId = Object.keys(cfg.servers ?? {}).find((k) => (cfg.servers![k]?.identity === 'brainrouter') || /^brainrouter/i.test(k));
-        const apiKey = bId ? String(cfg.servers![bId]?.apiKey ?? '') : '';
-        if (!base || !apiKey) return { signedIn: false, sessions: [] };
-        const h = { Authorization: `Bearer ${apiKey}` };
+        const account = resolveBrainRouterAccountApi(loadConfig());
+        if (!account) return { signedIn: false, sessions: [] };
+        const h = { Authorization: `Bearer ${account.apiKey}` };
         const out: { signedIn: true; orgId?: string; orgName?: string; plan?: string; role?: string; sessions: Array<{ clientKind: string; workspaceRoot?: string; startedAt?: string; lastHeartbeatAt?: string }> } = { signedIn: true, sessions: [] };
+        // These are independent account cards. Fetch them concurrently with the
+        // same bounded transport as the catalog so one unhealthy endpoint cannot
+        // hold the entire signed-in settings view hostage.
+        const [orgResult, sessionResult] = await Promise.allSettled([
+          timeoutFetch(`${account.baseUrl}/api/orgs`, { headers: h }),
+          timeoutFetch(`${account.baseUrl}/api/sessions?includeStale=true`, { headers: h }),
+        ]);
         try {
-          const r = await fetch(`${base}/api/orgs`, { headers: h });
+          if (orgResult.status !== 'fulfilled') throw orgResult.reason;
+          const r = orgResult.value;
           if (r.ok) {
             const j = await r.json() as { orgs?: Array<{ orgId: string; name?: string; plan?: string; role?: string; isDefault?: boolean }> };
             const org = (j.orgs ?? []).find((o) => o.isDefault) ?? (j.orgs ?? [])[0];
@@ -3566,7 +3593,8 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           }
         } catch { /* org id optional */ }
         try {
-          const r = await fetch(`${base}/api/sessions?includeStale=true`, { headers: h });
+          if (sessionResult.status !== 'fulfilled') throw sessionResult.reason;
+          const r = sessionResult.value;
           if (r.ok) {
             const j = await r.json() as { sessions?: Array<{ clientKind?: string; workspaceRoot?: string; startedAt?: string; lastHeartbeatAt?: string }> };
             out.sessions = (j.sessions ?? []).map((s) => ({ clientKind: s.clientKind ?? 'unknown', workspaceRoot: s.workspaceRoot, startedAt: s.startedAt, lastHeartbeatAt: s.lastHeartbeatAt }));
@@ -3620,26 +3648,35 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // client (CLI, other desktops) using the old key is invalidated, then re-key
       // THIS device so it stays signed in. Refreshes the short-lived jwt first.
       'action:logout-all-devices': async () => {
-        const cfg = loadConfig() as { cli?: { account?: { url?: string; jwt?: string; refreshToken?: string } }; servers?: Record<string, { identity?: string; apiKey?: string }> };
-        const base = String(cfg.cli?.account?.url ?? '').replace(/\/+$/, '');
+        const cfg = loadConfig() as { cli?: { account?: { url?: string } }; servers?: Record<string, { identity?: string; apiKey?: string }> };
+        const account = resolveBrainRouterAccountApi(cfg);
+        const base = account?.baseUrl ?? '';
         const bId = Object.keys(cfg.servers ?? {}).find((k) => (cfg.servers![k]?.identity === 'brainrouter') || /^brainrouter/i.test(k));
-        const refreshToken = String(cfg.cli?.account?.refreshToken ?? '');
-        let jwt = String(cfg.cli?.account?.jwt ?? '');
+        const [storedAccess, storedRefresh] = secretBridge
+          ? await Promise.all([
+            secretBridge.get('account:access-token').catch(() => undefined),
+            secretBridge.get('account:refresh-token').catch(() => undefined),
+          ])
+          : [undefined, undefined];
+        const refreshToken = String(storedRefresh ?? '');
+        let jwt = String(storedAccess ?? '');
         if (!base || !bId || (!jwt && !refreshToken)) return { ok: false, error: 'Sign out and back in, then try again.' };
         if (refreshToken) {
           try {
-            const rr = await fetch(`${base}/api/auth/refresh`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken }) });
+            const rr = await timeoutFetch(`${base}/api/auth/refresh`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken }) });
             if (rr.ok) {
               const rj = await rr.json() as { jwt?: string; refreshToken?: string };
               if (rj.jwt) jwt = rj.jwt;
-              const f = loadConfig() as { cli?: { account?: Record<string, unknown> } };
-              if (f.cli?.account) { if (rj.jwt) f.cli.account.jwt = rj.jwt; if (rj.refreshToken) f.cli.account.refreshToken = rj.refreshToken; saveConfig(f as never); }
+              if (secretBridge) {
+                if (rj.jwt) await secretBridge.set('account:access-token', rj.jwt);
+                if (rj.refreshToken) await secretBridge.set('account:refresh-token', rj.refreshToken);
+              }
             }
           } catch { /* use existing jwt */ }
         }
         if (!jwt) return { ok: false, error: 'Sign out and back in, then try again.' };
         try {
-          const r = await fetch(`${base}/api/auth/rotate-key`, { method: 'POST', headers: { Authorization: `Bearer ${jwt}` } });
+          const r = await timeoutFetch(`${base}/api/auth/rotate-key`, { method: 'POST', headers: { Authorization: `Bearer ${jwt}` } });
           if (!r.ok) return { ok: false, error: r.status === 401 ? 'Sign out and back in, then try again.' : `Failed (HTTP ${r.status})` };
           const newKey = String((await r.json() as { apiKey?: string }).apiKey ?? '');
           if (!newKey) return { ok: false, error: 'No new key returned.' };

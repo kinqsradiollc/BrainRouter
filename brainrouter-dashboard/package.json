@@ -2,6 +2,7 @@
   "name": "dashboard",
   "private": true,
   "version": "0.4.16",
+  "type": "module",
   "scripts": {
     "dev": "NODE_OPTIONS='--no-deprecation' next dev",
     "build": "next build",

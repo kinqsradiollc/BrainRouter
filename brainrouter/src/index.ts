@@ -52,7 +52,7 @@ import { orgsRouter, projectsRouter, githubReposRouter } from './api/routes/tena
 import { connectorOauthRouter } from './api/routes/connectors/oauth.js';
 import { connectorManageRouter } from './api/routes/connectors/manage.js';
 import { githubConnectorRouter, githubConnectorAdminRouter } from './api/routes/connectors/github.js';
-import { providersRouter, agentModelsRouter, integrationsRouter, reviewsRouter, pentestsRouter, adminEmailRouter, adminOrgsRouter, adminModelsRouter } from './api/routes/admin/index.js';
+import { providersRouter, agentModelsRouter, recallSettingsRouter, integrationsRouter, reviewsRouter, pentestsRouter, adminEmailRouter, adminOrgsRouter, adminModelsRouter } from './api/routes/admin/index.js';
 import { modelsRouter } from './api/routes/models/index.js';
 import { remoteRouter } from './api/routes/remote/index.js';
 import { triggersRouter } from './api/routes/triggers/index.js';
@@ -265,6 +265,7 @@ if (USE_HTTP) {
   app.use("/api/models", modelsRouter);
   app.use("/api/remote", remoteRouter);
   app.use("/api/admin/agent-models", agentModelsRouter);
+  app.use("/api/admin/recall-settings", recallSettingsRouter);
   app.use("/api/admin/integrations", integrationsRouter);
   app.use("/api/connectors", connectorOauthRouter);
   app.use("/api/connectors", connectorManageRouter);
@@ -281,6 +282,7 @@ if (USE_HTTP) {
   app.use("/api/meetings", meetingsRouter);
   app.use("/api/public/meetings", publicMeetingsRouter);
   app.use("/api/vulnerabilities", vulnerabilitiesRouter);
+  app.use("/api/vulnerability", vulnerabilitiesRouter);
   app.use("/api/contradictions", contradictionsRouter);
   app.use("/api/stats", statsRouter);
   app.use("/api/brain", brainRouter);

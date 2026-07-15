@@ -53,7 +53,7 @@ export interface ProbedModel {
  */
 export async function probeModels(baseUrl: string, apiKey: string, kind: string = "llm", timeoutMs = 8000): Promise<ProbedModel[]> {
   const c = await core();
-  const chat = kind === "llm" || kind === "judge" || !kind;
+  const chat = kind === "llm" || !kind;
 
   // LM Studio native enrichment — chat only (it drops embedding-type models).
   if (chat && c.isLmStudioEndpoint?.(baseUrl) && c.fetchLmStudioModels) {

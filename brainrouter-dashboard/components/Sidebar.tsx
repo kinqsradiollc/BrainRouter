@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "./AuthProvider";
+import { BrainRouterLogo } from "./BrainRouterLogo";
 import { isNavItemActive, isRouteActive, PRODUCT_NAV_GROUPS, SETTINGS_NAV_GROUPS } from "./dashboardNavigation";
 
 const settingsIconProps = {
@@ -43,7 +44,7 @@ export function Sidebar({ isMobile = false, mobileOpen = false, onNavigate }: Si
     <aside className={`sidebar${isMobile ? " sidebar--mobile" : ""}${mobileOpen ? " sidebar--open" : ""}`} aria-hidden={isMobile && !mobileOpen}>
       <div className="sidebar-org-row">
         <Link href="/overview" onClick={onNavigate} className="sidebar-org" aria-label="Dashboard home">
-          <span className="sidebar-org-mark">B</span>
+          <BrainRouterLogo className="sidebar-org-mark" size={16} showWordmark={false} />
         </Link>
         {isMobile && <button type="button" onClick={onNavigate} className="sidebar-icon-button" aria-label="Close menu">×</button>}
       </div>

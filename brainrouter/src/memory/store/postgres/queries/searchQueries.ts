@@ -23,7 +23,7 @@ import type { Executor } from "./executor.js";
 export interface VecContext {
   readonly vecReady: boolean;
   readonly vecDimensions: number;
-  initVec(dimensions: number): Promise<void>;
+  initVec(dimensions: number, opts?: { allowRebuild?: boolean }): Promise<void>;
 }
 
 export async function searchCognitiveFts(exec: Executor, userId: string, query: string, limit: number, orgId?: string): Promise<CognitiveFtsResult[]> {
@@ -91,7 +91,10 @@ export async function searchCognitiveFtsAsOf(exec: Executor, userId: string, que
 
 export async function upsertCognitiveVec(exec: Executor, vec: VecContext, recordId: string, embedding: Float32Array): Promise<void> {
   if (!vec.vecReady) return;
+  if (embedding.length === 0) return; // a malformed/empty embedding can't be stored — skip (never build a vector(0))
   if (vec.vecDimensions !== embedding.length) {
+    // WRITE path: a confirmed embedding length. Re-dimension cognitive_vec to the
+    // live embedder's real width (drops old-width vectors → they get re-embedded).
     await vec.initVec(embedding.length);
   }
   if (!vec.vecReady) return;
@@ -104,9 +107,11 @@ export async function upsertCognitiveVec(exec: Executor, vec: VecContext, record
 
 export async function searchCognitiveVec(exec: Executor, vec: VecContext, userId: string, queryEmbedding: Float32Array, limit: number, orgId?: string): Promise<VectorSearchResult[]> {
   if (!vec.vecReady) return [];
-  if (vec.vecDimensions !== queryEmbedding.length) {
-    await vec.initVec(queryEmbedding.length);
-  }
+  // A READ must never mutate the schema. A width mismatch means the embedder
+  // changed: the stored vectors are the old width and can't be compared to this
+  // query, so skip vector search this turn (recall degrades to FTS). The WRITE
+  // path re-dimensions + re-embeds — a recall must NEVER drop a populated table.
+  if (vec.vecDimensions !== queryEmbedding.length) return [];
   if (!vec.vecDimensions) return [];
   try {
     // ADR-010 P5b — gated org-shared union (see searchCognitiveFts). Without orgId

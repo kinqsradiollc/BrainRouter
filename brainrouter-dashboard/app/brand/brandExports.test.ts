@@ -60,12 +60,15 @@ test("browser and install metadata use only the canonical coded vector mark", ()
   const layout = readFileSync(new URL("../layout.tsx", import.meta.url), "utf8");
   const manifest = readFileSync(new URL("../../public/site.webmanifest", import.meta.url), "utf8");
   const icon = readFileSync(new URL("../../public/ico.svg", import.meta.url), "utf8");
+  const sidebar = readFileSync(new URL("../../components/Sidebar.tsx", import.meta.url), "utf8");
 
   assertCanonicalMark(icon);
   assert.doesNotMatch(`${layout}\n${manifest}`, /\.(?:ico|png|jpe?g|webp|avif)\b/i);
   assert.doesNotMatch(icon, /#(?:34C28E|42D6A0|06120D)|<(?:linear|radial)Gradient\b|<image\b/i);
   assert.match(layout, /\/ico\.svg/);
   assert.match(manifest, /"src"\s*:\s*"\/ico\.svg"/);
+  assert.match(sidebar, /<BrainRouterLogo\b[^>]*\bshowWordmark=\{false\}/);
+  assert.doesNotMatch(sidebar, /<img\b|<span className="sidebar-org-mark">B<\/span>/i);
 
   for (const asset of ["favicon.ico", "icon-192.png", "icon-512.png", "apple-touch-icon.png"]) {
     assert.equal(existsSync(new URL(`../../public/${asset}`, import.meta.url)), false, `${asset} must not ship as a logo dependency`);

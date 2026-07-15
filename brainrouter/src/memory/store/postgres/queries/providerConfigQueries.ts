@@ -142,8 +142,9 @@ export async function setDefaultProvider(exec: Executor, orgId: string, kind: Pr
 /**
  * The resolved, DECRYPTED default provider for (org, kind): the `is_default`
  * enabled row, else the first enabled row. Returns null when the org has none
- * (the caller then falls back to .env). The api key is opened here — the only
- * place a stored key is decrypted.
+ * (the caller then treats that service as unconfigured — no env fallback; the
+ * one-time env→DB seed is the only env path). The api key is opened here — the
+ * only place a stored key is decrypted.
  */
 export async function getDefaultResolvedProvider(
   exec: Executor,

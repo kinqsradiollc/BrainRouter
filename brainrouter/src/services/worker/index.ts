@@ -7,8 +7,12 @@
  *   node dist/services/worker/index.js
  */
 import { MemoryEngine } from "../../memory/engine.js";
+import { rm, writeFile } from "node:fs/promises";
+
+const READY_FILE = process.env.BRAINROUTER_WORKER_READY_FILE ?? "/tmp/brainrouter-worker-ready";
 
 async function main(): Promise<void> {
+  await rm(READY_FILE, { force: true });
   if (!process.env.BRAINROUTER_DATABASE_URL && !process.env.DATABASE_URL) {
     console.error("[worker] BRAINROUTER_DATABASE_URL (or DATABASE_URL) is required");
     process.exit(1);
@@ -21,12 +25,14 @@ async function main(): Promise<void> {
 
   const engine = new MemoryEngine();
   await engine.ready;
+  await writeFile(READY_FILE, `${process.pid}\n`, { encoding: "utf8", mode: 0o600 });
   console.error("[worker] ready — draining memory_jobs");
 
   let stopping = false;
   const shutdown = async () => {
     if (stopping) return;
     stopping = true;
+    await rm(READY_FILE, { force: true }).catch(() => undefined);
     try { await engine.close(); } catch { /* best-effort */ }
     process.exit(0);
   };

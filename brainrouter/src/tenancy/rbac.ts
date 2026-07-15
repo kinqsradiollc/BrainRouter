@@ -27,7 +27,7 @@ const ROLE_RANK: Record<Role, number> = { owner: 3, admin: 2, developer: 1, view
 export const CAPABILITIES = [
   'org:manage',       // rename / delete / change plan / transfer ownership
   'members:manage',   // invite / remove members, set roles
-  'providers:manage', // create/update/delete LLM/embeddings/reranker/judge configs
+  'providers:manage', // create/update/delete LLM/embeddings/reranker configs
   'models:read',      // read the member-safe server-managed model catalog
   'models:manage',    // create/update/default/order org model policies
   'triggers:manage',  // GitHub App / webhook / automation-rule config + linked repos

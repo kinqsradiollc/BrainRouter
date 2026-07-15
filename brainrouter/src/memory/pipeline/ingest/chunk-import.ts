@@ -1,16 +1,16 @@
 // MEM-CHUNK (0.4.14) — split over-long imported memories into chunk records so
 // the recall stages operate on focused units instead of one long blob. Without
-// this, a ~2,600-token session stored as a single cognitive record breaks every
-// value-add stage: the reranker truncates docs to 700 chars (~7% of it), the
-// relevance judge only sees 600 chars, and one embedding over the whole session
-// is a blurry average. Chunking restores all three (benchmarked under MEM-EVAL).
+// this, a ~2,600-token session stored as a single cognitive record breaks the
+// value-add stages: the reranker truncates docs to 700 chars (~7% of it), and
+// one embedding over the whole session is a blurry average. Chunking restores
+// both (benchmarked under MEM-EVAL).
 //
 // Behaviour-preserving for normal-length records (content ≤ threshold → returned
 // unchanged). Parent provenance is kept in metadata + encoded in the child id
 // (`${parentId}::c${i}`) so callers can roll a chunk back to its source.
 
 /** Default char budget per chunk (~375 tokens — comfortably under the reranker's
- *  700-char / the judge's 600-char windows). 0 disables chunking. */
+ *  700-char window). 0 disables chunking. */
 export const IMPORT_CHUNK_DEFAULT_CHARS = 1500;
 
 export function readImportChunkChars(env: NodeJS.ProcessEnv = process.env): number {

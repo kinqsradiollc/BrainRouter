@@ -9,18 +9,47 @@ import { sendError } from "../../../contracts/http.js";
 import { can } from "../../../tenancy/rbac.js";
 import { canAccessGithubRepository, isRepoAvailableForManualReview, isRepoLinkedForReview } from "../../../integrations/githubWebhook.js";
 import { resolveGithubAccountToken } from "../../../connectors/githubAccountToken.js";
+import { createReviewPullRequestLoader } from "./reviewDataLoader.js";
 
 export const reviewsRouter = Router();
 reviewsRouter.use(requireAnyAuth);
 
 type Store = Partial<{
   listReviewJobsForOrg(orgId: string, limit?: number): Promise<MemoryJobRecord[]>;
+  listReviewJobSummariesForOrg(orgId: string, limit?: number): Promise<MemoryJobRecord[]>;
+  listReviewAnalyticsForOrg(orgId: string, since: string, limit?: number): Promise<MemoryJobRecord[]>;
+  listReviewJobsForPr(orgId: string, repo: string, prNumber: number, limit?: number): Promise<MemoryJobRecord[]>;
+  listReviewFindingsForOrg(orgId: string, query?: {
+    limit?: number; severity?: string; repo?: string; status?: string; search?: string;
+    cursor?: { createdAt: string; reviewId: string; ordinal: number };
+    sort?: "newest" | "oldest";
+  }): Promise<Array<{
+    reviewId: string; lens: "security" | "code" | "pentest"; reviewStatus: string; repo: string | null; prNumber: number | null;
+    issueStatus: string; ordinal: number; finding: Record<string, unknown>; createdAt: string; updatedAt: string; total: number;
+    severityCounts: { critical: number; high: number; medium: number; low: number; info: number };
+  }>>;
   getMemoryJob(id: string): Promise<MemoryJobRecord | null>;
   listMemoryJobs(filters?: { kind?: string; status?: string[]; limit?: number }): Promise<MemoryJobRecord[]>;
   enqueueMemoryJob(input: { kind: string; input: Record<string, unknown>; maxAttempts?: number }): Promise<MemoryJobRecord>;
 }>;
 type Lens = "security" | "code" | "pentest" | "both";
-const cache = new Map<string, { until: number; prs: unknown[] }>();
+
+interface GithubPrRow {
+  repo: string;
+  number: number;
+  title: string;
+  author: string | null;
+  headSha: string | null;
+  updatedAt: string | null;
+  createdAt: string | null;
+  url: string | null;
+  state: string;
+  draft: boolean;
+  comments: number;
+  labels: string[];
+}
+
+const pullRequestLoader = createReviewPullRequestLoader<GithubPrRow>();
 
 function reviewRecord(job: MemoryJobRecord): ReviewJobDto {
   const input = (job.input ?? {}) as { repo?: string; prNumber?: number; target?: string; forge?: "github" | "gitlab" };
@@ -207,6 +236,20 @@ function validRepo(repo: unknown, forge: "github" | "gitlab" = "github"): repo i
     && segments.every((part) => /^[A-Za-z0-9_.-]+$/.test(part) && part !== "." && part !== "..");
 }
 
+function encodeFindingCursor(row: { createdAt: string; reviewId: string; ordinal: number }): string {
+  return Buffer.from(JSON.stringify([row.createdAt, row.reviewId, row.ordinal]), "utf8").toString("base64url");
+}
+
+function decodeFindingCursor(value: unknown): { createdAt: string; reviewId: string; ordinal: number } | null | "invalid" {
+  if (value == null || value === "") return null;
+  if (typeof value !== "string" || value.length > 512) return "invalid";
+  try {
+    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as unknown;
+    if (!Array.isArray(parsed) || parsed.length !== 3 || typeof parsed[0] !== "string" || typeof parsed[1] !== "string" || !Number.isInteger(parsed[2]) || Number(parsed[2]) < 1) return "invalid";
+    return { createdAt: parsed[0], reviewId: parsed[1], ordinal: Number(parsed[2]) };
+  } catch { return "invalid"; }
+}
+
 /** GET /jobs — compact recent list; developer-readable. */
 reviewsRouter.get("/jobs", requirePermission("reviews:read"), async (req: AuthedRequest, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 30, 1), 100);
@@ -214,13 +257,41 @@ reviewsRouter.get("/jobs", requirePermission("reviews:read"), async (req: Authed
   res.json({ reviews: jobs.map(reviewRecord), canRun: await canRun(req) });
 });
 
+/** GET /issues — compact, server-filtered finding pages with trace provenance. */
+reviewsRouter.get("/issues", requirePermission("reviews:read"), async (req: AuthedRequest, res) => {
+  const cursor = decodeFindingCursor(req.query.cursor);
+  if (cursor === "invalid") { sendError(res, 400, "Invalid issues cursor"); return; }
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
+  const severity = typeof req.query.severity === "string" && req.query.severity !== "all" ? req.query.severity : undefined;
+  const repo = typeof req.query.repo === "string" && req.query.repo !== "all" ? req.query.repo : undefined;
+  const status = typeof req.query.status === "string" && req.query.status !== "all" ? req.query.status : undefined;
+  const search = typeof req.query.q === "string" ? req.query.q.trim().slice(0, 200) : undefined;
+  const sort = req.query.sort === "oldest" ? "oldest" : "newest";
+  if (repo && !validRepo(repo)) { sendError(res, 400, "Invalid repository filter"); return; }
+  const rows = (await (memoryEngine.store as Store).listReviewFindingsForOrg?.(req.orgId!, {
+    limit, severity, repo, status, search: search || undefined, cursor: cursor ?? undefined, sort,
+  })) ?? [];
+  const hasMore = rows.length > limit;
+  const page = rows.slice(0, limit);
+  const last = page.at(-1);
+  res.json({
+    issues: page.map((row) => ({
+      reviewId: row.reviewId, lens: row.lens, reviewStatus: row.reviewStatus, repo: row.repo, prNumber: row.prNumber,
+      issueStatus: row.issueStatus, finding: row.finding, createdAt: row.createdAt, updatedAt: row.updatedAt,
+    })),
+    total: rows[0]?.total ?? 0,
+    severity: rows[0]?.severityCounts ?? { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
+    nextCursor: hasMore && last ? encodeFindingCursor(last) : null,
+  });
+});
+
 /** GET /summary — analytics-friendly rollup for the dashboard.  The raw jobs
  * remain the source of truth; this route keeps the browser from reimplementing
  * time bucketing and severity parsing on every render. */
 reviewsRouter.get("/summary", requirePermission("reviews:read"), async (req: AuthedRequest, res) => {
   const days = Math.min(Math.max(Number(req.query.days) || 30, 7), 90);
-  const jobs = (await (memoryEngine.store as Store).listReviewJobsForOrg?.(req.orgId!, 500)) ?? [];
   const since = Date.now() - days * 86_400_000;
+  const jobs = (await (memoryEngine.store as Store).listReviewAnalyticsForOrg?.(req.orgId!, new Date(since).toISOString(), 1_000)) ?? [];
   const recent = jobs.map(reviewRecord).filter((job) => Date.parse(job.createdAt) >= since);
   const severity = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
   const verdicts = { approved: 0, commented: 0, changesRequested: 0 };
@@ -301,30 +372,73 @@ reviewsRouter.post("/run", async (req: AuthedRequest, res) => {
   res.status(202).json({ jobs });
 });
 
-/** GET /prs — open GitHub PRs accessible to the active credential, cached for 30 seconds. */
+/** GET /prs — open GitHub PRs accessible to the active credential. GitHub
+ * repository fan-out is bounded and stale-while-revalidate cached per user/org;
+ * local review state is joined after the cache so running jobs remain live. */
 reviewsRouter.get("/prs", requirePermission("reviews:read"), async (req: AuthedRequest, res) => {
-  // Account credentials are per-user, so cache entries must be as well. This
-  // also prevents a user from receiving a peer's private-repository metadata.
-  const cacheKey = `${req.orgId!}:${req.userId!}`;
-  const cached = cache.get(cacheKey);
-  if (cached && cached.until > Date.now()) { res.json({ prs: cached.prs, canRun: await canRun(req) }); return; }
   const repositoryAccess = await githubConsoleRepositories(req.orgId!, req.userId!);
   if (!repositoryAccess) { res.json({ prs: [], canRun: await canRun(req) }); return; }
   const { auth, repos } = repositoryAccess;
-  const stateContext = await githubReviewStateContext(req.orgId!, req.userId!);
-  const jobs = (await (memoryEngine.store as Store).listReviewJobsForOrg?.(req.orgId!, 500)) ?? [];
+  // Account credentials are per-user. Include every non-secret authorization
+  // boundary so private repository metadata can never cross users or sources.
+  const cacheKey = [req.orgId!, req.userId!, auth.credentialSource, auth.installationId, auth.apiBase].join(":");
+  const [github, stateContext, jobs, permission] = await Promise.all([
+    pullRequestLoader.load({
+      cacheKey,
+      repos,
+      force: req.query.refresh === "1",
+      fetchRepo: async (repo, etag, signal) => {
+        const response = await fetch(`${auth.apiBase}/repos/${repo}/pulls?state=open&per_page=50`, {
+          headers: { ...ghHeaders(auth.token), ...(etag ? { "If-None-Match": etag } : {}) },
+          signal,
+        });
+        if (response.status === 304) return { status: "not-modified", etag: response.headers.get("etag") ?? etag };
+        if (!response.ok) throw new Error(`GitHub repository request failed (${response.status})`);
+        const rows = (await response.json() as any[]).map((pr): GithubPrRow => ({
+          repo,
+          number: Number(pr.number),
+          title: String(pr.title ?? "Untitled pull request"),
+          author: pr.user?.login ? String(pr.user.login) : null,
+          headSha: pr.head?.sha ? String(pr.head.sha) : null,
+          updatedAt: pr.updated_at ? String(pr.updated_at) : null,
+          createdAt: pr.created_at ? String(pr.created_at) : null,
+          url: pr.html_url ? String(pr.html_url) : null,
+          state: String(pr.state ?? "open"),
+          draft: pr.draft === true,
+          comments: Number(pr.comments ?? 0) + Number(pr.review_comments ?? 0),
+          labels: Array.isArray(pr.labels) ? pr.labels.map((label: any) => String(label?.name ?? "")).filter(Boolean) : [],
+        }));
+        return { status: "ok", rows, etag: response.headers.get("etag") ?? undefined };
+      },
+    }),
+    githubReviewStateContext(req.orgId!, req.userId!),
+    (memoryEngine.store as Store).listReviewJobSummariesForOrg?.(req.orgId!, 2_000).then((value) => value ?? []) ?? Promise.resolve([]),
+    canRun(req),
+  ]);
   const latest = new Map<string, ReturnType<typeof reviewRecord>>();
   for (const job of jobs) { const rec = reviewRecord(job); const key = `${rec.repo}#${rec.prNumber}:${rec.lens}`; if (!latest.has(key)) latest.set(key, rec); }
-  const prs: any[] = [];
-  for (const repo of repos) {
-    try {
-      const response = await fetch(`${auth.apiBase}/repos/${repo}/pulls?state=open&per_page=50`, { headers: ghHeaders(auth.token) });
-      if (!response.ok) continue;
-      for (const pr of await response.json() as any[]) prs.push({ repo, number: pr.number, title: pr.title, author: pr.user?.login ?? null, headSha: pr.head?.sha ?? null, updatedAt: pr.updated_at ?? null, url: pr.html_url ?? null, availability: reviewAvailability(stateContext, repo, true), security: latest.get(`${repo}#${pr.number}:security`) ?? null, code: latest.get(`${repo}#${pr.number}:code`) ?? null });
-    } catch { /* one inaccessible repo must not hide others */ }
-  }
-  cache.set(cacheKey, { until: Date.now() + 30_000, prs });
-  res.json({ prs, canRun: await canRun(req) });
+  const prs = github.rows.map((pr) => ({
+    ...pr,
+    availability: reviewAvailability(stateContext, pr.repo, true),
+    security: latest.get(`${pr.repo}#${pr.number}:security`) ?? null,
+    code: latest.get(`${pr.repo}#${pr.number}:code`) ?? null,
+  }));
+  res.json({
+    prs,
+    canRun: permission,
+    cache: { fresh: github.fresh, refreshing: github.refreshing },
+    partial: github.partial,
+    failedRepositories: github.failedRepositories,
+  });
+});
+
+/** Local-only live activity. Safe to poll: performs no GitHub request. */
+reviewsRouter.get("/prs/:owner/:repo/:number/activity", requirePermission("reviews:read"), async (req: AuthedRequest, res) => {
+  const repo = `${req.params.owner}/${req.params.repo}`;
+  const number = Number(req.params.number);
+  if (!validRepo(repo) || !Number.isInteger(number) || number <= 0) { sendError(res, 400, "Invalid pull request"); return; }
+  const jobs = (await (memoryEngine.store as Store).listReviewJobsForPr?.(req.orgId!, repo, number, 50)) ?? [];
+  res.json({ reviews: jobs.map(reviewRecord), canRun: await canRun(req) });
 });
 
 /** GET /prs/:owner/:repo/:number — PR metadata, check-runs and both lens results. */
@@ -335,13 +449,15 @@ reviewsRouter.get("/prs/:owner/:repo/:number", requirePermission("reviews:read")
   const auth = await githubReviewAuthorization(req.orgId!, req.userId!, repo);
   if (!auth) { sendError(res, 404, "Pull request not found"); return; }
   try {
-    const pull = await fetch(`${auth.apiBase}/repos/${repo}/pulls/${number}`, { headers: ghHeaders(auth.token) });
+    const [pull, jobs, stateContext, permission] = await Promise.all([
+      fetch(`${auth.apiBase}/repos/${repo}/pulls/${number}`, { headers: ghHeaders(auth.token), signal: AbortSignal.timeout(5_000) }),
+      (memoryEngine.store as Store).listReviewJobsForPr?.(req.orgId!, repo, number, 50).then((value) => value ?? []) ?? Promise.resolve([]),
+      githubReviewStateContext(req.orgId!, req.userId!),
+      canRun(req),
+    ]);
     if (!pull.ok) { sendError(res, pull.status === 404 ? 404 : 502, "Unable to load pull request"); return; }
     const pr = await pull.json() as any;
-    const checks = pr.head?.sha ? await fetch(`${auth.apiBase}/repos/${repo}/commits/${pr.head.sha}/check-runs`, { headers: ghHeaders(auth.token) }).then(async (r) => r.ok ? ((await r.json() as any).check_runs ?? []) : []).catch(() => []) : [];
-    const jobs = (await (memoryEngine.store as Store).listReviewJobsForOrg?.(req.orgId!, 500)) ?? [];
-    const matching = jobs.filter((job) => { const input = job.input as { repo?: unknown; prNumber?: unknown }; return input.repo === repo && Number(input.prNumber) === number; }).map(reviewRecord);
-    const stateContext = await githubReviewStateContext(req.orgId!, req.userId!);
-    res.json({ pr: { repo, number, title: pr.title, author: pr.user?.login ?? null, branch: pr.head?.ref ?? null, headSha: pr.head?.sha ?? null, url: pr.html_url ?? null, availability: reviewAvailability(stateContext, repo, true), checks, reviews: matching }, canRun: await canRun(req) });
+    const checks = pr.head?.sha ? await fetch(`${auth.apiBase}/repos/${repo}/commits/${pr.head.sha}/check-runs`, { headers: ghHeaders(auth.token), signal: AbortSignal.timeout(5_000) }).then(async (r) => r.ok ? ((await r.json() as any).check_runs ?? []) : []).catch(() => []) : [];
+    res.json({ pr: { repo, number, title: pr.title, author: pr.user?.login ?? null, branch: pr.head?.ref ?? null, headSha: pr.head?.sha ?? null, url: pr.html_url ?? null, availability: reviewAvailability(stateContext, repo, true), checks, reviews: jobs.map(reviewRecord) }, canRun: permission });
   } catch { sendError(res, 502, "Unable to load pull request"); }
 });

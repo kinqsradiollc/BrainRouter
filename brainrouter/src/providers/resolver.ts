@@ -1,7 +1,7 @@
 /**
  * ProviderResolver (ADR-012) — resolve a runtime provider config for (org, kind)
  * from the DATABASE. This is the "new system": providers (LLM / embeddings /
- * reranker / judge) are configured per-org in the DB (dashboard → AI Providers,
+ * reranker) are configured per-org in the DB (dashboard → AI Providers,
  * or POST /api/admin/providers), exactly like desktop/CLI — never `.env`.
  *
  * `resolveFromEnv` is retained ONLY for the one-time upgrade SEED
@@ -32,8 +32,6 @@ export function resolveFromEnv(kind: ProviderKind): ResolvedProviderConfig | nul
       return base(env("BRAINROUTER_EMBEDDING_ENDPOINT"), env("BRAINROUTER_EMBEDDING_API_KEY") || env("BRAINROUTER_LLM_API_KEY"), env("BRAINROUTER_EMBEDDING_MODEL") || "text-embedding-3-small", "https://api.openai.com/v1/embeddings");
     case "reranker":
       return base(env("BRAINROUTER_RERANKER_ENDPOINT"), env("BRAINROUTER_RERANKER_API_KEY"), env("BRAINROUTER_RERANKER_MODEL") || "rerank-english-v3.0", "https://api.cohere.com/v1/rerank");
-    case "judge":
-      return base(env("BRAINROUTER_RELEVANCE_JUDGE_ENDPOINT") || env("BRAINROUTER_LLM_ENDPOINT"), env("BRAINROUTER_RELEVANCE_JUDGE_API_KEY") || env("BRAINROUTER_LLM_API_KEY"), env("BRAINROUTER_RELEVANCE_JUDGE_MODEL") || env("BRAINROUTER_LLM_MODEL"), "https://api.openai.com/v1/chat/completions");
     default:
       return null;
   }

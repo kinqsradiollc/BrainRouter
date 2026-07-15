@@ -9,10 +9,9 @@
  *   BRAINROUTER_RECALL_RERANK_POOL    (default 20)  Stage 2 reranker pool size
  *   BRAINROUTER_RECALL_TOP_RESULTS    (default 5)   final size when reranker is off
  *
- * Each is clamped to [1, 200] to keep a typo from blowing up the
- * downstream LLM-judge call. Reading env once per recall is fine —
- * recall is already an LLM-grade operation, the env read is in the
- * noise.
+ * Each is clamped to [1, 200] to keep a typo from blowing up the recall
+ * candidate pool. Reading env once per recall is fine — recall is already an
+ * LLM-grade operation, the env read is in the noise.
  */
 function recallLimit(envName: string, defaultValue: number, max = 200): number {
   const raw = process.env[envName];
@@ -62,80 +61,6 @@ export function readRecallSelection(env: NodeJS.ProcessEnv = process.env): Recal
   const rawLambda = Number.parseFloat(env.BRAINROUTER_RECALL_DIVERSITY_LAMBDA ?? '');
   const lambda = Number.isFinite(rawLambda) && rawLambda >= 0 && rawLambda <= 1 ? rawLambda : 0.7;
   return { diversity, lambda };
-}
-
-/**
- * MEM-JUDGE (0.4.14) — result floor for the relevance judge. On long-session
- * records the small judge can't verify an answer buried in a 2.6k-token session
- * (it also only sees the first 600 chars), so it "when in doubt, reject"s every
- * candidate and recall collapses to ~0 (LongMemEval judge R@5 0.80 → 0.10). The
- * floor keeps at least `minKeep` top pre-judge results when the judge
- * under-delivers, so recall never drops below the retriever on a query that had
- * candidates. The judge's precision trimming on short records is untouched
- * (it only kicks in when approvals < minKeep).
- *   BRAINROUTER_RELEVANCE_JUDGE_MIN_KEEP  (default 1; 0 = old collapse-to-zero)
- */
-export function readJudgeMinKeep(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env.BRAINROUTER_RELEVANCE_JUDGE_MIN_KEEP;
-  if (raw === undefined || raw.trim() === "") return 1;
-  const n = Number.parseInt(raw, 10);
-  return Number.isFinite(n) && n >= 0 ? n : 1;
-}
-
-/**
- * Keep the judge's approved results, but if it approved fewer than `minKeep`,
- * backfill from the rank-ordered pre-judge list (approvals first, then the
- * next-best retriever results) so the set never collapses below the floor.
- * Pure + order-preserving; `approved` must be a subset of `preJudge`.
- */
-export function applyJudgeFloor<T>(preJudge: T[], approved: T[], minKeep: number): T[] {
-  if (minKeep <= 0 || approved.length >= minKeep || preJudge.length === 0) return approved;
-  const out = [...approved];
-  const have = new Set<T>(approved);
-  for (const item of preJudge) {
-    if (out.length >= minKeep) break;
-    if (!have.has(item)) { out.push(item); have.add(item); }
-  }
-  return out;
-}
-
-/**
- * MEM-JUDGE2 (0.4.14) — how the relevance judge applies its verdicts:
- *   "reorder" (default) — recall-safe: keep every candidate and move the
- *                         approved ones to the front. The top-K slice still
- *                         gets a precision-ordered set, but recall@k can never
- *                         drop below the retriever (fixes the LongMemEval
- *                         judge R@k collapse where R@5=R@10=R@20).
- *   "filter"            — legacy precision-max: drop the rejects, floored by
- *                         BRAINROUTER_RELEVANCE_JUDGE_MIN_KEEP so it can't hit 0.
- *   BRAINROUTER_RELEVANCE_JUDGE_MODE
- */
-export function readJudgeMode(env: NodeJS.ProcessEnv = process.env): "reorder" | "filter" {
-  return env.BRAINROUTER_RELEVANCE_JUDGE_MODE?.trim().toLowerCase() === "filter" ? "filter" : "reorder";
-}
-
-/**
- * MEM-JUDGE2 (0.4.14) — recall-safe judge application. Return a permutation of
- * `preJudge`: the judge-approved records first (in the judge's order, deduped),
- * then every remaining record in its original retriever order. Records the judge
- * never saw (beyond its candidate window) or rejected are demoted, not dropped,
- * so the caller's top-K slice loses no recall. Pure + total.
- */
-export function reorderApprovedFirst<T>(preJudge: T[], approvedIndices: number[]): T[] {
-  if (preJudge.length === 0) return [];
-  const approvedSet = new Set<number>();
-  const approved: T[] = [];
-  for (const i of approvedIndices) {
-    if (Number.isInteger(i) && i >= 0 && i < preJudge.length && !approvedSet.has(i)) {
-      approvedSet.add(i);
-      approved.push(preJudge[i]);
-    }
-  }
-  const rest: T[] = [];
-  for (let i = 0; i < preJudge.length; i++) {
-    if (!approvedSet.has(i)) rest.push(preJudge[i]);
-  }
-  return [...approved, ...rest];
 }
 
 /**
@@ -220,8 +145,8 @@ export function rerankHeadSize(docLens: number[], budgetChars: number, maxDocCha
  * MEM-ROUTE (0.4.14) — detect reflective / analytical queries ("most likely
  * sentiment", "how do they feel", "overall pattern", "summarize their attitude").
  * Their gold evidence has low surface overlap with the question, so the
- * cross-encoder demotes it — and on these the retriever+judge path already beats
- * the reranker (os-rm judge R-any@10 0.87 vs reranker 0.77). We route reflective
+ * cross-encoder demotes it — and on these the plain retriever path already beats
+ * the reranker (os-rm R-any@10 0.87 vs reranker 0.77). We route reflective
  * queries around the cross-encoder; factual / conversational keep it.
  */
 const REFLECTIVE_QUERY_RE = /\b(sentiment|mood|emotions?|emotional|feel(s|ing|ings)?|attitude|opinion|tone|most likely|tend(s|ed)? to|usually|typically|overall|in general|generally|pattern|patterns|summar(y|ize|ise)|reflect|state of mind|disposition|outlook|impression)\b/i;

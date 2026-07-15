@@ -83,6 +83,12 @@ export interface ReviewProgressEventDto {
   kind: string;
   msg: string;
   data?: Record<string, unknown>;
+  traceId?: string;
+  spanId?: string;
+  parentSpanId?: string;
+  role?: string;
+  status?: "pending" | "running" | "succeeded" | "failed" | "skipped";
+  durationMs?: number;
 }
 export interface ReviewJobDto {
   id: string;

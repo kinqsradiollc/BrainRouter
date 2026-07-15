@@ -12,12 +12,17 @@ import { memoryEngine } from "../engine.js";
 import { ingestSource, type SourceIngestStore } from "../source/ingest.js";
 import { isPublicScope, isScopeDowngrade, scopeToBackendVisibility, assertScopeParams } from "./sharing.js";
 import { redactSensitiveMemoryText } from "../util/redaction.js";
-import type { CreateMeetingInput, MeetingRow, MeetingScope } from "../store/postgres/queries/meetingsQueries.js";
+import type { CreateMeetingInput, MeetingListCursor, MeetingRow, MeetingScope, MeetingTranscriptSegment } from "../store/postgres/queries/meetingsQueries.js";
 
 interface MeetingsStore {
   createMeeting(m: CreateMeetingInput): Promise<void>;
   listMeetings(orgId: string, userId: string, limit?: number): Promise<MeetingRow[]>;
+  listMeetingsPage(orgId: string, userId: string, limit?: number, cursor?: MeetingListCursor): Promise<MeetingRow[]>;
   getMeeting(orgId: string, userId: string, id: string): Promise<MeetingRow | null>;
+  getMeetingOverview(orgId: string, userId: string, id: string): Promise<MeetingRow | null>;
+  getMeetingTranscriptText(orgId: string, userId: string, id: string): Promise<string | null>;
+  insertMeetingTranscriptSegments(meetingId: string, segments: MeetingTranscriptSegment[]): Promise<void>;
+  listMeetingTranscriptSegments(orgId: string, userId: string, id: string, cursor?: number, limit?: number): Promise<MeetingTranscriptSegment[]>;
   setMeetingScope(id: string, userId: string, scope: MeetingScope, teamId: string | null): Promise<boolean>;
   createMeetingShareToken(s: { token: string; meetingId: string; orgId: string; createdBy: string; expiresAt?: string }): Promise<void>;
   revokeMeetingShareTokens(meetingId: string): Promise<number>;
@@ -47,6 +52,11 @@ export interface MeetingDetailDTO {
   summaryStatus: MeetingRow["summaryStatus"]; summaryError?: string;
 }
 export interface MeetingShareDTO { scope: MeetingScope; teamId?: string; publicUrl?: string; expiresAt?: string }
+export interface MeetingTranscriptPageDTO {
+  segments: Array<{ ordinal: number; at: string; speaker: string; text: string }>;
+  total: number;
+  nextCursor: string | null;
+}
 
 function baseUrl(): string {
   return (process.env.BRAINROUTER_PUBLIC_URL ?? "").replace(/\/+$/, "");
@@ -59,7 +69,7 @@ function baseUrl(): string {
  * ("Reminder: ship Friday") stays intact. A leading "[mm:ss]" timestamp is kept
  * only if the source already includes one.
  */
-function parseTranscript(text: string): MeetingDetailDTO["transcript"] {
+function parseTranscript(text: string, maxLines = 500): MeetingDetailDTO["transcript"] {
   const lines: MeetingDetailDTO["transcript"] = [];
   for (const raw of text.split("\n")) {
     const trimmed = raw.trim();
@@ -67,7 +77,7 @@ function parseTranscript(text: string): MeetingDetailDTO["transcript"] {
     const ts = trimmed.match(/^\[?(\d{1,2}:\d{2}(?::\d{2})?)\]\s*(.+)$/);
     if (ts) lines.push({ at: ts[1] ?? "", speaker: "", text: (ts[2] ?? "").trim() });
     else lines.push({ at: "", speaker: "", text: trimmed });
-    if (lines.length >= 500) break;
+    if (lines.length >= maxLines) break;
   }
   return lines;
 }
@@ -94,15 +104,21 @@ function parseActionItems(md: string): MeetingRow["actionItems"] {
   return items;
 }
 
-async function summarize(orgId: string, title: string, transcript: string): Promise<{ markdown: string; actionItems: MeetingRow["actionItems"] }> {
+type MeetingSummaryTemplate = "general" | "standup" | "one-on-one" | "retrospective";
+
+async function summarize(orgId: string, title: string, transcript: string, template: MeetingSummaryTemplate = "general"): Promise<{ markdown: string; actionItems: MeetingRow["actionItems"] }> {
   // Internal sub-agent runner bound to the org's OWN LLM provider (BYOK / personal).
   // An admin can assign a dedicated model to the meeting-summary role via
   // agentModels["meeting-summary"], else the org's default LLM provider is used.
   // Server-managed models are NOT consulted here — those only serve the desktop.
   const runner = await memoryEngine.modelRunner("meeting-summary", orgId);
-  const systemPrompt =
-    "You summarize meeting transcripts. Return concise markdown: a short paragraph, then a '### Decisions' " +
-    "bullet list, then a '### Action items' bullet list where each item is '- <task> — @<assignee>'. No preamble.";
+  const templateInstruction: Record<MeetingSummaryTemplate, string> = {
+    general: "Lead with a concise overview, then decisions and action items.",
+    standup: "Organize the notes under Progress, Blockers, Next steps, and Action items.",
+    "one-on-one": "Organize the notes under Discussion, Feedback, Commitments, and Action items.",
+    retrospective: "Organize the notes under What went well, What did not, Experiments, and Action items.",
+  };
+  const systemPrompt = `You summarize meeting transcripts. ${templateInstruction[template]} Use concise markdown and format each action item as '- <task> — @<assignee>'. No preamble.`;
   // Throws on model failure (e.g. LLM_NOT_CONFIGURED) so the background job marks
   // the summary 'failed' — the caller polls status and can Regenerate.
   const markdown = await runner.run({ systemPrompt, prompt: `Meeting: ${title}\n\nTranscript:\n${transcript.slice(0, 40_000)}`, taskId: `meeting-summary:${orgId}` });
@@ -116,11 +132,11 @@ async function summarize(orgId: string, title: string, transcript: string): Prom
  */
 function generateSummaryInBackground(args: {
   id: string; userId: string; orgId: string; title: string; transcript: string;
-  date?: string; attendees?: string[]; scope?: MeetingScope; previousActionItems?: MeetingRow["actionItems"];
+  date?: string; attendees?: string[]; scope?: MeetingScope; previousActionItems?: MeetingRow["actionItems"]; template?: MeetingSummaryTemplate;
 }): void {
   void (async () => {
     try {
-      const { markdown, actionItems } = await summarize(args.orgId, args.title, args.transcript);
+      const { markdown, actionItems } = await summarize(args.orgId, args.title, args.transcript, args.template);
       const previous = new Map((args.previousActionItems ?? []).map((item) => [item.title.toLowerCase(), item]));
       const merged = actionItems.map((item) => {
         const before = previous.get(item.title.toLowerCase());
@@ -153,7 +169,7 @@ function generateSummaryInBackground(args: {
 }
 
 export async function createMeeting(input: {
-  userId: string; orgId: string; title: string; transcript: string; scope?: MeetingScope; teamId?: string; date?: string; attendees?: string[];
+  userId: string; orgId: string; title: string; transcript: string; scope?: MeetingScope; teamId?: string; date?: string; attendees?: string[]; template?: MeetingSummaryTemplate;
 }): Promise<{ id: string; summaryStatus: MeetingRow["summaryStatus"] }> {
   requireAccount(input.userId, input.orgId);
   if (!input.transcript.trim()) throw new Error("Cannot record a meeting with an empty transcript.");
@@ -171,7 +187,7 @@ export async function createMeeting(input: {
     scope: "private", teamId: undefined, summaryStatus: "processing",
   });
   if (scope !== "private") await setScope({ userId: input.userId, orgId: input.orgId, id, scope, teamId: input.teamId });
-  generateSummaryInBackground({ id, userId: input.userId, orgId: input.orgId, title: input.title, transcript: input.transcript, date: input.date, attendees: input.attendees, scope });
+  generateSummaryInBackground({ id, userId: input.userId, orgId: input.orgId, title: input.title, transcript: input.transcript, date: input.date, attendees: input.attendees, scope, template: input.template });
   return { id, summaryStatus: "processing" };
 }
 
@@ -181,10 +197,58 @@ export async function listMeetings(userId: string, orgId: string): Promise<Meeti
   return rows.map((r) => ({ id: r.id, title: r.title, date: r.meetingDate ?? r.createdAt.slice(0, 10), scope: r.scope, attendeeCount: r.attendees.length, summaryStatus: r.summaryStatus }));
 }
 
+export async function listMeetingsPage(userId: string, orgId: string, cursorValue?: string, limit = 50): Promise<{ meetings: MeetingListDTO[]; nextCursor: string | null }> {
+  requireAccount(userId, orgId);
+  let cursor: MeetingListCursor | undefined;
+  if (cursorValue) {
+    try {
+      const decoded = JSON.parse(Buffer.from(cursorValue, "base64url").toString("utf8")) as MeetingListCursor;
+      if (!decoded.id || !decoded.createdAt || !Number.isFinite(Date.parse(decoded.createdAt))) throw new Error("bad cursor");
+      cursor = decoded;
+    } catch { throw new Error("Invalid meetings cursor"); }
+  }
+  const size = Math.min(Math.max(limit, 1), 100);
+  const rows = await store().listMeetingsPage(orgId, userId, size + 1, cursor);
+  const hasMore = rows.length > size;
+  const page = rows.slice(0, size);
+  const last = page.at(-1);
+  return {
+    meetings: page.map((r) => ({ id: r.id, title: r.title, date: r.meetingDate ?? r.createdAt.slice(0, 10), scope: r.scope, attendeeCount: r.attendees.length, summaryStatus: r.summaryStatus })),
+    nextCursor: hasMore && last ? Buffer.from(JSON.stringify({ createdAt: last.createdAt, id: last.id }), "utf8").toString("base64url") : null,
+  };
+}
+
 export async function getMeeting(userId: string, orgId: string, id: string): Promise<MeetingDetailDTO | null> {
   requireAccount(userId, orgId);
   const r = await store().getMeeting(orgId, userId, id);
   return r ? await toDetail(r) : null;
+}
+
+export async function getMeetingOverview(userId: string, orgId: string, id: string): Promise<Omit<MeetingDetailDTO, "transcript"> | null> {
+  requireAccount(userId, orgId);
+  const r = await store().getMeetingOverview(orgId, userId, id);
+  if (!r) return null;
+  const detail = await toDetail(r);
+  const { transcript: _transcript, ...overview } = detail;
+  return overview;
+}
+
+export async function getMeetingTranscriptPage(userId: string, orgId: string, id: string, cursor = 0, limit = 100): Promise<MeetingTranscriptPageDTO | null> {
+  requireAccount(userId, orgId);
+  const size = Math.min(Math.max(limit, 1), 200);
+  let rows = await store().listMeetingTranscriptSegments(orgId, userId, id, cursor, size + 1);
+  if (!rows.length && cursor === 0) {
+    const text = await store().getMeetingTranscriptText(orgId, userId, id);
+    if (text === null) return null;
+    const legacy = parseTranscript(text, Number.POSITIVE_INFINITY).map((segment, ordinal) => ({ ordinal, ...segment }));
+    await store().insertMeetingTranscriptSegments(id, legacy);
+    rows = await store().listMeetingTranscriptSegments(orgId, userId, id, cursor, size + 1);
+  }
+  const hasMore = rows.length > size;
+  const page = rows.slice(0, size);
+  const total = rows[0]?.total ?? 0;
+  const last = page.at(-1);
+  return { segments: page.map(({ total: _total, ...segment }) => segment), total, nextCursor: hasMore && last ? String(last.ordinal + 1) : null };
 }
 
 async function toDetail(r: MeetingRow): Promise<MeetingDetailDTO> {
