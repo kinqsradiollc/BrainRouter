@@ -15,6 +15,7 @@ import type { InventoryComponent } from "../../vulnerability/types.js";
 import { enqueueAgentJob } from "../../memory/scheduler/jobs.js";
 import { resolveGithubAccountToken } from "../../connectors/githubAccountToken.js";
 import { canAccessGithubRepository } from "../../integrations/githubWebhook.js";
+import { getCache, cacheKeyFromFilters } from "../../infra/cache.js";
 
 type CatalogStore = {
   listVulnerabilities(filters: Record<string, unknown>): Promise<{ items: unknown[]; total: number }>;
@@ -89,7 +90,7 @@ vulnerabilitiesRouter.use(requireAnyAuth);
 vulnerabilitiesRouter.get("/", requirePermission("vulnerabilities:read"), async (req: AuthedRequest, res) => {
   const q = req.query;
   const num = (v: unknown): number | undefined => { const n = Number(v); return Number.isFinite(n) ? n : undefined; };
-  const result = await store().listVulnerabilities({
+  const filters = {
     search: typeof q.search === "string" ? q.search.slice(0, 200) : undefined,
     severity: typeof q.severity === "string" ? q.severity : undefined,
     kevOnly: q.kev === "true",
@@ -99,7 +100,12 @@ vulnerabilitiesRouter.get("/", requirePermission("vulnerabilities:read"), async 
     modifiedSince: typeof q.modifiedSince === "string" ? q.modifiedSince : undefined,
     limit: num(q.limit),
     offset: num(q.offset),
-  });
+  };
+  // Catalog is GLOBAL and only changes on the scheduled sync (≥15 min), so a
+  // short-TTL cache keyed by the exact filters absorbs the dashboard's repeated
+  // reads without going stale in any meaningful way.
+  const key = cacheKeyFromFilters("vuln:list", filters as Record<string, unknown>);
+  const result = await getCache().wrap(key, 60, () => store().listVulnerabilities(filters));
   res.json(result);
 });
 
@@ -217,7 +223,15 @@ vulnerabilitiesRouter.delete("/watches/:id", requirePermission("vulnerabilities:
 /** Catalog detail LAST — the param route must not shadow the fixed paths above. */
 vulnerabilitiesRouter.get("/:cveId", requirePermission("vulnerabilities:read"), async (req: AuthedRequest, res) => {
   const cveId = String(req.params.cveId).toUpperCase();
-  const vulnerability = await store().getVulnerability(cveId);
+  // Cache HITS only (5 min) — a missing CVE recomputes so a newly-synced entry
+  // appears immediately rather than being negative-cached.
+  const cache = getCache();
+  const cacheKey = `vuln:cve:${cveId}`;
+  let vulnerability = await cache.get<unknown>(cacheKey);
+  if (vulnerability === undefined) {
+    vulnerability = await store().getVulnerability(cveId);
+    if (vulnerability) await cache.set(cacheKey, vulnerability, 300);
+  }
   if (!vulnerability) { res.status(404).json({ error: "CVE not found in the catalog" }); return; }
   res.json(vulnerability);
 });

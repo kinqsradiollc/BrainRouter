@@ -435,6 +435,7 @@ no-cross-encoder diversity selector.
 | Var | Default | Purpose |
 | --- | --- | --- |
 | `BRAINROUTER_DATABASE_URL` | _(required)_ | Postgres + pgvector connection string (SQLite removed, ADR-007). `DATABASE_URL` is also accepted. The engine connects + migrates **lazily on first use** and closes the pool on SIGINT/SIGTERM. |
+| `BRAINROUTER_REDIS_URL` | _(unset → in-process)_ | **Optional** read cache for hot global data (CVE catalog list/detail, hot dashboard GETs). `REDIS_URL` is also accepted. Purely an accelerator — with it unset, or if Redis is unreachable, the server transparently uses a bounded in-process TTL cache with identical correctness. Set it to share the cache across replicas and survive restarts. Needs the optional `ioredis` package (baked into the Docker image; compose wires the bundled `redis`). |
 | `BRAINROUTER_HOME` | `~/.brainrouter` | Per-user state root. Honored by both processes. |
 | `BRAINROUTER_LOCAL_ROOT` | _(unset)_ | Override the local-state root. |
 | `BRAINROUTER_IMPORT_CHUNK_CHARS` | `1500` | Chunk records longer than this on `memory_import` (0.4.14) so recall stages get focused units (child id `${parent}::c{i}`, parent in metadata). `0` disables. |

@@ -46,6 +46,21 @@ services:
       start_period: 30s
       retries: 5
 
+  # Optional read cache (CVE catalog, hot dashboard GETs). The brain degrades to
+  # an in-process cache if this is absent, so it is purely an accelerator.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    # Published for a host-run `npm run dev:http` to reach it at 127.0.0.1:6379.
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   # The full backend monolith, LIVE from the bind-mounted repo under tsx watch.
   # A container-owned node_modules volume keeps host (macOS) + container (linux)
   # deps separate. First boot runs `npm ci` + `build:packages` (a few minutes);
@@ -68,6 +83,7 @@ services:
       # Job runner ON so meeting notes + depth agents generate in-process.
       BRAINROUTER_JOB_RUNNER: ${BRAINROUTER_JOB_RUNNER:-on}
       BRAINROUTER_STT_URL: ${BRAINROUTER_STT_URL:-http://stt:3752}
+      BRAINROUTER_REDIS_URL: ${BRAINROUTER_REDIS_URL:-redis://redis:6379}
     volumes:
       - ../../:/repo
       - brain_node_modules:/repo/node_modules
@@ -95,6 +111,7 @@ services:
       - "host.docker.internal:host-gateway"
     depends_on:
       - stt
+      - redis
     # node-based probe (the slim image has no curl). start_period covers the
     # first-boot npm ci + build:packages before /health answers.
     healthcheck:
