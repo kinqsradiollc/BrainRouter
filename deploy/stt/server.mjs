@@ -20,7 +20,7 @@ const PORT = Number.parseInt(process.env.STT_PORT ?? "3752", 10);
 const MODELS_DIR = process.env.WHISPER_MODELS_DIR ?? "/models";
 const MODEL = process.env.WHISPER_MODEL ?? "/models/ggml-base.en.bin";
 const WHISPER_BIN = process.env.WHISPER_BIN ?? "whisper-cli";
-const THREADS = process.env.WHISPER_THREADS ?? String(Math.max(1, (os.cpus?.().length ?? 4) - 1));
+const THREADS = process.env.WHISPER_THREADS || String(Math.max(1, (os.cpus?.().length ?? 4) - 1));
 const MAX_BYTES = Number.parseInt(process.env.STT_MAX_BYTES ?? String(80 * 1024 * 1024), 10);
 
 /**
@@ -88,6 +88,7 @@ const server = http.createServer((req, res) => {
       try {
         json(200, { text: await transcribe(audio, resolveModelPath(req.headers["x-model"])) });
       } catch (error) {
+        console.error("[stt] transcription failed:", error instanceof Error ? error.message : error);
         json(500, { error: error instanceof Error ? error.message : String(error) });
       }
     });

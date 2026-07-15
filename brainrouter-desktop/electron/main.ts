@@ -125,9 +125,12 @@ function handleSecretRequest(host: UtilityProcess, request: SecretRequest): void
       host.postMessage({ kind: 'secret-response', id: request.id, ok: true });
       return;
     }
-    if (secretStorageMode() !== 'keychain') throw new Error('OS-protected credential storage is unavailable on this device.');
-    setSecret(app.getPath('userData'), request.key, request.value);
-    host.postMessage({ kind: 'secret-response', id: request.id, ok: true });
+    // No hard fail when the OS keychain is unavailable: setSecret already falls
+    // back to a 0600 base64 file (the module's intended behavior — refusing to
+    // store would push the token into plaintext config.json, which is worse). We
+    // surface the mode so the UI can show a non-blocking "not OS-encrypted" note.
+    const { mode } = setSecret(app.getPath('userData'), request.key, request.value);
+    host.postMessage({ kind: 'secret-response', id: request.id, ok: true, mode });
   } catch (err) {
     host.postMessage({ kind: 'secret-response', id: request.id, ok: false, error: err instanceof Error ? err.message : String(err) });
   }

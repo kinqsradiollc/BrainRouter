@@ -10,9 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 ARG WHISPER_CPP_REF=v1.7.4
 # GGML_NATIVE=OFF disables the -mcpu=native auto-detection (which emits a flag
-# value the arm64 build gcc rejects) — a portable binary is what an image wants.
+# value the arm64 build gcc rejects). BUILD_SHARED_LIBS=OFF statically links the
+# CLI so the runtime image needs no libwhisper.so/libggml*.so — a portable,
+# self-contained binary is exactly what an image wants.
 RUN git clone --depth 1 --branch "${WHISPER_CPP_REF}" https://github.com/ggerganov/whisper.cpp /src \
- && cmake -S /src -B /src/build -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON -DGGML_NATIVE=OFF \
+ && cmake -S /src -B /src/build -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON -DGGML_NATIVE=OFF -DBUILD_SHARED_LIBS=OFF \
  && cmake --build /src/build --config Release -j "$(nproc)" \
  && (cp /src/build/bin/whisper-cli /usr/local/bin/whisper-cli 2>/dev/null \
      || cp /src/build/bin/main /usr/local/bin/whisper-cli)
