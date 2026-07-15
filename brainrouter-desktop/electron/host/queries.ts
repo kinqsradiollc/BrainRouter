@@ -2094,11 +2094,25 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         });
         const brainApiKey = brainServerId ? (fresh.servers as Record<string, { apiKey?: string }>)[brainServerId]?.apiKey : undefined;
         const managedModelIds = accountModels?.signedIn ? accountModels.models.map((model) => model.id) : [];
-        const brainrouterProvider: Record<string, LLMConfig> = (accountUrl && brainApiKey && managedModelIds.length)
-          ? { brainrouter: { provider: 'brainrouter', endpoint: `${accountUrl}/v1/chat/completions`, apiKey: brainApiKey, model: managedModelIds[0], models: managedModelIds } }
-          : {};
+        // Persist a SYNCED `brainrouter` provider into config.providers so the
+        // router's chain/fallback resolves BrainRouter at TURN time too (runTurn
+        // builds its registry from config.providers). Field-level change detection
+        // avoids config-write churn; it is removed on sign-out / when the account
+        // has no managed models. Deduped from the picker's BYOK catalog below.
+        {
+          const providers = (fresh.providers = (fresh.providers ?? {}) as Record<string, LLMConfig>);
+          const desired: LLMConfig | undefined = (accountUrl && brainApiKey && managedModelIds.length)
+            ? { provider: 'brainrouter', endpoint: `${accountUrl}/v1/chat/completions`, apiKey: brainApiKey, model: managedModelIds[0], models: managedModelIds }
+            : undefined;
+          const current = providers.brainrouter;
+          const unchanged = !!desired && !!current
+            && current.endpoint === desired.endpoint && current.apiKey === desired.apiKey
+            && current.model === desired.model && JSON.stringify(current.models ?? []) === JSON.stringify(desired.models ?? []);
+          if (desired && !unchanged) { providers.brainrouter = desired; try { saveConfig(fresh as never); } catch { /* registry still uses the in-memory value */ } }
+          else if (!desired && current) { delete providers.brainrouter; try { saveConfig(fresh as never); } catch { /* best effort */ } }
+        }
         const routerRegistry = buildModelRegistry(
-          { ...(fresh.providers ?? {}), ...brainrouterProvider, ...(fresh.llm ? { [baseName]: fresh.llm } : {}) },
+          { ...(fresh.providers ?? {}), ...(fresh.llm ? { [baseName]: fresh.llm } : {}) },
           {
             aliases: resolvedKnobs.router.aliases,
             chain: [...resolvedKnobs.router.chain, ...resolvedKnobs.fallbackModels, ...(fresh.llm ? [`${baseName}/${fresh.llm.model}`] : [])],
