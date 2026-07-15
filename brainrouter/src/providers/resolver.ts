@@ -52,7 +52,10 @@ export async function resolveProviderConfig(
 ): Promise<ResolvedProviderConfig | null> {
   try {
     const db = await store.getDefaultResolvedProvider(orgId, kind);
-    if (db && db.apiKey) return db;
+    // Require an ENDPOINT, not an api key: local providers (LM Studio, Ollama,
+    // bge-reranker, …) are keyless. Gating on the key dropped admin-configured
+    // keyless embedders/rerankers, silently disabling vector search + reranking.
+    if (db && db.endpoint) return db;
   } catch {
     /* DB unavailable / unconfigured → unconfigured */
   }
