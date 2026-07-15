@@ -31,6 +31,7 @@ import {
   type VulnerabilityIntelligenceResult,
 } from '@kinqs/brainrouter-core/review';
 import type { LLMRunner, MemoryJobProgressEvent } from '@kinqs/brainrouter-types';
+import { splitDiffForReview, dedupeReviewFindings } from './reviewDiffChunks.js';
 import { resolveReviewPolicy } from './githubWebhook.js';
 
 export interface PrReviewInput {
@@ -303,13 +304,20 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
   } catch (e) { const error = e instanceof Error ? e.message : 'diff fetch failed'; progress("error", error); return { ok: false, findings: 0, posted: false, error }; }
   if (!diff.trim()) return { ok: true, findings: 0, posted: false, skipped: 'empty-diff' };
 
-  // 2. Run the single-shot reviewer (this lens) over the diff.
+  // 2. Review the FULL diff as a turn-based loop. `cap` is the per-part context
+  //    budget — the diff is split along file/hunk boundaries and reviewed part by
+  //    part so a large PR is covered end-to-end instead of truncated at the first
+  //    `cap` characters. A diff within budget stays a single pass (as before).
   const cap = deps.maxDiffChars ?? 60_000;
-  progress("diff-fetched", "PR diff fetched", { bytes: diff.length, truncated: diff.length > cap, files: addedLinesByPath(diff).size });
+  const MAX_PARTS = 40;
+  const allParts = splitDiffForReview(diff, cap);
+  const parts = allParts.slice(0, MAX_PARTS);
+  const droppedParts = allParts.length - parts.length;
+  progress("diff-fetched", "PR diff fetched", { bytes: diff.length, parts: parts.length, unreviewedParts: droppedParts, files: addedLinesByPath(diff).size });
   let intelligenceContext = '';
   if ((lens.id === 'security' || lens.id === 'code') && deps.getVulnerabilityContext) {
     try {
-      const intelligence = await deps.getVulnerabilityContext({ orgId: input.orgId, repo, diff: diff.slice(0, cap) });
+      const intelligence = await deps.getVulnerabilityContext({ orgId: input.orgId, repo, diff });
       intelligenceContext = intelligence.text;
       progress('intelligence-ready', 'Persisted vulnerability catalog and exact exposure loaded', intelligence.metadata);
     } catch {
@@ -319,7 +327,7 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
     try {
       const intelligence = await deps.getVulnerabilityIntelligence();
       if (intelligence) {
-        intelligenceContext = formatVulnerabilityIntelligenceContext(intelligence, diff.slice(0, cap), { lensId: lens.id });
+        intelligenceContext = formatVulnerabilityIntelligenceContext(intelligence, diff, { lensId: lens.id });
         progress('intelligence-ready', 'Current vulnerability intelligence loaded', {
           source: intelligence.provenance.sourceId,
           fetchedAt: intelligence.provenance.fetchedAt,
@@ -334,17 +342,28 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
     }
   }
   const intelligenceAppendix = intelligenceContext ? `${intelligenceContext}\n\n` : '';
-  const prompt = `You are reviewing pull request #${prNumber} in ${repo}. Here is the unified diff:\n\n\`\`\`diff\n${diff.slice(0, cap)}\n\`\`\`\n\n${intelligenceAppendix}${lens.buildContract()}`;
-  let reviewText = '';
   const startedAt = Date.now();
-  progress("llm-started", "Review model started", { provider: "review", model: "configured" });
-  try {
-    reviewText = await deps.llmRunner.run({ prompt, systemPrompt: lens.systemPrompt, taskId: `pr-${lens.id}-review:${repo}#${prNumber}`, timeoutMs: deps.timeoutMs ?? 120_000 });
-  } catch (e) { const error = e instanceof Error ? e.message : 'review failed'; progress("error", error); return { ok: false, findings: 0, posted: false, error }; }
-  progress("llm-finished", "Review model finished", { ms: Date.now() - startedAt });
-  const findings = parseReviewFindings(stripReasoning(reviewText));
+  const collected: ParsedReviewFinding[] = [];
+  for (let partIndex = 0; partIndex < parts.length; partIndex++) {
+    const multi = parts.length > 1;
+    const label = multi ? ` (part ${partIndex + 1} of ${parts.length})` : '';
+    const prompt = `You are reviewing pull request #${prNumber} in ${repo}${label}. Here is the unified diff${multi ? ' for this part' : ''}:\n\n\`\`\`diff\n${parts[partIndex]}\n\`\`\`\n\n${intelligenceAppendix}${lens.buildContract()}`;
+    progress("llm-started", `Review model started${label}`, { provider: "review", model: "configured", part: partIndex + 1, parts: parts.length });
+    try {
+      const reviewText = await deps.llmRunner.run({ prompt, systemPrompt: lens.systemPrompt, taskId: `pr-${lens.id}-review:${repo}#${prNumber}${multi ? `:${partIndex + 1}` : ''}`, timeoutMs: deps.timeoutMs ?? 120_000 });
+      collected.push(...parseReviewFindings(stripReasoning(reviewText)));
+    } catch (e) {
+      const error = e instanceof Error ? e.message : 'review failed';
+      // Only the FIRST part failing sinks the review (nothing to post). A later
+      // part failing still lets us surface what the earlier parts found.
+      if (partIndex === 0) { progress("error", error); return { ok: false, findings: 0, posted: false, error }; }
+      progress("llm-finished", `Review part ${partIndex + 1} failed, continuing: ${error}`, { part: partIndex + 1, failed: true });
+    }
+  }
+  progress("llm-finished", "Review model finished", { ms: Date.now() - startedAt, parts: parts.length });
+  const findings = dedupeReviewFindings(collected);
   const blocking = findings.filter((f) => lens.isBlocking(f)).length;
-  progress("findings-parsed", "Findings parsed", { total: findings.length, blocking });
+  progress("findings-parsed", "Findings parsed", { total: findings.length, blocking, ...(droppedParts > 0 ? { unreviewedParts: droppedParts } : {}) });
 
   // 3. Post inline review comments (with GitHub ```suggestion blocks) anchored to the
   //    diff, grouped as ONE PR review — deduped against inline comments we already
