@@ -2080,8 +2080,25 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const defaultProviderName = defaultProviderMatch.name;
         const resolvedKnobs = resolveCliKnobs(fresh);
         const baseName = fresh.providers?.base ? 'base-config' : 'base';
+        // Phase B — surface the signed-in account's server-managed models as a
+        // first-class `brainrouter` provider so the router's chain/fallback can
+        // auto-route across BrainRouter AND the user's own BYOK providers. It
+        // targets the single :3747 /v1 gateway with the account's br_ key, and is
+        // filtered out of the picker's BYOK catalog below (the managed menu owns
+        // its display) so it never double-lists.
+        const accountModels = await refreshAccountModelCatalog();
+        const accountUrl = String((fresh.cli as { account?: { url?: string } } | undefined)?.account?.url ?? '').trim().replace(/\/+$/, '');
+        const brainServerId = Object.keys(fresh.servers ?? {}).find((id) => {
+          const s = (fresh.servers as Record<string, { identity?: string }> | undefined)?.[id];
+          return s?.identity === 'brainrouter' || /^brainrouter/i.test(id);
+        });
+        const brainApiKey = brainServerId ? (fresh.servers as Record<string, { apiKey?: string }>)[brainServerId]?.apiKey : undefined;
+        const managedModelIds = accountModels?.signedIn ? accountModels.models.map((model) => model.id) : [];
+        const brainrouterProvider: Record<string, LLMConfig> = (accountUrl && brainApiKey && managedModelIds.length)
+          ? { brainrouter: { provider: 'brainrouter', endpoint: `${accountUrl}/v1/chat/completions`, apiKey: brainApiKey, model: managedModelIds[0], models: managedModelIds } }
+          : {};
         const routerRegistry = buildModelRegistry(
-          { ...(fresh.providers ?? {}), ...(fresh.llm ? { [baseName]: fresh.llm } : {}) },
+          { ...(fresh.providers ?? {}), ...brainrouterProvider, ...(fresh.llm ? { [baseName]: fresh.llm } : {}) },
           {
             aliases: resolvedKnobs.router.aliases,
             chain: [...resolvedKnobs.router.chain, ...resolvedKnobs.fallbackModels, ...(fresh.llm ? [`${baseName}/${fresh.llm.model}`] : [])],
@@ -2095,7 +2112,6 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const workspacePrefs = readPreferences(workspaceRoot);
         const activeMode = resolveActiveMode(workspaceRoot, getActiveAgent().sessionKey);
         const connectorItems = listConnectors(workspaceRoot);
-        const accountModels = await refreshAccountModelCatalog();
         return {
           model: fresh.llm?.model ?? getLlm().model,
           provider: fresh.llm?.provider ?? getLlm().provider,
@@ -2157,8 +2173,11 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           routerCatalog: {
             enabled: resolvedKnobs.router.enabled,
             primaryChain: resolvedKnobs.router.chain,
-            canonical: aggregateCatalog(routerRegistry, { prefix: 'canonical' }),
-            bare: aggregateCatalog(routerRegistry, { prefix: 'bare' }),
+            // BrainRouter is routable (registry above) but hidden from the BYOK
+            // catalog — the "BrainRouter managed" menu owns its display, so it
+            // never appears twice in the picker.
+            canonical: aggregateCatalog(routerRegistry, { prefix: 'canonical' }).filter((item) => item.provider !== 'brainrouter'),
+            bare: aggregateCatalog(routerRegistry, { prefix: 'bare' }).filter((item) => !(item.providers ?? []).includes('brainrouter')),
             aliases: aggregateCatalog(routerRegistry, { prefix: 'alias' }),
           },
           routerStatus: getRouterPolicy().status(),
