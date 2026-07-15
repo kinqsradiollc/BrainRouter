@@ -38,7 +38,7 @@ const ROLE_DESC: Record<string, string> = {
   pentest: "White-box pentest reviewer. Inherits the base LLM when unset.",
   "meeting-summary": "Summarizes meeting transcripts into decisions + action items. Inherits the base LLM when unset.",
 };
-type AgentAssign = { provider?: string; model?: string; maxDiffChars?: number; timeoutMs?: number };
+type AgentAssign = { provider?: string; model?: string };
 
 interface CatalogEntry { id: string; label: string; endpoint: string; local: boolean; defaultModels?: string[] }
 interface Draft {
@@ -311,7 +311,6 @@ function ProvidersInner() {
                   const set = (patch: AgentAssign) => setAssignments((m) => ({ ...m, [role]: { ...m[role], ...patch } }));
                   const selectedProvider = llmProviders.find((provider) => provider.id === a.provider) ?? llmProvider;
                   const modelOpts = selectedProvider ? Array.from(new Set([selectedProvider.model, ...(selectedProvider.models ?? [])].filter(Boolean))) : [];
-                  const isReview = role === "security-review" || role === "code-review";
                   return (
                     <div key={role} className="org-member">
                       <div className="org-member__id" style={{ whiteSpace: "normal" }}><strong>{ROLE_LABELS[role] ?? role}</strong><div className="settings-hint">{ROLE_DESC[role] ?? ""}</div></div>
@@ -319,15 +318,11 @@ function ProvidersInner() {
                       <select className="settings-select org-rolepick" style={{ minWidth: "10rem" }} value={a.provider ?? ""} onChange={(e) => set({ provider: e.target.value || undefined, model: undefined })} aria-label={`Provider for ${role}`}>
                         <option value="">Base provider</option>{llmProviders.map((provider) => <option key={provider.id} value={provider.id}>{provider.label || provider.providerId || provider.id}</option>)}
                       </select>
-                      {modelOpts.length > 0 ? (
-                        <select className="settings-select org-rolepick" style={{ minWidth: "13rem" }} value={a.model ?? ""} onChange={(e) => set({ model: e.target.value || undefined })} aria-label={`Model for ${role}`}>
-                          <option value="">Default ({selectedProvider?.model || "provider default"})</option>
-                          {modelOpts.map((m) => <option key={m} value={m}>{m}</option>)}
-                        </select>
-                      ) : (
-                        <input className="settings-input org-rolepick" style={{ width: "13rem" }} placeholder="model (optional)" value={a.model ?? ""} onChange={(e) => set({ model: e.target.value || undefined })} />
-                      )}
-                      {isReview && <><input className="settings-input" style={{ width: "7rem" }} type="number" min="1" max="500000" placeholder="max diff" value={a.maxDiffChars ?? ""} onChange={(e) => set({ maxDiffChars: e.target.value ? Number(e.target.value) : undefined })} aria-label={`Maximum diff chars for ${role}`} /><input className="settings-input" style={{ width: "7rem" }} type="number" min="1000" max="600000" placeholder="timeout ms" value={a.timeoutMs ?? ""} onChange={(e) => set({ timeoutMs: e.target.value ? Number(e.target.value) : undefined })} aria-label={`Timeout for ${role}`} /></>}
+                      {/* Model is ALWAYS a dropdown driven by the provider's /models — never a free-text box (consistent across roles; no hand-typed model ids). */}
+                      <select className="settings-select org-rolepick" style={{ minWidth: "13rem" }} value={a.model ?? ""} onChange={(e) => set({ model: e.target.value || undefined })} aria-label={`Model for ${role}`}>
+                        <option value="">Default ({selectedProvider?.model || "provider default"})</option>
+                        {modelOpts.map((m) => <option key={m} value={m}>{m}</option>)}
+                      </select>
                       </div>
                     </div>
                   );
