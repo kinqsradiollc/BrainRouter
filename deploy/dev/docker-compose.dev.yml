@@ -1,0 +1,77 @@
+# ── BrainRouter local DEV in Docker ──────────────────────────────────────────
+# Reuses your already-running `brainrouter-postgres` + `bge-reranker` containers
+# (reached via host.docker.internal) and adds the one thing `npm run dev:http`
+# can't run itself: the Whisper STT sidecar. Optionally runs the whole backend
+# monolith in a container too (profile "brain") — bind-mounted + tsx-watch, so a
+# code edit reflects live with NO image rebuild.
+#
+#   # STT only (recommended — keep `npm run dev:http` on the host):
+#   cd deploy/dev && cp .env.example .env   # fill the secrets
+#   docker compose -f docker-compose.dev.yml up -d
+#
+#   # …or run the backend in Docker too:
+#   docker compose -f docker-compose.dev.yml --profile brain up
+#
+# The host `npm run dev:http` (or the brain container) serves :3747 = MCP + REST +
+# /v1 gateway + job runner. It reaches the STT sidecar at BRAINROUTER_STT_URL.
+name: brainrouter-dev
+
+services:
+  # First-party Whisper transcription — the one image dev:http can't provide.
+  stt:
+    build:
+      context: ../stt
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      STT_PORT: "3752"
+      WHISPER_MODEL: ${WHISPER_MODEL:-/models/ggml-base.en.bin}
+      WHISPER_THREADS: ${WHISPER_THREADS:-}
+    # Published to the host so a host-run `npm run dev:http` can reach it at
+    # http://127.0.0.1:3752 (its default BRAINROUTER_STT_URL). Drop this and use
+    # the internal name when running the brain in-container (see below).
+    ports:
+      - "127.0.0.1:${STT_PORT:-3752}:3752"
+    # To offer MORE models (selectable via ?model=<name>), mount a dir of
+    # ggml-<name>.bin files and point WHISPER_MODELS_DIR at it — but DON'T mount
+    # over /models or you hide the baked-in default. e.g.:
+    #   volumes: [ "./whisper-models:/extra-models:ro" ]
+    #   environment: { WHISPER_MODELS_DIR: /extra-models, WHISPER_MODEL: /models/ggml-base.en.bin }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3752/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+
+  # OPTIONAL — the backend monolith in a container (profile "brain"). Bind-mounts
+  # the repo; a container-owned node_modules volume keeps host (macOS) + container
+  # (linux) native deps separate. tsx watch reflects edits live; no image build.
+  brain:
+    profiles: ["brain"]
+    image: node:22-bookworm-slim
+    working_dir: /repo
+    command: sh -lc "npm ci && npm run build:deps && npm --prefix brainrouter run dev:http"
+    restart: unless-stopped
+    volumes:
+      - ../../:/repo
+      - brain_node_modules:/repo/node_modules
+    ports:
+      - "3747:3747"
+    environment:
+      NODE_ENV: development
+      # Reuse the host's running postgres + bge-reranker. (The reranker provider row
+      # in the DB must then use http://host.docker.internal:8000, not localhost.)
+      BRAINROUTER_DATABASE_URL: ${BRAINROUTER_DATABASE_URL:-postgres://postgres:postgres@host.docker.internal:5432/brainrouter}
+      BRAINROUTER_JWT_SECRET: ${BRAINROUTER_JWT_SECRET:?set BRAINROUTER_JWT_SECRET in deploy/dev/.env}
+      BRAINROUTER_SECRET_KEY: ${BRAINROUTER_SECRET_KEY:?set BRAINROUTER_SECRET_KEY in deploy/dev/.env}
+      BRAINROUTER_STT_URL: ${BRAINROUTER_STT_URL:-http://stt:3752}
+      BRAINROUTER_CORS_ORIGIN: ${BRAINROUTER_CORS_ORIGIN:-}
+      BRAINROUTER_PUBLIC_URL: ${BRAINROUTER_PUBLIC_URL:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - stt
+
+volumes:
+  brain_node_modules:
