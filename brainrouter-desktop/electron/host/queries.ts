@@ -363,6 +363,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
     agent,
     llmForSession,
     refreshAccountModelCatalog,
+    peekAccountModelCatalog,
     syncActiveSessionLlm,
     spawnTaskAgent,
     taskEventView,
@@ -2080,37 +2081,14 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const defaultProviderName = defaultProviderMatch.name;
         const resolvedKnobs = resolveCliKnobs(fresh);
         const baseName = fresh.providers?.base ? 'base-config' : 'base';
-        // Phase B — surface the signed-in account's server-managed models as a
-        // first-class `brainrouter` provider so the router's chain/fallback can
-        // auto-route across BrainRouter AND the user's own BYOK providers. It
-        // targets the single :3747 /v1 gateway with the account's br_ key, and is
-        // filtered out of the picker's BYOK catalog below (the managed menu owns
-        // its display) so it never double-lists.
-        const accountModels = await refreshAccountModelCatalog();
-        const accountUrl = String((fresh.cli as { account?: { url?: string } } | undefined)?.account?.url ?? '').trim().replace(/\/+$/, '');
-        const brainServerId = Object.keys(fresh.servers ?? {}).find((id) => {
-          const s = (fresh.servers as Record<string, { identity?: string }> | undefined)?.[id];
-          return s?.identity === 'brainrouter' || /^brainrouter/i.test(id);
-        });
-        const brainApiKey = brainServerId ? (fresh.servers as Record<string, { apiKey?: string }>)[brainServerId]?.apiKey : undefined;
-        const managedModelIds = accountModels?.signedIn ? accountModels.models.map((model) => model.id) : [];
-        // Persist a SYNCED `brainrouter` provider into config.providers so the
-        // router's chain/fallback resolves BrainRouter at TURN time too (runTurn
-        // builds its registry from config.providers). Field-level change detection
-        // avoids config-write churn; it is removed on sign-out / when the account
-        // has no managed models. Deduped from the picker's BYOK catalog below.
-        {
-          const providers = (fresh.providers = (fresh.providers ?? {}) as Record<string, LLMConfig>);
-          const desired: LLMConfig | undefined = (accountUrl && brainApiKey && managedModelIds.length)
-            ? { provider: 'brainrouter', endpoint: `${accountUrl}/v1/chat/completions`, apiKey: brainApiKey, model: managedModelIds[0], models: managedModelIds }
-            : undefined;
-          const current = providers.brainrouter;
-          const unchanged = !!desired && !!current
-            && current.endpoint === desired.endpoint && current.apiKey === desired.apiKey
-            && current.model === desired.model && JSON.stringify(current.models ?? []) === JSON.stringify(desired.models ?? []);
-          if (desired && !unchanged) { providers.brainrouter = desired; try { saveConfig(fresh as never); } catch { /* registry still uses the in-memory value */ } }
-          else if (!desired && current) { delete providers.brainrouter; try { saveConfig(fresh as never); } catch { /* best effort */ } }
-        }
+        // PERF — read the last-known managed catalog SYNCHRONOUSLY so BYOK/router
+        // models render immediately even while the BrainRouter account is loading or
+        // signed out; refresh it in the BACKGROUND. That refresh also keeps a first-
+        // class `brainrouter` provider synced into config.providers (Phase B — so the
+        // router auto-routes across BrainRouter AND the user's own providers), deduped
+        // from the picker's BYOK catalog below. Not awaited → never blocks the snapshot.
+        const accountModels = peekAccountModelCatalog();
+        void refreshAccountModelCatalog();
         const routerRegistry = buildModelRegistry(
           { ...(fresh.providers ?? {}), ...(fresh.llm ? { [baseName]: fresh.llm } : {}) },
           {

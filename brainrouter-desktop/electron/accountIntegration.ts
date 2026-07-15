@@ -221,7 +221,7 @@ function parseModelPolicy(value: unknown): ModelPolicy {
   };
 }
 
-function emptyAccountModelCatalog(signedIn: boolean, error?: string): DesktopAccountModelCatalog {
+export function emptyAccountModelCatalog(signedIn: boolean, error?: string): DesktopAccountModelCatalog {
   return {
     signedIn,
     provider: { id: 'brainrouter', label: 'BrainRouter', readOnly: true },

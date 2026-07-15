@@ -28,6 +28,7 @@ import { createRemoteAccessClient } from './host/remoteAccessWiring.js';
 import { ensureBrainSession, getBrainSessionKey } from './host/brainSession.js';
 import {
   fetchAccountModelCatalog,
+  emptyAccountModelCatalog,
   resolveBrainRouterAccountApi,
   type BrainRouterAccountContext,
   type DesktopAccountModelCatalog,
@@ -336,6 +337,35 @@ async function main(): Promise<void> {
       ? { baseUrl, apiKey: accountAccessToken, orgId: '' }
       : null;
   };
+  // Synchronous, no-network read of the last-known managed catalog — lets the
+  // config snapshot return instantly (BYOK/router models render immediately) while
+  // the real refresh runs in the background.
+  const peekAccountModelCatalog = (): DesktopAccountModelCatalog =>
+    accountModelCatalog ?? emptyAccountModelCatalog(Boolean(accountAccessToken));
+  // Keep config.providers.brainrouter synced to the managed catalog so the router
+  // resolves BrainRouter at turn time. Runs on the (background) catalog refresh,
+  // NOT on the snapshot critical path. Field-level change detection avoids churn.
+  const syncBrainrouterProvider = (catalog: DesktopAccountModelCatalog): void => {
+    try {
+      const cfg = loadConfig() as typeof accountConfig & { providers?: Record<string, LLMConfig>; servers?: Record<string, { identity?: string; apiKey?: string }> };
+      const accountUrl = String(cfg.cli?.account?.url ?? '').trim().replace(/\/+$/, '');
+      const brainServerId = Object.keys(cfg.servers ?? {}).find((id) => {
+        const s = cfg.servers?.[id];
+        return s?.identity === 'brainrouter' || /^brainrouter/i.test(id);
+      });
+      const brApiKey = brainServerId ? cfg.servers?.[brainServerId]?.apiKey : undefined;
+      const ids = catalog.signedIn ? catalog.models.map((m) => m.id) : [];
+      const providers = (cfg.providers = (cfg.providers ?? {}) as Record<string, LLMConfig>);
+      const desired: LLMConfig | undefined = (accountUrl && brApiKey && ids.length)
+        ? { provider: 'brainrouter', endpoint: `${accountUrl}/v1/chat/completions`, apiKey: brApiKey, model: ids[0], models: ids }
+        : undefined;
+      const current = providers.brainrouter;
+      const unchanged = !!desired && !!current && current.endpoint === desired.endpoint && current.apiKey === desired.apiKey
+        && current.model === desired.model && JSON.stringify(current.models ?? []) === JSON.stringify(desired.models ?? []);
+      if (desired && !unchanged) { providers.brainrouter = desired; saveConfig(cfg as never); }
+      else if (!desired && current) { delete providers.brainrouter; saveConfig(cfg as never); }
+    } catch { /* best effort — the picker still works from the live catalog */ }
+  };
   const refreshAccountModelCatalog = async (force = false): Promise<DesktopAccountModelCatalog> => {
     if (force || !accountAccessToken) {
       accountAccessToken = await secretBridge?.get('account:access-token').catch(() => undefined);
@@ -344,6 +374,7 @@ async function main(): Promise<void> {
     if (!force && accountModelCatalog && now - accountModelCatalogAt < 30_000) return accountModelCatalog;
     accountModelCatalog = await fetchAccountModelCatalog(accountContext(), accountModelCatalog);
     accountModelCatalogAt = now;
+    syncBrainrouterProvider(accountModelCatalog);
     return accountModelCatalog;
   };
   let llm: LLMConfig = config.llm || { provider: 'openai', model: 'gpt-4o-mini', apiKey: '' };
@@ -1101,7 +1132,7 @@ async function main(): Promise<void> {
     getLlm: () => llm, setLlm: (next) => { llm = next; },
     mcpClient, callBrainAtlas, broker, emitPortFor, agent,
     getActiveAgent: () => activeAgent,
-    loadGlobalLlm, llmForSession, resolveProviderLlm, refreshAccountModelCatalog, syncActiveSessionLlm,
+    loadGlobalLlm, llmForSession, resolveProviderLlm, refreshAccountModelCatalog, peekAccountModelCatalog, syncActiveSessionLlm,
     spawnAgent, spawnReviewer, spawnTaskAgent, activeMemorySessionKey,
     lifecycleActionFor, emitRecordEvent, taskEventView, emitTaskEvent, taskProgress,
     verifyTitle, observeVerificationEvent, goalStrikes,
