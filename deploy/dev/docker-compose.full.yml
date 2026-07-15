@@ -1,0 +1,64 @@
+# ── BrainRouter FULL backend in Docker (production image, monolith) ───────────
+# Runs the whole backend (MCP + REST + /v1 gateway + job runner) in one container
+# on :3747, plus the Whisper STT sidecar — reusing your already-running host
+# postgres + bge-reranker via host.docker.internal. Uses your real secrets from
+# deploy/dev/.env (copied from brainrouter/.env, DB host rewritten).
+#
+#   cd deploy/dev
+#   docker compose -f docker-compose.full.yml up -d --build
+#   docker compose -f docker-compose.full.yml logs -f brain
+#
+# Code changed? Rebuild: `docker compose -f docker-compose.full.yml up -d --build brain`.
+# (For live-reload dev instead, use docker-compose.dev.yml's `brain` profile.)
+name: brainrouter-full
+
+services:
+  # One-shot: apply DB migrations (incl. 028 meeting summary status) before serving.
+  migrator:
+    build:
+      context: ../..
+      dockerfile: deploy/brain/Dockerfile
+      target: migrator
+    env_file: [.env]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: "no"
+
+  # First-party Whisper transcription.
+  stt:
+    build:
+      context: ../stt
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      STT_PORT: "3752"
+      WHISPER_MODEL: ${WHISPER_MODEL:-/models/ggml-base.en.bin}
+      WHISPER_THREADS: ${WHISPER_THREADS:-}
+    ports:
+      - "127.0.0.1:3752:3752"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3752/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 5
+
+  # The full backend monolith (SERVICE defaults to `brain`).
+  brain:
+    build:
+      context: ../..
+      dockerfile: deploy/brain/Dockerfile
+      target: runtime
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      # Ensure the background job runner is on so meeting notes generate.
+      BRAINROUTER_JOB_RUNNER: ${BRAINROUTER_JOB_RUNNER:-on}
+      BRAINROUTER_STT_URL: ${BRAINROUTER_STT_URL:-http://stt:3752}
+    ports:
+      - "3747:3747"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      migrator:
+        condition: service_completed_successfully

@@ -60,6 +60,8 @@ COPY --from=build /app/packages/agent-protocol/package.json /app/packages/agent-
 COPY --from=build /app/packages/agent-protocol/dist /app/packages/agent-protocol/dist
 COPY --from=build /app/packages/core/package.json /app/packages/core/package.json
 COPY --from=build /app/packages/core/dist /app/packages/core/dist
+# Runtime JSON config read from source (NOT dist): providers/models/api-key-prefixes.
+COPY --from=build /app/packages/core/config /app/packages/core/config
 COPY --from=build /app/brainrouter/package.json /app/brainrouter/package.json
 COPY --from=build /app/brainrouter/dist /app/brainrouter/dist
 

@@ -132,3 +132,4 @@ ClaudeCode*.md
 # Dev-only renderer control-gallery harness (not part of the app)
 brainrouter-desktop/preview.html
 brainrouter-desktop/src/preview.tsx
+deploy/dev/.env

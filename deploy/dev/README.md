@@ -43,6 +43,28 @@ docker compose -f docker-compose.dev.yml --profile brain up
 - For a **production image**, the brain Dockerfile bakes `dist` at build — rebuild
   it on release: `docker compose -f deploy/stack/docker-compose.yml build brain`.
 
+## Full backend in Docker (production image)
+
+Run the **whole** backend (not just STT) in a container, using your real secrets:
+
+```bash
+cd deploy/dev
+# .env is built from brainrouter/.env with the DB host rewritten to host.docker.internal.
+docker compose -f docker-compose.full.yml up -d --build     # migrator → brain (:3747) + stt
+docker compose -f docker-compose.full.yml logs -f brain
+```
+
+- Reuses your host **postgres** (all data intact) + reaches it via `host.docker.internal`.
+- The `migrator` applies pending migrations (incl. 028) before the brain serves.
+- **Local providers** (LM Studio embeddings, the `bge-reranker` container on
+  `localhost:8000`) are NOT reachable as `localhost` from inside the brain
+  container — point those provider rows at `http://host.docker.internal:8000`
+  (dashboard → AI Providers) if you want vector search + reranking in the
+  dockerized backend. Remote LLMs (e.g. opencode) work as-is. Without the change
+  the backend still runs, falling back to FTS + RRF.
+- Code changed? `docker compose -f docker-compose.full.yml up -d --build brain`
+  (or use `docker-compose.dev.yml`'s `brain` profile for live tsx-watch reload).
+
 ## Disk
 
 Image builds need headroom. Reclaim safely first:
