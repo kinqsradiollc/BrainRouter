@@ -42,3 +42,15 @@ export class MemoryCredentialStore implements CredentialStore {
   async put(value: HostCredential) { this.values.set(value.id, structuredClone(value)); }
   async remove(id: string) { this.values.delete(id); }
 }
+
+/** SecureStore-backed rotating device credentials (spec §9, Task 24) — holds only
+ * the phone's remote-access identity + rotating refresh token, never the account
+ * bearer. Satisfies the RemoteSecretsPort of client/RemoteAccessClient. */
+export class SecureRemoteSecrets {
+  private key(name: string): string { return `brainrouter.mobile.remote.${name.replace(/[^A-Za-z0-9._-]/g, '_')}`; }
+  async get(name: string): Promise<string | null> { return (await SecureStore.getItemAsync(this.key(name))) ?? null; }
+  async set(name: string, value: string): Promise<void> {
+    await SecureStore.setItemAsync(this.key(name), value, { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY });
+  }
+  async delete(name: string): Promise<void> { await SecureStore.deleteItemAsync(this.key(name)); }
+}

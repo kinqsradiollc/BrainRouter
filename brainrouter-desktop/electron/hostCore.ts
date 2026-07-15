@@ -167,7 +167,7 @@ export function createHostCore(input: {
   /** Resolve a saved connection (by name) + chosen model to a full LLM config
    *  (incl. key) so the active agent can be rebuilt for a cross-provider pick. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  resolveProviderLlm?: (providerName: string, model: string) => any | undefined;
+  resolveProviderLlm?: (providerName: string, model: string) => Promise<any | undefined> | any | undefined;
   /** Full per-session LLM (provider/model/endpoint + key) for a session switch. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   resolveSessionLlm?: (sessionKey: string) => any | undefined;
@@ -177,6 +177,9 @@ export function createHostCore(input: {
   broker?: InteractionBroker;
   /** Called on `shutdown` after pending interactions are dismissed. */
   onShutdown?: () => void;
+  /** Fail-closed policy check immediately before a turn starts. Returning a
+   * message blocks execution and surfaces that recovery prompt to the user. */
+  validateTurn?: (sessionKey: string) => Promise<string | null> | string | null;
 }): HostCore {
   const broker = input.broker ?? new InteractionBroker();
 
@@ -213,7 +216,17 @@ export function createHostCore(input: {
       emit({ kind: 'turn-error', message: 'A turn is already running in this session — interrupt it first or queue the prompt.' });
       return;
     }
+    // Reserve the session before an async policy refresh so a second send cannot
+    // race through validation and start another turn.
     rt.running = true;
+    try {
+      const policyError = input.validateTurn ? await input.validateTurn(activeKey) : null;
+      if (policyError) { rt.running = false; emit({ kind: 'turn-error', message: policyError }); return; }
+    } catch (error) {
+      rt.running = false;
+      emit({ kind: 'turn-error', message: error instanceof Error ? error.message : String(error) });
+      return;
+    }
     // DESK-6t — LAZY HISTORY lands here: if this session was resumed for viewing
     // and never loaded into the agent, load its transcript NOW (before the turn)
     // so the model has the full conversation. Hidden behind LLM latency.
@@ -442,7 +455,11 @@ export function createHostCore(input: {
         // A `providerName` means a CROSS-PROVIDER pick: rebuild the agent's whole
         // LLM (provider/model/endpoint/key) and write the full session override
         // (never the global default unless persist) — so it never syncs to others.
-        const full = cmd.providerName ? input.resolveProviderLlm?.(cmd.providerName, cmd.model) : undefined;
+        const full = cmd.providerName ? await input.resolveProviderLlm?.(cmd.providerName, cmd.model) : undefined;
+        if (cmd.providerName && !full) {
+          emit({ kind: 'turn-error', message: `The selected provider or model “${cmd.model}” is unavailable. Refresh Models and choose again.` });
+          return;
+        }
         if (full) a?.setLLMConfig?.(full); else a?.setModel?.(cmd.model);
         if (cmd.persist) {
           try {

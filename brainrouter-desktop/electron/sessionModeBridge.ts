@@ -4,7 +4,7 @@ export type DesktopSessionModePatch = Partial<SessionMode>;
 
 const EXECUTION_MODES = new Set<ExecutionMode>(['planning', 'fast']);
 const REVIEW_POLICIES = new Set<ReviewPolicy>(['request', 'proceed']);
-const EFFORT_LEVELS = new Set<EffortLevel>(['low', 'medium', 'high', 'xhigh']);
+const EFFORT_LEVELS = new Set<EffortLevel>(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 
 export function desktopSessionModePatchFromArgs(args: Record<string, unknown>): { patch: DesktopSessionModePatch; error?: string } {
   const patch: DesktopSessionModePatch = {};

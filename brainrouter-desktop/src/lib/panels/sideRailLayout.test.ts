@@ -4,11 +4,19 @@ import {
   SIDE_RAIL_MAX,
   SIDE_RAIL_MIN,
   clampSideRailWidth,
+  environmentPanelLayout,
   openWidthFor,
   reorderByValue,
   sideRailClassName,
   sideRailFullscreenTitle,
 } from './sideRailLayout.js';
+
+test('environment panel becomes a visible drawer instead of disappearing without column room', () => {
+  assert.deepEqual(environmentPanelLayout(false, false, false), { mounted: false, drawer: false });
+  assert.deepEqual(environmentPanelLayout(true, true, false), { mounted: false, drawer: false });
+  assert.deepEqual(environmentPanelLayout(true, false, true), { mounted: true, drawer: false });
+  assert.deepEqual(environmentPanelLayout(true, false, false), { mounted: true, drawer: true });
+});
 
 test('clampSideRailWidth keeps the rail within its normal drag bounds', () => {
   assert.equal(clampSideRailWidth(120), SIDE_RAIL_MIN);

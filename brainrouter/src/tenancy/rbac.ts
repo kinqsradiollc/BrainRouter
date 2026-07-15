@@ -28,12 +28,20 @@ export const CAPABILITIES = [
   'org:manage',       // rename / delete / change plan / transfer ownership
   'members:manage',   // invite / remove members, set roles
   'providers:manage', // create/update/delete LLM/embeddings/reranker/judge configs
+  'models:read',      // read the member-safe server-managed model catalog
+  'models:manage',    // create/update/default/order org model policies
   'triggers:manage',  // GitHub App / webhook / automation-rule config + linked repos
   'reviews:read',     // PR review console, job details and live timelines
   'reviews:run',      // manually enqueue a security/code review
+  'remote:read',      // list one's enrolled devices, grants, and metadata audit
+  'remote:connect',   // request remote sessions within an approved device grant
+  'remote:manage',    // approve/revoke device grants and enrolled devices
   'memory:write',     // create/update one's own memory records
   'memory:read',      // read own + org-shared memory
   'memory:share',     // mark a record org-visible (private → org)
+  'vulnerabilities:read',   // browse the CVE catalog + this org's scans/findings
+  'vulnerabilities:scan',   // run repository inventory scans + OSV matching
+  'vulnerabilities:manage', // refresh sources, triage findings, manage watches
 ] as const;
 export type Capability = (typeof CAPABILITIES)[number];
 
@@ -47,15 +55,34 @@ export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
   admin: new Set<Capability>([
     'members:manage',
     'providers:manage',
+    'models:read',
+    'models:manage',
     'triggers:manage',
     'reviews:read',
     'reviews:run',
+    'remote:read',
+    'remote:connect',
+    'remote:manage',
     'memory:write',
     'memory:read',
     'memory:share',
+    'vulnerabilities:read',
+    'vulnerabilities:scan',
+    'vulnerabilities:manage',
   ]),
-  developer: new Set<Capability>(['reviews:read', 'memory:write', 'memory:read', 'memory:share']),
-  viewer: new Set<Capability>(['memory:read']),
+  developer: new Set<Capability>([
+    'models:read',
+    'reviews:read',
+    'remote:read',
+    'remote:connect',
+    'remote:manage',
+    'memory:write',
+    'memory:read',
+    'memory:share',
+    'vulnerabilities:read',
+    'vulnerabilities:scan',
+  ]),
+  viewer: new Set<Capability>(['models:read', 'remote:read', 'memory:read', 'vulnerabilities:read']),
 };
 
 /** Narrow an unknown value to a canonical {@link Role} (strict — no legacy names). */

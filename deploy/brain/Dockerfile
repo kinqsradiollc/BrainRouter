@@ -17,7 +17,10 @@ WORKDIR /app
 # can resolve the workspace graph from the lockfile.
 COPY package.json package-lock.json ./
 COPY packages/types/package.json packages/types/
+COPY packages/agent-protocol/package.json packages/agent-protocol/
 COPY packages/core/package.json packages/core/
+COPY packages/sdk/package.json packages/sdk/
+COPY packages/hooks/package.json packages/hooks/
 COPY brainrouter/package.json brainrouter/
 COPY brainrouter-cli/package.json brainrouter-cli/
 COPY brainrouter-dashboard/package.json brainrouter-dashboard/
@@ -28,15 +31,23 @@ COPY brainrouter-desktop/package.json brainrouter-desktop/
 # Electron binary download) — the brain doesn't need them.
 RUN npm ci --no-audit --no-fund --ignore-scripts
 
-# Source for only what the brain needs: the shared types contract, then the brain.
+# Source for the complete runtime dependency chain. Core imports the agent
+# protocol at runtime, so all three workspaces must be built and copied rather
+# than leaving npm workspace symlinks pointing at empty directories.
 COPY packages/types ./packages/types
+COPY packages/agent-protocol ./packages/agent-protocol
+COPY packages/core ./packages/core
 COPY brainrouter ./brainrouter
 RUN npm --prefix packages/types run build \
+ && npm --prefix packages/agent-protocol run build \
+ && npm --prefix packages/core run build \
  && npm --prefix brainrouter run build \
- && npm prune --omit=dev --ignore-scripts
+ && npm prune --omit=dev --ignore-scripts \
+ && test -f brainrouter/dist/migrate.js \
+ && test -f brainrouter/dist/memory/store/postgres/migrations/001_init.sql
 
 # ── runtime ─────────────────────────────────────────────────────────────────────
-FROM node:22-bookworm-slim AS runtime
+FROM node:22-bookworm-slim AS runtime-base
 ENV NODE_ENV=production
 WORKDIR /app/brainrouter
 
@@ -45,9 +56,19 @@ COPY --from=build /app/node_modules /app/node_modules
 COPY --from=build /app/package.json /app/package.json
 COPY --from=build /app/packages/types/package.json /app/packages/types/package.json
 COPY --from=build /app/packages/types/dist /app/packages/types/dist
+COPY --from=build /app/packages/agent-protocol/package.json /app/packages/agent-protocol/package.json
+COPY --from=build /app/packages/agent-protocol/dist /app/packages/agent-protocol/dist
+COPY --from=build /app/packages/core/package.json /app/packages/core/package.json
+COPY --from=build /app/packages/core/dist /app/packages/core/dist
 COPY --from=build /app/brainrouter/package.json /app/brainrouter/package.json
 COPY --from=build /app/brainrouter/dist /app/brainrouter/dist
 
+# Deterministic one-shot target used by Compose/CI before any serving process.
+FROM runtime-base AS migrator
+CMD ["node", "dist/migrate.js"]
+
+# Default production target remains the HTTP/MCP service.
+FROM runtime-base AS runtime
 EXPOSE 3747
 # BRAINROUTER_DATABASE_URL is REQUIRED (supply via env/compose). The engine
 # connects + migrates lazily on first use; SIGTERM closes the pool cleanly.

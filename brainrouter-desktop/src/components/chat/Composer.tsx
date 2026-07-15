@@ -42,7 +42,7 @@ export interface ComposerProps {
   q: (id: string, name: string, args?: Record<string, unknown>) => void;
   modeLabel: string;
   effort: string;
-  info: { workspaceRoot?: string; model?: string };
+  info: { workspaceRoot?: string; model?: string; provider?: string };
   branches: { current: string | null; branches: string[]; loading?: boolean };
   endpointModels: string[];
   // §multi-select-models — the default provider's allowlist. When non-empty the
@@ -52,6 +52,7 @@ export interface ComposerProps {
   // the model menu can list and switch to any connected provider, not just the
   // active endpoint. defaultProviderName marks which one is currently active.
   connectedProviders?: Array<{ name: string; provider: string; model: string; models?: string[]; endpoint?: string | null }>;
+  accountModels?: ConfigSnapshot['accountModels'];
   defaultProviderName?: string | null;
   routerCatalog?: ConfigSnapshot['routerCatalog'];
   routerFallback?: string | null;
@@ -119,7 +120,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
   const {
     draft, setDraft, running, stopping, submit, requestStop, slashActive, slashMatches, commands,
     slashSel, setSlashSel, setSlashDismissed, onRunSlash, pop, setPop, q, modeLabel, effort,
-    info, branches, endpointModels, allowedModels, connectedProviders, defaultProviderName, routerCatalog, routerFallback, modelsLoading, setModelsLoading, modelChoices, modelScope, setModelScope,
+    info, branches, endpointModels, allowedModels, connectedProviders, accountModels, defaultProviderName, routerCatalog, routerFallback, modelsLoading, setModelsLoading, modelChoices, modelScope, setModelScope,
     hasConversation, contextUsage, tokens, openSettings, onAttach, attachments = [], onClearAttachment, canSubmit = false,
     pastedImages = [], onPasteImages, onClearPastedImage,
     componentTags = [], onDropTag, onClearComponentTag, inputRef,
@@ -201,8 +202,8 @@ export function Composer(p: ComposerProps): React.ReactElement {
     const files = Array.from(list);
     if (files.length) onAttach(files);
   };
-  const pickModelRequest = (model: string, providerName?: string): void => {
-    window.brainrouter.send({ kind: 'set-model', model, ...(providerName ? { providerName } : {}), persist: modelScope === 'global' });
+  const pickModelRequest = (model: string, providerName?: string, managed = false): void => {
+    window.brainrouter.send({ kind: 'set-model', model, ...(providerName ? { providerName } : {}), persist: managed ? false : modelScope === 'global' });
     rememberModel(providerName ? `${providerName}/${model}` : model);
     setPop('');
   };
@@ -231,8 +232,14 @@ export function Composer(p: ComposerProps): React.ReactElement {
   // binary On-Off / locked "Always on" / hidden). Reasoning is DECOUPLED from
   // Fast mode: this slider is the user's explicit choice and stays live; Fast
   // mode (a Settings toggle) only changes the agentic strategy, not the thinking.
-  const reasoningProfile = reasoningProfileForModel(info.model);
+  const activeManagedPolicy = info.provider === 'brainrouter'
+    ? accountModels?.models.find((model) => model.id === info.model) ?? null
+    : null;
+  const managedSelectionInvalid = info.provider === 'brainrouter' && !activeManagedPolicy;
+  const reasoningProfile = reasoningProfileForModel(info.model, activeManagedPolicy);
   const reasoningPill = reasoningPillLabel(reasoningProfile, effort, false);
+  const managedEffortInvalid = !!activeManagedPolicy?.reasoning
+    && !activeManagedPolicy.reasoning.allowed.some((option) => option.id === effort);
   const selectedChangePolicy = CHANGE_POLICIES.find((policy) => policy.modeLabel === modeLabel) ?? CHANGE_POLICIES[0];
   return (
     <div className="composer">
@@ -443,10 +450,12 @@ export function Composer(p: ComposerProps): React.ReactElement {
               SELECTED model's family: graded tiers, binary On/Off, a locked
               "Always on", or nothing for non-reasoning models. Always live
               (decoupled from Fast mode); only an always-on reasoner locks it. */}
+          <span className="model-effort-control">
           {reasoningPill ? (
             <span className="pop-wrap composer-effort">
               {pop === 'effort' && reasoningProfile.options.length ? (
                 <div className="menu-pop effort-menu">
+                  <div className="menu-head"><span>Reasoning effort</span><span>{reasoningProfile.source === 'server' ? 'Managed policy' : 'Inferred'}</span></div>
                   <ReasoningSlider
                     profile={reasoningProfile}
                     effort={effort}
@@ -456,8 +465,9 @@ export function Composer(p: ComposerProps): React.ReactElement {
               ) : null}
               <button
                 type="button"
-                className="effort-pill"
-                title={reasoningProfile.kind === 'always-on' ? 'This model always reasons' : 'Reasoning effort'}
+                className={`effort-pill${managedEffortInvalid ? ' invalid' : ''}`}
+                aria-label={`Reasoning effort: ${reasoningPill}`}
+                title={managedEffortInvalid ? 'This effort is unavailable for the managed model. Choose another effort.' : reasoningProfile.kind === 'always-on' ? 'This model always reasons' : 'Reasoning effort'}
                 disabled={reasoningProfile.kind === 'always-on'}
                 style={reasoningProfile.kind === 'always-on' ? { opacity: 0.6 } : undefined}
                 onClick={() => { if (reasoningProfile.options.length) setPop(pop === 'effort' ? '' : 'effort'); }}
@@ -471,6 +481,23 @@ export function Composer(p: ComposerProps): React.ReactElement {
             {pop === 'model' ? (
               <div className="menu-pop model-menu" ref={modelMenuRef}>
                 {(() => {
+                  const managedMenu = accountModels?.signedIn ? (
+                    <>
+                      <div className="menu-head"><span>BrainRouter managed</span><span>{accountModels.stale ? 'Last known' : 'Account'}</span></div>
+                      <div className="model-list">
+                        {accountModels.models.length ? accountModels.models.map((model) => (
+                          <button key={`brainrouter:${model.id}`} className="menu-item model-item"
+                            title={`Use ${model.label} for this chat`}
+                            onClick={() => pickModelRequest(model.id, 'brainrouter-account', true)}>
+                            <span className="mi-check">{info.provider === 'brainrouter' && model.id === info.model ? '✓' : ''}</span>
+                            <span className="managed-provider-mark managed-provider-mark--menu" aria-hidden="true">BR</span>
+                            <span className="model-id">{model.label}<span className="choice-detail">{model.id}</span></span>
+                            <span className="model-caps"><span className="cap-chip cap-reasoning" title="Server-managed reasoning policy">{model.reasoning ? `${model.reasoning.allowed.length} efforts` : 'fixed'}</span></span>
+                          </button>
+                        )) : <div className="empty">{accountModels.error ?? 'No managed models are available.'}</div>}
+                      </div>
+                    </>
+                  ) : null;
                   if (routerCatalog) {
                     const primary = (routerCatalog.primaryChain ?? []).filter(Boolean);
                     // Router-first (always on): the picker offers the routes, not a
@@ -503,6 +530,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
                     };
                     return (
                       <>
+                        {managedMenu}
                         <div className="menu-head"><span>Provider router</span><span>{fmt('Mod+Shift+I')}</span></div>
                         <div className="model-list">
                           <button className="menu-item model-item" onClick={() => {
@@ -550,6 +578,7 @@ export function Composer(p: ComposerProps): React.ReactElement {
                     .filter((g) => g.models.length);
                   return (
                     <>
+                      {managedMenu}
                       <div className="menu-head"><span>Models{chatModels.length ? ` · ${chatModels.length} on endpoint` : ''}</span><span>{fmt('Mod+Shift+I')}</span></div>
                       <div className="model-list model-list-endpoint">
                         {modelsLoading && !endpointModels.length ? (
@@ -626,13 +655,16 @@ export function Composer(p: ComposerProps): React.ReactElement {
                 </div>
               </div>
             ) : null}
-            <button type="button" className={`model-pill${routerFallback ? ' router-fallback' : ''}`} title={routerFallback ? `Router fallback: ${routerFallback}` : undefined} onClick={() => {
-              if (pop !== 'model') { setModelsLoading(true); q('q-models', 'list-models'); }
+            <button type="button" className={`model-pill${routerFallback ? ' router-fallback' : ''}${managedSelectionInvalid ? ' invalid' : ''}`}
+              aria-label={`Model: ${info.model ?? 'none selected'}`}
+              title={managedSelectionInvalid ? 'This managed model is unavailable. Choose another model.' : routerFallback ? `Router fallback: ${routerFallback}` : 'Choose model'} onClick={() => {
+              if (pop !== 'model') { setModelsLoading(true); q('q-models', 'list-models'); q('q-account-models', 'account-model-catalog'); }
               setPop(pop === 'model' ? '' : 'model');
             }}>
               {routerFallback ? <span className="router-fallback-badge" aria-label="Router fallback">↷</span> : null}
               <span>{info.model ?? ''}</span>
             </button>
+          </span>
           </span>
           {/* DESK-5s/5u — click the ring for a full context + usage breakdown. */}
           <span className="pop-wrap" style={hasConversation ? undefined : { display: 'none' }}>

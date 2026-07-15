@@ -21,7 +21,7 @@ import { appendVerbositySteering } from '../../prompt/steering/verbositySteering
 import { syncRequirementPlanTrack } from '../../requirement/sync/planTrackSync.js';
 import { detectRequirementShapedPrompt } from '../../requirement/records/requirementDetector.js';
 import { createRequirement, getRequirement, linkRequirement, listRequirements, updateRequirement } from '../../requirement/records/requirementStore.js';
-import { effortToWireLevel, readPreferences } from '../../session/preferences/preferencesStore.js';
+import { effortToPromptLevel, readPreferences } from '../../session/preferences/preferencesStore.js';
 import { resolveActiveMode } from '../../session/state/sessionModeStore.js';
 import { readPlan } from '../../task/taskStore.js';
 import { reconcileSessionSprints } from '../../track/automation/index.js';
@@ -142,7 +142,7 @@ export function createSystemMessage(this: Agent) {
       // child override) still wins when set.
       executionMode: activeMode.executionMode,
       reviewPolicy: activeMode.reviewPolicy,
-      effort: effortToWireLevel(this.effortOverride ?? activeMode.effort),
+      effort: effortToPromptLevel(this.effortOverride ?? activeMode.effort),
       connectedMcpTools,
       // Drive `modelFamilyOverlay`: weaker / OS / free-tier models
       // (Nemotron, Kimi, Llama, Qwen, Mistral, gpt-oss, DeepSeek, …)

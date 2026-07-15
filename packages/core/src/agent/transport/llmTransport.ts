@@ -249,11 +249,14 @@ function normalizeResponsesOutput(data: any, endpoint: string, model: string) {
  *      (deepseek `max`, opencode `xhigh`) are untouched.
  */
 export function resolveWireEffort(config: LLMConfig, effort: EffortLevel | undefined): string | null {
-  if (!effort || effort === 'medium') return null;
-  // Claude's extended UI tiers (max, ultracode) have no distinct reasoning_effort
-  // value (the field tops at xhigh), so they cap to xhigh on the wire. They still
-  // persist distinctly so the slider remembers its position.
+  if (!effort) return null;
   const lvl = effortToWireLevel(effort);
+  // The built-in account provider has already validated the selected model
+  // against the server catalog. Preserve its exact policy vocabulary, including
+  // none/minimal/medium/max, and let the gateway translate upstream.
+  if (config.provider === 'brainrouter') return lvl;
+  // Preserve existing BYOK semantics: medium means provider default / omitted.
+  if (lvl === 'medium') return null;
   const def = activeProviderDef(config);
   if ((def?.reasoningEffort ?? 'param') !== 'param') return null;
   const model = normalizeModelName(config.model);
@@ -1162,7 +1165,10 @@ export async function callOpenAIStream(
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'Accept': 'text/event-stream',
+    // Advertise both: real providers stream SSE regardless, and the MCP
+    // Streamable-HTTP SDK requires application/json + text/event-stream together
+    // on any POST it sees (so a BrainRouter-as-provider request never 406s).
+    'Accept': 'application/json, text/event-stream',
   };
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 

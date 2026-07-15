@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import React, { type ReactNode } from "react";
 
 export type DashboardNavItem = {
   href: string;
@@ -47,6 +47,7 @@ export const PRODUCT_NAV_GROUPS: DashboardNavGroup[] = [
     items: [
       { href: "/overview", label: "Overview", keywords: "dashboard home", icon: <svg {...iconProps}><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></svg> },
       { href: "/chat", label: "Agent workbench", keywords: "chat ask build task", icon: <svg {...iconProps}><path d="M21 11.5a8.5 8.5 0 0 1-9 8.5 9.4 9.4 0 0 1-4-.9L3 21l1.7-4.5A8.5 8.5 0 1 1 21 11.5Z" /></svg> },
+      { href: "/meetings", label: "Meetings", keywords: "record transcript summary notes", icon: <svg {...iconProps}><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></svg> },
     ],
   },
   {
@@ -55,6 +56,7 @@ export const PRODUCT_NAV_GROUPS: DashboardNavGroup[] = [
       { href: "/reviews", label: "PR reviews", keywords: "pull request quality", icon: <svg {...iconProps}><path d="M6 3v12" /><circle cx="6" cy="18" r="2" /><circle cx="18" cy="6" r="2" /><path d="M8 6h8M18 8v10" /></svg> },
       { href: "/issues", label: "Issues", keywords: "findings attention", icon: <svg {...iconProps}><path d="M12 3 2.8 20h18.4L12 3Z" /><path d="M12 9v4M12 17h.01" /></svg> },
       { href: "/pentests", label: "Pentests", keywords: "assessment", icon: <svg {...iconProps}><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg> },
+      { href: "/vulnerabilities", label: "CVE", keywords: "cve vulnerability exposure kev epss", icon: <svg {...iconProps}><path d="M12 3l8 4v5c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V7l8-4Z" /><path d="M12 8v4M12 15h.01" /></svg> },
     ],
   },
   {
@@ -83,9 +85,16 @@ export const SETTINGS_NAV_GROUPS: DashboardNavGroup[] = [
     items: [
       { href: "/organizations", label: "Organizations" },
       { href: "/users", label: "Members", adminOnly: true },
+      { href: "/review-automation", label: "Review automation", keywords: "pull request review policy repositories" },
     ],
   },
-  { label: "Intelligence", items: [{ href: "/providers", label: "Models & providers", keywords: "llm", adminOnly: true }] },
+  { label: "Intelligence", items: [
+    // Visible to every member: the backend gates writes per-org (models:manage /
+    // providers:manage), and the page itself disables admin-only tabs. Gating the
+    // NAV on the instance-admin flag hid the managed-models editor from org
+    // owners entirely (the "can't configure managed models anywhere" bug).
+    { href: "/providers", label: "Models & providers", keywords: "llm managed models byok" },
+  ] },
   { label: "Notifications", items: [{ href: "/email-settings", label: "Email", adminOnly: true }] },
   {
     label: "Advanced",

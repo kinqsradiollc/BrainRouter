@@ -357,10 +357,12 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
     listWorkspaceFilesCached,
     send,
     config,
+    secretBridge,
     mcpClient,
     callBrainAtlas,
     agent,
     llmForSession,
+    refreshAccountModelCatalog,
     syncActiveSessionLlm,
     spawnTaskAgent,
     taskEventView,
@@ -375,6 +377,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
     hostedAgents,
     fanoutManager, remoteWorktrees,
     mobileRelay,
+    remoteAccess,
     modelsCacheByKey,
     isoNow,
     runReview,
@@ -952,6 +955,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         return {
           sessionKey: getActiveAgent().sessionKey,
           model: getActiveAgent().getModel?.() ?? current.model,
+          provider: current.provider,
           workspaceRoot,
           username: identity.username,
           accountSignedIn: identity.signedIn,
@@ -2065,7 +2069,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       'schedule-toggle': (a) => ({ ok: setScheduleEnabled(workspaceRoot, String(a.id ?? ''), a.enabled !== false), enabled: a.enabled !== false }),
       // DESK-4c — one snapshot powering the whole Settings dialog. All values
       // come from the stores the CLI itself reads/writes.
-      'config-snapshot': () => {
+      'config-snapshot': async () => {
         const fresh = loadConfig();
         setLlm(fresh.llm ?? getLlm());
         syncActiveSessionLlm(getLlm());
@@ -2091,10 +2095,12 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const workspacePrefs = readPreferences(workspaceRoot);
         const activeMode = resolveActiveMode(workspaceRoot, getActiveAgent().sessionKey);
         const connectorItems = listConnectors(workspaceRoot);
+        const accountModels = await refreshAccountModelCatalog();
         return {
           model: fresh.llm?.model ?? getLlm().model,
           provider: fresh.llm?.provider ?? getLlm().provider,
           endpoint: fresh.llm?.endpoint ?? null,
+          accountModels,
           fallbackModel: cli?.fallbackModel ?? null,
           workspaceRoot,
           sandbox: cli?.sandbox ?? 'off',
@@ -2225,6 +2231,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           },
         };
       },
+      'account-model-catalog': () => refreshAccountModelCatalog(true),
       'usage-breakdown': () => buildUsageBreakdown({ parent: getActiveAgent().sessionUsage, children: [], offload: undefined, prefixStability: getActiveAgent().getPrefixStability() }),
       // WS10 — persistent cross-session usage history (day-bucketed), for the
       // contributions-style heatmap + range totals in the Usage panel.
@@ -3181,6 +3188,13 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         return mobileRelay.status();
       },
       'mobile-relay-pairing': async (args) => {
+        // Migration cutover (spec §9 / Task 25): account-based enrollment + the
+        // broker is the primary path. Legacy LAN/QR pairing stays available for
+        // ONE migration release behind cli.remote.legacyLanPairing (default off).
+        const remoteConfig = (loadConfig() as { cli?: { remote?: { legacyLanPairing?: unknown } } }).cli?.remote;
+        if (remoteConfig?.legacyLanPairing !== true) {
+          return { error: 'legacy-pairing-disabled', message: 'QR pairing is retired. Sign in on your phone (Desktops tab) to connect — or set cli.remote.legacyLanPairing=true during migration.' };
+        }
         const scopes = Array.isArray(args.scopes) ? args.scopes.map(String).filter((scope) => ['monitor', 'control', 'approve'].includes(scope)) : ['monitor', 'control'];
         const payload = mobileRelay.createPairing(scopes as Array<'monitor' | 'control' | 'approve'>);
         const encoded = JSON.stringify(payload);
@@ -3188,6 +3202,23 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         return { payload, qrDataUrl };
       },
       'mobile-relay-revoke': (args) => ({ ok: mobileRelay.revoke(String(args.deviceId ?? '')) }),
+      // Account-based remote access (spec §9, Task 23) — explicit opt-in
+      // enrollment + outbound broker connections. The account bearer and the
+      // rotating device refresh token never reach the renderer or the wire.
+      'remote-access-status': () => ({ enrolled: remoteAccess.isEnrolled(), deviceId: remoteAccess.deviceId() }),
+      'remote-access-enroll': async () => {
+        const result = await remoteAccess.enroll();
+        return { ok: true, deviceId: result.deviceId };
+      },
+      'remote-access-approve-grant': async (args) => ({ ok: await remoteAccess.approveGrant(String(args.grantId ?? '')) }),
+      'remote-access-connect': async (args) => {
+        const scopes = Array.isArray(args.scopes)
+          ? args.scopes.map(String).filter((scope) => ['monitor', 'control', 'approve'].includes(scope))
+          : ['monitor'];
+        await remoteAccess.connect(String(args.grantId ?? ''), scopes);
+        return { ok: true };
+      },
+      'remote-access-stop': () => { remoteAccess.stop(); return { ok: true }; },
       // WS2 2.4 / WS6 6.3 — stop a background shell (e.g. a dev server an agent
       // started) from the Background-tasks panel. Kills the whole process group.
       'action:kill-bgshell': (args) => ({ ok: killBackgroundShell(String(args.id ?? '')) }),
@@ -3443,6 +3474,16 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const data = await res.json() as { apiKey?: string; userId?: string; displayName?: string; email?: string; jwt?: string; refreshToken?: string };
         const apiKey = String(data.apiKey ?? '').trim();
         if (!apiKey) return { ok: false, error: 'Sign-in succeeded but returned no API key.' };
+        if (!secretBridge) return { ok: false, error: 'Secure credential storage is unavailable. Sign-in was not saved.' };
+        const accountBearer = String(data.jwt ?? '').trim() || apiKey;
+        try {
+          await secretBridge.set('account:access-token', accountBearer);
+          const refreshToken = String(data.refreshToken ?? '').trim();
+          if (refreshToken) await secretBridge.set('account:refresh-token', refreshToken);
+          else await secretBridge.delete('account:refresh-token');
+        } catch (error) {
+          return { ok: false, error: `Secure credential storage failed: ${error instanceof Error ? error.message : String(error)}` };
+        }
         const isBrain = (id: string, s: { identity?: string } | undefined) => s?.identity === 'brainrouter' || /^brainrouter/i.test(id);
         const fresh = loadConfig() as { servers?: Record<string, unknown>; cli?: Record<string, unknown> };
         fresh.servers = fresh.servers ?? {};
@@ -3453,15 +3494,15 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         fresh.servers[brainId] = { type: 'http', url: mcpUrl, apiKey, identity: 'brainrouter' };
         fresh.cli = fresh.cli ?? {};
         fresh.cli.brainUrl = mcpUrl;
-        // jwt + refreshToken stay host-side (not returned to the renderer) — used only
-        // for account management like "log out of all devices" (rotate-key needs a jwt).
-        fresh.cli.account = { ...account, prevBrain, jwt: String(data.jwt ?? ''), refreshToken: String(data.refreshToken ?? '') };
+        // Account bearer + refresh credentials live only in Electron safeStorage.
+        fresh.cli.account = { ...account, prevBrain };
         saveConfig(fresh as never);
         _resetCliKnobsCache();
         try { await mcpClient.disconnectOne(brainId); } catch { /* not connected */ }
         try { await mcpClient.connectOne(brainId, fresh.servers[brainId] as never, loadConfig().llm ?? getLlm(), 5_000); }
         catch { return { ok: false, error: `Signed in, but couldn't reach the brain at ${mcpUrl}. Is the backend running?` }; }
         void ensureBrainSession(mcpClient, workspaceRoot); // show this device on the Account page
+        await refreshAccountModelCatalog(true);
         return { ok: true, account };
       },
       'action:auth-signout': async () => {
@@ -3480,6 +3521,13 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         try { if (brainId) await mcpClient.disconnectOne(brainId); } catch { /* already gone */ }
         try { if (brainId && fresh.servers?.[brainId]) await mcpClient.connectOne(brainId, fresh.servers[brainId] as never, loadConfig().llm ?? getLlm(), 5_000); }
         catch { /* embedded brain reconnects on next boot */ }
+        if (secretBridge) {
+          await Promise.allSettled([
+            secretBridge.delete('account:access-token'),
+            secretBridge.delete('account:refresh-token'),
+          ]);
+        }
+        await refreshAccountModelCatalog(true);
         return { ok: true };
       },
       'auth-status': () => {

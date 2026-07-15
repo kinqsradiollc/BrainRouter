@@ -41,3 +41,15 @@ export function decryptPayload<T>(envelope: { nonce: string; ciphertext: string 
   if (!opened) return null;
   try { return JSON.parse(decoder.decode(opened)) as T; } catch { return null; }
 }
+
+/** base64url (RFC 4648 §5) — the account control plane's encoding for keys/signatures. */
+export const b64url = (value: Uint8Array): string => b64(value).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+export const fromB64url = (value: string): Uint8Array => fromB64(value.replace(/-/g, '+').replace(/_/g, '/'));
+
+/** Ed25519 enrollment identity (spec §9): signs server challenges; never leaves the device. */
+export function createSigningKeyPair(): nacl.SignKeyPair { return nacl.sign.keyPair(); }
+export function signingKeyPairFromSecret(secretKey: Uint8Array): nacl.SignKeyPair { return nacl.sign.keyPair.fromSecretKey(secretKey); }
+export function signDetached(message: Uint8Array, secretKey: Uint8Array): string {
+  return b64url(nacl.sign.detached(message, secretKey));
+}
+export function randomToken(bytes = 48): string { return b64url(nacl.randomBytes(bytes)); }

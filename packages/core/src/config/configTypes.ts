@@ -658,10 +658,8 @@ export interface CliKnobs {
    * Default true.
    */
   confirmRunWorkflow?: boolean;
-  /** Reasoning depth preference override (`/effort`). Default 'medium'. `max` and
-   *  `ultracode` are desktop slider tiers capped to the wire's top
-   *  reasoning_effort, like xhigh. */
-  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultracode';
+  /** Reasoning depth preference override (`/effort`). Default 'medium'. */
+  effort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   /** PARITY-E3 — model to fall back to when the primary model is unavailable. */
   fallbackModel?: string | null;
   /**
@@ -1259,7 +1257,7 @@ export interface ResolvedCliKnobs {
   llmMaxConcurrent: number;
   disableStream: boolean;
   confirmRunWorkflow: boolean;
-  effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultracode';
+  effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   fallbackModel: string | null;
   /** CC-CONFIG-A2 — resolved ORDERED fallback chain (validated, capped at 3, deduped;
    *  `fallbackModel` appended last for back-compat). */

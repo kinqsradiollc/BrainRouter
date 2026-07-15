@@ -24,8 +24,14 @@ import { HostedAgentManager } from './host/hostedAgents.js';
 import { FanoutManager } from './host/fanoutManager.js';
 import { RemoteWorktreeManager } from './host/sshRemote.js';
 import { MobileRelayServer } from './host/mobileRelayServer.js';
+import { createRemoteAccessClient } from './host/remoteAccessWiring.js';
 import { ensureBrainSession, getBrainSessionKey } from './host/brainSession.js';
-import { resolveBrainRouterAccountApi } from './accountIntegration.js';
+import {
+  fetchAccountModelCatalog,
+  resolveBrainRouterAccountApi,
+  type BrainRouterAccountContext,
+  type DesktopAccountModelCatalog,
+} from './accountIntegration.js';
 // host/github-track-services — the extracted gh-CLI / connector / Track-PR
 // service layer. host.ts builds it with its runtime deps and folds the returned
 // functions into the HostContext.
@@ -61,6 +67,10 @@ import {
   getSessionRuntime,
   setSessionRuntime,
   resolveSessionLlmConfig,
+  resolveActiveMode,
+  getSessionMode,
+  normalizeEffort,
+  readPreferences,
 } from '@kinqs/brainrouter-core/session';
 import { readUsageHistory, totalUsage } from '@kinqs/brainrouter-core/usage';
 import { resolveWorkspaceGit } from '@kinqs/brainrouter-core/git';
@@ -298,6 +308,44 @@ async function main(): Promise<void> {
   // pool.connectAll(profiles) → Agent. Offline MCP does not block (same
   // semantics as the CLI's non-strict mode).
   const config = loadConfig();
+  const accountConfig = config as typeof config & {
+    cli?: { account?: { url?: string; jwt?: string; refreshToken?: string } } & Record<string, unknown>;
+  };
+  let accountAccessToken = await secretBridge?.get('account:access-token').catch(() => undefined);
+  // One-time migration from the former plaintext config fields. A credential is
+  // removed only after Electron main confirms OS-protected storage succeeded.
+  const legacyAccessToken = String(accountConfig.cli?.account?.jwt ?? '').trim();
+  const legacyRefreshToken = String(accountConfig.cli?.account?.refreshToken ?? '').trim();
+  if (!accountAccessToken && legacyAccessToken && secretBridge) {
+    try {
+      await secretBridge.set('account:access-token', legacyAccessToken);
+      if (legacyRefreshToken) await secretBridge.set('account:refresh-token', legacyRefreshToken);
+      accountAccessToken = legacyAccessToken;
+      if (accountConfig.cli?.account) {
+        delete accountConfig.cli.account.jwt;
+        delete accountConfig.cli.account.refreshToken;
+        saveConfig(accountConfig);
+      }
+    } catch { /* keep the legacy value until secure storage becomes available */ }
+  }
+  let accountModelCatalog: DesktopAccountModelCatalog | null = null;
+  let accountModelCatalogAt = 0;
+  const accountContext = (): BrainRouterAccountContext | null => {
+    const baseUrl = String((loadConfig() as typeof accountConfig).cli?.account?.url ?? '').trim().replace(/\/+$/, '');
+    return baseUrl && accountAccessToken
+      ? { baseUrl, apiKey: accountAccessToken, orgId: '' }
+      : null;
+  };
+  const refreshAccountModelCatalog = async (force = false): Promise<DesktopAccountModelCatalog> => {
+    if (force || !accountAccessToken) {
+      accountAccessToken = await secretBridge?.get('account:access-token').catch(() => undefined);
+    }
+    const now = Date.now();
+    if (!force && accountModelCatalog && now - accountModelCatalogAt < 30_000) return accountModelCatalog;
+    accountModelCatalog = await fetchAccountModelCatalog(accountContext(), accountModelCatalog);
+    accountModelCatalogAt = now;
+    return accountModelCatalog;
+  };
   let llm: LLMConfig = config.llm || { provider: 'openai', model: 'gpt-4o-mini', apiKey: '' };
   const mcpClient = new McpClientPool();
   try {
@@ -356,6 +404,14 @@ async function main(): Promise<void> {
   const llmForSession = (sessionKey: string): LLMConfig => {
     const base = loadGlobalLlm();
     const resolved = resolveSessionLlmConfig(base, workspaceRoot, sessionKey);
+    if (resolved.provider === 'brainrouter') {
+      const account = accountContext();
+      return {
+        ...resolved,
+        apiKey: account?.apiKey ?? '',
+        endpoint: account ? `${account.baseUrl}/v1/chat/completions` : resolved.endpoint,
+      };
+    }
     // A session can run a DIFFERENT provider than the global default; the session
     // runtime stores provider/model/endpoint but never a secret, so the global
     // apiKey would be wrong. Resolve the chosen provider's key from the saved
@@ -372,13 +428,30 @@ async function main(): Promise<void> {
   // Item 10 / per-session provider — resolve a named saved connection to a full
   // LLM config (incl. its apiKey, main-process only). Used to (re)build the active
   // agent when the user picks a model from another provider.
-  const resolveProviderLlm = (providerName: string, model: string): LLMConfig | undefined => {
+  const resolveProviderLlm = async (providerName: string, model: string): Promise<LLMConfig | undefined> => {
+    if (providerName === 'brainrouter-account') {
+      const catalog = await refreshAccountModelCatalog(true);
+      const account = accountContext();
+      if (!account || !catalog.models.some((entry) => entry.id === model && entry.enabled)) return undefined;
+      return {
+        provider: 'brainrouter',
+        apiKey: account.apiKey,
+        model,
+        endpoint: `${account.baseUrl}/v1/chat/completions`,
+      };
+    }
     const p = loadConfig().providers?.[providerName];
     if (!p) return undefined;
     return { provider: p.provider, apiKey: p.apiKey, model: model || p.model, endpoint: p.endpoint };
   };
   const syncActiveSessionLlm = (base: LLMConfig = loadGlobalLlm()): LLMConfig => {
-    const next = resolveSessionLlmConfig(base, workspaceRoot, activeAgent.sessionKey);
+    // Restore the host-only credential for the built-in BrainRouter provider;
+    // session runtime persistence intentionally holds only safe metadata.
+    const resolved = resolveSessionLlmConfig(base, workspaceRoot, activeAgent.sessionKey);
+    const account = resolved.provider === 'brainrouter' ? accountContext() : null;
+    const next = account
+      ? { ...resolved, apiKey: account.apiKey, endpoint: `${account.baseUrl}/v1/chat/completions` }
+      : resolved;
     activeAgent.setLLMConfig(next);
     return next;
   };
@@ -697,6 +770,9 @@ async function main(): Promise<void> {
       } catch { return false; }
     },
   });
+  // Enrolled-device broker client (spec §9, Task 23): outbound WSS to the
+  // remote-relay edge; attached sockets reuse mobileRelay's E2EE/RPC allowlist.
+  const remoteAccess = createRemoteAccessClient(mobileRelay);
   // Per-endpoint /models cache ('' = the active llm; otherwise a named provider).
   const modelsCacheByKey = new Map<string, { models: string[]; at: number }>();
   // DESK-5d — PR state cache (gh is a network call; the sidebar refreshes often).
@@ -1018,12 +1094,12 @@ async function main(): Promise<void> {
     getLlm: () => llm, setLlm: (next) => { llm = next; },
     mcpClient, callBrainAtlas, broker, emitPortFor, agent,
     getActiveAgent: () => activeAgent,
-    loadGlobalLlm, llmForSession, resolveProviderLlm, syncActiveSessionLlm,
+    loadGlobalLlm, llmForSession, resolveProviderLlm, refreshAccountModelCatalog, syncActiveSessionLlm,
     spawnAgent, spawnReviewer, spawnTaskAgent, activeMemorySessionKey,
     lifecycleActionFor, emitRecordEvent, taskEventView, emitTaskEvent, taskProgress,
     verifyTitle, observeVerificationEvent, goalStrikes,
     captureRequirementNote, captureAnnotationNote, captureAnnotationExportNote, captureArtifactNote,
-    ptyRegistry, hostedAgents, fanoutManager, remoteWorktrees, mobileRelay, modelsCacheByKey,
+    ptyRegistry, hostedAgents, fanoutManager, remoteWorktrees, mobileRelay, remoteAccess, modelsCacheByKey,
     getPrCache: () => prCache, setPrCache: (v) => { prCache = v; },
     getPrStatusMapCache: () => prStatusMapCache, setPrStatusMapCache: (v) => { prStatusMapCache = v; },
     readTranscriptCached, isoNow, collectWorkingDiff,
@@ -1072,6 +1148,26 @@ async function main(): Promise<void> {
     // Full per-session LLM (provider/model/endpoint + resolved key) for the active
     // chat — used to rebuild the agent on a session switch.
     resolveSessionLlm: (sessionKey) => llmForSession(sessionKey),
+    validateTurn: async (sessionKey) => {
+      const runtime = llmForSession(sessionKey);
+      const sessionEffort = getSessionMode(workspaceRoot, sessionKey).effort;
+      const configuredEffort = (loadConfig() as { cli?: { effort?: unknown } }).cli?.effort;
+      const preferenceEffort = readPreferences(workspaceRoot).effort;
+      const persistedEffort = sessionEffort ?? configuredEffort ?? preferenceEffort;
+      if (typeof persistedEffort === 'string' && !normalizeEffort(persistedEffort)) {
+        return `The saved reasoning effort “${persistedEffort}” is no longer supported. Choose a current effort before sending.`;
+      }
+      const effort = String(resolveActiveMode(workspaceRoot, sessionKey).effort ?? '');
+      if (runtime.provider !== 'brainrouter') return null;
+      const catalog = await refreshAccountModelCatalog(true);
+      if (!catalog.signedIn) return 'Sign in to BrainRouter or choose a Personal/BYOK model before sending.';
+      const policy = catalog.models.find((entry) => entry.id === runtime.model && entry.enabled);
+      if (!policy) return `The managed model “${runtime.model}” is no longer available. Choose another model before sending.`;
+      if (policy.reasoning && !policy.reasoning.allowed.some((entry) => entry.id === effort)) {
+        return `${policy.label} does not allow the “${effort}” effort. Choose one of its available efforts before sending.`;
+      }
+      return null;
+    },
     // GLOBAL default from a named connection + a chosen model (config.json).
     persistProviderModel: (providerName, model) => {
       const fresh = loadConfig();

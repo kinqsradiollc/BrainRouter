@@ -11,15 +11,18 @@
 
 import { Router } from "express";
 import { z } from "zod";
-import { projectTagFromName } from "@kinqs/brainrouter-types";
+import { MODEL_REASONING_EFFORTS, projectTagFromName } from "@kinqs/brainrouter-types";
 import { memoryEngine } from "../../../memory/engine.js";
 import { requireAnyAuth, type AuthedRequest } from "../../middleware/auth.js";
 import { withOrgContext } from "../../middleware/tenancy.js";
 import { buildBrainAgentStatuses } from "../../../memory/agents/status.js";
 import { sendError } from "../../../contracts/http.js";
 import { roleAtLeast } from "../../../tenancy/rbac.js";
-import { resolveProviderConfig } from "../../../providers/resolver.js";
-import { modelGateway } from "../../../services/modelGateway/modelGateway.js";
+import {
+  modelGateway,
+  resolveScopedModelSelection,
+  ScopedModelSelectionError,
+} from "../../../services/modelGateway/modelGateway.js";
 import { runBrainChat } from "./brainChatService.js";
 
 export const brainRouter = Router();
@@ -33,6 +36,8 @@ const ChatRequestSchema = z.object({
   sessionKey: z.string().trim().min(1).max(160).regex(/^[A-Za-z0-9._:-]+$/, "sessionKey contains unsupported characters"),
   projectId: z.string().trim().min(1).max(160).optional(),
   workspaceTag: z.string().trim().min(1).max(160).regex(/^[A-Za-z0-9._:-]+$/, "workspaceTag contains unsupported characters").optional(),
+  model: z.string().trim().min(1).max(160).optional(),
+  reasoningEffort: z.enum(MODEL_REASONING_EFFORTS).optional(),
 }).superRefine((body, ctx) => {
   if (body.messages.at(-1)?.role !== "user") {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["messages"], message: "the latest message must be from the user" });
@@ -61,11 +66,12 @@ brainRouter.post("/chat", withOrgContext, async (req: AuthedRequest, res) => {
       sendError(res, 404, "project not found or not accessible");
       return;
     }
-    const provider = await resolveProviderConfig(memoryEngine.providers, req.orgId!, "llm");
-    if (!provider) {
-      sendError(res, 503, "No chat model is configured for this organization. Configure an LLM provider in Intelligence settings.");
-      return;
-    }
+    const selection = await resolveScopedModelSelection({
+      store: memoryEngine.models,
+      orgId: req.orgId!,
+      requestedModel: body.model,
+      reasoningEffort: body.reasoningEffort,
+    });
     const result = await runBrainChat({
       userId: req.userId!,
       orgId: req.orgId!,
@@ -73,17 +79,24 @@ brainRouter.post("/chat", withOrgContext, async (req: AuthedRequest, res) => {
       projectId: project?.projectId,
       projectTag: project ? projectTagFromName(project.name) ?? undefined : undefined,
       workspaceTag: body.workspaceTag,
-      provider,
+      model: selection.publicModelId,
+      reasoningEffort: selection.reasoningEffort,
+      servicePrincipalId: selection.servicePrincipalId,
       messages: body.messages,
     }, {
       recall: (input) => memoryEngine.recall(input),
-      dispatch: (input) => modelGateway.dispatch(input),
+      dispatch: (input) => modelGateway.dispatchScoped(input),
       capture: (input) => memoryEngine.capture(input),
     });
     res.json(result);
   } catch (error) {
     if (error instanceof z.ZodError) {
       sendError(res, 400, error.issues.map((issue) => issue.message).join("; "));
+      return;
+    }
+    if (error instanceof ScopedModelSelectionError) {
+      const status = error.code === "model_not_configured" ? 503 : 400;
+      sendError(res, status, error.message);
       return;
     }
     // Provider failures can include upstream response bodies. Keep those details

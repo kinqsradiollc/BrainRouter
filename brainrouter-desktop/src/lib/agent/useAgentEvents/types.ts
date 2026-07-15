@@ -25,6 +25,7 @@ import { type ProjectSessionsByRoot } from '../../session/workspaces/projectSess
 export type InfoState = {
   sessionKey?: string;
   model?: string;
+  provider?: string;
   workspaceRoot?: string;
   username?: string;
   accountSignedIn?: boolean;

@@ -1,61 +1,200 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { AuthGuard } from "../../../components/AuthGuard";
+import { EmptyState } from "../../../components/EmptyState";
 import { PageHeader } from "../../../components/PageHeader";
 import { PremiumButton } from "../../../components/PremiumButton";
 import { PremiumCard } from "../../../components/PremiumCard";
+import { StatusBadge } from "../../../components/Analytics";
 import { adminApi, type ReviewJob, type ReviewPullRequestDetail } from "../../../lib/adminApi";
+import { REVIEW_ACTION_LABELS, reviewActionPresentation, safeReviewsReturnPath } from "../reviewPresentation";
+
+function lensName(lens: ReviewJob["lens"]): string {
+  if (lens === "security") return "Security review";
+  if (lens === "code") return "Code review";
+  return "Pentest";
+}
+
+function statusTone(status: string, blocking: number | null, error: string | null): "neutral" | "ok" | "warn" | "danger" | "info" {
+  if (error || (blocking ?? 0) > 0 || status === "failed" || status === "error") return "danger";
+  if (status === "pending" || status === "queued" || status === "running") return "info";
+  if (status === "done" || status === "completed" || status === "succeeded") return "ok";
+  return "neutral";
+}
+
+function formatTimestamp(value: string): string {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime())
+    ? date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+    : value;
+}
+
+function ReviewFindingsCard({ review }: { review: ReviewJob }) {
+  const running = review.status === "pending" || review.status === "queued" || review.status === "running";
+  return (
+    <PremiumCard level={2} className="review-detail__findings-card">
+      <div className="settings-cardhead">
+        <div><h3>{lensName(review.lens)}</h3><div className="settings-hint">{review.error ? review.error : running ? "Work is still in progress." : `Updated ${formatTimestamp(review.updatedAt)}`}</div></div>
+        <StatusBadge tone={statusTone(review.status, review.blocking, review.error)}>{review.status}</StatusBadge>
+      </div>
+      <div className="review-detail__finding-summary">
+        <span><strong>{review.findings ?? 0}</strong> findings</span>
+        <span><strong>{review.blocking ?? 0}</strong> blocking</span>
+      </div>
+      {review.findingsDetail?.length ? (
+        <div className="review-detail__findings">
+          {review.findingsDetail.map((finding, index) => (
+            <article key={`${finding.file}:${finding.line ?? 0}:${index}`}>
+              <div className="review-detail__finding-head">
+                <StatusBadge tone={finding.severity === "critical" || finding.severity === "high" ? "danger" : finding.severity === "medium" ? "warn" : "neutral"}>{finding.severity}</StatusBadge>
+                <strong>{finding.title ?? finding.summary ?? "Finding"}</strong>
+              </div>
+              <div className="settings-row__sub">{finding.file}{finding.line ? `:${finding.line}` : ""}{finding.cwe ? ` · ${finding.cwe}` : ""}{finding.preExisting ? " · Pre-existing" : ""}</div>
+              {finding.summary && finding.summary !== finding.title && <p>{finding.summary}</p>}
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className="settings-empty-inline">{running ? "Findings will appear as the review progresses." : "No stored finding details."}</div>
+      )}
+    </PremiumCard>
+  );
+}
 
 function Detail() {
   const search = useSearchParams();
   const repo = search.get("repo") ?? "";
   const number = Number(search.get("number"));
+  const orgId = search.get("org") ?? undefined;
+  const returnPath = safeReviewsReturnPath(search.get("from"));
   const [pr, setPr] = useState<ReviewPullRequestDetail | null>(null);
   const [canRun, setCanRun] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<"security" | "code" | "both" | "">("");
+
+  const validTarget = Boolean(repo && Number.isSafeInteger(number) && number > 0);
   const load = useCallback(async () => {
-    if (!repo || !Number.isInteger(number)) return;
-    try { const result = await adminApi.getReviewPr(repo, number); setPr(result.pr); setCanRun(result.canRun); setError(""); }
-    catch (e) { setError(e instanceof Error ? e.message : "Failed to load pull request"); }
-  }, [repo, number]);
+    if (!validTarget) {
+      setLoading(false);
+      return;
+    }
+    try {
+      const result = await adminApi.getReviewPr(repo, number, orgId);
+      setPr(result.pr);
+      setCanRun(result.canRun);
+      setError("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Failed to load pull request");
+    } finally {
+      setLoading(false);
+    }
+  }, [validTarget, repo, number, orgId]);
+
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
-    if (!pr?.reviews.some((review) => review.status === "pending" || review.status === "running")) return;
+    if (!pr?.reviews.some((review) => review.status === "pending" || review.status === "queued" || review.status === "running")) return;
     const timer = window.setInterval(() => void load(), 2000);
     return () => window.clearInterval(timer);
   }, [pr?.reviews, load]);
+
   const run = async (lens: "security" | "code" | "both") => {
-    setBusy(true);
-    try { await adminApi.runReview({ repo, prNumber: number, lens }); await load(); }
-    catch (e) { setError(e instanceof Error ? e.message : "Failed to queue review"); }
-    finally { setBusy(false); }
+    setBusy(lens);
+    setError("");
+    try {
+      await adminApi.runReview({ repo, prNumber: number, lens }, orgId);
+      await load();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Failed to queue review");
+    } finally {
+      setBusy("");
+    }
   };
-  if (!repo || !Number.isInteger(number)) return <div className="settings-page"><PageHeader title="Pull request" description="Choose a PR from the Reviews console." /></div>;
-  return <div className="settings-page">
-    <PageHeader title={pr ? `${repo} #${number}` : "Pull request"} description={pr?.title ?? "Loading pull request…"} />
-    <div className="settings-hint"><Link href="/reviews" className="settings-link">← Reviews</Link>{pr?.url && <> · <a className="settings-link" href={pr.url} target="_blank">Open on GitHub ↗</a></>}</div>
-    {error && <div className="settings-note settings-note--error">{error}</div>}
-    {pr && <>
-      <PremiumCard level={2} style={{ marginTop: "var(--spacing-20)" }}><div className="settings-cardhead"><div><h3>{pr.title}</h3><div className="settings-hint">{pr.author ?? "unknown"} · {pr.branch ?? "unknown branch"} · {pr.headSha?.slice(0, 12) ?? "no SHA"}</div></div>{canRun && <div className="settings-actions"><PremiumButton size="small" variant="ghost" disabled={busy} onClick={() => run("security")}>Run security</PremiumButton><PremiumButton size="small" variant="ghost" disabled={busy} onClick={() => run("code")}>Run code</PremiumButton><PremiumButton size="small" variant="primary" disabled={busy} onClick={() => run("both")}>{busy ? "Queuing…" : "Run both"}</PremiumButton></div>}</div></PremiumCard>
-      <PremiumCard level={2} style={{ marginTop: "var(--spacing-20)" }}><div className="settings-cardhead"><div><h3>Checks</h3><div className="settings-hint">GitHub check-run state for this head commit.</div></div></div>{pr.checks.length ? pr.checks.map((check, index) => <div className="settings-item" key={check.id ?? index}><span className="settings-row__title">{check.name ?? "Check"}</span><span className="settings-badge settings-badge--muted">{check.conclusion ?? check.status ?? "pending"}</span></div>) : <div className="settings-empty-inline">No check runs yet.</div>}</PremiumCard>
-      {pr.reviews.map((review) => <ReviewCard key={review.id} review={review} />)}
-    </>}
-  </div>;
+
+  const timeline = useMemo(() => (pr?.reviews ?? []).flatMap((review) => (review.progress ?? []).map((event) => ({
+    ...event,
+    reviewId: review.id,
+    lens: review.lens,
+  }))).sort((left, right) => Date.parse(right.ts) - Date.parse(left.ts)), [pr?.reviews]);
+
+  if (!validTarget) {
+    return (
+      <div className="settings-page review-detail">
+        <PageHeader title="Pull request" description="Choose a pull request from the operational review list." />
+        <Link href="/reviews" className="settings-link">Back to PR reviews</Link>
+      </div>
+    );
+  }
+
+  const action = pr ? reviewActionPresentation(canRun, pr.availability, Boolean(busy)) : { enabled: false, help: "Loading pull request review access…" };
+
+  return (
+    <div className="settings-page review-detail">
+      <PageHeader title={pr ? `${pr.repo} #${pr.number}` : "Pull request"} description={pr?.title ?? "Review findings, checks, and progress."} />
+      <div className="review-detail__breadcrumbs">
+        <Link href={returnPath} className="settings-link">Back to PR reviews</Link>
+        {pr?.url && <a className="settings-link" href={pr.url} target="_blank" rel="noreferrer">Open on GitHub</a>}
+      </div>
+      {error && <div className="settings-note settings-note--error" role="alert">{error}</div>}
+
+      {loading && !pr ? <div className="settings-empty-inline">Loading pull request…</div> : pr && (
+        <div className="review-detail__grid">
+          <main className="review-detail__main">
+            <div className="review-detail__section-head"><div><span>Review output</span><h2>Findings</h2></div><span>{pr.reviews.length} run{pr.reviews.length === 1 ? "" : "s"}</span></div>
+            {pr.reviews.length ? pr.reviews.map((review) => <ReviewFindingsCard key={review.id} review={review} />) : (
+              <EmptyState title="No reviews yet" description="Run Security review, Code review, or both. Automatic repository enrollment is not required for an on-demand review." />
+            )}
+          </main>
+
+          <aside className="review-detail__aside" aria-label="Pull request review metadata">
+            <PremiumCard level={2} className="review-detail__run-card">
+              <div className="settings-cardhead"><div><h3>Run review</h3><div className="settings-hint">Uses organization policy and posts the result to this pull request.</div></div></div>
+              <div className="review-detail__run-actions">
+                <PremiumButton size="small" title={action.help} disabled={!action.enabled} onClick={() => void run("security")}>{busy === "security" ? "Queuing…" : REVIEW_ACTION_LABELS.security}</PremiumButton>
+                <PremiumButton size="small" title={action.help} disabled={!action.enabled} onClick={() => void run("code")}>{busy === "code" ? "Queuing…" : REVIEW_ACTION_LABELS.code}</PremiumButton>
+                <PremiumButton size="small" variant="primary" title={action.help} disabled={!action.enabled} onClick={() => void run("both")}>{busy === "both" ? "Queuing…" : REVIEW_ACTION_LABELS.both}</PremiumButton>
+              </div>
+              <p className="review-detail__run-help">{action.help}</p>
+            </PremiumCard>
+
+            <PremiumCard level={2} className="review-detail__metadata-card">
+              <div className="settings-cardhead"><div><h3>Repository</h3><div className="settings-hint">Current pull request metadata</div></div><StatusBadge tone={pr.availability.autoReviewEnabled ? "ok" : "neutral"}>{pr.availability.autoReviewEnabled ? "Automatic" : "On demand"}</StatusBadge></div>
+              <dl className="review-detail__metadata">
+                <div><dt>Repository</dt><dd>{pr.repo}</dd></div>
+                <div><dt>Author</dt><dd>{pr.author ?? "Unknown"}</dd></div>
+                <div><dt>Branch</dt><dd>{pr.branch ?? "Unknown"}</dd></div>
+                <div><dt>Head</dt><dd><code>{pr.headSha?.slice(0, 12) ?? "Unavailable"}</code></dd></div>
+              </dl>
+            </PremiumCard>
+
+            <PremiumCard level={2} className="review-detail__checks-card">
+              <div className="settings-cardhead"><div><h3>Checks</h3><div className="settings-hint">GitHub state for the current head commit</div></div><span className="settings-badge settings-badge--muted">{pr.checks.length}</span></div>
+              {pr.checks.length ? pr.checks.map((check, index) => {
+                const state = check.conclusion ?? check.status ?? "pending";
+                const content = <><span className="review-detail__check-name">{check.name ?? "Check"}</span><StatusBadge tone={state === "success" ? "ok" : state === "failure" ? "danger" : "neutral"}>{state}</StatusBadge></>;
+                return check.html_url ? <a className="review-detail__check" key={check.id ?? index} href={check.html_url} target="_blank" rel="noreferrer">{content}</a> : <div className="review-detail__check" key={check.id ?? index}>{content}</div>;
+              }) : <div className="settings-empty-inline">No check runs yet.</div>}
+            </PremiumCard>
+
+            <PremiumCard level={2} className="review-detail__timeline-card">
+              <div className="settings-cardhead"><div><h3>Timeline</h3><div className="settings-hint">Latest review work first</div></div>{timeline.length > 0 && <span className="settings-badge settings-badge--muted">{timeline.length}</span>}</div>
+              {timeline.length ? <ol className="review-detail__timeline">{timeline.map((event, index) => (
+                <li key={`${event.reviewId}:${event.ts}:${index}`}>
+                  <span className="review-detail__timeline-dot" aria-hidden />
+                  <div><strong>{event.msg}</strong><span>{lensName(event.lens)} · {formatTimestamp(event.ts)}</span></div>
+                </li>
+              ))}</ol> : <div className="settings-empty-inline">No progress events yet.</div>}
+            </PremiumCard>
+          </aside>
+        </div>
+      )}
+    </div>
+  );
 }
 
-function ReviewCard({ review }: { review: ReviewJob }) {
-  const running = review.status === "pending" || review.status === "running";
-  return <PremiumCard level={2} style={{ marginTop: "var(--spacing-20)" }}>
-    <div className="settings-cardhead"><div><h3>{review.lens === "security" ? "🛡️ Security review" : "🔎 Code review"}</h3><div className="settings-hint">{review.status}{review.error ? ` · ${review.error}` : ""}</div></div><span className="settings-badge settings-badge--muted">{review.findings ?? 0} findings</span></div>
-    <div className="settings-hint" style={{ marginBottom: 8 }}>Live timeline {running ? "· updating every 2 seconds" : ""}</div>
-    {review.progress?.length ? review.progress.map((event, index) => <div className="settings-item" key={`${event.ts}:${index}`}><span className="settings-row__title">{running && index === review.progress!.length - 1 ? "◌" : "✓"} {event.msg}</span><span className="settings-row__sub">{new Date(event.ts).toLocaleTimeString()}</span></div>) : <div className="settings-empty-inline">Waiting for progress events…</div>}
-    <div className="settings-hint" style={{ marginTop: 14, marginBottom: 8 }}>Findings</div>
-    {review.findingsDetail?.length ? review.findingsDetail.map((finding, index) => <div className="settings-item" key={`${finding.file}:${finding.line ?? 0}:${index}`}><div><span className="settings-row__title">{finding.severity.toUpperCase()} · {finding.title}</span><div className="settings-row__sub">{finding.file}{finding.line ? `:${finding.line}` : ""}{finding.cwe ? ` · ${finding.cwe}` : ""}{finding.preExisting ? " · pre-existing" : ""}</div></div></div>) : <div className="settings-empty-inline">No stored finding details.</div>}
-  </PremiumCard>;
+export default function ReviewDetailPage() {
+  return <AuthGuard><Detail /></AuthGuard>;
 }
-
-export default function ReviewDetailPage() { return <AuthGuard><Detail /></AuthGuard>; }

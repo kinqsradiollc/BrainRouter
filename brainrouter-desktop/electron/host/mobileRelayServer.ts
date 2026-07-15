@@ -35,6 +35,10 @@ type SocketState = {
   lastStatusAt: number;
   lastStatusHash: string;
   candidateStates: Map<string, string>;
+  /** Present only on broker-attached sockets (Task 23): the relay-ticket scopes.
+   * A `pair` frame on such a socket needs NO token — trust derives from the
+   * ticket-authenticated attachment (grant approved + desktop-confirmed). */
+  brokerScopes?: MobileScope[];
 };
 
 const METHOD_SCOPE: Record<string, MobileScope> = {
@@ -155,6 +159,21 @@ export class MobileRelayServer {
     return this.registry.revoke(deviceId);
   }
 
+  /**
+   * Broker path (spec §9, Task 23): an OUTBOUND connection to the remote-relay
+   * edge is handled exactly like an inbound LAN socket — same pairing, E2EE
+   * frames, replay counters, and scoped RPC allowlist. The relay only splices
+   * opaque frames, so the phone speaks this same protocol end-to-end.
+   */
+  attachBrokerSocket(socket: WebSocket, authorization?: { scopes: MobileScope[] }): void {
+    this.onConnection(socket);
+    const state = this.sockets.get(socket);
+    if (state && authorization) {
+      const clean = authorization.scopes.filter((scope): scope is MobileScope => ['monitor', 'control', 'approve'].includes(scope));
+      state.brokerScopes = clean.length ? clean : ['monitor'];
+    }
+  }
+
   private onConnection(socket: WebSocket): void {
     this.sockets.set(socket, { authenticated: false, serverCounter: 0, rates: [], subscriptions: new Map(), lastStatusAt: 0, lastStatusHash: '', candidateStates: new Map() });
     socket.on('message', (data) => this.onMessage(socket, data));
@@ -174,6 +193,15 @@ export class MobileRelayServer {
     let frame: Record<string, unknown>;
     try { frame = JSON.parse(raw.toString('utf8')) as Record<string, unknown>; } catch { socket.close(1003, 'invalid json'); return; }
     if (frame.kind === 'pair') {
+      // Broker pairing (Task 24): NO token rides the wire — the broker socket was
+      // already authenticated by a single-use, grant-bound relay ticket that this
+      // desktop itself requested after signing the grant approval.
+      if (frame.broker === true && state.brokerScopes) {
+        const clientPublicKey = typeof frame.clientPublicKey === 'string' ? fromB64(frame.clientPublicKey) : new Uint8Array();
+        if (clientPublicKey.length !== 32) { socket.close(1008, 'invalid pairing'); return; }
+        this.finalizePairing(socket, clientPublicKey, typeof frame.deviceName === 'string' ? frame.deviceName : 'Remote device', state.brokerScopes);
+        return;
+      }
       // Account-based pairing: same-account token, no manual QR token.
       if (typeof frame.accountToken === 'string' && frame.accountToken) { void this.handleAccountPair(socket, frame); return; }
       this.handlePair(socket, frame);

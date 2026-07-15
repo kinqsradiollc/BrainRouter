@@ -1,4 +1,4 @@
-import type { CognitiveExtractionStatus } from "@kinqs/brainrouter-types";
+import type { CognitiveExtractionStatus, LLMRunner } from "@kinqs/brainrouter-types";
 import { extractCognitiveMemories } from "../pipeline/cognitive/cognitive-extractor.js";
 import { deduplicateMemories } from "../pipeline/cognitive/cognitive-dedup.js";
 import { detectContradictions } from "../pipeline/cognitive/cognitive-contradiction.js";
@@ -31,6 +31,9 @@ export class CaptureExtraction extends CapturePersistence {
     projectTag?: string | null;
   }): Promise<{ triggered: boolean; extractedCount: number; status: CognitiveExtractionStatus; errorMessage?: string }> {
     const { userId, sessionKey, sessionId = "", activeSkill, skillHints, orgId, projectId, workspaceTag, projectTag } = params;
+    const llmRunner = this.resolveLlmRunner
+      ? await this.resolveLlmRunner(orgId, userId)
+      : this.llmRunner;
     const recentSensory = await this.store.getRecentSensoryMessages(userId, sessionKey, 20);
     if (recentSensory.length === 0) {
       return { triggered: false, extractedCount: 0, status: "skipped" };
@@ -48,7 +51,7 @@ export class CaptureExtraction extends CapturePersistence {
           userId,
           sessionKey,
           sessionId,
-          llmRunner: this.llmRunner,
+          llmRunner,
           activeSkill,
           existingSceneNames,
           skillHints: resolvedSkillHints,
@@ -149,7 +152,7 @@ export class CaptureExtraction extends CapturePersistence {
           detectContradictions({
             newRecord: record,
             store: this.store,
-            llmRunner: this.llmRunner
+            llmRunner
           }),
       ).catch((err: any) => {
         console.error(`[BrainRouter] Background contradiction check failed for ${record.id}:`, err.message);
@@ -164,7 +167,7 @@ export class CaptureExtraction extends CapturePersistence {
           buildGraphFromCognitive({
             record,
             store: this.store,
-            llmRunner: this.llmRunner
+            llmRunner
           }),
       ).catch((err: any) => {
         console.error(`[BrainRouter] Background graph extraction failed for ${record.id}:`, err.message);
@@ -218,7 +221,7 @@ export class CaptureExtraction extends CapturePersistence {
           detectFocusShift({
             activeScene: topScenes[0],
             newCognitiveRecords: uniqueRecords,
-            llmRunner: this.llmRunner,
+            llmRunner,
           }),
         { summarize: (r) => ({ shift: r.shift, confidence: r.confidence }) },
       ).then(async ({ result: shiftResult }) => {
@@ -231,7 +234,7 @@ export class CaptureExtraction extends CapturePersistence {
           } catch (err: any) {
             console.error("[BrainRouter] LTD decay and prune failed:", err.message);
           }
-          this.distillFocusAsJob(userId);
+          this.distillFocusAsJob(userId, llmRunner);
         } else {
           const countState = await this.store.getSchedulerState(userId);
           if (shouldRunFocusDistill(countState)) {
@@ -242,7 +245,7 @@ export class CaptureExtraction extends CapturePersistence {
             } catch (err: any) {
               console.error("[BrainRouter] LTD decay and prune failed:", err.message);
             }
-            this.distillFocusAsJob(userId);
+            this.distillFocusAsJob(userId, llmRunner);
           }
         }
       }).catch(err => console.error("[BrainRouter] Background focus shift detection failed:", err.message));
@@ -256,7 +259,7 @@ export class CaptureExtraction extends CapturePersistence {
         } catch (err: any) {
           console.error("[BrainRouter] LTD decay and prune failed:", err.message);
         }
-        this.distillFocusAsJob(userId);
+        this.distillFocusAsJob(userId, llmRunner);
       }
     }
 
@@ -264,7 +267,7 @@ export class CaptureExtraction extends CapturePersistence {
     const identityState = await this.store.getSchedulerState(userId);
     if (shouldRunIdentityDistill(identityState)) {
       await this.store.resetSchedulerIdentityCount(userId);
-      this.distillIdentityAsJob(userId);
+      this.distillIdentityAsJob(userId, llmRunner);
     }
 
     return { triggered: true, extractedCount: cognitiveExtractedCount, status: "ok" };
@@ -275,12 +278,12 @@ export class CaptureExtraction extends CapturePersistence {
    * job row. Same behaviour as the previous inline call — errors are
    * logged, never thrown — but now observable via memory_agent_status.
    */
-  protected distillFocusAsJob(userId: string): void {
+  protected distillFocusAsJob(userId: string, llmRunner: LLMRunner): void {
     runAsJob(
       this.store,
       "focus_distiller",
       { userId },
-      () => distillFocusScenes({ userId, store: this.store, llmRunner: this.llmRunner }),
+      () => distillFocusScenes({ userId, store: this.store, llmRunner }),
       { summarize: (r) => ({ sceneNames: r.sceneNames }) },
     ).catch((err: any) =>
       console.error("[BrainRouter] Background focus distillation failed:", err.message),
@@ -288,12 +291,12 @@ export class CaptureExtraction extends CapturePersistence {
   }
 
   /** Fire-and-forget identity distillation, recorded as an `identity_distiller` job row. */
-  protected distillIdentityAsJob(userId: string): void {
+  protected distillIdentityAsJob(userId: string, llmRunner: LLMRunner): void {
     runAsJob(
       this.store,
       "identity_distiller",
       { userId },
-      () => distillCoreIdentity({ userId, store: this.store, llmRunner: this.llmRunner }),
+      () => distillCoreIdentity({ userId, store: this.store, llmRunner }),
       { summarize: (r) => ({ success: r.success }) },
     ).catch((err: any) =>
       console.error("[BrainRouter] Background core identity distillation failed:", err.message),

@@ -32,6 +32,22 @@ services:
       timeout: 3s
       retries: 12
 
+  # One-shot migrator (spec §11, Tasks 32-33) — the ONLY writer of schema DDL.
+  # Every data service waits for service_completed_successfully, so a migration
+  # error fails the stack instead of racing half-migrated services.
+  migrator:
+    build:
+      context: ../..
+      dockerfile: deploy/brain/Dockerfile
+      target: migrator
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      BRAINROUTER_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brainrouter}
+
   brain:
     build:
       context: ../..
@@ -40,6 +56,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
     environment:
       NODE_ENV: production
       BRAINROUTER_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brainrouter}
@@ -82,6 +100,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
     environment:
       NODE_ENV: production
       BRAINROUTER_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brainrouter}
@@ -91,6 +111,12 @@ services:
       GATEWAY_PORT: "3748"
     ports:
       - "${GATEWAY_PORT:-3748}:3748"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3748/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 3s
+      start_period: 20s
+      retries: 5
 
   # Trigger Ingress (ADR-011) — the stateless hosted GitHub webhook receiver.
   # Its own process/port; verifies the App HMAC, resolves the tenant, and enqueues
@@ -104,6 +130,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
     environment:
       NODE_ENV: production
       BRAINROUTER_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brainrouter}
@@ -125,12 +153,21 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
     environment:
       NODE_ENV: production
       BRAINROUTER_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brainrouter}
       BRAINROUTER_JWT_SECRET: ${BRAINROUTER_JWT_SECRET}
       BRAINROUTER_SECRET_KEY: ${BRAINROUTER_SECRET_KEY}
       BRAINROUTER_JOB_RUNNER: "on"
+    healthcheck:
+      # Readiness = DB reachable + migrations table present (no fake HTTP).
+      test: ["CMD-SHELL", "node -e \"import('pg').then(async({default:pg})=>{const c=new pg.Client({connectionString:process.env.BRAINROUTER_DATABASE_URL});await c.connect();await c.query('SELECT 1 FROM schema_migrations LIMIT 1');await c.end();}).then(()=>process.exit(0)).catch(()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
 
   # Auth + REST API (ADR-013) — the identity / tenancy / admin / memory-REST plane
   # (SERVICE=api, no MCP). Scale independently of the MCP brain; point the
@@ -144,6 +181,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
     environment:
       NODE_ENV: production
       BRAINROUTER_SERVICE: "api"
@@ -159,6 +198,39 @@ services:
       BRAINROUTER_CORS_ORIGIN: ${BRAINROUTER_CORS_ORIGIN:-}
     ports:
       - "${API_PORT:-3750}:3750"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3750/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 3s
+      start_period: 20s
+      retries: 5
+
+  # Remote relay (spec §9/§11) — the public outbound-WSS broker edge. Splices
+  # opaque E2EE frames between enrolled devices; single-use tickets validated
+  # against the shared Postgres control plane. It never decrypts payloads.
+  remote-relay:
+    build:
+      context: ../..
+      dockerfile: deploy/brain/Dockerfile
+    restart: unless-stopped
+    command: ["node", "dist/services/remoteRelay/index.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      BRAINROUTER_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brainrouter}
+      REMOTE_RELAY_PORT: "3751"
+    ports:
+      - "${REMOTE_RELAY_PORT:-3751}:3751"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3751/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 3s
+      start_period: 20s
+      retries: 5
 
 volumes:
   brainrouter-pg:

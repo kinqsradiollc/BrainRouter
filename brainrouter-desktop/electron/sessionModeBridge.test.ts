@@ -12,6 +12,13 @@ test('desktopSessionModePatchFromArgs accepts valid session-scoped fields', () =
   });
 });
 
+test('desktop effort bridge accepts canonical none/minimal/max and rejects ultracode', () => {
+  for (const effort of ['none', 'minimal', 'max']) {
+    assert.deepEqual(desktopSessionModePatchFromArgs({ effort }), { patch: { effort } });
+  }
+  assert.match(desktopSessionModePatchFromArgs({ effort: 'ultracode' }).error ?? '', /Unknown effort/);
+});
+
 test('desktopSessionModePatchFromArgs rejects invalid values before writing', () => {
   assert.match(desktopSessionModePatchFromArgs({ executionMode: 'auto' }).error ?? '', /execution mode/);
   assert.match(desktopSessionModePatchFromArgs({ reviewPolicy: 'always' }).error ?? '', /review policy/);

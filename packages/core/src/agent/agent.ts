@@ -120,7 +120,7 @@ import { evaluateDestructiveCommand } from '../exec/guard/destructiveCommandGuar
 import { gitHeadSha } from '../git/workspaceGit.js';
 import { recordDailyUsage } from '../usage/usageHistoryStore.js';
 import { isTelemetryEnabled } from '../telemetry/recorder/telemetry.js';
-import { readPreferences, resolveEffort, effortToWireLevel, type EffortLevel } from '../session/preferences/preferencesStore.js';
+import { readPreferences, resolveEffort, type EffortLevel } from '../session/preferences/preferencesStore.js';
 import { resolveActiveMode } from '../session/state/sessionModeStore.js';
 import { resolveEffortForTurn } from './support/effortRouting.js';
 // 0.3.9 — Anthropic native adapter removed (the /v1/messages path landed in

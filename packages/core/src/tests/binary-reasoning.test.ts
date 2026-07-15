@@ -133,15 +133,16 @@ test('minimalReasoningEffort: non-reasoning, always-on, and binary models omit (
   assert.equal(minimalReasoningEffort('vendor/gemma-min-qat'), 'medium', 'binary on/off → off, not a graded low');
 });
 
-test('resolveWireEffort: Claude extended tiers (max, ultracode) cap at the wire top — same value as xhigh', () => {
-  // The OpenAI-compatible reasoning_effort field has no level above xhigh, so the
-  // desktop Claude slider's Max/Ultracode tiers request the same top effort as
-  // Extra (xhigh). They persist distinctly for the UI but converge on the wire.
+test('resolveWireEffort: managed BrainRouter efforts preserve the exact catalog value', () => {
+  const managed = cfg('claude-fable-5', { provider: 'brainrouter' });
+  for (const effort of ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const) {
+    assert.equal(resolveWireEffort(managed, effort), effort);
+  }
+});
+
+test('resolveWireEffort: max remains max instead of silently aliasing to xhigh', () => {
   const claude = cfg('claude-opus-4-8', { provider: 'openai-compatible', endpoint: 'https://openrouter.ai/api/v1' });
-  const xh = resolveWireEffort(claude, 'xhigh');
-  assert.notEqual(xh, null, 'sanity: Extra (xhigh) produces a wire value here');
-  assert.equal(resolveWireEffort(claude, 'max'), xh, 'Max → same wire reasoning_effort as Extra');
-  assert.equal(resolveWireEffort(claude, 'ultracode'), xh, 'Ultracode → same wire reasoning_effort as Extra');
+  assert.equal(resolveWireEffort(claude, 'max'), 'max');
 });
 
 test('effortForTurnSelection: reasoning is DECOUPLED from executionMode (Fast no longer clamps)', () => {

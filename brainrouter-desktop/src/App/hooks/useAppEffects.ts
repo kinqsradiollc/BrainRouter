@@ -23,7 +23,7 @@ type Query = (id: string, name: string, args?: Record<string, unknown>) => void;
 export interface AppEffectsCtx {
   q: Query;
   settingsOpen: boolean;
-  mode: 'chat' | 'track' | 'code';
+  mode: 'chat' | 'track' | 'code' | 'meetings';
   info: { workspaceRoot?: string; sessionKey?: string };
   hostUp: boolean;
   refreshGit: () => void;
@@ -84,6 +84,18 @@ export function useAppEffects(ctx: AppEffectsCtx): void {
     if (settingsOpen) q('q-toolcat', 'tool-catalog');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settingsOpen]);
+
+  // Account-managed models use normal ETag revalidation so policy changes land
+  // without restarting the desktop app. Only the renderer-safe catalog crosses
+  // the bridge; the bearer remains in Electron main/host storage.
+  useEffect(() => {
+    if (!hostUp) return;
+    const refresh = (): void => q('q-account-models', 'account-model-catalog');
+    refresh();
+    const timer = window.setInterval(refresh, 30_000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hostUp]);
 
   // Track mode — fetch the project + work items on entering Track or switching
   // workspace; mutations return the updated list (handled in useAgentEvents).

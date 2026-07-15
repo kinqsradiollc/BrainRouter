@@ -63,6 +63,55 @@ export async function probeModels(baseUrl: string, apiKey: string, kind: string 
     }
   }
 
+  // Rerankers are a POST /rerank surface: many (Cohere-style, TEI, dedicated
+  // vLLM rerank servers) don't serve GET /models at all, and a base saved as
+  // ".../v1/rerank" must not be probed as GET ".../v1/rerank/models". Strip the
+  // action suffix for the listing attempt, and on failure verify the endpoint
+  // with a minimal POST /rerank instead of surfacing a misleading GET error.
+  if (kind === "reranker") {
+    const rerankBase = baseUrl.replace(/\/+$/, "").replace(/\/rerank$/, "");
+    try {
+      return await probeModelsViaGet(rerankBase, apiKey, timeoutMs, c);
+    } catch (listError) {
+      const alive = await probeRerankEndpoint(rerankBase, apiKey, timeoutMs, c);
+      if (alive) return []; // reachable rerank endpoint, no listing — type the model manually
+      throw listError;
+    }
+  }
+
+  return probeModelsViaGet(baseUrl, apiKey, timeoutMs, c);
+}
+
+/**
+ * POST a minimal request to `{base}/rerank`. A 2xx — or a 4xx JSON validation
+ * error (missing/unknown model) — proves a live rerank surface; 404/405/network
+ * failures do not.
+ */
+async function probeRerankEndpoint(base: string, apiKey: string, timeoutMs: number, c: Awaited<ReturnType<typeof core>>): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const key = apiKey || c.LOCAL_PLACEHOLDER_KEY || "";
+    if (key) headers.Authorization = `Bearer ${key}`;
+    const res = await fetch(`${base}/rerank`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ query: "connectivity probe", documents: ["a", "b"], top_n: 1 }),
+      signal: controller.signal,
+    });
+    if (res.ok) return true;
+    if (res.status === 404 || res.status === 405) return false;
+    // 400/401/422 etc.: the rerank route exists and parsed the request shape.
+    return res.status < 500;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function probeModelsViaGet(baseUrl: string, apiKey: string, timeoutMs: number, c: Awaited<ReturnType<typeof core>>): Promise<ProbedModel[]> {
   const url = resolveModelsUrl(baseUrl);
   if (!url) return [];
   const controller = new AbortController();

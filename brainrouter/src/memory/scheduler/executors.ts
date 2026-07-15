@@ -48,6 +48,7 @@ export interface JobEngineOps {
   /** Per-user, org-pinned GitLab connector credential for a manual MR review. */
   findGitlabAccountAuthorization?(userId: string, orgId: string): Promise<{ token: string; apiBase: string; config: Record<string, unknown> } | null>;
   reviewRunner?(lens: "security" | "code" | "pentest", orgId?: string): LLMRunner | Promise<LLMRunner | undefined> | undefined;
+  scheduledModelRunner?(userId: string, role?: string): Promise<LLMRunner>;
   reviewAssignment?(lens: "security" | "code" | "pentest", orgId?: string): { maxDiffChars?: number; timeoutMs?: number } | Promise<{ maxDiffChars?: number; timeoutMs?: number } | undefined> | undefined;
   pentestAgentConfig?(orgId: string): Promise<LLMConfig | null>;
   /** Ingest completed pentest findings into the org's cognitive memory (redacted, org-scoped). */
@@ -121,12 +122,20 @@ function userIdOf(input: any): string {
   return typeof u === "string" && u ? u : "default";
 }
 
+async function scheduledRunner(input: any, ctx: JobExecContext, role = "synthesis"): Promise<LLMRunner> {
+  return await ctx.engine?.scheduledModelRunner?.(userIdOf(input), role) ?? ctx.llmRunner;
+}
+
 const EXECUTORS: Record<string, JobExecutor> = {
-  identity_distiller: async (input, { store, llmRunner }) => {
+  identity_distiller: async (input, ctx) => {
+    const { store } = ctx;
+    const llmRunner = await scheduledRunner(input, ctx);
     const r = await distillCoreIdentity({ userId: userIdOf(input), store, llmRunner });
     return { success: r.success };
   },
-  focus_distiller: async (input, { store, llmRunner }) => {
+  focus_distiller: async (input, ctx) => {
+    const { store } = ctx;
+    const llmRunner = await scheduledRunner(input, ctx);
     const r = await distillFocusScenes({ userId: userIdOf(input), store, llmRunner });
     return { sceneNames: r.sceneNames };
   },
@@ -164,7 +173,9 @@ const EXECUTORS: Record<string, JobExecutor> = {
     }
     return { parentId: parent?.id ?? null, sealed: parent ? childIds.length : 0 };
   },
-  tree_digest: async (input, { store, llmRunner }) => {
+  tree_digest: async (input, ctx) => {
+    const { store } = ctx;
+    const llmRunner = await scheduledRunner(input, ctx);
     const nodeIds: string[] = Array.isArray(input?.nodeIds) ? input.nodeIds.map(String) : [];
     if (nodeIds.length === 0) return { summarized: [], skipped: 0, reason: "no nodeIds supplied" };
     return digestTreeNodes({ userId: userIdOf(input), nodeIds, store, llmRunner });

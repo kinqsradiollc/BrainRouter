@@ -33,7 +33,9 @@ import type { HostedAgentManager } from './hostedAgents.js';
 import type { FanoutManager } from './fanoutManager.js';
 import type { RemoteWorktreeManager } from './sshRemote.js';
 import type { MobileRelayServer } from './mobileRelayServer.js';
+import type { RemoteAccessClient } from '../remoteAccessClient.js';
 import type { UiTestHost } from '../uitestHost.js';
+import type { DesktopAccountModelCatalog } from '../accountIntegration.js';
 
 type WsGit = ReturnType<typeof resolveWorkspaceGit>;
 
@@ -84,7 +86,8 @@ export interface HostContext {
   getActiveAgent: () => Agent;
   loadGlobalLlm: () => LLMConfig;
   llmForSession: (sessionKey: string) => LLMConfig;
-  resolveProviderLlm: (providerName: string, model: string) => LLMConfig | undefined;
+  resolveProviderLlm: (providerName: string, model: string) => Promise<LLMConfig | undefined> | LLMConfig | undefined;
+  refreshAccountModelCatalog: (force?: boolean) => Promise<DesktopAccountModelCatalog>;
   syncActiveSessionLlm: (base?: LLMConfig) => LLMConfig;
   spawnAgent: (sessionKey: string) => AgentLike;
   spawnReviewer: (sessionKey?: string) => AgentLike;
@@ -113,6 +116,7 @@ export interface HostContext {
   fanoutManager: FanoutManager;
   remoteWorktrees: RemoteWorktreeManager;
   mobileRelay: MobileRelayServer;
+  remoteAccess: RemoteAccessClient;
   modelsCacheByKey: Map<string, { models: string[]; at: number }>;
   getPrCache: () => { at: number; pr: { number: number; state: string; title?: string } | null } | null;
   setPrCache: (v: { at: number; pr: { number: number; state: string; title?: string } | null } | null) => void;

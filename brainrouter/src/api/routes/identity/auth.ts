@@ -17,6 +17,9 @@ const refreshExpiry = Number.parseInt(process.env.BRAINROUTER_REFRESH_EXPIRES_SE
 function createJwt(user: { userId: string; isAdmin: boolean; email: string; displayName: string }) {
   return signJwt(
     {
+      type: "access",
+      aud: ["brainrouter-api", "brainrouter-model-gateway"],
+      scope: ["api", "models:invoke"],
       userId: user.userId,
       isAdmin: user.isAdmin,
       email: user.email,

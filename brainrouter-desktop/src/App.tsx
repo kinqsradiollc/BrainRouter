@@ -15,6 +15,7 @@ import type { GitTrackContext, SyncConfig, SyncResult, TrackPrStatus } from './t
 import type { ScheduleRecordView } from './lib/schedule/scheduleView.js';
 import { SESSION_BASE } from './lib/session/list/sessionPagination.js';
 import { usePanels } from './lib/panels/usePanels.js';
+import { environmentPanelLayout } from './lib/panels/sideRailLayout.js';
 import { buildCommandList, runCommand, type CmdCtx, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
 import { tagQueryId } from './lib/workspace/workspaceEvents.js';
 import { duplicateTitleKeys } from './lib/session/list/sessionDisplay.js';
@@ -86,6 +87,7 @@ export function App(): React.ReactElement {
   const [info, setInfo] = useState<{
     sessionKey?: string;
     model?: string;
+    provider?: string;
     workspaceRoot?: string;
     username?: string;
     accountSignedIn?: boolean;
@@ -118,7 +120,7 @@ export function App(): React.ReactElement {
   const [efficiency, setEfficiency] = useState<{ compactions: number; droppedMessages: number; memoriesRecalled: number }>({ compactions: 0, droppedMessages: 0, memoriesRecalled: 0 });
   // Workspace MODE — Chat · Track · Code, switched from the left sidebar (each
   // swaps the whole main surface). Code is the default agentic-coding view.
-  const [mode, setMode] = useState<'chat' | 'track' | 'code'>('code');
+  const [mode, setMode] = useState<'chat' | 'track' | 'code' | 'meetings'>('code');
   // Track mode data (the per-workspace project + its work items), fed by the
   // host `track-*` queries. Mutations re-fetch the item list.
   const [track, setTrack] = useState<{ project: TrackProject | null; items: WorkItem[]; sprints: Sprint[]; modules: Module[]; views: SavedView[]; automations: AutomationRule[]; members: ProjectMember[]; sync: { config: SyncConfig | null; result: SyncResult | null }; git: GitTrackContext | null; pr: TrackPrStatus | null }>({ project: null, items: [], sprints: [], modules: [], views: [], automations: [], members: [], sync: { config: null, result: null }, git: null, pr: null });
@@ -561,11 +563,11 @@ export function App(): React.ReactElement {
   // width (760px content + padding ≈ 820): opening Environment must never
   // visibly shrink the conversation. No room → column AND toggle yield.
   const envRoom = !sideFullScreen && (workW === 0 || workW - (sidePanelOpen ? sideWidth : 0) - 316 >= 820 / zoomFactor);
-  const envVisible = envOpen && !homeMode && envRoom;
+  const envLayout = environmentPanelLayout(envOpen, homeMode, envRoom);
   const railAnim = useClosable(railOpen);
   const sideAnim = useClosable(sidePanelOpen);
   const dockAnim = useClosable(termDockOpen);
-  const envAnim = useClosable(envVisible, 150);
+  const envAnim = useClosable(envLayout.mounted, 150);
 
   return (
     <div className="app">
@@ -591,7 +593,7 @@ export function App(): React.ReactElement {
         tabTitle={tabTitle} renderPanelBody={renderPanelBody} openSideView={openSideView} lastPlan={lastPlan}
         changedFiles={changedFiles} backgroundTasks={backgroundTasks} fleet={fleet} toolLog={toolLog} schedules={schedules}
         worktrees={worktrees} review={review} requirements={requirements} annotations={annotations} artifacts={artifacts}
-        ci={ci} envRoom={envRoom} homeMode={homeMode} gitInfo={gitInfo} info={info} sessionTitle={sessionTitle}
+        ci={ci} envRoom={envRoom} envDrawer={envLayout.drawer} homeMode={homeMode} gitInfo={gitInfo} info={info} sessionTitle={sessionTitle}
         taskView={taskView} setTaskView={setTaskView} chatRef={chatRef} atBottomRef={atBottomRef} setAtBottom={setAtBottom}
         workflowView={workflowView} setWorkflowView={setWorkflowView} renderRow={renderRow} homeStats={homeStats}
         statsTab={statsTab} setStatsTab={setStatsTab} statsRange={statsRange} setStatsRange={setStatsRange}

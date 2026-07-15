@@ -14,7 +14,8 @@ export class CaptureBase {
     protected store: IMemoryStore,
     protected llmRunner: LLMRunner,
     protected embeddingService: EmbeddingService,
-    protected extractEveryNTurns: number = 3
+    protected extractEveryNTurns: number = 3,
+    protected resolveLlmRunner?: (orgId: string | null | undefined, userId: string) => Promise<LLMRunner>,
   ) {}
 
   /**

@@ -35,27 +35,34 @@ const PROMOTED_VALUE = 'application/json, text/event-stream';
 
 /**
  * Decide whether to overwrite `Accept` so the Streamable HTTP MCP
- * SDK accepts the POST.
+ * SDK accepts the POST. The SDK's POST rule requires the header to
+ * advertise BOTH `application/json` AND `text/event-stream` — a
+ * request carrying only one of them is 406'd.
  *
  * Cases:
- *   - already accepts text/event-stream    → no change
- *   - accept is empty                       → promote
- *   - accept is `*​/*`                       → promote (caller wins)
- *   - accept is exactly application/json    → promote (common miss)
- *   - accept is multi-value with json       → promote
- *   - accept is any other narrow type       → DO NOT promote; SDK's 406 is right
+ *   - already lists BOTH json AND event-stream → no change (SDK is happy)
+ *   - accept is empty                          → promote
+ *   - accept is `*​/*`                          → promote (caller wins)
+ *   - accept lists application/json only        → promote (common miss)
+ *   - accept lists text/event-stream only       → promote (add the missing json;
+ *                                                 a streaming client that reaches
+ *                                                 /mcp otherwise 406s — see the
+ *                                                 desktop provider transport)
+ *   - accept is multi-value with json           → promote
+ *   - accept is any other narrow type           → DO NOT promote; SDK's 406 is right
  */
 export function decideMcpAcceptPromotion(accept: string): AcceptDecision {
   const trimmed = (accept ?? '').trim();
-  if (/\btext\/event-stream\b/i.test(trimmed)) return { promote: false };
+  const hasEventStream = /\btext\/event-stream\b/i.test(trimmed);
+  const hasJson = /\bapplication\/json\b/i.test(trimmed);
+  // Already satisfies the SDK's dual-Accept POST rule — leave it untouched.
+  if (hasEventStream && hasJson) return { promote: false };
   if (trimmed === '' || trimmed === '*/*') {
     return { promote: true, value: PROMOTED_VALUE };
   }
-  if (/^application\/json\s*(;.*)?$/i.test(trimmed)) {
-    return { promote: true, value: PROMOTED_VALUE };
-  }
-  const tokens = trimmed.split(',').map((t) => t.split(';')[0].trim().toLowerCase());
-  if (tokens.includes('application/json')) {
+  // Carries exactly one of the two required types (json-only OR event-stream-only)
+  // — promote to the full dual value so the SDK accepts the POST.
+  if (hasJson || hasEventStream) {
     return { promote: true, value: PROMOTED_VALUE };
   }
   return { promote: false };

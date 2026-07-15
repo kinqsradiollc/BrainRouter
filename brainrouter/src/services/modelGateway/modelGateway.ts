@@ -19,6 +19,10 @@ import { resolveRequestUrl, buildRequestBody, extractResponsesText, isResponsesW
 import { fetchWithExternalRetry } from "../../memory/util/retry.js";
 import { requestTimeoutSignal } from "../../memory/util/request-timeout.js";
 import { extractChatCompletionText } from "../../memory/llm/llm-response.js";
+import { signJwt } from "../../api/auth/crypto.js";
+import { MODEL_GATEWAY_AUDIENCE, MODEL_INVOKE_SCOPE } from "../gateway/auth.js";
+import type { ModelReasoningEffort } from "@kinqs/brainrouter-types";
+import type { ModelPolicyStore, ProviderModelRecord } from "../../providers/modelPolicyStore.js";
 
 export type ModelKind = "llm" | "embedding" | "reranker" | "judge";
 export const MODEL_KINDS: ModelKind[] = ["llm", "embedding", "reranker", "judge"];
@@ -46,9 +50,146 @@ export interface GatewayDispatchOptions {
   retry?: { maxRetries?: number; baseDelayMs?: number; maxDelayMs?: number };
 }
 
+/**
+ * Tenant-scoped internal dispatch. Unlike {@link GatewayDispatchOptions}, this
+ * contract deliberately cannot carry an upstream endpoint or credential. The
+ * hosted gateway resolves the public model inside the authenticated org and is
+ * the only process that opens the provider secret.
+ */
+export interface ScopedGatewayDispatchOptions {
+  orgId: string;
+  servicePrincipalId: string;
+  model: string;
+  reasoningEffort?: string;
+  messages: { role: string; content: string }[];
+  tool?: LLMToolSchema;
+  maxTokens?: number;
+  jsonMode?: boolean;
+  timeoutMs?: number;
+  label?: string;
+  retry?: { maxRetries?: number; baseDelayMs?: number; maxDelayMs?: number };
+}
+
+export interface ScopedGatewayClientConfig {
+  baseUrl?: string;
+  jwtSecret?: string;
+}
+
+export class ScopedModelSelectionError extends Error {
+  constructor(
+    public readonly code: "model_not_configured" | "model_not_allowed" | "invalid_reasoning_effort",
+    message: string,
+  ) {
+    super(message);
+    this.name = "ScopedModelSelectionError";
+  }
+}
+
+export interface ScopedModelSelection {
+  orgId: string;
+  servicePrincipalId: string;
+  publicModelId: string;
+  reasoningEffort?: ModelReasoningEffort;
+}
+
+/** Resolve only member-safe policy data; this path never opens provider config. */
+export async function resolveScopedModelSelection(input: {
+  store: ModelPolicyStore;
+  orgId: string;
+  requestedModel?: string;
+  assignedModel?: string;
+  reasoningEffort?: string;
+}): Promise<ScopedModelSelection> {
+  const models = await input.store.listProviderModels(input.orgId, true);
+  if (models.length === 0) {
+    throw new ScopedModelSelectionError(
+      "model_not_configured",
+      "No managed model is configured for this organization.",
+    );
+  }
+  const byPublicId = (id: string | undefined): ProviderModelRecord | undefined => {
+    const normalized = id?.trim();
+    return normalized ? models.find((model) => model.publicModelId === normalized) : undefined;
+  };
+  const requested = input.requestedModel?.trim();
+  const selected = byPublicId(requested)
+    ?? byPublicId(input.assignedModel)
+    ?? models.find((model) => model.isDefault)
+    ?? models[0];
+  if (requested && selected.publicModelId !== requested) {
+    throw new ScopedModelSelectionError(
+      "model_not_allowed",
+      "The selected model is not enabled for this organization.",
+    );
+  }
+
+  const requestedEffort = input.reasoningEffort?.trim() as ModelReasoningEffort | undefined;
+  if (requestedEffort && !selected.allowedEfforts.includes(requestedEffort)) {
+    throw new ScopedModelSelectionError(
+      "invalid_reasoning_effort",
+      "The selected reasoning effort is not allowed for this model.",
+    );
+  }
+  const reasoningEffort = requestedEffort ?? selected.defaultEffort ?? undefined;
+  const servicePrincipalId = await input.store.ensureModelGatewayServicePrincipal(input.orgId);
+  return {
+    orgId: input.orgId,
+    servicePrincipalId,
+    publicModelId: selected.publicModelId,
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+  };
+}
+
+function hostedGatewayUrl(config?: ScopedGatewayClientConfig): string {
+  return (config?.baseUrl
+    ?? process.env.BRAINROUTER_MODEL_GATEWAY_URL
+    ?? `http://127.0.0.1:${process.env.GATEWAY_PORT ?? "3748"}`)
+    .replace(/\/+$/, "");
+}
+
+function internalJwt(opts: ScopedGatewayDispatchOptions, config?: ScopedGatewayClientConfig): string {
+  const secret = config?.jwtSecret ?? process.env.BRAINROUTER_JWT_SECRET?.trim();
+  if (!secret) {
+    const error: Error & { code?: string } = new Error("[gateway] BRAINROUTER_JWT_SECRET is required for internal model dispatch");
+    error.code = "LLM_NOT_CONFIGURED";
+    throw error;
+  }
+  return signJwt({
+    type: "service",
+    aud: MODEL_GATEWAY_AUDIENCE,
+    scope: [MODEL_INVOKE_SCOPE],
+    servicePrincipalId: opts.servicePrincipalId,
+    orgId: opts.orgId,
+  }, secret, 60);
+}
+
+function scopedRequestBody(opts: ScopedGatewayDispatchOptions): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    model: opts.model,
+    messages: opts.messages,
+    stream: false,
+  };
+  if (opts.reasoningEffort) body.reasoning_effort = opts.reasoningEffort;
+  if (opts.maxTokens) body.max_tokens = opts.maxTokens;
+  if (opts.jsonMode) body.response_format = { type: "json_object" };
+  if (opts.tool) {
+    body.tools = [{
+      type: "function",
+      function: {
+        name: opts.tool.name,
+        description: opts.tool.description,
+        parameters: opts.tool.parameters,
+      },
+    }];
+    body.tool_choice = { type: "function", function: { name: opts.tool.name } };
+  }
+  return body;
+}
+
 /** One process-wide gateway. All four model kinds register + resolve through it. */
 class ModelGateway {
   private readonly configs = new Map<ModelKind, GatewayProviderConfig>();
+  private readonly scopedKinds = new Set<ModelKind>();
 
   /** Register (or clear) the resolved provider for a kind. Called by the engine. */
   configure(kind: ModelKind, cfg: GatewayProviderConfig | null): void {
@@ -56,21 +197,27 @@ class ModelGateway {
     else this.configs.delete(kind);
   }
 
+  /** Status-only flag for kinds routed through the hosted, tenant-safe plane. */
+  configureScoped(kind: ModelKind, configured: boolean): void {
+    if (configured) this.scopedKinds.add(kind);
+    else this.scopedKinds.delete(kind);
+  }
+
   getConfig(kind: ModelKind): GatewayProviderConfig | null {
     return this.configs.get(kind) ?? null;
   }
 
   isConfigured(kind: ModelKind): boolean {
-    return this.configs.has(kind);
+    return this.configs.has(kind) || this.scopedKinds.has(kind);
   }
 
   /** Which kinds are currently live behind the gateway (for /api/status). */
   snapshot(): Record<ModelKind, boolean> {
     return {
-      llm: this.configs.has("llm"),
-      embedding: this.configs.has("embedding"),
-      reranker: this.configs.has("reranker"),
-      judge: this.configs.has("judge"),
+      llm: this.isConfigured("llm"),
+      embedding: this.isConfigured("embedding"),
+      reranker: this.isConfigured("reranker"),
+      judge: this.isConfigured("judge"),
     };
   }
 
@@ -158,6 +305,51 @@ class ModelGateway {
     }
     const content = extractChatCompletionText(data);
     if (typeof content !== "string") throw new Error(`[${tag}] choice had no usable content: ${JSON.stringify(choice).slice(0, 300)}`);
+    return content;
+  }
+
+  /**
+   * Call the hosted model data plane with a short-lived, org-bound service JWT.
+   * The request contains a public model id only; upstream routing and credential
+   * decryption remain behind `/v1/chat/completions`.
+   */
+  async dispatchScoped(
+    opts: ScopedGatewayDispatchOptions,
+    config?: ScopedGatewayClientConfig,
+  ): Promise<string> {
+    const tag = opts.label ?? "gateway";
+    const url = `${hostedGatewayUrl(config)}/v1/chat/completions`;
+    const doFetch = () => fetchWithExternalRetry(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${internalJwt(opts, config)}`,
+        "X-BrainRouter-Org": opts.orgId,
+      },
+      body: JSON.stringify(scopedRequestBody(opts)),
+      signal: requestTimeoutSignal(opts.timeoutMs ?? 120_000),
+    }, { label: `[${tag}] internal gateway`, ...(opts.retry ?? {}) });
+
+    const response = await doFetch();
+    const payload = await response.json().catch(() => null) as any;
+    if (!response.ok) {
+      const code = typeof payload?.error?.code === "string" ? payload.error.code : "gateway_error";
+      const error: Error & { code?: string; status?: number } = new Error(`[${tag}] internal model gateway rejected the request (${response.status}, ${code})`);
+      error.code = code;
+      error.status = response.status;
+      throw error;
+    }
+    if (!Array.isArray(payload?.choices) || payload.choices.length === 0) {
+      throw new Error(`[${tag}] internal model gateway returned no choices`);
+    }
+    if (opts.tool) {
+      const argumentsJson = payload.choices[0]?.message?.tool_calls?.[0]?.function?.arguments;
+      if (typeof argumentsJson === "string" && argumentsJson.trim()) return argumentsJson;
+    }
+    const content = extractChatCompletionText(payload);
+    if (typeof content !== "string") {
+      throw new Error(`[${tag}] internal model gateway returned no usable content`);
+    }
     return content;
   }
 }

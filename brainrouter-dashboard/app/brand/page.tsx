@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "../../components/AuthProvider";
 import { useIsMobile } from "../../lib/useIsMobile";
-import { DEFAULT_CONFIG, dimsFor, type BrandConfig, type Mode } from "./brandPresets";
+import { allowsRasterExport, DEFAULT_CONFIG, dimsFor, type BrandConfig, type Mode } from "./brandPresets";
 import { buildSVG } from "./buildSVG";
 import { useBrandExport } from "./useBrandExport";
 import { BrandControls } from "./BrandControls";
@@ -43,7 +43,7 @@ export default function BrandStudioPage() {
   const previewMaxW = ar < 1 ? Math.round(660 * ar) : ar > 2.4 ? 860 : 700;
   const previewHtml = svg.replace(
     "<svg ",
-    `<svg style="display:block;width:auto;height:auto;max-width:min(100%, ${previewMaxW}px);max-height:70vh;margin:0 auto;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,0.4)" `
+    `<svg style="display:block;width:auto;height:auto;max-width:min(100%, ${previewMaxW}px);max-height:70vh;margin:0 auto;border-radius:12px" `
   );
 
   return (
@@ -51,13 +51,13 @@ export default function BrandStudioPage() {
       {/* header */}
       <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-          <h1 style={{ fontSize: "26px", fontWeight: 600, letterSpacing: "-0.02em", margin: 0, color: "var(--text)" }}>Brand Studio</h1>
+          <h1 style={{ fontSize: "24px", lineHeight: "32px", fontWeight: 600, letterSpacing: "-0.02em", margin: 0, color: "var(--text)" }}>Brand Studio</h1>
           <span style={{ fontFamily: "var(--font-mono)", fontSize: "10px", letterSpacing: "0.12em", textTransform: "uppercase", color: "var(--accent)", background: "var(--accent-wash)", border: "1px solid var(--border-hover-accent)", borderRadius: "var(--radius-pill)", padding: "3px 10px" }}>
             Admin only
           </span>
         </div>
         <p style={{ color: "var(--text-secondary)", fontSize: "14px", margin: 0, maxWidth: "62ch", lineHeight: 1.55 }}>
-          The <strong style={{ color: "var(--text)", fontWeight: 600 }}>Poster studio</strong> is a freeform canvas — start from a release, feature, role, quote or lockup template, then drag, resize, restyle, and add your own layers. The guilloché mark, role badges, and the Memory-Instrument palette are baked in. Everything is vector: export crisp <strong style={{ color: "var(--text)", fontWeight: 600 }}>SVG</strong> or hi-res <strong style={{ color: "var(--text)", fontWeight: 600 }}>PNG</strong>.
+          Start from a release, feature, role, quote, or lockup template, then edit its layers and safe zones. Every brand layer uses the coded Routed B and the shared neutral palette. Logo mode exports editable <strong style={{ color: "var(--text)", fontWeight: 600 }}>SVG</strong>; poster and avatar compositions can also export a flattened <strong style={{ color: "var(--text)", fontWeight: 600 }}>PNG</strong>.
         </p>
       </div>
 
@@ -69,9 +69,10 @@ export default function BrandStudioPage() {
             type="button"
             onClick={() => set({ mode: m })}
             style={{
-              padding: "9px 16px",
-              borderRadius: "10px",
-              fontSize: "14px",
+              height: "var(--control-size)",
+              padding: "0 12px",
+              borderRadius: "8px",
+              fontSize: "13px",
               fontWeight: 600,
               cursor: "pointer",
               background: cfg.mode === m ? "var(--accent-wash)" : "var(--surface-raised)",
@@ -125,49 +126,55 @@ export default function BrandStudioPage() {
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-            <select
-              value={scale}
-              onChange={(e) => setScale(Number(e.target.value))}
-              title="PNG resolution"
-              style={{ padding: "11px 12px", borderRadius: "10px", background: "var(--surface-overlay)", border: "1px solid var(--border-strong)", color: "var(--text)", fontSize: "14px", fontWeight: 600, cursor: "pointer" }}
-            >
-              <option value={1}>1×</option>
-              <option value={2}>2× HD</option>
-              <option value={3}>3×</option>
-              <option value={4}>4×</option>
-            </select>
-            <button
-              type="button"
-              onClick={() => downloadPNG(scale)}
-              disabled={busy}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "8px",
-                padding: "11px 20px",
-                borderRadius: "10px",
-                background: "var(--accent)",
-                border: "1px solid var(--accent)",
-                color: "#06130E",
-                fontWeight: 600,
-                fontSize: "14px",
-                cursor: busy ? "default" : "pointer",
-                opacity: busy ? 0.7 : 1,
-              }}
-            >
-              {busy ? "Rendering…" : `Download PNG (${Math.round(w * scale)}×${Math.round(h * scale)})`}
-            </button>
+            {allowsRasterExport(cfg.mode) ? (
+              <>
+                <select
+                  value={scale}
+                  onChange={(e) => setScale(Number(e.target.value))}
+                  title="PNG resolution"
+                  style={{ height: "var(--control-size)", padding: "0 10px", borderRadius: "8px", background: "var(--surface-overlay)", border: "1px solid var(--border-strong)", color: "var(--text)", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}
+                >
+                  <option value={1}>1×</option>
+                  <option value={2}>2× HD</option>
+                  <option value={3}>3×</option>
+                  <option value={4}>4×</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => downloadPNG(scale)}
+                  disabled={busy}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    height: "var(--control-size)",
+                    padding: "0 12px",
+                    borderRadius: "8px",
+                    background: "var(--accent)",
+                    border: "1px solid var(--accent)",
+                    color: "var(--surface-base)",
+                    fontWeight: 600,
+                    fontSize: "13px",
+                    cursor: busy ? "default" : "pointer",
+                    opacity: busy ? 0.7 : 1,
+                  }}
+                >
+                  {busy ? "Rendering…" : `Download PNG (${Math.round(w * scale)}×${Math.round(h * scale)})`}
+                </button>
+              </>
+            ) : null}
             <button
               type="button"
               onClick={downloadSVG}
               style={{
-                padding: "11px 20px",
-                borderRadius: "10px",
+                height: "var(--control-size)",
+                padding: "0 12px",
+                borderRadius: "8px",
                 background: "var(--surface-overlay)",
                 border: "1px solid var(--border-strong)",
                 color: "var(--text)",
                 fontWeight: 600,
-                fontSize: "14px",
+                fontSize: "13px",
                 cursor: "pointer",
               }}
             >
@@ -177,20 +184,21 @@ export default function BrandStudioPage() {
               type="button"
               onClick={copySVG}
               style={{
-                padding: "11px 20px",
-                borderRadius: "10px",
+                height: "var(--control-size)",
+                padding: "0 12px",
+                borderRadius: "8px",
                 background: "transparent",
                 border: "1px solid var(--border-strong)",
                 color: copied ? "var(--accent)" : "var(--text-secondary)",
                 fontWeight: 600,
-                fontSize: "14px",
+                fontSize: "13px",
                 cursor: "pointer",
               }}
             >
-              {copied ? "Copied ✓" : "Copy SVG"}
+              {copied ? "Copied" : "Copy SVG"}
             </button>
             <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--text-muted)", marginLeft: "auto" }}>
-              SVG keeps text editable · PNG flattens to {w}×{h}
+              {cfg.mode === "logo" ? "SVG stays code-rendered and editable" : `SVG stays editable · PNG flattens to ${w}×${h}`}
             </span>
           </div>
         </div>

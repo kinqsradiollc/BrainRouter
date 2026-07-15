@@ -22,6 +22,8 @@ import type { RetrievalMetrics } from "./bench/code-scale.js";
 import type { CursorPaginationOptions, DiagnosticsBundle, EvidenceListFilters, IMemoryStore, MemoryListFilters, OperationLogFilters } from "@kinqs/brainrouter-types";
 import type { TenancyStore, EmailAuthStore, OrgPersonaStore, MemorySharingStore, ProjectStore, AdminConsoleStore } from "../tenancy/store.js";
 import type { ProviderStore } from "../providers/store.js";
+import type { ModelPolicyStore } from "../providers/modelPolicyStore.js";
+import type { RemoteAccessStore } from "../remote/store.js";
 import type { IntegrationStore } from "../integrations/store.js";
 import type { ConnectorStore } from "../connectors/store.js";
 import { resolveGithubAccountToken } from "../connectors/githubAccountToken.js";
@@ -131,12 +133,20 @@ export class MemoryEngine {
     // built in lifecycleOps.buildServices; the engine just wires the results
     // onto its fields (readiness of the reranker/judge/embedder still drives
     // benchmark modes + embed-on-import).
-    const svc = lifecycleOps.buildServices(this.store, this.extractionRunner, this.synthesisRunner);
+    const svc = lifecycleOps.buildServices(
+      this.store,
+      this.extractionRunner,
+      this.synthesisRunner,
+      (orgId, userId) => orgId
+        ? this.modelRunner("extraction", orgId)
+        : this.scheduledModelRunner(userId, "extraction"),
+    );
     this.capturePipeline = svc.capturePipeline;
     this.recallPipeline = svc.recallPipeline;
     this.rerankerService = svc.rerankerService; // MEM-19 — readiness drives benchmark mode selection
     this.embeddingService = svc.embeddingService; // MEM-VEC — embed-on-import reuse
     this.relevanceJudge = svc.relevanceJudge;
+    this.relevanceJudge.setRunnerResolver((orgId) => this.modelRunner("judge", orgId));
 
     // ADR-007 Phase 2 (step 3) — single awaited init chain. With Postgres the
     // store is genuinely async, so migrations + vec init + seed-admin must be
@@ -439,6 +449,16 @@ export class MemoryEngine {
     return this.store as unknown as ProviderStore;
   }
 
+  /** Organization-scoped server-managed model catalog and policy store. */
+  public get models(): ModelPolicyStore {
+    return this.store as unknown as ModelPolicyStore;
+  }
+
+  /** Tenant-scoped remote device identities, rotating sessions, grants, and audit. */
+  public get remote(): RemoteAccessStore {
+    return this.store as unknown as RemoteAccessStore;
+  }
+
   /** ADR-010 P6 — org-scoped external integrations (GitHub App, …). */
   public get integrations(): IntegrationStore {
     return this.store as unknown as IntegrationStore;
@@ -465,47 +485,24 @@ export class MemoryEngine {
       // Brain agent-models (BRAIN_AGENT_ROLES): per-role model overrides on the
       // shared LLM provider (extraction / synthesis / judge are brain sub-agents).
       const assigns = (await this.emailAuth.getSetting<Record<string, { provider?: string; model?: string; maxDiffChars?: number; timeoutMs?: number }>>(`agentModels:${orgId}`)) ?? {};
-      const llm = await resolveProviderConfig(store, orgId, "llm");
-      if (llm) {
-        const o = {
-          endpoint: llm.endpoint,
-          apiKey: llm.apiKey,
-          model: llm.model,
-          // Wire format decides /chat/completions vs /responses at request time.
-          wireFormat: str(llm.wireFormat),
-          // Optional resilience carried on the provider config's `extra`.
-          fallbackModel: str(llm.extra?.fallbackModel),
-          fallbackEndpoint: str(llm.extra?.fallbackEndpoint),
-          fallbackApiKey: str(llm.extra?.fallbackApiKey),
+      const bind = async (runner: LLMRunner, role: string) => {
+        // Managed model when configured, else the org's DB provider (backward-compat).
+        await this.configureRunner(runner as ModelLLMRunner, role, orgId, str(assigns[role]?.model));
+      };
+      await bind(this.extractionRunner, "extraction");
+      await bind(this.synthesisRunner, "synthesis");
+      await bind(this.securityReviewRunner, "security-review");
+      await bind(this.codeReviewRunner, "code-review");
+      await bind(this.pentestReviewRunner, "pentest");
+      for (const [lens, role] of [["security", "security-review"], ["code", "code-review"], ["pentest", "pentest"]] as const) {
+        const assign = assigns[role] ?? {};
+        this.reviewAssignments[lens] = {
+          ...(typeof assign.maxDiffChars === "number" ? { maxDiffChars: assign.maxDiffChars } : {}),
+          ...(typeof assign.timeoutMs === "number" ? { timeoutMs: assign.timeoutMs } : {}),
         };
-        for (const runner of [this.extractionRunner, this.synthesisRunner]) {
-          const set = (runner as { setProviderOverride?: (x: typeof o) => void }).setProviderOverride;
-          if (typeof set === "function") set.call(runner, o);
-        }
-        const configureReview = async (lens: "security" | "code" | "pentest", runner: LLMRunner, role: "security-review" | "code-review" | "pentest") => {
-          const assign = assigns[role] ?? {};
-          const namedRecord = assign.provider ? await this.providers.getProviderConfig(assign.provider) : null;
-          const named = namedRecord?.orgId === orgId && assign.provider ? await this.providers.getResolvedProvider(assign.provider) : null;
-          const selected = named ?? llm;
-          const override = { endpoint: selected.endpoint, apiKey: selected.apiKey, model: selected.model, wireFormat: str(selected.wireFormat), fallbackModel: str(selected.extra?.fallbackModel), fallbackEndpoint: str(selected.extra?.fallbackEndpoint), fallbackApiKey: str(selected.extra?.fallbackApiKey) };
-          (runner as { setProviderOverride?: (x: typeof override) => void }).setProviderOverride?.(override);
-          (runner as { setModelOverride?: (m?: string) => void }).setModelOverride?.(str(assign.model));
-          this.reviewAssignments[lens] = { ...(typeof assign.maxDiffChars === "number" ? { maxDiffChars: assign.maxDiffChars } : {}), ...(typeof assign.timeoutMs === "number" ? { timeoutMs: assign.timeoutMs } : {}) };
-        };
-        await configureReview("security", this.securityReviewRunner, "security-review");
-        await configureReview("code", this.codeReviewRunner, "code-review");
-        await configureReview("pentest", this.pentestReviewRunner, "pentest");
-        // Register the LLM provider in the single gateway (the one authority).
-        modelGateway.configure("llm", { endpoint: llm.endpoint, apiKey: llm.apiKey, model: llm.model, wireFormat: str(llm.wireFormat) });
-        // Extraction + synthesis brain sub-agents: per-role model on the LLM provider.
-        (this.extractionRunner as { setModelOverride?: (m?: string) => void }).setModelOverride?.(str(assigns.extraction?.model));
-        (this.synthesisRunner as { setModelOverride?: (m?: string) => void }).setModelOverride?.(str(assigns.synthesis?.model));
-        // Judge is a brain sub-agent too — it runs on the LLM provider with its own
-        // model choice (no separate provider config), routed through the gateway.
-        const judgeModel = str(assigns.judge?.model) ?? llm.model;
-        this.relevanceJudge.reconfigure({ endpoint: llm.endpoint, apiKey: llm.apiKey, model: judgeModel });
-        modelGateway.configure("judge", { endpoint: llm.endpoint, apiKey: llm.apiKey, model: judgeModel, wireFormat: str(llm.wireFormat) });
       }
+      modelGateway.configureScoped("llm", true);
+      modelGateway.configureScoped("judge", true);
       const emb = await resolveProviderConfig(store, orgId, "embedding");
       if (emb?.source === "db") this.embeddingService.reconfigure({ endpoint: emb.endpoint, apiKey: emb.apiKey, model: emb.model });
       if (emb) modelGateway.configure("embedding", { endpoint: emb.endpoint, apiKey: emb.apiKey, model: emb.model });
@@ -524,19 +521,50 @@ export class MemoryEngine {
    * an isolated configured runner.
    */
   public async reviewRunner(lens: "security" | "code" | "pentest", orgId = systemProviderOrgId()): Promise<LLMRunner> {
-    if (orgId === systemProviderOrgId()) return lens === "security" ? this.securityReviewRunner : lens === "code" ? this.codeReviewRunner : this.pentestReviewRunner;
-    const runner = new ModelLLMRunner();
-    const assigns = (await this.emailAuth.getSetting<Record<string, { provider?: string; model?: string }>>(`agentModels:${orgId}`)) ?? {};
-    const assign = assigns[lens === "security" ? "security-review" : lens === "code" ? "code-review" : "pentest"] ?? {};
-    const base = await resolveProviderConfig(this.providers, orgId, "llm");
-    const record = assign.provider ? await this.providers.getProviderConfig(assign.provider) : null;
-    const selected = record?.orgId === orgId && assign.provider ? await this.providers.getResolvedProvider(assign.provider) : null;
-    const provider = selected ?? base;
-    if (provider) {
-      runner.setProviderOverride({ endpoint: provider.endpoint, apiKey: provider.apiKey, model: provider.model, wireFormat: provider.wireFormat, fallbackModel: typeof provider.extra?.fallbackModel === "string" ? provider.extra.fallbackModel : undefined, fallbackEndpoint: typeof provider.extra?.fallbackEndpoint === "string" ? provider.extra.fallbackEndpoint : undefined, fallbackApiKey: typeof provider.extra?.fallbackApiKey === "string" ? provider.extra.fallbackApiKey : undefined });
-      runner.setModelOverride(assign.model);
+    return this.modelRunner(lens === "security" ? "security-review" : lens === "code" ? "code-review" : "pentest", orgId);
+  }
+
+  /**
+   * Bind an internal sub-agent runner to the org's OWN LLM provider (BYOK /
+   * personal, ADR-012) plus its per-role model override (ADR-014 agent-models).
+   *
+   * Server-managed models are deliberately NOT consulted here. Those exist only
+   * for BrainRouter to act as a model *provider* to the desktop app; they must
+   * never gate internal cognition, reviews, meetings, or extraction. So an org
+   * with no managed model still runs every sub-agent off its configured provider,
+   * and an org with no provider at all leaves the runner unconfigured — cognition
+   * is skipped cleanly (LLM_NOT_CONFIGURED), never a hard "no managed model"
+   * failure. Isolation is preserved because the provider is resolved per-org.
+   */
+  private async configureRunner(runner: ModelLLMRunner, _role: string, orgId: string, assignedModel?: string): Promise<void> {
+    runner.setScopedBinding(null);
+    const provider = await resolveProviderConfig(this.providers, orgId, "llm");
+    if (!provider) {
+      runner.setProviderOverride(null);
+      runner.setModelOverride(assignedModel);
+      return;
     }
+    runner.setProviderOverride({
+      endpoint: provider.endpoint, apiKey: provider.apiKey, model: provider.model, wireFormat: provider.wireFormat,
+      fallbackModel: typeof provider.extra?.fallbackModel === "string" ? provider.extra.fallbackModel : undefined,
+      fallbackEndpoint: typeof provider.extra?.fallbackEndpoint === "string" ? provider.extra.fallbackEndpoint : undefined,
+      fallbackApiKey: typeof provider.extra?.fallbackApiKey === "string" ? provider.extra.fallbackApiKey : undefined,
+    });
+    runner.setModelOverride(assignedModel);
+  }
+
+  /** Construct one immutable org-scoped worker runner off the org's own provider. */
+  public async modelRunner(role: string, orgId = systemProviderOrgId()): Promise<LLMRunner> {
+    const assigns = (await this.emailAuth.getSetting<Record<string, { model?: string }>>(`agentModels:${orgId}`)) ?? {};
+    const runner = new ModelLLMRunner();
+    await this.configureRunner(runner, role, orgId, typeof assigns[role]?.model === "string" ? assigns[role].model : undefined);
     return runner;
+  }
+
+  /** Scheduled user jobs inherit the user's current default organization. */
+  public async scheduledModelRunner(userId: string, role = "synthesis"): Promise<LLMRunner> {
+    const orgId = await this.tenancy.getDefaultOrgId(userId);
+    return this.modelRunner(role, orgId ?? systemProviderOrgId());
   }
 
   /** Non-secret per-lens execution knobs, loaded in the same org scope as the runner. */

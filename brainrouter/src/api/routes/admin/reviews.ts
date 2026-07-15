@@ -1,7 +1,7 @@
 /** PR review console API: org-scoped jobs, manual runs, GitHub PR metadata and timelines. */
 import { Router } from "express";
 import { mintInstallationToken, validateGithubApiBase } from "@kinqs/brainrouter-core/track";
-import type { MemoryJobRecord, ReviewJobDto } from "@kinqs/brainrouter-types";
+import type { MemoryJobRecord, RepositoryReviewAvailability, ReviewJobDto } from "@kinqs/brainrouter-types";
 import { memoryEngine } from "../../../memory/engine.js";
 import { requireAnyAuth, type AuthedRequest } from "../../middleware/auth.js";
 import { attachOrgContext, requirePermission } from "../../middleware/tenancy.js";
@@ -38,6 +38,42 @@ function reviewRecord(job: MemoryJobRecord): ReviewJobDto {
 async function integration(orgId: string) {
   return memoryEngine.integrations.getResolvedIntegration(orgId, "github_app");
 }
+
+type GithubReviewStateContext = {
+  accountConnected: boolean;
+  automaticReviewConfig?: Record<string, unknown>;
+};
+
+async function githubReviewStateContext(orgId: string, userId: string): Promise<GithubReviewStateContext> {
+  const [integ, account] = await Promise.all([
+    integration(orgId).catch(() => null),
+    resolveGithubAccountToken(memoryEngine.emailAuth, userId).catch(() => null),
+  ]);
+  const appConfigured = Boolean(
+    String(integ?.config.appId ?? "").trim()
+    && String(integ?.config.installationId ?? "").trim()
+    && String(integ?.secret.privateKey ?? "").trim(),
+  );
+  return {
+    accountConnected: Boolean(account),
+    automaticReviewConfig: appConfigured ? integ?.config : undefined,
+  };
+}
+
+function reviewAvailability(
+  context: GithubReviewStateContext,
+  repo: string,
+  repositoryAccessible: boolean,
+): RepositoryReviewAvailability {
+  return {
+    accountConnected: context.accountConnected,
+    repositoryAccessible,
+    autoReviewEnabled: Boolean(
+      context.automaticReviewConfig
+      && isRepoLinkedForReview(context.automaticReviewConfig, repo),
+    ),
+  };
+}
 function ghHeaders(token: string) { return { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" }; }
 async function githubToken(orgId: string) {
   const integ = await integration(orgId);
@@ -53,6 +89,49 @@ type ManualReviewAuthorization = {
   credentialSource: "github_app" | "github_account" | "gitlab_account";
   installationId: string;
 };
+type GithubReviewAuthorization = ManualReviewAuthorization & {
+  credentialSource: "github_app" | "github_account";
+  apiBase: string;
+  token: string;
+  reviewConfig?: Record<string, unknown>;
+};
+
+async function githubAppAuthorization(orgId: string): Promise<GithubReviewAuthorization | null> {
+  try {
+    const app = await githubToken(orgId);
+    return app ? {
+      credentialSource: "github_app",
+      installationId: app.installationId,
+      apiBase: app.apiBase,
+      token: app.token,
+      reviewConfig: app.integ.config,
+    } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function githubAccountAuthorization(userId: string): Promise<GithubReviewAuthorization | null> {
+  const account = await resolveGithubAccountToken(memoryEngine.emailAuth, userId);
+  return account ? {
+    credentialSource: "github_account",
+    installationId: "",
+    apiBase: "https://api.github.com",
+    token: account.accessToken,
+  } : null;
+}
+
+/** Resolve a credential that can reach one repository. Automatic-review
+ * enrollment is deliberately not an access gate for an explicit console read. */
+async function githubReviewAuthorization(orgId: string, userId: string, repo: string): Promise<GithubReviewAuthorization | null> {
+  const app = await githubAppAuthorization(orgId);
+  if (app && await isRepoAvailableForManualReview(app.reviewConfig, repo, app)) return app;
+
+  const account = await githubAccountAuthorization(userId);
+  if (account && await canAccessGithubRepository(repo, account)) return account;
+  return null;
+}
+
 async function manualReviewAuthorization(orgId: string, userId: string, repo: string, forge: "github" | "gitlab"): Promise<ManualReviewAuthorization | null> {
   if (forge === "gitlab") {
     const account = await memoryEngine.findGitlabAccountAuthorization(userId, orgId);
@@ -68,18 +147,46 @@ async function manualReviewAuthorization(orgId: string, userId: string, repo: st
   // Prefer the org's dedicated App bot when one exists. Fall back to the same
   // per-user GitHub authorization that powers Connectors and Track, so a user
   // never has to configure the same repository twice just to run a manual review.
-  try {
-    const app = await githubToken(orgId);
-    if (app && await isRepoAvailableForManualReview(app.integ.config, repo, { apiBase: app.apiBase, token: app.token })) {
-      return { credentialSource: "github_app", installationId: app.installationId };
-    }
-  } catch { /* a broken optional App integration must not mask a healthy account connector */ }
+  const authorization = await githubReviewAuthorization(orgId, userId, repo);
+  return authorization ? {
+    credentialSource: authorization.credentialSource,
+    installationId: authorization.installationId,
+  } : null;
+}
 
-  const account = await resolveGithubAccountToken(memoryEngine.emailAuth, userId);
-  if (account && await canAccessGithubRepository(repo, { apiBase: "https://api.github.com", token: account.accessToken })) {
-    return { credentialSource: "github_account", installationId: "" };
+async function listGithubRepositories(
+  auth: GithubReviewAuthorization,
+): Promise<string[] | null> {
+  const path = auth.credentialSource === "github_app"
+    ? "/installation/repositories?per_page=100"
+    : "/user/repos?per_page=100&sort=updated";
+  try {
+    const response = await fetch(`${auth.apiBase}${path}`, { headers: ghHeaders(auth.token) });
+    if (!response.ok) return null;
+    const payload = await response.json() as { repositories?: Array<{ full_name?: unknown }> } | Array<{ full_name?: unknown }>;
+    const records = Array.isArray(payload) ? payload : (payload.repositories ?? []);
+    return records.map((repo) => String(repo.full_name ?? "")).filter((repo) => validRepo(repo));
+  } catch {
+    return null;
   }
-  return null;
+}
+
+/** List repositories for the review console, independently of the webhook
+ * auto-review allowlist. A broken/missing App falls back to the requester's
+ * signed-in GitHub account without returning either credential to the client. */
+async function githubConsoleRepositories(orgId: string, userId: string): Promise<{
+  auth: GithubReviewAuthorization;
+  repos: string[];
+} | null> {
+  const app = await githubAppAuthorization(orgId);
+  if (app) {
+    const repos = await listGithubRepositories(app);
+    if (repos) return { auth: app, repos };
+  }
+  const account = await githubAccountAuthorization(userId);
+  if (!account) return null;
+  const repos = await listGithubRepositories(account);
+  return repos ? { auth: account, repos } : null;
 }
 async function canRun(req: AuthedRequest): Promise<boolean> {
   if (req.isAdmin || can(req.role, "reviews:run")) return true;
@@ -194,20 +301,17 @@ reviewsRouter.post("/run", async (req: AuthedRequest, res) => {
   res.status(202).json({ jobs });
 });
 
-/** GET /prs — open GitHub PRs on linked repositories, cached per-org for 30 seconds. */
+/** GET /prs — open GitHub PRs accessible to the active credential, cached for 30 seconds. */
 reviewsRouter.get("/prs", requirePermission("reviews:read"), async (req: AuthedRequest, res) => {
-  const cached = cache.get(req.orgId!);
+  // Account credentials are per-user, so cache entries must be as well. This
+  // also prevents a user from receiving a peer's private-repository metadata.
+  const cacheKey = `${req.orgId!}:${req.userId!}`;
+  const cached = cache.get(cacheKey);
   if (cached && cached.until > Date.now()) { res.json({ prs: cached.prs, canRun: await canRun(req) }); return; }
-  const auth = await githubToken(req.orgId!);
-  if (!auth) { res.json({ prs: [], canRun: await canRun(req) }); return; }
-  const linked = auth.integ.config.linkedRepositories;
-  let repos = Array.isArray(linked) ? linked.map(String) : [];
-  if (!Array.isArray(linked)) {
-    try {
-      const response = await fetch(`${auth.apiBase}/installation/repositories?per_page=100`, { headers: ghHeaders(auth.token) });
-      if (response.ok) repos = ((await response.json() as { repositories?: Array<{ full_name?: string }> }).repositories ?? []).map((repo) => String(repo.full_name ?? "")).filter((repo) => validRepo(repo));
-    } catch { /* a console read should degrade to an empty PR list */ }
-  }
+  const repositoryAccess = await githubConsoleRepositories(req.orgId!, req.userId!);
+  if (!repositoryAccess) { res.json({ prs: [], canRun: await canRun(req) }); return; }
+  const { auth, repos } = repositoryAccess;
+  const stateContext = await githubReviewStateContext(req.orgId!, req.userId!);
   const jobs = (await (memoryEngine.store as Store).listReviewJobsForOrg?.(req.orgId!, 500)) ?? [];
   const latest = new Map<string, ReturnType<typeof reviewRecord>>();
   for (const job of jobs) { const rec = reviewRecord(job); const key = `${rec.repo}#${rec.prNumber}:${rec.lens}`; if (!latest.has(key)) latest.set(key, rec); }
@@ -216,10 +320,10 @@ reviewsRouter.get("/prs", requirePermission("reviews:read"), async (req: AuthedR
     try {
       const response = await fetch(`${auth.apiBase}/repos/${repo}/pulls?state=open&per_page=50`, { headers: ghHeaders(auth.token) });
       if (!response.ok) continue;
-      for (const pr of await response.json() as any[]) prs.push({ repo, number: pr.number, title: pr.title, author: pr.user?.login ?? null, headSha: pr.head?.sha ?? null, updatedAt: pr.updated_at ?? null, url: pr.html_url ?? null, security: latest.get(`${repo}#${pr.number}:security`) ?? null, code: latest.get(`${repo}#${pr.number}:code`) ?? null });
+      for (const pr of await response.json() as any[]) prs.push({ repo, number: pr.number, title: pr.title, author: pr.user?.login ?? null, headSha: pr.head?.sha ?? null, updatedAt: pr.updated_at ?? null, url: pr.html_url ?? null, availability: reviewAvailability(stateContext, repo, true), security: latest.get(`${repo}#${pr.number}:security`) ?? null, code: latest.get(`${repo}#${pr.number}:code`) ?? null });
     } catch { /* one inaccessible repo must not hide others */ }
   }
-  cache.set(req.orgId!, { until: Date.now() + 30_000, prs });
+  cache.set(cacheKey, { until: Date.now() + 30_000, prs });
   res.json({ prs, canRun: await canRun(req) });
 });
 
@@ -228,8 +332,8 @@ reviewsRouter.get("/prs/:owner/:repo/:number", requirePermission("reviews:read")
   const repo = `${req.params.owner}/${req.params.repo}`;
   const number = Number(req.params.number);
   if (!validRepo(repo) || !Number.isInteger(number)) { sendError(res, 400, "Invalid pull request"); return; }
-  const auth = await githubToken(req.orgId!);
-  if (!auth || !isRepoLinkedForReview(auth.integ.config, repo)) { sendError(res, 404, "Pull request not found"); return; }
+  const auth = await githubReviewAuthorization(req.orgId!, req.userId!, repo);
+  if (!auth) { sendError(res, 404, "Pull request not found"); return; }
   try {
     const pull = await fetch(`${auth.apiBase}/repos/${repo}/pulls/${number}`, { headers: ghHeaders(auth.token) });
     if (!pull.ok) { sendError(res, pull.status === 404 ? 404 : 502, "Unable to load pull request"); return; }
@@ -237,6 +341,7 @@ reviewsRouter.get("/prs/:owner/:repo/:number", requirePermission("reviews:read")
     const checks = pr.head?.sha ? await fetch(`${auth.apiBase}/repos/${repo}/commits/${pr.head.sha}/check-runs`, { headers: ghHeaders(auth.token) }).then(async (r) => r.ok ? ((await r.json() as any).check_runs ?? []) : []).catch(() => []) : [];
     const jobs = (await (memoryEngine.store as Store).listReviewJobsForOrg?.(req.orgId!, 500)) ?? [];
     const matching = jobs.filter((job) => { const input = job.input as { repo?: unknown; prNumber?: unknown }; return input.repo === repo && Number(input.prNumber) === number; }).map(reviewRecord);
-    res.json({ pr: { repo, number, title: pr.title, author: pr.user?.login ?? null, branch: pr.head?.ref ?? null, headSha: pr.head?.sha ?? null, url: pr.html_url ?? null, checks, reviews: matching }, canRun: await canRun(req) });
+    const stateContext = await githubReviewStateContext(req.orgId!, req.userId!);
+    res.json({ pr: { repo, number, title: pr.title, author: pr.user?.login ?? null, branch: pr.head?.ref ?? null, headSha: pr.head?.sha ?? null, url: pr.html_url ?? null, availability: reviewAvailability(stateContext, repo, true), checks, reviews: matching }, canRun: await canRun(req) });
   } catch { sendError(res, 502, "Unable to load pull request"); }
 });

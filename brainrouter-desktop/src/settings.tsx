@@ -9,6 +9,7 @@
  * re-exported here so the public surface is unchanged.
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ROUTED_B_ACCENT, ROUTED_B_PATHS, ROUTED_B_VIEWBOX } from '../../packages/brand/routedB.js';
 import { wireBadge, type CommandsCatalog, type DeskCommand, type SettingsSection } from './lib/commands/commands.js';
 import { Icon } from './icons.js';
 import { ShortcutsReference } from './components/dialogs/ShortcutsReference.js';
@@ -206,8 +207,8 @@ export function SettingsDialog(props: {
           <div className="set-h">General</div>
           <div className="set-desc" style={{ marginBottom: 6 }}>Model &amp; providers moved to their own <b>Models</b> section.</div>
           <SetGroup title="Agent behavior">
-            <Row title="Reasoning effort" desc="low = terse, medium = default, high = step-by-step, xhigh = maximum. max / ultracode are top slider tiers (they cap to maximum on the wire). Forwarded to provider reasoning slots when the model supports it. (/effort)">
-              <Select value={ps('effort', 'medium')} options={['low', 'medium', 'high', 'xhigh', 'max', 'ultracode']} onChange={(v) => props.onPref('effort', v)} />
+            <Row title="Reasoning effort" desc="Choose an exact model effort from none through max. Managed models limit this list to the server policy; custom providers use an inferred profile. (/effort)">
+              <Select value={ps('effort', 'medium')} options={['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']} onChange={(v) => props.onPref('effort', v)} />
             </Row>
             <Row title="Personality" desc="Communication style for the agent's prose. (/personality)">
               <Select value={ps('personality', 'standard')} options={['concise', 'standard', 'detailed', 'pair-programmer']} onChange={(v) => props.onPref('personality', v)} />
@@ -764,7 +765,19 @@ export function SettingsDialog(props: {
       >
         <nav className="settings-nav">
           <div className="settings-brand">
-            <span className="settings-brand-mark">B</span>
+            <svg
+              className="settings-brand-mark"
+              data-brand-mark="routed-b"
+              width="22"
+              height="22"
+              viewBox={ROUTED_B_VIEWBOX}
+              role="img"
+              aria-label="BrainRouter"
+              focusable="false"
+            >
+              <path d={ROUTED_B_PATHS.upper} fill="currentColor" />
+              <path d={ROUTED_B_PATHS.lower} fill={ROUTED_B_ACCENT} />
+            </svg>
             <div><strong id="settings-dialog-title">Settings</strong></div>
           </div>
           <input

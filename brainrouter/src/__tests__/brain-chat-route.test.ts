@@ -9,7 +9,8 @@ const mocks = vi.hoisted(() => ({
   getMemberRole: vi.fn(),
   getDefaultOrgId: vi.fn(),
   listAccessibleProjects: vi.fn(),
-  getDefaultResolvedProvider: vi.fn(),
+  listProviderModels: vi.fn(),
+  ensureModelGatewayServicePrincipal: vi.fn(),
   getSourceDocuments: vi.fn(),
   getSourceDocument: vi.fn(),
   getSourceChunksByDocument: vi.fn(),
@@ -19,7 +20,9 @@ vi.mock("../memory/engine.js", () => ({
   memoryEngine: {
     getUserByApiKey: vi.fn((key: string) => key === "br_user"
       ? { userId: "user-1", isAdmin: false, email: "user@example.test", status: "active" }
-      : null),
+      : key === "br_user_2"
+        ? { userId: "user-2", isAdmin: false, email: "user2@example.test", status: "active" }
+        : null),
     tenancy: {
       getMemberRole: mocks.getMemberRole,
       getDefaultOrgId: mocks.getDefaultOrgId,
@@ -28,8 +31,9 @@ vi.mock("../memory/engine.js", () => ({
     projects: {
       listAccessibleProjects: mocks.listAccessibleProjects,
     },
-    providers: {
-      getDefaultResolvedProvider: mocks.getDefaultResolvedProvider,
+    models: {
+      listProviderModels: mocks.listProviderModels,
+      ensureModelGatewayServicePrincipal: mocks.ensureModelGatewayServicePrincipal,
     },
     recall: mocks.recall,
     capture: mocks.capture,
@@ -42,20 +46,46 @@ vi.mock("../memory/engine.js", () => ({
 }));
 
 vi.mock("../services/modelGateway/modelGateway.js", () => ({
-  modelGateway: { dispatch: mocks.dispatch },
+  modelGateway: { dispatchScoped: mocks.dispatch },
+  resolveScopedModelSelection: async (input: any) => {
+    const models = await input.store.listProviderModels(input.orgId, true);
+    const selected = input.requestedModel
+      ? models.find((model: any) => model.publicModelId === input.requestedModel)
+      : models.find((model: any) => model.isDefault) ?? models[0];
+    if (!selected) throw new Error("model unavailable");
+    if (input.reasoningEffort && !selected.allowedEfforts.includes(input.reasoningEffort)) throw new Error("effort unavailable");
+    return {
+      orgId: input.orgId,
+      servicePrincipalId: await input.store.ensureModelGatewayServicePrincipal(input.orgId),
+      publicModelId: selected.publicModelId,
+      reasoningEffort: input.reasoningEffort ?? selected.defaultEffort ?? undefined,
+    };
+  },
+  ScopedModelSelectionError: class ScopedModelSelectionError extends Error {},
 }));
 
 import { brainRouter } from "../api/routes/agent/brain.js";
 
-const provider = {
-  kind: "llm" as const,
-  endpoint: "https://models.example/v1",
-  apiKey: "sealed-key",
-  model: "model-a",
-  models: [],
-  extra: {},
-  source: "db" as const,
-};
+function model(orgId: string, publicModelId: string) {
+  return {
+    id: `${orgId}:${publicModelId}`,
+    orgId,
+    providerConfigId: `provider:${orgId}`,
+    publicModelId,
+    upstreamModelId: `upstream:${publicModelId}`,
+    displayName: publicModelId,
+    enabled: true,
+    isDefault: true,
+    sortOrder: 0,
+    allowedEfforts: ["low", "high"],
+    defaultEffort: "low",
+    effortWireMap: {},
+    capabilities: { streaming: true, tools: true, responses: true, reasoning: true },
+    capabilitySource: "manual",
+    createdAt: "2026-07-13T00:00:00.000Z",
+    updatedAt: "2026-07-13T00:00:00.000Z",
+  };
+}
 
 describe("scoped brain API routes", () => {
   let server: ReturnType<express.Express["listen"]> | undefined;
@@ -64,8 +94,8 @@ describe("scoped brain API routes", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mocks.getMemberRole.mockImplementation(async (orgId: string, userId: string) =>
-      orgId === "org-1" && userId === "user-1" ? "developer" : null);
-    mocks.getDefaultOrgId.mockResolvedValue("org-1");
+      (orgId === "org-1" && userId === "user-1") || (orgId === "org-2" && userId === "user-2") ? "developer" : null);
+    mocks.getDefaultOrgId.mockImplementation(async (userId: string) => userId === "user-2" ? "org-2" : "org-1");
     mocks.listAccessibleProjects.mockResolvedValue([{
       projectId: "project-1",
       orgId: "org-1",
@@ -76,7 +106,8 @@ describe("scoped brain API routes", () => {
       createdBy: "user-1",
       createdAt: "2026-07-13T00:00:00.000Z",
     }]);
-    mocks.getDefaultResolvedProvider.mockResolvedValue(provider);
+    mocks.listProviderModels.mockImplementation(async (orgId: string) => [model(orgId, orgId === "org-2" ? "model-b" : "model-a")]);
+    mocks.ensureModelGatewayServicePrincipal.mockImplementation(async (orgId: string) => `brain-worker:${orgId}`);
     mocks.recall.mockResolvedValue({
       recallStrategy: "hybrid",
       recalledCognitiveMemories: [],
@@ -170,11 +201,43 @@ describe("scoped brain API routes", () => {
       citations: [],
       recallStrategy: "hybrid",
     });
-    expect(mocks.getDefaultResolvedProvider).toHaveBeenCalledWith("org-1", "llm");
+    expect(mocks.listProviderModels).toHaveBeenCalledWith("org-1", true);
     expect(mocks.recall).toHaveBeenCalledWith(expect.objectContaining({
       userId: "user-1",
       filters: expect.objectContaining({ orgId: "org-1", callerUserId: "user-1" }),
     }));
+  });
+
+  it("keeps model selection and service identity isolated between organizations", async () => {
+    const first = await post({ ...validBody, model: "model-a", reasoningEffort: "high" }, {
+      Authorization: "Bearer br_user",
+      "X-BrainRouter-Org": "org-1",
+    });
+    const second = await post({
+      ...validBody,
+      projectId: undefined,
+      model: "model-b",
+      reasoningEffort: "low",
+    }, {
+      Authorization: "Bearer br_user_2",
+      "X-BrainRouter-Org": "org-2",
+    });
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(mocks.dispatch).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      orgId: "org-1",
+      servicePrincipalId: "brain-worker:org-1",
+      model: "model-a",
+      reasoningEffort: "high",
+    }));
+    expect(mocks.dispatch).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      orgId: "org-2",
+      servicePrincipalId: "brain-worker:org-2",
+      model: "model-b",
+      reasoningEffort: "low",
+    }));
+    expect(mocks.dispatch.mock.calls.flatMap((call) => Object.keys(call[0]))).not.toContain("apiKey");
   });
 
   it("does not expose a provider response body when dispatch fails", async () => {

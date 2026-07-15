@@ -463,7 +463,11 @@ export class MemoryRecallPipeline {
           id: r.record.record_id,
           content: r.record.content,
         }));
-        const judgeResult = await this.relevanceJudge.judge({ query, candidates: judgeCandidates });
+        const judgeResult = await this.relevanceJudge.judge({
+          query,
+          candidates: judgeCandidates,
+          orgId: filters?.orgId,
+        });
         judgeUsed = true;
         judgeVerdicts = judgeResult.verdicts;
         judgeApproved = judgeResult.approvedIndices.length;

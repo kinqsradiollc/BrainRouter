@@ -14,6 +14,7 @@ import type {
   SkillActivationRecord,
 } from "./memory.js";
 import type { MemoryListItem } from "./store.js";
+import type { ModelReasoningEffort } from "./models.js";
 import { PublicUserRecord } from "./memory.js";
 
 export interface SigninRequest {
@@ -213,6 +214,10 @@ export interface BrainChatRequest {
   sessionKey: string;
   projectId?: string;
   workspaceTag?: string;
+  /** Public server-managed model id from the authenticated member catalog. */
+  model?: string;
+  /** Canonical effort id; omitted delegates to the model policy default. */
+  reasoningEffort?: ModelReasoningEffort;
 }
 
 export interface BrainChatCitation {

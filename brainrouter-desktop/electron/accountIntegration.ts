@@ -1,3 +1,12 @@
+import {
+  MODEL_REASONING_EFFORTS,
+  type ModelCapabilities,
+  type ModelCapabilityProvenanceSource,
+  type ModelPolicy,
+  type ModelReasoningEffort,
+  type ModelReasoningPolicy,
+} from '@kinqs/brainrouter-types';
+
 type AccountConfig = {
   cli?: { account?: { url?: string; displayName?: string; email?: string } };
   servers?: Record<string, { identity?: string; apiKey?: string }>;
@@ -6,6 +15,7 @@ type AccountConfig = {
 type FetchResponse = {
   ok: boolean;
   status: number;
+  headers?: { get(name: string): string | null };
   json(): Promise<unknown>;
 };
 
@@ -36,6 +46,18 @@ export interface DesktopAccountIdentity {
   signedIn: boolean;
   username: string;
   email?: string;
+}
+
+/** Renderer-safe snapshot for the built-in, read-only BrainRouter provider. */
+export interface DesktopAccountModelCatalog {
+  signedIn: boolean;
+  provider: { id: 'brainrouter'; label: 'BrainRouter'; readOnly: true };
+  revision: string | null;
+  etag: string | null;
+  models: ModelPolicy[];
+  stale: boolean;
+  refreshedAt: string | null;
+  error?: string;
 }
 
 export interface GithubAccountStatus {
@@ -102,6 +124,138 @@ function responseError(response: FetchResponse, body: Record<string, unknown>): 
   return message || `HTTP ${response.status}`;
 }
 
+const MODEL_EFFORTS = new Set<string>(MODEL_REASONING_EFFORTS);
+const CAPABILITY_SOURCES = new Set<ModelCapabilityProvenanceSource>(['verified', 'discovered', 'manual', 'inferred']);
+
+function nonEmptyString(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`Model catalog ${field} is required.`);
+  return value.trim();
+}
+
+function capabilitySource(value: unknown, field: string): ModelCapabilityProvenanceSource {
+  if (typeof value !== 'string' || !CAPABILITY_SOURCES.has(value as ModelCapabilityProvenanceSource)) {
+    throw new Error(`Model catalog ${field} is invalid.`);
+  }
+  return value as ModelCapabilityProvenanceSource;
+}
+
+function parseCapabilities(value: unknown): ModelCapabilities {
+  const raw = asRecord(value);
+  for (const field of ['streaming', 'tools', 'responses', 'reasoning'] as const) {
+    if (typeof raw[field] !== 'boolean') throw new Error(`Model catalog capability "${field}" must be boolean.`);
+  }
+  return {
+    streaming: raw.streaming as boolean,
+    tools: raw.tools as boolean,
+    responses: raw.responses as boolean,
+    reasoning: raw.reasoning as boolean,
+  };
+}
+
+function parseReasoning(value: unknown): ModelReasoningPolicy | null {
+  if (value === null) return null;
+  const raw = asRecord(value);
+  if (!Array.isArray(raw.allowed)) throw new Error('Model catalog reasoning.allowed must be an array.');
+  const allowed = raw.allowed.map((entry) => {
+    const item = asRecord(entry);
+    const id = nonEmptyString(item.id, 'reasoning effort') as ModelReasoningEffort;
+    if (!MODEL_EFFORTS.has(id)) throw new Error(`Model catalog contains unsupported effort "${id}".`);
+    return { id, label: nonEmptyString(item.label, `reasoning label for ${id}`) };
+  });
+  if (new Set(allowed.map((entry) => entry.id)).size !== allowed.length) {
+    throw new Error('Model catalog contains duplicate reasoning efforts.');
+  }
+  const defaultEffort = raw.default === null ? null : nonEmptyString(raw.default, 'reasoning default') as ModelReasoningEffort;
+  if (defaultEffort !== null && !allowed.some((entry) => entry.id === defaultEffort)) {
+    throw new Error('Model catalog reasoning default is not allowed.');
+  }
+  if (raw.mode !== 'selectable' && raw.mode !== 'adaptive') throw new Error('Model catalog reasoning mode is invalid.');
+  if (raw.manualBudgetTokens !== undefined && raw.manualBudgetTokens !== 'supported' && raw.manualBudgetTokens !== 'unsupported') {
+    throw new Error('Model catalog manual budget support is invalid.');
+  }
+  return {
+    default: defaultEffort,
+    allowed,
+    source: capabilitySource(raw.source, 'reasoning source'),
+    mode: raw.mode,
+    ...(raw.manualBudgetTokens ? { manualBudgetTokens: raw.manualBudgetTokens } : {}),
+  };
+}
+
+function parseModelPolicy(value: unknown): ModelPolicy {
+  const raw = asRecord(value);
+  if (raw.provider !== 'brainrouter') throw new Error('Model catalog provider must be BrainRouter.');
+  if (raw.enabled !== true) throw new Error('Model catalog returned a disabled model.');
+  const provenance = asRecord(raw.provenance);
+  const sourceUrl = typeof provenance.sourceUrl === 'string' && provenance.sourceUrl.trim() ? provenance.sourceUrl.trim() : undefined;
+  const verifiedAt = typeof provenance.verifiedAt === 'string' && provenance.verifiedAt.trim() ? provenance.verifiedAt.trim() : undefined;
+  return {
+    id: nonEmptyString(raw.id, 'model id'),
+    label: nonEmptyString(raw.label, 'model label'),
+    provider: 'brainrouter',
+    enabled: true,
+    capabilities: parseCapabilities(raw.capabilities),
+    reasoning: parseReasoning(raw.reasoning),
+    provenance: {
+      source: capabilitySource(provenance.source, 'provenance source'),
+      ...(sourceUrl ? { sourceUrl } : {}),
+      ...(verifiedAt ? { verifiedAt } : {}),
+    },
+    revision: nonEmptyString(raw.revision, 'model revision'),
+  };
+}
+
+function emptyAccountModelCatalog(signedIn: boolean, error?: string): DesktopAccountModelCatalog {
+  return {
+    signedIn,
+    provider: { id: 'brainrouter', label: 'BrainRouter', readOnly: true },
+    revision: null,
+    etag: null,
+    models: [],
+    stale: false,
+    refreshedAt: null,
+    ...(error ? { error } : {}),
+  };
+}
+
+/** Fetch and strictly whitelist the member-safe model catalog. Account bearer
+ * and gateway endpoint never enter the returned object. `previous` enables
+ * normal ETag revalidation plus an explicit stale offline view. */
+export async function fetchAccountModelCatalog(
+  account: BrainRouterAccountContext | null,
+  previous: DesktopAccountModelCatalog | null,
+  fetchImpl: AccountFetch = globalThis.fetch as unknown as AccountFetch,
+): Promise<DesktopAccountModelCatalog> {
+  if (!account) return emptyAccountModelCatalog(false);
+  const headers = brainRouterAccountHeaders(account);
+  if (previous?.etag) headers['If-None-Match'] = previous.etag;
+  try {
+    const response = await fetchImpl(`${account.baseUrl}/api/models/catalog`, { headers });
+    if (response.status === 304 && previous) {
+      return { ...previous, stale: false, refreshedAt: new Date().toISOString(), error: undefined };
+    }
+    const body = await safeJson(response);
+    if (!response.ok) throw new Error(responseError(response, body));
+    const revision = nonEmptyString(body.revision, 'revision');
+    if (!Array.isArray(body.models)) throw new Error('Model catalog models must be an array.');
+    const models = body.models.map(parseModelPolicy);
+    return {
+      signedIn: true,
+      provider: { id: 'brainrouter', label: 'BrainRouter', readOnly: true },
+      revision,
+      etag: response.headers?.get('etag') ?? `"${revision}"`,
+      models,
+      stale: false,
+      refreshedAt: new Date().toISOString(),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unable to refresh the BrainRouter model catalog.';
+    return previous
+      ? { ...previous, signedIn: true, stale: true, error: message }
+      : emptyAccountModelCatalog(true, message);
+  }
+}
+
 export function resolveBrainRouterAccountApi(config: unknown): BrainRouterAccountApi | null {
   const candidate = asRecord(config) as AccountConfig;
   const baseUrl = String(candidate.cli?.account?.url ?? '').trim().replace(/\/+$/, '');
@@ -160,7 +314,7 @@ export function brainRouterAccountHeaders(
 ): Record<string, string> {
   return {
     Authorization: `Bearer ${account.apiKey}`,
-    'X-BrainRouter-Org': account.orgId,
+    ...(account.orgId ? { 'X-BrainRouter-Org': account.orgId } : {}),
     ...(json ? { 'Content-Type': 'application/json' } : {}),
   };
 }

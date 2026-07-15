@@ -14,7 +14,7 @@ import type { PanelId } from '../../panels/index.js';
 
 export interface TopbarRightProps {
   /** Workspace mode — Environment/terminal are Code-only; side views also apply to Track. */
-  mode: 'chat' | 'track' | 'code';
+  mode: 'chat' | 'track' | 'code' | 'meetings';
   homeMode: boolean;
   envRoom: boolean;
   envOpen: boolean;

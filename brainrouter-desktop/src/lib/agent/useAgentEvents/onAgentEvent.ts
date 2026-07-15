@@ -297,6 +297,10 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
         // agent (which resolves fresh per turn) sent this session's. Refetch
         // it on every switch so the chip matches what actually gets sent.
         q('q-snapshot', 'config-snapshot');
+        // Session runtime can also change provider (for the built-in managed
+        // BrainRouter catalog). Re-read the safe session metadata after the host
+        // has applied the switch so capability policy follows the active model.
+        q('q-info', 'session-info');
         // GOAL-BANNER — pull THIS session's active goal so the pinned banner
         // reflects the chat we just landed on (each session has its own goal).
         q('q-goal', 'goal-state');

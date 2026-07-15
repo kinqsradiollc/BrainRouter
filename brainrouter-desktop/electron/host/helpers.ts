@@ -36,6 +36,11 @@ export type { ChildProcessWithoutNullStreams };
  */
 export function scrubCliSecrets(cli: unknown): Record<string, unknown> {
   const c = (cli && typeof cli === 'object' ? { ...(cli as Record<string, unknown>) } : {}) as Record<string, unknown>;
+  if (c.account && typeof c.account === 'object') {
+    const account = { ...(c.account as Record<string, unknown>) };
+    for (const key of ['jwt', 'refreshToken', 'accessToken', 'apiKey']) delete account[key];
+    c.account = account;
+  }
   if (c.webSearch && typeof c.webSearch === 'object') {
     const webSearch = { ...(c.webSearch as Record<string, unknown>) };
     if (typeof webSearch.serperApiKey === 'string' && webSearch.serperApiKey) webSearch.serperApiKey = '••••';
@@ -183,6 +188,8 @@ export function createComputerUseBridge(port: ParentPortLike | undefined): Compu
 
 export type SecretBridge = {
   get(key: string): Promise<string | undefined>;
+  set(key: 'account:access-token' | 'account:refresh-token', value: string): Promise<void>;
+  delete(key: 'account:access-token' | 'account:refresh-token'): Promise<void>;
   handleMessage(message: unknown): boolean;
 };
 
@@ -196,18 +203,21 @@ export function createSecretBridge(port: ParentPortLike | undefined): SecretBrid
   if (!port) return undefined;
   let seq = 0;
   const pending = new Map<string, { resolve: (value: string | undefined) => void; reject: (err: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  const request = (op: 'get' | 'set' | 'delete', key: string, value?: string): Promise<string | undefined> => {
+    const id = `sec_${++seq}`;
+    port.postMessage({ kind: 'secret-request', id, op, key, ...(value !== undefined ? { value } : {}) });
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error('Secret operation timed out waiting for Electron main.'));
+      }, 10_000);
+      pending.set(id, { resolve, reject, timer });
+    });
+  };
   return {
-    get(key: string): Promise<string | undefined> {
-      const id = `sec_${++seq}`;
-      port.postMessage({ kind: 'secret-request', id, op: 'get', key });
-      return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-          pending.delete(id);
-          reject(new Error('Secret lookup timed out waiting for Electron main.'));
-        }, 10_000);
-        pending.set(id, { resolve, reject, timer });
-      });
-    },
+    get: (key) => request('get', key),
+    set: async (key, value) => { await request('set', key, value); },
+    delete: async (key) => { await request('delete', key); },
     handleMessage(message: unknown): boolean {
       if (!message || typeof message !== 'object') return false;
       const msg = message as { kind?: string; id?: string; ok?: boolean; value?: string; error?: string };

@@ -331,18 +331,18 @@ test('preferencesStore: effort defaults to medium and round-trips through write+
   });
 });
 
-test('normalizeEffort: canonical levels pass through; max and ultracode are distinct top tiers; case-insensitive', () => {
+test('normalizeEffort: canonical API levels pass through exactly; legacy ultracode fails closed', () => {
+  assert.equal(normalizeEffort('none'), 'none');
+  assert.equal(normalizeEffort('minimal'), 'minimal');
   assert.equal(normalizeEffort('low'), 'low');
   assert.equal(normalizeEffort('medium'), 'medium');
   assert.equal(normalizeEffort('high'), 'high');
   // xhigh must pass through (previously dropped to undefined → resolveEffort fell back to medium).
   assert.equal(normalizeEffort('xhigh'), 'xhigh');
-  // max and ultracode are their OWN tiers above xhigh (the desktop Claude slider).
-  // Kept DISTINCT (max no longer aliases xhigh) so the slider position persists.
   assert.equal(normalizeEffort('max'), 'max');
   assert.equal(normalizeEffort('  MAX  '), 'max');
-  assert.equal(normalizeEffort('ultracode'), 'ultracode');
-  assert.equal(normalizeEffort('Ultracode'), 'ultracode');
+  assert.equal(normalizeEffort('ultracode'), undefined);
+  assert.equal(normalizeEffort('Ultracode'), undefined);
   assert.equal(normalizeEffort('XHigh'), 'xhigh');
   // unknown / non-string → undefined
   assert.equal(normalizeEffort('turbo'), undefined);

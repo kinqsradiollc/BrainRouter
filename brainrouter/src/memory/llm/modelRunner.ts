@@ -19,6 +19,7 @@ import { resolveLLMTimeoutMs, isExternalTimeoutError } from "./llm-response.js";
 import { modelGateway } from "../../services/modelGateway/modelGateway.js";
 import { requestTimeoutSignal } from "../util/request-timeout.js";
 import { cognitiveBreakerOpen, recordCognitiveSuccess, recordCognitiveFailure } from "./cognitive-breaker.js";
+import type { ModelReasoningEffort } from "@kinqs/brainrouter-types";
 
 function parsePositiveInt(value: string | undefined): number | undefined {
   if (!value) return undefined;
@@ -53,10 +54,19 @@ export interface LlmProviderOverride {
   fallbackApiKey?: string;
 }
 
+/** Public, tenant-bound gateway state. It intentionally contains no provider secret. */
+export interface ScopedModelBinding {
+  orgId: string;
+  servicePrincipalId: string;
+  publicModelId: string;
+  reasoningEffort?: ModelReasoningEffort;
+}
+
 // Configurable LLM Runner — supports per-task model routing
 export class ModelLLMRunner implements LLMRunner {
   private modelOverride?: string;
   private providerOverride: LlmProviderOverride | null = null;
+  private scopedBinding: ScopedModelBinding | null = null;
 
   constructor(modelOverride?: string) {
     this.modelOverride = modelOverride?.trim() || undefined;
@@ -81,7 +91,15 @@ export class ModelLLMRunner implements LLMRunner {
     this.providerOverride = o && (o.endpoint || o.apiKey || o.model) ? o : null;
   }
 
+  /** Bind this runner to one immutable organization/public-model selection. */
+  setScopedBinding(binding: ScopedModelBinding | null): void {
+    this.scopedBinding = binding ? { ...binding } : null;
+  }
+
   async run({ prompt, systemPrompt, timeoutMs = 120_000, taskId, tool }: LLMRunParams): Promise<string> {
+    if (this.scopedBinding) {
+      return this.runScoped({ prompt, systemPrompt, timeoutMs, taskId, tool }, this.scopedBinding);
+    }
     const endpoint = this.providerOverride?.endpoint || "https://api.openai.com/v1/chat/completions";
     const apiKey = this.providerOverride?.apiKey;
 
@@ -161,6 +179,55 @@ export class ModelLLMRunner implements LLMRunner {
       // breaker so a sustained outage opens the circuit.
       recordCognitiveFailure();
       throw err;
+    }
+  }
+
+  private async runScoped(
+    params: { prompt: string; systemPrompt?: string; timeoutMs: number; taskId: string; tool?: LLMToolSchema },
+    binding: ScopedModelBinding,
+  ): Promise<string> {
+    if (cognitiveBreakerOpen()) {
+      const error: Error & { code?: string } = new Error(`[BrainRouter:${params.taskId}] cognitive LLM circuit open (provider failing); skipping this call.`);
+      error.code = "COGNITIVE_BREAKER_OPEN";
+      throw error;
+    }
+    const messages: { role: string; content: string }[] = [];
+    if (params.systemPrompt) messages.push({ role: "system", content: params.systemPrompt });
+    messages.push({ role: "user", content: params.prompt });
+    const effectiveTimeoutMs = resolveLLMTimeoutMs({
+      endpoint: process.env.BRAINROUTER_MODEL_GATEWAY_URL ?? "http://127.0.0.1:3748/v1/chat/completions",
+      requestedMs: params.timeoutMs,
+      envVarNames: params.taskId === "cognitive-extraction"
+        ? ["BRAINROUTER_EXTRACTION_TIMEOUT_MS", "BRAINROUTER_LLM_TIMEOUT_MS"]
+        : ["BRAINROUTER_LLM_TIMEOUT_MS"],
+    });
+    const maxTokens = parsePositiveInt(process.env.BRAINROUTER_LLM_MAX_TOKENS);
+    const jsonMode = process.env.BRAINROUTER_LLM_JSON_MODE === "on" && params.taskId === "cognitive-extraction";
+    const retry = params.taskId.startsWith("pr-")
+      ? { maxRetries: 6, baseDelayMs: 3_000, maxDelayMs: 45_000 }
+      : undefined;
+    const release = await acquireLLMSlot();
+    try {
+      const result = await modelGateway.dispatchScoped({
+        orgId: binding.orgId,
+        servicePrincipalId: binding.servicePrincipalId,
+        model: binding.publicModelId,
+        reasoningEffort: binding.reasoningEffort,
+        messages,
+        tool: params.tool,
+        maxTokens,
+        jsonMode,
+        timeoutMs: effectiveTimeoutMs,
+        label: `BrainRouter:${params.taskId}`,
+        retry,
+      });
+      recordCognitiveSuccess();
+      return result;
+    } catch (error) {
+      recordCognitiveFailure();
+      throw error;
+    } finally {
+      release();
     }
   }
 
