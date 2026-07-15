@@ -32,6 +32,19 @@ services:
       timeout: 3s
       retries: 12
 
+  # Optional read cache — accelerates hot global reads (CVE catalog, dashboard
+  # GETs). The REST services degrade to an in-process cache if this is absent, so
+  # it is purely an accelerator. No persistence: it is disposable by design.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   # One-shot migrator (spec §11, Tasks 32-33) — the ONLY writer of schema DDL.
   # Every data service waits for service_completed_successfully, so a migration
   # error fails the stack instead of racing half-migrated services.
@@ -58,9 +71,13 @@ services:
         condition: service_healthy
       migrator:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     environment:
       NODE_ENV: production
       BRAINROUTER_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brainrouter}
+      # Optional shared read cache (falls back to in-process if unset/unreachable).
+      BRAINROUTER_REDIS_URL: ${BRAINROUTER_REDIS_URL:-redis://redis:6379}
       # REQUIRED in production — JWT signing (sessions reset on boot without it).
       BRAINROUTER_JWT_SECRET: ${BRAINROUTER_JWT_SECRET:?set BRAINROUTER_JWT_SECRET in .env}
       # REQUIRED to store provider / integration API keys (AES-256-GCM KEK — a
@@ -212,11 +229,15 @@ services:
         condition: service_healthy
       migrator:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     environment:
       NODE_ENV: production
       BRAINROUTER_SERVICE: "api"
       BRAINROUTER_JOB_RUNNER: "off"
       BRAINROUTER_DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-brainrouter}
+      # Optional shared read cache (falls back to in-process if unset/unreachable).
+      BRAINROUTER_REDIS_URL: ${BRAINROUTER_REDIS_URL:-redis://redis:6379}
       BRAINROUTER_JWT_SECRET: ${BRAINROUTER_JWT_SECRET:?set BRAINROUTER_JWT_SECRET in .env}
       BRAINROUTER_SECRET_KEY: ${BRAINROUTER_SECRET_KEY:?set BRAINROUTER_SECRET_KEY in .env}
       BRAINROUTER_SYSTEM_ORG_ID: ${BRAINROUTER_SYSTEM_ORG_ID:-}

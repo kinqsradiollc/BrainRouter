@@ -152,7 +152,16 @@ DB via the dashboard:
 | `BRAINROUTER_JWT_SECRET` | session signing |
 | `BRAINROUTER_ADMIN_EMAIL` / `_PASSWORD` | first-admin seed (clear after first boot) |
 | `BRAINROUTER_CORS_ORIGIN` | browser origins allowed to call the API |
+| `BRAINROUTER_REDIS_URL` | **optional** read cache (CVE catalog, hot GETs) — see below |
 | `BRAINROUTER_SYSTEM_ORG_ID`, `_JOB_RUNNER`, `_METRICS`, `_SERVICE`, `_PORT` | deployment topology |
+
+**Optional Redis cache.** The compose stacks bundle a `redis` service and point
+the REST/brain services at it via `BRAINROUTER_REDIS_URL` (`redis://redis:6379`),
+so hot global reads — the CVE catalog list/detail and other high-traffic GETs —
+are served from cache. It is purely an accelerator: **unset the variable (or make
+Redis unreachable) and the services fall back to an in-process cache with no loss
+of correctness.** The `ioredis` client is an optional dependency baked into the
+Docker image; a from-source run without it simply uses the in-process cache.
 
 Beyond those, a large set of **operational tuning knobs** (timeouts, concurrency
 caps, reranker/pgvector index params, recall limits, sweepers) are optional

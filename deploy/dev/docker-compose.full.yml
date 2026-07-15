@@ -46,6 +46,18 @@ services:
       start_period: 40s
       retries: 5
 
+  # Optional read cache (CVE catalog, hot dashboard GETs). The brain degrades to
+  # an in-process cache if this is absent — it is an accelerator, not a dependency.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   # HTTP/MCP/model-gateway process (SERVICE defaults to `brain`). Async work is
   # delegated so feed refreshes and repository scans never delay API traffic.
   brain:
@@ -58,6 +70,7 @@ services:
     environment:
       BRAINROUTER_JOB_RUNNER: "off"
       BRAINROUTER_STT_URL: ${BRAINROUTER_STT_URL:-http://stt:3752}
+      BRAINROUTER_REDIS_URL: ${BRAINROUTER_REDIS_URL:-redis://redis:6379}
     ports:
       - "3747:3747"
     extra_hosts:
@@ -65,6 +78,8 @@ services:
     depends_on:
       migrator:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
 
   # Durable-job worker and vulnerability-sync responsibility. PostgreSQL queue
   # claims and per-source feed leases make additional replicas safe.
@@ -79,10 +94,13 @@ services:
       BRAINROUTER_JOB_RUNNER: "on"
       BRAINROUTER_VULNERABILITY_SYNC: ${BRAINROUTER_VULNERABILITY_SYNC:-on}
       BRAINROUTER_STT_URL: ${BRAINROUTER_STT_URL:-http://stt:3752}
+      BRAINROUTER_REDIS_URL: ${BRAINROUTER_REDIS_URL:-redis://redis:6379}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
       migrator:
         condition: service_completed_successfully
       stt:
+        condition: service_healthy
+      redis:
         condition: service_healthy

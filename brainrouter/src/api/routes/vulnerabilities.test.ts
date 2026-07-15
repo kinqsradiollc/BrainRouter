@@ -38,12 +38,14 @@ vi.mock("../middleware/tenancy.js", () => ({
 }));
 
 import { vulnerabilitiesRouter } from "./vulnerabilities.js";
+import { __setCacheForTests, createCache } from "../../infra/cache.js";
 
 let server: Server | undefined;
 let baseUrl = "";
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  __setCacheForTests(createCache()); // fresh in-process cache each test — no cross-case bleed
   mocks.projects.mockResolvedValue([{ repoUrl: "https://github.com/acme/app.git" }]);
   mocks.createScan.mockResolvedValue({ id: "scan-1", status: "running" });
   mocks.getScan.mockResolvedValue({ id: "scan-1", status: "running", repo: "acme/app" });
