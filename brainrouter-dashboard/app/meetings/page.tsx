@@ -8,6 +8,7 @@
  * — the same dataset the desktop sees for the same account. No sample data.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { Lock, UsersThree, Buildings, GlobeHemisphereWest, Microphone, type Icon } from "@phosphor-icons/react";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
 import { authFetch } from "../../lib/adminApi";
@@ -32,11 +33,11 @@ interface Detail {
 type Overview = Omit<Detail, "transcript">;
 interface TranscriptPage { segments: Array<{ ordinal: number; at: string; speaker: string; text: string }>; total: number; nextCursor: string | null }
 
-const SCOPE_META: Record<Scope, { label: string; blurb: string; badge: string; dot: string; icon: string }> = {
-  private: { label: "Private", blurb: "Only you can see this meeting.", badge: styles.bPrivate, dot: "", icon: "🔒" },
-  team: { label: "Team", blurb: "Members of your team can recall it.", badge: styles.bTeam, dot: styles.dotTeam, icon: "◑" },
-  org: { label: "Organization", blurb: "Everyone in your organization.", badge: styles.bOrg, dot: styles.dotOrg, icon: "▤" },
-  public: { label: "Public", blurb: "Anyone with the link — redacted summary only.", badge: styles.bPublic, dot: styles.dotPublic, icon: "◍" },
+const SCOPE_META: Record<Scope, { label: string; blurb: string; badge: string; dot: string; Icon: Icon }> = {
+  private: { label: "Private", blurb: "Only you can see this meeting.", badge: styles.bPrivate, dot: "", Icon: Lock },
+  team: { label: "Team", blurb: "Members of your team can recall it.", badge: styles.bTeam, dot: styles.dotTeam, Icon: UsersThree },
+  org: { label: "Organization", blurb: "Everyone in your organization.", badge: styles.bOrg, dot: styles.dotOrg, Icon: Buildings },
+  public: { label: "Public", blurb: "Anyone with the link — redacted summary only.", badge: styles.bPublic, dot: styles.dotPublic, Icon: GlobeHemisphereWest },
 };
 const SCOPES: Scope[] = ["private", "team", "org", "public"];
 
@@ -372,12 +373,15 @@ export default function MeetingsPage() {
                   {shareOpen ? (
                     <div className={styles.pop} role="menu">
                       <div className={styles.popH}>Who can access</div>
-                      {SCOPES.map((s) => (
-                        <button key={s} type="button" className={`${styles.srow}${detail.share.scope === s ? ` ${styles.srowOn}` : ""}`} onClick={() => void setScope(s)} role="menuitemradio" aria-checked={detail.share.scope === s}>
-                          <span className={styles.srowIc}>{SCOPE_META[s].icon}</span>
-                          <span><span className={styles.srowLb}>{SCOPE_META[s].label}</span><span className={styles.srowDs}>{SCOPE_META[s].blurb}</span></span>
-                        </button>
-                      ))}
+                      {SCOPES.map((s) => {
+                        const ScopeIcon = SCOPE_META[s].Icon;
+                        return (
+                          <button key={s} type="button" className={`${styles.srow}${detail.share.scope === s ? ` ${styles.srowOn}` : ""}`} onClick={() => void setScope(s)} role="menuitemradio" aria-checked={detail.share.scope === s}>
+                            <span className={styles.srowIc}><ScopeIcon size={16} /></span>
+                            <span><span className={styles.srowLb}>{SCOPE_META[s].label}</span><span className={styles.srowDs}>{SCOPE_META[s].blurb}</span></span>
+                          </button>
+                        );
+                      })}
                       {detail.share.scope === "public" && detail.share.publicUrl ? (
                         <div className={styles.linkzone}>
                           <div className={styles.linkrow}>
@@ -486,7 +490,7 @@ export default function MeetingsPage() {
             </div>
             {createErr ? <div className={styles.errorBar} role="alert">{createErr}</div> : null}
             <div className={styles.modalActions} style={{ justifyContent: "space-between" }}>
-              <div className={styles.recordActions}><button type="button" className={styles.track} onClick={() => (recording ? stopRecording() : void startRecording())} disabled={busy === "transcribe"}>{recording ? "■ Stop recording" : busy === "transcribe" ? "Transcribing…" : "🎙 Record"}</button>{recording ? <button type="button" className={styles.track} onClick={toggleRecordingPause}>{recordingPaused ? "▶ Resume" : "Ⅱ Pause"}</button> : null}</div>
+              <div className={styles.recordActions}><button type="button" className={styles.track} onClick={() => (recording ? stopRecording() : void startRecording())} disabled={busy === "transcribe"}>{recording ? "■ Stop recording" : busy === "transcribe" ? "Transcribing…" : <><Microphone size={13} weight="fill" /> Record</>}</button>{recording ? <button type="button" className={styles.track} onClick={toggleRecordingPause}>{recordingPaused ? "▶ Resume" : "Ⅱ Pause"}</button> : null}</div>
               <div style={{ display: "flex", gap: 8 }}>
                 <button type="button" className={styles.track} onClick={() => { if (recording) stopRecording(); setCreateOpen(false); }}>Cancel</button>
                 <button type="button" className={styles.newBtn} onClick={() => void submitCreate()} disabled={busy === "create" || recording}>
