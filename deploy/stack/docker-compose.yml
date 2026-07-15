@@ -83,14 +83,18 @@ services:
       # Observability + browser CORS.
       BRAINROUTER_METRICS: ${BRAINROUTER_METRICS:-}
       BRAINROUTER_CORS_ORIGIN: ${BRAINROUTER_CORS_ORIGIN:-}
+      # First-party STT target for a monolith brain (SERVICE=brain mounts /v1 with
+      # the audio route in-process). Unused while SERVICE=mcp; harmless to set.
+      BRAINROUTER_STT_URL: ${BRAINROUTER_STT_URL:-http://stt:3752}
     ports:
       - "${BRAINROUTER_PORT:-3747}:3747"
 
-  # Provider/LLM Gateway (ADR-006 service #1) — the first extracted microservice.
-  # Same image as the brain, different entrypoint: a standalone provider-resolution
-  # service on its own port. Other services POST /v1/resolve {orgId,kind} (with a
-  # brain-issued JWT) to get their org's provider. Optional — remove it to run the
-  # brain as a self-contained monolith; add it to split provider egress out.
+  # Provider/LLM Gateway (ADR-006 service #1) — the OpenAI-compatible model plane.
+  # Same image as the brain, different entrypoint: a standalone service serving
+  # POST /v1/chat/completions, /v1/responses, /v1/audio/transcriptions and GET
+  # /v1/models against the org's managed models (auth = a br_ API key or a
+  # models:invoke JWT). Optional — a single-node `brain` (SERVICE=brain) mounts the
+  # same /v1 surface in-process on :3747, so :3747 alone can front everything.
   gateway:
     build:
       context: ../..
@@ -109,6 +113,8 @@ services:
       # Needed to DECRYPT provider keys it returns to callers.
       BRAINROUTER_SECRET_KEY: ${BRAINROUTER_SECRET_KEY}
       GATEWAY_PORT: "3748"
+      # First-party speech-to-text — POST /v1/audio/transcriptions forwards here.
+      BRAINROUTER_STT_URL: ${BRAINROUTER_STT_URL:-http://stt:3752}
     ports:
       - "${GATEWAY_PORT:-3748}:3748"
     healthcheck:
@@ -116,6 +122,29 @@ services:
       interval: 15s
       timeout: 3s
       start_period: 20s
+      retries: 5
+
+  # Whisper STT sidecar (ADR-018 M1) — first-party speech-to-text. Builds
+  # whisper.cpp + ffmpeg + a tiny Node wrapper (deploy/stt). The gateway forwards
+  # audio to it; it is NOT published to the host (internal network only), so the
+  # single-door invariant holds. Swappable behind BRAINROUTER_STT_URL.
+  stt:
+    build:
+      context: ../../deploy/stt
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      STT_PORT: "3752"
+      # Override to a larger model (ggml-small.bin / ggml-medium.bin) for accuracy.
+      WHISPER_MODEL: ${WHISPER_MODEL:-/models/ggml-base.en.bin}
+      WHISPER_THREADS: ${WHISPER_THREADS:-}
+    expose:
+      - "3752"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3752/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
       retries: 5
 
   # Trigger Ingress (ADR-011) — the stateless hosted GitHub webhook receiver.

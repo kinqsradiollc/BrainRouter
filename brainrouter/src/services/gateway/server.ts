@@ -8,6 +8,7 @@ import {
   type GatewayDataPlaneOptions,
   type GatewayDataPlaneService,
 } from "./chatRoutes.js";
+import { registerGatewayAudioPlane } from "./audioRoutes.js";
 
 export interface GatewayHttpService extends GatewayDataPlaneService {
   ping(): Promise<boolean>;
@@ -88,6 +89,7 @@ export function mountGatewayDataPlane(
 ): void {
   app.use("/v1", requestIdMiddleware(options), gatewayAuthMiddleware(svc));
   registerGatewayDataPlane(app, svc, options);
+  registerGatewayAudioPlane(app, svc);
 }
 
 export function createGatewayApp(svc: GatewayHttpService, options: GatewayAppOptions = {}) {
@@ -105,6 +107,7 @@ export function createGatewayApp(svc: GatewayHttpService, options: GatewayAppOpt
   app.use(gatewayAuthMiddleware(svc));
 
   registerGatewayDataPlane(app, svc, options);
+  registerGatewayAudioPlane(app, svc);
 
   // /v1/resolve intentionally no longer exists. Data-plane routes consume
   // res.locals.gatewayAuth and keep decrypted upstream custody in-process.

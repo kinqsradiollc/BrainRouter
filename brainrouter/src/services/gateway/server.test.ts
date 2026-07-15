@@ -174,4 +174,39 @@ describe("in-process /v1 gateway mount (single-port :3747)", () => {
     expect(response.status).toBe(401);
     expect(body.error.type).toBe("authentication_error");
   });
+
+  it("forwards audio to the STT sidecar and returns { text }", async () => {
+    // A fake first-party STT sidecar that echoes the byte count it received.
+    const stt = express();
+    stt.post("/inference", express.raw({ type: () => true, limit: "40mb" }), (req, res) => {
+      res.json({ text: `heard ${Buffer.isBuffer(req.body) ? req.body.length : 0} bytes` });
+    });
+    const sttServer = stt.listen(0);
+    await new Promise<void>((resolve) => sttServer.once("listening", resolve));
+    const sttPort = (sttServer.address() as AddressInfo).port;
+    const prev = process.env.BRAINROUTER_STT_URL;
+    process.env.BRAINROUTER_STT_URL = `http://127.0.0.1:${sttPort}`;
+    try {
+      const { response, body } = await mounted(
+        { ping: vi.fn(async () => true), authenticate: okAuth(), ...unusedDataPlane() },
+        "/v1/audio/transcriptions",
+        { method: "POST", headers: { Authorization: "Bearer br_key", "Content-Type": "audio/webm" }, body: "AUDIOBYTES" },
+      );
+      expect(response.status).toBe(200);
+      expect(String(body.text)).toContain("heard");
+    } finally {
+      process.env.BRAINROUTER_STT_URL = prev;
+      await new Promise<void>((resolve) => sttServer.close(() => resolve()));
+    }
+  });
+
+  it("rejects an empty audio body with a missing_audio error", async () => {
+    const { response, body } = await mounted(
+      { ping: vi.fn(async () => true), authenticate: okAuth(), ...unusedDataPlane() },
+      "/v1/audio/transcriptions",
+      { method: "POST", headers: { Authorization: "Bearer br_key", "Content-Type": "audio/webm" } },
+    );
+    expect(response.status).toBe(400);
+    expect(body.error.code).toBe("missing_audio");
+  });
 });
