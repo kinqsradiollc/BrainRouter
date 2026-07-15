@@ -32,6 +32,22 @@ export type AccountTrackFetch = (
 /** @deprecated Use AccountTrackFetch for provider-neutral connector traffic. */
 export type GithubTrackFetch = AccountTrackFetch;
 
+/**
+ * PERF — the default account fetch, with a bounded timeout so an unreachable or
+ * slow account server can't hang desktop boot for the OS socket timeout (tens of
+ * seconds). Injected test/production fetches that already carry a signal are
+ * unaffected (they pass their own fetchImpl).
+ */
+const ACCOUNT_FETCH_TIMEOUT_MS = 4000;
+export const timeoutFetch: AccountFetch = ((
+  url: string,
+  init?: { method?: string; headers?: Record<string, string>; body?: string },
+): Promise<FetchResponse> =>
+  (globalThis.fetch as unknown as (u: string, i?: unknown) => Promise<FetchResponse>)(url, {
+    ...(init ?? {}),
+    signal: AbortSignal.timeout(ACCOUNT_FETCH_TIMEOUT_MS),
+  })) as AccountFetch;
+
 export interface BrainRouterAccountApi {
   baseUrl: string;
   apiKey: string;
@@ -224,7 +240,7 @@ function emptyAccountModelCatalog(signedIn: boolean, error?: string): DesktopAcc
 export async function fetchAccountModelCatalog(
   account: BrainRouterAccountContext | null,
   previous: DesktopAccountModelCatalog | null,
-  fetchImpl: AccountFetch = globalThis.fetch as unknown as AccountFetch,
+  fetchImpl: AccountFetch = timeoutFetch,
 ): Promise<DesktopAccountModelCatalog> {
   if (!account) return emptyAccountModelCatalog(false);
   const headers = brainRouterAccountHeaders(account);
@@ -288,7 +304,7 @@ export function resolveDesktopAccountIdentity(config: unknown, fallbackUsername:
  * this context explicitly instead of relying on a server-side fallback. */
 export async function resolveBrainRouterAccountContext(
   config: unknown,
-  fetchImpl: AccountFetch = globalThis.fetch as unknown as AccountFetch,
+  fetchImpl: AccountFetch = timeoutFetch,
 ): Promise<BrainRouterAccountContext | null> {
   const account = resolveBrainRouterAccountApi(config);
   if (!account) return null;
@@ -322,7 +338,7 @@ export function brainRouterAccountHeaders(
 export async function startAccountConnectorOAuth(
   account: BrainRouterAccountContext,
   source: string,
-  fetchImpl: AccountFetch = globalThis.fetch as unknown as AccountFetch,
+  fetchImpl: AccountFetch = timeoutFetch,
 ): Promise<{ ok: boolean; url?: string; error?: string }> {
   const response = await fetchImpl(
     `${account.baseUrl}/api/connectors/${encodeURIComponent(source)}/oauth/start`,
@@ -342,7 +358,7 @@ const SECRETISH_CONFIG_KEY = /(token|secret|password|passphrase|apikey|api[_-]?k
 export async function fetchAccountConnectorStatuses(
   config: unknown,
   sources: readonly string[],
-  fetchImpl: AccountFetch = globalThis.fetch as unknown as AccountFetch,
+  fetchImpl: AccountFetch = timeoutFetch,
 ): Promise<AccountConnectorSnapshotResult> {
   if (!resolveBrainRouterAccountApi(config)) return { signedIn: false, connectors: [] };
   try {
@@ -405,7 +421,7 @@ export async function fetchAccountConnectorStatuses(
 function createAccountTrackProxyFetch(
   source: 'github' | 'gitlab',
   account: BrainRouterAccountContext,
-  fetchImpl: AccountFetch = globalThis.fetch as unknown as AccountFetch,
+  fetchImpl: AccountFetch = timeoutFetch,
 ): AccountTrackFetch {
   return async (url, init) => {
     const providerUrl = new URL(url);
@@ -446,21 +462,21 @@ function createAccountTrackProxyFetch(
 
 export function createGithubTrackProxyFetch(
   account: BrainRouterAccountContext,
-  fetchImpl: AccountFetch = globalThis.fetch as unknown as AccountFetch,
+  fetchImpl: AccountFetch = timeoutFetch,
 ): AccountTrackFetch {
   return createAccountTrackProxyFetch('github', account, fetchImpl);
 }
 
 export function createGitlabTrackProxyFetch(
   account: BrainRouterAccountContext,
-  fetchImpl: AccountFetch = globalThis.fetch as unknown as AccountFetch,
+  fetchImpl: AccountFetch = timeoutFetch,
 ): AccountTrackFetch {
   return createAccountTrackProxyFetch('gitlab', account, fetchImpl);
 }
 
 export async function fetchGithubAccountStatus(
   config: unknown,
-  fetchImpl: AccountFetch = globalThis.fetch as unknown as AccountFetch,
+  fetchImpl: AccountFetch = timeoutFetch,
 ): Promise<GithubAccountStatus> {
   const account = resolveBrainRouterAccountApi(config);
   if (!account) return { signedIn: false, connected: false };
@@ -503,7 +519,7 @@ export async function fetchGithubAccountStatus(
 
 export async function fetchAutomationAccountStatus(
   config: unknown,
-  fetchImpl: AccountFetch = globalThis.fetch as unknown as AccountFetch,
+  fetchImpl: AccountFetch = timeoutFetch,
 ): Promise<AutomationAccountStatus> {
   const account = resolveBrainRouterAccountApi(config);
   if (!account) {

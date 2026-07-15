@@ -348,13 +348,20 @@ async function main(): Promise<void> {
   };
   let llm: LLMConfig = config.llm || { provider: 'openai', model: 'gpt-4o-mini', apiKey: '' };
   const mcpClient = new McpClientPool();
-  try {
-    await mcpClient.connectAll(config.servers ?? {}, llm, { timeoutMs: 5_000 });
-    mcpClient.startReconnectSupervisor(); // WS9 — auto-reconnect dropped MCP servers in the background
-  } catch { /* offline-mode: local tools only, same as the CLI */ }
-  // FED — register this desktop as an active session for the signed-in user, so it
-  // appears on the Account page + dashboard "Devices & sessions" (heartbeats itself).
-  void ensureBrainSession(mcpClient, workspaceRoot);
+  // PERF — do NOT block boot on MCP connect. The renderer gates its account/model
+  // queries on the host's first event, and connectAll waits for the SLOWEST
+  // configured server (5s cap, longer if one connects then stalls) — so awaiting
+  // it here made account loading slow on every launch. Connect in the background;
+  // local tools work immediately, remote tools light up as servers come online,
+  // and the brain-dependent boot steps run once the pool is ready.
+  void mcpClient.connectAll(config.servers ?? {}, llm, { timeoutMs: 5_000 })
+    .then(() => {
+      mcpClient.startReconnectSupervisor(); // WS9 — auto-reconnect dropped MCP servers in the background
+      // FED — register this desktop as an active session for the signed-in user, so it
+      // appears on the Account page + dashboard "Devices & sessions" (heartbeats itself).
+      void ensureBrainSession(mcpClient, workspaceRoot);
+    })
+    .catch(() => { /* offline-mode: local tools only, same as the CLI */ });
 
   // REMOTE-BRAIN Phase 3d — call a brain Atlas tool via the MCP pool, parsing its
   // JSON text result. Best-effort: null on any failure so the local artifact path
