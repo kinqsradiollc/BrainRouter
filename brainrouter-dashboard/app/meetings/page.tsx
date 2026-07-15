@@ -3,22 +3,26 @@
 /**
  * Meetings — the dashboard mirror of the desktop Meetings mode (ADR-018). Lists the
  * account's recallable meeting summaries and shows a detail with the same model +
- * four-level sharing vocabulary (Private / Team / Org / Public). Data comes from
- * `/api/meetings`; an in-memory sample renders until the backend route lands.
+ * four-level sharing vocabulary (Private / Team / Org / Public). Real, org-scoped
+ * data from the backend at :3747 (/api/meetings) using the signed-in account's JWT
+ * — the same dataset the desktop sees for the same account. No sample data.
  */
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
+import { authFetch } from "../../lib/adminApi";
 import styles from "./meetings.module.css";
 
 type Scope = "private" | "team" | "org" | "public";
-interface ListItem { id: string; title: string; date: string; scope: Scope; }
-interface ActionItem { id: string; title: string; assignee?: string; trackItemId?: string; }
+interface ListItem { id: string; title: string; date: string; scope: Scope; attendeeCount: number }
+interface ActionItem { id: string; title: string; assignee?: string; done?: boolean; trackItemId?: string }
+interface Share { scope: Scope; teamId?: string; publicUrl?: string; expiresAt?: string }
 interface Detail {
   id: string; title: string; date: string; status: string; durationMin?: number; wordCount?: number;
   attendees: string[]; model?: { label: string; effort?: string };
-  summary: string; actions: ActionItem[]; transcript: { at: string; sp: string; tx: string }[];
-  share: { scope: Scope; publicUrl?: string; expiresAt?: string };
+  summaryMarkdown: string; actionItems: ActionItem[];
+  transcript: { at: string; speaker: string; text: string }[];
+  share: Share;
 }
 
 const SCOPE_META: Record<Scope, { label: string; blurb: string; badge: string; dot: string; icon: string }> = {
@@ -28,34 +32,6 @@ const SCOPE_META: Record<Scope, { label: string; blurb: string; badge: string; d
   public: { label: "Public", blurb: "Anyone with the link — redacted summary only.", badge: styles.bPublic, dot: styles.dotPublic, icon: "◍" },
 };
 const SCOPES: Scope[] = ["private", "team", "org", "public"];
-
-async function fetchJson<T>(url: string): Promise<T | null> {
-  try { const r = await fetch(url, { credentials: "include" }); return r.ok ? (await r.json() as T) : null; } catch { return null; }
-}
-
-const SAMPLE_LIST: ListItem[] = [
-  { id: "m1", title: "Weekly product sync", date: "Jul 14", scope: "private" },
-  { id: "m2", title: "Design review — Meetings UI", date: "Jul 11", scope: "team" },
-  { id: "m3", title: "All-hands Q3 kickoff", date: "Jul 08", scope: "org" },
-  { id: "m4", title: "Customer call — Northwind", date: "Jul 03", scope: "public" },
-];
-function sampleDetail(item: ListItem): Detail {
-  return {
-    id: item.id, title: item.title, date: "2026-07-14", status: "recorded", durationMin: 32, wordCount: 1240,
-    attendees: ["anh", "maya", "jordan"], model: { label: "Opus 4.8", effort: "high" },
-    summary: "The team confirmed Meetings ships as a 4th desktop mode, memory-native with four-level sharing. Server-default transcription was agreed, with a local Whisper fallback.\n### Decisions\n- Meetings is account-gated; offline capture stays as a fallback.\n- Summaries route through the server-managed BrainRouter provider.",
-    actions: [
-      { id: "a1", title: "Wire the sharing scope picker into both surfaces", assignee: "maya" },
-      { id: "a2", title: "Finalize the STT microservice Dockerfile", assignee: "jordan" },
-    ],
-    transcript: [
-      { at: "00:12", sp: "Anh", tx: "Let's lock the Meetings placement — desktop mode, dashboard page." },
-      { at: "00:31", sp: "Maya", tx: "Sharing needs all four scopes, public with a revocable link." },
-      { at: "00:58", sp: "Jordan", tx: "Transcription server-side by default, keep the offline path." },
-    ],
-    share: { scope: item.scope, publicUrl: item.scope === "public" ? "brainrouter.ai/m/9fK2qX" : undefined, expiresAt: item.scope === "public" ? "in 30 days" : undefined },
-  };
-}
 
 function ScopeBadge({ scope }: { scope: Scope }) {
   const m = SCOPE_META[scope];
@@ -67,44 +43,110 @@ export default function MeetingsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftTranscript, setDraftTranscript] = useState("");
+  const [createErr, setCreateErr] = useState("");
 
-  useEffect(() => {
-    void (async () => {
-      const list = (await fetchJson<ListItem[]>("/api/meetings")) ?? SAMPLE_LIST;
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await authFetch<{ meetings: ListItem[] }>("/api/meetings");
+      const list = r.meetings ?? [];
       setItems(list);
-      setSelectedId((cur) => cur ?? list[0]?.id ?? null);
-    })();
+      setSelectedId((cur) => (cur && list.some((m) => m.id === cur) ? cur : list[0]?.id ?? null));
+      setError("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not load meetings.");
+      setItems([]);
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => { void load(); }, [load]);
 
   useEffect(() => {
     if (!selectedId) { setDetail(null); return; }
     let live = true;
     void (async () => {
-      const item = items.find((m) => m.id === selectedId);
-      const d = (await fetchJson<Detail>(`/api/meetings/${selectedId}`)) ?? (item ? sampleDetail(item) : null);
-      if (live) { setDetail(d); setShareOpen(false); }
+      try {
+        const d = await authFetch<Detail>(`/api/meetings/${selectedId}`);
+        if (live) { setDetail(d); setShareOpen(false); }
+      } catch {
+        if (live) setDetail(null);
+      }
     })();
     return () => { live = false; };
-  }, [selectedId, items]);
+  }, [selectedId]);
 
   const setScope = useCallback(async (scope: Scope) => {
     if (!detail) return;
-    const share = (await fetchJson<Detail["share"]>(`/api/meetings/${detail.id}/scope?to=${scope}`))
-      ?? { scope, publicUrl: scope === "public" ? "brainrouter.ai/m/9fK2qX" : undefined, expiresAt: scope === "public" ? "in 30 days" : undefined };
-    setDetail((d) => (d ? { ...d, share } : d));
-    setItems((list) => list.map((m) => (m.id === detail.id ? { ...m, scope } : m)));
+    try {
+      const share = await authFetch<Share>(`/api/meetings/${detail.id}/scope`, { method: "POST", body: { scope } });
+      setDetail((d) => (d ? { ...d, share } : d));
+      setItems((list) => list.map((m) => (m.id === detail.id ? { ...m, scope } : m)));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not change sharing.");
+    }
   }, [detail]);
 
-  const summaryBlocks = useMemo(() => renderSummary(detail?.summary ?? ""), [detail?.summary]);
+  const regenerate = useCallback(async () => {
+    if (!detail) return;
+    setBusy("regen");
+    try {
+      const d = await authFetch<Detail>(`/api/meetings/${detail.id}/regenerate`, { method: "POST" });
+      setDetail(d);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not regenerate the summary.");
+    } finally {
+      setBusy("");
+    }
+  }, [detail]);
+
+  const toggleAction = useCallback(async (action: ActionItem) => {
+    if (!detail) return;
+    const done = !action.done;
+    try {
+      await authFetch(`/api/meetings/${detail.id}/actions/${action.id}`, { method: "POST", body: { done } });
+      setDetail((d) => (d ? { ...d, actionItems: d.actionItems.map((x) => (x.id === action.id ? { ...x, done } : x)) } : d));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not update the action item.");
+    }
+  }, [detail]);
+
+  const submitCreate = useCallback(async () => {
+    if (!draftTitle.trim() || !draftTranscript.trim()) { setCreateErr("A title and a transcript are required."); return; }
+    setBusy("create");
+    setCreateErr("");
+    try {
+      const out = await authFetch<{ id: string }>("/api/meetings", { method: "POST", body: { title: draftTitle.trim(), transcript: draftTranscript } });
+      setCreateOpen(false);
+      setDraftTitle("");
+      setDraftTranscript("");
+      await load();
+      setSelectedId(out.id);
+    } catch (caught) {
+      setCreateErr(caught instanceof Error ? caught.message : "Could not create the meeting.");
+    } finally {
+      setBusy("");
+    }
+  }, [draftTitle, draftTranscript, load]);
+
+  const summaryBlocks = useMemo(() => renderSummary(detail?.summaryMarkdown ?? ""), [detail?.summaryMarkdown]);
 
   return (
     <AuthGuard>
       <PageHeader title="Meetings" description="Recallable meeting summaries across your organization." />
+      {error ? <div className={styles.errorBar} role="alert">{error}</div> : null}
       <div className={styles.wrap}>
         <div className={styles.list}>
           <div className={styles.listHead}>
             <h2>Meetings</h2>
-            <button type="button" className={styles.newBtn}>+ New</button>
+            <button type="button" className={styles.newBtn} onClick={() => { setCreateErr(""); setCreateOpen(true); }}>+ New</button>
           </div>
           {items.map((m) => (
             <div key={m.id} className={`${styles.item}${m.id === selectedId ? ` ${styles.itemOn}` : ""}`} onClick={() => setSelectedId(m.id)} role="button" tabIndex={0}
@@ -113,7 +155,9 @@ export default function MeetingsPage() {
               <div className={styles.itemM}><span className={styles.itemD}>{m.date}</span><ScopeBadge scope={m.scope} /></div>
             </div>
           ))}
-          {items.length === 0 ? <div className={styles.empty}>No meetings yet.</div> : null}
+          {items.length === 0 ? (
+            <div className={styles.empty}>{loading ? "Loading…" : "No meetings yet. Click + New to add one."}</div>
+          ) : null}
         </div>
 
         {detail ? (
@@ -122,7 +166,7 @@ export default function MeetingsPage() {
               <div className={styles.dHeadRow}>
                 <div>
                   <h3>{detail.title}</h3>
-                  <div className={styles.att}>{detail.attendees.join(", ")}</div>
+                  <div className={styles.att}>{detail.attendees.length ? detail.attendees.join(", ") : "No attendees recorded"}</div>
                 </div>
                 <div className={styles.hActions}>
                   <button type="button" className={styles.shareBtn} onClick={() => setShareOpen((v) => !v)} aria-haspopup="menu" aria-expanded={shareOpen}>
@@ -156,10 +200,13 @@ export default function MeetingsPage() {
                 </div>
               </div>
               <div className={styles.metastrip}>
-                <span className={styles.chip}><i />{detail.status[0].toUpperCase() + detail.status.slice(1)}</span>
+                <span className={styles.chip}><i />{detail.status ? detail.status[0].toUpperCase() + detail.status.slice(1) : "Recorded"}</span>
                 <span className={styles.chip}>{detail.date}</span>
                 {detail.durationMin ? <span className={styles.chip}>{detail.durationMin} min</span> : null}
                 {detail.wordCount ? <span className={styles.chip}>{detail.wordCount.toLocaleString()} words</span> : null}
+                <button type="button" className={styles.chip} onClick={() => void regenerate()} disabled={busy === "regen"} style={{ cursor: "pointer" }}>
+                  {busy === "regen" ? "Regenerating…" : "↻ Regenerate"}
+                </button>
               </div>
             </div>
             <div className={styles.body}>
@@ -168,13 +215,18 @@ export default function MeetingsPage() {
                   <div className={styles.cardLab}>Summary</div>
                   {summaryBlocks}
                 </div>
-                {detail.actions.length ? (
+                {detail.actionItems.length ? (
                   <div className={styles.card}>
                     <div className={styles.cardLab}>Action items</div>
-                    {detail.actions.map((a) => (
+                    {detail.actionItems.map((a) => (
                       <div key={a.id} className={styles.ai}>
-                        <div className={styles.aiTxt}>{a.title}{a.assignee ? <div className={styles.aiWho}>→ {a.assignee}</div> : null}</div>
-                        <button type="button" className={styles.track}>{a.trackItemId ? "In Track ✓" : "Track ↗"}</button>
+                        <label className={styles.aiTxt} style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: "pointer" }}>
+                          <input type="checkbox" checked={Boolean(a.done)} onChange={() => void toggleAction(a)} style={{ marginTop: 3 }} />
+                          <span style={a.done ? { textDecoration: "line-through", opacity: 0.6 } : undefined}>
+                            {a.title}{a.assignee ? <span className={styles.aiWho}>→ {a.assignee}</span> : null}
+                          </span>
+                        </label>
+                        <button type="button" className={styles.track} disabled={Boolean(a.trackItemId)}>{a.trackItemId ? "In Track ✓" : "Track ↗"}</button>
                       </div>
                     ))}
                   </div>
@@ -182,16 +234,46 @@ export default function MeetingsPage() {
               </div>
               <div className={styles.card}>
                 <div className={styles.cardLab}>Transcript</div>
-                {detail.transcript.map((l, i) => (
-                  <div key={i} className={styles.trLine}><span className={styles.trTs}>{l.at}</span><span className={styles.trSp}>{l.sp}</span><span className={styles.trTx}>{l.tx}</span></div>
-                ))}
+                {detail.transcript.length ? detail.transcript.map((l, i) => (
+                  <div key={i} className={styles.trLine}><span className={styles.trTs}>{l.at}</span><span className={styles.trSp}>{l.speaker}</span><span className={styles.trTx}>{l.text}</span></div>
+                )) : <div className={styles.empty}>No transcript.</div>}
               </div>
             </div>
           </div>
         ) : (
-          <div className={styles.detail}><div className={styles.empty}>Select a meeting.</div></div>
+          <div className={styles.detail}><div className={styles.empty}>{items.length ? "Select a meeting." : "No meeting selected."}</div></div>
         )}
       </div>
+
+      {createOpen ? (
+        <div className={styles.modalScrim} role="dialog" aria-modal="true" aria-label="New meeting" onClick={() => setCreateOpen(false)}>
+          <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+            <div className={styles.cardLab}>New meeting</div>
+            <input
+              className={styles.modalInput}
+              placeholder="Title (e.g. Weekly product sync)"
+              value={draftTitle}
+              onChange={(e) => setDraftTitle(e.target.value)}
+              aria-label="Meeting title"
+            />
+            <textarea
+              className={styles.modalTextarea}
+              placeholder="Paste the transcript. Lines like '[00:12] Anh: …' are parsed into speaker turns."
+              value={draftTranscript}
+              onChange={(e) => setDraftTranscript(e.target.value)}
+              rows={10}
+              aria-label="Transcript"
+            />
+            {createErr ? <div className={styles.errorBar} role="alert">{createErr}</div> : null}
+            <div className={styles.modalActions}>
+              <button type="button" className={styles.track} onClick={() => setCreateOpen(false)}>Cancel</button>
+              <button type="button" className={styles.newBtn} onClick={() => void submitCreate()} disabled={busy === "create"}>
+                {busy === "create" ? "Summarizing…" : "Create + summarize"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </AuthGuard>
   );
 }
