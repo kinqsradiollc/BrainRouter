@@ -36,7 +36,7 @@ export function isSubagentRole(x: unknown): x is SubagentRole {
  * model" routing is keyed by these roles, not the coding roles above. Each role
  * overrides the model on the shared LLM provider.
  */
-export const BRAIN_AGENT_ROLES = ['extraction', 'synthesis', 'judge', 'security-review', 'code-review', 'pentest'] as const;
+export const BRAIN_AGENT_ROLES = ['extraction', 'synthesis', 'judge', 'security-review', 'code-review', 'pentest', 'meeting-summary'] as const;
 export type BrainAgentRole = (typeof BRAIN_AGENT_ROLES)[number];
 
 export function isBrainAgentRole(x: unknown): x is BrainAgentRole {

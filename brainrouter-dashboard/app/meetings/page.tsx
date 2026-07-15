@@ -16,7 +16,8 @@ import { getApiKey, getJwt } from "../../lib/client-auth";
 import styles from "./meetings.module.css";
 
 type Scope = "private" | "team" | "org" | "public";
-interface ListItem { id: string; title: string; date: string; scope: Scope; attendeeCount: number }
+type SummaryStatus = "queued" | "processing" | "ready" | "failed";
+interface ListItem { id: string; title: string; date: string; scope: Scope; attendeeCount: number; summaryStatus: SummaryStatus }
 interface ActionItem { id: string; title: string; assignee?: string; done?: boolean; trackItemId?: string }
 interface Share { scope: Scope; teamId?: string; publicUrl?: string; expiresAt?: string }
 interface Detail {
@@ -25,6 +26,7 @@ interface Detail {
   summaryMarkdown: string; actionItems: ActionItem[];
   transcript: { at: string; speaker: string; text: string }[];
   share: Share;
+  summaryStatus: SummaryStatus; summaryError?: string;
 }
 
 const SCOPE_META: Record<Scope, { label: string; blurb: string; badge: string; dot: string; icon: string }> = {
@@ -53,8 +55,41 @@ export default function MeetingsPage() {
   const [draftTranscript, setDraftTranscript] = useState("");
   const [createErr, setCreateErr] = useState("");
   const [recording, setRecording] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draftSummary, setDraftSummary] = useState("");
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+
+  // Poll while notes are generating — the server keeps summarizing across refreshes,
+  // so this converges the status without the user re-triggering anything.
+  useEffect(() => {
+    if (!detail || (detail.summaryStatus !== "processing" && detail.summaryStatus !== "queued")) return;
+    const id = detail.id;
+    let alive = true;
+    const timer = setInterval(async () => {
+      try {
+        const d = await authFetch<Detail>(`/api/meetings/${id}`);
+        if (!alive) return;
+        setDetail((cur) => (cur && cur.id === id ? d : cur));
+        setItems((list) => list.map((m) => (m.id === id ? { ...m, summaryStatus: d.summaryStatus } : m)));
+      } catch { /* transient — keep polling */ }
+    }, 3000);
+    return () => { alive = false; clearInterval(timer); };
+  }, [detail?.id, detail?.summaryStatus]);
+
+  const saveSummary = useCallback(async () => {
+    if (!detail) return;
+    setBusy("save-summary");
+    try {
+      const d = await authFetch<Detail>(`/api/meetings/${detail.id}/summary`, { method: "PATCH", body: { summaryMarkdown: draftSummary } });
+      setDetail(d);
+      setEditing(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not save the summary.");
+    } finally {
+      setBusy("");
+    }
+  }, [detail, draftSummary]);
 
   const transcribe = useCallback(async (blob: Blob) => {
     setBusy("transcribe");
@@ -193,6 +228,7 @@ export default function MeetingsPage() {
   return (
     <AuthGuard>
       <PageHeader title="Meetings" description="Recallable meeting summaries across your organization." />
+      <div className={styles.page}>
       {error ? <div className={styles.errorBar} role="alert">{error}</div> : null}
       <div className={styles.wrap}>
         <div className={styles.list}>
@@ -256,16 +292,36 @@ export default function MeetingsPage() {
                 <span className={styles.chip}>{detail.date}</span>
                 {detail.durationMin ? <span className={styles.chip}>{detail.durationMin} min</span> : null}
                 {detail.wordCount ? <span className={styles.chip}>{detail.wordCount.toLocaleString()} words</span> : null}
-                <button type="button" className={styles.chip} onClick={() => void regenerate()} disabled={busy === "regen"} style={{ cursor: "pointer" }}>
-                  {busy === "regen" ? "Regenerating…" : "↻ Regenerate"}
+                <button type="button" className={styles.chip} onClick={() => void regenerate()}
+                  disabled={busy === "regen" || detail.summaryStatus === "processing" || detail.summaryStatus === "queued"} style={{ cursor: "pointer" }}>
+                  {detail.summaryStatus === "processing" || detail.summaryStatus === "queued" ? "● Summarizing…" : busy === "regen" ? "Regenerating…" : "↻ Regenerate"}
                 </button>
               </div>
             </div>
             <div className={styles.body}>
               <div style={{ display: "flex", flexDirection: "column", gap: 14, minWidth: 0 }}>
                 <div className={styles.card}>
-                  <div className={styles.cardLab}>Summary</div>
-                  {summaryBlocks}
+                  <div className={styles.cardLab} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span>Summary</span>
+                    {detail.summaryStatus === "ready" && !editing ? (
+                      <button type="button" className={styles.track} onClick={() => { setDraftSummary(detail.summaryMarkdown); setEditing(true); }}>✎ Edit</button>
+                    ) : null}
+                  </div>
+                  {detail.summaryStatus === "processing" || detail.summaryStatus === "queued" ? (
+                    <div className={styles.empty}>● Generating notes… this keeps running on the server — you can leave or refresh.</div>
+                  ) : detail.summaryStatus === "failed" ? (
+                    <div className={styles.errorBar} role="alert">{(detail.summaryError || "Summary generation failed.") + " Check the meeting-summary model, then Regenerate."}</div>
+                  ) : editing ? (
+                    <>
+                      <textarea className={styles.modalTextarea} value={draftSummary} onChange={(e) => setDraftSummary(e.target.value)} rows={12} aria-label="Edit summary" />
+                      <div className={styles.modalActions}>
+                        <button type="button" className={styles.track} onClick={() => setEditing(false)}>Cancel</button>
+                        <button type="button" className={styles.newBtn} onClick={() => void saveSummary()} disabled={busy === "save-summary"}>{busy === "save-summary" ? "Saving…" : "Save"}</button>
+                      </div>
+                    </>
+                  ) : (
+                    summaryBlocks
+                  )}
                 </div>
                 {detail.actionItems.length ? (
                   <div className={styles.card}>
@@ -287,7 +343,11 @@ export default function MeetingsPage() {
               <div className={styles.card}>
                 <div className={styles.cardLab}>Transcript</div>
                 {detail.transcript.length ? detail.transcript.map((l, i) => (
-                  <div key={i} className={styles.trLine}><span className={styles.trTs}>{l.at}</span><span className={styles.trSp}>{l.speaker}</span><span className={styles.trTx}>{l.text}</span></div>
+                  <div key={i} className={styles.trLine}>
+                    {l.at ? <span className={styles.trTs}>{l.at}</span> : null}
+                    {l.speaker ? <span className={styles.trSp}>{l.speaker}</span> : null}
+                    <span className={styles.trTx}>{l.text}</span>
+                  </div>
                 )) : <div className={styles.empty}>No transcript.</div>}
               </div>
             </div>
@@ -310,7 +370,7 @@ export default function MeetingsPage() {
             />
             <textarea
               className={styles.modalTextarea}
-              placeholder="Paste the transcript. Lines like '[00:12] Anh: …' are parsed into speaker turns."
+              placeholder="Paste a transcript, or record above — Whisper produces plain text (no speaker labels)."
               value={draftTranscript}
               onChange={(e) => setDraftTranscript(e.target.value)}
               rows={10}
@@ -324,13 +384,14 @@ export default function MeetingsPage() {
               <div style={{ display: "flex", gap: 8 }}>
                 <button type="button" className={styles.track} onClick={() => { if (recording) stopRecording(); setCreateOpen(false); }}>Cancel</button>
                 <button type="button" className={styles.newBtn} onClick={() => void submitCreate()} disabled={busy === "create" || recording}>
-                  {busy === "create" ? "Summarizing…" : "Create + summarize"}
+                  {busy === "create" ? "Creating…" : "Create + summarize"}
                 </button>
               </div>
             </div>
           </div>
         </div>
       ) : null}
+      </div>
     </AuthGuard>
   );
 }

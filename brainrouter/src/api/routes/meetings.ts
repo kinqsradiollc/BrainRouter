@@ -50,6 +50,15 @@ meetingsRouter.post("/:id/regenerate", async (req: AuthedRequest, res) => {
   res.json(detail);
 });
 
+meetingsRouter.patch("/:id/summary", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  const body = (req.body ?? {}) as { summaryMarkdown?: unknown };
+  if (typeof body.summaryMarkdown !== "string") { res.status(400).json({ error: "summaryMarkdown is required" }); return; }
+  const detail = await meetings.updateSummary(req.userId!, req.orgId!, String(req.params.id), body.summaryMarkdown);
+  if (!detail) { res.status(404).json({ error: "Meeting not found, or you are not its owner." }); return; }
+  res.json(detail);
+});
+
 meetingsRouter.post("/:id/actions/:actionId", async (req: AuthedRequest, res) => {
   if (!(await attachOrgContext(req, res))) return;
   const body = (req.body ?? {}) as { done?: unknown; trackItemId?: unknown };

@@ -29,13 +29,15 @@ const REASONING = ["", ...MODEL_REASONING_EFFORTS];
 
 // Brain sub-agent roles (packages/core BRAIN_AGENT_ROLES) — the list arrives from
 // the backend; these are the labels. Each picks a model on the LLM provider.
-const ROLE_LABELS: Record<string, string> = { extraction: "Extraction", synthesis: "Synthesis", judge: "Relevance judge", "security-review": "🛡️ Security review", "code-review": "🔎 Code review" };
+const ROLE_LABELS: Record<string, string> = { extraction: "Extraction", synthesis: "Synthesis", judge: "Relevance judge", "security-review": "🛡️ Security review", "code-review": "🔎 Code review", pentest: "🧪 Pentest", "meeting-summary": "🗒️ Meeting summary" };
 const ROLE_DESC: Record<string, string> = {
   extraction: "Distills memories from each turn.",
   synthesis: "Identity distillation, digests & summaries.",
   judge: "Filters retrieved memories for real relevance.",
   "security-review": "Gating PR security reviewer. Inherits the base LLM when unset.",
   "code-review": "Advisory PR code reviewer. Inherits the base LLM when unset.",
+  pentest: "White-box pentest reviewer. Inherits the base LLM when unset.",
+  "meeting-summary": "Summarizes meeting transcripts into decisions + action items. Inherits the base LLM when unset.",
 };
 type AgentAssign = { provider?: string; model?: string; maxDiffChars?: number; timeoutMs?: number };
 

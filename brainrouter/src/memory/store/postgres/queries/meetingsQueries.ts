@@ -27,6 +27,9 @@ export interface MeetingRow {
   teamId: string | null;
   modelLabel: string | null;
   modelEffort: string | null;
+  /** Notes-generation lifecycle, independent of the import `status`. */
+  summaryStatus: "queued" | "processing" | "ready" | "failed";
+  summaryError: string | null;
   createdAt: string;
 }
 
@@ -49,6 +52,7 @@ export interface CreateMeetingInput {
   teamId?: string;
   modelLabel?: string;
   modelEffort?: string;
+  summaryStatus?: "queued" | "processing" | "ready" | "failed";
 }
 
 function mapRow(r: Record<string, unknown>): MeetingRow {
@@ -72,6 +76,9 @@ function mapRow(r: Record<string, unknown>): MeetingRow {
     teamId: r.team_id == null ? null : String(r.team_id),
     modelLabel: r.model_label == null ? null : String(r.model_label),
     modelEffort: r.model_effort == null ? null : String(r.model_effort),
+    summaryStatus: (["queued", "processing", "ready", "failed"].includes(String(r.summary_status))
+      ? String(r.summary_status) : "ready") as MeetingRow["summaryStatus"],
+    summaryError: r.summary_error == null ? null : String(r.summary_error),
     createdAt: String(r.created_at ?? ""),
   };
 }
@@ -80,14 +87,28 @@ export async function createMeeting(exec: Executor, m: CreateMeetingInput): Prom
   await exec.run(
     `INSERT INTO meetings (id, org_id, user_id, title, meeting_date, status, duration_min, word_count,
        attendees_json, transcript_text, summary_markdown, action_items_json, summary_record_id,
-       transcript_source_id, scope, team_id, model_label, model_effort)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+       transcript_source_id, scope, team_id, model_label, model_effort, summary_status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
     [m.id, m.orgId, m.userId, m.title, m.meetingDate ?? null, m.status ?? "recorded",
       m.durationMin ?? null, m.wordCount ?? null, JSON.stringify(m.attendees ?? []), m.transcriptText,
       m.summaryMarkdown, JSON.stringify(m.actionItems ?? []), m.summaryRecordId ?? null,
       m.transcriptSourceId ?? null, m.scope ?? "private", m.teamId ?? null, m.modelLabel ?? null,
-      m.modelEffort ?? null],
+      m.modelEffort ?? null, m.summaryStatus ?? "ready"],
   );
+}
+
+/** Set the notes-generation lifecycle status (owner-guarded). `error` is only
+ *  meaningful for 'failed'; it is cleared on any other status. */
+export async function setMeetingSummaryStatus(
+  exec: Executor, id: string, userId: string,
+  status: MeetingRow["summaryStatus"], error?: string | null,
+): Promise<boolean> {
+  const n = await exec.run(
+    `UPDATE meetings SET summary_status = $3, summary_error = $4, summary_updated_at = now(), updated_at = now()
+       WHERE id = $1 AND user_id = $2`,
+    [id, userId, status, status === "failed" ? (error ?? "Summary generation failed.") : null],
+  );
+  return n > 0;
 }
 
 /** Meetings the user may see: their own, plus org/public/team-shared within the org. */
@@ -137,8 +158,20 @@ export async function revokeShareTokens(exec: Executor, meetingId: string): Prom
 /** Owner-only summary rewrite (regenerate). Returns true when a row updated. */
 export async function updateMeetingSummary(exec: Executor, id: string, userId: string, summaryMarkdown: string, actionItems: MeetingRow["actionItems"]): Promise<boolean> {
   const n = await exec.run(
-    `UPDATE meetings SET summary_markdown = $3, action_items_json = $4, updated_at = now() WHERE id = $1 AND user_id = $2`,
+    `UPDATE meetings SET summary_markdown = $3, action_items_json = $4, summary_status = 'ready',
+       summary_error = NULL, summary_updated_at = now(), updated_at = now() WHERE id = $1 AND user_id = $2`,
     [id, userId, summaryMarkdown, JSON.stringify(actionItems)],
+  );
+  return n > 0;
+}
+
+/** Owner-only: link the recall provenance records written by the background pass. */
+export async function setMeetingSummaryRecords(exec: Executor, id: string, userId: string, summaryRecordId: string | null, transcriptSourceId: string | null): Promise<boolean> {
+  const n = await exec.run(
+    `UPDATE meetings SET summary_record_id = COALESCE($3, summary_record_id),
+       transcript_source_id = COALESCE($4, transcript_source_id), updated_at = now()
+       WHERE id = $1 AND user_id = $2`,
+    [id, userId, summaryRecordId, transcriptSourceId],
   );
   return n > 0;
 }

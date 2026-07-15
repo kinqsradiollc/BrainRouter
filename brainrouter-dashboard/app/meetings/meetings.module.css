@@ -1,11 +1,16 @@
 /* Meetings dashboard page (ADR-018). Scoped module; graphite palette mirrors the desktop. */
-.wrap{
+/* Palette lives on .page so BOTH the grid (.wrap) AND the portal-less modal/error
+   bar (siblings of .wrap) inherit the --mv-* tokens — otherwise the modal renders
+   with unresolved vars (transparent panel, invisible text). */
+.page{
   --mv-bg:#0b0b0d; --mv-panel:#141417; --mv-panel2:#171719; --mv-raise:#202027; --mv-raise2:#26262e;
   --mv-line:#26262c; --mv-line2:#33333b; --mv-line3:#3f3f49;
   --mv-tx:#e9e9ec; --mv-tx2:#a6a6ad; --mv-tx3:#83838a;
   --mv-ind:#7b7bf5; --mv-ind2:#9a9aff; --mv-ind-dim:#22223f; --mv-ind-bd:#38386a;
   --mv-blue:#4b8ff0; --mv-amber:#e0a138; --mv-teal:#3fb98c;
   --mv-mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+.wrap{
   display:grid;grid-template-columns:300px 1fr;gap:14px;align-items:start;min-height:0;
 }
 .list{background:var(--mv-panel2);border:1px solid var(--mv-line);border-radius:12px;overflow:hidden}

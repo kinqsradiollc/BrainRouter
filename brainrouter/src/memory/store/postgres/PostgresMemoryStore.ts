@@ -460,6 +460,8 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public getMeetingActiveShareToken(meetingId: string): Promise<{ token: string; expiresAt: string | null } | null> { return meetings.getActiveShareToken(this.exec, meetingId); }
   public updateMeetingSummary(id: string, userId: string, summaryMarkdown: string, actionItems: meetings.MeetingRow["actionItems"]): Promise<boolean> { return meetings.updateMeetingSummary(this.exec, id, userId, summaryMarkdown, actionItems); }
   public updateMeetingActionItems(id: string, userId: string, actionItems: meetings.MeetingRow["actionItems"]): Promise<boolean> { return meetings.updateMeetingActionItems(this.exec, id, userId, actionItems); }
+  public setMeetingSummaryStatus(id: string, userId: string, status: meetings.MeetingRow["summaryStatus"], error?: string | null): Promise<boolean> { return meetings.setMeetingSummaryStatus(this.exec, id, userId, status, error); }
+  public setMeetingSummaryRecords(id: string, userId: string, summaryRecordId: string | null, transcriptSourceId: string | null): Promise<boolean> { return meetings.setMeetingSummaryRecords(this.exec, id, userId, summaryRecordId, transcriptSourceId); }
   public getMeetingByShareToken(token: string): Promise<meetings.MeetingRow | null> { return meetings.getMeetingByShareToken(this.exec, token); }
   // CVE catalog (spec §10, Task 26) — global world data, no org scoping.
   public ensureVulnerabilitySource(source: { id: import("../../../vulnerability/types.js").VulnerabilitySourceId; displayName: string; kind: string }): Promise<void> { return vulnerability.ensureVulnerabilitySource(this.exec, source); }
