@@ -9,7 +9,7 @@ import { DataTable, SeverityBadge, StatusBadge } from "../../components/Analytic
 import { EmptyState } from "../../components/EmptyState";
 import { PageHeader } from "../../components/PageHeader";
 import { PremiumButton } from "../../components/PremiumButton";
-import { adminApi, type ReviewIssue, type ReviewIssuesResponse, type ReviewJob } from "../../lib/adminApi";
+import { adminApi, type OrgSummary, type ReviewIssue, type ReviewIssuesResponse, type ReviewJob } from "../../lib/adminApi";
 
 const TABS = ["all", "open", "in progress", "snoozed", "fixed", "ignored"] as const;
 const SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
@@ -22,7 +22,11 @@ function validValue<T extends string>(value: string | null, values: readonly T[]
 function Issues() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const orgId = searchParams.get("org") ?? undefined;
+  // Active org comes from the validated orgs list (an explicit selector), NOT an
+  // untrusted `?org=` URL param — the server also enforces membership per request
+  // (resolveOrgContext → 403 for non-members), so this is scoping, not a gate.
+  const [orgs, setOrgs] = useState<OrgSummary[]>([]);
+  const [activeOrg, setActiveOrg] = useState<string>("");
   const [tab, setTab] = useState<Tab>(() => validValue(searchParams.get("status"), TABS, "all"));
   const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
   const [debouncedQuery, setDebouncedQuery] = useState(query);
@@ -44,8 +48,18 @@ function Issues() {
   }, [query]);
 
   useEffect(() => {
+    void (async () => {
+      try {
+        const res = await adminApi.listOrgs();
+        setOrgs(res.orgs ?? []);
+        const def = (res.orgs ?? []).find((o) => o.isDefault) ?? (res.orgs ?? [])[0];
+        if (def) setActiveOrg(def.orgId);
+      } catch { /* fall back to the server's default org */ }
+    })();
+  }, []);
+
+  useEffect(() => {
     const params = new URLSearchParams();
-    if (orgId) params.set("org", orgId);
     if (debouncedQuery) params.set("q", debouncedQuery);
     if (severity !== "all") params.set("severity", severity);
     if (repo !== "all") params.set("repository", repo);
@@ -54,7 +68,7 @@ function Issues() {
     if (cursor) params.set("cursor", cursor);
     if (traceReviewId) params.set("review", traceReviewId);
     router.replace(params.size ? `/issues?${params}` : "/issues", { scroll: false });
-  }, [router, orgId, debouncedQuery, severity, repo, tab, sort, cursor, traceReviewId]);
+  }, [router, debouncedQuery, severity, repo, tab, sort, cursor, traceReviewId]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -67,7 +81,7 @@ function Issues() {
       status: tab,
       sort,
       ...(cursor ? { cursor } : {}),
-    }, orgId, controller.signal).then((result) => {
+    }, activeOrg || undefined, controller.signal).then((result) => {
       setResponse(result);
       setError("");
     }).catch((caught) => {
@@ -77,13 +91,13 @@ function Issues() {
       if (!controller.signal.aborted) setLoading(false);
     });
     return () => controller.abort();
-  }, [orgId, debouncedQuery, severity, repo, tab, sort, cursor]);
+  }, [activeOrg, debouncedQuery, severity, repo, tab, sort, cursor]);
 
   useEffect(() => {
     if (!traceReviewId || selectedReview?.id === traceReviewId) return;
     setTraceLoading(true);
-    adminApi.getReviewJob(traceReviewId, orgId).then((result) => { setSelectedReview(result.review); setError(""); }).catch((caught) => { setSelectedReview(null); setError(caught instanceof Error ? caught.message : "Failed to load agent trace"); }).finally(() => setTraceLoading(false));
-  }, [traceReviewId, selectedReview?.id, orgId]);
+    adminApi.getReviewJob(traceReviewId, activeOrg || undefined).then((result) => { setSelectedReview(result.review); setError(""); }).catch((caught) => { setSelectedReview(null); setError(caught instanceof Error ? caught.message : "Failed to load agent trace"); }).finally(() => setTraceLoading(false));
+  }, [traceReviewId, selectedReview?.id, activeOrg]);
 
   const resetPage = useCallback(() => { setCursor(null); setCursorHistory([]); }, []);
   const repositories = useMemo(() => [...new Set((response?.issues ?? []).map((issue) => issue.repo).filter((value): value is string => Boolean(value)))].sort(), [response]);
@@ -118,6 +132,7 @@ function Issues() {
         <div className="issue-filters">
           <input className="settings-input" aria-label="Search findings" placeholder="Search issues" value={query} onChange={(event) => { setQuery(event.target.value); resetPage(); }} />
           <select className="settings-select" aria-label="Severity filter" value={severity} onChange={(event) => { setSeverity(validValue(event.target.value, ["all", ...SEVERITIES] as const, "all")); resetPage(); }}><option value="all">All severities</option>{SEVERITIES.map((value) => <option value={value} key={value}>{value}</option>)}</select>
+          {orgs.length > 1 && <select className="settings-select" aria-label="Organization" value={activeOrg} onChange={(event) => { setActiveOrg(event.target.value); resetPage(); }}>{orgs.map((o) => <option key={o.orgId} value={o.orgId}>{o.name}</option>)}</select>}
           <select className="settings-select" aria-label="Repository filter" value={repo} onChange={(event) => { setRepo(event.target.value); resetPage(); }}><option value="all">All repositories</option>{repo !== "all" && !repositories.includes(repo) && <option value={repo}>{repo}</option>}{repositories.map((value) => <option value={value} key={value}>{value}</option>)}</select>
           <select className="settings-select" aria-label="Sort issues" value={sort} onChange={(event) => { setSort(event.target.value === "oldest" ? "oldest" : "newest"); resetPage(); }}><option value="newest">Newest</option><option value="oldest">Oldest</option></select>
         </div>
@@ -130,7 +145,7 @@ function Issues() {
                 <td><strong>{issue.finding.title ?? issue.finding.summary ?? "Finding"}</strong><div className="settings-row__sub">{issue.finding.file}{issue.finding.line ? `:${issue.finding.line}` : ""}</div></td>
                 <td>{issue.repo ?? "—"}</td>
                 <td><StatusBadge tone={issue.issueStatus === "fixed" ? "ok" : issue.issueStatus === "open" ? "danger" : "warn"}>{issue.issueStatus}</StatusBadge></td>
-                <td><div className="issues-provenance">{issue.repo && issue.prNumber ? <Link className="settings-link" href={`/reviews/pr?repo=${encodeURIComponent(issue.repo)}&number=${issue.prNumber}${orgId ? `&org=${encodeURIComponent(orgId)}` : ""}`}>PR #{issue.prNumber}</Link> : <span>Review</span>}<button type="button" className="settings-link settings-link--button" onClick={() => openTrace(issue)}>Agent Trace</button></div></td>
+                <td><div className="issues-provenance">{issue.repo && issue.prNumber ? <Link className="settings-link" href={`/reviews/pr?repo=${encodeURIComponent(issue.repo)}&number=${issue.prNumber}${activeOrg ? `&org=${encodeURIComponent(activeOrg)}` : ""}`}>PR #{issue.prNumber}</Link> : <span>Review</span>}<button type="button" className="settings-link settings-link--button" onClick={() => openTrace(issue)}>Agent Trace</button></div></td>
               </tr>
             ))}</DataTable>
             <div className="issues-pagination"><span>{response?.total ?? issues.length} matching issues · page shows {issues.length}</span><div><PremiumButton size="small" disabled={!cursorHistory.length} onClick={goBack}>Previous</PremiumButton><PremiumButton size="small" disabled={!response?.nextCursor} onClick={goNext}>Next</PremiumButton></div></div>
