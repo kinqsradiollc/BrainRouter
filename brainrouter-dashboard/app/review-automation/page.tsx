@@ -8,6 +8,7 @@ import { PageHeader } from "../../components/PageHeader";
 import { PremiumButton } from "../../components/PremiumButton";
 import { PremiumCard } from "../../components/PremiumCard";
 import { adminApi, type IntegrationConfig, type OrgSummary } from "../../lib/adminApi";
+import { InlineLoading } from "../../components/LoadingSpinner";
 
 interface Repo {
   fullName: string;
@@ -292,7 +293,7 @@ function ReviewAutomationInner() {
         </>
       )}
 
-      {loading && <div className="settings-empty-inline">Loading review automation…</div>}
+      {loading && <InlineLoading label="Loading review automation…" />}
     </div>
   );
 }

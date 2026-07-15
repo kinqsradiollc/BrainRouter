@@ -6,6 +6,7 @@ import type { ModelPolicy, ModelReasoningEffort } from "@kinqs/brainrouter-types
 
 import { PremiumButton } from "../../components/PremiumButton";
 import { PremiumCard } from "../../components/PremiumCard";
+import { InlineLoading } from "../../components/LoadingSpinner";
 import {
   adminApi,
   type ManagedModelInput,
@@ -258,7 +259,7 @@ export function ManagedModelsPanel({ providers }: { providers: ProviderConfig[] 
         <div className="settings-note">Read only. An organization administrator controls upstream routing and allowed efforts.</div>
       )}
       {error && <div className="settings-note settings-note--error">{error}</div>}
-      {loading ? <div className="settings-empty-inline">Loading managed models…</div>
+      {loading ? <InlineLoading label="Loading managed models…" />
         : displayedCatalog.length === 0 ? <div className="settings-empty-inline">No managed model is configured for this organization.</div>
           : displayedCatalog.map((model) => {
             const admin = adminByPublicId.get(model.id);

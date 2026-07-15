@@ -11,6 +11,7 @@ import type { GraphAnalytics } from "@kinqs/brainrouter-types";
 import { getClient } from "../../lib/client";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
+import { InlineLoading } from "../../components/LoadingSpinner";
 
 const stone = "var(--color-stone-text)";
 const frost = "var(--color-white-frost)";
@@ -60,7 +61,7 @@ export default function IntelligencePage() {
           description="Explore which people, projects, topics, and concepts are most connected across your workspace."
         />
         {error && <p style={{ color: "#E5675F", fontSize: "13px" }}>Could not load analytics: {error}</p>}
-        {!data && !error && <p style={{ color: stone, fontSize: "13px" }}>Loading…</p>}
+        {!data && !error && <InlineLoading label="Loading…" />}
         {data && data.nodeCount === 0 && (
           <p style={{ color: stone, fontSize: "13px" }}>The graph is empty — it grows as memories are captured and entities are linked.</p>
         )}

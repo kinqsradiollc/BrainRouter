@@ -13,6 +13,7 @@ import { AgentTraceGraph } from "../../../components/AgentTraceGraph";
 import { adminApi, type ReviewJob, type ReviewPullRequestDetail } from "../../../lib/adminApi";
 import { invalidateDashboardQueries, queryDashboard } from "../../../lib/dashboardQuery";
 import { REVIEW_ACTION_LABELS, reviewActionPresentation, safeReviewsReturnPath } from "../reviewPresentation";
+import { InlineLoading } from "../../../components/LoadingSpinner";
 
 function lensName(lens: ReviewJob["lens"]): string {
   if (lens === "security") return "Security review";
@@ -174,7 +175,7 @@ function Detail() {
       </div>
       {error && <div className="settings-note settings-note--error" role="alert">{error}</div>}
 
-      {loading && !pr ? <div className="settings-empty-inline">Loading pull request…</div> : pr && (
+      {loading && !pr ? <InlineLoading label="Loading pull request…" /> : pr && (
         <div className="review-detail__grid">
           <main className="review-detail__main">
             <div className="review-detail__section-head"><div><span>Review output</span><h2>Findings</h2></div><span>{pr.reviews.length} run{pr.reviews.length === 1 ? "" : "s"}</span></div>

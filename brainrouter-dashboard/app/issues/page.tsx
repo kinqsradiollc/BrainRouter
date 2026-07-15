@@ -10,6 +10,7 @@ import { EmptyState } from "../../components/EmptyState";
 import { PageHeader } from "../../components/PageHeader";
 import { PremiumButton } from "../../components/PremiumButton";
 import { adminApi, type OrgSummary, type ReviewIssue, type ReviewIssuesResponse, type ReviewJob } from "../../lib/adminApi";
+import { InlineLoading } from "../../components/LoadingSpinner";
 
 const TABS = ["all", "open", "in progress", "snoozed", "fixed", "ignored"] as const;
 const SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
@@ -137,7 +138,7 @@ function Issues() {
           <select className="settings-select" aria-label="Sort issues" value={sort} onChange={(event) => { setSort(event.target.value === "oldest" ? "oldest" : "newest"); resetPage(); }}><option value="newest">Newest</option><option value="oldest">Oldest</option></select>
         </div>
         {error && <div className="settings-note settings-note--error" role="alert">{error}</div>}
-        {loading && !response ? <div className="settings-empty-inline">Loading matching issues…</div> : issues.length ? (
+        {loading && !response ? <InlineLoading label="Loading matching issues…" /> : issues.length ? (
           <>
             <DataTable headers={["Severity", "Finding", "Repository", "Status", "Provenance"]}>{issues.map((issue) => (
               <tr key={`${issue.reviewId}:${issue.finding.file}:${issue.finding.line ?? 0}:${issue.createdAt}`}>
@@ -152,7 +153,7 @@ function Issues() {
           </>
         ) : <EmptyState title="No matching issues" description="Run a review or adjust the filters to see verified findings." />}
       </section>
-      {(traceLoading || selectedReview) && <section className="issues-trace" aria-label="Originating review trace">{traceLoading && !selectedReview ? <div className="settings-empty-inline">Loading Agent Trace…</div> : selectedReview && <><div className="issues-trace__head"><div><span>Originating review</span><h2>{selectedReview.repo} #{selectedReview.prNumber}</h2></div><button type="button" className="settings-link settings-link--button" onClick={() => { setTraceReviewId(null); setSelectedReview(null); }}>Close</button></div><AgentTraceGraph reviews={[selectedReview]} /></>}</section>}
+      {(traceLoading || selectedReview) && <section className="issues-trace" aria-label="Originating review trace">{traceLoading && !selectedReview ? <InlineLoading label="Loading Agent Trace…" /> : selectedReview && <><div className="issues-trace__head"><div><span>Originating review</span><h2>{selectedReview.repo} #{selectedReview.prNumber}</h2></div><button type="button" className="settings-link settings-link--button" onClick={() => { setTraceReviewId(null); setSelectedReview(null); }}>Close</button></div><AgentTraceGraph reviews={[selectedReview]} /></>}</section>}
     </div>
   );
 }

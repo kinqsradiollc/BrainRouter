@@ -11,6 +11,7 @@ import { PageHeader } from "../../components/PageHeader";
 import { PremiumCard } from "../../components/PremiumCard";
 import { PremiumButton } from "../../components/PremiumButton";
 import { PremiumModal } from "../../components/PremiumModal";
+import { InlineLoading } from "../../components/LoadingSpinner";
 
 type ProfilePanel = "account" | "api" | "clients";
 type ClientTransport = "http" | "stdio";
@@ -186,7 +187,7 @@ export default function ProfilePage() {
 
         <div key={panel} id={`profile-panel-${panel}`} role="tabpanel" aria-labelledby={`profile-tab-${panel}`} className="settings-panel-stage">
           {loading ? (
-            <div className="settings-panel-loading">Loading user details…</div>
+            <InlineLoading label="Loading user details…" />
           ) : !me ? (
             <div className="settings-panel-loading">We could not retrieve this session. Sign in again.</div>
           ) : (

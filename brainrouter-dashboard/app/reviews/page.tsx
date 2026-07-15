@@ -9,6 +9,7 @@ import { PremiumButton } from "../../components/PremiumButton";
 import { StatusBadge } from "../../components/Analytics";
 import { adminApi, type OrgSummary, type ReviewJob, type ReviewPullRequest } from "../../lib/adminApi";
 import { invalidateDashboardQueries, queryDashboard } from "../../lib/dashboardQuery";
+import { InlineLoading } from "../../components/LoadingSpinner";
 import {
   REVIEW_ACTION_LABELS,
   filterReviewPullRequests,
@@ -258,7 +259,7 @@ function ReviewsInner() {
             <thead><tr><th>Pull request</th><th>Repository</th><th>Review state</th><th>Updated</th><th>Actions</th></tr></thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={5} className="review-console__loading">Loading open pull requests…</td></tr>
+                <tr><td colSpan={5} className="review-console__loading"><InlineLoading label="Loading open pull requests…" /></td></tr>
               ) : displayed.map((pr) => {
                 const key = `${pr.repo}#${pr.number}`;
                 const presentation = reviewStatus(pr);

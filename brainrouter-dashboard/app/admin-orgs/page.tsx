@@ -10,6 +10,7 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
 import { PremiumCard } from "../../components/PremiumCard";
 import { adminApi, type OrgStats } from "../../lib/adminApi";
+import { InlineLoading } from "../../components/LoadingSpinner";
 
 function fmtLimit(used: number, limit: number | null): string {
   return limit === null ? `${used} / ∞` : `${used} / ${limit}`;
@@ -39,7 +40,7 @@ function AdminOrgsInner() {
 
       <PremiumCard level={2} style={{ marginTop: "var(--spacing-24)", overflowX: "auto" }}>
         {loading ? (
-          <div className="settings-empty-inline">Loading…</div>
+          <InlineLoading label="Loading…" />
         ) : orgs.length === 0 ? (
           <div className="settings-empty-inline">No organizations.</div>
         ) : (

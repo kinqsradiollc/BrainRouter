@@ -1016,6 +1016,28 @@ html {
   animation: brainrouter-spin 0.8s linear infinite;
 }
 
+/* Inline loader — small ring + label, drops into panels/lists/table cells. */
+.inline-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.inline-loading-ring {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--accent-wash);
+  border-top-color: var(--accent);
+  border-radius: 9999px;
+  animation: brainrouter-spin 0.8s linear infinite;
+  flex: 0 0 auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  .loading-spinner-ring,
+  .inline-loading-ring { animation-duration: 1.6s; }
+}
+
 /* Premium Markdown Content Styling */
 .markdown-content {
   color: var(--color-white-frost);

@@ -8,6 +8,7 @@ import { Sidebar } from "./Sidebar";
 import { PublicHeader } from "./PublicHeader";
 import { CommandPalette } from "./CommandPalette";
 import { useIsMobile } from "../lib/useIsMobile";
+import { InlineLoading } from "./LoadingSpinner";
 
 export function LayoutWrapper({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -29,7 +30,7 @@ export function LayoutWrapper({ children }: { children: React.ReactNode }) {
   if (isPublicRoute) {
     return <div className="public-shell"><PublicHeader /><main className="public-content">{children}</main></div>;
   }
-  if (isLoading) return <div className="app-loading">Loading BrainRouter…</div>;
+  if (isLoading) return <div className="app-loading"><InlineLoading label="Loading BrainRouter…" /></div>;
   if (!isAuthenticated) return <div className="public-shell"><PublicHeader /><main className="public-content">{children}</main></div>;
 
   return (

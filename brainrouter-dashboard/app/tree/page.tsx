@@ -10,6 +10,7 @@ import type { MemoryTreeNode } from "@kinqs/brainrouter-types";
 import { getClient } from "../../lib/client";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
+import { InlineLoading } from "../../components/LoadingSpinner";
 
 function NodeRow({ node, depth, onDrill, children, openIds }: {
   node: MemoryTreeNode;
@@ -34,7 +35,7 @@ function NodeRow({ node, depth, onDrill, children, openIds }: {
           {node.sourceChunkIds?.length ?? 0} chunks{node.sealedAt ? " · sealed" : ""} · {open ? "▾" : "▸"}
         </span>
       </button>
-      {open && loaded === "loading" && <p style={{ color: "var(--color-stone-text)", fontSize: "12px", margin: 0 }}>Loading children…</p>}
+      {open && loaded === "loading" && <InlineLoading label="Loading children…" />}
       {open && Array.isArray(loaded) && loaded.length === 0 && <p style={{ color: "var(--color-stone-text)", fontSize: "12px", margin: 0 }}>Leaf (no children).</p>}
       {open && Array.isArray(loaded) && loaded.map((c) => (
         <NodeRow key={c.id} node={c} depth={depth + 1} onDrill={onDrill} children={children} openIds={openIds} />
@@ -83,7 +84,7 @@ export default function TreePage() {
           description="Browse how detailed notes roll up into topics and larger summaries. Select any item to explore what sits beneath it."
         />
         {error && <p style={{ color: "#E5675F", fontSize: "13px" }}>Could not load tree: {error}</p>}
-        {!roots && !error && <p style={{ color: "var(--color-stone-text)", fontSize: "13px" }}>Loading…</p>}
+        {!roots && !error && <InlineLoading label="Loading…" />}
         {roots && roots.length === 0 && (
           <p style={{ color: "var(--color-stone-text)", fontSize: "13px" }}>No tree nodes yet. They form as memory accumulates and buckets are sealed (0.4.3).</p>
         )}

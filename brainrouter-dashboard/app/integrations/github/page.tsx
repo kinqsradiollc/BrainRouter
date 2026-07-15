@@ -15,6 +15,7 @@ import { PageHeader } from "../../../components/PageHeader";
 import { PremiumCard } from "../../../components/PremiumCard";
 import { PremiumButton } from "../../../components/PremiumButton";
 import { adminApi, type OrgSummary, type Project } from "../../../lib/adminApi";
+import { InlineLoading } from "../../../components/LoadingSpinner";
 
 interface Repo { fullName: string; url: string; private: boolean; defaultBranch: string }
 interface Status { configured: boolean; installed: boolean; installUrl?: string }
@@ -115,7 +116,7 @@ function GithubInner() {
       {/* Connection */}
       <PremiumCard level={2} style={{ marginTop: "var(--spacing-24)" }}>
         <div className="settings-cardhead"><div><h3>Connection</h3><div className="settings-hint">The Team&apos;s GitHub App installation.</div></div></div>
-        {loading ? <div className="settings-empty-inline">Loading…</div> : status?.installed ? (
+        {loading ? <InlineLoading label="Loading…" /> : status?.installed ? (
           <div className="flex flex-wrap items-center gap-3">
             <span className="prov-status prov-status--ok">✓ Connected{connectedOwner ? <> as <code>{connectedOwner}</code></> : ""}</span>
             <span style={{ flex: 1 }} />

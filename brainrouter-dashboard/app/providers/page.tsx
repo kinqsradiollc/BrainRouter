@@ -18,6 +18,7 @@ import { PremiumButton } from "../../components/PremiumButton";
 import { adminApi, type ProviderConfig, type ProviderKind } from "../../lib/adminApi";
 import { ManagedModelsPanel } from "./ManagedModelsPanel";
 import { AdvancedRecallPanel } from "./AdvancedRecallPanel";
+import { InlineLoading } from "../../components/LoadingSpinner";
 
 // The configurable provider kinds are the LLM + the two vector stages.
 const KINDS: { kind: ProviderKind; label: string; hint: string }[] = [
@@ -245,7 +246,7 @@ function ProvidersInner() {
               </div>
             </div>
             <div className="prov-gallery">
-              {catalog.length === 0 ? <div className="settings-empty-inline">Loading the provider catalog…</div> : catalog.map((c) => {
+              {catalog.length === 0 ? <InlineLoading label="Loading the provider catalog…" /> : catalog.map((c) => {
                 const done = configuredIds.has(c.id);
                 return (
                   <button key={c.id} type="button" className="prov-card" onClick={() => openCatalog(c)} title={`Set up ${c.label}`}>
@@ -274,7 +275,7 @@ function ProvidersInner() {
                     <div><h3>{label}</h3><div className="settings-hint">{hint}</div></div>
                     <span className="settings-badge settings-badge--muted">{rows.length} configured</span>
                   </div>
-                  {loading ? <div className="settings-empty-inline">Loading…</div>
+                  {loading ? <InlineLoading label="Loading…" />
                     : rows.length === 0 ? <div className="settings-empty-inline">No {label} provider yet — pick one above.</div>
                       : rows.map((p) => (
                         <div key={p.id} className="org-member">
@@ -305,7 +306,7 @@ function ProvidersInner() {
           <PremiumCard level={2} style={{ marginTop: "var(--spacing-24)" }}>
             <div className="settings-cardhead"><div><h3>Brain worker models</h3><div className="settings-hint">Route the brain&apos;s cognitive workers to different models on your LLM provider — the same routing mechanism as the desktop/CLI agent.</div></div></div>
             {!llmProvider ? <div className="settings-empty-inline">Configure an LLM provider first (Personal / BYOK tab).</div>
-              : roles.length === 0 ? <div className="settings-empty-inline">Loading roles…</div>
+              : roles.length === 0 ? <InlineLoading label="Loading roles…" />
                 : roles.map((role) => {
                   const a = assignments[role] ?? {};
                   const set = (patch: AgentAssign) => setAssignments((m) => ({ ...m, [role]: { ...m[role], ...patch } }));

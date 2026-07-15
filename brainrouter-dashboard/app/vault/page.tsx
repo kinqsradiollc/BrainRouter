@@ -10,6 +10,7 @@ import type { VaultExportEntry } from "@kinqs/brainrouter-types";
 import { getClient } from "../../lib/client";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
+import { InlineLoading } from "../../components/LoadingSpinner";
 
 export default function VaultPage() {
   const client = useMemo(() => getClient(), []);
@@ -31,7 +32,7 @@ export default function VaultPage() {
           description="Browse a readable copy of durable knowledge that is easy to back up, review, and version with your project."
         />
         {error && <p style={{ color: "#E5675F", fontSize: "13px" }}>Could not load vault: {error}</p>}
-        {!exports && !error && <p style={{ color: "var(--color-stone-text)", fontSize: "13px" }}>Loading…</p>}
+        {!exports && !error && <InlineLoading label="Loading…" />}
         {exports && exports.length === 0 && (
           <p style={{ color: "var(--color-stone-text)", fontSize: "13px" }}>No vault exports yet. Run <code>memory_vault_export</code> to mirror memory to markdown (0.4.3).</p>
         )}
