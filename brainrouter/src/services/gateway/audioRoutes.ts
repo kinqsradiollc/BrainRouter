@@ -43,12 +43,16 @@ export function registerGatewayAudioPlane(app: Express, _service?: GatewayDataPl
       }
       const contentType = (req.headers["content-type"] as string | undefined) || "application/octet-stream";
       const language = typeof req.query.language === "string" ? req.query.language : undefined;
+      // Optional Whisper model select (HF ggml name, e.g. "small" / "large-v3"),
+      // via ?model= or an x-model header; the sidecar maps it to a ggml file.
+      const model = typeof req.query.model === "string" ? req.query.model
+        : typeof req.headers["x-model"] === "string" ? req.headers["x-model"] : undefined;
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), Number.isFinite(STT_TIMEOUT_MS) ? STT_TIMEOUT_MS : 120000);
       try {
         const upstream = await fetch(`${sttBaseUrl()}/inference`, {
           method: "POST",
-          headers: { "content-type": contentType, ...(language ? { "x-language": language } : {}) },
+          headers: { "content-type": contentType, ...(language ? { "x-language": language } : {}), ...(model ? { "x-model": model } : {}) },
           // Buffer is a valid fetch body at runtime; the cast sidesteps the TS 5.7
           // ArrayBufferLike/BodyInit strictness without copying the audio bytes.
           body: audio as unknown as BodyInit,
