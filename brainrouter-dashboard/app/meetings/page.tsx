@@ -7,10 +7,12 @@
  * data from the backend at :3747 (/api/meetings) using the signed-in account's JWT
  * — the same dataset the desktop sees for the same account. No sample data.
  */
-import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
 import { authFetch } from "../../lib/adminApi";
+import { BASE_URL } from "../../lib/client";
+import { getApiKey, getJwt } from "../../lib/client-auth";
 import styles from "./meetings.module.css";
 
 type Scope = "private" | "team" | "org" | "public";
@@ -50,6 +52,56 @@ export default function MeetingsPage() {
   const [draftTitle, setDraftTitle] = useState("");
   const [draftTranscript, setDraftTranscript] = useState("");
   const [createErr, setCreateErr] = useState("");
+  const [recording, setRecording] = useState(false);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+
+  const transcribe = useCallback(async (blob: Blob) => {
+    setBusy("transcribe");
+    setCreateErr("");
+    try {
+      const token = getJwt() || getApiKey() || "";
+      const res = await fetch(`${BASE_URL}/v1/audio/transcriptions`, {
+        method: "POST",
+        headers: { "Content-Type": blob.type || "audio/webm", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: blob,
+      });
+      if (!res.ok) throw new Error(`Transcription failed (${res.status})`);
+      const out = (await res.json()) as { text?: string };
+      const text = (out.text ?? "").trim();
+      if (text) setDraftTranscript((cur) => (cur ? `${cur}\n${text}` : text));
+      else setCreateErr("No speech was detected in the recording.");
+    } catch (caught) {
+      setCreateErr(caught instanceof Error ? caught.message : "Transcription failed.");
+    } finally {
+      setBusy("");
+    }
+  }, []);
+
+  const startRecording = useCallback(async () => {
+    setCreateErr("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const rec = new MediaRecorder(stream);
+      chunksRef.current = [];
+      rec.ondataavailable = (e) => { if (e.data.size) chunksRef.current.push(e.data); };
+      rec.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        void transcribe(new Blob(chunksRef.current, { type: rec.mimeType || "audio/webm" }));
+      };
+      recorderRef.current = rec;
+      rec.start();
+      setRecording(true);
+    } catch {
+      setCreateErr("Microphone access was denied or is unavailable.");
+    }
+  }, [transcribe]);
+
+  const stopRecording = useCallback(() => {
+    recorderRef.current?.stop();
+    recorderRef.current = null;
+    setRecording(false);
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -265,11 +317,16 @@ export default function MeetingsPage() {
               aria-label="Transcript"
             />
             {createErr ? <div className={styles.errorBar} role="alert">{createErr}</div> : null}
-            <div className={styles.modalActions}>
-              <button type="button" className={styles.track} onClick={() => setCreateOpen(false)}>Cancel</button>
-              <button type="button" className={styles.newBtn} onClick={() => void submitCreate()} disabled={busy === "create"}>
-                {busy === "create" ? "Summarizing…" : "Create + summarize"}
+            <div className={styles.modalActions} style={{ justifyContent: "space-between" }}>
+              <button type="button" className={styles.track} onClick={() => (recording ? stopRecording() : void startRecording())} disabled={busy === "transcribe"}>
+                {recording ? "■ Stop recording" : busy === "transcribe" ? "Transcribing…" : "🎙 Record"}
               </button>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button type="button" className={styles.track} onClick={() => { if (recording) stopRecording(); setCreateOpen(false); }}>Cancel</button>
+                <button type="button" className={styles.newBtn} onClick={() => void submitCreate()} disabled={busy === "create" || recording}>
+                  {busy === "create" ? "Summarizing…" : "Create + summarize"}
+                </button>
+              </div>
             </div>
           </div>
         </div>
