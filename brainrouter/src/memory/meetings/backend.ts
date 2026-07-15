@@ -4,8 +4,8 @@
  * Memory-native (D1): the transcript is ingested as a `SourceDocument(kind:"transcript")`
  * and the summary as a recallable `CognitiveRecord` (through the redaction chokepoint),
  * linked for provenance; a thin `meetings` index row drives list/detail. Summaries route
- * through the org-resolved review runner (D2) — swaps to the server-managed provider after
- * Codex lands. Sharing is the four-level ladder (D8) with revocable public tokens.
+ * through the org's own LLM provider (D2, via memoryEngine.modelRunner) — server-managed
+ * models are desktop-only. Sharing is the four-level ladder (D8) with revocable public tokens.
  */
 import { randomUUID, createHash, randomBytes } from "node:crypto";
 import { memoryEngine } from "../engine.js";
@@ -83,9 +83,10 @@ function parseActionItems(md: string): MeetingRow["actionItems"] {
 }
 
 async function summarize(orgId: string, title: string, transcript: string): Promise<{ markdown: string; actionItems: MeetingRow["actionItems"] }> {
-  // Server-managed model path (Task 11): an immutable org-scoped runner that
-  // dispatches through the internal gateway — admins can assign a dedicated model
-  // via agentModels["meeting-summary"], else the org's default model policy applies.
+  // Internal sub-agent runner bound to the org's OWN LLM provider (BYOK / personal).
+  // An admin can assign a dedicated model to the meeting-summary role via
+  // agentModels["meeting-summary"], else the org's default LLM provider is used.
+  // Server-managed models are NOT consulted here — those only serve the desktop.
   const runner = await memoryEngine.modelRunner("meeting-summary", orgId);
   const systemPrompt =
     "You summarize meeting transcripts. Return concise markdown: a short paragraph, then a '### Decisions' " +
@@ -95,8 +96,8 @@ async function summarize(orgId: string, title: string, transcript: string): Prom
     markdown = await runner.run({ systemPrompt, prompt: `Meeting: ${title}\n\nTranscript:\n${transcript.slice(0, 40_000)}`, taskId: `meeting-summary:${orgId}` });
   } catch {
     markdown = "Summary pending — the transcript was captured, but no summary model responded. "
-      + "An organization admin can enable a managed model under Settings → Models & providers "
-      + "(or assign one to the meeting-summary role), then use Regenerate.";
+      + "An organization admin can configure the org's LLM provider under Settings → Models & providers "
+      + "(or assign a model to the meeting-summary role), then use Regenerate.";
   }
   return { markdown: markdown.trim(), actionItems: parseActionItems(markdown) };
 }

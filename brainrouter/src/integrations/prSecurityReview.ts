@@ -111,6 +111,42 @@ function glHeaders(token: string): Record<string, string> {
   return { Authorization: `Bearer ${token}`, Accept: 'application/json' };
 }
 
+/**
+ * Fetch a PR's unified diff from GitHub, resilient to large PRs.
+ *
+ * The compact `application/vnd.github.diff` media type is the fast path, but
+ * GitHub returns **406 Not Acceptable** for it once a PR's diff is too large
+ * (hundreds of files / tens of thousands of lines) — which silently killed the
+ * review agent on big PRs. On 406 we fall back to the paginated Files API and
+ * reconstruct a unified diff from each file's `patch` (the same shape the GitLab
+ * branch builds). Binary / per-file-too-large entries have no `patch` and are
+ * skipped (there is nothing textual to review). Returns the status on failure so
+ * the caller can surface `diff HTTP <status>` unchanged.
+ */
+async function fetchGithubUnifiedDiff(
+  fetchImpl: typeof fetch, apiBase: string, repo: string, prNumber: number, token: string,
+): Promise<{ ok: true; diff: string } | { ok: false; status: number }> {
+  const direct = await fetchImpl(`${apiBase}/repos/${repo}/pulls/${prNumber}`, { headers: ghHeaders(token, 'application/vnd.github.diff') });
+  if (direct.ok) return { ok: true, diff: await direct.text() };
+  if (direct.status !== 406) return { ok: false, status: direct.status };
+  // Oversized diff → reconstruct from the Files API (max 3000 files, 100/page).
+  const parts: string[] = [];
+  for (let page = 1; page <= 30; page++) {
+    const r = await fetchImpl(`${apiBase}/repos/${repo}/pulls/${prNumber}/files?per_page=100&page=${page}`, { headers: ghHeaders(token) });
+    if (!r.ok) return { ok: false, status: r.status };
+    const files = await r.json() as Array<{ filename?: string; previous_filename?: string; patch?: string }>;
+    if (!Array.isArray(files) || files.length === 0) break;
+    for (const f of files) {
+      if (typeof f.patch !== 'string' || !f.patch) continue;
+      const newPath = String(f.filename ?? 'unknown');
+      const oldPath = String(f.previous_filename ?? f.filename ?? 'unknown');
+      parts.push(`diff --git a/${oldPath} b/${newPath}\n--- a/${oldPath}\n+++ b/${newPath}\n${f.patch}`);
+    }
+    if (files.length < 100) break;
+  }
+  return { ok: true, diff: parts.join('\n') };
+}
+
 type GitlabDiffRefs = { base_sha?: string; start_sha?: string; head_sha?: string };
 
 function validReviewRepo(repo: string, forge: "github" | "gitlab"): boolean {
@@ -220,9 +256,9 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
         return `diff --git a/${oldPath} b/${newPath}\n--- a/${oldPath}\n+++ b/${newPath}\n${String(change.diff ?? '')}`;
       }).join('\n');
     } else {
-      const r = await deps.fetchImpl(`${apiBase}/repos/${repo}/pulls/${prNumber}`, { headers: ghHeaders(token, 'application/vnd.github.diff') });
-      if (!r.ok) { const error = `diff HTTP ${r.status}`; progress("error", error); return { ok: false, findings: 0, posted: false, error }; }
-      diff = await r.text();
+      const result = await fetchGithubUnifiedDiff(deps.fetchImpl, apiBase, repo, prNumber, token);
+      if (!result.ok) { const error = `diff HTTP ${result.status}`; progress("error", error); return { ok: false, findings: 0, posted: false, error }; }
+      diff = result.diff;
     }
   } catch (e) { const error = e instanceof Error ? e.message : 'diff fetch failed'; progress("error", error); return { ok: false, findings: 0, posted: false, error }; }
   if (!diff.trim()) return { ok: true, findings: 0, posted: false, skipped: 'empty-diff' };

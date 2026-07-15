@@ -1165,7 +1165,10 @@ export async function callOpenAIStream(
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'Accept': 'text/event-stream',
+    // Advertise both: real providers stream SSE regardless, and the MCP
+    // Streamable-HTTP SDK requires application/json + text/event-stream together
+    // on any POST it sees (so a BrainRouter-as-provider request never 406s).
+    'Accept': 'application/json, text/event-stream',
   };
   if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
 

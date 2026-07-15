@@ -15,14 +15,22 @@ import { decideMcpAcceptPromotion } from "../api/mcpAcceptHeader.js";
  */
 
 describe("decideMcpAcceptPromotion", () => {
-  it("leaves headers alone when text/event-stream is already present", () => {
+  it("leaves headers alone only when BOTH json and event-stream are already present", () => {
     expect(
       decideMcpAcceptPromotion("application/json, text/event-stream"),
     ).toEqual({ promote: false });
-    expect(decideMcpAcceptPromotion("text/event-stream")).toEqual({ promote: false });
     expect(
       decideMcpAcceptPromotion("Application/JSON, Text/Event-Stream"),
     ).toEqual({ promote: false });
+  });
+
+  it("promotes a text/event-stream-only Accept — the SDK POST rule also needs application/json", () => {
+    // A streaming client (e.g. the desktop provider transport) that reaches /mcp
+    // sends `Accept: text/event-stream` alone; without application/json the SDK 406s.
+    expect(decideMcpAcceptPromotion("text/event-stream")).toEqual({
+      promote: true,
+      value: "application/json, text/event-stream",
+    });
   });
 
   it("promotes when the header is missing entirely", () => {

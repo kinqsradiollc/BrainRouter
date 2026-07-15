@@ -174,8 +174,13 @@ export function ManagedModelsPanel({ providers }: { providers: ProviderConfig[] 
     setFormError("");
     try {
       const result = await adminApi.discoverManagedModels(draft.providerConfigId);
-      setDiscovered(result.selection.upstreamModelIds);
-      const first = result.selection.upstreamModelIds[0];
+      // Defensive: older backends returned probe objects ({id,...}); coerce to id
+      // strings so the <option> keys/values never render "[object Object]".
+      const ids = (result.selection.upstreamModelIds as unknown[])
+        .map((m) => (typeof m === "string" ? m : m && typeof m === "object" && "id" in m ? String((m as { id: unknown }).id) : String(m)))
+        .filter((id) => id && id !== "[object Object]");
+      setDiscovered(ids);
+      const first = ids[0];
       if (first && !draft.upstreamModelId) {
         setDraft((current) => ({
           ...current,

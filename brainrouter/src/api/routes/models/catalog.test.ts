@@ -134,7 +134,7 @@ describe("server-managed model APIs", () => {
     mocks.reorderProviderModels.mockResolvedValue(undefined);
     mocks.getProviderConfig.mockResolvedValue({ id: "provider-a", orgId: "org-a", kind: "llm" });
     mocks.getResolvedProvider.mockResolvedValue({ endpoint: "https://upstream.example/v1", apiKey: "provider-secret" });
-    mocks.probeModels.mockResolvedValue(["model-one", "model-two"]);
+    mocks.probeModels.mockResolvedValue([{ id: "model-one" }, { id: "model-two" }]);
 
     const app = express();
     app.use(express.json());
@@ -243,7 +243,7 @@ describe("server-managed model APIs", () => {
     expect(response.status).toBe(200);
     expect(mocks.probeModels).toHaveBeenCalledWith("https://upstream.example/v1", "provider-secret", "llm");
     expect(response.body).toEqual({
-      models: ["model-one", "model-two"],
+      models: [{ id: "model-one" }, { id: "model-two" }],
       selection: { mode: "explicit", upstreamModelIds: ["model-one", "model-two"] },
     });
     expect(JSON.stringify(response.body)).not.toContain("provider-secret");

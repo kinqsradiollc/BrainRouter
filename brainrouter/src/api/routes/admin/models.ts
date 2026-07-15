@@ -133,10 +133,15 @@ adminModelsRouter.post("/discover", async (req: AuthedRequest, res) => {
   const resolved = await memoryEngine.providers.getResolvedProvider(provider.id);
   if (!resolved) { sendError(res, 400, "Provider is disabled or unavailable"); return; }
   try {
-    const models = await probeModels(resolved.endpoint, resolved.apiKey, "llm");
+    const probed = await probeModels(resolved.endpoint, resolved.apiKey, "llm");
+    // probeModels returns {id, reasoning} objects — the dashboard's model picker
+    // expects a string[] of ids (it renders each as an <option>). Returning the
+    // objects rendered "[object Object]" and crashed the Discover flow with a
+    // duplicate-key error, which is why managed models couldn't be configured.
+    const upstreamModelIds = probed.map((model) => model.id);
     res.json({
-      models,
-      selection: { mode: "explicit", upstreamModelIds: models },
+      models: probed,
+      selection: { mode: "explicit", upstreamModelIds },
     });
   } catch (error) {
     sendError(res, 400, error instanceof Error ? error.message : "Failed to discover models");

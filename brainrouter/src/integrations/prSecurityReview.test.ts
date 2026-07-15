@@ -37,6 +37,8 @@ interface Routes {
   comments?: unknown[];
   inlineComments?: unknown[];
   diff?: string;
+  diffTooLarge?: boolean; // 406 the .diff media type (simulates an oversized PR) → Files-API fallback
+  files?: Array<{ filename?: string; previous_filename?: string; patch?: string }>; // Files-API payload
   reviewOk?: boolean; // grouped-review POST result (default true)
   checksOk?: boolean; // check-run POST result (default true; false simulates missing `checks: write`)
   bodies?: Record<string, string>; // captured request bodies by "METHOD path"
@@ -48,13 +50,21 @@ const CODE_INLINE =
   '"suggestion":"use < not <=","replacement":"for (let i = 0; i < n; i++) {"}]\n```';
 
 function mockFetch(routes: Routes) {
-  return (async (url: string, init?: { method?: string; body?: string }): Promise<unknown> => {
+  return (async (url: string, init?: { method?: string; body?: string; headers?: Record<string, string> }): Promise<unknown> => {
     const method = (init?.method ?? "GET").toUpperCase();
     const path = url.replace("https://api.github.com", "");
     routes.calls.push(`${method} ${path}`);
     if (init?.body) { routes.bodies ??= {}; routes.bodies[`${method} ${path}`] = init.body; }
     if (url.includes("/access_tokens") && method === "POST") return { ok: true, status: 201, json: async () => ({ token: "ghs_test", expires_at: "2099-01-01T00:00:00Z" }) };
-    if (/\/pulls\/\d+$/.test(url)) return { ok: true, status: 200, text: async () => routes.diff ?? "diff --git a/x b/x\n+const q = `SELECT * FROM u WHERE id=${id}`;\n", json: async () => ({ head: { sha: "resolvedsha" } }) };
+    if (/\/pulls\/\d+\/files/.test(url) && method === "GET") {
+      const page = Number(new URL(url).searchParams.get("page") ?? "1");
+      return { ok: true, status: 200, json: async () => (page === 1 ? (routes.files ?? []) : []) };
+    }
+    if (/\/pulls\/\d+$/.test(url)) {
+      const accept = init?.headers?.Accept ?? init?.headers?.accept;
+      if (routes.diffTooLarge && accept === "application/vnd.github.diff") return { ok: false, status: 406, text: async () => "", json: async () => ({}) };
+      return { ok: true, status: 200, text: async () => routes.diff ?? "diff --git a/x b/x\n+const q = `SELECT * FROM u WHERE id=${id}`;\n", json: async () => ({ head: { sha: "resolvedsha" } }) };
+    }
     if (/\/pulls\/\d+\/comments/.test(url) && method === "GET") return { ok: true, status: 200, json: async () => routes.inlineComments ?? [] };
     if (/\/pulls\/\d+\/comments$/.test(url) && method === "POST") return { ok: true, status: 201, json: async () => ({ id: 321 }) };
     if (/\/pulls\/\d+\/reviews$/.test(url) && method === "POST") return { ok: routes.reviewOk ?? true, status: (routes.reviewOk ?? true) ? 200 : 422, json: async () => ({ id: 77 }) };
@@ -127,6 +137,26 @@ describe("PR security review executor (ADR-017 D5)", () => {
     );
     expect(r.ok).toBe(true);
     expect(events).toContain("intelligence-unavailable");
+  });
+
+  it("reconstructs the diff from the Files API when GitHub 406s the .diff media type (oversized PR)", async () => {
+    // GitHub 406s the compact .diff media type on very large PRs (e.g. #845). The
+    // reviewer must fall back to the paginated Files API instead of dying on
+    // `diff HTTP 406`, and still produce commentable findings.
+    const routes: Routes = {
+      calls: [],
+      diffTooLarge: true,
+      files: [{ filename: "x.ts", patch: "@@ -0,0 +1,3 @@\n+import x;\n+const q = `SELECT * FROM u WHERE id=${req.query.id}`;\n+db.query(q);" }],
+    };
+    const r = await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 845, headSha: "sha" },
+      makeDeps(routes, { llmRunner: llm(REVIEW_INLINE) }),
+    );
+    expect(r.ok).toBe(true);
+    // The .diff request 406'd, so it fell back to the Files API…
+    expect(routes.calls.some((c) => /^GET \/repos\/o\/r\/pulls\/845\/files/.test(c))).toBe(true);
+    // …and the reconstructed diff still yielded a finding.
+    expect(r.findings).toBeGreaterThan(0);
   });
 
   it("gives the code-quality lens current context without letting it duplicate security findings", async () => {
