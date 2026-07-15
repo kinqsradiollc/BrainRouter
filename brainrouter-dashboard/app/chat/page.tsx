@@ -9,6 +9,7 @@ import { LazyMarkdown } from "../../components/LazyMarkdown";
 import { brainApi } from "../../lib/brainApi";
 import { adminApi } from "../../lib/adminApi";
 import { normalizeChatModelSelection, type ChatModelSelection } from "./chatModelSelection";
+import { InlineLoading } from "../../components/LoadingSpinner";
 import {
   loadChatSessions,
   sameChatScope,
@@ -290,7 +291,7 @@ function ChatContent() {
           <button type="button" onClick={newConversation} aria-label="New task" title="New task">+</button>
         </div>
         <div className="chat-session-list">
-          {!hydrated || scopeState.loading ? <span className="chat-session-empty">Loading sessions…</span>
+          {!hydrated || scopeState.loading ? <InlineLoading label="Loading sessions…" />
             : scopedSessions.length === 0 ? <span className="chat-session-empty">No tasks in this scope yet.</span>
               : scopedSessions.map((item) => (
                 <div className={`chat-session-item${activeSessionId === item.id ? " active" : ""}`} key={item.id}>

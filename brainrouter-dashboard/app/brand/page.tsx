@@ -9,6 +9,7 @@ import { buildSVG } from "./buildSVG";
 import { useBrandExport } from "./useBrandExport";
 import { BrandControls } from "./BrandControls";
 import { Editor } from "./editor/Editor";
+import { InlineLoading } from "../../components/LoadingSpinner";
 
 const MODES: [Mode, string][] = [
   ["canvas", "Poster studio"],
@@ -34,7 +35,7 @@ export default function BrandStudioPage() {
   const { downloadSVG, downloadPNG, copySVG, busy, copied } = useBrandExport(cfg);
 
   if (isLoading) {
-    return <div style={{ padding: "48px", color: "var(--text-muted)" }}>Loading…</div>;
+    return <div style={{ padding: "48px" }}><InlineLoading label="Loading…" /></div>;
   }
   if (!user || !user.isAdmin) return null;
 

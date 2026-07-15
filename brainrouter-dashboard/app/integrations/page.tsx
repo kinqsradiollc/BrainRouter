@@ -15,6 +15,7 @@ import { PremiumButton } from "../../components/PremiumButton";
 import { adminApi, type IntegrationConfig, type IntegrationInput, type OrgSummary } from "../../lib/adminApi";
 import { ConnectorOAuthAppsCard } from "./ConnectorOAuthAppsCard";
 import { ConnectorRows } from "./ConnectorRows";
+import { InlineLoading } from "../../components/LoadingSpinner";
 
 interface FormState {
   appId: string;
@@ -222,7 +223,7 @@ function IntegrationsInner() {
             <span className="settings-badge settings-badge--muted">{items.length} configured</span>
           </div>
           {loading ? (
-            <div className="settings-empty-inline">Loading…</div>
+            <InlineLoading label="Loading…" />
           ) : items.length === 0 ? (
             <div className="settings-empty-inline">No GitHub App configured yet — add one below.</div>
           ) : (

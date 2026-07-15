@@ -10,6 +10,7 @@ import type { BlackboardItem } from "@kinqs/brainrouter-types";
 import { getClient } from "../../lib/client";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
+import { InlineLoading } from "../../components/LoadingSpinner";
 
 const STATUS_COLOR: Record<string, string> = {
   pending: "var(--color-stone-text)",
@@ -39,7 +40,7 @@ export default function BlackboardPage() {
           description="Check new knowledge candidates before they become part of the durable record. Keep useful items and reject the rest."
         />
         {error && <p style={{ color: "#E5675F", fontSize: "13px" }}>Could not load blackboard: {error}</p>}
-        {!items && !error && <p style={{ color: "var(--color-stone-text)", fontSize: "13px" }}>Loading…</p>}
+        {!items && !error && <InlineLoading label="Loading…" />}
         {items && items.length === 0 && (
           <p style={{ color: "var(--color-stone-text)", fontSize: "13px" }}>No staged candidates. Items appear here before they commit to long-term memory (0.4.3).</p>
         )}

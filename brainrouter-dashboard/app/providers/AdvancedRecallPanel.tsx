@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from "react";
 import { authFetch } from "../../lib/adminApi";
 import { PremiumCard } from "../../components/PremiumCard";
 import { PremiumButton } from "../../components/PremiumButton";
+import { InlineLoading } from "../../components/LoadingSpinner";
 
 interface RecallField {
   key: string;
@@ -83,7 +84,7 @@ export function AdvancedRecallPanel() {
 
       {error && <div className="settings-empty-inline">{error}</div>}
       {loading ? (
-        <div className="settings-empty-inline">Loading…</div>
+        <InlineLoading label="Loading…" />
       ) : (
         <>
           {fields.map((f) => {

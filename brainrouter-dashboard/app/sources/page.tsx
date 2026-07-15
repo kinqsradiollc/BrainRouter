@@ -16,6 +16,7 @@ import { KnowledgeScopePicker, useKnowledgeScope } from '../../components/Knowle
 import { PageHeader } from '../../components/PageHeader';
 import { PremiumButton } from '../../components/PremiumButton';
 import { brainApi } from '../../lib/brainApi';
+import { InlineLoading } from '../../components/LoadingSpinner';
 
 function SourcesContent() {
   const scopeState = useKnowledgeScope();
@@ -145,7 +146,7 @@ function SourcesContent() {
         </div>
       )}
       {scopeState.loading && !scopeState.error && (
-        <p style={{ color: 'var(--color-stone-text)', fontSize: '13px' }}>Loading sources…</p>
+        <InlineLoading label="Loading sources…" />
       )}
       {!scopeState.loading && scopedDocs.length === 0 && (
         <EmptyState
@@ -236,7 +237,7 @@ function SourcesContent() {
               {open && (
                 <div id={`source-chunks-${d.id}`} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {(loaded === undefined || loaded === 'loading') && (
-                    <p style={{ color: 'var(--color-stone-text)', fontSize: '12px', margin: 0 }}>Loading chunks…</p>
+                    <InlineLoading label="Loading chunks…" />
                   )}
                   {Array.isArray(loaded) && loaded.length === 0 && (
                     <p style={{ color: 'var(--color-stone-text)', fontSize: '12px', margin: 0 }}>No chunks.</p>

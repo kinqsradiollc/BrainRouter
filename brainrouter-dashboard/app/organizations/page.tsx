@@ -12,6 +12,7 @@ import { PageHeader } from "../../components/PageHeader";
 import { PremiumCard } from "../../components/PremiumCard";
 import { PremiumButton } from "../../components/PremiumButton";
 import { adminApi, ORG_PLANS, type OrgSummary, type OrgMember, type OrgPlan, type SharedMemory } from "../../lib/adminApi";
+import { InlineLoading } from "../../components/LoadingSpinner";
 
 const ROLES = ["owner", "admin", "member", "viewer"];
 const planLabel = (plan: string) => ORG_PLANS.find((p) => p.value === plan)?.label ?? plan;
@@ -223,7 +224,7 @@ function OrgsInner() {
       {/* List */}
       <div className="settings-stack">
         {loading ? (
-          <div className="settings-empty-inline">Loading organizations…</div>
+          <InlineLoading label="Loading organizations…" />
         ) : orgs.length === 0 ? (
           <div className="settings-empty-inline">You don&apos;t belong to any organization yet — create one above.</div>
         ) : orgs.map((org) => {
@@ -292,7 +293,7 @@ function OrgsInner() {
                 <div className="org-members">
                   <div className="org-members__title">Members</div>
                   {list === undefined ? (
-                    <div className="settings-empty-inline">Loading members…</div>
+                    <InlineLoading label="Loading members…" />
                   ) : list.length === 0 ? (
                     <div className="settings-empty-inline">No members yet — invite someone below.</div>
                   ) : list.map((m) => (
@@ -364,7 +365,7 @@ function OrgsInner() {
                     <div className="org-members" style={{ borderTop: "1px solid var(--border-dim)", marginTop: "var(--spacing-16)" }}>
                       <div className="org-members__title">Team artifacts ({(shared[org.orgId] ?? []).length})</div>
                       {shared[org.orgId] === undefined ? (
-                        <div className="settings-empty-inline">Loading…</div>
+                        <InlineLoading label="Loading…" />
                       ) : (shared[org.orgId] ?? []).length === 0 ? (
                         <div className="settings-empty-inline">Nothing shared with this team yet. Members share work with <code>memory:share</code>.</div>
                       ) : (shared[org.orgId] ?? []).map((m) => (

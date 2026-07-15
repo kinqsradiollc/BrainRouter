@@ -7,6 +7,7 @@ import { PageHeader } from "../../components/PageHeader";
 import { PremiumButton } from "../../components/PremiumButton";
 import { adminApi, type ReviewSummary } from "../../lib/adminApi";
 import { queryDashboard } from "../../lib/dashboardQuery";
+import { InlineLoading } from "../../components/LoadingSpinner";
 
 const EMPTY: ReviewSummary = {
   periodDays: 30,
@@ -60,7 +61,7 @@ function Overview() {
       <section className="overview-compact-grid" aria-label="Workspace status">
         <article className="overview-attention-panel">
           <header><span>Attention</span><Link href="/reviews">Open reviews <span aria-hidden>→</span></Link></header>
-          {loading ? <div className="overview-compact-empty">Loading workspace status…</div>
+          {loading ? <InlineLoading label="Loading workspace status…" />
             : summary.metrics.openIssues > 0 ? (
               <div className="overview-attention-state" data-state="attention">
                 <strong>{summary.metrics.openIssues}</strong>
@@ -81,7 +82,7 @@ function Overview() {
 
         <article className="overview-recent-panel">
           <header><span>Recent work</span><Link href="/fleet">View activity <span aria-hidden>→</span></Link></header>
-          {loading ? <div className="overview-compact-empty">Loading recent work…</div>
+          {loading ? <InlineLoading label="Loading recent work…" />
             : recent.length === 0 ? <div className="overview-compact-empty">No review activity yet. Start a task or connect a repository.</div>
               : <div className="overview-recent-list">{recent.map((day) => (
                 <div key={day.date}><time dateTime={day.date}>{new Date(`${day.date}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</time><span>{day.findings ? `${day.findings} finding${day.findings === 1 ? "" : "s"} recorded` : "No findings recorded"}</span></div>
@@ -98,7 +99,7 @@ function Overview() {
 
       <section className="overview-repositories">
         <header><div><span>Repositories</span><h2>Most active workspaces</h2></div><Link href="/projects">All projects <span aria-hidden>→</span></Link></header>
-        {loading ? <div className="overview-compact-empty">Loading repositories…</div>
+        {loading ? <InlineLoading label="Loading repositories…" />
           : repositories.length === 0 ? (
             <div className="overview-repository-empty"><span>No repository activity yet.</span><Link href="/integrations">Connect a repository</Link></div>
           ) : <div className="overview-repository-list">{repositories.map((repository) => (
