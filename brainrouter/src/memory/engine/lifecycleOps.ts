@@ -3,10 +3,9 @@ import type { IMemoryStore } from "@kinqs/brainrouter-types";
 import type { MemoryEngine } from "../engine.js";
 import { MemoryCapturePipeline } from "../capture.js";
 import { MemoryRecallPipeline } from "../recall.js";
-import { MemoryJobRunner, recordInlineJob } from "../scheduler/runner.js";
-import { EmbeddingService } from "../store/embedding.js";
+import { MemoryJobRunner } from "../scheduler/runner.js";
+import { EmbeddingService, DEFAULT_EMBEDDING_DIMENSIONS } from "../store/embedding.js";
 import { RerankerService } from "../store/reranker.js";
-import { RelevanceJudgeService } from "../store/relevance-judge.js";
 import { hashPassword } from "../../api/auth/crypto.js";
 
 /**
@@ -23,7 +22,6 @@ import { hashPassword } from "../../api/auth/crypto.js";
 export interface EngineServices {
   embeddingService: EmbeddingService;
   rerankerService: RerankerService;
-  relevanceJudge: RelevanceJudgeService;
   capturePipeline: MemoryCapturePipeline;
   recallPipeline: MemoryRecallPipeline;
 }
@@ -43,8 +41,9 @@ export function buildServices(
   resolveLlmRunner?: ConstructorParameters<typeof MemoryCapturePipeline>[4],
 ): EngineServices {
   const embeddingService = new EmbeddingService({
-    // dimensions is a SCHEMA knob (the pgvector column width), not a credential.
-    dimensions: process.env.BRAINROUTER_EMBEDDING_DIMENSIONS ? parseInt(process.env.BRAINROUTER_EMBEDDING_DIMENSIONS, 10) : undefined,
+    // No `dimensions` from env — the pgvector width is DB-driven: cognitive_vec
+    // adopts the running store's width at boot and the write path re-dimensions
+    // it to the live DB embedder's real output length. (See initVec + DEFAULT_EMBEDDING_DIMENSIONS.)
     timeoutMs: process.env.BRAINROUTER_EMBEDDING_TIMEOUT_MS
       ? parseInt(process.env.BRAINROUTER_EMBEDDING_TIMEOUT_MS, 10)
       : undefined,
@@ -59,25 +58,10 @@ export function buildServices(
       : undefined,
   });
 
-  // Relevance judge is opt-in (off by default) — enable with
-  // BRAINROUTER_RELEVANCE_JUDGE_ENABLED=true (an OPERATIONAL flag, since it adds
-  // a per-query LLM call). Its provider (endpoint/apiKey/model) comes from the DB
-  // "judge" provider via applyProviderOverrides; when no judge provider is set it
-  // is simply not ready. When enabled + configured it runs INLINE inside recall.
-  const relevanceJudge = new RelevanceJudgeService({
-    enabled: process.env.BRAINROUTER_RELEVANCE_JUDGE_ENABLED === "true",
-    maxCandidates: process.env.BRAINROUTER_RELEVANCE_JUDGE_MAX_CANDIDATES
-      ? parseInt(process.env.BRAINROUTER_RELEVANCE_JUDGE_MAX_CANDIDATES, 10)
-      : undefined,
-    timeoutMs: process.env.BRAINROUTER_RELEVANCE_JUDGE_TIMEOUT_MS
-      ? parseInt(process.env.BRAINROUTER_RELEVANCE_JUDGE_TIMEOUT_MS, 10)
-      : undefined,
-  });
-
   const capturePipeline = new MemoryCapturePipeline(store, extractionRunner, embeddingService, 1, resolveLlmRunner);
-  const recallPipeline = new MemoryRecallPipeline(store, embeddingService, rerankerService, relevanceJudge);
+  const recallPipeline = new MemoryRecallPipeline(store, embeddingService, rerankerService);
 
-  return { embeddingService, rerankerService, relevanceJudge, capturePipeline, recallPipeline };
+  return { embeddingService, rerankerService, capturePipeline, recallPipeline };
 }
 
 /** Private lifecycle state on the engine, reached via a narrow cast. */
@@ -87,7 +71,6 @@ type LifecycleState = {
   synthesisRunner: unknown;
   jobRunner?: MemoryJobRunner;
   recallPipeline: MemoryRecallPipeline;
-  relevanceJudgeLastJobAt: number;
   ensureSeedAdminUser(): Promise<void>;
   enqueueScheduledMaintenance(force?: boolean): Promise<unknown>;
   getPersona(userId: string): Promise<{ personaMd: string } | null>;
@@ -103,7 +86,11 @@ type LifecycleState = {
 export async function initialize(engine: MemoryEngine): Promise<void> {
   const self = engine as unknown as LifecycleState;
   await self.store.init();
-  await self.store.initVec(self.embeddingService.getDimensions());
+  // NON-DESTRUCTIVE at boot (allowRebuild:false): adopt the running store's own
+  // pgvector width rather than a guessed one, so a stale hint can never drop a
+  // populated cognitive_vec. A fresh store starts at DEFAULT_EMBEDDING_DIMENSIONS
+  // and the first write re-dimensions it to the live DB embedder's real length.
+  await self.store.initVec(DEFAULT_EMBEDDING_DIMENSIONS, { allowRebuild: false });
   await self.ensureSeedAdminUser().catch((err) => {
     console.error("[BrainRouter] Failed to seed admin user:", err instanceof Error ? err.message : err);
   });
@@ -169,32 +156,24 @@ export async function ensureSeedAdminUser(engine: MemoryEngine): Promise<void> {
 }
 
 /**
- * The `recall` decorator: run the recall pipeline, then (a) record a throttled
- * relevance-judge observability heartbeat when the judge actually ran, and (b)
- * splice the user persona into the recall result. Extracted verbatim from the
- * engine's `recall` getter.
+ * The `recall` decorator: run the recall pipeline, then splice the user persona
+ * into the recall result. Extracted verbatim from the engine's `recall` getter.
  */
 export async function recallWithDecorations(engine: MemoryEngine, params: Parameters<MemoryRecallPipeline['recall']>[0]) {
   const self = engine as unknown as LifecycleState;
-  const result = await self.recallPipeline.recall(params);
 
-  // MEM-10b — the relevance judge runs INLINE inside recall (request-scoped),
-  // so it never produced a job row → it showed "idle · never". Record a
-  // throttled observability heartbeat when the judge actually ran (the
-  // recall strategy is tagged "+judge"), so the agent reflects real activity
-  // without flooding the job table on every query.
-  if (typeof result.recallStrategy === "string" && result.recallStrategy.includes("judge")) {
-    const now = Date.now();
-    if (now - self.relevanceJudgeLastJobAt > 5 * 60_000) {
-      self.relevanceJudgeLastJobAt = now;
-      recordInlineJob(
-        self.store,
-        "relevance_judge",
-        { userId: params.userId, source: "recall" },
-        { strategy: result.recallStrategy, kept: result.recalledCognitiveMemories?.length ?? 0 },
-      );
-    }
-  }
+  // Layer the caller's org's saved recall-quality settings (dashboard → Advanced)
+  // UNDER any explicit per-call override (the benchmark's overrides still win).
+  // Empty when the org has none set, so this is a no-op for a default org.
+  const org = await engine.resolveRecallOverrides(params.filters?.orgId);
+  const merged = {
+    ...params,
+    limitsOverride: { ...org.limitsOverride, ...params.limitsOverride },
+    selectionOverride: { ...org.selectionOverride, ...params.selectionOverride },
+    rerankBlendAlphaOverride: params.rerankBlendAlphaOverride ?? org.rerankBlendAlphaOverride,
+    queryRoutingOverride: params.queryRoutingOverride ?? org.queryRoutingOverride,
+  };
+  const result = await self.recallPipeline.recall(merged);
 
   const persona = await self.getPersona(params.userId);
   if (persona) {

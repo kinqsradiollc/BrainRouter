@@ -16,12 +16,24 @@ export async function refreshAccessToken(): Promise<string | null> {
     if (!refreshToken) return null;
     refreshInFlight = (async () => {
       try {
-        const res = await new BrainRouterClient(BASE_URL).refresh(refreshToken);
-        setJwt(res.jwt);
-        if (res.refreshToken) setRefreshToken(res.refreshToken);
-        return res.jwt;
+        const response = await fetch(`${BASE_URL}/api/auth/refresh`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refreshToken }),
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!response.ok) {
+          if (response.status === 400 || response.status === 401 || response.status === 403) clearAll();
+          return null;
+        }
+        const refreshed = await response.json() as { jwt?: string; refreshToken?: string };
+        if (!refreshed.jwt) throw new Error("Refresh returned no access token");
+        setJwt(refreshed.jwt);
+        if (refreshed.refreshToken) setRefreshToken(refreshed.refreshToken);
+        return refreshed.jwt;
       } catch {
-        clearAll();
+        // Offline/timeout is not evidence that the refresh credential is bad.
+        // Keep it so a later request can recover without forcing a sign-in.
         return null;
       }
     })().finally(() => {

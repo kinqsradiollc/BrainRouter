@@ -9,7 +9,9 @@ import { PageHeader } from "../../../components/PageHeader";
 import { PremiumButton } from "../../../components/PremiumButton";
 import { PremiumCard } from "../../../components/PremiumCard";
 import { StatusBadge } from "../../../components/Analytics";
+import { AgentTraceGraph } from "../../../components/AgentTraceGraph";
 import { adminApi, type ReviewJob, type ReviewPullRequestDetail } from "../../../lib/adminApi";
+import { invalidateDashboardQueries, queryDashboard } from "../../../lib/dashboardQuery";
 import { REVIEW_ACTION_LABELS, reviewActionPresentation, safeReviewsReturnPath } from "../reviewPresentation";
 
 function lensName(lens: ReviewJob["lens"]): string {
@@ -83,7 +85,7 @@ function Detail() {
       return;
     }
     try {
-      const result = await adminApi.getReviewPr(repo, number, orgId);
+      const result = await queryDashboard(`review-pr:${orgId ?? "default"}:${repo}#${number}`, () => adminApi.getReviewPr(repo, number, orgId), { ttlMs: 60_000 });
       setPr(result.pr);
       setCanRun(result.canRun);
       setError("");
@@ -95,17 +97,49 @@ function Detail() {
   }, [validTarget, repo, number, orgId]);
 
   useEffect(() => { void load(); }, [load]);
+  const hasActiveReview = Boolean(pr?.reviews.some((review) => review.status === "pending" || review.status === "queued" || review.status === "running"));
   useEffect(() => {
-    if (!pr?.reviews.some((review) => review.status === "pending" || review.status === "queued" || review.status === "running")) return;
-    const timer = window.setInterval(() => void load(), 2000);
-    return () => window.clearInterval(timer);
-  }, [pr?.reviews, load]);
+    if (!hasActiveReview || !validTarget) return;
+    let cancelled = false;
+    let timer = 0;
+    let delay = 1000;
+    const pollActivity = async () => {
+      if (cancelled) return;
+      if (document.hidden) {
+        timer = window.setTimeout(() => void pollActivity(), 5000);
+        return;
+      }
+      let shouldContinue = true;
+      try {
+        const result = await adminApi.getReviewPrActivity(repo, number, orgId);
+        if (cancelled) return;
+        setPr((current) => current ? { ...current, reviews: result.reviews } : current);
+        setCanRun(result.canRun);
+        const stillActive = result.reviews.some((review) => review.status === "pending" || review.status === "queued" || review.status === "running");
+        shouldContinue = stillActive;
+      } catch {
+        // A transient local activity read should not replace the loaded PR with an error screen.
+      } finally {
+        if (!cancelled && shouldContinue) {
+          delay = Math.min(5000, delay + 1000);
+          timer = window.setTimeout(() => void pollActivity(), delay);
+        }
+      }
+    };
+    timer = window.setTimeout(() => void pollActivity(), 750);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [hasActiveReview, validTarget, repo, number, orgId]);
 
   const run = async (lens: "security" | "code" | "both") => {
     setBusy(lens);
     setError("");
     try {
       await adminApi.runReview({ repo, prNumber: number, lens }, orgId);
+      invalidateDashboardQueries(`review-pr:${orgId ?? "default"}:${repo}#${number}`);
+      invalidateDashboardQueries(`review-prs:${orgId ?? ""}`);
       await load();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Failed to queue review");
@@ -147,6 +181,8 @@ function Detail() {
             {pr.reviews.length ? pr.reviews.map((review) => <ReviewFindingsCard key={review.id} review={review} />) : (
               <EmptyState title="No reviews yet" description="Run Security review, Code review, or both. Automatic repository enrollment is not required for an on-demand review." />
             )}
+            <div className="review-detail__section-head"><div><span>Review execution</span><h2>Agent Trace</h2></div><span>Live</span></div>
+            <AgentTraceGraph reviews={pr.reviews} />
           </main>
 
           <aside className="review-detail__aside" aria-label="Pull request review metadata">

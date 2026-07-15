@@ -1,16 +1,14 @@
 import type { IMemoryStore } from "@kinqs/brainrouter-types";
-import type { RecallResult, CognitiveFtsResult, RecalledMemory, VectorSearchResult, CognitiveRecord, RecallExplanation, RelevanceVerdict } from "@kinqs/brainrouter-types";
+import type { RecallResult, CognitiveFtsResult, RecalledMemory, VectorSearchResult, CognitiveRecord, RecallExplanation } from "@kinqs/brainrouter-types";
 import type { EmbeddingService } from "../store/embedding.js";
 import type { RerankerService } from "../store/reranker.js";
 import { rerankerMaxDocChars } from "../store/reranker.js";
-import type { RelevanceJudgeService } from "../store/relevance-judge.js";
 import { expandRecallWithGraph } from "../pipeline/graph/graph-recall.js";
 import { detectPrewarmSkills, buildPrewarmBlock } from "../pipeline/skill/skill-prewarm.js";
 import { detectTaskIntent, extractFilePathHints, getMemoryTypeConfig } from "../config/memory-type-config.js";
 import { randomUUID } from "node:crypto";
 import { NeuralSparkEngine } from "../pipeline/skill/neural-spark.js";
 import { gatherRecordRefs, formatRefHint, type RecordRefsStore } from "../util/recall-refs.js";
-import { isExternalTimeoutError } from "../llm/llm-response.js";
 import {
   applyRecallCompression,
   readRecallCompressionConfig,
@@ -35,10 +33,6 @@ import {
 import {
   readRecallLimits,
   readRecallSelection,
-  readJudgeMinKeep,
-  applyJudgeFloor,
-  readJudgeMode,
-  reorderApprovedFirst,
   readRerankBlendAlpha,
   blendByRank,
   readRerankCharBudget,
@@ -70,7 +64,6 @@ export class MemoryRecallPipeline {
     private store: IMemoryStore,
     private embeddingService: EmbeddingService,
     private rerankerService: RerankerService,
-    private relevanceJudge?: RelevanceJudgeService,
   ) { }
 
   public async recall(params: {
@@ -89,10 +82,15 @@ export class MemoryRecallPipeline {
      */
     limitsOverride?: Partial<RecallLimits>;
     selectionOverride?: Partial<RecallSelection>;
-    /** MEM-19 — force-disable the reranker / relevance-judge stages for this
-     * call (the benchmark's baseline vs rerank/judge modes). */
+    /** Per-call reranker-blend override (0..1). Used by per-org recall settings;
+     *  falls back to BRAINROUTER_RECALL_RERANK_BLEND_ALPHA when undefined. */
+    rerankBlendAlphaOverride?: number;
+    /** Per-call reflective-query-routing override. Used by per-org recall
+     *  settings; falls back to BRAINROUTER_RECALL_QUERY_ROUTING when undefined. */
+    queryRoutingOverride?: boolean;
+    /** MEM-19 — force-disable the reranker stage for this call (the benchmark's
+     * baseline vs rerank modes). */
     disableReranker?: boolean;
-    disableJudge?: boolean;
   }): Promise<RecallResult> {
     const startTime = Date.now();
     const { userId, sessionKey, query, activeSkill, filters } = params;
@@ -379,8 +377,9 @@ export class MemoryRecallPipeline {
 
     // MEM-ROUTE (0.4.14) — skip the cross-encoder for reflective/analytical
     // queries; their low-overlap gold retrieves better without it (it gets
-    // demoted), so they fall through to the MMR + recall-safe judge path below.
-    const routeReflective = readQueryRoutingEnabled() && isReflectiveQuery(query);
+    // demoted), so they fall through to the MMR selection path below.
+    const queryRoutingEnabled = params.queryRoutingOverride ?? readQueryRoutingEnabled();
+    const routeReflective = queryRoutingEnabled && isReflectiveQuery(query);
     // isAvailable() (not isReady) so a tripped circuit breaker skips the
     // cross-encoder entirely during its cooldown — recall uses RRF with no
     // per-call network wait, instead of paying the reranker timeout every turn.
@@ -418,7 +417,7 @@ export class MemoryRecallPipeline {
           }
         });
         const outN = Math.max(1, this.rerankerService.getTopN());
-        const headOrder = blendByRank(rerankRank, readRerankBlendAlpha());
+        const headOrder = blendByRank(rerankRank, params.rerankBlendAlphaOverride ?? readRerankBlendAlpha());
         topResults = [...headOrder.map((i) => head[i]), ...tail].slice(0, outN);
         usedReranker = true;
       } catch (e) {
@@ -442,61 +441,6 @@ export class MemoryRecallPipeline {
       });
       topResults = selectMMR(mmrCandidates, limits.topResults, selection.lambda);
       usedLexicalSelection = true;
-    }
-
-    // Stage 4 — LLM Relevance Judge (semantic approve/reject gate)
-    //
-    // The reranker orders candidates by a learned relevance score but never
-    // *filters* — so a memory that shares vocabulary with the query but is
-    // about a different subject still makes the cut. The judge fixes that by
-    // asking a fast LLM "is each of these actually relevant?" and dropping
-    // the rejects. On any failure we keep the reranker output unchanged so a
-    // flaky judge call never breaks recall.
-    let judgeUsed = false;
-    let judgeApproved = 0;
-    let judgeRejected = 0;
-    let judgeVerdicts: RelevanceVerdict[] | undefined;
-
-    if (this.relevanceJudge?.isReady() && !params.disableJudge && topResults.length > 0) {
-      try {
-        const judgeCandidates = topResults.map(r => ({
-          id: r.record.record_id,
-          content: r.record.content,
-        }));
-        const judgeResult = await this.relevanceJudge.judge({
-          query,
-          candidates: judgeCandidates,
-          orgId: filters?.orgId,
-        });
-        judgeUsed = true;
-        judgeVerdicts = judgeResult.verdicts;
-        judgeApproved = judgeResult.approvedIndices.length;
-        judgeRejected = topResults.length - judgeApproved;
-        // MEM-JUDGE2 (0.4.14) — apply the verdicts recall-safely. Default
-        // "reorder" keeps every candidate and just promotes the approved ones,
-        // so the top-K slice gains precision without losing recall (fixes the
-        // long-session R@5=R@10=R@20 collapse). "filter" restores the legacy
-        // drop-the-rejects behavior, floored by MIN_KEEP so it can't hit 0.
-        const preJudge = topResults;
-        if (readJudgeMode() === "filter") {
-          const approvedResults = judgeResult.approvedIndices.map((i) => preJudge[i]);
-          topResults = applyJudgeFloor(preJudge, approvedResults, readJudgeMinKeep());
-        } else {
-          topResults = reorderApprovedFirst(preJudge, judgeResult.approvedIndices);
-        }
-      } catch (e) {
-        // Locally-hosted LLMs (LM Studio, Ollama) timing out on the
-        // relevance judge isn't a server bug — it just means the
-        // judge model is slow. Tone the message down to a single warn
-        // line (no stack trace) so it doesn't dump several frames of
-        // noise into the CLI's terminal on every recall. Non-timeout
-        // failures still get the full error for diagnostics.
-        if (isExternalTimeoutError(e)) {
-          console.warn("[BrainRouter] Relevance judge timed out; keeping reranker output.");
-        } else {
-          console.error("[BrainRouter] Relevance judge failed during recall, keeping reranker output:", (e as Error).message);
-        }
-      }
     }
 
     // MEM-17 — gather expansion refs (source chunks + covering tree node) once
@@ -534,7 +478,7 @@ export class MemoryRecallPipeline {
       return line;
     });
 
-    // If the judge rejected everything, skip the prepend block entirely —
+    // If nothing survived selection, skip the prepend block entirely —
     // an empty <relevant-memories> tag is worse than no tag because it
     // implies "we looked and nothing helped," which the agent should infer
     // from the absence of the block.
@@ -622,7 +566,7 @@ export class MemoryRecallPipeline {
     // Surface the 0.4.3 local selection stage in the strategy label (no shared-
     // type change): "+lexmmr" = lexical-relevance demotion + MMR diversity ran.
     const selectStrategy = usedLexicalSelection ? `${baseStrategy}+lexmmr` : baseStrategy;
-    const recallStrategy = judgeUsed ? `${selectStrategy}+judge` : selectStrategy;
+    const recallStrategy = selectStrategy;
 
     const durationMs = Date.now() - startTime;
 
@@ -636,10 +580,6 @@ export class MemoryRecallPipeline {
       skillBoostApplied,
       rerankerUsed: usedReranker,
       diversityApplied: usedLexicalSelection,
-      judgeUsed,
-      judgeApproved,
-      judgeRejected,
-      judgeVerdicts,
       graphExpansion: hasGraphExpansion,
       citationBoosts,
       durationMs,
@@ -703,9 +643,6 @@ export class MemoryRecallPipeline {
           vecHits: explanation?.vecHits ?? 0,
           intentDetected: explanation?.intentDetected ?? "none",
           rerankerUsed: explanation?.rerankerUsed ?? false,
-          judgeUsed: explanation?.judgeUsed ?? false,
-          judgeApproved: explanation?.judgeApproved ?? 0,
-          judgeRejected: explanation?.judgeRejected ?? 0,
         },
       });
     } catch {

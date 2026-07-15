@@ -15,7 +15,7 @@
  *   ./memory/session.ts     — federation sessions, inbox, delegation
  *   ./memory/operations.ts  — evidence, operations, import/export, diagnostics
  *   ./memory/search.ts      — vector/FTS search, recall, capture results
- *   ./memory/services.ts    — embedding/reranker/judge configs, users, LLM runner
+ *   ./memory/services.ts    — embedding/reranker configs, users, LLM runner
  *   ./memory/scheduler.ts   — focus/identity/contradiction + scheduler state
  *   ./memory/graph.ts       — GraphRAG nodes/edges + analytics
  *   ./memory/agents.ts      — brain-agent registry, job queue, blackboard items

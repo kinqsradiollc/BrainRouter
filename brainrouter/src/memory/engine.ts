@@ -34,10 +34,10 @@ import { systemProviderOrgId } from "../providers/runtime.js";
 import { modelGateway } from "../services/modelGateway/modelGateway.js";
 import { MemoryCapturePipeline } from "./capture.js";
 import { MemoryRecallPipeline } from "./recall.js";
+import { normalizeRecallSettings, recallSettingsToOverrides, type RecallOverrides } from "./recall/orgRecallSettings.js";
 import { MemoryJobRunner } from "./scheduler/runner.js";
 import { EmbeddingService } from "./store/embedding.js";
 import { RerankerService } from "./store/reranker.js";
-import { RelevanceJudgeService } from "./store/relevance-judge.js";
 import { scanSkillsForHints } from "./skills/skill-hints-loader.js";
 import { distillFocusScenes } from "./pipeline/focus/contextual-focus-builder.js";
 import { planGovernance, planStorageGovernance, type GovernancePlanFilters, type GovernancePlanResult, type StorageGovernanceStats, type StorageGovernanceResult } from "./governance/governance-plan.js";
@@ -66,9 +66,8 @@ export class MemoryEngine {
   public readonly ready: Promise<void>;
   private capturePipeline: MemoryCapturePipeline;
   private recallPipeline: MemoryRecallPipeline;
-  /** MEM-19 — kept to query reranker/judge readiness when picking benchmark modes. */
+  /** MEM-19 — kept to query reranker readiness when picking benchmark modes. */
   private rerankerService!: RerankerService;
-  private relevanceJudge!: RelevanceJudgeService;
   private embeddingService!: EmbeddingService; // MEM-VEC — reused for embed-on-import
   private extractionRunner: LLMRunner;
   private synthesisRunner: LLMRunner;
@@ -131,7 +130,7 @@ export class MemoryEngine {
 
     // REFAC-ENGINE-SPLIT (0.4.17) — every env-configured service + pipeline is
     // built in lifecycleOps.buildServices; the engine just wires the results
-    // onto its fields (readiness of the reranker/judge/embedder still drives
+    // onto its fields (readiness of the reranker/embedder still drives
     // benchmark modes + embed-on-import).
     const svc = lifecycleOps.buildServices(
       this.store,
@@ -145,8 +144,6 @@ export class MemoryEngine {
     this.recallPipeline = svc.recallPipeline;
     this.rerankerService = svc.rerankerService; // MEM-19 — readiness drives benchmark mode selection
     this.embeddingService = svc.embeddingService; // MEM-VEC — embed-on-import reuse
-    this.relevanceJudge = svc.relevanceJudge;
-    this.relevanceJudge.setRunnerResolver((orgId) => this.modelRunner("judge", orgId));
 
     // ADR-007 Phase 2 (step 3) — single awaited init chain. With Postgres the
     // store is genuinely async, so migrations + vec init + seed-admin must be
@@ -177,6 +174,19 @@ export class MemoryEngine {
     // providers are DB-only; the env vars are dead.
     try { await seedProvidersFromEnv(this.providers, systemProviderOrgId()); } catch { /* best-effort */ }
     await this.applyProviderOverrides();
+
+    // ONE accurate provider summary, logged once here (NOT in the service ctors /
+    // reconfigure, which fire on every boot + every admin save). Silent when both
+    // vector stages are on; a single nudge when one is missing (recall still runs,
+    // degraded to FTS / RRF).
+    const embOn = this.embeddingService.isReady();
+    const rerOn = this.rerankerService.isReady();
+    if (!embOn || !rerOn) {
+      console.error(
+        `[BrainRouter] Providers: embedding ${embOn ? "on" : "OFF (vector search disabled)"}, ` +
+        `reranking ${rerOn ? "on" : "OFF (RRF only)"} — configure in dashboard → AI Providers.`,
+      );
+    }
   }
 
   /**
@@ -229,8 +239,8 @@ export class MemoryEngine {
   // vault ~hourly (every 12th pass) since it rescans records each run.
   private maintenanceLastAt = 0;
   private maintenancePass = 0;
-  /** MEM-10b — throttle for the relevance_judge observability heartbeat. */
-  private relevanceJudgeLastJobAt = 0;
+  /** Per-org recall-settings overrides, cached briefly (see resolveRecallOverrides). */
+  private recallOverridesCache = new Map<string, { overrides: RecallOverrides; expiresAt: number }>();
 
   /** MEM-10 — auto-enqueue the throttled maintenance depth agents per active user; see engine/maintenanceOps.ts. */
   public enqueueScheduledMaintenance(force = false): Promise<{ enqueued: Record<string, number>; skipped?: boolean }> {
@@ -418,6 +428,31 @@ export class MemoryEngine {
     return this.store as unknown as EmailAuthStore;
   }
 
+  /**
+   * Per-org recall-quality settings (dashboard → Intelligence → Advanced), mapped
+   * to recall pipeline override params and cached ~60s so recall doesn't hit the
+   * settings KV every turn. Returns `{}` when the org has none set — recall then
+   * uses the `BRAINROUTER_RECALL_*` env / built-in defaults exactly as before.
+   */
+  public async resolveRecallOverrides(orgId?: string): Promise<RecallOverrides> {
+    if (!orgId) return {};
+    const now = Date.now();
+    const hit = this.recallOverridesCache.get(orgId);
+    if (hit && hit.expiresAt > now) return hit.overrides;
+    let overrides: RecallOverrides = {};
+    try {
+      const raw = await this.emailAuth.getSetting<unknown>(`recallSettings:${orgId}`);
+      if (raw) overrides = recallSettingsToOverrides(normalizeRecallSettings(raw));
+    } catch { /* settings store unavailable → env/defaults */ }
+    this.recallOverridesCache.set(orgId, { overrides, expiresAt: now + 60_000 });
+    return overrides;
+  }
+
+  /** Drop the cached recall overrides for an org (call after an admin save). */
+  public invalidateRecallOverrides(orgId: string): void {
+    this.recallOverridesCache.delete(orgId);
+  }
+
   /** The active embedding dimension (0 if unbuilt) — for the embedder-swap guard. */
   public getEmbeddingDimensions(): number {
     const s = this.store as unknown as { getVecDimensions?: () => number };
@@ -471,7 +506,7 @@ export class MemoryEngine {
 
   /**
    * ADR-010 P2 — the ".env retired" cutover. Resolve the system org's DB provider
-   * configs (llm/embedding/reranker/judge) and apply any that exist over the
+   * configs (llm/embedding/reranker) and apply any that exist over the
    * env-built singletons. Applied ONLY when a DB row exists (source==='db'), so an
    * env-only deployment is byte-identical to before. Called after seed on startup
    * and after an admin writes a provider config (so it takes effect without a
@@ -483,7 +518,7 @@ export class MemoryEngine {
     try {
       const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
       // Brain agent-models (BRAIN_AGENT_ROLES): per-role model overrides on the
-      // shared LLM provider (extraction / synthesis / judge are brain sub-agents).
+      // shared LLM provider (extraction / synthesis are brain sub-agents).
       const assigns = (await this.emailAuth.getSetting<Record<string, { provider?: string; model?: string; maxDiffChars?: number; timeoutMs?: number }>>(`agentModels:${orgId}`)) ?? {};
       const bind = async (runner: LLMRunner, role: string) => {
         // Managed model when configured, else the org's DB provider (backward-compat).
@@ -502,7 +537,6 @@ export class MemoryEngine {
         };
       }
       modelGateway.configureScoped("llm", true);
-      modelGateway.configureScoped("judge", true);
       const emb = await resolveProviderConfig(store, orgId, "embedding");
       if (emb?.source === "db") this.embeddingService.reconfigure({ endpoint: emb.endpoint, apiKey: emb.apiKey, model: emb.model });
       if (emb) modelGateway.configure("embedding", { endpoint: emb.endpoint, apiKey: emb.apiKey, model: emb.model });

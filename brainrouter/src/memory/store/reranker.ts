@@ -102,11 +102,11 @@ export class RerankerService {
     this.breakerThreshold = rerankerBreakerThreshold();
     this.breakerCooldownMs = rerankerBreakerCooldownMs();
 
-    // Graceful fallback: If no API key is provided, disable the reranker service.
+    // Providers live in the DB (dashboard → AI Providers), applied a moment later
+    // by applyProviderOverrides → reconfigure(). Starting unconfigured is the
+    // EXPECTED ADR-012 path, not a fault — stay silent here. A single accurate
+    // provider summary is logged once after applyProviderOverrides settles.
     this.ready = !!this.apiKey;
-    if (!this.ready) {
-      console.error("[BrainRouter] Reranker API key not set. Stage 3 reranking will be disabled. Falling back to RRF-only mode.");
-    }
   }
 
   isReady(): boolean {
@@ -118,7 +118,11 @@ export class RerankerService {
     if (cfg.endpoint) this.endpoint = cfg.endpoint;
     if (cfg.apiKey) this.apiKey = cfg.apiKey;
     if (cfg.model) this.model = cfg.model;
-    this.ready = !!this.apiKey;
+    // A DB-configured reranker is intentional: ready with a valid endpoint + model
+    // even WITHOUT an api key — a local reranker (bge-reranker, etc.) is keyless.
+    // Silent: reconfigure() runs on every admin provider save, so the boot summary
+    // (engine) is the one place that reports readiness, once.
+    this.ready = !!(this.endpoint && this.model);
   }
 
   /**

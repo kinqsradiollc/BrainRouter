@@ -4,9 +4,9 @@
  * backend service `kind`.
  */
 
-/** The four backend AI service roles a provider config can back. */
-export type ProviderKind = "llm" | "embedding" | "reranker" | "judge";
-export const PROVIDER_KINDS: readonly ProviderKind[] = ["llm", "embedding", "reranker", "judge"];
+/** The backend AI service roles a provider config can back. */
+export type ProviderKind = "llm" | "embedding" | "reranker";
+export const PROVIDER_KINDS: readonly ProviderKind[] = ["llm", "embedding", "reranker"];
 
 export function isProviderKind(x: unknown): x is ProviderKind {
   return typeof x === "string" && (PROVIDER_KINDS as readonly string[]).includes(x);

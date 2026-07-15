@@ -5,7 +5,7 @@
  * Providers tab: a catalog gallery → a setup MODAL that pre-fills the endpoint,
  * fetches the models the key unlocks, and lets you tick an allowlist + mark ONE
  * ★ preferred (the default) — no manual model typing. Subagents tab: route the
- * brain's workers (extraction / synthesis / judge) to models on the LLM provider.
+ * brain's workers (extraction / synthesis) to models on the LLM provider.
  * Admin-only (RBAC: providers:manage). Keys are write-only.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -17,11 +17,11 @@ import { PremiumCard } from "../../components/PremiumCard";
 import { PremiumButton } from "../../components/PremiumButton";
 import { adminApi, type ProviderConfig, type ProviderKind } from "../../lib/adminApi";
 import { ManagedModelsPanel } from "./ManagedModelsPanel";
+import { AdvancedRecallPanel } from "./AdvancedRecallPanel";
 
-// Judge is NOT a provider kind — it's a brain sub-agent (Subagents tab). The
-// configurable provider kinds are the LLM + the two vector stages.
+// The configurable provider kinds are the LLM + the two vector stages.
 const KINDS: { kind: ProviderKind; label: string; hint: string }[] = [
-  { kind: "llm", label: "LLM", hint: "Extraction, synthesis & judging" },
+  { kind: "llm", label: "LLM", hint: "Extraction & synthesis" },
   { kind: "embedding", label: "Embeddings", hint: "Vector recall" },
   { kind: "reranker", label: "Reranker", hint: "Cross-encoder rescoring" },
 ];
@@ -29,13 +29,14 @@ const REASONING = ["", ...MODEL_REASONING_EFFORTS];
 
 // Brain sub-agent roles (packages/core BRAIN_AGENT_ROLES) — the list arrives from
 // the backend; these are the labels. Each picks a model on the LLM provider.
-const ROLE_LABELS: Record<string, string> = { extraction: "Extraction", synthesis: "Synthesis", judge: "Relevance judge", "security-review": "🛡️ Security review", "code-review": "🔎 Code review" };
+const ROLE_LABELS: Record<string, string> = { extraction: "Extraction", synthesis: "Synthesis", "security-review": "🛡️ Security review", "code-review": "🔎 Code review", pentest: "🧪 Pentest", "meeting-summary": "🗒️ Meeting summary" };
 const ROLE_DESC: Record<string, string> = {
   extraction: "Distills memories from each turn.",
   synthesis: "Identity distillation, digests & summaries.",
-  judge: "Filters retrieved memories for real relevance.",
   "security-review": "Gating PR security reviewer. Inherits the base LLM when unset.",
   "code-review": "Advisory PR code reviewer. Inherits the base LLM when unset.",
+  pentest: "White-box pentest reviewer. Inherits the base LLM when unset.",
+  "meeting-summary": "Summarizes meeting transcripts into decisions + action items. Inherits the base LLM when unset.",
 };
 type AgentAssign = { provider?: string; model?: string; maxDiffChars?: number; timeoutMs?: number };
 
@@ -63,7 +64,7 @@ function ProvidersInner() {
   const [canManageProviders, setCanManageProviders] = useState(true);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"managed" | "personal" | "subagents">("managed");
+  const [tab, setTab] = useState<"managed" | "personal" | "subagents" | "advanced">("managed");
   const [galleryKind, setGalleryKind] = useState<ProviderKind>("llm");
 
   // Modal state.
@@ -224,9 +225,12 @@ function ProvidersInner() {
         <button type="button" role="tab" aria-selected={tab === "managed"} className={`models-tab ${tab === "managed" ? "models-tab--active" : ""}`} onClick={() => setTab("managed")}>Managed models</button>
         <button type="button" role="tab" aria-selected={tab === "personal"} disabled={!canManageProviders} title={canManageProviders ? undefined : "Organization administrators manage provider custody"} className={`models-tab ${tab === "personal" ? "models-tab--active" : ""}`} onClick={() => setTab("personal")}>Personal / BYOK</button>
         <button type="button" role="tab" aria-selected={tab === "subagents"} disabled={!canManageProviders} title={canManageProviders ? undefined : "Organization administrators manage subagent routing"} className={`models-tab ${tab === "subagents" ? "models-tab--active" : ""}`} onClick={() => setTab("subagents")}>Subagents</button>
+        <button type="button" role="tab" aria-selected={tab === "advanced"} disabled={!canManageProviders} title={canManageProviders ? undefined : "Organization administrators manage recall tuning"} className={`models-tab ${tab === "advanced" ? "models-tab--active" : ""}`} onClick={() => setTab("advanced")}>Advanced</button>
       </div>
 
       {tab === "managed" && <ManagedModelsPanel providers={providers} />}
+
+      {tab === "advanced" && canManageProviders && <AdvancedRecallPanel />}
 
       {tab === "personal" && canManageProviders && (
         <>

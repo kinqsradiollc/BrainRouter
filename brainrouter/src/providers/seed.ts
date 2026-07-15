@@ -1,7 +1,7 @@
 /**
  * One-time env → DB provider seed (ADR-012 migration). The runtime no longer
  * reads `BRAINROUTER_*` provider vars, so a deployment upgrading from the old
- * `.env` world would suddenly have no LLM/embedding/reranker/judge provider.
+ * `.env` world would suddenly have no LLM/embedding/reranker provider.
  *
  * To make the cutover non-breaking, on boot we migrate any legacy env provider
  * into the system org's DB config ONCE — but only for a kind that has NO DB

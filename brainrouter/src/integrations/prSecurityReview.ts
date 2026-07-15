@@ -30,7 +30,7 @@ import {
   type ReviewLens,
   type VulnerabilityIntelligenceResult,
 } from '@kinqs/brainrouter-core/review';
-import type { LLMRunner } from '@kinqs/brainrouter-types';
+import type { LLMRunner, MemoryJobProgressEvent } from '@kinqs/brainrouter-types';
 import { resolveReviewPolicy } from './githubWebhook.js';
 
 export interface PrReviewInput {
@@ -60,12 +60,20 @@ export interface PrReviewDeps {
   maxDiffChars?: number;
   timeoutMs?: number;
   /** Best-effort durable job activity callback (must never affect review output). */
-  onProgress?: (event: { kind: string; msg: string; data?: Record<string, unknown> }) => void;
+  onProgress?: (event: Omit<MemoryJobProgressEvent, "ts">) => void;
   /**
    * Best-effort current vulnerability catalog. Injected by the worker so unit
    * tests never use the network and an unavailable feed never blocks reviews.
    */
   getVulnerabilityIntelligence?: () => Promise<VulnerabilityIntelligenceResult | null>;
+  /**
+   * Preferred persisted catalog/exposure context. The worker supplies org and
+   * repository scope; no review-time public-feed fetch is performed.
+   */
+  getVulnerabilityContext?: (input: { orgId?: string; repo: string; diff: string }) => Promise<{
+    text: string;
+    metadata: { sources: number; unhealthySources: number; exactExposures: number; diffReferencedCves: number; freshestSuccessAt: string | null };
+  }>;
 }
 
 export interface PrReviewFindingDetail {
@@ -172,10 +180,42 @@ export function runPrPentest(input: PrReviewInput, deps: PrReviewDeps): Promise<
   return runPrReview(input, deps, PENTEST_LENS);
 }
 
+function tracePhase(kind: string): string {
+  if (kind === 'queued' || kind.startsWith('token-')) return 'authorization';
+  if (kind === 'head-resolved' || kind === 'diff-fetched') return 'context';
+  if (kind.startsWith('intelligence-')) return 'intelligence';
+  if (kind.startsWith('llm-')) return 'analysis';
+  if (kind === 'findings-parsed') return 'findings';
+  if (kind.endsWith('-posted') || kind === 'approved') return 'publishing';
+  if (kind === 'done' || kind === 'error') return 'terminal';
+  return 'activity';
+}
+
+function traceStatus(kind: string): MemoryJobProgressEvent["status"] {
+  if (kind === 'error') return 'failed';
+  if (kind.endsWith('-unavailable')) return 'skipped';
+  if (kind === 'queued' || kind.endsWith('-started')) return 'running';
+  return 'succeeded';
+}
+
 /** Run one review lens end-to-end: diff → LLM → inline suggestions + summary + check-run. */
 export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens: ReviewLens): Promise<PrReviewResult> {
   const progress = (kind: string, msg: string, data?: Record<string, unknown>) => {
-    try { deps.onProgress?.({ kind, msg, ...(data ? { data } : {}) }); } catch { /* observability is best effort */ }
+    const phase = tracePhase(kind);
+    const durationMs = typeof data?.ms === 'number' ? data.ms : undefined;
+    try {
+      deps.onProgress?.({
+        kind,
+        msg,
+        ...(data ? { data } : {}),
+        traceId: `pr:${String(input.repo ?? '').trim()}#${Number(input.prNumber)}`,
+        spanId: `${lens.id}:${phase}`,
+        parentSpanId: lens.id,
+        role: lens.id,
+        status: traceStatus(kind),
+        ...(durationMs !== undefined ? { durationMs } : {}),
+      });
+    } catch { /* observability is best effort */ }
   };
   progress("queued", `${lens.name} review started`);
   const repo = String(input.repo ?? '').trim();
@@ -267,7 +307,15 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
   const cap = deps.maxDiffChars ?? 60_000;
   progress("diff-fetched", "PR diff fetched", { bytes: diff.length, truncated: diff.length > cap, files: addedLinesByPath(diff).size });
   let intelligenceContext = '';
-  if ((lens.id === 'security' || lens.id === 'code') && deps.getVulnerabilityIntelligence) {
+  if ((lens.id === 'security' || lens.id === 'code') && deps.getVulnerabilityContext) {
+    try {
+      const intelligence = await deps.getVulnerabilityContext({ orgId: input.orgId, repo, diff: diff.slice(0, cap) });
+      intelligenceContext = intelligence.text;
+      progress('intelligence-ready', 'Persisted vulnerability catalog and exact exposure loaded', intelligence.metadata);
+    } catch {
+      progress('intelligence-unavailable', 'Persisted vulnerability intelligence unavailable; continuing evidence-only review');
+    }
+  } else if ((lens.id === 'security' || lens.id === 'code') && deps.getVulnerabilityIntelligence) {
     try {
       const intelligence = await deps.getVulnerabilityIntelligence();
       if (intelligence) {

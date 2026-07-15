@@ -13,15 +13,15 @@ function mockResponse(body: unknown, status = 200) {
 
 afterEach(() => {
   vi.unstubAllGlobals();
-  for (const k of ["llm", "embedding", "reranker", "judge"] as const) modelGateway.configure(k, null);
+  for (const k of ["llm", "embedding", "reranker"] as const) modelGateway.configure(k, null);
 });
 
 describe("MODEL-GATEWAY — the single gateway all model providers route through", () => {
   it("snapshot() reports which kinds are registered", () => {
-    expect(modelGateway.snapshot()).toEqual({ llm: false, embedding: false, reranker: false, judge: false });
+    expect(modelGateway.snapshot()).toEqual({ llm: false, embedding: false, reranker: false });
     modelGateway.configure("llm", { endpoint: "https://api.openai.com/v1", model: "gpt-4o-mini" });
     modelGateway.configure("embedding", { endpoint: "https://api.openai.com/v1" });
-    expect(modelGateway.snapshot()).toEqual({ llm: true, embedding: true, reranker: false, judge: false });
+    expect(modelGateway.snapshot()).toEqual({ llm: true, embedding: true, reranker: false });
     expect(modelGateway.isConfigured("llm")).toBe(true);
   });
 
@@ -51,9 +51,9 @@ describe("MODEL-GATEWAY — the single gateway all model providers route through
   });
 
   it("chat(kind) resolves the registered provider + dispatches through the gateway", async () => {
-    modelGateway.configure("judge", { endpoint: "https://api.openai.com/v1", apiKey: "k", model: "judge-model" });
+    modelGateway.configure("llm", { endpoint: "https://api.openai.com/v1", apiKey: "k", model: "gpt-4o-mini" });
     vi.stubGlobal("fetch", vi.fn(async () => mockResponse({ choices: [{ message: { content: "yes" } }] })));
-    const out = await modelGateway.chat("judge", { messages: [{ role: "user", content: "relevant?" }] });
+    const out = await modelGateway.chat("llm", { messages: [{ role: "user", content: "relevant?" }] });
     expect(out).toBe("yes");
   });
 

@@ -1,6 +1,6 @@
 /**
  * Request-timeout policy for the memory pipeline's outbound calls (reranker,
- * embedding, relevance judge, generative extraction).
+ * embedding, generative extraction).
  *
  * CONTRACT (0.4.15+): by default these calls have NO client-side timeout. Recall
  * and extraction WAIT for the server however long it takes; only a *genuine*

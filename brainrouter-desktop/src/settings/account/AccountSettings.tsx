@@ -11,6 +11,19 @@ interface Account { url: string; userId: string; displayName: string; email: str
 interface SessionRow { clientKind: string; workspaceRoot?: string; startedAt?: string; lastHeartbeatAt?: string }
 interface Overview { signedIn: boolean; orgId?: string; orgName?: string; plan?: string; role?: string; sessions: SessionRow[] }
 
+// Settings pages can unmount when the user changes category. Keep the last
+// credential-free account view in renderer memory so reopening never regresses
+// to a spinner. The launch value comes synchronously from Electron main.
+let cachedAccount: Account | null | undefined;
+let cachedOverview: Overview | null = null;
+
+function initialAccount(): Account | null {
+  if (cachedAccount !== undefined) return cachedAccount;
+  const status = window.brainrouter.getBootstrapState?.()?.accountStatus;
+  cachedAccount = status?.signedIn && status.account ? status.account : null;
+  return cachedAccount;
+}
+
 function relTime(iso?: string): string {
   if (!iso) return '—';
   const t = Date.parse(iso);
@@ -32,9 +45,8 @@ function deviceLabel(kind: string): string {
 }
 
 export function AccountSettings(): React.ReactElement {
-  const [account, setAccount] = useState<Account | null>(null);
-  const [overview, setOverview] = useState<Overview | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [account, setAccount] = useState<Account | null>(initialAccount);
+  const [overview, setOverview] = useState<Overview | null>(cachedOverview);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -42,24 +54,41 @@ export function AccountSettings(): React.ReactElement {
   const [notice, setNotice] = useState('');
 
   const loadOverview = useCallback(async () => {
-    try { const res = await bridgeQuery<Overview>('account-overview'); setOverview(res?.signedIn ? res : null); }
-    catch { setOverview(null); }
+    try {
+      const res = await bridgeQuery<Overview>('account-overview');
+      if (res?.signedIn) { cachedOverview = res; setOverview(res); }
+    } catch { /* preserve the last-known account cards while offline */ }
   }, []);
   const refresh = useCallback(async () => {
     try {
       const res = await bridgeQuery<{ signedIn: boolean; account: Account | null }>('auth-status');
-      setAccount(res.signedIn ? res.account : null);
-      if (res.signedIn) await loadOverview();
-    } catch { /* leave signed-out */ } finally { setLoading(false); }
+      cachedAccount = res.signedIn ? res.account : null;
+      setAccount(cachedAccount);
+      // Identity is enough to render the signed-in view. Org/session cards load
+      // independently so a slow account endpoint never keeps Settings blocked.
+      if (res.signedIn) void loadOverview();
+      else { cachedOverview = null; setOverview(null); }
+    } catch { /* preserve the durable bootstrap identity while the host wakes */ }
   }, [loadOverview]);
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    void refresh();
+    const onAccountChanged = (): void => { void refresh(); };
+    window.addEventListener('br-account-changed', onAccountChanged);
+    return () => window.removeEventListener('br-account-changed', onAccountChanged);
+  }, [refresh]);
 
   const signIn = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true); setError('');
     try {
       const res = await bridgeQuery<{ ok: boolean; account?: Account; error?: string }>('action:auth-signin', { email, password });
-      if (res.ok && res.account) { setAccount(res.account); setPassword(''); await loadOverview(); }
+      if (res.ok && res.account) {
+        cachedAccount = res.account;
+        setAccount(res.account);
+        setPassword('');
+        window.dispatchEvent(new Event('br-account-changed'));
+        void loadOverview();
+      }
       else setError(res.error || 'Sign-in failed.');
     } catch (err) { setError(err instanceof Error ? err.message : 'Sign-in failed.'); }
     finally { setBusy(false); }
@@ -67,7 +96,14 @@ export function AccountSettings(): React.ReactElement {
 
   const signOut = useCallback(async () => {
     setBusy(true); setError(''); setNotice('');
-    try { await bridgeQuery('action:auth-signout'); setAccount(null); setOverview(null); }
+    try {
+      await bridgeQuery('action:auth-signout');
+      cachedAccount = null;
+      cachedOverview = null;
+      setAccount(null);
+      setOverview(null);
+      window.dispatchEvent(new Event('br-account-changed'));
+    }
     catch (err) { setError(err instanceof Error ? err.message : 'Sign-out failed.'); }
     finally { setBusy(false); }
   }, []);
@@ -96,9 +132,7 @@ export function AccountSettings(): React.ReactElement {
         Your agent, terminal, and local files stay on this machine.
       </p>
 
-      {loading ? (
-        <div className="muted" style={box}>Loading…</div>
-      ) : account ? (
+      {account ? (
         <>
           <div style={box}>
             <div><strong>Signed in as {account.displayName || account.email}</strong></div>

@@ -9,7 +9,9 @@ import {
   fetchAccountModelCatalog,
   fetchGithubAccountStatus,
   resolveBrainRouterAccountApi,
+  resolveBrainRouterAccountBaseUrl,
   resolveBrainRouterAccountContext,
+  resolveDesktopBootstrapState,
   resolveDesktopAccountIdentity,
   startAccountConnectorOAuth,
 } from './accountIntegration.js';
@@ -36,6 +38,23 @@ test('resolveBrainRouterAccountApi returns only the account endpoint and bearer 
     apiKey: 'account-key',
   });
   assert.equal(resolveBrainRouterAccountApi({}), null);
+});
+
+test('BrainRouter MCP profiles remain valid account connections without cli.account metadata', () => {
+  const serverOnly = {
+    servers: {
+      local: { identity: 'brainrouter', type: 'http', url: 'http://localhost:3747/mcp/', apiKey: 'legacy-account-key' },
+    },
+  };
+  assert.equal(resolveBrainRouterAccountBaseUrl(serverOnly), 'http://localhost:3747');
+  assert.deepEqual(resolveBrainRouterAccountApi(serverOnly), {
+    baseUrl: 'http://localhost:3747',
+    apiKey: 'legacy-account-key',
+  });
+  assert.equal(resolveBrainRouterAccountBaseUrl({
+    cli: { account: { url: 'https://account.brainrouter.test/tenant/' } },
+    servers: serverOnly.servers,
+  }), 'https://account.brainrouter.test/tenant');
 });
 
 test('renderer config snapshots strip legacy account bearer fields', () => {
@@ -73,6 +92,34 @@ test('desktop identity prefers the BrainRouter profile and keeps signed-out use 
   assert.deepEqual(resolveDesktopAccountIdentity({}, 'mac-user'), {
     signedIn: false,
     username: 'mac-user',
+  });
+  assert.deepEqual(resolveDesktopAccountIdentity({
+    servers: { cloud: { identity: 'brainrouter', url: 'https://account.brainrouter.test/mcp', apiKey: 'account-key' } },
+  }, 'mac-user'), {
+    signedIn: true,
+    username: 'mac-user',
+  });
+});
+
+test('desktop bootstrap exposes durable identity immediately without credentials', () => {
+  const state = resolveDesktopBootstrapState({
+    cli: { account: { url: 'https://account.brainrouter.test/', userId: 'user-1', displayName: 'Ada', email: 'ada@example.test' } },
+    servers: { cloud: { identity: 'brainrouter', url: 'https://account.brainrouter.test/mcp', apiKey: 'must-not-cross' } },
+  }, 'mac-user');
+  assert.deepEqual(state, {
+    accountStatus: {
+      signedIn: true,
+      account: {
+        url: 'https://account.brainrouter.test',
+        userId: 'user-1',
+        displayName: 'Ada',
+        email: 'ada@example.test',
+      },
+    },
+  });
+  assert.equal(JSON.stringify(state).includes('must-not-cross'), false);
+  assert.deepEqual(resolveDesktopBootstrapState({}, 'mac-user'), {
+    accountStatus: { signedIn: false, account: null },
   });
 });
 

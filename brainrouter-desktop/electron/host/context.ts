@@ -88,6 +88,7 @@ export interface HostContext {
   llmForSession: (sessionKey: string) => LLMConfig;
   resolveProviderLlm: (providerName: string, model: string) => Promise<LLMConfig | undefined> | LLMConfig | undefined;
   refreshAccountModelCatalog: (force?: boolean) => Promise<DesktopAccountModelCatalog>;
+  peekAccountModelCatalog: () => DesktopAccountModelCatalog;
   syncActiveSessionLlm: (base?: LLMConfig) => LLMConfig;
   spawnAgent: (sessionKey: string) => AgentLike;
   spawnReviewer: (sessionKey?: string) => AgentLike;

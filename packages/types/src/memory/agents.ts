@@ -35,7 +35,7 @@ export type BrainAgentModelClass =
 /**
  * A brain-side specialist. Each agent owns one stage of the memory
  * pipeline (extract, dedup, contradiction-check, graph-extract,
- * focus-distill, relevance-judge, identity-distill, source-chunk,
+ * focus-distill, identity-distill, source-chunk,
  * tree-summarise, situation-report). The registry is data-driven
  * so Phase 1 can swap implementations without touching call sites.
  *
@@ -121,6 +121,13 @@ export interface MemoryJobProgressEvent {
   kind: string;
   msg: string;
   data?: Record<string, unknown>;
+  /** Optional, non-sensitive trace linkage for dashboard observability. */
+  traceId?: string;
+  spanId?: string;
+  parentSpanId?: string;
+  role?: string;
+  status?: "pending" | "running" | "succeeded" | "failed" | "skipped";
+  durationMs?: number;
 }
 
 /**

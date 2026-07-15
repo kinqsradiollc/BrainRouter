@@ -53,6 +53,10 @@ Important boundaries:
 
 ## Quick start from source
 
+> **Full guide:** [`deploy/README.md`](deploy/README.md) covers dev setup
+> (host or live-reload Docker), building the production stack from source, and
+> the dashboard-vs-`.env` configuration split. The essentials:
+
 ```bash
 git clone https://github.com/kinqsradiollc/BrainRouter.git
 cd BrainRouter
@@ -79,7 +83,7 @@ npm run dev:http -w @kinqs/brainrouter-mcp-server
 npm run dev -w dashboard
 ```
 
-Sign in, then configure the organization’s LLM/embedding providers in **Settings → Intelligence**. Providers live in the database; `.env` contains infrastructure and operational settings, not the normal provider credential path.
+Sign in as the seeded admin (its API key prints once in the brain logs), then configure the organization’s LLM / embedding / reranker providers under **Intelligence → Models & providers**. Providers live in the database; `.env` holds only infrastructure + operational settings, never provider credentials. The embedding vector width is derived from the embedder automatically.
 
 Run a local client:
 
@@ -90,6 +94,23 @@ npm run cli
 # Desktop workbench
 npm run start -w brainrouter-desktop
 ```
+
+## Deploy (build from source)
+
+There is no published server image — the production stack is built from this
+repo. Fill secrets and bring it up (Postgres + one-shot migrator + the
+service-capable brain):
+
+```bash
+cd deploy/stack
+cp .env.example .env
+docker compose up -d --build          # → brain on http://localhost:3747
+```
+
+Pin a version by checking out a release tag before building
+(`git checkout v0.4.16 && docker compose … up -d --build`); update with
+`git pull && docker compose … up -d --build` (the migrator runs first). See
+[`deploy/README.md`](deploy/README.md) and [`brainrouter-docs/HOSTING.md`](brainrouter-docs/HOSTING.md).
 
 ## Install published clients
 
@@ -114,14 +135,14 @@ The shared connection flow is:
 
 Supported OAuth sources include GitHub, GitLab, Slack, Google Drive, Gmail, Notion, and Linear. Additional runtime connectors include filesystem, web, Jira, Confluence, and MCP resources where their credential model applies.
 
-Knowledge and source requests carry organization, project, and workspace scope. Record ownership and source provenance stay attached to the returned evidence. Recall combines keyword, vector, file-path, freshness, reranking, relevance judging, and graph expansion, then returns attributable records instead of an opaque context blob.
+Knowledge and source requests carry organization, project, and workspace scope. Record ownership and source provenance stay attached to the returned evidence. Recall combines keyword, vector, file-path, freshness, reranking, and graph expansion, then returns attributable records instead of an opaque context blob.
 
 ## Reviews and automation
 
 - Desktop and dashboard can inspect backend pull-request review jobs and findings; local uncommitted-change review remains a separate workspace action.
 - GitHub App installation credentials support repository linking, check-runs, and webhook-triggered review automation.
 - Track detects a repository from the active workspace remote and uses the signed-in account connection before any advanced local-token fallback.
-- Security and code-review prompts can consume a bounded, cached vulnerability-intelligence briefing with source and retrieval metadata.
+- CVE-, security-, advisory-, exploit-, and affected-version prompts automatically receive a bounded briefing from the continuously refreshed NVD catalog, enriched with CISA KEV and FIRST EPSS source/freshness metadata. Security and code reviews also receive exact repository matches produced from OSV plus stored inventory evidence.
 
 See [`brainrouter-docs/setup/github-app-setup.md`](brainrouter-docs/setup/github-app-setup.md) for the GitHub trust boundaries and [`brainrouter-docs/automations.md`](brainrouter-docs/automations.md) for automation behavior.
 
@@ -148,6 +169,7 @@ Read [`CLAUDE.md`](CLAUDE.md) and the relevant package rules before editing. The
 
 ## Documentation
 
+- [`deploy/README.md`](deploy/README.md) — dev setup + build-from-source Docker deploy (start here to run it).
 - [`SETUP.md`](SETUP.md) — operator and maintainer setup/runbook.
 - [`BRAINROUTER.md`](BRAINROUTER.md) — brain, memory, REST, and MCP behavior.
 - [`SYSTEM_WORKFLOWS.md`](SYSTEM_WORKFLOWS.md) — end-to-end runtime flows.

@@ -3,23 +3,34 @@
 /**
  * Meetings — the dashboard mirror of the desktop Meetings mode (ADR-018). Lists the
  * account's recallable meeting summaries and shows a detail with the same model +
- * four-level sharing vocabulary (Private / Team / Org / Public). Data comes from
- * `/api/meetings`; an in-memory sample renders until the backend route lands.
+ * four-level sharing vocabulary (Private / Team / Org / Public). Real, org-scoped
+ * data from the backend at :3747 (/api/meetings) using the signed-in account's JWT
+ * — the same dataset the desktop sees for the same account. No sample data.
  */
-import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
+import { authFetch } from "../../lib/adminApi";
+import { BASE_URL } from "../../lib/client";
+import { getApiKey, getJwt } from "../../lib/client-auth";
+import { invalidateDashboardQueries, queryDashboard } from "../../lib/dashboardQuery";
 import styles from "./meetings.module.css";
 
 type Scope = "private" | "team" | "org" | "public";
-interface ListItem { id: string; title: string; date: string; scope: Scope; }
-interface ActionItem { id: string; title: string; assignee?: string; trackItemId?: string; }
+type SummaryStatus = "queued" | "processing" | "ready" | "failed";
+interface ListItem { id: string; title: string; date: string; scope: Scope; attendeeCount: number; summaryStatus: SummaryStatus }
+interface ActionItem { id: string; title: string; assignee?: string; done?: boolean; trackItemId?: string }
+interface Share { scope: Scope; teamId?: string; publicUrl?: string; expiresAt?: string }
 interface Detail {
   id: string; title: string; date: string; status: string; durationMin?: number; wordCount?: number;
   attendees: string[]; model?: { label: string; effort?: string };
-  summary: string; actions: ActionItem[]; transcript: { at: string; sp: string; tx: string }[];
-  share: { scope: Scope; publicUrl?: string; expiresAt?: string };
+  summaryMarkdown: string; actionItems: ActionItem[];
+  transcript: { at: string; speaker: string; text: string }[];
+  share: Share;
+  summaryStatus: SummaryStatus; summaryError?: string;
 }
+type Overview = Omit<Detail, "transcript">;
+interface TranscriptPage { segments: Array<{ ordinal: number; at: string; speaker: string; text: string }>; total: number; nextCursor: string | null }
 
 const SCOPE_META: Record<Scope, { label: string; blurb: string; badge: string; dot: string; icon: string }> = {
   private: { label: "Private", blurb: "Only you can see this meeting.", badge: styles.bPrivate, dot: "", icon: "🔒" },
@@ -29,82 +40,307 @@ const SCOPE_META: Record<Scope, { label: string; blurb: string; badge: string; d
 };
 const SCOPES: Scope[] = ["private", "team", "org", "public"];
 
-async function fetchJson<T>(url: string): Promise<T | null> {
-  try { const r = await fetch(url, { credentials: "include" }); return r.ok ? (await r.json() as T) : null; } catch { return null; }
-}
-
-const SAMPLE_LIST: ListItem[] = [
-  { id: "m1", title: "Weekly product sync", date: "Jul 14", scope: "private" },
-  { id: "m2", title: "Design review — Meetings UI", date: "Jul 11", scope: "team" },
-  { id: "m3", title: "All-hands Q3 kickoff", date: "Jul 08", scope: "org" },
-  { id: "m4", title: "Customer call — Northwind", date: "Jul 03", scope: "public" },
-];
-function sampleDetail(item: ListItem): Detail {
-  return {
-    id: item.id, title: item.title, date: "2026-07-14", status: "recorded", durationMin: 32, wordCount: 1240,
-    attendees: ["anh", "maya", "jordan"], model: { label: "Opus 4.8", effort: "high" },
-    summary: "The team confirmed Meetings ships as a 4th desktop mode, memory-native with four-level sharing. Server-default transcription was agreed, with a local Whisper fallback.\n### Decisions\n- Meetings is account-gated; offline capture stays as a fallback.\n- Summaries route through the server-managed BrainRouter provider.",
-    actions: [
-      { id: "a1", title: "Wire the sharing scope picker into both surfaces", assignee: "maya" },
-      { id: "a2", title: "Finalize the STT microservice Dockerfile", assignee: "jordan" },
-    ],
-    transcript: [
-      { at: "00:12", sp: "Anh", tx: "Let's lock the Meetings placement — desktop mode, dashboard page." },
-      { at: "00:31", sp: "Maya", tx: "Sharing needs all four scopes, public with a revocable link." },
-      { at: "00:58", sp: "Jordan", tx: "Transcription server-side by default, keep the offline path." },
-    ],
-    share: { scope: item.scope, publicUrl: item.scope === "public" ? "brainrouter.ai/m/9fK2qX" : undefined, expiresAt: item.scope === "public" ? "in 30 days" : undefined },
-  };
-}
-
 function ScopeBadge({ scope }: { scope: Scope }) {
   const m = SCOPE_META[scope];
   return <span className={`${styles.badge} ${m.badge}`}>{scope === "org" ? "Org" : m.label}</span>;
 }
 
+function TranscriptLines({ segments }: { segments: Detail["transcript"] }) {
+  const [scrollTop, setScrollTop] = useState(0);
+  const rowHeight = 58;
+  const viewportHeight = 520;
+  const overscan = 5;
+  if (segments.length <= 40) return <>{segments.map((line, index) => <TranscriptLine key={index} line={line} />)}</>;
+  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
+  const visible = Math.ceil(viewportHeight / rowHeight) + overscan * 2;
+  const end = Math.min(segments.length, start + visible);
+  return (
+    <div className={styles.transcriptViewport} style={{ height: viewportHeight }} onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)} role="list" aria-label={`${segments.length} loaded transcript segments`}>
+      <div style={{ height: segments.length * rowHeight, position: "relative" }}>
+        <div style={{ position: "absolute", top: start * rowHeight, right: 0, left: 0 }}>
+          {segments.slice(start, end).map((line, offset) => <TranscriptLine key={start + offset} line={line} />)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TranscriptLine({ line }: { line: Detail["transcript"][number] }) {
+  return <div className={styles.trLine} role="listitem">{line.at ? <span className={styles.trTs}>{line.at}</span> : null}{line.speaker ? <span className={styles.trSp}>{line.speaker}</span> : null}<span className={styles.trTx}>{line.text}</span></div>;
+}
+
 export default function MeetingsPage() {
   const [items, setItems] = useState<ListItem[]>([]);
+  const [meetingsNext, setMeetingsNext] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
+  const [transcriptSegments, setTranscriptSegments] = useState<Detail["transcript"]>([]);
+  const [transcriptNext, setTranscriptNext] = useState<string | null>(null);
+  const [transcriptTotal, setTranscriptTotal] = useState(0);
+  const [transcriptLoading, setTranscriptLoading] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftTranscript, setDraftTranscript] = useState("");
+  const [createErr, setCreateErr] = useState("");
+  const [recording, setRecording] = useState(false);
+  const [recordingPaused, setRecordingPaused] = useState(false);
+  const [language, setLanguage] = useState("auto");
+  const [summaryTemplate, setSummaryTemplate] = useState("general");
+  const [editing, setEditing] = useState(false);
+  const [draftSummary, setDraftSummary] = useState("");
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
 
   useEffect(() => {
-    void (async () => {
-      const list = (await fetchJson<ListItem[]>("/api/meetings")) ?? SAMPLE_LIST;
-      setItems(list);
-      setSelectedId((cur) => cur ?? list[0]?.id ?? null);
-    })();
+    try {
+      const saved = JSON.parse(localStorage.getItem("brainrouter:meeting-draft") ?? "null") as { title?: string; transcript?: string; language?: string; template?: string } | null;
+      if (saved?.title) setDraftTitle(saved.title);
+      if (saved?.transcript) setDraftTranscript(saved.transcript);
+      if (saved?.language) setLanguage(saved.language);
+      if (saved?.template) setSummaryTemplate(saved.template);
+    } catch { /* a malformed local draft should not block Meetings */ }
   }, []);
 
   useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (draftTitle || draftTranscript) localStorage.setItem("brainrouter:meeting-draft", JSON.stringify({ title: draftTitle, transcript: draftTranscript, language, template: summaryTemplate }));
+      else localStorage.removeItem("brainrouter:meeting-draft");
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [draftTitle, draftTranscript, language, summaryTemplate]);
+
+  // Poll while notes are generating — the server keeps summarizing across refreshes,
+  // so this converges the status without the user re-triggering anything.
+  useEffect(() => {
+    if (!detail || (detail.summaryStatus !== "processing" && detail.summaryStatus !== "queued")) return;
+    const id = detail.id;
+    let alive = true;
+    const timer = setInterval(async () => {
+      try {
+        const overview = await authFetch<Overview>(`/api/meetings/${id}/overview`);
+        if (!alive) return;
+        setDetail((cur) => (cur && cur.id === id ? { ...cur, ...overview } : cur));
+        setItems((list) => list.map((m) => (m.id === id ? { ...m, summaryStatus: overview.summaryStatus } : m)));
+      } catch { /* transient — keep polling */ }
+    }, 3000);
+    return () => { alive = false; clearInterval(timer); };
+  }, [detail?.id, detail?.summaryStatus]);
+
+  const saveSummary = useCallback(async () => {
+    if (!detail) return;
+    setBusy("save-summary");
+    try {
+      const d = await authFetch<Detail>(`/api/meetings/${detail.id}/summary`, { method: "PATCH", body: { summaryMarkdown: draftSummary } });
+      invalidateDashboardQueries(`meetings:overview:${detail.id}`);
+      setDetail(d);
+      setEditing(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not save the summary.");
+    } finally {
+      setBusy("");
+    }
+  }, [detail, draftSummary]);
+
+  const transcribe = useCallback(async (blob: Blob) => {
+    setBusy("transcribe");
+    setCreateErr("");
+    try {
+      const token = getJwt() || getApiKey() || "";
+      const res = await fetch(`${BASE_URL}/v1/audio/transcriptions${language === "auto" ? "" : `?language=${encodeURIComponent(language)}`}`, {
+        method: "POST",
+        headers: { "Content-Type": blob.type || "audio/webm", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: blob,
+      });
+      if (!res.ok) throw new Error(`Transcription failed (${res.status})`);
+      const out = (await res.json()) as { text?: string };
+      const text = (out.text ?? "").trim();
+      if (text) setDraftTranscript((cur) => (cur ? `${cur}\n${text}` : text));
+      else setCreateErr("No speech was detected in the recording.");
+    } catch (caught) {
+      setCreateErr(caught instanceof Error ? caught.message : "Transcription failed.");
+    } finally {
+      setBusy("");
+    }
+  }, [language]);
+
+  const startRecording = useCallback(async () => {
+    setCreateErr("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const rec = new MediaRecorder(stream);
+      chunksRef.current = [];
+      rec.ondataavailable = (e) => { if (e.data.size) chunksRef.current.push(e.data); };
+      rec.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        void transcribe(new Blob(chunksRef.current, { type: rec.mimeType || "audio/webm" }));
+      };
+      recorderRef.current = rec;
+      rec.start();
+      setRecording(true);
+      setRecordingPaused(false);
+    } catch {
+      setCreateErr("Microphone access was denied or is unavailable.");
+    }
+  }, [transcribe]);
+
+  const stopRecording = useCallback(() => {
+    recorderRef.current?.stop();
+    recorderRef.current = null;
+    setRecording(false);
+    setRecordingPaused(false);
+  }, []);
+
+  const toggleRecordingPause = useCallback(() => {
+    const recorder = recorderRef.current;
+    if (!recorder) return;
+    if (recorder.state === "recording") { recorder.pause(); setRecordingPaused(true); }
+    else if (recorder.state === "paused") { recorder.resume(); setRecordingPaused(false); }
+  }, []);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await queryDashboard("meetings:list", () => authFetch<{ meetings: ListItem[]; nextCursor: string | null }>("/api/meetings?limit=50"), { ttlMs: 30_000 });
+      const list = r.meetings ?? [];
+      setItems(list);
+      setMeetingsNext(r.nextCursor);
+      setSelectedId((cur) => (cur && list.some((m) => m.id === cur) ? cur : list[0]?.id ?? null));
+      setError("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not load meetings.");
+      setItems([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const loadMoreMeetings = useCallback(async () => {
+    if (!meetingsNext || busy === "more-meetings") return;
+    setBusy("more-meetings");
+    try {
+      const page = await authFetch<{ meetings: ListItem[]; nextCursor: string | null }>(`/api/meetings?limit=50&cursor=${encodeURIComponent(meetingsNext)}`);
+      setItems((current) => [...current, ...page.meetings.filter((item) => !current.some((existing) => existing.id === item.id))]);
+      setMeetingsNext(page.nextCursor);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not load more meetings.");
+    } finally {
+      setBusy("");
+    }
+  }, [meetingsNext, busy]);
+
+  useEffect(() => {
     if (!selectedId) { setDetail(null); return; }
-    let live = true;
-    void (async () => {
-      const item = items.find((m) => m.id === selectedId);
-      const d = (await fetchJson<Detail>(`/api/meetings/${selectedId}`)) ?? (item ? sampleDetail(item) : null);
-      if (live) { setDetail(d); setShareOpen(false); }
-    })();
-    return () => { live = false; };
-  }, [selectedId, items]);
+    const controller = new AbortController();
+    const id = selectedId;
+    setDetail(null);
+    setTranscriptSegments([]);
+    setTranscriptNext(null);
+    setTranscriptTotal(0);
+    setTranscriptLoading(true);
+    void queryDashboard(`meetings:overview:${id}`, () => authFetch<Overview>(`/api/meetings/${id}/overview`, { signal: controller.signal }), { ttlMs: 30_000 }).then((overview) => {
+      if (!controller.signal.aborted) { setDetail({ ...overview, transcript: [] }); setShareOpen(false); }
+    }).catch(() => { if (!controller.signal.aborted) setDetail(null); });
+    void authFetch<TranscriptPage>(`/api/meetings/${id}/transcript?limit=100`, { signal: controller.signal }).then((page) => {
+      if (controller.signal.aborted) return;
+      setTranscriptSegments(page.segments);
+      setTranscriptNext(page.nextCursor);
+      setTranscriptTotal(page.total);
+    }).catch(() => {}).finally(() => { if (!controller.signal.aborted) setTranscriptLoading(false); });
+    return () => controller.abort();
+  }, [selectedId]);
+
+  const loadMoreTranscript = useCallback(async () => {
+    if (!detail || !transcriptNext || transcriptLoading) return;
+    const id = detail.id;
+    setTranscriptLoading(true);
+    try {
+      const page = await authFetch<TranscriptPage>(`/api/meetings/${id}/transcript?limit=100&cursor=${encodeURIComponent(transcriptNext)}`);
+      if (detail.id === id) setTranscriptSegments((current) => [...current, ...page.segments]);
+      setTranscriptNext(page.nextCursor);
+      setTranscriptTotal(page.total);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not load more transcript.");
+    } finally {
+      setTranscriptLoading(false);
+    }
+  }, [detail, transcriptNext, transcriptLoading]);
 
   const setScope = useCallback(async (scope: Scope) => {
     if (!detail) return;
-    const share = (await fetchJson<Detail["share"]>(`/api/meetings/${detail.id}/scope?to=${scope}`))
-      ?? { scope, publicUrl: scope === "public" ? "brainrouter.ai/m/9fK2qX" : undefined, expiresAt: scope === "public" ? "in 30 days" : undefined };
-    setDetail((d) => (d ? { ...d, share } : d));
-    setItems((list) => list.map((m) => (m.id === detail.id ? { ...m, scope } : m)));
+    try {
+      const share = await authFetch<Share>(`/api/meetings/${detail.id}/scope`, { method: "POST", body: { scope } });
+      invalidateDashboardQueries(`meetings:overview:${detail.id}`);
+      setDetail((d) => (d ? { ...d, share } : d));
+      setItems((list) => list.map((m) => (m.id === detail.id ? { ...m, scope } : m)));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not change sharing.");
+    }
   }, [detail]);
 
-  const summaryBlocks = useMemo(() => renderSummary(detail?.summary ?? ""), [detail?.summary]);
+  const regenerate = useCallback(async () => {
+    if (!detail) return;
+    setBusy("regen");
+    try {
+      const d = await authFetch<Detail>(`/api/meetings/${detail.id}/regenerate`, { method: "POST" });
+      invalidateDashboardQueries(`meetings:overview:${detail.id}`);
+      setDetail(d);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not regenerate the summary.");
+    } finally {
+      setBusy("");
+    }
+  }, [detail]);
+
+  const toggleAction = useCallback(async (action: ActionItem) => {
+    if (!detail) return;
+    const done = !action.done;
+    try {
+      await authFetch(`/api/meetings/${detail.id}/actions/${action.id}`, { method: "POST", body: { done } });
+      invalidateDashboardQueries(`meetings:overview:${detail.id}`);
+      setDetail((d) => (d ? { ...d, actionItems: d.actionItems.map((x) => (x.id === action.id ? { ...x, done } : x)) } : d));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not update the action item.");
+    }
+  }, [detail]);
+
+  const submitCreate = useCallback(async () => {
+    if (!draftTitle.trim() || !draftTranscript.trim()) { setCreateErr("A title and a transcript are required."); return; }
+    setBusy("create");
+    setCreateErr("");
+    try {
+      const out = await authFetch<{ id: string }>("/api/meetings", { method: "POST", body: { title: draftTitle.trim(), transcript: draftTranscript, template: summaryTemplate } });
+      invalidateDashboardQueries("meetings:");
+      setCreateOpen(false);
+      setDraftTitle("");
+      setDraftTranscript("");
+      localStorage.removeItem("brainrouter:meeting-draft");
+      await load();
+      setSelectedId(out.id);
+    } catch (caught) {
+      setCreateErr(caught instanceof Error ? caught.message : "Could not create the meeting.");
+    } finally {
+      setBusy("");
+    }
+  }, [draftTitle, draftTranscript, summaryTemplate, load]);
+
+  const summaryBlocks = useMemo(() => renderSummary(detail?.summaryMarkdown ?? ""), [detail?.summaryMarkdown]);
 
   return (
     <AuthGuard>
       <PageHeader title="Meetings" description="Recallable meeting summaries across your organization." />
+      <div className={styles.page}>
+      {error ? <div className={styles.errorBar} role="alert">{error}</div> : null}
       <div className={styles.wrap}>
         <div className={styles.list}>
           <div className={styles.listHead}>
             <h2>Meetings</h2>
-            <button type="button" className={styles.newBtn}>+ New</button>
+            <button type="button" className={styles.newBtn} onClick={() => { setCreateErr(""); setCreateOpen(true); }}>+ New</button>
           </div>
           {items.map((m) => (
             <div key={m.id} className={`${styles.item}${m.id === selectedId ? ` ${styles.itemOn}` : ""}`} onClick={() => setSelectedId(m.id)} role="button" tabIndex={0}
@@ -113,7 +349,10 @@ export default function MeetingsPage() {
               <div className={styles.itemM}><span className={styles.itemD}>{m.date}</span><ScopeBadge scope={m.scope} /></div>
             </div>
           ))}
-          {items.length === 0 ? <div className={styles.empty}>No meetings yet.</div> : null}
+          {items.length === 0 ? (
+            <div className={styles.empty}>{loading ? "Loading…" : "No meetings yet. Click + New to add one."}</div>
+          ) : null}
+          {meetingsNext ? <button type="button" className={styles.listMore} disabled={busy === "more-meetings"} onClick={() => void loadMoreMeetings()}>{busy === "more-meetings" ? "Loading…" : "Load more meetings"}</button> : null}
         </div>
 
         {detail ? (
@@ -122,7 +361,7 @@ export default function MeetingsPage() {
               <div className={styles.dHeadRow}>
                 <div>
                   <h3>{detail.title}</h3>
-                  <div className={styles.att}>{detail.attendees.join(", ")}</div>
+                  <div className={styles.att}>{detail.attendees.length ? detail.attendees.join(", ") : "No attendees recorded"}</div>
                 </div>
                 <div className={styles.hActions}>
                   <button type="button" className={styles.shareBtn} onClick={() => setShareOpen((v) => !v)} aria-haspopup="menu" aria-expanded={shareOpen}>
@@ -156,41 +395,108 @@ export default function MeetingsPage() {
                 </div>
               </div>
               <div className={styles.metastrip}>
-                <span className={styles.chip}><i />{detail.status[0].toUpperCase() + detail.status.slice(1)}</span>
+                <span className={styles.chip}><i />{detail.status ? detail.status[0].toUpperCase() + detail.status.slice(1) : "Recorded"}</span>
                 <span className={styles.chip}>{detail.date}</span>
                 {detail.durationMin ? <span className={styles.chip}>{detail.durationMin} min</span> : null}
                 {detail.wordCount ? <span className={styles.chip}>{detail.wordCount.toLocaleString()} words</span> : null}
+                <button type="button" className={styles.chip} onClick={() => void regenerate()}
+                  disabled={busy === "regen" || detail.summaryStatus === "processing" || detail.summaryStatus === "queued"} style={{ cursor: "pointer" }}>
+                  {detail.summaryStatus === "processing" || detail.summaryStatus === "queued" ? "● Summarizing…" : busy === "regen" ? "Regenerating…" : "↻ Regenerate"}
+                </button>
               </div>
             </div>
             <div className={styles.body}>
               <div style={{ display: "flex", flexDirection: "column", gap: 14, minWidth: 0 }}>
                 <div className={styles.card}>
-                  <div className={styles.cardLab}>Summary</div>
-                  {summaryBlocks}
+                  <div className={styles.cardLab} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span>Summary</span>
+                    {detail.summaryStatus === "ready" && !editing ? (
+                      <button type="button" className={styles.track} onClick={() => { setDraftSummary(detail.summaryMarkdown); setEditing(true); }}>✎ Edit</button>
+                    ) : null}
+                  </div>
+                  {detail.summaryStatus === "processing" || detail.summaryStatus === "queued" ? (
+                    <div className={styles.empty}>● Generating notes… this keeps running on the server — you can leave or refresh.</div>
+                  ) : detail.summaryStatus === "failed" ? (
+                    <div className={styles.errorBar} role="alert">{(detail.summaryError || "Summary generation failed.") + " Check the meeting-summary model, then Regenerate."}</div>
+                  ) : editing ? (
+                    <>
+                      <textarea className={styles.modalTextarea} value={draftSummary} onChange={(e) => setDraftSummary(e.target.value)} rows={12} aria-label="Edit summary" />
+                      <div className={styles.modalActions}>
+                        <button type="button" className={styles.track} onClick={() => setEditing(false)}>Cancel</button>
+                        <button type="button" className={styles.newBtn} onClick={() => void saveSummary()} disabled={busy === "save-summary"}>{busy === "save-summary" ? "Saving…" : "Save"}</button>
+                      </div>
+                    </>
+                  ) : (
+                    summaryBlocks
+                  )}
                 </div>
-                {detail.actions.length ? (
+                {detail.actionItems.length ? (
                   <div className={styles.card}>
                     <div className={styles.cardLab}>Action items</div>
-                    {detail.actions.map((a) => (
+                    {detail.actionItems.map((a) => (
                       <div key={a.id} className={styles.ai}>
-                        <div className={styles.aiTxt}>{a.title}{a.assignee ? <div className={styles.aiWho}>→ {a.assignee}</div> : null}</div>
-                        <button type="button" className={styles.track}>{a.trackItemId ? "In Track ✓" : "Track ↗"}</button>
+                        <label className={styles.aiTxt} style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: "pointer" }}>
+                          <input type="checkbox" checked={Boolean(a.done)} onChange={() => void toggleAction(a)} style={{ marginTop: 3 }} />
+                          <span style={a.done ? { textDecoration: "line-through", opacity: 0.6 } : undefined}>
+                            {a.title}{a.assignee ? <span className={styles.aiWho}>→ {a.assignee}</span> : null}
+                          </span>
+                        </label>
+                        <button type="button" className={styles.track} disabled={Boolean(a.trackItemId)}>{a.trackItemId ? "In Track ✓" : "Track ↗"}</button>
                       </div>
                     ))}
                   </div>
                 ) : null}
               </div>
               <div className={styles.card}>
-                <div className={styles.cardLab}>Transcript</div>
-                {detail.transcript.map((l, i) => (
-                  <div key={i} className={styles.trLine}><span className={styles.trTs}>{l.at}</span><span className={styles.trSp}>{l.sp}</span><span className={styles.trTx}>{l.tx}</span></div>
-                ))}
+                <div className={styles.cardLab}>Transcript {transcriptTotal ? <span className={styles.transcriptCount}>{transcriptSegments.length} / {transcriptTotal}</span> : null}</div>
+                {transcriptSegments.length ? <TranscriptLines segments={transcriptSegments} /> : <div className={styles.empty}>{transcriptLoading ? "Loading transcript…" : "No transcript."}</div>}
+                {transcriptNext ? <button type="button" className={styles.loadMore} disabled={transcriptLoading} onClick={() => void loadMoreTranscript()}>{transcriptLoading ? "Loading…" : "Load 100 more"}</button> : null}
               </div>
             </div>
           </div>
         ) : (
-          <div className={styles.detail}><div className={styles.empty}>Select a meeting.</div></div>
+          <div className={styles.detail}><div className={styles.empty}>{items.length ? "Select a meeting." : "No meeting selected."}</div></div>
         )}
+      </div>
+
+      {createOpen ? (
+        <div className={styles.modalScrim} role="dialog" aria-modal="true" aria-label="New meeting" onClick={() => setCreateOpen(false)}>
+          <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+            <div className={styles.cardLab}>New meeting</div>
+            <input
+              className={styles.modalInput}
+              placeholder="Title (e.g. Weekly product sync)"
+              value={draftTitle}
+              onChange={(e) => setDraftTitle(e.target.value)}
+              aria-label="Meeting title"
+            />
+            <textarea
+              className={styles.modalTextarea}
+              placeholder="Paste a transcript, or record above — Whisper produces plain text (no speaker labels)."
+              value={draftTranscript}
+              onChange={(e) => setDraftTranscript(e.target.value)}
+              rows={10}
+              aria-label="Transcript"
+            />
+            <div className={styles.captureOptions}>
+              <label>Template<select value={summaryTemplate} onChange={(event) => setSummaryTemplate(event.target.value)} aria-label="Meeting summary template"><option value="general">General notes</option><option value="standup">Standup</option><option value="one-on-one">1:1</option><option value="retrospective">Retrospective</option></select></label>
+              <label>Language<select value={language} onChange={(event) => setLanguage(event.target.value)} aria-label="Transcription language"><option value="auto">Auto detect</option><option value="en">English</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option><option value="ja">Japanese</option><option value="ko">Korean</option><option value="zh">Chinese</option></select></label>
+              <label className={styles.importAudio}>Import audio<input type="file" accept="audio/*,.webm,.m4a,.mp3,.wav,.ogg" onChange={(event) => { const file = event.target.files?.[0]; if (file) void transcribe(file); event.target.value = ""; }} /></label>
+              <span>{draftTranscript ? "Draft recovered automatically" : "Drafts are saved on this device"}</span>
+            </div>
+            {createErr ? <div className={styles.errorBar} role="alert">{createErr}</div> : null}
+            <div className={styles.modalActions} style={{ justifyContent: "space-between" }}>
+              <div className={styles.recordActions}><button type="button" className={styles.track} onClick={() => (recording ? stopRecording() : void startRecording())} disabled={busy === "transcribe"}>{recording ? "■ Stop recording" : busy === "transcribe" ? "Transcribing…" : "🎙 Record"}</button>{recording ? <button type="button" className={styles.track} onClick={toggleRecordingPause}>{recordingPaused ? "▶ Resume" : "Ⅱ Pause"}</button> : null}</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button type="button" className={styles.track} onClick={() => { if (recording) stopRecording(); setCreateOpen(false); }}>Cancel</button>
+                <button type="button" className={styles.newBtn} onClick={() => void submitCreate()} disabled={busy === "create" || recording}>
+                  {busy === "create" ? "Creating…" : "Create + summarize"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
       </div>
     </AuthGuard>
   );

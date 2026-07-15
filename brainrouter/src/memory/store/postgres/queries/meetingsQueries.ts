@@ -27,6 +27,9 @@ export interface MeetingRow {
   teamId: string | null;
   modelLabel: string | null;
   modelEffort: string | null;
+  /** Notes-generation lifecycle, independent of the import `status`. */
+  summaryStatus: "queued" | "processing" | "ready" | "failed";
+  summaryError: string | null;
   createdAt: string;
 }
 
@@ -49,6 +52,21 @@ export interface CreateMeetingInput {
   teamId?: string;
   modelLabel?: string;
   modelEffort?: string;
+  summaryStatus?: "queued" | "processing" | "ready" | "failed";
+}
+
+export interface MeetingTranscriptSegment { ordinal: number; at: string; speaker: string; text: string; total?: number }
+export interface MeetingListCursor { createdAt: string; id: string }
+
+function transcriptSegments(text: string): MeetingTranscriptSegment[] {
+  const segments: MeetingTranscriptSegment[] = [];
+  for (const raw of text.split("\n")) {
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    const timestamp = trimmed.match(/^\[?(\d{1,2}:\d{2}(?::\d{2})?)\]\s*(.+)$/);
+    segments.push({ ordinal: segments.length, at: timestamp?.[1] ?? "", speaker: "", text: (timestamp?.[2] ?? trimmed).trim() });
+  }
+  return segments;
 }
 
 function mapRow(r: Record<string, unknown>): MeetingRow {
@@ -72,33 +90,124 @@ function mapRow(r: Record<string, unknown>): MeetingRow {
     teamId: r.team_id == null ? null : String(r.team_id),
     modelLabel: r.model_label == null ? null : String(r.model_label),
     modelEffort: r.model_effort == null ? null : String(r.model_effort),
+    summaryStatus: (["queued", "processing", "ready", "failed"].includes(String(r.summary_status))
+      ? String(r.summary_status) : "ready") as MeetingRow["summaryStatus"],
+    summaryError: r.summary_error == null ? null : String(r.summary_error),
     createdAt: String(r.created_at ?? ""),
   };
 }
 
 export async function createMeeting(exec: Executor, m: CreateMeetingInput): Promise<void> {
-  await exec.run(
-    `INSERT INTO meetings (id, org_id, user_id, title, meeting_date, status, duration_min, word_count,
+  const segments = transcriptSegments(m.transcriptText);
+  await exec.tx(async (client) => {
+    await client.query(
+      `INSERT INTO meetings (id, org_id, user_id, title, meeting_date, status, duration_min, word_count,
        attendees_json, transcript_text, summary_markdown, action_items_json, summary_record_id,
-       transcript_source_id, scope, team_id, model_label, model_effort)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
-    [m.id, m.orgId, m.userId, m.title, m.meetingDate ?? null, m.status ?? "recorded",
-      m.durationMin ?? null, m.wordCount ?? null, JSON.stringify(m.attendees ?? []), m.transcriptText,
-      m.summaryMarkdown, JSON.stringify(m.actionItems ?? []), m.summaryRecordId ?? null,
-      m.transcriptSourceId ?? null, m.scope ?? "private", m.teamId ?? null, m.modelLabel ?? null,
-      m.modelEffort ?? null],
+       transcript_source_id, scope, team_id, model_label, model_effort, summary_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+      [m.id, m.orgId, m.userId, m.title, m.meetingDate ?? null, m.status ?? "recorded",
+        m.durationMin ?? null, m.wordCount ?? null, JSON.stringify(m.attendees ?? []), m.transcriptText,
+        m.summaryMarkdown, JSON.stringify(m.actionItems ?? []), m.summaryRecordId ?? null,
+        m.transcriptSourceId ?? null, m.scope ?? "private", m.teamId ?? null, m.modelLabel ?? null,
+        m.modelEffort ?? null, m.summaryStatus ?? "ready"],
+    );
+    if (segments.length) {
+      await client.query(
+        `INSERT INTO meeting_transcript_segments (meeting_id, ordinal, at_label, speaker, text)
+         SELECT $1, (segment ->> 'ordinal')::integer, segment ->> 'at', segment ->> 'speaker', segment ->> 'text'
+           FROM jsonb_array_elements($2::jsonb) AS segment
+         ON CONFLICT (meeting_id, ordinal) DO NOTHING`,
+        [m.id, JSON.stringify(segments)],
+      );
+    }
+  });
+}
+
+/** Set the notes-generation lifecycle status (owner-guarded). `error` is only
+ *  meaningful for 'failed'; it is cleared on any other status. */
+export async function setMeetingSummaryStatus(
+  exec: Executor, id: string, userId: string,
+  status: MeetingRow["summaryStatus"], error?: string | null,
+): Promise<boolean> {
+  const n = await exec.run(
+    `UPDATE meetings SET summary_status = $3, summary_error = $4, summary_updated_at = now(), updated_at = now()
+       WHERE id = $1 AND user_id = $2`,
+    [id, userId, status, status === "failed" ? (error ?? "Summary generation failed.") : null],
   );
+  return n > 0;
 }
 
 /** Meetings the user may see: their own, plus org/public/team-shared within the org. */
 export async function listMeetings(exec: Executor, orgId: string, userId: string, limit = 100): Promise<MeetingRow[]> {
+  return listMeetingsPage(exec, orgId, userId, limit);
+}
+
+export async function listMeetingsPage(exec: Executor, orgId: string, userId: string, limit = 100, cursor?: MeetingListCursor): Promise<MeetingRow[]> {
+  const params: unknown[] = [orgId, userId];
+  const cursorWhere = cursor ? "AND (created_at, id) < ($3, $4)" : "";
+  if (cursor) params.push(cursor.createdAt, cursor.id);
+  params.push(limit);
   const rows = await exec.rows<Record<string, unknown>>(
-    `SELECT * FROM meetings
-      WHERE org_id = $1 AND (user_id = $2 OR scope IN ('team','org','public'))
-      ORDER BY created_at DESC LIMIT $3`,
-    [orgId, userId, limit],
+    `SELECT id, org_id, user_id, title, meeting_date, status, duration_min, word_count,
+            attendees_json, scope, team_id, model_label, model_effort, summary_status,
+            summary_error, created_at
+       FROM meetings
+      WHERE org_id = $1 AND (user_id = $2 OR scope IN ('team','org','public')) ${cursorWhere}
+      ORDER BY created_at DESC, id DESC LIMIT $${params.length}`,
+    params,
   );
   return rows.map(mapRow);
+}
+
+/** Summary/action projection for progressive dashboard detail. */
+export async function getMeetingOverview(exec: Executor, orgId: string, userId: string, id: string): Promise<MeetingRow | null> {
+  const rows = await exec.rows<Record<string, unknown>>(
+    `SELECT id, org_id, user_id, title, meeting_date, status, duration_min, word_count,
+            attendees_json, summary_markdown, action_items_json, summary_record_id,
+            transcript_source_id, scope, team_id, model_label, model_effort,
+            summary_status, summary_error, created_at
+       FROM meetings
+      WHERE id = $1 AND org_id = $2 AND (user_id = $3 OR scope IN ('team','org','public')) LIMIT 1`,
+    [id, orgId, userId],
+  );
+  return rows[0] ? mapRow(rows[0]) : null;
+}
+
+/** Transcript-only projection; the API turns it into bounded pages. */
+export async function getMeetingTranscriptText(exec: Executor, orgId: string, userId: string, id: string): Promise<string | null> {
+  const rows = await exec.rows<Record<string, unknown>>(
+    `SELECT transcript_text FROM meetings
+      WHERE id = $1 AND org_id = $2 AND (user_id = $3 OR scope IN ('team','org','public')) LIMIT 1`,
+    [id, orgId, userId],
+  );
+  return rows[0] ? String(rows[0].transcript_text ?? "") : null;
+}
+
+export async function insertMeetingTranscriptSegments(exec: Executor, meetingId: string, segments: MeetingTranscriptSegment[]): Promise<void> {
+  if (!segments.length) return;
+  await exec.run(
+    `INSERT INTO meeting_transcript_segments (meeting_id, ordinal, at_label, speaker, text)
+     SELECT $1, (segment ->> 'ordinal')::integer, segment ->> 'at', segment ->> 'speaker', segment ->> 'text'
+       FROM jsonb_array_elements($2::jsonb) AS segment
+     ON CONFLICT (meeting_id, ordinal) DO NOTHING`,
+    [meetingId, JSON.stringify(segments)],
+  );
+}
+
+export async function listMeetingTranscriptSegments(exec: Executor, orgId: string, userId: string, id: string, cursor = 0, limit = 100): Promise<MeetingTranscriptSegment[]> {
+  const rows = await exec.rows<Record<string, unknown>>(
+    `WITH accessible AS (
+       SELECT s.ordinal, s.at_label, s.speaker, s.text
+         FROM meeting_transcript_segments s
+         JOIN meetings m ON m.id = s.meeting_id
+        WHERE m.id = $1 AND m.org_id = $2 AND (m.user_id = $3 OR m.scope IN ('team','org','public'))
+     ), counted AS (
+       SELECT *, COUNT(*) OVER() AS total FROM accessible
+     )
+     SELECT * FROM counted WHERE ordinal >= $4 ORDER BY ordinal ASC LIMIT $5`,
+    [id, orgId, userId, cursor, limit],
+  );
+  return rows.map((row) => ({ ordinal: Number(row.ordinal), at: String(row.at_label ?? ""), speaker: String(row.speaker ?? ""), text: String(row.text ?? ""), total: Number(row.total ?? 0) }));
 }
 
 export async function getMeeting(exec: Executor, orgId: string, userId: string, id: string): Promise<MeetingRow | null> {
@@ -137,8 +246,20 @@ export async function revokeShareTokens(exec: Executor, meetingId: string): Prom
 /** Owner-only summary rewrite (regenerate). Returns true when a row updated. */
 export async function updateMeetingSummary(exec: Executor, id: string, userId: string, summaryMarkdown: string, actionItems: MeetingRow["actionItems"]): Promise<boolean> {
   const n = await exec.run(
-    `UPDATE meetings SET summary_markdown = $3, action_items_json = $4, updated_at = now() WHERE id = $1 AND user_id = $2`,
+    `UPDATE meetings SET summary_markdown = $3, action_items_json = $4, summary_status = 'ready',
+       summary_error = NULL, summary_updated_at = now(), updated_at = now() WHERE id = $1 AND user_id = $2`,
     [id, userId, summaryMarkdown, JSON.stringify(actionItems)],
+  );
+  return n > 0;
+}
+
+/** Owner-only: link the recall provenance records written by the background pass. */
+export async function setMeetingSummaryRecords(exec: Executor, id: string, userId: string, summaryRecordId: string | null, transcriptSourceId: string | null): Promise<boolean> {
+  const n = await exec.run(
+    `UPDATE meetings SET summary_record_id = COALESCE($3, summary_record_id),
+       transcript_source_id = COALESCE($4, transcript_source_id), updated_at = now()
+       WHERE id = $1 AND user_id = $2`,
+    [id, userId, summaryRecordId, transcriptSourceId],
   );
   return n > 0;
 }

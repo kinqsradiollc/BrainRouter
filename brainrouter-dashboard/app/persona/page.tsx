@@ -5,7 +5,7 @@ import { motion } from "framer-motion";
 import { usePersona } from "@kinqs/brainrouter-hooks";
 import { getClient } from "../../lib/client";
 import { AuthGuard } from "../../components/AuthGuard";
-import { Markdown } from "../../components/Markdown";
+import { LazyMarkdown } from "../../components/LazyMarkdown";
 import { PageHeader } from "../../components/PageHeader";
 import { PremiumCard } from "../../components/PremiumCard";
 
@@ -64,7 +64,7 @@ export default function PersonaPage() {
             <div style={{ position: "relative" }}>
               {persona ? (
                 <div className="markdown-content">
-                  <Markdown>{persona.personaMd}</Markdown>
+                  <LazyMarkdown>{persona.personaMd}</LazyMarkdown>
                 </div>
               ) : (
                 <div style={{ color: "var(--color-stone-text)", fontStyle: "italic", padding: "40px 0", textAlign: "center" }}>

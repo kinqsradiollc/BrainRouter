@@ -2,8 +2,10 @@
 
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { getClient } from "../lib/client";
-import { isAuthenticated as checkIsAuthenticated, setJwt, setApiKey, setRefreshToken, signOut, clearAll } from "../lib/client-auth";
+import { getRefreshToken, isAuthenticated as checkIsAuthenticated, setJwt, setApiKey, setRefreshToken, signOut, clearAll } from "../lib/client-auth";
+import { authFetch } from "../lib/adminApi";
 import { STATIC_PRESENTATION } from "../lib/presentation";
+import { clearDashboardQueries } from "../lib/dashboardQuery";
 
 interface AuthUser {
   userId: string;
@@ -56,9 +58,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    // A locally valid access/refresh credential is enough to render the shell.
+    // Validate and hydrate the profile in the background so a slow or offline
+    // account endpoint cannot hide every dashboard page behind a global loader.
+    setIsAuthenticated(true);
+    setIsLoading(false);
+
     try {
-      const client = getClient();
-      const data = await client.me();
+      const data = await authFetch<AuthUser>("/api/auth/me");
       setUser({
         userId: data.userId,
         displayName: data.displayName,
@@ -68,12 +75,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsAuthenticated(true);
     } catch (err) {
       const status = typeof err === "object" && err !== null && "status" in err ? Number((err as { status?: number }).status) : 0;
-      if (status === 401 || status === 403) {
+      if ((status === 401 || status === 403) && (!getRefreshToken() || !checkIsAuthenticated())) {
         clearAll();
+        clearDashboardQueries();
+        setIsAuthenticated(false);
+        setUser(null);
+      } else {
+        // Network/timeout failures are transient. Keep the locally valid
+        // session usable; individual pages surface their own retry state.
+        setIsAuthenticated(checkIsAuthenticated());
       }
       console.error("Failed to fetch user:", err);
-      setIsAuthenticated(false);
-      setUser(null);
     } finally {
       setIsLoading(false);
     }
@@ -81,6 +93,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (jwt: string, apiKey?: string, rememberMe = false, refreshToken?: string) => {
     setIsLoading(true);
+    clearDashboardQueries();
     setJwt(jwt, rememberMe);
     if (refreshToken) setRefreshToken(refreshToken);
     if (apiKey) setApiKey(apiKey);
@@ -95,6 +108,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       /* ignore */
     }
     signOut();
+    clearDashboardQueries();
     setUser(null);
     setIsAuthenticated(false);
   };

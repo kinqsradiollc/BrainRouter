@@ -82,7 +82,9 @@ tree before release. Do not copy a stale advisory exception forward: record the
 exact affected version/path, reachability, mitigation, and removal condition in
 the release review when an advisory cannot be fixed immediately.
 
-Security and code-review agents also consume a bounded vulnerability-
-intelligence cache. Feed content is treated as untrusted reference data, carries
-source/retrieval metadata, and never overrides repository evidence or agent
-policy.
+Security and code-review agents consume bounded context from BrainRouter's
+persisted CVE catalog and exact organization/repository inventory matches. NVD,
+CISA KEV, FIRST EPSS, and OSV content is treated as untrusted reference data,
+carries source/freshness metadata, and never overrides repository evidence or
+agent policy. Catalog presence, product-name text, or a CVE mentioned in a diff
+does not by itself establish exposure.

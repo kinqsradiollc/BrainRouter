@@ -68,6 +68,14 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     // Router-first: routing is always on (no `enabled` gate).
     return { enabled: true, primaryChain: Array.isArray(router.chain) ? router.chain : [], canonical, bare: [...bareMap.values()], aliases: [] };
   };
+  const devConnectorSnapshot = () => ({
+    catalog: devConnectorCatalog.map((entry) => ({ ...entry })),
+    items: S.devConnectors.map((entry) => ({ ...entry, config: { ...entry.config }, credential: { ...entry.credential }, flows: [...entry.flows] })),
+    documentCounts: Object.fromEntries(S.devConnectors.map((entry) => [entry.id, Number((entry.checkpoint as { documentCount?: number } | undefined)?.documentCount ?? 0)])),
+    permissionCounts: Object.fromEntries(S.devConnectors.map((entry) => [entry.id, devConnectorPermissionCounts[entry.id] ?? 0])),
+    runPreviews: Object.fromEntries(S.devConnectors.map((entry) => [entry.id, devConnectorRuns[entry.id] ?? []])),
+    documentPreviews: Object.fromEntries(S.devConnectors.map((entry) => [entry.id, devSlimDocuments(entry.id, 3)])),
+  });
   const queries: Record<string, (args: Record<string, unknown>) => unknown> = {
     'list-sessions': () => mergeMeta(S.wsCurrent),
     'runtime-runner-info': () => ({ mode: 'in-process', remoteUrl: null }),
@@ -100,6 +108,7 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     },
     'schedule-remove': (a) => { const i = devSchedules.findIndex((s) => s.id === a.id); if (i >= 0) devSchedules.splice(i, 1); return { ok: i >= 0 }; },
     'schedule-toggle': (a) => { const s = devSchedules.find((x) => x.id === a.id); if (s) s.enabled = a.enabled !== false; return { ok: !!s, enabled: a.enabled !== false }; },
+    'connectors-snapshot': devConnectorSnapshot,
     // T13 — mock git worktrees (raw porcelain, parsed in the renderer).
     'git-worktrees': () => ({ raw: devWorktrees.map((w) => `worktree ${w.path}\nHEAD ${'a'.repeat(40)}\n${w.detached ? 'detached' : `branch refs/heads/${w.branch}`}\n`).join('\n'), gitRoot: '/Users/dev/BrainRouter', current: S.wsCurrent }),
     'worktree-diff': () => ({ path: '', diff: DEMO_DIFF, files: 1 }),
@@ -997,10 +1006,6 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
       connectors: {
         catalog: devConnectorCatalog.map((entry) => ({ ...entry })),
         items: S.devConnectors.map((entry) => ({ ...entry, config: { ...entry.config }, credential: { ...entry.credential }, flows: [...entry.flows] })),
-        documentCounts: Object.fromEntries(S.devConnectors.map((entry) => [entry.id, Number((entry.checkpoint as { documentCount?: number } | undefined)?.documentCount ?? 0)])),
-        permissionCounts: Object.fromEntries(S.devConnectors.map((entry) => [entry.id, devConnectorPermissionCounts[entry.id] ?? 0])),
-        runPreviews: Object.fromEntries(S.devConnectors.map((entry) => [entry.id, devConnectorRuns[entry.id] ?? []])),
-        documentPreviews: Object.fromEntries(S.devConnectors.map((entry) => [entry.id, devSlimDocuments(entry.id, 3)])),
       },
       workspacePrefs: { ...prefs },
       sessionMode: { ...(sessionModes[S.activeSession] ?? {}) },

@@ -132,12 +132,6 @@ export const RECALL_PIPELINE = [
   },
   {
     n: "03",
-    name: "Judge",
-    detail:
-      "An LLM relevance judge filters every finalist with a binary “is this actually useful?” check. The reranker reorders; the judge drops.",
-  },
-  {
-    n: "04",
     name: "Expand",
     detail:
       "A 2-hop knowledge-graph walk pulls in related facts — reflection that synthesises a richer, connected context.",

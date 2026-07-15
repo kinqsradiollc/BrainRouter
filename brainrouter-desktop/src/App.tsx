@@ -92,7 +92,15 @@ export function App(): React.ReactElement {
     username?: string;
     accountSignedIn?: boolean;
     accountEmail?: string;
-  }>({});
+  }>(() => {
+    const status = window.brainrouter.getBootstrapState?.()?.accountStatus;
+    const account = status?.account;
+    return {
+      username: account?.displayName || account?.email || undefined,
+      accountSignedIn: status?.signedIn === true,
+      accountEmail: account?.email || undefined,
+    };
+  });
   const [hostUp, setHostUp] = useState(false);
   const [interaction, setInteraction] = useState<InteractionRequest | null>(null);
   const [picked, setPicked] = useState<string[]>([]);

@@ -78,22 +78,41 @@ export function useAppEffects(ctx: AppEffectsCtx): void {
     sidePinned, codeFont, theme, accent,
   } = ctx;
 
-  // Fetch the tool enable/disable catalog (built-in + connected MCP tools) when
-  // Settings opens, so the Tools section can render a toggle per tool.
+  // Warm settings data once the host is available. Opening Settings only reveals
+  // already-rendered state; it never has to begin these reads on the click path.
   useEffect(() => {
-    if (settingsOpen) q('q-toolcat', 'tool-catalog');
+    if (!hostUp) return;
+    q('q-toolcat', 'tool-catalog');
+    q('q-usage', 'usage-breakdown');
+    q('q-usage-hist', 'usage-history', { days: 365 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settingsOpen]);
+  }, [hostUp]);
+
+  // Revalidate local config after the modal is visible, without clearing the
+  // cached snapshot or delaying the opening frame.
+  useEffect(() => {
+    if (!settingsOpen || !hostUp) return;
+    const timer = window.setTimeout(() => q('q-snapshot', 'config-snapshot'), 250);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsOpen, hostUp]);
 
   // Account-managed models use normal ETag revalidation so policy changes land
   // without restarting the desktop app. Only the renderer-safe catalog crosses
   // the bridge; the bearer remains in Electron main/host storage.
   useEffect(() => {
     if (!hostUp) return;
-    const refresh = (): void => q('q-account-models', 'account-model-catalog');
+    const refresh = (): void => {
+      q('q-account-models', 'account-model-catalog');
+      q('q-info', 'session-info');
+    };
     refresh();
     const timer = window.setInterval(refresh, 30_000);
-    return () => window.clearInterval(timer);
+    window.addEventListener('br-account-changed', refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('br-account-changed', refresh);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hostUp]);
 

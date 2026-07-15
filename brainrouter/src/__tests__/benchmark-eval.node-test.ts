@@ -13,18 +13,16 @@ import { createTestEngine } from "./helpers/pgTestStore.js";
 
 async function fresh() {
   const dir = mkdtempSync(join(tmpdir(), `brainrouter-bench-`));
-  // Hermetic env: the engine constructor reads the reranker/judge knobs from
-  // process.env, so a developer machine with a live reranker endpoint or
-  // BRAINROUTER_RELEVANCE_JUDGE_ENABLED=true would otherwise flip the bench
-  // into running those modes against real services (skippedModes assertions
-  // fail + the test hits live endpoints). Snapshot + clear, restore in cleanup.
-  // (createTestEngine handles BRAINROUTER_JOB_RUNNER; the reranker/judge keys
-  // are still ours to scrub.)
+  // Hermetic env: the engine constructor reads the reranker knobs from
+  // process.env, so a developer machine with a live reranker endpoint would
+  // otherwise flip the bench into running that mode against a real service
+  // (skippedModes assertions fail + the test hits a live endpoint). Snapshot +
+  // clear, restore in cleanup. (createTestEngine handles BRAINROUTER_JOB_RUNNER;
+  // the reranker keys are still ours to scrub.)
   const HERMETIC_KEYS = [
     "BRAINROUTER_RERANKER_ENDPOINT",
     "BRAINROUTER_RERANKER_API_KEY",
     "BRAINROUTER_RERANKER_MODEL",
-    "BRAINROUTER_RELEVANCE_JUDGE_ENABLED",
   ] as const;
   const prevEnv = new Map<string, string | undefined>(HERMETIC_KEYS.map((k) => [k, process.env[k]]));
   for (const k of HERMETIC_KEYS) delete process.env[k];
@@ -92,10 +90,10 @@ test("benchmark: runs baseline + lexmmr on real records, valid metrics, writes a
     // mutate these process.env knobs (the old toggle approach leaked '20').
     assert.equal(process.env.BRAINROUTER_RECALL_TOP_RESULTS, top0, "TOP_RESULTS untouched");
     assert.equal(process.env.BRAINROUTER_RECALL_DIVERSITY, div0, "DIVERSITY untouched");
-    // No reranker/judge configured in tests → reported as skipped, not faked as baseline.
+    // No reranker configured in tests → reported as skipped, not faked as baseline.
     assert.deepEqual(
       [...r.skippedModes].sort(),
-      ["judge (relevance judge disabled)", "rerank (no reranker configured)"],
+      ["rerank (no reranker configured)"],
     );
   } finally {
     cleanup();

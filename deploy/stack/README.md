@@ -25,8 +25,9 @@ docker compose up -d --build
 **Providers are configured in the database, not `.env`.** After first boot, sign
 in to the dashboard as the admin → **AI Providers**, or `POST /api/admin/providers`
 (both gated by the `providers:manage` capability), to add the LLM / embeddings /
-reranker / judge providers. The `BRAINROUTER_*_LLM/EMBEDDING/...` env vars are an
-optional bootstrap fallback only.
+reranker providers. The embedding **vector width** is derived from the embedder
+automatically — nothing to set. Legacy `BRAINROUTER_*_LLM/EMBEDDING/...` env vars,
+if still present, are migrated into the DB once on first boot, then ignored.
 
 ### Single user vs. team vs. organization
 

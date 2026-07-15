@@ -11,12 +11,18 @@ import { randomUUID, createHash, randomBytes } from "node:crypto";
 import { memoryEngine } from "../engine.js";
 import { ingestSource, type SourceIngestStore } from "../source/ingest.js";
 import { isPublicScope, isScopeDowngrade, scopeToBackendVisibility, assertScopeParams } from "./sharing.js";
-import type { CreateMeetingInput, MeetingRow, MeetingScope } from "../store/postgres/queries/meetingsQueries.js";
+import { redactSensitiveMemoryText } from "../util/redaction.js";
+import type { CreateMeetingInput, MeetingListCursor, MeetingRow, MeetingScope, MeetingTranscriptSegment } from "../store/postgres/queries/meetingsQueries.js";
 
 interface MeetingsStore {
   createMeeting(m: CreateMeetingInput): Promise<void>;
   listMeetings(orgId: string, userId: string, limit?: number): Promise<MeetingRow[]>;
+  listMeetingsPage(orgId: string, userId: string, limit?: number, cursor?: MeetingListCursor): Promise<MeetingRow[]>;
   getMeeting(orgId: string, userId: string, id: string): Promise<MeetingRow | null>;
+  getMeetingOverview(orgId: string, userId: string, id: string): Promise<MeetingRow | null>;
+  getMeetingTranscriptText(orgId: string, userId: string, id: string): Promise<string | null>;
+  insertMeetingTranscriptSegments(meetingId: string, segments: MeetingTranscriptSegment[]): Promise<void>;
+  listMeetingTranscriptSegments(orgId: string, userId: string, id: string, cursor?: number, limit?: number): Promise<MeetingTranscriptSegment[]>;
   setMeetingScope(id: string, userId: string, scope: MeetingScope, teamId: string | null): Promise<boolean>;
   createMeetingShareToken(s: { token: string; meetingId: string; orgId: string; createdBy: string; expiresAt?: string }): Promise<void>;
   revokeMeetingShareTokens(meetingId: string): Promise<number>;
@@ -24,6 +30,8 @@ interface MeetingsStore {
   getMeetingActiveShareToken(meetingId: string): Promise<{ token: string; expiresAt: string | null } | null>;
   updateMeetingSummary(id: string, userId: string, summaryMarkdown: string, actionItems: MeetingRow["actionItems"]): Promise<boolean>;
   updateMeetingActionItems(id: string, userId: string, actionItems: MeetingRow["actionItems"]): Promise<boolean>;
+  setMeetingSummaryStatus(id: string, userId: string, status: MeetingRow["summaryStatus"], error?: string | null): Promise<boolean>;
+  setMeetingSummaryRecords(id: string, userId: string, summaryRecordId: string | null, transcriptSourceId: string | null): Promise<boolean>;
 }
 const store = (): MeetingsStore => memoryEngine.store as unknown as MeetingsStore;
 
@@ -34,28 +42,42 @@ function requireAccount(userId?: string, orgId?: string): asserts userId is stri
   if (!userId || !orgId) throw new MeetingsAccountRequiredError();
 }
 
-export interface MeetingListDTO { id: string; title: string; date: string; scope: MeetingScope; attendeeCount: number }
+export interface MeetingListDTO { id: string; title: string; date: string; scope: MeetingScope; attendeeCount: number; summaryStatus: MeetingRow["summaryStatus"] }
 export interface MeetingDetailDTO {
   id: string; title: string; date: string; status: string; durationMin?: number; wordCount?: number;
   attendees: string[]; model?: { label: string; effort?: string };
   summaryMarkdown: string; actionItems: MeetingRow["actionItems"];
   transcript: Array<{ at: string; speaker: string; text: string }>;
   share: MeetingShareDTO;
+  summaryStatus: MeetingRow["summaryStatus"]; summaryError?: string;
 }
 export interface MeetingShareDTO { scope: MeetingScope; teamId?: string; publicUrl?: string; expiresAt?: string }
+export interface MeetingTranscriptPageDTO {
+  segments: Array<{ ordinal: number; at: string; speaker: string; text: string }>;
+  total: number;
+  nextCursor: string | null;
+}
 
 function baseUrl(): string {
   return (process.env.BRAINROUTER_PUBLIC_URL ?? "").replace(/\/+$/, "");
 }
 
-/** Parse a "[mm:ss] Speaker: text" style transcript into structured lines (best-effort). */
-function parseTranscript(text: string): MeetingDetailDTO["transcript"] {
+/**
+ * Split a transcript into displayable lines. Speech-to-text output is plain prose
+ * with NO speaker labels (meetily-style — we deliberately don't attribute
+ * speakers), so we never infer a speaker: a plain sentence with an early colon
+ * ("Reminder: ship Friday") stays intact. A leading "[mm:ss]" timestamp is kept
+ * only if the source already includes one.
+ */
+function parseTranscript(text: string, maxLines = 500): MeetingDetailDTO["transcript"] {
   const lines: MeetingDetailDTO["transcript"] = [];
   for (const raw of text.split("\n")) {
-    const m = raw.match(/^\s*(?:\[?(\d{1,2}:\d{2}(?::\d{2})?)\]?)?\s*([A-Za-z][\w .'-]{0,40}?):\s*(.+)$/);
-    if (m) lines.push({ at: m[1] ?? "", speaker: (m[2] ?? "").trim(), text: (m[3] ?? "").trim() });
-    else if (raw.trim()) lines.push({ at: "", speaker: "", text: raw.trim() });
-    if (lines.length >= 500) break;
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    const ts = trimmed.match(/^\[?(\d{1,2}:\d{2}(?::\d{2})?)\]\s*(.+)$/);
+    if (ts) lines.push({ at: ts[1] ?? "", speaker: "", text: (ts[2] ?? "").trim() });
+    else lines.push({ at: "", speaker: "", text: trimmed });
+    if (lines.length >= maxLines) break;
   }
   return lines;
 }
@@ -82,79 +104,151 @@ function parseActionItems(md: string): MeetingRow["actionItems"] {
   return items;
 }
 
-async function summarize(orgId: string, title: string, transcript: string): Promise<{ markdown: string; actionItems: MeetingRow["actionItems"] }> {
+type MeetingSummaryTemplate = "general" | "standup" | "one-on-one" | "retrospective";
+
+async function summarize(orgId: string, title: string, transcript: string, template: MeetingSummaryTemplate = "general"): Promise<{ markdown: string; actionItems: MeetingRow["actionItems"] }> {
   // Internal sub-agent runner bound to the org's OWN LLM provider (BYOK / personal).
   // An admin can assign a dedicated model to the meeting-summary role via
   // agentModels["meeting-summary"], else the org's default LLM provider is used.
   // Server-managed models are NOT consulted here — those only serve the desktop.
   const runner = await memoryEngine.modelRunner("meeting-summary", orgId);
-  const systemPrompt =
-    "You summarize meeting transcripts. Return concise markdown: a short paragraph, then a '### Decisions' " +
-    "bullet list, then a '### Action items' bullet list where each item is '- <task> — @<assignee>'. No preamble.";
-  let markdown: string;
-  try {
-    markdown = await runner.run({ systemPrompt, prompt: `Meeting: ${title}\n\nTranscript:\n${transcript.slice(0, 40_000)}`, taskId: `meeting-summary:${orgId}` });
-  } catch {
-    markdown = "Summary pending — the transcript was captured, but no summary model responded. "
-      + "An organization admin can configure the org's LLM provider under Settings → Models & providers "
-      + "(or assign a model to the meeting-summary role), then use Regenerate.";
-  }
+  const templateInstruction: Record<MeetingSummaryTemplate, string> = {
+    general: "Lead with a concise overview, then decisions and action items.",
+    standup: "Organize the notes under Progress, Blockers, Next steps, and Action items.",
+    "one-on-one": "Organize the notes under Discussion, Feedback, Commitments, and Action items.",
+    retrospective: "Organize the notes under What went well, What did not, Experiments, and Action items.",
+  };
+  const systemPrompt = `You summarize meeting transcripts. ${templateInstruction[template]} Use concise markdown and format each action item as '- <task> — @<assignee>'. No preamble.`;
+  // Throws on model failure (e.g. LLM_NOT_CONFIGURED) so the background job marks
+  // the summary 'failed' — the caller polls status and can Regenerate.
+  const markdown = await runner.run({ systemPrompt, prompt: `Meeting: ${title}\n\nTranscript:\n${transcript.slice(0, 40_000)}`, taskId: `meeting-summary:${orgId}` });
   return { markdown: markdown.trim(), actionItems: parseActionItems(markdown) };
 }
 
+/**
+ * Generate (or regenerate) the summary + recall-provenance records in the
+ * BACKGROUND, then flip summary_status to ready/failed. It runs on the server, so
+ * a client refresh never loses progress — the client just polls the status.
+ */
+function generateSummaryInBackground(args: {
+  id: string; userId: string; orgId: string; title: string; transcript: string;
+  date?: string; attendees?: string[]; scope?: MeetingScope; previousActionItems?: MeetingRow["actionItems"]; template?: MeetingSummaryTemplate;
+}): void {
+  void (async () => {
+    try {
+      const { markdown, actionItems } = await summarize(args.orgId, args.title, args.transcript, args.template);
+      const previous = new Map((args.previousActionItems ?? []).map((item) => [item.title.toLowerCase(), item]));
+      const merged = actionItems.map((item) => {
+        const before = previous.get(item.title.toLowerCase());
+        return before ? { ...item, done: before.done, trackItemId: before.trackItemId } : item;
+      });
+      await store().updateMeetingSummary(args.id, args.userId, markdown, merged); // sets summary_status='ready'
+      // Memory-native (D1): recallable summary + transcript source, linked for provenance. Best-effort.
+      try {
+        const hash = createHash("sha256").update(args.transcript).digest("hex");
+        const src = await ingestSource(memoryEngine.store as unknown as SourceIngestStore, {
+          userId: args.userId, orgId: args.orgId, workspaceTag: null, kind: "transcript",
+          uri: null, hash, title: args.title, metadata: { meetingId: args.id },
+        }, args.transcript);
+        const rec = await memoryEngine.upsertEngineeringMemory({
+          userId: args.userId, type: "episodic", content: `MEETING — ${args.title}\n\n${markdown}`,
+          sourceKind: "model_inference",
+          metadata: { kind: "meeting", meetingId: args.id, title: args.title, date: args.date, attendees: args.attendees ?? [], sourceId: src.document.id },
+        });
+        await (memoryEngine.store as unknown as { linkRecordSources(u: string, r: string, c: string[]): Promise<void> })
+          .linkRecordSources(args.userId, rec.id, src.chunks.map((c) => c.id));
+        await store().setMeetingSummaryRecords(args.id, args.userId, rec.id, src.document.id);
+        if (args.scope && args.scope !== "private") {
+          await memoryEngine.sharing.setMemoryVisibility(rec.id, args.userId, args.orgId, "org").catch(() => {});
+        }
+      } catch { /* provenance is best-effort; the summary + status are already persisted */ }
+    } catch (error) {
+      await store().setMeetingSummaryStatus(args.id, args.userId, "failed", error instanceof Error ? error.message : "Summary generation failed.").catch(() => {});
+    }
+  })();
+}
+
 export async function createMeeting(input: {
-  userId: string; orgId: string; title: string; transcript: string; scope?: MeetingScope; teamId?: string; date?: string; attendees?: string[];
-}): Promise<{ id: string }> {
+  userId: string; orgId: string; title: string; transcript: string; scope?: MeetingScope; teamId?: string; date?: string; attendees?: string[]; template?: MeetingSummaryTemplate;
+}): Promise<{ id: string; summaryStatus: MeetingRow["summaryStatus"] }> {
   requireAccount(input.userId, input.orgId);
   if (!input.transcript.trim()) throw new Error("Cannot record a meeting with an empty transcript.");
   const scope = input.scope ?? "private";
   assertScopeParams(scope, input.teamId);
   const id = `meeting-${randomUUID()}`;
 
-  const { markdown, actionItems } = await summarize(input.orgId, input.title, input.transcript);
-
-  // Memory-native (D1): recallable summary record + transcript source, linked for provenance.
-  let summaryRecordId: string | undefined;
-  let transcriptSourceId: string | undefined;
-  try {
-    const hash = createHash("sha256").update(input.transcript).digest("hex");
-    const src = await ingestSource(memoryEngine.store as unknown as SourceIngestStore, {
-      userId: input.userId, orgId: input.orgId, workspaceTag: null, kind: "transcript",
-      uri: null, hash, title: input.title, metadata: { meetingId: id },
-    }, input.transcript);
-    transcriptSourceId = src.document.id;
-    const rec = await memoryEngine.upsertEngineeringMemory({
-      userId: input.userId, type: "episodic", content: `MEETING — ${input.title}\n\n${markdown}`,
-      sourceKind: "model_inference",
-      metadata: { kind: "meeting", meetingId: id, title: input.title, date: input.date, attendees: input.attendees ?? [], sourceId: src.document.id },
-    });
-    summaryRecordId = rec.id;
-    await (memoryEngine.store as unknown as { linkRecordSources(userId: string, recordId: string, chunkIds: string[]): Promise<void> })
-      .linkRecordSources(input.userId, rec.id, src.chunks.map((c) => c.id));
-  } catch {
-    // Non-fatal: the index row below still gives a working meeting; recall provenance is best-effort.
-  }
-
+  // Persist the meeting immediately with an empty summary + 'processing' status, then
+  // generate the notes in the background — the request returns fast and a client
+  // refresh never loses progress (the server keeps summarizing; the client polls).
   await store().createMeeting({
     id, orgId: input.orgId, userId: input.userId, title: input.title, meetingDate: input.date,
     status: "imported", wordCount: input.transcript.trim().split(/\s+/).length, attendees: input.attendees ?? [],
-    transcriptText: input.transcript, summaryMarkdown: markdown, actionItems,
-    summaryRecordId, transcriptSourceId, scope: "private", teamId: undefined,
+    transcriptText: input.transcript, summaryMarkdown: "", actionItems: [],
+    scope: "private", teamId: undefined, summaryStatus: "processing",
   });
   if (scope !== "private") await setScope({ userId: input.userId, orgId: input.orgId, id, scope, teamId: input.teamId });
-  return { id };
+  generateSummaryInBackground({ id, userId: input.userId, orgId: input.orgId, title: input.title, transcript: input.transcript, date: input.date, attendees: input.attendees, scope, template: input.template });
+  return { id, summaryStatus: "processing" };
 }
 
 export async function listMeetings(userId: string, orgId: string): Promise<MeetingListDTO[]> {
   requireAccount(userId, orgId);
   const rows = await store().listMeetings(orgId, userId);
-  return rows.map((r) => ({ id: r.id, title: r.title, date: r.meetingDate ?? r.createdAt.slice(0, 10), scope: r.scope, attendeeCount: r.attendees.length }));
+  return rows.map((r) => ({ id: r.id, title: r.title, date: r.meetingDate ?? r.createdAt.slice(0, 10), scope: r.scope, attendeeCount: r.attendees.length, summaryStatus: r.summaryStatus }));
+}
+
+export async function listMeetingsPage(userId: string, orgId: string, cursorValue?: string, limit = 50): Promise<{ meetings: MeetingListDTO[]; nextCursor: string | null }> {
+  requireAccount(userId, orgId);
+  let cursor: MeetingListCursor | undefined;
+  if (cursorValue) {
+    try {
+      const decoded = JSON.parse(Buffer.from(cursorValue, "base64url").toString("utf8")) as MeetingListCursor;
+      if (!decoded.id || !decoded.createdAt || !Number.isFinite(Date.parse(decoded.createdAt))) throw new Error("bad cursor");
+      cursor = decoded;
+    } catch { throw new Error("Invalid meetings cursor"); }
+  }
+  const size = Math.min(Math.max(limit, 1), 100);
+  const rows = await store().listMeetingsPage(orgId, userId, size + 1, cursor);
+  const hasMore = rows.length > size;
+  const page = rows.slice(0, size);
+  const last = page.at(-1);
+  return {
+    meetings: page.map((r) => ({ id: r.id, title: r.title, date: r.meetingDate ?? r.createdAt.slice(0, 10), scope: r.scope, attendeeCount: r.attendees.length, summaryStatus: r.summaryStatus })),
+    nextCursor: hasMore && last ? Buffer.from(JSON.stringify({ createdAt: last.createdAt, id: last.id }), "utf8").toString("base64url") : null,
+  };
 }
 
 export async function getMeeting(userId: string, orgId: string, id: string): Promise<MeetingDetailDTO | null> {
   requireAccount(userId, orgId);
   const r = await store().getMeeting(orgId, userId, id);
   return r ? await toDetail(r) : null;
+}
+
+export async function getMeetingOverview(userId: string, orgId: string, id: string): Promise<Omit<MeetingDetailDTO, "transcript"> | null> {
+  requireAccount(userId, orgId);
+  const r = await store().getMeetingOverview(orgId, userId, id);
+  if (!r) return null;
+  const detail = await toDetail(r);
+  const { transcript: _transcript, ...overview } = detail;
+  return overview;
+}
+
+export async function getMeetingTranscriptPage(userId: string, orgId: string, id: string, cursor = 0, limit = 100): Promise<MeetingTranscriptPageDTO | null> {
+  requireAccount(userId, orgId);
+  const size = Math.min(Math.max(limit, 1), 200);
+  let rows = await store().listMeetingTranscriptSegments(orgId, userId, id, cursor, size + 1);
+  if (!rows.length && cursor === 0) {
+    const text = await store().getMeetingTranscriptText(orgId, userId, id);
+    if (text === null) return null;
+    const legacy = parseTranscript(text, Number.POSITIVE_INFINITY).map((segment, ordinal) => ({ ordinal, ...segment }));
+    await store().insertMeetingTranscriptSegments(id, legacy);
+    rows = await store().listMeetingTranscriptSegments(orgId, userId, id, cursor, size + 1);
+  }
+  const hasMore = rows.length > size;
+  const page = rows.slice(0, size);
+  const total = rows[0]?.total ?? 0;
+  const last = page.at(-1);
+  return { segments: page.map(({ total: _total, ...segment }) => segment), total, nextCursor: hasMore && last ? String(last.ordinal + 1) : null };
 }
 
 async function toDetail(r: MeetingRow): Promise<MeetingDetailDTO> {
@@ -169,6 +263,7 @@ async function toDetail(r: MeetingRow): Promise<MeetingDetailDTO> {
     model: r.modelLabel ? { label: r.modelLabel, effort: r.modelEffort ?? undefined } : undefined,
     summaryMarkdown: r.summaryMarkdown, actionItems: r.actionItems, transcript: parseTranscript(r.transcriptText),
     share,
+    summaryStatus: r.summaryStatus, summaryError: r.summaryError ?? undefined,
   };
 }
 
@@ -201,19 +296,30 @@ export async function setScope(params: { userId: string; orgId: string; id: stri
   return share;
 }
 
-/** Owner-only: re-run summarization on the stored transcript (D5 lifecycle). */
+/** Owner-only: re-run summarization on the stored transcript (D5 lifecycle), in
+ *  the BACKGROUND. Idempotent — a second call while one is already running returns
+ *  the in-progress meeting untouched (so a double-click can't double-summarize). */
 export async function regenerateSummary(userId: string, orgId: string, id: string): Promise<MeetingDetailDTO | null> {
   requireAccount(userId, orgId);
   const row = await store().getMeeting(orgId, userId, id);
   if (!row || row.userId !== userId) return null;
-  const { markdown, actionItems } = await summarize(orgId, row.title, row.transcriptText);
-  // Preserve done/track state for action items that survived the regeneration.
-  const previous = new Map(row.actionItems.map((item) => [item.title.toLowerCase(), item]));
-  const merged = actionItems.map((item) => {
-    const before = previous.get(item.title.toLowerCase());
-    return before ? { ...item, done: before.done, trackItemId: before.trackItemId } : item;
-  });
-  const ok = await store().updateMeetingSummary(id, userId, markdown, merged);
+  // Already running (and not stuck): don't start a second pass.
+  if (row.summaryStatus === "processing" || row.summaryStatus === "queued") return await toDetail(row);
+  await store().setMeetingSummaryStatus(id, userId, "processing");
+  generateSummaryInBackground({ id, userId, orgId, title: row.title, transcript: row.transcriptText, scope: row.scope, previousActionItems: row.actionItems });
+  const updated = await store().getMeeting(orgId, userId, id);
+  return updated ? await toDetail(updated) : null;
+}
+
+/** Owner-only manual summary edit (Notion-style). Preserves action items + their
+ *  done/track state; runs through the redaction chokepoint (public shares serve
+ *  the summary column raw). Sets status back to 'ready'. */
+export async function updateSummary(userId: string, orgId: string, id: string, summaryMarkdown: string): Promise<MeetingDetailDTO | null> {
+  requireAccount(userId, orgId);
+  const row = await store().getMeeting(orgId, userId, id);
+  if (!row || row.userId !== userId) return null;
+  const clean = redactSensitiveMemoryText(summaryMarkdown).slice(0, 40_000);
+  const ok = await store().updateMeetingSummary(id, userId, clean, row.actionItems);
   if (!ok) return null;
   const updated = await store().getMeeting(orgId, userId, id);
   return updated ? await toDetail(updated) : null;

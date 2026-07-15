@@ -4,7 +4,16 @@
  */
 const { contextBridge, ipcRenderer, webFrame } = require('electron');
 
+// Credential-free, local-only identity captured before the utility host boots.
+// sendSync is deliberate here: one small config read removes the signed-out
+// first-frame flash and never waits on network or safeStorage.
+let desktopBootstrapState: unknown = null;
+try { desktopBootstrapState = ipcRenderer.sendSync('desktop-bootstrap-state'); } catch { /* older main process */ }
+
 contextBridge.exposeInMainWorld('brainrouter', {
+  getBootstrapState(): unknown {
+    return desktopBootstrapState;
+  },
   send(command: unknown): void {
     ipcRenderer.send('agent-command', command);
   },

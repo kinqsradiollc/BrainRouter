@@ -56,6 +56,16 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
   void liveBuf; void liveFlushPending; void turnFailsRef; void pendingResumeRef; void lastPromptRef;
   void cardOpenRef; void chatRef; void refreshSidebar; void cachedSessionRowsRef;
 
+  // The account catalog query is intentionally independent of the much larger
+  // config snapshot. It can therefore finish first during launch. Remember the
+  // newest catalog in this event-router closure so a later snapshot cannot drop
+  // it and leave managed models invisible until the next 30-second poll.
+  let latestAccountModels: ConfigSnapshot['accountModels'] | undefined;
+  // Connector counts/previews are loaded independently and only while their
+  // Settings page is open. Preserve the newest lazy payload when a later,
+  // lightweight config snapshot arrives.
+  let latestConnectors: ConfigSnapshot['connectors'] | undefined;
+
   return function handleQueryResult(rawId: string, result: unknown, error?: string, resultWorkspaceRoot?: string): void {
     // Stability fix — drop results from an older workspace generation (they were
     // in flight when the user switched projects); then route by the base id.
@@ -401,9 +411,23 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
         return;
       }
       case 'q-catalog': if (result && typeof result === 'object') setCatalog(result as CommandsCatalog); return;
-      case 'q-snapshot': if (result && typeof result === 'object') setSnapshot(result as ConfigSnapshot); return;
+      case 'q-snapshot': if (result && typeof result === 'object') {
+        const next = result as ConfigSnapshot;
+        setSnapshot({
+          ...next,
+          ...(latestAccountModels ? { accountModels: latestAccountModels } : {}),
+          ...(latestConnectors ? { connectors: latestConnectors } : {}),
+        });
+        return;
+      }
       case 'q-account-models': if (result && typeof result === 'object') {
-        setSnapshot((current) => current ? { ...current, accountModels: result as ConfigSnapshot['accountModels'] } : current);
+        latestAccountModels = result as ConfigSnapshot['accountModels'];
+        setSnapshot((current) => current ? { ...current, accountModels: latestAccountModels } : current);
+        return;
+      }
+      case 'q-connectors': if (result && typeof result === 'object') {
+        latestConnectors = result as ConfigSnapshot['connectors'];
+        setSnapshot((current) => current ? { ...current, connectors: latestConnectors } : current);
         return;
       }
       case 'q-usage': if (Array.isArray(result)) setUsageLines(result as string[]); return;

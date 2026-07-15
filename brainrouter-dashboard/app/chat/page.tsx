@@ -5,7 +5,7 @@ import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react"
 import type { ModelPolicy } from "@kinqs/brainrouter-types";
 import { AuthGuard } from "../../components/AuthGuard";
 import { KnowledgeScopePicker, useKnowledgeScope } from "../../components/KnowledgeScopePicker";
-import { Markdown } from "../../components/Markdown";
+import { LazyMarkdown } from "../../components/LazyMarkdown";
 import { brainApi } from "../../lib/brainApi";
 import { adminApi } from "../../lib/adminApi";
 import { normalizeChatModelSelection, type ChatModelSelection } from "./chatModelSelection";
@@ -319,7 +319,7 @@ function ChatContent() {
               {messages.map((item) => (
                 <article className={`chat-message chat-message--${item.role}`} key={item.id}>
                   <div className="chat-message__role">{item.role === "user" ? "You" : "Agent"}</div>
-                  <div className="chat-message__body markdown-content markdown-content--chat"><Markdown>{item.content}</Markdown></div>
+                  <div className="chat-message__body markdown-content markdown-content--chat"><LazyMarkdown>{item.content}</LazyMarkdown></div>
                   {item.citations && item.citations.length > 0 && (
                     <div className="chat-citations">
                       <span>Context used</span>

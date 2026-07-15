@@ -20,6 +20,13 @@ describe("depth-agent executors", () => {
     }
   });
 
+  it("registers vulnerability intelligence sync as an on-demand executor", () => {
+    expect(onDemandRunnableAgentIds()).toContain("vulnerability_sync");
+    expect(getJobExecutor("vulnerability_sync")).toBeTypeOf("function");
+    expect(onDemandRunnableAgentIds()).toContain("vulnerability_scan");
+    expect(getJobExecutor("vulnerability_scan")).toBeTypeOf("function");
+  });
+
   it("benchmark_eval delegates to engine.runRetrievalBenchmark", async () => {
     let calledWith: { u: string; opts: unknown } | null = null;
     const engine = {

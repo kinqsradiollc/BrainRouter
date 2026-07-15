@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => ({
   resolveGithubAccountToken: vi.fn(),
   mintInstallationToken: vi.fn(),
   listReviewJobsForOrg: vi.fn(),
+  listReviewJobSummariesForOrg: vi.fn(),
+  listReviewJobsForPr: vi.fn(),
+  listReviewFindingsForOrg: vi.fn(),
   listMemoryJobs: vi.fn(),
   enqueueMemoryJob: vi.fn(),
 }));
@@ -28,6 +31,9 @@ vi.mock("../memory/engine.js", () => ({
     emailAuth: {},
     store: {
       listReviewJobsForOrg: mocks.listReviewJobsForOrg,
+      listReviewJobSummariesForOrg: mocks.listReviewJobSummariesForOrg,
+      listReviewJobsForPr: mocks.listReviewJobsForPr,
+      listReviewFindingsForOrg: mocks.listReviewFindingsForOrg,
       listMemoryJobs: mocks.listMemoryJobs,
       enqueueMemoryJob: mocks.enqueueMemoryJob,
     },
@@ -104,6 +110,9 @@ describe("review route GitHub accessibility", () => {
       connectedAt: "2026-07-14T00:00:00.000Z",
     });
     mocks.listReviewJobsForOrg.mockResolvedValue([]);
+    mocks.listReviewJobSummariesForOrg.mockResolvedValue([]);
+    mocks.listReviewJobsForPr.mockResolvedValue([]);
+    mocks.listReviewFindingsForOrg.mockResolvedValue([]);
     mocks.listMemoryJobs.mockResolvedValue([]);
     mocks.enqueueMemoryJob.mockResolvedValue({ id: "review-job-1" });
 
@@ -127,6 +136,50 @@ describe("review route GitHub accessibility", () => {
     Authorization: "Bearer br_user",
     "X-BrainRouter-Org": "org-1",
   };
+
+  it("rejects unauthenticated issue reads", async () => {
+    const response = await getJson(new URL(`${baseUrl}/api/admin/reviews/issues`), {});
+    expect(response.status).toBe(401);
+  });
+
+  it("validates issue cursors before querying the store", async () => {
+    const response = await getJson(new URL(`${baseUrl}/api/admin/reviews/issues?cursor=not-a-cursor`), headers);
+    expect(response.status).toBe(400);
+    expect(mocks.listReviewFindingsForOrg).not.toHaveBeenCalled();
+  });
+
+  it("returns compact filtered issues with provenance", async () => {
+    mocks.listReviewFindingsForOrg.mockResolvedValue([{
+      reviewId: "job-1", lens: "security", reviewStatus: "done", repo: "acme/widgets", prNumber: 7,
+      issueStatus: "open", ordinal: 1, finding: { file: "src/a.ts", severity: "high", title: "Unsafe input" },
+      createdAt: "2026-07-15T01:00:00.000Z", updatedAt: "2026-07-15T01:01:00.000Z", total: 1,
+      severityCounts: { critical: 0, high: 1, medium: 0, low: 0, info: 0 },
+    }]);
+    const response = await getJson(new URL(`${baseUrl}/api/admin/reviews/issues?severity=high&repo=acme%2Fwidgets&q=unsafe`), headers);
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      total: 1,
+      severity: { high: 1 },
+      issues: [{ reviewId: "job-1", repo: "acme/widgets", prNumber: 7, finding: { title: "Unsafe input" } }],
+    });
+    expect(mocks.listReviewFindingsForOrg).toHaveBeenCalledWith("org-1", expect.objectContaining({ severity: "high", repo: "acme/widgets", search: "unsafe" }));
+  });
+
+  it("polls PR activity without any GitHub request", async () => {
+    mocks.listReviewJobsForPr.mockResolvedValue([{
+      id: "job-1", kind: "pr-security-review", status: "running", priority: 50, attempts: 0, maxAttempts: 3,
+      runAfter: "2026-07-15T00:00:00.000Z", lockedAt: null, parentJobId: null,
+      input: { orgId: "org-1", repo: "acme/widgets", prNumber: 7 }, output: null,
+      progress: [{ ts: "2026-07-15T00:00:01.000Z", kind: "llm-started", msg: "Review model started" }],
+      error: null, createdAt: "2026-07-15T00:00:00.000Z", updatedAt: "2026-07-15T00:00:01.000Z",
+    }]);
+    const githubFetch = vi.fn(async () => { throw new Error("activity must be local"); });
+    vi.stubGlobal("fetch", githubFetch);
+    const response = await getJson(new URL(`${baseUrl}/api/admin/reviews/prs/acme/widgets/7/activity`), headers);
+    expect(response.status).toBe(200);
+    expect(response.body.reviews[0]).toMatchObject({ id: "job-1", status: "running" });
+    expect(githubFetch).not.toHaveBeenCalled();
+  });
 
   it("loads PR detail through the signed-in GitHub account when no App integration exists", async () => {
     const githubFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {

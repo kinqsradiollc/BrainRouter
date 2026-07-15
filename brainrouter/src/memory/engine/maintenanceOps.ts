@@ -29,6 +29,15 @@ type MaintenanceState = {
   blackboardStore(): BlackboardSurface;
 };
 
+type VulnerabilityScheduleSurface = {
+  getVulnerabilitySource(id: string): Promise<{ lastAttemptAt: string | null; cursor?: Record<string, unknown> } | null>;
+};
+
+function positiveInterval(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 export async function enqueueScheduledMaintenance(engine: MemoryEngine, force = false): Promise<{ enqueued: Record<string, number>; skipped?: boolean }> {
   const self = engine as unknown as MaintenanceState;
   if (process.env.BRAINROUTER_JOB_MAINTENANCE === "off") return { enqueued: {}, skipped: true };
@@ -84,5 +93,27 @@ export async function enqueueScheduledMaintenance(engine: MemoryEngine, force = 
   }
   // ADR-016 C3 — fan out a connector_sync job per enabled server-side connector.
   try { enqueued.connector_sync = await enqueueConnectorSyncs(engine.store); } catch { /* connectors optional */ }
+  // CVE Task 27/28 — one global, deduplicated feed job. Source state makes the
+  // cadence durable across restarts; the feed-run lease prevents replica races.
+  if ((process.env.BRAINROUTER_VULNERABILITY_SYNC ?? "on").trim().toLowerCase() !== "off") {
+    try {
+      const surface = engine.store as unknown as VulnerabilityScheduleSurface;
+      if (typeof surface.getVulnerabilitySource !== "function") return { enqueued };
+      const source = await surface.getVulnerabilitySource("nvd");
+      const lastAttempt = source?.lastAttemptAt ? Date.parse(source.lastAttemptAt) : 0;
+      const partial = source?.cursor && typeof source.cursor.windowMode === "string";
+      const interval = partial
+        ? positiveInterval(process.env.BRAINROUTER_VULNERABILITY_PARTIAL_SYNC_INTERVAL_MS, 60_000)
+        : positiveInterval(process.env.BRAINROUTER_VULNERABILITY_SYNC_INTERVAL_MS, 15 * 60_000);
+      if (!Number.isFinite(lastAttempt) || now - lastAttempt >= interval) {
+        const queued = await enqueueAgentJob(engine.store, "vulnerability_sync", { mode: "scheduled" }, { priority: 80 });
+        enqueued.vulnerability_sync = queued.deduped ? 0 : 1;
+      } else {
+        enqueued.vulnerability_sync = 0;
+      }
+    } catch (error) {
+      console.error("[BrainRouter] vulnerability sync scheduling failed:", error instanceof Error ? error.message : error);
+    }
+  }
   return { enqueued };
 }

@@ -23,14 +23,14 @@ export function LayoutWrapper({ children }: { children: React.ReactNode }) {
     return () => { document.body.style.overflow = ""; };
   }, [isMobile, mobileNavOpen]);
 
-  if (isLoading) {
-    return <div className="app-loading">Loading BrainRouter…</div>;
-  }
-
   const isPublicRoute = pathname === "/" || pathname === "/about" || pathname === "/auth";
-  if (isPublicRoute || !isAuthenticated) {
+  // Public pages never depend on account hydration; render them immediately
+  // even when a stale stored credential is being checked in the background.
+  if (isPublicRoute) {
     return <div className="public-shell"><PublicHeader /><main className="public-content">{children}</main></div>;
   }
+  if (isLoading) return <div className="app-loading">Loading BrainRouter…</div>;
+  if (!isAuthenticated) return <div className="public-shell"><PublicHeader /><main className="public-content">{children}</main></div>;
 
   return (
     <div className="dashboard-shell">

@@ -206,9 +206,6 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
   }
   function openSettings(section: SettingsSection): void {
     setSettings({ open: true, section });
-    q('q-snapshot', 'config-snapshot');
-    q('q-usage', 'usage-breakdown');
-    q('q-usage-hist', 'usage-history', { days: 365 }); // WS10 — cross-session contributions heatmap
   }
 
   // ---- DESK-5d — single-window project switching --------------------------

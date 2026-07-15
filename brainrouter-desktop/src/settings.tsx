@@ -108,7 +108,11 @@ export function SettingsDialog(props: {
   const [ruleDraft, setRuleDraft] = useState('');
   // WS10 — usage heatmap range selector (week / month / year). Re-fetches usage-history.
   const [usageDays, setUsageDays] = useState(365);
-  const refreshSnapshot = (): void => props.onAction('q-snapshot', 'config-snapshot');
+  const refreshConnectors = (): void => props.onAction('q-connectors', 'connectors-snapshot');
+  const refreshSnapshot = (): void => {
+    props.onAction('q-snapshot', 'config-snapshot');
+    if (section === 'data-connectors') refreshConnectors();
+  };
   const prefs = (snapshot?.prefs ?? {}) as Record<string, unknown>;
   const ps = (key: string, dflt: string): string => String(prefs[key] ?? dflt);
   const pb = (key: string, dflt: boolean): boolean => Boolean(prefs[key] ?? dflt);
@@ -168,6 +172,7 @@ export function SettingsDialog(props: {
     if (!props.open) return;
     lastSectionByGroup.current[activeGroup] = section;
     if (bodyRef.current) bodyRef.current.scrollTop = 0;
+    if (section === 'data-connectors') refreshConnectors();
   }, [activeGroup, props.open, section]);
 
   useEffect(() => {
@@ -196,8 +201,6 @@ export function SettingsDialog(props: {
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   };
-
-  if (!props.open) return null;
 
   const body = (() => {
     switch (section) {
@@ -751,12 +754,17 @@ export function SettingsDialog(props: {
   })();
 
   return (
-    <div className="overlay" onClick={(e) => { if (e.target === e.currentTarget) props.onClose(); }}>
+    <div
+      className="overlay"
+      hidden={!props.open}
+      aria-hidden={!props.open}
+      onClick={(e) => { if (e.target === e.currentTarget) props.onClose(); }}
+    >
       <div
         ref={dialogRef}
         className={`settings-modal settings-wrap settings-group-${activeGroup.toLowerCase()} settings-section-${section}${zoomed ? ' zoomed' : ''}`}
         role="dialog"
-        aria-modal="true"
+        aria-modal={props.open ? 'true' : undefined}
         aria-labelledby="settings-dialog-title"
         onKeyDown={handleDialogKeyDown}
         data-category={activeGroup.toLowerCase()}

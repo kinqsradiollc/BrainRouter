@@ -60,7 +60,7 @@ describe("recall pipeline width knobs", () => {
     expect(limits.topResults).toBe(10);
   });
 
-  it("clamps absurd values to 200 so a typo doesn't blow up the judge call", () => {
+  it("clamps absurd values to 200 so a typo doesn't blow up the recall pool", () => {
     restore = withEnv({
       BRAINROUTER_RECALL_FTS_LIMIT: "9999",
       BRAINROUTER_RECALL_VEC_LIMIT: "100000",

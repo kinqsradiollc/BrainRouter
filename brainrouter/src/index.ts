@@ -52,7 +52,7 @@ import { orgsRouter, projectsRouter, githubReposRouter } from './api/routes/tena
 import { connectorOauthRouter } from './api/routes/connectors/oauth.js';
 import { connectorManageRouter } from './api/routes/connectors/manage.js';
 import { githubConnectorRouter, githubConnectorAdminRouter } from './api/routes/connectors/github.js';
-import { providersRouter, agentModelsRouter, integrationsRouter, reviewsRouter, pentestsRouter, adminEmailRouter, adminOrgsRouter, adminModelsRouter } from './api/routes/admin/index.js';
+import { providersRouter, agentModelsRouter, recallSettingsRouter, integrationsRouter, reviewsRouter, pentestsRouter, adminEmailRouter, adminOrgsRouter, adminModelsRouter } from './api/routes/admin/index.js';
 import { modelsRouter } from './api/routes/models/index.js';
 import { remoteRouter } from './api/routes/remote/index.js';
 import { triggersRouter } from './api/routes/triggers/index.js';
@@ -68,7 +68,9 @@ import {
   workingRouter,
 } from './api/routes/memory/index.js';
 import { brainRouter, fleetRouter, hooksRouter, governanceRouter } from './api/routes/agent/index.js';
-import { USING_FALLBACK_JWT_SECRET, IS_PRODUCTION, jwtSecretBootError } from './api/middleware/auth.js';
+import { USING_FALLBACK_JWT_SECRET, IS_PRODUCTION, jwtSecretBootError, JWT_SECRET } from './api/middleware/auth.js';
+import { GatewayProviderService } from './services/gateway/providerPool.js';
+import { mountGatewayDataPlane } from './services/gateway/server.js';
 import { securityHeaders, corsMiddleware, resolveCorsAllowlist } from './api/middleware/securityHeaders.js';
 import { resolveJsonBodyLimit, payloadTooLargeHandler } from './api/bodyLimit.js';
 import { createRateLimiter } from './api/middleware/rateLimit.js';
@@ -193,6 +195,13 @@ if (USE_HTTP) {
   const SERVICE = (process.env.BRAINROUTER_SERVICE ?? "brain").toLowerCase();
   const serveRest = SERVICE === "brain" || SERVICE === "api";
   const serveMcp = SERVICE === "brain" || SERVICE === "mcp";
+  // SINGLE GATEWAY — front the OpenAI-compatible /v1 model-gateway on THIS port so
+  // clients (desktop BrainRouter provider, CLI, any OpenAI-compat caller) only ever
+  // need :3747. Default ON for the single-node `brain`; OFF for the decomposed
+  // stack (SERVICE=mcp/api) where a dedicated gateway container serves :3748 — set
+  // BRAINROUTER_INPROCESS_GATEWAY=on to force it, =off to opt a brain out.
+  const serveGateway = process.env.BRAINROUTER_INPROCESS_GATEWAY === "on"
+    || (SERVICE === "brain" && process.env.BRAINROUTER_INPROCESS_GATEWAY !== "off");
 
   // Health check (fast liveness probe).
   app.get('/health', (_req: Request, res: Response) => {
@@ -216,6 +225,30 @@ if (USE_HTTP) {
     res.status(status.status === 'down' ? 503 : 200).json(status);
   });
 
+  // SINGLE-GATEWAY MOUNT — the OpenAI-compatible /v1 surface (chat/completions,
+  // responses, models) on this same port, so :3747 is the one door clients need.
+  // Auth here is the gateway's own (a `br_` API key or a models:invoke JWT — NOT
+  // the plain /api JWT); it shares the brain's JWT_SECRET + Postgres so a token
+  // minted by /api/auth validates here. Skipped (falls back to the standalone
+  // :3748 gateway) when no database URL is configured.
+  if (serveGateway) {
+    const gatewayDbUrl = process.env.BRAINROUTER_DATABASE_URL ?? process.env.DATABASE_URL;
+    if (gatewayDbUrl) {
+      const gatewayService = new GatewayProviderService(gatewayDbUrl, JWT_SECRET);
+      app.use('/v1', apiRateLimit);
+      mountGatewayDataPlane(app, gatewayService);
+      // Point internal scoped dispatch (dashboard brain-chat) at THIS in-process
+      // gateway (base URL — modelGateway appends /v1/chat/completions) so a
+      // single-node deploy needs no separate :3748 process.
+      if (!process.env.BRAINROUTER_MODEL_GATEWAY_URL) {
+        process.env.BRAINROUTER_MODEL_GATEWAY_URL = `http://127.0.0.1:${PORT}`;
+      }
+      console.error(`[BrainRouter] in-process model gateway mounted at /v1 (single-port ${SERVICE}).`);
+    } else {
+      console.error('[BrainRouter] in-process /v1 gateway skipped: no BRAINROUTER_DATABASE_URL; use the standalone gateway service.');
+    }
+  }
+
   if (serveRest) {
   app.use("/api", apiRateLimit);
   app.use("/api/auth/signin", authRateLimit);
@@ -232,6 +265,7 @@ if (USE_HTTP) {
   app.use("/api/models", modelsRouter);
   app.use("/api/remote", remoteRouter);
   app.use("/api/admin/agent-models", agentModelsRouter);
+  app.use("/api/admin/recall-settings", recallSettingsRouter);
   app.use("/api/admin/integrations", integrationsRouter);
   app.use("/api/connectors", connectorOauthRouter);
   app.use("/api/connectors", connectorManageRouter);
@@ -248,6 +282,7 @@ if (USE_HTTP) {
   app.use("/api/meetings", meetingsRouter);
   app.use("/api/public/meetings", publicMeetingsRouter);
   app.use("/api/vulnerabilities", vulnerabilitiesRouter);
+  app.use("/api/vulnerability", vulnerabilitiesRouter);
   app.use("/api/contradictions", contradictionsRouter);
   app.use("/api/stats", statsRouter);
   app.use("/api/brain", brainRouter);

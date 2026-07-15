@@ -6,6 +6,7 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
 import { PremiumButton } from "../../components/PremiumButton";
 import { adminApi, type ReviewSummary } from "../../lib/adminApi";
+import { queryDashboard } from "../../lib/dashboardQuery";
 
 const EMPTY: ReviewSummary = {
   periodDays: 30,
@@ -24,7 +25,7 @@ function Overview() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setSummary(await adminApi.reviewSummary(undefined, 30));
+      setSummary(await queryDashboard("overview:review-summary:30", () => adminApi.reviewSummary(undefined, 30), { ttlMs: 30_000 }));
       setError("");
     } catch (caught) {
       setSummary(EMPTY);

@@ -1,5 +1,12 @@
 # Hosting BrainRouter (ADR-014 Phase G)
 
+> **New here?** [`deploy/README.md`](../deploy/README.md) is the step-by-step dev
+> setup + build-from-source deploy guide. This page is the hosting-topology
+> reference (the three modes, the tunnel, the status endpoint). Everything is
+> **built from source in this repo** — there is no published server image; the
+> production stack (`deploy/stack`) compiles the image locally with
+> `docker compose up -d --build`.
+
 **One codebase, three deployments.** The `brain` process is a **single gateway**: one Express app
 serves REST (`/api/*`), MCP (`/mcp`), the dashboard (`/dashboard`), `/health`, and the status
 aggregation (`/api/status`) on one port (default `3747`). Everything a client needs is behind that one
