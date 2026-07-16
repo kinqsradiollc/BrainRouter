@@ -292,7 +292,7 @@ export async function setScope(params: { userId: string; orgId: string; id: stri
     const expiresAt = new Date(Date.now() + 30 * 864e5).toISOString();
     await store().createMeetingShareToken({ token, meetingId: params.id, orgId: params.orgId, createdBy: params.userId, expiresAt });
     share.publicUrl = `${baseUrl()}/m/${token}`;
-    share.expiresAt = "in 30 days";
+    share.expiresAt = expiresAt; // ISO — matches the shape toDetail() returns (was the literal "in 30 days")
   }
   return share;
 }
