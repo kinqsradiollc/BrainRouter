@@ -14,7 +14,9 @@ import {
   registerExtensionTool,
   registerExtensionProvider,
   registerExtensionHook,
+  registerExtensionPanel,
   type ExtensionHookHandler,
+  type PanelContribution,
 } from './registry.js';
 
 /** The ergonomic shape an extension passes to `host.registerTool`. */
@@ -40,6 +42,8 @@ export interface ExtensionHost {
   registerProvider(def: ProviderDefinition): void;
   /** Attach a typed lifecycle handler (in-process analogue of a shell hook). */
   registerHook(handler: ExtensionHookHandler): void;
+  /** Contribute a serializable UI panel descriptor the desktop renderer maps to a view. */
+  registerPanel(descriptor: PanelContribution): void;
   /** Structured logger scoped to the extension name. */
   readonly log: (msg: string, fields?: Record<string, unknown>) => void;
   readonly workspaceRoot: string;
@@ -80,5 +84,6 @@ export function createExtensionHost(name: string, workspaceRoot: string, version
     },
     registerProvider: (def) => registerExtensionProvider(def, name),
     registerHook: (handler) => registerExtensionHook(handler, name),
+    registerPanel: (descriptor) => registerExtensionPanel(descriptor, name),
   };
 }
