@@ -93,6 +93,18 @@ with the same `SOURCE_RANK` precedence (workspace shadows user shadows built-in)
 Enable/disable state lives alongside pack state in a small `extensionStore.ts`
 (same shape as `packStore.ts`).
 
+**Name validation (required, security-critical — CWE-22).** `<name>` comes from a
+directory name / an `extension.json` that a workspace or user directory can supply,
+and it is interpolated into a filesystem path that is then `import()`ed in-process
+with full host capabilities. The loader **MUST** reject any name that is not a
+single safe path segment — enforce `^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$` (lower-kebab,
+no dots, slashes, or `..`) **before** constructing the path, and additionally verify
+the resolved absolute path stays inside the intended `extensions/` root (realpath
+containment). A name like `../../evil` or `../steal-config` must never resolve or
+load — otherwise a malicious repository checkout could achieve arbitrary module
+execution (RCE). Built-in extension names are fixed constants and are exempt from
+discovery-time inference but still pass the same validator.
+
 #### The typed host (`host.ts`)
 
 ```ts
