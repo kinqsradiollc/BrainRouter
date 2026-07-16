@@ -216,6 +216,16 @@ export const githubConnectorRouter = Router();
 githubConnectorRouter.post("/github/device/start", requireAnyAuth, requirePermission("connectors:manage"), async (req: AuthedRequest, res) => {
   const app = getDeviceApp();
   if (!app?.clientId) { sendError(res, 400, "GitHub sign-in is not configured on this server yet."); return; }
+  // Optional: bind this flow to a SPECIFIC connector to add ANOTHER account
+  // (work + personal). Verify the connector is the caller's own github connector
+  // in this org so a device flow can never write into someone else's connector.
+  const connectorId = String(req.body?.connectorId ?? "").trim() || undefined;
+  if (connectorId) {
+    const conn = await memoryEngine.connectors.getConnector(connectorId);
+    if (!conn || conn.userId !== req.userId || conn.orgId !== req.orgId || conn.source !== "github") {
+      sendError(res, 403, "Connector not found or access denied."); return;
+    }
+  }
   try {
     const body = app.isGithubApp ? { client_id: app.clientId } : { client_id: app.clientId, scope: LEGACY_SCOPE };
     const r = await fetch(`${GH}/login/device/code`, {
@@ -224,7 +234,7 @@ githubConnectorRouter.post("/github/device/start", requireAnyAuth, requirePermis
     });
     const d = await r.json() as { device_code?: string; user_code?: string; verification_uri?: string; interval?: number; expires_in?: number; error?: string };
     if (!d.device_code || !d.user_code) { sendError(res, 400, d.error || "GitHub returned no device code — is Device Flow enabled on the App?"); return; }
-    await memoryEngine.emailAuth.setSetting(deviceKey(req.userId!), { deviceCode: d.device_code, orgId: req.orgId!, exp: Math.floor(Date.now() / 1000) + (d.expires_in ?? 900) });
+    await memoryEngine.emailAuth.setSetting(deviceKey(req.userId!), { deviceCode: d.device_code, orgId: req.orgId!, connectorId, exp: Math.floor(Date.now() / 1000) + (d.expires_in ?? 900) });
     res.json({ userCode: d.user_code, verificationUri: d.verification_uri ?? "https://github.com/login/device", interval: d.interval ?? 5, expiresIn: d.expires_in ?? 900 });
   } catch (e) { console.error("[github] device start failed:", e); sendError(res, 500, "Could not start the GitHub device flow."); }
 });
@@ -237,7 +247,7 @@ githubConnectorRouter.post("/github/device/cancel", requireAnyAuth, requirePermi
 
 githubConnectorRouter.post("/github/device/poll", requireAnyAuth, requirePermission("connectors:manage"), async (req: AuthedRequest, res) => {
   const app = getDeviceApp();
-  const dev = await memoryEngine.emailAuth.getSetting<{ deviceCode?: string; orgId?: string; exp?: number }>(deviceKey(req.userId!));
+  const dev = await memoryEngine.emailAuth.getSetting<{ deviceCode?: string; orgId?: string; connectorId?: string; exp?: number }>(deviceKey(req.userId!));
   if (!app?.clientId || !dev?.deviceCode || dev.orgId !== req.orgId) { res.json({ status: "error", error: "no pending device authorization" }); return; }
   if ((dev.exp ?? 0) < Math.floor(Date.now() / 1000)) { res.json({ status: "expired" }); return; }
   try {
@@ -253,8 +263,23 @@ githubConnectorRouter.post("/github/device/poll", requireAnyAuth, requirePermiss
     const connectedAt = new Date().toISOString();
     const stored = githubAccountTokenFromResponse(d, { login, scope: d.scope ?? "", connectedAt, flow: "device" });
     if (!stored) { res.json({ status: "error", error: "GitHub returned no usable access token." }); return; }
-    await memoryEngine.emailAuth.setSetting(tokenKey(req.userId!), { sealed: seal(JSON.stringify(stored)) });
-    await upsertGithubConnector(req.userId!, req.orgId!, stored);
+    if (dev.connectorId) {
+      // Adding ANOTHER account: bind the token to that specific connector only —
+      // never the shared account-token key, so the primary account is untouched.
+      const target = await memoryEngine.connectors.getConnector(dev.connectorId);
+      if (target && target.userId === req.userId && target.orgId === req.orgId && target.source === "github") {
+        const updated = await memoryEngine.connectors.updateConnector(dev.connectorId, {
+          credential: connectorCredential(stored),
+          status: "connected", enabled: true, lastError: null,
+          config: { ...target.config, login, authMode: "device" },
+        });
+        if (updated) await enqueueAgentJob(memoryEngine.store, "connector_sync", { connectorId: updated.id, userId: req.userId! }).catch(() => undefined);
+      }
+    } else {
+      // First / primary account — the account-token record + its connector.
+      await memoryEngine.emailAuth.setSetting(tokenKey(req.userId!), { sealed: seal(JSON.stringify(stored)) });
+      await upsertGithubConnector(req.userId!, req.orgId!, stored);
+    }
     await memoryEngine.emailAuth.setSetting(deviceKey(req.userId!), {});
     res.json({ status: "connected", login });
   } catch (e) { console.error("[github] device poll failed:", e); res.json({ status: "error", error: "Could not complete the GitHub sign-in." }); }

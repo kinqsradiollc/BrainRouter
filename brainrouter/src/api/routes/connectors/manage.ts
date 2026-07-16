@@ -66,6 +66,44 @@ connectorManageRouter.get("/:source/status", async (req: AuthedRequest, res) => 
   res.json({ source: found.source, connected: !!c?.hasCredential, connector: c ?? null, account, scopes: resolved?.credential?.scope ?? null });
 });
 
+/** GET /api/connectors/:source/accounts — EVERY account the caller has connected
+ * for this source in the active org (multi-account: work + personal + …). Each
+ * connector IS one external account; credentials stay server-only, so this
+ * returns only the label, connected state, and the discovered account identity. */
+connectorManageRouter.get("/:source/accounts", async (req: AuthedRequest, res) => {
+  const source = String(req.params.source ?? "").trim();
+  if (!isOAuthSource(source)) { res.status(404).json({ error: "Unknown OAuth connector source" }); return; }
+  const orgId = activeOrgId(req);
+  const connectors = (await memoryEngine.connectors.listConnectors(req.userId!))
+    .filter((item) => item.source === source && item.orgId === orgId);
+  const accounts = await Promise.all(connectors.map(async (c) => {
+    const resolved = c.hasCredential ? await memoryEngine.connectors.getResolvedConnector(c.id) : null;
+    const account = resolved ? await discoverConnectorAccount(resolved).catch(() => null) : null;
+    return {
+      id: c.id, label: c.name, connected: !!c.hasCredential, status: c.status,
+      account, enabled: c.enabled, lastRunAt: c.lastRunAt, lastError: c.lastError,
+      authMode: (c.config?.authMode as string | undefined) ?? undefined,
+    };
+  }));
+  res.json({ source, accounts });
+});
+
+/** POST /api/connectors/:source/accounts — start a NEW account for this source.
+ * Creates an empty connector the OAuth/device flow then binds a credential to,
+ * so a user can add a second (work/personal) account without touching the first. */
+connectorManageRouter.post("/:source/accounts", async (req: AuthedRequest, res) => {
+  const source = String(req.params.source ?? "").trim();
+  if (!isOAuthSource(source)) { res.status(404).json({ error: "Unknown OAuth connector source" }); return; }
+  const label = typeof req.body?.label === "string" && req.body.label.trim() ? req.body.label.trim().slice(0, 80) : source;
+  const connector = await memoryEngine.connectors.createConnector(req.userId!, {
+    source,
+    name: label,
+    orgId: activeOrgId(req),
+    visibility: "private",
+  });
+  res.status(201).json({ connector });
+});
+
 /** GET /api/connectors/:source/resources — selection state safe for a browser UI.
  * Source runtimes persist their selected repositories/projects/channels in config;
  * the endpoint never attempts to expose an OAuth token to enumerate them client-side. */

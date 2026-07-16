@@ -249,6 +249,19 @@ export interface ConnectorStatus {
   appConfigured?: boolean;
 }
 
+/** One connected (or pending) account for a source — the multi-account unit. */
+export interface ConnectorAccount {
+  id: string;
+  label: string;
+  connected: boolean;
+  status: string;
+  account: string | null;
+  enabled: boolean;
+  lastRunAt: string | null;
+  lastError: string | null;
+  authMode?: "web" | "device";
+}
+
 export interface PentestTarget {
   id: string; orgId: string; createdBy: string; kind: "domain" | "repository"; value: string; normalizedValue: string; label: string | null; authorizedAt: string; createdAt: string; updatedAt: string;
 }
@@ -358,8 +371,17 @@ export const adminApi = {
     authFetch<{ app: unknown }>(`/api/connectors/${source}/oauth/app`, { method: "POST", body, orgId }),
   startConnectorOAuth: (source: string, connectorId?: string, orgId?: string) =>
     authFetch<{ url: string }>(`/api/connectors/${encodeURIComponent(source)}/oauth/start${connectorId ? `?connectorId=${encodeURIComponent(connectorId)}` : ""}`, { method: "POST", orgId }),
-  startGithubDevice: (orgId?: string) =>
-    authFetch<{ userCode: string; verificationUri: string; interval: number; expiresIn: number }>("/api/connectors/github/device/start", { method: "POST", orgId }),
+  startGithubDevice: (orgId?: string, connectorId?: string) =>
+    authFetch<{ userCode: string; verificationUri: string; interval: number; expiresIn: number }>("/api/connectors/github/device/start", { method: "POST", orgId, ...(connectorId ? { body: { connectorId } } : {}) }),
+  /** All accounts (connectors) the caller has for a source — multi-account. */
+  connectorAccounts: (source: string, orgId?: string) =>
+    authFetch<{ source: string; accounts: ConnectorAccount[] }>(`/api/connectors/${encodeURIComponent(source)}/accounts`, { orgId }),
+  /** Start a NEW account for a source (empty connector the flow then binds to). */
+  addConnectorAccount: (source: string, label: string, orgId?: string) =>
+    authFetch<{ connector: { id: string; name: string } }>(`/api/connectors/${encodeURIComponent(source)}/accounts`, { method: "POST", body: { label }, orgId }),
+  /** Remove one account (connector) by id. */
+  deleteConnectorAccount: (id: string, orgId?: string) =>
+    authFetch<{ ok?: boolean }>(`/api/connectors/${encodeURIComponent(id)}`, { method: "DELETE", orgId }),
   pollGithubDevice: (orgId?: string) =>
     authFetch<{ status: "pending" | "connected" | "expired" | "error"; login?: string; error?: string }>("/api/connectors/github/device/poll", { method: "POST", orgId }),
   cancelGithubDevice: (orgId?: string) =>
