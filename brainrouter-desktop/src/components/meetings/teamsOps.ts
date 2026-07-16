@@ -93,14 +93,20 @@ export function groupTeamOptions(teams: TeamOption[]): GroupedTeamOptions {
   };
 }
 
-/** Where an inline "New team" create lands: the caller's active shared
- *  organization when they are in one (same pick as TeamsView — default context,
- *  else the first), otherwise their personal workspace. */
+/** Where an inline "New team" create lands for a single selected context: an
+ *  organization team in that org, or a personal team when the context is the
+ *  caller's personal workspace (or missing). */
 export interface TeamCreateTarget { kind: TeamKind; orgId: string | null; orgName: string | null }
-export function pickTeamCreateTarget(contexts: TeamContext[]): TeamCreateTarget {
-  const active = contexts.find((item) => item.isDefault) ?? contexts[0];
-  if (active && active.isPersonal !== true) return { kind: "organization", orgId: active.orgId, orgName: active.name };
+export function teamCreateTargetFor(context: TeamContext | undefined): TeamCreateTarget {
+  if (context && context.isPersonal !== true) return { kind: "organization", orgId: context.orgId, orgName: context.name };
   return { kind: "personal", orgId: null, orgName: null };
+}
+
+/** The default create-target across contexts (same pick as TeamsView — the
+ *  default context, else the first). Prefer {@link teamCreateTargetFor} when a
+ *  specific context is already selected. */
+export function pickTeamCreateTarget(contexts: TeamContext[]): TeamCreateTarget {
+  return teamCreateTargetFor(contexts.find((item) => item.isDefault) ?? contexts[0]);
 }
 
 function team(value: unknown): TeamOption {

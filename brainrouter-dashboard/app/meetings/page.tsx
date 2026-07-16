@@ -84,6 +84,7 @@ export default function MeetingsPage() {
   const [shareOpen, setShareOpen] = useState(false);
   const [teams, setTeams] = useState<Team[]>([]);
   const [orgs, setOrgs] = useState<OrgSummary[]>([]);
+  const [selectedOrgId, setSelectedOrgId] = useState("");
   const [teamsLoaded, setTeamsLoaded] = useState(false);
   const [teamPickerOpen, setTeamPickerOpen] = useState(false);
   const [newTeamName, setNewTeamName] = useState("");
@@ -128,6 +129,21 @@ export default function MeetingsPage() {
     return () => window.clearTimeout(timer);
   }, [draftTitle, draftTranscript, language, summaryTemplate]);
 
+  // Meetings are org-scoped, so the surface needs an organization context before
+  // the caller can point new/shared meetings at an enterprise org. Load the
+  // caller's contexts (personal workspace + every org they belong to) up front and
+  // default to their default context; a failure is non-fatal — the picker simply
+  // stays on the implicit default (no X-BrainRouter-Org header).
+  useEffect(() => {
+    let active = true;
+    void queryDashboard("orgs", () => adminApi.listOrgs(), { ttlMs: 60_000 }).then(({ orgs: rows }) => {
+      if (!active) return;
+      setOrgs(rows);
+      setSelectedOrgId((current) => current || rows.find((org) => org.isDefault)?.orgId || rows[0]?.orgId || "");
+    }).catch(() => { /* org list is optional — Meetings still works in the default context */ });
+    return () => { active = false; };
+  }, []);
+
   // Poll while notes are generating — the server keeps summarizing across refreshes,
   // so this converges the status without the user re-triggering anything.
   useEffect(() => {
@@ -136,20 +152,20 @@ export default function MeetingsPage() {
     let alive = true;
     const timer = setInterval(async () => {
       try {
-        const overview = await authFetch<Overview>(`/api/meetings/${id}/overview`);
+        const overview = await authFetch<Overview>(`/api/meetings/${id}/overview`, { orgId: selectedOrgId || undefined });
         if (!alive) return;
         setDetail((cur) => (cur && cur.id === id ? { ...cur, ...overview } : cur));
         setItems((list) => list.map((m) => (m.id === id ? { ...m, summaryStatus: overview.summaryStatus } : m)));
       } catch { /* transient — keep polling */ }
     }, 3000);
     return () => { alive = false; clearInterval(timer); };
-  }, [detail?.id, detail?.summaryStatus]);
+  }, [detail?.id, detail?.summaryStatus, selectedOrgId]);
 
   const saveSummary = useCallback(async () => {
     if (!detail) return;
     setBusy("save-summary");
     try {
-      const d = await authFetch<Detail>(`/api/meetings/${detail.id}/summary`, { method: "PATCH", body: { summaryMarkdown: draftSummary } });
+      const d = await authFetch<Detail>(`/api/meetings/${detail.id}/summary`, { method: "PATCH", body: { summaryMarkdown: draftSummary }, orgId: selectedOrgId || undefined });
       invalidateDashboardQueries(`meetings:overview:${detail.id}`);
       setDetail(d);
       setEditing(false);
@@ -158,7 +174,7 @@ export default function MeetingsPage() {
     } finally {
       setBusy("");
     }
-  }, [detail, draftSummary]);
+  }, [detail, draftSummary, selectedOrgId]);
 
   const transcribe = useCallback(async (blob: Blob) => {
     setBusy("transcribe");
@@ -221,7 +237,7 @@ export default function MeetingsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await queryDashboard("meetings:list", () => authFetch<{ meetings: ListItem[]; nextCursor: string | null }>("/api/meetings?limit=50"), { ttlMs: 30_000 });
+      const r = await queryDashboard(`meetings:list:${selectedOrgId || "default"}`, () => authFetch<{ meetings: ListItem[]; nextCursor: string | null }>("/api/meetings?limit=50", { orgId: selectedOrgId || undefined }), { ttlMs: 30_000 });
       const list = r.meetings ?? [];
       setItems(list);
       setMeetingsNext(r.nextCursor);
@@ -233,7 +249,7 @@ export default function MeetingsPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [selectedOrgId]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -241,7 +257,7 @@ export default function MeetingsPage() {
     if (!meetingsNext || busy === "more-meetings") return;
     setBusy("more-meetings");
     try {
-      const page = await authFetch<{ meetings: ListItem[]; nextCursor: string | null }>(`/api/meetings?limit=50&cursor=${encodeURIComponent(meetingsNext)}`);
+      const page = await authFetch<{ meetings: ListItem[]; nextCursor: string | null }>(`/api/meetings?limit=50&cursor=${encodeURIComponent(meetingsNext)}`, { orgId: selectedOrgId || undefined });
       setItems((current) => [...current, ...page.meetings.filter((item) => !current.some((existing) => existing.id === item.id))]);
       setMeetingsNext(page.nextCursor);
     } catch (caught) {
@@ -249,7 +265,7 @@ export default function MeetingsPage() {
     } finally {
       setBusy("");
     }
-  }, [meetingsNext, busy]);
+  }, [meetingsNext, busy, selectedOrgId]);
 
   useEffect(() => {
     if (!selectedId) { setDetail(null); return; }
@@ -263,7 +279,7 @@ export default function MeetingsPage() {
     setTranscriptNext(null);
     setTranscriptTotal(0);
     setTranscriptLoading(true);
-    void queryDashboard(`meetings:overview:${id}`, () => authFetch<Overview>(`/api/meetings/${id}/overview`, { signal: controller.signal }), { ttlMs: 30_000 }).then((overview) => {
+    void queryDashboard(`meetings:overview:${selectedOrgId || "default"}:${id}`, () => authFetch<Overview>(`/api/meetings/${id}/overview`, { signal: controller.signal, orgId: selectedOrgId || undefined }), { ttlMs: 30_000 }).then((overview) => {
       if (!controller.signal.aborted) { setDetail({ ...overview, transcript: [] }); setShareOpen(false); }
     }).catch((caught) => {
       if (!controller.signal.aborted) {
@@ -271,13 +287,17 @@ export default function MeetingsPage() {
         setDetailError(caught instanceof Error ? caught.message : "Could not load this meeting.");
       }
     }).finally(() => { if (!controller.signal.aborted) setDetailLoading(false); });
-    void authFetch<TranscriptPage>(`/api/meetings/${id}/transcript?limit=100`, { signal: controller.signal }).then((page) => {
+    void authFetch<TranscriptPage>(`/api/meetings/${id}/transcript?limit=100`, { signal: controller.signal, orgId: selectedOrgId || undefined }).then((page) => {
       if (controller.signal.aborted) return;
       setTranscriptSegments(page.segments);
       setTranscriptNext(page.nextCursor);
       setTranscriptTotal(page.total);
     }).catch(() => {}).finally(() => { if (!controller.signal.aborted) setTranscriptLoading(false); });
     return () => controller.abort();
+    // Keyed on selectedId only: changeOrg always clears the selection (and the detail
+    // then reloads under the new org via the fresh selection), while the harmless
+    // startup "" -> default-org-id resolution leaves the selection untouched — so
+    // re-running here on selectedOrgId would only flash the detail on first paint.
   }, [selectedId]);
 
   const loadMoreTranscript = useCallback(async () => {
@@ -285,7 +305,7 @@ export default function MeetingsPage() {
     const id = detail.id;
     setTranscriptLoading(true);
     try {
-      const page = await authFetch<TranscriptPage>(`/api/meetings/${id}/transcript?limit=100&cursor=${encodeURIComponent(transcriptNext)}`);
+      const page = await authFetch<TranscriptPage>(`/api/meetings/${id}/transcript?limit=100&cursor=${encodeURIComponent(transcriptNext)}`, { orgId: selectedOrgId || undefined });
       if (detail.id === id) setTranscriptSegments((current) => [...current, ...page.segments]);
       setTranscriptNext(page.nextCursor);
       setTranscriptTotal(page.total);
@@ -294,38 +314,51 @@ export default function MeetingsPage() {
     } finally {
       setTranscriptLoading(false);
     }
-  }, [detail, transcriptNext, transcriptLoading]);
+  }, [detail, transcriptNext, transcriptLoading, selectedOrgId]);
 
-  // Load the caller's teams (active org) lazily the first time the share menu
-  // opens — most meetings never get shared to a team, so we don't fetch on load.
-  // Organizations ride along so the picker can group org teams under the active
-  // org's name and offer an org-linked create; an orgs failure is non-fatal.
+  // Load the SELECTED org's teams lazily the first time the share menu opens —
+  // most meetings never get shared to a team, so we don't fetch on load. The list
+  // is org-scoped (organization teams for the selected org + the caller's personal
+  // teams) so the picker can group them and offer an org-linked create.
   const loadTeams = useCallback(async () => {
     try {
-      const [teamsResult, orgsResult] = await Promise.all([
-        queryDashboard("teams:list", () => adminApi.listTeams(), { ttlMs: 30_000 }),
-        queryDashboard("orgs", () => adminApi.listOrgs(), { ttlMs: 60_000 }).catch(() => ({ orgs: [] as OrgSummary[] })),
-      ]);
+      const teamsResult = await queryDashboard(`teams:list:${selectedOrgId || "default"}`, () => adminApi.listTeams(selectedOrgId || undefined), { ttlMs: 30_000 });
       setTeams(teamsResult.teams ?? []);
-      setOrgs(orgsResult.orgs ?? []);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not load teams.");
     } finally {
       setTeamsLoaded(true);
     }
-  }, []);
+  }, [selectedOrgId]);
 
   useEffect(() => { if (shareOpen && !teamsLoaded) void loadTeams(); }, [shareOpen, teamsLoaded, loadTeams]);
 
-  // The org the share picker is scoped to: adminApi calls here send no explicit
-  // X-BrainRouter-Org, so the backend resolves the caller's default org — mirror
-  // that by treating the default org as active (same fallback as app/teams).
+  // The caller's default context (same fallback as app/teams) — used only until the
+  // selector resolves to a concrete org id.
   const activeOrg = useMemo(() => orgs.find((org) => org.isDefault) ?? orgs[0], [orgs]);
+  // The context the surface is operating in: every meeting call sends its id as the
+  // X-BrainRouter-Org header, so the share picker must derive its org from the
+  // SELECTED context, not a re-derived default.
+  const selectedOrg = useMemo(() => orgs.find((org) => org.orgId === selectedOrgId) ?? activeOrg, [orgs, selectedOrgId, activeOrg]);
   // A personal workspace cannot own organization teams, so org-linked affordances
-  // only appear when the active context is a real shared organization.
-  const shareOrg = activeOrg && activeOrg.isPersonal !== true ? activeOrg : undefined;
+  // only appear when the selected context is a real shared organization.
+  const shareOrg = selectedOrg && selectedOrg.isPersonal !== true ? selectedOrg : undefined;
   const organizationTeams = useMemo(() => teams.filter((team) => team.kind === "organization"), [teams]);
   const personalTeams = useMemo(() => teams.filter((team) => team.kind === "personal"), [teams]);
+
+  // Switching context re-scopes everything: meetings are org-partitioned, so drop the
+  // open meeting/detail, close the share menu, and reload both the list (via `load`'s
+  // selectedOrgId dependency) and the team picker for the newly selected org.
+  const changeOrg = useCallback((value: string) => {
+    if (value === selectedOrgId) return;
+    setSelectedOrgId(value);
+    setSelectedId(null);
+    setDetail(null);
+    setShareOpen(false);
+    setTeamPickerOpen(false);
+    setTeams([]);
+    setTeamsLoaded(false);
+  }, [selectedOrgId]);
 
   // Team scope REQUIRES a teamId (the backend 400s without one). Selecting the
   // Team row with no team chosen just reveals the picker; a concrete team POSTs.
@@ -344,7 +377,7 @@ export default function MeetingsPage() {
     setBusy("share");
     try {
       const body = scope === "team" ? { scope, teamId } : { scope };
-      const share = await authFetch<Share>(`/api/meetings/${detail.id}/scope`, { method: "POST", body });
+      const share = await authFetch<Share>(`/api/meetings/${detail.id}/scope`, { method: "POST", body, orgId: selectedOrgId || undefined });
       invalidateDashboardQueries(`meetings:overview:${detail.id}`);
       setDetail((d) => (d ? { ...d, share } : d));
       setItems((list) => list.map((m) => (m.id === detail.id ? { ...m, scope } : m)));
@@ -353,7 +386,7 @@ export default function MeetingsPage() {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not change sharing.");
     } finally { setBusy(""); }
-  }, [detail, teams]);
+  }, [detail, teams, selectedOrgId]);
 
   // Inline create keeps meeting sharing first-class to the enterprise structure:
   // inside a shared organization it creates an ORGANIZATION team bound to that
@@ -364,7 +397,7 @@ export default function MeetingsPage() {
     if (!name) return;
     setBusy("create-team");
     try {
-      const { team } = await adminApi.createTeam(name, shareOrg ? "organization" : "personal");
+      const { team } = await adminApi.createTeam(name, shareOrg ? "organization" : "personal", selectedOrgId || undefined);
       invalidateDashboardQueries("teams:");
       setTeams((cur) => [...cur, team]);
       setNewTeamName("");
@@ -374,13 +407,13 @@ export default function MeetingsPage() {
     } finally {
       setBusy("");
     }
-  }, [newTeamName, setScope, shareOrg]);
+  }, [newTeamName, setScope, shareOrg, selectedOrgId]);
 
   const regenerate = useCallback(async () => {
     if (!detail) return;
     setBusy("regen");
     try {
-      const d = await authFetch<Detail>(`/api/meetings/${detail.id}/regenerate`, { method: "POST" });
+      const d = await authFetch<Detail>(`/api/meetings/${detail.id}/regenerate`, { method: "POST", orgId: selectedOrgId || undefined });
       invalidateDashboardQueries(`meetings:overview:${detail.id}`);
       setDetail(d);
     } catch (caught) {
@@ -388,20 +421,20 @@ export default function MeetingsPage() {
     } finally {
       setBusy("");
     }
-  }, [detail]);
+  }, [detail, selectedOrgId]);
 
   const toggleAction = useCallback(async (action: ActionItem) => {
     if (!detail) return;
     const done = !action.done;
     setBusy(`action:${action.id}`);
     try {
-      await authFetch(`/api/meetings/${detail.id}/actions/${action.id}`, { method: "POST", body: { done } });
+      await authFetch(`/api/meetings/${detail.id}/actions/${action.id}`, { method: "POST", body: { done }, orgId: selectedOrgId || undefined });
       invalidateDashboardQueries(`meetings:overview:${detail.id}`);
       setDetail((d) => (d ? { ...d, actionItems: d.actionItems.map((x) => (x.id === action.id ? { ...x, done } : x)) } : d));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not update the action item.");
     } finally { setBusy(""); }
-  }, [detail]);
+  }, [detail, selectedOrgId]);
 
   // Track / untrack a meeting action — creates (or removes) a real Track work item
   // server-side, so it shows up on the Track board here and on the desktop.
@@ -411,10 +444,10 @@ export default function MeetingsPage() {
     setBusy(`track:${action.id}`);
     try {
       if (linked) {
-        await authFetch(`/api/meetings/${detail.id}/actions/${action.id}/track`, { method: "DELETE" });
+        await authFetch(`/api/meetings/${detail.id}/actions/${action.id}/track`, { method: "DELETE", orgId: selectedOrgId || undefined });
         setDetail((d) => (d ? { ...d, actionItems: d.actionItems.map((x) => (x.id === action.id ? { ...x, trackItemId: undefined } : x)) } : d));
       } else {
-        const res = await authFetch<{ trackItemId: string }>(`/api/meetings/${detail.id}/actions/${action.id}/track`, { method: "POST" });
+        const res = await authFetch<{ trackItemId: string }>(`/api/meetings/${detail.id}/actions/${action.id}/track`, { method: "POST", orgId: selectedOrgId || undefined });
         setDetail((d) => (d ? { ...d, actionItems: d.actionItems.map((x) => (x.id === action.id ? { ...x, trackItemId: res.trackItemId } : x)) } : d));
       }
       invalidateDashboardQueries(`meetings:overview:${detail.id}`);
@@ -422,14 +455,14 @@ export default function MeetingsPage() {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not update Track.");
     } finally { setBusy(""); }
-  }, [detail]);
+  }, [detail, selectedOrgId]);
 
   const submitCreate = useCallback(async () => {
     if (!draftTitle.trim() || !draftTranscript.trim()) { setCreateErr("A title and a transcript are required."); return; }
     setBusy("create");
     setCreateErr("");
     try {
-      const out = await authFetch<{ id: string }>("/api/meetings", { method: "POST", body: { title: draftTitle.trim(), transcript: draftTranscript, template: summaryTemplate } });
+      const out = await authFetch<{ id: string }>("/api/meetings", { method: "POST", body: { title: draftTitle.trim(), transcript: draftTranscript, template: summaryTemplate }, orgId: selectedOrgId || undefined });
       invalidateDashboardQueries("meetings:");
       setCreateOpen(false);
       setDraftTitle("");
@@ -443,7 +476,7 @@ export default function MeetingsPage() {
     } finally {
       setBusy("");
     }
-  }, [draftTitle, draftTranscript, summaryTemplate, load]);
+  }, [draftTitle, draftTranscript, summaryTemplate, load, selectedOrgId]);
 
   const summaryBlocks = useMemo(() => renderSummary(detail?.summaryMarkdown ?? ""), [detail?.summaryMarkdown]);
   const filteredItems = useMemo(() => {
@@ -453,7 +486,11 @@ export default function MeetingsPage() {
 
   return (
     <AuthGuard>
-      <PageHeader title="Meetings" description="Recallable meeting summaries across your organization." />
+      <PageHeader title="Meetings" description="Recallable meeting summaries across your organization.">
+        {orgs.length ? (
+          <label className={styles.orgPicker}>Organization context<select value={selectedOrgId} onChange={(event) => changeOrg(event.target.value)} aria-label="Meetings organization context">{orgs.map((org) => <option key={org.orgId} value={org.orgId}>{org.isPersonal ? `${org.name} · Personal workspace` : org.name}</option>)}</select></label>
+        ) : null}
+      </PageHeader>
       <div className={styles.page}>
       {error ? <div className={styles.errorBar} role="alert">{error}</div> : null}
       <div className={styles.wrap}>

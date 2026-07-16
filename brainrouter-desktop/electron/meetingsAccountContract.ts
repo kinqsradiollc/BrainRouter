@@ -86,25 +86,26 @@ function optionalOrgId(value: unknown): string | undefined {
 }
 
 export const meetingRequests = {
-  list(input: { cursor?: string; limit?: number } = {}): AccountRequest {
-    return { path: query('/api/meetings', [['limit', boundedInt(input.limit, 50, 1, 100, 'meetings limit')], ['cursor', cursor(input.cursor)]]), method: 'GET' };
+  list(input: { cursor?: string; limit?: number } = {}, orgId?: unknown): AccountRequest {
+    return { path: query('/api/meetings', [['limit', boundedInt(input.limit, 50, 1, 100, 'meetings limit')], ['cursor', cursor(input.cursor)]]), method: 'GET', ...(optionalOrgId(orgId) ? { orgId: optionalOrgId(orgId) } : {}) };
   },
-  detail(meetingId: unknown): AccountRequest {
-    return { path: `/api/meetings/${safeOpaqueId(meetingId, 'meeting id')}`, method: 'GET' };
+  detail(meetingId: unknown, orgId?: unknown): AccountRequest {
+    return { path: `/api/meetings/${safeOpaqueId(meetingId, 'meeting id')}`, method: 'GET', ...(optionalOrgId(orgId) ? { orgId: optionalOrgId(orgId) } : {}) };
   },
-  overview(meetingId: unknown): AccountRequest {
-    return { path: `/api/meetings/${safeOpaqueId(meetingId, 'meeting id')}/overview`, method: 'GET' };
+  overview(meetingId: unknown, orgId?: unknown): AccountRequest {
+    return { path: `/api/meetings/${safeOpaqueId(meetingId, 'meeting id')}/overview`, method: 'GET', ...(optionalOrgId(orgId) ? { orgId: optionalOrgId(orgId) } : {}) };
   },
-  transcript(meetingId: unknown, input: { cursor?: string; limit?: number } = {}): AccountRequest {
+  transcript(meetingId: unknown, input: { cursor?: string; limit?: number } = {}, orgId?: unknown): AccountRequest {
     return {
       path: query(`/api/meetings/${safeOpaqueId(meetingId, 'meeting id')}/transcript`, [
         ['limit', boundedInt(input.limit, 100, 1, 200, 'transcript limit')],
         ['cursor', cursor(input.cursor, 32)],
       ]),
       method: 'GET',
+      ...(optionalOrgId(orgId) ? { orgId: optionalOrgId(orgId) } : {}),
     };
   },
-  create(input: unknown): AccountRequest {
+  create(input: unknown, orgId?: unknown): AccountRequest {
     if (!input || typeof input !== 'object') throw new Error('Meeting input is required.');
     const raw = input as Record<string, unknown>;
     const title = boundedText(raw.title, 'Meeting title', 500);
@@ -125,18 +126,20 @@ export const meetingRequests = {
         ...(typeof raw.date === 'string' && raw.date.trim() ? { date: boundedText(raw.date, 'Meeting date', 64) } : {}),
         ...(attendees ? { attendees } : {}),
       },
+      ...(optionalOrgId(orgId) ? { orgId: optionalOrgId(orgId) } : {}),
     };
   },
-  updateSummary(meetingId: unknown, summaryMarkdown: unknown): AccountRequest {
+  updateSummary(meetingId: unknown, summaryMarkdown: unknown, orgId?: unknown): AccountRequest {
     return {
       path: `/api/meetings/${safeOpaqueId(meetingId, 'meeting id')}/summary`, method: 'PATCH',
       json: { summaryMarkdown: boundedText(summaryMarkdown, 'Summary', 500_000, false) },
+      ...(optionalOrgId(orgId) ? { orgId: optionalOrgId(orgId) } : {}),
     };
   },
-  regenerate(meetingId: unknown): AccountRequest {
-    return { path: `/api/meetings/${safeOpaqueId(meetingId, 'meeting id')}/regenerate`, method: 'POST' };
+  regenerate(meetingId: unknown, orgId?: unknown): AccountRequest {
+    return { path: `/api/meetings/${safeOpaqueId(meetingId, 'meeting id')}/regenerate`, method: 'POST', ...(optionalOrgId(orgId) ? { orgId: optionalOrgId(orgId) } : {}) };
   },
-  setScope(meetingId: unknown, requested: unknown, opts?: unknown): AccountRequest {
+  setScope(meetingId: unknown, requested: unknown, opts?: unknown, orgId?: unknown): AccountRequest {
     const next = scope(requested);
     const teamId = opts && typeof opts === 'object' && typeof (opts as { teamId?: unknown }).teamId === 'string'
       ? decodeURIComponent(safeOpaqueId((opts as { teamId: string }).teamId, 'team id'))
@@ -145,19 +148,22 @@ export const meetingRequests = {
     return {
       path: `/api/meetings/${safeOpaqueId(meetingId, 'meeting id')}/scope`, method: 'POST',
       json: { scope: next, ...(teamId ? { teamId } : {}) },
+      ...(optionalOrgId(orgId) ? { orgId: optionalOrgId(orgId) } : {}),
     };
   },
-  toggleAction(meetingId: unknown, actionId: unknown, done: unknown): AccountRequest {
+  toggleAction(meetingId: unknown, actionId: unknown, done: unknown, orgId?: unknown): AccountRequest {
     if (typeof done !== 'boolean') throw new Error('Action state must be a boolean.');
     return {
       path: `/api/meetings/${safeOpaqueId(meetingId, 'meeting id')}/actions/${safeOpaqueId(actionId, 'action id')}`,
       method: 'POST', json: { done },
+      ...(optionalOrgId(orgId) ? { orgId: optionalOrgId(orgId) } : {}),
     };
   },
-  trackAction(meetingId: unknown, actionId: unknown, remove = false): AccountRequest {
+  trackAction(meetingId: unknown, actionId: unknown, remove = false, orgId?: unknown): AccountRequest {
     return {
       path: `/api/meetings/${safeOpaqueId(meetingId, 'meeting id')}/actions/${safeOpaqueId(actionId, 'action id')}/track`,
       method: remove ? 'DELETE' : 'POST',
+      ...(optionalOrgId(orgId) ? { orgId: optionalOrgId(orgId) } : {}),
     };
   },
   transcribe(input: unknown): AccountRequest {
@@ -176,8 +182,8 @@ export const meetingRequests = {
 };
 
 export const trackRequests = {
-  list(): AccountRequest { return { path: '/api/track', method: 'GET' }; },
-  create(input: unknown): AccountRequest {
+  list(orgId?: unknown): AccountRequest { return { path: '/api/track', method: 'GET', ...(optionalOrgId(orgId) ? { orgId: optionalOrgId(orgId) } : {}) }; },
+  create(input: unknown, orgId?: unknown): AccountRequest {
     if (!input || typeof input !== 'object') throw new Error('Track input is required.');
     const raw = input as Record<string, unknown>;
     const title = boundedText(raw.title, 'Track title', 500);
@@ -191,16 +197,18 @@ export const trackRequests = {
         ...(typeof raw.assignee === 'string' && raw.assignee.trim() ? { assignee: boundedText(raw.assignee, 'Track assignee', 256) } : {}),
         ...(raw.statusCategory == null ? {} : { statusCategory: category(raw.statusCategory) }),
       },
+      ...(optionalOrgId(orgId) ? { orgId: optionalOrgId(orgId) } : {}),
     };
   },
-  transition(trackId: unknown, statusCategory: unknown): AccountRequest {
+  transition(trackId: unknown, statusCategory: unknown, orgId?: unknown): AccountRequest {
     return {
       path: `/api/track/${safeOpaqueId(trackId, 'track id')}/transition`, method: 'POST',
       json: { statusCategory: category(statusCategory) },
+      ...(optionalOrgId(orgId) ? { orgId: optionalOrgId(orgId) } : {}),
     };
   },
-  remove(trackId: unknown): AccountRequest {
-    return { path: `/api/track/${safeOpaqueId(trackId, 'track id')}`, method: 'DELETE' };
+  remove(trackId: unknown, orgId?: unknown): AccountRequest {
+    return { path: `/api/track/${safeOpaqueId(trackId, 'track id')}`, method: 'DELETE', ...(optionalOrgId(orgId) ? { orgId: optionalOrgId(orgId) } : {}) };
   },
 };
 

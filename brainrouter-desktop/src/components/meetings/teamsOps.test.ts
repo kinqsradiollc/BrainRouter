@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createTeamsOps, groupTeamOptions, pickTeamCreateTarget, toTeamOptions } from './teamsOps.js';
+import { createTeamsOps, groupTeamOptions, pickTeamCreateTarget, teamCreateTargetFor, toTeamOptions } from './teamsOps.js';
 
 test('toTeamOptions keeps valid teams and derives {id, name} picker rows', () => {
   const rows = toTeamOptions([
@@ -64,6 +64,16 @@ test('pickTeamCreateTarget falls back to a personal team outside shared orgs', (
   assert.deepEqual(pickTeamCreateTarget([{ orgId: 'personal', name: 'Personal workspace', isPersonal: true, isDefault: true }]),
     { kind: 'personal', orgId: null, orgName: null });
   assert.deepEqual(pickTeamCreateTarget([]), { kind: 'personal', orgId: null, orgName: null });
+});
+
+test('teamCreateTargetFor lands the create in the SELECTED context, not a default pick', () => {
+  // A non-default organization the caller explicitly selected still creates there.
+  assert.deepEqual(teamCreateTargetFor({ orgId: 'o2', name: 'Beta Org' }),
+    { kind: 'organization', orgId: 'o2', orgName: 'Beta Org' });
+  // The personal workspace (or a missing context) creates a personal team.
+  assert.deepEqual(teamCreateTargetFor({ orgId: 'personal', name: 'Ada (personal)', isPersonal: true }),
+    { kind: 'personal', orgId: null, orgName: null });
+  assert.deepEqual(teamCreateTargetFor(undefined), { kind: 'personal', orgId: null, orgName: null });
 });
 
 test('Teams ops exposes management CRUD over the privileged bridge', async () => {

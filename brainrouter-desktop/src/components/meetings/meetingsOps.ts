@@ -15,23 +15,23 @@ import type {
 } from "./types.js";
 
 interface MeetingsBridge {
-  list(input?: { cursor?: string; limit?: number }): Promise<unknown>;
-  get(id: string): Promise<unknown>;
-  overview(id: string): Promise<unknown>;
-  transcript(id: string, input?: { cursor?: string; limit?: number }): Promise<unknown>;
-  create(input: CreateMeetingInput): Promise<unknown>;
-  updateSummary(id: string, summaryMarkdown: string): Promise<unknown>;
+  list(input?: { cursor?: string; limit?: number }, orgId?: string): Promise<unknown>;
+  get(id: string, orgId?: string): Promise<unknown>;
+  overview(id: string, orgId?: string): Promise<unknown>;
+  transcript(id: string, input?: { cursor?: string; limit?: number }, orgId?: string): Promise<unknown>;
+  create(input: CreateMeetingInput, orgId?: string): Promise<unknown>;
+  updateSummary(id: string, summaryMarkdown: string, orgId?: string): Promise<unknown>;
   transcribe(input: { bytes: Uint8Array; contentType?: string; language?: string }): Promise<unknown>;
-  regenerate(id: string): Promise<unknown>;
-  setScope(id: string, scope: MeetingScope, opts?: { teamId?: string }): Promise<unknown>;
-  actionToTrack(meetingId: string, actionId: string): Promise<unknown>;
-  actionUntrack(meetingId: string, actionId: string): Promise<unknown>;
-  toggleAction(meetingId: string, actionId: string, done: boolean): Promise<unknown>;
-  serverTracks(): Promise<unknown>;
-  serverTrackCreate(input: CreateTrackInput): Promise<unknown>;
-  serverTrackTransition(id: string, statusCategory: TrackStatusCategory): Promise<unknown>;
-  serverTrackSetDone(id: string, done: boolean): Promise<unknown>;
-  serverTrackRemove(id: string): Promise<unknown>;
+  regenerate(id: string, orgId?: string): Promise<unknown>;
+  setScope(id: string, scope: MeetingScope, opts?: { teamId?: string }, orgId?: string): Promise<unknown>;
+  actionToTrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown>;
+  actionUntrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown>;
+  toggleAction(meetingId: string, actionId: string, done: boolean, orgId?: string): Promise<unknown>;
+  serverTracks(orgId?: string): Promise<unknown>;
+  serverTrackCreate(input: CreateTrackInput, orgId?: string): Promise<unknown>;
+  serverTrackTransition(id: string, statusCategory: TrackStatusCategory, orgId?: string): Promise<unknown>;
+  serverTrackSetDone(id: string, done: boolean, orgId?: string): Promise<unknown>;
+  serverTrackRemove(id: string, orgId?: string): Promise<unknown>;
 }
 
 export class MeetingsUnavailableError extends Error {
@@ -79,29 +79,29 @@ export function createMeetingsOps(): MeetingsOps {
     };
   }
 
-  const getPage = async (input?: { cursor?: string; limit?: number }) => listPage(await api.list(input));
+  const getPage = async (input?: { cursor?: string; limit?: number }, orgId?: string) => listPage(await api.list(input, orgId));
   return {
     listPage: getPage,
-    list: async () => (await getPage({ limit: 50 })).meetings,
-    get: async (id) => requireObject<MeetingDetail>(await api.get(id), "meeting"),
-    overview: async (id) => requireObject<MeetingOverview>(await api.overview(id), "meeting overview"),
-    transcriptPage: async (id, input) => requireObject<MeetingTranscriptPage>(await api.transcript(id, input), "transcript page"),
-    createFromTranscript: async (input) => requireObject(await api.create(input), "meeting creation result"),
-    updateSummary: async (id, markdown) => requireObject<MeetingDetail>(await api.updateSummary(id, markdown), "meeting"),
+    list: async (orgId) => (await getPage({ limit: 50 }, orgId)).meetings,
+    get: async (id, orgId) => requireObject<MeetingDetail>(await api.get(id, orgId), "meeting"),
+    overview: async (id, orgId) => requireObject<MeetingOverview>(await api.overview(id, orgId), "meeting overview"),
+    transcriptPage: async (id, input, orgId) => requireObject<MeetingTranscriptPage>(await api.transcript(id, input, orgId), "transcript page"),
+    createFromTranscript: async (input, orgId) => requireObject(await api.create(input, orgId), "meeting creation result"),
+    updateSummary: async (id, markdown, orgId) => requireObject<MeetingDetail>(await api.updateSummary(id, markdown, orgId), "meeting"),
     transcribeAudio: async (input) => requireObject<{ text: string }>(await api.transcribe(input), "transcription"),
-    regenerateSummary: async (id) => requireObject<MeetingDetail>(await api.regenerate(id), "meeting"),
-    setScope: async (id, scope, opts) => requireObject<MeetingShare>(await api.setScope(id, scope, opts), "meeting share"),
-    sendActionToTrack: async (meetingId, actionId) => requireObject<{ trackItemId: string }>(await api.actionToTrack(meetingId, actionId), "Track link"),
-    unsendActionFromTrack: async (meetingId, actionId) => { await api.actionUntrack(meetingId, actionId); },
-    toggleAction: async (meetingId, actionId, done) => { await api.toggleAction(meetingId, actionId, done); },
-    serverTracks: async () => {
-      const value = await api.serverTracks();
+    regenerateSummary: async (id, orgId) => requireObject<MeetingDetail>(await api.regenerate(id, orgId), "meeting"),
+    setScope: async (id, scope, opts, orgId) => requireObject<MeetingShare>(await api.setScope(id, scope, opts, orgId), "meeting share"),
+    sendActionToTrack: async (meetingId, actionId, orgId) => requireObject<{ trackItemId: string }>(await api.actionToTrack(meetingId, actionId, orgId), "Track link"),
+    unsendActionFromTrack: async (meetingId, actionId, orgId) => { await api.actionUntrack(meetingId, actionId, orgId); },
+    toggleAction: async (meetingId, actionId, done, orgId) => { await api.toggleAction(meetingId, actionId, done, orgId); },
+    serverTracks: async (orgId) => {
+      const value = await api.serverTracks(orgId);
       if (!Array.isArray(value)) throw new Error("The server returned an invalid Track board.");
       return value as TrackItem[];
     },
-    serverTrackCreate: async (input) => trackItem(await api.serverTrackCreate(input)),
-    serverTrackTransition: async (id, status) => trackItem(await api.serverTrackTransition(id, status)),
-    serverTrackSetDone: async (id, done) => { await api.serverTrackSetDone(id, done); },
-    serverTrackRemove: async (id) => { await api.serverTrackRemove(id); },
+    serverTrackCreate: async (input, orgId) => trackItem(await api.serverTrackCreate(input, orgId)),
+    serverTrackTransition: async (id, status, orgId) => trackItem(await api.serverTrackTransition(id, status, orgId)),
+    serverTrackSetDone: async (id, done, orgId) => { await api.serverTrackSetDone(id, done, orgId); },
+    serverTrackRemove: async (id, orgId) => { await api.serverTrackRemove(id, orgId); },
   };
 }

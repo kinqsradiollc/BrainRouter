@@ -3,7 +3,7 @@ import "./meetings.css";
 import { MeetingTracksView } from "./MeetingTracksView.js";
 import { SharePopover } from "./SharePopover.js";
 import { TeamsView } from "./TeamsView.js";
-import { createTeamsOps } from "./teamsOps.js";
+import { createTeamsOps, type TeamContext } from "./teamsOps.js";
 import {
   MEETING_SCOPES,
   SCOPE_LABEL,
@@ -38,6 +38,11 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
   const teamsOps = useMemo(() => createTeamsOps(), []);
   const [mode, setMode] = useState<"meetings" | "tracked" | "teams">("meetings");
   const [teamRevision, setTeamRevision] = useState(0);
+  // Organization context the whole meetings surface operates in. Meetings, their
+  // Track board, and team sharing are all org-scoped, so the caller picks the org
+  // once here (their personal workspace by default) and everything below follows.
+  const [contexts, setContexts] = useState<TeamContext[]>([]);
+  const [activeOrgId, setActiveOrgId] = useState("");
   const [items, setItems] = useState<MeetingListItem[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -58,11 +63,21 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
   const [draftSummary, setDraftSummary] = useState("");
   const [copied, setCopied] = useState(false);
 
+  useEffect(() => {
+    let active = true;
+    void teamsOps.contexts().then((rows) => {
+      if (!active) return;
+      setContexts(rows);
+      setActiveOrgId(rows.find((item) => item.isDefault)?.orgId ?? rows[0]?.orgId ?? "");
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [teamsOps]);
+
   const refreshList = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const page = await ops.listPage({ limit: 50 });
+      const page = await ops.listPage({ limit: 50 }, activeOrgId || undefined);
       setItems(page.meetings);
       setNextCursor(page.nextCursor);
       setSelectedId((current) => current && page.meetings.some((item) => item.id === current) ? current : page.meetings[0]?.id ?? null);
@@ -72,20 +87,32 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
       setSelectedId(null);
       setError(errorText(caught, "Could not load meetings."));
     } finally { setLoading(false); }
-  }, [ops]);
+  }, [activeOrgId, ops]);
 
   useEffect(() => { void refreshList(); }, [refreshList]);
+
+  // Switching org context reloads the (org-scoped) library, drops the open
+  // meeting/compose, and bumps the team revision so the share picker refetches
+  // the new org's teams.
+  const changeOrg = useCallback((next: string) => {
+    setActiveOrgId(next);
+    setComposing(false);
+    setSelectedId(null);
+    setDetail(null);
+    setTranscript([]);
+    setTeamRevision((value) => value + 1);
+  }, []);
 
   const loadMoreMeetings = useCallback(async () => {
     if (!nextCursor || busy) return;
     setBusy("more-meetings");
     try {
-      const page = await ops.listPage({ cursor: nextCursor, limit: 50 });
+      const page = await ops.listPage({ cursor: nextCursor, limit: 50 }, activeOrgId || undefined);
       setItems((current) => [...current, ...page.meetings.filter((row) => !current.some((existing) => existing.id === row.id))]);
       setNextCursor(page.nextCursor);
     } catch (caught) { setError(errorText(caught, "Could not load more meetings.")); }
     finally { setBusy(""); }
-  }, [busy, nextCursor, ops]);
+  }, [activeOrgId, busy, nextCursor, ops]);
 
   useEffect(() => {
     if (!selectedId || composing) { setDetail(null); setTranscript([]); return; }
@@ -99,55 +126,55 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
     setTranscriptTotal(0);
     setTranscriptLoading(true);
     setEditing(false);
-    void ops.overview(id).then((overview) => {
+    void ops.overview(id, activeOrgId || undefined).then((overview) => {
       if (active) { setDetail({ ...overview, transcript: [] }); setDraftSummary(overview.summaryMarkdown); }
     }).catch((caught) => { if (active) setDetailError(errorText(caught, "Could not load this meeting.")); })
       .finally(() => { if (active) setDetailLoading(false); });
-    void ops.transcriptPage(id, { limit: 100 }).then((page) => {
+    void ops.transcriptPage(id, { limit: 100 }, activeOrgId || undefined).then((page) => {
       if (active) { setTranscript(page.segments); setTranscriptNext(page.nextCursor); setTranscriptTotal(page.total); }
     }).catch((caught) => { if (active) setDetailError(errorText(caught, "Could not load the transcript.")); })
       .finally(() => { if (active) setTranscriptLoading(false); });
     return () => { active = false; };
-  }, [composing, ops, selectedId]);
+  }, [activeOrgId, composing, ops, selectedId]);
 
   useEffect(() => {
     if (!detail || !["queued", "processing"].includes(detail.summaryStatus)) return;
     let active = true;
     const id = detail.id;
     const timer = globalThis.setInterval(() => {
-      void ops.overview(id).then((overview) => {
+      void ops.overview(id, activeOrgId || undefined).then((overview) => {
         if (!active) return;
         setDetail((current) => current?.id === id ? { ...current, ...overview } : current);
         setItems((list) => list.map((item) => item.id === id ? { ...item, summaryStatus: overview.summaryStatus } : item));
       }).catch(() => undefined);
     }, 3000);
     return () => { active = false; globalThis.clearInterval(timer); };
-  }, [detail?.id, detail?.summaryStatus, ops]);
+  }, [activeOrgId, detail?.id, detail?.summaryStatus, ops]);
 
   const loadMoreTranscript = useCallback(async () => {
     if (!detail || !transcriptNext || transcriptLoading) return;
     const id = detail.id;
     setTranscriptLoading(true);
     try {
-      const page = await ops.transcriptPage(id, { cursor: transcriptNext, limit: 100 });
+      const page = await ops.transcriptPage(id, { cursor: transcriptNext, limit: 100 }, activeOrgId || undefined);
       if (detail.id === id) setTranscript((current) => [...current, ...page.segments]);
       setTranscriptNext(page.nextCursor);
       setTranscriptTotal(page.total);
     } catch (caught) { setError(errorText(caught, "Could not load more transcript.")); }
     finally { setTranscriptLoading(false); }
-  }, [detail, ops, transcriptLoading, transcriptNext]);
+  }, [activeOrgId, detail, ops, transcriptLoading, transcriptNext]);
 
   const setScope = useCallback(async (scope: MeetingScope, options?: { teamId?: string }) => {
     if (!detail || busy) return;
     setBusy("share");
     setError("");
     try {
-      const share = await ops.setScope(detail.id, scope, options);
+      const share = await ops.setScope(detail.id, scope, options, activeOrgId || undefined);
       setDetail((current) => current ? { ...current, share } : current);
       setItems((list) => list.map((item) => item.id === detail.id ? { ...item, scope } : item));
     } catch (caught) { setError(errorText(caught, "Could not change meeting access.")); }
     finally { setBusy(""); }
-  }, [busy, detail, ops]);
+  }, [activeOrgId, busy, detail, ops]);
 
   const toggleAction = useCallback(async (action: MeetingActionItem) => {
     if (!detail || busy) return;
@@ -156,10 +183,10 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
     setBusy(`action:${action.id}`);
     setDetail({ ...detail, actionItems: previous.map((item) => item.id === action.id ? { ...item, done } : item) });
     setError("");
-    try { await ops.toggleAction(detail.id, action.id, done); }
+    try { await ops.toggleAction(detail.id, action.id, done, activeOrgId || undefined); }
     catch (caught) { setDetail((current) => current ? { ...current, actionItems: previous } : current); setError(errorText(caught, "Could not update that action item.")); }
     finally { setBusy(""); }
-  }, [busy, detail, ops]);
+  }, [activeOrgId, busy, detail, ops]);
 
   const toggleTrack = useCallback(async (action: MeetingActionItem) => {
     if (!detail || busy) return;
@@ -168,45 +195,48 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
     setError("");
     try {
       if (action.trackItemId) {
-        await ops.unsendActionFromTrack(detail.id, action.id);
+        await ops.unsendActionFromTrack(detail.id, action.id, activeOrgId || undefined);
         setDetail((current) => current ? { ...current, actionItems: current.actionItems.map((item) => item.id === action.id ? { ...item, trackItemId: undefined } : item) } : current);
       } else {
-        const { trackItemId } = await ops.sendActionToTrack(detail.id, action.id);
+        const { trackItemId } = await ops.sendActionToTrack(detail.id, action.id, activeOrgId || undefined);
         setDetail((current) => current ? { ...current, actionItems: current.actionItems.map((item) => item.id === action.id ? { ...item, trackItemId } : item) } : current);
       }
     } catch (caught) { setDetail((current) => current ? { ...current, actionItems: previous } : current); setError(errorText(caught, "Could not update Meeting Track.")); }
     finally { setBusy(""); }
-  }, [busy, detail, ops]);
+  }, [activeOrgId, busy, detail, ops]);
 
   const regenerate = useCallback(async () => {
     if (!detail || busy) return;
     setBusy("regenerate");
     setError("");
-    try { const updated = await ops.regenerateSummary(detail.id); setDetail(updated); setDraftSummary(updated.summaryMarkdown); }
+    try { const updated = await ops.regenerateSummary(detail.id, activeOrgId || undefined); setDetail(updated); setDraftSummary(updated.summaryMarkdown); }
     catch (caught) { setError(errorText(caught, "Could not regenerate this summary.")); }
     finally { setBusy(""); }
-  }, [busy, detail, ops]);
+  }, [activeOrgId, busy, detail, ops]);
 
   const saveSummary = useCallback(async () => {
     if (!detail || busy) return;
     setBusy("save-summary");
     setError("");
-    try { const updated = await ops.updateSummary(detail.id, draftSummary); setDetail(updated); setEditing(false); }
+    try { const updated = await ops.updateSummary(detail.id, draftSummary, activeOrgId || undefined); setDetail(updated); setEditing(false); }
     catch (caught) { setError(errorText(caught, "Could not save this summary.")); }
     finally { setBusy(""); }
-  }, [busy, detail, draftSummary, ops]);
+  }, [activeOrgId, busy, detail, draftSummary, ops]);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return items.filter((item) => (scopeFilter === "all" || item.scope === scopeFilter) && (!needle || item.title.toLowerCase().includes(needle)));
   }, [items, query, scopeFilter]);
 
+  const activeContext = useMemo(() => contexts.find((item) => item.orgId === activeOrgId), [activeOrgId, contexts]);
+
   return (
     <div className="mv-shell">
       <div className="mv-tabs" role="tablist" aria-label="Meetings sections">
         {(["meetings", "tracked", "teams"] as const).map((tab) => <button type="button" key={tab} role="tab" aria-selected={mode === tab} className={`mv-tab${mode === tab ? " mv-on" : ""}`} onClick={() => setMode(tab)}>{tab === "tracked" ? "Track" : tab[0].toUpperCase() + tab.slice(1)}</button>)}
+        {mode !== "teams" && contexts.length ? <label className="mv-orgctx">Organization context<select value={activeOrgId} onChange={(event) => changeOrg(event.target.value)} aria-label="Organization context">{contexts.map((item) => <option key={item.orgId} value={item.orgId}>{item.isPersonal ? `${item.name} · Personal workspace` : item.name}</option>)}</select></label> : null}
       </div>
-      {mode === "tracked" ? <MeetingTracksView ops={ops} /> : mode === "teams" ? <TeamsView ops={teamsOps} onChanged={() => setTeamRevision((value) => value + 1)} /> : (
+      {mode === "tracked" ? <MeetingTracksView ops={ops} orgId={activeOrgId || undefined} /> : mode === "teams" ? <TeamsView ops={teamsOps} onChanged={() => setTeamRevision((value) => value + 1)} /> : (
         <div className="mv-root">
           <aside className={`mv-col${selectedId || composing ? " mv-col-has-selection" : ""}`}>
             <div className="mv-col-head"><div><span className="mv-eyebrow">Library</span><h2>Meetings <span>{items.length}</span></h2></div><button type="button" className="mv-newbtn" onClick={() => { setComposing(true); setSelectedId(null); }}>+ New</button></div>
@@ -220,12 +250,12 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
             {nextCursor ? <button type="button" className="mv-load-more" disabled={busy === "more-meetings"} onClick={() => void loadMoreMeetings()}>{busy === "more-meetings" ? "Loading…" : "Load more meetings"}</button> : null}
           </aside>
 
-          {composing ? <NewMeeting ops={ops} onCancel={() => { setComposing(false); void refreshList(); }} onCreated={async (id) => { await refreshList(); setComposing(false); setSelectedId(id); }} /> : detail ? (
+          {composing ? <NewMeeting ops={ops} orgId={activeOrgId || undefined} onCancel={() => { setComposing(false); void refreshList(); }} onCreated={async (id) => { await refreshList(); setComposing(false); setSelectedId(id); }} /> : detail ? (
             <main className="mv-detail">
               <button type="button" className="mv-mobile-back" onClick={() => setSelectedId(null)}>← Meetings</button>
               {error ? <div className="mv-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError("")} aria-label="Dismiss error">×</button></div> : null}
               <header className="mv-dhead">
-                <div className="mv-dhead-row"><div className="mv-title-block"><div className="mv-title-status"><span className={`mv-summary-dot mv-summary-${detail.summaryStatus}`} />{STATUS_LABEL[detail.summaryStatus]}</div><h3>{detail.title}</h3><div className="mv-att"><span className="mv-av">{detail.attendees.slice(0, 4).map((attendee) => <span key={attendee}>{initials(attendee)}</span>)}</span>{detail.attendees.length ? detail.attendees.join(", ") : "No attendees recorded"}</div></div><div className="mv-hactions">{detail.canEdit ? <SharePopover share={detail.share} busy={busy === "share"} teamsOps={teamsOps} teamRevision={teamRevision} onError={setError} onSetScope={(scope, options) => void setScope(scope, options)} /> : <span className="mv-shared-readonly">Shared with you · read only</span>}{detail.model ? <span className="mv-modelchip">{detail.model.label}{detail.model.effort ? <> · <b>{detail.model.effort}</b></> : null}</span> : null}</div></div>
+                <div className="mv-dhead-row"><div className="mv-title-block"><div className="mv-title-status"><span className={`mv-summary-dot mv-summary-${detail.summaryStatus}`} />{STATUS_LABEL[detail.summaryStatus]}</div><h3>{detail.title}</h3><div className="mv-att"><span className="mv-av">{detail.attendees.slice(0, 4).map((attendee) => <span key={attendee}>{initials(attendee)}</span>)}</span>{detail.attendees.length ? detail.attendees.join(", ") : "No attendees recorded"}</div></div><div className="mv-hactions">{detail.canEdit ? <SharePopover share={detail.share} busy={busy === "share"} teamsOps={teamsOps} teamRevision={teamRevision} context={activeContext} onError={setError} onSetScope={(scope, options) => void setScope(scope, options)} /> : <span className="mv-shared-readonly">Shared with you · read only</span>}{detail.model ? <span className="mv-modelchip">{detail.model.label}{detail.model.effort ? <> · <b>{detail.model.effort}</b></> : null}</span> : null}</div></div>
                 <div className="mv-metastrip"><span className="mv-chip">{detail.status || "Captured"}</span><span className="mv-chip">{detail.date}</span>{detail.durationMin ? <span className="mv-chip">{detail.durationMin} min</span> : null}{detail.wordCount ? <span className="mv-chip">{detail.wordCount.toLocaleString()} words</span> : null}</div>
               </header>
               <div className="mv-dbody">
@@ -274,7 +304,7 @@ function SummaryBody({ markdown }: { markdown: string }): ReactElement {
   return <div className="mv-summary-body">{blocks}</div>;
 }
 
-function NewMeeting({ ops, onCreated, onCancel }: { ops: MeetingsOps; onCreated(id: string): Promise<void>; onCancel(): void }): ReactElement {
+function NewMeeting({ ops, orgId, onCreated, onCancel }: { ops: MeetingsOps; orgId?: string; onCreated(id: string): Promise<void>; onCancel(): void }): ReactElement {
   const [title, setTitle] = useState("");
   const [transcript, setTranscript] = useState("");
   const [template, setTemplate] = useState<CreateMeetingInput["template"]>("general");
@@ -337,11 +367,11 @@ function NewMeeting({ ops, onCreated, onCancel }: { ops: MeetingsOps; onCreated(
     if (!title.trim() || !transcript.trim() || busy) return;
     setBusy("create"); setError("");
     try {
-      const result = await ops.createFromTranscript({ title: title.trim(), transcript, template });
+      const result = await ops.createFromTranscript({ title: title.trim(), transcript, template }, orgId);
       localStorage.removeItem(DRAFT_KEY); await onCreated(result.id);
     } catch (caught) { setError(errorText(caught, "Could not create this meeting.")); }
     finally { setBusy(""); }
-  }, [busy, onCreated, ops, template, title, transcript]);
+  }, [busy, onCreated, ops, orgId, template, title, transcript]);
 
   return <main className="mv-detail"><button type="button" className="mv-mobile-back" onClick={onCancel}>← Meetings</button><div className="mv-compose"><div className="mv-compose-head"><div><span className="mv-eyebrow">Capture</span><h3>New meeting</h3><p>Record, import audio, or paste a transcript. Your draft stays on this device until it is summarized.</p></div>{recovered ? <span className="mv-recovered">Draft recovered</span> : null}</div>{error ? <div className="mv-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError("")} aria-label="Dismiss error">×</button></div> : null}<div className="mv-capture-bar">{recording ? <><button type="button" className="mv-recording" onClick={stopRecording}><span /> Stop & transcribe</button><button type="button" className="mv-secondary" onClick={togglePause}>{paused ? "Resume" : "Pause"}</button></> : <button type="button" className="mv-secondary" onClick={() => void startRecording()} disabled={Boolean(busy)}>● Record audio</button>}<label className={`mv-secondary mv-file-btn${busy ? " mv-disabled" : ""}`}>↑ Import audio<input type="file" accept="audio/*" onChange={importAudio} disabled={Boolean(busy)} /></label><span>{busy === "transcribe" ? "Transcribing audio…" : "MP3, M4A, WAV, or WebM · up to 40 MB"}</span></div><div className="mv-compose-grid"><label className="mv-field mv-field-wide"><span>Meeting title</span><input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Weekly product sync" maxLength={180} /></label><label className="mv-field"><span>Summary template</span><select value={template} onChange={(event) => setTemplate(event.target.value as CreateMeetingInput["template"])}><option value="general">General</option><option value="standup">Stand-up</option><option value="one-on-one">1:1</option><option value="retrospective">Retrospective</option></select></label><label className="mv-field"><span>Audio language</span><select value={language} onChange={(event) => setLanguage(event.target.value)}><option value="auto">Auto-detect</option><option value="en">English</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option><option value="ja">Japanese</option></select></label><label className="mv-field mv-field-wide"><span>Transcript</span><textarea value={transcript} onChange={(event) => setTranscript(event.target.value)} placeholder="Paste a transcript here, or record/import audio above…" /></label></div><div className="mv-compose-actions"><button type="button" className="mv-primary" disabled={!title.trim() || !transcript.trim() || Boolean(busy)} onClick={() => void submit()}>{busy === "create" ? "Creating & summarizing…" : "Create meeting"}</button><button type="button" className="mv-secondary" onClick={onCancel}>Cancel</button></div></div></main>;
 }

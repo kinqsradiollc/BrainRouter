@@ -13,18 +13,18 @@ test("Meetings ops reports an explicit unavailable state instead of sample data"
   await assert.rejects(() => ops.serverTracks(), MeetingsUnavailableError);
 });
 
-test("Meetings ops preserves list and transcript pagination", async () => {
+test("Meetings ops preserves pagination and threads the selected org context", async () => {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   setBridge({
     list: async (...args: never[]) => { calls.push({ method: "list", args }); return { meetings: [{ id: "m1" }], nextCursor: "next" }; },
     transcript: async (...args: never[]) => { calls.push({ method: "transcript", args }); return { segments: [], total: 201, nextCursor: "100" }; },
   });
   const ops = createMeetingsOps();
-  assert.equal((await ops.listPage({ limit: 25, cursor: "cur" })).nextCursor, "next");
-  assert.equal((await ops.transcriptPage("m1", { limit: 100, cursor: "0" })).total, 201);
+  assert.equal((await ops.listPage({ limit: 25, cursor: "cur" }, "org_1")).nextCursor, "next");
+  assert.equal((await ops.transcriptPage("m1", { limit: 100, cursor: "0" }, "org_1")).total, 201);
   assert.deepEqual(calls, [
-    { method: "list", args: [{ limit: 25, cursor: "cur" }] },
-    { method: "transcript", args: ["m1", { limit: 100, cursor: "0" }] },
+    { method: "list", args: [{ limit: 25, cursor: "cur" }, "org_1"] },
+    { method: "transcript", args: ["m1", { limit: 100, cursor: "0" }, "org_1"] },
   ]);
 });
 

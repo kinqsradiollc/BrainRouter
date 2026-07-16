@@ -49,23 +49,23 @@ declare global {
       };
       /** Account-backed Meetings and its org-scoped server Track board. */
       meetings?: {
-        list(input?: { cursor?: string; limit?: number }): Promise<unknown>;
-        get(id: string): Promise<unknown>;
-        overview(id: string): Promise<unknown>;
-        transcript(id: string, input?: { cursor?: string; limit?: number }): Promise<unknown>;
-        create(input: { title: string; transcript: string; template?: string; scope?: string; teamId?: string; date?: string; attendees?: string[] }): Promise<unknown>;
-        updateSummary(id: string, summaryMarkdown: string): Promise<unknown>;
+        list(input?: { cursor?: string; limit?: number }, orgId?: string): Promise<unknown>;
+        get(id: string, orgId?: string): Promise<unknown>;
+        overview(id: string, orgId?: string): Promise<unknown>;
+        transcript(id: string, input?: { cursor?: string; limit?: number }, orgId?: string): Promise<unknown>;
+        create(input: { title: string; transcript: string; template?: string; scope?: string; teamId?: string; date?: string; attendees?: string[] }, orgId?: string): Promise<unknown>;
+        updateSummary(id: string, summaryMarkdown: string, orgId?: string): Promise<unknown>;
         transcribe(input: { bytes: Uint8Array; contentType?: string; language?: string }): Promise<unknown>;
-        regenerate(id: string): Promise<unknown>;
-        setScope(id: string, scope: string, opts?: { teamId?: string }): Promise<unknown>;
-        actionToTrack(meetingId: string, actionId: string): Promise<unknown>;
-        actionUntrack(meetingId: string, actionId: string): Promise<unknown>;
-        toggleAction(meetingId: string, actionId: string, done: boolean): Promise<unknown>;
-        serverTracks(): Promise<unknown>;
-        serverTrackCreate(input: { title: string; description?: string; priority?: string; assignee?: string; statusCategory?: string }): Promise<unknown>;
-        serverTrackTransition(id: string, statusCategory: string): Promise<unknown>;
-        serverTrackSetDone(id: string, done: boolean): Promise<unknown>;
-        serverTrackRemove(id: string): Promise<unknown>;
+        regenerate(id: string, orgId?: string): Promise<unknown>;
+        setScope(id: string, scope: string, opts?: { teamId?: string }, orgId?: string): Promise<unknown>;
+        actionToTrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown>;
+        actionUntrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown>;
+        toggleAction(meetingId: string, actionId: string, done: boolean, orgId?: string): Promise<unknown>;
+        serverTracks(orgId?: string): Promise<unknown>;
+        serverTrackCreate(input: { title: string; description?: string; priority?: string; assignee?: string; statusCategory?: string }, orgId?: string): Promise<unknown>;
+        serverTrackTransition(id: string, statusCategory: string, orgId?: string): Promise<unknown>;
+        serverTrackSetDone(id: string, done: boolean, orgId?: string): Promise<unknown>;
+        serverTrackRemove(id: string, orgId?: string): Promise<unknown>;
       };
       /** Organization team spaces plus cross-organization personal teams. */
       teams?: {

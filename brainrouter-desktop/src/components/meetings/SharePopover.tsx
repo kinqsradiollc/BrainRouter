@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { groupTeamOptions, pickTeamCreateTarget, type TeamContext, type TeamOption, type TeamsOps } from "./teamsOps.js";
+import { groupTeamOptions, teamCreateTargetFor, type TeamContext, type TeamOption, type TeamsOps } from "./teamsOps.js";
 import { MEETING_SCOPES, SCOPE_BLURB, SCOPE_LABEL, type MeetingScope, type MeetingShare } from "./types.js";
 
 const SCOPE_ICON: Record<MeetingScope, ReactElement> = {
@@ -16,24 +16,27 @@ interface Props {
   busy?: boolean;
   teamsOps: TeamsOps;
   teamRevision?: number;
+  /** The organization context selected on the meetings surface. Team listing and
+   *  inline create both target this context so an org meeting shares to that
+   *  org's teams. */
+  context?: TeamContext;
   onError(message: string): void;
   onSetScope(scope: MeetingScope, opts?: { teamId?: string }): void;
 }
 
 /** Header "Share" button + a scope popover (ADR-018 D8). Public reveals a
  *  revocable link; Team reveals a picker of the caller's teams. */
-export function SharePopover({ share, busy, teamsOps, teamRevision = 0, onError, onSetScope }: Props): ReactElement {
+export function SharePopover({ share, busy, teamsOps, teamRevision = 0, context, onError, onSetScope }: Props): ReactElement {
   const [open, setOpen] = useState(false);
   // Selecting the Team row reveals the picker without committing a team-less scope.
   const [teamPickerOpen, setTeamPickerOpen] = useState(false);
   // null = teams not yet fetched; loaded lazily on first open of the picker.
   const [teams, setTeams] = useState<TeamOption[] | null>(null);
-  // null = org contexts not yet fetched; drives where inline create lands.
-  const [contexts, setContexts] = useState<TeamContext[] | null>(null);
   const [newTeamName, setNewTeamName] = useState("");
   const [creating, setCreating] = useState(false);
   const [copied, setCopied] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const orgId = context?.orgId;
 
   useEffect(() => {
     if (!open) return;
@@ -46,39 +49,34 @@ export function SharePopover({ share, busy, teamsOps, teamRevision = 0, onError,
     return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
   }, [open]);
 
-  useEffect(() => { setTeams(null); setContexts(null); }, [teamRevision]);
+  // A changed org selection (or team edit) invalidates the cached team list for
+  // the previously selected context.
+  useEffect(() => { setTeams(null); }, [orgId, teamRevision]);
 
   // The picker shows for an already team-shared meeting, or once the Team row is
-  // picked. Fetch the caller's teams the first time it becomes visible — most
-  // meetings never get team-shared, so we don't fetch on load.
+  // picked. Fetch the selected context's teams the first time it becomes visible
+  // — most meetings never get team-shared, so we don't fetch on load.
   const showTeamPicker = teamPickerOpen || share.scope === "team";
   useEffect(() => {
     if (!open || !showTeamPicker || teams !== null) return;
     let live = true;
-    void teamsOps.list().then((t) => { if (live) setTeams(t); }).catch((caught) => {
+    void teamsOps.list(orgId).then((t) => { if (live) setTeams(t); }).catch((caught) => {
       if (!live) return;
       setTeams([]);
       onError(caught instanceof Error ? caught.message : "Could not load teams.");
     });
     return () => { live = false; };
-  }, [onError, open, showTeamPicker, teams, teamsOps]);
-
-  // Org contexts decide where the inline "New team" create lands. Signed-out or
-  // context-less callers degrade to a personal-team create.
-  useEffect(() => {
-    if (!open || !showTeamPicker || contexts !== null) return;
-    let live = true;
-    void teamsOps.contexts().then((rows) => { if (live) setContexts(rows); }).catch(() => { if (live) setContexts([]); });
-    return () => { live = false; };
-  }, [contexts, open, showTeamPicker, teamsOps]);
+  }, [onError, open, orgId, showTeamPicker, teams, teamsOps]);
 
   const grouped = teams === null ? null : groupTeamOptions(teams);
-  const createTarget = contexts === null ? null : pickTeamCreateTarget(contexts);
-  const orgHeaderName = createTarget?.kind === "organization" ? createTarget.orgName : grouped?.organization[0]?.orgName ?? null;
+  // The inline "New team" create lands in the SELECTED context, so an org meeting
+  // shares to that org's teams. A missing/personal context degrades to personal.
+  const createTarget = teamCreateTargetFor(context);
+  const orgHeaderName = createTarget.kind === "organization" ? createTarget.orgName : grouped?.organization[0]?.orgName ?? null;
 
   const submitCreate = async (): Promise<void> => {
     const name = newTeamName.trim();
-    if (!name || creating || !createTarget) return;
+    if (!name || creating) return;
     setCreating(true);
     try {
       const created = await teamsOps.create(name, createTarget.kind, createTarget.orgId ?? undefined);
@@ -110,7 +108,7 @@ export function SharePopover({ share, busy, teamsOps, teamRevision = 0, onError,
     );
   };
 
-  const createRow = createTarget ? (
+  const createRow = (
     <form
       className="mv-tcreate"
       onSubmit={(event) => { event.preventDefault(); void submitCreate(); }}
@@ -126,7 +124,7 @@ export function SharePopover({ share, busy, teamsOps, teamRevision = 0, onError,
         {creating ? "Creating…" : createTarget.kind === "organization" ? `Create team in ${createTarget.orgName}` : "Create personal team"}
       </button>
     </form>
-  ) : null;
+  );
 
   return (
     <div className="mv-share-wrap" ref={wrapRef}>
@@ -181,11 +179,11 @@ export function SharePopover({ share, busy, teamsOps, teamRevision = 0, onError,
                   {grouped.organization.length === 0 ? (
                     <>
                       <div className="mv-teamhint">
-                        {createTarget?.kind === "organization"
+                        {createTarget.kind === "organization"
                           ? `No organization teams in ${createTarget.orgName} yet — create the first one below.`
                           : "No organization teams yet."}
                       </div>
-                      {createTarget?.kind === "organization" ? createRow : null}
+                      {createTarget.kind === "organization" ? createRow : null}
                     </>
                   ) : (
                     grouped.organization.map(teamRow)
@@ -196,7 +194,7 @@ export function SharePopover({ share, busy, teamsOps, teamRevision = 0, onError,
                       {grouped.personal.map(teamRow)}
                     </>
                   ) : null}
-                  {createTarget?.kind === "organization" && grouped.organization.length === 0 ? null : createRow}
+                  {createTarget.kind === "organization" && grouped.organization.length === 0 ? null : createRow}
                 </>
               )}
             </div>

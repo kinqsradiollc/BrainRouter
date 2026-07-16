@@ -91,52 +91,52 @@ function arrayField(payload: unknown, field: string): unknown[] {
 export function registerMeetingsBridge(): void {
   // Meetings list/detail use the paged endpoints so large accounts and long
   // transcripts never force all rows into the renderer at once.
-  ipcMain.handle('meetings:list', async (_event, input: unknown) => {
+  ipcMain.handle('meetings:list', async (_event, input: unknown, orgId: unknown) => {
     const opts = input && typeof input === 'object' ? input as { cursor?: string; limit?: number } : {};
-    return await requestJson(meetingRequests.list(opts), 'Could not load meetings');
+    return await requestJson(meetingRequests.list(opts, orgId), 'Could not load meetings');
   });
-  ipcMain.handle('meetings:get', async (_event, meetingId: unknown) =>
-    await requestJson(meetingRequests.detail(meetingId), 'Could not load the meeting'));
-  ipcMain.handle('meetings:overview', async (_event, meetingId: unknown) =>
-    await requestJson(meetingRequests.overview(meetingId), 'Could not load the meeting overview'));
-  ipcMain.handle('meetings:transcript', async (_event, meetingId: unknown, input: unknown) => {
+  ipcMain.handle('meetings:get', async (_event, meetingId: unknown, orgId: unknown) =>
+    await requestJson(meetingRequests.detail(meetingId, orgId), 'Could not load the meeting'));
+  ipcMain.handle('meetings:overview', async (_event, meetingId: unknown, orgId: unknown) =>
+    await requestJson(meetingRequests.overview(meetingId, orgId), 'Could not load the meeting overview'));
+  ipcMain.handle('meetings:transcript', async (_event, meetingId: unknown, input: unknown, orgId: unknown) => {
     const opts = input && typeof input === 'object' ? input as { cursor?: string; limit?: number } : {};
-    return await requestJson(meetingRequests.transcript(meetingId, opts), 'Could not load the transcript');
+    return await requestJson(meetingRequests.transcript(meetingId, opts, orgId), 'Could not load the transcript');
   });
-  ipcMain.handle('meetings:create', async (_event, input: unknown) =>
-    await requestJson(meetingRequests.create(input), 'Could not create the meeting'));
-  ipcMain.handle('meetings:updateSummary', async (_event, meetingId: unknown, summaryMarkdown: unknown) =>
-    await requestJson(meetingRequests.updateSummary(meetingId, summaryMarkdown), 'Could not save the summary'));
+  ipcMain.handle('meetings:create', async (_event, input: unknown, orgId: unknown) =>
+    await requestJson(meetingRequests.create(input, orgId), 'Could not create the meeting'));
+  ipcMain.handle('meetings:updateSummary', async (_event, meetingId: unknown, summaryMarkdown: unknown, orgId: unknown) =>
+    await requestJson(meetingRequests.updateSummary(meetingId, summaryMarkdown, orgId), 'Could not save the summary'));
   ipcMain.handle('meetings:transcribe', async (_event, input: unknown) =>
     await requestJson(meetingRequests.transcribe(input), 'Could not transcribe the audio'));
-  ipcMain.handle('meetings:setScope', async (_event, meetingId: unknown, scope: unknown, opts: unknown) =>
-    await requestJson(meetingRequests.setScope(meetingId, scope, opts), 'Could not change sharing'));
-  ipcMain.handle('meetings:regenerate', async (_event, meetingId: unknown) =>
-    await requestJson(meetingRequests.regenerate(meetingId), 'Could not regenerate the summary'));
-  ipcMain.handle('meetings:toggleAction', async (_event, meetingId: unknown, actionId: unknown, done: unknown) =>
-    await requestJson(meetingRequests.toggleAction(meetingId, actionId, done), 'Could not update the action item'));
-  ipcMain.handle('meetings:actionToTrack', async (_event, meetingId: unknown, actionId: unknown) =>
-    await requestJson(meetingRequests.trackAction(meetingId, actionId), 'Could not add this action to Track'));
-  ipcMain.handle('meetings:actionUntrack', async (_event, meetingId: unknown, actionId: unknown) =>
-    await requestJson(meetingRequests.trackAction(meetingId, actionId, true), 'Could not remove this action from Track'));
+  ipcMain.handle('meetings:setScope', async (_event, meetingId: unknown, scope: unknown, opts: unknown, orgId: unknown) =>
+    await requestJson(meetingRequests.setScope(meetingId, scope, opts, orgId), 'Could not change sharing'));
+  ipcMain.handle('meetings:regenerate', async (_event, meetingId: unknown, orgId: unknown) =>
+    await requestJson(meetingRequests.regenerate(meetingId, orgId), 'Could not regenerate the summary'));
+  ipcMain.handle('meetings:toggleAction', async (_event, meetingId: unknown, actionId: unknown, done: unknown, orgId: unknown) =>
+    await requestJson(meetingRequests.toggleAction(meetingId, actionId, done, orgId), 'Could not update the action item'));
+  ipcMain.handle('meetings:actionToTrack', async (_event, meetingId: unknown, actionId: unknown, orgId: unknown) =>
+    await requestJson(meetingRequests.trackAction(meetingId, actionId, false, orgId), 'Could not add this action to Track'));
+  ipcMain.handle('meetings:actionUntrack', async (_event, meetingId: unknown, actionId: unknown, orgId: unknown) =>
+    await requestJson(meetingRequests.trackAction(meetingId, actionId, true, orgId), 'Could not remove this action from Track'));
 
   // Org-scoped server Track board. This remains separate from desktop's local
   // workspace/GitHub Track mode.
-  ipcMain.handle('meetings:serverTracks', async () => {
-    const payload = await requestJson<unknown>(trackRequests.list(), 'Could not load Track');
+  ipcMain.handle('meetings:serverTracks', async (_event, orgId: unknown) => {
+    const payload = await requestJson<unknown>(trackRequests.list(orgId), 'Could not load Track');
     return arrayField(payload, 'items');
   });
-  ipcMain.handle('meetings:serverTrackCreate', async (_event, input: unknown) =>
-    await requestJson(trackRequests.create(input), 'Could not create the Track item'));
-  ipcMain.handle('meetings:serverTrackTransition', async (_event, trackId: unknown, statusCategory: unknown) =>
-    await requestJson(trackRequests.transition(trackId, statusCategory), 'Could not move the Track item'));
+  ipcMain.handle('meetings:serverTrackCreate', async (_event, input: unknown, orgId: unknown) =>
+    await requestJson(trackRequests.create(input, orgId), 'Could not create the Track item'));
+  ipcMain.handle('meetings:serverTrackTransition', async (_event, trackId: unknown, statusCategory: unknown, orgId: unknown) =>
+    await requestJson(trackRequests.transition(trackId, statusCategory, orgId), 'Could not move the Track item'));
   // Compatibility for the previously shipped done/reopen renderer method.
-  ipcMain.handle('meetings:serverTrackSetDone', async (_event, trackId: unknown, done: unknown) => {
+  ipcMain.handle('meetings:serverTrackSetDone', async (_event, trackId: unknown, done: unknown, orgId: unknown) => {
     const status: TrackStatusCategory = done === true ? 'completed' : 'todo';
-    return await requestJson(trackRequests.transition(trackId, status), 'Could not update the tracked item');
+    return await requestJson(trackRequests.transition(trackId, status, orgId), 'Could not update the tracked item');
   });
-  ipcMain.handle('action:meetings:serverTrackRemove', async (_event, trackId: unknown) =>
-    await requestJson(trackRequests.remove(trackId), 'Could not remove the tracked item'));
+  ipcMain.handle('action:meetings:serverTrackRemove', async (_event, trackId: unknown, orgId: unknown) =>
+    await requestJson(trackRequests.remove(trackId, orgId), 'Could not remove the tracked item'));
 
   // Teams management and sharing use the same org-scoped backend collection.
   ipcMain.handle('teams:contexts', async () => {

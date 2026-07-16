@@ -11,7 +11,7 @@ const GROUPS: readonly { key: TrackStatusCategory; label: string; hint: string }
 const categoryOf = (item: TrackItem): TrackStatusCategory => item.statusCategory ?? "todo";
 const errorText = (caught: unknown, fallback: string) => caught instanceof Error && caught.message ? caught.message : fallback;
 
-export function MeetingTracksView({ ops }: { ops: MeetingsOps }): ReactElement {
+export function MeetingTracksView({ ops, orgId }: { ops: MeetingsOps; orgId?: string }): ReactElement {
   const [items, setItems] = useState<TrackItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -24,12 +24,12 @@ export function MeetingTracksView({ ops }: { ops: MeetingsOps }): ReactElement {
     setLoading(true);
     setError("");
     try {
-      const list = await ops.serverTracks();
+      const list = await ops.serverTracks(orgId);
       setItems(Array.isArray(list) ? list : []);
     } catch (caught) {
       setError(errorText(caught, "Could not load tracked items. Check your connection and sign-in."));
     } finally { setLoading(false); }
-  }, [ops]);
+  }, [ops, orgId]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
@@ -40,13 +40,13 @@ export function MeetingTracksView({ ops }: { ops: MeetingsOps }): ReactElement {
     setItems((list) => list.map((row) => row.id === item.id ? { ...row, statusCategory: next } : row));
     setError("");
     try {
-      const updated = await ops.serverTrackTransition(item.id, next);
+      const updated = await ops.serverTrackTransition(item.id, next, orgId);
       setItems((list) => list.map((row) => row.id === item.id ? { ...row, ...updated } : row));
     } catch (caught) {
       setItems((list) => list.map((row) => row.id === item.id ? { ...row, statusCategory: previous } : row));
       setError(errorText(caught, "Could not move that item."));
     } finally { setBusy((state) => ({ ...state, [item.id]: false })); }
-  }, [busy, ops]);
+  }, [busy, ops, orgId]);
 
   const create = useCallback(async (event: FormEvent) => {
     event.preventDefault();
@@ -55,13 +55,13 @@ export function MeetingTracksView({ ops }: { ops: MeetingsOps }): ReactElement {
     setBusy((state) => ({ ...state, create: true }));
     setError("");
     try {
-      const created = await ops.serverTrackCreate({ title, statusCategory: "todo" });
+      const created = await ops.serverTrackCreate({ title, statusCategory: "todo" }, orgId);
       setItems((list) => [created, ...list]);
       setNewTitle("");
     } catch (caught) {
       setError(errorText(caught, "Could not create that Track item."));
     } finally { setBusy((state) => ({ ...state, create: false })); }
-  }, [busy.create, newTitle, ops]);
+  }, [busy.create, newTitle, ops, orgId]);
 
   const remove = useCallback(async (item: TrackItem) => {
     if (globalThis.confirm?.(`Remove “${item.title}” from the organization Track board?`) === false) return;
@@ -69,10 +69,10 @@ export function MeetingTracksView({ ops }: { ops: MeetingsOps }): ReactElement {
     setBusy((state) => ({ ...state, [item.id]: true }));
     setItems((list) => list.filter((row) => row.id !== item.id));
     setError("");
-    try { await ops.serverTrackRemove(item.id); }
+    try { await ops.serverTrackRemove(item.id, orgId); }
     catch (caught) { setItems(previous); setError(errorText(caught, "Could not remove that item.")); }
     finally { setBusy((state) => ({ ...state, [item.id]: false })); }
-  }, [items, ops]);
+  }, [items, ops, orgId]);
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();

@@ -108,25 +108,25 @@ export interface CreateTrackInput {
 }
 
 export interface MeetingsOps {
-  listPage(input?: { cursor?: string; limit?: number }): Promise<MeetingListPage>;
+  listPage(input?: { cursor?: string; limit?: number }, orgId?: string): Promise<MeetingListPage>;
   /** Compatibility convenience for consumers that only need the first page. */
-  list(): Promise<MeetingListItem[]>;
-  get(id: string): Promise<MeetingDetail>;
-  overview(id: string): Promise<MeetingOverview>;
-  transcriptPage(id: string, input?: { cursor?: string; limit?: number }): Promise<MeetingTranscriptPage>;
-  createFromTranscript(input: CreateMeetingInput): Promise<{ id: string; summaryStatus?: MeetingSummaryStatus }>;
-  updateSummary(id: string, summaryMarkdown: string): Promise<MeetingDetail>;
+  list(orgId?: string): Promise<MeetingListItem[]>;
+  get(id: string, orgId?: string): Promise<MeetingDetail>;
+  overview(id: string, orgId?: string): Promise<MeetingOverview>;
+  transcriptPage(id: string, input?: { cursor?: string; limit?: number }, orgId?: string): Promise<MeetingTranscriptPage>;
+  createFromTranscript(input: CreateMeetingInput, orgId?: string): Promise<{ id: string; summaryStatus?: MeetingSummaryStatus }>;
+  updateSummary(id: string, summaryMarkdown: string, orgId?: string): Promise<MeetingDetail>;
   transcribeAudio(input: { bytes: Uint8Array; contentType?: string; language?: string }): Promise<{ text: string }>;
-  regenerateSummary(id: string): Promise<MeetingDetail>;
-  setScope(id: string, scope: MeetingScope, opts?: { teamId?: string }): Promise<MeetingShare>;
-  sendActionToTrack(meetingId: string, actionId: string): Promise<{ trackItemId: string }>;
-  unsendActionFromTrack(meetingId: string, actionId: string): Promise<void>;
-  toggleAction(meetingId: string, actionId: string, done: boolean): Promise<void>;
-  serverTracks(): Promise<TrackItem[]>;
-  serverTrackCreate(input: CreateTrackInput): Promise<TrackItem>;
-  serverTrackTransition(id: string, statusCategory: TrackStatusCategory): Promise<TrackItem>;
-  serverTrackSetDone(id: string, done: boolean): Promise<void>;
-  serverTrackRemove(id: string): Promise<void>;
+  regenerateSummary(id: string, orgId?: string): Promise<MeetingDetail>;
+  setScope(id: string, scope: MeetingScope, opts?: { teamId?: string }, orgId?: string): Promise<MeetingShare>;
+  sendActionToTrack(meetingId: string, actionId: string, orgId?: string): Promise<{ trackItemId: string }>;
+  unsendActionFromTrack(meetingId: string, actionId: string, orgId?: string): Promise<void>;
+  toggleAction(meetingId: string, actionId: string, done: boolean, orgId?: string): Promise<void>;
+  serverTracks(orgId?: string): Promise<TrackItem[]>;
+  serverTrackCreate(input: CreateTrackInput, orgId?: string): Promise<TrackItem>;
+  serverTrackTransition(id: string, statusCategory: TrackStatusCategory, orgId?: string): Promise<TrackItem>;
+  serverTrackSetDone(id: string, done: boolean, orgId?: string): Promise<void>;
+  serverTrackRemove(id: string, orgId?: string): Promise<void>;
 }
 
 export const MEETING_SCOPES: readonly MeetingScope[] = ["private", "team", "org", "public"];
