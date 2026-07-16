@@ -298,6 +298,12 @@ export default function MeetingsPage() {
   const setScope = useCallback(async (scope: Scope, teamId?: string) => {
     if (!detail) return;
     if (scope === "team" && !teamId) { setTeamPickerOpen(true); return; }
+    // Defence in depth: only share to a team the caller actually belongs to. The
+    // server also enforces this (assertUserInTeam), so this just fails fast in the UI.
+    if (scope === "team" && teamId && teams.length && !teams.some((t) => t.id === teamId)) {
+      setError("You can only share to a team you belong to.");
+      return;
+    }
     try {
       const body = scope === "team" ? { scope, teamId } : { scope };
       const share = await authFetch<Share>(`/api/meetings/${detail.id}/scope`, { method: "POST", body });
@@ -308,7 +314,7 @@ export default function MeetingsPage() {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not change sharing.");
     }
-  }, [detail]);
+  }, [detail, teams]);
 
   const createTeamInline = useCallback(async () => {
     const name = newTeamName.trim();

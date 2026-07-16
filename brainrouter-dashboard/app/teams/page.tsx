@@ -104,6 +104,7 @@ function TeamsInner() {
 
   const removeMember = useCallback(async (userId: string) => {
     if (!selectedId) return;
+    if (!window.confirm(`Remove ${userId} from this team?`)) return;
     setBusy(`remove:${userId}`);
     try {
       await adminApi.removeTeamMember(selectedId, userId);
@@ -118,6 +119,7 @@ function TeamsInner() {
   }, [selectedId]);
 
   const deleteTeam = useCallback(async (id: string) => {
+    if (!window.confirm("Delete this team? This can't be undone. (Only a team owner or an org admin can.)")) return;
     setBusy("delete");
     try {
       await adminApi.deleteTeam(id);
