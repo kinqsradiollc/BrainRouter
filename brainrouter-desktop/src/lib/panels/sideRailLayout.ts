@@ -10,10 +10,10 @@ export function clampSideRailWidth(width: number): number {
   return Math.max(SIDE_RAIL_MIN, Math.min(SIDE_RAIL_MAX, Math.floor(width)));
 }
 
-/** Comfortable minimum width to open certain panels at — the Browser (uitest)
+/** Comfortable minimum width to open certain panels at — the Browser panel
  *  needs room for its icon rail + URL bar + webview. Panels not listed keep the
  *  current width. */
-const OPEN_WIDTH: Partial<Record<PanelId, number>> = { uitest: 500 };
+const OPEN_WIDTH: Partial<Record<PanelId, number>> = { browser: 500 };
 
 /** The side width to use when a panel is opened: at least its comfortable
  *  default (if it has one), but never shrinking the user's current width. */

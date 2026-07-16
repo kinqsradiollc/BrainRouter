@@ -116,7 +116,7 @@ const EXTRACT_JS = `(() => {
 })()`;
 
 const HIGHLIGHT_JS = (on: boolean) => `(() => {
-  const ID = '__uitest_highlight_style__';
+  const ID = '__browser_highlight_style__';
   const prev = document.getElementById(ID);
   if (prev) prev.remove();
   if (${on ? 'true' : 'false'}) {
@@ -130,35 +130,35 @@ const HIGHLIGHT_JS = (on: boolean) => `(() => {
 
 // Pick mode: arm a one-shot capture; the renderer polls PICK_READ_JS.
 const PICK_START_JS = `(() => {
-  window.__uitestPicked = null;
-  if (window.__uitestPickHandler) document.removeEventListener('click', window.__uitestPickHandler, true);
-  window.__uitestPickHandler = (e) => {
+  window.__browserPicked = null;
+  if (window.__browserPickHandler) document.removeEventListener('click', window.__browserPickHandler, true);
+  window.__browserPickHandler = (e) => {
     e.preventDefault(); e.stopPropagation();
     let el = e.target;
     while (el && !el.getAttribute('data-testid') && el.parentElement) el = el.parentElement;
     const tid = el && el.getAttribute ? el.getAttribute('data-testid') : null;
     const t = e.target;
-    window.__uitestPicked = {
+    window.__browserPicked = {
       testid: tid || null,
       tag: (t.tagName||'').toLowerCase(),
       text: (t.textContent||'').trim().slice(0,48),
       suggestion: tid ? null : (t.id ? ('#'+t.id) : (t.className && typeof t.className==='string' ? '.'+t.className.trim().split(/\\s+/)[0] : (t.tagName||'').toLowerCase())),
     };
-    document.removeEventListener('click', window.__uitestPickHandler, true);
+    document.removeEventListener('click', window.__browserPickHandler, true);
   };
-  document.addEventListener('click', window.__uitestPickHandler, true);
+  document.addEventListener('click', window.__browserPickHandler, true);
   return { ok: true };
 })()`;
 
-const PICK_READ_JS = `(window.__uitestPicked || null)`;
-const PICK_CANCEL_JS = `(() => { if (window.__uitestPickHandler) document.removeEventListener('click', window.__uitestPickHandler, true); window.__uitestPicked = null; return {ok:true}; })()`;
+const PICK_READ_JS = `(window.__browserPicked || null)`;
+const PICK_CANCEL_JS = `(() => { if (window.__browserPickHandler) document.removeEventListener('click', window.__browserPickHandler, true); window.__browserPicked = null; return {ok:true}; })()`;
 
 // Network: patch fetch + XHR to record into a ring buffer; read on demand.
 const NET_INSTRUMENT_JS = `(() => {
-  if (window.__uitestNetReady) return { ok: true };
-  window.__uitestNetReady = true;
-  window.__uitestNet = [];
-  const push = (e) => { window.__uitestNet.push(e); if (window.__uitestNet.length > 200) window.__uitestNet.shift(); };
+  if (window.__browserNetReady) return { ok: true };
+  window.__browserNetReady = true;
+  window.__browserNet = [];
+  const push = (e) => { window.__browserNet.push(e); if (window.__browserNet.length > 200) window.__browserNet.shift(); };
   const of = window.fetch;
   if (of) window.fetch = function(...a){
     const t = performance.now(); const url = (a[0] && a[0].url) || String(a[0] || '');
@@ -174,7 +174,7 @@ const NET_INSTRUMENT_JS = `(() => {
   return { ok: true };
 })()`;
 
-const NET_READ_JS = `(window.__uitestNet || [])`;
+const NET_READ_JS = `(window.__browserNet || [])`;
 
 // A compact accessibility-ish tree: interactive/landmark nodes with role + name.
 const A11Y_JS = `(() => {
@@ -239,10 +239,10 @@ export function assertVisible(wv: WebviewEl, target: string, hint?: ResolveHint)
 // ONE element and restores its prior inline outline on clear.
 export function highlightEl(wv: WebviewEl, target: string, hint?: ResolveHint): Promise<ActionResult> {
   const js = `(() => { ${RESOLVE_FN}
-    try { var p = window.__uitestHoverEl; if (p && p.el) { p.el.style.outline = p.o || ''; p.el.style.outlineOffset = p.oo || ''; } } catch(e){}
+    try { var p = window.__browserHoverEl; if (p && p.el) { p.el.style.outline = p.o || ''; p.el.style.outlineOffset = p.oo || ''; } } catch(e){}
     var el=__brResolve(${resolveArgs(target, hint)});
-    if(!el){ window.__uitestHoverEl=null; return { ok:false, error:'not found: '+${JSON.stringify(target)} }; }
-    window.__uitestHoverEl={ el: el, o: el.style.outline, oo: el.style.outlineOffset };
+    if(!el){ window.__browserHoverEl=null; return { ok:false, error:'not found: '+${JSON.stringify(target)} }; }
+    window.__browserHoverEl={ el: el, o: el.style.outline, oo: el.style.outlineOffset };
     el.style.outline='2px solid #7c5cff'; el.style.outlineOffset='1px';
     el.scrollIntoView({block:'center',inline:'nearest'});
     return { ok:true };
@@ -253,8 +253,8 @@ export function highlightEl(wv: WebviewEl, target: string, hint?: ResolveHint): 
 /** Remove the hover outline set by highlightEl, restoring the element's prior inline outline. */
 export function clearHighlight(wv: WebviewEl): Promise<ActionResult> {
   const js = `(() => {
-    try { var p = window.__uitestHoverEl; if (p && p.el) { p.el.style.outline = p.o || ''; p.el.style.outlineOffset = p.oo || ''; } } catch(e){}
-    window.__uitestHoverEl=null; return { ok:true };
+    try { var p = window.__browserHoverEl; if (p && p.el) { p.el.style.outline = p.o || ''; p.el.style.outlineOffset = p.oo || ''; } } catch(e){}
+    window.__browserHoverEl=null; return { ok:true };
   })()`;
   return wv.executeJavaScript(js, true) as Promise<ActionResult>;
 }

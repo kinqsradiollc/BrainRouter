@@ -29,7 +29,7 @@ const TOOL_EXT = `export const activate = (host) => {
 
 // NOTE: assertions target THIS test's fixture extension by name (membership),
 // not the exact activated/error lists — the binary now ships built-in extensions
-// (e.g. `ui-test`) that also load here, so a whole-list equality would be brittle.
+// (e.g. `browser`) that also load here, so a whole-list equality would be brittle.
 
 test('a workspace extension activates only when the workspace is TRUSTED', async () => {
   const ws = mkWorkspaceExt('w-tool', TOOL_EXT);

@@ -27,7 +27,7 @@ export type Command = z.infer<typeof CommandSchema>;
 export type Artifacts = z.infer<typeof ArtifactsSchema>;
 export type UiCommandResult = z.infer<typeof UiCommandResultSchema>;
 
-/** A compact screen summary for the agent's `ui_list_screens` query helper. */
+/** A compact screen summary for the agent's `browser_list_screens` query helper. */
 export interface ScreenSummary {
   id: string;
   title: string;

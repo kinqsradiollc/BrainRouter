@@ -39,9 +39,12 @@ import {
 // functions into the HostContext.
 import { buildGithubTrackServices } from './host/github-track-services.js';
 import type { HostContext } from './host/context.js';
-// UI-TEST fusion — the web UI-testing host (extract, drive, flows/stories, run
-// reports, auto-host). Wired into the query router via HostContext.uitest.
-import { createUiTestHost } from './uitestHost.js';
+// BROWSER — the web browser-automation host (extract, drive, flows/stories, run
+// reports, auto-host). Wired into the query router via HostContext.browser.
+import { createBrowserHost } from './browserHost.js';
+// Dev-server registry — starts/stops launch.json dev servers for the Servers panel
+// and the browser host's story auto-host. Extracted from the browser host.
+import { createDevServerRegistry } from './devServerRegistry.js';
 import { exec, execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { InteractionBroker, type AgentEvent, type RecordLifecycleAction } from '@kinqs/brainrouter-agent-protocol';
 // Deep imports into the CLI's built runtime (no "exports" field = allowed).
@@ -1135,12 +1138,15 @@ async function main(): Promise<void> {
   // this bag. Stable bindings pass by shorthand; the few that are REASSIGNED over
   // the process lifetime (the viewed agent, the global llm, the PR caches, the
   // terminal sequence) pass as live accessors so behavior is unchanged.
-  // UI-TEST fusion — one host per workspace; the query router drives it and it
-  // owns the (lazy) Playwright driver + auto-hosted dev server, disposed on quit.
-  const uitest = createUiTestHost(workspaceRoot);
+  // BROWSER — one host per workspace; the query router drives it and it owns the
+  // (lazy) Playwright driver + auto-hosted dev server, disposed on quit. The
+  // dev-server registry is shared with the Servers panel (start/stop/add).
+  const devServers = createDevServerRegistry(workspaceRoot);
+  const browser = createBrowserHost(workspaceRoot, devServers);
 
   const ctx: HostContext = {
-    uitest,
+    browser,
+    devServers,
     workspaceRoot, wsGit, fileListCache, listWorkspaceFilesCached, send,
     computerUseBridge, secretBridge, config,
     getLlm: () => llm, setLlm: (next) => { llm = next; },
@@ -1239,7 +1245,8 @@ async function main(): Promise<void> {
       fanoutManager.dispose();
       hostedAgents.dispose();
       ptyRegistry.dispose();
-      uitest.dispose();
+      browser.dispose();
+      devServers.disposeAll();
       void mcpClient.close?.();
       process.exit(0);
     },

@@ -163,9 +163,9 @@
       "types": "./dist/triggers/index.d.ts",
       "default": "./dist/triggers/index.js"
     },
-    "./uitest": {
-      "types": "./dist/uitest/index.d.ts",
-      "default": "./dist/uitest/index.js"
+    "./browser": {
+      "types": "./dist/browser/index.d.ts",
+      "default": "./dist/browser/index.js"
     },
     "./usage": {
       "types": "./dist/usage/index.d.ts",

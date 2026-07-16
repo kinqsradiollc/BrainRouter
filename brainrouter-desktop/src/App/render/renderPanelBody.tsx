@@ -7,7 +7,7 @@
 import React, { Suspense, lazy } from 'react';
 import {
   DiffPanel, FilesPanel, FileViewerPanel, PlanPanel, SearchPanel, SchedulePanel, WorktreesPanel, ReviewPanel,
-  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, AttachmentsPanel, AtlasPanel, WorkflowsPanel, MemoryPanel, PrototypePanel, TasksPanel, TaskDetailPanel, TerminalPanel, ToolsPanel, PreviewPanel, ContextPanel, type PanelId, type SearchHit, type ReviewFindingView, type GrepHit, type FinishedTask,
+  RequirementsPanel, AnnotationsPanel, ArtifactsPanel, AttachmentsPanel, AtlasPanel, WorkflowsPanel, MemoryPanel, PrototypePanel, TasksPanel, TaskDetailPanel, TerminalPanel, ToolsPanel, PreviewPanel, ServersPanel, ContextPanel, type PanelId, type SearchHit, type ReviewFindingView, type GrepHit, type FinishedTask,
 } from '../../panels/index.js';
 import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph } from '@kinqs/brainrouter-types';
 import type { TrackPrStatus } from '../../track/TrackView.js';
@@ -23,7 +23,7 @@ import type { AtlasChangeAssessment } from '../../lib/atlas/atlasView.js';
 import { buildTrackOps } from '../track/trackOps.js';
 // UI-TEST fusion — the Atlas Screens map + user-journey stories the Atlas panel
 // renders, and the Browser panel that replays them live.
-import type { UiMap, Story } from '@kinqs/brainrouter-core/uitest';
+import type { UiMap, Story } from '@kinqs/brainrouter-core/browser';
 
 // Monaco is ~5MB — lazy-load the editor panel so it only loads when first opened.
 const EditorPanel = lazy(() => import('../../panels/editing/EditorPanel.js').then((m) => ({ default: m.EditorPanel })));
@@ -186,6 +186,13 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId) => 
       case 'terminal': return <TerminalPanel />;
       case 'tools': return <ToolsPanel log={toolLog} />;
       case 'preview': return <PreviewPanel />;
+      // SERVERS — start/stop launch.json dev servers; "Open in Browser" drives the
+      // IN-APP Browser panel (not the system browser) via the br-browser-navigate
+      // event, mirroring the Atlas onDriveElement handoff.
+      case 'servers': return <ServersPanel onOpenInBrowser={(url) => {
+        ensurePanel('browser');
+        window.dispatchEvent(new CustomEvent('br-browser-navigate', { detail: { url } }));
+      }} />;
       // Unified Tasks panel — suggested starters + the (former Dashboard) task
       // board: scope toggle, lifecycle/kind tabs, cross-workspace grouping. A row
       // click opens the task read-only in the Task side panel (openDashboardTask
@@ -303,21 +310,21 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId) => 
           assessments={atlasAssessments} assessing={atlasAssessing}
           onAssess={(path) => { setAtlasAssessing(path); q('q-atlas-explain', 'atlas-explain-change', { path }); }}
           uiMap={atlasUiMap}
-          onLoadUiMap={() => q('q-uitest-manifest', 'uitest:manifest')}
-          onExtractUi={(opts) => q('q-uitest-extract', 'uitest:extract', { ...(opts?.only?.length ? { only: opts.only } : {}), broad: !!opts?.broad })}
+          onLoadUiMap={() => q('q-browser-manifest', 'browser:manifest')}
+          onExtractUi={(opts) => q('q-browser-extract', 'browser:extract', { ...(opts?.only?.length ? { only: opts.only } : {}), broad: !!opts?.broad })}
           onDriveElement={(el) => {
-            ensurePanel('uitest');
+            ensurePanel('browser');
             try { localStorage.setItem('br-browser-focus', JSON.stringify({ ...el, at: Date.now() })); } catch { /* ignore */ }
             window.dispatchEvent(new CustomEvent('br-browser-focus'));
             setToast(`Sent "${el.testID}" to the Browser panel`);
           }}
           stories={atlasStories}
-          onLoadStories={() => q('q-uitest-stories', 'uitest:list-stories')}
-          onSuggestStories={() => q('q-uitest-suggest', 'uitest:suggest-stories')}
+          onLoadStories={() => q('q-browser-stories', 'browser:list-stories')}
+          onSuggestStories={() => q('q-browser-suggest', 'browser:suggest-stories')}
           onRunStory={(story) => runStory(story)} />;
       // UI-TEST fusion — the embedded Browser panel (propless; talks to App via
       // localStorage + br-browser-* window events). Lazy + Suspense like Editor/CI.
-      case 'uitest':
+      case 'browser':
         return <Suspense fallback={<div className="row status"><span className="spinner" /> Loading…</div>}><BrowserPanel /></Suspense>;
       case 'requirements': {
         const refresh = () => setTimeout(() => q('q-req', 'requirement-list'), 150);

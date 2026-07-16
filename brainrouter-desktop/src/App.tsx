@@ -8,7 +8,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { InteractionRequest } from '@kinqs/brainrouter-agent-protocol';
 // UI-TEST fusion — the generated screen map + user-journey stories the Atlas
 // Screens mode + Browser panel render, and that runStory replays.
-import type { UiMap, Story } from '@kinqs/brainrouter-core/uitest';
+import type { UiMap, Story } from '@kinqs/brainrouter-core/browser';
 import { PANEL_DEFS, type PanelId, type SearchHit } from './panels/index.js';
 import type { RequirementRecord, AnnotationRecord, ArtifactRecord, AtlasGraph, TrackProject, WorkItem, Sprint, Module, SavedView, AutomationRule, ProjectMember } from '@kinqs/brainrouter-types';
 import type { GitTrackContext, SyncConfig, SyncResult, TrackPrStatus } from './track/TrackView.js';
@@ -497,10 +497,10 @@ export function App(): React.ReactElement {
   const runStory = (story: Story): void => {
     const url = (localStorage.getItem('br-browser-url') || '').trim();
     try { localStorage.setItem('br-browser-runstory', JSON.stringify({ id: story.id, title: story.title, steps: enrichStorySteps(story, atlasUiMap) })); } catch { /* ignore */ }
-    ensurePanel('uitest');
+    ensurePanel('browser');
     setToast(`Preparing "${story.title}"…`);
     window.dispatchEvent(new CustomEvent('br-browser-log', { detail: { message: `▶ Preparing "${story.title}" — ensuring the app is served…` } }));
-    q('q-uitest-ensure', 'uitest:ensure-app', url ? { url } : {});
+    q('q-browser-ensure', 'browser:ensure-app', url ? { url } : {});
   };
 
   // The Browser panel takes no props, so its "save this screenshot" and "story run
@@ -510,11 +510,11 @@ export function App(): React.ReactElement {
   useEffect(() => {
     const onSaveShot = (e: Event): void => {
       const d = (e as CustomEvent<{ dataUrl?: string; name?: string }>).detail;
-      if (d?.dataUrl) q('q-uitest-shot', 'uitest:save-screenshot', { dataUrl: d.dataUrl, name: d.name });
+      if (d?.dataUrl) q('q-browser-shot', 'browser:save-screenshot', { dataUrl: d.dataUrl, name: d.name });
     };
     const onRunResult = (e: Event): void => {
       const d = (e as CustomEvent<Record<string, unknown>>).detail;
-      if (d) q('q-uitest-report', 'uitest:run-report', d);
+      if (d) q('q-browser-report', 'browser:run-report', d);
     };
     // A11y-row -> source: the Browser panel asks App to open a file at a line.
     const onOpenFile = (e: Event): void => {
@@ -523,7 +523,7 @@ export function App(): React.ReactElement {
     };
     // The Browser panel wants the UI map but has none yet -> load the manifest;
     // its result lands in atlasUiMap and is mirrored back via localStorage.
-    const onLoadUiMap = (): void => { q('q-uitest-manifest', 'uitest:manifest'); };
+    const onLoadUiMap = (): void => { q('q-browser-manifest', 'browser:manifest'); };
     window.addEventListener('br-browser-savescreenshot', onSaveShot);
     window.addEventListener('br-browser-runresult', onRunResult);
     window.addEventListener('br-browser-openfile', onOpenFile);

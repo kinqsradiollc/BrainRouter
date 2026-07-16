@@ -24,7 +24,7 @@ import "@xyflow/react/dist/style.css";
 import type { AtlasGraph } from "@kinqs/brainrouter-types";
 import type { AtlasChangeAssessment } from "../../lib/atlas/atlasView.js";
 import { ATLAS_CATEGORY_COLORS, atlasUiModel, atlasElementColor, atlasGroupedLayout } from "../../lib/atlas/atlasView.js";
-import type { UiMap, Story } from "@kinqs/brainrouter-core/uitest";
+import type { UiMap, Story } from "@kinqs/brainrouter-core/browser";
 import { ATLAS_NODE_TYPES } from "./AtlasNodes.js";
 import { AtlasDetail } from "./AtlasDetail.js";
 import { Icon } from "../../icons.js";
