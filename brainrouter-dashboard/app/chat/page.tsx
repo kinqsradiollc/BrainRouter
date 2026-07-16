@@ -8,6 +8,7 @@ import { KnowledgeScopePicker, useKnowledgeScope } from "../../components/Knowle
 import { LazyMarkdown } from "../../components/LazyMarkdown";
 import { brainApi } from "../../lib/brainApi";
 import { adminApi } from "../../lib/adminApi";
+import { isAuthenticated } from "../../lib/client-auth";
 import { normalizeChatModelSelection, type ChatModelSelection } from "./chatModelSelection";
 import { InlineLoading } from "../../components/LoadingSpinner";
 import {
@@ -19,6 +20,16 @@ import {
   type StoredChatMessage,
   type StoredChatSession,
 } from "./chatSessions";
+import {
+  createChatThread,
+  deleteChatThread,
+  getChatThread,
+  listChatThreads,
+  mergeServerThreads,
+  replaceChatMessages,
+  serverMessageToStored,
+  toServerMessages,
+} from "../../lib/chatThreads";
 
 const categories = ["General", "Build", "Plan", "Recall", "Knowledge", "Review"] as const;
 type ChatCategory = (typeof categories)[number];
@@ -72,6 +83,7 @@ function ChatContent() {
   const [activeSessionId, setActiveSessionId] = useState("");
   const [creatingNew, setCreatingNew] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const [threadsLoading, setThreadsLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const [showScope, setShowScope] = useState(false);
@@ -84,11 +96,60 @@ function ChatContent() {
   const composer = useRef<HTMLTextAreaElement>(null);
   const currentScope = useRef(scopeState.scope);
   currentScope.current = scopeState.scope;
+  // Ids known to exist on the server, so a send/rename/delete targets the right
+  // plane (append/replace vs. create) without a per-id round-trip.
+  const serverThreadIds = useRef<Set<string>>(new Set());
+  // Latest sessions, readable inside async closures without a stale snapshot.
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
 
   useEffect(() => {
     setSessions(loadChatSessions(window.localStorage));
     setHydrated(true);
   }, []);
+
+  // Server reconciliation — the server is the source of truth for which threads
+  // exist. Fetch the caller's threads for the active org, merge them over the
+  // local cache, and run the one-time localStorage→server migration for any
+  // local-only threads. Signed-out or offline falls back to the local cache.
+  useEffect(() => {
+    if (!hydrated || scopeState.loading || !isAuthenticated()) return;
+    const orgId = scopeState.scope.orgId || undefined;
+    const scopeSnapshot = { ...currentScope.current };
+    let cancelled = false;
+    setThreadsLoading(true);
+    (async () => {
+      try {
+        const remote = await listChatThreads(orgId);
+        if (cancelled) return;
+        remote.forEach((thread) => serverThreadIds.current.add(thread.id));
+        const merged = mergeServerThreads(sessionsRef.current, remote, scopeSnapshot);
+        const rekeys = new Map<string, string>();
+        for (const stale of merged.unsynced) {
+          try {
+            const thread = await createChatThread(
+              { title: stale.title, model: stale.model, messages: toServerMessages(stale.messages) },
+              orgId,
+            );
+            serverThreadIds.current.add(thread.id);
+            rekeys.set(stale.id, thread.id);
+          } catch { /* offline/failed — keep the local copy, retry on next load */ }
+        }
+        if (cancelled) return;
+        const reconciled = merged.sessions.map((item) => {
+          const migratedId = rekeys.get(item.id);
+          return migratedId ? { ...item, id: migratedId } : item;
+        });
+        setSessions(reconciled);
+        saveChatSessions(window.localStorage, reconciled);
+        const activeMigrated = rekeys.get(sessionKey.current);
+        if (activeMigrated) { sessionKey.current = activeMigrated; setActiveSessionId(activeMigrated); }
+      } catch { /* server unreachable — keep the local cache, never crash the page */ }
+      finally { if (!cancelled) setThreadsLoading(false); }
+    })();
+    return () => { cancelled = true; };
+    // Threads are org-scoped server-side, so only the active org drives a refetch.
+  }, [hydrated, scopeState.loading, scopeState.scope.orgId]);
 
   useEffect(() => {
     if (scopeState.loading) return;
@@ -178,12 +239,59 @@ function ChatContent() {
     });
   }
 
+  /** Rewrite a locally-minted thread id to the server id it was assigned, in
+   * both the session list and the active selection, then re-cache. */
+  function rekeySession(oldId: string, newId: string) {
+    if (oldId === newId) return;
+    setSessions((current) => {
+      const found = current.find((item) => item.id === oldId);
+      const rest = current.filter((item) => item.id !== oldId && item.id !== newId);
+      const next = found
+        ? [{ ...found, id: newId }, ...rest].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+        : rest;
+      saveChatSessions(window.localStorage, next);
+      return next;
+    });
+    if (sessionKey.current === oldId) {
+      sessionKey.current = newId;
+      setActiveSessionId(newId);
+    }
+  }
+
+  /** Push a finished turn to the server so a second device sees it: create the
+   * thread on its first turn (rekeying the local id), else replace-sync the
+   * history up. Best-effort — a failure leaves the local cache authoritative. */
+  async function syncSessionToServer(
+    localId: string,
+    wasOnServer: boolean,
+    completed: readonly StoredChatMessage[],
+    storedScope: StoredChatSession["scope"],
+    selection: ChatModelSelection,
+  ) {
+    if (!isAuthenticated()) return;
+    const orgId = storedScope.orgId || undefined;
+    const serverMessages = toServerMessages(completed);
+    try {
+      if (wasOnServer || serverThreadIds.current.has(localId)) {
+        await replaceChatMessages(localId, serverMessages, orgId);
+      } else {
+        const thread = await createChatThread(
+          { title: sessionTitle(completed), model: selection.model || undefined, messages: serverMessages },
+          orgId,
+        );
+        serverThreadIds.current.add(thread.id);
+        rekeySession(localId, thread.id);
+      }
+    } catch { /* offline/failed — the local cache still holds the turn; retry later */ }
+  }
+
   async function sendMessage() {
     const content = draft.trim();
     if (!content || sending) return;
     const requestScope = { ...scopeState.scope };
     const requestSelection = { ...modelSelection };
     const id = activeSessionId || nextId("dashboard_chat");
+    const wasOnServer = serverThreadIds.current.has(id);
     const userMessage: StoredChatMessage = { id: nextId("user"), role: "user", content };
     const history = [...messages, userMessage];
     if (!activeSessionId) setActiveSessionId(id);
@@ -212,6 +320,7 @@ function ChatContent() {
       }];
       persist(id, completed, category, requestScope, requestSelection);
       if (sameChatScope(requestScope, currentScope.current)) setMessages(completed);
+      void syncSessionToServer(id, wasOnServer, completed, requestScope, requestSelection);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The agent could not answer");
     } finally {
@@ -229,6 +338,28 @@ function ChatContent() {
     requestAnimationFrame(() => composer.current?.focus());
   }
 
+  /** Fill a skeleton thread (one synced from another device, so it has no cached
+   * body) from the server the first time it's opened. Never clobbers a local
+   * copy that already has messages — those carry citations the server can't. */
+  async function loadServerMessages(id: string, orgId?: string) {
+    if (!serverThreadIds.current.has(id) || !isAuthenticated()) return;
+    try {
+      const detail = await getChatThread(id, orgId);
+      const stored = detail.messages
+        .map(serverMessageToStored)
+        .filter((item): item is StoredChatMessage => item !== null);
+      if (!stored.length) return;
+      setSessions((current) => {
+        const target = current.find((item) => item.id === id);
+        if (!target || target.messages.length > 0) return current;
+        const next = current.map((item) => (item.id === id ? { ...item, messages: stored } : item));
+        saveChatSessions(window.localStorage, next);
+        return next;
+      });
+      if (sessionKey.current === id) setMessages((prev) => (prev.length ? prev : stored));
+    } catch { /* leave the thread empty — the composer still works */ }
+  }
+
   function openSession(item: StoredChatSession) {
     setCreatingNew(false);
     setActiveSessionId(item.id);
@@ -241,12 +372,17 @@ function ChatContent() {
     }));
     setDraft("");
     setError("");
+    if (item.messages.length === 0) void loadServerMessages(item.id, item.scope.orgId || undefined);
   }
 
   function removeSession(id: string) {
     const updated = sessions.filter((item) => item.id !== id);
     setSessions(updated);
     saveChatSessions(window.localStorage, updated);
+    if (serverThreadIds.current.has(id) && isAuthenticated()) {
+      void deleteChatThread(id, scopeState.scope.orgId || undefined).catch(() => { /* stays deleted locally */ });
+    }
+    serverThreadIds.current.delete(id);
     if (activeSessionId === id) newConversation();
   }
 
@@ -290,11 +426,11 @@ function ChatContent() {
     <div className="chat-workbench">
       <aside className="chat-session-rail" aria-label="Chat sessions">
         <div className="chat-session-rail__head">
-          <div><strong>Sessions</strong><span>Saved in this browser</span></div>
+          <div><strong>Sessions</strong><span>Synced to your account</span></div>
           <button type="button" onClick={newConversation} aria-label="New task" title="New task">+</button>
         </div>
         <div className="chat-session-list">
-          {!hydrated || scopeState.loading ? <InlineLoading label="Loading sessions…" />
+          {!hydrated || scopeState.loading || (threadsLoading && scopedSessions.length === 0) ? <InlineLoading label="Loading sessions…" />
             : scopedSessions.length === 0 ? <span className="chat-session-empty">No tasks in this scope yet.</span>
               : scopedSessions.map((item) => (
                 <div className={`chat-session-item${activeSessionId === item.id ? " active" : ""}`} key={item.id}>
