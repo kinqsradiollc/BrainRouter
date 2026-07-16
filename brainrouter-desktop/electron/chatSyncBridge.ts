@@ -18,6 +18,7 @@ import path from 'node:path';
 import { app, ipcMain } from 'electron';
 import { loadConfig } from '@kinqs/brainrouter-core/config';
 import { isInternalSessionKey, readTranscriptEntries } from '@kinqs/brainrouter-core/session';
+import { isWorkspaceTrusted } from '@kinqs/brainrouter-core/workspace';
 import { resolveBrainRouterAccountApi } from './accountIntegration.js';
 import {
   deriveThreadTitle,
@@ -141,6 +142,14 @@ export function registerChatSyncBridge(): void {
       throw new Error('There is no chat session to sync yet.');
     }
     const workspaceRoot = path.resolve(args.workspaceRoot);
+    // CWE-22 — the renderer must not be able to point this at an arbitrary path and
+    // exfiltrate transcripts from outside the app's workspaces. Only read from a
+    // workspace the user has explicitly TRUSTED (the app's existing boundary for
+    // sensitive workspace ops; the agent won't produce transcripts in an untrusted
+    // workspace anyway). An attacker-supplied path is never trusted, so it's rejected.
+    if (!isWorkspaceTrusted(workspaceRoot)) {
+      throw new Error('This workspace is not trusted — open and trust it before syncing.');
+    }
     const sessionKey = args.sessionKey;
     if (isInternalSessionKey(sessionKey)) {
       throw new Error('Internal sessions cannot be synced.');
