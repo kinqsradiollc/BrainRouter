@@ -1,0 +1,8 @@
+{
+  "name": "mcp-lsp-connectors",
+  "version": "0.4.17",
+  "description": "MCP, language-server, and connector tools.",
+  "main": "index.js",
+  "required": true,
+  "contributes": ["tools"]
+}

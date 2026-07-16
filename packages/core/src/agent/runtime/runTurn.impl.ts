@@ -19,7 +19,7 @@ import { runHooks, parseHookDecision, collectStopAdditionalContext } from '../..
 import { extractToolText } from '../../mcp/mcpUtils.js';
 import { reconnectBackoffMs, probeConnectivity } from '../../mcp/reconnect/reconnect.js';
 import { listAll as listAgentDefinitions } from '../../orchestration/agents/agentRegistry.js';
-import { executeOrchestrationTool, isOrchestrationToolName, synthesizeDelegateTools, OrchestrationContext } from '../../orchestration/tools.js';
+import { executeOrchestrationTool, synthesizeDelegateTools, OrchestrationContext } from '../../orchestration/tools.js';
 import { buildFanOutHint, shouldSuggestFanOut } from '../../prompt/planning/breadthHint.js';
 import { buildNextActionMessages, parseNextActionPlan, nextActionDirective, planWantsFanOut, shouldSkipPlanner } from '../../prompt/planning/nextAction.js';
 import { compactToolOutput } from '../../prompt/compaction/toolCompaction.js';
@@ -43,8 +43,7 @@ import { readPlan } from '../../task/taskStore.js';
 import { startSpan, traceEvent } from '../../telemetry/tracing/tracing.js';
 import { localToolSpecsFromExecutors } from '../../tool/registry/executors.js';
 import { normalizeToolName } from '../../tool/specs/names.js';
-import { registryAllowedTools, hideWorkerToolsFor, WORKER_THREAD_TOOLS, MCP_DISCOVERY_TOOLS } from '../../tool/registry/registry.js';
-import { LOCAL_TOOLS } from '../../tool/specs/specs.js';
+import { hideWorkerToolsFor, isRegisteredLocalTool, registryEntry, registryToolAllowed } from '../../tool/registry/registry.js';
 import { applyToolScope, rankAndCapTools } from '../../tool/policy/toolBudget.js';
 import { resolveToolVisible } from '../../tool/policy/toolPolicy.js';
 import { extractCacheStats } from '../../util/tokens/cacheStats.js';
@@ -74,6 +73,7 @@ import { classifyForVerification, commandWritesFiles, decideVerification, buildV
 import { isTelemetryEnabled } from '../../telemetry/recorder/telemetry.js';
 import { recordDailyUsage } from '../../usage/usageHistoryStore.js';
 import { shrinkOversizedToolResults } from '../guards/turnEndShrink.js';
+import { getCurrentWorkflow } from '../../workflow/run/workflowArtifacts.js';
 import { getToolSummary, getToolPreview } from '../support/toolSummary.js';
 import { trackChildObservation, parseChildDrainTimeouts, formatChildDrainTimeoutAnswer, summarizeWaitedChildOutputs } from '../support/childObservation.js';
 import { sanitizeToolCallsForHistory, explainUnknownToolName } from '../agent.js';
@@ -177,14 +177,6 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     }
 
     const allowed = this.allowedToolsForAccess();
-    // Collapse the orchestration surface the LLM sees onto
-    // task_agent (foreground) + delegate_agent (background). spawn_agent /
-    // spawn_agents stay registered and executable (workflow.ts slash commands
-    // still call them, and `executeOrchestrationTool` dispatches them) but
-    // we don't advertise them to the model — that's what made the model
-    // pick four overlapping tools at random instead of consistently using
-    // task_agent.
-    const MODEL_HIDDEN_TOOLS = new Set(['spawn_agent', 'spawn_agents']);
     // Worker-thread tools are registered so the model can call them, but only a
     // depth-0, non-worker orchestrator should SEE them (workers can't spawn
     // workers; a child owns none) — hide the surface from everyone else.
@@ -220,17 +212,19 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // here so it filters BOTH local tools (below) and MCP tools (further down).
     const effectiveDisallowed = [...this.disallowedTools, ...this.activeSkillDisallowedTools];
     const disallowedLocalSet = new Set(effectiveDisallowed);
-    let filteredLocalTools = localToolSpecsFromExecutors().filter((t) => {
+    let filteredLocalTools = localToolSpecsFromExecutors({
+      resultExpansionAvailable: this.resultCache.size() > 0,
+      workflowActive: Boolean(getCurrentWorkflow(this.workspaceRoot, this.sessionKey)),
+      rootAgent: !hideWorkerTools,
+      computerUseAvailable: !hideComputerUse,
+      multiProfile: !hideSwitchModel,
+      mcpDiscovery: mcpDiscoveryOn,
+    }).filter((t) => {
       // HARD gates first — a user override can never escalate past these.
       const hardVisible =
         allowed.has(t.name) &&
         (!this.toolScope?.local.length || this.toolScope.local.includes(t.name)) &&
-        !disallowedLocalSet.has(t.name) &&
-        !MODEL_HIDDEN_TOOLS.has(t.name) &&
-        !(hideWorkerTools && WORKER_THREAD_TOOLS.has(t.name)) &&
-        !(hideComputerUse && t.name === 'computer_use') &&
-        !(hideSwitchModel && t.name === 'switch_model') &&
-        !(!mcpDiscoveryOn && MCP_DISCOVERY_TOOLS.has(t.name));
+        !disallowedLocalSet.has(t.name);
       if (!hardVisible) return false;
       // SOFT gate = the local-model L2 allowlist; the override flips it.
       const softVisible = !(localToolScope && !isLocalModelCoreTool(t.name));
@@ -318,7 +312,13 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // `delegate_<id>` tools live next to the legacy `spawn_agent` /
     // `task_agent` / `delegate_agent` so the LLM has a discoverable
     // typed path AND the escape hatch.
-    const delegateTools = synthesizeDelegateTools(listAgentDefinitions(this.workspaceRoot));
+    const delegateTools = synthesizeDelegateTools(listAgentDefinitions(this.workspaceRoot)).filter((tool) => {
+      const ownerName = registryEntry(tool.name)?.name ?? tool.name;
+      return registryToolAllowed(tool.name, this.accessMode)
+        && (!this.toolScope?.local.length || this.toolScope.local.includes(tool.name) || this.toolScope.local.includes(ownerName))
+        && !disallowedLocalSet.has(tool.name)
+        && !disallowedLocalSet.has(ownerName);
+    });
     const allTools = [...filteredLocalTools, ...delegateTools, ...visibleMcpTools];
     const mcpToolByName = new Map<string, any>();
     for (const tool of mcpTools) {
@@ -1703,7 +1703,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       // chatHistory in the ORIGINAL call order so the model's next turn
       // sees a deterministic trace even if a later read settled first.
       const candidates = [
-        ...LOCAL_TOOLS.map((lt) => lt.name),
+        ...localToolSpecsFromExecutors().map((tool) => tool.name),
         ...mcpTools.map((t: any) => t.name).filter((n: any) => typeof n === 'string'),
       ];
       const toolCalls: any[] = response.toolCalls ?? [];
@@ -1743,7 +1743,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         for (const name of normalizedNames) {
           callbacks.onToolStart(name, {});
           callbacks.onToolEnd(name, { success: false, summary: `repeat sequence guard tripped (${previousSequenceRepeats + 1}× ${sequenceLabel})`, preview: resultText });
-          traceEvent('brainrouter.tool', { tool: name, ok: false, local: LOCAL_TOOLS.some(lt => lt.name === name), session_key: this.sessionKey, guard: 'repeat_sequence' }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
+          traceEvent('brainrouter.tool', { tool: name, ok: false, local: isRegisteredLocalTool(name), session_key: this.sessionKey, guard: 'repeat_sequence' }, { traceId: turnSpan.traceId, parentSpanId: turnSpan.spanId });
         }
         for (const entry of processed) {
           this.chatHistory.push(entry.toolMsg);
@@ -1799,7 +1799,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         let args: any = parsedArgs.args;
         const argParseError: string | undefined = parsedArgs.error;
 
-        const isLocal = LOCAL_TOOLS.some(lt => lt.name === name);
+        const isLocal = isRegisteredLocalTool(name);
         callbacks.onToolStart(name, args, tc.id);
 
         let resultText = '';
@@ -1974,7 +1974,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
           // (scope/budget-filtered) is still blocked even when its action kind
           // is allowed. Orchestration/MCP tools have their own inventory; the
           // `allowed` set is the local-tool roster.
-          if (isLocal && !allowed.has(name)) {
+          if (isLocal && !registryToolAllowed(name, this.accessMode)) {
             throw new Error(`Tool "${name}" is not permitted in access mode "${this.accessMode}".`);
           }
           // 0.4.x-4 (`/context`) — count each tool that actually dispatches.
@@ -1986,57 +1986,40 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
             const serverId = this.serverIdFromMcpToolName(name);
             if (serverId) this.mcpServerCallCounts.set(serverId, (this.mcpServerCallCounts.get(serverId) ?? 0) + 1);
           }
-          if (isOrchestrationToolName(name)) {
-            // WF-NO-NEST — a silent/child agent (itself a spawned worker, incl.
-            // a workflow PHASE agent) must never launch its own workflow. That
-            // recursion is what produced the "lots of workflows" runaway: a
-            // build worker called run_workflow → a nested install/verify
-            // workflow → token blow-up, with no human to approve it. Phase work
-            // is done DIRECTLY (or via plain spawn_agents, depth-capped); only a
-            // top-level, user-facing agent may launch a workflow.
-            // Both the declarative `run_workflow` and the saved-graph
-            // `run_workflow_graph` fan out child agents, so they share the
-            // nest-block + cost-confirm gate.
-            const isWorkflowLaunch = name === 'run_workflow' || name === 'run_workflow_graph';
-            if (isWorkflowLaunch && this.silent) {
-              isError = true;
-              resultText =
-                `${name} is not available to a spawned/child agent — nested workflows are blocked ` +
-                '(they recurse and run unattended). Do this work directly with the regular tools ' +
-                '(read_file, write_file, edit_file, run_command), or use spawn_agents for genuinely ' +
-                'independent sub-tasks.';
-              summary = `nested ${name} blocked`;
-            } else if (isWorkflowLaunch && !(await this.confirmRunWorkflowLaunch(args))) {
-              isError = true;
-              resultText =
-                `${name} declined — the workflow launch was not approved (workflows fan out ` +
-                'multiple agents and cost more tokens). Proceed with the regular tools (spawn_agents, ' +
-                'run_command, …) or ask the user to approve the workflow.';
-              summary = 'workflow launch declined';
-            } else {
-              resultText = await executeOrchestrationTool(name, args, buildOrchestrationContext());
-              summary = getToolSummary(name, args, resultText);
-              trackChildObservation(name, args, resultText, spawnedChildIdsThisTurn, waitedChildIdsThisTurn);
-              // MAR-3 — note when a child/sub-agent's findings reached the parent this turn.
-              if (isChildSynthesisTool(name) && resultHasChildOutput(resultText)) childOutputDeliveredThisTurn = true;
-            }
-          } else if (isLocal) {
-            resultText = await this.executeLocalTool(name, args);
-            summary = getToolSummary(name, args, resultText);
-            if (name === 'track_update') {
-              // Best-effort — a throw here must not fail the tool result.
-              let automationCount = 0;
-              try { automationCount = this.applyTrackCodeSignalAutomation(args, callbacks); } catch { /* best-effort */ }
-              if (automationCount > 0) {
-                summary = `${summary} | automation advanced ${automationCount} Track item${automationCount === 1 ? '' : 's'}`;
-              }
-            }
-            if (name === 'goal_complete') { try { this.autoReconcileGoalCompletion(callbacks); } catch { /* best-effort */ } }
-            // Plan-ticker: surface update_plan changes to the REPL so the user
-            // sees the live ✓/⏳/☐ checklist instead of having to run /plan.
-            if (name === 'update_plan' && Array.isArray(args.plan) && callbacks.onPlanUpdate) {
-              callbacks.onPlanUpdate(args.plan, args.explanation);
-            }
+          if (isLocal) {
+            let lifecycleSummarySuffix = '';
+            resultText = await this.executeLocalTool(name, args, {
+              orchestrationRuntime: {
+                invoke: async (toolName, toolArgs, metadata) => {
+                  // High-cost workflow launch policy is extension metadata, not
+                  // a native-name check in the turn loop.
+                  if (metadata.workflowLaunch && this.silent) {
+                    throw new Error(`${toolName}: nested workflows are blocked for spawned/child agents because they run unattended.`);
+                  }
+                  if (metadata.workflowLaunch && !(await this.confirmRunWorkflowLaunch(toolArgs))) {
+                    throw new Error(`${toolName} declined — the high-cost workflow launch was not approved.`);
+                  }
+                  const output = await executeOrchestrationTool(toolName, toolArgs, buildOrchestrationContext());
+                  trackChildObservation(toolName, toolArgs, output, spawnedChildIdsThisTurn, waitedChildIdsThisTurn);
+                  if (isChildSynthesisTool(toolName) && resultHasChildOutput(output)) childOutputDeliveredThisTurn = true;
+                  return output;
+                },
+              },
+              lifecycleRuntime: {
+                afterInvoke: (kind, toolArgs) => {
+                  if (kind === 'track-automation') {
+                    let automationCount = 0;
+                    try { automationCount = this.applyTrackCodeSignalAutomation(toolArgs, callbacks); } catch { /* best-effort */ }
+                    if (automationCount > 0) lifecycleSummarySuffix = ` | automation advanced ${automationCount} Track item${automationCount === 1 ? '' : 's'}`;
+                  } else if (kind === 'goal-reconcile') {
+                    try { this.autoReconcileGoalCompletion(callbacks); } catch { /* best-effort */ }
+                  } else if (kind === 'plan-update' && Array.isArray(toolArgs.plan) && callbacks.onPlanUpdate) {
+                    callbacks.onPlanUpdate(toolArgs.plan, toolArgs.explanation);
+                  }
+                },
+              },
+            });
+            summary = getToolSummary(name, args, resultText) + lifecycleSummarySuffix;
           } else if (this.lastBudgetHiddenTools.has(name)) {
             // MAS-P4-T1: the model called an MCP tool that was trimmed from
             // this turn's inventory by the tool budget. It's real and

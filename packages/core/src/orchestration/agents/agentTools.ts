@@ -2,8 +2,8 @@
  * REFAC-AGENT-ORCH (0.4.6) — the orchestration tool SPEC factories, extracted
  * verbatim from tools.ts. Each returns a pure model-visible tool spec
  * (name/description/inputSchema) consumed by agent/tools/specs.ts to build
- * LOCAL_TOOLS. No shared state, no tools.ts-internal deps. Re-exported from
- * tools.ts for back-compat. Pairs with the 0.4.7 CODEX-TOOL-REGISTRY work.
+ * the orchestration capability extension. No shared state and no Agent-runtime
+ * dependencies; re-exported from tools.ts for back-compat.
  */
 export function createSpawnAgentTool() {
   return {

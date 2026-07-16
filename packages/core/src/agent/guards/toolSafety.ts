@@ -1,5 +1,5 @@
 import { getCliKnobs } from '../../config/config.js';
-import { registryParallelSafeLocal } from '../../tool/registry/registry.js';
+import { registryToolParallelSafe } from '../../tool/registry/registry.js';
 
 // 0.3.8-R4 — Single source of truth for which tool calls are safe to
 // dispatch concurrently within one LLM response.
@@ -47,7 +47,6 @@ import { registryParallelSafeLocal } from '../../tool/registry/registry.js';
 // (`agent/tools/registry.ts`, entries with `parallelSafe: true`) so the
 // concurrency whitelist can't drift from each tool's declared action kind /
 // exposure. (MCP read tools are a separate, dynamically-named surface — below.)
-const PARALLEL_SAFE_LOCAL_TOOLS = registryParallelSafeLocal();
 
 /**
  * MCP read tools — bare tool names (without the `mcp_<server>_` prefix)
@@ -75,7 +74,9 @@ const PARALLEL_SAFE_MCP_READ_TOOLS = new Set<string>([
  */
 export function isParallelSafe(toolName: string): boolean {
   if (!toolName) return false;
-  if (PARALLEL_SAFE_LOCAL_TOOLS.has(toolName)) return true;
+  // Resolve per call so an atomic extension reload immediately updates the
+  // safety surface without leaving a stale module-level cache behind.
+  if (registryToolParallelSafe(toolName)) return true;
   const bare = stripMcpPrefix(toolName);
   if (bare && PARALLEL_SAFE_MCP_READ_TOOLS.has(bare)) return true;
   return false;

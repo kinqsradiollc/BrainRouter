@@ -1,4 +1,3 @@
-// The model-facing tool surface: the local tool specs (specs.ts) and the
-// tool-name normalization that maps model-emitted names onto them (names.ts).
-export * from './specs.js';
+// Model-emitted tool-name normalization. Required tool declarations are owned
+// by capability extensions under extension/builtin.
 export * from './names.js';

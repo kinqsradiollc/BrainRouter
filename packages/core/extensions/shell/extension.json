@@ -1,0 +1,8 @@
+{
+  "name": "shell",
+  "version": "0.4.17",
+  "description": "Shell, background process, wait, and computer-use tools.",
+  "main": "index.js",
+  "required": true,
+  "contributes": ["tools"]
+}

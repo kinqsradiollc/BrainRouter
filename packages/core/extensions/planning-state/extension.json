@@ -1,0 +1,8 @@
+{
+  "name": "planning-state",
+  "version": "0.4.17",
+  "description": "Plan, goal, Track, artifact, chapter, and model-state tools.",
+  "main": "index.js",
+  "required": true,
+  "contributes": ["tools"]
+}

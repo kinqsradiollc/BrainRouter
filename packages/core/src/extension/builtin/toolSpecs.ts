@@ -22,7 +22,7 @@ import {
   createRunWorkflowGraphTool,
 } from '../../orchestration/tools.js';
 
-export const LOCAL_TOOLS = [
+export const BUILTIN_TOOL_SPECS = [
   {
     name: 'read_file',
     description: 'Read the contents of a file from the workspace. Optional line ranges can be provided.',
