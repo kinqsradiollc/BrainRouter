@@ -107,6 +107,10 @@ export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
   const [newAccountLabel, setNewAccountLabel] = useState('');
   const [addAccountBusy, setAddAccountBusy] = useState(false);
   const [addAccountError, setAddAccountError] = useState('');
+  // The "add another account" GitHub device flow runs in its OWN state, fully
+  // decoupled from the primary `oauthState` — so completing it refreshes the
+  // accounts list without ever rewriting the primary account's credential.
+  const [addDevice, setAddDevice] = useState<{ status: 'idle' | 'pending'; source?: string; userCode?: string; verificationUri?: string; intervalSec?: number; expiresAtMs?: number }>({ status: 'idle' });
   const refreshSourceAccounts = React.useCallback(async (source: string): Promise<void> => {
     if (!MULTI_ACCOUNT_SOURCES.has(source)) { setSourceAccounts([]); return; }
     try {
@@ -118,8 +122,35 @@ export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
     if (!editorOpen || !selectedEntry) { return; }
     setNewAccountLabel('');
     setAddAccountError('');
+    setAddDevice({ status: 'idle' });
     void refreshSourceAccounts(selectedEntry.source);
   }, [editorOpen, selectedEntry?.source, refreshSourceAccounts]);
+  // Poll the added-account device flow independently of the primary poll.
+  React.useEffect(() => {
+    if (addDevice.status !== 'pending') return;
+    const delay = Math.max(1, addDevice.intervalSec ?? 5) * 1000;
+    const timer = window.setTimeout(() => {
+      void bridgeQuery<{ status?: string; login?: string }>('github-device-poll').then((res) => {
+        if (res.status === 'pending') {
+          if (addDevice.expiresAtMs && Date.now() >= addDevice.expiresAtMs) { setAddDevice({ status: 'idle' }); setAddAccountError('That code expired — try adding the account again.'); return; }
+          setAddDevice((cur) => (cur.status === 'pending' ? { ...cur } : cur));
+          return;
+        }
+        if (res.status === 'connected') {
+          const src = addDevice.source ?? 'github';
+          setAddDevice({ status: 'idle' });
+          setAddAccountError('');
+          void refreshSourceAccounts(src);
+          void refreshAccountConnectors();
+          setTimeout(refreshSnapshot, 120);
+          return;
+        }
+        setAddDevice({ status: 'idle' });
+        setAddAccountError('That code expired — try adding the account again.');
+      }).catch((err) => { setAddDevice({ status: 'idle' }); setAddAccountError(err instanceof Error ? err.message : String(err)); });
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [addDevice, refreshSourceAccounts, refreshAccountConnectors, refreshSnapshot]);
 
   React.useEffect(() => {
     if (!firstGithub) return;
@@ -328,7 +359,10 @@ export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
   const startGenericOauth = async (): Promise<void> => {
     if (!selectedEntry) return;
     setGenericOauth((s) => ({ ...s, busy: true, error: undefined }));
-    const res = await bridgeQuery<{ ok?: boolean; url?: string; error?: string }>('connector-oauth-start', { source: selectedEntry.source }).catch((e): { ok?: boolean; url?: string; error?: string } => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+    // Re-bind the source's existing account rather than minting a NEW connector on
+    // every click; only a source with no account yet falls through to a fresh one.
+    const connectorId = sourceAccounts[0]?.id;
+    const res = await bridgeQuery<{ ok?: boolean; url?: string; error?: string }>('connector-oauth-start', { source: selectedEntry.source, ...(connectorId ? { connectorId } : {}) }).catch((e): { ok?: boolean; url?: string; error?: string } => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
     if (!res.ok || !res.url) { setGenericOauth((s) => ({ ...s, busy: false, error: res.error || 'Could not start OAuth.' })); return; }
     await bridgeQuery('action:open-external', { url: res.url });
     setGenericOauth((s) => ({ ...s, busy: false, error: 'Complete authorization in the browser, then click Refresh.' }));
@@ -339,9 +373,14 @@ export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
     await refreshGenericOauth();
     await refreshAccountConnectors();
   };
-  const disconnectAccountConnector = async (source: string): Promise<void> => {
-    await bridgeQuery('action:connector-oauth-disconnect', { source });
+  // Multi-account: the Configured grid disconnects a SPECIFIC account by its
+  // connector id (delete). Only a legacy card with no id falls back to the
+  // source-level disconnect.
+  const disconnectAccountConnector = async (source: string, connectorId?: string): Promise<void> => {
+    if (connectorId) await bridgeQuery('action:connector-account-delete', { id: connectorId });
+    else await bridgeQuery('action:connector-oauth-disconnect', { source });
     await refreshAccountConnectors();
+    if (selectedEntry?.source === source) await refreshSourceAccounts(source);
     if (selectedEntry?.source === source) await refreshGenericOauth();
   };
 
@@ -362,15 +401,15 @@ export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
         const res = await bridgeQuery<{ ok: boolean; userCode?: string; verificationUri?: string; interval?: number; error?: string }>('github-device-start', { connectorId });
         if (!res.ok || !res.userCode) { setAddAccountError(res.error || 'Could not start the GitHub connection.'); await refreshSourceAccounts(source); return; }
         const uri = res.verificationUri || 'https://github.com/login/device';
-        setSelectedSource('github');
-        setCredentialMode('oauth');
-        setOauthState({ status: 'pending', flow: 'device', userCode: res.userCode, verificationUri: uri, intervalSec: Number(res.interval) > 0 ? Number(res.interval) : 5, expiresAtMs: Date.now() + 15 * 60_000 });
+        // Own device-flow state (not the primary oauthState) so the primary
+        // account is never touched when this added account finishes authorizing.
+        setAddDevice({ status: 'pending', source, userCode: res.userCode, verificationUri: uri, intervalSec: Number(res.interval) > 0 ? Number(res.interval) : 5, expiresAtMs: Date.now() + 15 * 60_000 });
         await bridgeQuery('action:open-external', { url: uri });
       } else {
         const res = await bridgeQuery<{ ok?: boolean; url?: string; error?: string }>('connector-oauth-start', { source, connectorId }).catch((e): { ok?: boolean; url?: string; error?: string } => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
         if (!res.ok || !res.url) { setAddAccountError(res.error || 'Could not start OAuth.'); await refreshSourceAccounts(source); return; }
         await bridgeQuery('action:open-external', { url: res.url });
-        setAddAccountError('Complete authorization in the browser, then click Refresh.');
+        setAddAccountError('Complete authorization in the browser, then use Refresh below to update this list.');
       }
       await refreshSourceAccounts(source);
     } catch (e) {
@@ -465,13 +504,13 @@ export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
                   {connector?.name || `${entry?.title ?? item.source} account`}
                   <span className={`pc-tag ${item.connected ? 'ok' : 'danger'}`}>{status}</span>
                 </span>
-                <span className="pc-host">{entry?.title ?? item.source} · OAuth via BrainRouter account</span>
+                <span className="pc-host">{entry?.title ?? item.source}{item.account ? ` · @${item.account}` : ''} · OAuth via BrainRouter account</span>
                 <span className="pc-wire">Credential sealed server-side · schedule {connector?.enabled ? 'on' : 'paused'}</span>
                 <span className="pc-wire">Last synced {relTime(connector?.lastRunAt ?? undefined)}</span>
                 {(item.error || connector?.lastError) ? <span className="pc-host" style={{ color: 'var(--warn)' }}>Last sync didn’t finish — {item.error || connector?.lastError}</span> : null}
                 <span className="pc-actions">
                   <button className="btn" onClick={() => { setSelectedSource(item.source); setEditorOpen(true); }}>Configure</button>
-                  {item.connected ? <button className="btn danger" onClick={() => void disconnectAccountConnector(item.source)}>Disconnect</button> : null}
+                  {item.connected ? <button className="btn danger" onClick={() => void disconnectAccountConnector(item.source, connector?.id)}>Disconnect</button> : null}
                 </span>
               </div>
             );
@@ -566,13 +605,20 @@ export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
                 </div>
               ))}
             </div>
-          ) : <div className="set-desc" style={{ marginBottom: 10 }}>No {selectedEntry.title} accounts connected yet — use the connection below, or add a labelled one here.</div>}
+          ) : <div className="empty" style={{ marginBottom: 10 }}>No {selectedEntry.title} accounts connected yet — add a labelled one below.</div>}
           <Row title="Add another account" desc="Label it (e.g. Work, Personal), then authorize the new account in your browser.">
             <div style={{ display: 'grid', gap: 8, minWidth: 300 }}>
               <div style={{ display: 'flex', gap: 8 }}>
-                <input className="ctl" value={newAccountLabel} onChange={(e) => setNewAccountLabel(e.target.value)} placeholder="Work / Personal" />
-                <button type="button" className="btn" disabled={addAccountBusy} onClick={() => void addAnotherAccount()}>{addAccountBusy ? 'Starting…' : 'Add & connect'}</button>
+                <input className="ctl" value={newAccountLabel} onChange={(e) => setNewAccountLabel(e.target.value)} placeholder="Work / Personal" disabled={addDevice.status === 'pending'} />
+                <button type="button" className="btn" disabled={addAccountBusy || addDevice.status === 'pending'} onClick={() => void addAnotherAccount()}>{addAccountBusy ? 'Starting…' : 'Add & connect'}</button>
+                <button type="button" className="btn" onClick={() => void refreshSourceAccounts(selectedEntry.source)}>Refresh</button>
               </div>
+              {addDevice.status === 'pending' ? (
+                <div className="gh-int-status ok">
+                  <span className="gh-int-dot" />
+                  <span>Enter code <b className="mono">{addDevice.userCode}</b> at <span className="mono">{addDevice.verificationUri}</span> to finish adding this account.</span>
+                </div>
+              ) : null}
               {addAccountError ? <span className="pc-host" style={{ color: 'var(--warn)' }}>{addAccountError}</span> : null}
             </div>
           </Row>

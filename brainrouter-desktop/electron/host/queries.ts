@@ -3717,21 +3717,21 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       'connector-accounts': async (args) => {
         const source=String(args.source??'').trim();
         if(!resolveBrainRouterAccountApi(loadConfig()))return{signedIn:false,accounts:[]};
-        try{const account=await resolveBrainRouterAccountContext(loadConfig());if(!account)return{signedIn:false,accounts:[]};const r=await fetch(`${account.baseUrl}/api/connectors/${encodeURIComponent(source)}/accounts`,{headers:brainRouterAccountHeaders(account)});if(!r.ok)return{signedIn:true,accounts:[],error:`HTTP ${r.status}`};return{signedIn:true,...(await r.json() as Record<string,unknown>)};}
+        try{const account=await resolveBrainRouterAccountContext(loadConfig());if(!account)return{signedIn:false,accounts:[]};const r=await fetch(`${account.baseUrl}/api/connectors/${encodeURIComponent(source)}/accounts`,{headers:brainRouterAccountHeaders(account),signal:AbortSignal.timeout(12_000)});if(!r.ok)return{signedIn:true,accounts:[],error:`HTTP ${r.status}`};return{signedIn:true,...(await r.json() as Record<string,unknown>)};}
         catch(e){return{signedIn:true,accounts:[],error:e instanceof Error?e.message:'failed'};}
       },
       'connector-account-add': async (args) => {
         const source=String(args.source??'').trim();
         const label=typeof args.label==='string'&&args.label.trim()?args.label.trim():undefined;
         if(!resolveBrainRouterAccountApi(loadConfig()))return{ok:false,error:'Sign in to BrainRouter first.'};
-        try{const account=await resolveBrainRouterAccountContext(loadConfig());if(!account)return{ok:false,error:'No active BrainRouter organization.'};const r=await fetch(`${account.baseUrl}/api/connectors/${encodeURIComponent(source)}/accounts`,{method:'POST',headers:brainRouterAccountHeaders(account,true),body:JSON.stringify(label?{label}:{})});const d=await r.json() as Record<string,unknown>;return r.ok?{ok:true,...d}:{ok:false,error:String(d.error??`HTTP ${r.status}`)};}
+        try{const account=await resolveBrainRouterAccountContext(loadConfig());if(!account)return{ok:false,error:'No active BrainRouter organization.'};const r=await fetch(`${account.baseUrl}/api/connectors/${encodeURIComponent(source)}/accounts`,{method:'POST',headers:brainRouterAccountHeaders(account,true),body:JSON.stringify(label?{label}:{}),signal:AbortSignal.timeout(12_000)});const d=await r.json() as Record<string,unknown>;return r.ok?{ok:true,...d}:{ok:false,error:String(d.error??`HTTP ${r.status}`)};}
         catch(e){return{ok:false,error:e instanceof Error?e.message:'failed'};}
       },
       'action:connector-account-delete': async (args) => {
         const id=String(args.id??'').trim();
         if(!id)return{ok:false,error:'Missing connector id.'};
         if(!resolveBrainRouterAccountApi(loadConfig()))return{ok:false};
-        try{const account=await resolveBrainRouterAccountContext(loadConfig());if(!account)return{ok:false};const r=await fetch(`${account.baseUrl}/api/connectors/${encodeURIComponent(id)}`,{method:'DELETE',headers:brainRouterAccountHeaders(account)});return{ok:r.ok};}
+        try{const account=await resolveBrainRouterAccountContext(loadConfig());if(!account)return{ok:false};const r=await fetch(`${account.baseUrl}/api/connectors/${encodeURIComponent(id)}`,{method:'DELETE',headers:brainRouterAccountHeaders(account),signal:AbortSignal.timeout(12_000)});return{ok:r.ok};}
         catch{return{ok:false};}
       },
       'action:connector-oauth-disconnect': async (args) => {

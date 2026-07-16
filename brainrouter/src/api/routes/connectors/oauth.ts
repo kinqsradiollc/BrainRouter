@@ -209,7 +209,11 @@ connectorOauthRouter.get("/:source/oauth/callback", async (req: AuthedRequest, r
       credential,
     })).id;
   }
-  if (source === "github") {
+  // Only the PRIMARY github connection (no bound connectorId) owns the shared
+  // per-user account-token key that Track and other subsystems read. Adding a
+  // SECOND github account (state.connectorId set) must never overwrite it, or the
+  // primary account silently starts acting as the just-added one.
+  if (source === "github" && !state.connectorId) {
     await memoryEngine.emailAuth.setSetting(githubAccountTokenSettingKey(state.userId), {
       sealed: seal(JSON.stringify({
         accessToken: credential.accessToken,
