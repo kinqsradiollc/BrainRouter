@@ -98,6 +98,16 @@
 .mv-linkmeta{display:flex;align-items:center;justify-content:space-between;margin-top:8px}
 .mv-linkmeta .mv-lm{font-size:10.5px;color:var(--mv-tx3)}
 .mv-revoke{font:10.5px system-ui;color:#e08a8a;background:none;border:0;cursor:pointer;padding:0}
+/* team picker (ADR-018 team scope) */
+.mv-teamzone{padding:5px;margin:2px 4px 6px;background:var(--mv-bg);border:1px solid var(--mv-line2);border-radius:9px}
+.mv-teamhint{font-size:11px;color:var(--mv-tx3);line-height:1.5;padding:8px 9px}
+.mv-trow{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;padding:8px 9px;border-radius:8px;border:1px solid transparent;background:none;cursor:pointer;text-align:left}
+.mv-trow:hover{background:var(--mv-panel)}
+.mv-trow.mv-on{background:var(--mv-raise);border-color:var(--mv-line2)}
+.mv-trow .mv-tnm{font-size:12.5px;color:var(--mv-tx);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mv-trow .mv-ck{color:var(--mv-ind2);opacity:0;flex-shrink:0}
+.mv-trow.mv-on .mv-ck{opacity:1}
+.mv-trow .mv-ck svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2.2}
 /* meta chips */
 .mv-metastrip{display:flex;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap}
 .mv-chip{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--mv-tx3);background:var(--mv-panel);border:1px solid var(--mv-line);border-radius:20px;padding:4px 10px;font-family:var(--mv-mono)}

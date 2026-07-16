@@ -125,4 +125,14 @@ export function registerMeetingsBridge(): void {
     if (!r?.ok) throw new Error('Could not remove the tracked item.');
     return await r.json();
   });
+
+  // Teams (ADR-018 `team` sharing scope) — the caller's teams in the active org,
+  // feeding the Meetings Share popover's team picker. No path param; `[]` when
+  // signed out / not ok so the picker degrades to an empty list.
+  ipcMain.handle('teams:list', async () => {
+    const r = await accountFetch('/api/teams');
+    if (!r?.ok) return [];
+    const data = (await r.json()) as { teams?: unknown };
+    return Array.isArray(data.teams) ? data.teams : [];
+  });
 }

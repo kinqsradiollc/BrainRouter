@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
+import { listTeams, type TeamOption } from "./teamsOps.js";
 import { MEETING_SCOPES, SCOPE_BLURB, SCOPE_LABEL, type MeetingScope, type MeetingShare } from "./types.js";
 
 const SCOPE_ICON: Record<MeetingScope, ReactElement> = {
@@ -13,12 +14,17 @@ const CHECK = <svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5" /></svg>;
 interface Props {
   share: MeetingShare;
   busy?: boolean;
-  onSetScope(scope: MeetingScope): void;
+  onSetScope(scope: MeetingScope, opts?: { teamId?: string }): void;
 }
 
-/** Header "Share" button + a scope popover (ADR-018 D8). Public reveals a revocable link. */
+/** Header "Share" button + a scope popover (ADR-018 D8). Public reveals a
+ *  revocable link; Team reveals a picker of the caller's teams. */
 export function SharePopover({ share, busy, onSetScope }: Props): ReactElement {
   const [open, setOpen] = useState(false);
+  // Selecting the Team row reveals the picker without committing a team-less scope.
+  const [teamPickerOpen, setTeamPickerOpen] = useState(false);
+  // null = teams not yet fetched; loaded lazily on first open of the picker.
+  const [teams, setTeams] = useState<TeamOption[] | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -29,6 +35,17 @@ export function SharePopover({ share, busy, onSetScope }: Props): ReactElement {
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
   }, [open]);
+
+  // The picker shows for an already team-shared meeting, or once the Team row is
+  // picked. Fetch the caller's teams the first time it becomes visible — most
+  // meetings never get team-shared, so we don't fetch on load.
+  const showTeamPicker = teamPickerOpen || share.scope === "team";
+  useEffect(() => {
+    if (!open || !showTeamPicker || teams !== null) return;
+    let live = true;
+    void listTeams().then((t) => { if (live) setTeams(t); });
+    return () => { live = false; };
+  }, [open, showTeamPicker, teams]);
 
   return (
     <div className="mv-share-wrap" ref={wrapRef}>
@@ -56,7 +73,11 @@ export function SharePopover({ share, busy, onSetScope }: Props): ReactElement {
               data-s={scope}
               role="menuitemradio"
               aria-checked={share.scope === scope}
-              onClick={() => onSetScope(scope)}
+              onClick={() => {
+                if (scope === "team") { setTeamPickerOpen(true); return; }
+                setTeamPickerOpen(false);
+                onSetScope(scope);
+              }}
             >
               <span className="mv-ic">{SCOPE_ICON[scope]}</span>
               <span className="mv-sbody">
@@ -68,6 +89,33 @@ export function SharePopover({ share, busy, onSetScope }: Props): ReactElement {
               </span>
             </button>
           ))}
+
+          {showTeamPicker ? (
+            <div className="mv-teamzone">
+              {teams === null ? (
+                <div className="mv-teamhint">Loading teams…</div>
+              ) : teams.length === 0 ? (
+                <div className="mv-teamhint">No teams yet — create one in Settings › Teams.</div>
+              ) : (
+                teams.map((t) => {
+                  const on = share.scope === "team" && share.teamId === t.id;
+                  return (
+                    <button
+                      type="button"
+                      key={t.id}
+                      className={`mv-trow${on ? " mv-on" : ""}`}
+                      role="menuitemradio"
+                      aria-checked={on}
+                      onClick={() => onSetScope("team", { teamId: t.id })}
+                    >
+                      <span className="mv-tnm">{t.name}</span>
+                      <span className="mv-ck">{CHECK}</span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          ) : null}
 
           {share.scope === "public" && share.publicUrl ? (
             <div className="mv-linkzone">
