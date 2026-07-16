@@ -92,8 +92,9 @@ to put in `.env`.
 ## Deploy — build from source
 
 The production stack is built locally from this repo (no registry pull). It
-brings up Postgres, a one-shot migrator, and the service-capable brain (plus the
-optional gateway / STT / worker / api / ingress / remote-relay services).
+brings up Postgres, an optional Redis cache, a one-shot migrator, and the
+service-capable brain (plus the optional gateway / STT / worker / api / ingress /
+remote-relay services). Every brain image runs **unprivileged** (the `node` user).
 
 ```bash
 cd deploy/stack

@@ -53,7 +53,8 @@ FROM node:22-bookworm-slim AS runtime-base
 ENV NODE_ENV=production
 WORKDIR /app/brainrouter
 
-# Production deps (devDeps pruned) + the two built workspaces.
+# Production deps (devDeps pruned) + the built workspaces (types, agent-protocol,
+# core) the brain imports at runtime.
 COPY --from=build /app/node_modules /app/node_modules
 COPY --from=build /app/package.json /app/package.json
 COPY --from=build /app/packages/types/package.json /app/packages/types/package.json
@@ -66,6 +67,12 @@ COPY --from=build /app/packages/core/dist /app/packages/core/dist
 COPY --from=build /app/packages/core/config /app/packages/core/config
 COPY --from=build /app/brainrouter/package.json /app/brainrouter/package.json
 COPY --from=build /app/brainrouter/dist /app/brainrouter/dist
+
+# Drop root: the official node image ships an unprivileged `node` user (uid 1000).
+# The brain never writes under /app at runtime (config is read-only; DB is the
+# store; the worker readiness flag lives in world-writable /tmp), so every target
+# — migrator, worker, and the HTTP service — runs unprivileged.
+USER node
 
 # Deterministic one-shot target used by Compose/CI before any serving process.
 FROM runtime-base AS migrator
