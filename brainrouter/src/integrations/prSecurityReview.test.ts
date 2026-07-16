@@ -426,4 +426,24 @@ describe("PR security review executor (ADR-017 D5)", () => {
     expect(bodies["POST /projects/acme%2Fplatform%2Fservice/merge_requests/9/discussions"]).toContain('"new_line":2');
     expect(calls.some((call) => call.includes("/repos/"))).toBe(false);
   });
+
+  it("reviews a large diff in multiple parts (turn-based loop) and merges the findings", async () => {
+    const fileA = ["diff --git a/a.ts b/a.ts", "--- a/a.ts", "+++ b/a.ts", "@@ -0,0 +1 @@", "+const a = " + "x".repeat(70) + ";"].join("\n");
+    const fileB = ["diff --git a/b.ts b/b.ts", "--- a/b.ts", "+++ b/b.ts", "@@ -0,0 +1 @@", "+const b = " + "y".repeat(70) + ";"].join("\n");
+    const routes: Routes = { calls: [], diff: `${fileA}\n${fileB}` };
+    let runs = 0;
+    const runner = { run: async (input: { prompt: string }) => {
+      runs += 1;
+      if (input.prompt.includes("a/a.ts")) return '```json\n[{"file":"a.ts","line":1,"severity":"high","confidence":90,"summary":"finding A"}]\n```';
+      if (input.prompt.includes("a/b.ts")) return '```json\n[{"file":"b.ts","line":1,"severity":"low","confidence":90,"summary":"finding B"}]\n```';
+      return "```json\n[]\n```";
+    } };
+    const r = await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "sha" },
+      makeDeps(routes, { llmRunner: runner, maxDiffChars: 150 }),
+    );
+    expect(runs).toBe(2);        // the diff was reviewed in two turns, not truncated
+    expect(r.findings).toBe(2);  // findings from BOTH parts merged
+    expect(r).toMatchObject({ ok: true });
+  });
 });
