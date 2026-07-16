@@ -25,6 +25,7 @@ export const SECURITY_VULN_CLASSES: readonly string[] = [
   'Insecure direct object reference (IDOR) / broken object-level authorization',
   'Broken function-level authorization',
   'Authentication / session / JWT flaws',
+  'Weak password / credential policy (missing complexity or rate-limiting, default or system-predictable credentials)',
   'Cross-site request forgery (CSRF)',
   'Open redirect',
   'HTTP header injection / request smuggling',
@@ -57,7 +58,7 @@ export function buildSecurityReviewContract(): string {
     'Sweep for these vulnerability classes:\n' +
     SECURITY_VULN_CLASSES.map((c) => `  - ${c}`).join('\n') + '\n' +
     '\n' +
-    'Report a finding when the diff shows BOTH an untrusted SOURCE and a dangerous SINK it reaches — e.g. request input (req.query / req.params / req.body / argv / env / headers) flowing into a SQL/NoSQL query, a shell command, a file path, HTML, a template, a deserializer, or a redirect; or a hardcoded secret / credential committed in the change. Prefix the `summary` with the CWE id when known, e.g. "[CWE-89] SQL injection in the /user handler".\n' +
+    'Report a finding when the diff shows BOTH an untrusted SOURCE and a dangerous SINK it reaches — e.g. request input (req.query / req.params / req.body / argv / env / headers) flowing into a SQL/NoSQL query, a shell command, a file path, HTML, a template, a deserializer, or a redirect; or a hardcoded secret / credential committed in the change. Prefix the `summary` with the CWE id when known, e.g. "[CWE-89] SQL injection in the /user handler". Use the MOST SPECIFIC child CWE, never a broad parent — CWE-89 not CWE-74, CWE-78 not CWE-77, CWE-639 not CWE-284; avoid the umbrella CWEs CWE-74 / CWE-20 / CWE-200 / CWE-284 / CWE-693, and omit the CWE entirely if you are unsure rather than guessing a broad one.\n' +
     'Severity: exploitable-in-production / secret leak / auth bypass ⇒ "critical" or "high"; defense-in-depth / hardening ⇒ "low" or "info". An empty array is correct ONLY when the change genuinely introduces no security issue — do not invent problems, but do NOT stay silent about a vulnerability that is plainly visible in the diff.\n' +
     '\n' +
     'For `line`/`endLine`, give the EXACT new-file line numbers of the vulnerable code (read them off the `+` lines under the hunk header) — these anchor the inline comment, so they must be precise. When a safe drop-in fix exists, put the EXACT replacement for lines [line..endLine] in `replacement` (the corrected code ONLY, no `+`/`-` diff prefixes, indentation preserved) so the author can apply it in one click; it must cover exactly those lines.\n' +
