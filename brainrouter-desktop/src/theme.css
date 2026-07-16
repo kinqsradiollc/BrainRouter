@@ -143,6 +143,13 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .crumb-muted { color: var(--text-faint); }
 .crumb-cur { color: var(--text); font-weight: 600; }
 .crumb .task-status { margin-left: 8px; display: inline-flex; align-items: center; justify-content: center; height: 18px; line-height: 1; vertical-align: middle; font-size: 10px; font-weight: 600; padding: 0 8px; border-radius: 999px; }
+/* K-desktop — opt-in "Sync to cloud" control in the chat header. Quiet until
+   hovered; goes green once synced, danger-tinted on failure. */
+.chat-sync-btn { -webkit-app-region: no-drag; display: inline-flex; align-items: center; gap: 5px; background: transparent; border: 0; color: var(--text-faint); font: inherit; font-size: 11.5px; cursor: pointer; padding: 3px 8px; border-radius: 6px; line-height: 1; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+.chat-sync-btn:hover:not(:disabled) { background: var(--ov-08); color: var(--text); transform: translateY(-1px); }
+.chat-sync-btn:disabled { opacity: 0.7; cursor: default; }
+.chat-sync-btn.synced { color: var(--ok); }
+.chat-sync-btn.failed { color: var(--danger); }
 /* DESK-5g/5h — top-bar buttons: ONE size (30px), quiet until hovered, smooth.
    The cluster is PINNED to the content area's top-right (absolute in .main),
    so it never moves when panels open — it sits on top of the side panel the

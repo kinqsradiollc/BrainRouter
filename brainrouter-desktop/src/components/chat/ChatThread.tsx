@@ -105,6 +105,33 @@ export function ChatThread(p: ChatThreadProps): React.ReactElement {
     setEditingTitle(false);
     if (save) { const t = titleDraft.trim(); if (t && t !== headerTitle) onRenameCurrent(t); }
   };
+  // K-desktop — OPT-IN "Sync to cloud": mirror THIS session's user/assistant
+  // turns up to the shared chat-threads API so the conversation also shows on
+  // the dashboard + CLI. Local transcripts are untouched; this only runs on an
+  // explicit click, never on a normal chat turn.
+  const activeRoot = info.workspaceRoot;
+  const [syncState, setSyncState] = useState<'idle' | 'syncing' | 'synced' | 'failed'>('idle');
+  const [syncNote, setSyncNote] = useState('');
+  React.useEffect(() => { setSyncState('idle'); setSyncNote(''); }, [viewKey]);
+  const syncToCloud = async (): Promise<void> => {
+    if (!activeRoot || !currentRow || syncState === 'syncing') return;
+    const api = window.brainrouter.chatSync;
+    if (!api) { setSyncState('failed'); setSyncNote('Chat sync is unavailable in this build.'); return; }
+    setSyncState('syncing');
+    setSyncNote('');
+    try {
+      const res = await api.push({ workspaceRoot: activeRoot, sessionKey: viewKey, title: headerTitle });
+      setSyncState('synced');
+      setSyncNote(`Synced ${res.messageCount} message${res.messageCount === 1 ? '' : 's'} to the cloud.`);
+    } catch (err) {
+      setSyncState('failed');
+      setSyncNote(err instanceof Error ? err.message : 'Could not sync this chat.');
+    }
+  };
+  const syncLabel = syncState === 'syncing' ? 'Syncing…'
+    : syncState === 'synced' ? 'Synced'
+    : syncState === 'failed' ? 'Retry sync'
+    : 'Sync to cloud';
   return (
     <main className={`center${homeMode ? ' home-mode' : ''}${railOpen ? '' : ' no-rail'}`}>
       <header className="chat-head">
@@ -126,6 +153,19 @@ export function ChatThread(p: ChatThreadProps): React.ReactElement {
             </button>
           )}
         </span>
+        {!homeMode && currentRow ? (
+          <button type="button"
+            className={`chat-sync-btn${syncState === 'synced' ? ' synced' : ''}${syncState === 'failed' ? ' failed' : ''}`}
+            onClick={syncToCloud}
+            disabled={syncState === 'syncing'}
+            title={syncNote || 'Sync this chat to the cloud so it appears on the dashboard and CLI'}
+            aria-label="Sync this chat to the cloud">
+            {syncState === 'syncing'
+              ? <span className="spinner sm" />
+              : <Icon name={syncState === 'synced' ? 'check-circle' : 'globe'} size={13} />}
+            <span>{syncLabel}</span>
+          </button>
+        ) : null}
       </header>
       <div className="chat" ref={chatRef} onScroll={() => {
         const el = chatRef.current;

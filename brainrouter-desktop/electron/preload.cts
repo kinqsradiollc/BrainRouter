@@ -115,4 +115,14 @@ contextBridge.exposeInMainWorld('brainrouter', {
   teams: {
     list(): Promise<unknown> { return ipcRenderer.invoke('teams:list'); },
   },
+  // K-desktop — cross-surface chat sync. OPT-IN: push mirrors the active chat
+  // session's user/assistant turns up to the shared /api/chat/threads API so a
+  // desktop conversation also shows on the dashboard + CLI. Local transcripts
+  // are untouched; nothing runs on a normal turn, only on explicit user action.
+  chatSync: {
+    push(args: { workspaceRoot: string; sessionKey: string; title?: string }): Promise<{ threadId: string; messageCount: number; created: boolean; title: string }> {
+      return ipcRenderer.invoke('chatSync:push', args);
+    },
+    list(): Promise<Array<Record<string, unknown>>> { return ipcRenderer.invoke('chatSync:list'); },
+  },
 });
