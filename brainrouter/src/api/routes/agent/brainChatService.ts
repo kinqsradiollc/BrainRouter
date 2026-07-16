@@ -11,6 +11,14 @@ export interface BrainChatMessage {
 export interface BrainChatInput {
   userId: string;
   orgId: string;
+  /**
+   * The org the MODEL dispatch runs as — the org that owns the resolved managed
+   * model + service principal. Equals `orgId` normally, but differs when a
+   * BYOK-less org inherits the deployment-default (system-org) model: recall and
+   * capture stay on the caller's `orgId`, while the gateway call must present the
+   * model owner's org so its service principal is accepted. Defaults to `orgId`.
+   */
+  dispatchOrgId?: string;
   sessionKey: string;
   projectId?: string;
   projectTag?: string;
@@ -123,7 +131,7 @@ export async function runBrainChat(input: BrainChatInput, deps: BrainChatDepende
   });
 
   const answer = (await deps.dispatch({
-    orgId: input.orgId,
+    orgId: input.dispatchOrgId ?? input.orgId,
     servicePrincipalId: input.servicePrincipalId,
     model: input.model,
     reasoningEffort: input.reasoningEffort,

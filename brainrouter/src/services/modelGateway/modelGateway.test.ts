@@ -64,6 +64,35 @@ describe("tenant-scoped internal model gateway", () => {
     });
   });
 
+  it("inherits the system org's models when the requested org has none (deployment default)", async () => {
+    const prev = process.env.BRAINROUTER_SYSTEM_ORG_ID;
+    process.env.BRAINROUTER_SYSTEM_ORG_ID = "org-system";
+    try {
+      // Requested org has no models; the system org does → dispatch resolves as the
+      // model OWNER (org-system) so its service principal is accepted downstream.
+      const store = storeFor({ "org-system": [policy("org-system", "default-model")] });
+      await expect(resolveScopedModelSelection({ store, orgId: "org-empty" })).resolves.toEqual({
+        orgId: "org-system",
+        servicePrincipalId: "brain-worker:org-system",
+        publicModelId: "default-model",
+        reasoningEffort: "low",
+      });
+    } finally {
+      if (prev === undefined) delete process.env.BRAINROUTER_SYSTEM_ORG_ID; else process.env.BRAINROUTER_SYSTEM_ORG_ID = prev;
+    }
+  });
+
+  it("still throws model_not_configured when neither the org nor the system org has a model", async () => {
+    const prev = process.env.BRAINROUTER_SYSTEM_ORG_ID;
+    process.env.BRAINROUTER_SYSTEM_ORG_ID = "org-system";
+    try {
+      await expect(resolveScopedModelSelection({ store: storeFor({}), orgId: "org-empty" }))
+        .rejects.toMatchObject({ code: "model_not_configured" });
+    } finally {
+      if (prev === undefined) delete process.env.BRAINROUTER_SYSTEM_ORG_ID; else process.env.BRAINROUTER_SYSTEM_ORG_ID = prev;
+    }
+  });
+
   it("sends public routing state with a short-lived org-bound service JWT and no provider secret", async () => {
     const secret = "unit-test-jwt-secret";
     const seen: Array<{ url: string; headers: Headers; body: Record<string, unknown> }> = [];
