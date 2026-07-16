@@ -47,6 +47,13 @@ declare global {
         openScreenRecordingSettings(): Promise<unknown>;
         setMode(args: { enabled?: boolean; mode?: string }): Promise<unknown>;
       };
+      /** K-desktop — opt-in cross-surface chat sync. Pushes the active desktop
+       *  session's user/assistant turns up to /api/chat/threads (never touches
+       *  the local transcript). Absent on older preloads. */
+      chatSync?: {
+        push(args: { workspaceRoot: string; sessionKey: string; title?: string }): Promise<{ threadId: string; messageCount: number; created: boolean; title: string }>;
+        list(): Promise<Array<Record<string, unknown>>>;
+      };
     };
   }
 }
