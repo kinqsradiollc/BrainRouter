@@ -110,4 +110,9 @@ contextBridge.exposeInMainWorld('brainrouter', {
     serverTrackSetDone(id: string, done: boolean): Promise<unknown> { return ipcRenderer.invoke('meetings:serverTrackSetDone', id, done); },
     serverTrackRemove(id: string): Promise<unknown> { return ipcRenderer.invoke('action:meetings:serverTrackRemove', id); },
   },
+  // Teams (ADR-018) — the caller's teams in the active org, for the Meetings
+  // Share popover's team picker. Proxied through main (no bearer in renderer).
+  teams: {
+    list(): Promise<unknown> { return ipcRenderer.invoke('teams:list'); },
+  },
 });

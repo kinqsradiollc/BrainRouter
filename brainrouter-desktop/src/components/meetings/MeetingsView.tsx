@@ -64,11 +64,11 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
     return q ? items.filter((m) => m.title.toLowerCase().includes(q)) : items;
   }, [items, query]);
 
-  const setScope = useCallback(async (scope: MeetingScope) => {
+  const setScope = useCallback(async (scope: MeetingScope, opts?: { teamId?: string }) => {
     if (!detail) return;
     setBusyShare(true);
     try {
-      const share = await ops.setScope(detail.id, scope);
+      const share = await ops.setScope(detail.id, scope, opts);
       setDetail((d) => (d ? { ...d, share } : d));
       setItems((list) => list.map((m) => (m.id === detail.id ? { ...m, scope } : m)));
     } finally {
