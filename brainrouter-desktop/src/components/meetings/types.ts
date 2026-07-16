@@ -67,6 +67,8 @@ export interface MeetingsOps {
   setScope(id: string, scope: MeetingScope, opts?: { teamId?: string }): Promise<MeetingShare>;
   /** Promote an action item to a Track work item; returns its id. */
   sendActionToTrack(meetingId: string, actionId: string): Promise<{ trackItemId: string }>;
+  /** Remove an action item's Track work item and clear the link (untrack). */
+  unsendActionFromTrack(meetingId: string, actionId: string): Promise<void>;
   toggleAction(meetingId: string, actionId: string, done: boolean): Promise<void>;
 }
 

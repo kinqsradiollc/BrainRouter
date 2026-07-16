@@ -310,6 +310,26 @@ export default function MeetingsPage() {
     }
   }, [detail]);
 
+  // Track / untrack a meeting action — creates (or removes) a real Track work item
+  // server-side, so it shows up on the Track board here and on the desktop.
+  const toggleTrack = useCallback(async (action: ActionItem) => {
+    if (!detail) return;
+    const linked = Boolean(action.trackItemId);
+    try {
+      if (linked) {
+        await authFetch(`/api/meetings/${detail.id}/actions/${action.id}/track`, { method: "DELETE" });
+        setDetail((d) => (d ? { ...d, actionItems: d.actionItems.map((x) => (x.id === action.id ? { ...x, trackItemId: undefined } : x)) } : d));
+      } else {
+        const res = await authFetch<{ trackItemId: string }>(`/api/meetings/${detail.id}/actions/${action.id}/track`, { method: "POST" });
+        setDetail((d) => (d ? { ...d, actionItems: d.actionItems.map((x) => (x.id === action.id ? { ...x, trackItemId: res.trackItemId } : x)) } : d));
+      }
+      invalidateDashboardQueries(`meetings:overview:${detail.id}`);
+      invalidateDashboardQueries("track:");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not update Track.");
+    }
+  }, [detail]);
+
   const submitCreate = useCallback(async () => {
     if (!draftTitle.trim() || !draftTranscript.trim()) { setCreateErr("A title and a transcript are required."); return; }
     setBusy("create");
@@ -445,7 +465,7 @@ export default function MeetingsPage() {
                             {a.title}{a.assignee ? <span className={styles.aiWho}>→ {a.assignee}</span> : null}
                           </span>
                         </label>
-                        <button type="button" className={styles.track} disabled={Boolean(a.trackItemId)}>{a.trackItemId ? "In Track ✓" : "Track ↗"}</button>
+                        <button type="button" className={styles.track} title={a.trackItemId ? "Remove from Track" : "Add to Track"} onClick={() => void toggleTrack(a)}>{a.trackItemId ? "In Track ✓" : "Track ↗"}</button>
                       </div>
                     ))}
                   </div>

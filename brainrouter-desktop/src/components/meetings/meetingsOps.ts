@@ -19,6 +19,7 @@ interface MeetingsBridge {
   regenerate(id: string): Promise<void>;
   setScope(id: string, scope: MeetingScope, opts?: { teamId?: string }): Promise<MeetingShare>;
   actionToTrack(meetingId: string, actionId: string): Promise<{ trackItemId: string }>;
+  actionUntrack(meetingId: string, actionId: string): Promise<void>;
   toggleAction(meetingId: string, actionId: string, done: boolean): Promise<void>;
 }
 
@@ -37,6 +38,7 @@ export function createMeetingsOps(): MeetingsOps {
       regenerateSummary: (id) => b.regenerate(id),
       setScope: (id, scope, opts) => b.setScope(id, scope, opts),
       sendActionToTrack: (meetingId, actionId) => b.actionToTrack(meetingId, actionId),
+      unsendActionFromTrack: (meetingId, actionId) => b.actionUntrack(meetingId, actionId),
       toggleAction: (meetingId, actionId, done) => b.toggleAction(meetingId, actionId, done),
     };
   }
@@ -91,6 +93,7 @@ function sampleOps(): MeetingsOps {
       return { scope, publicUrl: scope === "public" ? "brainrouter.ai/m/9fK2qX" : undefined, expiresAt: scope === "public" ? "in 30 days" : undefined };
     },
     async sendActionToTrack() { return { trackItemId: `wi-${++trackSeq}` }; },
+    async unsendActionFromTrack() { /* no-op in sample */ },
     async toggleAction() { /* no-op in sample */ },
   };
 }

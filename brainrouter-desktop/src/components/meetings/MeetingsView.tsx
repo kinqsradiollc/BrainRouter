@@ -86,6 +86,12 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
     setDetail((d) => (d ? { ...d, actionItems: d.actionItems.map((a) => (a.id === actionId ? { ...a, trackItemId } : a)) } : d));
   }, [detail, ops]);
 
+  const unsendFromTrack = useCallback(async (actionId: string) => {
+    if (!detail) return;
+    await ops.unsendActionFromTrack(detail.id, actionId);
+    setDetail((d) => (d ? { ...d, actionItems: d.actionItems.map((a) => (a.id === actionId ? { ...a, trackItemId: undefined } : a)) } : d));
+  }, [detail, ops]);
+
   return (
     <div className="mv-root">
       <div className="mv-col">
@@ -192,7 +198,7 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
                         <svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5" /></svg>
                       </button>
                       <div className="mv-txt">{a.title}{a.assignee ? <div className="mv-who">→ {a.assignee}</div> : null}</div>
-                      <button type="button" className={`mv-totrack${a.trackItemId ? " mv-linked" : ""}`} onClick={() => { if (!a.trackItemId) void sendToTrack(a.id); }}>
+                      <button type="button" className={`mv-totrack${a.trackItemId ? " mv-linked" : ""}`} title={a.trackItemId ? "Remove from Track" : "Add to Track"} onClick={() => { void (a.trackItemId ? unsendFromTrack(a.id) : sendToTrack(a.id)); }}>
                         {a.trackItemId ? "In Track ✓" : "Track ↗"}
                       </button>
                     </div>

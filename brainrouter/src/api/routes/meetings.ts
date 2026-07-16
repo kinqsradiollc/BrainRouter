@@ -97,6 +97,22 @@ meetingsRouter.post("/:id/actions/:actionId", async (req: AuthedRequest, res) =>
   res.json({ ok: true });
 });
 
+/** Track a meeting action — create a real Track work item + link it (idempotent). */
+meetingsRouter.post("/:id/actions/:actionId/track", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  const result = await meetings.trackMeetingAction(req.userId!, req.orgId!, String(req.params.id), String(req.params.actionId));
+  if (!result) { res.status(404).json({ error: "Action item not found, or you are not the owner." }); return; }
+  res.status(201).json(result);
+});
+
+/** Untrack a meeting action — delete its Track work item + clear the link. */
+meetingsRouter.delete("/:id/actions/:actionId/track", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  const ok = await meetings.untrackMeetingAction(req.userId!, req.orgId!, String(req.params.id), String(req.params.actionId));
+  if (!ok) { res.status(404).json({ error: "Action item not found, or you are not the owner." }); return; }
+  res.json({ ok: true });
+});
+
 meetingsRouter.post("/:id/scope", async (req: AuthedRequest, res) => {
   if (!(await attachOrgContext(req, res))) return;
   const body = (req.body ?? {}) as { scope?: unknown; teamId?: unknown; from?: unknown };

@@ -12,6 +12,7 @@ import { memoryEngine } from "../engine.js";
 import { ingestSource, type SourceIngestStore } from "../source/ingest.js";
 import { isPublicScope, isScopeDowngrade, scopeToBackendVisibility, assertScopeParams } from "./sharing.js";
 import { redactSensitiveMemoryText } from "../util/redaction.js";
+import { createTrack, untrackBySourceRef, type TrackItemRow } from "../track/backend.js";
 import type { CreateMeetingInput, MeetingListCursor, MeetingRow, MeetingScope, MeetingTranscriptSegment } from "../store/postgres/queries/meetingsQueries.js";
 
 interface MeetingsStore {
@@ -325,8 +326,9 @@ export async function updateSummary(userId: string, orgId: string, id: string, s
   return updated ? await toDetail(updated) : null;
 }
 
-/** Owner-only: persist an action item's done state (or a Track link). */
-export async function setActionItemState(userId: string, orgId: string, id: string, actionId: string, patch: { done?: boolean; trackItemId?: string }): Promise<boolean> {
+/** Owner-only: persist an action item's done state (or a Track link).
+ *  `trackItemId: null` CLEARS the link (untrack); omitting it leaves it unchanged. */
+export async function setActionItemState(userId: string, orgId: string, id: string, actionId: string, patch: { done?: boolean; trackItemId?: string | null }): Promise<boolean> {
   requireAccount(userId, orgId);
   const row = await store().getMeeting(orgId, userId, id);
   if (!row || row.userId !== userId) return false;
@@ -334,10 +336,44 @@ export async function setActionItemState(userId: string, orgId: string, id: stri
   const next = row.actionItems.map((item) => {
     if (item.id !== actionId) return item;
     found = true;
-    return { ...item, ...(patch.done !== undefined ? { done: patch.done } : {}), ...(patch.trackItemId ? { trackItemId: patch.trackItemId } : {}) };
+    const merged = { ...item, ...(patch.done !== undefined ? { done: patch.done } : {}) };
+    // `undefined` is dropped by JSON.stringify on persist, so null clears the link.
+    if (patch.trackItemId !== undefined) merged.trackItemId = patch.trackItemId || undefined;
+    return merged;
   });
   if (!found) return false;
   return store().updateMeetingActionItems(id, userId, next);
+}
+
+/** Track a meeting action item — create a REAL, org-scoped Track work item (idempotent
+ *  per meeting+action) and link it back onto the action. Both desktop and dashboard
+ *  call this, so the resulting item is viewable + syncs everywhere. */
+export async function trackMeetingAction(userId: string, orgId: string, meetingId: string, actionId: string): Promise<{ trackItemId: string; item: TrackItemRow } | null> {
+  requireAccount(userId, orgId);
+  const row = await store().getMeeting(orgId, userId, meetingId);
+  if (!row || row.userId !== userId) return null;
+  const action = row.actionItems.find((a) => a.id === actionId);
+  if (!action) return null;
+  const item = await createTrack(orgId, userId, {
+    title: action.title,
+    assignee: action.assignee ?? null,
+    source: "meeting-action",
+    sourceRef: `${meetingId}:${actionId}`,
+    statusCategory: action.done ? "completed" : "todo",
+  });
+  await store().updateMeetingActionItems(meetingId, userId, row.actionItems.map((a) => a.id === actionId ? { ...a, trackItemId: item.id } : a));
+  return { trackItemId: item.id, item };
+}
+
+/** Untrack a meeting action — delete its linked Track work item and clear the link. */
+export async function untrackMeetingAction(userId: string, orgId: string, meetingId: string, actionId: string): Promise<boolean> {
+  requireAccount(userId, orgId);
+  const row = await store().getMeeting(orgId, userId, meetingId);
+  if (!row || row.userId !== userId) return false;
+  if (!row.actionItems.some((a) => a.id === actionId)) return false;
+  await untrackBySourceRef(orgId, `${meetingId}:${actionId}`);
+  await store().updateMeetingActionItems(meetingId, userId, row.actionItems.map((a) => a.id === actionId ? { ...a, trackItemId: undefined } : a));
+  return true;
 }
 
 /** Public read — the redacted summary only, for an active share token. No auth. */
