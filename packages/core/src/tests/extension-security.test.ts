@@ -6,6 +6,7 @@ import {
   commitExtensionReload,
   extensionToolEntries,
   extensionToolOwner,
+  requiredExtensionToolNames,
   resetExtensionContributions,
 } from '../extension/registry.js';
 import { effectiveToolRegistry } from '../tool/registry/registry.js';
@@ -31,6 +32,19 @@ test('CORE-EXT required first-party tools cannot be shadowed', () => {
   assert.deepEqual(owner, { extension: 'filesystem', required: true });
   const host = createExtensionHost('workspace-plugin', '/tmp/ws', '1.0.0');
   assert.throws(() => host.registerTool(publicTool('read_file')), /required core extension/);
+});
+
+test('CORE-EXT only required first-party tools are trusted with the privileged runtime ports (CWE-266)', () => {
+  // executeLocalTool withholds builtinRuntime/orchestrationRuntime/lifecycleRuntime
+  // from any tool not in requiredExtensionToolNames(), so a user-installed
+  // extension tool can never capture those escalation interfaces.
+  resetExtensionContributions();
+  effectiveToolRegistry();
+  assert.equal(requiredExtensionToolNames().has('read_file'), true, 'a required core tool IS trusted');
+  createExtensionHost('workspace-plugin', '/tmp/ws', '1.0.0').registerTool(publicTool('user_ext_tool'));
+  assert.equal(requiredExtensionToolNames().has('user_ext_tool'), false, 'a user extension tool is NOT trusted');
+  resetExtensionContributions();
+  effectiveToolRegistry();
 });
 
 test('CORE-EXT reload contributions become visible only at atomic commit', () => {

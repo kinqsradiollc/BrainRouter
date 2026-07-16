@@ -63,6 +63,12 @@ export function decideExecutionPolicy(action: ActionKind, mode: AccessMode): Pol
  * MCP `memory_*`/etc. land here and are allowed in every mode).
  */
 export function actionKindForTool(name: string): ActionKind {
+  // Synthesized `delegate_<id>` tools (created per agent definition) are NOT in
+  // the registry, so they must be classified explicitly — otherwise they fall to
+  // the read_only default and a read-only access mode would wrongly permit
+  // spawning a child agent through one (CWE-280). A delegate always launches a
+  // child, so it gates as child_write.
+  if (name.startsWith('delegate_')) return 'child_write';
   return registryEntry(name)?.actionKind ?? 'read_only';
 }
 

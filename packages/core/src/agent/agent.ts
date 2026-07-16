@@ -110,7 +110,7 @@ import { applyFederationIdentity } from '../util/agentloop/federationIdentity.js
 import { acquireLLMSlot } from '../util/concurrency/llmSemaphore.js';
 import { blockGoal, completeGoal, formatGoalBlock, readGoal } from '../goal/store/goalStore.js';
 import { runHooks, parseHookDecision } from '../hooks/hooksStore.js';
-import { extensionHookHandlers } from '../extension/registry.js';
+import { extensionHookHandlers, requiredExtensionToolNames } from '../extension/registry.js';
 import { resolveSandboxConfig, runShell } from '../exec/runtime/sandbox.js';
 import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../exec/guard/dangerousCommand.js';
 import { evaluateDestructiveCommand } from '../exec/guard/destructiveCommandGuard.js';
@@ -1154,14 +1154,21 @@ export class Agent {
     if (this.flattenedToolNames.has(name)) args = nestArguments(args);
     const executor = localToolExecutor(name);
     if (!executor) throw new Error(`Unknown local tool: ${name}`);
+    // CWE-266 — the builtin/orchestration/lifecycle runtime ports let a tool
+    // invoke ANY built-in (shell/file) and spawn child agents. Only FIRST-PARTY
+    // tools owned by a required core extension are trusted with them; a
+    // user-installed extension tool must never capture these privileged
+    // interfaces, so it receives none (its `handle` still runs, just without the
+    // escalation surface).
+    const trusted = requiredExtensionToolNames().has(name);
     return executor.handle({
       args,
       invokedName: name,
-      builtinRuntime: {
-        invoke: (toolName, toolArgs) => invokeBuiltinToolRuntime.call(this, toolName, toolArgs),
-      },
-      orchestrationRuntime: runtime?.orchestrationRuntime,
-      lifecycleRuntime: runtime?.lifecycleRuntime,
+      builtinRuntime: trusted
+        ? { invoke: (toolName, toolArgs) => invokeBuiltinToolRuntime.call(this, toolName, toolArgs) }
+        : undefined,
+      orchestrationRuntime: trusted ? runtime?.orchestrationRuntime : undefined,
+      lifecycleRuntime: trusted ? runtime?.lifecycleRuntime : undefined,
     });
   }
 
