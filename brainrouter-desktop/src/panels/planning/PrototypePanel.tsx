@@ -12,18 +12,26 @@ import { reservePrototypePath } from '@kinqs/brainrouter-core/dist/prototype/pro
  * Set a requirement and a {designType, brandColor, tone[]} steer; this builds the
  * exact prompt the agent follows to emit one self-contained interactive HTML file
  * at a reserved path (pure core: buildPrototypePrompt + buildDesignSteering +
- * reservePrototypePath). Copy it into chat to generate — the result lands as an
- * html artifact, which the Artifacts panel renders (placeholder swap from §3 D2).
+ * reservePrototypePath). Hit Generate to drop the prompt straight into the
+ * composer (press Enter to run) — the result lands as an html artifact, which the
+ * Artifacts panel renders (placeholder swap from §3 D2). Copy prompt stays as a
+ * utility fallback; when no onSendToChat is wired, Generate copies instead.
  */
 
 const TONES = ['minimal', 'playful', 'professional', 'bold', 'elegant', 'high-contrast', 'retro', 'dark'];
 
-export function PrototypePanel(): React.ReactElement {
+export interface PrototypePanelProps {
+  /** Drop the built prototype prompt into the chat composer (press Enter to generate). */
+  onSendToChat?: (text: string) => void;
+}
+
+export function PrototypePanel({ onSendToChat }: PrototypePanelProps = {}): React.ReactElement {
   const [requirement, setRequirement] = useState('A kanban board with drag-and-drop columns and add-card.');
   const [designType, setDesignType] = useState('');
   const [brandColor, setBrandColor] = useState('');
   const [tone, setTone] = useState<string[]>([]);
   const [copied, setCopied] = useState(false);
+  const [sent, setSent] = useState(false);
 
   // A stable-per-session reserved path so the preview prompt doesn't churn every render.
   const reservedPath = useMemo(() => {
@@ -43,6 +51,12 @@ export function PrototypePanel(): React.ReactElement {
   const toggleTone = (t: string): void => setTone((cur) => (cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]));
   const copyPrompt = async (): Promise<void> => {
     try { await navigator.clipboard.writeText(prompt); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* ignore */ }
+  };
+  // Primary action: send the built prompt to the composer so the agent runs it and
+  // the result lands as an html artifact. Standalone (no onSendToChat) → copy.
+  const generate = (): void => {
+    if (onSendToChat) { onSendToChat(prompt); setSent(true); setTimeout(() => setSent(false), 2000); }
+    else void copyPrompt();
   };
 
   return (
@@ -74,13 +88,16 @@ export function PrototypePanel(): React.ReactElement {
 
       <div className="proto-actions">
         <span className="proto-path">→ {reservedPath}</span>
-        <button className="sched-add-btn" disabled={!requirement.trim()} onClick={() => void copyPrompt()}>{copied ? 'Copied ✓' : 'Copy prompt'}</button>
+        <button className="btn" disabled={!requirement.trim()} onClick={() => void copyPrompt()}>{copied ? 'Copied ✓' : 'Copy prompt'}</button>
+        <button className="sched-add-btn" disabled={!requirement.trim()} onClick={generate}>{sent ? 'Sent ✓' : 'Generate'}</button>
       </div>
+
+      {sent ? <div className="sched-note">Sent to composer — press Enter to generate.</div> : null}
 
       <div className="proto-section">Prototype prompt</div>
       <pre className="proto-prompt">{prompt}</pre>
 
-      <div className="sched-note">Paste this into chat to generate. The agent writes one self-contained interactive HTML file to the reserved path; it lands as an <code>html</code> artifact (placeholder tokens resolve to inline SVGs in the Artifacts preview).</div>
+      <div className="sched-note">Generate drops this into the composer — press Enter and the agent writes one self-contained interactive HTML file to the reserved path; it lands as an <code>html</code> artifact (placeholder tokens resolve to inline SVGs in the Artifacts preview).</div>
     </div>
   );
 }

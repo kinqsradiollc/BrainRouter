@@ -259,7 +259,7 @@ export function buildRenderPanelBody(ctx: RenderPanelBodyCtx): (id: PanelId) => 
       case 'search': return <SearchPanel hits={searchHits} onSearch={(query) => q('q-search', 'search-transcript', { q: query })} />;
       case 'workflows': return <WorkflowsPanel />;
       case 'memory': return <MemoryPanel />;
-      case 'prototype': return <PrototypePanel />;
+      case 'prototype': return <PrototypePanel onSendToChat={(text) => { setDraft(text); setToast('Prototype prompt sent to the composer — press Enter to generate.'); }} />;
       case 'schedule': return <SchedulePanel schedules={schedules} now={Date.now()}
         onAdd={(kind, expr, command) => { q('q-schedule', 'schedule-add', { kind, expr, command }); setTimeout(() => q('q-schedule', 'schedule-list'), 150); }}
         onRemove={(id) => { q('q-schedule', 'schedule-remove', { id }); setTimeout(() => q('q-schedule', 'schedule-list'), 150); }}
