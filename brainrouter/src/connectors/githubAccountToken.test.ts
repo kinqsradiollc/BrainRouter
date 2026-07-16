@@ -1,12 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
   githubAccountTokenFromResponse,
+  githubRepositoryAccessMode,
   githubAccountTokenSettingKey,
   readGithubAccountToken,
   resolveGithubAccountToken,
 } from "./githubAccountToken.js";
 
 describe("GitHub account connector token storage", () => {
+  it("uses installation repositories only for device-flow GitHub App tokens", () => {
+    expect(githubRepositoryAccessMode({ flow: "device" })).toBe("installations");
+    expect(githubRepositoryAccessMode({ flow: "web" })).toBe("user");
+    expect(githubRepositoryAccessMode({ flow: undefined })).toBe("user");
+  });
+
   it("reads the existing sealed-setting contract without exposing it through config", async () => {
     const getSetting = async <T>(key: string): Promise<T | null> => {
       expect(key).toBe("connectorToken:github:user-1");

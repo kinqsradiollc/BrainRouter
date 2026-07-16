@@ -16,11 +16,9 @@ import { gitlabTrackProxyTarget } from "../../../connectors/gitlabTrackProxy.js"
 
 export const connectorManageRouter = Router();
 connectorManageRouter.use(requireAnyAuth);
-// Connector credentials control what external data enters an organization.  Keep
-// this surface aligned with the OAuth-app configuration endpoints: a valid JWT
-// alone is not sufficient; the active org role must be allowed to manage
-// triggers/integrations.
-connectorManageRouter.use(requirePermission("triggers:manage"));
+// Connector accounts are per-user. Developers may connect and sync their own
+// sources, while shared OAuth-app credentials remain behind triggers:manage.
+connectorManageRouter.use(requirePermission("connectors:manage"));
 
 function activeOrgId(req: AuthedRequest): string {
   // `requirePermission` immediately above resolves and attaches this value. Keep

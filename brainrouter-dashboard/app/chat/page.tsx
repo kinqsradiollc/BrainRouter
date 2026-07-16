@@ -257,6 +257,9 @@ function ChatContent() {
 
   const activeModel = models.find((model) => model.id === modelSelection.model && model.enabled) ?? null;
   const effortOptions = activeModel?.reasoning?.mode === "selectable" ? activeModel.reasoning.allowed : [];
+  const activeOrg = scopeState.orgs.find((org) => org.orgId === scopeState.scope.orgId);
+  const canManageModels = Boolean(activeOrg?.capabilities.includes("models:manage"));
+  const modelsEmpty = !modelsLoading && !modelsError && models.length === 0;
 
   function selectModel(model: string) {
     const next = normalizeChatModelSelection(models, { model });
@@ -386,6 +389,13 @@ function ChatContent() {
           </form>
 
           {modelsError && <div className="chat-model-error" role="status">Managed models unavailable. <Link href="/providers">Open Models &amp; providers</Link></div>}
+          {modelsEmpty && (
+            <div className="chat-model-error" role="status">
+              No managed model is available for {activeOrg?.name ?? "this organization"}. {canManageModels
+                ? <Link href="/providers">Configure a model</Link>
+                : <>Choose another organization under Context, or ask an organization administrator to configure one.</>}
+            </div>
+          )}
           {error && <div className="chat-error" role="alert"><span>Message not sent.</span> {error}</div>}
           {!messages.length && (
             <>

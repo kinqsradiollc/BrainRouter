@@ -65,7 +65,7 @@ export const PRODUCT_NAV_GROUPS: DashboardNavGroup[] = [
       { href: "/projects", label: "Projects", keywords: "workspace", icon: <svg {...iconProps}><path d="M3 7.5h7l2 2h9v9.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7.5Z" /><path d="M3 7.5V5a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v2.5" /></svg> },
       { href: "/repositories", label: "Repositories", keywords: "source code github", icon: <svg {...iconProps}><path d="m12 2 9 5-9 5-9-5 9-5Z" /><path d="m3 12 9 5 9-5M3 17l9 5 9-5" /></svg> },
       { href: "/knowledge", label: "Knowledge", keywords: "memory context recall", activeHrefs: KNOWLEDGE_ROUTES, icon: <svg {...iconProps}><ellipse cx="12" cy="5" rx="7" ry="3" /><path d="M5 5v6c0 1.7 3.1 3 7 3s7-1.3 7-3V5M5 11v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6" /></svg> },
-      { href: "/integrations", label: "Connections", keywords: "integrations connectors mcp", adminOnly: true, icon: <svg {...iconProps}><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><path d="M17.5 14v7M14 17.5h7" /></svg> },
+      { href: "/integrations", label: "Connections", keywords: "integrations connectors mcp", icon: <svg {...iconProps}><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><path d="M17.5 14v7M14 17.5h7" /></svg> },
     ],
   },
   {

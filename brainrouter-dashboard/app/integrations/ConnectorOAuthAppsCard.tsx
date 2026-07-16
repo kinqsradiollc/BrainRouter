@@ -80,9 +80,9 @@ function SourceForm({ app, orgId, onSaved }: { app: AppStatus; orgId?: string; o
   );
 }
 
-export function ConnectorOAuthAppsCard({ orgId }: { orgId?: string }): React.ReactElement | null {
+export function ConnectorOAuthAppsCard({ orgId, showGithub = true }: { orgId?: string; showGithub?: boolean }): React.ReactElement | null {
   const [apps, setApps] = useState<AppStatus[]>([]);
-  const [activeSource, setActiveSource] = useState("github");
+  const [activeSource, setActiveSource] = useState(showGithub ? "github" : "");
   const [error, setError] = useState("");
   const [loaded, setLoaded] = useState(false);
 
@@ -93,13 +93,17 @@ export function ConnectorOAuthAppsCard({ orgId }: { orgId?: string }): React.Rea
       const r = await adminApi.getConnectorOAuthApps(orgId);
       const nextApps = (r.apps ?? []).filter((a) => a.source !== "github");
       setApps(nextApps);
-      setActiveSource((current) => current === "github" || nextApps.some((app) => app.source === current) ? current : "github");
+      setActiveSource((current) => {
+        if (showGithub && current === "github") return current;
+        if (nextApps.some((app) => app.source === current)) return current;
+        return showGithub ? "github" : nextApps[0]?.source ?? "";
+      });
     } catch (e) { setError(e instanceof Error ? e.message : "Failed to load"); }
     finally { setLoaded(true); }
-  }, [orgId]);
+  }, [orgId, showGithub]);
   useEffect(() => { void load(); }, [load]);
 
-  const providers = ["github", ...apps.map((app) => app.source)];
+  const providers = [...(showGithub ? ["github"] : []), ...apps.map((app) => app.source)];
   const moveProvider = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
     let nextIndex: number | null = null;
     if (event.key === "ArrowRight") nextIndex = (index + 1) % providers.length;
@@ -125,9 +129,9 @@ export function ConnectorOAuthAppsCard({ orgId }: { orgId?: string }): React.Rea
       </div>
       {error && <div className="settings-note settings-note--error">{error}</div>}
       <div className="settings-provider-tabs" role="tablist" aria-label="OAuth provider">
-        <button type="button" role="tab" id="oauth-provider-tab-github" aria-controls="oauth-provider-panel-github" aria-selected={activeSource === "github"} tabIndex={activeSource === "github" ? 0 : -1} className={activeSource === "github" ? "active" : ""} onKeyDown={(event) => moveProvider(event, 0)} onClick={() => setActiveSource("github")}>
+        {showGithub && <button type="button" role="tab" id="oauth-provider-tab-github" aria-controls="oauth-provider-panel-github" aria-selected={activeSource === "github"} tabIndex={activeSource === "github" ? 0 : -1} className={activeSource === "github" ? "active" : ""} onKeyDown={(event) => moveProvider(event, 0)} onClick={() => setActiveSource("github")}>
           <span className="provider-status-dot" /> GitHub
-        </button>
+        </button>}
         {apps.map((app) => (
           <button
             key={app.source}
@@ -147,7 +151,7 @@ export function ConnectorOAuthAppsCard({ orgId }: { orgId?: string }): React.Rea
         ))}
       </div>
       <div id={`oauth-provider-panel-${activeSource}`} role="tabpanel" aria-labelledby={`oauth-provider-tab-${activeSource}`}>
-        {activeSource === "github" && <GithubOAuthAppCard embedded />}
+        {showGithub && activeSource === "github" && <GithubOAuthAppCard embedded />}
         {apps.filter((app) => app.source === activeSource).map((app) => <SourceForm key={`${orgId ?? "default"}-${app.source}`} app={app} orgId={orgId} onSaved={load} />)}
         {apps.length === 0 && activeSource !== "github" && (
           <div className="settings-empty-inline">No OAuth connector definitions were returned by the server.</div>

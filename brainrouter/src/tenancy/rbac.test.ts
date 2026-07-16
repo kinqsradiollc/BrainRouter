@@ -21,6 +21,7 @@ describe("RBAC roles + capabilities (ADR-010)", () => {
     expect(can("admin", "models:read")).toBe(true);
     expect(can("admin", "models:manage")).toBe(true);
     expect(can("admin", "triggers:manage")).toBe(true);
+    expect(can("admin", "connectors:manage")).toBe(true);
     expect(can("admin", "members:manage")).toBe(true);
     expect(can("admin", "org:manage")).toBe(false);
   });
@@ -33,6 +34,7 @@ describe("RBAC roles + capabilities (ADR-010)", () => {
     expect(can("developer", "models:read")).toBe(true);
     expect(can("developer", "models:manage")).toBe(false);
     expect(can("developer", "triggers:manage")).toBe(false);
+    expect(can("developer", "connectors:manage")).toBe(true);
     expect(can("developer", "members:manage")).toBe(false);
     expect(can("developer", "reviews:read")).toBe(true);
     expect(can("developer", "reviews:run")).toBe(false);
@@ -53,6 +55,7 @@ describe("RBAC roles + capabilities (ADR-010)", () => {
     expect(can("viewer", "providers:manage")).toBe(false);
     expect(can("viewer", "models:read")).toBe(true);
     expect(can("viewer", "models:manage")).toBe(false);
+    expect(can("viewer", "connectors:manage")).toBe(false);
     expect(can("viewer", "reviews:read")).toBe(false);
     expect(can("viewer", "reviews:run")).toBe(false);
     expect(capabilitiesFor("viewer")).toEqual(["models:read", "remote:read", "memory:read", "vulnerabilities:read"]);
@@ -122,6 +125,18 @@ describe("RBAC roles + capabilities (ADR-010)", () => {
     const canConfigTriggers = ROLES.filter((r) => can(r, "triggers:manage"));
     expect(canConfigProviders.sort()).toEqual(["admin", "owner"]);
     expect(canConfigTriggers.sort()).toEqual(["admin", "owner"]);
+  });
+
+  it("lets members manage only their own connectors while keeping shared OAuth apps admin-only", () => {
+    expect(ROLES.filter((role) => can(role, "connectors:manage")).sort()).toEqual([
+      "admin",
+      "developer",
+      "owner",
+    ]);
+    expect(ROLES.filter((role) => can(role, "triggers:manage")).sort()).toEqual([
+      "admin",
+      "owner",
+    ]);
   });
 
   it("roleAtLeast respects the owner > admin > developer > viewer order", () => {

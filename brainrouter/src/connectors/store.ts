@@ -9,6 +9,9 @@ export interface ConnectorTokenSecret {
   refreshToken?: string;
   /** ISO expiry; absent = non-expiring (e.g. a GitHub OAuth-App token). */
   expiresAt?: string;
+  /** Provider authorization mode needed to select the correct API surface.
+   * Stored inside the sealed credential and never returned by connector APIs. */
+  authMode?: "device" | "web";
   scope?: string;
   /** Exact callback used for providers (notably GitLab) that require it again
    * during refresh-token rotation. */

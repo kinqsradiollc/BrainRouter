@@ -243,6 +243,10 @@ export interface ConnectorStatus {
   connector: { id: string; name: string; status: string; enabled: boolean; hasCredential: boolean; config: Record<string, unknown>; lastRunAt: string | null; lastError: string | null } | null;
   account: string | null;
   scopes: string | null;
+  /** GitHub only: how to connect — `device` (bundled App, no secret) vs `web` (configured OAuth App). */
+  authMode?: "web" | "device";
+  /** GitHub only: whether any connect app (bundled or configured) is available. */
+  appConfigured?: boolean;
 }
 
 export interface PentestTarget {
@@ -354,6 +358,12 @@ export const adminApi = {
     authFetch<{ app: unknown }>(`/api/connectors/${source}/oauth/app`, { method: "POST", body, orgId }),
   startConnectorOAuth: (source: string, connectorId?: string, orgId?: string) =>
     authFetch<{ url: string }>(`/api/connectors/${encodeURIComponent(source)}/oauth/start${connectorId ? `?connectorId=${encodeURIComponent(connectorId)}` : ""}`, { method: "POST", orgId }),
+  startGithubDevice: (orgId?: string) =>
+    authFetch<{ userCode: string; verificationUri: string; interval: number; expiresIn: number }>("/api/connectors/github/device/start", { method: "POST", orgId }),
+  pollGithubDevice: (orgId?: string) =>
+    authFetch<{ status: "pending" | "connected" | "expired" | "error"; login?: string; error?: string }>("/api/connectors/github/device/poll", { method: "POST", orgId }),
+  cancelGithubDevice: (orgId?: string) =>
+    authFetch<{ ok: boolean }>("/api/connectors/github/device/cancel", { method: "POST", orgId }),
   connectorStatus: (source: string, orgId?: string) =>
     authFetch<ConnectorStatus>(`/api/connectors/${encodeURIComponent(source)}/status`, { orgId }),
   connectorResources: (source: string, orgId?: string) =>

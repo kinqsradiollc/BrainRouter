@@ -31,6 +31,7 @@ export const CAPABILITIES = [
   'models:read',      // read the member-safe server-managed model catalog
   'models:manage',    // create/update/default/order org model policies
   'triggers:manage',  // GitHub App / webhook / automation-rule config + linked repos
+  'connectors:manage', // connect/configure/run the caller's own external-source accounts
   'reviews:read',     // PR review console, job details and live timelines
   'reviews:run',      // manually enqueue a security/code review
   'remote:read',      // list one's enrolled devices, grants, and metadata audit
@@ -58,6 +59,7 @@ export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
     'models:read',
     'models:manage',
     'triggers:manage',
+    'connectors:manage',
     'reviews:read',
     'reviews:run',
     'remote:read',
@@ -72,6 +74,7 @@ export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
   ]),
   developer: new Set<Capability>([
     'models:read',
+    'connectors:manage',
     'reviews:read',
     'remote:read',
     'remote:connect',

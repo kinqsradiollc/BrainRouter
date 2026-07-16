@@ -3769,6 +3769,15 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           return await r.json() as Record<string, unknown>;
         } catch (e) { return { status: 'error', error: e instanceof Error ? e.message : 'failed' }; }
       },
+      'github-device-cancel': async () => {
+        if (!resolveBrainRouterAccountApi(loadConfig())) return { ok: false };
+        try {
+          const account = await resolveBrainRouterAccountContext(loadConfig());
+          if (!account) return { ok: false };
+          const response = await fetch(`${account.baseUrl}/api/connectors/github/device/cancel`, { method: 'POST', headers: brainRouterAccountHeaders(account) });
+          return { ok: response.ok };
+        } catch { return { ok: false }; }
+      },
       // DESK-6m — per-chat context-menu actions (Pin / Mark completed / Rename /
       // Move to group / Archive / Delete / Fork / Open). All write the shared
       // CLI stores, so the terminal sees the same titles/pins/groups.

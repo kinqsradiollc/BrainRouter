@@ -4,6 +4,12 @@ import { type KeyboardEvent, useCallback, useEffect, useState } from "react";
 import { StatusBadge } from "../../components/Analytics";
 import { PremiumButton } from "../../components/PremiumButton";
 import { adminApi, type ConnectorStatus } from "../../lib/adminApi";
+import {
+  applyGithubDevicePoll,
+  beginGithubDeviceFlow,
+  shouldUseGithubDeviceFallback,
+  type GithubDeviceFlowState,
+} from "./githubDeviceFlow";
 
 const GROUPS: Array<{ title: string; sources: Array<[string, string]> }> = [
   { title: "Code providers", sources: [["github", "GitHub"], ["gitlab", "GitLab"]] },
@@ -12,7 +18,7 @@ const GROUPS: Array<{ title: string; sources: Array<[string, string]> }> = [
 ];
 
 type ResourceRow = { id: string; label: string; selected: boolean; kind?: string };
-type ConnectorAction = "connect" | "disconnect" | "resources" | "save" | "sync" | "schedule";
+type ConnectorAction = "connect" | "disconnect" | "resources" | "save" | "sync" | "schedule" | "cancel";
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "The connector request failed.";
@@ -25,6 +31,7 @@ export function ConnectorRows({ orgId }: { orgId?: string }) {
   const [expanded, setExpanded] = useState("");
   const [busy, setBusy] = useState("");
   const [activeGroup, setActiveGroup] = useState(GROUPS[0].title);
+  const [githubDevice, setGithubDevice] = useState<GithubDeviceFlowState>({ status: "idle" });
 
   const load = useCallback(async () => {
     const entries = await Promise.all(GROUPS.flatMap((group) => group.sources).map(async ([source]) => [
@@ -38,8 +45,47 @@ export function ConnectorRows({ orgId }: { orgId?: string }) {
     setState({});
     setErrors({});
     setExpanded("");
+    setGithubDevice({ status: "idle" });
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (githubDevice.status !== "pending") return;
+    const pending = githubDevice;
+    let cancelled = false;
+    let timer: number | undefined;
+
+    const poll = async (): Promise<void> => {
+      try {
+        const result = await adminApi.pollGithubDevice(orgId);
+        if (cancelled) return;
+        const next = applyGithubDevicePoll(pending, result);
+        if (next.status === "pending") {
+          timer = window.setTimeout(() => void poll(), pending.intervalMs);
+          return;
+        }
+        if (next.status === "connected") {
+          setGithubDevice({ status: "idle" });
+          setErrors((current) => ({ ...current, github: "" }));
+          await load();
+          return;
+        }
+        setGithubDevice(next);
+        setErrors((current) => ({ ...current, github: next.error }));
+      } catch (error) {
+        if (cancelled) return;
+        const message = errorMessage(error);
+        setGithubDevice({ status: "error", error: message });
+        setErrors((current) => ({ ...current, github: message }));
+      }
+    };
+
+    timer = window.setTimeout(() => void poll(), pending.intervalMs);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [githubDevice, load, orgId]);
 
   const start = (source: string, action: ConnectorAction): void => {
     setBusy(`${source}:${action}`);
@@ -49,13 +95,46 @@ export function ConnectorRows({ orgId }: { orgId?: string }) {
     setErrors((current) => ({ ...current, [source]: errorMessage(error) }));
   };
 
+  async function startGithubDeviceFlow(): Promise<void> {
+    const next = beginGithubDeviceFlow(await adminApi.startGithubDevice(orgId));
+    if (next.status === "error") throw new Error(next.error);
+    setGithubDevice(next);
+  }
+
   async function connect(source: string): Promise<void> {
     start(source, "connect");
     try {
+      // GitHub in device mode (the zero-config bundled App, or no OAuth-App secret)
+      // goes straight to the device flow — no doomed confidential-OAuth round-trip.
+      if (source === "github" && state.github?.authMode === "device") {
+        await startGithubDeviceFlow();
+        return;
+      }
       const result = await adminApi.startConnectorOAuth(source, state[source]?.connector?.id, orgId);
       window.location.assign(result.url);
     } catch (error) {
-      fail(source, error);
+      // Fallback path preserved: a 409 from the web broker still drops to device flow.
+      if (source === "github" && shouldUseGithubDeviceFallback(error)) {
+        try {
+          await startGithubDeviceFlow();
+        } catch (fallbackError) {
+          fail(source, fallbackError);
+        }
+      } else {
+        fail(source, error);
+      }
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function cancelGithubDevice(): Promise<void> {
+    setGithubDevice({ status: "idle" });
+    start("github", "cancel");
+    try {
+      await adminApi.cancelGithubDevice(orgId);
+    } catch (error) {
+      fail("github", error);
     } finally {
       setBusy("");
     }
@@ -183,6 +262,7 @@ export function ConnectorRows({ orgId }: { orgId?: string }) {
           const rows = resources[source] ?? [];
           const selectable = source !== "gmail";
           const isBusy = busy.startsWith(`${source}:`);
+          const waitingForGithub = source === "github" && githubDevice.status === "pending";
           const error = errors[source] || connector?.lastError || "";
           return (
             <div className="connector-resource" key={source}>
@@ -238,13 +318,24 @@ export function ConnectorRows({ orgId }: { orgId?: string }) {
                   <PremiumButton
                     size="small"
                     variant={connected ? "danger" : "ghost"}
-                    disabled={isBusy}
+                    disabled={isBusy || waitingForGithub}
                     onClick={() => connected ? void disconnect(source) : void connect(source)}
                   >
-                    {busy === `${source}:${connected ? "disconnect" : "connect"}` ? "Working…" : connected ? "Disconnect" : "Connect"}
+                    {waitingForGithub ? "Waiting…" : busy === `${source}:${connected ? "disconnect" : "connect"}` ? "Working…" : connected ? "Disconnect" : "Connect"}
                   </PremiumButton>
                 </div>
               </div>
+              {waitingForGithub && (
+                <div className="connector-resource__picker" role="status" aria-label="GitHub device authorization">
+                  <div className="settings-row__title">Complete GitHub authorization</div>
+                  <div className="settings-hint">Enter this one-time code on GitHub. BrainRouter will finish automatically and keep the resulting token sealed on the backend.</div>
+                  <code aria-label="GitHub device code" style={{ display: "inline-block", marginTop: 8, fontSize: "1.1rem", letterSpacing: "0.08em" }}>{githubDevice.userCode}</code>
+                  <div className="connector-resource__actions">
+                    <PremiumButton size="small" variant="primary" onClick={() => window.open(githubDevice.verificationUri, "_blank", "noopener,noreferrer")}>Open GitHub</PremiumButton>
+                    <PremiumButton size="small" variant="text" disabled={busy === "github:cancel"} onClick={() => void cancelGithubDevice()}>{busy === "github:cancel" ? "Cancelling…" : "Cancel"}</PremiumButton>
+                  </div>
+                </div>
+              )}
               {expanded === source && (
                 <div className="connector-resource__picker">
                   {rows.length === 0

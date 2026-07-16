@@ -191,19 +191,28 @@ export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
     setTimeout(refreshSnapshot, 120);
   };
 
-  // Connect GitHub through BrainRouter's server-mediated broker (device flow). No
-  // client id/secret on this machine; the token is stored in your account. Requires
-  // being signed in (Settings → Account).
+  // Prefer the backend OAuth App configured in Dashboard. If this deployment has
+  // no web app, fall back to the backend's bundled GitHub App device flow. Neither
+  // path sends a client secret or provider token to this machine.
   const startGithubOauth = async (): Promise<void> => {
     setOauthState({ status: 'starting' });
     try {
+      const browser = await bridgeQuery<{ ok?: boolean; url?: string; error?: string }>('github-connect-start');
+      if (browser.ok && browser.url) {
+        setOauthState({ status: 'pending', flow: 'browser', intervalSec: 2, expiresAtMs: Date.now() + 10 * 60_000 });
+        await bridgeQuery('action:open-external', { url: browser.url });
+        return;
+      }
       const res = await bridgeQuery<{ ok: boolean; userCode?: string; verificationUri?: string; interval?: number; error?: string }>('github-device-start');
       if (!res.ok || !res.userCode) {
+        // The browser path failing just means no web OAuth App is configured — the
+        // device flow is the real mechanism here, so surface ITS error (or a
+        // sign-in hint), never the misleading "OAuth isn't configured" browser message.
         setOauthState({ status: 'error', error: res.error || 'Sign in to your BrainRouter account (Settings → Account) to connect GitHub.' });
         return;
       }
       const uri = res.verificationUri || 'https://github.com/login/device';
-      setOauthState({ status: 'pending', userCode: res.userCode, verificationUri: uri, intervalSec: Number(res.interval) > 0 ? Number(res.interval) : 5, expiresAtMs: Date.now() + 15 * 60_000 });
+      setOauthState({ status: 'pending', flow: 'device', userCode: res.userCode, verificationUri: uri, intervalSec: Number(res.interval) > 0 ? Number(res.interval) : 5, expiresAtMs: Date.now() + 15 * 60_000 });
       await bridgeQuery('action:open-external', { url: uri });
     } catch (e) {
       setOauthState({ status: 'error', error: e instanceof Error ? e.message : 'Could not start the GitHub connection.' });
@@ -211,6 +220,9 @@ export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
   };
 
   const cancelGithubOauth = async (): Promise<void> => {
+    if (oauthState.status === 'pending' && oauthState.flow === 'device') {
+      await bridgeQuery('github-device-cancel').catch(() => undefined);
+    }
     setOauthState({ status: 'idle' });
   };
 
@@ -225,6 +237,14 @@ export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
     if (oauthState.status !== 'pending') return;
     const delay = Math.max(1, oauthState.intervalSec) * 1000;
     const timer = window.setTimeout(() => {
+      if (oauthState.flow === 'browser') {
+        void bridgeQuery<{ connected?: boolean; login?: string }>('github-connect-status').then((res) => {
+          if (res.connected) { markGithubOauthCredential(true); setGithubAccount({ signedIn: true, connected: true, login: res.login }); setOauthState({ status: 'authorized', storageMode: 'BrainRouter account' }); setTimeout(refreshSnapshot, 120); return; }
+          if (Date.now() >= oauthState.expiresAtMs) { setOauthState({ status: 'error', error: 'Authorization was not completed — click Connect to try again.' }); return; }
+          setOauthState((current) => current.status === 'pending' ? { ...current } : current);
+        }).catch((err) => setOauthState({ status: 'error', error: err instanceof Error ? err.message : String(err) }));
+        return;
+      }
       void bridgeQuery<{ status?: string; login?: string }>('github-device-poll').then((res) => {
         // Re-trigger the effect (new object) so polling continues until authorized.
         if (res.status === 'pending') { setOauthState((cur) => (cur.status === 'pending' ? { ...cur } : cur)); return; }
@@ -505,14 +525,14 @@ export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
                 {oauthState.status === 'pending' ? (
                   <div className="gh-int-status ok">
                     <span className="gh-int-dot" />
-                    <span>Code <b className="mono">{oauthState.userCode}</b> · expires {new Date(oauthState.expiresAtMs).toLocaleTimeString()}</span>
+                    <span>{oauthState.flow === 'device' ? <>Code <b className="mono">{oauthState.userCode}</b> · </> : <>Complete authorization in your browser · </>}expires {new Date(oauthState.expiresAtMs).toLocaleTimeString()}</span>
                   </div>
                 ) : oauthState.status === 'authorized' ? (
                   <div className="gh-int-status ok"><span className="gh-int-dot" />Connected{oauthState.scope ? ` · ${oauthState.scope}` : ''}</div>
                 ) : oauthState.status === 'error' ? (
                   <div className="pc-host" style={{ color: 'var(--warn)' }}>{oauthState.error}</div>
                 ) : null}
-                {oauthState.status === 'pending' ? <span className="set-desc mono">{oauthState.verificationUri}</span> : null}
+                {oauthState.status === 'pending' && oauthState.flow === 'device' ? <span className="set-desc mono">{oauthState.verificationUri}</span> : null}
                 <span className="pc-actions">
                   {oauthState.status === 'pending'
                     ? <button type="button" className="btn" onClick={() => void cancelGithubOauth()}>Cancel</button>

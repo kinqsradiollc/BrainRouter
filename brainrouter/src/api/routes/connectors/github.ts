@@ -1,21 +1,15 @@
 /**
- * ADR-016 — server-mediated GitHub connect (per-user), unified onto ONE GitHub App.
+ * ADR-016 — server-mediated GitHub connect (per-user).
  *
- * The BrainRouter backend brokers GitHub sign-in for every user. The deployment's
- * GitHub App is identified by a SINGLE env var — `BRAINROUTER_GITHUB_APP_CLIENT_ID`
- * (plus `BRAINROUTER_GITHUB_APP_SLUG` for the "install on more repos" link). A user
- * signs in with the **device flow** (like `claude auth login`): they get a short code
- * to enter at github.com/login/device and we poll for a user-to-server token, which we
- * store SEALED, per user. No client secret is involved — a GitHub App device flow is a
- * public-client flow and the App's permissions (not OAuth scopes) govern access.
+ * The BrainRouter backend brokers GitHub sign-in for every user. The dashboard-configured,
+ * deployment-wide OAuth App is the preferred browser sign-in
+ * path. Its client secret stays sealed on the backend. The bundled/env GitHub App
+ * remains a native-device fallback: the user enters a short code at GitHub and the
+ * backend polls for a user-to-server token. Both credentials are stored sealed per user.
  *
- * Repos are listed through the user's App *installations* (`/user/installations` →
- * `/user/installations/{id}/repositories`), so we only ever see repos where the user
- * actually installed the App — the same model as the dashboard's /integrations/github.
- *
- * A legacy DB-configured OAuth App (admin-set client_id + sealed secret) is still
- * honored as a fallback when no env App is set — that path keeps the classic web
- * redirect + `/user/repos`. The env GitHub App always wins when present.
+ * OAuth-App tokens list repositories through `/user/repos`; device-flow GitHub-App
+ * tokens list only their installations. The saved token flow selects the endpoint, so
+ * the presence of the bundled device client cannot misclassify a browser OAuth token.
  *
  * Routes (mounted at /api/connectors):
  *   POST /github/device/start    (authed) → { userCode, verificationUri, interval }
@@ -23,27 +17,36 @@
  *   GET  /github/status          (authed) → { appConfigured, connected, login, installUrl }
  *   GET  /github/repos           (authed) → { connected, repos[], installUrl }
  *   POST /github/disconnect      (authed)
- *   GET  /github/oauth/start     (authed) → { url }   (legacy DB OAuth App only)
- *   GET  /github/oauth/callback  (public; auth via signed state)  (legacy)
+ * Browser OAuth start/callback are owned by the generic connector OAuth router.
  * Admin (mounted at /api/admin/connectors):
- *   GET/POST /github/app         (global admin) → the legacy DB OAuth App creds
+ *   GET/POST /github/app         (global admin) → deployment-wide OAuth App config
  */
 import { Router } from "express";
-import crypto from "node:crypto";
 import { memoryEngine } from "../../../memory/engine.js";
-import { requireAnyAuth, JWT_SECRET, type AuthedRequest } from "../../middleware/auth.js";
+import { requireAnyAuth, type AuthedRequest } from "../../middleware/auth.js";
+import { requirePermission } from "../../middleware/tenancy.js";
 import { sendError } from "../../../contracts/http.js";
-import { seal, open, isSecretBoxConfigured } from "../../../security/secretBox.js";
+import { seal, isSecretBoxConfigured } from "../../../security/secretBox.js";
 import { probeGithubConnection } from "./githubConnection.js";
 import {
   githubAccountTokenFromResponse,
   githubAccountTokenSettingKey,
   githubAppClientId,
+  githubRepositoryAccessMode,
+  readGithubAccountToken,
   resolveGithubAccountToken,
   type GithubAccountToken,
 } from "../../../connectors/githubAccountToken.js";
+import {
+  GITHUB_OAUTH_APP_SETTING_KEY,
+  readGithubOAuthApp,
+  resolveGithubOAuthApp,
+  type GithubOAuthAppSetting,
+} from "../../../connectors/githubOAuthApp.js";
+import type { ConnectorConfigRecord, ConnectorTokenSecret } from "../../../connectors/store.js";
+import { enqueueAgentJob } from "../../../memory/scheduler/jobs.js";
 
-const APP_KEY = "connectorOAuthApp:github";
+const APP_KEY = GITHUB_OAUTH_APP_SETTING_KEY;
 const tokenKey = githubAccountTokenSettingKey;
 const deviceKey = (userId: string) => `connectorDevice:github:${userId}`;
 const GH = "https://github.com";
@@ -51,9 +54,8 @@ const GH_API = "https://api.github.com";
 /** Only sent for the legacy OAuth-App path — a GitHub App device flow ignores scopes. */
 const LEGACY_SCOPE = "repo read:org";
 
-interface OAuthApp { clientId: string; clientSecretSealed: string; redirectBase?: string }
 /** Unified view the routes use: env GitHub App (device flow) or legacy DB OAuth App. */
-interface AppConfig { clientId: string; slug: string; isGithubApp: boolean; clientSecretSealed?: string; redirectBase?: string }
+interface AppConfig { clientId: string; slug: string; isGithubApp: boolean; redirectBase?: string }
 type UserToken = GithubAccountToken;
 interface RepoRow { fullName: string; url: string; private: boolean; defaultBranch: string }
 
@@ -65,38 +67,122 @@ const DEFAULT_APP_SLUG = "brainrouter-memory-kinqsradiollc";
 const APP_CLIENT_ID = githubAppClientId();
 const APP_SLUG = process.env.BRAINROUTER_GITHUB_APP_SLUG?.trim() || DEFAULT_APP_SLUG;
 
-async function getDbApp(): Promise<OAuthApp | null> {
-  return (await memoryEngine.emailAuth.getSetting<OAuthApp>(APP_KEY)) ?? null;
+async function getDbApp(): Promise<GithubOAuthAppSetting | null> {
+  return readGithubOAuthApp(memoryEngine.emailAuth);
 }
-/** The GitHub App (bundled/env, device flow, no secret) wins; else a legacy DB OAuth App. */
-async function getApp(): Promise<AppConfig | null> {
-  if (APP_CLIENT_ID) return { clientId: APP_CLIENT_ID, slug: APP_SLUG, isGithubApp: true };
-  const db = await getDbApp();
-  if (db?.clientId) return { clientId: db.clientId, slug: "", isGithubApp: false, clientSecretSealed: db.clientSecretSealed, redirectBase: db.redirectBase };
-  return null;
+function getDeviceApp(): AppConfig | null {
+  return APP_CLIENT_ID ? { clientId: APP_CLIENT_ID, slug: APP_SLUG, isGithubApp: true } : null;
+}
+/** A dashboard-configured OAuth App is the preferred interactive path. The
+ * bundled GitHub App remains the zero-config device-flow fallback. */
+async function getPreferredApp(): Promise<AppConfig | null> {
+  const db = await resolveGithubOAuthApp(memoryEngine.emailAuth);
+  if (db?.clientId && db.clientSecret) return { clientId: db.clientId, slug: "", isGithubApp: false, redirectBase: db.redirectBase };
+  return getDeviceApp();
 }
 /** Public install page for the App (so the user can grant more repos). */
 function installUrl(app: AppConfig | null): string | null {
   return app?.isGithubApp && app.slug ? `${GH}/apps/${app.slug}/installations/new` : null;
 }
-async function getUserToken(userId: string): Promise<UserToken | null> {
-  const app = await getApp();
-  let clientSecret: string | undefined;
-  if (app && !app.isGithubApp && app.clientSecretSealed) {
-    try { clientSecret = open(app.clientSecretSealed); } catch { /* the probe will surface reconnect */ }
-  }
+async function getUserToken(userId: string, existing?: UserToken | null): Promise<UserToken | null> {
+  const stored = existing === undefined ? await readGithubAccountToken(memoryEngine.emailAuth, userId) : existing;
+  const webApp = stored?.flow === "device" ? null : await resolveGithubOAuthApp(memoryEngine.emailAuth);
   return resolveGithubAccountToken(memoryEngine.emailAuth, userId, {
-    clientId: app?.clientId ?? APP_CLIENT_ID,
-    ...(clientSecret ? { clientSecret } : {}),
+    clientId: webApp?.clientId ?? APP_CLIENT_ID,
+    ...(webApp?.clientSecret ? { clientSecret: webApp.clientSecret } : {}),
   });
 }
 
+function connectorCredential(token: GithubAccountToken): ConnectorTokenSecret {
+  return {
+    accessToken: token.accessToken,
+    ...(token.flow ? { authMode: token.flow } : {}),
+    ...(token.refreshToken ? { refreshToken: token.refreshToken } : {}),
+    ...(token.expiresAt ? { expiresAt: token.expiresAt } : {}),
+    ...(token.scope ? { scope: token.scope } : {}),
+  };
+}
+
+async function upsertGithubConnector(userId: string, orgId: string, token: GithubAccountToken): Promise<ConnectorConfigRecord> {
+  const existing = (await memoryEngine.connectors.listConnectors(userId))
+    .find((item) => item.orgId === orgId && item.source === "github");
+  const credential = connectorCredential(token);
+  const connector = existing
+    ? await memoryEngine.connectors.updateConnector(existing.id, { credential, status: "connected", enabled: true, lastError: null })
+    : await memoryEngine.connectors.createConnector(userId, {
+      source: "github",
+      name: "GitHub",
+      orgId,
+      visibility: "private",
+      credential,
+    });
+  if (!connector) throw new Error("GitHub connector changed while authorization was being saved");
+  await enqueueAgentJob(memoryEngine.store, "connector_sync", { connectorId: connector.id, userId }).catch(() => undefined);
+  return connector;
+}
+
+interface OrgGithubConnection {
+  connector: ConnectorConfigRecord | null;
+  token: GithubAccountToken | null;
+  probe: Awaited<ReturnType<typeof probeGithubConnection>>;
+}
+
+/** Resolve only the credential explicitly attached to the active organization.
+ * A pre-connector account token is migrated once for backward compatibility, but
+ * never copied into a second org merely because its status endpoint was read. */
+async function getOrgGithubConnection(userId: string, orgId: string): Promise<OrgGithubConnection> {
+  const githubConnectors = (await memoryEngine.connectors.listConnectors(userId))
+    .filter((item) => item.source === "github");
+  let connector = githubConnectors.find((item) => item.orgId === orgId) ?? null;
+  const storedAccount = await readGithubAccountToken(memoryEngine.emailAuth, userId);
+  const account = await getUserToken(userId, storedAccount);
+
+  if (connector?.hasCredential) {
+    const resolved = await memoryEngine.connectors.getResolvedConnector(connector.id);
+    const credential = resolved?.credential;
+    if (credential?.accessToken) {
+      // When the account-token compatibility record rotated, keep the matching
+      // org connector in step without exposing either credential to a client.
+      const usesAccountRecord = !!storedAccount && credential.accessToken === storedAccount.accessToken;
+      if (usesAccountRecord && account && account.accessToken !== credential.accessToken) {
+        connector = await memoryEngine.connectors.updateConnector(connector.id, {
+          credential: connectorCredential(account),
+          status: "connected",
+          lastError: null,
+        }) ?? connector;
+      }
+      const token = usesAccountRecord && account ? account : {
+        accessToken: credential.accessToken,
+        login: "",
+        scope: credential.scope ?? "",
+        connectedAt: connector.updatedAt,
+        ...(credential.refreshToken ? { refreshToken: credential.refreshToken } : {}),
+        ...(credential.expiresAt ? { expiresAt: credential.expiresAt } : {}),
+        flow: credential.authMode === "device" ? "device" as const : "web" as const,
+      };
+      return { connector, token, probe: await probeGithubConnection(token.accessToken) };
+    }
+  }
+
+  // Upgrade only a truly legacy account: once any GitHub connector exists, a
+  // missing connector in another org means "not connected" for that org.
+  if (!connector && githubConnectors.length === 0 && account) {
+    const probe = await probeGithubConnection(account.accessToken);
+    if (probe.connected) connector = await upsertGithubConnector(userId, orgId, account);
+    return { connector, token: account, probe };
+  }
+  return { connector, token: null, probe: { connected: false } };
+}
+
 // ---- GitHub REST helpers (fixed api.github.com host — no user-controlled base) ----
+class GithubApiError extends Error {
+  constructor(readonly status: number) { super(`GitHub ${status}`); }
+}
 async function ghGet(token: string, path: string): Promise<unknown> {
   const r = await fetch(`${GH_API}${path}`, {
     headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
   });
-  if (!r.ok) throw new Error(`GitHub ${r.status}`);
+  if (!r.ok) throw new GithubApiError(r.status);
   return r.json();
 }
 function mapRepo(x: { full_name?: string; html_url?: string; private?: boolean; default_branch?: string }): RepoRow {
@@ -123,44 +209,12 @@ async function listReposViaInstallations(token: string): Promise<RepoRow[]> {
   return [...out.values()].sort((a, b) => a.fullName.localeCompare(b.fullName));
 }
 
-/** Stateless HMAC-signed state binding the initiating user (10-min TTL). */
-function signState(userId: string): string {
-  const payload = Buffer.from(JSON.stringify({ u: userId, n: crypto.randomBytes(8).toString("hex"), e: Math.floor(Date.now() / 1000) + 600 })).toString("base64url");
-  const mac = crypto.createHmac("sha256", JWT_SECRET).update(payload).digest("base64url");
-  return `${payload}.${mac}`;
-}
-function verifyState(state: string): string | null {
-  const [payload, mac] = String(state).split(".");
-  if (!payload || !mac) return null;
-  const expect = crypto.createHmac("sha256", JWT_SECRET).update(payload).digest("base64url");
-  const a = Buffer.from(mac), b = Buffer.from(expect);
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
-  try {
-    const p = JSON.parse(Buffer.from(payload, "base64url").toString()) as { u?: string; e?: number };
-    if (typeof p.e !== "number" || p.e < Math.floor(Date.now() / 1000)) return null;
-    return typeof p.u === "string" ? p.u : null;
-  } catch { return null; }
-}
-function redirectUri(app: AppConfig | null, req: AuthedRequest): string {
-  const base = (app?.redirectBase || `${req.protocol}://${req.get("host") ?? "localhost:3747"}`).replace(/\/+$/, "");
-  return `${base}/api/connectors/github/oauth/callback`;
-}
-function escHtml(s: string): string {
-  return String(s).replace(/[&<>"']/g, (c) => (({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c));
-}
-// title/msg may carry a provider-derived value (a GitHub login, an error text) —
-// escape both so this HTML response can never reflect markup.
-function resultPage(title: string, msg: string): string {
-  const t = escHtml(title), m = escHtml(msg);
-  return `<!doctype html><meta charset="utf-8"><title>${t}</title><body style="font-family:system-ui;background:#0d0f13;color:#e6e6e6;display:grid;place-items:center;height:100vh;margin:0"><div style="text-align:center;max-width:440px;padding:24px"><h2>${t}</h2><p style="opacity:.85">${m}</p><p style="opacity:.55;font-size:13px;margin-top:18px">You can close this tab and return to BrainRouter.</p></div>`;
-}
-
 export const githubConnectorRouter = Router();
 
-// ---- Device flow (RFC 8628) — the primary path. No client secret: a GitHub App
-// device flow is a public-client flow; the App's permissions govern access. ----
-githubConnectorRouter.post("/github/device/start", requireAnyAuth, async (req: AuthedRequest, res) => {
-  const app = await getApp();
+// ---- Device flow (RFC 8628) — browser/native fallback. No client secret: a
+// GitHub App device flow is a public-client flow; the App's permissions govern access. ----
+githubConnectorRouter.post("/github/device/start", requireAnyAuth, requirePermission("connectors:manage"), async (req: AuthedRequest, res) => {
+  const app = getDeviceApp();
   if (!app?.clientId) { sendError(res, 400, "GitHub sign-in is not configured on this server yet."); return; }
   try {
     const body = app.isGithubApp ? { client_id: app.clientId } : { client_id: app.clientId, scope: LEGACY_SCOPE };
@@ -170,15 +224,21 @@ githubConnectorRouter.post("/github/device/start", requireAnyAuth, async (req: A
     });
     const d = await r.json() as { device_code?: string; user_code?: string; verification_uri?: string; interval?: number; expires_in?: number; error?: string };
     if (!d.device_code || !d.user_code) { sendError(res, 400, d.error || "GitHub returned no device code — is Device Flow enabled on the App?"); return; }
-    await memoryEngine.emailAuth.setSetting(deviceKey(req.userId!), { deviceCode: d.device_code, exp: Math.floor(Date.now() / 1000) + (d.expires_in ?? 900) });
-    res.json({ userCode: d.user_code, verificationUri: d.verification_uri ?? "https://github.com/login/device", interval: d.interval ?? 5 });
+    await memoryEngine.emailAuth.setSetting(deviceKey(req.userId!), { deviceCode: d.device_code, orgId: req.orgId!, exp: Math.floor(Date.now() / 1000) + (d.expires_in ?? 900) });
+    res.json({ userCode: d.user_code, verificationUri: d.verification_uri ?? "https://github.com/login/device", interval: d.interval ?? 5, expiresIn: d.expires_in ?? 900 });
   } catch (e) { console.error("[github] device start failed:", e); sendError(res, 500, "Could not start the GitHub device flow."); }
 });
 
-githubConnectorRouter.post("/github/device/poll", requireAnyAuth, async (req: AuthedRequest, res) => {
-  const app = await getApp();
-  const dev = await memoryEngine.emailAuth.getSetting<{ deviceCode?: string; exp?: number }>(deviceKey(req.userId!));
-  if (!app?.clientId || !dev?.deviceCode) { res.json({ status: "error", error: "no pending device authorization" }); return; }
+githubConnectorRouter.post("/github/device/cancel", requireAnyAuth, requirePermission("connectors:manage"), async (req: AuthedRequest, res) => {
+  const pending = await memoryEngine.emailAuth.getSetting<{ orgId?: string }>(deviceKey(req.userId!));
+  if (pending?.orgId === req.orgId) await memoryEngine.emailAuth.setSetting(deviceKey(req.userId!), {});
+  res.json({ ok: true });
+});
+
+githubConnectorRouter.post("/github/device/poll", requireAnyAuth, requirePermission("connectors:manage"), async (req: AuthedRequest, res) => {
+  const app = getDeviceApp();
+  const dev = await memoryEngine.emailAuth.getSetting<{ deviceCode?: string; orgId?: string; exp?: number }>(deviceKey(req.userId!));
+  if (!app?.clientId || !dev?.deviceCode || dev.orgId !== req.orgId) { res.json({ status: "error", error: "no pending device authorization" }); return; }
   if ((dev.exp ?? 0) < Math.floor(Date.now() / 1000)) { res.json({ status: "expired" }); return; }
   try {
     const r = await fetch(`${GH}/login/oauth/access_token`, {
@@ -194,40 +254,62 @@ githubConnectorRouter.post("/github/device/poll", requireAnyAuth, async (req: Au
     const stored = githubAccountTokenFromResponse(d, { login, scope: d.scope ?? "", connectedAt, flow: "device" });
     if (!stored) { res.json({ status: "error", error: "GitHub returned no usable access token." }); return; }
     await memoryEngine.emailAuth.setSetting(tokenKey(req.userId!), { sealed: seal(JSON.stringify(stored)) });
+    await upsertGithubConnector(req.userId!, req.orgId!, stored);
     await memoryEngine.emailAuth.setSetting(deviceKey(req.userId!), {});
     res.json({ status: "connected", login });
   } catch (e) { console.error("[github] device poll failed:", e); res.json({ status: "error", error: "Could not complete the GitHub sign-in." }); }
 });
 
-githubConnectorRouter.get("/github/status", requireAnyAuth, async (req: AuthedRequest, res) => {
-  const app = await getApp();
-  const tok = await getUserToken(req.userId!);
-  const probe = tok ? await probeGithubConnection(tok.accessToken) : { connected: false };
+githubConnectorRouter.get("/github/status", requireAnyAuth, requirePermission("connectors:manage"), async (req: AuthedRequest, res) => {
+  const app = await getPreferredApp();
+  const { token: tok, probe, connector } = await getOrgGithubConnection(req.userId!, req.orgId!);
   res.json({
+    source: "github",
     appConfigured: !!app?.clientId,
     ...probe,
     login: probe.login ?? (probe.connected ? tok?.login ?? null : null),
-    scope: probe.connected ? tok?.scope ?? null : null,
-    installUrl: installUrl(app),
+    account: probe.login ?? (probe.connected ? tok?.login ?? null : null),
+    scopes: probe.connected ? tok?.scope ?? null : null,
+    connector,
+    installUrl: tok?.flow === "device" || (!tok && app?.isGithubApp) ? installUrl(getDeviceApp()) : null,
+    authMode: tok?.flow ?? (app?.isGithubApp ? "device" : "web"),
   });
 });
 
-githubConnectorRouter.get("/github/repos", requireAnyAuth, async (req: AuthedRequest, res) => {
-  const app = await getApp();
-  const tok = await getUserToken(req.userId!);
+githubConnectorRouter.get("/github/repos", requireAnyAuth, requirePermission("connectors:manage"), async (req: AuthedRequest, res) => {
+  const app = await getPreferredApp();
+  const { token: tok, probe } = await getOrgGithubConnection(req.userId!, req.orgId!);
   if (!tok) { res.json({ connected: false, repos: [], installUrl: installUrl(app) }); return; }
+  if (!probe.connected) {
+    res.json({ connected: false, repos: [], installUrl: tok.flow === "device" ? installUrl(getDeviceApp()) : null, error: probe.error });
+    return;
+  }
   try {
-    const repos = app?.isGithubApp ? await listReposViaInstallations(tok.accessToken) : await listReposViaUser(tok.accessToken);
-    res.json({ connected: true, repos, installUrl: installUrl(app) });
+    const repos = githubRepositoryAccessMode(tok) === "installations" ? await listReposViaInstallations(tok.accessToken) : await listReposViaUser(tok.accessToken);
+    res.json({ connected: true, repos, installUrl: tok.flow === "device" ? installUrl(getDeviceApp()) : null });
   } catch (e) {
     console.error("[github] repo list failed:", e);
-    res.json({ connected: true, repos: [], installUrl: installUrl(app), error: "Could not list repositories." });
+    const expired = e instanceof GithubApiError && e.status === 401;
+    res.json({
+      connected: !expired,
+      repos: [],
+      installUrl: tok.flow === "device" ? installUrl(getDeviceApp()) : null,
+      error: expired ? "GitHub authorization expired or was revoked. Reconnect GitHub." : "Could not list repositories.",
+    });
   }
 });
 
-githubConnectorRouter.post("/github/disconnect", requireAnyAuth, async (req: AuthedRequest, res) => {
+githubConnectorRouter.post("/github/disconnect", requireAnyAuth, requirePermission("connectors:manage"), async (req: AuthedRequest, res) => {
   await memoryEngine.emailAuth.setSetting(tokenKey(req.userId!), {});
-  res.json({ ok: true });
+  const connector = (await memoryEngine.connectors.listConnectors(req.userId!))
+    .find((item) => item.orgId === req.orgId && item.source === "github");
+  const updated = connector ? await memoryEngine.connectors.updateConnector(connector.id, {
+    credential: null,
+    status: "disconnected",
+    enabled: false,
+    lastError: null,
+  }) : null;
+  res.json({ ok: true, connector: updated });
 });
 
 // ---- Track sync proxy — Track runs on the desktop, but the GitHub token is sealed
@@ -245,9 +327,10 @@ function sanitizeTrackQuery(query: string): string {
   const s = out.toString();
   return s ? `?${s}` : "";
 }
-githubConnectorRouter.post("/github/track/proxy", requireAnyAuth, async (req: AuthedRequest, res) => {
-  const tok = await getUserToken(req.userId!);
+githubConnectorRouter.post("/github/track/proxy", requireAnyAuth, requirePermission("connectors:manage"), async (req: AuthedRequest, res) => {
+  const { token: tok, probe } = await getOrgGithubConnection(req.userId!, req.orgId!);
   if (!tok) { res.json({ ok: false, status: 401, error: "GitHub is not connected." }); return; }
+  if (!probe.connected) { res.json({ ok: false, status: 401, error: probe.error ?? "GitHub authorization expired or was revoked." }); return; }
   const method = String(req.body?.method ?? "GET").toUpperCase();
   const [pathname, ...rest] = String(req.body?.path ?? "").split("?");
   if (!["GET", "POST", "PATCH"].includes(method)) { res.json({ ok: false, status: 405, error: "method not allowed" }); return; }
@@ -266,46 +349,7 @@ githubConnectorRouter.post("/github/track/proxy", requireAnyAuth, async (req: Au
   } catch (e) { res.json({ ok: false, status: 502, error: e instanceof Error ? e.message : "proxy failed" }); }
 });
 
-// ---- Legacy web redirect flow — only for a DB-configured OAuth App (needs a secret).
-// When an env GitHub App is set we sign in with device flow, so this path is disabled. ----
-githubConnectorRouter.get("/github/oauth/start", requireAnyAuth, async (req: AuthedRequest, res) => {
-  const app = await getApp();
-  if (!app?.clientId) { sendError(res, 400, "GitHub OAuth is not configured on this server yet."); return; }
-  if (app.isGithubApp) { sendError(res, 400, "This deployment signs in with GitHub via device flow — use /github/device/start."); return; }
-  const url = `${GH}/login/oauth/authorize?client_id=${encodeURIComponent(app.clientId)}`
-    + `&redirect_uri=${encodeURIComponent(redirectUri(app, req))}`
-    + `&scope=${encodeURIComponent(LEGACY_SCOPE)}&state=${encodeURIComponent(signState(req.userId!))}&allow_signup=false`;
-  res.json({ url });
-});
-
-// PUBLIC — GitHub redirects the user's browser here; the signed `state` is the auth.
-githubConnectorRouter.get("/github/oauth/callback", async (req: AuthedRequest, res) => {
-  const code = String(req.query.code ?? "");
-  const userId = verifyState(String(req.query.state ?? ""));
-  if (!userId || !code) { res.status(400).send(resultPage("Connection failed", "Invalid or expired authorization request.")); return; }
-  const app = await getApp();
-  if (!app?.clientId || !app.clientSecretSealed) { res.status(400).send(resultPage("Connection failed", "GitHub OAuth is not fully configured.")); return; }
-  let clientSecret: string;
-  try { clientSecret = open(app.clientSecretSealed); } catch { res.status(500).send(resultPage("Connection failed", "Server secret storage error.")); return; }
-  try {
-    const tr = await fetch(`${GH}/login/oauth/access_token`, {
-      method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ client_id: app.clientId, client_secret: clientSecret, code, redirect_uri: redirectUri(app, req) }),
-    });
-    const td = await tr.json() as { access_token?: string; scope?: string; expires_in?: number; refresh_token?: string; refresh_token_expires_in?: number; error_description?: string };
-    if (!td.access_token) { res.status(400).send(resultPage("Connection failed", td.error_description || "GitHub did not return a token.")); return; }
-    const ur = await fetch(`${GH_API}/user`, { headers: { Authorization: `Bearer ${td.access_token}`, Accept: "application/vnd.github+json" } });
-    const login = (ur.ok ? ((await ur.json()) as { login?: string }).login : "") || "";
-    const stored = githubAccountTokenFromResponse(td, { login, scope: td.scope ?? LEGACY_SCOPE, connectedAt: new Date().toISOString(), flow: "web" });
-    if (!stored) { res.status(400).send(resultPage("Connection failed", "GitHub did not return a usable token.")); return; }
-    await memoryEngine.emailAuth.setSetting(tokenKey(userId), { sealed: seal(JSON.stringify(stored)) });
-    res.send(resultPage("GitHub connected ✓", `Signed in as ${login || "your account"}. BrainRouter can now read your repositories.`));
-  } catch {
-    res.status(500).send(resultPage("Connection failed", "Could not complete the exchange with GitHub."));
-  }
-});
-
-/** Admin surface — the legacy DB OAuth App credentials (fallback when no env App). */
+/** Admin surface — the deployment-wide browser OAuth App credentials. */
 export const githubConnectorAdminRouter = Router();
 githubConnectorAdminRouter.get("/github/app", requireAnyAuth, async (req: AuthedRequest, res) => {
   if (!req.isAdmin) { sendError(res, 403, "This action requires a global admin."); return; }
@@ -318,8 +362,12 @@ githubConnectorAdminRouter.post("/github/app", requireAnyAuth, async (req: Authe
   const clientSecret = String(req.body?.clientSecret ?? "").trim();
   const redirectBase = String(req.body?.redirectBase ?? "").trim();
   if (!clientId) { sendError(res, 400, "clientId is required"); return; }
-  if (clientSecret && !isSecretBoxConfigured()) { sendError(res, 400, "BRAINROUTER_SECRET_KEY must be set before storing the client secret"); return; }
   const existing = await getDbApp();
+  if (!clientSecret && !existing?.clientSecretSealed) {
+    sendError(res, 400, "clientSecret is required before users can connect with this OAuth App");
+    return;
+  }
+  if (clientSecret && !isSecretBoxConfigured()) { sendError(res, 400, "BRAINROUTER_SECRET_KEY must be set before storing the client secret"); return; }
   const clientSecretSealed = clientSecret ? seal(clientSecret) : (existing?.clientSecretSealed ?? "");
   await memoryEngine.emailAuth.setSetting(APP_KEY, { clientId, clientSecretSealed, redirectBase });
   res.json({ ok: true, configured: true, hasSecret: !!clientSecretSealed });
