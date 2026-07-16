@@ -145,6 +145,15 @@ export async function activate(host) {
       if (action === 'cancel') {
         const id = String(args.id || '').trim();
         if (!id) return JSON.stringify({ ok: false, error: 'cancel requires `id` (see action="list").' });
+        // CWE-639 — a session may only cancel a schedule it owns (i.e. one it can
+        // see via action="list"). Look the task up first and refuse to remove one
+        // owned by a different session, so an agent can't enumerate ids and cancel
+        // other sessions' schedules (IDOR). Not-found and not-owned return the same
+        // error so existence of another session's task is never disclosed.
+        const target = loadSchedules(ws).find((s) => s.id === id);
+        if (!target || (owner && target.owner !== owner)) {
+          return JSON.stringify({ ok: false, id, removed: false, error: `no task with id ${id}` });
+        }
         const removed = removeSchedule(ws, id);
         return JSON.stringify({ ok: removed, id, removed, error: removed ? undefined : `no task with id ${id}` });
       }

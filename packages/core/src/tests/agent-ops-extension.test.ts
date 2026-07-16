@@ -115,6 +115,39 @@ test('schedule_task create/list/cancel hits the real schedule store', async () =
   });
 });
 
+test('schedule_task cancel is owner-scoped — a session cannot cancel another session\'s task (CWE-639)', async () => {
+  await withState(async (ws, sessionKey) => {
+    const { tools, host } = makeHost(ws);
+    await (await loadExtension()).activate(host);
+    const tool = tools.get('schedule_task')!;
+
+    // Session A (the withState default) creates a task.
+    const created = JSON.parse(await tool.handle({ action: 'create', command: '/ci-status', in: '5m' }));
+    assert.equal(created.owner, sessionKey);
+    // Assertions below are on the tool's RETURN VALUES for `created.id` specifically —
+    // not absolute store counts — so this stays correct even though the sibling tests
+    // run concurrently against a HOME-scoped state store.
+
+    // A DIFFERENT session is refused when it tries to cancel A's task, and existence
+    // is not disclosed (same error as a genuinely-missing id).
+    process.env[SESSION_KEY_ENV] = 'test-session-2';
+    try {
+      const denied = JSON.parse(await tool.handle({ action: 'cancel', id: created.id }));
+      assert.equal(denied.ok, false, 'session B is refused');
+      assert.equal(denied.removed, false, 'B\'s cancel removes nothing');
+      assert.equal(denied.error, `no task with id ${created.id}`, 'existence is not disclosed');
+    } finally {
+      process.env[SESSION_KEY_ENV] = sessionKey;
+    }
+
+    // The owning session CAN still cancel its own task — which also proves B's attempt
+    // did not remove it (removed:true means created.id was still present).
+    const ok = JSON.parse(await tool.handle({ action: 'cancel', id: created.id }));
+    assert.equal(ok.ok, true);
+    assert.equal(ok.removed, true, 'A\'s task survived B\'s attempt and A can cancel it');
+  });
+});
+
 test('schedule_task one-shot "in" and validation', async () => {
   await withState(async (ws) => {
     const { tools, host } = makeHost(ws);
