@@ -30,6 +30,17 @@ async function accountFetch(path: string, init?: { method?: string; body?: strin
 
 function id(v: unknown): string { return encodeURIComponent(String(v ?? '')); }
 
+/** Validate a Track item id before it becomes a URL path segment. Track ids are
+ *  opaque server tokens (e.g. `wi_<uuid>`); reject anything with path/traversal
+ *  characters so a hostile renderer value can never escape the intended
+ *  `/api/track/<id>` shape (CWE-22 defence in depth — `id()` already percent-encodes
+ *  `/`, this makes the constraint explicit and rejects rather than encodes). */
+function safeTrackId(v: unknown): string {
+  const s = String(v ?? '');
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(s)) throw new Error('Invalid track id.');
+  return s;
+}
+
 export function registerMeetingsBridge(): void {
   ipcMain.handle('meetings:list', async () => {
     const r = await accountFetch('/api/meetings');
@@ -84,6 +95,34 @@ export function registerMeetingsBridge(): void {
   ipcMain.handle('meetings:actionUntrack', async (_e, meetingId: unknown, actionId: unknown) => {
     const r = await accountFetch(`/api/meetings/${id(meetingId)}/actions/${id(actionId)}/track`, { method: 'DELETE' });
     if (!r?.ok) throw new Error('Could not remove this action from Track.');
+    return await r.json();
+  });
+
+  // SERVER Track board (org-scoped `/api/track`) — the destination meeting actions
+  // are tracked to. Distinct from the workspace GitHub Track board; surfaced inside
+  // Meetings mode so meeting-sourced items are viewable + stay in sync with the web
+  // dashboard's /track board.
+  ipcMain.handle('meetings:serverTracks', async () => {
+    const r = await accountFetch('/api/track');
+    if (!r?.ok) return [];
+    const data = (await r.json()) as { items?: unknown };
+    return Array.isArray(data.items) ? data.items : [];
+  });
+
+  // Mark done / reopen — transition the item's status category on the server.
+  ipcMain.handle('meetings:serverTrackSetDone', async (_e, trackId: unknown, done: unknown) => {
+    const statusCategory = done === true ? 'completed' : 'todo';
+    const r = await accountFetch(`/api/track/${safeTrackId(trackId)}/transition`, {
+      method: 'POST', body: JSON.stringify({ statusCategory }),
+    });
+    if (!r?.ok) throw new Error('Could not update the tracked item.');
+    return await r.json();
+  });
+
+  // Untrack / remove — delete the server Track item outright.
+  ipcMain.handle('action:meetings:serverTrackRemove', async (_e, trackId: unknown) => {
+    const r = await accountFetch(`/api/track/${safeTrackId(trackId)}`, { method: 'DELETE' });
+    if (!r?.ok) throw new Error('Could not remove the tracked item.');
     return await r.json();
   });
 }

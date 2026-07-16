@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
 import "./meetings.css";
+import { MeetingTracksView } from "./MeetingTracksView.js";
 import { SharePopover } from "./SharePopover.js";
 import {
   SCOPE_LABEL,
@@ -34,6 +35,7 @@ function initials(handle: string): string {
 }
 
 export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
+  const [mode, setMode] = useState<"meetings" | "tracked">("meetings");
   const [items, setItems] = useState<MeetingListItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<MeetingDetail | null>(null);
@@ -93,7 +95,15 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
   }, [detail, ops]);
 
   return (
-    <div className="mv-root">
+    <div className="mv-shell">
+      <div className="mv-tabs" role="tablist" aria-label="Meetings sections">
+        <button type="button" role="tab" aria-selected={mode === "meetings"} className={`mv-tab${mode === "meetings" ? " mv-on" : ""}`} onClick={() => setMode("meetings")}>Meetings</button>
+        <button type="button" role="tab" aria-selected={mode === "tracked"} className={`mv-tab${mode === "tracked" ? " mv-on" : ""}`} onClick={() => setMode("tracked")}>Tracked</button>
+      </div>
+      {mode === "tracked" ? (
+        <MeetingTracksView ops={ops} />
+      ) : (
+      <div className="mv-root">
       <div className="mv-col">
         <div className="mv-col-head">
           <h2>Meetings</h2>
@@ -221,6 +231,8 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
         </div>
       ) : (
         <div className="mv-detail"><div className="mv-empty" style={{ marginTop: 60 }}>Select a meeting, or start a new one.</div></div>
+      )}
+      </div>
       )}
     </div>
   );

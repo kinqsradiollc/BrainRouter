@@ -105,5 +105,9 @@ contextBridge.exposeInMainWorld('brainrouter', {
     actionToTrack(meetingId: string, actionId: string): Promise<unknown> { return ipcRenderer.invoke('meetings:actionToTrack', meetingId, actionId); },
     actionUntrack(meetingId: string, actionId: string): Promise<unknown> { return ipcRenderer.invoke('meetings:actionUntrack', meetingId, actionId); },
     toggleAction(meetingId: string, actionId: string, done: boolean): Promise<unknown> { return ipcRenderer.invoke('meetings:toggleAction', meetingId, actionId, done); },
+    // SERVER Track board (org-scoped /api/track), surfaced inside Meetings mode.
+    serverTracks(): Promise<unknown> { return ipcRenderer.invoke('meetings:serverTracks'); },
+    serverTrackSetDone(id: string, done: boolean): Promise<unknown> { return ipcRenderer.invoke('meetings:serverTrackSetDone', id, done); },
+    serverTrackRemove(id: string): Promise<unknown> { return ipcRenderer.invoke('action:meetings:serverTrackRemove', id); },
   },
 });
