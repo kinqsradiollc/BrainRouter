@@ -110,6 +110,7 @@ import {
 import * as sensory from "./queries/sensoryQueries.js";
 import * as meetings from "./queries/meetingsQueries.js";
 import * as track from "./queries/trackQueries.js";
+import * as teams from "./queries/teamsQueries.js";
 import * as vulnerability from "./queries/vulnerabilityQueries.js";
 import * as vulnScans from "./queries/vulnerabilityScanQueries.js";
 import * as cognitive from "./queries/cognitiveQueries.js";
@@ -505,6 +506,16 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public transitionTrackItem(orgId: string, id: string, status: string, statusCategory: track.TrackStatusCategory): Promise<track.TrackItemRow | null> { return track.transitionTrackItem(this.exec, orgId, id, status, statusCategory); }
   public updateTrackItem(orgId: string, id: string, patch: track.UpdateTrackItemPatch): Promise<track.TrackItemRow | null> { return track.updateTrackItem(this.exec, orgId, id, patch); }
   public deleteTrackItem(orgId: string, id: string): Promise<boolean> { return track.deleteTrackItem(this.exec, orgId, id); }
+
+  // ── Teams (migration 035) — org-scoped groups of users, backing `team` sharing ──
+  public createTeam(input: teams.CreateTeamInput): Promise<teams.TeamRow> { return teams.createTeam(this.exec, input); }
+  public listTeamsForUser(orgId: string, userId: string): Promise<teams.TeamRow[]> { return teams.listTeamsForUser(this.exec, orgId, userId); }
+  public getTeam(orgId: string, id: string): Promise<teams.TeamRow | null> { return teams.getTeam(this.exec, orgId, id); }
+  public isTeamMember(orgId: string, teamId: string, userId: string): Promise<boolean> { return teams.isTeamMember(this.exec, orgId, teamId, userId); }
+  public listTeamMembers(orgId: string, teamId: string): Promise<teams.TeamMemberRow[]> { return teams.listTeamMembers(this.exec, orgId, teamId); }
+  public addTeamMember(orgId: string, teamId: string, userId: string, role?: teams.TeamMemberRole): Promise<boolean> { return teams.addTeamMember(this.exec, orgId, teamId, userId, role); }
+  public removeTeamMember(orgId: string, teamId: string, userId: string): Promise<boolean> { return teams.removeTeamMember(this.exec, orgId, teamId, userId); }
+  public deleteTeam(orgId: string, id: string): Promise<boolean> { return teams.deleteTeam(this.exec, orgId, id); }
   // CVE catalog (spec §10, Task 26) — global world data, no org scoping.
   public ensureVulnerabilitySource(source: { id: import("../../../vulnerability/types.js").VulnerabilitySourceId; displayName: string; kind: string }): Promise<void> { return vulnerability.ensureVulnerabilitySource(this.exec, source); }
   public getVulnerabilitySource(id: string) { return vulnerability.getVulnerabilitySource(this.exec, id); }

@@ -11,6 +11,7 @@ import { randomUUID, createHash, randomBytes } from "node:crypto";
 import { memoryEngine } from "../engine.js";
 import { ingestSource, type SourceIngestStore } from "../source/ingest.js";
 import { isPublicScope, isScopeDowngrade, scopeToBackendVisibility, assertScopeParams } from "./sharing.js";
+import { assertUserInTeam } from "../teams/backend.js";
 import { redactSensitiveMemoryText } from "../util/redaction.js";
 import { createTrack, untrackBySourceRef, type TrackItemRow } from "../track/backend.js";
 import type { CreateMeetingInput, MeetingListCursor, MeetingRow, MeetingScope, MeetingTranscriptSegment } from "../store/postgres/queries/meetingsQueries.js";
@@ -272,6 +273,9 @@ async function toDetail(r: MeetingRow): Promise<MeetingDetailDTO> {
 export async function setScope(params: { userId: string; orgId: string; id: string; scope: MeetingScope; teamId?: string; from?: MeetingScope }): Promise<MeetingShareDTO> {
   requireAccount(params.userId, params.orgId);
   assertScopeParams(params.scope, params.teamId);
+  // A `team` share must target a REAL team in this org that the caller belongs to
+  // (migration 035). assertScopeParams already guaranteed teamId is present.
+  if (params.scope === "team") await assertUserInTeam(params.orgId, params.userId, params.teamId!);
   if (params.from && isPublicScope(params.from) && isScopeDowngrade(params.from, params.scope)) {
     await store().revokeMeetingShareTokens(params.id);
   } else if (!isPublicScope(params.scope)) {
