@@ -40,6 +40,27 @@ export interface MeetingShare {
   expiresAt?: string;
 }
 
+/** Server Track board (org-scoped, `/api/track`) — distinct from the workspace GitHub Track. */
+export type TrackStatusCategory = "todo" | "in_progress" | "completed";
+
+export interface TrackItem {
+  id: string;
+  title: string;
+  description?: string;
+  type?: string;
+  status?: string;
+  statusCategory: TrackStatusCategory;
+  priority?: string;
+  assignee?: string;
+  labels?: string[];
+  /** `"meeting-action"` items were promoted from a meeting action item. */
+  source: "manual" | "meeting-action";
+  sourceRef?: string;
+  completedAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export type MeetingStatus = "recorded" | "imported" | "live" | "summarizing";
 
 export interface MeetingDetail {
@@ -70,6 +91,12 @@ export interface MeetingsOps {
   /** Remove an action item's Track work item and clear the link (untrack). */
   unsendActionFromTrack(meetingId: string, actionId: string): Promise<void>;
   toggleAction(meetingId: string, actionId: string, done: boolean): Promise<void>;
+  /** List the org's SERVER Track board items (`/api/track`), newest first. */
+  serverTracks(): Promise<TrackItem[]>;
+  /** Mark a server Track item done (→ completed) or reopen it (→ todo). */
+  serverTrackSetDone(id: string, done: boolean): Promise<void>;
+  /** Untrack — delete a server Track item outright. */
+  serverTrackRemove(id: string): Promise<void>;
 }
 
 export const MEETING_SCOPES: readonly MeetingScope[] = ["private", "team", "org", "public"];

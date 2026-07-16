@@ -86,4 +86,32 @@ export function registerMeetingsBridge(): void {
     if (!r?.ok) throw new Error('Could not remove this action from Track.');
     return await r.json();
   });
+
+  // SERVER Track board (org-scoped `/api/track`) — the destination meeting actions
+  // are tracked to. Distinct from the workspace GitHub Track board; surfaced inside
+  // Meetings mode so meeting-sourced items are viewable + stay in sync with the web
+  // dashboard's /track board.
+  ipcMain.handle('meetings:serverTracks', async () => {
+    const r = await accountFetch('/api/track');
+    if (!r?.ok) return [];
+    const data = (await r.json()) as { items?: unknown };
+    return Array.isArray(data.items) ? data.items : [];
+  });
+
+  // Mark done / reopen — transition the item's status category on the server.
+  ipcMain.handle('meetings:serverTrackSetDone', async (_e, trackId: unknown, done: unknown) => {
+    const statusCategory = done === true ? 'completed' : 'todo';
+    const r = await accountFetch(`/api/track/${id(trackId)}/transition`, {
+      method: 'POST', body: JSON.stringify({ statusCategory }),
+    });
+    if (!r?.ok) throw new Error('Could not update the tracked item.');
+    return await r.json();
+  });
+
+  // Untrack / remove — delete the server Track item outright.
+  ipcMain.handle('action:meetings:serverTrackRemove', async (_e, trackId: unknown) => {
+    const r = await accountFetch(`/api/track/${id(trackId)}`, { method: 'DELETE' });
+    if (!r?.ok) throw new Error('Could not remove the tracked item.');
+    return await r.json();
+  });
 }

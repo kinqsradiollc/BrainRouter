@@ -1,12 +1,25 @@
 /* Meetings view (ADR-018). Scoped under .mv-root with a local graphite palette so it
    renders identically regardless of theme.css token renames. Classes are mv-prefixed. */
-.mv-root{
+.mv-shell,.mv-root{
   --mv-bg:#0b0b0d; --mv-panel:#141417; --mv-panel2:#171719; --mv-raise:#202027; --mv-raise2:#26262e;
   --mv-line:#26262c; --mv-line2:#33333b; --mv-line3:#3f3f49;
   --mv-tx:#e9e9ec; --mv-tx2:#a6a6ad; --mv-tx3:#83838a;
   --mv-ind:#7b7bf5; --mv-ind2:#9a9aff; --mv-ind-dim:#22223f; --mv-ind-bd:#38386a;
   --mv-blue:#4b8ff0; --mv-amber:#e0a138; --mv-teal:#3fb98c;
   --mv-mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+/* shell: tab bar on top, either the meetings split-view or the tracked board below */
+.mv-shell{
+  display:flex; flex-direction:column; height:100%; min-height:0;
+  background:var(--mv-bg); color:var(--mv-tx); font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+.mv-shell *{box-sizing:border-box}
+.mv-shell .mv-root{flex:1;height:auto;min-height:0}
+.mv-tabs{display:flex;gap:2px;padding:8px 12px 0;border-bottom:1px solid var(--mv-line);background:var(--mv-panel2);flex-shrink:0}
+.mv-tab{font:500 12.5px system-ui;color:var(--mv-tx3);background:none;border:0;border-bottom:2px solid transparent;padding:8px 12px 9px;cursor:pointer;margin-bottom:-1px}
+.mv-tab:hover{color:var(--mv-tx2)}
+.mv-tab.mv-on{color:var(--mv-tx);border-bottom-color:var(--mv-ind2)}
+.mv-root{
   display:grid; grid-template-columns:236px 1fr; height:100%; min-height:0;
   background:var(--mv-bg); color:var(--mv-tx); font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
 }
@@ -134,3 +147,30 @@
 .mv-primary svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2}
 .mv-linkbtn{font:12px system-ui;color:var(--mv-tx3);background:none;border:0;cursor:pointer;margin-left:10px}
 @media(max-width:900px){.mv-root{grid-template-columns:1fr}.mv-col{display:none}.mv-dbody{grid-template-columns:1fr}}
+/* meeting tracks (server /api/track board, surfaced in Meetings mode) */
+.mtk{flex:1;min-height:0;display:flex;flex-direction:column;background:var(--mv-bg);color:var(--mv-tx)}
+.mtk-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:16px 22px 13px;border-bottom:1px solid var(--mv-line);background:var(--mv-bg);flex-shrink:0}
+.mtk-head-l{min-width:0}
+.mtk-h{font-size:18px;margin:0 0 5px;font-weight:600;letter-spacing:.1px}
+.mtk-sub{margin:0;font-size:12px;color:var(--mv-tx3);line-height:1.5}
+.mtk-actions{display:flex;align-items:center;gap:7px;flex-shrink:0}
+.mtk-actions .mv-ghost{padding:6px 10px;font-size:11px}
+.mtk-actions .mv-ghost.mtk-active{color:var(--mv-ind2);border-color:var(--mv-ind-bd);background:var(--mv-ind-dim)}
+.mtk-err{margin:12px 22px 0;padding:9px 12px;border:1px solid #4f2b2b;background:#241414;color:#e0a0a0;font-size:12px;border-radius:9px}
+.mtk-body{flex:1;overflow:auto;padding:14px 22px 24px;min-height:0}
+.mtk-group{margin-bottom:16px}
+.mtk-glab{display:flex;align-items:center;gap:8px;font-size:10.5px;letter-spacing:1px;text-transform:uppercase;color:var(--mv-tx3);font-weight:600;margin:0 2px 8px}
+.mtk-count{font-family:var(--mv-mono);font-size:10px;color:var(--mv-tx3);background:var(--mv-panel);border:1px solid var(--mv-line);border-radius:20px;padding:1px 7px;letter-spacing:0}
+.mtk-row{display:flex;align-items:center;gap:11px;padding:11px 13px;background:var(--mv-panel);border:1px solid var(--mv-line);border-radius:10px;margin-bottom:7px}
+.mtk-row:hover{border-color:var(--mv-line2)}
+.mtk-doneRow .mtk-title{color:var(--mv-tx3);text-decoration:line-through}
+.mtk-main{flex:1;min-width:0}
+.mtk-title{font-size:12.5px;color:var(--mv-tx);line-height:1.4}
+.mtk-meta{display:flex;align-items:center;gap:8px;margin-top:5px;flex-wrap:wrap}
+.mtk-src{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:600;letter-spacing:.3px;color:var(--mv-ind2);background:var(--mv-ind-dim);border:1px solid var(--mv-ind-bd);border-radius:20px;padding:2px 8px}
+.mtk-src svg{width:9px;height:9px;stroke:currentColor;fill:none;stroke-width:2}
+.mtk-meta .mv-chip{text-transform:uppercase}
+.mtk-who{font-size:10.5px;color:var(--mv-tx3);font-family:var(--mv-mono)}
+.mtk-remove{font:10.5px system-ui;color:var(--mv-tx3);background:none;border:1px solid var(--mv-line2);border-radius:6px;padding:4px 9px;cursor:pointer;flex-shrink:0;white-space:nowrap}
+.mtk-remove:hover{color:#e08a8a;border-color:#4f2b2b}
+.mtk-remove:disabled,.mtk .mv-cbox:disabled{opacity:.5;cursor:default}

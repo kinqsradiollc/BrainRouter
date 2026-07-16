@@ -10,6 +10,7 @@ import type {
   MeetingScope,
   MeetingShare,
   MeetingsOps,
+  TrackItem,
 } from "./types.js";
 
 interface MeetingsBridge {
@@ -21,6 +22,9 @@ interface MeetingsBridge {
   actionToTrack(meetingId: string, actionId: string): Promise<{ trackItemId: string }>;
   actionUntrack(meetingId: string, actionId: string): Promise<void>;
   toggleAction(meetingId: string, actionId: string, done: boolean): Promise<void>;
+  serverTracks(): Promise<TrackItem[]>;
+  serverTrackSetDone(id: string, done: boolean): Promise<void>;
+  serverTrackRemove(id: string): Promise<void>;
 }
 
 function bridge(): MeetingsBridge | null {
@@ -40,6 +44,9 @@ export function createMeetingsOps(): MeetingsOps {
       sendActionToTrack: (meetingId, actionId) => b.actionToTrack(meetingId, actionId),
       unsendActionFromTrack: (meetingId, actionId) => b.actionUntrack(meetingId, actionId),
       toggleAction: (meetingId, actionId, done) => b.toggleAction(meetingId, actionId, done),
+      serverTracks: () => b.serverTracks(),
+      serverTrackSetDone: (id, done) => b.serverTrackSetDone(id, done),
+      serverTrackRemove: (id) => b.serverTrackRemove(id),
     };
   }
   return sampleOps();
@@ -95,5 +102,14 @@ function sampleOps(): MeetingsOps {
     async sendActionToTrack() { return { trackItemId: `wi-${++trackSeq}` }; },
     async unsendActionFromTrack() { /* no-op in sample */ },
     async toggleAction() { /* no-op in sample */ },
+    async serverTracks() {
+      return [
+        { id: "t1", title: "Wire the sharing scope picker into both surfaces", statusCategory: "todo", source: "meeting-action", assignee: "maya", priority: "P1", createdAt: "2026-07-14" },
+        { id: "t2", title: "Finalize the STT microservice Dockerfile", statusCategory: "in_progress", source: "meeting-action", assignee: "jordan", createdAt: "2026-07-14" },
+        { id: "t3", title: "Draft the Q3 launch checklist", statusCategory: "completed", source: "manual", completedAt: "2026-07-15", createdAt: "2026-07-10" },
+      ];
+    },
+    async serverTrackSetDone() { /* no-op in sample */ },
+    async serverTrackRemove() { /* no-op in sample */ },
   };
 }
