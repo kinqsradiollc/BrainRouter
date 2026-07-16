@@ -29,6 +29,24 @@ reranker providers. The embedding **vector width** is derived from the embedder
 automatically — nothing to set. Legacy `BRAINROUTER_*_LLM/EMBEDDING/...` env vars,
 if still present, are migrated into the DB once on first boot, then ignored.
 
+### Bundled services
+
+| Service | Role |
+| --- | --- |
+| `postgres` | Postgres 16 + pgvector — the memory store (the only stateful service). |
+| `redis` | **Optional** read cache (CVE catalog, hot GETs). Disposable — the brain falls back to an in-process cache if it's removed. Wired via `BRAINROUTER_REDIS_URL`. |
+| `migrator` | One-shot: applies all pending DB migrations before any service serves. |
+| `brain` | MCP plane (`/mcp`). Single-node mode (`BRAINROUTER_SERVICE=brain`) also serves REST + `/v1`. |
+| `api` | Auth + REST API plane (identity/tenancy/admin/memory REST). |
+| `gateway` | OpenAI-compatible model gateway (`/v1`) over the org's managed models. |
+| `worker` | Durable-job runner (scans, vulnerability sync, meetings summarization). |
+| `stt` | First-party Whisper speech-to-text for Meetings (internal-only). |
+| `remote-relay` | Outbound-WSS broker edge for enrolled devices (never decrypts). |
+
+Every image runs **unprivileged** (the `node` user). To collapse the decomposed
+services back to a single node, run only `postgres` + `redis` + `migrator` +
+`brain` with `BRAINROUTER_SERVICE=brain`.
+
 ### Single user vs. team vs. organization
 
 - **Single user** — the seeded admin gets a personal org automatically; nothing

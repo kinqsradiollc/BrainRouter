@@ -20,7 +20,8 @@ RUN git clone --depth 1 --branch "${WHISPER_CPP_REF}" https://github.com/ggergan
      || cp /src/build/bin/main /usr/local/bin/whisper-cli)
 
 # ── runtime ──────────────────────────────────────────────────────────────────
-FROM node:20-bookworm-slim
+# Node 22 to match the brain image (the wrapper only uses stable stdlib APIs).
+FROM node:22-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /usr/local/bin/whisper-cli /usr/local/bin/whisper-cli
