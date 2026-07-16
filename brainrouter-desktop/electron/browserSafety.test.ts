@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { safeName, isPathWithinRoot, mdSafe, isAllowedLauncher, hasShellMeta } from './uitestSafety.js';
+import { safeName, isPathWithinRoot, mdSafe, isAllowedLauncher, hasShellMeta } from './browserSafety.js';
 
 test('safeName strips directory traversal + absolute paths to a single segment', () => {
   assert.equal(safeName('../../etc/passwd'), 'passwd');

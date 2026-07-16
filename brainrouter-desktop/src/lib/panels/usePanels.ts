@@ -12,9 +12,10 @@ import { clampSideRailWidth, openWidthFor, reorderByValue, SIDE_RAIL_MIN } from 
 
 // Persisted layouts can carry renamed/retired panel ids. The Markdown writing
 // experience ('write' → 'docs') folded into the Editor, so both map to 'editor'.
-// Unknown ids are dropped, and duplicates are collapsed, so an upgrade never
-// leaves a dead or doubled tab.
-const PANEL_ID_ALIASES: Record<string, PanelId> = { write: 'editor', docs: 'editor' };
+// The Browser panel's internal id was renamed 'uitest' → 'browser', so a persisted
+// open-tab layout survives the rename. Unknown ids are dropped, and duplicates are
+// collapsed, so an upgrade never leaves a dead or doubled tab.
+const PANEL_ID_ALIASES: Record<string, PanelId> = { write: 'editor', docs: 'editor', uitest: 'browser' };
 const migratePanelId = (id: string): PanelId => (PANEL_ID_ALIASES[id] ?? id) as PanelId;
 const migratePanelIds = (ids: unknown[]): PanelId[] => {
   const seen = new Set<PanelId>();

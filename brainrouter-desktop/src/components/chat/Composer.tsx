@@ -21,7 +21,7 @@ import { findMentionToken, rankFileMatches, applyMention } from '../../lib/compo
 import { hostQuery } from '../../lib/hostQuery.js';
 import { usePlatform } from '../../lib/shortcuts/shortcuts.js';
 import type { ConfigSnapshot } from '../../settings.js';
-import { symbolKindIcon } from '../../lib/uitest/rowSource.js';
+import { symbolKindIcon } from '../../lib/browser/rowSource.js';
 
 export interface ComposerProps {
   draft: string;

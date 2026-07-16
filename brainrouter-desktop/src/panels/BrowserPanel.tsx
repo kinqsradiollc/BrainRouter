@@ -25,9 +25,9 @@ import {
   assertVisible,
   highlightEl,
   clearHighlight,
-} from '../lib/uitest/webviewBridge.js';
-import type { UiMap } from '@kinqs/brainrouter-core/uitest';
-import { rowSource, symbolKindIcon } from '../lib/uitest/rowSource.js';
+} from '../lib/browser/webviewBridge.js';
+import type { UiMap } from '@kinqs/brainrouter-core/browser';
+import { rowSource, symbolKindIcon } from '../lib/browser/rowSource.js';
 
 type Drawer = 'elements' | 'console' | 'network' | 'a11y' | 'shot' | 'flows' | null;
 type Device = 'desktop' | 'tablet' | 'phone';
@@ -273,6 +273,20 @@ export function BrowserPanel(): React.ReactElement {
     };
     window.addEventListener('br-browser-focus', onFocus);
     return () => window.removeEventListener('br-browser-focus', onFocus);
+  }, []);
+
+  // "Open in Browser" from the Servers panel: navigate the in-app <webview> to a
+  // running dev server's loopback URL. This drives go() (normalizeUrl + loadURL),
+  // NOT action:open-external — it deliberately stays IN-APP, and the main-process
+  // attach gate already restricts navigation to loopback http(s)/data.
+  useEffect(() => {
+    const onNavigate = (e: Event): void => {
+      const u = (e as CustomEvent<{ url?: string }>).detail?.url;
+      if (u) go(u);
+    };
+    window.addEventListener('br-browser-navigate', onNavigate);
+    return () => window.removeEventListener('br-browser-navigate', onNavigate);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

@@ -1,5 +1,5 @@
 /**
- * Pure path/name guards for the UI-test host. The host is reachable over IPC by
+ * Pure path/name guards for the Browser host. The host is reachable over IPC by
  * the agent, so file names and extract paths it receives are UNTRUSTED — these
  * helpers keep every write/read contained to the workspace. Dependency-free
  * (only node:path) so they unit-test without electron.

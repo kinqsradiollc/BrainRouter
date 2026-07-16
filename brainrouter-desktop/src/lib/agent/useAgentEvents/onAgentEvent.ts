@@ -320,8 +320,8 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
           // the old project's and load the NEW workspace's stored ones.
           setAtlasUiMap(null); setAtlasStories([]);
           q('q-atlas', 'atlas-graph');
-          q('q-uitest-manifest', 'uitest:manifest');
-          q('q-uitest-stories', 'uitest:list-stories');
+          q('q-browser-manifest', 'browser:manifest');
+          q('q-browser-stories', 'browser:list-stories');
           refreshSidebar();
         } else refreshSession();
         break;

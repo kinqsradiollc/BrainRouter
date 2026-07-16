@@ -10,7 +10,7 @@
  *
  * Pure and DOM-free so it runs under tsx/node --test (no React, no webview).
  */
-import type { UiMap, Screen, SymbolKind } from '@kinqs/brainrouter-core/uitest';
+import type { UiMap, Screen, SymbolKind } from '@kinqs/brainrouter-core/browser';
 
 /** One row of the Browser panel's Accessibility snapshot. */
 export interface A11yRow {

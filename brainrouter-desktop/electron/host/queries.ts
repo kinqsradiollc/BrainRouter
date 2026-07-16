@@ -67,12 +67,12 @@ import {
 // Deep imports into the CLI's built runtime (no "exports" field = allowed).
 // Extracting a proper @kinqs/brainrouter-agent package is tracked for 0.4.16.
 import { callOpenAI } from '@kinqs/brainrouter-core/agent';
-// UI-TEST fusion — story prompt/validation helpers + the driver step types the
-// uitest:* handlers below use. The host instance itself arrives via ctx.uitest.
-import { buildStoryPrompt, validateStories, FlowStepSchema, DeviceSchema, type Story } from '@kinqs/brainrouter-core/uitest';
-// IPC boundary: the uitest:* channel is agent-reachable, so validate every input.
+// BROWSER — story prompt/validation helpers + the driver step types the
+// browser:* handlers below use. The host instance itself arrives via ctx.browser.
+import { buildStoryPrompt, validateStories, FlowStepSchema, DeviceSchema, type Story } from '@kinqs/brainrouter-core/browser';
+// IPC boundary: the browser:* channel is agent-reachable, so validate every input.
 import { isLoopbackHttpSrc } from '../webviewPolicy.js';
-import type { UiTestStep, UiTestStepResult } from '../uitestHost.js';
+import type { BrowserStep, BrowserStepResult } from '../browserHost.js';
 import {
   CLI_CONFIG_SCHEMA,
   findConfigSchemaField,
@@ -351,7 +351,8 @@ import type { QueryHandler } from '../hostCore.js';
 
 export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
   const {
-    uitest,
+    browser,
+    devServers,
     workspaceRoot,
     wsGit,
     fileListCache,
@@ -3245,17 +3246,17 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // WS2 2.4 / WS6 6.3 — stop a background shell (e.g. a dev server an agent
       // started) from the Background-tasks panel. Kills the whole process group.
       'action:kill-bgshell': (args) => ({ ok: killBackgroundShell(String(args.id ?? '')) }),
-      // UI-TESTING (P4) — the panel's controls (extract / set-url / run / device /
+      // BROWSER — the panel's controls (extract / set-url / run / device /
       // stop). Every command routes through the shared command layer, never a
       // backend directly. They ride the query channel like the other host actions.
-      'uitest:extract': (args) => {
+      'browser:extract': (args) => {
         try {
           const only = Array.isArray(args.only) ? (args.only as unknown[]).map(String) : undefined;
-          return uitest.extract({ only: only && only.length ? only : undefined, broad: !!args.broad });
+          return browser.extract({ only: only && only.length ? only : undefined, broad: !!args.broad });
         } catch (err) { return { error: err instanceof Error ? err.message : String(err) }; }
       },
-      'uitest:manifest': () => uitest.manifest(),
-      'uitest:set-url': (args) => {
+      'browser:manifest': () => browser.manifest(),
+      'browser:set-url': (args) => {
         const url = typeof args.url === 'string' ? args.url.trim() : '';
         // Only a LOOPBACK http(s) URL may be loaded into the webview. An empty
         // string clears the base; reject javascript:/data:/remote schemes an
@@ -3263,53 +3264,53 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         if (url && !isLoopbackHttpSrc(url)) {
           return { ok: false, url: '', error: 'Only loopback http(s) URLs are allowed (localhost / 127.0.0.1 / [::1]).' };
         }
-        return uitest.setUrl(url);
+        return browser.setUrl(url);
       },
-      'uitest:run-command': async (args) => {
+      'browser:run-command': async (args) => {
         // Validate against the step schema — action ∈ {navigate,tap,type,assertVisible}
         // and `type` requires text. An agent must not drive an unknown action.
         const parsed = FlowStepSchema.safeParse(args.step);
         if (!parsed.success) return { result: null, error: 'invalid UI-test step (unknown action or missing field)' };
-        return uitest.runCommand(parsed.data as UiTestStep);
+        return browser.runCommand(parsed.data as BrowserStep);
       },
-      'uitest:set-device': async (args) => {
+      'browser:set-device': async (args) => {
         const parsed = DeviceSchema.safeParse(args.device);
         if (!parsed.success) return { result: null, error: 'invalid device (need a valid name + numeric width/height)' };
-        return uitest.setDevice(parsed.data);
+        return browser.setDevice(parsed.data);
       },
-      'uitest:list-flows': () => uitest.listFlows(),
-      'uitest:save-flow': (args) => {
+      'browser:list-flows': () => browser.listFlows(),
+      'browser:save-flow': (args) => {
         // Validate every step against the schema before it's written to YAML —
         // an agent must not persist malformed/unexpected step structures.
         const raw = Array.isArray(args.steps) ? args.steps : [];
-        const steps: UiTestStep[] = [];
+        const steps: BrowserStep[] = [];
         for (const s of raw) {
           const p = FlowStepSchema.safeParse(s);
           if (!p.success) return { ok: false, name: typeof args.name === 'string' ? args.name : 'flow', error: 'one or more flow steps are invalid (unknown action or missing field)' };
-          steps.push(p.data as UiTestStep);
+          steps.push(p.data as BrowserStep);
         }
-        return uitest.saveFlow(typeof args.name === 'string' ? args.name : 'flow', steps);
+        return browser.saveFlow(typeof args.name === 'string' ? args.name : 'flow', steps);
       },
-      'uitest:run-flow': async (args) =>
-        uitest.runFlow({
+      'browser:run-flow': async (args) =>
+        browser.runFlow({
           name: typeof args.name === 'string' ? args.name : undefined,
-          steps: Array.isArray(args.steps) ? (args.steps as UiTestStep[]) : undefined,
+          steps: Array.isArray(args.steps) ? (args.steps as BrowserStep[]) : undefined,
         }),
       // UI STORIES — named user journeys: list/save on disk, LLM-suggest from the
       // current screen map, and ensure the app is hosted before a run.
-      'uitest:list-stories': () => uitest.listStories(),
-      'uitest:save-story': (args) => {
+      'browser:list-stories': () => browser.listStories(),
+      'browser:save-story': (args) => {
         // Agent-supplied stories pass the SAME validation as LLM-suggested ones:
         // every target must exist in the current map, ≥2 valid steps, and titled.
-        const manifest = uitest.manifest().manifest;
+        const manifest = browser.manifest().manifest;
         if (!manifest) return { ok: false, error: 'No screen map yet — extract one before saving a story.' };
         const [story] = validateStories(args.story ? [args.story] : [], manifest);
         if (!story) return { ok: false, error: 'story failed validation (unknown targets, fewer than 2 valid steps, or missing title).' };
-        return uitest.saveStory(story);
+        return browser.saveStory(story);
       },
-      'uitest:suggest-stories': async () => {
+      'browser:suggest-stories': async () => {
         try {
-          const manifest = uitest.manifest().manifest;
+          const manifest = browser.manifest().manifest;
           if (!manifest || manifest.screens.length === 0) return { error: 'No screen map yet — Extract first.' };
           const llm = llmForSession(getActiveAgent().sessionKey);
           if (!llm || (!llm.apiKey && (llm.provider ?? 'openai') === 'openai')) {
@@ -3325,16 +3326,16 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           const argsText = (resp as { tool_calls?: Array<{ function?: { arguments?: string } }> })?.tool_calls?.[0]?.function?.arguments;
           const raw = typeof argsText === 'string' && argsText.trim() ? argsText : ((resp?.content as string) ?? '');
           const stories = validateStories(extractAtlasJson(raw) ?? raw, manifest);
-          for (const s of stories) uitest.saveStory(s);
+          for (const s of stories) browser.saveStory(s);
           return { stories, count: stories.length };
         } catch (err) { return { error: err instanceof Error ? err.message : String(err) }; }
       },
-      'uitest:ensure-app': async (args) => uitest.ensureApp({
+      'browser:ensure-app': async (args) => browser.ensureApp({
         name: typeof args.name === 'string' ? args.name : undefined,
         url: typeof args.url === 'string' ? args.url : undefined,
       }),
       // Save a Browser-panel screenshot to disk (`.brainrouter/ui-tests/screenshots/`).
-      'uitest:save-screenshot': (args) => uitest.saveScreenshot({
+      'browser:save-screenshot': (args) => browser.saveScreenshot({
         dataUrl: typeof args.dataUrl === 'string' ? args.dataUrl : undefined,
         base64: typeof args.base64 === 'string' ? args.base64 : undefined,
         name: typeof args.name === 'string' ? args.name : undefined,
@@ -3342,12 +3343,12 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
       // Turn a finished story run into a markdown report on disk, then register it
       // as a path-backed Artifact Record (shared artifacts.json — reuses the same
       // store the CLI + Artifacts panel already use).
-      'uitest:run-report': async (args) => {
+      'browser:run-report': async (args) => {
         const story = (args.story && typeof args.story === 'object' ? args.story : {}) as { id?: string; title?: string };
-        const out = uitest.runReport({
+        const out = browser.runReport({
           story,
           baseUrl: typeof args.baseUrl === 'string' ? args.baseUrl : undefined,
-          results: Array.isArray(args.results) ? (args.results as UiTestStepResult[]) : [],
+          results: Array.isArray(args.results) ? (args.results as BrowserStepResult[]) : [],
           screenshots: Array.isArray(args.screenshots) ? (args.screenshots as Array<{ name: string; dataUrl: string }>) : [],
         });
         if (out.error || !out.reportPath) return out;
@@ -3365,7 +3366,20 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
           return { ...out, artifactError: err instanceof Error ? err.message : String(err) };
         }
       },
-      'uitest:driver-stop': async () => uitest.stopDriver(),
+      'browser:driver-stop': async () => browser.stopDriver(),
+      // SERVERS — the Servers panel lists/starts/stops launch.json dev servers and
+      // can append a new (validated) config. All guards live in the registry; the
+      // query layer only coerces argument types (matches how browser:* delegates).
+      'servers:list': () => ({ servers: devServers.list() }),
+      'servers:start': (args) => devServers.start(String(args.name ?? '')),
+      'servers:stop': (args) => ({ ...devServers.stop(String(args.name ?? '')) }),
+      'servers:add': (args) => devServers.addConfig({
+        name: String(args.name ?? ''),
+        exe: String(args.exe ?? 'npm'),
+        args: Array.isArray(args.args) ? args.args.map(String) : [],
+        port: Number(args.port) || 0,
+      }),
+      'servers:logs': (args) => ({ lines: devServers.tail(String(args.name ?? ''), 200) }),
       // Actions — host-side mutations the Settings dialog / palette trigger.
       // They ride the query channel (free-form names, result routing by id).
       'action:clear': () => { getActiveAgent().clearHistory(); return { ok: true }; },

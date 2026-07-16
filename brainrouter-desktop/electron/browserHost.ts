@@ -1,9 +1,9 @@
 /**
- * UI-TEST HOST (Desktop side) — the host-side glue for the "UI Tests" panel. It
+ * BROWSER HOST (Desktop side) — the host-side glue for the "Browser" panel. It
  * owns the workspace walk + incremental `data-testid` extraction (re-parse only
  * changed files) and persists the manifest; the driver, base URL, command layer,
  * and manifest sharing all live in the package's shared SESSION, so the panel and
- * the agent's `ui_*` tools drive the SAME headed browser over the SAME command
+ * the agent's `browser_*` tools drive the SAME headed browser over the SAME command
  * layer (one browser, two consumers).
  *
  * Imports the headless engine the same way host.ts imports the CLI runtime —
@@ -11,8 +11,6 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import http from 'node:http';
-import { spawn, type ChildProcess } from 'node:child_process';
 import {
   extractFile,
   assembleManifest,
@@ -34,20 +32,23 @@ import {
   type UiCommandResult,
   type ManifestDiff,
   type Story,
-} from '@kinqs/brainrouter-core/uitest';
+} from '@kinqs/brainrouter-core/browser';
 import { shouldIgnoreWatchPath } from './fileWatch.js';
-import { findFreePort, isPortFree } from './portUtil.js';
 // IPC is agent-reachable — names + extract paths it receives are untrusted.
-import { safeName, isPathWithinRoot, mdSafe, isAllowedLauncher, hasShellMeta } from './uitestSafety.js';
+import { safeName, isPathWithinRoot, mdSafe } from './browserSafety.js';
 import { isLoopbackHttpSrc } from './webviewPolicy.js';
+// The dev-server registry owns spawning/tracking launch.json servers; the story
+// auto-host (ensureApp) delegates the actual start to it and only keeps the
+// story-specific pre-checks. `probe`/`portOf` are its pure helpers.
+import { DESKTOP_PORT, portOf, probe, type DevServerRegistry } from './devServerRegistry.js';
 
 /**
- * The `uitest:*` channel is agent-reachable — log the full error to the dev
+ * The `browser:*` channel is agent-reachable — log the full error to the dev
  * console but return a GENERIC message across IPC so fs paths / env / stack
  * traces don't leak to the caller (CWE-209).
  */
 function ipcError(err: unknown, what: string): string {
-  console.error(`[uitest] ${what} failed:`, err);
+  console.error(`[browser] ${what} failed:`, err);
   return `${what} failed`;
 }
 
@@ -57,14 +58,14 @@ const MAX_BYTES = 512 * 1024;
 
 /** A single panel/agent request: an element action (target = element id) or a
  *  navigate (target = screen id). Mirrors the package's FlowStep. */
-export interface UiTestStep {
+export interface BrowserStep {
   action: 'navigate' | 'tap' | 'type' | 'assertVisible';
   target: string;
   text?: string;
 }
 
 /** One executed story step's outcome, captured live in the Browser panel. */
-export interface UiTestStepResult {
+export interface BrowserStepResult {
   i: number;
   action: string;
   target: string;
@@ -74,20 +75,20 @@ export interface UiTestStepResult {
 }
 
 /** A captured screenshot handed back from the Browser panel (data URL / base64). */
-export interface UiTestShot {
+export interface BrowserShot {
   name: string;
   dataUrl: string;
 }
 
 /** A finished story run to turn into a markdown report. */
-export interface UiRunReportInput {
+export interface BrowserRunReportInput {
   story: { id?: string; title?: string };
   baseUrl?: string;
-  results: UiTestStepResult[];
-  screenshots?: UiTestShot[];
+  results: BrowserStepResult[];
+  screenshots?: BrowserShot[];
 }
 
-export interface UiTestHost {
+export interface BrowserHost {
   /** Full workspace walk, or (with `only`) re-extract just those files and merge
    *  into the existing map. `broad` also captures interactive elements without
    *  data-testid (the whole-app map); toggling it re-extracts from scratch. */
@@ -95,11 +96,11 @@ export interface UiTestHost {
   manifest(): { manifest: UiMap | null };
   setUrl(url: string): { ok: boolean; url: string };
   getUrl(): string;
-  runCommand(step: UiTestStep): Promise<{ result: UiCommandResult }>;
+  runCommand(step: BrowserStep): Promise<{ result: UiCommandResult }>;
   setDevice(device: Device): Promise<{ result: UiCommandResult }>;
   listFlows(): { flows: string[] };
-  saveFlow(name: string, steps: UiTestStep[]): { ok: boolean; name: string; error?: string };
-  runFlow(arg: { name?: string; steps?: UiTestStep[] }): Promise<{ results: UiCommandResult[] }>;
+  saveFlow(name: string, steps: BrowserStep[]): { ok: boolean; name: string; error?: string };
+  runFlow(arg: { name?: string; steps?: BrowserStep[] }): Promise<{ results: UiCommandResult[] }>;
   /** Saved user-journey stories (`.brainrouter/ui-tests/stories/*.story.yaml`). */
   listStories(): { stories: Story[] };
   saveStory(story: Story): { ok: boolean; id: string; error?: string };
@@ -108,7 +109,7 @@ export interface UiTestHost {
   saveScreenshot(opts: { dataUrl?: string; base64?: string; name?: string }): { path?: string; error?: string };
   /** Build a markdown run report (saving its screenshots) under
    *  `.brainrouter/ui-tests/reports/`; the host then registers it as an Artifact. */
-  runReport(input: UiRunReportInput): { reportPath?: string; markdown?: string; screenshots?: string[]; error?: string };
+  runReport(input: BrowserRunReportInput): { reportPath?: string; markdown?: string; screenshots?: string[]; error?: string };
   /** Ensure a dev server is serving the app: reuse the URL if it responds, else
    *  start the dev server from `.claude/launch.json` and wait until it's ready. */
   ensureApp(opts?: { name?: string; url?: string }): Promise<{ url: string; started: boolean; error?: string; note?: string }>;
@@ -122,7 +123,7 @@ function sanitizeFlowName(name: string): string {
   return safeName(name, 'flow');
 }
 
-async function dispatch(layer: CommandLayer, step: UiTestStep): Promise<UiCommandResult> {
+async function dispatch(layer: CommandLayer, step: BrowserStep): Promise<UiCommandResult> {
   switch (step.action) {
     case 'navigate':
       return layer.navigate(step.target);
@@ -137,7 +138,7 @@ async function dispatch(layer: CommandLayer, step: UiTestStep): Promise<UiComman
   }
 }
 
-export function createUiTestHost(workspaceRoot: string): UiTestHost {
+export function createBrowserHost(workspaceRoot: string, devServers: DevServerRegistry): BrowserHost {
   // In-memory incremental state: re-parse only files whose hash changed.
   const fileSites = new Map<string, FileSites>();
   const hashes = new Map<string, string>();
@@ -274,7 +275,7 @@ export function createUiTestHost(workspaceRoot: string): UiTestHost {
     }
   }
 
-  function saveFlow(name: string, steps: UiTestStep[]): { ok: boolean; name: string; error?: string } {
+  function saveFlow(name: string, steps: BrowserStep[]): { ok: boolean; name: string; error?: string } {
     try {
       const safe = sanitizeFlowName(name);
       const yaml = serializeFlowYaml({ name: safe, steps: steps as never });
@@ -286,8 +287,8 @@ export function createUiTestHost(workspaceRoot: string): UiTestHost {
     }
   }
 
-  async function runFlow(arg: { name?: string; steps?: UiTestStep[] }): Promise<{ results: UiCommandResult[] }> {
-    let steps: UiTestStep[] = [];
+  async function runFlow(arg: { name?: string; steps?: BrowserStep[] }): Promise<{ results: UiCommandResult[] }> {
+    let steps: BrowserStep[] = [];
     if (arg.name) {
       try {
         steps = parseFlowYaml(fs.readFileSync(path.join(flowsDir(), `${sanitizeFlowName(arg.name)}.flow.yaml`), 'utf8')).steps as never;
@@ -366,11 +367,11 @@ export function createUiTestHost(workspaceRoot: string): UiTestHost {
     }
   }
 
-  function buildReportMarkdown(a: { title: string; id: string; baseUrl?: string; results: UiTestStepResult[]; shotPaths: string[]; passed: number }): string {
+  function buildReportMarkdown(a: { title: string; id: string; baseUrl?: string; results: BrowserStepResult[]; shotPaths: string[]; passed: number }): string {
     const total = a.results.length;
     const allOk = total > 0 && a.passed === total;
     const lines: string[] = [];
-    // title / id / baseUrl are agent-supplied (uitest:run-report) — HTML-encode
+    // title / id / baseUrl are agent-supplied (browser:run-report) — HTML-encode
     // them so an injected tag can't execute if the report is rendered in a webview.
     lines.push(`# UI run: ${mdSafe(a.title)}`, '');
     lines.push(`- **Story:** ${mdSafe(a.id)}`);
@@ -395,7 +396,7 @@ export function createUiTestHost(workspaceRoot: string): UiTestHost {
     return lines.join('\n') + '\n';
   }
 
-  function runReport(input: UiRunReportInput): { reportPath?: string; markdown?: string; screenshots?: string[]; error?: string } {
+  function runReport(input: BrowserRunReportInput): { reportPath?: string; markdown?: string; screenshots?: string[]; error?: string } {
     try {
       const results = Array.isArray(input.results) ? input.results : [];
       const title = (String(input.story?.title ?? '').trim()) || 'UI run';
@@ -419,81 +420,14 @@ export function createUiTestHost(workspaceRoot: string): UiTestHost {
     }
   }
 
-  // --- Auto-host: probe the app URL, else start the dev server + wait --------
-  const DESKTOP_PORT = 5173; // the desktop app's own vite — never auto-start it
-  let devServer: { child: ChildProcess; port: number } | null = null;
-
-  function readLaunchConfigs(): Array<{ name: string; exe: string; args: string[]; port: number }> {
-    try {
-      const j = JSON.parse(fs.readFileSync(path.join(workspaceRoot, '.claude', 'launch.json'), 'utf8')) as { configurations?: unknown };
-      const arr = Array.isArray(j.configurations) ? j.configurations : [];
-      return arr
-        .map((c) => {
-          const o = c as { name?: unknown; runtimeExecutable?: unknown; runtimeArgs?: unknown; port?: unknown };
-          return {
-            name: String(o.name ?? ''),
-            exe: String(o.runtimeExecutable ?? 'npm'),
-            args: Array.isArray(o.runtimeArgs) ? o.runtimeArgs.map(String) : [],
-            port: Number(o.port) || 0,
-          };
-        })
-        // launch.json is repo-controlled — only spawn a whitelisted launcher, and
-        // reject any arg carrying a shell metacharacter (spawn uses shell:true on
-        // Windows). A config that fails is dropped, not run (CWE-78).
-        .filter((c) => c.port > 0 && isAllowedLauncher(c.exe) && !c.args.some(hasShellMeta));
-    } catch {
-      return [];
-    }
-  }
-
-  function portOf(url: string): number {
-    try { const u = new URL(url); return Number(u.port) || (u.protocol === 'https:' ? 443 : 80); } catch { return 0; }
-  }
-
-  function probe(port: number, timeoutMs = 900): Promise<boolean> {
-    return new Promise((resolve) => {
-      // 'localhost' (not '127.0.0.1'): a dev server may bind IPv6 ::1 (Vite's
-      // Windows default) or IPv4 — Node resolves localhost to both and connects
-      // to whichever answers, so we detect the server regardless of family.
-      const req = http.get({ host: 'localhost', port, path: '/', timeout: timeoutMs }, (res) => { res.resume(); resolve(true); });
-      req.on('error', () => resolve(false));
-      req.on('timeout', () => { req.destroy(); resolve(false); });
-    });
-  }
-
-  function waitForPort(port: number, timeoutMs: number): Promise<boolean> {
-    const deadline = Date.now() + timeoutMs;
-    return new Promise((resolve) => {
-      const tick = (): void => {
-        void probe(port, 800).then((ok) => {
-          if (ok) resolve(true);
-          else if (Date.now() > deadline) resolve(false);
-          else setTimeout(tick, 400);
-        });
-      };
-      tick();
-    });
-  }
-
-  function stopDevServer(): void {
-    const ds = devServer;
-    devServer = null;
-    if (!ds?.child) return;
-    const pid = ds.child.pid;
-    try {
-      if (process.platform === 'win32' && pid) spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' });
-      else if (pid) { try { process.kill(-pid, 'SIGTERM'); } catch { ds.child.kill('SIGTERM'); } }
-      else ds.child.kill('SIGTERM');
-    } catch {
-      /* already gone */
-    }
-  }
-
+  // --- Auto-host: probe the app URL, else DELEGATE the dev-server start to the
+  // shared registry (which owns spawning/tracking/port-fallback + every guard).
+  // This keeps the STORY-run pre-checks here (reuse the current loopback URL, skip
+  // the desktop's own :5173, only probe KNOWN ports) and hands the spawn to the
+  // registry so the Servers panel and story runs drive the same processes.
   async function ensureApp(opts?: { name?: string; url?: string }): Promise<{ url: string; started: boolean; error?: string; note?: string }> {
     // 1) the caller's current URL already serving? reuse it — but NEVER target the
     // desktop app's OWN dev port (5173): that's this app, not the app under test.
-    // The Browser panel defaults to :5173, so a story run must fall through to the
-    // workspace's dev config (e.g. the mock on :5174) instead of trying to host 5173.
     // Only honor a caller URL that is LOOPBACK http(s); ignore anything else so
     // an agent can't steer the probe/host at a non-loopback origin.
     const optUrl = opts?.url && isLoopbackHttpSrc(String(opts.url)) ? String(opts.url).trim() : '';
@@ -502,7 +436,7 @@ export function createUiTestHost(workspaceRoot: string): UiTestHost {
     const curPort = portOf(curUrl);
 
     // Choose the dev config(s) up front so we know which ports are legitimate.
-    const configs = readLaunchConfigs().filter((c) => c.port !== DESKTOP_PORT);
+    const configs = devServers.list().filter((c) => c.port !== DESKTOP_PORT);
     // Only ever probe a KNOWN port — a launch-config port or the session's own
     // base URL — never an arbitrary agent-supplied one (prevents localhost port
     // scanning / local-service reconnaissance, CWE-200).
@@ -514,52 +448,12 @@ export function createUiTestHost(workspaceRoot: string): UiTestHost {
     if (!cfg) {
       return { url: curUrl, started: false, error: curUrl ? `nothing is serving ${curUrl}, and no .claude/launch.json dev config was found` : 'No app URL set and no .claude/launch.json dev config — set a URL in the Browser panel first.' };
     }
-    const url = `http://localhost:${cfg.port}`;
 
-    // 3) already serving on the chosen port? or on a port we already moved to?
-    if (await probe(cfg.port)) return { url, started: false };
-    if (devServer && devServer.child.exitCode === null && (await probe(devServer.port))) {
-      return { url: `http://localhost:${devServer.port}`, started: false };
-    }
-    // 4) a server we already started still coming up?
-    if (devServer && devServer.child.exitCode === null) {
-      const u = `http://localhost:${devServer.port}`;
-      return (await waitForPort(devServer.port, 20000)) ? { url: u, started: false } : { url: u, started: false, error: `dev server "${cfg.name}" did not become ready on :${devServer.port}` };
-    }
-
-    // 5) pick a bindable port — cfg.port if free, else the next free one, and say
-    // so (the caller logs `note`), then spawn there and poll until ready.
-    stopDevServer();
-    let port = cfg.port;
-    let note: string | undefined;
-    if (!(await isPortFree(cfg.port))) {
-      const alt = await findFreePort(cfg.port + 1);
-      if (!alt) return { url, started: false, error: `port ${cfg.port} is in use and no free port was found near it` };
-      note = `Port ${cfg.port} is in use — starting "${cfg.name}" on ${alt} instead.`;
-      port = alt;
-    }
-    // Runtime guard: never spawn on the desktop app's OWN dev port. The config
-    // list is already filtered, but a free-port fallback could still land on it.
-    if (port === DESKTOP_PORT) {
-      return { url, started: false, error: `refusing to auto-start on :${DESKTOP_PORT} — that's the desktop app's own dev port, not the app under test` };
-    }
-    const spawnUrl = `http://localhost:${port}`;
-    const isWin = process.platform === 'win32';
-    const exe = isWin && /^npm$/i.test(cfg.exe) ? 'npm.cmd' : cfg.exe;
-    // When we move ports, pass the override to the dev command (npm scripts + vite
-    // and friends accept `-- --port <n>`); on the configured port, run it verbatim.
-    const args = port === cfg.port ? cfg.args : [...cfg.args, '--', '--port', String(port)];
-    let child: ChildProcess;
-    try {
-      child = spawn(exe, args, { cwd: workspaceRoot, env: { ...process.env }, detached: !isWin, shell: isWin, stdio: 'ignore' });
-    } catch (err) {
-      return { url: spawnUrl, started: false, error: ipcError(err, `start dev server "${cfg.name}"`) };
-    }
-    devServer = { child, port };
-    child.on('exit', () => { if (devServer?.child === child) devServer = null; });
-    const ready = await waitForPort(port, 30000);
-    if (!ready) { stopDevServer(); return { url: spawnUrl, started: false, error: `dev server "${cfg.name}" did not become ready on :${port} within 30s` }; }
-    return { url: spawnUrl, started: true, note };
+    // 2) delegate the actual probe/port-fallback/spawn/wait to the registry.
+    const status = await devServers.start(cfg.name);
+    const url = status.url || `http://localhost:${cfg.port}`;
+    if (status.error) return { url, started: false, error: status.error, note: status.note };
+    return { url, started: !!status.started, note: status.note };
   }
 
   return {
@@ -585,7 +479,7 @@ export function createUiTestHost(workspaceRoot: string): UiTestHost {
       return { ok: true };
     },
     dispose: () => {
-      stopDevServer();
+      // Dev servers are owned by the shared registry (host.ts disposes it on quit).
       void session().close();
     },
   };

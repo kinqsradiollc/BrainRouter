@@ -1,5 +1,5 @@
 /**
- * `@kinqs/brainrouter-ui-test` — the headless web UI-testing engine: a
+ * `@kinqs/brainrouter-core/browser` — the headless web UI-testing engine: a
  * data-testid extractor (Layer 2), a named command layer (Layer 4), a headed
  * Playwright driver (Layer 5a), and the result normalizer (Layer 6). Consumed by
  * the Desktop "UI Tests" panel and, via a built-in extension, by the agent.

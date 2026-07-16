@@ -1,7 +1,7 @@
 /**
- * Built-in extension: ui-test — exposes the web UI-testing command layer to the
- * agent as `ui_*` tools. They share the SAME headed browser + manifest as the
- * Desktop "UI Tests" panel (via the package's per-workspace session), so the
+ * Built-in extension: browser — exposes the web browser-automation command layer
+ * to the agent as `browser_*` tools. They share the SAME headed browser + manifest
+ * as the Desktop "Browser" panel (via the package's per-workspace session), so the
  * panel and the agent are two consumers of one command layer.
  *
  * Registered at access tier `read` / action `read_only`: these drive an EXTERNAL
@@ -12,7 +12,7 @@
  *
  * Plain ESM (no build step). It deep-imports the built engine; if that package
  * isn't built, activation fails soft (the loader is fault-isolated) and the agent
- * simply has no ui_* tools.
+ * simply has no browser_* tools.
  */
 
 const objSchema = (properties, required) => ({ type: 'object', properties: properties || {}, required: required || [] });
@@ -31,9 +31,9 @@ function formatResult(r) {
 export async function activate(host) {
   let pkg;
   try {
-    pkg = await import('../../dist/uitest/index.js');
+    pkg = await import('../../dist/browser/index.js');
   } catch (err) {
-    host.log('ui-test engine not built — ui_* tools unavailable', { error: String((err && err.message) || err) });
+    host.log('browser engine not built — browser_* tools unavailable', { error: String((err && err.message) || err) });
     return;
   }
   const { getUiTestSession, runFlow } = pkg;
@@ -44,21 +44,21 @@ export async function activate(host) {
 
   // --- query helpers (manifest-only, keep agent context small) ---
   reg(
-    'ui_list_screens',
-    "List the screens in the workspace web app's UI map (id, title, route, element count). If empty, run Extract in the UI Tests panel first.",
+    'browser_list_screens',
+    "List the screens in the workspace web app's UI map (id, title, route, element count). If empty, run Extract in the Browser panel first.",
     objSchema({}),
     true,
     async () => {
       const screens = session().layer.listScreens();
-      if (!screens.length) return 'No UI map yet — extract it via the UI Tests panel (or no data-testid elements were found).';
+      if (!screens.length) return 'No UI map yet — extract it via the Browser panel (or no data-testid elements were found).';
       return JSON.stringify(screens);
     },
   );
 
   reg(
-    'ui_get_screen',
+    'browser_get_screen',
     "Get one screen's elements (testID, type, action, label) from the UI map — load only the screen you need.",
-    objSchema({ screen: { type: 'string', description: 'The screen id from ui_list_screens.' } }, ['screen']),
+    objSchema({ screen: { type: 'string', description: 'The screen id from browser_list_screens.' } }, ['screen']),
     true,
     async (args) => {
       const s = session().layer.getScreen(String(args.screen || ''));
@@ -67,7 +67,7 @@ export async function activate(host) {
   );
 
   reg(
-    'ui_find_element',
+    'browser_find_element',
     'Find elements in the UI map by a case-insensitive substring of their testID / id / label.',
     objSchema({ query: { type: 'string', description: 'Substring to match.' } }, ['query']),
     true,
@@ -76,15 +76,15 @@ export async function activate(host) {
 
   // --- action commands (drive the headed browser) ---
   reg(
-    'ui_navigate',
-    'Navigate the headed browser to a screen (by id) — uses the dev-server URL set in the UI Tests panel.',
+    'browser_navigate',
+    'Navigate the headed browser to a screen (by id) — uses the dev-server URL set in the Browser panel.',
     objSchema({ screen: { type: 'string' } }, ['screen']),
     false,
     async (args) => formatResult(await session().layer.navigate(String(args.screen || ''))),
   );
 
   reg(
-    'ui_tap',
+    'browser_tap',
     'Tap/click an element by its testID (or manifest id) in the headed browser.',
     objSchema({ testID: { type: 'string' } }, ['testID']),
     false,
@@ -92,7 +92,7 @@ export async function activate(host) {
   );
 
   reg(
-    'ui_type',
+    'browser_type',
     'Type text into an input element by its testID.',
     objSchema({ testID: { type: 'string' }, text: { type: 'string' } }, ['testID', 'text']),
     false,
@@ -100,7 +100,7 @@ export async function activate(host) {
   );
 
   reg(
-    'ui_assert_visible',
+    'browser_assert_visible',
     'Assert an element (by testID) is visible in the headed browser.',
     objSchema({ testID: { type: 'string' } }, ['testID']),
     false,
@@ -108,7 +108,7 @@ export async function activate(host) {
   );
 
   reg(
-    'ui_set_device',
+    'browser_set_device',
     'Set the browser viewport to a device preset (width/height in CSS px).',
     objSchema(
       {
@@ -134,7 +134,7 @@ export async function activate(host) {
   );
 
   reg(
-    'ui_run_flow',
+    'browser_run_flow',
     'Run a sequence of UI steps in order (stops at the first failure). Each step: {action:"navigate|tap|type|assertVisible", target:"<screenId|testID>", text?:"<for type>"}.',
     objSchema({ steps: { type: 'array', items: { type: 'object' }, description: 'Ordered steps.' } }, ['steps']),
     false,
@@ -145,5 +145,5 @@ export async function activate(host) {
     },
   );
 
-  host.log('ui-test: registered 9 ui_* tools');
+  host.log('browser: registered 9 browser_* tools');
 }

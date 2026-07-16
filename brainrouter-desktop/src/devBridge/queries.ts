@@ -1487,14 +1487,25 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     'action:plugin-enable': () => ({ ok: true }),
     'action:plugin-consent-set': () => ({ ok: true }),
     'action:plugin-remove': () => ({ ok: true }),
-    // UI-TEST fusion — a synthetic screen map + stories so the Atlas "Screens"
+    // BROWSER — a synthetic screen map + stories so the Atlas "Screens"
     // mode + Browser panel render in browser-only dev (real extraction + LLM
     // suggestion run in the host over the workspace).
-    'uitest:manifest': () => ({ manifest: devUiMap() }),
-    'uitest:extract': () => ({ manifest: devUiMap(), diff: { added: [], removed: [], changed: [] }, degraded: false, fileCount: 3 }),
-    'uitest:list-stories': () => ({ stories: devStories() }),
-    'uitest:suggest-stories': () => ({ stories: devStories(), count: devStories().length }),
-    'uitest:ensure-app': () => ({ url: 'http://localhost:5174', started: false }),
+    'browser:manifest': () => ({ manifest: devUiMap() }),
+    'browser:extract': () => ({ manifest: devUiMap(), diff: { added: [], removed: [], changed: [] }, degraded: false, fileCount: 3 }),
+    'browser:list-stories': () => ({ stories: devStories() }),
+    'browser:suggest-stories': () => ({ stories: devStories(), count: devStories().length }),
+    'browser:ensure-app': () => ({ url: 'http://localhost:5174', started: false }),
+    // SERVERS — the three launch.json configs returned as stopped so the Servers
+    // panel renders in the browser-only dev harness (the host runs them for real).
+    'servers:list': () => ({ servers: [
+      { name: 'dashboard', exe: 'npm', args: ['run', 'dev'], port: 4321, url: 'http://localhost:4321', status: 'stopped', pid: null, startedAt: null },
+      { name: 'desktop-renderer', exe: 'npm', args: ['run', 'dev:renderer'], port: 5199, url: 'http://localhost:5199', status: 'stopped', pid: null, startedAt: null },
+      { name: 'desktop-impl', exe: 'npm', args: ['run', 'dev:impl'], port: 5198, url: 'http://localhost:5198', status: 'stopped', pid: null, startedAt: null },
+    ] }),
+    'servers:start': (a) => ({ name: String(a.name ?? ''), exe: 'npm', args: [], port: 0, url: '', status: 'stopped', pid: null, startedAt: null }),
+    'servers:stop': () => ({ ok: true }),
+    'servers:add': () => ({ ok: true }),
+    'servers:logs': () => ({ lines: [] as string[] }),
   };
   return queries;
 }

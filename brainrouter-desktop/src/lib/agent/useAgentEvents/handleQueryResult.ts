@@ -24,8 +24,8 @@ import { parseQueryId, isStaleQueryResult } from '../../workspace/workspaceEvent
 import { fmt, download } from '../../format.js';
 import { rid } from '../../rid.js';
 import { type AgentEventsCtx, type ToolCatalog, getStableRowId, isWorkspaceScopedReviewQuery } from './types.js';
-// UI-TEST fusion — the screen map + story journeys the uitest:* results carry.
-import type { UiMap, Story } from '@kinqs/brainrouter-core/uitest';
+// BROWSER — the screen map + story journeys the browser:* results carry.
+import type { UiMap, Story } from '@kinqs/brainrouter-core/browser';
 
 export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, result: unknown, error?: string, resultWorkspaceRoot?: string) => void {
   const {
@@ -501,23 +501,23 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
       }
       // UI-TEST fusion — the Atlas "Screens" map + user-journey stories, and the
       // Browser panel's run/extract/suggest/report round-trips.
-      case 'q-uitest-manifest': { const m = (result as { manifest?: UiMap } | null)?.manifest ?? null; setAtlasUiMap(m); return; }
-      case 'q-uitest-extract': {
+      case 'q-browser-manifest': { const m = (result as { manifest?: UiMap } | null)?.manifest ?? null; setAtlasUiMap(m); return; }
+      case 'q-browser-extract': {
         const r = result as { manifest?: UiMap; error?: string; degraded?: boolean } | null;
         if (r?.error) { setToast(`⚠ UI extract: ${r.error}`); return; }
         if (r?.manifest) setAtlasUiMap(r.manifest);
         return;
       }
-      case 'q-uitest-stories': { const st = (result as { stories?: Story[] } | null)?.stories; setAtlasStories(Array.isArray(st) ? st : []); return; }
-      case 'q-uitest-suggest': {
+      case 'q-browser-stories': { const st = (result as { stories?: Story[] } | null)?.stories; setAtlasStories(Array.isArray(st) ? st : []); return; }
+      case 'q-browser-suggest': {
         const r = result as { stories?: Story[]; count?: number; error?: string } | null;
         if (r?.error) { setToast(`⚠ Suggest stories: ${r.error}`); return; }
         const n = r?.count ?? r?.stories?.length ?? 0;
         setToast(n ? `✓ ${n} stor${n === 1 ? 'y' : 'ies'} suggested` : 'No stories suggested — try extracting first.');
-        q('q-uitest-stories', 'uitest:list-stories');
+        q('q-browser-stories', 'browser:list-stories');
         return;
       }
-      case 'q-uitest-ensure': {
+      case 'q-browser-ensure': {
         const r = result as { url?: string; started?: boolean; error?: string; note?: string } | null;
         const log = (message: string): void => { window.dispatchEvent(new CustomEvent('br-browser-log', { detail: { message } })); };
         if (r?.error) { setToast(`⚠ ${r.error}`); log(`⚠ App not ready: ${r.error}`); return; }
@@ -528,12 +528,12 @@ export function createHandleQueryResult(ctx: AgentEventsCtx): (rawId: string, re
         }
         return;
       }
-      case 'q-uitest-shot': {
+      case 'q-browser-shot': {
         const r = result as { path?: string; error?: string } | null;
         setToast(r?.error ? `⚠ Screenshot: ${r.error}` : r?.path ? `✓ Screenshot saved → ${r.path}` : 'Screenshot saved');
         return;
       }
-      case 'q-uitest-report': {
+      case 'q-browser-report': {
         const r = result as { reportPath?: string; error?: string } | null;
         const msg = r?.error ? `⚠ Report: ${r.error}` : r?.reportPath ? `✓ Run report saved → Artifacts (${r.reportPath})` : 'Run report saved';
         setToast(msg);
