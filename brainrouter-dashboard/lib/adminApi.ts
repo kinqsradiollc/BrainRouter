@@ -422,16 +422,16 @@ export const adminApi = {
   removeMember: (orgId: string, userId: string) =>
     authFetch(`/api/orgs/${orgId}/members/${encodeURIComponent(userId)}`, { method: "DELETE", orgId }),
   setDefaultOrg: (orgId: string) => authFetch(`/api/orgs/${orgId}/default`, { method: "POST" }),
-  // Teams — sub-groups inside the active org for scoped sharing (e.g. meeting
-  // scope==='team'). Org header defaults to the caller's active org, same as
-  // Meetings, so the team a meeting is shared to is always in the same org.
+  // Team spaces — active-organization teams plus the caller's global personal teams.
   listTeams: (orgId?: string) => authFetch<{ teams: Team[] }>("/api/teams", { orgId }),
-  createTeam: (name: string, orgId?: string) =>
-    authFetch<{ team: Team }>("/api/teams", { method: "POST", body: { name }, orgId }),
+  createTeam: (name: string, kind: TeamKind = "organization", orgId?: string) =>
+    authFetch<{ team: Team }>("/api/teams", { method: "POST", body: { name, kind }, orgId }),
   getTeam: (id: string, orgId?: string) =>
-    authFetch<{ team: Team; members: TeamMember[] }>(`/api/teams/${encodeURIComponent(id)}`, { orgId }),
-  addTeamMember: (id: string, userId: string, role?: string, orgId?: string) =>
-    authFetch<{ member: TeamMember }>(`/api/teams/${encodeURIComponent(id)}/members`, { method: "POST", body: role ? { userId, role } : { userId }, orgId }),
+    authFetch<{ team: Team; members: TeamMember[]; currentUserId: string }>(`/api/teams/${encodeURIComponent(id)}`, { orgId }),
+  addTeamMember: (id: string, account: string, role?: string, orgId?: string) =>
+    authFetch<{ ok: boolean; members: TeamMember[] }>(`/api/teams/${encodeURIComponent(id)}/members`, {
+      method: "POST", body: { ...(account.includes("@") ? { email: account } : { userId: account }), ...(role ? { role } : {}) }, orgId,
+    }),
   removeTeamMember: (id: string, userId: string, orgId?: string) =>
     authFetch(`/api/teams/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, { method: "DELETE", orgId }),
   deleteTeam: (id: string, orgId?: string) =>
@@ -524,15 +524,26 @@ export interface SharedMemory {
 
 export interface Team {
   id: string;
-  orgId: string;
+  kind: TeamKind;
+  orgId: string | null;
+  orgName: string | null;
+  ownerUserId: string | null;
   name: string;
   createdBy: string;
   createdAt: string;
+  updatedAt?: string;
+  myRole: "owner" | "admin" | "member" | null;
+  canManage: boolean;
 }
+
+export type TeamKind = "organization" | "personal";
 
 export interface TeamMember {
   userId: string;
   role: string;
+  displayName?: string;
+  email?: string;
+  createdAt?: string;
 }
 
 export interface OrgInvite {

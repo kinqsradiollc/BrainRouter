@@ -17,6 +17,11 @@ describe("ADR-010 P5 — orgVisibilityAllows (org isolation + visibility)", () =
     expect(orgVisibilityAllows(rec("orgB", "private", "alice"), "orgA", "alice")).toBe(false);
   });
 
+  it("allows a membership-verified personal-team candidate across organizations", () => {
+    expect(orgVisibilityAllows({ ...rec("orgB", "team", "bob"), team_access: true }, "orgA", "alice")).toBe(true);
+    expect(orgVisibilityAllows({ ...rec("orgB", "team", "bob"), team_access: false }, "orgA", "alice")).toBe(false);
+  });
+
   it("same org, the caller's own record → allowed regardless of visibility", () => {
     expect(orgVisibilityAllows(rec("orgA", "private", "alice"), "orgA", "alice")).toBe(true);
     expect(orgVisibilityAllows(rec("orgA", "org", "alice"), "orgA", "alice")).toBe(true);

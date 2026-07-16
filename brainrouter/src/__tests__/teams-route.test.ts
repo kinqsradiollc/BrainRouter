@@ -10,11 +10,13 @@ const mocks = vi.hoisted(() => ({
   listTeamMembers: vi.fn(),
   addTeamMember: vi.fn(),
   removeTeamMember: vi.fn(),
+  transferPersonalTeamOwnership: vi.fn(),
   deleteTeam: vi.fn(),
   getMemberRole: vi.fn(),
   getDefaultOrgId: vi.fn(),
   ensurePersonalOrg: vi.fn(),
   getUserById: vi.fn(),
+  getUserByEmail: vi.fn(),
 }));
 
 vi.mock("../memory/engine.js", () => ({
@@ -23,6 +25,7 @@ vi.mock("../memory/engine.js", () => ({
       key === "br_user" ? { userId: "user-1", isAdmin: false, email: "user@example.test" }
         : key === "br_dev" ? { userId: "user-2", isAdmin: false, email: "dev@example.test" } : null),
     getUserById: mocks.getUserById,
+    getUserByEmail: mocks.getUserByEmail,
     tenancy: {
       getMemberRole: mocks.getMemberRole,
       getDefaultOrgId: mocks.getDefaultOrgId,
@@ -36,6 +39,7 @@ vi.mock("../memory/engine.js", () => ({
       listTeamMembers: mocks.listTeamMembers,
       addTeamMember: mocks.addTeamMember,
       removeTeamMember: mocks.removeTeamMember,
+      transferPersonalTeamOwnership: mocks.transferPersonalTeamOwnership,
       deleteTeam: mocks.deleteTeam,
     },
   },
@@ -43,8 +47,8 @@ vi.mock("../memory/engine.js", () => ({
 
 import { teamsRouter } from "../api/routes/teams.js";
 
-function team(id = "team_1", orgId = "org-a") {
-  return { id, orgId, name: "Platform", createdBy: "user-1", createdAt: "2026-07-16T00:00:00.000Z", updatedAt: "2026-07-16T00:00:00.000Z" };
+function team(id = "team_1", orgId: string | null = "org-a", kind: "organization" | "personal" = "organization") {
+  return { id, kind, orgId, orgName: orgId ? "Acme" : null, ownerUserId: kind === "personal" ? "user-1" : null, name: "Platform", createdBy: "user-1", createdAt: "2026-07-16T00:00:00.000Z", updatedAt: "2026-07-16T00:00:00.000Z" };
 }
 
 describe("teams route — org isolation + management gating", () => {
@@ -55,19 +59,22 @@ describe("teams route — org isolation + management gating", () => {
     vi.clearAllMocks();
     mocks.getDefaultOrgId.mockResolvedValue("org-a");
     mocks.getUserById.mockImplementation(async (userId: string) => ({ userId, isAdmin: false, status: "active" }));
+    mocks.getUserByEmail.mockImplementation(async (email: string) => email === "three@example.test" ? { userId: "user-3", email, status: "active" } : null);
     // user-1 is an org admin of org-a; user-2 is a plain developer of org-a.
     mocks.getMemberRole.mockImplementation(async (orgId: string, userId: string) => {
+      if (orgId === `org_personal_${userId}`) return "owner";
       if (orgId !== "org-a") return null;
-      return userId === "user-1" ? "admin" : userId === "user-2" ? "developer" : null;
+      return userId === "user-1" ? "admin" : userId === "user-2" || userId === "user-3" ? "developer" : null;
     });
     mocks.ensurePersonalOrg.mockResolvedValue({ orgId: "org-a" });
     mocks.listTeamsForUser.mockResolvedValue([team()]);
     mocks.getTeam.mockResolvedValue(team());
     mocks.isTeamMember.mockResolvedValue(true);
-    mocks.listTeamMembers.mockResolvedValue([{ teamId: "team_1", userId: "user-1", role: "owner", createdAt: "t" }]);
-    mocks.createTeam.mockImplementation(async (input: Record<string, unknown>) => team(String(input.id), String(input.orgId)));
+    mocks.listTeamMembers.mockResolvedValue([{ teamId: "team_1", userId: "user-1", role: "owner", displayName: "User One", email: "user@example.test", createdAt: "t" }]);
+    mocks.createTeam.mockImplementation(async (input: Record<string, unknown>) => team(String(input.id), input.orgId == null ? null : String(input.orgId), input.kind === "personal" ? "personal" : "organization"));
     mocks.addTeamMember.mockResolvedValue(true);
     mocks.removeTeamMember.mockResolvedValue(true);
+    mocks.transferPersonalTeamOwnership.mockResolvedValue(true);
     mocks.deleteTeam.mockResolvedValue(true);
 
     const app = express();
@@ -84,7 +91,7 @@ describe("teams route — org isolation + management gating", () => {
     const res = await fetch(`${baseUrl}/api/teams`, { headers: headers() });
     expect(res.status).toBe(200);
     expect((await res.json()).teams).toHaveLength(1);
-    expect(mocks.listTeamsForUser).toHaveBeenCalledWith("org-a", "user-1");
+    expect(mocks.listTeamsForUser).toHaveBeenCalledWith("org-a", "user-1", true);
   });
 
   it("creates a team scoped to the caller's org", async () => {
@@ -93,6 +100,19 @@ describe("teams route — org isolation + management gating", () => {
     expect(mocks.createTeam.mock.calls[0]![0].orgId).toBe("org-a");
     // creator auto-added as owner member
     expect(mocks.addTeamMember).toHaveBeenCalledWith("org-a", expect.any(String), "user-1", "owner");
+  });
+
+  it("creates a personal team with no organization container", async () => {
+    const res = await fetch(`${baseUrl}/api/teams`, { method: "POST", headers: headers(), body: JSON.stringify({ name: "Friends", kind: "personal" }) });
+    expect(res.status).toBe(201);
+    expect(mocks.createTeam.mock.calls[0]![0]).toMatchObject({ kind: "personal", orgId: null, ownerUserId: "user-1" });
+  });
+
+  it("requires a shared organization for organization-team creation", async () => {
+    const res = await fetch(`${baseUrl}/api/teams`, { method: "POST", headers: headers("br_user", "org_personal_user-1"), body: JSON.stringify({ name: "Not an org team" }) });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: expect.stringMatching(/shared organization/i) });
+    expect(mocks.createTeam).not.toHaveBeenCalled();
   });
 
   it("rejects an empty team name with 400", async () => {
@@ -107,6 +127,7 @@ describe("teams route — org isolation + management gating", () => {
     const body = await res.json();
     expect(body.team.id).toBe("team_1");
     expect(body.members).toHaveLength(1);
+    expect(body.currentUserId).toBe("user-1");
   });
 
   it("hides a team (404) from a non-member, non-admin caller", async () => {
@@ -119,6 +140,27 @@ describe("teams route — org isolation + management gating", () => {
     const res = await fetch(`${baseUrl}/api/teams/team_1/members`, { method: "POST", headers: headers(), body: JSON.stringify({ userId: "user-3", role: "member" }) });
     expect(res.status).toBe(200);
     expect(mocks.addTeamMember).toHaveBeenCalledWith("org-a", "team_1", "user-3", "member");
+  });
+
+  it("rejects an account outside an organization team", async () => {
+    const res = await fetch(`${baseUrl}/api/teams/team_1/members`, { method: "POST", headers: headers(), body: JSON.stringify({ userId: "user-4" }) });
+    expect(res.status).toBe(409);
+    expect(mocks.addTeamMember).not.toHaveBeenCalled();
+  });
+
+  it("allows a personal-team owner to add an active account from another organization by email", async () => {
+    mocks.getTeam.mockResolvedValue(team("team_personal", null, "personal"));
+    mocks.listTeamMembers.mockResolvedValue([{ teamId: "team_personal", userId: "user-1", role: "owner", displayName: "", email: "", createdAt: "t" }]);
+    const res = await fetch(`${baseUrl}/api/teams/team_personal/members`, { method: "POST", headers: headers(), body: JSON.stringify({ email: "three@example.test" }) });
+    expect(res.status).toBe(200);
+    expect(mocks.addTeamMember).toHaveBeenCalledWith("org-a", "team_personal", "user-3", "member");
+  });
+
+  it("does not give an organization admin an override on a personal team", async () => {
+    mocks.getTeam.mockResolvedValue(team("team_personal", null, "personal"));
+    mocks.listTeamMembers.mockResolvedValue([{ teamId: "team_personal", userId: "user-2", role: "owner", displayName: "", email: "", createdAt: "t" }]);
+    const res = await fetch(`${baseUrl}/api/teams/team_personal`, { headers: headers() });
+    expect(res.status).toBe(404);
   });
 
   it("forbids a plain developer (not a team owner/admin) from adding a member", async () => {
@@ -169,9 +211,53 @@ describe("teams route — org isolation + management gating", () => {
   });
 
   it("removes a member (manager-gated)", async () => {
+    mocks.listTeamMembers.mockResolvedValue([
+      { teamId: "team_1", userId: "user-1", role: "owner", displayName: "", email: "", createdAt: "t" },
+      { teamId: "team_1", userId: "user-3", role: "member", displayName: "", email: "", createdAt: "t" },
+    ]);
     const res = await fetch(`${baseUrl}/api/teams/team_1/members/user-3`, { method: "DELETE", headers: headers() });
     expect(res.status).toBe(200);
     expect(mocks.removeTeamMember).toHaveBeenCalledWith("org-a", "team_1", "user-3");
+  });
+
+  it("lets a regular member leave without management permission", async () => {
+    mocks.listTeamMembers.mockResolvedValue([
+      { teamId: "team_1", userId: "user-1", role: "owner", displayName: "", email: "", createdAt: "t" },
+      { teamId: "team_1", userId: "user-2", role: "member", displayName: "", email: "", createdAt: "t" },
+    ]);
+    const res = await fetch(`${baseUrl}/api/teams/team_1/members/user-2`, { method: "DELETE", headers: headers("br_dev") });
+    expect(res.status).toBe(200);
+    expect(mocks.removeTeamMember).toHaveBeenCalledWith("org-a", "team_1", "user-2");
+  });
+
+  it("blocks demoting the last owner", async () => {
+    const res = await fetch(`${baseUrl}/api/teams/team_1/members`, { method: "POST", headers: headers(), body: JSON.stringify({ userId: "user-1", role: "member" }) });
+    expect(res.status).toBe(400);
+    expect(mocks.addTeamMember).not.toHaveBeenCalled();
+  });
+
+  it("moves personal-team lifecycle ownership before demoting the primary owner", async () => {
+    mocks.getTeam.mockResolvedValue(team("team_personal", null, "personal"));
+    mocks.listTeamMembers.mockResolvedValue([
+      { teamId: "team_personal", userId: "user-1", role: "owner", createdAt: "t" },
+      { teamId: "team_personal", userId: "user-3", role: "owner", createdAt: "t" },
+    ]);
+    const res = await fetch(`${baseUrl}/api/teams/team_personal/members`, { method: "POST", headers: headers(), body: JSON.stringify({ userId: "user-1", role: "member" }) });
+    expect(res.status).toBe(200);
+    expect(mocks.transferPersonalTeamOwnership).toHaveBeenCalledWith("team_personal", "user-1", "user-3");
+    expect(mocks.addTeamMember).toHaveBeenCalledWith("org-a", "team_personal", "user-1", "member");
+  });
+
+  it("moves personal-team lifecycle ownership before the primary owner leaves", async () => {
+    mocks.getTeam.mockResolvedValue(team("team_personal", null, "personal"));
+    mocks.listTeamMembers.mockResolvedValue([
+      { teamId: "team_personal", userId: "user-1", role: "owner", createdAt: "t" },
+      { teamId: "team_personal", userId: "user-3", role: "owner", createdAt: "t" },
+    ]);
+    const res = await fetch(`${baseUrl}/api/teams/team_personal/members/user-1`, { method: "DELETE", headers: headers() });
+    expect(res.status).toBe(200);
+    expect(mocks.transferPersonalTeamOwnership).toHaveBeenCalledWith("team_personal", "user-1", "user-3");
+    expect(mocks.removeTeamMember).toHaveBeenCalledWith("org-a", "team_personal", "user-1");
   });
 
   it("deletes a team (manager-gated)", async () => {

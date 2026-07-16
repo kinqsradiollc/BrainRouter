@@ -20,11 +20,12 @@ import styles from "./meetings.module.css";
 
 type Scope = "private" | "team" | "org" | "public";
 type SummaryStatus = "queued" | "processing" | "ready" | "failed";
-interface ListItem { id: string; title: string; date: string; scope: Scope; attendeeCount: number; summaryStatus: SummaryStatus }
+interface ListItem { id: string; title: string; date: string; scope: Scope; attendeeCount: number; summaryStatus: SummaryStatus; originOrgId: string; canEdit: boolean }
 interface ActionItem { id: string; title: string; assignee?: string; done?: boolean; trackItemId?: string }
 interface Share { scope: Scope; teamId?: string; publicUrl?: string; expiresAt?: string }
 interface Detail {
   id: string; title: string; date: string; status: string; durationMin?: number; wordCount?: number;
+  originOrgId: string; canEdit: boolean;
   attendees: string[]; model?: { label: string; effort?: string };
   summaryMarkdown: string; actionItems: ActionItem[];
   transcript: { at: string; speaker: string; text: string }[];
@@ -86,6 +87,8 @@ export default function MeetingsPage() {
   const [teamPickerOpen, setTeamPickerOpen] = useState(false);
   const [newTeamName, setNewTeamName] = useState("");
   const [loading, setLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
@@ -98,6 +101,10 @@ export default function MeetingsPage() {
   const [summaryTemplate, setSummaryTemplate] = useState("general");
   const [editing, setEditing] = useState(false);
   const [draftSummary, setDraftSummary] = useState("");
+  const [meetingQuery, setMeetingQuery] = useState("");
+  const [scopeFilter, setScopeFilter] = useState<Scope | "all">("all");
+  const [draftRecovered, setDraftRecovered] = useState(false);
+  const [copied, setCopied] = useState(false);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
@@ -108,6 +115,7 @@ export default function MeetingsPage() {
       if (saved?.transcript) setDraftTranscript(saved.transcript);
       if (saved?.language) setLanguage(saved.language);
       if (saved?.template) setSummaryTemplate(saved.template);
+      if (saved?.title || saved?.transcript) setDraftRecovered(true);
     } catch { /* a malformed local draft should not block Meetings */ }
   }, []);
 
@@ -155,6 +163,8 @@ export default function MeetingsPage() {
     setBusy("transcribe");
     setCreateErr("");
     try {
+      if (!blob.size) throw new Error("The selected audio file is empty.");
+      if (blob.size > 40 * 1024 * 1024) throw new Error("Audio must be 40 MB or smaller.");
       const token = getJwt() || getApiKey() || "";
       const res = await fetch(`${BASE_URL}/v1/audio/transcriptions${language === "auto" ? "" : `?language=${encodeURIComponent(language)}`}`, {
         method: "POST",
@@ -245,6 +255,8 @@ export default function MeetingsPage() {
     const controller = new AbortController();
     const id = selectedId;
     setDetail(null);
+    setDetailLoading(true);
+    setDetailError("");
     setTeamPickerOpen(false);
     setTranscriptSegments([]);
     setTranscriptNext(null);
@@ -252,7 +264,12 @@ export default function MeetingsPage() {
     setTranscriptLoading(true);
     void queryDashboard(`meetings:overview:${id}`, () => authFetch<Overview>(`/api/meetings/${id}/overview`, { signal: controller.signal }), { ttlMs: 30_000 }).then((overview) => {
       if (!controller.signal.aborted) { setDetail({ ...overview, transcript: [] }); setShareOpen(false); }
-    }).catch(() => { if (!controller.signal.aborted) setDetail(null); });
+    }).catch((caught) => {
+      if (!controller.signal.aborted) {
+        setDetail(null);
+        setDetailError(caught instanceof Error ? caught.message : "Could not load this meeting.");
+      }
+    }).finally(() => { if (!controller.signal.aborted) setDetailLoading(false); });
     void authFetch<TranscriptPage>(`/api/meetings/${id}/transcript?limit=100`, { signal: controller.signal }).then((page) => {
       if (controller.signal.aborted) return;
       setTranscriptSegments(page.segments);
@@ -304,6 +321,7 @@ export default function MeetingsPage() {
       setError("You can only share to a team you belong to.");
       return;
     }
+    setBusy("share");
     try {
       const body = scope === "team" ? { scope, teamId } : { scope };
       const share = await authFetch<Share>(`/api/meetings/${detail.id}/scope`, { method: "POST", body });
@@ -311,9 +329,10 @@ export default function MeetingsPage() {
       setDetail((d) => (d ? { ...d, share } : d));
       setItems((list) => list.map((m) => (m.id === detail.id ? { ...m, scope } : m)));
       if (scope !== "team") setTeamPickerOpen(false);
+      setShareOpen(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not change sharing.");
-    }
+    } finally { setBusy(""); }
   }, [detail, teams]);
 
   const createTeamInline = useCallback(async () => {
@@ -350,13 +369,14 @@ export default function MeetingsPage() {
   const toggleAction = useCallback(async (action: ActionItem) => {
     if (!detail) return;
     const done = !action.done;
+    setBusy(`action:${action.id}`);
     try {
       await authFetch(`/api/meetings/${detail.id}/actions/${action.id}`, { method: "POST", body: { done } });
       invalidateDashboardQueries(`meetings:overview:${detail.id}`);
       setDetail((d) => (d ? { ...d, actionItems: d.actionItems.map((x) => (x.id === action.id ? { ...x, done } : x)) } : d));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not update the action item.");
-    }
+    } finally { setBusy(""); }
   }, [detail]);
 
   // Track / untrack a meeting action — creates (or removes) a real Track work item
@@ -364,6 +384,7 @@ export default function MeetingsPage() {
   const toggleTrack = useCallback(async (action: ActionItem) => {
     if (!detail) return;
     const linked = Boolean(action.trackItemId);
+    setBusy(`track:${action.id}`);
     try {
       if (linked) {
         await authFetch(`/api/meetings/${detail.id}/actions/${action.id}/track`, { method: "DELETE" });
@@ -376,7 +397,7 @@ export default function MeetingsPage() {
       invalidateDashboardQueries("track:");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not update Track.");
-    }
+    } finally { setBusy(""); }
   }, [detail]);
 
   const submitCreate = useCallback(async () => {
@@ -389,6 +410,7 @@ export default function MeetingsPage() {
       setCreateOpen(false);
       setDraftTitle("");
       setDraftTranscript("");
+      setDraftRecovered(false);
       localStorage.removeItem("brainrouter:meeting-draft");
       await load();
       setSelectedId(out.id);
@@ -400,6 +422,10 @@ export default function MeetingsPage() {
   }, [draftTitle, draftTranscript, summaryTemplate, load]);
 
   const summaryBlocks = useMemo(() => renderSummary(detail?.summaryMarkdown ?? ""), [detail?.summaryMarkdown]);
+  const filteredItems = useMemo(() => {
+    const needle = meetingQuery.trim().toLowerCase();
+    return items.filter((item) => (scopeFilter === "all" || item.scope === scopeFilter) && (!needle || item.title.toLowerCase().includes(needle)));
+  }, [items, meetingQuery, scopeFilter]);
 
   return (
     <AuthGuard>
@@ -409,19 +435,26 @@ export default function MeetingsPage() {
       <div className={styles.wrap}>
         <div className={styles.list}>
           <div className={styles.listHead}>
-            <h2>Meetings</h2>
+            <div><span className={styles.eyebrow}>Library</span><h2>Meetings <span>{items.length}</span></h2></div>
             <button type="button" className={styles.newBtn} onClick={() => { setCreateErr(""); setCreateOpen(true); }}>+ New</button>
           </div>
-          {items.map((m) => (
-            <div key={m.id} className={`${styles.item}${m.id === selectedId ? ` ${styles.itemOn}` : ""}`} onClick={() => setSelectedId(m.id)} role="button" tabIndex={0}
-              onKeyDown={(e) => { if (e.key === "Enter") setSelectedId(m.id); }}>
-              <div className={styles.itemT}>{m.title}</div>
-              <div className={styles.itemM}><span className={styles.itemD}>{m.date}</span><ScopeBadge scope={m.scope} /></div>
+          <div className={styles.listTools}>
+            <label className={styles.listSearch}><span aria-hidden="true">⌕</span><span className="sr-only">Search meetings</span><input value={meetingQuery} onChange={(event) => setMeetingQuery(event.target.value)} placeholder="Search meetings" />{meetingQuery ? <button type="button" onClick={() => setMeetingQuery("")} aria-label="Clear meeting search">×</button> : null}</label>
+            <div className={styles.scopeFilters} role="group" aria-label="Filter meeting visibility">
+              {(["all", "private", "team", "org", "public"] as const).map((value) => <button key={value} type="button" className={scopeFilter === value ? styles.scopeFilterOn : ""} aria-pressed={scopeFilter === value} onClick={() => setScopeFilter(value)}>{value === "all" ? "All" : value === "org" ? "Org" : value[0]?.toUpperCase() + value.slice(1)}</button>)}
             </div>
+          </div>
+          <div className={styles.listRows}>
+          {filteredItems.map((m) => (
+            <button type="button" key={m.id} className={`${styles.item}${m.id === selectedId ? ` ${styles.itemOn}` : ""}`} onClick={() => setSelectedId(m.id)} aria-pressed={m.id === selectedId}>
+              <div className={styles.itemT}>{m.title}</div>
+              <div className={styles.itemM}><span className={styles.itemD}>{m.date}</span><span className={`${styles.statusDot} ${styles[`status_${m.summaryStatus}`]}`} title={`Summary ${m.summaryStatus}`} /><ScopeBadge scope={m.scope} />{!m.canEdit ? <span className={styles.sharedBadge}>Shared with me</span> : null}</div>
+            </button>
           ))}
-          {items.length === 0 ? (
-            <div className={styles.empty}>{loading ? "Loading…" : "No meetings yet. Click + New to add one."}</div>
+          {filteredItems.length === 0 ? (
+            <div className={styles.listEmpty}>{loading ? <InlineLoading label="Loading meetings…" /> : items.length ? "No meetings match these filters." : "No meetings yet. Record, import audio, or paste a transcript to begin."}</div>
           ) : null}
+          </div>
           {meetingsNext ? <button type="button" className={styles.listMore} disabled={busy === "more-meetings"} onClick={() => void loadMoreMeetings()}>{busy === "more-meetings" ? "Loading…" : "Load more meetings"}</button> : null}
         </div>
 
@@ -434,19 +467,19 @@ export default function MeetingsPage() {
                   <div className={styles.att}>{detail.attendees.length ? detail.attendees.join(", ") : "No attendees recorded"}</div>
                 </div>
                 <div className={styles.hActions}>
-                  <button type="button" className={styles.shareBtn} onClick={() => setShareOpen((v) => !v)} aria-haspopup="menu" aria-expanded={shareOpen}>
+                  {detail.canEdit ? <button type="button" className={styles.shareBtn} disabled={busy === "share"} onClick={() => setShareOpen((v) => !v)} aria-haspopup="menu" aria-expanded={shareOpen}>
                     <span className={`${styles.dot} ${SCOPE_META[detail.share.scope].dot}`} />
                     {SCOPE_META[detail.share.scope].label}
                     {detail.share.scope === "team" && detail.share.teamId ? ` · ${teams.find((t) => t.id === detail.share.teamId)?.name ?? "Team"}` : ""} ▾
-                  </button>
+                  </button> : <span className={styles.sharedBadge}>Shared with you · read only</span>}
                   {detail.model ? <span className={styles.modelChip}>{detail.model.label}{detail.model.effort ? <> · <b>{detail.model.effort}</b></> : null}</span> : null}
-                  {shareOpen ? (
+                  {detail.canEdit && shareOpen ? (
                     <div className={styles.pop} role="menu">
                       <div className={styles.popH}>Who can access</div>
                       {SCOPES.map((s) => {
                         const ScopeIcon = SCOPE_META[s].Icon;
                         return (
-                          <button key={s} type="button" className={`${styles.srow}${detail.share.scope === s ? ` ${styles.srowOn}` : ""}`} onClick={() => void setScope(s)} role="menuitemradio" aria-checked={detail.share.scope === s}>
+                            <button key={s} type="button" disabled={busy === "share"} className={`${styles.srow}${detail.share.scope === s ? ` ${styles.srowOn}` : ""}`} onClick={() => void setScope(s)} role="menuitemradio" aria-checked={detail.share.scope === s}>
                             <span className={styles.srowIc}><ScopeIcon size={16} /></span>
                             <span><span className={styles.srowLb}>{SCOPE_META[s].label}</span><span className={styles.srowDs}>{SCOPE_META[s].blurb}</span></span>
                           </button>
@@ -458,7 +491,7 @@ export default function MeetingsPage() {
                             <InlineLoading label="Loading teams…" />
                           ) : teams.length === 0 ? (
                             <>
-                              <div className={styles.teamPickH}>You have no teams yet — create one to share with your team.</div>
+                              <div className={styles.teamPickH}>You have no teams yet — create an organization team here, or open Teams for a personal cross-organization circle.</div>
                               <div className={styles.teamCreateRow}>
                                 <input value={newTeamName} onChange={(e) => setNewTeamName(e.target.value)} placeholder="Team name (e.g. Platform)" aria-label="New team name" onKeyDown={(e) => { if (e.key === "Enter") void createTeamInline(); }} />
                                 <button type="button" onClick={() => void createTeamInline()} disabled={busy === "create-team" || !newTeamName.trim()}>{busy === "create-team" ? "Creating…" : "Create"}</button>
@@ -469,7 +502,8 @@ export default function MeetingsPage() {
                               <div className={styles.teamPickH}>Share with team</div>
                               <select className={styles.teamSel} value={detail.share.teamId ?? ""} onChange={(e) => { if (e.target.value) void setScope("team", e.target.value); }} aria-label="Share with team">
                                 <option value="" disabled>Select a team…</option>
-                                {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                                {teams.some((team) => team.kind === "personal") ? <optgroup label="Personal teams · cross-organization">{teams.filter((team) => team.kind === "personal").map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</optgroup> : null}
+                                {teams.some((team) => team.kind === "organization") ? <optgroup label="Organization teams · current organization">{teams.filter((team) => team.kind === "organization").map((team) => <option key={team.id} value={team.id}>{team.name}{team.orgName ? ` · ${team.orgName}` : ""}</option>)}</optgroup> : null}
                               </select>
                             </>
                           )}
@@ -479,7 +513,7 @@ export default function MeetingsPage() {
                         <div className={styles.linkzone}>
                           <div className={styles.linkrow}>
                             <input readOnly value={detail.share.publicUrl} aria-label="Public link" />
-                            <button type="button" onClick={() => void navigator.clipboard?.writeText(detail.share.publicUrl ?? "")}>Copy</button>
+                            <button type="button" onClick={() => { void navigator.clipboard?.writeText(detail.share.publicUrl ?? ""); setCopied(true); window.setTimeout(() => setCopied(false), 1600); }}>{copied ? "Copied" : "Copy"}</button>
                           </div>
                           <div className={styles.linkMeta}>
                             <span>{detail.share.expiresAt ? `Expires ${detail.share.expiresAt} · ` : ""}summary only</span>
@@ -496,10 +530,10 @@ export default function MeetingsPage() {
                 <span className={styles.chip}>{detail.date}</span>
                 {detail.durationMin ? <span className={styles.chip}>{detail.durationMin} min</span> : null}
                 {detail.wordCount ? <span className={styles.chip}>{detail.wordCount.toLocaleString()} words</span> : null}
-                <button type="button" className={styles.chip} onClick={() => void regenerate()}
+                {detail.canEdit ? <button type="button" className={styles.chip} onClick={() => void regenerate()}
                   disabled={busy === "regen" || detail.summaryStatus === "processing" || detail.summaryStatus === "queued"} style={{ cursor: "pointer" }}>
                   {detail.summaryStatus === "processing" || detail.summaryStatus === "queued" ? "● Summarizing…" : busy === "regen" ? "Regenerating…" : "↻ Regenerate"}
-                </button>
+                </button> : null}
               </div>
             </div>
             <div className={styles.body}>
@@ -507,14 +541,14 @@ export default function MeetingsPage() {
                 <div className={styles.card}>
                   <div className={styles.cardLab} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <span>Summary</span>
-                    {detail.summaryStatus === "ready" && !editing ? (
+                    {detail.canEdit && detail.summaryStatus === "ready" && !editing ? (
                       <button type="button" className={styles.track} onClick={() => { setDraftSummary(detail.summaryMarkdown); setEditing(true); }}>✎ Edit</button>
                     ) : null}
                   </div>
                   {detail.summaryStatus === "processing" || detail.summaryStatus === "queued" ? (
                     <div className={styles.empty}>● Generating notes… this keeps running on the server — you can leave or refresh.</div>
                   ) : detail.summaryStatus === "failed" ? (
-                    <div className={styles.errorBar} role="alert">{(detail.summaryError || "Summary generation failed.") + " Check the meeting-summary model, then Regenerate."}</div>
+                    <div className={styles.errorBar} role="alert">{(detail.summaryError || "Summary generation failed.") + (detail.canEdit ? " Check the meeting-summary model, then Regenerate." : " The meeting owner can regenerate it.")}</div>
                   ) : editing ? (
                     <>
                       <textarea className={styles.modalTextarea} value={draftSummary} onChange={(e) => setDraftSummary(e.target.value)} rows={12} aria-label="Edit summary" />
@@ -532,13 +566,13 @@ export default function MeetingsPage() {
                     <div className={styles.cardLab}>Action items</div>
                     {detail.actionItems.map((a) => (
                       <div key={a.id} className={styles.ai}>
-                        <label className={styles.aiTxt} style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: "pointer" }}>
-                          <input type="checkbox" checked={Boolean(a.done)} onChange={() => void toggleAction(a)} style={{ marginTop: 3 }} />
+                        <label className={styles.aiTxt} style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: detail.canEdit ? "pointer" : "default" }}>
+                          <input type="checkbox" checked={Boolean(a.done)} disabled={!detail.canEdit || busy === `action:${a.id}`} onChange={() => void toggleAction(a)} style={{ marginTop: 3 }} />
                           <span style={a.done ? { textDecoration: "line-through", opacity: 0.6 } : undefined}>
                             {a.title}{a.assignee ? <span className={styles.aiWho}>→ {a.assignee}</span> : null}
                           </span>
                         </label>
-                        <button type="button" className={styles.track} title={a.trackItemId ? "Remove from Track" : "Add to Track"} onClick={() => void toggleTrack(a)}>{a.trackItemId ? "In Track ✓" : "Track ↗"}</button>
+                        {detail.canEdit ? <button type="button" className={styles.track} disabled={busy === `track:${a.id}`} title={a.trackItemId ? "Remove from Track" : "Add to Track"} onClick={() => void toggleTrack(a)}>{busy === `track:${a.id}` ? "Updating…" : a.trackItemId ? "In Track ✓" : "Track ↗"}</button> : null}
                       </div>
                     ))}
                   </div>
@@ -552,18 +586,19 @@ export default function MeetingsPage() {
             </div>
           </div>
         ) : (
-          <div className={styles.detail}><div className={styles.empty}>{items.length ? "Select a meeting." : "No meeting selected."}</div></div>
+          <div className={styles.detail}><div className={styles.empty}>{detailLoading ? <InlineLoading label="Loading meeting…" /> : detailError ? <><strong>Meeting unavailable</strong><span>{detailError}</span><button type="button" className={styles.track} onClick={() => { const id = selectedId; setSelectedId(null); queueMicrotask(() => setSelectedId(id)); }}>Try again</button></> : items.length ? "Select a meeting." : "No meeting selected."}</div></div>
         )}
       </div>
 
       {createOpen ? (
-        <div className={styles.modalScrim} role="dialog" aria-modal="true" aria-label="New meeting" onClick={() => setCreateOpen(false)}>
+        <div className={styles.modalScrim} role="dialog" aria-modal="true" aria-labelledby="new-meeting-title" onClick={() => setCreateOpen(false)} onKeyDown={(event) => { if (event.key === "Escape") setCreateOpen(false); }}>
           <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
-            <div className={styles.cardLab}>New meeting</div>
+            <div className={styles.modalHead}><div><span className={styles.eyebrow}>Capture</span><h2 id="new-meeting-title">New meeting</h2></div><button type="button" onClick={() => setCreateOpen(false)} aria-label="Close new meeting dialog">×</button></div>
             <input
               className={styles.modalInput}
               placeholder="Title (e.g. Weekly product sync)"
               value={draftTitle}
+              autoFocus
               onChange={(e) => setDraftTitle(e.target.value)}
               aria-label="Meeting title"
             />
@@ -579,7 +614,7 @@ export default function MeetingsPage() {
               <label>Template<select value={summaryTemplate} onChange={(event) => setSummaryTemplate(event.target.value)} aria-label="Meeting summary template"><option value="general">General notes</option><option value="standup">Standup</option><option value="one-on-one">1:1</option><option value="retrospective">Retrospective</option></select></label>
               <label>Language<select value={language} onChange={(event) => setLanguage(event.target.value)} aria-label="Transcription language"><option value="auto">Auto detect</option><option value="en">English</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option><option value="ja">Japanese</option><option value="ko">Korean</option><option value="zh">Chinese</option></select></label>
               <label className={styles.importAudio}>Import audio<input type="file" accept="audio/*,.webm,.m4a,.mp3,.wav,.ogg" onChange={(event) => { const file = event.target.files?.[0]; if (file) void transcribe(file); event.target.value = ""; }} /></label>
-              <span>{draftTranscript ? "Draft recovered automatically" : "Drafts are saved on this device"}</span>
+              <span>{draftRecovered ? "Recovered your saved draft" : "Drafts are saved on this device"}</span>
             </div>
             {createErr ? <div className={styles.errorBar} role="alert">{createErr}</div> : null}
             <div className={styles.modalActions} style={{ justifyContent: "space-between" }}>

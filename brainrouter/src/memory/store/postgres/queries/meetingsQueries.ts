@@ -58,6 +58,25 @@ export interface CreateMeetingInput {
 export interface MeetingTranscriptSegment { ordinal: number; at: string; speaker: string; text: string; total?: number }
 export interface MeetingListCursor { createdAt: string; id: string }
 
+/**
+ * Access is deliberately expressed once and reused by every authenticated read:
+ * - owner/org/public reads stay inside the active organization;
+ * - organization-team reads require membership and the same organization;
+ * - personal-team reads require membership and may cross organization boundaries.
+ */
+function accessible(alias: string, orgParam: string, userParam: string): string {
+  return `(
+    (${alias}.org_id = ${orgParam} AND (${alias}.user_id = ${userParam} OR ${alias}.scope IN ('org','public')))
+    OR (${alias}.scope = 'team' AND EXISTS (
+      SELECT 1 FROM teams access_team
+      JOIN team_members access_member ON access_member.team_id = access_team.id
+      WHERE access_team.id = ${alias}.team_id AND access_member.user_id = ${userParam}
+        AND (access_team.kind = 'personal'
+          OR (access_team.kind = 'organization' AND access_team.org_id = ${orgParam} AND ${alias}.org_id = ${orgParam}))
+    ))
+  )`;
+}
+
 function transcriptSegments(text: string): MeetingTranscriptSegment[] {
   const segments: MeetingTranscriptSegment[] = [];
   for (const raw of text.split("\n")) {
@@ -144,16 +163,16 @@ export async function listMeetings(exec: Executor, orgId: string, userId: string
 
 export async function listMeetingsPage(exec: Executor, orgId: string, userId: string, limit = 100, cursor?: MeetingListCursor): Promise<MeetingRow[]> {
   const params: unknown[] = [orgId, userId];
-  const cursorWhere = cursor ? "AND (created_at, id) < ($3, $4)" : "";
+  const cursorWhere = cursor ? "AND (m.created_at, m.id) < ($3, $4)" : "";
   if (cursor) params.push(cursor.createdAt, cursor.id);
   params.push(limit);
   const rows = await exec.rows<Record<string, unknown>>(
-    `SELECT id, org_id, user_id, title, meeting_date, status, duration_min, word_count,
-            attendees_json, scope, team_id, model_label, model_effort, summary_status,
-            summary_error, created_at
-       FROM meetings
-      WHERE org_id = $1 AND (user_id = $2 OR scope IN ('team','org','public')) ${cursorWhere}
-      ORDER BY created_at DESC, id DESC LIMIT $${params.length}`,
+    `SELECT m.id, m.org_id, m.user_id, m.title, m.meeting_date, m.status, m.duration_min, m.word_count,
+            m.attendees_json, m.scope, m.team_id, m.model_label, m.model_effort, m.summary_status,
+            m.summary_error, m.created_at
+       FROM meetings m
+      WHERE ${accessible("m", "$1", "$2")} ${cursorWhere}
+      ORDER BY m.created_at DESC, m.id DESC LIMIT $${params.length}`,
     params,
   );
   return rows.map(mapRow);
@@ -166,8 +185,8 @@ export async function getMeetingOverview(exec: Executor, orgId: string, userId: 
             attendees_json, summary_markdown, action_items_json, summary_record_id,
             transcript_source_id, scope, team_id, model_label, model_effort,
             summary_status, summary_error, created_at
-       FROM meetings
-      WHERE id = $1 AND org_id = $2 AND (user_id = $3 OR scope IN ('team','org','public')) LIMIT 1`,
+       FROM meetings m
+      WHERE m.id = $1 AND ${accessible("m", "$2", "$3")} LIMIT 1`,
     [id, orgId, userId],
   );
   return rows[0] ? mapRow(rows[0]) : null;
@@ -176,8 +195,8 @@ export async function getMeetingOverview(exec: Executor, orgId: string, userId: 
 /** Transcript-only projection; the API turns it into bounded pages. */
 export async function getMeetingTranscriptText(exec: Executor, orgId: string, userId: string, id: string): Promise<string | null> {
   const rows = await exec.rows<Record<string, unknown>>(
-    `SELECT transcript_text FROM meetings
-      WHERE id = $1 AND org_id = $2 AND (user_id = $3 OR scope IN ('team','org','public')) LIMIT 1`,
+    `SELECT m.transcript_text FROM meetings m
+      WHERE m.id = $1 AND ${accessible("m", "$2", "$3")} LIMIT 1`,
     [id, orgId, userId],
   );
   return rows[0] ? String(rows[0].transcript_text ?? "") : null;
@@ -200,7 +219,7 @@ export async function listMeetingTranscriptSegments(exec: Executor, orgId: strin
        SELECT s.ordinal, s.at_label, s.speaker, s.text
          FROM meeting_transcript_segments s
          JOIN meetings m ON m.id = s.meeting_id
-        WHERE m.id = $1 AND m.org_id = $2 AND (m.user_id = $3 OR m.scope IN ('team','org','public'))
+        WHERE m.id = $1 AND ${accessible("m", "$2", "$3")}
      ), counted AS (
        SELECT *, COUNT(*) OVER() AS total FROM accessible
      )
@@ -212,18 +231,18 @@ export async function listMeetingTranscriptSegments(exec: Executor, orgId: strin
 
 export async function getMeeting(exec: Executor, orgId: string, userId: string, id: string): Promise<MeetingRow | null> {
   const rows = await exec.rows<Record<string, unknown>>(
-    `SELECT * FROM meetings
-      WHERE id = $1 AND org_id = $2 AND (user_id = $3 OR scope IN ('team','org','public')) LIMIT 1`,
+    `SELECT m.* FROM meetings m
+      WHERE m.id = $1 AND ${accessible("m", "$2", "$3")} LIMIT 1`,
     [id, orgId, userId],
   );
   return rows[0] ? mapRow(rows[0]) : null;
 }
 
 /** Owner-only scope change. Returns true when a row was updated. */
-export async function setMeetingScope(exec: Executor, id: string, userId: string, scope: MeetingScope, teamId: string | null): Promise<boolean> {
+export async function setMeetingScope(exec: Executor, id: string, orgId: string, userId: string, scope: MeetingScope, teamId: string | null): Promise<boolean> {
   const n = await exec.run(
-    `UPDATE meetings SET scope = $3, team_id = $4, updated_at = now() WHERE id = $1 AND user_id = $2`,
-    [id, userId, scope, teamId],
+    `UPDATE meetings SET scope = $4, team_id = $5, updated_at = now() WHERE id = $1 AND org_id = $2 AND user_id = $3`,
+    [id, orgId, userId, scope, teamId],
   );
   return n > 0;
 }

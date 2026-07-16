@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { listTeams, type TeamOption } from "./teamsOps.js";
+import type { TeamOption, TeamsOps } from "./teamsOps.js";
 import { MEETING_SCOPES, SCOPE_BLURB, SCOPE_LABEL, type MeetingScope, type MeetingShare } from "./types.js";
 
 const SCOPE_ICON: Record<MeetingScope, ReactElement> = {
@@ -14,17 +14,21 @@ const CHECK = <svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5" /></svg>;
 interface Props {
   share: MeetingShare;
   busy?: boolean;
+  teamsOps: TeamsOps;
+  teamRevision?: number;
+  onError(message: string): void;
   onSetScope(scope: MeetingScope, opts?: { teamId?: string }): void;
 }
 
 /** Header "Share" button + a scope popover (ADR-018 D8). Public reveals a
  *  revocable link; Team reveals a picker of the caller's teams. */
-export function SharePopover({ share, busy, onSetScope }: Props): ReactElement {
+export function SharePopover({ share, busy, teamsOps, teamRevision = 0, onError, onSetScope }: Props): ReactElement {
   const [open, setOpen] = useState(false);
   // Selecting the Team row reveals the picker without committing a team-less scope.
   const [teamPickerOpen, setTeamPickerOpen] = useState(false);
   // null = teams not yet fetched; loaded lazily on first open of the picker.
   const [teams, setTeams] = useState<TeamOption[] | null>(null);
+  const [copied, setCopied] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -32,9 +36,13 @@ export function SharePopover({ share, busy, onSetScope }: Props): ReactElement {
     const onDoc = (e: MouseEvent) => {
       if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
     };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
     document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
   }, [open]);
+
+  useEffect(() => { setTeams(null); }, [teamRevision]);
 
   // The picker shows for an already team-shared meeting, or once the Team row is
   // picked. Fetch the caller's teams the first time it becomes visible — most
@@ -43,9 +51,13 @@ export function SharePopover({ share, busy, onSetScope }: Props): ReactElement {
   useEffect(() => {
     if (!open || !showTeamPicker || teams !== null) return;
     let live = true;
-    void listTeams().then((t) => { if (live) setTeams(t); });
+    void teamsOps.list().then((t) => { if (live) setTeams(t); }).catch((caught) => {
+      if (!live) return;
+      setTeams([]);
+      onError(caught instanceof Error ? caught.message : "Could not load teams.");
+    });
     return () => { live = false; };
-  }, [open, showTeamPicker, teams]);
+  }, [onError, open, showTeamPicker, teams, teamsOps]);
 
   return (
     <div className="mv-share-wrap" ref={wrapRef}>
@@ -95,9 +107,9 @@ export function SharePopover({ share, busy, onSetScope }: Props): ReactElement {
               {teams === null ? (
                 <div className="mv-teamhint">Loading teams…</div>
               ) : teams.length === 0 ? (
-                <div className="mv-teamhint">No teams yet — create one in Settings › Teams.</div>
+                <div className="mv-teamhint">No teams yet — create one in the Teams tab.</div>
               ) : (
-                teams.map((t) => {
+                [...teams].sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name)).map((t) => {
                   const on = share.scope === "team" && share.teamId === t.id;
                   return (
                     <button
@@ -108,7 +120,7 @@ export function SharePopover({ share, busy, onSetScope }: Props): ReactElement {
                       aria-checked={on}
                       onClick={() => onSetScope("team", { teamId: t.id })}
                     >
-                      <span className="mv-tnm">{t.name}</span>
+                      <span className="mv-tnm">{t.name}<small>{t.kind === "personal" ? "Personal · cross-organization" : t.orgName ? `Organization · ${t.orgName}` : "Organization team"}</small></span>
                       <span className="mv-ck">{CHECK}</span>
                     </button>
                   );
@@ -124,9 +136,9 @@ export function SharePopover({ share, busy, onSetScope }: Props): ReactElement {
                 <button
                   type="button"
                   className="mv-cp"
-                  onClick={() => void navigator.clipboard?.writeText(share.publicUrl ?? "")}
+                  onClick={() => { void navigator.clipboard?.writeText(share.publicUrl ?? ""); setCopied(true); globalThis.setTimeout(() => setCopied(false), 1400); }}
                 >
-                  Copy
+                  {copied ? "Copied" : "Copy"}
                 </button>
               </div>
               <div className="mv-linkmeta">

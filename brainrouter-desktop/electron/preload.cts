@@ -97,9 +97,13 @@ contextBridge.exposeInMainWorld('brainrouter', {
   // Meetings (ADR-018) — the renderer never holds the account bearer, so meeting
   // reads/writes are proxied through the main process to the account backend.
   meetings: {
-    list(): Promise<unknown> { return ipcRenderer.invoke('meetings:list'); },
+    list(input?: { cursor?: string; limit?: number }): Promise<unknown> { return ipcRenderer.invoke('meetings:list', input); },
     get(id: string): Promise<unknown> { return ipcRenderer.invoke('meetings:get', id); },
-    create(input: { title: string; transcript: string }): Promise<unknown> { return ipcRenderer.invoke('meetings:create', input); },
+    overview(id: string): Promise<unknown> { return ipcRenderer.invoke('meetings:overview', id); },
+    transcript(id: string, input?: { cursor?: string; limit?: number }): Promise<unknown> { return ipcRenderer.invoke('meetings:transcript', id, input); },
+    create(input: { title: string; transcript: string; template?: string; scope?: string; teamId?: string; date?: string; attendees?: string[] }): Promise<unknown> { return ipcRenderer.invoke('meetings:create', input); },
+    updateSummary(id: string, summaryMarkdown: string): Promise<unknown> { return ipcRenderer.invoke('meetings:updateSummary', id, summaryMarkdown); },
+    transcribe(input: { bytes: Uint8Array; contentType?: string; language?: string }): Promise<unknown> { return ipcRenderer.invoke('meetings:transcribe', input); },
     regenerate(id: string): Promise<unknown> { return ipcRenderer.invoke('meetings:regenerate', id); },
     setScope(id: string, scope: string, opts?: { teamId?: string }): Promise<unknown> { return ipcRenderer.invoke('meetings:setScope', id, scope, opts); },
     actionToTrack(meetingId: string, actionId: string): Promise<unknown> { return ipcRenderer.invoke('meetings:actionToTrack', meetingId, actionId); },
@@ -107,13 +111,21 @@ contextBridge.exposeInMainWorld('brainrouter', {
     toggleAction(meetingId: string, actionId: string, done: boolean): Promise<unknown> { return ipcRenderer.invoke('meetings:toggleAction', meetingId, actionId, done); },
     // SERVER Track board (org-scoped /api/track), surfaced inside Meetings mode.
     serverTracks(): Promise<unknown> { return ipcRenderer.invoke('meetings:serverTracks'); },
+    serverTrackCreate(input: { title: string; description?: string; priority?: string; assignee?: string; statusCategory?: string }): Promise<unknown> { return ipcRenderer.invoke('meetings:serverTrackCreate', input); },
+    serverTrackTransition(id: string, statusCategory: string): Promise<unknown> { return ipcRenderer.invoke('meetings:serverTrackTransition', id, statusCategory); },
     serverTrackSetDone(id: string, done: boolean): Promise<unknown> { return ipcRenderer.invoke('meetings:serverTrackSetDone', id, done); },
     serverTrackRemove(id: string): Promise<unknown> { return ipcRenderer.invoke('action:meetings:serverTrackRemove', id); },
   },
-  // Teams (ADR-018) — the caller's teams in the active org, for the Meetings
-  // Share popover's team picker. Proxied through main (no bearer in renderer).
+  // Team spaces — organization context + global personal teams. Proxied through
+  // main so the renderer never receives the account bearer.
   teams: {
-    list(): Promise<unknown> { return ipcRenderer.invoke('teams:list'); },
+    contexts(): Promise<unknown> { return ipcRenderer.invoke('teams:contexts'); },
+    list(orgId?: string): Promise<unknown> { return ipcRenderer.invoke('teams:list', orgId); },
+    get(id: string, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('teams:get', id, orgId); },
+    create(name: string, kind: string, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('teams:create', name, kind, orgId); },
+    addMember(id: string, account: string, role: string, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('teams:addMember', id, account, role, orgId); },
+    removeMember(id: string, userId: string, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('teams:removeMember', id, userId, orgId); },
+    remove(id: string, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('teams:remove', id, orgId); },
   },
   // K-desktop — cross-surface chat sync. OPT-IN: push mirrors the active chat
   // session's user/assistant turns up to the shared /api/chat/threads API so a

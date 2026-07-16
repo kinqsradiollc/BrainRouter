@@ -20,8 +20,10 @@ describe("meeting dashboard projections", () => {
     const exec = executor();
     await listMeetingsPage(exec, "org-1", "user-1", 51, { createdAt: "2026-07-15T00:00:00.000Z", id: "meeting-9" });
     const [sql, params] = exec.rows.mock.calls[0]!;
-    expect(sql).toContain("(created_at, id) < ($3, $4)");
-    expect(sql).toContain("ORDER BY created_at DESC, id DESC");
+    expect(sql).toContain("(m.created_at, m.id) < ($3, $4)");
+    expect(sql).toContain("ORDER BY m.created_at DESC, m.id DESC");
+    expect(sql).toContain("access_member.user_id = $2");
+    expect(sql).not.toContain("scope IN ('team','org','public')");
     expect(params).toEqual(["org-1", "user-1", "2026-07-15T00:00:00.000Z", "meeting-9", 51]);
   });
 
@@ -43,7 +45,7 @@ describe("meeting dashboard projections", () => {
     const transcriptSql = exec.rows.mock.calls[1]![0] as string;
     expect(overviewSql).toContain("summary_markdown");
     expect(overviewSql).not.toContain("transcript_text");
-    expect(transcriptSql).toContain("SELECT transcript_text");
+    expect(transcriptSql).toContain("SELECT m.transcript_text");
     expect(transcriptSql).not.toContain("summary_markdown");
   });
 });

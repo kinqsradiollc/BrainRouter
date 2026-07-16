@@ -1,161 +1,122 @@
-import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent, type ReactElement } from "react";
 import type { MeetingsOps, TrackItem, TrackStatusCategory } from "./types.js";
 
-/**
- * Meeting Tracks (ADR-018) — the SERVER Track board (`/api/track`, org-scoped),
- * surfaced inside Meetings mode. This is deliberately SEPARATE from the workspace
- * GitHub Track board (`src/track/TrackView.tsx`): meeting action items are tracked
- * to the server and viewable here + on the web dashboard's /track board, never on
- * the GitHub-synced workspace board.
- */
-
-const GROUPS: readonly { key: TrackStatusCategory; label: string }[] = [
-  { key: "todo", label: "To do" },
-  { key: "in_progress", label: "In progress" },
-  { key: "completed", label: "Done" },
+/** The org-scoped server Track board. It intentionally stays separate from the workspace/GitHub board. */
+const GROUPS: readonly { key: TrackStatusCategory; label: string; hint: string }[] = [
+  { key: "todo", label: "To do", hint: "Ready to start" },
+  { key: "in_progress", label: "In progress", hint: "Actively moving" },
+  { key: "completed", label: "Done", hint: "Completed work" },
 ];
 
 const categoryOf = (item: TrackItem): TrackStatusCategory => item.statusCategory ?? "todo";
+const errorText = (caught: unknown, fallback: string) => caught instanceof Error && caught.message ? caught.message : fallback;
 
 export function MeetingTracksView({ ops }: { ops: MeetingsOps }): ReactElement {
   const [items, setItems] = useState<TrackItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState("");
   const [busy, setBusy] = useState<Record<string, boolean>>({});
-  const [meetingsOnly, setMeetingsOnly] = useState(false);
+  const [source, setSource] = useState<"all" | "meeting-action">("all");
+  const [query, setQuery] = useState("");
+  const [newTitle, setNewTitle] = useState("");
 
   const refresh = useCallback(async () => {
-    setError(null);
+    setLoading(true);
+    setError("");
     try {
       const list = await ops.serverTracks();
       setItems(Array.isArray(list) ? list : []);
-    } catch {
-      setError("Couldn't load tracked items. Check your connection and that you're signed in.");
-    } finally {
-      setLoading(false);
-    }
+    } catch (caught) {
+      setError(errorText(caught, "Could not load tracked items. Check your connection and sign-in."));
+    } finally { setLoading(false); }
   }, [ops]);
 
   useEffect(() => { void refresh(); }, [refresh]);
 
-  const setDone = useCallback(async (item: TrackItem, done: boolean) => {
-    const nextCat: TrackStatusCategory = done ? "completed" : "todo";
-    setBusy((b) => ({ ...b, [item.id]: true }));
-    setItems((list) => list.map((it) => (it.id === item.id ? { ...it, statusCategory: nextCat } : it)));
+  const transition = useCallback(async (item: TrackItem, next: TrackStatusCategory) => {
+    if (categoryOf(item) === next || busy[item.id]) return;
+    const previous = categoryOf(item);
+    setBusy((state) => ({ ...state, [item.id]: true }));
+    setItems((list) => list.map((row) => row.id === item.id ? { ...row, statusCategory: next } : row));
+    setError("");
     try {
-      await ops.serverTrackSetDone(item.id, done);
-    } catch {
-      setError("Couldn't update that item.");
-    } finally {
-      await refresh();
-      setBusy((b) => ({ ...b, [item.id]: false }));
-    }
-  }, [ops, refresh]);
+      const updated = await ops.serverTrackTransition(item.id, next);
+      setItems((list) => list.map((row) => row.id === item.id ? { ...row, ...updated } : row));
+    } catch (caught) {
+      setItems((list) => list.map((row) => row.id === item.id ? { ...row, statusCategory: previous } : row));
+      setError(errorText(caught, "Could not move that item."));
+    } finally { setBusy((state) => ({ ...state, [item.id]: false })); }
+  }, [busy, ops]);
+
+  const create = useCallback(async (event: FormEvent) => {
+    event.preventDefault();
+    const title = newTitle.trim();
+    if (!title || busy.create) return;
+    setBusy((state) => ({ ...state, create: true }));
+    setError("");
+    try {
+      const created = await ops.serverTrackCreate({ title, statusCategory: "todo" });
+      setItems((list) => [created, ...list]);
+      setNewTitle("");
+    } catch (caught) {
+      setError(errorText(caught, "Could not create that Track item."));
+    } finally { setBusy((state) => ({ ...state, create: false })); }
+  }, [busy.create, newTitle, ops]);
 
   const remove = useCallback(async (item: TrackItem) => {
-    const ok = globalThis.confirm?.(`Remove "${item.title}" from Track? This untracks it for everyone in your org.`);
-    if (ok === false) return;
-    setBusy((b) => ({ ...b, [item.id]: true }));
-    setItems((list) => list.filter((it) => it.id !== item.id));
-    try {
-      await ops.serverTrackRemove(item.id);
-    } catch {
-      setError("Couldn't remove that item.");
-      await refresh();
-    } finally {
-      setBusy((b) => ({ ...b, [item.id]: false }));
-    }
-  }, [ops, refresh]);
+    if (globalThis.confirm?.(`Remove “${item.title}” from the organization Track board?`) === false) return;
+    const previous = items;
+    setBusy((state) => ({ ...state, [item.id]: true }));
+    setItems((list) => list.filter((row) => row.id !== item.id));
+    setError("");
+    try { await ops.serverTrackRemove(item.id); }
+    catch (caught) { setItems(previous); setError(errorText(caught, "Could not remove that item.")); }
+    finally { setBusy((state) => ({ ...state, [item.id]: false })); }
+  }, [items, ops]);
 
-  const visible = useMemo(
-    () => (meetingsOnly ? items.filter((i) => i.source === "meeting-action") : items),
-    [items, meetingsOnly],
-  );
-  const fromMeetings = useMemo(() => items.filter((i) => i.source === "meeting-action").length, [items]);
+  const visible = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return items.filter((item) => (source === "all" || item.source === source) && (!needle || `${item.title} ${item.description ?? ""} ${item.assignee ?? ""}`.toLowerCase().includes(needle)));
+  }, [items, query, source]);
+  const meetingCount = useMemo(() => items.filter((item) => item.source === "meeting-action").length, [items]);
 
   return (
-    <div className="mtk">
-      <div className="mtk-head">
-        <div className="mtk-head-l">
-          <h2 className="mtk-h">Tracked</h2>
-          <p className="mtk-sub">Your org's server Track board — including items sent from meetings. Syncs with the web dashboard.</p>
-        </div>
-        <div className="mtk-actions">
-          <button
-            type="button"
-            className={`mv-ghost${meetingsOnly ? " mtk-active" : ""}`}
-            aria-pressed={meetingsOnly}
-            onClick={() => setMeetingsOnly((v) => !v)}
-          >
-            <svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2" /></svg>
-            From meetings{fromMeetings ? ` · ${fromMeetings}` : ""}
-          </button>
-          <button type="button" className="mv-ghost" onClick={() => void refresh()}>
-            <svg viewBox="0 0 24 24"><path d="M4 4v6h6M20 20v-6h-6M20 9a8 8 0 0 0-14-3M4 15a8 8 0 0 0 14 3" /></svg>
-            Refresh
-          </button>
+    <section className="mtk">
+      <header className="mtk-head">
+        <div><span className="mv-eyebrow">Organization workspace</span><h2>Meeting Track</h2><p>Action items from meetings and manually tracked work, synced with the dashboard.</p></div>
+        <button type="button" className="mv-secondary" onClick={() => void refresh()} disabled={loading}>↻ {loading ? "Refreshing…" : "Refresh"}</button>
+      </header>
+      {error ? <div className="mv-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError("")} aria-label="Dismiss error">×</button></div> : null}
+      <div className="mtk-toolbar">
+        <form className="mtk-create" onSubmit={(event) => void create(event)}><label className="mv-sr-only" htmlFor="mtk-new">New Track item</label><input id="mtk-new" value={newTitle} onChange={(event) => setNewTitle(event.target.value)} placeholder="Add an organization Track item…" /><button className="mv-primary" disabled={!newTitle.trim() || busy.create}>{busy.create ? "Adding…" : "Add item"}</button></form>
+        <div className="mtk-filters">
+          <label className="mv-search mv-search-wide"><span aria-hidden="true">⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search Track" aria-label="Search Track" />{query ? <button type="button" onClick={() => setQuery("")} aria-label="Clear search">×</button> : null}</label>
+          <div className="mv-segment" role="group" aria-label="Filter Track source"><button type="button" className={source === "all" ? "mv-on" : ""} aria-pressed={source === "all"} onClick={() => setSource("all")}>All · {items.length}</button><button type="button" className={source === "meeting-action" ? "mv-on" : ""} aria-pressed={source === "meeting-action"} onClick={() => setSource("meeting-action")}>From meetings · {meetingCount}</button></div>
         </div>
       </div>
-
-      {error ? <div className="mtk-err">{error}</div> : null}
-
-      <div className="mtk-body">
-        {loading ? (
-          <div className="mv-empty" style={{ marginTop: 40 }}>Loading tracked items…</div>
-        ) : visible.length === 0 ? (
-          <div className="mv-empty" style={{ marginTop: 40 }}>
-            {meetingsOnly ? "No meeting items tracked yet." : "Nothing tracked yet."}
-            <br />Track a meeting action item to see it here.
-          </div>
-        ) : (
-          GROUPS.map((g) => {
-            const rows = visible.filter((i) => categoryOf(i) === g.key);
-            if (rows.length === 0) return null;
-            return (
-              <div className="mtk-group" key={g.key}>
-                <div className="mtk-glab">{g.label}<span className="mtk-count">{rows.length}</span></div>
-                {rows.map((item) => {
-                  const done = categoryOf(item) === "completed";
-                  return (
-                    <div className={`mtk-row${done ? " mtk-doneRow" : ""}`} key={item.id}>
-                      <button
-                        type="button"
-                        className={`mv-cbox${done ? " mv-done" : ""}`}
-                        disabled={!!busy[item.id]}
-                        aria-label={done ? "Reopen" : "Mark done"}
-                        onClick={() => void setDone(item, !done)}
-                      >
-                        <svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5" /></svg>
-                      </button>
-                      <div className="mtk-main">
-                        <div className="mtk-title">{item.title}</div>
-                        <div className="mtk-meta">
-                          {item.source === "meeting-action" ? (
-                            <span className="mtk-src">
-                              <svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2" /></svg>
-                              From meeting
-                            </span>
-                          ) : null}
-                          {item.priority ? <span className="mv-chip">{item.priority}</span> : null}
-                          {item.assignee ? <span className="mtk-who">→ {item.assignee}</span> : null}
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        className="mtk-remove"
-                        disabled={!!busy[item.id]}
-                        onClick={() => void remove(item)}
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  );
-                })}
+      <div className="mtk-board" aria-busy={loading}>
+        {GROUPS.map((group) => {
+          const rows = visible.filter((item) => categoryOf(item) === group.key);
+          return (
+            <section className={`mtk-column mtk-column-${group.key}`} key={group.key} aria-label={`${group.label}, ${rows.length} items`}>
+              <div className="mtk-column-head"><div><h3>{group.label}<span>{rows.length}</span></h3><p>{group.hint}</p></div><span className="mtk-status-dot" /></div>
+              <div className="mtk-cards">
+                {rows.map((item) => (
+                  <article className={`mtk-card${group.key === "completed" ? " mtk-card-done" : ""}`} key={item.id}>
+                    <div className="mtk-card-top"><span className={`mtk-source mtk-source-${item.source}`}>{item.source === "meeting-action" ? "Meeting" : "Manual"}</span><button type="button" className="mtk-remove" disabled={busy[item.id]} onClick={() => void remove(item)} aria-label={`Remove ${item.title}`}>×</button></div>
+                    <h4>{item.title}</h4>
+                    {item.description ? <p>{item.description}</p> : null}
+                    <div className="mtk-meta">{item.priority ? <span>{item.priority}</span> : null}{item.assignee ? <span>→ {item.assignee}</span> : null}</div>
+                    <label className="mtk-move"><span>Move to</span><select value={group.key} disabled={busy[item.id]} onChange={(event) => void transition(item, event.target.value as TrackStatusCategory)}>{GROUPS.map((option) => <option key={option.key} value={option.key}>{option.label}</option>)}</select></label>
+                  </article>
+                ))}
+                {!loading && rows.length === 0 ? <div className="mtk-column-empty">{query || source !== "all" ? "No matching items" : `No ${group.label.toLowerCase()} items`}</div> : null}
+                {loading && items.length === 0 ? <div className="mtk-column-empty">Loading…</div> : null}
               </div>
-            );
-          })
-        )}
+            </section>
+          );
+        })}
       </div>
-    </div>
+    </section>
   );
 }

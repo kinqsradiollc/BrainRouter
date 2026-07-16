@@ -31,6 +31,15 @@ const scope = {
 };
 
 describe("org-shared recall candidate scope tags", () => {
+  it("uses team membership rather than treating team visibility as organization-wide", async () => {
+    const exec = { rows: vi.fn(async () => [{ ...sharedRow, visibility: "team", team_access: true }]) } as any;
+    const results = await searchCognitiveFts(exec, "caller-user", "implementation detail", 10, "org-1");
+    const sql = exec.rows.mock.calls[0]![0] as string;
+    expect(sql).toContain("JOIN team_members access_member");
+    expect(sql).toContain("access_team.kind = 'personal'");
+    expect((results[0] as any).team_access).toBe(true);
+  });
+
   it("retains FTS workspace/project tags so a mismatched shared record is filtered", async () => {
     const exec = { rows: vi.fn(async () => [sharedRow]) } as any;
 

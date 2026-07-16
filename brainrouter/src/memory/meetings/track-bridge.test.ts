@@ -59,6 +59,14 @@ describe("meeting → Track bridge", () => {
     expect(mocks.createTrackItem).not.toHaveBeenCalled();
   });
 
+  it("refuses model placeholder actions instead of creating an unusable Track card", async () => {
+    mocks.getMeeting.mockResolvedValue(meeting([{ id: "a1", title: "None.", done: false }]));
+    const result = await trackMeetingAction("user-1", "org-1", "m1", "a1");
+    expect(result).toBeNull();
+    expect(mocks.createTrackItem).not.toHaveBeenCalled();
+    expect(mocks.updateMeetingActionItems).not.toHaveBeenCalled();
+  });
+
   it("untracking deletes the linked work item and clears the link", async () => {
     mocks.getMeeting.mockResolvedValue(meeting([{ id: "a1", title: "X", done: false, trackItemId: "wi_old" }]));
     mocks.getTrackItemBySourceRef.mockResolvedValue({ id: "wi_old", orgId: "org-1" });

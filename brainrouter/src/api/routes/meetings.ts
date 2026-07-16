@@ -5,6 +5,7 @@
 import { Router } from "express";
 import { requireAnyAuth, type AuthedRequest } from "../middleware/auth.js";
 import { attachOrgContext } from "../middleware/tenancy.js";
+import { roleAtLeast } from "../../tenancy/rbac.js";
 import * as meetings from "../../memory/meetings/backend.js";
 import { isMeetingVisibility } from "../../memory/meetings/sharing.js";
 
@@ -53,6 +54,7 @@ meetingsRouter.post("/", async (req: AuthedRequest, res) => {
     const out = await meetings.createMeeting({
       userId: req.userId!, orgId: req.orgId!, title, transcript, scope,
       teamId: typeof body.teamId === "string" ? body.teamId : undefined,
+      canManageOrgTeams: req.isAdmin === true || roleAtLeast(req.role, "admin"),
       date: typeof body.date === "string" ? body.date : undefined,
       attendees: Array.isArray(body.attendees) ? body.attendees.filter((a): a is string => typeof a === "string") : undefined,
       template,
@@ -121,6 +123,7 @@ meetingsRouter.post("/:id/scope", async (req: AuthedRequest, res) => {
     const share = await meetings.setScope({
       userId: req.userId!, orgId: req.orgId!, id: String(req.params.id), scope: body.scope,
       teamId: typeof body.teamId === "string" ? body.teamId : undefined,
+      canManageOrgTeams: req.isAdmin === true || roleAtLeast(req.role, "admin"),
       from: isMeetingVisibility(body.from) ? body.from : undefined,
     });
     res.json(share);
