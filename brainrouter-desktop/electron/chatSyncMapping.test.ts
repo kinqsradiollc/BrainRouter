@@ -9,6 +9,7 @@ import {
   mappingKey,
   normalizeMapping,
   removeThreadLink,
+  sanitizeThreadTitle,
   transcriptEntriesToServerMessages,
   upsertThreadLink,
 } from './chatSyncMapping.js';
@@ -117,4 +118,23 @@ test('isSafeSessionKey accepts opaque tokens and rejects path/traversal chars', 
   for (const bad of ['../etc/passwd', 'a/b', 'a\\b', 'has space', 'dot.dot', '', 42, null, undefined]) {
     assert.equal(isSafeSessionKey(bad as unknown), false, String(bad));
   }
+});
+
+test('sanitizeThreadTitle strips angle brackets + control chars so a title cannot carry markup (CWE-79)', () => {
+  const out = sanitizeThreadTitle('<img src=x onerror=alert(1)> hello');
+  assert.ok(!out.includes('<'));
+  assert.ok(!out.includes('>'));
+  assert.equal(out, 'img src=x onerror=alert(1) hello');
+});
+
+test('sanitizeThreadTitle drops control characters', () => {
+  const out = sanitizeThreadTitle('a\u0000b\u0007c\u001fd\u007fe');
+  assert.equal(out, 'a b c d e'.replace(/ +/g, ' '));
+  assert.ok(!new RegExp('[\u0000-\u001f\u007f]').test(out));
+});
+
+test('sanitizeThreadTitle collapses whitespace, caps length, and falls back when blank', () => {
+  assert.equal(sanitizeThreadTitle('  a\t\t b \n c  '), 'a b c');
+  assert.equal(sanitizeThreadTitle('<<<>>>'), 'Desktop session');
+  assert.equal(sanitizeThreadTitle('x'.repeat(500)).length, 120);
 });

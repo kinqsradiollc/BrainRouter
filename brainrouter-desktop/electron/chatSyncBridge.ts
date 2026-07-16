@@ -27,6 +27,7 @@ import {
   isSafeSessionKey,
   normalizeMapping,
   removeThreadLink,
+  sanitizeThreadTitle,
   transcriptEntriesToServerMessages,
   upsertThreadLink,
   type ChatSyncMapping,
@@ -162,9 +163,11 @@ export function registerChatSyncBridge(): void {
     const messages = transcriptEntriesToServerMessages(entries);
     if (messages.length === 0) throw new Error('This chat has no messages to sync yet.');
 
-    const title = typeof args.title === 'string' && args.title.trim()
-      ? args.title.trim()
-      : deriveThreadTitle(entries);
+    // CWE-79 — the title comes from user chat content (or a caller override), so
+    // reduce it to inert plain text before it reaches the server / any renderer.
+    const title = sanitizeThreadTitle(
+      typeof args.title === 'string' && args.title.trim() ? args.title : deriveThreadTitle(entries),
+    );
 
     let mapping = loadMapping();
     const existing = getThreadLink(mapping, workspaceRoot, sessionKey);
