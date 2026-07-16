@@ -1842,8 +1842,18 @@ export async function main(transport?: HostTransport): Promise<void> {
           });
       }),
       'term-run': async (a) => new Promise((resolve) => {
-        // One-shot command (the mobile Terminal's model), via the same shell exec
-        // the desktop term-* sessions use. Combined stdout+stderr.
+        // One-shot command for the mobile Terminal. Running an arbitrary command IS
+        // the point of a terminal (it mirrors the desktop `term-open` shell), so we
+        // do NOT whitelist. The real control is the transport: this handler is only
+        // reachable over the authenticated host WebSocket (brainrouter-mobile/host/
+        // server.mjs — a device token is mandatory for any non-loopback bind, CWE-306).
+        // As defence in depth it is ALSO off by default: the operator opts in with
+        // BRAINROUTER_HOST_ALLOW_TERM=1, so a paired host never exposes remote exec
+        // unless deliberately enabled (CWE-78).
+        if (process.env.BRAINROUTER_HOST_ALLOW_TERM !== '1') {
+          resolve({ output: 'Terminal is disabled on this host. Set BRAINROUTER_HOST_ALLOW_TERM=1 to enable one-shot commands.' });
+          return;
+        }
         const command = typeof a.cmd === 'string' ? a.cmd : '';
         if (!command) { resolve({ output: '' }); return; }
         exec(command, { cwd: workspaceRoot, timeout: 15_000, maxBuffer: 2_000_000 }, (err, stdout, stderr) => {

@@ -8,6 +8,29 @@ All notable changes to the **mobile** app. Format: [Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+### Security hardening — host transport (PR #552 security review)
+
+The mobile host (`host/server.mjs`) is the WebSocket the phone pairs with, running the
+full agent host (shell-command capable), so the transport is the trust boundary. Fixes
+for four findings (TDD — 8 new cases in `host/auth.integration.test.mjs`, all green; the
+wire integration suite still passes):
+
+- **Device-token authentication (CWE-306).** The `hello` handshake now validates
+  `msg.token` against `BRAINROUTER_HOST_TOKEN` in **constant time** (`timingSafeEqual`);
+  a wrong/absent token closes the socket with `4001`, and **no command is dispatched
+  before a valid hello**. The server **refuses to bind a non-loopback interface without a
+  token** and defaults to `127.0.0.1` (`BRAINROUTER_HOST_BIND=0.0.0.0` for LAN pairing).
+  The client already sent the token — the server simply never checked it.
+- **One-shot Terminal is opt-in (CWE-78).** `term-run` (`brainrouter-desktop` host) now
+  returns a "disabled" message unless `BRAINROUTER_HOST_ALLOW_TERM=1`. Command execution
+  is the deliberate function of a terminal (it mirrors the desktop `term-open` shell), so
+  it is not whitelisted; the control is the authenticated transport above plus this
+  off-by-default gate.
+- **Per-message error isolation (CWE-248).** Each agent handler dispatch is wrapped in
+  try/catch, so malformed input that makes a handler throw is logged, not fatal.
+- **No endpoint URL in logs (CWE-532).** The LLM-override log line prints only the model
+  name, never the endpoint URL.
+
 ### Reasoning-model display fixes (verified live against a local Qwen 3.5-9B)
 
 Tested the wired turn loop end-to-end against a local llama.cpp model and fixed two

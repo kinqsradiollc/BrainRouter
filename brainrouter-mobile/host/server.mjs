@@ -28,10 +28,34 @@
  */
 import { WebSocketServer } from 'ws';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { timingSafeEqual } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
 const RING_CAP = 2000;
+
+// Interfaces that are NOT reachable from the network — safe to serve an
+// unauthenticated host on (local dev / adb-forwarded). Anything else exposes
+// the agent host (which can run shell commands) to the LAN, so it requires a token.
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost', '::ffff:127.0.0.1']);
+
+/** True if `host` is a loopback bind address. */
+export function isLoopbackHost(host) {
+  return LOOPBACK_HOSTS.has(String(host));
+}
+
+/**
+ * Constant-time device-token comparison (CWE-306). Both sides must be non-empty
+ * and equal; a length mismatch short-circuits (timingSafeEqual throws on
+ * unequal-length buffers). `expected === ''` means "no token configured" and is
+ * handled by the caller (auth disabled), so it never matches here.
+ */
+export function tokenMatches(expected, provided) {
+  if (typeof expected !== 'string' || typeof provided !== 'string') return false;
+  if (expected.length === 0 || provided.length === 0) return false;
+  if (expected.length !== provided.length) return false;
+  return timingSafeEqual(Buffer.from(expected), Buffer.from(provided));
+}
 
 /**
  * Start the host WS server, bridging the currently-paired WebSocket to the agent
@@ -39,14 +63,36 @@ const RING_CAP = 2000;
  *
  * @param {object}   opts
  * @param {number}   [opts.port=0]          TCP port (0 = OS-assigned, for tests).
+ * @param {string}   [opts.host]            Bind address. Default 127.0.0.1 (loopback) —
+ *                                          set BRAINROUTER_HOST_BIND=0.0.0.0 for LAN pairing.
+ * @param {string}   [opts.token]           Pre-shared device token. Default $BRAINROUTER_HOST_TOKEN.
+ *                                          When set, every client must present it in `hello`.
  * @param {Function} opts.main              Agent host entrypoint `(transport) => Promise<void>`.
  * @param {number}   [opts.ringCap=2000]    Replay-ring capacity (events).
  * @param {boolean}  [opts.exitOnFatal=true] process.exit(1) if `main` rejects (off in tests).
- * @returns {Promise<{ wss: import('ws').WebSocketServer, port: number, close: () => Promise<void> }>}
+ * @returns {Promise<{ wss: import('ws').WebSocketServer, host: string, port: number, close: () => Promise<void> }>}
  */
-export async function startHostServer({ port = 0, main, ringCap = RING_CAP, exitOnFatal = true } = {}) {
+export async function startHostServer({
+  port = 0,
+  host = process.env.BRAINROUTER_HOST_BIND || '127.0.0.1',
+  token = process.env.BRAINROUTER_HOST_TOKEN || '',
+  main,
+  ringCap = RING_CAP,
+  exitOnFatal = true,
+} = {}) {
   if (typeof main !== 'function') {
     throw new Error('startHostServer requires `main` (the agent host entrypoint)');
+  }
+
+  // The agent host can run shell commands, so an UNAUTHENTICATED server must
+  // never be reachable off-box. Refuse to bind a non-loopback interface unless a
+  // device token is configured (CWE-306). Loopback (local dev / adb-forward) is fine.
+  const authRequired = token.length > 0;
+  if (!authRequired && !isLoopbackHost(host)) {
+    throw new Error(
+      `Refusing to bind brainrouter-host to non-loopback ${host} without a device token. ` +
+        `Set BRAINROUTER_HOST_TOKEN for LAN pairing, or bind to 127.0.0.1 (BRAINROUTER_HOST_BIND).`,
+    );
   }
 
   let socket = null;
@@ -65,7 +111,7 @@ export async function startHostServer({ port = 0, main, ringCap = RING_CAP, exit
     onMessage: (handler) => handlers.add(handler),
   };
 
-  const wss = new WebSocketServer({ port });
+  const wss = new WebSocketServer({ port, host });
   await new Promise((resolve, reject) => {
     wss.once('listening', resolve);
     wss.once('error', reject);
@@ -73,6 +119,10 @@ export async function startHostServer({ port = 0, main, ringCap = RING_CAP, exit
 
   wss.on('connection', (ws) => {
     socket = ws;
+    // A socket must present a valid `hello` token before ANY command is handled.
+    // When no token is configured (loopback dev) the connection is trusted from
+    // the start, preserving the zero-config local flow.
+    let authed = !authRequired;
     ws.on('message', (data) => {
       let msg;
       try {
@@ -81,12 +131,21 @@ export async function startHostServer({ port = 0, main, ringCap = RING_CAP, exit
         return; // tolerate noise on the wire (matches core.handle's guard)
       }
       if (msg && msg.kind === 'hello') {
-        // TODO: validate msg.token against a paired device token.
+        if (authRequired && !tokenMatches(token, msg.token)) {
+          try { ws.close(4001, 'unauthorized'); } catch { /* already closing */ }
+          return; // CWE-306 — reject an unpaired/forged device
+        }
+        authed = true;
         const after = typeof msg.afterSeq === 'number' ? msg.afterSeq : 0;
         for (const { seq, frame } of ring) if (seq > after) ws.send(frame); // gap-free replay
         return;
       }
-      for (const h of handlers) h(msg);
+      if (!authed) return; // drop any command received before a valid hello
+      // Isolate each handler: malformed input that makes one throw must not take
+      // down the socket (or the process) — it would be a trivial DoS (CWE-248).
+      for (const h of handlers) {
+        try { h(msg); } catch (err) { console.error('[brainrouter-host] handler error:', err); }
+      }
     });
     ws.on('close', () => {
       if (socket === ws) socket = null;
@@ -114,6 +173,7 @@ export async function startHostServer({ port = 0, main, ringCap = RING_CAP, exit
 
   return {
     wss,
+    host,
     port: wss.address().port,
     close: () => new Promise((resolve) => wss.close(() => resolve())),
   };
@@ -153,13 +213,15 @@ if (isEntry) {
     );
     process.env.USERPROFILE = home;
     process.env.HOME = home;
-    console.log(`[brainrouter-host] LLM override → ${llm.model} @ ${llm.endpoint}`);
+    // Log only the model — the endpoint URL can carry an internal host/IP (CWE-532).
+    console.log(`[brainrouter-host] LLM override → ${llm.model}`);
   }
   process.env.BRAINROUTER_HOST_EMBEDDED = '1'; // tell host.ts not to self-boot on import
   const { main } = await import('../../brainrouter-desktop/dist-electron/host.js');
-  const { port } = await startHostServer({
+  const { host, port } = await startHostServer({
     port: Number(process.env.BRAINROUTER_HOST_PORT ?? 3747),
     main,
   });
-  console.log(`[brainrouter-host] listening on ws://0.0.0.0:${port}`);
+  const auth = process.env.BRAINROUTER_HOST_TOKEN ? 'device token required' : 'no token (loopback only)';
+  console.log(`[brainrouter-host] listening on ws://${host}:${port} — ${auth}`);
 }
