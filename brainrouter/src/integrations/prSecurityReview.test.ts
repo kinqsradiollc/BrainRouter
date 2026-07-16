@@ -99,7 +99,7 @@ describe("PR security review executor (ADR-017 D5)", () => {
           inputSeen = input;
           return {
             text: "<brainrouter-current-vulnerability-intelligence>\nEXACT REPOSITORY EXPOSURE: CVE-2026-9999 npm/demo@1.0.0\n</brainrouter-current-vulnerability-intelligence>",
-            metadata: { sources: 4, unhealthySources: 0, exactExposures: 1, diffReferencedCves: 0, freshestSuccessAt: "2026-07-15T00:00:00Z" },
+            metadata: { sources: 4, unhealthySources: 0, exactExposures: 1, diffReferencedCves: 0, diffDependencyMatches: 0, freshestSuccessAt: "2026-07-15T00:00:00Z" },
           };
         },
         getVulnerabilityIntelligence: async () => { legacyCalls += 1; return null; },

@@ -72,7 +72,7 @@ export interface PrReviewDeps {
    */
   getVulnerabilityContext?: (input: { orgId?: string; repo: string; diff: string }) => Promise<{
     text: string;
-    metadata: { sources: number; unhealthySources: number; exactExposures: number; diffReferencedCves: number; freshestSuccessAt: string | null };
+    metadata: { sources: number; unhealthySources: number; exactExposures: number; diffReferencedCves: number; diffDependencyMatches?: number; freshestSuccessAt: string | null };
   }>;
 }
 
