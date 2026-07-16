@@ -71,14 +71,19 @@ export function registerMeetingsBridge(): void {
     if (!r?.ok) throw new Error('Could not update the action item.');
   });
 
-  // Track lives in the WORKSPACE host process, not the backend — creating the
-  // work item is wired through the host bridge in a follow-up slice. Persist the
-  // link intent server-side so the UI state survives reloads meanwhile.
+  // Track a meeting action — creates a REAL, org-scoped Track work item on the
+  // server (idempotent) and links it back, so the item is viewable + syncs on the
+  // desktop Track board and the web dashboard alike.
   ipcMain.handle('meetings:actionToTrack', async (_e, meetingId: unknown, actionId: unknown) => {
-    const trackItemId = `meeting-action:${String(actionId)}`;
-    await accountFetch(`/api/meetings/${id(meetingId)}/actions/${id(actionId)}`, {
-      method: 'POST', body: JSON.stringify({ trackItemId }),
-    });
-    return { trackItemId };
+    const r = await accountFetch(`/api/meetings/${id(meetingId)}/actions/${id(actionId)}/track`, { method: 'POST' });
+    if (!r?.ok) throw new Error('Could not add this action to Track.');
+    return await r.json() as { trackItemId: string; item: unknown };
+  });
+
+  // Untrack — delete the linked Track work item and clear the link.
+  ipcMain.handle('meetings:actionUntrack', async (_e, meetingId: unknown, actionId: unknown) => {
+    const r = await accountFetch(`/api/meetings/${id(meetingId)}/actions/${id(actionId)}/track`, { method: 'DELETE' });
+    if (!r?.ok) throw new Error('Could not remove this action from Track.');
+    return await r.json();
   });
 }

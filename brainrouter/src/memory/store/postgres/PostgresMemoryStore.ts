@@ -109,6 +109,7 @@ import {
 } from "./queries/compressionQueries.js";
 import * as sensory from "./queries/sensoryQueries.js";
 import * as meetings from "./queries/meetingsQueries.js";
+import * as track from "./queries/trackQueries.js";
 import * as vulnerability from "./queries/vulnerabilityQueries.js";
 import * as vulnScans from "./queries/vulnerabilityScanQueries.js";
 import * as cognitive from "./queries/cognitiveQueries.js";
@@ -495,6 +496,15 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public setMeetingSummaryStatus(id: string, userId: string, status: meetings.MeetingRow["summaryStatus"], error?: string | null): Promise<boolean> { return meetings.setMeetingSummaryStatus(this.exec, id, userId, status, error); }
   public setMeetingSummaryRecords(id: string, userId: string, summaryRecordId: string | null, transcriptSourceId: string | null): Promise<boolean> { return meetings.setMeetingSummaryRecords(this.exec, id, userId, summaryRecordId, transcriptSourceId); }
   public getMeetingByShareToken(token: string): Promise<meetings.MeetingRow | null> { return meetings.getMeetingByShareToken(this.exec, token); }
+
+  // ── Track (migration 034) — org-scoped, collaborative work items ──
+  public createTrackItem(input: track.CreateTrackItemInput): Promise<track.TrackItemRow> { return track.createTrackItem(this.exec, input); }
+  public listTrackItems(orgId: string, opts?: { includeArchived?: boolean; limit?: number }): Promise<track.TrackItemRow[]> { return track.listTrackItems(this.exec, orgId, opts); }
+  public getTrackItem(orgId: string, id: string): Promise<track.TrackItemRow | null> { return track.getTrackItem(this.exec, orgId, id); }
+  public getTrackItemBySourceRef(orgId: string, sourceRef: string): Promise<track.TrackItemRow | null> { return track.getTrackItemBySourceRef(this.exec, orgId, sourceRef); }
+  public transitionTrackItem(orgId: string, id: string, status: string, statusCategory: track.TrackStatusCategory): Promise<track.TrackItemRow | null> { return track.transitionTrackItem(this.exec, orgId, id, status, statusCategory); }
+  public updateTrackItem(orgId: string, id: string, patch: track.UpdateTrackItemPatch): Promise<track.TrackItemRow | null> { return track.updateTrackItem(this.exec, orgId, id, patch); }
+  public deleteTrackItem(orgId: string, id: string): Promise<boolean> { return track.deleteTrackItem(this.exec, orgId, id); }
   // CVE catalog (spec §10, Task 26) — global world data, no org scoping.
   public ensureVulnerabilitySource(source: { id: import("../../../vulnerability/types.js").VulnerabilitySourceId; displayName: string; kind: string }): Promise<void> { return vulnerability.ensureVulnerabilitySource(this.exec, source); }
   public getVulnerabilitySource(id: string) { return vulnerability.getVulnerabilitySource(this.exec, id); }

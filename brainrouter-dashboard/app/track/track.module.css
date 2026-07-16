@@ -1,0 +1,64 @@
+/* Track dashboard page — kanban board of org work items. Bound to the same global
+   design tokens as Meetings (monochrome accent, layered near-black surfaces,
+   white-alpha borders) so it matches the rest of the console and follows the
+   light/dark override. The local --mv-* aliases resolve to the shared tokens and
+   keep the rules terse. Palette lives on .page so BOTH the board and the sibling
+   error bar inherit it. */
+.page{
+  --mv-bg:var(--surface-base); --mv-panel:var(--surface-raised); --mv-panel2:var(--surface-raised);
+  --mv-raise:var(--surface-overlay); --mv-raise2:var(--surface-overlay);
+  --mv-line:var(--border); --mv-line2:var(--border-med); --mv-line3:var(--border-strong);
+  --mv-tx:var(--text); --mv-tx2:var(--text-secondary); --mv-tx3:var(--text-muted);
+  --mv-ind:var(--accent); --mv-ind2:var(--text); --mv-ind-dim:var(--accent-wash); --mv-ind-bd:var(--border-strong);
+  --mv-blue:var(--heat-cool); --mv-amber:var(--heat-warm); --mv-teal:var(--ok);
+  --mv-mono:var(--font-mono);
+}
+.doneSummary{font-size:11.5px;color:var(--mv-tx2);font-family:var(--mv-mono)}
+.refreshBtn{font-size:11.5px;color:var(--mv-tx);background:var(--mv-ind-dim);border:1px solid var(--mv-ind-bd);border-radius:var(--radius-control);padding:5px 11px;cursor:pointer;transition:background .12s var(--ease),border-color .12s var(--ease)}
+.refreshBtn:hover:not(:disabled){background:var(--overlay-bg-hover-strong);border-color:var(--border-hover-accent)}
+.refreshBtn:disabled{opacity:.55;cursor:default}
+
+.loadWrap{padding:56px 20px;display:flex;justify-content:center}
+
+.board{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;align-items:start;min-height:0}
+.col{background:var(--mv-panel2);border:1px solid var(--mv-line);border-radius:var(--radius-panel);overflow:hidden;display:flex;flex-direction:column}
+.colHead{padding:13px 14px;display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid var(--mv-line)}
+.colHead h2{font-size:13.5px;margin:0;font-weight:600;color:var(--mv-tx);letter-spacing:-.01em}
+.colCount{font-size:11px;color:var(--mv-tx3);font-family:var(--mv-mono);background:var(--overlay-bg);border:1px solid var(--mv-line2);border-radius:20px;padding:2px 9px;min-width:26px;text-align:center}
+
+.composer{display:flex;gap:8px;padding:12px 14px;border-bottom:1px solid var(--mv-line)}
+.composerInput{flex:1;min-width:0;padding:8px 11px;background:var(--mv-bg);border:1px solid var(--mv-line2);border-radius:8px;color:var(--mv-tx);font-size:12.5px;outline:none;transition:border-color .12s var(--ease)}
+.composerInput:focus{border-color:var(--mv-ind-bd)}
+.composerInput::placeholder{color:var(--mv-tx3)}
+.composerInput:disabled{opacity:.6}
+.addBtn{font-size:11.5px;color:var(--mv-tx);background:var(--mv-ind-dim);border:1px solid var(--mv-ind-bd);border-radius:var(--radius-control);padding:6px 12px;cursor:pointer;white-space:nowrap;transition:background .12s var(--ease),border-color .12s var(--ease)}
+.addBtn:hover:not(:disabled){background:var(--overlay-bg-hover-strong);border-color:var(--border-hover-accent)}
+.addBtn:disabled{opacity:.55;cursor:default}
+
+.colBody{display:flex;flex-direction:column;gap:10px;padding:12px 14px;min-height:80px}
+
+.card{background:var(--mv-panel);border:1px solid var(--mv-line2);border-radius:var(--radius-card);padding:12px 13px;display:flex;flex-direction:column;gap:9px;transition:border-color .12s var(--ease)}
+.card:hover{border-color:var(--mv-line3)}
+.cardTitle{font-size:12.5px;color:var(--mv-tx);font-weight:500;line-height:1.45}
+.cardMeta{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.prio{font-size:10px;padding:2px 8px;border-radius:20px;font-weight:600;letter-spacing:.3px;border:1px solid;white-space:nowrap;text-transform:capitalize}
+.prioHigh{color:var(--mv-amber);border-color:color-mix(in srgb,var(--mv-amber) 36%,transparent);background:color-mix(in srgb,var(--mv-amber) 12%,transparent)}
+.prioMed{color:var(--mv-tx2);border-color:var(--mv-line2);background:var(--overlay-bg)}
+.prioLow{color:var(--mv-blue);border-color:color-mix(in srgb,var(--mv-blue) 36%,transparent);background:color-mix(in srgb,var(--mv-blue) 12%,transparent)}
+.assignee{font-size:10.5px;color:var(--mv-tx3);font-family:var(--mv-mono)}
+.meetingBadge{font-size:10px;color:var(--mv-tx2);background:var(--accent-wash);border:1px solid var(--mv-line3);border-radius:20px;padding:2px 8px;font-weight:500;white-space:nowrap}
+
+.cardActions{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:1px}
+.moveGroup{display:flex;gap:6px}
+.moveBtn{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;color:var(--mv-tx2);background:var(--overlay-bg);border:1px solid var(--mv-line2);border-radius:var(--radius-control);padding:4px 9px;cursor:pointer;transition:background .12s var(--ease),color .12s var(--ease)}
+.moveBtn:hover:not(:disabled){background:var(--mv-raise);color:var(--mv-tx)}
+.moveBtn:disabled{opacity:.4;cursor:default}
+.removeBtn{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;font-size:14px;line-height:1;color:var(--mv-tx3);background:none;border:1px solid transparent;border-radius:var(--radius-control);cursor:pointer;transition:background .12s var(--ease),color .12s var(--ease),border-color .12s var(--ease)}
+.removeBtn:hover:not(:disabled){color:var(--danger);border-color:color-mix(in srgb,var(--danger) 40%,transparent);background:color-mix(in srgb,var(--danger) 10%,transparent)}
+.removeBtn:disabled{opacity:.5;cursor:default}
+
+.empty{padding:26px 12px;text-align:center;color:var(--mv-tx3);font-size:12px}
+.errorBar{margin:0 0 12px;padding:9px 12px;border:1px solid color-mix(in srgb,var(--warn) 45%,transparent);border-radius:8px;background:color-mix(in srgb,var(--warn) 10%,transparent);color:var(--warn);font-size:12px}
+.composer + .errorBar{margin:0 14px 12px}
+
+@media(max-width:900px){.board{grid-template-columns:1fr}}
