@@ -43,6 +43,7 @@ import { checkComputerUsePermissions, openAccessibilitySettings, openScreenRecor
 import { setupTray } from './tray.js';
 import { hardenWebviewPreferences, isAllowedWebviewSrc } from './webviewPolicy.js';
 import { resolveDesktopBootstrapState } from './accountIntegration.js';
+import { initAutoUpdate } from './updater.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -483,6 +484,17 @@ app.whenReady().then(() => {
     },
     openWorkspace: (root) => { try { trustWorkspace(root); } catch { /* best-effort */ } openWorkspaceWindow(root); },
     quit: () => app.quit(),
+  });
+
+  // DESK-6 — auto-update scaffold. No-op unless this is a PACKAGED build with
+  // BRAINROUTER_UPDATE_CHANNEL set AND electron-updater installed (see updater.ts).
+  // Forwards update lifecycle events to every window on the 'update-event' channel.
+  void initAutoUpdate({
+    emit: (event) => {
+      for (const wp of wins.values()) {
+        if (!wp.win.isDestroyed()) wp.win.webContents.send('update-event', event);
+      }
+    },
   });
 
   ipcMain.on('agent-command', (event, raw: unknown) => {
