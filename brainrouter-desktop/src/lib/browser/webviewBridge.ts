@@ -52,6 +52,18 @@ export interface NetworkEntry {
 /** A resolver hint for the fuzzy fallback: the element's human label + coarse type. */
 export interface ResolveHint { label?: string; type?: string }
 
+/** Minimal rect shape for the cursor-center math (the fields we read off a DOMRect). */
+export interface CursorRect { left: number; top: number; width: number; height: number }
+
+/**
+ * Center point of an element rect — where the on-page cursor indicator parks.
+ * The injected `__brCursorMoveTo` mirrors this in the live DOM (same as INFER
+ * mirrors the source extractor); kept here as the canonical, testable form.
+ */
+export function cursorCenter(r: CursorRect): { x: number; y: number } {
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}
+
 // Precise-first, fuzzy fallback: find by exact data-testid; else, within controls
 // of the given type, match aria-label/title/placeholder/text (exact, then
 // partial). Injected into the page so broad (no-data-testid) apps stay runnable.
@@ -69,6 +81,40 @@ const RESOLVE_FN = `function __brResolve(target,label,type){
 
 // Briefly outline the acted-on element so the user sees each step land.
 const FLASH = `try{el.style.outline='2px solid #7c5cff';el.style.outlineOffset='1px';setTimeout(function(){try{el.style.outline='';}catch(e){}},700);}catch(e){}`;
+
+// How long the injected cursor is given to glide to its target before the action
+// fires — long enough to see the motion, short enough not to slow runs.
+const CURSOR_TRAVEL_MS = 300;
+
+// The on-page cursor indicator. `__brCursorInstall` is idempotent and self-healing:
+// it (re)builds the `#__brCursor` overlay + keyframe <style> after a navigation
+// wipes the DOM, and (re)attaches the window helpers. The overlay is position:fixed,
+// pointer-events:none and hidden (opacity 0) until the first move, so it never
+// intercepts real clicks. `__brCursorMoveTo` mirrors cursorCenter() in-page; a tap
+// plays a brief expanding ring via `__brCursorPulse`.
+const CURSOR_FN = `function __brCursorInstall(){
+  try{
+    var doc=document, body=doc.body||doc.documentElement; if(!body) return null;
+    var c=doc.getElementById('__brCursor');
+    if(c && c.__brReady) return c;
+    if(!c){ c=doc.createElement('div'); c.id='__brCursor'; }
+    c.setAttribute('aria-hidden','true');
+    c.style.cssText='position:fixed;left:0;top:0;width:0;height:0;z-index:2147483647;pointer-events:none;opacity:0;transform:translate(-100px,-100px);transition:transform .28s cubic-bezier(.22,.61,.36,1),opacity .18s ease;will-change:transform,opacity;';
+    c.innerHTML='<svg width="18" height="18" viewBox="0 0 16 16" style="position:absolute;left:-3px;top:-2px;filter:drop-shadow(0 1px 2px rgba(0,0,0,.4))"><path d="M3 2 L3 13 L6 10 L8 14 L10 13 L8 9 L12 9 Z" fill="#fff" stroke="#111" stroke-width="1.1" stroke-linejoin="round"/></svg><span class="__brCursorRing" style="position:absolute;left:0;top:0;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;border:2px solid #7c5cff;opacity:0;"></span>';
+    if(!c.parentNode) body.appendChild(c);
+    if(!doc.getElementById('__brCursorStyle')){
+      var st=doc.createElement('style'); st.id='__brCursorStyle';
+      st.textContent='@keyframes __brCursorPulse{0%{transform:scale(.4);opacity:.75}100%{transform:scale(3.6);opacity:0}}.__brCursorRing.__on{animation:__brCursorPulse .5s ease-out}';
+      (doc.head||doc.documentElement).appendChild(st);
+    }
+    c.__brReady=true;
+    window.__brCursorMove=function(x,y){ try{ c.style.opacity='1'; c.style.transform='translate('+x+'px,'+y+'px)'; }catch(e){} };
+    window.__brCursorMoveTo=function(el){ try{ var r=el.getBoundingClientRect(); window.__brCursorMove(r.left+r.width/2, r.top+r.height/2); }catch(e){} };
+    window.__brCursorPulse=function(){ try{ var ring=c.querySelector('.__brCursorRing'); if(!ring) return; ring.classList.remove('__on'); void ring.offsetWidth; ring.classList.add('__on'); }catch(e){} };
+    window.__brCursorHide=function(){ try{ c.style.opacity='0'; }catch(e){} };
+    return c;
+  }catch(e){ return null; }
+}`;
 
 /** JSON-encoded (target, label, type) argument list for the injected __brResolve. */
 function resolveArgs(target: string, hint?: ResolveHint): string {
@@ -202,35 +248,66 @@ export const a11ySnapshot = (wv: WebviewEl) => wv.executeJavaScript(A11Y_JS, fal
 
 export function tap(wv: WebviewEl, target: string, hint?: ResolveHint): Promise<ActionResult> {
   const js = `(() => { ${RESOLVE_FN}
+    ${CURSOR_FN}
     var el=__brResolve(${resolveArgs(target, hint)});
     if(!el) return { ok:false, error:'not found: '+${JSON.stringify(target)} };
-    el.scrollIntoView({block:'center'}); ${FLASH} el.click(); return { ok:true };
+    el.scrollIntoView({block:'center'});
+    if(window.__brCursorEnabled===false || !__brCursorInstall()){ ${FLASH} el.click(); return { ok:true }; }
+    window.__brCursorMoveTo(el);
+    return new Promise(function(__res){ setTimeout(function(){ try{ window.__brCursorPulse(); }catch(e){} ${FLASH} el.click(); __res({ ok:true }); }, ${CURSOR_TRAVEL_MS}); });
   })()`;
   return wv.executeJavaScript(js, true) as Promise<ActionResult>;
 }
 
 export function typeText(wv: WebviewEl, target: string, text: string, hint?: ResolveHint): Promise<ActionResult> {
   const val = JSON.stringify(text);
+  const doType = `el.focus(); try{el.value=${val};}catch(e){} el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true}));`;
   const js = `(() => { ${RESOLVE_FN}
+    ${CURSOR_FN}
     var el=__brResolve(${resolveArgs(target, hint)});
     if(!el) return { ok:false, error:'not found: '+${JSON.stringify(target)} };
-    el.scrollIntoView({block:'center'}); ${FLASH} el.focus(); try{el.value=${val};}catch(e){}
-    el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true}));
-    return { ok:true, value:${val} };
+    el.scrollIntoView({block:'center'});
+    if(window.__brCursorEnabled===false || !__brCursorInstall()){ ${FLASH} ${doType} return { ok:true, value:${val} }; }
+    window.__brCursorMoveTo(el);
+    return new Promise(function(__res){ setTimeout(function(){ try{ window.__brCursorPulse(); }catch(e){} ${FLASH} ${doType} __res({ ok:true, value:${val} }); }, ${CURSOR_TRAVEL_MS}); });
   })()`;
   return wv.executeJavaScript(js, true) as Promise<ActionResult>;
 }
 
 export function assertVisible(wv: WebviewEl, target: string, hint?: ResolveHint): Promise<ActionResult> {
   const js = `(() => { ${RESOLVE_FN}
+    ${CURSOR_FN}
     var el=__brResolve(${resolveArgs(target, hint)});
     if(!el) return { ok:false, error:'not found: '+${JSON.stringify(target)} };
     var r=el.getBoundingClientRect(); var cs=getComputedStyle(el);
     var vis=!!(r.width&&r.height)&&cs.visibility!=='hidden'&&cs.display!=='none';
-    if(vis){ el.scrollIntoView({block:'center'}); ${FLASH} }
-    return { ok:vis, error: vis?undefined:'not visible' };
+    if(!vis) return { ok:false, error:'not visible' };
+    el.scrollIntoView({block:'center'});
+    if(window.__brCursorEnabled===false || !__brCursorInstall()){ ${FLASH} return { ok:true }; }
+    window.__brCursorMoveTo(el);
+    return new Promise(function(__res){ setTimeout(function(){ ${FLASH} __res({ ok:true }); }, ${CURSOR_TRAVEL_MS}); });
   })()`;
   return wv.executeJavaScript(js, true) as Promise<ActionResult>;
+}
+
+// Toggle the on-page cursor indicator. When on, the overlay is installed (hidden
+// until the first move); when off, the flag is set and the overlay + its <style>
+// are removed so nothing lingers. Re-applied on every dom-ready by the panel,
+// since a navigation wipes both the DOM node and the flag.
+export function setCursorEnabled(wv: WebviewEl, on: boolean): Promise<ActionResult> {
+  const js = `(() => { ${CURSOR_FN}
+    window.__brCursorEnabled = ${on ? 'true' : 'false'};
+    if(${on ? 'true' : 'false'}) { __brCursorInstall(); }
+    else { try{ var c=document.getElementById('__brCursor'); if(c&&c.parentNode) c.parentNode.removeChild(c); var s=document.getElementById('__brCursorStyle'); if(s&&s.parentNode) s.parentNode.removeChild(s); }catch(e){} }
+    return { ok:true };
+  })()`;
+  return wv.executeJavaScript(js, true) as Promise<ActionResult>;
+}
+
+/** Hide the cursor indicator (used just before capturePage so it never bleeds into a shot). */
+export function hideCursor(wv: WebviewEl): Promise<ActionResult> {
+  const js = `(() => { try{ var c=document.getElementById('__brCursor'); if(c) c.style.opacity='0'; }catch(e){} return { ok:true }; })()`;
+  return wv.executeJavaScript(js, false) as Promise<ActionResult>;
 }
 
 // Persistent hover outline for the Accessibility list: resolve the element the

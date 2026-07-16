@@ -25,6 +25,8 @@ import {
   assertVisible,
   highlightEl,
   clearHighlight,
+  setCursorEnabled,
+  hideCursor,
 } from '../lib/browser/webviewBridge.js';
 import type { UiMap } from '@kinqs/brainrouter-core/browser';
 import { rowSource, symbolKindIcon } from '../lib/browser/rowSource.js';
@@ -40,6 +42,7 @@ const DEVICE_W: Record<Device, number | null> = { desktop: null, tablet: 820, ph
 const FLOWS_KEY = 'br-browser-flows';
 const URL_KEY = 'br-browser-url';
 const UIMAP_KEY = 'br-browser-uimap';
+const CURSOR_KEY = 'br-browser-cursor';
 function readUiMap(): UiMap | null {
   try { const raw = localStorage.getItem(UIMAP_KEY); return raw ? (JSON.parse(raw) as UiMap) : null; } catch { return null; }
 }
@@ -88,6 +91,8 @@ export function BrowserPanel(): React.ReactElement {
   const [a11y, setA11y] = useState<Array<{ role: string; name: string; testid?: string }>>([]);
   const [shot, setShot] = useState<string>('');
   const [highlightOn, setHighlightOn] = useState(false);
+  // Cursor indicator — visible pointer that tracks automated actions. Default ON.
+  const [cursorOn, setCursorOn] = useState(() => localStorage.getItem(CURSOR_KEY) !== '0');
   const [pickMode, setPickMode] = useState(false);
   const [picked, setPicked] = useState<string>('');
   const [typeVal, setTypeVal] = useState('test');
@@ -105,6 +110,10 @@ export function BrowserPanel(): React.ReactElement {
   const wvRef = useRef<WebviewEl | null>(null);
   const urlRef = useRef(url);
   urlRef.current = url;
+  // Latest cursor pref, read inside the (once-wired) dom-ready handler so the
+  // indicator is re-applied after every navigation wipes the page state.
+  const cursorOnRef = useRef(cursorOn);
+  cursorOnRef.current = cursorOn;
 
   // Create the <webview> once and wire its lifecycle events.
   useEffect(() => {
@@ -119,7 +128,9 @@ export function BrowserPanel(): React.ReactElement {
     wv.style.width = '100%';
     wv.style.height = '100%';
     wv.style.border = '0';
-    const onReady = (): void => setReady(true);
+    // dom-ready fires on the initial load AND every navigation/reload, which wipes
+    // the injected cursor overlay + its flag — so re-apply the current pref here.
+    const onReady = (): void => { setReady(true); void setCursorEnabled(wv, cursorOnRef.current).catch(() => undefined); };
     const onConsole = (e: unknown): void => {
       const ev = e as { level: number; message: string };
       setConsoleMsgs((m) => [...m, { level: ev.level, text: ev.message }].slice(-200));
@@ -182,6 +193,14 @@ export function BrowserPanel(): React.ReactElement {
     return () => { clearInterval(t); void cancelPick(wv); };
   }, [pickMode]);
 
+  // Persist the cursor pref and apply it live when toggled (the dom-ready handler
+  // re-applies it after navigations).
+  useEffect(() => {
+    try { localStorage.setItem(CURSOR_KEY, cursorOn ? '1' : '0'); } catch { /* ignore */ }
+    const wv = wvRef.current;
+    if (wv && ready) void setCursorEnabled(wv, cursorOn).catch(() => undefined);
+  }, [cursorOn, ready]);
+
   const withWv = async (fn: (wv: WebviewEl) => Promise<void>): Promise<void> => {
     const wv = wvRef.current;
     if (!wv || !ready) { setStatus('page not ready yet'); return; }
@@ -236,7 +255,7 @@ export function BrowserPanel(): React.ReactElement {
 
   const doExtract = () => withWv(async (wv) => { setElements(await extractLive(wv)); setDrawer('elements'); setStatus(''); });
   const toggleHighlight = () => withWv(async (wv) => { const on = !highlightOn; await setHighlight(wv, on); setHighlightOn(on); });
-  const doScreenshot = () => withWv(async (wv) => { const img = await wv.capturePage(); setShot(img.toDataURL()); setDrawer('shot'); });
+  const doScreenshot = () => withWv(async (wv) => { await hideCursor(wv).catch(() => undefined); const img = await wv.capturePage(); setShot(img.toDataURL()); setDrawer('shot'); });
   // Name a shot after the current URL's route so saved files are recognisable.
   const shotName = (): string => {
     try { const u = new URL(urlRef.current); return (u.hash || u.pathname).replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '') || 'screen'; } catch { return 'screen'; }
@@ -348,7 +367,7 @@ export function BrowserPanel(): React.ReactElement {
     // the run can be turned into a markdown report + Artifact by the host.
     const results: Array<{ i: number; action: string; target: string; ok: boolean; error?: string; ms?: number }> = [];
     const shots: Array<{ name: string; dataUrl: string }> = [];
-    const grab = async (name: string): Promise<void> => { try { const img = await wv.capturePage(); shots.push({ name, dataUrl: img.toDataURL() }); } catch { /* ignore */ } };
+    const grab = async (name: string): Promise<void> => { try { await hideCursor(wv).catch(() => undefined); const img = await wv.capturePage(); shots.push({ name, dataUrl: img.toDataURL() }); } catch { /* ignore */ } };
     let failed = false;
     for (let i = 0; i < steps.length; i++) {
       const st = steps[i];
@@ -427,6 +446,7 @@ export function BrowserPanel(): React.ReactElement {
           {railBtn('bolt', 'Extract data-testid elements', drawer === 'elements', doExtract)}
           {railBtn('eye', pickMode ? 'Inspecting… click an element' : 'Inspect / pick element', pickMode, () => setPickMode((p) => !p))}
           {railBtn('search', highlightOn ? 'Hide test-id outlines' : 'Highlight test-ids', highlightOn, toggleHighlight)}
+          {railBtn('cursor', cursorOn ? 'Hide cursor indicator' : 'Show cursor indicator', cursorOn, () => setCursorOn((c) => !c))}
           <div className="br-rail-sep" />
           {railBtn('monitor', 'Desktop', device === 'desktop', () => setDevice('desktop'))}
           {railBtn('file', 'Tablet', device === 'tablet', () => setDevice('tablet'))}
