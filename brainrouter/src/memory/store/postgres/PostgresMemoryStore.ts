@@ -111,6 +111,7 @@ import * as sensory from "./queries/sensoryQueries.js";
 import * as meetings from "./queries/meetingsQueries.js";
 import * as track from "./queries/trackQueries.js";
 import * as teams from "./queries/teamsQueries.js";
+import * as chatThreads from "./queries/chatThreadsQueries.js";
 import * as vulnerability from "./queries/vulnerabilityQueries.js";
 import * as vulnScans from "./queries/vulnerabilityScanQueries.js";
 import * as cognitive from "./queries/cognitiveQueries.js";
@@ -516,6 +517,16 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public addTeamMember(orgId: string, teamId: string, userId: string, role?: teams.TeamMemberRole): Promise<boolean> { return teams.addTeamMember(this.exec, orgId, teamId, userId, role); }
   public removeTeamMember(orgId: string, teamId: string, userId: string): Promise<boolean> { return teams.removeTeamMember(this.exec, orgId, teamId, userId); }
   public deleteTeam(orgId: string, id: string): Promise<boolean> { return teams.deleteTeam(this.exec, orgId, id); }
+
+  // ── Chat threads (migration 036) — per-user private chat history within an org ──
+  public createChatThread(input: chatThreads.CreateChatThreadInput): Promise<chatThreads.ChatThreadRow> { return chatThreads.createThread(this.exec, input); }
+  public listChatThreads(orgId: string, userId: string, limit?: number): Promise<chatThreads.ChatThreadRow[]> { return chatThreads.listThreads(this.exec, orgId, userId, limit); }
+  public getChatThread(orgId: string, userId: string, id: string): Promise<chatThreads.ChatThreadWithMessages | null> { return chatThreads.getThread(this.exec, orgId, userId, id); }
+  public countChatThreads(orgId: string, userId: string): Promise<number> { return chatThreads.threadCount(this.exec, orgId, userId); }
+  public appendChatMessage(orgId: string, userId: string, threadId: string, msg: chatThreads.AppendChatMessageInput): Promise<chatThreads.ChatMessageRow | null> { return chatThreads.appendMessage(this.exec, orgId, userId, threadId, msg); }
+  public renameChatThread(orgId: string, userId: string, id: string, title: string, model?: string | null): Promise<chatThreads.ChatThreadRow | null> { return chatThreads.renameThread(this.exec, orgId, userId, id, title, model); }
+  public deleteChatThread(orgId: string, userId: string, id: string): Promise<boolean> { return chatThreads.deleteThread(this.exec, orgId, userId, id); }
+  public replaceChatMessages(orgId: string, userId: string, threadId: string, messages: chatThreads.AppendChatMessageInput[]): Promise<chatThreads.ChatThreadWithMessages | null> { return chatThreads.replaceMessages(this.exec, orgId, userId, threadId, messages); }
   // CVE catalog (spec §10, Task 26) — global world data, no org scoping.
   public ensureVulnerabilitySource(source: { id: import("../../../vulnerability/types.js").VulnerabilitySourceId; displayName: string; kind: string }): Promise<void> { return vulnerability.ensureVulnerabilitySource(this.exec, source); }
   public getVulnerabilitySource(id: string) { return vulnerability.getVulnerabilitySource(this.exec, id); }
