@@ -364,7 +364,7 @@ export function App(): React.ReactElement {
     q, settingsOpen: settings.open, mode, info, hostUp, refreshGit, editorAnyDirty: editor.anyDirty, running,
     lastPlan, activeSideTab, setGlobalBoards, setWorkspaces, setProjSessions, taskView, workflowView,
     cardOpenRef, setTaskView, setWorkflowView, viewKey, chatWidth, chatSize, toast, setToast, envOpen,
-    railWidth, railOpen, expandedProjects, workrowRef, setWorkW, setPaletteOpen, togglePanel, setSideFullScreen,
+    railWidth, railOpen, expandedProjects, workrowRef, setWorkW, setPaletteOpen, togglePanel, ensurePanel, setSideFullScreen,
     setSidePanelOpen, setTermDockOpen, openSettings, sessionsRef, resumeSessionRef, zoomIn, zoomOut, resetZoom,
     sidePanelOpen, sidePinned, codeFont, theme, accent,
   });

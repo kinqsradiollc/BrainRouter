@@ -52,6 +52,7 @@ export interface AppEffectsCtx {
   setWorkW: (w: number) => void;
   setPaletteOpen: React.Dispatch<React.SetStateAction<boolean>>;
   togglePanel: (id: PanelId) => void;
+  ensurePanel: (id: PanelId) => void;
   setSideFullScreen: React.Dispatch<React.SetStateAction<boolean>>;
   setSidePanelOpen: React.Dispatch<React.SetStateAction<boolean>>;
   setTermDockOpen: React.Dispatch<React.SetStateAction<boolean>>;
@@ -73,10 +74,29 @@ export function useAppEffects(ctx: AppEffectsCtx): void {
     q, settingsOpen, mode, info, hostUp, refreshGit, editorAnyDirty, running, lastPlan, activeSideTab,
     setGlobalBoards, setWorkspaces, setProjSessions, taskView, workflowView, cardOpenRef, setTaskView,
     setWorkflowView, viewKey, chatWidth, chatSize, toast, setToast, envOpen, railWidth, railOpen,
-    expandedProjects, workrowRef, setWorkW, setPaletteOpen, togglePanel, setSideFullScreen, setSidePanelOpen,
+    expandedProjects, workrowRef, setWorkW, setPaletteOpen, togglePanel, ensurePanel, setSideFullScreen, setSidePanelOpen,
     setTermDockOpen, openSettings, sessionsRef, resumeSessionRef, zoomIn, zoomOut, resetZoom, sidePanelOpen,
     sidePinned, codeFont, theme, accent,
   } = ctx;
+
+  // F1 — pop the Artifacts panel open when the agent writes an artifact (like
+  // Claude popping the artifact into view). Throttled so a burst of writes in one
+  // turn opens the panel once rather than repeatedly yanking focus; the panel's
+  // own br-artifact-focus listener keeps selecting the latest artifact. Kept in a
+  // ref so the listener subscribes once (ensurePanel is re-created each render).
+  const ensurePanelRef = useRef(ensurePanel);
+  ensurePanelRef.current = ensurePanel;
+  const lastArtifactOpenRef = useRef(0);
+  useEffect(() => {
+    const onWritten = (): void => {
+      const now = Date.now();
+      if (now - lastArtifactOpenRef.current < 1500) return; // one open per burst
+      lastArtifactOpenRef.current = now;
+      ensurePanelRef.current('artifacts');
+    };
+    window.addEventListener('br-artifact-written', onWritten);
+    return () => window.removeEventListener('br-artifact-written', onWritten);
+  }, []);
 
   // Warm settings data once the host is available. Opening Settings only reveals
   // already-rendered state; it never has to begin these reads on the click path.

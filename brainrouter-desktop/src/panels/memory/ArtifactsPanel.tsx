@@ -18,7 +18,7 @@ import { Markdown, MD_COMPONENTS } from '../../chat/markdown.js';
 import { Button } from '../../components/primitives/Button.js';
 import { Chip } from '../../components/primitives/Badge.js';
 import {
-  sortArtifacts, artifactCounts, kindLabel, statusClass,
+  sortArtifacts, artifactCounts, kindLabel, statusClass, isReactArtifact,
   ARTIFACT_KIND_OPTIONS, ARTIFACT_STATUS_OPTIONS,
 } from '../../lib/artifacts/artifactsView.js';
 
@@ -46,6 +46,24 @@ export function ArtifactsPanel({ artifacts, annotations, onCreate, onSetStatus, 
   const [statusFilter, setStatusFilter] = useState<'' | ArtifactStatus>('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [title, setTitle] = useState('');
+
+  // F1/F2 — honor a "focus this artifact" signal from the chat (auto-open on
+  // artifact_write, or an inline card's Open button). The target id is stashed in
+  // localStorage so a panel that mounts AFTER the signal (the auto-open case)
+  // still picks it up on first render; the event re-selects while already open.
+  useEffect(() => {
+    const focus = (): void => {
+      try {
+        const raw = localStorage.getItem('br-artifact-focus');
+        if (!raw) return;
+        const parsed = JSON.parse(raw) as { id?: string; at?: number };
+        if (parsed.id && (!parsed.at || Date.now() - parsed.at < 8000)) setSelectedId(parsed.id);
+      } catch { /* ignore */ }
+    };
+    focus();
+    window.addEventListener('br-artifact-focus', focus);
+    return () => window.removeEventListener('br-artifact-focus', focus);
+  }, []);
 
   const filtered = artifacts.filter((a) =>
     (!kindFilter || a.kind === kindFilter) && (!statusFilter || a.status === statusFilter));
@@ -281,7 +299,16 @@ function ArtifactPreview({ art, content }: { art: ArtifactRecord; content: strin
     // `code` → a fenced block in the chosen language so the shared highlighter lights it up.
     if (art.format === 'code') {
       const fence = '```' + (art.language ?? '') + '\n' + content + '\n```';
-      return <div className="art-preview md"><Markdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>{fence}</Markdown></div>;
+      // F3 (deferred) — a jsx/tsx artifact is a React component. Live in-webview
+      // rendering needs a JSX transform dependency + a `react` artifact format
+      // (a types/core change), so for now show the source with a short note.
+      const react = isReactArtifact(art);
+      return (
+        <div className="art-preview md">
+          {react ? <div className="art-react-note">React component — live preview coming soon; showing source.</div> : null}
+          <Markdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>{fence}</Markdown>
+        </div>
+      );
     }
     // `mermaid` → render via a fenced ```mermaid block (the shared renderer draws
     // the diagram when mermaid support is present; otherwise it shows the source).

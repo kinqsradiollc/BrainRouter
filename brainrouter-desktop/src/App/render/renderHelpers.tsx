@@ -104,6 +104,14 @@ export function buildRenderRow(ctx: RenderRowCtx): (r: ChatRow, liveLast: boolea
       onOpenFile={(f) => openFile(f)}
       onOpenDiff={(f) => { setDiffTarget({ path: f, line: 1 }); ensurePanel('diff'); q('q-diff', 'file-diff', { path: f }); }}
       onOpenPlan={() => ensurePanel('plan')}
+      onOpenArtifact={(id) => {
+        // F2 — open the Artifacts panel and focus the just-written artifact. The
+        // panel selects it via the br-artifact-focus signal (localStorage carries
+        // the id so a freshly-mounted panel picks it up on first render).
+        ensurePanel('artifacts');
+        try { localStorage.setItem('br-artifact-focus', JSON.stringify({ id, at: Date.now() })); } catch { /* ignore */ }
+        window.dispatchEvent(new CustomEvent('br-artifact-focus'));
+      }}
       onDismissError={(id) => {
         setRows((rs) => rs.filter((x) => x.id !== id));
         for (const k of Object.keys(errorsBySession.current)) errorsBySession.current[k] = errorsBySession.current[k].filter((er) => er.id !== id);

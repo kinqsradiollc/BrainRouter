@@ -24,6 +24,10 @@ export type ChatRow =
   | { id: number | string; kind: 'loading'; ts: number }
   | { id: number | string; kind: 'briefing'; sources: string[]; records: BriefingRecord[]; ts: number }
   | { id: number | string; kind: 'changeset'; files: ChangesetFile[]; insertions: number; deletions: number; ts: number }
+  // ARTIFACT-INLINE (F2) — a compact chip in the transcript when the agent
+  // authors/updates an artifact (artifact_write), with an "Open" affordance that
+  // pops the Artifacts panel and focuses this artifact by id.
+  | { id: number | string; kind: 'artifact'; artifactId: string; title: string; format: string; artifactKind?: string; version?: number; action: 'created' | 'updated'; ts: number }
   | { id: number | string; kind: 'tool-group'; items: ToolItem[]; ts: number };
 
 export interface SessionRow {
