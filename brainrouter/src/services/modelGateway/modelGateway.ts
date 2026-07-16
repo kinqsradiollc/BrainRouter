@@ -18,6 +18,7 @@ import type { LLMToolSchema } from "@kinqs/brainrouter-types";
 import { resolveRequestUrl, buildRequestBody, extractResponsesText, isResponsesWire } from "../../providers/wireFormat.js";
 import { fetchWithExternalRetry } from "../../memory/util/retry.js";
 import { requestTimeoutSignal } from "../../memory/util/request-timeout.js";
+import { systemProviderOrgId } from "../../providers/runtime.js";
 import { extractChatCompletionText } from "../../memory/llm/llm-response.js";
 import { signJwt } from "../../api/auth/crypto.js";
 import { MODEL_GATEWAY_AUDIENCE, MODEL_INVOKE_SCOPE } from "../gateway/auth.js";
@@ -100,7 +101,20 @@ export async function resolveScopedModelSelection(input: {
   assignedModel?: string;
   reasoningEffort?: string;
 }): Promise<ScopedModelSelection> {
-  const models = await input.store.listProviderModels(input.orgId, true);
+  // An org without its own managed models inherits the deployment default — the
+  // system org's models (single-tenant: the seeded admin's org). This is what
+  // lets every org's chat work off one deployment-configured model set instead of
+  // requiring each org to configure its own. The service principal + provider
+  // then resolve against the SAME org that owns the model, so dispatch is coherent.
+  let effectiveOrgId = input.orgId;
+  let models = await input.store.listProviderModels(input.orgId, true);
+  if (models.length === 0) {
+    const fallbackOrgId = systemProviderOrgId();
+    if (fallbackOrgId && fallbackOrgId !== input.orgId) {
+      const fallback = await input.store.listProviderModels(fallbackOrgId, true);
+      if (fallback.length > 0) { models = fallback; effectiveOrgId = fallbackOrgId; }
+    }
+  }
   if (models.length === 0) {
     throw new ScopedModelSelectionError(
       "model_not_configured",
@@ -131,9 +145,13 @@ export async function resolveScopedModelSelection(input: {
     );
   }
   const reasoningEffort = requestedEffort ?? selected.defaultEffort ?? undefined;
-  const servicePrincipalId = await input.store.ensureModelGatewayServicePrincipal(input.orgId);
+  // Service principal + provider resolve against the org that OWNS the selected
+  // model (the caller's org, or the system org when inheriting the deployment
+  // default) — so dispatch finds a real provider config and the service-principal
+  // FK is satisfied. Falling back the model list alone is not enough.
+  const servicePrincipalId = await input.store.ensureModelGatewayServicePrincipal(effectiveOrgId);
   return {
-    orgId: input.orgId,
+    orgId: effectiveOrgId,
     servicePrincipalId,
     publicModelId: selected.publicModelId,
     ...(reasoningEffort ? { reasoningEffort } : {}),

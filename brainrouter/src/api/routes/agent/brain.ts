@@ -75,6 +75,9 @@ brainRouter.post("/chat", withOrgContext, async (req: AuthedRequest, res) => {
     const result = await runBrainChat({
       userId: req.userId!,
       orgId: req.orgId!,
+      // Dispatch runs as the model owner (selection.orgId) — same as orgId unless
+      // this org inherited the deployment-default model from the system org.
+      dispatchOrgId: selection.orgId,
       sessionKey: body.sessionKey,
       projectId: project?.projectId,
       projectTag: project ? projectTagFromName(project.name) ?? undefined : undefined,

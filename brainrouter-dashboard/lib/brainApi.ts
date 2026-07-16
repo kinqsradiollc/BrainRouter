@@ -45,6 +45,10 @@ export const brainApi = {
     authFetch<BrainChatResponse>('/api/brain/chat', {
       method: 'POST',
       orgId: scope.orgId || undefined,
+      // An agent turn (recall + an LLM call, up to Max reasoning effort) runs far
+      // longer than the 10s default dashboard timeout — allow past the backend's
+      // 120s dispatch bound so the client doesn't abort a still-working request.
+      signal: AbortSignal.timeout(180_000),
       body: {
         messages,
         sessionKey,
