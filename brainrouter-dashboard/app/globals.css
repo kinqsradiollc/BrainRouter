@@ -1425,6 +1425,111 @@ button, input, textarea, select { font: inherit; }
 }
 .sidebar-org-mark { width: 20px; height: 20px; padding: 1px; box-sizing: border-box; }
 .sidebar-org-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; }
+
+/* Workspace switcher (ADR-019 D1) */
+.sidebar-orgswitch {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-align: left;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.sidebar-orgswitch:hover { background: rgba(255,255,255,.06); }
+.sidebar-orgswitch[aria-expanded="true"] { background: rgba(255,255,255,.08); border-color: var(--border); }
+.sidebar-orgswitch-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; }
+.sidebar-orgswitch-chevron { width: 16px; height: 16px; flex: 0 0 16px; color: var(--text-muted); }
+.sidebar-orgswitch-home { display: inline-grid; place-items: center; flex: 0 0 auto; width: 28px; height: 28px; border-radius: 8px; color: var(--text-secondary); }
+.sidebar-orgswitch-home:hover { background: rgba(255,255,255,.06); }
+
+.sidebar-orgswitch-menu {
+  position: fixed;
+  z-index: 1000;
+  max-height: min(70vh, 520px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--text);
+  background: var(--sidebar-bg, #0d0e13);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.45);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.sidebar-orgswitch-list { min-height: 0; overflow-y: auto; padding: 6px; display: grid; gap: 1px; scrollbar-width: thin; }
+.sidebar-orgswitch-item {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px;
+  text-align: left;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.sidebar-orgswitch-item:hover { color: var(--text); background: rgba(255,255,255,.06); }
+.sidebar-orgswitch-item.active { color: var(--text); background: rgba(255,255,255,.1); }
+.sidebar-orgswitch-item-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; line-height: 1.25; }
+.sidebar-orgswitch-item-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; }
+.sidebar-orgswitch-item-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 11px; text-transform: capitalize; }
+.sidebar-orgswitch-check { flex: 0 0 auto; color: var(--text); font-size: 13px; }
+.sidebar-orgswitch-empty { padding: 12px 10px; color: var(--text-muted); font-size: 12px; }
+
+.sidebar-orgswitch-create { padding: 6px; border-top: 1px solid var(--border); }
+.sidebar-orgswitch-additem {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.sidebar-orgswitch-additem:hover { color: var(--text); background: rgba(255,255,255,.06); }
+.sidebar-orgswitch-plus { display: inline-grid; place-items: center; width: 24px; height: 24px; flex: 0 0 24px; border: 1px dashed var(--border); border-radius: 999px; font-size: 15px; line-height: 1; }
+.sidebar-orgswitch-createform { display: grid; gap: 8px; padding: 2px; }
+.sidebar-orgswitch-input {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  color: var(--text);
+  background: rgba(255,255,255,.04);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+.sidebar-orgswitch-input:focus { outline: none; border-color: var(--text-muted); }
+.sidebar-orgswitch-createrow { display: flex; gap: 6px; }
+.sidebar-orgswitch-createbtn,
+.sidebar-orgswitch-cancelbtn {
+  flex: 1;
+  height: 32px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.sidebar-orgswitch-createbtn { color: #000; background: var(--text); border: 0; }
+.sidebar-orgswitch-createbtn:disabled { opacity: .5; cursor: default; }
+.sidebar-orgswitch-cancelbtn { color: var(--text-secondary); background: transparent; border: 1px solid var(--border); }
+.sidebar-orgswitch-cancelbtn:hover { color: var(--text); }
+.sidebar-orgswitch-error { color: #f87171; font-size: 11px; }
 .sidebar-nav {
   flex: 1;
   min-height: 0;

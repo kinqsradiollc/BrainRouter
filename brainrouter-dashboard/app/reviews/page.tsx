@@ -7,9 +7,10 @@ import { EmptyState } from "../../components/EmptyState";
 import { PageHeader } from "../../components/PageHeader";
 import { PremiumButton } from "../../components/PremiumButton";
 import { StatusBadge } from "../../components/Analytics";
-import { adminApi, type OrgSummary, type ReviewJob, type ReviewPullRequest } from "../../lib/adminApi";
+import { adminApi, type ReviewJob, type ReviewPullRequest } from "../../lib/adminApi";
 import { invalidateDashboardQueries, queryDashboard } from "../../lib/dashboardQuery";
 import { InlineLoading } from "../../components/LoadingSpinner";
+import { useActiveOrg } from "../../components/OrgWorkspaceProvider";
 import {
   REVIEW_ACTION_LABELS,
   filterReviewPullRequests,
@@ -71,8 +72,7 @@ function updatedLabel(value: string | null): string {
 }
 
 function ReviewsInner() {
-  const [orgs, setOrgs] = useState<OrgSummary[]>([]);
-  const [activeOrg, setActiveOrg] = useState("");
+  const { activeOrgId: activeOrg, loading: orgsLoading } = useActiveOrg();
   const [prs, setPrs] = useState<ReviewPullRequest[]>([]);
   const [canRun, setCanRun] = useState(false);
   const [partial, setPartial] = useState(false);
@@ -88,25 +88,6 @@ function ReviewsInner() {
   const [status, setStatus] = useState<ReviewStatusFilter>(initialStatus);
   const [automation, setAutomation] = useState<ReviewAutomationFilter>(initialAutomation);
   const [sort, setSort] = useState<ReviewSort>(initialSort);
-
-  useEffect(() => {
-    void (async () => {
-      try {
-        const response = await queryDashboard("orgs", () => adminApi.listOrgs(), { ttlMs: 60_000 });
-        const available = response.orgs ?? [];
-        setOrgs(available);
-        const requested = initialParam("org");
-        const selected = available.find((org) => org.orgId === requested)
-          ?? available.find((org) => org.isDefault)
-          ?? available[0];
-        if (selected) setActiveOrg(selected.orgId);
-        else setLoading(false);
-      } catch (caught) {
-        setError(caught instanceof Error ? caught.message : "Failed to load organizations");
-        setLoading(false);
-      }
-    })();
-  }, []);
 
   const load = useCallback(async (orgId: string, force = false) => {
     if (!orgId) return;
@@ -129,7 +110,12 @@ function ReviewsInner() {
     }
   }, []);
 
-  useEffect(() => { void load(activeOrg); }, [activeOrg, load]);
+  // Reload the PR list whenever the active workspace changes. Once the workspace
+  // context has settled with no org, stop the spinner instead of loading forever.
+  useEffect(() => {
+    if (activeOrg) void load(activeOrg);
+    else if (!orgsLoading) { setPrs([]); setLoading(false); }
+  }, [activeOrg, orgsLoading, load]);
 
   const filters: ReviewListFilters = useMemo(() => ({ query, repository, author, label, draft, status, automation, sort }), [query, repository, author, label, draft, status, automation, sort]);
   const returnPath = useMemo(() => reviewsReturnPath(filters, activeOrg), [filters, activeOrg]);
@@ -175,14 +161,6 @@ function ReviewsInner() {
       <PageHeader title="PR reviews" description="Open pull requests you can access, their latest review state, and the actions available to your role.">
         <Link className="premium-button premium-button--ghost premium-button--medium" href={`/review-automation${activeOrg ? `?org=${encodeURIComponent(activeOrg)}` : ""}`}>Review automation</Link>
       </PageHeader>
-
-      {orgs.length > 1 && (
-        <label className="settings-label review-console__org">Team
-          <select className="settings-select" value={activeOrg} onChange={(event) => setActiveOrg(event.target.value)}>
-            {orgs.map((org) => <option key={org.orgId} value={org.orgId}>{org.name}</option>)}
-          </select>
-        </label>
-      )}
 
       {error && <div className="settings-note settings-note--error" role="alert">{error}</div>}
 

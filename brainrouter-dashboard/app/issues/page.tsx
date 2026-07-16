@@ -2,15 +2,16 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AgentTraceGraph } from "../../components/AgentTraceGraph";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DataTable, SeverityBadge, StatusBadge } from "../../components/Analytics";
 import { EmptyState } from "../../components/EmptyState";
 import { PageHeader } from "../../components/PageHeader";
 import { PremiumButton } from "../../components/PremiumButton";
-import { adminApi, type OrgSummary, type ReviewIssue, type ReviewIssuesResponse, type ReviewJob } from "../../lib/adminApi";
+import { adminApi, type ReviewIssue, type ReviewIssuesResponse, type ReviewJob } from "../../lib/adminApi";
 import { InlineLoading } from "../../components/LoadingSpinner";
+import { useActiveOrg } from "../../components/OrgWorkspaceProvider";
 
 const TABS = ["all", "open", "in progress", "snoozed", "fixed", "ignored"] as const;
 const SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
@@ -23,11 +24,11 @@ function validValue<T extends string>(value: string | null, values: readonly T[]
 function Issues() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  // Active org comes from the validated orgs list (an explicit selector), NOT an
-  // untrusted `?org=` URL param — the server also enforces membership per request
-  // (resolveOrgContext → 403 for non-members), so this is scoping, not a gate.
-  const [orgs, setOrgs] = useState<OrgSummary[]>([]);
-  const [activeOrg, setActiveOrg] = useState<string>("");
+  // Active org comes from the app-wide workspace switcher (a validated, explicit
+  // selection), NOT an untrusted `?org=` URL param — the server also enforces
+  // membership per request (resolveOrgContext → 403 for non-members), so this is
+  // scoping, not a gate.
+  const { activeOrgId: activeOrg } = useActiveOrg();
   const [tab, setTab] = useState<Tab>(() => validValue(searchParams.get("status"), TABS, "all"));
   const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
   const [debouncedQuery, setDebouncedQuery] = useState(query);
@@ -47,17 +48,6 @@ function Issues() {
     const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 250);
     return () => window.clearTimeout(timer);
   }, [query]);
-
-  useEffect(() => {
-    void (async () => {
-      try {
-        const res = await adminApi.listOrgs();
-        setOrgs(res.orgs ?? []);
-        const def = (res.orgs ?? []).find((o) => o.isDefault) ?? (res.orgs ?? [])[0];
-        if (def) setActiveOrg(def.orgId);
-      } catch { /* fall back to the server's default org */ }
-    })();
-  }, []);
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -101,6 +91,20 @@ function Issues() {
   }, [traceReviewId, selectedReview?.id, activeOrg]);
 
   const resetPage = useCallback(() => { setCursor(null); setCursorHistory([]); }, []);
+
+  // Switching workspaces invalidates the current pagination cursor and any open
+  // agent-trace panel (they belong to the previous org). Skip the first run so a
+  // deep-linked cursor/review from the URL survives the initial org resolution.
+  const prevOrg = useRef<string | null>(null);
+  useEffect(() => {
+    if (prevOrg.current !== null && prevOrg.current !== activeOrg) {
+      setCursor(null);
+      setCursorHistory([]);
+      setSelectedReview(null);
+      setTraceReviewId(null);
+    }
+    prevOrg.current = activeOrg;
+  }, [activeOrg]);
   const repositories = useMemo(() => [...new Set((response?.issues ?? []).map((issue) => issue.repo).filter((value): value is string => Boolean(value)))].sort(), [response]);
   const openTrace = (issue: ReviewIssue) => {
     setSelectedReview(null);
@@ -133,7 +137,6 @@ function Issues() {
         <div className="issue-filters">
           <input className="settings-input" aria-label="Search findings" placeholder="Search issues" value={query} onChange={(event) => { setQuery(event.target.value); resetPage(); }} />
           <select className="settings-select" aria-label="Severity filter" value={severity} onChange={(event) => { setSeverity(validValue(event.target.value, ["all", ...SEVERITIES] as const, "all")); resetPage(); }}><option value="all">All severities</option>{SEVERITIES.map((value) => <option value={value} key={value}>{value}</option>)}</select>
-          {orgs.length > 1 && <select className="settings-select" aria-label="Organization" value={activeOrg} onChange={(event) => { setActiveOrg(event.target.value); resetPage(); }}>{orgs.map((o) => <option key={o.orgId} value={o.orgId}>{o.name}</option>)}</select>}
           <select className="settings-select" aria-label="Repository filter" value={repo} onChange={(event) => { setRepo(event.target.value); resetPage(); }}><option value="all">All repositories</option>{repo !== "all" && !repositories.includes(repo) && <option value={repo}>{repo}</option>}{repositories.map((value) => <option value={value} key={value}>{value}</option>)}</select>
           <select className="settings-select" aria-label="Sort issues" value={sort} onChange={(event) => { setSort(event.target.value === "oldest" ? "oldest" : "newest"); resetPage(); }}><option value="newest">Newest</option><option value="oldest">Oldest</option></select>
         </div>

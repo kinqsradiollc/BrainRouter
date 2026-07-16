@@ -8,6 +8,7 @@ import { PremiumButton } from "../../components/PremiumButton";
 import { adminApi, type ReviewSummary } from "../../lib/adminApi";
 import { queryDashboard } from "../../lib/dashboardQuery";
 import { InlineLoading } from "../../components/LoadingSpinner";
+import { useActiveOrg } from "../../components/OrgWorkspaceProvider";
 
 const EMPTY: ReviewSummary = {
   periodDays: 30,
@@ -19,6 +20,7 @@ const EMPTY: ReviewSummary = {
 };
 
 function Overview() {
+  const { activeOrgId } = useActiveOrg();
   const [summary, setSummary] = useState<ReviewSummary>(EMPTY);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -26,7 +28,9 @@ function Overview() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setSummary(await queryDashboard("overview:review-summary:30", () => adminApi.reviewSummary(undefined, 30), { ttlMs: 30_000 }));
+      // Scope the summary to the active workspace; the cache key includes the org
+      // so switching workspaces doesn't reuse another org's cached figures.
+      setSummary(await queryDashboard(`overview:review-summary:30:${activeOrgId}`, () => adminApi.reviewSummary(activeOrgId || undefined, 30), { ttlMs: 30_000 }));
       setError("");
     } catch (caught) {
       setSummary(EMPTY);
@@ -34,7 +38,7 @@ function Overview() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [activeOrgId]);
   useEffect(() => { void load(); }, [load]);
 
   const highPriority = summary.severity.critical + summary.severity.high;
