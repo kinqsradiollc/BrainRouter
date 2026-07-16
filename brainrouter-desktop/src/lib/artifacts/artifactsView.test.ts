@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { ArtifactRecord } from '@kinqs/brainrouter-types';
 import {
-  sortArtifacts, artifactCounts, draftArtifactCount, kindLabel, statusClass, artifactSummary,
+  sortArtifacts, artifactCounts, draftArtifactCount, kindLabel, statusClass, artifactSummary, isReactArtifact,
   ARTIFACT_KIND_OPTIONS, ARTIFACT_STATUS_OPTIONS, ARTIFACT_FORMAT_OPTIONS,
 } from './artifactsView.js';
 
@@ -52,6 +52,15 @@ test('statusClass prefixes the status with st-, and artifactSummary is a compact
   assert.equal(statusClass('draft'), 'st-draft');
   assert.equal(statusClass('final'), 'st-final');
   assert.equal(artifactSummary(rec({ id: 'art_x', kind: 'sketch', status: 'final' })), 'art_x · sketch · final');
+});
+
+test('isReactArtifact detects jsx/tsx code artifacts (case-insensitive), not others', () => {
+  assert.equal(isReactArtifact({ format: 'code', language: 'jsx' }), true);
+  assert.equal(isReactArtifact({ format: 'code', language: 'TSX' }), true);
+  assert.equal(isReactArtifact({ format: 'code', language: 'react' }), true);
+  assert.equal(isReactArtifact({ format: 'code', language: 'ts' }), false);
+  assert.equal(isReactArtifact({ format: 'code', language: undefined }), false);
+  assert.equal(isReactArtifact({ format: 'markdown', language: 'jsx' }), false);
 });
 
 test('option arrays cover the full enum sets', () => {

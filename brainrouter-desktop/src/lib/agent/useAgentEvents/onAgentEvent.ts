@@ -14,6 +14,7 @@ import {
 } from '../../workspace/workspaceEvents.js';
 import { sessionRowsCacheKey } from '../../session/list/sessionCache.js';
 import { fileFromSummary } from '../../format.js';
+import { parseArtifactWriteSummary } from '../../artifacts/artifactWriteRow.js';
 import { FOREGROUND_ONLY_KINDS } from '../../../constants.js';
 import { rid } from '../../rid.js';
 import { type AgentEventsCtx, isWorkspaceScopedReviewQuery } from './types.js';
@@ -148,7 +149,22 @@ export function createOnAgentEvent(deps: OnAgentEventDeps): (msg: AgentEventMess
         // §AV-3 — near-live artifacts: when the agent authors/updates an artifact
         // in-band (artifact_write), refresh the list immediately so the Artifacts
         // panel reflects it mid-turn instead of waiting for a manual reload.
-        if (e.ok && e.tool === 'artifact_write') q('q-art', 'artifact-list');
+        // (tool-end is FOREGROUND-only, so this only fires for the chat on screen.)
+        if (e.ok && e.tool === 'artifact_write') {
+          q('q-art', 'artifact-list');
+          // F2 — a compact inline card in the transcript; F1 — pop the Artifacts
+          // panel open + focus this artifact. Both derive their fields from the
+          // deterministic tool summary (there is no AGENT-path artifact-event).
+          const info = parseArtifactWriteSummary(e.summary);
+          if (info) {
+            push({ id: rid(), kind: 'artifact', artifactId: info.id, title: info.title, format: info.format, artifactKind: info.kind, version: info.version, action: info.action, ts: Date.now() });
+            // Carry the target id so a freshly-mounted panel selects it on first
+            // render; the events drive the auto-open (F1) + live re-selection.
+            try { localStorage.setItem('br-artifact-focus', JSON.stringify({ id: info.id, at: Date.now() })); } catch { /* ignore */ }
+            window.dispatchEvent(new CustomEvent('br-artifact-focus'));
+            window.dispatchEvent(new CustomEvent('br-artifact-written'));
+          }
+        }
         break;
       }
       case 'child-tool-start':

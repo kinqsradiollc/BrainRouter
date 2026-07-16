@@ -16,8 +16,9 @@ import { parseThink } from '../lib/chat/thinkParse.js';
 import { Markdown, MD_COMPONENTS } from './markdown.js';
 import { ToolGroup } from './ToolGroup.js';
 import { ChangesetCard } from './ChangesetCard.js';
+import { ArtifactCard } from './ArtifactCard.js';
 
-export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onOpenFile, onOpenDiff, onOpenPlan, onDismissError, onFork, onRewind }: {
+export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onOpenFile, onOpenDiff, onOpenPlan, onOpenArtifact, onDismissError, onFork, onRewind }: {
   r: ChatRow;
   liveLast: boolean;
   inlineDiffs: Record<string, string>;
@@ -25,6 +26,7 @@ export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onOpenFile
   onOpenFile: (file: string) => void;
   onOpenDiff: (file: string) => void;
   onOpenPlan: () => void;
+  onOpenArtifact: (id: string) => void;
   onDismissError: (id: number | string) => void;
   onFork: (ts: number) => void;
   onRewind: (ts: number) => void;
@@ -65,6 +67,7 @@ export function MessageRow({ r, liveLast, inlineDiffs, onRequestDiff, onOpenFile
     }
     case 'tool-group': return <div className="row"><ToolGroup row={r} live={liveLast} inlineDiffs={inlineDiffs} onRequestDiff={onRequestDiff} onOpenFile={onOpenFile} onOpenDiff={onOpenDiff} /></div>;
     case 'changeset': return <div className="row"><ChangesetCard files={r.files} insertions={r.insertions} deletions={r.deletions} onOpenDiff={onOpenDiff} /></div>;
+    case 'artifact': return <div className="row"><ArtifactCard artifactId={r.artifactId} title={r.title} format={r.format} artifactKind={r.artifactKind} version={r.version} action={r.action} onOpen={onOpenArtifact} /></div>;
     case 'error': return (
       <div className="row">
         <div className="error-card">
