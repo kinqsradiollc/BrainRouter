@@ -26,6 +26,21 @@ function relTime(iso?: string): string {
 }
 const CRED_LABEL: Record<string, string> = { oauth: 'OAuth account', dynamic: 'GitHub CLI', static: 'access token', none: '' };
 const SERVER_OAUTH_SOURCES = new Set(['gitlab', 'slack', 'google-drive', 'gmail', 'notion', 'linear']);
+// Every OAuth-backed source can hold more than one account (work + personal + …).
+const MULTI_ACCOUNT_SOURCES = new Set(['github', ...SERVER_OAUTH_SOURCES]);
+/** One external account for a source — the server keeps the sealed credential;
+ * this is only the label, connected state, and discovered account identity. */
+type ConnectorAccountEntry = {
+  id: string;
+  label: string;
+  connected: boolean;
+  status: string;
+  account: string | null;
+  enabled: boolean;
+  lastRunAt: string | null;
+  lastError: string | null;
+  authMode?: string;
+};
 type AccountConnectorSnapshot = {
   source: ConnectorRecord['source'];
   connected: boolean;
@@ -86,6 +101,25 @@ export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
     }
   }, []);
   React.useEffect(() => { void refreshAccountConnectors(); }, [refreshAccountConnectors]);
+
+  // Multi-account: every account connected for the source open in the editor.
+  const [sourceAccounts, setSourceAccounts] = useState<ConnectorAccountEntry[]>([]);
+  const [newAccountLabel, setNewAccountLabel] = useState('');
+  const [addAccountBusy, setAddAccountBusy] = useState(false);
+  const [addAccountError, setAddAccountError] = useState('');
+  const refreshSourceAccounts = React.useCallback(async (source: string): Promise<void> => {
+    if (!MULTI_ACCOUNT_SOURCES.has(source)) { setSourceAccounts([]); return; }
+    try {
+      const res = await bridgeQuery<{ accounts?: ConnectorAccountEntry[] }>('connector-accounts', { source });
+      setSourceAccounts(Array.isArray(res.accounts) ? res.accounts : []);
+    } catch { setSourceAccounts([]); }
+  }, []);
+  React.useEffect(() => {
+    if (!editorOpen || !selectedEntry) { return; }
+    setNewAccountLabel('');
+    setAddAccountError('');
+    void refreshSourceAccounts(selectedEntry.source);
+  }, [editorOpen, selectedEntry?.source, refreshSourceAccounts]);
 
   React.useEffect(() => {
     if (!firstGithub) return;
@@ -239,7 +273,7 @@ export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
     const timer = window.setTimeout(() => {
       if (oauthState.flow === 'browser') {
         void bridgeQuery<{ connected?: boolean; login?: string }>('github-connect-status').then((res) => {
-          if (res.connected) { markGithubOauthCredential(true); setGithubAccount({ signedIn: true, connected: true, login: res.login }); setOauthState({ status: 'authorized', storageMode: 'BrainRouter account' }); setTimeout(refreshSnapshot, 120); return; }
+          if (res.connected) { markGithubOauthCredential(true); setGithubAccount({ signedIn: true, connected: true, login: res.login }); setOauthState({ status: 'authorized', storageMode: 'BrainRouter account' }); setTimeout(refreshSnapshot, 120); void refreshSourceAccounts('github'); return; }
           if (Date.now() >= oauthState.expiresAtMs) { setOauthState({ status: 'error', error: 'Authorization was not completed — click Connect to try again.' }); return; }
           setOauthState((current) => current.status === 'pending' ? { ...current } : current);
         }).catch((err) => setOauthState({ status: 'error', error: err instanceof Error ? err.message : String(err) }));
@@ -248,7 +282,7 @@ export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
       void bridgeQuery<{ status?: string; login?: string }>('github-device-poll').then((res) => {
         // Re-trigger the effect (new object) so polling continues until authorized.
         if (res.status === 'pending') { setOauthState((cur) => (cur.status === 'pending' ? { ...cur } : cur)); return; }
-        if (res.status === 'connected') { markGithubOauthCredential(true); setGithubAccount({ signedIn: true, connected: true, login: res.login }); setOauthState({ status: 'authorized', storageMode: 'BrainRouter account' }); setTimeout(refreshSnapshot, 120); return; }
+        if (res.status === 'connected') { markGithubOauthCredential(true); setGithubAccount({ signedIn: true, connected: true, login: res.login }); setOauthState({ status: 'authorized', storageMode: 'BrainRouter account' }); setTimeout(refreshSnapshot, 120); void refreshSourceAccounts('github'); return; }
         setOauthState({ status: 'error', error: 'That code expired — click Connect to try again.' });
       }).catch((err) => setOauthState({ status: 'error', error: err instanceof Error ? err.message : String(err) }));
     }, delay);
@@ -309,6 +343,47 @@ export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
     await bridgeQuery('action:connector-oauth-disconnect', { source });
     await refreshAccountConnectors();
     if (selectedEntry?.source === source) await refreshGenericOauth();
+  };
+
+  // Multi-account: create a new empty connector for this source, then kick off
+  // its own auth flow (GitHub device code, or the generic OAuth browser redirect)
+  // bound to that connector id — so work + personal stay separate credentials.
+  const addAnotherAccount = async (): Promise<void> => {
+    if (!selectedEntry) return;
+    const source = selectedEntry.source;
+    setAddAccountBusy(true);
+    setAddAccountError('');
+    try {
+      const created = await bridgeQuery<{ ok?: boolean; connector?: { id?: string }; error?: string }>('connector-account-add', { source, label: newAccountLabel.trim() || undefined });
+      const connectorId = created.connector?.id;
+      if (!created.ok || !connectorId) { setAddAccountError(created.error || 'Could not create the account.'); return; }
+      setNewAccountLabel('');
+      if (source === 'github') {
+        const res = await bridgeQuery<{ ok: boolean; userCode?: string; verificationUri?: string; interval?: number; error?: string }>('github-device-start', { connectorId });
+        if (!res.ok || !res.userCode) { setAddAccountError(res.error || 'Could not start the GitHub connection.'); await refreshSourceAccounts(source); return; }
+        const uri = res.verificationUri || 'https://github.com/login/device';
+        setSelectedSource('github');
+        setCredentialMode('oauth');
+        setOauthState({ status: 'pending', flow: 'device', userCode: res.userCode, verificationUri: uri, intervalSec: Number(res.interval) > 0 ? Number(res.interval) : 5, expiresAtMs: Date.now() + 15 * 60_000 });
+        await bridgeQuery('action:open-external', { url: uri });
+      } else {
+        const res = await bridgeQuery<{ ok?: boolean; url?: string; error?: string }>('connector-oauth-start', { source, connectorId }).catch((e): { ok?: boolean; url?: string; error?: string } => ({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+        if (!res.ok || !res.url) { setAddAccountError(res.error || 'Could not start OAuth.'); await refreshSourceAccounts(source); return; }
+        await bridgeQuery('action:open-external', { url: res.url });
+        setAddAccountError('Complete authorization in the browser, then click Refresh.');
+      }
+      await refreshSourceAccounts(source);
+    } catch (e) {
+      setAddAccountError(e instanceof Error ? e.message : 'Could not add the account.');
+    } finally {
+      setAddAccountBusy(false);
+    }
+  };
+  const removeSourceAccount = async (id: string): Promise<void> => {
+    await bridgeQuery('action:connector-account-delete', { id });
+    if (selectedEntry) await refreshSourceAccounts(selectedEntry.source);
+    await refreshAccountConnectors();
+    await refreshGenericOauth();
   };
   const exportDefinitions = (): void => {
     const bundle: ConnectorDefinitionBundle = {
@@ -475,6 +550,34 @@ export function ConnectorSettings({ connectors, onAction, refreshSnapshot }: {
               </span>
             </div>
             <div ref={editorRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+            {MULTI_ACCOUNT_SOURCES.has(selectedEntry.source) ? (
+        <>
+          <div className="set-h2" style={{ marginTop: 2 }}>Accounts</div>
+          <div className="set-desc" style={{ marginBottom: 8 }}>Connect more than one {selectedEntry.title} account — e.g. work and personal. Each keeps its own sealed credential on the BrainRouter backend.</div>
+          {sourceAccounts.length ? (
+            <div className="provider-gallery" style={{ marginBottom: 10 }}>
+              {sourceAccounts.map((acct) => (
+                <div key={acct.id} className="provider-card saved">
+                  <span className="pc-name">{acct.label}<span className={`pc-tag ${acct.connected ? 'ok' : 'default'}`}>{acct.connected ? 'Connected' : 'Awaiting authorization'}</span></span>
+                  <span className="pc-host">{acct.account ? `@${acct.account}` : `${selectedEntry.title} · not yet authorized`}{acct.authMode ? ` · ${acct.authMode}` : ''}</span>
+                  <span className="pc-wire">Credential sealed server-side · schedule {acct.enabled ? 'on' : 'paused'} · last synced {relTime(acct.lastRunAt ?? undefined)}</span>
+                  {acct.lastError ? <span className="pc-host" style={{ color: 'var(--warn)' }}>Last sync didn’t finish — {acct.lastError}</span> : null}
+                  <span className="pc-actions"><button className="btn danger" onClick={() => void removeSourceAccount(acct.id)}>Remove</button></span>
+                </div>
+              ))}
+            </div>
+          ) : <div className="set-desc" style={{ marginBottom: 10 }}>No {selectedEntry.title} accounts connected yet — use the connection below, or add a labelled one here.</div>}
+          <Row title="Add another account" desc="Label it (e.g. Work, Personal), then authorize the new account in your browser.">
+            <div style={{ display: 'grid', gap: 8, minWidth: 300 }}>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input className="ctl" value={newAccountLabel} onChange={(e) => setNewAccountLabel(e.target.value)} placeholder="Work / Personal" />
+                <button type="button" className="btn" disabled={addAccountBusy} onClick={() => void addAnotherAccount()}>{addAccountBusy ? 'Starting…' : 'Add & connect'}</button>
+              </div>
+              {addAccountError ? <span className="pc-host" style={{ color: 'var(--warn)' }}>{addAccountError}</span> : null}
+            </div>
+          </Row>
+        </>
+            ) : null}
             {selectedEntry.source === 'github' ? (
         <>
           <div className="set-h2" style={{ marginTop: 2 }}>GitHub source</div>

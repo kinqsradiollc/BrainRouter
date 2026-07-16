@@ -3,7 +3,7 @@
 import { type KeyboardEvent, useCallback, useEffect, useState } from "react";
 import { StatusBadge } from "../../components/Analytics";
 import { PremiumButton } from "../../components/PremiumButton";
-import { adminApi, type ConnectorStatus } from "../../lib/adminApi";
+import { adminApi, type ConnectorAccount } from "../../lib/adminApi";
 import {
   applyGithubDevicePoll,
   beginGithubDeviceFlow,
@@ -18,33 +18,46 @@ const GROUPS: Array<{ title: string; sources: Array<[string, string]> }> = [
 ];
 
 type ResourceRow = { id: string; label: string; selected: boolean; kind?: string };
-type ConnectorAction = "connect" | "disconnect" | "resources" | "save" | "sync" | "schedule" | "cancel";
+type SourceAuthMode = "web" | "device" | undefined;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "The connector request failed.";
 }
 
 export function ConnectorRows({ orgId }: { orgId?: string }) {
-  const [state, setState] = useState<Record<string, ConnectorStatus | null>>({});
+  // Multi-account: each source now owns a LIST of connectors (accounts). We still
+  // read the single connectorStatus per source, but only to learn its authMode
+  // (device vs web) which drives how a fresh account is connected.
+  const [accounts, setAccounts] = useState<Record<string, ConnectorAccount[]>>({});
+  const [authModes, setAuthModes] = useState<Record<string, SourceAuthMode>>({});
   const [resources, setResources] = useState<Record<string, ResourceRow[]>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [expanded, setExpanded] = useState("");
+  const [adding, setAdding] = useState("");
+  const [labelDraft, setLabelDraft] = useState("");
   const [busy, setBusy] = useState("");
   const [activeGroup, setActiveGroup] = useState(GROUPS[0].title);
   const [githubDevice, setGithubDevice] = useState<GithubDeviceFlowState>({ status: "idle" });
 
   const load = useCallback(async () => {
-    const entries = await Promise.all(GROUPS.flatMap((group) => group.sources).map(async ([source]) => [
-      source,
-      await adminApi.connectorStatus(source, orgId).catch(() => null),
-    ] as const));
-    setState(Object.fromEntries(entries));
+    const sources = GROUPS.flatMap((group) => group.sources).map(([source]) => source);
+    const results = await Promise.all(sources.map(async (source) => {
+      const [accountsRes, status] = await Promise.all([
+        adminApi.connectorAccounts(source, orgId).catch(() => null),
+        adminApi.connectorStatus(source, orgId).catch(() => null),
+      ]);
+      return { source, accounts: accountsRes?.accounts ?? [], authMode: status?.authMode };
+    }));
+    setAccounts(Object.fromEntries(results.map((row) => [row.source, row.accounts] as const)));
+    setAuthModes(Object.fromEntries(results.map((row) => [row.source, row.authMode] as const)));
   }, [orgId]);
 
   useEffect(() => {
-    setState({});
+    setAccounts({});
+    setAuthModes({});
     setErrors({});
     setExpanded("");
+    setAdding("");
     setGithubDevice({ status: "idle" });
     void load();
   }, [load]);
@@ -87,7 +100,7 @@ export function ConnectorRows({ orgId }: { orgId?: string }) {
     };
   }, [githubDevice, load, orgId]);
 
-  const start = (source: string, action: ConnectorAction): void => {
+  const start = (source: string, action: string): void => {
     setBusy(`${source}:${action}`);
     setErrors((current) => ({ ...current, [source]: "" }));
   };
@@ -95,34 +108,56 @@ export function ConnectorRows({ orgId }: { orgId?: string }) {
     setErrors((current) => ({ ...current, [source]: errorMessage(error) }));
   };
 
-  async function startGithubDeviceFlow(): Promise<void> {
-    const next = beginGithubDeviceFlow(await adminApi.startGithubDevice(orgId));
+  async function startGithubDeviceFlow(connectorId?: string): Promise<void> {
+    const next = beginGithubDeviceFlow(await adminApi.startGithubDevice(orgId, connectorId));
     if (next.status === "error") throw new Error(next.error);
     setGithubDevice(next);
   }
 
-  async function connect(source: string): Promise<void> {
-    start(source, "connect");
+  // Start (or resume) the connect flow bound to a specific account/connector id.
+  // GitHub in device mode goes straight to the device flow; everyone else uses
+  // the web OAuth broker, with a 409 still falling back to GitHub device flow.
+  async function beginConnect(source: string, connectorId: string): Promise<void> {
+    if (source === "github" && authModes.github === "device") {
+      await startGithubDeviceFlow(connectorId);
+      return;
+    }
     try {
-      // GitHub in device mode (the zero-config bundled App, or no OAuth-App secret)
-      // goes straight to the device flow — no doomed confidential-OAuth round-trip.
-      if (source === "github" && state.github?.authMode === "device") {
-        await startGithubDeviceFlow();
-        return;
-      }
-      const result = await adminApi.startConnectorOAuth(source, state[source]?.connector?.id, orgId);
+      const result = await adminApi.startConnectorOAuth(source, connectorId, orgId);
       window.location.assign(result.url);
     } catch (error) {
-      // Fallback path preserved: a 409 from the web broker still drops to device flow.
       if (source === "github" && shouldUseGithubDeviceFallback(error)) {
-        try {
-          await startGithubDeviceFlow();
-        } catch (fallbackError) {
-          fail(source, fallbackError);
-        }
+        await startGithubDeviceFlow(connectorId);
       } else {
-        fail(source, error);
+        throw error;
       }
+    }
+  }
+
+  // Resume the connect flow for an existing (pending) account.
+  async function connectAccount(source: string, connectorId: string): Promise<void> {
+    start(source, `connect:${connectorId}`);
+    try {
+      await beginConnect(source, connectorId);
+    } catch (error) {
+      fail(source, error);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  // Create a brand-new empty account for a source, then start its connect flow
+  // bound to the returned connector id. Used both for the first account and for
+  // "Add another account".
+  async function startNewAccount(source: string, label: string): Promise<void> {
+    start(source, "connect");
+    try {
+      const { connector } = await adminApi.addConnectorAccount(source, label.trim(), orgId);
+      setAdding("");
+      setLabelDraft("");
+      await beginConnect(source, connector.id);
+    } catch (error) {
+      fail(source, error);
     } finally {
       setBusy("");
     }
@@ -140,10 +175,10 @@ export function ConnectorRows({ orgId }: { orgId?: string }) {
     }
   }
 
-  async function disconnect(source: string): Promise<void> {
-    start(source, "disconnect");
+  async function removeAccount(source: string, connectorId: string): Promise<void> {
+    start(source, `disconnect:${connectorId}`);
     try {
-      await adminApi.disconnectConnector(source, orgId);
+      await adminApi.deleteConnectorAccount(connectorId, orgId);
       setExpanded("");
       await load();
     } catch (error) {
@@ -188,7 +223,7 @@ export function ConnectorRows({ orgId }: { orgId?: string }) {
   }
 
   async function syncNow(source: string, connectorId: string): Promise<void> {
-    start(source, "sync");
+    start(source, `sync:${connectorId}`);
     try {
       const { result } = await adminApi.runConnector(connectorId, orgId);
       if (!result.ok) throw new Error(result.error || "The connector sync did not complete.");
@@ -202,7 +237,7 @@ export function ConnectorRows({ orgId }: { orgId?: string }) {
   }
 
   async function setScheduled(source: string, connectorId: string, enabled: boolean): Promise<void> {
-    start(source, "schedule");
+    start(source, `schedule:${connectorId}`);
     try {
       await adminApi.setConnectorSchedule(connectorId, enabled, orgId);
       await load();
@@ -225,6 +260,7 @@ export function ConnectorRows({ orgId }: { orgId?: string }) {
     event.preventDefault();
     setActiveGroup(GROUPS[nextIndex].title);
     setExpanded("");
+    setAdding("");
     requestAnimationFrame(() => document.getElementById(`connection-group-tab-${nextIndex}`)?.focus());
   };
 
@@ -242,7 +278,7 @@ export function ConnectorRows({ orgId }: { orgId?: string }) {
             tabIndex={candidate.title === activeGroup ? 0 : -1}
             className={candidate.title === activeGroup ? "active" : ""}
             onKeyDown={(event) => moveGroup(event, index)}
-            onClick={() => { setActiveGroup(candidate.title); setExpanded(""); }}
+            onClick={() => { setActiveGroup(candidate.title); setExpanded(""); setAdding(""); }}
           >
             {candidate.title}
           </button>
@@ -256,75 +292,149 @@ export function ConnectorRows({ orgId }: { orgId?: string }) {
       >
         <h2>{group.title}</h2>
         {group.sources.map(([source, label]) => {
-          const item = state[source];
-          const connector = item?.connector;
-          const connected = !!item?.connected;
+          const sourceAccounts = accounts[source] ?? [];
+          const connectedCount = sourceAccounts.filter((account) => account.connected).length;
+          const anyConnected = connectedCount > 0;
           const rows = resources[source] ?? [];
           const selectable = source !== "gmail";
           const isBusy = busy.startsWith(`${source}:`);
           const waitingForGithub = source === "github" && githubDevice.status === "pending";
-          const error = errors[source] || connector?.lastError || "";
+          const error = errors[source] || "";
           return (
             <div className="connector-resource" key={source}>
               <div className="settings-item">
                 <div>
                   <div className="settings-row__title">{label}</div>
                   <div className="settings-row__sub">
-                    {connected
-                      ? connector?.lastRunAt
-                        ? `Last sync ${new Date(connector.lastRunAt).toLocaleString()}`
-                        : "Connected — ready to sync"
-                      : "Connect a server-sealed account"}
+                    {anyConnected
+                      ? `${connectedCount} account${connectedCount === 1 ? "" : "s"} connected`
+                      : "No accounts connected yet"}
                   </div>
-                  {connector && (
-                    <div className="settings-row__sub">
-                      Schedule: {connector.enabled ? "automatic sync on" : "paused"}
-                    </div>
-                  )}
                   {error && <div className="connector-resource__error" role="alert">Last error: {error}</div>}
                 </div>
                 <div className="settings-actions">
-                  <StatusBadge tone={connected ? "ok" : "neutral"}>{connected ? "Connected" : "Not connected"}</StatusBadge>
-                  {connected && connector && (
-                    <>
-                      <PremiumButton
-                        size="small"
-                        variant="text"
-                        disabled={isBusy}
-                        onClick={() => void syncNow(source, connector.id)}
-                      >
-                        {busy === `${source}:sync` ? "Syncing…" : "Sync now"}
-                      </PremiumButton>
-                      <PremiumButton
-                        size="small"
-                        variant="text"
-                        disabled={isBusy}
-                        aria-pressed={connector.enabled}
-                        onClick={() => void setScheduled(source, connector.id, !connector.enabled)}
-                      >
-                        {busy === `${source}:schedule`
-                          ? "Saving…"
-                          : connector.enabled
-                            ? "Pause schedule"
-                            : "Resume schedule"}
-                      </PremiumButton>
-                    </>
-                  )}
-                  {connected && (
+                  <StatusBadge tone={anyConnected ? "ok" : "neutral"}>{anyConnected ? "Connected" : "Not connected"}</StatusBadge>
+                  {anyConnected && (
                     <PremiumButton size="small" variant="text" disabled={isBusy} onClick={() => void toggleResources(source)}>
                       {expanded === source ? "Close" : source === "gmail" ? "View labels" : "Choose resources"}
                     </PremiumButton>
                   )}
-                  <PremiumButton
-                    size="small"
-                    variant={connected ? "danger" : "ghost"}
-                    disabled={isBusy || waitingForGithub}
-                    onClick={() => connected ? void disconnect(source) : void connect(source)}
-                  >
-                    {waitingForGithub ? "Waiting…" : busy === `${source}:${connected ? "disconnect" : "connect"}` ? "Working…" : connected ? "Disconnect" : "Connect"}
-                  </PremiumButton>
+                  {sourceAccounts.length === 0 ? (
+                    <PremiumButton
+                      size="small"
+                      variant="ghost"
+                      disabled={isBusy || waitingForGithub}
+                      onClick={() => void startNewAccount(source, "")}
+                    >
+                      {waitingForGithub ? "Waiting…" : busy === `${source}:connect` ? "Working…" : "Connect"}
+                    </PremiumButton>
+                  ) : (
+                    <PremiumButton
+                      size="small"
+                      variant="ghost"
+                      disabled={isBusy || waitingForGithub}
+                      onClick={() => { setAdding(adding === source ? "" : source); setLabelDraft(""); }}
+                    >
+                      {adding === source ? "Close" : "Add another account"}
+                    </PremiumButton>
+                  )}
                 </div>
               </div>
+              {adding === source && (
+                <div className="connector-resource__picker">
+                  <div className="settings-row__title">Add another account</div>
+                  <div className="settings-hint">Give it a label to tell your accounts apart (optional), then authorize the new account.</div>
+                  <input
+                    type="text"
+                    value={labelDraft}
+                    placeholder="e.g. Work"
+                    aria-label={`New ${label} account label`}
+                    style={{ display: "block", marginTop: 8, width: "100%", maxWidth: 320 }}
+                    onChange={(event) => setLabelDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") { event.preventDefault(); void startNewAccount(source, labelDraft); }
+                    }}
+                  />
+                  <div className="connector-resource__actions">
+                    <PremiumButton
+                      size="small"
+                      variant="primary"
+                      disabled={isBusy || waitingForGithub}
+                      onClick={() => void startNewAccount(source, labelDraft)}
+                    >
+                      {busy === `${source}:connect` ? "Working…" : "Connect account"}
+                    </PremiumButton>
+                    <PremiumButton size="small" variant="text" disabled={isBusy} onClick={() => { setAdding(""); setLabelDraft(""); }}>Cancel</PremiumButton>
+                  </div>
+                </div>
+              )}
+              {sourceAccounts.map((account) => (
+                <div className="settings-item" key={account.id}>
+                  <div>
+                    <div className="settings-row__title">{account.label || label}</div>
+                    <div className="settings-row__sub">
+                      {account.connected
+                        ? account.account
+                          ? `@${account.account}`
+                          : "Connected — ready to sync"
+                        : "Awaiting authorization"}
+                    </div>
+                    {account.connected && (
+                      <div className="settings-row__sub">
+                        {account.lastRunAt ? `Last sync ${new Date(account.lastRunAt).toLocaleString()}` : "Not synced yet"}
+                        {" · "}
+                        {account.enabled ? "automatic sync on" : "paused"}
+                      </div>
+                    )}
+                    {account.lastError && <div className="connector-resource__error" role="alert">Last error: {account.lastError}</div>}
+                  </div>
+                  <div className="settings-actions">
+                    <StatusBadge tone={account.connected ? "ok" : "neutral"}>{account.connected ? "Connected" : "Pending"}</StatusBadge>
+                    {account.connected ? (
+                      <>
+                        <PremiumButton
+                          size="small"
+                          variant="text"
+                          disabled={isBusy}
+                          onClick={() => void syncNow(source, account.id)}
+                        >
+                          {busy === `${source}:sync:${account.id}` ? "Syncing…" : "Sync now"}
+                        </PremiumButton>
+                        <PremiumButton
+                          size="small"
+                          variant="text"
+                          disabled={isBusy}
+                          aria-pressed={account.enabled}
+                          onClick={() => void setScheduled(source, account.id, !account.enabled)}
+                        >
+                          {busy === `${source}:schedule:${account.id}`
+                            ? "Saving…"
+                            : account.enabled
+                              ? "Pause schedule"
+                              : "Resume schedule"}
+                        </PremiumButton>
+                      </>
+                    ) : (
+                      <PremiumButton
+                        size="small"
+                        variant="primary"
+                        disabled={isBusy || waitingForGithub}
+                        onClick={() => void connectAccount(source, account.id)}
+                      >
+                        {waitingForGithub ? "Waiting…" : busy === `${source}:connect:${account.id}` ? "Working…" : "Connect"}
+                      </PremiumButton>
+                    )}
+                    <PremiumButton
+                      size="small"
+                      variant="danger"
+                      disabled={isBusy || waitingForGithub}
+                      onClick={() => void removeAccount(source, account.id)}
+                    >
+                      {busy === `${source}:disconnect:${account.id}` ? "Removing…" : "Disconnect"}
+                    </PremiumButton>
+                  </div>
+                </div>
+              ))}
               {waitingForGithub && (
                 <div className="connector-resource__picker" role="status" aria-label="GitHub device authorization">
                   <div className="settings-row__title">Complete GitHub authorization</div>

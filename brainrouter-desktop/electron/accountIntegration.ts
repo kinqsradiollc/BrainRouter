@@ -409,9 +409,14 @@ export async function startAccountConnectorOAuth(
   account: BrainRouterAccountContext,
   source: string,
   fetchImpl: AccountFetch = timeoutFetch,
+  connectorId?: string,
 ): Promise<{ ok: boolean; url?: string; error?: string }> {
+  // `connectorId` (multi-account) re-connects a specific existing account rather
+  // than minting a new one; the backend reads it as a query param and verifies
+  // ownership before binding it into the signed state.
+  const query = connectorId ? `?connectorId=${encodeURIComponent(connectorId)}` : '';
   const response = await fetchImpl(
-    `${account.baseUrl}/api/connectors/${encodeURIComponent(source)}/oauth/start`,
+    `${account.baseUrl}/api/connectors/${encodeURIComponent(source)}/oauth/start${query}`,
     { method: 'POST', headers: brainRouterAccountHeaders(account, true) },
   );
   const body = await safeJson(response);
