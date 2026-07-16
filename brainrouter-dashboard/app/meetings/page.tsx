@@ -12,7 +12,7 @@ import { Lock, UsersThree, Buildings, GlobeHemisphereWest, Microphone, type Icon
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
 import { InlineLoading } from "../../components/LoadingSpinner";
-import { adminApi, authFetch, type Team } from "../../lib/adminApi";
+import { adminApi, authFetch, type OrgSummary, type Team } from "../../lib/adminApi";
 import { BASE_URL } from "../../lib/client";
 import { getApiKey, getJwt } from "../../lib/client-auth";
 import { invalidateDashboardQueries, queryDashboard } from "../../lib/dashboardQuery";
@@ -83,6 +83,7 @@ export default function MeetingsPage() {
   const [transcriptLoading, setTranscriptLoading] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [teams, setTeams] = useState<Team[]>([]);
+  const [orgs, setOrgs] = useState<OrgSummary[]>([]);
   const [teamsLoaded, setTeamsLoaded] = useState(false);
   const [teamPickerOpen, setTeamPickerOpen] = useState(false);
   const [newTeamName, setNewTeamName] = useState("");
@@ -297,10 +298,16 @@ export default function MeetingsPage() {
 
   // Load the caller's teams (active org) lazily the first time the share menu
   // opens — most meetings never get shared to a team, so we don't fetch on load.
+  // Organizations ride along so the picker can group org teams under the active
+  // org's name and offer an org-linked create; an orgs failure is non-fatal.
   const loadTeams = useCallback(async () => {
     try {
-      const r = await queryDashboard("teams:list", () => adminApi.listTeams(), { ttlMs: 30_000 });
-      setTeams(r.teams ?? []);
+      const [teamsResult, orgsResult] = await Promise.all([
+        queryDashboard("teams:list", () => adminApi.listTeams(), { ttlMs: 30_000 }),
+        queryDashboard("orgs", () => adminApi.listOrgs(), { ttlMs: 60_000 }).catch(() => ({ orgs: [] as OrgSummary[] })),
+      ]);
+      setTeams(teamsResult.teams ?? []);
+      setOrgs(orgsResult.orgs ?? []);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not load teams.");
     } finally {
@@ -310,14 +317,27 @@ export default function MeetingsPage() {
 
   useEffect(() => { if (shareOpen && !teamsLoaded) void loadTeams(); }, [shareOpen, teamsLoaded, loadTeams]);
 
+  // The org the share picker is scoped to: adminApi calls here send no explicit
+  // X-BrainRouter-Org, so the backend resolves the caller's default org — mirror
+  // that by treating the default org as active (same fallback as app/teams).
+  const activeOrg = useMemo(() => orgs.find((org) => org.isDefault) ?? orgs[0], [orgs]);
+  // A personal workspace cannot own organization teams, so org-linked affordances
+  // only appear when the active context is a real shared organization.
+  const shareOrg = activeOrg && activeOrg.isPersonal !== true ? activeOrg : undefined;
+  const organizationTeams = useMemo(() => teams.filter((team) => team.kind === "organization"), [teams]);
+  const personalTeams = useMemo(() => teams.filter((team) => team.kind === "personal"), [teams]);
+
   // Team scope REQUIRES a teamId (the backend 400s without one). Selecting the
   // Team row with no team chosen just reveals the picker; a concrete team POSTs.
-  const setScope = useCallback(async (scope: Scope, teamId?: string) => {
+  const setScope = useCallback(async (scope: Scope, teamId?: string, justCreated?: Team) => {
     if (!detail) return;
     if (scope === "team" && !teamId) { setTeamPickerOpen(true); return; }
     // Defence in depth: only share to a team the caller actually belongs to. The
-    // server also enforces this (assertUserInTeam), so this just fails fast in the UI.
-    if (scope === "team" && teamId && teams.length && !teams.some((t) => t.id === teamId)) {
+    // server also enforces this (assertUserInTeam), so this just fails fast in the
+    // UI. A team created a moment ago is passed explicitly because the `teams`
+    // state captured by this closure does not include it yet.
+    const known = justCreated ? [...teams, justCreated] : teams;
+    if (scope === "team" && teamId && known.length && !known.some((t) => t.id === teamId)) {
       setError("You can only share to a team you belong to.");
       return;
     }
@@ -335,22 +355,26 @@ export default function MeetingsPage() {
     } finally { setBusy(""); }
   }, [detail, teams]);
 
+  // Inline create keeps meeting sharing first-class to the enterprise structure:
+  // inside a shared organization it creates an ORGANIZATION team bound to that
+  // org; in a personal workspace it creates a personal cross-org team. The new
+  // team is selected immediately so the meeting is shared in the same gesture.
   const createTeamInline = useCallback(async () => {
     const name = newTeamName.trim();
     if (!name) return;
     setBusy("create-team");
     try {
-      const { team } = await adminApi.createTeam(name);
+      const { team } = await adminApi.createTeam(name, shareOrg ? "organization" : "personal");
       invalidateDashboardQueries("teams:");
       setTeams((cur) => [...cur, team]);
       setNewTeamName("");
-      await setScope("team", team.id);
+      await setScope("team", team.id, team);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not create the team.");
     } finally {
       setBusy("");
     }
-  }, [newTeamName, setScope]);
+  }, [newTeamName, setScope, shareOrg]);
 
   const regenerate = useCallback(async () => {
     if (!detail) return;
@@ -489,22 +513,32 @@ export default function MeetingsPage() {
                         <div className={styles.linkzone}>
                           {!teamsLoaded ? (
                             <InlineLoading label="Loading teams…" />
-                          ) : teams.length === 0 ? (
-                            <>
-                              <div className={styles.teamPickH}>You have no teams yet — create an organization team here, or open Teams for a personal cross-organization circle.</div>
-                              <div className={styles.teamCreateRow}>
-                                <input value={newTeamName} onChange={(e) => setNewTeamName(e.target.value)} placeholder="Team name (e.g. Platform)" aria-label="New team name" onKeyDown={(e) => { if (e.key === "Enter") void createTeamInline(); }} />
-                                <button type="button" onClick={() => void createTeamInline()} disabled={busy === "create-team" || !newTeamName.trim()}>{busy === "create-team" ? "Creating…" : "Create"}</button>
-                              </div>
-                            </>
                           ) : (
                             <>
-                              <div className={styles.teamPickH}>Share with team</div>
-                              <select className={styles.teamSel} value={detail.share.teamId ?? ""} onChange={(e) => { if (e.target.value) void setScope("team", e.target.value); }} aria-label="Share with team">
-                                <option value="" disabled>Select a team…</option>
-                                {teams.some((team) => team.kind === "personal") ? <optgroup label="Personal teams · cross-organization">{teams.filter((team) => team.kind === "personal").map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</optgroup> : null}
-                                {teams.some((team) => team.kind === "organization") ? <optgroup label="Organization teams · current organization">{teams.filter((team) => team.kind === "organization").map((team) => <option key={team.id} value={team.id}>{team.name}{team.orgName ? ` · ${team.orgName}` : ""}</option>)}</optgroup> : null}
-                              </select>
+                              {teams.length === 0 ? (
+                                <div className={styles.teamPickH}>
+                                  {shareOrg
+                                    ? <>No teams in <b>{shareOrg.name}</b> yet — create the first organization team below to share this meeting.</>
+                                    : "No teams yet — create a personal cross-organization team below to share this meeting."}
+                                </div>
+                              ) : (
+                                <>
+                                  <div className={styles.teamPickH}>Share with team</div>
+                                  <select className={styles.teamSel} value={detail.share.teamId ?? ""} onChange={(e) => { if (e.target.value) void setScope("team", e.target.value); }} aria-label="Share with team">
+                                    <option value="" disabled>Select a team…</option>
+                                    {organizationTeams.length ? <optgroup label={`Organization teams — ${shareOrg?.name ?? organizationTeams[0].orgName ?? "current organization"}`}>{organizationTeams.map((team) => <option key={team.id} value={team.id}>{team.name}{team.orgName ? ` · ${team.orgName}` : ""}</option>)}</optgroup> : null}
+                                    {personalTeams.length ? <optgroup label="Personal teams · cross-organization · explicit access">{personalTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</optgroup> : null}
+                                  </select>
+                                  {shareOrg && organizationTeams.length === 0 ? (
+                                    <div className={styles.teamPickNote}>No organization teams in <b>{shareOrg.name}</b> yet — create one below to keep this meeting linked to your organization.</div>
+                                  ) : null}
+                                </>
+                              )}
+                              <div className={styles.teamCreateLabel}>{shareOrg ? <>Create team in <b>{shareOrg.name}</b></> : "Create personal team"}</div>
+                              <div className={styles.teamCreateRow}>
+                                <input value={newTeamName} onChange={(e) => setNewTeamName(e.target.value)} placeholder={shareOrg ? "Team name (e.g. Platform)" : "Team name (e.g. Research circle)"} aria-label="New team name" onKeyDown={(e) => { if (e.key === "Enter") void createTeamInline(); }} />
+                                <button type="button" onClick={() => void createTeamInline()} disabled={busy === "create-team" || !newTeamName.trim()}>{busy === "create-team" ? "Creating…" : "Create"}</button>
+                              </div>
                             </>
                           )}
                         </div>

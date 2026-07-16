@@ -82,7 +82,10 @@ button.chip:disabled{opacity:.6;cursor:default}
 .linkMeta span{font-size:10.5px;color:var(--mv-tx3)}
 .revoke{font-size:10.5px;color:var(--danger);background:none;border:0;cursor:pointer}
 .teamPickH{font-size:11px;color:var(--mv-tx3);line-height:1.5;padding:0 2px 8px}
+.teamPickH b,.teamPickNote b,.teamCreateLabel b{font-weight:600;color:var(--mv-tx2)}
+.teamPickNote{font-size:11px;color:var(--mv-tx3);line-height:1.5;padding:8px 2px 0}
 .teamSel{width:100%;font-size:12.5px;color:var(--mv-tx);background:var(--mv-panel);border:1px solid var(--mv-line3);border-radius:7px;padding:8px 9px;cursor:pointer}
+.teamCreateLabel{font-size:10.5px;letter-spacing:.6px;text-transform:uppercase;color:var(--mv-tx3);font-weight:600;padding:10px 2px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .teamCreateRow{display:flex;gap:7px}
 .teamCreateRow input{flex:1;font-size:12px;color:var(--mv-tx);background:var(--mv-panel);border:1px solid var(--mv-line3);border-radius:7px;padding:7px 9px;min-width:0}
 .teamCreateRow button{font-size:11px;color:var(--mv-tx);background:var(--mv-raise);border:1px solid var(--mv-line3);border-radius:7px;padding:7px 11px;cursor:pointer;white-space:nowrap}

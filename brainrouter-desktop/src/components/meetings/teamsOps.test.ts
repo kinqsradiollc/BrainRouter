@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createTeamsOps, toTeamOptions } from './teamsOps.js';
+import { createTeamsOps, groupTeamOptions, pickTeamCreateTarget, toTeamOptions } from './teamsOps.js';
 
 test('toTeamOptions keeps valid teams and derives {id, name} picker rows', () => {
   const rows = toTeamOptions([
@@ -32,6 +32,38 @@ test('toTeamOptions degrades to an empty list for non-array or malformed payload
   assert.deepEqual(toTeamOptions({ teams: [] }), []);
   assert.deepEqual(toTeamOptions('nope'), []);
   assert.deepEqual(toTeamOptions([null, 3, 'x', { id: '' }, { name: 'no id' }]), []);
+});
+
+test('groupTeamOptions sections organization teams first, each section name-sorted', () => {
+  const rows = toTeamOptions([
+    { id: 'team_p2', kind: 'personal', name: 'Zeta circle' },
+    { id: 'team_o2', orgId: 'o2', orgName: 'Beta Org', name: 'Platform' },
+    { id: 'team_p1', kind: 'personal', name: 'Alpha circle' },
+    { id: 'team_o1', orgId: 'o1', orgName: 'Acme', name: 'Design' },
+    { id: 'team_o3', orgId: 'o1', orgName: 'Acme', name: 'Core' },
+  ]);
+  const grouped = groupTeamOptions(rows);
+  assert.deepEqual(grouped.organization.map((team) => team.id), ['team_o3', 'team_o1', 'team_o2']);
+  assert.deepEqual(grouped.personal.map((team) => team.id), ['team_p1', 'team_p2']);
+});
+
+test('pickTeamCreateTarget targets the default shared organization context', () => {
+  assert.deepEqual(pickTeamCreateTarget([
+    { orgId: 'personal', name: 'Personal', isPersonal: true },
+    { orgId: 'o1', name: 'Acme', isDefault: true },
+    { orgId: 'o2', name: 'Beta Org' },
+  ]), { kind: 'organization', orgId: 'o1', orgName: 'Acme' });
+  // No default flag → first context wins, matching TeamsView's pick.
+  assert.deepEqual(pickTeamCreateTarget([
+    { orgId: 'o2', name: 'Beta Org' },
+    { orgId: 'o1', name: 'Acme' },
+  ]), { kind: 'organization', orgId: 'o2', orgName: 'Beta Org' });
+});
+
+test('pickTeamCreateTarget falls back to a personal team outside shared orgs', () => {
+  assert.deepEqual(pickTeamCreateTarget([{ orgId: 'personal', name: 'Personal workspace', isPersonal: true, isDefault: true }]),
+    { kind: 'personal', orgId: null, orgName: null });
+  assert.deepEqual(pickTeamCreateTarget([]), { kind: 'personal', orgId: null, orgName: null });
 });
 
 test('Teams ops exposes management CRUD over the privileged bridge', async () => {

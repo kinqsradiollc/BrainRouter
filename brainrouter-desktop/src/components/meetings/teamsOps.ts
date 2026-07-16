@@ -82,6 +82,27 @@ export function toTeamContexts(raw: unknown): TeamContext[] {
   });
 }
 
+/** Picker sections: organization teams first (grouped under their org), then
+ *  personal cross-organization teams. */
+export interface GroupedTeamOptions { organization: TeamOption[]; personal: TeamOption[] }
+export function groupTeamOptions(teams: TeamOption[]): GroupedTeamOptions {
+  return {
+    organization: teams.filter((item) => item.kind === "organization")
+      .sort((a, b) => (a.orgName ?? "").localeCompare(b.orgName ?? "") || a.name.localeCompare(b.name)),
+    personal: teams.filter((item) => item.kind === "personal").sort((a, b) => a.name.localeCompare(b.name)),
+  };
+}
+
+/** Where an inline "New team" create lands: the caller's active shared
+ *  organization when they are in one (same pick as TeamsView — default context,
+ *  else the first), otherwise their personal workspace. */
+export interface TeamCreateTarget { kind: TeamKind; orgId: string | null; orgName: string | null }
+export function pickTeamCreateTarget(contexts: TeamContext[]): TeamCreateTarget {
+  const active = contexts.find((item) => item.isDefault) ?? contexts[0];
+  if (active && active.isPersonal !== true) return { kind: "organization", orgId: active.orgId, orgName: active.name };
+  return { kind: "personal", orgId: null, orgName: null };
+}
+
 function team(value: unknown): TeamOption {
   const row = toTeamOptions([value])[0];
   if (!row) throw new Error("The server returned an invalid team.");
