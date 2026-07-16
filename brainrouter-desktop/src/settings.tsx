@@ -753,11 +753,15 @@ export function SettingsDialog(props: {
     }
   })();
 
+  // Render NOTHING when closed. Relying on the `hidden` attribute alone left the
+  // full-screen `.overlay` mounted — any CSS `display` on `.overlay` defeats
+  // `[hidden]`, so an invisible backdrop sat on top from launch, swallowing every
+  // click and reading as a stuck-open modal. (All hooks run above this return.)
+  if (!props.open) return null;
+
   return (
     <div
       className="overlay"
-      hidden={!props.open}
-      aria-hidden={!props.open}
       onClick={(e) => { if (e.target === e.currentTarget) props.onClose(); }}
     >
       <div
