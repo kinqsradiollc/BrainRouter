@@ -71,6 +71,13 @@ button.chip:disabled{opacity:.6;cursor:default}
 .linkMeta{display:flex;justify-content:space-between;align-items:center;margin-top:8px}
 .linkMeta span{font-size:10.5px;color:var(--mv-tx3)}
 .revoke{font-size:10.5px;color:var(--danger);background:none;border:0;cursor:pointer}
+.teamPickH{font-size:11px;color:var(--mv-tx3);line-height:1.5;padding:0 2px 8px}
+.teamSel{width:100%;font-size:12.5px;color:var(--mv-tx);background:var(--mv-panel);border:1px solid var(--mv-line3);border-radius:7px;padding:8px 9px;cursor:pointer}
+.teamCreateRow{display:flex;gap:7px}
+.teamCreateRow input{flex:1;font-size:12px;color:var(--mv-tx);background:var(--mv-panel);border:1px solid var(--mv-line3);border-radius:7px;padding:7px 9px;min-width:0}
+.teamCreateRow button{font-size:11px;color:var(--mv-tx);background:var(--mv-raise);border:1px solid var(--mv-line3);border-radius:7px;padding:7px 11px;cursor:pointer;white-space:nowrap}
+.teamCreateRow button:hover:not(:disabled){background:var(--mv-raise2)}
+.teamCreateRow button:disabled{opacity:.5;cursor:default}
 /* body */
 .body{padding:16px 20px 20px;display:grid;grid-template-columns:1.35fr 1fr;gap:14px;align-items:start}
 .card{background:var(--mv-panel2);border:1px solid var(--mv-line);border-radius:var(--radius-card);padding:15px 17px}

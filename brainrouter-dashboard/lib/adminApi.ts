@@ -420,6 +420,20 @@ export const adminApi = {
   removeMember: (orgId: string, userId: string) =>
     authFetch(`/api/orgs/${orgId}/members/${encodeURIComponent(userId)}`, { method: "DELETE", orgId }),
   setDefaultOrg: (orgId: string) => authFetch(`/api/orgs/${orgId}/default`, { method: "POST" }),
+  // Teams — sub-groups inside the active org for scoped sharing (e.g. meeting
+  // scope==='team'). Org header defaults to the caller's active org, same as
+  // Meetings, so the team a meeting is shared to is always in the same org.
+  listTeams: (orgId?: string) => authFetch<{ teams: Team[] }>("/api/teams", { orgId }),
+  createTeam: (name: string, orgId?: string) =>
+    authFetch<{ team: Team }>("/api/teams", { method: "POST", body: { name }, orgId }),
+  getTeam: (id: string, orgId?: string) =>
+    authFetch<{ team: Team; members: TeamMember[] }>(`/api/teams/${encodeURIComponent(id)}`, { orgId }),
+  addTeamMember: (id: string, userId: string, role?: string, orgId?: string) =>
+    authFetch<{ member: TeamMember }>(`/api/teams/${encodeURIComponent(id)}/members`, { method: "POST", body: role ? { userId, role } : { userId }, orgId }),
+  removeTeamMember: (id: string, userId: string, orgId?: string) =>
+    authFetch(`/api/teams/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, { method: "DELETE", orgId }),
+  deleteTeam: (id: string, orgId?: string) =>
+    authFetch(`/api/teams/${encodeURIComponent(id)}`, { method: "DELETE", orgId }),
   // GitHub App repo linking (RBAC: triggers:manage).
   githubStatus: (orgId: string) =>
     authFetch<{ configured: boolean; installed: boolean; installUrl?: string }>(`/api/orgs/${orgId}/github/status`, { orgId }),
@@ -504,6 +518,19 @@ export interface SharedMemory {
   skillTag: string;
   visibility: string;
   createdTime: string;
+}
+
+export interface Team {
+  id: string;
+  orgId: string;
+  name: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface TeamMember {
+  userId: string;
+  role: string;
 }
 
 export interface OrgInvite {

@@ -11,7 +11,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } 
 import { Lock, UsersThree, Buildings, GlobeHemisphereWest, Microphone, type Icon } from "@phosphor-icons/react";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
-import { authFetch } from "../../lib/adminApi";
+import { InlineLoading } from "../../components/LoadingSpinner";
+import { adminApi, authFetch, type Team } from "../../lib/adminApi";
 import { BASE_URL } from "../../lib/client";
 import { getApiKey, getJwt } from "../../lib/client-auth";
 import { invalidateDashboardQueries, queryDashboard } from "../../lib/dashboardQuery";
@@ -80,6 +81,10 @@ export default function MeetingsPage() {
   const [transcriptTotal, setTranscriptTotal] = useState(0);
   const [transcriptLoading, setTranscriptLoading] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  const [teams, setTeams] = useState<Team[]>([]);
+  const [teamsLoaded, setTeamsLoaded] = useState(false);
+  const [teamPickerOpen, setTeamPickerOpen] = useState(false);
+  const [newTeamName, setNewTeamName] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
@@ -240,6 +245,7 @@ export default function MeetingsPage() {
     const controller = new AbortController();
     const id = selectedId;
     setDetail(null);
+    setTeamPickerOpen(false);
     setTranscriptSegments([]);
     setTranscriptNext(null);
     setTranscriptTotal(0);
@@ -272,17 +278,54 @@ export default function MeetingsPage() {
     }
   }, [detail, transcriptNext, transcriptLoading]);
 
-  const setScope = useCallback(async (scope: Scope) => {
-    if (!detail) return;
+  // Load the caller's teams (active org) lazily the first time the share menu
+  // opens — most meetings never get shared to a team, so we don't fetch on load.
+  const loadTeams = useCallback(async () => {
     try {
-      const share = await authFetch<Share>(`/api/meetings/${detail.id}/scope`, { method: "POST", body: { scope } });
+      const r = await queryDashboard("teams:list", () => adminApi.listTeams(), { ttlMs: 30_000 });
+      setTeams(r.teams ?? []);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not load teams.");
+    } finally {
+      setTeamsLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => { if (shareOpen && !teamsLoaded) void loadTeams(); }, [shareOpen, teamsLoaded, loadTeams]);
+
+  // Team scope REQUIRES a teamId (the backend 400s without one). Selecting the
+  // Team row with no team chosen just reveals the picker; a concrete team POSTs.
+  const setScope = useCallback(async (scope: Scope, teamId?: string) => {
+    if (!detail) return;
+    if (scope === "team" && !teamId) { setTeamPickerOpen(true); return; }
+    try {
+      const body = scope === "team" ? { scope, teamId } : { scope };
+      const share = await authFetch<Share>(`/api/meetings/${detail.id}/scope`, { method: "POST", body });
       invalidateDashboardQueries(`meetings:overview:${detail.id}`);
       setDetail((d) => (d ? { ...d, share } : d));
       setItems((list) => list.map((m) => (m.id === detail.id ? { ...m, scope } : m)));
+      if (scope !== "team") setTeamPickerOpen(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not change sharing.");
     }
   }, [detail]);
+
+  const createTeamInline = useCallback(async () => {
+    const name = newTeamName.trim();
+    if (!name) return;
+    setBusy("create-team");
+    try {
+      const { team } = await adminApi.createTeam(name);
+      invalidateDashboardQueries("teams:");
+      setTeams((cur) => [...cur, team]);
+      setNewTeamName("");
+      await setScope("team", team.id);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not create the team.");
+    } finally {
+      setBusy("");
+    }
+  }, [newTeamName, setScope]);
 
   const regenerate = useCallback(async () => {
     if (!detail) return;
@@ -387,7 +430,8 @@ export default function MeetingsPage() {
                 <div className={styles.hActions}>
                   <button type="button" className={styles.shareBtn} onClick={() => setShareOpen((v) => !v)} aria-haspopup="menu" aria-expanded={shareOpen}>
                     <span className={`${styles.dot} ${SCOPE_META[detail.share.scope].dot}`} />
-                    {SCOPE_META[detail.share.scope].label} ▾
+                    {SCOPE_META[detail.share.scope].label}
+                    {detail.share.scope === "team" && detail.share.teamId ? ` · ${teams.find((t) => t.id === detail.share.teamId)?.name ?? "Team"}` : ""} ▾
                   </button>
                   {detail.model ? <span className={styles.modelChip}>{detail.model.label}{detail.model.effort ? <> · <b>{detail.model.effort}</b></> : null}</span> : null}
                   {shareOpen ? (
@@ -402,6 +446,29 @@ export default function MeetingsPage() {
                           </button>
                         );
                       })}
+                      {teamPickerOpen || detail.share.scope === "team" ? (
+                        <div className={styles.linkzone}>
+                          {!teamsLoaded ? (
+                            <InlineLoading label="Loading teams…" />
+                          ) : teams.length === 0 ? (
+                            <>
+                              <div className={styles.teamPickH}>You have no teams yet — create one to share with your team.</div>
+                              <div className={styles.teamCreateRow}>
+                                <input value={newTeamName} onChange={(e) => setNewTeamName(e.target.value)} placeholder="Team name (e.g. Platform)" aria-label="New team name" onKeyDown={(e) => { if (e.key === "Enter") void createTeamInline(); }} />
+                                <button type="button" onClick={() => void createTeamInline()} disabled={busy === "create-team" || !newTeamName.trim()}>{busy === "create-team" ? "Creating…" : "Create"}</button>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className={styles.teamPickH}>Share with team</div>
+                              <select className={styles.teamSel} value={detail.share.teamId ?? ""} onChange={(e) => { if (e.target.value) void setScope("team", e.target.value); }} aria-label="Share with team">
+                                <option value="" disabled>Select a team…</option>
+                                {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                              </select>
+                            </>
+                          )}
+                        </div>
+                      ) : null}
                       {detail.share.scope === "public" && detail.share.publicUrl ? (
                         <div className={styles.linkzone}>
                           <div className={styles.linkrow}>
