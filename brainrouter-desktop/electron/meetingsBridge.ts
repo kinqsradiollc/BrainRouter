@@ -30,6 +30,17 @@ async function accountFetch(path: string, init?: { method?: string; body?: strin
 
 function id(v: unknown): string { return encodeURIComponent(String(v ?? '')); }
 
+/** Validate a Track item id before it becomes a URL path segment. Track ids are
+ *  opaque server tokens (e.g. `wi_<uuid>`); reject anything with path/traversal
+ *  characters so a hostile renderer value can never escape the intended
+ *  `/api/track/<id>` shape (CWE-22 defence in depth — `id()` already percent-encodes
+ *  `/`, this makes the constraint explicit and rejects rather than encodes). */
+function safeTrackId(v: unknown): string {
+  const s = String(v ?? '');
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(s)) throw new Error('Invalid track id.');
+  return s;
+}
+
 export function registerMeetingsBridge(): void {
   ipcMain.handle('meetings:list', async () => {
     const r = await accountFetch('/api/meetings');
@@ -101,7 +112,7 @@ export function registerMeetingsBridge(): void {
   // Mark done / reopen — transition the item's status category on the server.
   ipcMain.handle('meetings:serverTrackSetDone', async (_e, trackId: unknown, done: unknown) => {
     const statusCategory = done === true ? 'completed' : 'todo';
-    const r = await accountFetch(`/api/track/${id(trackId)}/transition`, {
+    const r = await accountFetch(`/api/track/${safeTrackId(trackId)}/transition`, {
       method: 'POST', body: JSON.stringify({ statusCategory }),
     });
     if (!r?.ok) throw new Error('Could not update the tracked item.');
@@ -110,7 +121,7 @@ export function registerMeetingsBridge(): void {
 
   // Untrack / remove — delete the server Track item outright.
   ipcMain.handle('action:meetings:serverTrackRemove', async (_e, trackId: unknown) => {
-    const r = await accountFetch(`/api/track/${id(trackId)}`, { method: 'DELETE' });
+    const r = await accountFetch(`/api/track/${safeTrackId(trackId)}`, { method: 'DELETE' });
     if (!r?.ok) throw new Error('Could not remove the tracked item.');
     return await r.json();
   });
