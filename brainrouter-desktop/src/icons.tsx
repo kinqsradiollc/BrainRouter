@@ -72,6 +72,7 @@ const PATHS: Record<string, React.ReactNode> = {
   trash: <path d="M3 4.5h10M6 4.5V3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5m-6.2 0 .6 8a1 1 0 0 0 1 1h4.2a1 1 0 0 0 1-1l.6-8M6.7 7v4M9.3 7v4" />,
   fork: <><circle cx="4" cy="3.2" r="1.7" /><circle cx="12" cy="3.2" r="1.7" /><circle cx="8" cy="12.8" r="1.7" /><path d="M4 5v2a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V5M8 9v2.1" /></>,
   external: <path d="M9 2.5h4.5V7M13.5 2.5 7.5 8.5M11 9.5v3a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3" />,
+  cursor: <path d="M3 2.2 3 13.2 6 10.2 8 14.2 10 13.4 8 9.4 12 9.2 3 2.2Z" />,
 };
 
 export function Icon({ name, size = 16, className }: { name: string; size?: number; className?: string }): React.ReactElement {
