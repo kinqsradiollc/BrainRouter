@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getResolvedConnector: vi.fn(),
@@ -126,5 +126,47 @@ describe("server connector sync knowledge scope", () => {
       },
       new Map([[syncedDocument.id, ["connector-memory-1"]]]),
     );
+  });
+});
+
+describe("github device-flow token refresh (multi-account)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.listFileConnectors.mockReturnValueOnce([]).mockReturnValue([{ id: "runtime-connector-1", checkpoint: {} }]);
+    mocks.createFileConnector.mockReturnValue({ id: "runtime-connector-1" });
+    mocks.runConnectorCheckpointCore.mockResolvedValue({ ok: true, documents: [], failures: [], run: { id: "run-1" } });
+    mocks.updateDbConnector.mockResolvedValue({});
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("rotates an expired device token via the GitHub App client id with NO client secret, and seals it back on THIS connector", async () => {
+    const past = new Date(Date.now() - 60_000).toISOString();
+    mocks.getResolvedConnector.mockResolvedValue({
+      id: "db-connector-work", userId: "user-1", orgId: "org-1", source: "github", name: "GitHub work",
+      status: "connected", enabled: true, visibility: "private", config: {}, checkpoint: {},
+      lastRunAt: null, lastError: null, createdAt: past, updatedAt: past,
+      // A GitHub App device token: expired, refreshable, authMode "device".
+      credential: { accessToken: "old-token", refreshToken: "refresh-abc", expiresAt: past, authMode: "device" },
+    });
+    const fetchMock = vi.fn(async (url: unknown, init: { body?: unknown } = {}) => {
+      expect(String(url)).toContain("github.com/login/oauth/access_token");
+      const body = String(init.body ?? "");
+      expect(body).toContain("grant_type=refresh_token");
+      expect(body).toContain("refresh_token=refresh-abc");
+      // Device refresh must NOT send a client secret (public client).
+      expect(body).not.toContain("client_secret");
+      return { ok: true, json: async () => ({ access_token: "new-token", refresh_token: "refresh-def", expires_in: 28800, scope: "repo" }) } as unknown as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await runConnectorSync("db-connector-work");
+
+    expect(result.ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // The rotated credential is sealed back onto THIS connector (not the shared key).
+    expect(mocks.updateDbConnector).toHaveBeenCalledWith("db-connector-work", expect.objectContaining({
+      credential: expect.objectContaining({ accessToken: "new-token", refreshToken: "refresh-def", authMode: "device" }),
+      status: "connected",
+    }));
   });
 });

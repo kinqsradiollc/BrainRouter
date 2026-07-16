@@ -20,8 +20,9 @@ import {
 } from "@kinqs/brainrouter-core/connectors";
 import { validateGithubApiBase } from "@kinqs/brainrouter-core/track";
 import { refreshToken } from "./oauthBroker.js";
-import type { ConnectorStore } from "./store.js";
+import type { ConnectorStore, ConnectorTokenSecret } from "./store.js";
 import { resolveConnectorOAuthApp } from "./oauthAppResolver.js";
+import { githubAppClientId } from "./githubAccountToken.js";
 import {
   connectorRecordIdsByDocument,
   ingestConnectorSources,
@@ -42,26 +43,42 @@ export async function runConnectorSync(connectorId: string): Promise<ConnectorSy
   if (!conn.enabled) return { ok: true, documents: 0, imported: 0 };
   let credential = conn.credential;
   if (credential && needsRefresh(credential.expiresAt) && credential.refreshToken) {
-    const app = conn.orgId
-      ? await resolveConnectorOAuthApp({ connectors: memoryEngine.connectors, settings: memoryEngine.emailAuth }, conn.orgId, conn.source)
-      : null;
-    if (!app?.clientId) {
-      await memoryEngine.connectors.updateConnector(connectorId, { status: "error", lastError: "OAuth app is unavailable — reconnect the source" });
-      return { ok: false, documents: 0, imported: 0, error: "OAuth app unavailable" };
-    }
-    try {
-      const refreshed = await refreshToken(conn.source, {
-        clientId: app.clientId,
-        clientSecret: app.clientSecret,
-        refreshToken: credential.refreshToken,
-        redirectUri: credential.redirectUri,
-      }, { fetchImpl: fetch });
-      credential = { ...credential, ...refreshed, refreshToken: refreshed.refreshToken ?? credential.refreshToken };
-      await memoryEngine.connectors.updateConnector(connectorId, { credential, status: "connected", lastError: null });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      await memoryEngine.connectors.updateConnector(connectorId, { status: "error", lastError: `token refresh failed: ${message}` });
-      return { ok: false, documents: 0, imported: 0, error: message };
+    if (conn.source === "github" && credential.authMode === "device") {
+      // GitHub App *device* tokens are minted by the BUNDLED App client id and
+      // rotate WITHOUT a client secret — the per-org connector OAuth app (a
+      // confidential web app) can neither identify nor rotate them. Refresh in
+      // place against the GitHub App client id and seal the result back onto THIS
+      // connector, so every device-flow account keeps syncing after ~8h expiry.
+      try {
+        credential = await refreshGithubDeviceCredential(credential);
+        await memoryEngine.connectors.updateConnector(connectorId, { credential, status: "connected", lastError: null });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await memoryEngine.connectors.updateConnector(connectorId, { status: "error", lastError: `token refresh failed: ${message}` });
+        return { ok: false, documents: 0, imported: 0, error: message };
+      }
+    } else {
+      const app = conn.orgId
+        ? await resolveConnectorOAuthApp({ connectors: memoryEngine.connectors, settings: memoryEngine.emailAuth }, conn.orgId, conn.source)
+        : null;
+      if (!app?.clientId) {
+        await memoryEngine.connectors.updateConnector(connectorId, { status: "error", lastError: "OAuth app is unavailable — reconnect the source" });
+        return { ok: false, documents: 0, imported: 0, error: "OAuth app unavailable" };
+      }
+      try {
+        const refreshed = await refreshToken(conn.source, {
+          clientId: app.clientId,
+          clientSecret: app.clientSecret,
+          refreshToken: credential.refreshToken,
+          redirectUri: credential.redirectUri,
+        }, { fetchImpl: fetch });
+        credential = { ...credential, ...refreshed, refreshToken: refreshed.refreshToken ?? credential.refreshToken };
+        await memoryEngine.connectors.updateConnector(connectorId, { credential, status: "connected", lastError: null });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await memoryEngine.connectors.updateConnector(connectorId, { status: "error", lastError: `token refresh failed: ${message}` });
+        return { ok: false, documents: 0, imported: 0, error: message };
+      }
     }
   }
   const accessToken = credential?.accessToken ?? "";
@@ -164,6 +181,37 @@ function needsRefresh(expiresAt: string | undefined, skewMs = 120_000): boolean 
   if (!expiresAt) return false;
   const expiry = Date.parse(expiresAt);
   return Number.isFinite(expiry) && expiry <= Date.now() + skewMs;
+}
+
+/** Rotate a GitHub App device-flow token in place. Device tokens refresh against
+ * the public App client id with NO client secret (unlike a confidential web app),
+ * so this is the only correct rotation path for a sealed device credential. */
+async function refreshGithubDeviceCredential(credential: ConnectorTokenSecret): Promise<ConnectorTokenSecret> {
+  if (!credential.refreshToken) throw new Error("no refresh token");
+  const response = await fetch("https://github.com/login/oauth/access_token", {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: githubAppClientId(),
+      grant_type: "refresh_token",
+      refresh_token: credential.refreshToken,
+    }),
+  });
+  if (!response.ok) throw new Error(`GitHub token refresh HTTP ${response.status}`);
+  const d = await response.json() as { access_token?: string; refresh_token?: string; expires_in?: number; scope?: string; error?: string };
+  if (!d.access_token) throw new Error(d.error ? String(d.error) : "GitHub returned no access token on refresh");
+  const expiresInSec = Number(d.expires_in);
+  const expiresAt = Number.isFinite(expiresInSec) && expiresInSec > 0
+    ? new Date(Date.now() + expiresInSec * 1000).toISOString()
+    : undefined;
+  return {
+    ...credential,
+    accessToken: d.access_token,
+    refreshToken: d.refresh_token ?? credential.refreshToken,
+    ...(expiresAt ? { expiresAt } : {}),
+    ...(d.scope ? { scope: d.scope } : {}),
+    authMode: "device",
+  };
 }
 
 /** Enqueue a `connector_sync` job per enabled connector — called from the
