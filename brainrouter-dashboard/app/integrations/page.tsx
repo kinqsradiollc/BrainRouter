@@ -30,7 +30,7 @@ const EMPTY: FormState = { appId: "", appSlug: "", installationId: "", apiBase: 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 type IntegrationPanel = "connections" | "oauth" | "github";
 
-const PANELS: Array<{ id: IntegrationPanel; label: string; description: string }> = [
+const ALL_PANELS: Array<{ id: IntegrationPanel; label: string; description: string }> = [
   { id: "connections", label: "Connections", description: "Sources and repositories" },
   { id: "oauth", label: "OAuth apps", description: "Shared provider credentials" },
   { id: "github", label: "GitHub App", description: "Bot identity and webhooks" },
@@ -54,11 +54,26 @@ function IntegrationsInner() {
   const [orgsLoaded, setOrgsLoaded] = useState(false);
 
   useEffect(() => {
+    setOrgsLoaded(false);
     const query = new URLSearchParams(window.location.search);
     const requestedPanel = query.get("panel");
-    if (PANELS.some((candidate) => candidate.id === requestedPanel)) setPanel(requestedPanel as IntegrationPanel);
+    if (ALL_PANELS.some((candidate) => candidate.id === requestedPanel)) setPanel(requestedPanel as IntegrationPanel);
     const requestedOrg = query.get("orgId") ?? "";
-    void adminApi.listOrgs().then(({ orgs: nextOrgs = [] }) => {
+    const orgRequest = user?.isAdmin
+      ? Promise.all([adminApi.listOrgs(), adminApi.listAllOrgs()]).then(([memberships, all]) => {
+        const membershipById = new Map((memberships.orgs ?? []).map((org) => [org.orgId, org]));
+        return all.orgs.map((org) => membershipById.get(org.orgId) ?? {
+          orgId: org.orgId,
+          name: org.name,
+          slug: org.slug,
+          plan: org.plan,
+          role: "system-admin",
+          capabilities: ["triggers:manage"],
+          isDefault: false,
+        });
+      })
+      : adminApi.listOrgs().then(({ orgs: memberships = [] }) => memberships);
+    void orgRequest.then((nextOrgs) => {
       setOrgs(nextOrgs);
       const selected = nextOrgs.find((org) => org.orgId === requestedOrg)
         ?? nextOrgs.find((org) => org.isDefault)
@@ -66,7 +81,20 @@ function IntegrationsInner() {
       setActiveOrg(selected?.orgId ?? "");
     }).catch((caught) => setError(caught instanceof Error ? caught.message : "Failed to load organizations"))
       .finally(() => setOrgsLoaded(true));
-  }, []);
+  }, [user?.isAdmin]);
+
+  const activeMembership = orgs.find((org) => org.orgId === activeOrg);
+  const canManageShared = Boolean(user?.isAdmin || activeMembership?.capabilities.includes("triggers:manage"));
+  const panels = useMemo(() => canManageShared ? ALL_PANELS : ALL_PANELS.filter((item) => item.id === "connections"), [canManageShared]);
+
+  useEffect(() => {
+    if (orgsLoaded && !panels.some((item) => item.id === panel)) {
+      setPanel("connections");
+      const url = new URL(window.location.href);
+      url.searchParams.set("panel", "connections");
+      window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
+    }
+  }, [orgsLoaded, panel, panels]);
 
   // Read the downloaded .pem entirely in the browser and drop it into the field —
   // the key goes file → browser → (on save) encrypted storage, never elsewhere.
@@ -81,6 +109,13 @@ function IntegrationsInner() {
 
   const load = useCallback(async () => {
     if (!orgsLoaded) return;
+    if (!canManageShared) {
+      setItems([]);
+      setSecretReady(true);
+      setError("");
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
       const res = await adminApi.listIntegrations(activeOrg || undefined);
@@ -92,7 +127,7 @@ function IntegrationsInner() {
     } finally {
       setLoading(false);
     }
-  }, [activeOrg, orgsLoaded]);
+  }, [activeOrg, canManageShared, orgsLoaded]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -110,13 +145,13 @@ function IntegrationsInner() {
 
   function movePanel(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     let nextIndex: number | null = null;
-    if (event.key === "ArrowRight") nextIndex = (index + 1) % PANELS.length;
-    else if (event.key === "ArrowLeft") nextIndex = (index - 1 + PANELS.length) % PANELS.length;
+    if (event.key === "ArrowRight") nextIndex = (index + 1) % panels.length;
+    else if (event.key === "ArrowLeft") nextIndex = (index - 1 + panels.length) % panels.length;
     else if (event.key === "Home") nextIndex = 0;
-    else if (event.key === "End") nextIndex = PANELS.length - 1;
+    else if (event.key === "End") nextIndex = panels.length - 1;
     if (nextIndex === null) return;
     event.preventDefault();
-    const next = PANELS[nextIndex];
+    const next = panels[nextIndex];
     selectPanel(next.id);
     requestAnimationFrame(() => document.getElementById(`integration-tab-${next.id}`)?.focus());
   }
@@ -168,7 +203,7 @@ function IntegrationsInner() {
       </div>
 
       <div className="settings-section-tabs" role="tablist" aria-label="Integration settings sections">
-        {PANELS.map((item, index) => (
+        {panels.map((item, index) => (
           <button
             key={item.id}
             type="button"
@@ -187,7 +222,7 @@ function IntegrationsInner() {
         ))}
       </div>
 
-      {!secretReady && (
+      {canManageShared && !secretReady && (
         <div className="settings-note settings-note--warn">
           <code>BRAINROUTER_SECRET_KEY</code> is not configured on the server — integration secrets cannot be stored until it is set.
         </div>
@@ -196,23 +231,23 @@ function IntegrationsInner() {
 
       {panel === "connections" && (
         <div id="integration-panel-connections" role="tabpanel" aria-labelledby="integration-tab-connections" className="settings-panel-stage integration-panel-stage">
-          <PremiumCard level={2}>
+          {canManageShared && <PremiumCard level={2}>
             <div className="settings-cardhead">
               <div><h3>GitHub repositories</h3><div className="settings-hint">Link the repositories the shared GitHub App can access.</div></div>
               <Link href={repositoriesHref}><PremiumButton size="small" variant="ghost">Manage repositories →</PremiumButton></Link>
             </div>
-          </PremiumCard>
+          </PremiumCard>}
           <ConnectorRows orgId={activeOrg || undefined} />
         </div>
       )}
 
-      {panel === "oauth" && (
+      {canManageShared && panel === "oauth" && (
         <div id="integration-panel-oauth" role="tabpanel" aria-labelledby="integration-tab-oauth" className="settings-panel-stage integration-panel-stage">
-          {user?.isAdmin ? <ConnectorOAuthAppsCard orgId={activeOrg || undefined} /> : <div className="settings-note">Only administrators can manage shared OAuth credentials.</div>}
+          <ConnectorOAuthAppsCard orgId={activeOrg || undefined} showGithub={Boolean(user?.isAdmin)} />
         </div>
       )}
 
-      {panel === "github" && (
+      {canManageShared && panel === "github" && (
         <div id="integration-panel-github" role="tabpanel" aria-labelledby="integration-tab-github" className="settings-panel-stage integration-panel-stage">
           <PremiumCard level={2}>
           <div className="settings-cardhead">

@@ -266,7 +266,7 @@ export const CHECKPOINT_RUNTIME_SOURCES = new Set<ConnectorRecord['source']>([
 export type GithubOauthState =
   | { status: 'idle'; hasToken?: boolean; storageMode?: string }
   | { status: 'starting' }
-  | { status: 'pending'; userCode: string; verificationUri: string; intervalSec: number; expiresAtMs: number }
+  | { status: 'pending'; flow: 'browser' | 'device'; userCode?: string; verificationUri?: string; intervalSec: number; expiresAtMs: number }
   | { status: 'authorized'; scope?: string; storageMode?: string }
   | { status: 'error'; error: string };
 

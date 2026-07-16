@@ -743,6 +743,7 @@ export function createQueries(S: DevState): Record<string, (args: Record<string,
     'action:github-disconnect': () => ({ ok: true }),
     'github-device-start': () => ({ ok: true, userCode: 'BR-D3MO', verificationUri: 'https://github.com/login/device', interval: 2 }),
     'github-device-poll': () => ({ status: 'connected', login: 'kinqsradio' }),
+    'github-device-cancel': () => ({ ok: true }),
     'automation-account-status': () => ({
       signedIn: true,
       githubOauthConnected: true,

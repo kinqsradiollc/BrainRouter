@@ -20,6 +20,13 @@ export interface GithubAccountToken {
   flow?: "device" | "web";
 }
 
+/** GitHub OAuth-App tokens use `/user/repos`; only GitHub-App device tokens can
+ * call `/user/installations`. Keeping this decision on the credential prevents a
+ * bundled device client id from misclassifying a valid web token as an App token. */
+export function githubRepositoryAccessMode(token: Pick<GithubAccountToken, "flow">): "installations" | "user" {
+  return token.flow === "device" ? "installations" : "user";
+}
+
 interface GithubAccountTokenStore {
   getSetting<T = unknown>(key: string): Promise<T | null>;
   setSetting?<T = unknown>(key: string, value: T): Promise<void>;

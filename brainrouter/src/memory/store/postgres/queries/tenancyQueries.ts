@@ -6,7 +6,7 @@
 import type { Executor } from "./executor.js";
 import type { OrgPlan, OrganizationRecord, OrgMemberRecord, OrgMembership } from "../../../../tenancy/types.js";
 import { normalizeOrgPlan } from "../../../../tenancy/types.js";
-import { isRole, type Role } from "../../../../tenancy/rbac.js";
+import { normalizeRole, type Role } from "../../../../tenancy/rbac.js";
 
 const ORG_COLUMNS = "org_id, name, slug, plan, allowed_domains, created_at";
 
@@ -30,7 +30,7 @@ function memberRowToRecord(row: any): OrgMemberRecord {
   return {
     orgId: String(row.org_id),
     userId: String(row.user_id),
-    role: (isRole(row.role) ? row.role : "viewer") as Role,
+    role: normalizeRole(row.role) ?? "viewer",
     createdAt: toIso(row.created_at),
   };
 }
@@ -107,7 +107,7 @@ export async function getMemberRole(exec: Executor, orgId: string, userId: strin
   // own space — this is the documented model (see rbac.ts).
   if (orgId === personalOrgId(userId)) return "owner";
   const row = await exec.one(`SELECT role FROM org_members WHERE org_id = $1 AND user_id = $2`, [orgId, userId]);
-  return row && isRole(row.role) ? (row.role as Role) : null;
+  return row ? normalizeRole(row.role) : null;
 }
 
 export async function listOrgMembers(exec: Executor, orgId: string): Promise<OrgMemberRecord[]> {
@@ -129,7 +129,7 @@ export async function listOrgMembershipsForUser(exec: Executor, userId: string):
   return rows.map((row) => ({
     org: orgRowToRecord(row),
     // Same invariant as getMemberRole: a user owns their own personal org.
-    role: (row.org_id === personalOrgId(userId) ? "owner" : (isRole(row.member_role) ? row.member_role : "viewer")) as Role,
+    role: row.org_id === personalOrgId(userId) ? "owner" : (normalizeRole(row.member_role) ?? "viewer"),
   }));
 }
 

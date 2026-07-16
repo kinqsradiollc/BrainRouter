@@ -21,6 +21,7 @@ import {
 import { validateGithubApiBase } from "@kinqs/brainrouter-core/track";
 import { refreshToken } from "./oauthBroker.js";
 import type { ConnectorStore } from "./store.js";
+import { resolveConnectorOAuthApp } from "./oauthAppResolver.js";
 import {
   connectorRecordIdsByDocument,
   ingestConnectorSources,
@@ -42,7 +43,7 @@ export async function runConnectorSync(connectorId: string): Promise<ConnectorSy
   let credential = conn.credential;
   if (credential && needsRefresh(credential.expiresAt) && credential.refreshToken) {
     const app = conn.orgId
-      ? await memoryEngine.connectors.getResolvedOAuthApp(conn.orgId, conn.source)
+      ? await resolveConnectorOAuthApp({ connectors: memoryEngine.connectors, settings: memoryEngine.emailAuth }, conn.orgId, conn.source)
       : null;
     if (!app?.clientId) {
       await memoryEngine.connectors.updateConnector(connectorId, { status: "error", lastError: "OAuth app is unavailable — reconnect the source" });

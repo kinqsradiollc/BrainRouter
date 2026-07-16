@@ -32,7 +32,8 @@ export function GithubOAuthAppCard({ embedded = false }: { embedded?: boolean })
   const save = useCallback(async (e: React.FormEvent) => {
     e.preventDefault(); setSaving(true); setError(""); setSaved(false);
     try {
-      await adminApi.setGithubOAuthApp({ clientId: clientId.trim(), clientSecret: clientSecret.trim() || undefined, redirectBase: redirectBase.trim() || undefined });
+      const result = await adminApi.setGithubOAuthApp({ clientId: clientId.trim(), clientSecret: clientSecret.trim() || undefined, redirectBase: redirectBase.trim() || undefined });
+      if (!result.hasSecret) throw new Error("The client secret was not stored. Re-enter it before users connect.");
       setClientSecret(""); setSaved(true); await load();
     } catch (e) { setError(e instanceof Error ? e.message : "Failed to save"); }
     finally { setSaving(false); }
@@ -52,6 +53,9 @@ export function GithubOAuthAppCard({ embedded = false }: { embedded?: boolean })
       {state && !state.secretStorageReady && (
         <div className="settings-note settings-note--warn"><code>BRAINROUTER_SECRET_KEY</code> is not set — the client secret can’t be stored until it is.</div>
       )}
+      {state?.clientId && !state.hasSecret && state.secretStorageReady && (
+        <div className="settings-note settings-note--warn">The Client ID is saved, but no client secret is stored. Enter the OAuth App’s client secret and save again before users connect.</div>
+      )}
       <form onSubmit={save}>
         <div className="settings-grid">
           <label className="settings-label">Client ID
@@ -67,7 +71,7 @@ export function GithubOAuthAppCard({ embedded = false }: { embedded?: boolean })
         {error && <div className="settings-note settings-note--error" style={{ marginTop: 8 }}>{error}</div>}
         {saved && <div className="settings-note" style={{ marginTop: 8 }}>Saved — signed-in users can now Connect GitHub.</div>}
         <div style={{ marginTop: "var(--spacing-16)" }}>
-          <PremiumButton type="submit" variant="primary" disabled={saving || !clientId.trim()}>{saving ? "Saving…" : "Save OAuth App"}</PremiumButton>
+          <PremiumButton type="submit" variant="primary" disabled={saving || !clientId.trim() || (!state?.hasSecret && !clientSecret.trim())}>{saving ? "Saving…" : "Save OAuth App"}</PremiumButton>
         </div>
       </form>
     </div>
