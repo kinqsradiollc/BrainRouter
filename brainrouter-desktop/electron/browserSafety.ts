@@ -34,10 +34,24 @@ export function isPathWithinRoot(root: string, rel: string): boolean {
  * controls. Restrict the launcher to known dev-server runners so a config can't
  * name an arbitrary executable (CWE-78). `.cmd`/`.exe` suffixes are stripped.
  */
-const ALLOWED_LAUNCHERS = new Set(['node', 'npm', 'npx', 'pnpm', 'yarn', 'bun', 'vite', 'deno', 'nx', 'turbo']);
+// Package-manager / task runners only. The bare code-eval runtimes (node, deno, bun)
+// are DELIBERATELY excluded: `node -e '<code>'` etc. is arbitrary code execution that
+// slips past the shell-metachar check, so an agent-added server config could be RCE
+// (CWE-94). Dev servers are launched through a package script or a task runner instead.
+const ALLOWED_LAUNCHERS = new Set(['npm', 'npx', 'pnpm', 'yarn', 'vite', 'nx', 'turbo']);
 export function isAllowedLauncher(exe: string): boolean {
   const base = path.basename(String(exe ?? '').trim().toLowerCase()).replace(/\.(cmd|exe|bat|ps1)$/, '');
   return ALLOWED_LAUNCHERS.has(base);
+}
+
+/**
+ * True when an arg is an inline code-execution flag (`node -e`, `-p`, `-r`, `npx -c`,
+ * …). These execute attacker-supplied code WITHOUT any shell metacharacter, so they
+ * must be rejected in addition to hasShellMeta. Covers the short/long/`=` forms.
+ */
+const DANGEROUS_FLAG = /^--?(e|eval|p|print|c|call|r|require)(=|$)/i;
+export function hasDangerousFlag(arg: string): boolean {
+  return DANGEROUS_FLAG.test(String(arg ?? '').trim());
 }
 
 /**

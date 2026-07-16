@@ -15,7 +15,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { findFreePort, isPortFree } from './portUtil.js';
-import { isAllowedLauncher, hasShellMeta } from './browserSafety.js';
+import { isAllowedLauncher, hasShellMeta, hasDangerousFlag } from './browserSafety.js';
 
 /** The desktop app's own vite dev port — never auto-start or accept a config on it. */
 export const DESKTOP_PORT = 5173;
@@ -115,7 +115,7 @@ export function readLaunchConfigs(workspaceRoot: string): LaunchConfig[] {
           port: Number(o.port) || 0,
         };
       })
-      .filter((c) => c.name && c.port > 0 && isAllowedLauncher(c.exe) && !c.args.some(hasShellMeta));
+      .filter((c) => c.name && c.port > 0 && isAllowedLauncher(c.exe) && !c.args.some(hasShellMeta) && !c.args.some(hasDangerousFlag));
   } catch {
     return [];
   }
@@ -249,8 +249,9 @@ export function createDevServerRegistry(workspaceRoot: string): DevServerRegistr
     const port = Number(input.port);
     // Validate BEFORE any write — never spawn from add.
     if (!name) return { ok: false, error: 'a non-empty server name is required.' };
-    if (!isAllowedLauncher(exe)) return { ok: false, error: `launcher "${exe}" is not allowed (npm/npx/pnpm/yarn/node only).` };
+    if (!isAllowedLauncher(exe)) return { ok: false, error: `launcher "${exe}" is not allowed (npm/npx/pnpm/yarn/vite/nx/turbo only).` };
     if (args.some(hasShellMeta)) return { ok: false, error: 'an argument contains a shell metacharacter.' };
+    if (args.some(hasDangerousFlag)) return { ok: false, error: 'an argument is an inline code-execution flag (-e/-p/-r/-c).' };
     if (!Number.isInteger(port) || port < 1 || port > 65535) return { ok: false, error: 'port must be an integer in 1..65535.' };
     if (port === DESKTOP_PORT) return { ok: false, error: `port ${DESKTOP_PORT} is the desktop app's own dev port.` };
 

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { safeName, isPathWithinRoot, mdSafe, isAllowedLauncher, hasShellMeta } from './browserSafety.js';
+import { safeName, isPathWithinRoot, mdSafe, isAllowedLauncher, hasShellMeta, hasDangerousFlag } from './browserSafety.js';
 
 test('safeName strips directory traversal + absolute paths to a single segment', () => {
   assert.equal(safeName('../../etc/passwd'), 'passwd');
@@ -30,12 +30,22 @@ test('mdSafe HTML-encodes injection chars and collapses newlines for run reports
   assert.ok(mdSafe('x'.repeat(9999)).length <= 500);
 });
 
-test('isAllowedLauncher permits known dev-server runners and rejects arbitrary exes', () => {
-  for (const ok of ['node', 'npm', 'NPM', 'npm.cmd', 'npx', 'pnpm', 'yarn', 'bun', 'vite', 'deno', 'C:/x/npm.cmd']) {
+test('isAllowedLauncher permits package/task runners and rejects code-eval runtimes + arbitrary exes', () => {
+  for (const ok of ['npm', 'NPM', 'npm.cmd', 'npx', 'pnpm', 'yarn', 'vite', 'nx', 'turbo', 'C:/x/npm.cmd']) {
     assert.equal(isAllowedLauncher(ok), true, ok);
   }
-  for (const bad of ['calc', 'calc.exe', 'bash', 'cmd', 'powershell', '/bin/sh', 'curl', 'python', '']) {
+  // node/deno/bun are code-eval runtimes (node -e …) — rejected (CWE-94 defence).
+  for (const bad of ['node', 'deno', 'bun', 'calc', 'calc.exe', 'bash', 'cmd', 'powershell', '/bin/sh', 'curl', 'python', '']) {
     assert.equal(isAllowedLauncher(bad), false, bad);
+  }
+});
+
+test('hasDangerousFlag flags inline code-execution flags', () => {
+  for (const bad of ['-e', '--eval', '-p', '--print', '-r', '--require', '-c', '--call', '--eval=1+1', '--print=x', '-E'.toLowerCase()]) {
+    assert.equal(hasDangerousFlag(bad), true, bad);
+  }
+  for (const ok of ['run', 'dev', 'vite', '--', '--port', '5199', 'brainrouter-desktop', '--strictPort', '-w', '--experimental']) {
+    assert.equal(hasDangerousFlag(ok), false, ok);
   }
 });
 
