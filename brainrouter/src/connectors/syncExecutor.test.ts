@@ -137,7 +137,7 @@ describe("github device-flow token refresh (multi-account)", () => {
     mocks.runConnectorCheckpointCore.mockResolvedValue({ ok: true, documents: [], failures: [], run: { id: "run-1" } });
     mocks.updateDbConnector.mockResolvedValue({});
   });
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => { vi.unstubAllGlobals(); });
 
   it("rotates an expired device token via the GitHub App client id with NO client secret, and seals it back on THIS connector", async () => {
     const past = new Date(Date.now() - 60_000).toISOString();
