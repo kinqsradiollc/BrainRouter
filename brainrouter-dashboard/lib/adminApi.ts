@@ -388,10 +388,12 @@ export const adminApi = {
     authFetch<{ ok: boolean }>("/api/connectors/github/device/cancel", { method: "POST", orgId }),
   connectorStatus: (source: string, orgId?: string) =>
     authFetch<ConnectorStatus>(`/api/connectors/${encodeURIComponent(source)}/status`, { orgId }),
-  connectorResources: (source: string, orgId?: string) =>
-    authFetch<{ source: string; connected: boolean; resources: { id: string; label: string; selected: boolean; kind?: string }[] }>(`/api/connectors/${encodeURIComponent(source)}/resources`, { orgId }),
-  setConnectorResources: (source: string, resourceIds: string[], orgId?: string) =>
-    authFetch<{ connector: ConnectorStatus["connector"] }>(`/api/connectors/${encodeURIComponent(source)}/resources`, { method: "PUT", body: { resourceIds }, orgId }),
+  /** Resources for ONE account. Pass connectorId to scope to a specific account
+   * (multi-account); omit it and the backend falls back to the first account. */
+  connectorResources: (source: string, connectorId?: string, orgId?: string) =>
+    authFetch<{ source: string; connected: boolean; resources: { id: string; label: string; selected: boolean; kind?: string }[] }>(`/api/connectors/${encodeURIComponent(source)}/resources${connectorId ? `?connectorId=${encodeURIComponent(connectorId)}` : ""}`, { orgId }),
+  setConnectorResources: (source: string, connectorId: string, resourceIds: string[], orgId?: string) =>
+    authFetch<{ connector: ConnectorStatus["connector"] }>(`/api/connectors/${encodeURIComponent(source)}/resources`, { method: "PUT", body: { resourceIds, connectorId }, orgId }),
   setConnectorSchedule: (id: string, enabled: boolean, orgId?: string) =>
     authFetch<{ connector: ConnectorStatus["connector"] }>(`/api/connectors/${encodeURIComponent(id)}`, { method: "PATCH", body: { enabled }, orgId }),
   runConnector: (id: string, orgId?: string) =>
