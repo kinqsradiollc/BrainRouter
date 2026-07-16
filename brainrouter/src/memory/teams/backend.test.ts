@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   getTeam: vi.fn(),
   isTeamMember: vi.fn(),
   listTeamMembers: vi.fn(),
+  insertTeamOwner: vi.fn(),
   addTeamMember: vi.fn(),
   removeTeamMember: vi.fn(),
   transferPersonalTeamOwnership: vi.fn(),
@@ -26,6 +27,7 @@ describe("teams backend", () => {
       createdBy: String(input.createdBy), createdAt: "t", updatedAt: "t",
     }));
     mocks.addTeamMember.mockResolvedValue(true);
+    mocks.insertTeamOwner.mockResolvedValue(true);
   });
 
   it("createTeam trims the name and auto-adds the creator as owner", async () => {
@@ -33,7 +35,9 @@ describe("teams backend", () => {
     expect(team.name).toBe("Platform");
     expect(mocks.createTeam.mock.calls[0]![0]).toMatchObject({ orgId: "org-1", name: "Platform", createdBy: "user-1" });
     expect(mocks.createTeam.mock.calls[0]![0].id).toMatch(/^team_/);
-    expect(mocks.addTeamMember).toHaveBeenCalledWith("org-1", team.id, "user-1", "owner");
+    // Bootstrap goes through a dedicated owner-insert, not the authz-checked addTeamMember.
+    expect(mocks.insertTeamOwner).toHaveBeenCalledWith(team.id, "user-1");
+    expect(mocks.addTeamMember).not.toHaveBeenCalled();
   });
 
   it("createTeam rejects an empty name", async () => {
@@ -44,7 +48,7 @@ describe("teams backend", () => {
   it("creates a personal team outside an organization without changing membership scope", async () => {
     const team = await createTeam("org-active", "user-1", "Friends", "personal");
     expect(team).toMatchObject({ kind: "personal", orgId: null, ownerUserId: "user-1" });
-    expect(mocks.addTeamMember).toHaveBeenCalledWith("org-active", team.id, "user-1", "owner");
+    expect(mocks.insertTeamOwner).toHaveBeenCalledWith(team.id, "user-1");
   });
 
   it("assertUserInTeam passes when the store confirms membership", async () => {

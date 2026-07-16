@@ -33,15 +33,23 @@ export function TeamsView({ ops, onChanged }: Props): ReactElement {
     return () => { active = false; };
   }, [ops]);
 
+  // Defense in depth: only ever send an org the caller was actually shown. A
+  // tampered orgId that isn't in the loaded contexts falls back to the server
+  // default (personal workspace) instead of reaching the org-scoped API.
+  const scopedOrgId = useMemo(
+    () => (!orgId || contexts.some((item) => item.orgId === orgId) ? orgId || undefined : undefined),
+    [contexts, orgId],
+  );
+
   const load = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      const rows = await ops.list(orgId || undefined);
+      const rows = await ops.list(scopedOrgId);
       setTeams(rows);
       setSelectedId((current) => current && rows.some((team) => team.id === current) ? current : rows[0]?.id ?? null);
     } catch (caught) { setTeams([]); setSelectedId(null); setError(message(caught, "Could not load teams.")); }
     finally { setLoading(false); }
-  }, [ops, orgId]);
+  }, [ops, scopedOrgId]);
 
   useEffect(() => { if (contextReady) void load(); }, [contextReady, load]);
   const activeContext = contexts.find((item) => item.orgId === orgId);
@@ -50,46 +58,46 @@ export function TeamsView({ ops, onChanged }: Props): ReactElement {
   useEffect(() => {
     if (!selectedId) { setDetail(null); return; }
     let active = true; setDetailLoading(true); setError("");
-    void ops.get(selectedId, orgId || undefined).then((value) => { if (active) { setDetail(value); setTeams((rows) => rows.map((team) => team.id === value.team.id ? value.team : team)); } }).catch((caught) => { if (active) setError(message(caught, "Could not load this team.")); }).finally(() => { if (active) setDetailLoading(false); });
+    void ops.get(selectedId, scopedOrgId).then((value) => { if (active) { setDetail(value); setTeams((rows) => rows.map((team) => team.id === value.team.id ? value.team : team)); } }).catch((caught) => { if (active) setError(message(caught, "Could not load this team.")); }).finally(() => { if (active) setDetailLoading(false); });
     return () => { active = false; };
-  }, [ops, orgId, selectedId]);
+  }, [ops, scopedOrgId, selectedId]);
 
   const createTeam = useCallback(async (event: FormEvent) => {
     event.preventDefault(); const value = name.trim(); if (!value || busy) return;
     setBusy("create"); setError("");
-    try { const created = await ops.create(value, kind, orgId || undefined); setName(""); await load(); setSelectedId(created.id); onChanged(); }
+    try { const created = await ops.create(value, kind, scopedOrgId); setName(""); await load(); setSelectedId(created.id); onChanged(); }
     catch (caught) { setError(message(caught, "Could not create the team.")); }
     finally { setBusy(""); }
-  }, [busy, kind, load, name, onChanged, ops, orgId]);
+  }, [busy, kind, load, name, onChanged, ops, scopedOrgId]);
 
   const addMember = useCallback(async (event: FormEvent) => {
     event.preventDefault(); const value = account.trim(); if (!detail || !value || busy) return;
     setBusy("add-member"); setError("");
-    try { const members = await ops.addMember(detail.team.id, value, role, orgId || undefined); setDetail((current) => current ? { ...current, members } : current); setAccount(""); onChanged(); }
+    try { const members = await ops.addMember(detail.team.id, value, role, scopedOrgId); setDetail((current) => current ? { ...current, members } : current); setAccount(""); onChanged(); }
     catch (caught) { setError(message(caught, "Could not add that member.")); }
     finally { setBusy(""); }
-  }, [account, busy, detail, onChanged, ops, orgId, role]);
+  }, [account, busy, detail, onChanged, ops, scopedOrgId, role]);
 
   const removeMember = useCallback(async (memberUserId: string) => {
     if (!detail || busy || globalThis.confirm?.(`Remove ${memberUserId} from ${detail.team.name}?`) === false) return;
     setBusy(`member:${memberUserId}`); setError(""); const previous = detail.members;
     setDetail({ ...detail, members: previous.filter((member) => member.userId !== memberUserId) });
     try {
-      await ops.removeMember(detail.team.id, memberUserId, orgId || undefined);
+      await ops.removeMember(detail.team.id, memberUserId, scopedOrgId);
       if (memberUserId === detail.currentUserId) await load();
       onChanged();
     }
     catch (caught) { setDetail((current) => current ? { ...current, members: previous } : current); setError(message(caught, "Could not remove that member.")); }
     finally { setBusy(""); }
-  }, [busy, detail, load, onChanged, ops, orgId]);
+  }, [busy, detail, load, onChanged, ops, scopedOrgId]);
 
   const removeTeam = useCallback(async () => {
     if (!detail || busy || globalThis.confirm?.(`Delete ${detail.team.name}? Team-only meeting access will be revoked immediately.`) === false) return;
     setBusy("delete-team"); setError("");
-    try { await ops.remove(detail.team.id, orgId || undefined); setDetail(null); setSelectedId(null); await load(); onChanged(); }
+    try { await ops.remove(detail.team.id, scopedOrgId); setDetail(null); setSelectedId(null); await load(); onChanged(); }
     catch (caught) { setError(message(caught, "Could not delete the team.")); }
     finally { setBusy(""); }
-  }, [busy, detail, load, onChanged, ops, orgId]);
+  }, [busy, detail, load, onChanged, ops, scopedOrgId]);
 
   const personal = useMemo(() => teams.filter((team) => team.kind === "personal"), [teams]);
   const organization = useMemo(() => teams.filter((team) => team.kind === "organization"), [teams]);

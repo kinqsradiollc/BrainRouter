@@ -26,9 +26,9 @@ async function detailForCaller(req: AuthedRequest, id: string): Promise<{
 } | null> {
   const team = await teams.getTeam(req.orgId!, id);
   if (!team) return null;
-  const members = await teams.listMembers(req.orgId!, id);
-  const myRole = mine(members, req.userId)?.role ?? null;
   const isOrgAdmin = orgOverride(req, team);
+  const members = await teams.listMembers(req.orgId!, id, req.userId!, isOrgAdmin);
+  const myRole = mine(members, req.userId)?.role ?? null;
   if (!isOrgAdmin && !myRole) return null;
   return { team, members, myRole, isOrgAdmin };
 }
@@ -119,9 +119,9 @@ teamsRouter.post("/:id/members", async (req: AuthedRequest, res) => {
     }
   }
 
-  const ok = await teams.addMember(req.orgId!, id, target.userId, role);
+  const ok = await teams.addMember(req.orgId!, id, target.userId, role, req.userId!, detail.isOrgAdmin);
   if (!ok) { res.status(409).json({ error: "The account is not eligible to join this team" }); return; }
-  res.json({ ok: true, members: await teams.listMembers(req.orgId!, id) });
+  res.json({ ok: true, members: await teams.listMembers(req.orgId!, id, req.userId!, detail.isOrgAdmin) });
 });
 
 teamsRouter.delete("/:id/members/:userId", async (req: AuthedRequest, res) => {
@@ -150,7 +150,7 @@ teamsRouter.delete("/:id/members/:userId", async (req: AuthedRequest, res) => {
       res.status(409).json({ error: "Could not transfer personal-team ownership" }); return;
     }
   }
-  const ok = await teams.removeMember(req.orgId!, id, targetUserId);
+  const ok = await teams.removeMember(req.orgId!, id, targetUserId, req.userId!, detail.isOrgAdmin);
   res.json({ ok });
 });
 

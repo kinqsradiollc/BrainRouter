@@ -10,9 +10,10 @@ interface TeamsStore {
   listTeamsForUser(orgId: string, userId: string, includeAllOrgTeams?: boolean): Promise<TeamRow[]>;
   getTeam(orgId: string, id: string): Promise<TeamRow | null>;
   isTeamMember(orgId: string, teamId: string, userId: string): Promise<boolean>;
-  listTeamMembers(orgId: string, teamId: string): Promise<TeamMemberRow[]>;
-  addTeamMember(orgId: string, teamId: string, userId: string, role?: TeamMemberRole): Promise<boolean>;
-  removeTeamMember(orgId: string, teamId: string, userId: string): Promise<boolean>;
+  listTeamMembers(orgId: string, teamId: string, callerUserId: string, canViewAllOrgTeams?: boolean): Promise<TeamMemberRow[]>;
+  insertTeamOwner(teamId: string, userId: string): Promise<boolean>;
+  addTeamMember(orgId: string, teamId: string, userId: string, role: TeamMemberRole | undefined, callerUserId: string, canManageOrgTeams?: boolean): Promise<boolean>;
+  removeTeamMember(orgId: string, teamId: string, userId: string, callerUserId: string, canManageOrgTeams?: boolean): Promise<boolean>;
   transferPersonalTeamOwnership(teamId: string, fromUserId: string, toUserId: string): Promise<boolean>;
   deleteTeam(orgId: string, id: string): Promise<boolean>;
 }
@@ -33,7 +34,9 @@ export async function listTeams(orgId: string, userId: string, includeAllOrgTeam
   return store().listTeamsForUser(orgId, userId, includeAllOrgTeams);
 }
 export async function getTeam(orgId: string, id: string): Promise<TeamRow | null> { return store().getTeam(orgId, id); }
-export async function listMembers(orgId: string, teamId: string): Promise<TeamMemberRow[]> { return store().listTeamMembers(orgId, teamId); }
+export async function listMembers(orgId: string, teamId: string, callerUserId: string, canViewAllOrgTeams = false): Promise<TeamMemberRow[]> {
+  return store().listTeamMembers(orgId, teamId, callerUserId, canViewAllOrgTeams);
+}
 
 export async function createTeam(orgId: string, userId: string, name: string, kind: TeamKind = "organization"): Promise<TeamRow> {
   const clean = (name ?? "").trim().slice(0, MAX_NAME);
@@ -47,14 +50,16 @@ export async function createTeam(orgId: string, userId: string, name: string, ki
     name: clean,
     createdBy: userId,
   });
-  await store().addTeamMember(orgId, team.id, userId, "owner");
+  await store().insertTeamOwner(team.id, userId);
   return team;
 }
 
-export async function addMember(orgId: string, teamId: string, userId: string, role: TeamMemberRole = "member"): Promise<boolean> {
-  return store().addTeamMember(orgId, teamId, userId, role);
+export async function addMember(orgId: string, teamId: string, userId: string, role: TeamMemberRole = "member", callerUserId: string, canManageOrgTeams = false): Promise<boolean> {
+  return store().addTeamMember(orgId, teamId, userId, role, callerUserId, canManageOrgTeams);
 }
-export async function removeMember(orgId: string, teamId: string, userId: string): Promise<boolean> { return store().removeTeamMember(orgId, teamId, userId); }
+export async function removeMember(orgId: string, teamId: string, userId: string, callerUserId: string, canManageOrgTeams = false): Promise<boolean> {
+  return store().removeTeamMember(orgId, teamId, userId, callerUserId, canManageOrgTeams);
+}
 export async function transferPersonalTeamOwnership(teamId: string, fromUserId: string, toUserId: string): Promise<boolean> {
   return store().transferPersonalTeamOwnership(teamId, fromUserId, toUserId);
 }

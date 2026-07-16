@@ -41,8 +41,13 @@ function TeamsInner() {
     return () => { active = false; };
   }, []);
 
+  // Defense in depth: never send an org the caller wasn't shown. A tampered
+  // orgId state that isn't in the loaded org list is rejected before it reaches
+  // the org-scoped admin API (the server also 403s a non-member org).
+  const orgAllowed = useMemo(() => !orgId || orgs.some((org) => org.orgId === orgId), [orgId, orgs]);
+
   const load = useCallback(async () => {
-    if (!orgId) return;
+    if (!orgId || !orgAllowed) return;
     setLoading(true);
     try {
       const result = await queryDashboard(`teams:list:${orgId}`, () => adminApi.listTeams(orgId), { ttlMs: 30_000 });
@@ -54,12 +59,12 @@ function TeamsInner() {
       setError(caught instanceof Error ? caught.message : "Could not load teams.");
       setTeams([]);
     } finally { setLoading(false); }
-  }, [orgId]);
+  }, [orgAllowed, orgId]);
 
   useEffect(() => { void load(); }, [load]);
 
   const loadDetail = useCallback(async (id: string) => {
-    if (!orgId) return;
+    if (!orgId || !orgAllowed) return;
     setDetailLoading(true);
     try {
       const result = await queryDashboard(`teams:detail:${orgId}:${id}`, () => adminApi.getTeam(id, orgId), { ttlMs: 30_000 });
@@ -72,13 +77,13 @@ function TeamsInner() {
       setMembers([]);
       setCurrentUserId("");
     } finally { setDetailLoading(false); }
-  }, [orgId]);
+  }, [orgAllowed, orgId]);
 
   useEffect(() => { if (selectedId) void loadDetail(selectedId); else setMembers([]); }, [selectedId, loadDetail]);
 
   const createTeam = useCallback(async () => {
     const name = newTeamName.trim();
-    if (!name || !orgId) return;
+    if (!name || !orgId || !orgAllowed) return;
     setBusy("create");
     try {
       const { team } = await adminApi.createTeam(name, newTeamKind, orgId);
@@ -89,11 +94,11 @@ function TeamsInner() {
       setError("");
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not create the team."); }
     finally { setBusy(""); }
-  }, [load, newTeamKind, newTeamName, orgId]);
+  }, [load, newTeamKind, newTeamName, orgAllowed, orgId]);
 
   const addMember = useCallback(async () => {
     const account = newMember.trim();
-    if (!account || !selectedId || !orgId) return;
+    if (!account || !selectedId || !orgId || !orgAllowed) return;
     setBusy("add-member");
     try {
       const result = await adminApi.addTeamMember(selectedId, account, newMemberRole, orgId);
@@ -104,10 +109,10 @@ function TeamsInner() {
       setError("");
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not add the member."); }
     finally { setBusy(""); }
-  }, [newMember, newMemberRole, orgId, selectedId]);
+  }, [newMember, newMemberRole, orgAllowed, orgId, selectedId]);
 
   const removeMember = useCallback(async (userId: string) => {
-    if (!selectedId || !orgId || !window.confirm(`Remove ${userId} from this team?`)) return;
+    if (!selectedId || !orgId || !orgAllowed || !window.confirm(`Remove ${userId} from this team?`)) return;
     setBusy(`remove:${userId}`);
     try {
       await adminApi.removeTeamMember(selectedId, userId, orgId);
@@ -120,10 +125,10 @@ function TeamsInner() {
       setError("");
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not remove the member."); }
     finally { setBusy(""); }
-  }, [currentUserId, load, orgId, selectedId]);
+  }, [currentUserId, load, orgAllowed, orgId, selectedId]);
 
   const deleteTeam = useCallback(async (id: string) => {
-    if (!orgId || !window.confirm("Delete this team? Team-only meeting access will be revoked immediately.")) return;
+    if (!orgId || !orgAllowed || !window.confirm("Delete this team? Team-only meeting access will be revoked immediately.")) return;
     setBusy("delete");
     try {
       await adminApi.deleteTeam(id, orgId);
@@ -132,7 +137,7 @@ function TeamsInner() {
       setError("");
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not delete the team."); }
     finally { setBusy(""); }
-  }, [load, orgId]);
+  }, [load, orgAllowed, orgId]);
 
   const selected = teams.find((team) => team.id === selectedId) ?? null;
   const selectedOrg = orgs.find((org) => org.orgId === orgId);

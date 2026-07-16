@@ -125,7 +125,10 @@ export async function isTeamMember(exec: Executor, orgId: string, teamId: string
   return !!row;
 }
 
-export async function listTeamMembers(exec: Executor, orgId: string, teamId: string): Promise<TeamMemberRow[]> {
+/** Only a member of the team (or an org admin viewing all org teams) may read the member roster and its PII. */
+export async function listTeamMembers(
+  exec: Executor, orgId: string, teamId: string, callerUserId: string, canViewAllOrgTeams = false,
+): Promise<TeamMemberRow[]> {
   const rows = await exec.rows<Record<string, unknown>>(
     `SELECT m.team_id, m.user_id, m.role, m.created_at, u.display_name, u.email
        FROM team_members m
@@ -133,15 +136,36 @@ export async function listTeamMembers(exec: Executor, orgId: string, teamId: str
        JOIN users u ON u.user_id = m.user_id
       WHERE m.team_id = $2
         AND ((t.kind = 'organization' AND t.org_id = $1) OR t.kind = 'personal')
+        AND ($4 OR EXISTS (
+          SELECT 1 FROM team_members cm WHERE cm.team_id = t.id AND cm.user_id = $3
+        ))
       ORDER BY CASE m.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
                COALESCE(NULLIF(u.display_name, ''), NULLIF(u.email, ''), u.user_id) ASC`,
-    [orgId, teamId],
+    [orgId, teamId, callerUserId, canViewAllOrgTeams],
   );
   return rows.map(mapMember);
 }
 
-/** SQL repeats eligibility checks to protect against membership/status races. */
-export async function addTeamMember(exec: Executor, orgId: string, teamId: string, userId: string, role: TeamMemberRole = "member"): Promise<boolean> {
+/** Bootstrap the creator as the first owner without an owner-caller check (the team has no members yet). */
+export async function insertTeamOwner(exec: Executor, teamId: string, userId: string): Promise<boolean> {
+  const n = await exec.run(
+    `INSERT INTO team_members (team_id, user_id, role)
+     SELECT t.id, u.user_id, 'owner'
+       FROM teams t
+       JOIN users u ON u.user_id = $2 AND u.status = 'active'
+      WHERE t.id = $1
+     ON CONFLICT (team_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
+    [teamId, userId],
+  );
+  return n > 0;
+}
+
+/** SQL repeats eligibility checks to protect against membership/status races, and requires the
+ * caller to be a team owner/admin (or an org admin managing an org team) before granting membership. */
+export async function addTeamMember(
+  exec: Executor, orgId: string, teamId: string, userId: string, role: TeamMemberRole = "member",
+  callerUserId: string, canManageOrgTeams = false,
+): Promise<boolean> {
   const n = await exec.run(
     `INSERT INTO team_members (team_id, user_id, role)
      SELECT t.id, u.user_id, $4
@@ -150,20 +174,31 @@ export async function addTeamMember(exec: Executor, orgId: string, teamId: strin
        LEFT JOIN org_members om ON om.org_id = t.org_id AND om.user_id = u.user_id
       WHERE t.id = $2
         AND ((t.kind = 'personal') OR (t.kind = 'organization' AND t.org_id = $1 AND om.user_id IS NOT NULL))
+        AND (
+          EXISTS (SELECT 1 FROM team_members cm WHERE cm.team_id = t.id AND cm.user_id = $5 AND cm.role IN ('owner', 'admin'))
+          OR ($6 AND t.kind = 'organization' AND t.org_id = $1)
+        )
      ON CONFLICT (team_id, user_id) DO UPDATE SET role = EXCLUDED.role`,
-    [orgId, teamId, userId, role],
+    [orgId, teamId, userId, role, callerUserId, canManageOrgTeams],
   );
   return n > 0;
 }
 
-export async function removeTeamMember(exec: Executor, orgId: string, teamId: string, userId: string): Promise<boolean> {
+export async function removeTeamMember(
+  exec: Executor, orgId: string, teamId: string, userId: string, callerUserId: string, canManageOrgTeams = false,
+): Promise<boolean> {
   const n = await exec.run(
     `DELETE FROM team_members
       WHERE user_id = $3 AND team_id IN (
         SELECT id FROM teams WHERE id = $2
           AND ((kind = 'organization' AND org_id = $1) OR kind = 'personal')
+      )
+      AND (
+        $4 = $3
+        OR EXISTS (SELECT 1 FROM team_members cm WHERE cm.team_id = $2 AND cm.user_id = $4 AND cm.role IN ('owner', 'admin'))
+        OR ($5 AND EXISTS (SELECT 1 FROM teams t2 WHERE t2.id = $2 AND t2.kind = 'organization' AND t2.org_id = $1))
       )`,
-    [orgId, teamId, userId],
+    [orgId, teamId, userId, callerUserId, canManageOrgTeams],
   );
   return n > 0;
 }

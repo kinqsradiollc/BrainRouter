@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  createTeam, listTeamsForUser, getTeam, isTeamMember, listTeamMembers,
+  createTeam, listTeamsForUser, getTeam, isTeamMember, listTeamMembers, insertTeamOwner,
   addTeamMember, removeTeamMember, transferPersonalTeamOwnership, deleteTeam,
 } from "./teamsQueries.js";
 
@@ -64,41 +64,74 @@ describe("teams queries — tenancy + org-scoping", () => {
     await expect(isTeamMember(exec, "org-2", "team_1", "user-1")).resolves.toBe(false);
   });
 
-  it("listTeamMembers is org-scoped via a join", async () => {
+  it("listTeamMembers is org-scoped via a join and requires the caller to be a team member", async () => {
     const exec = executor(teamRow, [memberRow]);
-    const members = await listTeamMembers(exec, "org-1", "team_1");
+    const members = await listTeamMembers(exec, "org-1", "team_1", "user-1");
     const [sql, params] = exec.rows.mock.calls[0]!;
     expect(sql).toContain("JOIN teams t ON t.id = m.team_id");
     expect(sql).toContain("WHERE m.team_id = $2");
     expect(sql).toContain("t.kind = 'organization' AND t.org_id = $1");
-    expect(params).toEqual(["org-1", "team_1"]);
+    // Caller must be a member (EXISTS on team_members) unless an org admin can view all org teams.
+    expect(sql).toContain("$4 OR EXISTS");
+    expect(sql).toContain("cm.user_id = $3");
+    expect(params).toEqual(["org-1", "team_1", "user-1", false]);
     expect(members[0]).toMatchObject({ teamId: "team_1", userId: "user-1", role: "owner" });
   });
 
-  it("addTeamMember checks active account and organization membership in SQL", async () => {
+  it("listTeamMembers lets an org admin bypass the caller-membership gate", async () => {
+    const exec = executor(teamRow, [memberRow]);
+    await listTeamMembers(exec, "org-1", "team_1", "admin-x", true);
+    const [, params] = exec.rows.mock.calls[0]!;
+    expect(params).toEqual(["org-1", "team_1", "admin-x", true]);
+  });
+
+  it("insertTeamOwner bootstraps the creator as owner without a caller check", async () => {
     const exec = executor();
-    await addTeamMember(exec, "org-1", "team_1", "user-2", "admin");
+    await expect(insertTeamOwner(exec, "team_1", "user-1")).resolves.toBe(true);
+    const [sql, params] = exec.run.mock.calls[0]!;
+    expect(sql).toContain("INSERT INTO team_members");
+    expect(sql).toContain("'owner'");
+    expect(sql).not.toContain("cm.role IN");
+    expect(params).toEqual(["team_1", "user-1"]);
+  });
+
+  it("addTeamMember checks active account, org membership, and caller owner/admin authority in SQL", async () => {
+    const exec = executor();
+    await addTeamMember(exec, "org-1", "team_1", "user-2", "admin", "owner-1");
     const [sql, params] = exec.run.mock.calls[0]!;
     expect(sql).toContain("u.status = 'active'");
     expect(sql).toContain("LEFT JOIN org_members om");
     expect(sql).toContain("t.kind = 'personal'");
     expect(sql).toContain("t.kind = 'organization' AND t.org_id = $1 AND om.user_id IS NOT NULL");
+    // Caller must be a team owner/admin (or an org admin managing an org team).
+    expect(sql).toContain("cm.user_id = $5 AND cm.role IN ('owner', 'admin')");
+    expect(sql).toContain("$6 AND t.kind = 'organization'");
     expect(sql).toContain("ON CONFLICT (team_id, user_id) DO UPDATE");
-    expect(params).toEqual(["org-1", "team_1", "user-2", "admin"]);
+    expect(params).toEqual(["org-1", "team_1", "user-2", "admin", "owner-1", false]);
   });
 
   it("addTeamMember returns false when the team is not in the org", async () => {
     const exec = executor(teamRow, [teamRow], 0);
-    await expect(addTeamMember(exec, "org-2", "team_1", "user-2")).resolves.toBe(false);
+    await expect(addTeamMember(exec, "org-2", "team_1", "user-2", "member", "owner-1")).resolves.toBe(false);
   });
 
-  it("removeTeamMember is scoped to teams in the org", async () => {
+  it("addTeamMember passes the org-admin override flag through", async () => {
     const exec = executor();
-    await removeTeamMember(exec, "org-1", "team_1", "user-2");
+    await addTeamMember(exec, "org-1", "team_1", "user-2", "member", "admin-1", true);
+    const [, params] = exec.run.mock.calls[0]!;
+    expect(params).toEqual(["org-1", "team_1", "user-2", "member", "admin-1", true]);
+  });
+
+  it("removeTeamMember is scoped to teams in the org and gated to owner/admin or self-leave", async () => {
+    const exec = executor();
+    await removeTeamMember(exec, "org-1", "team_1", "user-2", "owner-1");
     const [sql, params] = exec.run.mock.calls[0]!;
     expect(sql).toContain("kind = 'organization' AND org_id = $1");
     expect(sql).toContain("OR kind = 'personal'");
-    expect(params).toEqual(["org-1", "team_1", "user-2"]);
+    // Self-leave ($4 = $3) or a team owner/admin (or org admin) may remove.
+    expect(sql).toContain("$4 = $3");
+    expect(sql).toContain("cm.user_id = $4 AND cm.role IN ('owner', 'admin')");
+    expect(params).toEqual(["org-1", "team_1", "user-2", "owner-1", false]);
   });
 
   it("transfers a personal team's lifecycle owner only to an existing owner", async () => {

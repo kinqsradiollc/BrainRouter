@@ -513,9 +513,10 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public listTeamsForUser(orgId: string, userId: string, includeAllOrgTeams?: boolean): Promise<teams.TeamRow[]> { return teams.listTeamsForUser(this.exec, orgId, userId, includeAllOrgTeams); }
   public getTeam(orgId: string, id: string): Promise<teams.TeamRow | null> { return teams.getTeam(this.exec, orgId, id); }
   public isTeamMember(orgId: string, teamId: string, userId: string): Promise<boolean> { return teams.isTeamMember(this.exec, orgId, teamId, userId); }
-  public listTeamMembers(orgId: string, teamId: string): Promise<teams.TeamMemberRow[]> { return teams.listTeamMembers(this.exec, orgId, teamId); }
-  public addTeamMember(orgId: string, teamId: string, userId: string, role?: teams.TeamMemberRole): Promise<boolean> { return teams.addTeamMember(this.exec, orgId, teamId, userId, role); }
-  public removeTeamMember(orgId: string, teamId: string, userId: string): Promise<boolean> { return teams.removeTeamMember(this.exec, orgId, teamId, userId); }
+  public listTeamMembers(orgId: string, teamId: string, callerUserId: string, canViewAllOrgTeams?: boolean): Promise<teams.TeamMemberRow[]> { return teams.listTeamMembers(this.exec, orgId, teamId, callerUserId, canViewAllOrgTeams); }
+  public insertTeamOwner(teamId: string, userId: string): Promise<boolean> { return teams.insertTeamOwner(this.exec, teamId, userId); }
+  public addTeamMember(orgId: string, teamId: string, userId: string, role: teams.TeamMemberRole | undefined, callerUserId: string, canManageOrgTeams?: boolean): Promise<boolean> { return teams.addTeamMember(this.exec, orgId, teamId, userId, role, callerUserId, canManageOrgTeams); }
+  public removeTeamMember(orgId: string, teamId: string, userId: string, callerUserId: string, canManageOrgTeams?: boolean): Promise<boolean> { return teams.removeTeamMember(this.exec, orgId, teamId, userId, callerUserId, canManageOrgTeams); }
   public transferPersonalTeamOwnership(teamId: string, fromUserId: string, toUserId: string): Promise<boolean> { return teams.transferPersonalTeamOwnership(this.exec, teamId, fromUserId, toUserId); }
   public deleteTeam(orgId: string, id: string): Promise<boolean> { return teams.deleteTeam(this.exec, orgId, id); }
 

@@ -73,11 +73,19 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
     return () => { active = false; };
   }, [teamsOps]);
 
+  // Defense in depth: only ever send an org the caller was actually shown. A
+  // tampered activeOrgId that isn't in the loaded contexts falls back to the
+  // server default (personal workspace) instead of reaching the org-scoped API.
+  const scopedOrgId = useMemo(
+    () => (!activeOrgId || contexts.some((item) => item.orgId === activeOrgId) ? activeOrgId || undefined : undefined),
+    [activeOrgId, contexts],
+  );
+
   const refreshList = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const page = await ops.listPage({ limit: 50 }, activeOrgId || undefined);
+      const page = await ops.listPage({ limit: 50 }, scopedOrgId);
       setItems(page.meetings);
       setNextCursor(page.nextCursor);
       setSelectedId((current) => current && page.meetings.some((item) => item.id === current) ? current : page.meetings[0]?.id ?? null);
@@ -87,7 +95,7 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
       setSelectedId(null);
       setError(errorText(caught, "Could not load meetings."));
     } finally { setLoading(false); }
-  }, [activeOrgId, ops]);
+  }, [scopedOrgId, ops]);
 
   useEffect(() => { void refreshList(); }, [refreshList]);
 
@@ -107,12 +115,12 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
     if (!nextCursor || busy) return;
     setBusy("more-meetings");
     try {
-      const page = await ops.listPage({ cursor: nextCursor, limit: 50 }, activeOrgId || undefined);
+      const page = await ops.listPage({ cursor: nextCursor, limit: 50 }, scopedOrgId);
       setItems((current) => [...current, ...page.meetings.filter((row) => !current.some((existing) => existing.id === row.id))]);
       setNextCursor(page.nextCursor);
     } catch (caught) { setError(errorText(caught, "Could not load more meetings.")); }
     finally { setBusy(""); }
-  }, [activeOrgId, busy, nextCursor, ops]);
+  }, [scopedOrgId, busy, nextCursor, ops]);
 
   useEffect(() => {
     if (!selectedId || composing) { setDetail(null); setTranscript([]); return; }
@@ -126,55 +134,55 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
     setTranscriptTotal(0);
     setTranscriptLoading(true);
     setEditing(false);
-    void ops.overview(id, activeOrgId || undefined).then((overview) => {
+    void ops.overview(id, scopedOrgId).then((overview) => {
       if (active) { setDetail({ ...overview, transcript: [] }); setDraftSummary(overview.summaryMarkdown); }
     }).catch((caught) => { if (active) setDetailError(errorText(caught, "Could not load this meeting.")); })
       .finally(() => { if (active) setDetailLoading(false); });
-    void ops.transcriptPage(id, { limit: 100 }, activeOrgId || undefined).then((page) => {
+    void ops.transcriptPage(id, { limit: 100 }, scopedOrgId).then((page) => {
       if (active) { setTranscript(page.segments); setTranscriptNext(page.nextCursor); setTranscriptTotal(page.total); }
     }).catch((caught) => { if (active) setDetailError(errorText(caught, "Could not load the transcript.")); })
       .finally(() => { if (active) setTranscriptLoading(false); });
     return () => { active = false; };
-  }, [activeOrgId, composing, ops, selectedId]);
+  }, [scopedOrgId, composing, ops, selectedId]);
 
   useEffect(() => {
     if (!detail || !["queued", "processing"].includes(detail.summaryStatus)) return;
     let active = true;
     const id = detail.id;
     const timer = globalThis.setInterval(() => {
-      void ops.overview(id, activeOrgId || undefined).then((overview) => {
+      void ops.overview(id, scopedOrgId).then((overview) => {
         if (!active) return;
         setDetail((current) => current?.id === id ? { ...current, ...overview } : current);
         setItems((list) => list.map((item) => item.id === id ? { ...item, summaryStatus: overview.summaryStatus } : item));
       }).catch(() => undefined);
     }, 3000);
     return () => { active = false; globalThis.clearInterval(timer); };
-  }, [activeOrgId, detail?.id, detail?.summaryStatus, ops]);
+  }, [scopedOrgId, detail?.id, detail?.summaryStatus, ops]);
 
   const loadMoreTranscript = useCallback(async () => {
     if (!detail || !transcriptNext || transcriptLoading) return;
     const id = detail.id;
     setTranscriptLoading(true);
     try {
-      const page = await ops.transcriptPage(id, { cursor: transcriptNext, limit: 100 }, activeOrgId || undefined);
+      const page = await ops.transcriptPage(id, { cursor: transcriptNext, limit: 100 }, scopedOrgId);
       if (detail.id === id) setTranscript((current) => [...current, ...page.segments]);
       setTranscriptNext(page.nextCursor);
       setTranscriptTotal(page.total);
     } catch (caught) { setError(errorText(caught, "Could not load more transcript.")); }
     finally { setTranscriptLoading(false); }
-  }, [activeOrgId, detail, ops, transcriptLoading, transcriptNext]);
+  }, [scopedOrgId, detail, ops, transcriptLoading, transcriptNext]);
 
   const setScope = useCallback(async (scope: MeetingScope, options?: { teamId?: string }) => {
     if (!detail || busy) return;
     setBusy("share");
     setError("");
     try {
-      const share = await ops.setScope(detail.id, scope, options, activeOrgId || undefined);
+      const share = await ops.setScope(detail.id, scope, options, scopedOrgId);
       setDetail((current) => current ? { ...current, share } : current);
       setItems((list) => list.map((item) => item.id === detail.id ? { ...item, scope } : item));
     } catch (caught) { setError(errorText(caught, "Could not change meeting access.")); }
     finally { setBusy(""); }
-  }, [activeOrgId, busy, detail, ops]);
+  }, [scopedOrgId, busy, detail, ops]);
 
   const toggleAction = useCallback(async (action: MeetingActionItem) => {
     if (!detail || busy) return;
@@ -183,10 +191,10 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
     setBusy(`action:${action.id}`);
     setDetail({ ...detail, actionItems: previous.map((item) => item.id === action.id ? { ...item, done } : item) });
     setError("");
-    try { await ops.toggleAction(detail.id, action.id, done, activeOrgId || undefined); }
+    try { await ops.toggleAction(detail.id, action.id, done, scopedOrgId); }
     catch (caught) { setDetail((current) => current ? { ...current, actionItems: previous } : current); setError(errorText(caught, "Could not update that action item.")); }
     finally { setBusy(""); }
-  }, [activeOrgId, busy, detail, ops]);
+  }, [scopedOrgId, busy, detail, ops]);
 
   const toggleTrack = useCallback(async (action: MeetingActionItem) => {
     if (!detail || busy) return;
@@ -195,33 +203,33 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
     setError("");
     try {
       if (action.trackItemId) {
-        await ops.unsendActionFromTrack(detail.id, action.id, activeOrgId || undefined);
+        await ops.unsendActionFromTrack(detail.id, action.id, scopedOrgId);
         setDetail((current) => current ? { ...current, actionItems: current.actionItems.map((item) => item.id === action.id ? { ...item, trackItemId: undefined } : item) } : current);
       } else {
-        const { trackItemId } = await ops.sendActionToTrack(detail.id, action.id, activeOrgId || undefined);
+        const { trackItemId } = await ops.sendActionToTrack(detail.id, action.id, scopedOrgId);
         setDetail((current) => current ? { ...current, actionItems: current.actionItems.map((item) => item.id === action.id ? { ...item, trackItemId } : item) } : current);
       }
     } catch (caught) { setDetail((current) => current ? { ...current, actionItems: previous } : current); setError(errorText(caught, "Could not update Meeting Track.")); }
     finally { setBusy(""); }
-  }, [activeOrgId, busy, detail, ops]);
+  }, [scopedOrgId, busy, detail, ops]);
 
   const regenerate = useCallback(async () => {
     if (!detail || busy) return;
     setBusy("regenerate");
     setError("");
-    try { const updated = await ops.regenerateSummary(detail.id, activeOrgId || undefined); setDetail(updated); setDraftSummary(updated.summaryMarkdown); }
+    try { const updated = await ops.regenerateSummary(detail.id, scopedOrgId); setDetail(updated); setDraftSummary(updated.summaryMarkdown); }
     catch (caught) { setError(errorText(caught, "Could not regenerate this summary.")); }
     finally { setBusy(""); }
-  }, [activeOrgId, busy, detail, ops]);
+  }, [scopedOrgId, busy, detail, ops]);
 
   const saveSummary = useCallback(async () => {
     if (!detail || busy) return;
     setBusy("save-summary");
     setError("");
-    try { const updated = await ops.updateSummary(detail.id, draftSummary, activeOrgId || undefined); setDetail(updated); setEditing(false); }
+    try { const updated = await ops.updateSummary(detail.id, draftSummary, scopedOrgId); setDetail(updated); setEditing(false); }
     catch (caught) { setError(errorText(caught, "Could not save this summary.")); }
     finally { setBusy(""); }
-  }, [activeOrgId, busy, detail, draftSummary, ops]);
+  }, [scopedOrgId, busy, detail, draftSummary, ops]);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -236,7 +244,7 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
         {(["meetings", "tracked", "teams"] as const).map((tab) => <button type="button" key={tab} role="tab" aria-selected={mode === tab} className={`mv-tab${mode === tab ? " mv-on" : ""}`} onClick={() => setMode(tab)}>{tab === "tracked" ? "Track" : tab[0].toUpperCase() + tab.slice(1)}</button>)}
         {mode !== "teams" && contexts.length ? <label className="mv-orgctx">Organization context<select value={activeOrgId} onChange={(event) => changeOrg(event.target.value)} aria-label="Organization context">{contexts.map((item) => <option key={item.orgId} value={item.orgId}>{item.isPersonal ? `${item.name} · Personal workspace` : item.name}</option>)}</select></label> : null}
       </div>
-      {mode === "tracked" ? <MeetingTracksView ops={ops} orgId={activeOrgId || undefined} /> : mode === "teams" ? <TeamsView ops={teamsOps} onChanged={() => setTeamRevision((value) => value + 1)} /> : (
+      {mode === "tracked" ? <MeetingTracksView ops={ops} orgId={scopedOrgId} /> : mode === "teams" ? <TeamsView ops={teamsOps} onChanged={() => setTeamRevision((value) => value + 1)} /> : (
         <div className="mv-root">
           <aside className={`mv-col${selectedId || composing ? " mv-col-has-selection" : ""}`}>
             <div className="mv-col-head"><div><span className="mv-eyebrow">Library</span><h2>Meetings <span>{items.length}</span></h2></div><button type="button" className="mv-newbtn" onClick={() => { setComposing(true); setSelectedId(null); }}>+ New</button></div>
@@ -250,7 +258,7 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
             {nextCursor ? <button type="button" className="mv-load-more" disabled={busy === "more-meetings"} onClick={() => void loadMoreMeetings()}>{busy === "more-meetings" ? "Loading…" : "Load more meetings"}</button> : null}
           </aside>
 
-          {composing ? <NewMeeting ops={ops} orgId={activeOrgId || undefined} onCancel={() => { setComposing(false); void refreshList(); }} onCreated={async (id) => { await refreshList(); setComposing(false); setSelectedId(id); }} /> : detail ? (
+          {composing ? <NewMeeting ops={ops} orgId={scopedOrgId} onCancel={() => { setComposing(false); void refreshList(); }} onCreated={async (id) => { await refreshList(); setComposing(false); setSelectedId(id); }} /> : detail ? (
             <main className="mv-detail">
               <button type="button" className="mv-mobile-back" onClick={() => setSelectedId(null)}>← Meetings</button>
               {error ? <div className="mv-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError("")} aria-label="Dismiss error">×</button></div> : null}
