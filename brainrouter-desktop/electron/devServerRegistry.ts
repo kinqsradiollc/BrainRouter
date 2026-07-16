@@ -15,7 +15,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { findFreePort, isPortFree } from './portUtil.js';
-import { isAllowedLauncher, hasShellMeta, hasDangerousFlag } from './browserSafety.js';
+import { isAllowedLauncher, hasShellMeta, hasDangerousFlag, hasExecSubcommand } from './browserSafety.js';
 
 /** The desktop app's own vite dev port — never auto-start or accept a config on it. */
 export const DESKTOP_PORT = 5173;
@@ -115,7 +115,7 @@ export function readLaunchConfigs(workspaceRoot: string): LaunchConfig[] {
           port: Number(o.port) || 0,
         };
       })
-      .filter((c) => c.name && c.port > 0 && isAllowedLauncher(c.exe) && !c.args.some(hasShellMeta) && !c.args.some(hasDangerousFlag));
+      .filter((c) => c.name && c.port > 0 && isAllowedLauncher(c.exe) && !c.args.some(hasShellMeta) && !c.args.some(hasDangerousFlag) && !hasExecSubcommand(c.exe, c.args));
   } catch {
     return [];
   }
@@ -200,7 +200,12 @@ export function createDevServerRegistry(workspaceRoot: string): DevServerRegistr
     const args = port === cfg.port ? cfg.args : [...cfg.args, '--', '--port', String(port)];
     let child: ChildProcess;
     try {
-      child = spawn(exe, args, { cwd: workspaceRoot, env: { ...process.env }, detached: !isWin, shell: isWin, stdio: ['ignore', 'pipe', 'pipe'] });
+      // Put the workspace's node_modules/.bin on PATH so whitelisted local tool
+      // binaries (vite/nx/turbo) resolve directly — the safe replacement for `npx`
+      // (which was removed because it can fetch + run an arbitrary package).
+      const binDir = path.join(workspaceRoot, 'node_modules', '.bin');
+      const env = { ...process.env, PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ''}` };
+      child = spawn(exe, args, { cwd: workspaceRoot, env, detached: !isWin, shell: isWin, stdio: ['ignore', 'pipe', 'pipe'] });
     } catch (err) {
       return { ...statusOf(name), error: `start dev server "${name}" failed: ${err instanceof Error ? err.message : String(err)}` };
     }
@@ -252,6 +257,7 @@ export function createDevServerRegistry(workspaceRoot: string): DevServerRegistr
     if (!isAllowedLauncher(exe)) return { ok: false, error: `launcher "${exe}" is not allowed (npm/npx/pnpm/yarn/vite/nx/turbo only).` };
     if (args.some(hasShellMeta)) return { ok: false, error: 'an argument contains a shell metacharacter.' };
     if (args.some(hasDangerousFlag)) return { ok: false, error: 'an argument is an inline code-execution flag (-e/-p/-r/-c).' };
+    if (hasExecSubcommand(exe, args)) return { ok: false, error: 'that subcommand (exec/x/dlx/create/add/install) runs an arbitrary package — use a project script (run <script>).' };
     if (!Number.isInteger(port) || port < 1 || port > 65535) return { ok: false, error: 'port must be an integer in 1..65535.' };
     if (port === DESKTOP_PORT) return { ok: false, error: `port ${DESKTOP_PORT} is the desktop app's own dev port.` };
 

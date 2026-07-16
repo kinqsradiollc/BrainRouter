@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { safeName, isPathWithinRoot, mdSafe, isAllowedLauncher, hasShellMeta, hasDangerousFlag } from './browserSafety.js';
+import { safeName, isPathWithinRoot, mdSafe, isAllowedLauncher, hasShellMeta, hasDangerousFlag, hasExecSubcommand } from './browserSafety.js';
 
 test('safeName strips directory traversal + absolute paths to a single segment', () => {
   assert.equal(safeName('../../etc/passwd'), 'passwd');
@@ -31,12 +31,24 @@ test('mdSafe HTML-encodes injection chars and collapses newlines for run reports
 });
 
 test('isAllowedLauncher permits package/task runners and rejects code-eval runtimes + arbitrary exes', () => {
-  for (const ok of ['npm', 'NPM', 'npm.cmd', 'npx', 'pnpm', 'yarn', 'vite', 'nx', 'turbo', 'C:/x/npm.cmd']) {
+  for (const ok of ['npm', 'NPM', 'npm.cmd', 'pnpm', 'yarn', 'vite', 'nx', 'turbo', 'C:/x/npm.cmd']) {
     assert.equal(isAllowedLauncher(ok), true, ok);
   }
-  // node/deno/bun are code-eval runtimes (node -e …) — rejected (CWE-94 defence).
-  for (const bad of ['node', 'deno', 'bun', 'calc', 'calc.exe', 'bash', 'cmd', 'powershell', '/bin/sh', 'curl', 'python', '']) {
+  // node/deno/bun (node -e …) AND npx (npx <arbitrary-pkg>) are code-execution vectors — rejected.
+  for (const bad of ['node', 'deno', 'bun', 'npx', 'calc', 'calc.exe', 'bash', 'cmd', 'powershell', '/bin/sh', 'curl', 'python', '']) {
     assert.equal(isAllowedLauncher(bad), false, bad);
+  }
+});
+
+test('hasExecSubcommand flags npm/pnpm/yarn subcommands that run an arbitrary package', () => {
+  const bad: Array<[string, string[]]> = [['npm', ['exec', 'x']], ['npm', ['x', 'y']], ['pnpm', ['dlx', 'p']], ['yarn', ['dlx', 'p']], ['npm', ['create', 'app']], ['npm', ['install', 'p']], ['npm', ['--silent', 'exec', 'p']]];
+  for (const [exe, args] of bad) {
+    assert.equal(hasExecSubcommand(exe, args), true, `${exe} ${args.join(' ')}`);
+  }
+  // Legit project-script runs are fine.
+  const ok: Array<[string, string[]]> = [['npm', ['run', 'dev']], ['npm', ['run', 'dev', '-w', 'dashboard']], ['yarn', ['start']], ['vite', ['app']], ['pnpm', ['run', 'build']]];
+  for (const [exe, args] of ok) {
+    assert.equal(hasExecSubcommand(exe, args), false, `${exe} ${args.join(' ')}`);
   }
 });
 
