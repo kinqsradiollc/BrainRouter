@@ -47,6 +47,7 @@ import path from 'node:path';
 import { decideMcpAcceptPromotion } from './api/mcpAcceptHeader.js';
 import { authRouter, usersRouter, sessionsRouter } from './api/routes/identity/index.js';
 import { meetingsRouter, publicMeetingsRouter } from './api/routes/meetings.js';
+import { trackRouter } from './api/routes/track.js';
 import { vulnerabilitiesRouter } from './api/routes/vulnerabilities.js';
 import { orgsRouter, projectsRouter, githubReposRouter } from './api/routes/tenancy/index.js';
 import { connectorOauthRouter } from './api/routes/connectors/oauth.js';
@@ -281,6 +282,7 @@ if (USE_HTTP) {
   app.use("/api/sessions", sessionsRouter);
   app.use("/api/meetings", meetingsRouter);
   app.use("/api/public/meetings", publicMeetingsRouter);
+  app.use("/api/track", trackRouter);
   app.use("/api/vulnerabilities", vulnerabilitiesRouter);
   app.use("/api/vulnerability", vulnerabilitiesRouter);
   app.use("/api/contradictions", contradictionsRouter);
