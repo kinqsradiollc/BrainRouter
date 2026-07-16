@@ -300,19 +300,21 @@ test('account connector snapshot is bounded, org-pinned, and strips credential m
         return response(200, { orgs: [{ orgId: 'org-main', name: 'Main org', isDefault: true }] });
       }
       const source = url.includes('/slack/') ? 'slack' : 'gitlab';
+      // Multi-account: the Configured list now enumerates the /accounts route.
       return response(200, {
         source,
-        connected: true,
-        connector: {
+        accounts: [{
           id: `conn-${source}`,
-          name: `${source} account`,
+          label: `${source} account`,
+          connected: true,
           status: 'connected',
           enabled: true,
-          config: { pollMinutes: 15 },
+          account: `${source}-user`,
           lastRunAt: '2026-07-13T00:00:00.000Z',
           lastError: null,
+          authMode: 'web',
           credential: { accessToken: 'must-not-cross' },
-        },
+        }],
       });
     },
   );
@@ -320,8 +322,10 @@ test('account connector snapshot is bounded, org-pinned, and strips credential m
   assert.equal(snapshot.signedIn, true);
   assert.equal(snapshot.orgId, 'org-main');
   assert.deepEqual(snapshot.connectors.map((item) => item.source), ['slack', 'gitlab']);
+  assert.deepEqual(snapshot.connectors.map((item) => item.connector?.id), ['conn-slack', 'conn-gitlab']);
   assert.equal(JSON.stringify(snapshot).includes('must-not-cross'), false);
   assert.deepEqual(calls.map((call) => call.orgId), [undefined, 'org-main', 'org-main']);
+  assert.deepEqual(calls.slice(1).map((call) => call.url.endsWith('/accounts')), [true, true]);
 });
 
 test('account model catalog exposes only safe policy metadata and preserves exact efforts', async () => {

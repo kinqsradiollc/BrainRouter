@@ -425,8 +425,6 @@ export async function startAccountConnectorOAuth(
   return { ok: true, url };
 }
 
-const SECRETISH_CONFIG_KEY = /(token|secret|password|passphrase|apikey|api[_-]?key|credential|refresh|client[_-]?secret|private[_-]?key)/i;
-
 /** A bounded, metadata-only view of account-managed OAuth connectors for the
  * desktop Configured list. The server remains the credential source of truth;
  * this function copies only an allowlist of status fields into the renderer. */
@@ -440,49 +438,55 @@ export async function fetchAccountConnectorStatuses(
     const account = await resolveBrainRouterAccountContext(config, fetchImpl);
     if (!account) return { signedIn: false, connectors: [] };
     const boundedSources = [...new Set(sources.map((source) => source.trim()).filter(Boolean))].slice(0, 12);
-    const connectors = await Promise.all(boundedSources.map(async (source): Promise<AccountConnectorSnapshot> => {
+    // Multi-account: enumerate EVERY account per source (work + personal + …) via
+    // the /accounts route, not the single /status connector — otherwise the
+    // Configured list shows just one card for an N-account source and a connected
+    // second account can render as disconnected.
+    const perSource = await Promise.all(boundedSources.map(async (source): Promise<AccountConnectorSnapshot[]> => {
       try {
         const response = await fetchImpl(
-          `${account.baseUrl}/api/connectors/${encodeURIComponent(source)}/status`,
+          `${account.baseUrl}/api/connectors/${encodeURIComponent(source)}/accounts`,
           { headers: brainRouterAccountHeaders(account) },
         );
         const body = await safeJson(response);
         if (!response.ok) {
-          return { source, connected: false, connector: null, error: responseError(response, body) };
+          return [{ source, connected: false, connector: null, error: responseError(response, body) }];
         }
-        const raw = asRecord(body.connector);
-        const id = typeof raw.id === 'string' ? raw.id.trim() : '';
-        const connector = id ? {
-          id,
-          name: typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : source,
-          status: typeof raw.status === 'string' ? raw.status : 'connected',
-          enabled: raw.enabled === true,
-          config: Object.fromEntries(
-            Object.entries(asRecord(raw.config)).filter(([key]) => !SECRETISH_CONFIG_KEY.test(key)),
-          ),
-          lastRunAt: typeof raw.lastRunAt === 'string' ? raw.lastRunAt : null,
-          lastError: typeof raw.lastError === 'string' ? raw.lastError : null,
-        } : null;
-        return {
-          source,
-          connected: body.connected === true,
-          connector,
-          ...(typeof body.account === 'string' ? { account: body.account } : {}),
-        };
+        const list = Array.isArray(body.accounts) ? body.accounts : [];
+        return list.map((entry): AccountConnectorSnapshot => {
+          const raw = asRecord(entry);
+          const id = typeof raw.id === 'string' ? raw.id.trim() : '';
+          const connected = raw.connected === true;
+          const connector = id ? {
+            id,
+            name: typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim() : source,
+            status: typeof raw.status === 'string' ? raw.status : (connected ? 'connected' : 'disconnected'),
+            enabled: raw.enabled === true,
+            config: {} as Record<string, unknown>,
+            lastRunAt: typeof raw.lastRunAt === 'string' ? raw.lastRunAt : null,
+            lastError: typeof raw.lastError === 'string' ? raw.lastError : null,
+          } : null;
+          return {
+            source,
+            connected,
+            connector,
+            ...(typeof raw.account === 'string' ? { account: raw.account } : {}),
+          };
+        });
       } catch (error) {
-        return {
+        return [{
           source,
           connected: false,
           connector: null,
           error: error instanceof Error ? error.message : 'Unable to read connector status.',
-        };
+        }];
       }
     }));
     return {
       signedIn: true,
       orgId: account.orgId,
       ...(account.orgName ? { orgName: account.orgName } : {}),
-      connectors,
+      connectors: perSource.flat(),
     };
   } catch (error) {
     return {
