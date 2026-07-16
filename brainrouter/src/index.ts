@@ -48,6 +48,7 @@ import { decideMcpAcceptPromotion } from './api/mcpAcceptHeader.js';
 import { authRouter, usersRouter, sessionsRouter } from './api/routes/identity/index.js';
 import { meetingsRouter, publicMeetingsRouter } from './api/routes/meetings.js';
 import { trackRouter } from './api/routes/track.js';
+import { teamsRouter } from './api/routes/teams.js';
 import { publicSharePageRouter } from './api/routes/publicShare.js';
 import { vulnerabilitiesRouter } from './api/routes/vulnerabilities.js';
 import { orgsRouter, projectsRouter, githubReposRouter } from './api/routes/tenancy/index.js';
@@ -284,6 +285,7 @@ if (USE_HTTP) {
   app.use("/api/meetings", meetingsRouter);
   app.use("/api/public/meetings", publicMeetingsRouter);
   app.use("/api/track", trackRouter);
+  app.use("/api/teams", teamsRouter);
   // Human-facing public share page — the /m/<token> link minted for a public meeting.
   app.use("/m", publicSharePageRouter);
   app.use("/api/vulnerabilities", vulnerabilitiesRouter);
