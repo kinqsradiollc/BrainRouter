@@ -20,6 +20,12 @@ export function verifyGithubSignature(secret: string, raw: Buffer, header: strin
 export interface WebhookDeps {
   findIntegrationByInstallation(installationId: string): Promise<(ResolvedIntegration & { orgId: string }) | null>;
   enqueue(job: { kind: string; input: Record<string, unknown> }): Promise<void>;
+  /**
+   * Supersede-cancel any still-PENDING review job for this (org, repo, PR) before a
+   * push re-review is enqueued, so repeated commits never pile up stale reviews. A
+   * running review is left to finish. Optional/best-effort — omit to disable.
+   */
+  cancelSupersededReviews?(input: { orgId: string; repo: string; prNumber: number }): Promise<void>;
   /** Injectable for permission-gate tests; production uses the global fetch. */
   fetchImpl?: typeof fetch;
   nowSec?: () => number;
@@ -238,8 +244,16 @@ export async function processGithubDelivery(deps: WebhookDeps, req: WebhookReque
   const orgId = integ.orgId;
   const repoFullName = req.body?.repository?.full_name;
   const repoLinked = isRepoLinkedForReview(integ.config, String(repoFullName ?? ""));
-  const fireReviews = async (prNumber: unknown, headSha: unknown, lenses: Array<"security" | "code">) => {
+  const fireReviews = async (prNumber: unknown, headSha: unknown, lenses: Array<"security" | "code">, opts?: { supersede?: boolean }) => {
     if (!repoLinked) return; // repo not linked to our system → do not review
+    // On a push, drop any prior PENDING review for this PR so only the newest head
+    // is reviewed (running reviews are left to finish). Best-effort — a failure here
+    // must never block enqueuing the fresh review.
+    const prNum = Number(prNumber);
+    if (opts?.supersede && deps.cancelSupersededReviews && Number.isFinite(prNum)) {
+      try { await deps.cancelSupersededReviews({ orgId, repo: String(repoFullName ?? ""), prNumber: prNum }); }
+      catch { /* superseding is best-effort; the new review still enqueues */ }
+    }
     const reviewInput = { orgId, installationId, repo: repoFullName, prNumber, headSha };
     for (const lens of lenses) {
       try {
@@ -257,7 +271,7 @@ export async function processGithubDelivery(deps: WebhookDeps, req: WebhookReque
     const lenses: Array<"security" | "code"> = [];
     if (!isPush || policy.reReviewOnPush) lenses.push("security");
     if (policy.codeReviewTrigger === "auto" && (!isPush || policy.reReviewOnPush)) lenses.push("code");
-    if (lenses.length) await fireReviews(pr.number, pr.head?.sha, lenses);
+    if (lenses.length) await fireReviews(pr.number, pr.head?.sha, lenses, { supersede: isPush });
   }
 
   // Command runs are gated by the install token's repository permission, never by

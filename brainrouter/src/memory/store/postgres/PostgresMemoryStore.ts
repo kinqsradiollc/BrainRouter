@@ -1079,8 +1079,13 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public listPentestTargets(orgId: string): Promise<PentestTargetRecord[]> { return pentestTargets.listPentestTargets(this.exec, orgId); }
   public deletePentestTarget(orgId: string, id: string): Promise<boolean> { return pentestTargets.deletePentestTarget(this.exec, orgId, id); }
 
-  public claimNextMemoryJob(options?: { now?: string }): Promise<MemoryJobRecord | null> {
+  public claimNextMemoryJob(options?: { now?: string; perTenantLimit?: number }): Promise<MemoryJobRecord | null> {
     return job.claimNextMemoryJob(this.exec, options);
+  }
+
+  /** Supersede-cancel still-pending review jobs for a PR when a newer push arrives. */
+  public cancelSupersededReviewJobs(input: { orgId: string; repo: string; prNumber: number }, options?: { now?: string }): Promise<number> {
+    return job.cancelSupersededReviewJobs(this.exec, input, options);
   }
 
   public startMemoryJob(id: string, options?: { now?: string }): Promise<MemoryJobRecord | null> {

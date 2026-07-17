@@ -53,13 +53,30 @@ export interface ReviewFindingRow {
   severityCounts: { critical: number; high: number; medium: number; low: number; info: number };
 }
 
+/**
+ * Resolve the queue tenant for a job from its input payload: the org owns review
+ * jobs (`orgId`), the user owns maintenance jobs (`userId`). Computed in JS at
+ * insert time so the fair-scheduling column never depends on a JSON expression.
+ * A job with neither is tenant-less (NULL) — exempt from the per-tenant cap.
+ */
+export function tenantForJobInput(input: unknown): string | null {
+  if (input && typeof input === "object") {
+    const rec = input as Record<string, unknown>;
+    const org = rec.orgId;
+    if (typeof org === "string" && org.trim() !== "") return org;
+    const user = rec.userId;
+    if (typeof user === "string" && user.trim() !== "") return user;
+  }
+  return null;
+}
+
 export async function enqueueMemoryJob(exec: Executor, input: MemoryJobEnqueueInput, options?: { idGenerator?: () => string; now?: string }): Promise<MemoryJobRecord> {
   const now = options?.now ?? new Date().toISOString();
   const id = (options?.idGenerator ?? (() => randomUUID()))();
   await exec.run(
-    `INSERT INTO memory_jobs (id, kind, status, priority, attempts, max_attempts, run_after, locked_at, parent_job_id, input_json, output_json, error, created_at, updated_at)
-     VALUES ($1,$2,'pending',$3,0,$4,$5,NULL,$6,$7,NULL,NULL,$8,$9)`,
-    [id, input.kind, input.priority ?? 50, input.maxAttempts ?? 3, input.runAfter ?? now, input.parentJobId ?? null, JSON.stringify(input.input ?? {}), now, now],
+    `INSERT INTO memory_jobs (id, kind, status, priority, attempts, max_attempts, run_after, locked_at, parent_job_id, tenant, input_json, output_json, error, created_at, updated_at)
+     VALUES ($1,$2,'pending',$3,0,$4,$5,NULL,$6,$7,$8,NULL,NULL,$9,$10)`,
+    [id, input.kind, input.priority ?? 50, input.maxAttempts ?? 3, input.runAfter ?? now, input.parentJobId ?? null, tenantForJobInput(input.input), JSON.stringify(input.input ?? {}), now, now],
   );
   return (await getMemoryJob(exec, id))!;
 }
@@ -272,16 +289,43 @@ export async function listPentestJobsForOrg(exec: Executor, orgId: string, limit
   return rows.map((r) => jobRowToRecord(r as any));
 }
 
-export async function claimNextMemoryJob(exec: Executor, options?: { now?: string }): Promise<MemoryJobRecord | null> {
+/**
+ * Atomically claim the next eligible pending job (highest priority, oldest first)
+ * and flip it to `running`. `FOR UPDATE SKIP LOCKED` makes this safe to run from
+ * many workers concurrently — each takes a distinct row.
+ *
+ * `perTenantLimit` enforces per-tenant fairness at claim time: a pending job is
+ * ineligible while its tenant already has `>= perTenantLimit` rows in `running`,
+ * so a busy org can't monopolize the workers and starve everyone else. With a
+ * single runner process the cap is exact (each claim commits before the next
+ * counts); across MULTIPLE worker processes it is a soft cap — the running-count
+ * subquery reads under READ COMMITTED and SKIP LOCKED doesn't serialize it, so
+ * concurrent claimers for the same tenant can momentarily exceed it by up to
+ * (workers − 1). That's an accepted fairness bound, not a hard invariant. A
+ * NULL-tenant job is exempt (bounded only by the caller's global ceiling). Omit
+ * the option for the original unbounded behavior.
+ */
+export async function claimNextMemoryJob(exec: Executor, options?: { now?: string; perTenantLimit?: number }): Promise<MemoryJobRecord | null> {
   const now = options?.now ?? new Date().toISOString();
+  const capped = typeof options?.perTenantLimit === "number" && options.perTenantLimit > 0;
   return exec.tx(async (client) => {
+    const params: unknown[] = [now];
+    let tenantClause = "";
+    if (capped) {
+      params.push(options!.perTenantLimit);
+      tenantClause = `AND (memory_jobs.tenant IS NULL OR (
+             SELECT count(*) FROM memory_jobs r
+              WHERE r.status = 'running' AND r.tenant = memory_jobs.tenant
+           ) < $${params.length})`;
+    }
     const sel = await client.query<{ id: string }>(
       `SELECT id FROM memory_jobs
         WHERE status = 'pending' AND run_after <= $1
+          ${tenantClause}
         ORDER BY priority DESC, run_after ASC, id ASC
         LIMIT 1
         FOR UPDATE SKIP LOCKED`,
-      [now],
+      params,
     );
     const candidate = sel.rows[0];
     if (!candidate) return null;
@@ -350,6 +394,31 @@ export async function cancelMemoryJob(exec: Executor, id: string, options?: { no
     [options?.reason ?? null, now, id],
   );
   return getMemoryJob(exec, id);
+}
+
+/**
+ * Supersede-cancel: when a new push arrives for a PR, cancel any still-PENDING
+ * review job for the same (org, repo, PR) so repeated commits never pile up
+ * superseded reviews — only the newest head is reviewed. An already-RUNNING review
+ * is left to finish. Scoped to the org via the materialized `tenant` column.
+ * Returns the number of jobs cancelled.
+ */
+export async function cancelSupersededReviewJobs(
+  exec: Executor,
+  input: { orgId: string; repo: string; prNumber: number },
+  options?: { now?: string },
+): Promise<number> {
+  const now = options?.now ?? new Date().toISOString();
+  return exec.run(
+    `UPDATE memory_jobs
+        SET status = 'cancelled', error = COALESCE(error, 'superseded by a newer push'), locked_at = NULL, updated_at = $1
+      WHERE status = 'pending'
+        AND kind IN ('pr-security-review','pr-code-review')
+        AND tenant = $2
+        AND (input_json::jsonb ->> 'repo') = $3
+        AND (input_json::jsonb ->> 'prNumber') = $4`,
+    [now, input.orgId, input.repo, String(input.prNumber)],
+  );
 }
 
 export async function sweepStuckMemoryJobs(exec: Executor, stuckMs: number, options?: { now?: string }): Promise<number> {
