@@ -38,37 +38,51 @@ const KNOWLEDGE_STEPS = [
 export default function HomePage() {
   const reduceMotion = useReducedMotion();
   const revealInitial = reduceMotion ? false : { opacity: 0, y: 24 };
+  // Cinematic hero staging: kicker → headline lines → copy → actions → proof,
+  // then the operations graph "powers on". Collapses to no-ops under reduced motion.
+  const stage = (delay: number) => reduceMotion ? {} : {
+    initial: { opacity: 0, y: 26, filter: "blur(6px)" },
+    animate: { opacity: 1, y: 0, filter: "blur(0px)" },
+    transition: { duration: .65, delay, ease: [0.16, 1, 0.3, 1] as const },
+  };
 
   return (
     <div className="platform-landing">
-      <motion.section className="platform-hero" initial={reduceMotion ? false : { opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .7, ease: [0.16, 1, 0.3, 1] }}>
+      <motion.section className="platform-hero" initial={reduceMotion ? false : { opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: .5 }}>
         <div className="platform-hero-atmosphere" aria-hidden>
           <i data-tone="plan" /><i data-tone="build" /><i data-tone="knowledge" /><i data-tone="review" />
         </div>
         <div className="platform-hero-copy">
-          <span className="platform-kicker"><i /> Open agent operations workspace</span>
-          <h1>Move every agent task from <em>intent</em> to verified work.</h1>
-          <p>BrainRouter keeps the workbench, models, projects, teams, connected systems, permissions, durable knowledge, automation, and review evidence on one shared task path.</p>
-          <div className="platform-actions">
+          <motion.span className="platform-kicker" {...stage(0)}><i /> Open agent operations workspace</motion.span>
+          <h1>
+            <motion.span className="platform-hero-line" {...stage(.08)}>Move every agent</motion.span>
+            <motion.span className="platform-hero-line" {...stage(.2)}>task from <em>intent</em></motion.span>
+            <motion.span className="platform-hero-line" {...stage(.32)}>to verified work.</motion.span>
+          </h1>
+          <motion.p {...stage(.46)}>BrainRouter keeps the workbench, models, projects, teams, connected systems, permissions, durable knowledge, automation, and review evidence on one shared task path.</motion.p>
+          <motion.div className="platform-actions" {...stage(.56)}>
             {!STATIC_PRESENTATION && (
               <Link href="/overview"><PremiumButton variant="primary">Open workspace <span aria-hidden>→</span></PremiumButton></Link>
             )}
             <a href="https://github.com/kinqsradiollc/BrainRouter" target="_blank" rel="noopener noreferrer">
               <PremiumButton variant="ghost">View source</PremiumButton>
             </a>
-          </div>
-          <div className="platform-proof" aria-label="BrainRouter product surfaces">
+          </motion.div>
+          <motion.div className="platform-proof" aria-label="BrainRouter product surfaces" {...stage(.66)}>
             <span>Desktop</span><span>CLI</span><span>Dashboard</span><span>MCP + API</span>
-          </div>
+          </motion.div>
         </div>
 
-        <div className="platform-hero-visual">
+        <motion.div className="platform-hero-visual"
+          initial={reduceMotion ? false : { opacity: 0, scale: .96, y: 18 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          transition={{ duration: .9, delay: reduceMotion ? 0 : .3, ease: [0.16, 1, 0.3, 1] }}>
           <ProductOrbit />
-          <div className="platform-hero-caption" aria-hidden="true">
+          <motion.div className="platform-hero-caption" aria-hidden="true" {...stage(.85)}>
             <span><i /> task state synchronized</span>
             <span>models · tools · sources · memory · review</span>
-          </div>
-        </div>
+          </motion.div>
+        </motion.div>
       </motion.section>
 
       <motion.section className="platform-route-strip" aria-label="BrainRouter workflow" initial={revealInitial} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, amount: .45 }} transition={{ duration: .55, ease: [0.16, 1, 0.3, 1] }}>
