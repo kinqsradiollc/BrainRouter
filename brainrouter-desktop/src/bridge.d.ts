@@ -57,6 +57,7 @@ declare global {
         updateSummary(id: string, summaryMarkdown: string, orgId?: string): Promise<unknown>;
         transcribe(input: { bytes: Uint8Array; contentType?: string; language?: string }): Promise<unknown>;
         regenerate(id: string, orgId?: string): Promise<unknown>;
+        remove(id: string, orgId?: string): Promise<unknown>;
         setScope(id: string, scope: string, opts?: { teamId?: string }, orgId?: string): Promise<unknown>;
         actionToTrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown>;
         actionUntrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown>;

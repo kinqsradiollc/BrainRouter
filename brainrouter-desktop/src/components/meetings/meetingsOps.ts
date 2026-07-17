@@ -23,6 +23,7 @@ interface MeetingsBridge {
   updateSummary(id: string, summaryMarkdown: string, orgId?: string): Promise<unknown>;
   transcribe(input: { bytes: Uint8Array; contentType?: string; language?: string }): Promise<unknown>;
   regenerate(id: string, orgId?: string): Promise<unknown>;
+  remove?(id: string, orgId?: string): Promise<unknown>;
   setScope(id: string, scope: MeetingScope, opts?: { teamId?: string }, orgId?: string): Promise<unknown>;
   actionToTrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown>;
   actionUntrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown>;
@@ -72,7 +73,7 @@ export function createMeetingsOps(): MeetingsOps {
     return {
       listPage: async () => unavailable(), list: async () => unavailable(), get: async () => unavailable(), overview: async () => unavailable(),
       transcriptPage: async () => unavailable(), createFromTranscript: async () => unavailable(), updateSummary: async () => unavailable(),
-      transcribeAudio: async () => unavailable(), regenerateSummary: async () => unavailable(), setScope: async () => unavailable(),
+      transcribeAudio: async () => unavailable(), regenerateSummary: async () => unavailable(), deleteMeeting: async () => unavailable(), setScope: async () => unavailable(),
       sendActionToTrack: async () => unavailable(), unsendActionFromTrack: async () => unavailable(), toggleAction: async () => unavailable(),
       serverTracks: async () => unavailable(), serverTrackCreate: async () => unavailable(), serverTrackTransition: async () => unavailable(),
       serverTrackSetDone: async () => unavailable(), serverTrackRemove: async () => unavailable(),
@@ -90,6 +91,7 @@ export function createMeetingsOps(): MeetingsOps {
     updateSummary: async (id, markdown, orgId) => requireObject<MeetingDetail>(await api.updateSummary(id, markdown, orgId), "meeting"),
     transcribeAudio: async (input) => requireObject<{ text: string }>(await api.transcribe(input), "transcription"),
     regenerateSummary: async (id, orgId) => requireObject<MeetingDetail>(await api.regenerate(id, orgId), "meeting"),
+    deleteMeeting: async (id, orgId) => { if (!api.remove) unavailable(); await api.remove(id, orgId); },
     setScope: async (id, scope, opts, orgId) => requireObject<MeetingShare>(await api.setScope(id, scope, opts, orgId), "meeting share"),
     sendActionToTrack: async (meetingId, actionId, orgId) => requireObject<{ trackItemId: string }>(await api.actionToTrack(meetingId, actionId, orgId), "Track link"),
     unsendActionFromTrack: async (meetingId, actionId, orgId) => { await api.actionUntrack(meetingId, actionId, orgId); },

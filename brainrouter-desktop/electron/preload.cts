@@ -105,6 +105,7 @@ contextBridge.exposeInMainWorld('brainrouter', {
     updateSummary(id: string, summaryMarkdown: string, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:updateSummary', id, summaryMarkdown, orgId); },
     transcribe(input: { bytes: Uint8Array; contentType?: string; language?: string }): Promise<unknown> { return ipcRenderer.invoke('meetings:transcribe', input); },
     regenerate(id: string, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:regenerate', id, orgId); },
+    remove(id: string, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:delete', id, orgId); },
     setScope(id: string, scope: string, opts?: { teamId?: string }, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:setScope', id, scope, opts, orgId); },
     actionToTrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:actionToTrack', meetingId, actionId, orgId); },
     actionUntrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:actionUntrack', meetingId, actionId, orgId); },

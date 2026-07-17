@@ -113,6 +113,8 @@ export function registerMeetingsBridge(): void {
     await requestJson(meetingRequests.setScope(meetingId, scope, opts, orgId), 'Could not change sharing'));
   ipcMain.handle('meetings:regenerate', async (_event, meetingId: unknown, orgId: unknown) =>
     await requestJson(meetingRequests.regenerate(meetingId, orgId), 'Could not regenerate the summary'));
+  ipcMain.handle('meetings:delete', async (_event, meetingId: unknown, orgId: unknown) =>
+    await requestJson(meetingRequests.remove(meetingId, orgId), 'Could not delete the meeting'));
   ipcMain.handle('meetings:toggleAction', async (_event, meetingId: unknown, actionId: unknown, done: unknown, orgId: unknown) =>
     await requestJson(meetingRequests.toggleAction(meetingId, actionId, done, orgId), 'Could not update the action item'));
   ipcMain.handle('meetings:actionToTrack', async (_event, meetingId: unknown, actionId: unknown, orgId: unknown) =>

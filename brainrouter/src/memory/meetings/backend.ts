@@ -34,6 +34,8 @@ interface MeetingsStore {
   updateMeetingActionItems(id: string, userId: string, actionItems: MeetingRow["actionItems"]): Promise<boolean>;
   setMeetingSummaryStatus(id: string, userId: string, status: MeetingRow["summaryStatus"], error?: string | null): Promise<boolean>;
   setMeetingSummaryRecords(id: string, userId: string, summaryRecordId: string | null, transcriptSourceId: string | null): Promise<boolean>;
+  deleteMeeting(id: string, orgId: string, userId: string): Promise<{ summaryRecordId: string | null; transcriptSourceId: string | null } | null>;
+  hardDeleteMemory(userId: string, recordId: string, reason: string): Promise<void>;
 }
 const store = (): MeetingsStore => memoryEngine.store as unknown as MeetingsStore;
 
@@ -311,6 +313,27 @@ export async function setScope(params: { userId: string; orgId: string; id: stri
     share.expiresAt = expiresAt; // ISO — matches the shape toDetail() returns (was the literal "in 30 days")
   }
   return share;
+}
+
+/**
+ * Owner-only hard delete (D5 lifecycle). Removes the meeting index row, its
+ * transcript segments + share tokens (cascade), the ingested transcript source
+ * document, AND the recallable summary CognitiveRecord — a deleted meeting must
+ * not remain recallable from memory. Returns false when the meeting doesn't
+ * exist in this org or the caller isn't its owner.
+ */
+export async function deleteMeeting(userId: string, orgId: string, id: string): Promise<boolean> {
+  requireAccount(userId, orgId);
+  const refs = await store().deleteMeeting(id, orgId, userId);
+  if (!refs) return false;
+  if (refs.summaryRecordId) {
+    // Best-effort: the meeting row is already gone; a mirror-cleanup failure must
+    // not resurrect it. hardDeleteMemory also leaves a governance audit operation.
+    await store().hardDeleteMemory(userId, refs.summaryRecordId, "meeting deleted by owner").catch((err: unknown) => {
+      console.error(`[BrainRouter] meeting ${id}: summary record cleanup failed:`, err instanceof Error ? err.message : err);
+    });
+  }
+  return true;
 }
 
 /** Owner-only: re-run summarization on the stored transcript (D5 lifecycle), in

@@ -247,6 +247,33 @@ export async function setMeetingScope(exec: Executor, id: string, orgId: string,
   return n > 0;
 }
 
+/** Memory-mirror references a deleted meeting leaves behind for the engine to clean. */
+export interface DeletedMeetingRefs { summaryRecordId: string | null; transcriptSourceId: string | null }
+
+/**
+ * Owner-only hard delete. One transaction removes the meeting row (share tokens
+ * and transcript segments go with it via ON DELETE CASCADE) plus the ingested
+ * transcript SourceDocument and its chunks (provenance links cascade from the
+ * chunks). Returns the memory-mirror ids so the caller can also hard-delete the
+ * recallable summary CognitiveRecord — a deleted meeting must not stay recallable.
+ */
+export async function deleteMeeting(exec: Executor, id: string, orgId: string, userId: string): Promise<DeletedMeetingRefs | null> {
+  return exec.tx(async (client) => {
+    const res = await client.query<{ summary_record_id: string | null; transcript_source_id: string | null }>(
+      `DELETE FROM meetings WHERE id = $1 AND org_id = $2 AND user_id = $3
+       RETURNING summary_record_id, transcript_source_id`,
+      [id, orgId, userId],
+    );
+    const row = res.rows[0];
+    if (!row) return null;
+    if (row.transcript_source_id) {
+      await client.query("DELETE FROM source_chunks WHERE document_id = $1", [row.transcript_source_id]);
+      await client.query("DELETE FROM source_documents WHERE id = $1 AND user_id = $2", [row.transcript_source_id, userId]);
+    }
+    return { summaryRecordId: row.summary_record_id ?? null, transcriptSourceId: row.transcript_source_id ?? null };
+  });
+}
+
 export async function createShareToken(exec: Executor, s: { token: string; meetingId: string; orgId: string; createdBy: string; expiresAt?: string }): Promise<void> {
   await exec.run(
     `INSERT INTO meeting_shares (token, meeting_id, org_id, created_by, expires_at)

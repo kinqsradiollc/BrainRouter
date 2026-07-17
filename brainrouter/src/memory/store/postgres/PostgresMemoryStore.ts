@@ -498,6 +498,7 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public setMeetingSummaryStatus(id: string, userId: string, status: meetings.MeetingRow["summaryStatus"], error?: string | null): Promise<boolean> { return meetings.setMeetingSummaryStatus(this.exec, id, userId, status, error); }
   public setMeetingSummaryRecords(id: string, userId: string, summaryRecordId: string | null, transcriptSourceId: string | null): Promise<boolean> { return meetings.setMeetingSummaryRecords(this.exec, id, userId, summaryRecordId, transcriptSourceId); }
   public getMeetingByShareToken(token: string): Promise<meetings.MeetingRow | null> { return meetings.getMeetingByShareToken(this.exec, token); }
+  public deleteMeeting(id: string, orgId: string, userId: string): Promise<meetings.DeletedMeetingRefs | null> { return meetings.deleteMeeting(this.exec, id, orgId, userId); }
 
   // ── Track (migration 034) — org-scoped, collaborative work items ──
   public createTrackItem(input: track.CreateTrackItemInput): Promise<track.TrackItemRow> { return track.createTrackItem(this.exec, input); }

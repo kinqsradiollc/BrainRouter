@@ -231,6 +231,22 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
     finally { setBusy(""); }
   }, [scopedOrgId, busy, detail, draftSummary, ops]);
 
+  // Owner-only hard delete — the server also removes the transcript source and
+  // the recallable summary record, so the meeting doesn't linger in recall.
+  const deleteMeeting = useCallback(async () => {
+    if (!detail?.canEdit || busy) return;
+    if (!globalThis.confirm?.(`Delete "${detail.title}"? Its transcript, notes and recallable summary are removed permanently.`)) return;
+    setBusy("delete");
+    setError("");
+    try {
+      await ops.deleteMeeting(detail.id, scopedOrgId);
+      setSelectedId(null);
+      setDetail(null);
+      await refreshList();
+    } catch (caught) { setError(errorText(caught, "Could not delete this meeting.")); }
+    finally { setBusy(""); }
+  }, [scopedOrgId, busy, detail, ops, refreshList]);
+
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return items.filter((item) => (scopeFilter === "all" || item.scope === scopeFilter) && (!needle || item.title.toLowerCase().includes(needle)));
@@ -263,7 +279,7 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
               <button type="button" className="mv-mobile-back" onClick={() => setSelectedId(null)}>← Meetings</button>
               {error ? <div className="mv-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError("")} aria-label="Dismiss error">×</button></div> : null}
               <header className="mv-dhead">
-                <div className="mv-dhead-row"><div className="mv-title-block"><div className="mv-title-status"><span className={`mv-summary-dot mv-summary-${detail.summaryStatus}`} />{STATUS_LABEL[detail.summaryStatus]}</div><h3>{detail.title}</h3><div className="mv-att"><span className="mv-av">{detail.attendees.slice(0, 4).map((attendee) => <span key={attendee}>{initials(attendee)}</span>)}</span>{detail.attendees.length ? detail.attendees.join(", ") : "No attendees recorded"}</div></div><div className="mv-hactions">{detail.canEdit ? <SharePopover share={detail.share} busy={busy === "share"} teamsOps={teamsOps} teamRevision={teamRevision} context={activeContext} onError={setError} onSetScope={(scope, options) => void setScope(scope, options)} /> : <span className="mv-shared-readonly">Shared with you · read only</span>}{detail.model ? <span className="mv-modelchip">{detail.model.label}{detail.model.effort ? <> · <b>{detail.model.effort}</b></> : null}</span> : null}</div></div>
+                <div className="mv-dhead-row"><div className="mv-title-block"><div className="mv-title-status"><span className={`mv-summary-dot mv-summary-${detail.summaryStatus}`} />{STATUS_LABEL[detail.summaryStatus]}</div><h3>{detail.title}</h3><div className="mv-att"><span className="mv-av">{detail.attendees.slice(0, 4).map((attendee) => <span key={attendee}>{initials(attendee)}</span>)}</span>{detail.attendees.length ? detail.attendees.join(", ") : "No attendees recorded"}</div></div><div className="mv-hactions">{detail.canEdit ? <SharePopover share={detail.share} busy={busy === "share"} teamsOps={teamsOps} teamRevision={teamRevision} context={activeContext} onError={setError} onSetScope={(scope, options) => void setScope(scope, options)} /> : <span className="mv-shared-readonly">Shared with you · read only</span>}{detail.model ? <span className="mv-modelchip">{detail.model.label}{detail.model.effort ? <> · <b>{detail.model.effort}</b></> : null}</span> : null}{detail.canEdit ? <button type="button" className="mv-danger-btn" disabled={busy === "delete"} onClick={() => void deleteMeeting()}>{busy === "delete" ? "Deleting…" : "Delete"}</button> : null}</div></div>
                 <div className="mv-metastrip"><span className="mv-chip">{detail.status || "Captured"}</span><span className="mv-chip">{detail.date}</span>{detail.durationMin ? <span className="mv-chip">{detail.durationMin} min</span> : null}{detail.wordCount ? <span className="mv-chip">{detail.wordCount.toLocaleString()} words</span> : null}</div>
               </header>
               <div className="mv-dbody">
