@@ -1838,9 +1838,28 @@ export async function main(transport) {
                     resolve({ output: '' });
                     return;
                 }
-                exec(command, { cwd: workspaceRoot, timeout: 15_000, maxBuffer: 2_000_000 }, (err, stdout, stderr) => {
-                    resolve({ output: `${stdout ?? ''}${stderr ?? ''}${err && !stdout && !stderr ? err.message : ''}` });
-                });
+                // Defence in depth (CWE-78): pass the command as a single argv element to an
+                // explicit shell (spawn, not exec) instead of interpolating it into a shell
+                // string we build. A terminal is inherently a shell, so shell features are
+                // intentional — this is not a whitelist; the primary controls remain the
+                // authenticated transport and the opt-in gate above. Combines stdout+stderr,
+                // caps output, and enforces the 15s budget by killing the child.
+                const isWin = process.platform === 'win32';
+                const shell = isWin ? (process.env.ComSpec || 'cmd.exe') : '/bin/sh';
+                const shellArgs = isWin ? ['/d', '/s', '/c', command] : ['-c', command];
+                let out = '';
+                let done = false;
+                let timer;
+                const finish = (text) => { if (done) return; done = true; clearTimeout(timer); resolve({ output: text }); };
+                const cap = (chunk) => { if (out.length < 2_000_000) out += chunk.toString(); };
+                const child = spawn(shell, shellArgs, { cwd: workspaceRoot });
+                child.stdout.on('data', cap);
+                child.stderr.on('data', cap);
+                // Guarantee the one-shot resolves within budget even if the shell spawns a
+                // child that outlives a kill (e.g. Windows grandchildren): resolve on timeout too.
+                timer = setTimeout(() => { try { child.kill(); } catch { /* already exited */ } finish(out || 'timed out after 15s'); }, 15_000);
+                child.on('error', (e) => finish(out || e.message));
+                child.on('close', (code) => finish(out || (code ? `exited with code ${code}` : '')));
             }),
             // Read-only surfaces — same pure modules the TUI commands use.
             // DESK-6m — sidebar sessions merged with their UI meta (title override,
