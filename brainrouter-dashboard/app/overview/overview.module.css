@@ -105,7 +105,7 @@
   grid-column: 1 / -1;
 }
 .panelBody {
-  min-height: 210px;
+  min-height: 170px;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -117,7 +117,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
   gap: var(--spacing-12);
-  align-items: start;
+  align-items: stretch;
 }
 .lower :global(.overview-repositories) {
   margin-top: 0;
@@ -295,7 +295,8 @@
   align-items: center;
   justify-content: center;
   text-align: center;
-  min-height: 150px;
+  min-height: 140px;
+  flex: 1;
   padding: 12px;
 }
 .empty strong {
@@ -379,7 +380,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
   gap: var(--spacing-12);
-  align-items: start;
+  align-items: stretch;
 }
 .heatWrap {
   overflow-x: auto;
@@ -490,25 +491,7 @@
 }
 .globe {
   flex: none;
-  width: 64px;
-  height: 64px;
-}
-.globeSpin {
-  animation: overview-globe-spin 16s linear infinite;
-}
-.globeMarker {
-  animation: overview-globe-pulse 2.4s ease-in-out infinite;
-}
-@keyframes overview-globe-spin {
-  from { transform: rotateZ(0deg) scaleX(1); }
-  25% { transform: scaleX(0.2); }
-  50% { transform: scaleX(1); }
-  75% { transform: scaleX(0.2); }
-  to { transform: scaleX(1); }
-}
-@keyframes overview-globe-pulse {
-  0%, 100% { opacity: 0.35; transform: scale(0.8); }
-  50% { opacity: 1; transform: scale(1.15); }
+  display: block;
 }
 
 /* Entrance: cards fade/slide up subtly; charts draw in ------------------- */
@@ -565,9 +548,7 @@
   .enter :global(.overview-repositories),
   .enter :global(.metric-tile),
   .enter :global(.analytics-panel) polyline,
-  .enter :global(.donut) circle[stroke-dasharray],
-  .globeSpin,
-  .globeMarker {
+  .enter :global(.donut) circle[stroke-dasharray] {
     animation: none !important;
   }
   .enter :global(.analytics-panel) polyline { stroke-dashoffset: 0; }

@@ -18,16 +18,94 @@ export function MetricTile({ label, value, delta, trend = "up", hint }: { label:
   return <section className="metric-tile"><span>{label}</span><strong>{value}</strong><div className={`metric-tile__delta metric-tile__delta--${trend}`}>{delta && <>{icon} {delta}</>}<small>{hint}</small></div></section>;
 }
 
-type HistoryRow = { date: string; critical: number; high: number; medium: number; low: number };
+type HistoryRow = { date: string; critical: number; high: number; medium: number; low: number; open?: number; fixed?: number };
+const SEVERITY_SERIES = ["critical", "high", "medium", "low"] as const;
+
+/** "Jul 3" label for a yyyy-mm-dd history key (UTC — matches the server buckets). */
+function dayLabel(date: string): string {
+  const parsed = new Date(`${date}T00:00:00Z`);
+  return Number.isNaN(parsed.valueOf()) ? date : parsed.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
+}
+
+/** Shared plot frame: y gridlines with integer labels + up to four x date labels. */
+function ChartFrame({ width, height, pad, max, data, x }: { width: number; height: number; pad: { t: number; r: number; b: number; l: number }; max: number; data: HistoryRow[]; x: (i: number) => number }) {
+  const innerH = height - pad.t - pad.b;
+  const ticks = [...new Set([0.25, 0.5, 0.75, 1].map((f) => Math.round(max * f)))].filter((v) => v > 0);
+  const labelIdx = data.length <= 4
+    ? data.map((_, i) => i)
+    : [0, Math.round((data.length - 1) / 3), Math.round(((data.length - 1) * 2) / 3), data.length - 1];
+  return <>
+    {ticks.map((value) => {
+      const ty = pad.t + innerH - (value * innerH) / max;
+      return <g key={value}><line x1={pad.l} x2={width - pad.r} y1={ty} y2={ty} stroke="var(--border-dim)" strokeDasharray="3 5" /><text x={pad.l - 6} y={ty + 3} textAnchor="end" className="chart__tick">{value}</text></g>;
+    })}
+    <path d={`M${pad.l} ${height - pad.b}H${width - pad.r}`} className="chart__axis" />
+    {[...new Set(labelIdx)].map((i) => data[i] && (
+      <text key={data[i].date} x={x(i)} y={height - pad.b + 14} textAnchor={i === 0 ? "start" : i === data.length - 1 ? "end" : "middle"} className="chart__tick">{dayLabel(data[i].date)}</text>
+    ))}
+  </>;
+}
+
+/** Issues discovered over time, stacked by severity — each legend entry is a real series. */
 export function AreaChart({ data }: { data: HistoryRow[] }) {
-  const width = 640; const height = 230; const pad = 16;
-  const values = data.map((r) => r.critical + r.high + r.medium + r.low);
-  const max = Math.max(1, ...values);
-  const x = (i: number) => pad + (i * (width - pad * 2)) / Math.max(1, data.length - 1);
-  const y = (value: number) => height - pad - (value * (height - pad * 2)) / max;
-  const points = values.map((value, i) => `${x(i)},${y(value)}`).join(" ");
-  const area = values.length ? `${pad},${height - pad} ${points} ${x(values.length - 1)},${height - pad}` : "";
-  return <div className="chart"><div className="chart__legend"><Legend color={palette.critical} label="Critical" /><Legend color={palette.high} label="High" /><Legend color={palette.medium} label="Medium" /><Legend color={palette.low} label="Low" /></div><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Issues over time area chart"><defs><linearGradient id="issue-area" x1="0" y1="0" x2="0" y2="1"><stop stopColor="var(--danger)" stopOpacity=".36"/><stop offset="1" stopColor="var(--danger)" stopOpacity="0"/></linearGradient></defs><path d={`M${pad} ${height - pad}H${width - pad}`} className="chart__axis"/><polygon points={area} fill="url(#issue-area)"/><polyline points={points} fill="none" stroke="var(--danger)" strokeWidth="2.5" vectorEffect="non-scaling-stroke"/>{values.map((value, i) => <circle key={data[i].date} cx={x(i)} cy={y(value)} r="3" fill="var(--surface-raised)" stroke="var(--danger)" strokeWidth="2"/>)}</svg>{data.length === 0 && <div className="chart__empty">No review activity in this period.</div>}</div>;
+  const width = 640; const height = 230; const pad = { t: 10, r: 8, b: 24, l: 30 };
+  const innerW = width - pad.l - pad.r; const innerH = height - pad.t - pad.b;
+  const totals = data.map((r) => r.critical + r.high + r.medium + r.low);
+  const max = Math.max(1, ...totals);
+  const x = (i: number) => pad.l + (data.length <= 1 ? innerW / 2 : (i * innerW) / (data.length - 1));
+  const y = (value: number) => pad.t + innerH - (value * innerH) / max;
+  // Stack bottom-up: critical sits on the axis, low on top; each band is the
+  // region between the previous cumulative series and this one.
+  const cumulative: number[][] = [data.map(() => 0)];
+  for (const key of SEVERITY_SERIES) cumulative.push(data.map((row, i) => cumulative[cumulative.length - 1][i] + row[key]));
+  const bandPath = (lower: number[], upper: number[]) => data.length === 0 ? "" :
+    `M${x(0)} ${y(upper[0])}` + upper.map((v, i) => `L${x(i)} ${y(v)}`).join("") +
+    [...lower].reverse().map((v, i) => `L${x(data.length - 1 - i)} ${y(v)}`).join("") + "Z";
+  const hasData = totals.some((v) => v > 0);
+  return <div className="chart">
+    <div className="chart__legend"><Legend color={palette.critical} label="Critical" /><Legend color={palette.high} label="High" /><Legend color={palette.medium} label="Medium" /><Legend color={palette.low} label="Low" /></div>
+    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Issues discovered over time by severity">
+      <ChartFrame width={width} height={height} pad={pad} max={max} data={data} x={x} />
+      {SEVERITY_SERIES.map((key, s) => (
+        <g key={key}>
+          <path d={bandPath(cumulative[s], cumulative[s + 1])} fill={palette[key]} opacity="0.22" />
+          <polyline points={cumulative[s + 1].map((v, i) => `${x(i)},${y(v)}`).join(" ")} fill="none" stroke={palette[key]} strokeWidth="1.6" vectorEffect="non-scaling-stroke" opacity={hasData ? 0.9 : 0.4} />
+        </g>
+      ))}
+      {data.length <= 45 && data.map((row, i) => totals[i] > 0 && (
+        <circle key={row.date} cx={x(i)} cy={y(totals[i])} r="3" fill="var(--surface-raised)" stroke="var(--danger)" strokeWidth="1.8">
+          <title>{`${dayLabel(row.date)} — ${SEVERITY_SERIES.filter((k) => row[k] > 0).map((k) => `${row[k]} ${k}`).join(", ") || "no issues"}`}</title>
+        </circle>
+      ))}
+    </svg>
+    {(data.length === 0 || !hasData) && <div className="chart__empty">No issues discovered in this period.</div>}
+  </div>;
+}
+
+/** Cumulative still-open vs fixed findings across the period — two real series. */
+export function OpenFixedChart({ data }: { data: HistoryRow[] }) {
+  const width = 640; const height = 230; const pad = { t: 10, r: 8, b: 24, l: 30 };
+  const innerW = width - pad.l - pad.r; const innerH = height - pad.t - pad.b;
+  const open: number[] = []; const fixed: number[] = [];
+  let openSum = 0; let fixedSum = 0;
+  for (const row of data) { openSum += row.open ?? 0; fixedSum += row.fixed ?? 0; open.push(openSum); fixed.push(fixedSum); }
+  const max = Math.max(1, openSum, fixedSum);
+  const x = (i: number) => pad.l + (data.length <= 1 ? innerW / 2 : (i * innerW) / (data.length - 1));
+  const y = (value: number) => pad.t + innerH - (value * innerH) / max;
+  const line = (series: number[]) => series.map((v, i) => `${x(i)},${y(v)}`).join(" ");
+  const area = (series: number[]) => data.length === 0 ? "" : `${x(0)},${y(0)} ${line(series)} ${x(data.length - 1)},${y(0)}`;
+  const hasData = openSum > 0 || fixedSum > 0;
+  return <div className="chart">
+    <div className="chart__legend"><Legend color="var(--danger)" label={`Open ${openSum}`} /><Legend color="var(--ok)" label={`Fixed ${fixedSum}`} /></div>
+    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Cumulative open versus fixed findings">
+      <ChartFrame width={width} height={height} pad={pad} max={max} data={data} x={x} />
+      <polygon points={area(open)} fill="var(--danger)" opacity="0.14" />
+      <polygon points={area(fixed)} fill="var(--ok)" opacity="0.14" />
+      <polyline points={line(open)} fill="none" stroke="var(--danger)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+      <polyline points={line(fixed)} fill="none" stroke="var(--ok)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+    </svg>
+    {(data.length === 0 || !hasData) && <div className="chart__empty">No findings recorded in this period.</div>}
+  </div>;
 }
 
 export function Donut({ values }: { values: Record<string, number> }) {

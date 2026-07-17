@@ -77,6 +77,8 @@ export interface ReviewFindingDetailDto {
   cwe?: string;
   preExisting?: boolean;
   suggestable?: boolean;
+  /** Issue lifecycle — open / in progress / snoozed / fixed / ignored (absent = open). */
+  status?: string;
 }
 export interface ReviewProgressEventDto {
   ts: string;

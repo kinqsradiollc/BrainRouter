@@ -232,10 +232,12 @@ export interface ReviewIssuesResponse {
 
 export interface ReviewSummary {
   periodDays: number;
-  metrics: { securityScore: number; openIssues: number; issuesFound: number; fixRate: number; prsReviewed: number; pentests: number };
+  metrics: { securityScore: number; openIssues: number; issuesFound: number; issuesFixed?: number; fixRate: number; prsReviewed: number; pentests: number };
   severity: { critical: number; high: number; medium: number; low: number; info: number };
   verdicts: { approved: number; commented: number; changesRequested: number };
-  history: Array<{ date: string; critical: number; high: number; medium: number; low: number }>;
+  /** Zero-filled per-day rows for the full period: discoveries by severity plus
+   * how many of that day's findings are currently open vs fixed. */
+  history: Array<{ date: string; critical: number; high: number; medium: number; low: number; open?: number; fixed?: number }>;
   repositories: Array<{ repository: string; prs: number; findings: number; addressed: number }>;
 }
 

@@ -290,19 +290,41 @@ reviewsRouter.get("/issues", requirePermission("reviews:read"), async (req: Auth
  * time bucketing and severity parsing on every render. */
 reviewsRouter.get("/summary", requirePermission("reviews:read"), async (req: AuthedRequest, res) => {
   const days = Math.min(Math.max(Number(req.query.days) || 30, 7), 90);
-  const since = Date.now() - days * 86_400_000;
+  const now = Date.now();
+  const since = now - days * 86_400_000;
   const jobs = (await (memoryEngine.store as Store).listReviewAnalyticsForOrg?.(req.orgId!, new Date(since).toISOString(), 1_000)) ?? [];
   const recent = jobs.map(reviewRecord).filter((job) => Date.parse(job.createdAt) >= since);
-  const severity = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+  // Per-finding status vocabulary mirrors the Issues tabs (open / in progress /
+  // snoozed / fixed / ignored; a missing status means open). Only "fixed" is
+  // remediated; "ignored" is closed-but-not-fixed, so it counts in neither the
+  // open figures nor the fix rate's numerator.
+  const statusOf = (finding: { status?: unknown }): string => String(finding.status ?? "open").toLowerCase();
+  const severity = { critical: 0, high: 0, medium: 0, low: 0, info: 0 }; // OPEN findings only
   const verdicts = { approved: 0, commented: 0, changesRequested: 0 };
-  const byDay = new Map<string, { critical: number; high: number; medium: number; low: number }>();
+  type DayBucket = { critical: number; high: number; medium: number; low: number; open: number; fixed: number };
+  const emptyDay = (): DayBucket => ({ critical: 0, high: 0, medium: 0, low: 0, open: 0, fixed: 0 });
+  // Zero-fill every day of the window so the time axis is continuous — sparse
+  // activity previously collapsed into adjacent points and distorted the chart.
+  const byDay = new Map<string, DayBucket>();
+  for (let ts = since; ts <= now; ts += 86_400_000) byDay.set(new Date(ts).toISOString().slice(0, 10), emptyDay());
+  let issuesFound = 0;
+  let issuesFixed = 0;
   for (const job of recent) {
     const day = job.createdAt.slice(0, 10);
-    const bucket = byDay.get(day) ?? { critical: 0, high: 0, medium: 0, low: 0 };
+    const bucket = byDay.get(day) ?? emptyDay();
     for (const finding of job.findingsDetail ?? []) {
       const key = String(finding.severity ?? "").toLowerCase() as keyof typeof severity;
-      if (key in severity) severity[key] += 1;
-      if (key in bucket) bucket[key as keyof typeof bucket] += 1;
+      const status = statusOf(finding);
+      issuesFound += 1;
+      // Discovered-by-severity per day (all statuses) — the "issues over time" series.
+      if (key in bucket) bucket[key as "critical" | "high" | "medium" | "low"] += 1;
+      if (status === "fixed") {
+        issuesFixed += 1;
+        bucket.fixed += 1;
+      } else if (status !== "ignored") {
+        bucket.open += 1;
+        if (key in severity) severity[key] += 1;
+      }
     }
     byDay.set(day, bucket);
     if (job.status === "completed" && !job.blocking) verdicts.approved += 1;
@@ -317,10 +339,18 @@ reviewsRouter.get("/summary", requirePermission("reviews:read"), async (req: Aut
     if (job.status === "completed" && !(job.blocking ?? 0)) row.addressed += job.findings ?? 0;
     repos.set(job.repo, row);
   }
-  const totalFindings = Object.values(severity).reduce((a, b) => a + b, 0);
   res.json({
     periodDays: days,
-    metrics: { securityScore: Math.max(0, 100 - severity.critical * 18 - severity.high * 8 - severity.medium * 3 - severity.low), openIssues: severity.critical + severity.high + severity.medium + severity.low, issuesFound: totalFindings, fixRate: totalFindings ? Math.round(([...repos.values()].reduce((n, r) => n + r.addressed, 0) / totalFindings) * 100) : 100, prsReviewed: recent.length, pentests: recent.filter((job) => job.lens === "pentest").length },
+    metrics: {
+      // Score + open counts reflect what is STILL open, so fixing issues improves them.
+      securityScore: Math.max(0, 100 - severity.critical * 18 - severity.high * 8 - severity.medium * 3 - severity.low),
+      openIssues: severity.critical + severity.high + severity.medium + severity.low,
+      issuesFound,
+      issuesFixed,
+      fixRate: issuesFound ? Math.round((issuesFixed / issuesFound) * 100) : 100,
+      prsReviewed: recent.length,
+      pentests: recent.filter((job) => job.lens === "pentest").length,
+    },
     severity, verdicts,
     history: [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, values]) => ({ date, ...values })),
     repositories: [...repos.values()].sort((a, b) => b.findings - a.findings || b.prs - a.prs).slice(0, 8),

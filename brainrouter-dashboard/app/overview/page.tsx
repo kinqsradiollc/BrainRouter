@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PremiumButton } from "../../components/PremiumButton";
-import { AreaChart, Donut, LineChart, MetricTile, SeverityBadge, StackedBar } from "../../components/Analytics";
+import { AreaChart, Donut, LineChart, MetricTile, OpenFixedChart, SeverityBadge, StackedBar } from "../../components/Analytics";
 import {
   adminApi, authFetch,
   type PentestRun, type ReviewIssue, type ReviewSummary,
@@ -13,6 +13,7 @@ import { queryDashboard } from "../../lib/dashboardQuery";
 import { InlineLoading } from "../../components/LoadingSpinner";
 import { useActiveOrg } from "../../components/OrgWorkspaceProvider";
 import { useAuth } from "../../components/AuthProvider";
+import { EarthGlobe } from "../../components/EarthGlobe";
 import styles from "./overview.module.css";
 
 const EMPTY: ReviewSummary = {
@@ -247,13 +248,6 @@ function Overview() {
     [summary.repositories],
   );
 
-  // Repository aggregates give real "opened vs closed" numbers without fabricating.
-  const totals = useMemo(() => {
-    const found = summary.repositories.reduce((sum, repo) => sum + repo.findings, 0);
-    const addressed = summary.repositories.reduce((sum, repo) => sum + repo.addressed, 0);
-    return { found, addressed };
-  }, [summary.repositories]);
-
   // Per-repository addressed rate — the LineChart's series over the period.
   const addressedRate = useMemo(
     () => summary.repositories
@@ -327,7 +321,7 @@ function Overview() {
         <MetricTile
           label="Open issues"
           value={open}
-          hint={totals.found > 0 ? `${totals.found} opened · ${totals.addressed} closed` : "awaiting fix"}
+          hint={metrics.issuesFound > 0 ? `${metrics.issuesFound} found · ${metrics.issuesFixed ?? 0} fixed` : "awaiting fix"}
         />
         <MetricTile label="Issues found" value={found} hint={`last ${days} days`} />
         <MetricTile label="Fix rate" value={`${fix}%`} hint="resolved" />
@@ -416,7 +410,7 @@ function Overview() {
           <h2>Open vs fixed</h2>
           <div className={styles.panelBody}>
             {loading ? <InlineLoading label="Loading trend…" />
-              : <><AreaChart data={summary.history} /><p className={styles.chartNote}>Open discoveries over time · fixed-over-time isn&apos;t tracked yet</p></>}
+              : <><OpenFixedChart data={summary.history} /><p className={styles.chartNote}>Cumulative still-open vs fixed findings this period</p></>}
           </div>
         </div>
         <div className="analytics-panel">
@@ -544,7 +538,7 @@ function Overview() {
                 <span>New in last 30 days</span>
               </div>
             </div>
-            <DotGlobe />
+            <EarthGlobe size={148} className={styles.globe} />
           </div>
 
           {cveLoading ? <div className={styles.feedEmpty}><InlineLoading label="Loading latest CVEs…" /></div>
@@ -683,38 +677,6 @@ function TypeDonut({ buckets, total }: { buckets: [string, number][]; total: num
         ))}
       </div>
     </div>
-  );
-}
-
-/** Lightweight rotating dot-globe (pure SVG/CSS, no lib, no external asset). */
-function DotGlobe() {
-  const meridians = [6, 10, 14, 18];
-  const latitudes = [
-    { cy: 22, rx: 20, ry: 5 },
-    { cy: 22, rx: 20, ry: 11 },
-    { cy: 22, rx: 20, ry: 17 },
-  ];
-  return (
-    <svg className={styles.globe} viewBox="0 0 44 44" role="img" aria-label="Rotating world of detections" aria-hidden>
-      <defs>
-        <radialGradient id="globe-fill" cx="38%" cy="34%" r="72%">
-          <stop offset="0" stopColor="var(--surface-overlay)" stopOpacity="0.9" />
-          <stop offset="1" stopColor="var(--surface-raised)" stopOpacity="0" />
-        </radialGradient>
-      </defs>
-      <circle cx="22" cy="22" r="20" fill="url(#globe-fill)" stroke="var(--border)" strokeWidth="0.5" />
-      {latitudes.map((lat) => (
-        <ellipse key={lat.ry} cx="22" cy={lat.cy} rx={lat.rx} ry={lat.ry} fill="none" stroke="var(--border-med)" strokeWidth="0.4" strokeDasharray="0.6 1.6" />
-      ))}
-      <g className={styles.globeSpin} style={{ transformOrigin: "22px 22px" }}>
-        {meridians.map((rx) => (
-          <ellipse key={rx} cx="22" cy="22" rx={rx} ry="20" fill="none" stroke="var(--text-muted)" strokeWidth="0.4" strokeDasharray="0.6 1.6" />
-        ))}
-      </g>
-      <circle className={styles.globeMarker} cx="14" cy="15" r="1.1" fill="var(--danger)" />
-      <circle className={styles.globeMarker} cx="30" cy="26" r="1" fill="var(--heat-hot)" style={{ animationDelay: "0.8s" }} />
-      <circle className={styles.globeMarker} cx="24" cy="12" r="0.9" fill="var(--warn)" style={{ animationDelay: "1.6s" }} />
-    </svg>
   );
 }
 
