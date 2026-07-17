@@ -1,0 +1,14 @@
+{
+  "name": "brainrouter-host-mobile",
+  "version": "0.4.15",
+  "private": true,
+  "type": "module",
+  "description": "WebSocket adapter that runs the desktop agent host (electron/host.ts) for the BrainRouter mobile app's RemoteTransport.",
+  "bin": { "brainrouter-host": "server.mjs" },
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

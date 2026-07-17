@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "BrainRouter",
+    "slug": "brainrouter-mobile",
+    "version": "0.4.15",
+    "orientation": "portrait",
+    "scheme": "brainrouter",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.kinqs.brainrouter"
+    },
+    "android": {
+      "package": "com.kinqs.brainrouter",
+      "edgeToEdgeEnabled": true
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-notifications"
+    ],
+    "experiments": {
+      "typedRoutes": false
+    }
+  }
+}

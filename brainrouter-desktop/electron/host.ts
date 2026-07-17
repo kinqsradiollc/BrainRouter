@@ -572,7 +572,18 @@ function sessionRows(root: string, limit: number): Array<TranscriptSummary & { l
   });
 }
 
-async function main(): Promise<void> {
+/** Injectable transport seam: an embedding host (e.g. the mobile WebSocket
+ *  adapter, brainrouter-mobile/host/server.mjs) passes its own send/onMessage;
+ *  the Electron utilityProcess path (no transport) keeps using parentPort
+ *  exactly as before — the desktop behavior is unchanged when none is passed. */
+export interface HostTransport {
+  send: (msg: unknown) => void;
+  onMessage: (handler: (msg: unknown) => void) => void;
+  /** A long-lived server transport must NOT process.exit on shutdown. */
+  keepAlive?: boolean;
+}
+
+export async function main(transport?: HostTransport): Promise<void> {
   const workspaceRoot = process.env.BRAINROUTER_DESKTOP_WORKSPACE || process.cwd();
   // DESK-6w (T4) — resolve how this workspace relates to its owning git repo
   // once (repo name, owning git root, subdir-vs-root). Workspace-scoped status/
@@ -614,9 +625,13 @@ async function main(): Promise<void> {
   // utilityProcess gives us process.parentPort; plain `node host.js` (dev
   // smoke) falls back to a console sink so the bootstrap is runnable solo.
   const port = (process as unknown as { parentPort?: ParentPortLike }).parentPort;
-  const send = port
-    ? (msg: unknown) => port.postMessage(msg)
-    : (msg: unknown) => console.log(JSON.stringify(msg));
+  // Transport seam: an injected transport (the mobile WS adapter) wins; else the
+  // Electron parentPort; else a console sink (dev smoke).
+  const send = transport
+    ? transport.send
+    : port
+      ? (msg: unknown) => port.postMessage(msg)
+      : (msg: unknown) => console.log(JSON.stringify(msg));
   const computerUseBridge = createComputerUseBridge(port);
 
   // Identical boot recipe to `brainrouter chat` (index.ts): config → llm →
@@ -1797,6 +1812,74 @@ async function main(): Promise<void> {
       modelsCacheByKey.delete('');
     },
     queries: {
+      // ── Mobile-app query surface (brainrouter-mobile / RemoteTransport) ──
+      // This host serves ONE workspace (the paired one), so the workspace-mgmt
+      // methods return that single-workspace reality (no multi-workspace recents
+      // to track). The three TODO entries degrade gracefully until their shapes
+      // are wired against real output (see docs/host-server.md).
+      'workspace-recents': () => ({ current: workspaceRoot, recents: [workspaceRoot] }),
+      'open-workspace': () => ({ opened: true }),
+      'is-workspace-trusted': () => ({ trusted: true }),
+      'trust-workspace': () => ({ trusted: true }),
+      'untrust-workspace': () => ({ trusted: false }),
+      'trusted-workspaces': () => ({ trusted: [workspaceRoot] }),
+      'mark-activity': () => ({ ok: true }),
+      'reorder-workspace': () => ({ recents: [workspaceRoot] }),
+      'global-dashboard': () => ({ workspaces: [{ workspaceRoot, tasks: [], reviewGate: null }] }),
+      'worktrees': async () => ({ porcelain: await git(['worktree', 'list', '--porcelain'], workspaceRoot), current: workspaceRoot }),
+      'search': (a) => {
+        // Single-session search over the recent transcript window (mirrors the
+        // desktop 'search-transcript'), mapped to the mobile hit shape.
+        const q = typeof a.q === 'string' ? a.q : '';
+        return searchTranscript(readTranscriptTail(workspaceRoot, activeAgent.sessionKey, 5000), q, { limit: 50 })
+          .map((m) => ({ sessionKey: activeAgent.sessionKey, title: (m as { role?: string }).role ?? 'match', snippet: (m as { snippet?: string }).snippet ?? '' }));
+      },
+      'ci-checks': async () => new Promise((resolve) => {
+        // `gh pr checks` already emits the CheckRow shape the mobile ciFormat expects.
+        execFile('gh', ['pr', 'checks', '--json', 'name,state,bucket,link,workflow,startedAt,completedAt'],
+          { cwd: workspaceRoot, timeout: 8_000, maxBuffer: 2_000_000 }, (_err, stdout) => {
+            try { resolve(JSON.parse(stdout)); } catch { resolve([]); }
+          });
+      }),
+      'term-run': async (a) => new Promise((resolve) => {
+        // One-shot command for the mobile Terminal. Running an arbitrary command IS
+        // the point of a terminal (it mirrors the desktop `term-open` shell), so we
+        // do NOT whitelist. The real control is the transport: this handler is only
+        // reachable over the authenticated host WebSocket (brainrouter-mobile/host/
+        // server.mjs — a device token is mandatory for any non-loopback bind, CWE-306).
+        // As defence in depth it is ALSO off by default: the operator opts in with
+        // BRAINROUTER_HOST_ALLOW_TERM=1, so a paired host never exposes remote exec
+        // unless deliberately enabled (CWE-78).
+        if (process.env.BRAINROUTER_HOST_ALLOW_TERM !== '1') {
+          resolve({ output: 'Terminal is disabled on this host. Set BRAINROUTER_HOST_ALLOW_TERM=1 to enable one-shot commands.' });
+          return;
+        }
+        const command = typeof a.cmd === 'string' ? a.cmd : '';
+        if (!command) { resolve({ output: '' }); return; }
+        if (command.length > 100_000) { resolve({ output: 'Command rejected: exceeds the 100000-character limit.' }); return; }
+        // Defence in depth (CWE-78): pass the command as a single argv element to an
+        // explicit shell (spawn, not exec) instead of interpolating it into a shell
+        // string we build. A terminal is inherently a shell, so shell features are
+        // intentional — this is not a whitelist; the primary controls remain the
+        // authenticated transport and the opt-in gate above. Combines stdout+stderr,
+        // caps output, and enforces the 15s budget by killing the child.
+        const isWin = process.platform === 'win32';
+        const shell = isWin ? (process.env.ComSpec || 'cmd.exe') : '/bin/sh';
+        const shellArgs = isWin ? ['/d', '/s', '/c', command] : ['-c', command];
+        let out = '';
+        let done = false;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const finish = (text: string) => { if (done) return; done = true; clearTimeout(timer); resolve({ output: text }); };
+        const cap = (chunk: Buffer) => { if (out.length < 2_000_000) out += chunk.toString(); };
+        const child = spawn(shell, shellArgs, { cwd: workspaceRoot });
+        child.stdout.on('data', cap);
+        child.stderr.on('data', cap);
+        // Guarantee the one-shot resolves within budget even if the shell spawns a
+        // child that outlives a kill (e.g. Windows grandchildren): resolve on timeout too.
+        timer = setTimeout(() => { try { child.kill(); } catch { /* already exited */ } finish(out || 'timed out after 15s'); }, 15_000);
+        child.on('error', (e: Error) => finish(out || e.message));
+        child.on('close', (code) => finish(out || (code ? `exited with code ${code}` : '')));
+      }),
       // Read-only surfaces — same pure modules the TUI commands use.
       // DESK-6m — sidebar sessions merged with their UI meta (title override,
       // pinned/archived/status/group) and sorted pinned-first; the renderer's
@@ -4068,11 +4151,12 @@ async function main(): Promise<void> {
       clearTimeout(connectorSchedulerBootTimer);
       stopWorkspaceWatcher();
       void mcpClient.close?.();
-      process.exit(0);
+      if (!transport?.keepAlive) process.exit(0);
     },
   });
 
-  if (port) port.on('message', (e) => {
+  if (transport) transport.onMessage((m) => { void core.handle(m); });
+  else if (port) port.on('message', (e) => {
     if (computerUseBridge?.handleMessage(e.data)) return;
     void core.handle(e.data);
   });
@@ -4091,7 +4175,12 @@ async function main(): Promise<void> {
   });
 }
 
-main().catch((err) => {
-  console.error('[brainrouter-desktop host] fatal:', err instanceof Error ? err.stack : err);
-  process.exit(1);
-});
+// The Electron utilityProcess runs this file as its entry → auto-boot. An
+// embedding host (the mobile WS adapter) sets BRAINROUTER_HOST_EMBEDDED and calls
+// main(transport) itself, so importing this module must NOT double-boot.
+if (!process.env.BRAINROUTER_HOST_EMBEDDED) {
+  main().catch((err) => {
+    console.error('[brainrouter-desktop host] fatal:', err instanceof Error ? err.stack : err);
+    process.exit(1);
+  });
+}

@@ -1,0 +1,62 @@
+{
+  "name": "brainrouter-mobile",
+  "version": "0.4.15",
+  "private": true,
+  "description": "BrainRouter Mobile — a thin Expo/React Native client for the remote brainrouter-host agent runtime.",
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:domain": "tsc -p tsconfig.domain.json --noEmit",
+    "test": "jest",
+    "test:domain": "node scripts/test-domain.mjs",
+    "test:wire": "tsx --test host/wire.integration.test.mjs",
+    "test:api": "tsx --test --test-force-exit host/api.integration.test.mjs"
+  },
+  "dependencies": {
+    "@gorhom/bottom-sheet": "^5.0.6",
+    "@kinqs/brainrouter-agent-protocol": "file:../packages/agent-protocol",
+    "@kinqs/brainrouter-types": "file:../packages/types",
+    "@react-navigation/bottom-tabs": "^7.2.0",
+    "@react-navigation/native": "^7.0.14",
+    "@react-navigation/native-stack": "^7.2.0",
+    "@shopify/flash-list": "2.0.2",
+    "@tanstack/react-query": "^5.62.0",
+    "expo": "54",
+    "expo-document-picker": "~14.0.8",
+    "expo-image-picker": "~17.0.11",
+    "expo-notifications": "~0.32.17",
+    "expo-secure-store": "~15.0.8",
+    "expo-status-bar": "~3.0.9",
+    "lucide-react-native": "^1.21.0",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-gesture-handler": "~2.28.0",
+    "react-native-markdown-display": "^7.0.2",
+    "react-native-mmkv": "^3.1.0",
+    "react-native-reanimated": "~4.1.1",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-screens": "~4.16.0",
+    "react-native-svg": "15.12.1",
+    "react-native-syntax-highlighter": "^2.1.0",
+    "react-native-worklets": "0.5.1",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.0",
+    "@testing-library/react-native": "^12.9.0",
+    "@types/react": "~19.1.10",
+    "jest": "^29.7.0",
+    "jest-expo": "~54.0.17",
+    "react-test-renderer": "18.3.1",
+    "tsx": "^4.19.2",
+    "typescript": "~5.9.3",
+    "ws": "^8.21.0"
+  },
+  "overrides": {
+    "lodash": "4.17.21"
+  }
+}
