@@ -2603,6 +2603,8 @@ body,
 @keyframes br-aurora-b { from { transform: translate3d(0, 0, 0) scale(1); } to { transform: translate3d(64px, -30px, 0) scale(1.1); } }
 .platform-kicker i { background: var(--tone-plan); box-shadow: 0 0 0 4px var(--tone-plan-wash); }
 .platform-hero-line { display: block; will-change: transform, filter; }
+.platform-scroll-progress { position: fixed; z-index: 70; top: 0; right: 0; left: 0; height: 2px; transform-origin: 0 50%; transform: scaleX(0); background: linear-gradient(90deg, var(--tone-plan), var(--tone-build) 60%, transparent); pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .platform-scroll-progress { display: none; } }
 .platform-hero h1 em { color: transparent; background: linear-gradient(105deg, #d6d0ff 5%, var(--tone-plan) 48%, var(--tone-build)); background-clip: text; -webkit-background-clip: text; font-style: normal; }
 .platform-actions .premium-button { transition: transform .2s var(--ease), background .2s var(--ease), border-color .2s var(--ease); }
 .platform-actions .premium-button:hover { transform: translateY(-2px); }

@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { motion, useReducedMotion } from "framer-motion";
+import { useRef } from "react";
+import { motion, useReducedMotion, useScroll, useSpring, useTransform } from "framer-motion";
 import { PremiumButton } from "../components/PremiumButton";
 import { ProductOrbit } from "../components/ProductOrbit";
 import { PRODUCT_CAPABILITIES, PRODUCT_LOOP, PRODUCT_SURFACES } from "../lib/homeProductStory";
@@ -46,13 +47,25 @@ export default function HomePage() {
     transition: { duration: .65, delay, ease: [0.16, 1, 0.3, 1] as const },
   };
 
+  // Scroll choreography: a page progress beam, and the hero splits apart as you
+  // leave it — copy rises away faster than the scene, which sinks, shrinks and
+  // dims like a camera pull-back. All inert under reduced motion.
+  const { scrollYProgress } = useScroll();
+  const progress = useSpring(scrollYProgress, { stiffness: 170, damping: 30, mass: 0.3 });
+  const heroRef = useRef<HTMLElement>(null);
+  const { scrollYProgress: heroProgress } = useScroll({ target: heroRef, offset: ["start start", "end start"] });
+  const heroCopyY = useTransform(heroProgress, [0, 1], [0, -70]);
+  const heroVisualY = useTransform(heroProgress, [0, 1], [0, 120]);
+  const heroVisualScale = useTransform(heroProgress, [0, 1], [1, 0.93]);
+
   return (
     <div className="platform-landing">
-      <motion.section className="platform-hero" initial={reduceMotion ? false : { opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: .5 }}>
+      <motion.div className="platform-scroll-progress" style={reduceMotion ? undefined : { scaleX: progress }} aria-hidden />
+      <motion.section ref={heroRef} className="platform-hero" initial={reduceMotion ? false : { opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: .5 }}>
         <div className="platform-hero-atmosphere" aria-hidden>
           <i data-tone="plan" /><i data-tone="build" /><i data-tone="knowledge" /><i data-tone="review" />
         </div>
-        <div className="platform-hero-copy">
+        <motion.div className="platform-hero-copy" style={reduceMotion ? undefined : { y: heroCopyY }}>
           <motion.span className="platform-kicker" {...stage(0)}><i /> Open agent operations workspace</motion.span>
           <h1>
             <motion.span className="platform-hero-line" {...stage(.08)}>Move every agent</motion.span>
@@ -71,16 +84,20 @@ export default function HomePage() {
           <motion.div className="platform-proof" aria-label="BrainRouter product surfaces" {...stage(.66)}>
             <span>Desktop</span><span>CLI</span><span>Dashboard</span><span>MCP + API</span>
           </motion.div>
-        </div>
+        </motion.div>
 
-        <motion.div className="platform-hero-visual"
-          initial={reduceMotion ? false : { opacity: 0, scale: .96, y: 18 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          transition={{ duration: .9, delay: reduceMotion ? 0 : .3, ease: [0.16, 1, 0.3, 1] }}>
-          <ProductOrbit />
-          <motion.div className="platform-hero-caption" aria-hidden="true" {...stage(.85)}>
-            <span><i /> task state synchronized</span>
-            <span>models · tools · sources · memory · review</span>
+        {/* Outer layer owns the scroll parallax; inner layer owns the entrance —
+            the same transform channels on one element would fight each other. */}
+        <motion.div className="platform-hero-visual" style={reduceMotion ? undefined : { y: heroVisualY, scale: heroVisualScale }}>
+          <motion.div
+            initial={reduceMotion ? false : { opacity: 0, scale: .96, y: 18 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            transition={{ duration: .9, delay: reduceMotion ? 0 : .3, ease: [0.16, 1, 0.3, 1] }}>
+            <ProductOrbit />
+            <motion.div className="platform-hero-caption" aria-hidden="true" {...stage(.85)}>
+              <span><i /> task state synchronized</span>
+              <span>models · tools · sources · memory · review</span>
+            </motion.div>
           </motion.div>
         </motion.div>
       </motion.section>
@@ -88,7 +105,15 @@ export default function HomePage() {
       <motion.section className="platform-route-strip" aria-label="BrainRouter workflow" initial={revealInitial} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, amount: .45 }} transition={{ duration: .55, ease: [0.16, 1, 0.3, 1] }}>
         <span className="platform-route-label">One continuous task</span>
         <div>
-          {PRODUCT_LOOP.map((step, index) => <span key={step.label} data-tone={step.tone}><i />{step.label}{index < PRODUCT_LOOP.length - 1 && <b aria-hidden>→</b>}</span>)}
+          {PRODUCT_LOOP.map((step, index) => (
+            <motion.span key={step.label} data-tone={step.tone}
+              initial={reduceMotion ? false : { opacity: 0, y: 14 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true, amount: .6 }}
+              transition={{ duration: .45, delay: reduceMotion ? 0 : index * .09, ease: [0.16, 1, 0.3, 1] }}>
+              <i />{step.label}{index < PRODUCT_LOOP.length - 1 && <b aria-hidden>→</b>}
+            </motion.span>
+          ))}
         </div>
         <small>Shared project · permissions · context</small>
       </motion.section>
