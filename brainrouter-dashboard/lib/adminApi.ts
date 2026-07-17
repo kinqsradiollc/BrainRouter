@@ -171,6 +171,8 @@ export interface OrgSummary {
   entitlements?: OrgEntitlements;
   allowedDomains?: string[];
   isDefault: boolean;
+  /** The user's own solo/local-first org — surfaced as "Personal workspace". */
+  isPersonal?: boolean;
 }
 
 export interface OrgMember {

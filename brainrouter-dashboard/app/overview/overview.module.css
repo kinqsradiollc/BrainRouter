@@ -1,0 +1,607 @@
+/*
+ * ADR-019 D2 — Overview landing.
+ *
+ * Scoped layout for the security/PR-review overview. Cards, charts and the CVE
+ * feed reuse the shared monochrome tokens (--surface-raised, --border, palette
+ * vars) and the global `.analytics-*` chart primitives; this module only owns
+ * the greeting header, period control, responsive grids and the cyber feed.
+ */
+
+.page {
+  max-width: 1180px;
+  margin-inline: auto;
+}
+
+/* Greeting header -------------------------------------------------------- */
+.greeting {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--spacing-20);
+  flex-wrap: wrap;
+}
+.greetingText {
+  min-width: 0;
+}
+.greetingText h1 {
+  margin: 0;
+  color: var(--text);
+  font-size: 26px;
+  line-height: 1.15;
+  font-weight: 570;
+  letter-spacing: -0.03em;
+}
+.nutshell {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 20px;
+}
+.nutshell b {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-12);
+  flex-wrap: wrap;
+}
+
+/* Period segmented control ---------------------------------------------- */
+.period {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  overflow: hidden;
+}
+.period button {
+  padding: 7px 13px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.period button + button {
+  border-left: 1px solid var(--border);
+}
+.period button[aria-pressed="true"] {
+  color: var(--text);
+  background: var(--surface-overlay);
+}
+.period button:hover:not([aria-pressed="true"]) {
+  color: var(--text-secondary);
+}
+
+/* Stat tiles ------------------------------------------------------------- */
+.stats {
+  margin-top: var(--spacing-16);
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: var(--spacing-12);
+}
+.stats :global(.metric-tile) {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface-raised);
+}
+
+/* Charts grid ------------------------------------------------------------ */
+.charts {
+  margin-top: var(--spacing-12);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--spacing-12);
+}
+.chartWide {
+  grid-column: span 2;
+}
+.chartFull {
+  grid-column: 1 / -1;
+}
+.panelBody {
+  min-height: 210px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+/* Lower grid: cyber feed + repositories --------------------------------- */
+.lower {
+  margin-top: var(--spacing-12);
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  gap: var(--spacing-12);
+  align-items: start;
+}
+.lower :global(.overview-repositories) {
+  margin-top: 0;
+}
+
+/* Cyber feed panel ------------------------------------------------------- */
+.cyber {
+  min-width: 0;
+  padding: var(--spacing-20);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface-raised);
+}
+.cyberHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--spacing-12);
+}
+.cyberHead h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 570;
+}
+.cyberHead a {
+  color: var(--text-secondary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.cyberHead a:hover {
+  color: var(--text);
+}
+.cyberCount {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.cyberList {
+  margin-top: var(--spacing-16);
+  border-top: 1px solid var(--border);
+}
+.cyberRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--spacing-16);
+  min-height: 52px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  color: inherit;
+}
+.cyberRow:hover .cyberSummary {
+  color: var(--text-secondary);
+}
+.cyberRow:hover strong {
+  color: var(--text);
+}
+.cyberMain {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.cyberId {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cyberId strong {
+  color: var(--text);
+  font: 600 12px var(--font-mono);
+}
+.cyberSummary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 11px;
+  transition: color 0.15s;
+}
+.cyberMeta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  text-align: right;
+  white-space: nowrap;
+}
+.cyberCvss {
+  color: var(--text-secondary);
+  font: 600 11px var(--font-mono);
+}
+.cyberAgo {
+  color: var(--text-muted);
+  font: 10px var(--font-mono);
+}
+.feedEmpty {
+  min-height: 150px;
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+/* Panel head: title + inline tabs / links -------------------------------- */
+.panelHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-12);
+  margin-bottom: 16px;
+}
+.panelHead h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.headLink,
+.headMuted {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.headLink:hover {
+  color: var(--text);
+}
+
+/* Inline segmented tabs -------------------------------------------------- */
+.tabs {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  overflow: hidden;
+}
+.tabs button {
+  padding: 4px 9px;
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.tabs button + button {
+  border-left: 1px solid var(--border);
+}
+.tabs button[aria-selected="true"] {
+  color: var(--text);
+  background: var(--surface-overlay);
+}
+.tabs button:disabled {
+  color: var(--text-muted);
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.tabs button:not(:disabled):hover:not([aria-selected="true"]) {
+  color: var(--text-secondary);
+}
+
+.chartNote {
+  margin: 10px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+/* Empty-state card body -------------------------------------------------- */
+.empty {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  min-height: 150px;
+  padding: 12px;
+}
+.empty strong {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+.empty span {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 16px;
+  max-width: 26ch;
+}
+
+/* Mini repository table --------------------------------------------------- */
+.miniTable {
+  display: flex;
+  flex-direction: column;
+}
+.miniRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border-dim);
+  color: inherit;
+}
+.miniRow:first-child {
+  border-top: 0;
+}
+.miniName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+}
+.miniRow:hover .miniName {
+  color: var(--accent);
+}
+.miniMeta {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* Top-issues list -------------------------------------------------------- */
+.issueList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.issueRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 11px 0;
+  border-top: 1px solid var(--border-dim);
+  color: inherit;
+}
+.issueList li:first-child .issueRow {
+  border-top: 0;
+}
+.issueTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.issueRow:hover .issueTitle {
+  color: var(--text);
+}
+
+/* Testing activity: heatmap + recent tests ------------------------------- */
+.testing {
+  margin-top: var(--spacing-12);
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: var(--spacing-12);
+  align-items: start;
+}
+.heatWrap {
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.heat {
+  display: inline-flex;
+  gap: 3px;
+  min-width: max-content;
+}
+.heatCol {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.heatCell {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  background: var(--surface-overlay);
+  transition: transform 0.12s;
+}
+.heatCell[data-level="1"] { background: var(--heat-cold); }
+.heatCell[data-level="2"] { background: #52585F; }
+.heatCell[data-level="3"] { background: #7B828A; }
+.heatCell[data-level="4"] { background: #AEB4BC; }
+.heatCell:hover {
+  transform: scale(1.25);
+}
+
+.testList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.testRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border-dim);
+}
+.testList li:first-child {
+  border-top: 0;
+}
+.testDot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 99px;
+  background: var(--text-muted);
+}
+.testDot[data-state="succeeded"], .testDot[data-state="completed"] { background: var(--ok); }
+.testDot[data-state="running"], .testDot[data-state="queued"], .testDot[data-state="pending"] { background: var(--warn); }
+.testDot[data-state="failed"], .testDot[data-state="error"] { background: var(--danger); }
+.testMain {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.testMain strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+}
+.testMain span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.testAgo {
+  color: var(--text-muted);
+  font: 10px var(--font-mono);
+  white-space: nowrap;
+}
+
+/* Newest-detection counts + dot-globe ------------------------------------ */
+.detections {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-16);
+  margin-top: var(--spacing-16);
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface-overlay);
+}
+.detectionNums {
+  display: flex;
+  gap: var(--spacing-24);
+}
+.detectionNums strong {
+  display: block;
+  color: var(--text);
+  font-size: 26px;
+  line-height: 1.1;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+.detectionNums span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.globe {
+  flex: none;
+  width: 64px;
+  height: 64px;
+}
+.globeSpin {
+  animation: overview-globe-spin 16s linear infinite;
+}
+.globeMarker {
+  animation: overview-globe-pulse 2.4s ease-in-out infinite;
+}
+@keyframes overview-globe-spin {
+  from { transform: rotateZ(0deg) scaleX(1); }
+  25% { transform: scaleX(0.2); }
+  50% { transform: scaleX(1); }
+  75% { transform: scaleX(0.2); }
+  to { transform: scaleX(1); }
+}
+@keyframes overview-globe-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+
+/* Entrance: cards fade/slide up subtly; charts draw in ------------------- */
+.enter :global(.analytics-panel),
+.enter .cyber,
+.enter :global(.overview-repositories),
+.enter :global(.metric-tile) {
+  animation: overview-rise 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.enter .stats :global(.metric-tile):nth-child(2) { animation-delay: 0.04s; }
+.enter .stats :global(.metric-tile):nth-child(3) { animation-delay: 0.08s; }
+.enter .stats :global(.metric-tile):nth-child(4) { animation-delay: 0.12s; }
+.enter .stats :global(.metric-tile):nth-child(5) { animation-delay: 0.16s; }
+.enter .stats :global(.metric-tile):nth-child(6) { animation-delay: 0.2s; }
+.enter :global(.analytics-panel) polyline,
+.enter :global(.analytics-panel) .line-chart polyline {
+  stroke-dasharray: 1200;
+  stroke-dashoffset: 1200;
+  animation: overview-draw 1.1s ease-out 0.15s forwards;
+}
+.enter :global(.donut) circle[stroke-dasharray] {
+  animation: overview-sweep 0.9s ease-out both;
+}
+@keyframes overview-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes overview-draw {
+  to { stroke-dashoffset: 0; }
+}
+@keyframes overview-sweep {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Card hover: subtle raise + border highlight ---------------------------- */
+.charts :global(.analytics-panel),
+.testing :global(.analytics-panel),
+.cyber,
+.lower :global(.overview-repositories) {
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+.charts :global(.analytics-panel):hover,
+.testing :global(.analytics-panel):hover,
+.cyber:hover,
+.lower :global(.overview-repositories):hover {
+  transform: translateY(-2px);
+  border-color: var(--border-hover-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .enter :global(.analytics-panel),
+  .enter .cyber,
+  .enter :global(.overview-repositories),
+  .enter :global(.metric-tile),
+  .enter :global(.analytics-panel) polyline,
+  .enter :global(.donut) circle[stroke-dasharray],
+  .globeSpin,
+  .globeMarker {
+    animation: none !important;
+  }
+  .enter :global(.analytics-panel) polyline { stroke-dashoffset: 0; }
+  .charts :global(.analytics-panel):hover,
+  .testing :global(.analytics-panel):hover,
+  .cyber:hover,
+  .lower :global(.overview-repositories):hover {
+    transform: none;
+  }
+}
+
+/* Responsive ------------------------------------------------------------- */
+@media (max-width: 1080px) {
+  .charts {
+    grid-template-columns: 1fr;
+  }
+  .chartWide,
+  .chartFull {
+    grid-column: auto;
+  }
+  .lower,
+  .testing {
+    grid-template-columns: 1fr;
+  }
+  .stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .greetingText h1 {
+    font-size: 22px;
+  }
+}
