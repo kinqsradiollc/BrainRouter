@@ -1856,6 +1856,7 @@ export async function main(transport?: HostTransport): Promise<void> {
         }
         const command = typeof a.cmd === 'string' ? a.cmd : '';
         if (!command) { resolve({ output: '' }); return; }
+        if (command.length > 100_000) { resolve({ output: 'Command rejected: exceeds the 100000-character limit.' }); return; }
         // Defence in depth (CWE-78): pass the command as a single argv element to an
         // explicit shell (spawn, not exec) instead of interpolating it into a shell
         // string we build. A terminal is inherently a shell, so shell features are
