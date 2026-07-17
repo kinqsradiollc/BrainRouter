@@ -26,12 +26,13 @@ export async function setMemoryVisibility(
   recordId: string,
   userId: string,
   orgId: string,
-  visibility: "private" | "org",
+  visibility: "private" | "team" | "org",
+  teamId?: string | null,
 ): Promise<boolean> {
   const n = await exec.run(
-    `UPDATE cognitive_records SET visibility = $4, org_id = $3
+    `UPDATE cognitive_records SET visibility = $4, org_id = $3, team_id = $5
        WHERE record_id = $1 AND user_id = $2`,
-    [recordId, userId, orgId, visibility],
+    [recordId, userId, orgId, visibility, visibility === "team" ? teamId ?? null : null],
   );
   return n > 0;
 }

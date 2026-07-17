@@ -1,287 +1,385 @@
-import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactElement } from "react";
 import "./meetings.css";
 import { MeetingTracksView } from "./MeetingTracksView.js";
 import { SharePopover } from "./SharePopover.js";
+import { TeamsView } from "./TeamsView.js";
+import { createTeamsOps, type TeamContext } from "./teamsOps.js";
 import {
+  MEETING_SCOPES,
   SCOPE_LABEL,
+  type CreateMeetingInput,
+  type MeetingActionItem,
   type MeetingDetail,
   type MeetingListItem,
   type MeetingScope,
+  type MeetingTranscriptLine,
   type MeetingsOps,
 } from "./types.js";
 
-const BADGE_CLASS: Record<MeetingScope, string> = {
-  private: "mv-b-private",
-  team: "mv-b-team",
-  org: "mv-b-org",
-  public: "mv-b-public",
-};
+const BADGE_CLASS: Record<MeetingScope, string> = { private: "mv-b-private", team: "mv-b-team", org: "mv-b-org", public: "mv-b-public" };
+const STATUS_LABEL: Record<MeetingDetail["summaryStatus"], string> = { queued: "Queued", processing: "Summarizing", ready: "Ready", failed: "Summary failed" };
+const DRAFT_KEY = "brainrouter:desktop-meeting-draft";
+const MAX_AUDIO_BYTES = 40 * 1024 * 1024;
+
+function errorText(caught: unknown, fallback: string): string {
+  return caught instanceof Error && caught.message ? caught.message : fallback;
+}
 
 function ScopeBadge({ scope }: { scope: MeetingScope }): ReactElement {
-  return (
-    <span className={`mv-badge ${BADGE_CLASS[scope]}`}>
-      {scope === "private" ? (
-        <svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
-      ) : null}
-      {scope === "org" ? "Org" : SCOPE_LABEL[scope]}
-    </span>
-  );
+  return <span className={`mv-badge ${BADGE_CLASS[scope]}`}>{scope === "org" ? "Org" : SCOPE_LABEL[scope]}</span>;
 }
 
 function initials(handle: string): string {
-  const base = handle.replace(/@.*/, "").replace(/[^a-zA-Z ]/g, " ").trim();
-  const parts = base.split(/\s+/).filter(Boolean);
-  return ((parts[0]?.[0] ?? handle[0] ?? "?") + (parts[1]?.[0] ?? "")).toUpperCase();
+  const parts = handle.replace(/@.*/, "").split(/[^a-zA-Z0-9]+/).filter(Boolean);
+  return parts.slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "?";
 }
 
 export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
-  const [mode, setMode] = useState<"meetings" | "tracked">("meetings");
+  const teamsOps = useMemo(() => createTeamsOps(), []);
+  const [mode, setMode] = useState<"meetings" | "tracked" | "teams">("meetings");
+  const [teamRevision, setTeamRevision] = useState(0);
+  // Organization context the whole meetings surface operates in. Meetings, their
+  // Track board, and team sharing are all org-scoped, so the caller picks the org
+  // once here (their personal workspace by default) and everything below follows.
+  const [contexts, setContexts] = useState<TeamContext[]>([]);
+  const [activeOrgId, setActiveOrgId] = useState("");
   const [items, setItems] = useState<MeetingListItem[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<MeetingDetail | null>(null);
+  const [transcript, setTranscript] = useState<MeetingTranscriptLine[]>([]);
+  const [transcriptNext, setTranscriptNext] = useState<string | null>(null);
+  const [transcriptTotal, setTranscriptTotal] = useState(0);
   const [composing, setComposing] = useState(false);
   const [query, setQuery] = useState("");
-  const [busyShare, setBusyShare] = useState(false);
+  const [scopeFilter, setScopeFilter] = useState<MeetingScope | "all">("all");
+  const [loading, setLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [detailError, setDetailError] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [draftSummary, setDraftSummary] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void teamsOps.contexts().then((rows) => {
+      if (!active) return;
+      setContexts(rows);
+      setActiveOrgId(rows.find((item) => item.isDefault)?.orgId ?? rows[0]?.orgId ?? "");
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [teamsOps]);
+
+  // Defense in depth: only ever send an org the caller was actually shown. A
+  // tampered activeOrgId that isn't in the loaded contexts falls back to the
+  // server default (personal workspace) instead of reaching the org-scoped API.
+  const scopedOrgId = useMemo(
+    () => (!activeOrgId || contexts.some((item) => item.orgId === activeOrgId) ? activeOrgId || undefined : undefined),
+    [activeOrgId, contexts],
+  );
 
   const refreshList = useCallback(async () => {
-    const list = await ops.list();
-    setItems(list);
-    setSelectedId((cur) => cur ?? list[0]?.id ?? null);
-  }, [ops]);
+    setLoading(true);
+    setError("");
+    try {
+      const page = await ops.listPage({ limit: 50 }, scopedOrgId);
+      setItems(page.meetings);
+      setNextCursor(page.nextCursor);
+      setSelectedId((current) => current && page.meetings.some((item) => item.id === current) ? current : page.meetings[0]?.id ?? null);
+    } catch (caught) {
+      setItems([]);
+      setNextCursor(null);
+      setSelectedId(null);
+      setError(errorText(caught, "Could not load meetings."));
+    } finally { setLoading(false); }
+  }, [scopedOrgId, ops]);
 
   useEffect(() => { void refreshList(); }, [refreshList]);
 
-  useEffect(() => {
-    if (!selectedId) { setDetail(null); return; }
-    let live = true;
+  // Switching org context reloads the (org-scoped) library, drops the open
+  // meeting/compose, and bumps the team revision so the share picker refetches
+  // the new org's teams.
+  const changeOrg = useCallback((next: string) => {
+    setActiveOrgId(next);
     setComposing(false);
-    void ops.get(selectedId).then((d) => { if (live) setDetail(d); });
-    return () => { live = false; };
-  }, [ops, selectedId]);
+    setSelectedId(null);
+    setDetail(null);
+    setTranscript([]);
+    setTeamRevision((value) => value + 1);
+  }, []);
+
+  const loadMoreMeetings = useCallback(async () => {
+    if (!nextCursor || busy) return;
+    setBusy("more-meetings");
+    try {
+      const page = await ops.listPage({ cursor: nextCursor, limit: 50 }, scopedOrgId);
+      setItems((current) => [...current, ...page.meetings.filter((row) => !current.some((existing) => existing.id === row.id))]);
+      setNextCursor(page.nextCursor);
+    } catch (caught) { setError(errorText(caught, "Could not load more meetings.")); }
+    finally { setBusy(""); }
+  }, [scopedOrgId, busy, nextCursor, ops]);
+
+  useEffect(() => {
+    if (!selectedId || composing) { setDetail(null); setTranscript([]); return; }
+    let active = true;
+    const id = selectedId;
+    setDetail(null);
+    setDetailError("");
+    setDetailLoading(true);
+    setTranscript([]);
+    setTranscriptNext(null);
+    setTranscriptTotal(0);
+    setTranscriptLoading(true);
+    setEditing(false);
+    void ops.overview(id, scopedOrgId).then((overview) => {
+      if (active) { setDetail({ ...overview, transcript: [] }); setDraftSummary(overview.summaryMarkdown); }
+    }).catch((caught) => { if (active) setDetailError(errorText(caught, "Could not load this meeting.")); })
+      .finally(() => { if (active) setDetailLoading(false); });
+    void ops.transcriptPage(id, { limit: 100 }, scopedOrgId).then((page) => {
+      if (active) { setTranscript(page.segments); setTranscriptNext(page.nextCursor); setTranscriptTotal(page.total); }
+    }).catch((caught) => { if (active) setDetailError(errorText(caught, "Could not load the transcript.")); })
+      .finally(() => { if (active) setTranscriptLoading(false); });
+    return () => { active = false; };
+  }, [scopedOrgId, composing, ops, selectedId]);
+
+  useEffect(() => {
+    if (!detail || !["queued", "processing"].includes(detail.summaryStatus)) return;
+    let active = true;
+    const id = detail.id;
+    const timer = globalThis.setInterval(() => {
+      void ops.overview(id, scopedOrgId).then((overview) => {
+        if (!active) return;
+        setDetail((current) => current?.id === id ? { ...current, ...overview } : current);
+        setItems((list) => list.map((item) => item.id === id ? { ...item, summaryStatus: overview.summaryStatus } : item));
+      }).catch(() => undefined);
+    }, 3000);
+    return () => { active = false; globalThis.clearInterval(timer); };
+  }, [scopedOrgId, detail?.id, detail?.summaryStatus, ops]);
+
+  const loadMoreTranscript = useCallback(async () => {
+    if (!detail || !transcriptNext || transcriptLoading) return;
+    const id = detail.id;
+    setTranscriptLoading(true);
+    try {
+      const page = await ops.transcriptPage(id, { cursor: transcriptNext, limit: 100 }, scopedOrgId);
+      if (detail.id === id) setTranscript((current) => [...current, ...page.segments]);
+      setTranscriptNext(page.nextCursor);
+      setTranscriptTotal(page.total);
+    } catch (caught) { setError(errorText(caught, "Could not load more transcript.")); }
+    finally { setTranscriptLoading(false); }
+  }, [scopedOrgId, detail, ops, transcriptLoading, transcriptNext]);
+
+  const setScope = useCallback(async (scope: MeetingScope, options?: { teamId?: string }) => {
+    if (!detail || busy) return;
+    setBusy("share");
+    setError("");
+    try {
+      const share = await ops.setScope(detail.id, scope, options, scopedOrgId);
+      setDetail((current) => current ? { ...current, share } : current);
+      setItems((list) => list.map((item) => item.id === detail.id ? { ...item, scope } : item));
+    } catch (caught) { setError(errorText(caught, "Could not change meeting access.")); }
+    finally { setBusy(""); }
+  }, [scopedOrgId, busy, detail, ops]);
+
+  const toggleAction = useCallback(async (action: MeetingActionItem) => {
+    if (!detail || busy) return;
+    const done = !action.done;
+    const previous = detail.actionItems;
+    setBusy(`action:${action.id}`);
+    setDetail({ ...detail, actionItems: previous.map((item) => item.id === action.id ? { ...item, done } : item) });
+    setError("");
+    try { await ops.toggleAction(detail.id, action.id, done, scopedOrgId); }
+    catch (caught) { setDetail((current) => current ? { ...current, actionItems: previous } : current); setError(errorText(caught, "Could not update that action item.")); }
+    finally { setBusy(""); }
+  }, [scopedOrgId, busy, detail, ops]);
+
+  const toggleTrack = useCallback(async (action: MeetingActionItem) => {
+    if (!detail || busy) return;
+    const previous = detail.actionItems;
+    setBusy(`track:${action.id}`);
+    setError("");
+    try {
+      if (action.trackItemId) {
+        await ops.unsendActionFromTrack(detail.id, action.id, scopedOrgId);
+        setDetail((current) => current ? { ...current, actionItems: current.actionItems.map((item) => item.id === action.id ? { ...item, trackItemId: undefined } : item) } : current);
+      } else {
+        const { trackItemId } = await ops.sendActionToTrack(detail.id, action.id, scopedOrgId);
+        setDetail((current) => current ? { ...current, actionItems: current.actionItems.map((item) => item.id === action.id ? { ...item, trackItemId } : item) } : current);
+      }
+    } catch (caught) { setDetail((current) => current ? { ...current, actionItems: previous } : current); setError(errorText(caught, "Could not update Meeting Track.")); }
+    finally { setBusy(""); }
+  }, [scopedOrgId, busy, detail, ops]);
+
+  const regenerate = useCallback(async () => {
+    if (!detail || busy) return;
+    setBusy("regenerate");
+    setError("");
+    try { const updated = await ops.regenerateSummary(detail.id, scopedOrgId); setDetail(updated); setDraftSummary(updated.summaryMarkdown); }
+    catch (caught) { setError(errorText(caught, "Could not regenerate this summary.")); }
+    finally { setBusy(""); }
+  }, [scopedOrgId, busy, detail, ops]);
+
+  const saveSummary = useCallback(async () => {
+    if (!detail || busy) return;
+    setBusy("save-summary");
+    setError("");
+    try { const updated = await ops.updateSummary(detail.id, draftSummary, scopedOrgId); setDetail(updated); setEditing(false); }
+    catch (caught) { setError(errorText(caught, "Could not save this summary.")); }
+    finally { setBusy(""); }
+  }, [scopedOrgId, busy, detail, draftSummary, ops]);
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return q ? items.filter((m) => m.title.toLowerCase().includes(q)) : items;
-  }, [items, query]);
+    const needle = query.trim().toLowerCase();
+    return items.filter((item) => (scopeFilter === "all" || item.scope === scopeFilter) && (!needle || item.title.toLowerCase().includes(needle)));
+  }, [items, query, scopeFilter]);
 
-  const setScope = useCallback(async (scope: MeetingScope, opts?: { teamId?: string }) => {
-    if (!detail) return;
-    setBusyShare(true);
-    try {
-      const share = await ops.setScope(detail.id, scope, opts);
-      setDetail((d) => (d ? { ...d, share } : d));
-      setItems((list) => list.map((m) => (m.id === detail.id ? { ...m, scope } : m)));
-    } finally {
-      setBusyShare(false);
-    }
-  }, [detail, ops]);
-
-  const toggleAction = useCallback(async (actionId: string, done: boolean) => {
-    if (!detail) return;
-    setDetail((d) => (d ? { ...d, actionItems: d.actionItems.map((a) => (a.id === actionId ? { ...a, done } : a)) } : d));
-    await ops.toggleAction(detail.id, actionId, done);
-  }, [detail, ops]);
-
-  const sendToTrack = useCallback(async (actionId: string) => {
-    if (!detail) return;
-    const { trackItemId } = await ops.sendActionToTrack(detail.id, actionId);
-    setDetail((d) => (d ? { ...d, actionItems: d.actionItems.map((a) => (a.id === actionId ? { ...a, trackItemId } : a)) } : d));
-  }, [detail, ops]);
-
-  const unsendFromTrack = useCallback(async (actionId: string) => {
-    if (!detail) return;
-    await ops.unsendActionFromTrack(detail.id, actionId);
-    setDetail((d) => (d ? { ...d, actionItems: d.actionItems.map((a) => (a.id === actionId ? { ...a, trackItemId: undefined } : a)) } : d));
-  }, [detail, ops]);
+  const activeContext = useMemo(() => contexts.find((item) => item.orgId === activeOrgId), [activeOrgId, contexts]);
 
   return (
     <div className="mv-shell">
       <div className="mv-tabs" role="tablist" aria-label="Meetings sections">
-        <button type="button" role="tab" aria-selected={mode === "meetings"} className={`mv-tab${mode === "meetings" ? " mv-on" : ""}`} onClick={() => setMode("meetings")}>Meetings</button>
-        <button type="button" role="tab" aria-selected={mode === "tracked"} className={`mv-tab${mode === "tracked" ? " mv-on" : ""}`} onClick={() => setMode("tracked")}>Tracked</button>
+        {(["meetings", "tracked", "teams"] as const).map((tab) => <button type="button" key={tab} role="tab" aria-selected={mode === tab} className={`mv-tab${mode === tab ? " mv-on" : ""}`} onClick={() => setMode(tab)}>{tab === "tracked" ? "Track" : tab[0].toUpperCase() + tab.slice(1)}</button>)}
+        {mode !== "teams" && contexts.length ? <label className="mv-orgctx">Organization context<select value={activeOrgId} onChange={(event) => changeOrg(event.target.value)} aria-label="Organization context">{contexts.map((item) => <option key={item.orgId} value={item.orgId}>{item.isPersonal ? `${item.name} · Personal workspace` : item.name}</option>)}</select></label> : null}
       </div>
-      {mode === "tracked" ? (
-        <MeetingTracksView ops={ops} />
-      ) : (
-      <div className="mv-root">
-      <div className="mv-col">
-        <div className="mv-col-head">
-          <h2>Meetings</h2>
-          <button type="button" className="mv-newbtn" onClick={() => { setComposing(true); setSelectedId(null); }}>
-            <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></svg>New
-          </button>
-        </div>
-        <div className="mv-search">
-          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4-4" /></svg>
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search meetings" aria-label="Search meetings" />
-        </div>
-        <div className="mv-items">
-          {filtered.map((m) => (
-            <div
-              key={m.id}
-              className={`mv-item${!composing && m.id === selectedId ? " mv-on" : ""}`}
-              onClick={() => setSelectedId(m.id)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => { if (e.key === "Enter") setSelectedId(m.id); }}
-            >
-              <div className="mv-item-t">{m.title}</div>
-              <div className="mv-item-m">
-                <span className="mv-item-d">{m.date}</span>
-                <ScopeBadge scope={m.scope} />
-              </div>
+      {mode === "tracked" ? <MeetingTracksView ops={ops} orgId={scopedOrgId} /> : mode === "teams" ? <TeamsView ops={teamsOps} onChanged={() => setTeamRevision((value) => value + 1)} /> : (
+        <div className="mv-root">
+          <aside className={`mv-col${selectedId || composing ? " mv-col-has-selection" : ""}`}>
+            <div className="mv-col-head"><div><span className="mv-eyebrow">Library</span><h2>Meetings <span>{items.length}</span></h2></div><button type="button" className="mv-newbtn" onClick={() => { setComposing(true); setSelectedId(null); }}>+ New</button></div>
+            <label className="mv-search"><span aria-hidden="true">⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search meetings" aria-label="Search meetings" />{query ? <button type="button" onClick={() => setQuery("")} aria-label="Clear search">×</button> : null}</label>
+            <div className="mv-scope-filters" role="group" aria-label="Filter meeting visibility">{(["all", ...MEETING_SCOPES] as const).map((scope) => <button type="button" key={scope} className={scopeFilter === scope ? "mv-on" : ""} aria-pressed={scopeFilter === scope} onClick={() => setScopeFilter(scope)}>{scope === "org" ? "Org" : scope[0].toUpperCase() + scope.slice(1)}</button>)}</div>
+            {error ? <div className="mv-list-error" role="alert">{error}<button type="button" onClick={() => void refreshList()}>Retry</button></div> : null}
+            <div className="mv-items">
+              {filtered.map((item) => <button type="button" key={item.id} className={`mv-item${!composing && item.id === selectedId ? " mv-on" : ""}`} onClick={() => { setComposing(false); setSelectedId(item.id); }} aria-pressed={!composing && item.id === selectedId}><span className="mv-item-t">{item.title}</span><span className="mv-item-m"><span className="mv-item-d">{item.date}</span><span className={`mv-summary-dot mv-summary-${item.summaryStatus}`} title={`Summary ${item.summaryStatus}`} /><ScopeBadge scope={item.scope} />{!item.canEdit ? <span className="mv-shared-readonly">Shared</span> : null}</span></button>)}
+              {!filtered.length ? <div className="mv-state">{loading ? "Loading meetings…" : items.length ? "No meetings match these filters." : "No meetings yet. Record, import audio, or paste a transcript to begin."}</div> : null}
             </div>
-          ))}
-          {filtered.length === 0 ? (
-            <div className="mv-empty">No meetings yet.<br />Record, import audio, or paste a transcript to start.</div>
-          ) : null}
-        </div>
-      </div>
+            {nextCursor ? <button type="button" className="mv-load-more" disabled={busy === "more-meetings"} onClick={() => void loadMoreMeetings()}>{busy === "more-meetings" ? "Loading…" : "Load more meetings"}</button> : null}
+          </aside>
 
-      {composing ? (
-        <NewMeeting
-          onCancel={() => { setComposing(false); void refreshList(); }}
-          onCreate={async (input) => {
-            const { id } = await ops.createFromTranscript(input);
-            await refreshList();
-            setComposing(false);
-            setSelectedId(id);
-          }}
-        />
-      ) : detail ? (
-        <div className="mv-detail">
-          <div className="mv-dhead">
-            <div className="mv-dhead-row">
-              <div>
-                <h3>{detail.title}</h3>
-                <div className="mv-att">
-                  <span className="mv-av">
-                    {detail.attendees.slice(0, 4).map((a) => <span key={a}>{initials(a)}</span>)}
-                  </span>
-                  {detail.attendees.join(", ")}
+          {composing ? <NewMeeting ops={ops} orgId={scopedOrgId} onCancel={() => { setComposing(false); void refreshList(); }} onCreated={async (id) => { await refreshList(); setComposing(false); setSelectedId(id); }} /> : detail ? (
+            <main className="mv-detail">
+              <button type="button" className="mv-mobile-back" onClick={() => setSelectedId(null)}>← Meetings</button>
+              {error ? <div className="mv-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError("")} aria-label="Dismiss error">×</button></div> : null}
+              <header className="mv-dhead">
+                <div className="mv-dhead-row"><div className="mv-title-block"><div className="mv-title-status"><span className={`mv-summary-dot mv-summary-${detail.summaryStatus}`} />{STATUS_LABEL[detail.summaryStatus]}</div><h3>{detail.title}</h3><div className="mv-att"><span className="mv-av">{detail.attendees.slice(0, 4).map((attendee) => <span key={attendee}>{initials(attendee)}</span>)}</span>{detail.attendees.length ? detail.attendees.join(", ") : "No attendees recorded"}</div></div><div className="mv-hactions">{detail.canEdit ? <SharePopover share={detail.share} busy={busy === "share"} teamsOps={teamsOps} teamRevision={teamRevision} context={activeContext} onError={setError} onSetScope={(scope, options) => void setScope(scope, options)} /> : <span className="mv-shared-readonly">Shared with you · read only</span>}{detail.model ? <span className="mv-modelchip">{detail.model.label}{detail.model.effort ? <> · <b>{detail.model.effort}</b></> : null}</span> : null}</div></div>
+                <div className="mv-metastrip"><span className="mv-chip">{detail.status || "Captured"}</span><span className="mv-chip">{detail.date}</span>{detail.durationMin ? <span className="mv-chip">{detail.durationMin} min</span> : null}{detail.wordCount ? <span className="mv-chip">{detail.wordCount.toLocaleString()} words</span> : null}</div>
+              </header>
+              <div className="mv-dbody">
+                <div className="mv-colL">
+                  {detail.summaryStatus === "failed" ? <div className="mv-summary-failed"><strong>Summary generation failed</strong><span>{detail.summaryError || (detail.canEdit ? "The transcript is preserved. Try generating the summary again." : "The transcript is preserved. The owner can generate the summary again.")}</span>{detail.canEdit ? <button type="button" className="mv-secondary" onClick={() => void regenerate()}>Try again</button> : null}</div> : null}
+                  <section className="mv-card"><div className="mv-card-lab"><span>Summary</span><div className="mv-cardacts">{editing ? <><button type="button" className="mv-ghost" onClick={() => { setEditing(false); setDraftSummary(detail.summaryMarkdown); }}>Cancel</button><button type="button" className="mv-ghost mv-ghost-strong" disabled={busy === "save-summary"} onClick={() => void saveSummary()}>{busy === "save-summary" ? "Saving…" : "Save"}</button></> : <>{detail.canEdit ? <><button type="button" className="mv-ghost" disabled={busy === "regenerate"} onClick={() => void regenerate()}>{busy === "regenerate" ? "Generating…" : "Regenerate"}</button><button type="button" className="mv-ghost" onClick={() => { setDraftSummary(detail.summaryMarkdown); setEditing(true); }}>Edit</button></> : null}<button type="button" className="mv-ghost" onClick={() => { void navigator.clipboard?.writeText(detail.summaryMarkdown); setCopied(true); globalThis.setTimeout(() => setCopied(false), 1400); }}>{copied ? "Copied" : "Copy"}</button></>}</div></div>{editing ? <textarea className="mv-summary-editor" value={draftSummary} onChange={(event) => setDraftSummary(event.target.value)} aria-label="Meeting summary" /> : detail.summaryStatus === "queued" || detail.summaryStatus === "processing" ? <div className="mv-processing"><span />Generating a recallable summary. You can leave this page.</div> : detail.summaryMarkdown ? <SummaryBody markdown={detail.summaryMarkdown} /> : <div className="mv-state">No summary is available yet.</div>}</section>
+                  <section className="mv-card"><div className="mv-card-lab"><span>Action items</span><span>{detail.actionItems.length}</span></div>{detail.actionItems.length ? detail.actionItems.map((action) => <div className="mv-ai" key={action.id}><button type="button" className={`mv-cbox${action.done ? " mv-done" : ""}`} disabled={!detail.canEdit || busy === `action:${action.id}`} aria-label={action.done ? "Mark not done" : "Mark done"} onClick={() => void toggleAction(action)}>✓</button><div className="mv-txt"><span className={action.done ? "mv-action-done" : ""}>{action.title}</span>{action.assignee ? <small>→ {action.assignee}</small> : null}</div>{detail.canEdit ? <button type="button" className={`mv-totrack${action.trackItemId ? " mv-linked" : ""}`} disabled={busy === `track:${action.id}`} onClick={() => void toggleTrack(action)}>{busy === `track:${action.id}` ? "Updating…" : action.trackItemId ? "In Track ✓" : "Track ↗"}</button> : null}</div>) : <div className="mv-state mv-state-compact">No action items were detected.</div>}</section>
                 </div>
+                <section className="mv-tpanel"><div className="mv-card-lab"><span>Transcript</span><span>{transcript.length}{transcriptTotal > transcript.length ? ` of ${transcriptTotal}` : ""}</span></div>{transcriptLoading && transcript.length === 0 ? <div className="mv-state">Loading transcript…</div> : transcript.length ? <TranscriptLines segments={transcript} /> : <div className="mv-state">No transcript segments are available.</div>}{transcriptNext ? <button type="button" className="mv-load-more" disabled={transcriptLoading} onClick={() => void loadMoreTranscript()}>{transcriptLoading ? "Loading…" : "Load more transcript"}</button> : null}</section>
               </div>
-              <div className="mv-hactions">
-                <SharePopover share={detail.share} busy={busyShare} onSetScope={setScope} />
-                {detail.model ? (
-                  <div className="mv-modelchip" title="Summarization model">
-                    <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10" /><path d="M12 6v6l4 2" /></svg>
-                    {detail.model.label}{detail.model.effort ? <> · <b>{detail.model.effort}</b></> : null}
-                  </div>
-                ) : null}
-                <button type="button" className="mv-iconbtn" aria-label="More">
-                  <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.4" /><circle cx="12" cy="12" r="1.4" /><circle cx="19" cy="12" r="1.4" /></svg>
-                </button>
-              </div>
-            </div>
-            <div className="mv-metastrip">
-              <span className="mv-chip"><span className="mv-g" />{detail.status[0].toUpperCase() + detail.status.slice(1)}</span>
-              <span className="mv-chip"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" /></svg>{detail.date}</span>
-              {detail.durationMin ? <span className="mv-chip"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>{detail.durationMin} min</span> : null}
-              {detail.wordCount ? <span className="mv-chip"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10" /></svg>{detail.wordCount.toLocaleString()} words</span> : null}
-            </div>
-          </div>
-
-          <div className="mv-dbody">
-            <div className="mv-colL">
-              <div className="mv-card">
-                <div className="mv-card-lab">
-                  <span className="mv-lt"><svg className="mv-li" viewBox="0 0 24 24"><path d="M4 4h16v4H4zM4 12h10M4 17h16" /></svg>Summary</span>
-                  <div className="mv-cardacts">
-                    <button type="button" className="mv-ghost" onClick={() => void ops.regenerateSummary(detail.id).then(() => ops.get(detail.id)).then(setDetail)}>
-                      <svg viewBox="0 0 24 24"><path d="M4 4v6h6M20 20v-6h-6M20 9a8 8 0 0 0-14-3M4 15a8 8 0 0 0 14 3" /></svg>Regenerate
-                    </button>
-                    <button type="button" className="mv-ghost" onClick={() => void navigator.clipboard?.writeText(detail.summaryMarkdown)}>
-                      <svg viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>Copy
-                    </button>
-                  </div>
-                </div>
-                <SummaryBody markdown={detail.summaryMarkdown} />
-              </div>
-
-              {detail.actionItems.length ? (
-                <div className="mv-card">
-                  <div className="mv-card-lab"><span className="mv-lt"><svg className="mv-li" viewBox="0 0 24 24"><path d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></svg>Action items</span></div>
-                  {detail.actionItems.map((a) => (
-                    <div className="mv-ai" key={a.id}>
-                      <button type="button" className={`mv-cbox${a.done ? " mv-done" : ""}`} aria-label={a.done ? "Mark not done" : "Mark done"} onClick={() => void toggleAction(a.id, !a.done)}>
-                        <svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5" /></svg>
-                      </button>
-                      <div className="mv-txt">{a.title}{a.assignee ? <div className="mv-who">→ {a.assignee}</div> : null}</div>
-                      <button type="button" className={`mv-totrack${a.trackItemId ? " mv-linked" : ""}`} title={a.trackItemId ? "Remove from Track" : "Add to Track"} onClick={() => { void (a.trackItemId ? unsendFromTrack(a.id) : sendToTrack(a.id)); }}>
-                        {a.trackItemId ? "In Track ✓" : "Track ↗"}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-
-            <div className="mv-tpanel">
-              <div className="mv-card-lab"><span className="mv-lt"><svg className="mv-li" viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3zM19 10v2a7 7 0 0 1-14 0v-2" /></svg>Transcript</span></div>
-              {detail.transcript.map((line, i) => (
-                <div className="mv-tr-line" key={i}>
-                  <span className="mv-ts">{line.at}</span>
-                  <span className="mv-sp">{line.speaker}</span>
-                  <span className="mv-tx">{line.text}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+            </main>
+          ) : <main className="mv-detail">{detailLoading ? <div className="mv-state mv-state-center">Loading meeting…</div> : detailError ? <div className="mv-detail-error" role="alert"><strong>Could not open this meeting</strong><span>{detailError}</span><button type="button" className="mv-secondary" onClick={() => { const id = selectedId; setSelectedId(null); globalThis.queueMicrotask(() => setSelectedId(id)); }}>Retry</button></div> : <div className="mv-state mv-state-center">Select a meeting, or start a new one.</div>}</main>}
         </div>
-      ) : (
-        <div className="mv-detail"><div className="mv-empty" style={{ marginTop: 60 }}>Select a meeting, or start a new one.</div></div>
-      )}
-      </div>
       )}
     </div>
   );
 }
 
+function TranscriptLines({ segments }: { segments: MeetingTranscriptLine[] }): ReactElement {
+  const [scrollTop, setScrollTop] = useState(0);
+  const rowHeight = 58;
+  if (segments.length <= 40) return <div role="list">{segments.map((line, index) => <TranscriptLine key={line.ordinal ?? index} line={line} />)}</div>;
+  const height = 520;
+  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - 5);
+  const end = Math.min(segments.length, start + Math.ceil(height / rowHeight) + 10);
+  return <div className="mv-transcript-viewport" style={{ height }} onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)} role="list" aria-label={`${segments.length} loaded transcript segments`}><div style={{ height: segments.length * rowHeight, position: "relative" }}><div style={{ position: "absolute", top: start * rowHeight, left: 0, right: 0 }}>{segments.slice(start, end).map((line, offset) => <TranscriptLine key={line.ordinal ?? start + offset} line={line} />)}</div></div></div>;
+}
+
+function TranscriptLine({ line }: { line: MeetingTranscriptLine }): ReactElement {
+  return <div className="mv-tr-line" role="listitem">{line.at ? <span className="mv-ts">{line.at}</span> : null}{line.speaker ? <span className="mv-sp">{line.speaker}</span> : null}<span className="mv-tx">{line.text}</span></div>;
+}
+
 function SummaryBody({ markdown }: { markdown: string }): ReactElement {
-  // Minimal markdown → the summary is short structured text; render headings, bullets, paragraphs.
   const blocks: ReactElement[] = [];
   let list: string[] = [];
-  const flush = () => { if (list.length) { blocks.push(<ul key={`u${blocks.length}`}>{list.map((li, i) => <li key={i}>{li}</li>)}</ul>); list = []; } };
+  const flush = () => { if (list.length) { blocks.push(<ul key={`list-${blocks.length}`}>{list.map((line, index) => <li key={index}>{line}</li>)}</ul>); list = []; } };
   for (const raw of markdown.split("\n")) {
     const line = raw.trim();
     if (!line) { flush(); continue; }
     if (line.startsWith("- ")) { list.push(line.slice(2)); continue; }
     flush();
-    if (line.startsWith("### ")) blocks.push(<h4 key={blocks.length}>{line.slice(4)}</h4>);
-    else if (line.startsWith("## ")) blocks.push(<h4 key={blocks.length}>{line.slice(3)}</h4>);
-    else if (line.startsWith("# ")) blocks.push(<h4 key={blocks.length}>{line.slice(2)}</h4>);
+    if (/^#{1,3} /.test(line)) blocks.push(<h4 key={blocks.length}>{line.replace(/^#{1,3} /, "")}</h4>);
     else blocks.push(<p key={blocks.length}>{line}</p>);
   }
   flush();
-  return <>{blocks}</>;
+  return <div className="mv-summary-body">{blocks}</div>;
 }
 
-function NewMeeting({ onCreate, onCancel }: { onCreate(input: { title: string; transcript: string }): Promise<void>; onCancel(): void }): ReactElement {
+function NewMeeting({ ops, orgId, onCreated, onCancel }: { ops: MeetingsOps; orgId?: string; onCreated(id: string): Promise<void>; onCancel(): void }): ReactElement {
   const [title, setTitle] = useState("");
   const [transcript, setTranscript] = useState("");
-  const [busy, setBusy] = useState(false);
-  const canSubmit = title.trim().length > 0 && transcript.trim().length > 0 && !busy;
-  return (
-    <div className="mv-detail">
-      <div className="mv-compose">
-        <h3>New meeting</h3>
-        <p className="mv-hint">Paste a transcript to summarize it now. Recording and audio import arrive with the capture phases.</p>
-        <div className="mv-field">
-          <label htmlFor="mv-title">Title</label>
-          <input id="mv-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Weekly product sync" />
-        </div>
-        <div className="mv-field">
-          <label htmlFor="mv-tr">Transcript</label>
-          <textarea id="mv-tr" value={transcript} onChange={(e) => setTranscript(e.target.value)} placeholder="[00:00] Alice: ..." />
-        </div>
-        <div>
-          <button type="button" className="mv-primary" disabled={!canSubmit} onClick={async () => { setBusy(true); try { await onCreate({ title: title.trim(), transcript }); } finally { setBusy(false); } }}>
-            <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" /></svg>{busy ? "Summarizing…" : "Summarize meeting"}
-          </button>
-          <button type="button" className="mv-linkbtn" onClick={onCancel}>Cancel</button>
-        </div>
-      </div>
-    </div>
-  );
+  const [template, setTemplate] = useState<CreateMeetingInput["template"]>("general");
+  const [language, setLanguage] = useState("auto");
+  const [recording, setRecording] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [recovered, setRecovered] = useState(false);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(DRAFT_KEY) ?? "null") as { title?: string; transcript?: string; template?: CreateMeetingInput["template"]; language?: string } | null;
+      if (saved?.title) setTitle(saved.title); if (saved?.transcript) setTranscript(saved.transcript); if (saved?.template) setTemplate(saved.template); if (saved?.language) setLanguage(saved.language);
+      setRecovered(Boolean(saved?.title || saved?.transcript));
+    } catch { /* ignore invalid local drafts */ }
+  }, []);
+  useEffect(() => {
+    const timer = globalThis.setTimeout(() => {
+      if (title || transcript) localStorage.setItem(DRAFT_KEY, JSON.stringify({ title, transcript, template, language })); else localStorage.removeItem(DRAFT_KEY);
+    }, 250);
+    return () => globalThis.clearTimeout(timer);
+  }, [language, template, title, transcript]);
+  useEffect(() => () => {
+    if (recorderRef.current && recorderRef.current.state !== "inactive") { recorderRef.current.onstop = null; recorderRef.current.stop(); }
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+  }, []);
+
+  const transcribe = useCallback(async (blob: Blob) => {
+    setBusy("transcribe"); setError("");
+    try {
+      if (!blob.size) throw new Error("The selected audio file is empty.");
+      if (blob.size > MAX_AUDIO_BYTES) throw new Error("Audio must be 40 MB or smaller.");
+      const result = await ops.transcribeAudio({ bytes: new Uint8Array(await blob.arrayBuffer()), contentType: blob.type || "audio/webm", ...(language === "auto" ? {} : { language }) });
+      if (!result.text.trim()) throw new Error("No speech was detected in that audio.");
+      setTranscript((current) => current ? `${current}\n${result.text.trim()}` : result.text.trim());
+    } catch (caught) { setError(errorText(caught, "Could not transcribe that audio.")); }
+    finally { setBusy(""); }
+  }, [language, ops]);
+
+  const startRecording = useCallback(async () => {
+    setError("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      streamRef.current = stream; recorderRef.current = recorder; chunksRef.current = [];
+      recorder.ondataavailable = (event) => { if (event.data.size) chunksRef.current.push(event.data); };
+      recorder.onstop = () => { stream.getTracks().forEach((track) => track.stop()); streamRef.current = null; void transcribe(new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" })); };
+      recorder.start(); setRecording(true); setPaused(false);
+    } catch { setError("Microphone access was denied or is unavailable."); }
+  }, [transcribe]);
+  const stopRecording = useCallback(() => { recorderRef.current?.stop(); recorderRef.current = null; setRecording(false); setPaused(false); }, []);
+  const togglePause = useCallback(() => { const recorder = recorderRef.current; if (!recorder) return; if (recorder.state === "recording") { recorder.pause(); setPaused(true); } else if (recorder.state === "paused") { recorder.resume(); setPaused(false); } }, []);
+  const importAudio = useCallback((event: ChangeEvent<HTMLInputElement>) => { const file = event.target.files?.[0]; if (file) void transcribe(file); event.target.value = ""; }, [transcribe]);
+
+  const submit = useCallback(async () => {
+    if (!title.trim() || !transcript.trim() || busy) return;
+    setBusy("create"); setError("");
+    try {
+      const result = await ops.createFromTranscript({ title: title.trim(), transcript, template }, orgId);
+      localStorage.removeItem(DRAFT_KEY); await onCreated(result.id);
+    } catch (caught) { setError(errorText(caught, "Could not create this meeting.")); }
+    finally { setBusy(""); }
+  }, [busy, onCreated, ops, orgId, template, title, transcript]);
+
+  return <main className="mv-detail"><button type="button" className="mv-mobile-back" onClick={onCancel}>← Meetings</button><div className="mv-compose"><div className="mv-compose-head"><div><span className="mv-eyebrow">Capture</span><h3>New meeting</h3><p>Record, import audio, or paste a transcript. Your draft stays on this device until it is summarized.</p></div>{recovered ? <span className="mv-recovered">Draft recovered</span> : null}</div>{error ? <div className="mv-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError("")} aria-label="Dismiss error">×</button></div> : null}<div className="mv-capture-bar">{recording ? <><button type="button" className="mv-recording" onClick={stopRecording}><span /> Stop & transcribe</button><button type="button" className="mv-secondary" onClick={togglePause}>{paused ? "Resume" : "Pause"}</button></> : <button type="button" className="mv-secondary" onClick={() => void startRecording()} disabled={Boolean(busy)}>● Record audio</button>}<label className={`mv-secondary mv-file-btn${busy ? " mv-disabled" : ""}`}>↑ Import audio<input type="file" accept="audio/*" onChange={importAudio} disabled={Boolean(busy)} /></label><span>{busy === "transcribe" ? "Transcribing audio…" : "MP3, M4A, WAV, or WebM · up to 40 MB"}</span></div><div className="mv-compose-grid"><label className="mv-field mv-field-wide"><span>Meeting title</span><input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Weekly product sync" maxLength={180} /></label><label className="mv-field"><span>Summary template</span><select value={template} onChange={(event) => setTemplate(event.target.value as CreateMeetingInput["template"])}><option value="general">General</option><option value="standup">Stand-up</option><option value="one-on-one">1:1</option><option value="retrospective">Retrospective</option></select></label><label className="mv-field"><span>Audio language</span><select value={language} onChange={(event) => setLanguage(event.target.value)}><option value="auto">Auto-detect</option><option value="en">English</option><option value="es">Spanish</option><option value="fr">French</option><option value="de">German</option><option value="ja">Japanese</option></select></label><label className="mv-field mv-field-wide"><span>Transcript</span><textarea value={transcript} onChange={(event) => setTranscript(event.target.value)} placeholder="Paste a transcript here, or record/import audio above…" /></label></div><div className="mv-compose-actions"><button type="button" className="mv-primary" disabled={!title.trim() || !transcript.trim() || Boolean(busy)} onClick={() => void submit()}>{busy === "create" ? "Creating & summarizing…" : "Create meeting"}</button><button type="button" className="mv-secondary" onClick={onCancel}>Cancel</button></div></div></main>;
 }

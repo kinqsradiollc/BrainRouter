@@ -61,11 +61,14 @@ export interface RecallFilters {
  * surface everywhere), and a hard boundary across orgs.
  */
 export function orgVisibilityAllows(
-  rec: { org_id?: string | null; visibility?: string | null; user_id?: string | null },
+  rec: { org_id?: string | null; visibility?: string | null; user_id?: string | null; team_access?: boolean },
   orgId: string | undefined,
   callerUserId: string | undefined,
 ): boolean {
   if (!orgId) return true; // no org scoping requested
+  // Team candidates are admitted only by membership-aware SQL. Personal teams
+  // intentionally cross org boundaries; organization teams are same-org only.
+  if (rec.visibility === "team" && rec.team_access === true) return true;
   const recOrg = rec.org_id ?? null;
   if (recOrg === null) return true; // untagged (legacy) — surfaces everywhere
   if (recOrg !== orgId) return false; // hard cross-org isolation
@@ -115,7 +118,7 @@ export function applyFilters<T extends CognitiveFtsResult | VectorSearchResult>(
     if (!filters) return true;
     // ADR-010 P5 — org isolation + visibility (hard cross-org boundary,
     // NULL-tolerant on untagged records). Runs before the optional filters.
-    if (filters.orgId && !orgVisibilityAllows(r as { org_id?: string | null; visibility?: string | null; user_id?: string | null }, filters.orgId, filters.callerUserId)) return false;
+    if (filters.orgId && !orgVisibilityAllows(r as { org_id?: string | null; visibility?: string | null; user_id?: string | null; team_access?: boolean }, filters.orgId, filters.callerUserId)) return false;
     if (types && !types.has(r.type)) return false;
     if (scenes && (!r.scene_name || !scenes.has(r.scene_name))) return false;
     if (filters.skillTag && r.skill_tag !== filters.skillTag) return false;

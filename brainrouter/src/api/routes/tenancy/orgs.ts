@@ -15,6 +15,7 @@ import { entitlementsFor, featuresFor, withinLimit, planHasFeature } from "../..
 import { domainAllowed, normalizeDomains } from "../../../tenancy/emailDomain.js";
 import { generateToken, hashToken, expiryFrom, notExpired } from "../../../tenancy/tokens.js";
 import { sendInviteEmail } from "../../../services/email/emailFlows.js";
+import { personalOrgId } from "../../../memory/store/postgres/queries/tenancyQueries.js";
 
 const INVITE_TTL_MS = 7 * 86400_000;
 
@@ -46,7 +47,7 @@ orgsRouter.post("/", async (req: AuthedRequest, res) => {
     const org = await memoryEngine.tenancy.createOrganization({ orgId, name, slug, plan });
     await memoryEngine.tenancy.addOrgMember(orgId, req.userId!, "owner");
     res.status(201).json({
-      org: { orgId: org.orgId, name: org.name, slug: org.slug, plan: org.plan, role: "owner", capabilities: capabilitiesFor("owner"), isDefault: false },
+      org: { orgId: org.orgId, name: org.name, slug: org.slug, plan: org.plan, role: "owner", capabilities: capabilitiesFor("owner"), isDefault: false, isPersonal: false },
     });
   } catch (error) {
     sendError(res, 400, error instanceof Error ? error.message : "Failed to create organization");
@@ -69,6 +70,7 @@ orgsRouter.get("/", async (req: AuthedRequest, res) => {
         entitlements: entitlementsView(m.org.plan),
         allowedDomains: m.org.allowedDomains,
         isDefault: m.org.orgId === defaultOrgId,
+        isPersonal: m.org.orgId === personalOrgId(req.userId!),
       })),
     });
   } catch (error) {

@@ -468,7 +468,7 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public upsertOrgIdentity(rec: orgPersona.OrgIdentityRecord): Promise<void> { return orgPersona.upsertOrgIdentity(this.exec, rec); }
 
   // ── artifact/memory sharing (ADR-014 P-D) ────────────────────────────────
-  public setMemoryVisibility(recordId: string, userId: string, orgId: string, visibility: "private" | "org"): Promise<boolean> { return sharing.setMemoryVisibility(this.exec, recordId, userId, orgId, visibility); }
+  public setMemoryVisibility(recordId: string, userId: string, orgId: string, visibility: "private" | "team" | "org", teamId?: string | null): Promise<boolean> { return sharing.setMemoryVisibility(this.exec, recordId, userId, orgId, visibility, teamId); }
   public listOrgSharedMemories(orgId: string, limit = 50): Promise<sharing.SharedMemory[]> { return sharing.listOrgSharedMemories(this.exec, orgId, limit); }
 
   // ── projects + per-project access (ADR-014 P-E) ──────────────────────────
@@ -489,7 +489,7 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public getMeetingTranscriptText(orgId: string, userId: string, id: string): Promise<string | null> { return meetings.getMeetingTranscriptText(this.exec, orgId, userId, id); }
   public insertMeetingTranscriptSegments(meetingId: string, segments: meetings.MeetingTranscriptSegment[]): Promise<void> { return meetings.insertMeetingTranscriptSegments(this.exec, meetingId, segments); }
   public listMeetingTranscriptSegments(orgId: string, userId: string, id: string, cursor?: number, limit?: number): Promise<meetings.MeetingTranscriptSegment[]> { return meetings.listMeetingTranscriptSegments(this.exec, orgId, userId, id, cursor, limit); }
-  public setMeetingScope(id: string, userId: string, scope: meetings.MeetingScope, teamId: string | null): Promise<boolean> { return meetings.setMeetingScope(this.exec, id, userId, scope, teamId); }
+  public setMeetingScope(id: string, orgId: string, userId: string, scope: meetings.MeetingScope, teamId: string | null): Promise<boolean> { return meetings.setMeetingScope(this.exec, id, orgId, userId, scope, teamId); }
   public createMeetingShareToken(s: { token: string; meetingId: string; orgId: string; createdBy: string; expiresAt?: string }): Promise<void> { return meetings.createShareToken(this.exec, s); }
   public revokeMeetingShareTokens(meetingId: string): Promise<number> { return meetings.revokeShareTokens(this.exec, meetingId); }
   public getMeetingActiveShareToken(meetingId: string): Promise<{ token: string; expiresAt: string | null } | null> { return meetings.getActiveShareToken(this.exec, meetingId); }
@@ -508,14 +508,16 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public updateTrackItem(orgId: string, id: string, patch: track.UpdateTrackItemPatch): Promise<track.TrackItemRow | null> { return track.updateTrackItem(this.exec, orgId, id, patch); }
   public deleteTrackItem(orgId: string, id: string): Promise<boolean> { return track.deleteTrackItem(this.exec, orgId, id); }
 
-  // ── Teams (migration 035) — org-scoped groups of users, backing `team` sharing ──
+  // ── Team spaces (migrations 035/037) — organization + personal groups ──
   public createTeam(input: teams.CreateTeamInput): Promise<teams.TeamRow> { return teams.createTeam(this.exec, input); }
-  public listTeamsForUser(orgId: string, userId: string): Promise<teams.TeamRow[]> { return teams.listTeamsForUser(this.exec, orgId, userId); }
+  public listTeamsForUser(orgId: string, userId: string, includeAllOrgTeams?: boolean): Promise<teams.TeamRow[]> { return teams.listTeamsForUser(this.exec, orgId, userId, includeAllOrgTeams); }
   public getTeam(orgId: string, id: string): Promise<teams.TeamRow | null> { return teams.getTeam(this.exec, orgId, id); }
   public isTeamMember(orgId: string, teamId: string, userId: string): Promise<boolean> { return teams.isTeamMember(this.exec, orgId, teamId, userId); }
-  public listTeamMembers(orgId: string, teamId: string): Promise<teams.TeamMemberRow[]> { return teams.listTeamMembers(this.exec, orgId, teamId); }
-  public addTeamMember(orgId: string, teamId: string, userId: string, role?: teams.TeamMemberRole): Promise<boolean> { return teams.addTeamMember(this.exec, orgId, teamId, userId, role); }
-  public removeTeamMember(orgId: string, teamId: string, userId: string): Promise<boolean> { return teams.removeTeamMember(this.exec, orgId, teamId, userId); }
+  public listTeamMembers(orgId: string, teamId: string, callerUserId: string, canViewAllOrgTeams?: boolean): Promise<teams.TeamMemberRow[]> { return teams.listTeamMembers(this.exec, orgId, teamId, callerUserId, canViewAllOrgTeams); }
+  public insertTeamOwner(teamId: string, userId: string): Promise<boolean> { return teams.insertTeamOwner(this.exec, teamId, userId); }
+  public addTeamMember(orgId: string, teamId: string, userId: string, role: teams.TeamMemberRole | undefined, callerUserId: string, canManageOrgTeams?: boolean): Promise<boolean> { return teams.addTeamMember(this.exec, orgId, teamId, userId, role, callerUserId, canManageOrgTeams); }
+  public removeTeamMember(orgId: string, teamId: string, userId: string, callerUserId: string, canManageOrgTeams?: boolean): Promise<boolean> { return teams.removeTeamMember(this.exec, orgId, teamId, userId, callerUserId, canManageOrgTeams); }
+  public transferPersonalTeamOwnership(teamId: string, fromUserId: string, toUserId: string): Promise<boolean> { return teams.transferPersonalTeamOwnership(this.exec, teamId, fromUserId, toUserId); }
   public deleteTeam(orgId: string, id: string): Promise<boolean> { return teams.deleteTeam(this.exec, orgId, id); }
 
   // ── Chat threads (migration 036) — per-user private chat history within an org ──
