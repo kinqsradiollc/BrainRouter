@@ -190,7 +190,11 @@ export interface ReviewJob {
   prNumber: number | null;
   findings: number | null;
   blocking: number | null;
-  findingsDetail?: { file: string; line?: number; severity: string; title?: string; summary?: string; status?: string; cwe?: string; preExisting?: boolean; suggestable?: boolean }[];
+  findingsDetail?: {
+    file: string; line?: number; endLine?: number; severity: string; title?: string; summary?: string; status?: string; cwe?: string;
+    preExisting?: boolean; suggestable?: boolean; firstSeenAt?: string; lastSeenAt?: string; fixedAt?: string;
+    firstSeenSha?: string; lastSeenSha?: string; fixedSha?: string; resolvedByLogin?: string;
+  }[];
   progress?: { ts: string; kind: string; msg: string; data?: Record<string, unknown>; traceId?: string; spanId?: string; parentSpanId?: string; role?: string; status?: "pending" | "running" | "succeeded" | "failed" | "skipped"; durationMs?: number }[];
   skipped: string | null;
   error: string | null;
@@ -232,13 +236,21 @@ export interface ReviewIssuesResponse {
 
 export interface ReviewSummary {
   periodDays: number;
-  metrics: { securityScore: number; openIssues: number; issuesFound: number; issuesFixed?: number; fixRate: number; prsReviewed: number; pentests: number };
+  metrics: { securityScore: number; openIssues: number; issuesFound: number; issuesFixed?: number; fixRate: number; meanTimeToRemediateDays?: number | null; prsReviewed: number; pentests: number };
   severity: { critical: number; high: number; medium: number; low: number; info: number };
   verdicts: { approved: number; commented: number; changesRequested: number };
   /** Zero-filled per-day rows for the full period: discoveries by severity plus
    * how many of that day's findings are currently open vs fixed. */
-  history: Array<{ date: string; critical: number; high: number; medium: number; low: number; open?: number; fixed?: number }>;
+  history: Array<{
+    date: string; critical: number; high: number; medium: number; low: number;
+    open?: number; fixed?: number; activity: number; prReviews: number; tests: number;
+  }>;
   repositories: Array<{ repository: string; prs: number; findings: number; addressed: number }>;
+  /** Absent on servers predating the finding-lifecycle rollup (rolling deploy). */
+  contributors?: Array<{
+    login: string; displayName: string | null; avatarUrl: string | null;
+    prs: number; authoredPrs: number; commits: number; findingsFixed: number; openFindings: number; lastActivityAt: string | null;
+  }>;
 }
 
 export interface ConnectorStatus {

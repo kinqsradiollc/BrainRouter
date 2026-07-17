@@ -21,6 +21,21 @@ function validValue<T extends string>(value: string | null, values: readonly T[]
   return value && values.includes(value as T) ? value as T : fallback;
 }
 
+function lifecycleProvenance(finding: ReviewIssue["finding"]): string {
+  const date = (value?: string) => {
+    if (!value) return "";
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.valueOf()) ? "" : parsed.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  };
+  if (finding.status === "fixed" && finding.fixedAt) {
+    return `Fixed ${date(finding.fixedAt)}${finding.resolvedByLogin ? ` by @${finding.resolvedByLogin}` : ""}${finding.fixedSha ? ` · ${finding.fixedSha.slice(0, 8)}` : ""}`;
+  }
+  const first = date(finding.firstSeenAt);
+  const last = date(finding.lastSeenAt);
+  if (!first && !last) return "";
+  return `First seen ${first || "—"}${last && last !== first ? ` · last seen ${last}` : ""}${finding.lastSeenSha ? ` · ${finding.lastSeenSha.slice(0, 8)}` : ""}`;
+}
+
 function Issues() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -146,7 +161,11 @@ function Issues() {
             <DataTable headers={["Severity", "Finding", "Repository", "Status", "Provenance"]}>{issues.map((issue) => (
               <tr key={`${issue.reviewId}:${issue.finding.file}:${issue.finding.line ?? 0}:${issue.createdAt}`}>
                 <td><SeverityBadge severity={issue.finding.severity} /></td>
-                <td><strong>{issue.finding.title ?? issue.finding.summary ?? "Finding"}</strong><div className="settings-row__sub">{issue.finding.file}{issue.finding.line ? `:${issue.finding.line}` : ""}</div></td>
+                <td>
+                  <strong>{issue.finding.title ?? issue.finding.summary ?? "Finding"}</strong>
+                  <div className="settings-row__sub">{issue.finding.file}{issue.finding.line ? `:${issue.finding.line}` : ""}</div>
+                  {lifecycleProvenance(issue.finding) && <div className="settings-row__sub">{lifecycleProvenance(issue.finding)}</div>}
+                </td>
                 <td>{issue.repo ?? "—"}</td>
                 <td><StatusBadge tone={issue.issueStatus === "fixed" ? "ok" : issue.issueStatus === "open" ? "danger" : "warn"}>{issue.issueStatus}</StatusBadge></td>
                 <td><div className="issues-provenance">{issue.repo && issue.prNumber ? <Link className="settings-link" href={`/reviews/pr?repo=${encodeURIComponent(issue.repo)}&number=${issue.prNumber}${activeOrg ? `&org=${encodeURIComponent(activeOrg)}` : ""}`}>PR #{issue.prNumber}</Link> : <span>Review</span>}<button type="button" className="settings-link settings-link--button" onClick={() => openTrace(issue)}>Agent Trace</button></div></td>
