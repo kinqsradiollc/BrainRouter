@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { motion, useReducedMotion } from "framer-motion";
+import { motion, useReducedMotion, useScroll, useSpring } from "framer-motion";
+import { ProductOrbit } from "../../components/ProductOrbit";
 import { STATIC_PRESENTATION } from "../../lib/presentation";
 import styles from "./about.module.css";
 
@@ -34,19 +35,35 @@ export default function AboutPage() {
   const reduceMotion = useReducedMotion();
   const reveal = reduceMotion ? false : { opacity: 0, y: 22 };
   const transition = { duration: .58, ease: [0.16, 1, 0.3, 1] as const };
+  // Same cinematic staging language as the landing hero.
+  const stage = (delay: number) => reduceMotion ? {} : {
+    initial: { opacity: 0, y: 24, filter: "blur(6px)" },
+    animate: { opacity: 1, y: 0, filter: "blur(0px)" },
+    transition: { duration: .6, delay, ease: [0.16, 1, 0.3, 1] as const },
+  };
+  const { scrollYProgress } = useScroll();
+  const progress = useSpring(scrollYProgress, { stiffness: 170, damping: 30, mass: 0.3 });
 
   return (
     <div className={styles.about}>
-      <motion.section className={styles.hero} initial={reveal} animate={{ opacity: 1, y: 0 }} transition={transition}>
-        <div className={styles.heroCopy}>
-          <span className={styles.eyebrow}><i /> Why BrainRouter exists</span>
-          <h1>Agent work should remain one continuous, inspectable system.</h1>
-          <p>BrainRouter is an open agent operations workspace for the path from intent to verified result. It keeps the task, project, connected systems, permissions, useful context, and review evidence together across desktop, terminal, browser, and MCP clients.</p>
-          <div className={styles.actions}>
+      <motion.div className="platform-scroll-progress" style={reduceMotion ? undefined : { scaleX: progress }} aria-hidden />
+      {/* Immersive hero — same film-frame language as the landing: the scene
+          fills the viewport under the pill nav, the copy floats as a title card. */}
+      <motion.section className={styles.cineHero} initial={reduceMotion ? false : { opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: .6 }}>
+        <div className={styles.cineScene} aria-hidden><ProductOrbit compact immersive /></div>
+        <div className={styles.cineGrade} aria-hidden />
+        <div className={styles.cineFg}>
+          <motion.span className={styles.eyebrow} {...stage(0)}><i /> Why BrainRouter exists</motion.span>
+          <motion.h1 {...stage(.1)}>Agent work should remain one continuous, inspectable system.</motion.h1>
+          <motion.p {...stage(.26)}>BrainRouter is an open agent operations workspace for the path from intent to verified result. It keeps the task, project, connected systems, permissions, useful context, and review evidence together across desktop, terminal, browser, and MCP clients.</motion.p>
+          <motion.div className={styles.actions} {...stage(.4)}>
             {!STATIC_PRESENTATION && <Link href="/overview" className={styles.primaryAction}>Open workspace <span aria-hidden>→</span></Link>}
             <a href={GITHUB_URL} target="_blank" rel="noopener noreferrer" className={styles.secondaryAction}>View source</a>
-          </div>
+          </motion.div>
         </div>
+      </motion.section>
+
+      <motion.section className={styles.mapSection} initial={reveal} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, amount: .2 }} transition={transition}>
         <div className={styles.systemMap} aria-label="BrainRouter product architecture">
           <div className={styles.mapHeader}><span>Shared task state</span><small><i /> active</small></div>
           <div className={styles.surfaceNodes}>

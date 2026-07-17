@@ -3331,6 +3331,9 @@ a.review-detail__check:hover .review-detail__check-name { color: var(--text); }
 /* ── Immersive landing hero (film-frame layout) ─────────────────────────── */
 .public-shell:has(.platform-landing) .public-content { padding: 0; }
 .platform-landing { --page-pad: clamp(18px, 5vw, 64px); width: 100%; padding: 0 var(--page-pad) var(--page-pad); }
+/* The landing escapes the public-content 1536px cap so the hero truly fills
+   the viewport; its inner sections re-cap themselves at a readable width. */
+.public-content > .platform-landing { max-width: none; }
 .platform-landing > section:not(.platform-hero-cine) { width: min(1440px, 100%); margin-inline: auto; }
 .platform-hero-cine { position: relative; min-height: 100dvh; margin: 0 calc(-1 * var(--page-pad)) 28px; overflow: clip; background: #030408; }
 .platform-hero-cine-scene { position: absolute; inset: 0; will-change: transform; }
