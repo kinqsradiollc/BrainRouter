@@ -72,6 +72,7 @@ export interface UserResetKeyResponse {
 export interface ReviewFindingDetailDto {
   file: string;
   line?: number;
+  endLine?: number;
   severity: string;
   title: string;
   cwe?: string;
@@ -79,6 +80,13 @@ export interface ReviewFindingDetailDto {
   suggestable?: boolean;
   /** Issue lifecycle — open / in progress / snoozed / fixed / ignored (absent = open). */
   status?: string;
+  firstSeenAt?: string;
+  lastSeenAt?: string;
+  fixedAt?: string;
+  firstSeenSha?: string;
+  lastSeenSha?: string;
+  fixedSha?: string;
+  resolvedByLogin?: string;
 }
 export interface ReviewProgressEventDto {
   ts: string;

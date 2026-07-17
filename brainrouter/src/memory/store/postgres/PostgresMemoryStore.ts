@@ -308,6 +308,7 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public async init(): Promise<void> {
     const migrations = loadMigrations(MIGRATIONS_DIR);
     await applyMigrations(this.pool, migrations);
+    await job.backfillReviewLifecycle(this.exec);
   }
 
   public async initVec(dimensions: number, opts?: { allowRebuild?: boolean }): Promise<void> {
@@ -1068,6 +1069,9 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   }
   public listReviewAnalyticsForOrg(orgId: string, since: string, limit?: number): Promise<MemoryJobRecord[]> {
     return job.listReviewAnalyticsForOrg(this.exec, orgId, since, limit);
+  }
+  public getReviewLifecycleSummaryForOrg(orgId: string, since: string): Promise<job.ReviewLifecycleSummary> {
+    return job.getReviewLifecycleSummaryForOrg(this.exec, orgId, since);
   }
   public listReviewJobsForPr(orgId: string, repo: string, prNumber: number, limit?: number): Promise<MemoryJobRecord[]> {
     return job.listReviewJobsForPr(this.exec, orgId, repo, prNumber, limit);
