@@ -1,0 +1,8 @@
+{
+  "name": "workflow-workers",
+  "version": "0.4.17",
+  "description": "Durable workflows and persistent worker-thread tools.",
+  "main": "index.js",
+  "required": true,
+  "contributes": ["tools"]
+}

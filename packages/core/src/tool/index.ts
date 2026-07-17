@@ -6,6 +6,5 @@ export * from './registry/executors.js';
 export * from './result/extractResult.js';
 export * from './specs/names.js';
 export * from './registry/registry.js';
-export * from './specs/specs.js';
 export * from './policy/toolBudget.js';
 export * from './policy/toolPolicy.js';

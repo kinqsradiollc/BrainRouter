@@ -14,6 +14,7 @@
  * This is the decision core (tested in isolation). Routing every I/O path
  * through it — replacing the scattered checks in agent.ts — is the follow-up.
  */
+import { registryEntry } from '../../tool/registry/registry.js';
 
 export type AccessMode = 'read' | 'write' | 'shell';
 export type ActionKind = 'read_only' | 'file_edit' | 'child_write' | 'shell' | 'computer' | 'network' | 'bg';
@@ -62,65 +63,18 @@ export function decideExecutionPolicy(action: ActionKind, mode: AccessMode): Pol
  * MCP `memory_*`/etc. land here and are allowed in every mode).
  */
 export function actionKindForTool(name: string): ActionKind {
-  // POLICY-2 — synthesized `delegate_<id>` tools spawn a child agent.
+  // Synthesized `delegate_<id>` tools (created per agent definition) are NOT in
+  // the registry, so they must be classified explicitly — otherwise they fall to
+  // the read_only default and a read-only access mode would wrongly permit
+  // spawning a child agent through one (CWE-280). A delegate always launches a
+  // child, so it gates as child_write.
   if (name.startsWith('delegate_')) return 'child_write';
-  switch (name) {
-    case 'run_command':
-      return 'shell';
-    case 'computer_use':
-      return 'computer';
-    case 'write_file':
-    case 'edit_file':
-    case 'apply_patch':
-      return 'file_edit';
-    // Child-spawning / delegation (orchestration + worker tools) all create a
-    // potentially-writing child, so they gate as child_write (denied in read mode).
-    case 'spawn_agent':
-    case 'spawn_agents':
-    case 'spawn_worker_thread':
-    case 'task_agent':
-    case 'delegate_agent':
-    case 'run_workflow':
-    case 'run_workflow_graph':
-    case 'send_input':
-    case 'resume_agent':
-      return 'child_write';
-    case 'fetch_url':
-    case 'web_search':
-    // mcp_call proxies a real MCP tool call (not access-mode gated, like other
-    // MCP/recall calls); its handler re-applies the MCP approval gate.
-    case 'mcp_call':
-    // connector_run does network ingestion + memory writes; its shell-tier
-    // exposure (registry) gates WHO sees it, `network` lets it execute once seen.
-    case 'connector_run':
-    case 'list_requests':
-    case 'view_request':
-    case 'repeat_request':
-    case 'list_sitemap':
-    case 'scope_rules':
-      return 'network';
-    default:
-      // Observation / planning orchestration tools (wait_*, list_agents,
-      // route_task, read_agent_transcript, close_*) + MCP reads → read-only.
-      return 'read_only';
-  }
+  return registryEntry(name)?.actionKind ?? 'read_only';
 }
-
-/** The child-spawning / delegation tools (orchestration + worker + synthesized). */
-const CHILD_SPAWN_TOOLS = new Set([
-  'spawn_agent',
-  'spawn_agents',
-  'spawn_worker_thread',
-  'task_agent',
-  'delegate_agent',
-  'run_workflow',
-  'send_input',
-  'resume_agent',
-]);
 
 /** True for a tool that launches a child agent / worker. */
 export function isChildSpawnTool(name: string): boolean {
-  return name.startsWith('delegate_') || CHILD_SPAWN_TOOLS.has(name);
+  return actionKindForTool(name) === 'child_write';
 }
 
 /**
@@ -157,8 +111,8 @@ function accessToActionKind(access: unknown): ActionKind {
  * clamps each child to the parent's mode (`clampAccess`).
  */
 export function actionKindForToolCall(name: string, args?: Record<string, unknown> | null): ActionKind {
-  // Batch spawn — the most-powerful requested child governs the gate.
-  if (name === 'spawn_agents' && Array.isArray(args?.agents)) {
+  const policy = registryEntry(name)?.childAccessPolicy;
+  if (policy === 'batch' && Array.isArray(args?.agents)) {
     const kinds = (args!.agents as unknown[]).map((e) =>
       accessToActionKind((e as { access?: unknown } | null)?.access));
     if (kinds.some((k) => k === 'shell')) return 'shell';
@@ -166,7 +120,7 @@ export function actionKindForToolCall(name: string, args?: Record<string, unknow
     return kinds.length > 0 ? 'read_only' : 'child_write';
   }
   // Single spawn / delegate — the requested `access` arg determines the kind.
-  if (isChildSpawnTool(name)) {
+  if (policy === 'single') {
     return accessToActionKind(args?.access);
   }
   return actionKindForTool(name);

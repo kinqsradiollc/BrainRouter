@@ -87,16 +87,13 @@ import { IGNORED_DIRS, isPathInside, resolveWorkspacePath, matchGlob, globFiles,
 import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from './fs/applyPatch.js';
 export { isPathInside, resolveWorkspacePath, matchGlob, globFiles } from './fs/workspaceFs.js';
 export { applyPatchEnvelope } from './fs/applyPatch.js';
-// REFAC-TOOLS-MODULE (0.4.6) — tool specs + name normalization live in agent/tools/.
-import { LOCAL_TOOLS } from '../tool/specs/specs.js';
 import { normalizeToolName } from '../tool/specs/names.js';
-import { registryAllowedTools, hideWorkerToolsFor, WORKER_THREAD_TOOLS, MCP_DISCOVERY_TOOLS } from '../tool/registry/registry.js';
+import { registryAllowedTools } from '../tool/registry/registry.js';
 import { searchMcpCatalog } from '../mcp/discovery/discovery.js';
 import { appendEvidence, setQuestion, readLedger } from '../research/researchStore.js';
 import { summarizeLedger, formatBrief } from '../research/evidenceLedger.js';
-import { localToolExecutor, localToolSpecsFromExecutors } from '../tool/registry/executors.js';
+import { localToolExecutor, type OrchestrationRuntimePort, type ToolLifecycleRuntimePort } from '../tool/registry/executors.js';
 import { assessMcpToolApproval } from './guards/mcpApproval.js';
-export { LOCAL_TOOLS } from '../tool/specs/specs.js';
 export { normalizeToolName } from '../tool/specs/names.js';
 import { applyToolScope, rankAndCapTools } from '../tool/policy/toolBudget.js';
 import { resolveToolVisible } from '../tool/policy/toolPolicy.js';
@@ -113,7 +110,7 @@ import { applyFederationIdentity } from '../util/agentloop/federationIdentity.js
 import { acquireLLMSlot } from '../util/concurrency/llmSemaphore.js';
 import { blockGoal, completeGoal, formatGoalBlock, readGoal } from '../goal/store/goalStore.js';
 import { runHooks, parseHookDecision } from '../hooks/hooksStore.js';
-import { extensionHookHandlers } from '../extension/registry.js';
+import { extensionHookHandlers, requiredExtensionToolNames } from '../extension/registry.js';
 import { resolveSandboxConfig, runShell } from '../exec/runtime/sandbox.js';
 import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../exec/guard/dangerousCommand.js';
 import { evaluateDestructiveCommand } from '../exec/guard/destructiveCommandGuard.js';
@@ -240,12 +237,10 @@ import {
   abortableDelay,
   appendDeveloperPromptLayer,
 } from './transport/llmTransport.js';
-// Giant method bodies (runTurn / executeLocalToolLegacy) moved to sibling impl
-// modules (god-file breakdown); the class methods above delegate to these with
-// `this` bound. Kept as `.impl` files because they are internal wiring, not part
-// of the agent public surface.
+// Giant turn-loop body stays behind the Agent facade. Tool handlers are owned
+// by required capability extensions and enter through an internal-only port.
 import { runTurn as runTurnImpl } from './runtime/runTurn.impl.js';
-import { executeLocalToolLegacy as executeLocalToolLegacyImpl } from './runtime/executeLocalTool.impl.js';
+import { invokeBuiltinToolRuntime } from '../extension/builtin/runtime.js';
 import {
   bootstrapSession as bootstrapSessionImpl,
   ensureInitialized as ensureInitializedImpl,
@@ -1153,18 +1148,28 @@ export class Agent {
     return estimateTokensContentAware(text);
   }
 
-  public async executeLocalTool(name: string, args: Record<string, any>): Promise<string> {
+  public async executeLocalTool(name: string, args: Record<string, any>, runtime?: { orchestrationRuntime?: OrchestrationRuntimePort; lifecycleRuntime?: ToolLifecycleRuntimePort }): Promise<string> {
     // HONK-L3 — re-nest args the local model emitted against a flattened schema
     // (dot-notation keys → nested objects) before any executor sees them.
     if (this.flattenedToolNames.has(name)) args = nestArguments(args);
     const executor = localToolExecutor(name);
-    if (executor) {
-      return executor.handle({
-        args,
-        legacyHandle: (toolName, toolArgs) => this.executeLocalToolLegacy(toolName, toolArgs),
-      });
-    }
-    return this.executeLocalToolLegacy(name, args);
+    if (!executor) throw new Error(`Unknown local tool: ${name}`);
+    // CWE-266 — the builtin/orchestration/lifecycle runtime ports let a tool
+    // invoke ANY built-in (shell/file) and spawn child agents. Only FIRST-PARTY
+    // tools owned by a required core extension are trusted with them; a
+    // user-installed extension tool must never capture these privileged
+    // interfaces, so it receives none (its `handle` still runs, just without the
+    // escalation surface).
+    const trusted = requiredExtensionToolNames().has(name);
+    return executor.handle({
+      args,
+      invokedName: name,
+      builtinRuntime: trusted
+        ? { invoke: (toolName, toolArgs) => invokeBuiltinToolRuntime.call(this, toolName, toolArgs) }
+        : undefined,
+      orchestrationRuntime: trusted ? runtime?.orchestrationRuntime : undefined,
+      lifecycleRuntime: trusted ? runtime?.lifecycleRuntime : undefined,
+    });
   }
 
   /**
@@ -1226,12 +1231,6 @@ export class Agent {
         };
       },
     };
-  }
-
-  private async executeLocalToolLegacy(name: string, args: Record<string, any>): Promise<string> {
-    // Body moved to ./executeLocalTool.impl.ts (god-file breakdown); delegate
-    // with `this` bound so all instance state resolves exactly as before.
-    return executeLocalToolLegacyImpl.call(this, name, args);
   }
 
   clearHistory() {

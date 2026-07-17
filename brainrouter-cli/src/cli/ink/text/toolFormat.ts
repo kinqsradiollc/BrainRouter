@@ -10,7 +10,7 @@
  *   ⏺ Grep("authenticate")
  *
  * — one-line, identity-revealing, no JSON. These helpers do the same
- * mapping for our built-in LOCAL_TOOLS (cli/../agent/agent.ts) + MCP
+ * mapping for extension-owned core tools + MCP
  * tool names (which carry an `mcp_<server>_` namespace prefix that
  * the user doesn't care about).
  */

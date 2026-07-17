@@ -1,15 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
-  LOCAL_TOOL_REGISTRY,
   registryAllowedTools,
   registryParallelSafeLocal,
+  registryToolAllowed,
   hideWorkerToolsFor,
   WORKER_THREAD_TOOLS,
 } from '../tool/registry/registry.js';
+import { REQUIRED_CORE_TOOL_CATALOG } from '../extension/builtin/toolCatalog.js';
+import { BUILTIN_TOOL_SPECS } from '../extension/builtin/toolSpecs.js';
+import { extensionToolOwner } from '../extension/registry.js';
 import { actionKindForTool } from '../exec/policy/execPolicy.js';
 import { isParallelSafe } from '../agent/guards/toolSafety.js';
-import { LOCAL_TOOLS } from '../tool/specs/specs.js';
 import {
   assertLocalToolExecutorInvariants,
   localToolExecutor,
@@ -17,15 +22,8 @@ import {
   localToolSpecsFromExecutors,
 } from '../tool/registry/executors.js';
 
-// Worker-thread tools are now registered (so the model can call them); the only
-// remaining unregistered, goal-scoped dynamic specs are these — the spec↔registry
-// guard still treats them as known exceptions.
-const WORKER_TOOLS = new Set([
-  'extract_result', 'workflow_progress',
-]);
-
 test('CODEX-TOOL-REGISTRY action kind agrees with execPolicy for every entry', () => {
-  for (const t of LOCAL_TOOL_REGISTRY) {
+  for (const t of REQUIRED_CORE_TOOL_CATALOG) {
     assert.equal(
       t.actionKind,
       actionKindForTool(t.name),
@@ -35,7 +33,7 @@ test('CODEX-TOOL-REGISTRY action kind agrees with execPolicy for every entry', (
 });
 
 test('CODEX-TOOL-REGISTRY parallel-safety agrees with toolSafety for every entry', () => {
-  for (const t of LOCAL_TOOL_REGISTRY) {
+  for (const t of REQUIRED_CORE_TOOL_CATALOG) {
     assert.equal(
       t.parallelSafe,
       isParallelSafe(t.name),
@@ -44,7 +42,7 @@ test('CODEX-TOOL-REGISTRY parallel-safety agrees with toolSafety for every entry
   }
   // The generated whitelist is exactly the registry's parallel-safe entries.
   const fromRegistry = registryParallelSafeLocal();
-  for (const t of LOCAL_TOOL_REGISTRY) {
+  for (const t of REQUIRED_CORE_TOOL_CATALOG) {
     assert.equal(fromRegistry.has(t.name), t.parallelSafe, `${t.name} parallel set membership`);
   }
 });
@@ -74,14 +72,14 @@ test('CODEX-TOOL-REGISTRY exposure tiers reproduce the historical allowed sets e
   assert.ok(!read.has('connector_run') && shell.has('connector_run'), 'connector_run is shell-only');
 });
 
-test('CODEX-TOOL-REGISTRY every spec\'d local tool is classified (registry or known worker)', () => {
-  const registered = new Set(LOCAL_TOOL_REGISTRY.map((t) => t.name));
-  for (const spec of LOCAL_TOOLS as Array<{ name?: string }>) {
+test('CORE-EXT every declared first-party tool has a required extension registration', () => {
+  const registered = new Set(REQUIRED_CORE_TOOL_CATALOG.map((t) => t.name));
+  for (const spec of BUILTIN_TOOL_SPECS as Array<{ name?: string }>) {
     const name = spec?.name;
     if (!name) continue;
     assert.ok(
-      registered.has(name) || WORKER_TOOLS.has(name),
-      `spec'd tool "${name}" has no registry entry — add it to LOCAL_TOOL_REGISTRY (or WORKER_TOOLS if it's a worker tool)`,
+      registered.has(name),
+      `declared tool "${name}" has no required capability owner`,
     );
   }
 });
@@ -113,20 +111,20 @@ test('WORKER-EXPOSURE filter shows worker tools at depth 0, hides them for child
 });
 
 test('CODEX-TOOL-REGISTRY entries are unique', () => {
-  const names = LOCAL_TOOL_REGISTRY.map((t) => t.name);
+  const names = REQUIRED_CORE_TOOL_CATALOG.map((t) => t.name);
   assert.equal(new Set(names).size, names.length, 'duplicate tool name in the registry');
 });
 
 test('CODEX-TOOL-EXECUTOR one executor exists for every registry entry', () => {
-  const registryNames = LOCAL_TOOL_REGISTRY.map((t) => t.name).sort();
+  const registryNames = REQUIRED_CORE_TOOL_CATALOG.map((t) => t.name).sort();
   const executorNames = localToolExecutors().map((t) => t.toolName()).sort();
   assert.deepEqual(executorNames, registryNames);
   assertLocalToolExecutorInvariants();
 });
 
 test('CODEX-TOOL-EXECUTOR owns spec + policy + parallel metadata together', () => {
-  const specs = new Map((LOCAL_TOOLS as Array<{ name: string }>).map((spec) => [spec.name, spec]));
-  for (const entry of LOCAL_TOOL_REGISTRY) {
+  const specs = new Map((BUILTIN_TOOL_SPECS as Array<{ name: string }>).map((spec) => [spec.name, spec]));
+  for (const entry of REQUIRED_CORE_TOOL_CATALOG) {
     const executor = localToolExecutor(entry.name);
     assert.ok(executor, `${entry.name} should have an executor`);
     assert.equal(executor.toolName(), entry.name);
@@ -137,8 +135,65 @@ test('CODEX-TOOL-EXECUTOR owns spec + policy + parallel metadata together', () =
   }
 });
 
+test('CORE-EXT synthesized delegate names resolve through extension metadata and preserve the invoked name', async () => {
+  const executor = localToolExecutor('delegate_reviewer');
+  assert.ok(executor);
+  assert.equal(executor.toolName(), 'delegate_agent');
+  assert.equal(actionKindForTool('delegate_reviewer'), 'child_write');
+  assert.equal(registryToolAllowed('delegate_reviewer', 'read'), true);
+  assert.equal(isParallelSafe('delegate_reviewer'), true);
+
+  let invoked = '';
+  const output = await executor.handle({
+    args: { prompt: 'Review this.' },
+    invokedName: 'delegate_reviewer',
+    orchestrationRuntime: {
+      async invoke(name) { invoked = name; return 'delegated'; },
+    },
+  });
+  assert.equal(invoked, 'delegate_reviewer');
+  assert.equal(output, 'delegated');
+});
+
 test('CODEX-TOOL-EXECUTOR direct specs are generated from executors', () => {
   const executorSpecs = localToolSpecsFromExecutors().map((tool) => tool.name).sort();
-  const registryNames = LOCAL_TOOL_REGISTRY.map((tool) => tool.name).sort();
+  const registryNames = REQUIRED_CORE_TOOL_CATALOG.map((tool) => tool.name).sort();
   assert.deepEqual(executorSpecs, registryNames);
+});
+
+test('CORE-EXT every required tool is owned by a required capability extension', () => {
+  for (const tool of REQUIRED_CORE_TOOL_CATALOG) {
+    const owner = extensionToolOwner(tool.name);
+    assert.ok(owner?.required, `${tool.name} must have a required extension owner`);
+    assert.notEqual(owner?.extension, 'Agent', `${tool.name} must not be wired directly into Agent`);
+  }
+});
+
+test('CORE-EXT dynamic visibility belongs to the extension executor', () => {
+  const none = localToolSpecsFromExecutors({ resultExpansionAvailable: false, workflowActive: false }).map((tool) => tool.name);
+  assert.ok(!none.includes('extract_result'));
+  assert.ok(!none.includes('workflow_progress'));
+  const active = localToolSpecsFromExecutors({ resultExpansionAvailable: true, workflowActive: true }).map((tool) => tool.name);
+  assert.ok(active.includes('extract_result'));
+  assert.ok(active.includes('workflow_progress'));
+});
+
+test('CORE-EXT Agent runtime contains no first-party tool catalog or handler switch', () => {
+  const agentRoot = fileURLToPath(new URL('../../src/agent/', import.meta.url));
+  const files: string[] = [path.join(agentRoot, 'agent.ts')];
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith('.ts')) files.push(full);
+    }
+  };
+  walk(path.join(agentRoot, 'runtime'));
+  const source = files.map((file) => fs.readFileSync(file, 'utf8')).join('\n');
+  for (const banned of ['LOCAL_' + 'TOOLS', 'LOCAL_' + 'TOOL_REGISTRY', 'executeLocalTool' + 'Legacy']) {
+    assert.equal(source.includes(banned), false, `Agent runtime must not reintroduce ${banned}`);
+  }
+  for (const tool of REQUIRED_CORE_TOOL_CATALOG) {
+    assert.equal(source.includes(`case '${tool.name}'`), false, `${tool.name} handler must stay outside Agent runtime`);
+  }
 });

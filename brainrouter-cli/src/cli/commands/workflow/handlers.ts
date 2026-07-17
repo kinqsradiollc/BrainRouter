@@ -8,7 +8,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import chalk from 'chalk';
 import { spinner as makeSpinner } from '../../prompt/spinner.js';
-import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/agent';
+import { localToolSpecsFromExecutors } from '@kinqs/brainrouter-core/tool';
 import { callMcpTool } from '@kinqs/brainrouter-core/mcp';
 import { listSessions, reconcileStale } from '@kinqs/brainrouter-core/orchestration';
 import { ARTIFACT, artifactRelativePath, createWorkflow, getCurrentWorkflow, listWorkflows, readArtifact, setCurrentWorkflow, slugify, updateWorkflowStatus, workflowExists } from '@kinqs/brainrouter-core/workflow';
@@ -117,8 +117,9 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
     case '/tools':
     {
       const verbose = args.includes('--verbose') || args.includes('-v');
-      console.log(chalk.bold(`\nLocal Workspace Tools (${LOCAL_TOOLS.length}):`));
-      for (const tool of LOCAL_TOOLS) {
+      const localTools = localToolSpecsFromExecutors();
+      console.log(chalk.bold(`\nExtension Tools (${localTools.length}):`));
+      for (const tool of localTools) {
         const suffix = verbose ? ` - ${tool.description}` : '';
         console.log(`  • ${chalk.cyan(tool.name)}${suffix}`);
       }
@@ -1307,4 +1308,3 @@ export async function tryHandleWorkflowCommand(ctx: CommandContext): Promise<boo
   }
   return false;
 }
-

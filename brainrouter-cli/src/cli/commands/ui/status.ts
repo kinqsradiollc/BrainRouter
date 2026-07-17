@@ -8,7 +8,7 @@
 
 import chalk from 'chalk';
 import { spinner as makeSpinner } from '../../prompt/spinner.js';
-import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/agent';
+import { localToolSpecsFromExecutors } from '@kinqs/brainrouter-core/tool';
 import { callMcpTool, hasMcpTool } from '@kinqs/brainrouter-core/mcp';
 import { listSessions, reconcileStale } from '@kinqs/brainrouter-core/orchestration';
 import { readPlan } from '@kinqs/brainrouter-core/task';
@@ -304,8 +304,9 @@ export async function tryHandleUiStatusCommand(ctx: CommandContext): Promise<boo
       const childSessions = listSessions(agent.workspaceRoot);
       console.log(`  Child sessions: ${chalk.yellow(childSessions.length)} total`);
       const orchestrationTools = ['task_agent', 'delegate_agent', 'list_agents', 'wait_agent', 'read_agent_transcript', 'close_agent', 'update_plan'];
+      const registeredTools = new Set(localToolSpecsFromExecutors().map((tool) => tool.name));
       for (const tn of orchestrationTools) {
-        const has = LOCAL_TOOLS.some((lt: any) => lt.name === tn);
+        const has = registeredTools.has(tn);
         console.log(`  ${tn}: ${has ? chalk.green('available') : chalk.red('missing')}`);
       }
       console.log();

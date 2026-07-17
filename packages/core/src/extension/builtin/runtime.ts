@@ -1,19 +1,16 @@
-// executeLocalToolLegacy — the built-in local-tool dispatcher, split out of
-// agent.ts (god-file breakdown). Byte-identical body; a free function bound to
-// `this: Agent` and assigned onto Agent.prototype so all instance state +
-// private helpers resolve exactly as before.
+// Internal implementation port for required core capability extensions.
+// Public/user/workspace extensions never receive this runtime object.
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
-import type { Agent } from '../agent.js';
-import { NoTTYError } from '../support/prompter.js';
+import { NoTTYError } from '../../agent/support/prompter.js';
 import { runHooks } from '../../hooks/hooksStore.js';
 import { getCliKnobs, loadOrInitConfig } from '../../config/config.js';
 import { createArtifact, updateArtifact, getArtifact } from '../../artifact/artifactStore.js';
 
 // Per-turn computer_use action cap — module const in the original agent.ts; kept
-// here (byte-identical value) since executeLocalToolLegacy is its only consumer.
+// here because the internal capability runtime is its only consumer.
 const MAX_COMPUTER_ACTIONS_PER_TURN = 20;
 import {
   listConnectors, runConnectorCheckpointCore, exportConnectorDocumentsForMemory,
@@ -28,7 +25,7 @@ import { resolveSandboxConfig, runShell } from '../../exec/runtime/sandbox.js';
 import { resolvePentestSandbox, runPentestCommand } from '../../review/pentestSandbox.js';
 import { proxyControl } from '../../review/pentestProxy.js';
 import { buildPentestDedupeMessages, findingKey, parsePentestDedupeDecision } from '../../review/reviewSynthesis.js';
-import { callOpenAI } from '../transport/llmTransport.js';
+import { callOpenAI } from '../../agent/transport/llmTransport.js';
 import { enforceTaskBudget } from '../../provider/budget.js';
 import { recordDenial } from '../../exec/runtime/recentDenials.js';
 import { gitHeadSha } from '../../git/workspaceGit.js';
@@ -49,7 +46,6 @@ import { buildModelRegistry, resolveRoutes } from '../../router/index.js';
 import { formatPlan, updatePlan, readPlan } from '../../task/taskStore.js';
 import { isTelemetryEnabled } from '../../telemetry/recorder/telemetry.js';
 import { traceEvent } from '../../telemetry/tracing/tracing.js';
-import { localToolExecutor } from '../../tool/registry/executors.js';
 import { runExtractResult } from '../../tool/result/extractResult.js';
 import { parseTrackQuery } from '../../track/query/index.js';
 import {
@@ -81,15 +77,15 @@ import { getLatestReview, saveReview } from '../../review/reviewStore.js';
 import { validatePentestFinding } from '../../review/pentestFinding.js';
 import { getCurrentWorkflow } from '../../workflow/run/workflowArtifacts.js';
 import { advanceRunStep, summarizeRun } from '../../workflow/run/workflowRun.js';
-import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from '../fs/applyPatch.js';
-import { evaluateDestructiveAction, isComputerActionMutating, validateComputerAction } from '../fs/computerUse.js';
-import { truncateFullRead } from '../fs/readTruncation.js';
-import { nestArguments } from '../repair/flatten.js';
-import { shrinkOversizedToolResults } from '../guards/turnEndShrink.js';
-import { resolveWorkspacePath, globFiles, grepSearch } from '../fs/workspaceFs.js';
+import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from '../../agent/fs/applyPatch.js';
+import { evaluateDestructiveAction, isComputerActionMutating, validateComputerAction } from '../../agent/fs/computerUse.js';
+import { truncateFullRead } from '../../agent/fs/readTruncation.js';
+import { nestArguments } from '../../agent/repair/flatten.js';
+import { shrinkOversizedToolResults } from '../../agent/guards/turnEndShrink.js';
+import { resolveWorkspacePath, globFiles, grepSearch } from '../../agent/fs/workspaceFs.js';
 import { isArtifactKind, isArtifactFormat, isWorkItemType, isWorkItemPriority, type ArtifactKind, type ArtifactFormat } from '@kinqs/brainrouter-types';
 
-export async function executeLocalToolLegacy(this: Agent, name: string, args: Record<string, any>): Promise<string> {
+export async function invokeBuiltinToolRuntime(this: any, name: string, args: Record<string, any>): Promise<string> {
     // Bind path resolution to this agent's workspace, never to process.cwd().
     // The Agent might have been constructed with a workspace different from
     // the launching shell's cwd (e.g. /resume from another dir), and cwd can
