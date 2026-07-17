@@ -232,3 +232,22 @@
   .node,
   .activityRail i { animation: none !important; }
 }
+
+/* Immersive (full-viewport hero) — the scene is the stage, not a card. */
+.immersive { min-height: 100%; height: 100%; border: 0; border-radius: 0; box-shadow: none; }
+.immersive::before { background-size: 68px 68px; opacity: .3; }
+.immersive::after { box-shadow: none; }
+.immersive .sceneHeader { top: 86px; right: clamp(20px, 4vw, 64px); left: auto; }
+.immersive .sceneHeader small { display: none; }
+.immersive .coreLabel { display: none; }
+.immersive .activityRail { right: clamp(20px, 4vw, 64px); bottom: 14px; left: clamp(20px, 5vw, 72px); border-top: 0; }
+.immersive .node[data-slot="workbench"] { top: 22%; left: 12%; }
+.immersive .node[data-slot="sources"] { top: 18%; right: 13%; }
+.immersive .node[data-slot="knowledge"] { top: 46%; left: 6%; }
+.immersive .node[data-slot="testing"] { right: 8%; bottom: 30%; }
+.immersive .node[data-slot="reviews"] { bottom: 34%; left: 14%; }
+.immersive .node[data-slot="automation"] { top: 40%; right: 6%; }
+@media (max-width: 900px) {
+  .immersive .node { display: none; }
+  .immersive .sceneHeader { display: none; }
+}

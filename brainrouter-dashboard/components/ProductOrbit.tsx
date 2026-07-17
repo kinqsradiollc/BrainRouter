@@ -51,7 +51,7 @@ function spherePoints(count: number, radius: number, jitter = 0): Float32Array {
   return positions;
 }
 
-export function ProductOrbit({ compact = false }: { compact?: boolean }) {
+export function ProductOrbit({ compact = false, immersive = false }: { compact?: boolean; immersive?: boolean }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -164,8 +164,8 @@ export function ProductOrbit({ compact = false }: { compact?: boolean }) {
 
         // Faint violet heart so the constellation has a center of gravity.
         const heart = new THREE.Mesh(
-          new THREE.SphereGeometry(0.5, 24, 16),
-          new THREE.MeshBasicMaterial({ color: VIOLET, transparent: true, opacity: 0.16, depthWrite: false, blending: THREE.AdditiveBlending }),
+          new THREE.SphereGeometry(0.42, 24, 16),
+          new THREE.MeshBasicMaterial({ color: VIOLET, transparent: true, opacity: 0.09, depthWrite: false, blending: THREE.AdditiveBlending }),
         );
         root.add(heart);
 
@@ -393,7 +393,7 @@ export function ProductOrbit({ compact = false }: { compact?: boolean }) {
   return (
     <div
       ref={hostRef}
-      className={`${styles.scene}${compact ? ` ${styles.compact}` : ""}`}
+      className={`${styles.scene}${compact ? ` ${styles.compact}` : ""}${immersive ? ` ${styles.immersive}` : ""}`}
       data-testid="product-orbit"
       data-render="loading"
       role="img"

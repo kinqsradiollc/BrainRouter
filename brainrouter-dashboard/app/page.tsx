@@ -47,33 +47,36 @@ export default function HomePage() {
     transition: { duration: .65, delay, ease: [0.16, 1, 0.3, 1] as const },
   };
 
-  // Scroll choreography: a page progress beam, and the hero splits apart as you
-  // leave it — copy rises away faster than the scene, which sinks, shrinks and
-  // dims like a camera pull-back. All inert under reduced motion.
+  // Scroll choreography: a page progress beam, and a film-style exit — the
+  // foreground title card rises away while the scene behind it slowly zooms
+  // in (backgrounds move less than foregrounds). Inert under reduced motion.
   const { scrollYProgress } = useScroll();
   const progress = useSpring(scrollYProgress, { stiffness: 170, damping: 30, mass: 0.3 });
   const heroRef = useRef<HTMLElement>(null);
   const { scrollYProgress: heroProgress } = useScroll({ target: heroRef, offset: ["start start", "end start"] });
-  const heroCopyY = useTransform(heroProgress, [0, 1], [0, -70]);
-  const heroVisualY = useTransform(heroProgress, [0, 1], [0, 120]);
-  const heroVisualScale = useTransform(heroProgress, [0, 1], [1, 0.93]);
+  const heroCopyY = useTransform(heroProgress, [0, 1], [0, -80]);
+  const heroVisualY = useTransform(heroProgress, [0, 1], [0, 46]);
+  const heroVisualScale = useTransform(heroProgress, [0, 1], [1, 1.08]);
 
   return (
     <div className="platform-landing">
       <motion.div className="platform-scroll-progress" style={reduceMotion ? undefined : { scaleX: progress }} aria-hidden />
-      <motion.section ref={heroRef} className="platform-hero" initial={reduceMotion ? false : { opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: .5 }}>
-        <div className="platform-hero-atmosphere" aria-hidden>
-          <i data-tone="plan" /><i data-tone="build" /><i data-tone="knowledge" /><i data-tone="review" />
-        </div>
-        <motion.div className="platform-hero-copy" style={reduceMotion ? undefined : { y: heroCopyY }}>
+      {/* Immersive hero — the operations graph IS the viewport; copy floats on
+          the scene like a title card. On exit the scene zooms subtly while the
+          foreground rises away (film-style pull). */}
+      <motion.section ref={heroRef} className="platform-hero-cine" initial={reduceMotion ? false : { opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: .6 }}>
+        <motion.div className="platform-hero-cine-scene" aria-hidden style={reduceMotion ? undefined : { y: heroVisualY, scale: heroVisualScale }}>
+          <ProductOrbit immersive />
+        </motion.div>
+        <div className="platform-hero-cine-grade" aria-hidden />
+        <motion.div className="platform-hero-cine-fg" style={reduceMotion ? undefined : { y: heroCopyY }}>
           <motion.span className="platform-kicker" {...stage(0)}><i /> Open agent operations workspace</motion.span>
           <h1>
             <motion.span className="platform-hero-line" {...stage(.08)}>Move every agent</motion.span>
             <motion.span className="platform-hero-line" {...stage(.2)}>task from <em>intent</em></motion.span>
             <motion.span className="platform-hero-line" {...stage(.32)}>to verified work.</motion.span>
           </h1>
-          <motion.p {...stage(.46)}>BrainRouter keeps the workbench, models, projects, teams, connected systems, permissions, durable knowledge, automation, and review evidence on one shared task path.</motion.p>
-          <motion.div className="platform-actions" {...stage(.56)}>
+          <motion.div className="platform-actions" {...stage(.5)}>
             {!STATIC_PRESENTATION && (
               <Link href="/overview"><PremiumButton variant="primary">Open workspace <span aria-hidden>→</span></PremiumButton></Link>
             )}
@@ -81,25 +84,14 @@ export default function HomePage() {
               <PremiumButton variant="ghost">View source</PremiumButton>
             </a>
           </motion.div>
-          <motion.div className="platform-proof" aria-label="BrainRouter product surfaces" {...stage(.66)}>
+          <motion.div className="platform-proof" aria-label="BrainRouter product surfaces" {...stage(.62)}>
             <span>Desktop</span><span>CLI</span><span>Dashboard</span><span>MCP + API</span>
           </motion.div>
         </motion.div>
-
-        {/* Outer layer owns the scroll parallax; inner layer owns the entrance —
-            the same transform channels on one element would fight each other. */}
-        <motion.div className="platform-hero-visual" style={reduceMotion ? undefined : { y: heroVisualY, scale: heroVisualScale }}>
-          <motion.div
-            initial={reduceMotion ? false : { opacity: 0, scale: .96, y: 18 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            transition={{ duration: .9, delay: reduceMotion ? 0 : .3, ease: [0.16, 1, 0.3, 1] }}>
-            <ProductOrbit />
-            <motion.div className="platform-hero-caption" aria-hidden="true" {...stage(.85)}>
-              <span><i /> task state synchronized</span>
-              <span>models · tools · sources · memory · review</span>
-            </motion.div>
-          </motion.div>
-        </motion.div>
+        <motion.aside className="platform-hero-cine-note" {...stage(.74)}>
+          <p>BrainRouter keeps the workbench, models, projects, teams, connected systems, permissions, durable knowledge, automation, and review evidence on one shared task path.</p>
+          <span><i /> task state synchronized · models · tools · sources · memory · review</span>
+        </motion.aside>
       </motion.section>
 
       <motion.section className="platform-route-strip" aria-label="BrainRouter workflow" initial={revealInitial} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, amount: .45 }} transition={{ duration: .55, ease: [0.16, 1, 0.3, 1] }}>

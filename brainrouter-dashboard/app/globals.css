@@ -3327,3 +3327,33 @@ a.review-detail__check:hover .review-detail__check-name { color: var(--text); }
   .chat-runtime-select--effort { flex: 0 1 116px; }
   .chat-send-button { margin-left: 0; }
 }
+
+/* ── Immersive landing hero (film-frame layout) ─────────────────────────── */
+.public-shell:has(.platform-landing) .public-content { padding: 0; }
+.platform-landing { --page-pad: clamp(18px, 5vw, 64px); width: 100%; padding: 0 var(--page-pad) var(--page-pad); }
+.platform-landing > section:not(.platform-hero-cine) { width: min(1440px, 100%); margin-inline: auto; }
+.platform-hero-cine { position: relative; min-height: 100dvh; margin: 0 calc(-1 * var(--page-pad)) 28px; overflow: clip; background: #030408; }
+.platform-hero-cine-scene { position: absolute; inset: 0; will-change: transform; }
+.platform-hero-cine-scene > div { position: absolute !important; inset: 0; }
+.platform-hero-cine-grade { position: absolute; inset: 0; z-index: 5; pointer-events: none; background:
+  linear-gradient(to top, rgba(2,3,7,.94), rgba(2,3,7,.3) 36%, transparent 58%),
+  linear-gradient(100deg, rgba(2,3,7,.78), transparent 48%),
+  linear-gradient(to bottom, rgba(2,3,7,.55), transparent 16%); }
+.platform-hero-cine-fg { position: absolute; z-index: 6; left: clamp(20px, 5vw, 72px); right: clamp(20px, 5vw, 72px); bottom: clamp(56px, 9vh, 108px); max-width: 820px; }
+.platform-hero-cine-fg h1 { margin: 16px 0 0; color: var(--text); font-size: clamp(46px, 5.4vw, 86px); line-height: .98; font-weight: 600; letter-spacing: -.052em; }
+.platform-hero-cine-fg h1 em { color: transparent; background: linear-gradient(105deg, #d6d0ff 5%, var(--tone-plan) 48%, var(--tone-build)); background-clip: text; -webkit-background-clip: text; font-style: normal; }
+.platform-hero-cine-fg .platform-actions { margin-top: 26px; }
+.platform-hero-cine-fg .platform-proof { margin-top: 24px; }
+.platform-hero-cine-note { position: absolute; z-index: 6; right: clamp(20px, 4vw, 64px); bottom: clamp(56px, 9vh, 108px); width: min(320px, 30vw); color: var(--text-secondary); font-size: 13px; line-height: 20px; }
+.platform-hero-cine-note p { margin: 0; text-wrap: pretty; }
+.platform-hero-cine-note span { display: flex; align-items: center; gap: 7px; margin-top: 12px; color: var(--text-muted); font: 9px var(--font-mono); letter-spacing: .07em; text-transform: uppercase; }
+.platform-hero-cine-note i { width: 5px; height: 5px; flex: none; border-radius: 50%; background: #86d58b; box-shadow: 0 0 10px rgba(134,213,139,.6); }
+@media (max-width: 1080px) {
+  .platform-hero-cine-note { display: none; }
+  .platform-hero-cine-fg { bottom: clamp(44px, 8vh, 84px); }
+}
+
+/* Floating glass pill nav over the immersive landing. */
+.public-shell:has(.platform-landing) .public-header { position: fixed; top: 14px; right: 0; left: 0; width: auto; background: transparent; border-bottom: 0; box-shadow: none; backdrop-filter: none; pointer-events: none; }
+.public-shell:has(.platform-landing) .public-header-inner { pointer-events: auto; width: fit-content; max-width: calc(100vw - 24px); height: 52px; margin: 0 auto; padding: 0 8px 0 14px; gap: 4px; border-radius: 999px; border: 1px solid rgba(255,255,255,.09); background: rgba(8,9,15,.55); backdrop-filter: blur(20px) saturate(1.35); box-shadow: 0 18px 48px -20px rgba(0,0,0,.8), inset 0 1px rgba(255,255,255,.05); }
+.public-shell:has(.platform-landing) .public-menu-panel { pointer-events: auto; margin: 8px auto 0; width: min(420px, calc(100vw - 24px)); border-radius: 18px; border: 1px solid rgba(255,255,255,.09); background: rgba(8,9,15,.85); backdrop-filter: blur(22px); }
