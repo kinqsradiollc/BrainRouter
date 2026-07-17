@@ -6,7 +6,6 @@ import { useEffect, useState } from "react";
 import { useAuth } from "./AuthProvider";
 import { useIsMobile } from "../lib/useIsMobile";
 import { STATIC_PRESENTATION } from "../lib/presentation";
-import { BrainRouterLogo } from "./BrainRouterLogo";
 
 const DOCS_URL = "https://github.com/kinqsradiollc/BrainRouter/tree/HEAD/brainrouter-docs";
 const NAV = [
@@ -28,9 +27,6 @@ export function PublicHeader() {
   return (
     <header className="public-header">
       <div className="public-header-inner">
-        <Link href="/" className="public-logo" aria-label="BrainRouter home">
-          <BrainRouterLogo size={24} />
-        </Link>
         <nav className="public-nav" aria-label="Public navigation">
           {NAV.map((item) => <Link key={item.label} href={item.href} className={`public-nav-link${pathname === item.href ? " active" : ""}`}>{item.label}</Link>)}
           <a href={DOCS_URL} target="_blank" rel="noopener noreferrer" className="public-nav-link">Docs</a>
