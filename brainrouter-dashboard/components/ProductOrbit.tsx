@@ -49,7 +49,13 @@ export function ProductOrbit({ compact = false }: { compact?: boolean }) {
 
     void (async () => {
       try {
-        const THREE = await import("three");
+        const [THREE, { EffectComposer }, { RenderPass }, { UnrealBloomPass }, { OutputPass }] = await Promise.all([
+          import("three"),
+          import("three/examples/jsm/postprocessing/EffectComposer.js"),
+          import("three/examples/jsm/postprocessing/RenderPass.js"),
+          import("three/examples/jsm/postprocessing/UnrealBloomPass.js"),
+          import("three/examples/jsm/postprocessing/OutputPass.js"),
+        ]);
         if (cancelled) return;
 
         const renderer = new THREE.WebGLRenderer({
@@ -58,36 +64,44 @@ export function ProductOrbit({ compact = false }: { compact?: boolean }) {
           antialias: true,
           powerPreference: "high-performance",
         });
-        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.6));
         renderer.outputColorSpace = THREE.SRGBColorSpace;
         renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        renderer.toneMappingExposure = 1.1;
+        renderer.toneMappingExposure = 1.12;
 
         const scene = new THREE.Scene();
-        scene.fog = new THREE.FogExp2(0x08090f, 0.085);
+        scene.fog = new THREE.FogExp2(0x07080e, 0.07);
         const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 80);
-        camera.position.set(0, 0.25, compact ? 9.4 : 8.6);
+        const cameraDistance = compact ? 9.6 : 8.8;
+        camera.position.set(0, 0.3, cameraDistance);
+
+        // Cinema: everything bright blooms. Threshold keeps the dark body out.
+        const composer = new EffectComposer(renderer);
+        composer.addPass(new RenderPass(scene, camera));
+        const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.95, 0.85, 0.18);
+        composer.addPass(bloom);
+        composer.addPass(new OutputPass());
 
         const root = new THREE.Group();
-        root.rotation.set(-0.08, -0.12, 0.025);
+        root.rotation.set(-0.12, -0.14, 0.03);
         scene.add(root);
 
-        scene.add(new THREE.HemisphereLight(0xb7b0ff, 0x06070b, 1.45));
-        const violetLight = new THREE.PointLight(0x8b7cff, 26, 18, 1.6);
+        scene.add(new THREE.HemisphereLight(0xb7b0ff, 0x06070b, 1.15));
+        const violetLight = new THREE.PointLight(0x8b7cff, 24, 18, 1.6);
         violetLight.position.set(3.4, 3.6, 4.5);
         scene.add(violetLight);
-        const cyanLight = new THREE.PointLight(0x4dd8ff, 14, 15, 1.8);
+        const cyanLight = new THREE.PointLight(0x4dd8ff, 12, 15, 1.8);
         cyanLight.position.set(-4.2, -1.4, 3.2);
         scene.add(cyanLight);
 
         const core = new THREE.Group();
         root.add(core);
         const coreMaterial = new THREE.MeshPhysicalMaterial({
-          color: 0x181925,
-          emissive: 0x3f347f,
-          emissiveIntensity: 0.58,
-          metalness: 0.48,
-          roughness: 0.18,
+          color: 0x14151f,
+          emissive: 0x4b3fa0,
+          emissiveIntensity: 0.72,
+          metalness: 0.42,
+          roughness: 0.2,
           clearcoat: 1,
           clearcoatRoughness: 0.16,
         });
@@ -95,29 +109,52 @@ export function ProductOrbit({ compact = false }: { compact?: boolean }) {
         core.add(coreMesh);
         const coreWire = new THREE.Mesh(
           new THREE.IcosahedronGeometry(1.34, 2),
-          new THREE.MeshBasicMaterial({ color: 0xbdb4ff, wireframe: true, transparent: true, opacity: 0.1 }),
+          new THREE.MeshBasicMaterial({ color: 0xbdb4ff, wireframe: true, transparent: true, opacity: 0.09 }),
         );
         core.add(coreWire);
 
-        const shell = new THREE.Mesh(
-          new THREE.SphereGeometry(1.64, 42, 28),
-          new THREE.MeshBasicMaterial({ color: 0x8b7cff, wireframe: true, transparent: true, opacity: 0.045 }),
-        );
-        core.add(shell);
+        // Fresnel energy shell — rim-lit atmosphere that bloom turns into a corona.
+        const fresnelMaterial = new THREE.ShaderMaterial({
+          transparent: true,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          side: THREE.BackSide,
+          uniforms: { uColor: { value: new THREE.Color(0x7c6bff) }, uTime: { value: 0 } },
+          vertexShader: `
+            varying float vRim;
+            uniform float uTime;
+            void main() {
+              vec3 transformed = position * (1.0 + 0.012 * sin(uTime * 1.6 + position.y * 4.0));
+              vec4 worldPosition = modelMatrix * vec4(transformed, 1.0);
+              vec3 worldNormal = normalize(mat3(modelMatrix) * normal);
+              vec3 viewDirection = normalize(cameraPosition - worldPosition.xyz);
+              vRim = pow(1.0 - abs(dot(worldNormal, viewDirection)), 2.6);
+              gl_Position = projectionMatrix * viewMatrix * worldPosition;
+            }
+          `,
+          fragmentShader: `
+            varying float vRim;
+            uniform vec3 uColor;
+            void main() { gl_FragColor = vec4(uColor, vRim * 0.55); }
+          `,
+        });
+        const fresnelShell = new THREE.Mesh(new THREE.SphereGeometry(1.5, 48, 32), fresnelMaterial);
+        core.add(fresnelShell);
 
-        const ringMaterial = new THREE.MeshBasicMaterial({ color: 0xa9a1ed, transparent: true, opacity: 0.21 });
         const ringConfigs = [
-          { radius: 2.15, x: 1.06, y: 0.12, z: 0.28 },
-          { radius: 2.72, x: 0.26, y: 1.12, z: -0.18 },
-          { radius: 3.18, x: 1.42, y: 0.36, z: 0.7 },
+          { radius: 2.15, x: 1.06, y: 0.12, z: 0.28, opacity: 0.34 },
+          { radius: 2.72, x: 0.26, y: 1.12, z: -0.18, opacity: 0.26 },
+          { radius: 3.18, x: 1.42, y: 0.36, z: 0.7, opacity: 0.2 },
         ];
         const rings = ringConfigs.map((config) => {
-          const ring = new THREE.Mesh(new THREE.TorusGeometry(config.radius, 0.012, 8, 160), ringMaterial.clone());
+          const ring = new THREE.Mesh(
+            new THREE.TorusGeometry(config.radius, 0.0085, 8, 200),
+            new THREE.MeshBasicMaterial({ color: 0xa9a1ed, transparent: true, opacity: config.opacity, blending: THREE.AdditiveBlending, depthWrite: false }),
+          );
           ring.rotation.set(config.x, config.y, config.z);
           root.add(ring);
           return ring;
         });
-        ringMaterial.dispose();
 
         const nodePositions = [
           new THREE.Vector3(-3.25, 2.05, 0.1),
@@ -128,58 +165,85 @@ export function ProductOrbit({ compact = false }: { compact?: boolean }) {
           new THREE.Vector3(2.82, 0.04, 0.72),
         ];
         const nodeColors = [0xbdb4ff, 0x76a7ff, 0x4dd8ff, 0xff8b73, 0xe5e7eb, 0x86d58b];
-        const pulseMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 });
-        const pulses: Array<{ mesh: InstanceType<typeof THREE.Mesh>; to: InstanceType<typeof THREE.Vector3>; offset: number }> = [];
+        // Comets ride curved energy conduits, each with a fading tail. Bloom does
+        // the rest — a bright head over an additive curve reads as light in motion.
+        const TAIL = 7;
+        const pulses: Array<{
+          head: InstanceType<typeof THREE.Mesh>;
+          tail: Array<InstanceType<typeof THREE.Mesh>>;
+          curve: InstanceType<typeof THREE.QuadraticBezierCurve3>;
+          offset: number;
+          speed: number;
+        }> = [];
 
         nodePositions.forEach((position, index) => {
           const color = nodeColors[index];
-          const lineGeometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), position]);
-          const line = new THREE.Line(
-            lineGeometry,
-            new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.18 }),
+          // Curved conduit: lift the midpoint out of plane so paths arc like orbits.
+          const lift = new THREE.Vector3(position.y * 0.22, -position.x * 0.16, 0.9 + (index % 3) * 0.28);
+          const control = position.clone().multiplyScalar(0.5).add(lift);
+          const curve = new THREE.QuadraticBezierCurve3(new THREE.Vector3(0, 0, 0), control, position);
+          const conduit = new THREE.Mesh(
+            new THREE.TubeGeometry(curve, 40, 0.008, 6, false),
+            new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.16, blending: THREE.AdditiveBlending, depthWrite: false }),
           );
-          root.add(line);
+          root.add(conduit);
 
           const node = new THREE.Mesh(
             new THREE.OctahedronGeometry(0.13, 1),
-            new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 1.3, roughness: 0.32 }),
+            new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 2.1, roughness: 0.3 }),
           );
           node.position.copy(position);
           root.add(node);
 
           const halo = new THREE.Mesh(
-            new THREE.SphereGeometry(0.28, 16, 12),
-            new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.07, depthWrite: false }),
+            new THREE.SphereGeometry(0.3, 16, 12),
+            new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.05, blending: THREE.AdditiveBlending, depthWrite: false }),
           );
           halo.position.copy(position);
           root.add(halo);
 
-          const pulse = new THREE.Mesh(new THREE.SphereGeometry(0.045, 12, 8), pulseMaterial.clone());
-          root.add(pulse);
-          pulses.push({ mesh: pulse, to: position, offset: index / nodePositions.length });
+          const head = new THREE.Mesh(
+            new THREE.SphereGeometry(0.05, 12, 8),
+            new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.95 }),
+          );
+          root.add(head);
+          const tail = Array.from({ length: TAIL }, (_, tailIndex) => {
+            const segment = new THREE.Mesh(
+              new THREE.SphereGeometry(0.034 - tailIndex * 0.003, 8, 6),
+              new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }),
+            );
+            root.add(segment);
+            return segment;
+          });
+          pulses.push({ head, tail, curve, offset: index / nodePositions.length, speed: 0.14 + (index % 3) * 0.025 });
         });
-        pulseMaterial.dispose();
 
-        const starPositions = new Float32Array(180 * 3);
-        for (let index = 0; index < 180; index += 1) {
-          const angle = index * 2.399963;
-          const radius = 3.4 + ((index * 47) % 100) / 27;
-          starPositions[index * 3] = Math.cos(angle) * radius;
-          starPositions[index * 3 + 1] = Math.sin(angle * 1.37) * radius * 0.58;
-          starPositions[index * 3 + 2] = -2.5 + ((index * 31) % 90) / 22;
-        }
-        const starsGeometry = new THREE.BufferGeometry();
-        starsGeometry.setAttribute("position", new THREE.BufferAttribute(starPositions, 3));
-        const stars = new THREE.Points(
-          starsGeometry,
-          new THREE.PointsMaterial({ color: 0xb9b6d5, size: 0.025, transparent: true, opacity: 0.36, depthWrite: false }),
-        );
-        scene.add(stars);
+        // Two star layers at different depths — parallax dust the bloom can catch.
+        const makeStars = (count: number, spread: number, size: number, opacity: number) => {
+          const positions = new Float32Array(count * 3);
+          for (let index = 0; index < count; index += 1) {
+            const angle = index * 2.399963;
+            const radius = 2.6 + ((index * 47) % 1000) / (1000 / spread);
+            positions[index * 3] = Math.cos(angle) * radius;
+            positions[index * 3 + 1] = Math.sin(angle * 1.37) * radius * 0.6;
+            positions[index * 3 + 2] = -3.2 + ((index * 31) % 900) / 160;
+          }
+          const geometry = new THREE.BufferGeometry();
+          geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+          const points = new THREE.Points(
+            geometry,
+            new THREE.PointsMaterial({ color: 0xb9b6d5, size, transparent: true, opacity, depthWrite: false, blending: THREE.AdditiveBlending }),
+          );
+          scene.add(points);
+          return points;
+        };
+        const starsNear = makeStars(260, 3.4, 0.03, 0.5);
+        const starsFar = makeStars(420, 5.2, 0.018, 0.3);
 
-        const grid = new THREE.GridHelper(12, 24, 0x625a96, 0x252633);
+        const grid = new THREE.GridHelper(12, 24, 0x625a96, 0x1e1f2b);
         grid.position.set(0, -2.75, -1.4);
         (grid.material as Material).transparent = true;
-        (grid.material as Material).opacity = 0.16;
+        (grid.material as Material).opacity = 0.12;
         scene.add(grid);
 
         let frame = 0;
@@ -191,34 +255,48 @@ export function ProductOrbit({ compact = false }: { compact?: boolean }) {
         const resize = () => {
           const width = Math.max(host.clientWidth, 1);
           const height = Math.max(host.clientHeight, 1);
-          renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
+          renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.6));
           renderer.setSize(width, height, false);
+          composer.setSize(width, height);
           camera.aspect = width / height;
           camera.updateProjectionMatrix();
-          renderer.render(scene, camera);
+          composer.render();
         };
 
         const renderFrame = (now: number) => {
           frame = 0;
           if (!visible || reducedMotion) return;
           const time = now * 0.001;
-          root.rotation.y += (pointerX * 0.13 - root.rotation.y) * 0.025;
-          root.rotation.x += (-0.08 + pointerY * 0.08 - root.rotation.x) * 0.025;
+          // Cinematic camera: slow orbital drift + breathing distance, pointer parallax on top.
+          const drift = time * 0.05;
+          camera.position.x = Math.sin(drift) * 0.55 + pointerX * 0.35;
+          camera.position.y = 0.3 + Math.sin(time * 0.11) * 0.18 - pointerY * 0.28;
+          camera.position.z = cameraDistance + Math.sin(time * 0.07) * 0.25;
+          camera.lookAt(0, 0, 0);
+          root.rotation.y = -0.14 + time * 0.02 + pointerX * 0.06;
           core.rotation.y = time * 0.18;
           core.rotation.x = Math.sin(time * 0.42) * 0.08;
           coreWire.rotation.y = -time * 0.12;
-          shell.rotation.x = time * 0.08;
+          fresnelMaterial.uniforms.uTime.value = time;
           rings[0].rotation.z = ringConfigs[0].z + time * 0.1;
           rings[1].rotation.z = ringConfigs[1].z - time * 0.075;
           rings[2].rotation.y = ringConfigs[2].y + time * 0.06;
-          stars.rotation.z = time * 0.008;
+          starsNear.rotation.z = time * 0.01;
+          starsFar.rotation.z = -time * 0.006;
           for (const pulse of pulses) {
-            const progress = (time * 0.18 + pulse.offset) % 1;
-            pulse.mesh.position.copy(pulse.to).multiplyScalar(progress);
-            pulse.mesh.scale.setScalar(0.7 + Math.sin(progress * Math.PI) * 0.8);
-            (pulse.mesh.material as InstanceType<typeof THREE.MeshBasicMaterial>).opacity = Math.sin(progress * Math.PI) * 0.9;
+            const progress = (time * pulse.speed + pulse.offset) % 1;
+            const intensity = Math.sin(progress * Math.PI);
+            pulse.head.position.copy(pulse.curve.getPoint(progress));
+            pulse.head.scale.setScalar(0.75 + intensity * 0.75);
+            (pulse.head.material as InstanceType<typeof THREE.MeshBasicMaterial>).opacity = intensity * 0.95;
+            pulse.tail.forEach((segment, tailIndex) => {
+              const trail = Math.max(progress - (tailIndex + 1) * 0.028, 0);
+              segment.position.copy(pulse.curve.getPoint(trail));
+              (segment.material as InstanceType<typeof THREE.MeshBasicMaterial>).opacity =
+                intensity * Math.max(0.5 - tailIndex * 0.07, 0) * (trail > 0 ? 1 : 0);
+            });
           }
-          renderer.render(scene, camera);
+          composer.render();
           frame = window.requestAnimationFrame(renderFrame);
         };
         const startAnimation = () => {
@@ -240,7 +318,7 @@ export function ProductOrbit({ compact = false }: { compact?: boolean }) {
           reducedMotion = event.matches;
           if (reducedMotion) {
             stopAnimation();
-            renderer.render(scene, camera);
+            composer.render(); // one graded still frame, no motion
           } else startAnimation();
         };
         const onContextLost = (event: Event) => {
@@ -280,6 +358,8 @@ export function ProductOrbit({ compact = false }: { compact?: boolean }) {
           canvas.removeEventListener("webglcontextlost", onContextLost);
           canvas.removeEventListener("webglcontextrestored", onContextRestored);
           motionQuery.removeEventListener("change", onMotionChange);
+          bloom.dispose();
+          composer.dispose();
           disposeScene(scene, renderer);
         };
       } catch {
