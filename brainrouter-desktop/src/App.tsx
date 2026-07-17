@@ -39,6 +39,8 @@ import { withExpanded } from './lib/session/workspaces/expandedProjectsStore.js'
 import { sessionRowsCacheKey } from './lib/session/list/sessionCache.js';
 import { useSessionActions } from './lib/session/hooks/useSessionActions.js';
 import { Sidebar } from './components/layout/Sidebar.js';
+import { ActivityBar } from './components/layout/ActivityBar.js';
+import { WorkspaceOrgProvider } from './lib/orgContext.js';
 import type { GoalRecord } from './components/chat/GoalBanner.js';
 import { useZoom, useAppHandlers, useAppEffects, useDashboardTasks } from './App/hooks/index.js';
 import { buildTrackOps } from './App/track/index.js';
@@ -578,7 +580,9 @@ export function App(): React.ReactElement {
   const envAnim = useClosable(envLayout.mounted, 150);
 
   return (
+    <WorkspaceOrgProvider>
     <div className="app">
+      <ActivityBar mode={mode} setMode={setMode} railOpen={railOpen} setRailOpen={setRailOpen} />
       <Sidebar railAnim={railAnim} railWidth={railWidth} setRailOpen={setRailOpen} setRailWidth={setRailWidth}
         setPaletteOpen={setPaletteOpen} ensurePanel={ensurePanel} setSidePanelOpen={setSidePanelOpen}
         recentsSort={recentsSort} setRecentsSort={setRecentsSort} workspaces={workspaces} info={info}
@@ -590,7 +594,7 @@ export function App(): React.ReactElement {
         setShowArchived={setShowArchived} showArchived={showArchived}
         expandedProjects={expandedProjects} projSessions={projSessions} runningWs={runningWorkspaces} runningSessions={runningSessions} workspaceRunCount={workspaceRunCount}
         openProject={openProject} toggleProject={toggleProject} reorderProject={reorderProject} addProject={addProject}
-        mode={mode} setMode={setMode} openAccountSettings={() => openSettings('account')} />
+        openAccountSettings={() => openSettings('account')} />
 
       <MainContent
         mode={mode} setMode={setMode} workrowRef={workrowRef} track={track} trackOps={trackOps}
@@ -650,5 +654,6 @@ export function App(): React.ReactElement {
         activeRoot={activeRoot} ensurePanel={ensurePanel} setReviewRunningByWs={setReviewRunningByWs} setReviewByWs={setReviewByWs}
         pendingGitRef={pendingGitRef} runGit={runGit} setToast={setToast} setGitBusy={setGitBusy} toast={toast} />
     </div>
+    </WorkspaceOrgProvider>
   );
 }

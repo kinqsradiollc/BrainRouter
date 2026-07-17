@@ -105,6 +105,30 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .center { --content-w: min(var(--chat-w, 840px), calc(100% - clamp(48px, 8vw, 96px))); flex: 1 1 0; min-width: 280px; display: flex; flex-direction: column; min-height: 0; background: var(--bg); container-type: inline-size; container-name: center; }
 
 /* ---------- left rail ---------- */
+/* Activity bar — far-left icon rail: workspace modes + the app-wide workspace
+   switcher (ADR-019). Stays visible when the sidebar is collapsed. */
+.activity-bar { flex: none; width: 46px; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 6px 12px; background: var(--sidebar); border-right: 1px solid var(--ov-06); -webkit-app-region: drag; z-index: 30; }
+.activity-bar > * { -webkit-app-region: no-drag; }
+[data-os="mac"] .activity-bar { padding-top: 40px; }
+.ab-btn { width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; background: transparent; border: 0; border-radius: 9px; color: var(--text-faint); cursor: pointer; transition: background .14s, color .14s; }
+.ab-btn:hover { color: var(--text-dim); background: var(--ov-04); }
+.ab-modes { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--ov-06); }
+.ab-mode.active { background: var(--raised); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,0.25); }
+.ab-mode.active svg { color: var(--accent); }
+.ab-spacer { flex: 1; }
+.ab-org { position: relative; }
+.ab-org-avatar { width: 22px; height: 22px; border-radius: 7px; background: var(--ov-06); border: 1px solid var(--border); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 650; color: var(--text-dim); }
+.ab-org-btn:hover .ab-org-avatar, .ab-org-btn.active .ab-org-avatar { color: var(--text); border-color: var(--accent); }
+.ab-org-pop { position: absolute; left: 42px; bottom: -4px; z-index: 95; min-width: 232px; padding: 6px; background: var(--raised); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 32px rgba(0,0,0,0.42); }
+.ab-org-head { padding: 4px 8px 6px; font-size: 10px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; color: var(--text-faint); }
+.ab-org-item { display: flex; width: 100%; align-items: center; gap: 8px; padding: 7px 8px; background: transparent; border: 0; border-radius: 8px; cursor: pointer; color: var(--text-dim); text-align: left; }
+.ab-org-item:hover { background: var(--ov-04); color: var(--text); }
+.ab-org-item.active { color: var(--text); }
+.ab-org-copy { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.ab-org-copy strong { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ab-org-copy small { font-size: 10.5px; color: var(--text-faint); }
+.ab-org-avatar.sm { width: 20px; height: 20px; font-size: 10px; flex: none; }
+.ab-org-check { color: var(--accent); font-size: 12px; }
 .rail { position: relative; width: 268px; flex: none; background: var(--sidebar); padding: 10px 10px 12px; display: flex; flex-direction: column; min-height: 0; -webkit-app-region: drag; border-right: 1px solid var(--ov-06); animation: railIn .18s ease-out; }
 /* DESK-5i — drag-resize on the sidebar's right edge (mirrors the side panel's grip) */
 .rail-grip { position: absolute; right: -3px; top: 0; bottom: 0; width: 7px; cursor: col-resize; z-index: 40; -webkit-app-region: no-drag; }

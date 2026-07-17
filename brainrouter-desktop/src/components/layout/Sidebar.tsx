@@ -73,9 +73,6 @@ export interface SidebarProps {
   toggleProject: (root: string) => void;
   reorderProject: (dragged: string, target: string) => void;
   addProject: () => void;
-  /** Workspace mode — Chat · Track · Code (the left-sidebar switcher). */
-  mode: 'chat' | 'track' | 'code' | 'meetings';
-  setMode: Dispatch<SetStateAction<'chat' | 'track' | 'code' | 'meetings'>>;
   openAccountSettings: () => void;
 }
 
@@ -162,15 +159,7 @@ export function Sidebar(p: SidebarProps): React.ReactElement | null {
         </svg>
       </div>
       <div className="rail-card">
-        {/* Workspace mode switcher — Chat · Track · Code over the same workspace. */}
-        <div className="mode-switch" role="tablist" aria-label="Workspace mode">
-          {([['chat', 'bubble', 'Chat'], ['code', 'code', 'Code'], ['track', 'tasks', 'Track'], ['meetings', 'mic', 'Meetings']] as const).map(([m, icon, label]) => (
-            <button key={m} role="tab" data-mode={m} aria-selected={p.mode === m} className={`mode-seg${p.mode === m ? ' active' : ''}`}
-              onClick={() => p.setMode(m)} title={`${label} mode`}>
-              <Icon name={icon} size={13} /><span>{label}</span>
-            </button>
-          ))}
-        </div>
+        {/* Workspace-mode switching lives on the activity bar (icon rail) now. */}
         <div className="rail-actions">
           <button className="rail-action primary" onClick={() => window.brainrouter.send({ kind: 'new-session' })}><Icon name="plus" size={13} />New conversation</button>
         </div>

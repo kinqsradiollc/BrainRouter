@@ -9,6 +9,20 @@ export function installBridge(S: DevState, queries: Record<string, (args: Record
     listeners, recentsListeners, runningSessions, emit, devSessionModels, resolvedModel, trustedRoots, SESSIONS_BY_ROOT, mergeMeta,
   } = S;
   (window as unknown as { brainrouter: unknown }).brainrouter = {
+    // Demo workspace contexts so the activity-bar workspace switcher renders in
+    // browser dev (Electron's preload provides the real org-scoped bridge).
+    teams: {
+      contexts: async () => [
+        { orgId: 'org-dev-personal', name: 'BrainRouter Developer', isDefault: true, isPersonal: true },
+        { orgId: 'org-dev-acme', name: 'Acme Corp', role: 'owner' },
+      ],
+      list: async () => [],
+      get: async () => { throw new Error('Teams detail is unavailable in browser dev.'); },
+      create: async () => { throw new Error('Teams are unavailable in browser dev.'); },
+      addMember: async () => { throw new Error('Teams are unavailable in browser dev.'); },
+      removeMember: async () => { throw new Error('Teams are unavailable in browser dev.'); },
+      remove: async () => { throw new Error('Teams are unavailable in browser dev.'); },
+    },
     getBootstrapState() {
       return {
         accountStatus: {
