@@ -710,7 +710,10 @@ function activityTarget(job: ReviewJob): string {
 }
 
 function activityHref(job: ReviewJob): string {
-  if (job.repo && job.prNumber != null) return `/reviews/pr?repo=${encodeURIComponent(job.repo)}&number=${job.prNumber}`;
+  // CWE-88: prNumber arrives from the API as `number | null` but is still
+  // encoded like every other query argument so a malformed value can never
+  // smuggle extra parameters into the link.
+  if (job.repo && job.prNumber != null) return `/reviews/pr?repo=${encodeURIComponent(job.repo)}&number=${encodeURIComponent(String(job.prNumber))}`;
   return job.lens === "pentest" ? "/pentests" : "/reviews";
 }
 
