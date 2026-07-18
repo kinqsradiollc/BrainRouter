@@ -74,8 +74,9 @@ services:
     # The brain's own deps are pure JS (pg) or ship prebuilt platform binaries
     # (esbuild under tsx). A lockfile-keyed marker makes restarts fast while
     # still invalidating correctly after dependency changes.
-    command: >
-      sh -lc 'set -eu; lock_hash=$$(sha256sum package-lock.json | cut -c1-16); marker=node_modules/.brain-deps-v2-$$lock_hash; if [ ! -f "$$marker" ]; then rm -f node_modules/.brain-deps-*; npm ci --ignore-scripts; touch "$$marker"; fi; if [ ! -f packages/types/dist/index.js ] || [ ! -f packages/agent-protocol/dist/index.js ] || [ ! -f packages/core/dist/review/index.js ]; then npm run build -w @kinqs/brainrouter-types && npm run build -w @kinqs/brainrouter-agent-protocol && npm run build -w @kinqs/brainrouter-core; fi; exec npm --prefix brainrouter run dev:http'
+    # Boot logic extracted to deploy/dev/brain-run.sh so the pentest override can
+    # reuse it verbatim (it only adds env flags + the docker socket mount).
+    command: ["sh", "/repo/deploy/dev/brain-run.sh"]
     restart: unless-stopped
     env_file: [.env]
     environment:
