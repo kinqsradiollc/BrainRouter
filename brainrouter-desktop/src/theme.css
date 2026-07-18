@@ -135,7 +135,8 @@ button:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: 1p
 .rail-grip:hover, .rail-grip:active { background: var(--accent-soft); box-shadow: inset -2px 0 0 var(--accent); }
 .rail.closing { animation: railOut .16s ease-in forwards; pointer-events: none; }
 .rail > * { -webkit-app-region: no-drag; }
-.rail-top { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 2px 3px; flex: none; }
+.rail-top { display: flex; align-items: center; gap: 6px; height: 8px; padding: 0 2px 3px; flex: none; }
+[data-os="mac"] .rail-top { height: 30px; }
 /* DESK-5m — clear the macOS traffic lights: the frameless hiddenInset window
    draws close/min/max over the top-left, exactly where rail-top sits. */
 [data-os="mac"] .rail-top { padding-left: var(--window-controls-inline-end); }

@@ -3364,3 +3364,18 @@ a.review-detail__check:hover .review-detail__check-name { color: var(--text); }
 /* The header no longer occupies flow height — non-landing pages clear the pill. */
 .public-shell .public-content { padding-top: 104px; }
 .public-shell:has(.platform-landing) .public-content { padding-top: 0; }
+
+/* "Four ways to work" — glass cards in the same language as the rest of the
+   page (the collapsed-border spreadsheet cells read dated next to it). */
+.platform-surface-grid { gap: 14px; border: 0; }
+.platform-surface-grid article {
+  min-height: 200px;
+  padding: 24px;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 16px;
+  background: linear-gradient(150deg, var(--item-wash), transparent 46%), linear-gradient(165deg, rgba(255,255,255,.025), rgba(255,255,255,.004));
+  backdrop-filter: blur(12px);
+}
+.platform-surface-grid article:hover { transform: translateY(-3px); border-color: color-mix(in srgb, var(--item-tone) 34%, rgba(255,255,255,.1)); }
+.platform-surface-grid h3 { margin: 42px 0 8px; font-size: 17px; }
+@media (max-width: 640px) { .platform-surface-grid { grid-template-columns: 1fr; } }

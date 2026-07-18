@@ -266,6 +266,15 @@
 }
 .cineFg .actions { margin-top: 24px; }
 
-/* The architecture map graduates from hero sidekick to its own section. */
-.mapSection { display: flex; justify-content: center; margin-bottom: 26px; }
-.mapSection .systemMap { width: min(720px, 100%); }
+/* The architecture map graduates from hero sidekick to a wide, horizontal
+   band: surfaces in one row, the animated route feeding a centered core. */
+.mapSection { display: flex; justify-content: center; margin-bottom: 34px; }
+.mapSection .systemMap { width: min(1080px, 100%); min-height: 0; padding: 20px 24px 24px; }
+.mapSection .surfaceNodes { margin-top: 30px; grid-template-columns: repeat(4, 1fr); }
+.mapSection .surfaceNodes span { justify-content: center; min-height: 56px; }
+.mapSection .mapRoute { height: 58px; }
+.mapSection .coreNode { align-items: center; text-align: center; }
+.mapSection .coreSignals { justify-content: center; }
+@media (max-width: 860px) {
+  .mapSection .surfaceNodes { grid-template-columns: 1fr 1fr; }
+}
