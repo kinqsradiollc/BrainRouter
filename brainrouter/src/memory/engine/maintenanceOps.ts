@@ -38,6 +38,30 @@ function positiveInterval(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+/**
+ * CVE feed cadence policy. An in-flight backfill window keeps a fast catch-up
+ * cadence so it converges; a settled catalog refreshes ONCE PER UTC DAY, firing
+ * on the first maintenance pass after 00:00 UTC. An operator who explicitly
+ * sets BRAINROUTER_VULNERABILITY_SYNC_INTERVAL_MS gets plain interval
+ * scheduling instead. Manual refreshes stay available anytime via
+ * POST /vulnerabilities/sources/:id/refresh (vulnerabilities:manage).
+ */
+export function vulnerabilitySyncDue(input: {
+  now: number;
+  lastAttempt: number;
+  partial: boolean;
+  explicitIntervalMs: number;
+  partialIntervalMs: number;
+}): boolean {
+  const { now, lastAttempt, partial, explicitIntervalMs, partialIntervalMs } = input;
+  if (!Number.isFinite(lastAttempt) || lastAttempt <= 0) return true; // never attempted
+  if (partial) return now - lastAttempt >= partialIntervalMs;
+  if (explicitIntervalMs > 0) return now - lastAttempt >= explicitIntervalMs;
+  const today = new Date(now);
+  const utcMidnight = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  return lastAttempt < utcMidnight;
+}
+
 export async function enqueueScheduledMaintenance(engine: MemoryEngine, force = false): Promise<{ enqueued: Record<string, number>; skipped?: boolean }> {
   const self = engine as unknown as MaintenanceState;
   if (process.env.BRAINROUTER_JOB_MAINTENANCE === "off") return { enqueued: {}, skipped: true };
@@ -102,10 +126,20 @@ export async function enqueueScheduledMaintenance(engine: MemoryEngine, force = 
       const source = await surface.getVulnerabilitySource("nvd");
       const lastAttempt = source?.lastAttemptAt ? Date.parse(source.lastAttemptAt) : 0;
       const partial = source?.cursor && typeof source.cursor.windowMode === "string";
-      const interval = partial
-        ? positiveInterval(process.env.BRAINROUTER_VULNERABILITY_PARTIAL_SYNC_INTERVAL_MS, 60_000)
-        : positiveInterval(process.env.BRAINROUTER_VULNERABILITY_SYNC_INTERVAL_MS, 15 * 60_000);
-      if (!Number.isFinite(lastAttempt) || now - lastAttempt >= interval) {
+      // Cadence policy: an in-flight backfill window keeps a fast catch-up
+      // cadence so it converges; a settled catalog refreshes ONCE PER UTC DAY,
+      // firing on the first maintenance pass after 00:00 UTC. Operators who
+      // explicitly set BRAINROUTER_VULNERABILITY_SYNC_INTERVAL_MS keep plain
+      // interval scheduling instead. Manual refreshes stay available anytime
+      // via POST /vulnerabilities/sources/:id/refresh (vulnerabilities:manage).
+      const due = vulnerabilitySyncDue({
+        now,
+        lastAttempt,
+        partial: Boolean(partial),
+        explicitIntervalMs: positiveInterval(process.env.BRAINROUTER_VULNERABILITY_SYNC_INTERVAL_MS, 0),
+        partialIntervalMs: positiveInterval(process.env.BRAINROUTER_VULNERABILITY_PARTIAL_SYNC_INTERVAL_MS, 60_000),
+      });
+      if (due) {
         const queued = await enqueueAgentJob(engine.store, "vulnerability_sync", { mode: "scheduled" }, { priority: 80 });
         enqueued.vulnerability_sync = queued.deduped ? 0 : 1;
       } else {
