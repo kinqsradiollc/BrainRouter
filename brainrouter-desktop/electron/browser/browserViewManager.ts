@@ -48,7 +48,14 @@ import {
   type BrowserTabId,
 } from './protocol.js';
 
-const BROWSER_PARTITION = 'persist:brainrouter-browser';
+const BROWSER_PARTITION_BASE = 'persist:brainrouter-browser';
+/** Per-session partition name so each chat session gets its own isolated browser
+ *  storage (cookies/cache/history). A session with no key keeps the base
+ *  partition, preserving the pre-per-session behavior. */
+function partitionForSession(sessionKey: string | null): string {
+  if (!sessionKey || sessionKey === 'host') return BROWSER_PARTITION_BASE;
+  return `${BROWSER_PARTITION_BASE}-${sessionKey.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80)}`;
+}
 const ISOLATED_WORLD_ID = 1_001;
 const MAX_CONSOLE_ROWS = 300;
 const MAX_NETWORK_ROWS = 500;
@@ -334,6 +341,12 @@ export class BrowserViewManager {
   private permissionSequence = 0;
   private dialogSequence = 0;
   private readonly windowPrefix = randomUUID().replace(/-/g, '').slice(0, 10);
+  // Per-session browser isolation: the active session's Electron partition + a
+  // per-session snapshot of its open tabs so switching sessions swaps to that
+  // session's isolated browser (and restores its tabs) rather than sharing one.
+  private partition = BROWSER_PARTITION_BASE;
+  private sessionKey: string | null = null;
+  private readonly sessionTabs = new Map<string, Array<{ url: string; title: string; active: boolean }>>();
   private readonly queues = new Map<BrowserTabId, Promise<void>>();
   private readonly emulatedTabs = new Set<BrowserTabId>();
   private permissionPrompt: BrowserState['permissionPrompt'] = null;
@@ -364,7 +377,7 @@ export class BrowserViewManager {
 
   constructor(private readonly win: BrowserWindow, workspaceRoot: string) {
     this.workspaceRoot = workspaceRoot;
-    configureBrowserSession(session.fromPartition(BROWSER_PARTITION));
+    configureBrowserSession(session.fromPartition(this.partition));
     this.restoreWorkspace();
     if (this.tabs.length === 0) this.createTab(BROWSER_BLANK_URL, true);
     this.installDownloadListener();
@@ -466,7 +479,7 @@ export class BrowserViewManager {
   }
 
   private destinationAllowed(url: string, policy?: AgentNavigationPolicy): Promise<boolean> {
-    const browserSession = session.fromPartition(BROWSER_PARTITION);
+    const browserSession = session.fromPartition(this.partition);
     return resolvedDestinationAllowed(url, policy, async (host, fresh) => {
       const resolved = await browserSession.resolveHost(host, { cacheUsage: fresh ? 'disallowed' : 'allowed' });
       return resolved.endpoints.map((entry) => entry.address);
@@ -607,6 +620,68 @@ export class BrowserViewManager {
     this.emitState();
   }
 
+  /** Switch the browser to a chat session's own isolated storage partition.
+   *  Each session gets a brand-new browser (its own cookies/cache/history/
+   *  localStorage) and its own set of open tabs; switching back restores that
+   *  session's tabs. A session with no key keeps the shared base partition, so
+   *  this is a no-op for callers that never wire sessions (back-compat). */
+  setSession(sessionKey: string | null): void {
+    const nextPartition = partitionForSession(sessionKey);
+    if (nextPartition === this.partition) { this.sessionKey = sessionKey; return; }
+    // Snapshot the outgoing session's tabs so returning to it restores them.
+    this.sessionTabs.set(this.partition, this.snapshotTabs());
+    // Detach the download listener from the old partition before tearing down.
+    const previousSession = session.fromPartition(this.partition);
+    if (this.downloadListener) {
+      previousSession.off('will-download', this.downloadListener);
+      this.downloadListener = null;
+    }
+    this.workspaceGeneration += 1;
+    this.visibleAgentPin = null;
+    this.destroyAllViews();
+    this.tabs = [];
+    this.activeTabId = '';
+    this.closedTabs = [];
+    this.trustedUserPrivateOrigins.clear();
+    this.userOriginChecks.clear();
+    // Switch partitions and re-arm the new session's browser.
+    this.sessionKey = sessionKey;
+    this.partition = nextPartition;
+    configureBrowserSession(session.fromPartition(this.partition));
+    this.installDownloadListener();
+    this.restoreTabs(this.sessionTabs.get(this.partition) ?? []);
+    if (this.tabs.length === 0) this.createTab(BROWSER_BLANK_URL, true);
+    this.attachActiveView();
+    this.emitState();
+  }
+
+  /** Wipe a session's isolated browser storage (cookies/cache/history/local
+   *  storage). Call when the user deletes or clears a chat session so its
+   *  browsing data doesn't outlive it. Safe to call for a non-active session. */
+  async clearSessionData(sessionKey: string): Promise<void> {
+    const partition = partitionForSession(sessionKey);
+    this.sessionTabs.delete(partition);
+    const ses = session.fromPartition(partition);
+    try {
+      await ses.clearCache();
+      await ses.clearStorageData({ storages: ['cookies', 'localstorage', 'indexdb', 'serviceworkers', 'cachestorage'] });
+    } catch { /* best effort — a never-used partition has nothing to clear */ }
+    // If they cleared the session they're currently viewing, hand back a blank tab.
+    if (partition === this.partition) { await this.resetBrowser(); }
+  }
+
+  private snapshotTabs(): Array<{ url: string; title: string; active: boolean }> {
+    return this.tabs
+      .filter((tab) => tab.url && tab.url !== BROWSER_BLANK_URL)
+      .map((tab) => ({ url: tab.url, title: tab.title, active: tab.id === this.activeTabId }));
+  }
+
+  private restoreTabs(saved: Array<{ url: string; title: string; active: boolean }>): void {
+    for (const entry of saved) {
+      try { this.createTab(entry.url, entry.active, { title: entry.title }); } catch { /* skip a tab that fails to open */ }
+    }
+  }
+
   hasPermission(rawOrigin: string, grants: string[]): boolean {
     if (grants.length === 0) return false;
     let origin = rawOrigin;
@@ -652,7 +727,7 @@ export class BrowserViewManager {
     }
     this.cancelPendingDialog();
     if (this.downloadListener) {
-      session.fromPartition(BROWSER_PARTITION).off('will-download', this.downloadListener);
+      session.fromPartition(this.partition).off('will-download', this.downloadListener);
       this.downloadListener = null;
     }
     this.destroyAllViews();
@@ -698,7 +773,7 @@ export class BrowserViewManager {
     const id = `tab_${this.windowPrefix}_${++this.tabSequence}`;
     const view = new WebContentsView({
       webPreferences: {
-        partition: BROWSER_PARTITION,
+        partition: this.partition,
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
@@ -1029,6 +1104,11 @@ export class BrowserViewManager {
       case 'open-download': case 'show-download': case 'cancel-download': case 'pause-download': case 'resume-download': return this.downloadCommand(command.op, command.downloadId);
       case 'clear-data': return this.clearData(command.dataTypes);
       case 'reset-browser': return this.resetBrowser();
+      case 'clear-session-data': {
+        if (typeof command.sessionKey !== 'string' || !command.sessionKey) throw new BrowserManagerError('INVALID_REQUEST', 'clear-session-data requires a sessionKey.');
+        await this.clearSessionData(command.sessionKey);
+        return { ok: true };
+      }
       default: throw new BrowserManagerError('INVALID_REQUEST', 'Unknown browser command.');
     }
   }
@@ -1494,7 +1574,7 @@ export class BrowserViewManager {
   }
 
   private async clearData(types: Array<'cache' | 'cookies' | 'storage' | 'history'> = ['cache']): Promise<{ ok: true }> {
-    const ses = session.fromPartition(BROWSER_PARTITION);
+    const ses = session.fromPartition(this.partition);
     if (types.includes('cache')) await ses.clearCache();
     const storages: Array<'cookies' | 'localstorage' | 'indexdb' | 'serviceworkers' | 'cachestorage'> = [];
     if (types.includes('cookies')) storages.push('cookies');
@@ -1523,7 +1603,7 @@ export class BrowserViewManager {
   }
 
   private installDownloadListener(): void {
-    const browserSession = session.fromPartition(BROWSER_PARTITION);
+    const browserSession = session.fromPartition(this.partition);
     if (this.downloadListener) return;
     this.downloadListener = (event, item, contents) => {
       const tab = this.tabForContents(contents.id); if (!tab) return;

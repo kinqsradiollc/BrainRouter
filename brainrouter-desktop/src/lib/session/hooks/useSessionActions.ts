@@ -498,6 +498,9 @@ export function useSessionActions(ctx: SessionActionsCtx): SessionActions {
     closeSessionMenu();
     if (!window.confirm('Delete this chat permanently? This removes its transcript from disk.')) return;
     q('q-session-delete', 'action:session-delete', { sessionKey: key, ...(root ? { root } : {}) });
+    // A deleted session's browsing data (cookies/history/tabs) must not outlive
+    // it — wipe that session's isolated browser partition.
+    void window.brainrouter.browser?.command({ op: 'clear-session-data', sessionKey: key }).catch(() => undefined);
     if (sessionKeyRef.current === key) window.brainrouter.send({ kind: 'new-session' });
   };
   const openExternal = (what: string): void => { q('q-open-external', 'action:open-external', { what }); closeSessionMenu(); };

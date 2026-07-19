@@ -522,8 +522,12 @@ function spawnHost(wp: WinPool, workspaceRoot: string): UtilityProcess {
       // Real background work (a child/worker produced output) is activity too.
       else if (kind === 'child-tool-end' || kind === 'child-complete') markWorkspaceActivity(workspaceRoot, 'background-task');
       // Remember each workspace's last-viewed session so we can re-announce it
-      // when the user switches back to a parked (reused) host.
-      else if (kind === 'session-changed' && typeof ev?.sessionKey === 'string') wp.lastSession.set(workspaceRoot, ev.sessionKey);
+      // when the user switches back to a parked (reused) host. Also give each
+      // session its own isolated browser (per-session cookies/history/tabs).
+      else if (kind === 'session-changed' && typeof ev?.sessionKey === 'string') {
+        wp.lastSession.set(workspaceRoot, ev.sessionKey);
+        try { wp.browser?.setSession(ev.sessionKey); } catch (err) { console.error('[browser] setSession failed', err); }
+      }
     }
     const tagged = (msg && typeof msg === 'object') ? { ...(msg as object), workspaceRoot } : msg;
     wp.win.webContents.send('agent-event', tagged);
