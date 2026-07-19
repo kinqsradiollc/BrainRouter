@@ -189,7 +189,7 @@
     "cheerio": "^1.2.0"
   },
   "devDependencies": {
-    "@types/node": "^22.5.0",
+    "@types/node": "^22.20.1",
     "typescript": "^5.5.4"
   },
   "keywords": [
