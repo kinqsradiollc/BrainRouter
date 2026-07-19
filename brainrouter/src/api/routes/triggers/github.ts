@@ -15,6 +15,11 @@ const engineDeps: WebhookDeps = {
   enqueue: async (job) => {
     await (memoryEngine.store as { enqueueMemoryJob?: (input: unknown) => Promise<unknown> }).enqueueMemoryJob?.(job);
   },
+  cancelSupersededReviews: async (input) => {
+    await (memoryEngine.store as {
+      cancelSupersededReviewJobs?: (i: { orgId: string; repo: string; prNumber: number }) => Promise<number>;
+    }).cancelSupersededReviewJobs?.(input);
+  },
 };
 
 triggersRouter.post("/github/events", async (req: Request & { rawBody?: Buffer }, res: Response) => {

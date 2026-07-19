@@ -219,6 +219,39 @@ describe("ADR-010 P6b — GitHub webhook core", () => {
     expect((d2.enqueue as any).mock.calls.map((c: any[]) => c[0].kind)).toContain("pr-security-review");
   });
 
+  it("synchronize (push) supersedes the prior PENDING review before enqueuing the new head", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const d = deps({ cancelSupersededReviews: cancel });
+    const payload = { installation: { id: 42 }, action: "synchronize", repository: { full_name: "acme/app" }, pull_request: { number: 12, head: { sha: "newsha" } } };
+    const raw = Buffer.from(JSON.stringify(payload));
+    await processGithubDelivery(d, { body: payload, rawBody: raw, signature: sign(raw), event: "pull_request", delivery: "s-1" });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(cancel).toHaveBeenCalledWith({ orgId: "org_acme", repo: "acme/app", prNumber: 12 });
+    // Supersede runs BEFORE the fresh enqueue so the newest head is the only pending review.
+    const enqueueOrder = (d.enqueue as any).mock.calls
+      .map((_c: unknown, i: number) => (d.enqueue as any).mock.invocationCallOrder[i]);
+    expect(Math.min(...cancel.mock.invocationCallOrder)).toBeLessThan(Math.max(...enqueueOrder));
+    expect((d.enqueue as any).mock.calls.map((c: any[]) => c[0].kind)).toContain("pr-security-review");
+  });
+
+  it("opened (not a push) does NOT supersede prior reviews", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const d = deps({ cancelSupersededReviews: cancel });
+    const payload = { installation: { id: 42 }, action: "opened", repository: { full_name: "acme/app" }, pull_request: { number: 12, head: { sha: "s" } } };
+    const raw = Buffer.from(JSON.stringify(payload));
+    await processGithubDelivery(d, { body: payload, rawBody: raw, signature: sign(raw), event: "pull_request", delivery: "s-2" });
+    expect(cancel).not.toHaveBeenCalled();
+  });
+
+  it("a push carries its OWN PR number to supersede (not a sibling PR)", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const d = deps({ cancelSupersededReviews: cancel });
+    const payload = { installation: { id: 42 }, action: "synchronize", repository: { full_name: "acme/app" }, pull_request: { number: 99, head: { sha: "z" } } };
+    const raw = Buffer.from(JSON.stringify(payload));
+    await processGithubDelivery(d, { body: payload, rawBody: raw, signature: sign(raw), event: "pull_request", delivery: "s-3" });
+    expect(cancel).toHaveBeenCalledWith({ orgId: "org_acme", repo: "acme/app", prNumber: 99 });
+  });
+
   it("a non-review comment does NOT trigger a review", async () => {
     const d = deps();
     const payload = { installation: { id: 42 }, action: "created", repository: { full_name: "acme/app" }, issue: { number: 12, pull_request: { url: "x" } }, comment: { body: "nice work, lgtm" } };

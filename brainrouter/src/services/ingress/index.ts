@@ -7,7 +7,7 @@
 import pg from "pg";
 import { makePoolExecutor } from "../gateway/providerPool.js";
 import { findIntegrationByInstallation } from "../../memory/store/postgres/queries/integrationConfigQueries.js";
-import { enqueueMemoryJob } from "../../memory/store/postgres/queries/jobQueries.js";
+import { enqueueMemoryJob, cancelSupersededReviewJobs } from "../../memory/store/postgres/queries/jobQueries.js";
 import { createIngressApp } from "./server.js";
 import type { WebhookDeps } from "../../integrations/githubWebhook.js";
 
@@ -24,6 +24,7 @@ function main(): void {
   const deps: WebhookDeps = {
     findIntegrationByInstallation: (installationId) => findIntegrationByInstallation(exec, "github_app", installationId),
     enqueue: async (job) => { await enqueueMemoryJob(exec, job as unknown as Parameters<typeof enqueueMemoryJob>[1]); },
+    cancelSupersededReviews: async (input) => { await cancelSupersededReviewJobs(exec, input); },
   };
   const app = createIngressApp(deps, { ping: async () => { try { await pool.query("SELECT 1"); return true; } catch { return false; } } });
 
