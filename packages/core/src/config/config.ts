@@ -875,6 +875,36 @@ function loadCachedConfig(): Config {
   return cfg;
 }
 
+/**
+ * Is the configured `brainUrl` a *genuinely remote* brain?
+ *
+ * `brainUrl` (ADR-005) points the memory brain at an HTTP endpoint. The
+ * local-desktop control gates (`browser_*`, `computer_use`) block "remote-brain"
+ * sessions so a brain running elsewhere cannot puppet the operator's machine.
+ * But a LOOPBACK brain runs on the *same host* as the desktop — the same trust
+ * boundary as the embedded brain — so it must NOT count as remote. Otherwise the
+ * standard local-dev setup (the dockerized brain served at
+ * `http://localhost:3747/mcp`) silently loses every browser and computer tool,
+ * even though the in-app browser is right there.
+ *
+ * Unset/empty = embedded = local (false). Unparseable = treat as remote (true):
+ * never grant local desktop control on a URL we cannot vet.
+ */
+export function isRemoteBrainUrl(brainUrl: string | null | undefined): boolean {
+  const raw = (brainUrl ?? '').trim();
+  if (!raw) return false;
+  let host: string;
+  try {
+    host = new URL(raw).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  } catch {
+    return true;
+  }
+  if (host === 'localhost' || host.endsWith('.localhost') || host === '::1') return false;
+  // 127.0.0.0/8 loopback (127.x.x.x).
+  if (/^127(?:\.\d{1,3}){3}$/.test(host)) return false;
+  return true;
+}
+
 export function getCliKnobs(): ResolvedCliKnobs {
   if (cachedKnobs === undefined) {
     // Lazy load so tests / one-shot commands don't pay the disk read

@@ -17,8 +17,6 @@
 /* Organization-context selector — rendered in the page header (a sibling of
    .page), so it is styled with the GLOBAL tokens, not the .page-scoped --mv-*
    aliases, and mirrors the Teams page control so both surfaces read the same. */
-.orgPicker{display:flex;align-items:center;gap:8px;color:var(--text-muted);font-size:11px;font-weight:600}
-.orgPicker select{height:34px;min-width:200px;border:1px solid var(--border-strong);border-radius:var(--radius-control);padding:0 32px 0 10px;background:var(--surface-raised) var(--select-bg-image) no-repeat right 9px center/14px;color:var(--text);font:550 12px var(--font-sans);appearance:none}
 .wrap{
   display:grid;grid-template-columns:300px 1fr;gap:14px;align-items:start;min-height:0;
 }
@@ -60,6 +58,8 @@
 .modelChip b{color:var(--mv-tx);font-weight:500}
 .metastrip{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
 .chip{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--mv-tx3);background:var(--mv-panel2);border:1px solid var(--mv-line);border-radius:20px;padding:4px 10px;font-family:var(--mv-mono)}
+.chipDanger{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 35%,transparent)}
+.chipDanger:hover:not(:disabled){background:color-mix(in srgb,var(--danger) 12%,transparent)}
 .chip i{width:6px;height:6px;border-radius:50%;background:var(--mv-teal);display:block}
 button.chip{cursor:pointer;transition:background .12s var(--ease),color .12s var(--ease)}
 button.chip:hover:not(:disabled){background:var(--mv-raise);color:var(--mv-tx)}
@@ -139,4 +139,4 @@ button.chip:disabled{opacity:.6;cursor:default}
 .recordActions{display:flex;gap:7px}
 .modalActions{display:flex;justify-content:flex-end;gap:8px;margin-top:2px}
 @media(max-width:900px){.wrap{grid-template-columns:1fr}.list{max-height:390px;min-height:280px}.body{grid-template-columns:1fr}}
-@media(max-width:620px){.orgPicker{align-items:flex-start;flex-direction:column}.orgPicker select{width:100%}.dHeadRow{flex-direction:column}.hActions{width:100%;flex-wrap:wrap}.pop{right:auto;left:0;width:min(312px,calc(100vw - 54px))}.body{padding:12px}.modalScrim{align-items:flex-end;padding:0}.modal{width:100%;max-height:94vh;border-radius:var(--radius-panel) var(--radius-panel) 0 0}.captureOptions{align-items:stretch;flex-direction:column}.modalActions{align-items:stretch;flex-direction:column}.modalActions>div{width:100%;justify-content:flex-end}.recordActions{justify-content:flex-start!important}}
+@media(max-width:620px){.dHeadRow{flex-direction:column}.hActions{width:100%;flex-wrap:wrap}.pop{right:auto;left:0;width:min(312px,calc(100vw - 54px))}.body{padding:12px}.modalScrim{align-items:flex-end;padding:0}.modal{width:100%;max-height:94vh;border-radius:var(--radius-panel) var(--radius-panel) 0 0}.captureOptions{align-items:stretch;flex-direction:column}.modalActions{align-items:stretch;flex-direction:column}.modalActions>div{width:100%;justify-content:flex-end}.recordActions{justify-content:flex-start!important}}

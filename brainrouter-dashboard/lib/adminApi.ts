@@ -190,7 +190,11 @@ export interface ReviewJob {
   prNumber: number | null;
   findings: number | null;
   blocking: number | null;
-  findingsDetail?: { file: string; line?: number; severity: string; title?: string; summary?: string; status?: string; cwe?: string; preExisting?: boolean; suggestable?: boolean }[];
+  findingsDetail?: {
+    file: string; line?: number; endLine?: number; severity: string; title?: string; summary?: string; status?: string; cwe?: string;
+    preExisting?: boolean; suggestable?: boolean; firstSeenAt?: string; lastSeenAt?: string; fixedAt?: string;
+    firstSeenSha?: string; lastSeenSha?: string; fixedSha?: string; resolvedByLogin?: string;
+  }[];
   progress?: { ts: string; kind: string; msg: string; data?: Record<string, unknown>; traceId?: string; spanId?: string; parentSpanId?: string; role?: string; status?: "pending" | "running" | "succeeded" | "failed" | "skipped"; durationMs?: number }[];
   skipped: string | null;
   error: string | null;
@@ -232,11 +236,21 @@ export interface ReviewIssuesResponse {
 
 export interface ReviewSummary {
   periodDays: number;
-  metrics: { securityScore: number; openIssues: number; issuesFound: number; fixRate: number; prsReviewed: number; pentests: number };
+  metrics: { securityScore: number; openIssues: number; issuesFound: number; issuesFixed?: number; fixRate: number; meanTimeToRemediateDays?: number | null; prsReviewed: number; pentests: number };
   severity: { critical: number; high: number; medium: number; low: number; info: number };
   verdicts: { approved: number; commented: number; changesRequested: number };
-  history: Array<{ date: string; critical: number; high: number; medium: number; low: number }>;
+  /** Zero-filled per-day rows for the full period: discoveries by severity plus
+   * how many of that day's findings are currently open vs fixed. */
+  history: Array<{
+    date: string; critical: number; high: number; medium: number; low: number;
+    open?: number; fixed?: number; activity: number; prReviews: number; tests: number;
+  }>;
   repositories: Array<{ repository: string; prs: number; findings: number; addressed: number }>;
+  /** Absent on servers predating the finding-lifecycle rollup (rolling deploy). */
+  contributors?: Array<{
+    login: string; displayName: string | null; avatarUrl: string | null;
+    prs: number; authoredPrs: number; commits: number; findingsFixed: number; openFindings: number; lastActivityAt: string | null;
+  }>;
 }
 
 export interface ConnectorStatus {
@@ -270,7 +284,10 @@ export interface PentestTarget {
 export type PentestScanMode = "code-review" | "standard" | "full-audit";
 export const PENTEST_SCAN_MODE_LABELS: Record<PentestScanMode, string> = { "code-review": "Code Review", standard: "Standard Pentest", "full-audit": "Full Audit Pentest" };
 export interface PentestRun {
-  id: string; status: string; targetId: string; target: string; kind: string; scanMode?: PentestScanMode; findings: number; error: string | null; createdAt: string; updatedAt: string;
+  id: string; status: string; targetId: string; target: string; kind: string; scanMode?: PentestScanMode; findings: number; blocking?: number; error: string | null; createdAt: string; updatedAt: string;
+  /** Present only on the run-detail response (GET /runs/:id). */
+  progress?: ReviewJob["progress"];
+  findingsDetail?: ReviewJob["findingsDetail"];
 }
 
 export const adminApi = {
@@ -406,6 +423,7 @@ export const adminApi = {
   createPentestTarget: (body: { kind: "domain" | "repository"; value: string; label?: string; authorized: true }, orgId?: string) => authFetch<{ target: PentestTarget }>("/api/admin/pentests/targets", { method: "POST", body, orgId }),
   deletePentestTarget: (id: string, orgId?: string) => authFetch<{ ok: boolean }>(`/api/admin/pentests/targets/${encodeURIComponent(id)}`, { method: "DELETE", orgId }),
   listPentestRuns: (orgId?: string, limit = 100) => authFetch<{ runs: PentestRun[] }>(`/api/admin/pentests/runs?limit=${limit}`, { orgId }),
+  getPentestRun: (id: string, orgId?: string) => authFetch<{ run: PentestRun }>(`/api/admin/pentests/runs/${encodeURIComponent(id)}`, { orgId }),
   startPentestRun: (targetId: string, scanMode: PentestScanMode = "standard", orgId?: string) => authFetch<{ run: PentestRun }>("/api/admin/pentests/runs", { method: "POST", body: { targetId, scanMode }, orgId }),
   listOrgs: (signal?: AbortSignal) => authFetch<{ orgs: OrgSummary[] }>("/api/orgs", { signal }),
   createOrg: (name: string, plan: OrgPlan = "team") =>

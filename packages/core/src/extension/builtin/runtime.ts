@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
 import { NoTTYError } from '../../agent/support/prompter.js';
 import { runHooks } from '../../hooks/hooksStore.js';
-import { getCliKnobs, loadOrInitConfig } from '../../config/config.js';
+import { getCliKnobs, isRemoteBrainUrl, loadOrInitConfig } from '../../config/config.js';
 import { createArtifact, updateArtifact, getArtifact } from '../../artifact/artifactStore.js';
 
 // Per-turn computer_use action cap — module const in the original agent.ts; kept
@@ -17,7 +17,7 @@ import {
   githubTokenClient, defaultEnvTokenResolver,
   type McpConnectorClient, type McpConnectorResource,
 } from '../../connectors/index.js';
-import { startBackgroundShell, readBackgroundOutput } from '../../exec/runtime/backgroundShell.js';
+import { startBackgroundShell, readBackgroundOutput, killBackgroundShell } from '../../exec/runtime/backgroundShell.js';
 import { buildRunCommandPrompt, isDangerousCommand, resolveRunCommandApproval } from '../../exec/guard/dangerousCommand.js';
 import { evaluateDestructiveCommand } from '../../exec/guard/destructiveCommandGuard.js';
 import { decideExecutionPolicy, egressDecision } from '../../exec/policy/execPolicy.js';
@@ -71,6 +71,7 @@ import { estimateTokens as estimateTokensContentAware } from '../../util/tokens/
 import { waitUntilCondition } from '../../util/agentloop/waitUntil.js';
 import { fetchAndExtract } from '../../websearch/crawler.js';
 import { buildSearchProvider } from '../../websearch/factory.js';
+import { parseDuckDuckGoLite, parseDuckDuckGoHtml } from '../../websearch/providers/duckduckgo.js';
 import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../../worker/workerStore.js';
 import { listWorkers } from '../../worker/workerStore.js';
 import { getLatestReview, saveReview } from '../../review/reviewStore.js';
@@ -78,12 +79,106 @@ import { validatePentestFinding } from '../../review/pentestFinding.js';
 import { getCurrentWorkflow } from '../../workflow/run/workflowArtifacts.js';
 import { advanceRunStep, summarizeRun } from '../../workflow/run/workflowRun.js';
 import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from '../../agent/fs/applyPatch.js';
+import { applyNotebookEdit } from '../../agent/fs/notebookEdit.js';
 import { evaluateDestructiveAction, isComputerActionMutating, validateComputerAction } from '../../agent/fs/computerUse.js';
 import { truncateFullRead } from '../../agent/fs/readTruncation.js';
 import { nestArguments } from '../../agent/repair/flatten.js';
 import { shrinkOversizedToolResults } from '../../agent/guards/turnEndShrink.js';
 import { resolveWorkspacePath, globFiles, grepSearch } from '../../agent/fs/workspaceFs.js';
 import { isArtifactKind, isArtifactFormat, isWorkItemType, isWorkItemPriority, type ArtifactKind, type ArtifactFormat } from '@kinqs/brainrouter-types';
+
+/** Minimal shape of the per-Agent browser-control port (a bridge to the desktop
+ *  WebContentsView). Typed loosely so the runtime pulls in no desktop imports. */
+interface BrowserFetchPort { request(command: unknown, options?: { signal?: AbortSignal }): Promise<{ ok?: boolean; tabId?: string; data?: unknown }> }
+
+/** True when a URL clearly points at STRUCTURED data (a JSON/XML/CSV/feed or an
+ *  API endpoint) rather than a rendered web page. Those must NOT go through the
+ *  browser — Chromium renders the response into a DOM view and innerText scraping
+ *  mangles it; the HTTP crawler returns the bytes near-verbatim (parseable). */
+export function looksStructuredUrl(rawUrl: string): boolean {
+  try {
+    const u = new URL(rawUrl);
+    const path = u.pathname.toLowerCase();
+    if (/\.(json|xml|csv|tsv|txt|rss|atom|ndjson|yaml|yml)$/.test(path)) return true;
+    if (path.includes('/api/') || path.startsWith('/api') || path.includes('/v1/') || path.includes('/v2/')) return true;
+    if (/^(api|data|feeds?)\./i.test(u.hostname)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Fetch a URL through the in-app browser (real Chromium, JS-rendered, using the
+ * user's logged-in session), returning the page's rendered text — the SAME view
+ * the agent gets from the browser tools. Opens a NON-active background tab so it
+ * doesn't steal focus, snapshots the rendered DOM, and always closes the tab.
+ *
+ * Best-effort by design: a hard timeout bounds the whole flow and ANY failure
+ * returns null so the caller falls back to the HTTP crawler — fetch_url can
+ * never be made worse than the crawler baseline. SSRF is enforced by the desktop
+ * browser's own onBeforeRequest destination gate, so no extra check is needed.
+ */
+export async function fetchViaInAppBrowser(port: BrowserFetchPort, url: string, timeoutMs: number, outerSignal?: AbortSignal): Promise<{ title: string; url: string; text: string } | null> {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const signal = outerSignal ? AbortSignal.any([outerSignal, timeout]) : timeout;
+  let tabId: string | undefined;
+  try {
+    const open = await port.request({ kind: 'tabs.open', url, activate: false }, { signal });
+    if (!open?.ok || !open.tabId) return null;
+    tabId = open.tabId;
+    // Wait for load, but ignore its timeout — we still read whatever rendered.
+    await port.request({ kind: 'page.wait', tabId, loadState: 'load', timeoutMs: Math.min(15_000, timeoutMs) }, { signal }).catch(() => undefined);
+    // page.text returns the page's clean rendered innerText (article text, not the
+    // structural agent snapshot). Fall back to the semantic snapshot's node text
+    // if page.text is somehow empty, and to the crawler (return null) if both are.
+    const textRes = await port.request({ kind: 'page.text', tabId, maxChars: 100_000 }, { signal }).catch(() => null);
+    const td = (textRes?.ok ? textRes.data : null) as { url?: string; title?: string; text?: string } | null;
+    let title = String(td?.title ?? '');
+    let finalUrl = String(td?.url ?? url);
+    let text = String(td?.text ?? '').replace(/\n{3,}/g, '\n\n').slice(0, 60_000).trim();
+    if (!text) {
+      const snap = await port.request({ kind: 'page.snapshot', tabId, maxChars: 50_000 }, { signal }).catch(() => null);
+      const sd = (snap?.ok ? snap.data : null) as { url?: string; title?: string; nodes?: Array<{ name?: unknown; value?: unknown }> } | null;
+      const nodes = Array.isArray(sd?.nodes) ? sd!.nodes : [];
+      text = nodes.map((n) => String(n?.name ?? n?.value ?? '').trim()).filter(Boolean).join('\n').slice(0, 40_000);
+      if (sd?.title) title = String(sd.title);
+      if (sd?.url) finalUrl = String(sd.url);
+    }
+    return text ? { title, url: finalUrl, text } : null;
+  } catch {
+    return null;
+  } finally {
+    if (tabId) { try { await port.request({ kind: 'tabs.close', tabId }); } catch { /* best effort */ } }
+  }
+}
+
+/**
+ * Fetch a page's RENDERED HTML through the in-app browser (real Chromium + the
+ * user's session), so structured extraction (e.g. web_search parsing a results
+ * page) runs over what the browser actually rendered — the network/JS/session
+ * all go through the browser, never a raw HTTP scrape. Opens a background tab,
+ * reads page.html, always closes the tab. Returns null on any failure/timeout.
+ */
+export async function fetchHtmlViaInAppBrowser(port: BrowserFetchPort, url: string, timeoutMs: number, outerSignal?: AbortSignal): Promise<string | null> {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const signal = outerSignal ? AbortSignal.any([outerSignal, timeout]) : timeout;
+  let tabId: string | undefined;
+  try {
+    const open = await port.request({ kind: 'tabs.open', url, activate: false }, { signal });
+    if (!open?.ok || !open.tabId) return null;
+    tabId = open.tabId;
+    await port.request({ kind: 'page.wait', tabId, loadState: 'load', timeoutMs: Math.min(15_000, timeoutMs) }, { signal }).catch(() => undefined);
+    const res = await port.request({ kind: 'page.html', tabId, maxChars: 500_000 }, { signal }).catch(() => null);
+    const data = (res?.ok ? res.data : null) as { html?: string } | null;
+    const html = String(data?.html ?? '');
+    return html.length > 100 ? html : null;
+  } catch {
+    return null;
+  } finally {
+    if (tabId) { try { await port.request({ kind: 'tabs.close', tabId }); } catch { /* best effort */ } }
+  }
+}
 
 export async function invokeBuiltinToolRuntime(this: any, name: string, args: Record<string, any>): Promise<string> {
     // Bind path resolution to this agent's workspace, never to process.cwd().
@@ -98,7 +193,22 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         if (!fs.existsSync(resolved)) {
           throw new Error(`File not found: ${args.path}`);
         }
-        const content = fs.readFileSync(resolved, 'utf8');
+        // Bound the bytes pulled into memory. Previously this read the WHOLE file
+        // (truncation only trimmed the RETURNED string), so a multi-GB file would
+        // be fully buffered before any cap applied. Read at most READ_FILE_MAX_BYTES;
+        // the full-read path truncates the visible output further via truncateFullRead.
+        const READ_FILE_MAX_BYTES = 16 * 1024 * 1024;
+        let content: string;
+        if (fs.statSync(resolved).size > READ_FILE_MAX_BYTES) {
+          const fd = fs.openSync(resolved, 'r');
+          try {
+            const b = Buffer.alloc(READ_FILE_MAX_BYTES);
+            const n = fs.readSync(fd, b, 0, READ_FILE_MAX_BYTES, 0);
+            content = b.subarray(0, n).toString('utf8');
+          } finally { fs.closeSync(fd); }
+        } else {
+          content = fs.readFileSync(resolved, 'utf8');
+        }
         this.filesReadThisSession.add(resolved); // CC-P6.4 — read-before-edit ledger
         // CLI-REINDEX — keep the code index fresh on read; fire-and-forget so
         // reads stay snappy, and guarded so a rejection never escapes.
@@ -152,6 +262,27 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         const reindexNotice = await this.maybeReindexSource(resolved, args.content);
         return `Successfully wrote file: ${args.path}` + writeNotice + reindexNotice;
       }
+      case 'notebook_edit': {
+        const resolved = resolveHere(args.path);
+        const ownErr = ownershipWriteViolation(this.ownership, this.workspaceRoot, resolved);
+        if (ownErr) throw new Error(ownErr);
+        if (!/\.ipynb$/i.test(resolved)) throw new Error('notebook_edit targets a .ipynb (Jupyter notebook) file.');
+        if (!fs.existsSync(resolved)) throw new Error(`Notebook not found: ${args.path}`);
+        const editMode = args.edit_mode === 'insert' || args.edit_mode === 'delete' ? args.edit_mode : 'replace';
+        const cellIndex = args.cell_index === undefined || args.cell_index === null ? undefined : Number(args.cell_index);
+        const cellType = args.cell_type === 'markdown' ? 'markdown' : args.cell_type === 'code' ? 'code' : undefined;
+        const parentDenial = await this.confirmSilentChildToolApproval({
+          tool: 'notebook_edit', path: String(args.path ?? ''),
+          summary: `${editMode} cell ${cellIndex ?? '(append)'}`,
+          reason: 'silent child agent requested a notebook edit',
+        });
+        if (parentDenial) return parentDenial;
+        this.captureFileSnapshot(resolved); // undo log for /rewind --files
+        const result = applyNotebookEdit(fs.readFileSync(resolved, 'utf8'), { editMode, cellIndex, cellType, source: String(args.source ?? '') });
+        fs.writeFileSync(resolved, result.content, 'utf8');
+        this.filesReadThisSession.add(resolved);
+        return JSON.stringify({ path: args.path, edit_mode: editMode, cells: result.cells });
+      }
       case 'edit_file': {
         const resolved = resolveHere(args.path);
         const ownErr = ownershipWriteViolation(this.ownership, this.workspaceRoot, resolved);
@@ -177,7 +308,11 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           throw new Error(`Target content found ${occurrences} times in ${args.path}. Specify more surrounding context to target uniquely.`);
         }
 
-        const updated = content.replace(target, replacement);
+        // Use a replacer FUNCTION so `replacement` is inserted verbatim. A string
+        // second arg makes String.replace interpret `$&`, `$1`, `$$`, `` $` ``, `$'`
+        // as special patterns, silently corrupting any edit whose replacement text
+        // contains a `$` (regex source, shell vars, template literals, prices…).
+        const updated = content.replace(target, () => replacement);
         const parentDenial = await this.confirmSilentChildToolApproval({
           tool: 'edit_file',
           path: String(args.path ?? ''),
@@ -433,7 +568,7 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         if (!getCliKnobs().computerUse.enabled) return 'computer_use is disabled. Set cli.computerUse.enabled=true to enable it.';
         if (!this.computerUsePort) return 'computer_use is unavailable in this runtime.';
         if (this.silent) return 'computer_use denied: silent child agents cannot control the desktop.';
-        if (getCliKnobs().brainUrl) return 'computer_use denied: remote-brain sessions cannot control the local desktop.';
+        if (isRemoteBrainUrl(getCliKnobs().brainUrl)) return 'computer_use denied: remote-brain sessions cannot control the local desktop.';
         if (this.computerActionsThisTurn >= MAX_COMPUTER_ACTIONS_PER_TURN) {
           return `computer_use denied: per-turn action cap (${MAX_COMPUTER_ACTIONS_PER_TURN}) reached.`;
         }
@@ -483,14 +618,31 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         if (this.pentestMode) return 'fetch_url is disabled for pentests; reach the target via run_command inside the sandbox, or view_request/repeat_request through the scoped proxy.';
         const url = args.url;
         // POLICY-3 — per-host egress allowlist (empty = unrestricted).
-        const egress = egressDecision(url, getCliKnobs().egressAllowlist);
+        const egressAllowlist = getCliKnobs().egressAllowlist;
+        const egress = egressDecision(url, egressAllowlist);
         if (egress.decision === 'deny') {
           return `fetch_url blocked by egress policy: ${egress.reason}.`;
         }
         const knobs = getCliKnobs();
+        // BROWSER-FIRST: when the in-app browser is available (desktop, top-level,
+        // not a silent child), fetch through it so JS-rendered / logged-in /
+        // bot-guarded pages return their REAL rendered content. Falls back to the
+        // HTTP crawler on any failure or when there is no browser (CLI/server).
+        // EXCEPT structured/API URLs (JSON/XML/feeds): the browser would render
+        // them into a DOM and innerText-scrape a mangled copy — send those
+        // straight to the crawler, which returns the raw bytes.
+        if (this.browserControlPort && !this.silent && !looksStructuredUrl(String(url))) {
+          const viaBrowser = await fetchViaInAppBrowser(this.browserControlPort, String(url), 25_000, this.turnAbort?.signal);
+          if (viaBrowser?.text) {
+            return JSON.stringify({ ok: true, via: 'in-app-browser', title: viaBrowser.title, url: viaBrowser.url, text: viaBrowser.text }, null, 2);
+          }
+        }
         const result = await fetchAndExtract(String(url), {
           ...knobs.webSearch.crawler,
           signal: this.turnAbort?.signal,
+          // Re-apply the allowlist on every redirect hop (the crawler also blocks
+          // private/loopback/metadata IPs on each hop as an always-on SSRF guard).
+          isEgressAllowed: (target) => egressDecision(target, egressAllowlist).decision !== 'deny',
         });
         return JSON.stringify(result, null, 2);
       }
@@ -501,6 +653,22 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         if (!query) throw new Error('web_search requires a non-empty query.');
         const knobs = getCliKnobs();
         const maxResults = Math.max(1, Math.min(10, Number(args.maxResults ?? knobs.webSearch.maxResults)));
+        // BROWSER-ONLY when available: run the search THROUGH the in-app browser
+        // (real Chromium, the user's session, no raw HTTP scrape / bot-challenge).
+        // Navigate a background tab to the DuckDuckGo results page, read the
+        // rendered HTML, and parse it. The HTTP provider below is used ONLY when
+        // there is no in-app browser (CLI / server).
+        if (this.browserControlPort && !this.silent) {
+          try {
+            const serpUrl = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
+            const html = await fetchHtmlViaInAppBrowser(this.browserControlPort, serpUrl, 25_000, this.turnAbort?.signal);
+            if (html) {
+              let results = parseDuckDuckGoLite(html, maxResults);
+              if (!results.length) results = parseDuckDuckGoHtml(html, maxResults);
+              if (results.length) return JSON.stringify(results.slice(0, maxResults), null, 2);
+            }
+          } catch { /* fall through to the HTTP provider (no-browser only) */ }
+        }
         try {
           const provider = buildSearchProvider(knobs);
           const results = await provider.search(query, maxResults, this.turnAbort?.signal);
@@ -782,6 +950,13 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         const out = readBackgroundOutput(id, fromByte);
         if (!out) return JSON.stringify({ id, found: false, note: 'Unknown background run (it dies with the CLI process).' });
         return JSON.stringify(out);
+      }
+      case 'kill_command': {
+        const id = String(args.id ?? '').trim();
+        if (!id) throw new Error('kill_command requires an id (from run_command background:true).');
+        const signal = args.signal === 'SIGKILL' || args.signal === 'SIGINT' ? args.signal : 'SIGTERM';
+        const killed = killBackgroundShell(id, signal);
+        return JSON.stringify({ id, killed, signal, ...(killed ? {} : { note: 'No running background command with that id (already exited, or unknown id).' }) });
       }
       case 'wait_until': {
         // CC-P11.2 — block until a workspace file condition holds (or timeout).
@@ -1302,9 +1477,16 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
           return JSON.stringify({ answer: await askOne(specs[0]) });
         }
         // Batched: ask each in turn, key answers by header (fallback question).
+        // Disambiguate duplicate headers — they are ≤12 chars so collisions are
+        // easy, and a plain `answers[header] = …` used to silently overwrite,
+        // handing the model fewer answers than it asked. A repeated key gets a
+        // ` (n)` suffix so every question's answer survives.
         const answers: Record<string, string | string[]> = {};
-        for (const spec of specs) {
-          answers[spec.header || spec.question] = await askOne(spec);
+        for (let i = 0; i < specs.length; i++) {
+          const spec = specs[i];
+          const base = spec.header || spec.question;
+          const key = base in answers ? `${base} (${i + 1})` : base;
+          answers[key] = await askOne(spec);
         }
         return JSON.stringify({ answers });
       }

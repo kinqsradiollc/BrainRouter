@@ -72,6 +72,15 @@ meetingsRouter.get("/:id", async (req: AuthedRequest, res) => {
   res.json(detail);
 });
 
+/** Owner-only hard delete — removes the meeting plus its transcript source and
+ *  recallable summary record (a deleted meeting must not stay recallable). */
+meetingsRouter.delete("/:id", async (req: AuthedRequest, res) => {
+  if (!(await attachOrgContext(req, res))) return;
+  const ok = await meetings.deleteMeeting(req.userId!, req.orgId!, String(req.params.id));
+  if (!ok) { res.status(404).json({ error: "Meeting not found, or you are not its owner." }); return; }
+  res.json({ ok: true });
+});
+
 meetingsRouter.post("/:id/regenerate", async (req: AuthedRequest, res) => {
   if (!(await attachOrgContext(req, res))) return;
   const detail = await meetings.regenerateSummary(req.userId!, req.orgId!, String(req.params.id));

@@ -2,17 +2,28 @@ import type { AccessMode, ActionKind } from '../../exec/policy/execPolicy.js';
 import { ensureRequiredCoreToolsRegistered, type BuiltinToolRuntimePort } from '../../extension/builtin/capabilities.js';
 import { extensionExecutor, extensionExecutors } from '../../extension/registry.js';
 import { registryEntry } from './registry.js';
+import type { BrowserControlPort } from '../../browser/control.js';
 
 export type ToolExposure = 'direct' | 'hidden';
 export interface LocalToolSpec { name: string; description: string; inputSchema: Record<string, unknown> }
 export interface OrchestrationRuntimePort { invoke(toolName: string, args: Record<string, any>, metadata: { workflowLaunch: boolean }): Promise<string> }
 export interface ToolLifecycleRuntimePort { afterInvoke(kind: 'track-automation' | 'goal-reconcile' | 'plan-update', args: Record<string, any>): void | Promise<void> }
-export interface LocalToolInvocation { args: Record<string, any>; invokedName?: string; builtinRuntime?: BuiltinToolRuntimePort; orchestrationRuntime?: OrchestrationRuntimePort; lifecycleRuntime?: ToolLifecycleRuntimePort }
+export interface LocalToolInvocation {
+  args: Record<string, any>;
+  invokedName?: string;
+  builtinRuntime?: BuiltinToolRuntimePort;
+  orchestrationRuntime?: OrchestrationRuntimePort;
+  lifecycleRuntime?: ToolLifecycleRuntimePort;
+  /** Desktop-only, per-Agent port. Never copied into child/reviewer agents. */
+  browserControlPort?: BrowserControlPort;
+  signal?: AbortSignal;
+}
 export interface LocalToolAvailabilityContext {
   resultExpansionAvailable?: boolean;
   workflowActive?: boolean;
   rootAgent?: boolean;
   computerUseAvailable?: boolean;
+  browserUseAvailable?: boolean;
   multiProfile?: boolean;
   mcpDiscovery?: boolean;
 }

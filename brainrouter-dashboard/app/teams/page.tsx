@@ -5,7 +5,8 @@ import { Buildings, Plus, Trash, UserCircle, UserPlus, UsersThree } from "@phosp
 import { AuthGuard } from "../../components/AuthGuard";
 import { PageHeader } from "../../components/PageHeader";
 import { InlineLoading } from "../../components/LoadingSpinner";
-import { adminApi, type OrgSummary, type Team, type TeamKind, type TeamMember } from "../../lib/adminApi";
+import { adminApi, type Team, type TeamKind, type TeamMember } from "../../lib/adminApi";
+import { useActiveOrg } from "../../components/OrgWorkspaceProvider";
 import { invalidateDashboardQueries, queryDashboard } from "../../lib/dashboardQuery";
 import styles from "./teams.module.css";
 
@@ -16,8 +17,11 @@ function initials(value: string): string {
 }
 
 function TeamsInner() {
-  const [orgs, setOrgs] = useState<OrgSummary[]>([]);
-  const [orgId, setOrgId] = useState("");
+  // ADR-019 Phase 2 — the org context comes from the app-wide workspace switcher
+  // (top of the sidebar), not a per-page picker. The provider only ever exposes
+  // orgs the caller is a member of, so a tampered org id can't be selected here
+  // (and the server still 403s a non-member org).
+  const { activeOrg, activeOrgId: orgId } = useActiveOrg();
   const [teams, setTeams] = useState<Team[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [members, setMembers] = useState<TeamMember[]>([]);
@@ -31,23 +35,8 @@ function TeamsInner() {
   const [newMember, setNewMember] = useState("");
   const [newMemberRole, setNewMemberRole] = useState<string>("member");
 
-  useEffect(() => {
-    let active = true;
-    void adminApi.listOrgs().then(({ orgs: rows }) => {
-      if (!active) return;
-      setOrgs(rows);
-      setOrgId((current) => current || rows.find((org) => org.isDefault)?.orgId || rows[0]?.orgId || "");
-    }).catch((caught) => { if (active) setError(caught instanceof Error ? caught.message : "Could not load organizations."); });
-    return () => { active = false; };
-  }, []);
-
-  // Defense in depth: never send an org the caller wasn't shown. A tampered
-  // orgId state that isn't in the loaded org list is rejected before it reaches
-  // the org-scoped admin API (the server also 403s a non-member org).
-  const orgAllowed = useMemo(() => !orgId || orgs.some((org) => org.orgId === orgId), [orgId, orgs]);
-
   const load = useCallback(async () => {
-    if (!orgId || !orgAllowed) return;
+    if (!orgId) return;
     setLoading(true);
     try {
       const result = await queryDashboard(`teams:list:${orgId}`, () => adminApi.listTeams(orgId), { ttlMs: 30_000 });
@@ -59,12 +48,12 @@ function TeamsInner() {
       setError(caught instanceof Error ? caught.message : "Could not load teams.");
       setTeams([]);
     } finally { setLoading(false); }
-  }, [orgAllowed, orgId]);
+  }, [orgId]);
 
   useEffect(() => { void load(); }, [load]);
 
   const loadDetail = useCallback(async (id: string) => {
-    if (!orgId || !orgAllowed) return;
+    if (!orgId) return;
     setDetailLoading(true);
     try {
       const result = await queryDashboard(`teams:detail:${orgId}:${id}`, () => adminApi.getTeam(id, orgId), { ttlMs: 30_000 });
@@ -77,13 +66,13 @@ function TeamsInner() {
       setMembers([]);
       setCurrentUserId("");
     } finally { setDetailLoading(false); }
-  }, [orgAllowed, orgId]);
+  }, [orgId]);
 
   useEffect(() => { if (selectedId) void loadDetail(selectedId); else setMembers([]); }, [selectedId, loadDetail]);
 
   const createTeam = useCallback(async () => {
     const name = newTeamName.trim();
-    if (!name || !orgId || !orgAllowed) return;
+    if (!name || !orgId) return;
     setBusy("create");
     try {
       const { team } = await adminApi.createTeam(name, newTeamKind, orgId);
@@ -94,11 +83,11 @@ function TeamsInner() {
       setError("");
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not create the team."); }
     finally { setBusy(""); }
-  }, [load, newTeamKind, newTeamName, orgAllowed, orgId]);
+  }, [load, newTeamKind, newTeamName, orgId]);
 
   const addMember = useCallback(async () => {
     const account = newMember.trim();
-    if (!account || !selectedId || !orgId || !orgAllowed) return;
+    if (!account || !selectedId || !orgId) return;
     setBusy("add-member");
     try {
       const result = await adminApi.addTeamMember(selectedId, account, newMemberRole, orgId);
@@ -109,10 +98,10 @@ function TeamsInner() {
       setError("");
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not add the member."); }
     finally { setBusy(""); }
-  }, [newMember, newMemberRole, orgAllowed, orgId, selectedId]);
+  }, [newMember, newMemberRole, orgId, selectedId]);
 
   const removeMember = useCallback(async (userId: string) => {
-    if (!selectedId || !orgId || !orgAllowed || !window.confirm(`Remove ${userId} from this team?`)) return;
+    if (!selectedId || !orgId || !window.confirm(`Remove ${userId} from this team?`)) return;
     setBusy(`remove:${userId}`);
     try {
       await adminApi.removeTeamMember(selectedId, userId, orgId);
@@ -125,10 +114,10 @@ function TeamsInner() {
       setError("");
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not remove the member."); }
     finally { setBusy(""); }
-  }, [currentUserId, load, orgAllowed, orgId, selectedId]);
+  }, [currentUserId, load, orgId, selectedId]);
 
   const deleteTeam = useCallback(async (id: string) => {
-    if (!orgId || !orgAllowed || !window.confirm("Delete this team? Team-only meeting access will be revoked immediately.")) return;
+    if (!orgId || !window.confirm("Delete this team? Team-only meeting access will be revoked immediately.")) return;
     setBusy("delete");
     try {
       await adminApi.deleteTeam(id, orgId);
@@ -137,11 +126,10 @@ function TeamsInner() {
       setError("");
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not delete the team."); }
     finally { setBusy(""); }
-  }, [load, orgAllowed, orgId]);
+  }, [load, orgId]);
 
   const selected = teams.find((team) => team.id === selectedId) ?? null;
-  const selectedOrg = orgs.find((org) => org.orgId === orgId);
-  const personalWorkspace = selectedOrg?.isPersonal === true;
+  const personalWorkspace = activeOrg?.isPersonal === true;
   const ownerCount = members.filter((member) => member.role === "owner").length;
   useEffect(() => { if (personalWorkspace) setNewTeamKind("personal"); }, [personalWorkspace]);
   const personalTeams = useMemo(() => teams.filter((team) => team.kind === "personal"), [teams]);
@@ -156,9 +144,7 @@ function TeamsInner() {
   );
 
   return <>
-    <PageHeader title="Teams" description="Organization groups and personal collaboration circles, with explicit meeting and memory access.">
-      <label className={styles.orgPicker}>Organization context<select value={orgId} onChange={(event) => setOrgId(event.target.value)}>{orgs.map((org) => <option key={org.orgId} value={org.orgId}>{org.name}</option>)}</select></label>
-    </PageHeader>
+    <PageHeader title="Teams" description="Organization groups and personal collaboration circles, with explicit meeting and memory access." />
     <div className={styles.page}>
       {error ? <div className={styles.errorBar} role="alert"><span>{error}</span><button type="button" onClick={() => setError("")} aria-label="Dismiss error">×</button></div> : null}
       <div className={styles.wrap}>

@@ -6,7 +6,6 @@
  * handlers and the renderSessionNode closure, passed through as props.
  */
 import React, { useMemo, useState, type Dispatch, type SetStateAction } from 'react';
-import { ROUTED_B_ACCENT, ROUTED_B_PATHS, ROUTED_B_VIEWBOX } from '../../../../packages/brand/routedB.js';
 import { Icon } from '../../icons.js';
 import { SessionStatus } from '../status/SessionStatus.js';
 import { fmtAge } from '../../lib/format.js';
@@ -73,9 +72,6 @@ export interface SidebarProps {
   toggleProject: (root: string) => void;
   reorderProject: (dragged: string, target: string) => void;
   addProject: () => void;
-  /** Workspace mode — Chat · Track · Code (the left-sidebar switcher). */
-  mode: 'chat' | 'track' | 'code' | 'meetings';
-  setMode: Dispatch<SetStateAction<'chat' | 'track' | 'code' | 'meetings'>>;
   openAccountSettings: () => void;
 }
 
@@ -143,34 +139,11 @@ export function Sidebar(p: SidebarProps): React.ReactElement | null {
           window.addEventListener('pointermove', move);
           window.addEventListener('pointerup', up);
         }} />
-      <div className="rail-top">
-        <button className="icon-btn" title="Collapse sidebar" aria-label="Collapse sidebar" onClick={() => setRailOpen(false)}>
-          <Icon name="layout" size={15} />
-        </button>
-        <svg
-          className="rail-brand-mark"
-          data-brand-mark="routed-b"
-          width="20"
-          height="20"
-          viewBox={ROUTED_B_VIEWBOX}
-          role="img"
-          aria-label="BrainRouter"
-          focusable="false"
-        >
-          <path d={ROUTED_B_PATHS.upper} fill="currentColor" />
-          <path d={ROUTED_B_PATHS.lower} fill={ROUTED_B_ACCENT} />
-        </svg>
-      </div>
+      {/* Collapse lives on the activity bar now; this strip only keeps the
+          drag region + macOS traffic-light clearance. */}
+      <div className="rail-top" aria-hidden />
       <div className="rail-card">
-        {/* Workspace mode switcher — Chat · Track · Code over the same workspace. */}
-        <div className="mode-switch" role="tablist" aria-label="Workspace mode">
-          {([['chat', 'bubble', 'Chat'], ['code', 'code', 'Code'], ['track', 'tasks', 'Track'], ['meetings', 'mic', 'Meetings']] as const).map(([m, icon, label]) => (
-            <button key={m} role="tab" data-mode={m} aria-selected={p.mode === m} className={`mode-seg${p.mode === m ? ' active' : ''}`}
-              onClick={() => p.setMode(m)} title={`${label} mode`}>
-              <Icon name={icon} size={13} /><span>{label}</span>
-            </button>
-          ))}
-        </div>
+        {/* Workspace-mode switching lives on the activity bar (icon rail) now. */}
         <div className="rail-actions">
           <button className="rail-action primary" onClick={() => window.brainrouter.send({ kind: 'new-session' })}><Icon name="plus" size={13} />New conversation</button>
         </div>

@@ -42,6 +42,8 @@ interface Routes {
   reviewOk?: boolean; // grouped-review POST result (default true)
   checksOk?: boolean; // check-run POST result (default true; false simulates missing `checks: write`)
   bodies?: Record<string, string>; // captured request bodies by "METHOD path"
+  pr?: { head?: { sha?: string }; user?: { login?: string; avatar_url?: string } };
+  commits?: Array<{ sha?: string; author?: { login?: string; avatar_url?: string }; commit?: { author?: { name?: string } } }>;
 }
 
 const CODE_INLINE =
@@ -60,10 +62,13 @@ function mockFetch(routes: Routes) {
       const page = Number(new URL(url).searchParams.get("page") ?? "1");
       return { ok: true, status: 200, json: async () => (page === 1 ? (routes.files ?? []) : []) };
     }
+    if (/\/pulls\/\d+\/commits/.test(url) && method === "GET") {
+      return { ok: true, status: 200, json: async () => routes.commits ?? [] };
+    }
     if (/\/pulls\/\d+$/.test(url)) {
       const accept = init?.headers?.Accept ?? init?.headers?.accept;
       if (routes.diffTooLarge && accept === "application/vnd.github.diff") return { ok: false, status: 406, text: async () => "", json: async () => ({}) };
-      return { ok: true, status: 200, text: async () => routes.diff ?? "diff --git a/x b/x\n+const q = `SELECT * FROM u WHERE id=${id}`;\n", json: async () => ({ head: { sha: "resolvedsha" } }) };
+      return { ok: true, status: 200, text: async () => routes.diff ?? "diff --git a/x b/x\n+const q = `SELECT * FROM u WHERE id=${id}`;\n", json: async () => routes.pr ?? ({ head: { sha: "resolvedsha" } }) };
     }
     if (/\/pulls\/\d+\/comments/.test(url) && method === "GET") return { ok: true, status: 200, json: async () => routes.inlineComments ?? [] };
     if (/\/pulls\/\d+\/comments$/.test(url) && method === "POST") return { ok: true, status: 201, json: async () => ({ id: 321 }) };
@@ -232,6 +237,46 @@ describe("PR security review executor (ADR-017 D5)", () => {
     expect(events.at(-1)).toBe("done");
     expect(r.findingsDetail?.[0]).toMatchObject({ file: "x.ts", severity: "high" });
     expect(r.findingsDetail?.[0]).not.toHaveProperty("details");
+    expect(r.coverage).toEqual({ complete: true, totalParts: 1, reviewedParts: 1, failedParts: 0, unreviewedParts: 0, unrecordedFindings: 0 });
+  });
+
+  it("returns forge-derived PR author, head contributor, and bounded commit counts", async () => {
+    const routes: Routes = {
+      calls: [], diff: DIFF_ADDED,
+      pr: { head: { sha: "head-sha" }, user: { login: "alice", avatar_url: "https://avatars.test/alice" } },
+      commits: [
+        { sha: "old-sha", author: { login: "alice", avatar_url: "https://avatars.test/alice" }, commit: { author: { name: "Alice A" } } },
+        { sha: "head-sha", author: { login: "bob", avatar_url: "https://avatars.test/bob" }, commit: { author: { name: "Bob B" } } },
+        { sha: "head-sha", author: { login: "bob", avatar_url: "https://avatars.test/bob" }, commit: { author: { name: "Bob B" } } },
+      ],
+    };
+    const r = await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "head-sha" },
+      makeDeps(routes),
+    );
+    expect(r).toMatchObject({
+      headSha: "head-sha",
+      prAuthor: "alice",
+      headContributor: "bob",
+      contributorsAvailable: true,
+      contributors: [
+        { login: "alice", displayName: "Alice A", avatarUrl: "https://avatars.test/alice", commitCount: 1, isAuthor: true },
+        { login: "bob", displayName: "Bob B", avatarUrl: "https://avatars.test/bob", commitCount: 2, isAuthor: false },
+      ],
+    });
+    expect(routes.calls).toContain("GET /repos/o/r/pulls/7/commits?per_page=100");
+  });
+
+  it("treats an empty diff as complete evidence that prior findings are absent", async () => {
+    const r = await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "sha" },
+      makeDeps({ calls: [], diff: "" }),
+    );
+    expect(r).toMatchObject({
+      ok: true, findings: 0, posted: false, headSha: "sha",
+      coverage: { complete: true, totalParts: 0, reviewedParts: 0, failedParts: 0, unreviewedParts: 0, unrecordedFindings: 0 },
+    });
+    expect(r).not.toHaveProperty("skipped");
   });
 
   it("updates its existing comment in place (idempotent by marker)", async () => {
@@ -445,5 +490,24 @@ describe("PR security review executor (ADR-017 D5)", () => {
     expect(runs).toBe(2);        // the diff was reviewed in two turns, not truncated
     expect(r.findings).toBe(2);  // findings from BOTH parts merged
     expect(r).toMatchObject({ ok: true });
+  });
+
+  it("marks lifecycle coverage incomplete when a later review part fails", async () => {
+    const fileA = ["diff --git a/a.ts b/a.ts", "--- a/a.ts", "+++ b/a.ts", "@@ -0,0 +1 @@", "+const a = " + "x".repeat(70) + ";"].join("\n");
+    const fileB = ["diff --git a/b.ts b/b.ts", "--- a/b.ts", "+++ b/b.ts", "@@ -0,0 +1 @@", "+const b = " + "y".repeat(70) + ";"].join("\n");
+    let runs = 0;
+    const r = await runPrSecurityReview(
+      { installationId: "42", repo: "o/r", prNumber: 7, headSha: "sha" },
+      makeDeps({ calls: [], diff: `${fileA}\n${fileB}` }, {
+        maxDiffChars: 150,
+        llmRunner: { run: async () => {
+          runs += 1;
+          if (runs === 2) throw new Error("part unavailable");
+          return REVIEW_OUT;
+        } },
+      }),
+    );
+    expect(r.ok).toBe(true);
+    expect(r.coverage).toEqual({ complete: false, totalParts: 2, reviewedParts: 1, failedParts: 1, unreviewedParts: 0, unrecordedFindings: 0 });
   });
 });

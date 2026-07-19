@@ -82,3 +82,30 @@ test('runReport writes a markdown report and HTML-escapes an injected title (CWE
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('screenshots and reports reject symlinked artifact directories', { skip: process.platform === 'win32' }, (t) => {
+  for (const leaf of ['screenshots', 'reports']) {
+    const root = tmpDir();
+    const outside = tmpDir();
+    try {
+      const parent = path.join(root, '.brainrouter', 'ui-tests');
+      fs.mkdirSync(parent, { recursive: true });
+      try { fs.symlinkSync(outside, path.join(parent, leaf), 'dir'); }
+      catch {
+        t.skip('no symlink privilege on this host');
+        return;
+      }
+      const host = createBrowserHost(root, fakeRegistry());
+      const png = `data:image/png;base64,${Buffer.from('png-bytes').toString('base64')}`;
+      const out = leaf === 'screenshots'
+        ? host.saveScreenshot({ dataUrl: png, name: 'escape' })
+        : host.runReport({ story: { id: 'escape', title: 'Escape' }, results: [], screenshots: [] });
+      assert.ok(out.error, `${leaf} write is refused`);
+      assert.deepEqual(fs.readdirSync(outside), [], `${leaf} never receives an escaped artifact`);
+      host.dispose();
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  }
+});

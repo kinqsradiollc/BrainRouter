@@ -118,6 +118,8 @@ export interface MeetingsOps {
   updateSummary(id: string, summaryMarkdown: string, orgId?: string): Promise<MeetingDetail>;
   transcribeAudio(input: { bytes: Uint8Array; contentType?: string; language?: string }): Promise<{ text: string }>;
   regenerateSummary(id: string, orgId?: string): Promise<MeetingDetail>;
+  /** Owner-only hard delete — also removes the recallable summary server-side. */
+  deleteMeeting(id: string, orgId?: string): Promise<void>;
   setScope(id: string, scope: MeetingScope, opts?: { teamId?: string }, orgId?: string): Promise<MeetingShare>;
   sendActionToTrack(meetingId: string, actionId: string, orgId?: string): Promise<{ trackItemId: string }>;
   unsendActionFromTrack(meetingId: string, actionId: string, orgId?: string): Promise<void>;

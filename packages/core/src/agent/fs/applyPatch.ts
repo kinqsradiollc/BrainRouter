@@ -197,7 +197,10 @@ export function applyPatchEnvelope(patch: string, workspaceRoot?: string, owners
       if (count > 1) {
         throw new Error(`apply_patch: context for Update File "${op.file}" matched ${count} times. Add more surrounding lines for uniqueness.`);
       }
-      const updated = content.replace(op.oldBlock, op.newBlock);
+      // Replacer FUNCTION so newBlock is inserted verbatim — a string second arg
+      // would interpret `$&`/`$1`/`$$`/`` $` ``/`$'` as special patterns and
+      // silently corrupt any patch whose replacement text contains a `$`.
+      const updated = content.replace(op.oldBlock, () => op.newBlock);
       if (op.moveTo) {
         const movedResolved = resolveWorkspacePath(wsRoot, op.moveTo, { forWrite: true });
         if (movedResolved !== resolved && readModel(movedResolved) !== null) {

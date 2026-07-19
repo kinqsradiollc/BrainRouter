@@ -5,6 +5,7 @@
 .mv-tab{padding:8px 13px 10px;border:0;border-bottom:2px solid transparent;color:var(--text-faint);font-size:12.5px;font-weight:600;cursor:pointer;margin-bottom:-1px}
 .mv-tab:hover{color:var(--text);background:var(--ov-04);border-radius:7px 7px 0 0}.mv-tab.mv-on{color:var(--text);border-bottom-color:var(--accent)}
 .mv-orgctx{display:flex;align-items:center;gap:7px;margin:0 0 6px auto;color:var(--text-faint);font-size:9.5px;font-weight:650}.mv-orgctx select{height:29px;min-width:170px;max-width:280px}
+.mv-orgctx-label{display:inline-flex;align-items:center;margin:0 0 6px auto;padding:4px 10px;border:1px solid var(--border);border-radius:20px;color:var(--text-faint);font-size:10px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px}
 .mv-root{display:grid;grid-template-columns:minmax(230px,270px) minmax(0,1fr);flex:1;min-height:0;background:var(--bg)}
 .mv-eyebrow{display:block;margin-bottom:4px;color:var(--text-faint);font-size:10px;font-weight:700;letter-spacing:.09em;text-transform:uppercase}
 .mv-state{padding:30px 18px;color:var(--text-faint);font-size:12px;line-height:1.55;text-align:center}.mv-state-center{margin:auto;max-width:390px}.mv-state-compact{padding:15px 4px}

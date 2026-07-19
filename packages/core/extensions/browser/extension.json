@@ -1,7 +1,7 @@
 {
   "name": "browser",
-  "version": "0.4.16",
-  "description": "Web browser automation — drive the workspace app in a headed browser by data-testid, sharing one browser + manifest with the Desktop Browser panel.",
+  "version": "0.4.17",
+  "description": "Control BrainRouter's embedded multi-tab browser through a live per-Agent Desktop port; no external browser fallback.",
   "main": "index.js",
   "contributes": ["tools"]
 }

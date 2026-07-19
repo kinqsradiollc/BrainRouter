@@ -69,7 +69,11 @@ describe("ADR-010 P6b — GitHub webhook core", () => {
 
   it("pull_request opened → enqueues security only when code review defaults to manual", async () => {
     const d = deps();
-    const payload = { installation: { id: 42 }, action: "opened", repository: { full_name: "acme/app" }, pull_request: { number: 12, head: { sha: "abc123" } } };
+    const payload = {
+      installation: { id: 42 }, action: "opened", repository: { full_name: "acme/app" },
+      pull_request: { number: 12, head: { sha: "abc123" }, user: { login: "pr-author" } },
+      sender: { login: "event-actor" },
+    };
     const raw = Buffer.from(JSON.stringify(payload));
     const out = await processGithubDelivery(d, { body: payload, rawBody: raw, signature: sign(raw), event: "pull_request", delivery: "d-2" });
     expect(out.status).toBe(202);
@@ -81,6 +85,8 @@ describe("ADR-010 P6b — GitHub webhook core", () => {
     expect(review.input.prNumber).toBe(12);
     expect(review.input.headSha).toBe("abc123");
     expect(review.input.installationId).toBe("42");
+    expect(review.input.prAuthor).toBe("pr-author");
+    expect(review.input.triggeredByLogin).toBe("event-actor");
   });
 
   it("isRepoLinkedForReview: absent field → all; present allowlist → membership", () => {
@@ -148,6 +154,7 @@ describe("ADR-010 P6b — GitHub webhook core", () => {
     const rerun = (d.enqueue as any).mock.calls.find((c: any[]) => c[0].kind === "pr-code-review")[0];
     expect(rerun.input.prNumber).toBe(12);
     expect(rerun.input.headSha).toBe(""); // resolved later by the executor
+    expect(rerun.input.triggeredByLogin).toBe("maintainer");
   });
 
   it("ignores bot commenters and denies users without configured permission/allowlist", async () => {

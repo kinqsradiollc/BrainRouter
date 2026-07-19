@@ -308,6 +308,7 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public async init(): Promise<void> {
     const migrations = loadMigrations(MIGRATIONS_DIR);
     await applyMigrations(this.pool, migrations);
+    await job.backfillReviewLifecycle(this.exec);
   }
 
   public async initVec(dimensions: number, opts?: { allowRebuild?: boolean }): Promise<void> {
@@ -498,6 +499,7 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   public setMeetingSummaryStatus(id: string, userId: string, status: meetings.MeetingRow["summaryStatus"], error?: string | null): Promise<boolean> { return meetings.setMeetingSummaryStatus(this.exec, id, userId, status, error); }
   public setMeetingSummaryRecords(id: string, userId: string, summaryRecordId: string | null, transcriptSourceId: string | null): Promise<boolean> { return meetings.setMeetingSummaryRecords(this.exec, id, userId, summaryRecordId, transcriptSourceId); }
   public getMeetingByShareToken(token: string): Promise<meetings.MeetingRow | null> { return meetings.getMeetingByShareToken(this.exec, token); }
+  public deleteMeeting(id: string, orgId: string, userId: string): Promise<meetings.DeletedMeetingRefs | null> { return meetings.deleteMeeting(this.exec, id, orgId, userId); }
 
   // ── Track (migration 034) — org-scoped, collaborative work items ──
   public createTrackItem(input: track.CreateTrackItemInput): Promise<track.TrackItemRow> { return track.createTrackItem(this.exec, input); }
@@ -1067,6 +1069,9 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
   }
   public listReviewAnalyticsForOrg(orgId: string, since: string, limit?: number): Promise<MemoryJobRecord[]> {
     return job.listReviewAnalyticsForOrg(this.exec, orgId, since, limit);
+  }
+  public getReviewLifecycleSummaryForOrg(orgId: string, since: string): Promise<job.ReviewLifecycleSummary> {
+    return job.getReviewLifecycleSummaryForOrg(this.exec, orgId, since);
   }
   public listReviewJobsForPr(orgId: string, repo: string, prNumber: number, limit?: number): Promise<MemoryJobRecord[]> {
     return job.listReviewJobsForPr(this.exec, orgId, repo, prNumber, limit);

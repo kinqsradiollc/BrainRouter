@@ -80,6 +80,33 @@ contextBridge.exposeInMainWorld('brainrouter', {
   setZoomFactor(factor: number): void {
     webFrame.setZoomFactor(factor);
   },
+  /**
+   * First-class in-app browser. The renderer controls browser chrome and reports
+   * the rectangle reserved for the native WebContentsView; page lifecycle and
+   * automation remain in Electron main. Keeping this as four bounded IPC calls
+   * means remote pages never receive a preload or a reference to ipcRenderer.
+   */
+  browser: {
+    getState(): Promise<unknown> {
+      return ipcRenderer.invoke('browser:get-state');
+    },
+    command(command: unknown): Promise<unknown> {
+      return ipcRenderer.invoke('browser:command', command);
+    },
+    setSurface(surface: unknown, openGeneration?: number): void {
+      ipcRenderer.send('browser:set-surface', openGeneration === undefined ? surface : { surface, openGeneration });
+    },
+    onEvent(listener: (event: unknown) => void): () => void {
+      const wrapped = (_e: unknown, event: unknown) => listener(event);
+      ipcRenderer.on('browser:event', wrapped);
+      return () => ipcRenderer.removeListener('browser:event', wrapped);
+    },
+    onOpenRequest(listener: (request: unknown) => void): () => void {
+      const wrapped = (_e: unknown, request: unknown) => listener(request);
+      ipcRenderer.on('browser:open-request', wrapped);
+      return () => ipcRenderer.removeListener('browser:open-request', wrapped);
+    },
+  },
   computerUse: {
     checkPermissions(): Promise<unknown> {
       return ipcRenderer.invoke('computerUse:checkPermissions');
@@ -105,6 +132,7 @@ contextBridge.exposeInMainWorld('brainrouter', {
     updateSummary(id: string, summaryMarkdown: string, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:updateSummary', id, summaryMarkdown, orgId); },
     transcribe(input: { bytes: Uint8Array; contentType?: string; language?: string }): Promise<unknown> { return ipcRenderer.invoke('meetings:transcribe', input); },
     regenerate(id: string, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:regenerate', id, orgId); },
+    remove(id: string, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:delete', id, orgId); },
     setScope(id: string, scope: string, opts?: { teamId?: string }, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:setScope', id, scope, opts, orgId); },
     actionToTrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:actionToTrack', meetingId, actionId, orgId); },
     actionUntrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown> { return ipcRenderer.invoke('meetings:actionUntrack', meetingId, actionId, orgId); },

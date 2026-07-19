@@ -7,7 +7,6 @@ import { createPortal } from "react-dom";
 import { adminApi } from "../lib/adminApi";
 import { useAuth } from "./AuthProvider";
 import { useActiveOrg } from "./OrgWorkspaceProvider";
-import { BrainRouterLogo } from "./BrainRouterLogo";
 import { isNavItemActive, isRouteActive, PRODUCT_NAV_GROUPS, SETTINGS_NAV_GROUPS } from "./dashboardNavigation";
 
 const settingsIconProps = {
@@ -29,7 +28,7 @@ function Initials({ value }: { value: string }) {
  * whole dashboard via OrgWorkspaceProvider; a "Create workspace" row spins up a
  * new org and switches to it. The menu is portaled to escape the sidebar's
  * `overflow: hidden` and anchored under the trigger. */
-function WorkspaceSwitcher({ onNavigate }: { onNavigate?: () => void }) {
+function WorkspaceSwitcher() {
   const { orgs, activeOrg, activeOrgId, loading, setActiveOrg, refreshOrgs } = useActiveOrg();
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -187,10 +186,6 @@ function WorkspaceSwitcher({ onNavigate }: { onNavigate?: () => void }) {
         </div>,
         document.body,
       )}
-
-      <Link href="/overview" onClick={onNavigate} className="sidebar-orgswitch-home" aria-label="Dashboard home">
-        <BrainRouterLogo className="sidebar-org-mark" size={16} showWordmark={false} />
-      </Link>
     </>
   );
 }
@@ -217,7 +212,7 @@ export function Sidebar({ isMobile = false, mobileOpen = false, onNavigate }: Si
   return (
     <aside className={`sidebar${isMobile ? " sidebar--mobile" : ""}${mobileOpen ? " sidebar--open" : ""}`} aria-hidden={isMobile && !mobileOpen}>
       <div className="sidebar-org-row">
-        <WorkspaceSwitcher onNavigate={onNavigate} />
+        <WorkspaceSwitcher />
         {isMobile && <button type="button" onClick={onNavigate} className="sidebar-icon-button" aria-label="Close menu">×</button>}
       </div>
 

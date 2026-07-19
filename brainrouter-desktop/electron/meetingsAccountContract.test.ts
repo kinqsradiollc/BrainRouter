@@ -10,6 +10,8 @@ test('meeting request contract preserves pagination and exact account routes', (
   assert.equal(meetingRequests.transcript('meeting-1', { limit: 100, cursor: '200' }).path, '/api/meetings/meeting-1/transcript?limit=100&cursor=200');
   assert.equal(meetingRequests.updateSummary('meeting-1', '# Notes').method, 'PATCH');
   assert.equal(meetingRequests.regenerate('meeting-1').method, 'POST');
+  assert.deepEqual(meetingRequests.remove('meeting-1', 'org-1'), { path: '/api/meetings/meeting-1', method: 'DELETE', orgId: 'org-1' });
+  assert.throws(() => meetingRequests.remove('../evil'), /meeting id/i);
 });
 
 test('meeting create and scope require real content and a team id for team sharing', () => {

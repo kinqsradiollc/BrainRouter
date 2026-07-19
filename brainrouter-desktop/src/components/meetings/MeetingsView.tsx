@@ -3,7 +3,8 @@ import "./meetings.css";
 import { MeetingTracksView } from "./MeetingTracksView.js";
 import { SharePopover } from "./SharePopover.js";
 import { TeamsView } from "./TeamsView.js";
-import { createTeamsOps, type TeamContext } from "./teamsOps.js";
+import { createTeamsOps } from "./teamsOps.js";
+import { useActiveOrg } from "../../lib/orgContext.js";
 import {
   MEETING_SCOPES,
   SCOPE_LABEL,
@@ -38,11 +39,11 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
   const teamsOps = useMemo(() => createTeamsOps(), []);
   const [mode, setMode] = useState<"meetings" | "tracked" | "teams">("meetings");
   const [teamRevision, setTeamRevision] = useState(0);
-  // Organization context the whole meetings surface operates in. Meetings, their
-  // Track board, and team sharing are all org-scoped, so the caller picks the org
-  // once here (their personal workspace by default) and everything below follows.
-  const [contexts, setContexts] = useState<TeamContext[]>([]);
-  const [activeOrgId, setActiveOrgId] = useState("");
+  // ADR-019 Phase 2 — the org context comes from the app-wide workspace switcher
+  // (activity bar), not a per-view picker. Meetings, their Track board, and team
+  // sharing are all org-scoped and follow it. scopedOrgId is already guarded to
+  // orgs the account was actually shown.
+  const { activeOrgId, activeContext, scopedOrgId } = useActiveOrg();
   const [items, setItems] = useState<MeetingListItem[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -63,24 +64,6 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
   const [draftSummary, setDraftSummary] = useState("");
   const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
-    let active = true;
-    void teamsOps.contexts().then((rows) => {
-      if (!active) return;
-      setContexts(rows);
-      setActiveOrgId(rows.find((item) => item.isDefault)?.orgId ?? rows[0]?.orgId ?? "");
-    }).catch(() => {});
-    return () => { active = false; };
-  }, [teamsOps]);
-
-  // Defense in depth: only ever send an org the caller was actually shown. A
-  // tampered activeOrgId that isn't in the loaded contexts falls back to the
-  // server default (personal workspace) instead of reaching the org-scoped API.
-  const scopedOrgId = useMemo(
-    () => (!activeOrgId || contexts.some((item) => item.orgId === activeOrgId) ? activeOrgId || undefined : undefined),
-    [activeOrgId, contexts],
-  );
-
   const refreshList = useCallback(async () => {
     setLoading(true);
     setError("");
@@ -99,17 +82,21 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
 
   useEffect(() => { void refreshList(); }, [refreshList]);
 
-  // Switching org context reloads the (org-scoped) library, drops the open
-  // meeting/compose, and bumps the team revision so the share picker refetches
-  // the new org's teams.
-  const changeOrg = useCallback((next: string) => {
-    setActiveOrgId(next);
+  // Switching workspace (via the activity-bar switcher) re-scopes everything:
+  // drop the open meeting/compose and bump the team revision so the share picker
+  // refetches the new org's teams. Skips the initial "" → org-id resolution
+  // (prev === null) so first paint doesn't flash a reset.
+  const prevOrgRef = useRef<string | null>(null);
+  useEffect(() => {
+    const prev = prevOrgRef.current;
+    prevOrgRef.current = activeOrgId;
+    if (prev === null || prev === activeOrgId) return;
     setComposing(false);
     setSelectedId(null);
     setDetail(null);
     setTranscript([]);
     setTeamRevision((value) => value + 1);
-  }, []);
+  }, [activeOrgId]);
 
   const loadMoreMeetings = useCallback(async () => {
     if (!nextCursor || busy) return;
@@ -231,18 +218,32 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
     finally { setBusy(""); }
   }, [scopedOrgId, busy, detail, draftSummary, ops]);
 
+  // Owner-only hard delete — the server also removes the transcript source and
+  // the recallable summary record, so the meeting doesn't linger in recall.
+  const deleteMeeting = useCallback(async () => {
+    if (!detail?.canEdit || busy) return;
+    if (!globalThis.confirm?.(`Delete "${detail.title}"? Its transcript, notes and recallable summary are removed permanently.`)) return;
+    setBusy("delete");
+    setError("");
+    try {
+      await ops.deleteMeeting(detail.id, scopedOrgId);
+      setSelectedId(null);
+      setDetail(null);
+      await refreshList();
+    } catch (caught) { setError(errorText(caught, "Could not delete this meeting.")); }
+    finally { setBusy(""); }
+  }, [scopedOrgId, busy, detail, ops, refreshList]);
+
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return items.filter((item) => (scopeFilter === "all" || item.scope === scopeFilter) && (!needle || item.title.toLowerCase().includes(needle)));
   }, [items, query, scopeFilter]);
 
-  const activeContext = useMemo(() => contexts.find((item) => item.orgId === activeOrgId), [activeOrgId, contexts]);
-
   return (
     <div className="mv-shell">
       <div className="mv-tabs" role="tablist" aria-label="Meetings sections">
         {(["meetings", "tracked", "teams"] as const).map((tab) => <button type="button" key={tab} role="tab" aria-selected={mode === tab} className={`mv-tab${mode === tab ? " mv-on" : ""}`} onClick={() => setMode(tab)}>{tab === "tracked" ? "Track" : tab[0].toUpperCase() + tab.slice(1)}</button>)}
-        {mode !== "teams" && contexts.length ? <label className="mv-orgctx">Organization context<select value={activeOrgId} onChange={(event) => changeOrg(event.target.value)} aria-label="Organization context">{contexts.map((item) => <option key={item.orgId} value={item.orgId}>{item.isPersonal ? `${item.name} · Personal workspace` : item.name}</option>)}</select></label> : null}
+        {mode !== "teams" && activeContext ? <span className="mv-orgctx-label" title="Workspace — switch from the activity bar">{activeContext.isPersonal ? `${activeContext.name} · Personal workspace` : activeContext.name}</span> : null}
       </div>
       {mode === "tracked" ? <MeetingTracksView ops={ops} orgId={scopedOrgId} /> : mode === "teams" ? <TeamsView ops={teamsOps} onChanged={() => setTeamRevision((value) => value + 1)} /> : (
         <div className="mv-root">
@@ -263,7 +264,7 @@ export function MeetingsView({ ops }: { ops: MeetingsOps }): ReactElement {
               <button type="button" className="mv-mobile-back" onClick={() => setSelectedId(null)}>← Meetings</button>
               {error ? <div className="mv-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError("")} aria-label="Dismiss error">×</button></div> : null}
               <header className="mv-dhead">
-                <div className="mv-dhead-row"><div className="mv-title-block"><div className="mv-title-status"><span className={`mv-summary-dot mv-summary-${detail.summaryStatus}`} />{STATUS_LABEL[detail.summaryStatus]}</div><h3>{detail.title}</h3><div className="mv-att"><span className="mv-av">{detail.attendees.slice(0, 4).map((attendee) => <span key={attendee}>{initials(attendee)}</span>)}</span>{detail.attendees.length ? detail.attendees.join(", ") : "No attendees recorded"}</div></div><div className="mv-hactions">{detail.canEdit ? <SharePopover share={detail.share} busy={busy === "share"} teamsOps={teamsOps} teamRevision={teamRevision} context={activeContext} onError={setError} onSetScope={(scope, options) => void setScope(scope, options)} /> : <span className="mv-shared-readonly">Shared with you · read only</span>}{detail.model ? <span className="mv-modelchip">{detail.model.label}{detail.model.effort ? <> · <b>{detail.model.effort}</b></> : null}</span> : null}</div></div>
+                <div className="mv-dhead-row"><div className="mv-title-block"><div className="mv-title-status"><span className={`mv-summary-dot mv-summary-${detail.summaryStatus}`} />{STATUS_LABEL[detail.summaryStatus]}</div><h3>{detail.title}</h3><div className="mv-att"><span className="mv-av">{detail.attendees.slice(0, 4).map((attendee) => <span key={attendee}>{initials(attendee)}</span>)}</span>{detail.attendees.length ? detail.attendees.join(", ") : "No attendees recorded"}</div></div><div className="mv-hactions">{detail.canEdit ? <SharePopover share={detail.share} busy={busy === "share"} teamsOps={teamsOps} teamRevision={teamRevision} context={activeContext} onError={setError} onSetScope={(scope, options) => void setScope(scope, options)} /> : <span className="mv-shared-readonly">Shared with you · read only</span>}{detail.model ? <span className="mv-modelchip">{detail.model.label}{detail.model.effort ? <> · <b>{detail.model.effort}</b></> : null}</span> : null}{detail.canEdit ? <button type="button" className="mv-danger-btn" disabled={busy === "delete"} onClick={() => void deleteMeeting()}>{busy === "delete" ? "Deleting…" : "Delete"}</button> : null}</div></div>
                 <div className="mv-metastrip"><span className="mv-chip">{detail.status || "Captured"}</span><span className="mv-chip">{detail.date}</span>{detail.durationMin ? <span className="mv-chip">{detail.durationMin} min</span> : null}{detail.wordCount ? <span className="mv-chip">{detail.wordCount.toLocaleString()} words</span> : null}</div>
               </header>
               <div className="mv-dbody">

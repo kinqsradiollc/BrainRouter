@@ -30,9 +30,10 @@ export interface LocalToolEntry {
   /** Safe to dispatch concurrently within one assistant message. */
   parallelSafe: boolean;
   /** Optional turn-scoped visibility predicate owned by the extension. */
-  availability?: 'result-cache' | 'active-workflow' | 'root-agent' | 'computer-use' | 'multi-profile' | 'mcp-discovery';
+  availability?: 'result-cache' | 'active-workflow' | 'root-agent' | 'computer-use' | 'browser-use' | 'multi-profile' | 'mcp-discovery';
   advertised?: boolean;
-  runtimePort?: 'orchestration';
+  runtimePort?: 'orchestration' | 'browser-control';
+  audited?: boolean;
   workflowLaunch?: boolean;
   afterInvoke?: 'track-automation' | 'goal-reconcile' | 'plan-update';
   childAccessPolicy?: 'single' | 'batch';
@@ -133,8 +134,10 @@ export const REQUIRED_CORE_TOOL_CATALOG: LocalToolEntry[] = [
   { name: 'write_file', accessTier: 'write', actionKind: 'file_edit', parallelSafe: false },
   { name: 'edit_file', accessTier: 'write', actionKind: 'file_edit', parallelSafe: false },
   { name: 'apply_patch', accessTier: 'write', actionKind: 'file_edit', parallelSafe: false },
+  { name: 'notebook_edit', accessTier: 'write', actionKind: 'file_edit', parallelSafe: false },
   // --- shell tier: + command execution ------------------------------------
   { name: 'run_command', accessTier: 'shell', actionKind: 'shell', parallelSafe: false },
+  { name: 'kill_command', accessTier: 'shell', actionKind: 'shell', parallelSafe: false },
   { name: 'computer_use', accessTier: 'shell', actionKind: 'computer', parallelSafe: false, availability: 'computer-use' },
   // connector_run performs network ingestion + memory writes, so it's gated to
   // shell tier (exposure) like command execution; its ActionKind is `network`

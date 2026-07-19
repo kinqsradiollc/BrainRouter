@@ -30,6 +30,9 @@ export interface CrawlerOptions {
   userAgent: string;
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
+  /** Re-checked per redirect hop so a redirect can't leave the egress allowlist
+   *  (the handler only vets the initial URL). Return false to block a target. */
+  isEgressAllowed?: (url: string) => boolean;
 }
 
 export function normalizeResult(input: {

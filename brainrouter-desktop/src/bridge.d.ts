@@ -1,4 +1,11 @@
 import type { AgentCommand, AgentEventMessage } from '@kinqs/brainrouter-agent-protocol';
+import type {
+  BrowserCommand,
+  BrowserCommandResult,
+  BrowserEvent,
+  BrowserState,
+  BrowserSurface,
+} from '../electron/browser/protocol.js';
 
 declare global {
   interface Window {
@@ -41,6 +48,15 @@ declare global {
       globalDashboard?(): Promise<{ workspaces: Array<{ workspaceRoot: string; tasks: Array<Record<string, unknown>>; reviewGate: { status: string; blocked: boolean; reason: string } | null }> }>;
       getZoomFactor?(): number;
       setZoomFactor?(factor: number): void;
+      /** Main-owned first-class browser. Remote pages never receive this bridge. */
+      browser?: {
+        getState(): Promise<BrowserState>;
+        command<T = unknown>(command: BrowserCommand): Promise<BrowserCommandResult<T>>;
+        setSurface(surface: BrowserSurface, openGeneration?: number): void;
+        onEvent(listener: (event: BrowserEvent) => void): () => void;
+        /** Main asks the shell to expose the Browser panel before an agent action. */
+        onOpenRequest?(listener: (request: { reason: 'agent'; command: string; generation: number }) => void): () => void;
+      };
       computerUse?: {
         checkPermissions(): Promise<unknown>;
         openAccessibilitySettings(): Promise<unknown>;
@@ -57,6 +73,7 @@ declare global {
         updateSummary(id: string, summaryMarkdown: string, orgId?: string): Promise<unknown>;
         transcribe(input: { bytes: Uint8Array; contentType?: string; language?: string }): Promise<unknown>;
         regenerate(id: string, orgId?: string): Promise<unknown>;
+        remove(id: string, orgId?: string): Promise<unknown>;
         setScope(id: string, scope: string, opts?: { teamId?: string }, orgId?: string): Promise<unknown>;
         actionToTrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown>;
         actionUntrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown>;

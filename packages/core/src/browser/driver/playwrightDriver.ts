@@ -1,6 +1,6 @@
 /**
- * Layer 5a — the persistent HEADED Chromium driver, run as its own Node process
- * (spawned by `DriverClient`). It lazily `createRequire('playwright')` (an
+ * Explicit test-only Chromium driver, run as its own Node process when a test
+ * constructs `DriverClient`. It lazily `createRequire('playwright')` (an
  * optional peer — never a forced ~300 MB dep) so a workspace without Playwright
  * gets an actionable error instead of a crash. It launches ONE headed browser +
  * page, then serves commands over the stdio line-protocol: read `{reqId, cmd}`,

@@ -1,18 +1,21 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AuthGuard } from "../../components/AuthGuard";
 import { PremiumButton } from "../../components/PremiumButton";
-import { AreaChart, Donut, LineChart, MetricTile, SeverityBadge, StackedBar } from "../../components/Analytics";
+import { AreaChart, Donut, LineChart, MetricTile, OpenFixedChart, SeverityBadge, StackedBar } from "../../components/Analytics";
 import {
   adminApi, authFetch,
-  type PentestRun, type ReviewIssue, type ReviewSummary,
+  type ReviewIssue, type ReviewJob, type ReviewSummary,
 } from "../../lib/adminApi";
 import { queryDashboard } from "../../lib/dashboardQuery";
 import { InlineLoading } from "../../components/LoadingSpinner";
 import { useActiveOrg } from "../../components/OrgWorkspaceProvider";
 import { useAuth } from "../../components/AuthProvider";
+import { EarthGlobe } from "../../components/EarthGlobe";
+import { ProductOrbit } from "../../components/ProductOrbit";
+import { OVERVIEW_ACTIONS, PRODUCT_LOOP } from "../../lib/homeProductStory";
 import styles from "./overview.module.css";
 
 const EMPTY: ReviewSummary = {
@@ -22,7 +25,9 @@ const EMPTY: ReviewSummary = {
   verdicts: { approved: 0, commented: 0, changesRequested: 0 },
   history: [],
   repositories: [],
+  contributors: [],
 };
+const EMPTY_ACTIVITY: ReviewSummary = { ...EMPTY, periodDays: 365 };
 
 const PERIODS = [30, 7] as const;
 type Period = (typeof PERIODS)[number];
@@ -110,11 +115,6 @@ function sinceIso(days: number): string {
   return new Date(Date.now() - days * 86_400_000).toISOString();
 }
 
-/** yyyy-mm-dd key in local time for heatmap/day bucketing. */
-function dayKey(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
 function Overview() {
   const { activeOrgId } = useActiveOrg();
   const { user } = useAuth();
@@ -126,8 +126,9 @@ function Overview() {
 
   const [issues, setIssues] = useState<ReviewIssue[]>([]);
   const [issuesLoading, setIssuesLoading] = useState(true);
-  const [runs, setRuns] = useState<PentestRun[]>([]);
-  const [runsLoading, setRunsLoading] = useState(true);
+  const [activitySummary, setActivitySummary] = useState<ReviewSummary>(EMPTY_ACTIVITY);
+  const [activityJobs, setActivityJobs] = useState<ReviewJob[]>([]);
+  const [activityLoading, setActivityLoading] = useState(true);
 
   const [cveItems, setCveItems] = useState<CveFeedItem[]>([]);
   const [cveTotal, setCveTotal] = useState(0);
@@ -182,23 +183,33 @@ function Overview() {
   }, [activeOrgId]);
   useEffect(() => { void loadIssues(); }, [loadIssues]);
 
-  // Pentest runs power the testing-activity heatmap + recent-tests list.
-  const loadRuns = useCallback(async () => {
-    setRunsLoading(true);
+  // A separate 12-month rollup keeps the activity calendar stable while the
+  // period control above changes review charts between 7 and 30 days.
+  const loadActivity = useCallback(async () => {
+    setActivityLoading(true);
     try {
-      const result = await queryDashboard(
-        `overview:pentest-runs:${activeOrgId}`,
-        () => adminApi.listPentestRuns(activeOrgId || undefined, 200),
-        { ttlMs: 30_000 },
-      );
-      setRuns(result.runs);
+      const [activity, jobs] = await Promise.all([
+        queryDashboard(
+          `overview:activity-summary:365:${activeOrgId}`,
+          () => adminApi.reviewSummary(activeOrgId || undefined, 365),
+          { ttlMs: 60_000 },
+        ),
+        queryDashboard(
+          `overview:activity-jobs:${activeOrgId}`,
+          () => adminApi.listReviewJobs(activeOrgId || undefined, 100),
+          { ttlMs: 30_000 },
+        ),
+      ]);
+      setActivitySummary(activity);
+      setActivityJobs(jobs.reviews);
     } catch {
-      setRuns([]);
+      setActivitySummary(EMPTY_ACTIVITY);
+      setActivityJobs([]);
     } finally {
-      setRunsLoading(false);
+      setActivityLoading(false);
     }
   }, [activeOrgId]);
-  useEffect(() => { void loadRuns(); }, [loadRuns]);
+  useEffect(() => { void loadActivity(); }, [loadActivity]);
 
   // Threat-intel feed is GLOBAL (CVE data is not org-scoped); load the newest
   // catalog rows plus 7-day / 30-day detection counts (windowed by modifiedSince).
@@ -246,13 +257,10 @@ function Overview() {
     () => [...summary.repositories].sort((left, right) => right.prs - left.prs),
     [summary.repositories],
   );
-
-  // Repository aggregates give real "opened vs closed" numbers without fabricating.
-  const totals = useMemo(() => {
-    const found = summary.repositories.reduce((sum, repo) => sum + repo.findings, 0);
-    const addressed = summary.repositories.reduce((sum, repo) => sum + repo.addressed, 0);
-    return { found, addressed };
-  }, [summary.repositories]);
+  const contributors = useMemo(
+    () => [...(summary.contributors ?? [])].sort((left, right) => right.findingsFixed - left.findingsFixed || right.prs - left.prs || right.commits - left.commits),
+    [summary.contributors],
+  );
 
   // Per-repository addressed rate — the LineChart's series over the period.
   const addressedRate = useMemo(
@@ -280,10 +288,16 @@ function Overview() {
     [issues],
   );
 
-  const recentTests = useMemo(() => [...runs].slice(0, 6), [runs]);
+  const recentActivity = useMemo(
+    () => [...activityJobs]
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
+      .slice(0, 6),
+    [activityJobs],
+  );
 
-  // GitHub-style 52-week heatmap of pentest-run activity.
-  const heatmap = useMemo(() => buildHeatmap(runs), [runs]);
+  // GitHub-style 52-week heatmap across every verification execution. PR
+  // reviews and tests stay visible as distinct source totals and tooltips.
+  const heatmap = useMemo(() => buildHeatmap(activitySummary.history), [activitySummary.history]);
 
   const animate = mounted && !loading;
   const score = useCountUp(metrics.securityScore, animate);
@@ -299,22 +313,19 @@ function Overview() {
 
   return (
     <div className={`settings-page ${styles.page} ${styles.enter}`}>
-      <header className={styles.greeting}>
-        <div className={styles.greetingText}>
-          <h1>{greeting}, {firstNameOf(user?.displayName, user?.email)}!</h1>
+      <section className={styles.homeHero} aria-labelledby="overview-title">
+        <div className={styles.homeHeroCopy}>
+          <span className={styles.eyebrow}><i /> Agent operations command center</span>
+          <h1 id="overview-title">{greeting}, {firstNameOf(user?.displayName, user?.email)}.</h1>
+          <p>Route the next task through the workbench, connected systems, durable knowledge, teams, automation, and verification from one organization-scoped home.</p>
           <p className={styles.nutshell}>{nutshell}</p>
-        </div>
-        <div className={styles.headerActions}>
-          <div className={styles.period} role="group" aria-label="Reporting period">
-            {PERIODS.map((value) => (
-              <button key={value} type="button" aria-pressed={days === value} onClick={() => setDays(value)}>
-                Last {value} days
-              </button>
-            ))}
+          <div className={styles.headerActions}>
+            <Link href="/chat"><PremiumButton variant="primary">Start a new task</PremiumButton></Link>
+            <Link href="/track"><PremiumButton variant="ghost">Open Track</PremiumButton></Link>
           </div>
-          <Link href="/chat"><PremiumButton variant="primary">New task</PremiumButton></Link>
         </div>
-      </header>
+        <ProductOrbit compact />
+      </section>
 
       {error && (
         <div className="settings-note settings-note--error" role="alert">
@@ -322,12 +333,59 @@ function Overview() {
         </div>
       )}
 
+      <section className={styles.launchSection} aria-labelledby="launch-heading">
+        <div className={styles.sectionHeading}>
+          <div>
+            <span>Start from the outcome</span>
+            <h2 id="launch-heading">What do you want to move forward?</h2>
+          </div>
+          <p>These are live product destinations, not sample dashboard cards.</p>
+        </div>
+        <div className={styles.actionGrid}>
+          {OVERVIEW_ACTIONS.map((action, index) => (
+            <Link key={action.href} href={action.href} className={styles.actionCard} data-tone={action.tone}>
+              <span className={styles.actionMeta}>0{index + 1} · {action.meta}</span>
+              <i aria-hidden />
+              <h3>{action.title}</h3>
+              <p>{action.copy}</p>
+              <strong>Open <span aria-hidden>→</span></strong>
+            </Link>
+          ))}
+        </div>
+      </section>
+
+      <section className={styles.loopRail} aria-label="BrainRouter operating loop">
+        <span className={styles.loopLabel}>One continuous task</span>
+        <div>
+          {PRODUCT_LOOP.map((step) => (
+            <span key={step.label} data-tone={step.tone}><i />{step.label}<small>{step.detail}</small></span>
+          ))}
+        </div>
+      </section>
+
+      <section className={styles.telemetryHeading} aria-labelledby="telemetry-heading">
+        <div>
+          <span>Workspace telemetry</span>
+          <h2 id="telemetry-heading">Review and security pulse</h2>
+        </div>
+        <div className={styles.telemetryControls}>
+          <p>Charts are one operational signal—not the product itself.</p>
+          <div className={styles.period} role="group" aria-label="Reporting period">
+            {PERIODS.map((value) => (
+              <button key={value} type="button" aria-pressed={days === value} onClick={() => setDays(value)}>
+                Last {value} days
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+
       <section className={styles.stats} aria-label={`Metrics for the last ${days} days`}>
         <MetricTile label="Security score" value={score} hint="out of 100" />
         <MetricTile
           label="Open issues"
           value={open}
-          hint={totals.found > 0 ? `${totals.found} opened · ${totals.addressed} closed` : "awaiting fix"}
+          hint={metrics.issuesFound > 0 ? `${metrics.issuesFound} found · ${metrics.issuesFixed ?? 0} fixed` : "awaiting fix"}
         />
         <MetricTile label="Issues found" value={found} hint={`last ${days} days`} />
         <MetricTile label="Fix rate" value={`${fix}%`} hint="resolved" />
@@ -392,7 +450,22 @@ function Overview() {
           <div className={styles.panelBody}>
             {loading ? <InlineLoading label="Loading repositories…" />
               : repoTab === "contributors"
-                ? <div className={styles.empty}><strong>No contributor data</strong><span>Per-author breakdowns land with connected review history.</span></div>
+                ? contributors.length === 0
+                  ? <div className={styles.empty}><strong>No contributors yet</strong><span>Forge authors and commit contributors appear after a PR review.</span></div>
+                  : (
+                    <div className={styles.miniTable}>
+                      {contributors.slice(0, 5).map((contributor) => (
+                        <div key={contributor.login} className={styles.miniRow}>
+                          <span className={styles.contributorIdentity}>
+                            <i aria-hidden>{(contributor.displayName || contributor.login).slice(0, 1).toUpperCase()}</i>
+                            <span><strong>{contributor.displayName || contributor.login}</strong><small>@{contributor.login}{contributor.lastActivityAt ? ` · ${relativeDay(contributor.lastActivityAt)}` : ""}</small></span>
+                          </span>
+                          <span className={styles.miniMeta}>{contributor.prs} PR{contributor.prs === 1 ? "" : "s"} · {contributor.commits} commit{contributor.commits === 1 ? "" : "s"}</span>
+                          <span className={styles.miniMeta}>{contributor.findingsFixed} fixed · {contributor.openFindings} open</span>
+                        </div>
+                      ))}
+                    </div>
+                  )
                 : repositories.length === 0
                   ? <div className={styles.empty}><strong>No repository activity</strong><span>Connect a repository to see review volume.</span></div>
                   : (
@@ -416,16 +489,20 @@ function Overview() {
           <h2>Open vs fixed</h2>
           <div className={styles.panelBody}>
             {loading ? <InlineLoading label="Loading trend…" />
-              : <><AreaChart data={summary.history} /><p className={styles.chartNote}>Open discoveries over time · fixed-over-time isn&apos;t tracked yet</p></>}
+              : <><OpenFixedChart data={summary.history} /><p className={styles.chartNote}>Cumulative still-open vs fixed findings this period</p></>}
           </div>
         </div>
         <div className="analytics-panel">
           <h2>Mean time to remediate</h2>
           <div className={styles.panelBody}>
-            <div className={styles.empty}>
-              <strong>No fixes in this period</strong>
-              <span>Shows the average days from discovery to fix.</span>
-            </div>
+            {metrics.meanTimeToRemediateDays == null
+              ? <div className={styles.empty}><strong>No fixes in this period</strong><span>Shows the average time from first discovery to a verified absent finding.</span></div>
+              : <div className={styles.remediationMetric}>
+                  <strong>{metrics.meanTimeToRemediateDays < 1
+                    ? `${Math.max(1, Math.round(metrics.meanTimeToRemediateDays * 24))}h`
+                    : `${metrics.meanTimeToRemediateDays.toFixed(1)}d`}</strong>
+                  <span>average from discovery to verified fix</span>
+                </div>}
           </div>
         </div>
         <div className="analytics-panel">
@@ -484,36 +561,49 @@ function Overview() {
         </div>
       </section>
 
-      {/* Row E — Testing activity heatmap + recent tests */}
-      <section className={styles.testing} aria-label="Testing activity">
-        <div className="analytics-panel">
+      {/* Row E — unified verification activity + recent jobs */}
+      <section className={styles.testing} aria-label="Workspace activity">
+        <div className={`analytics-panel ${styles.activityPanel}`}>
           <div className={styles.panelHead}>
-            <h2>Testing activity</h2>
-            <span className={styles.headMuted}>{heatmap.total} run{heatmap.total === 1 ? "" : "s"} · last 12 months</span>
+            <div>
+              <span className={styles.activityEyebrow}>Verification timeline</span>
+              <h2>Workspace activity</h2>
+            </div>
+            <span className={styles.headMuted}>{heatmap.total} event{heatmap.total === 1 ? "" : "s"} · last 12 months</span>
+          </div>
+          <div className={styles.activityLegend} aria-label="Activity totals by type">
+            <span data-kind="review"><i /><strong>{heatmap.prReviews}</strong> PR reviews</span>
+            <span data-kind="test"><i /><strong>{heatmap.tests}</strong> Security tests</span>
+            <span data-kind="fixed"><i /><strong>{heatmap.fixed}</strong> Findings resolved</span>
           </div>
           <div className={styles.heatWrap}>
-            {runsLoading ? <InlineLoading label="Loading activity…" /> : <Heatmap weeks={heatmap.weeks} />}
+            {activityLoading ? <InlineLoading label="Loading workspace activity…" /> : <Heatmap weeks={heatmap.weeks} />}
           </div>
         </div>
-        <div className="analytics-panel">
+        <div className={`analytics-panel ${styles.recentActivityPanel}`}>
           <div className={styles.panelHead}>
-            <h2>Recent tests</h2>
-            <Link className={styles.headLink} href="/pentests">All tests <span aria-hidden>→</span></Link>
+            <div>
+              <span className={styles.activityEyebrow}>Latest signals</span>
+              <h2>Recent verification</h2>
+            </div>
+            <Link className={styles.headLink} href="/reviews">Review console <span aria-hidden>→</span></Link>
           </div>
           <div className={styles.panelBody}>
-            {runsLoading ? <InlineLoading label="Loading tests…" />
-              : recentTests.length === 0
-                ? <div className={styles.empty}><strong>No tests yet</strong><span>Run your first pentest to see activity.</span></div>
+            {activityLoading ? <InlineLoading label="Loading verification jobs…" />
+              : recentActivity.length === 0
+                ? <div className={styles.empty}><strong>No verification activity yet</strong><span>Run a PR review or an authorized security test to start the timeline.</span><div className={styles.emptyActions}><Link href="/reviews">Open reviews</Link><Link href="/pentests">Open pentests</Link></div></div>
                 : (
                   <ul className={styles.testList}>
-                    {recentTests.map((run) => (
-                      <li key={run.id} className={styles.testRow}>
-                        <span className={styles.testDot} data-state={run.status} aria-hidden />
-                        <div className={styles.testMain}>
-                          <strong>{run.target}</strong>
-                          <span>{run.kind} · {run.findings} finding{run.findings === 1 ? "" : "s"}</span>
-                        </div>
-                        <span className={styles.testAgo}>{relativeDay(run.createdAt) || "—"}</span>
+                    {recentActivity.map((job) => (
+                      <li key={job.id}>
+                        <Link href={activityHref(job)} className={styles.testRow}>
+                          <span className={styles.testDot} data-kind={job.lens} data-state={job.status} aria-hidden />
+                          <div className={styles.testMain}>
+                            <strong>{activityTitle(job)}</strong>
+                            <span>{activityTarget(job)}{job.findings != null ? ` · ${job.findings} finding${job.findings === 1 ? "" : "s"}` : ""}</span>
+                          </div>
+                          <span className={styles.testAgo}>{relativeDay(job.createdAt) || "—"}</span>
+                        </Link>
                       </li>
                     ))}
                   </ul>
@@ -544,7 +634,7 @@ function Overview() {
                 <span>New in last 30 days</span>
               </div>
             </div>
-            <DotGlobe />
+            <EarthGlobe size={148} className={styles.globe} />
           </div>
 
           {cveLoading ? <div className={styles.feedEmpty}><InlineLoading label="Loading latest CVEs…" /></div>
@@ -602,49 +692,84 @@ function severityWeight(severity: string): number {
   return SEVERITY_WEIGHT[severity.toLowerCase()] ?? 0;
 }
 
-interface HeatDay { key: string; count: number; level: 0 | 1 | 2 | 3 | 4; date: string }
-interface HeatData { weeks: HeatDay[][]; total: number }
+interface HeatDay {
+  key: string; count: number; prReviews: number; tests: number; fixed: number;
+  level: 0 | 1 | 2 | 3 | 4; date: string;
+}
+interface HeatData { weeks: HeatDay[][]; total: number; prReviews: number; tests: number; fixed: number }
 
-/** Build a 53-week × 7-day grid of pentest-run activity ending today. */
-function buildHeatmap(runs: PentestRun[]): HeatData {
-  const counts = new Map<string, number>();
-  for (const run of runs) {
-    const when = new Date(run.createdAt);
-    if (Number.isNaN(when.valueOf())) continue;
-    const key = dayKey(when);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
+function activityTitle(job: ReviewJob): string {
+  if (job.lens === "pentest") return "Security test";
+  if (job.lens === "code") return "Code review";
+  return "Security review";
+}
+
+function activityTarget(job: ReviewJob): string {
+  if (job.repo && job.prNumber != null) return `${job.repo} · PR #${job.prNumber}`;
+  return job.repo || "Authorized target";
+}
+
+function activityHref(job: ReviewJob): string {
+  // CWE-88: prNumber arrives from the API as `number | null` but is still
+  // encoded like every other query argument so a malformed value can never
+  // smuggle extra parameters into the link.
+  if (job.repo && job.prNumber != null) return `/reviews/pr?repo=${encodeURIComponent(job.repo)}&number=${encodeURIComponent(String(job.prNumber))}`;
+  return job.lens === "pentest" ? "/pentests" : "/reviews";
+}
+
+/** Build a 53-week × 7-day grid from the backend's unique verification jobs. */
+function buildHeatmap(history: ReviewSummary["history"]): HeatData {
+  const byDay = new Map(history.map((day) => [day.date, day]));
   const end = new Date();
-  end.setHours(0, 0, 0, 0);
+  end.setUTCHours(0, 0, 0, 0);
   // Walk back to the Sunday on/after 52 weeks ago so columns are aligned weeks.
   const start = new Date(end);
-  start.setDate(start.getDate() - 7 * 52 - end.getDay());
+  start.setUTCDate(start.getUTCDate() - 7 * 52 - end.getUTCDay());
   const weeks: HeatDay[][] = [];
   let cursor = new Date(start);
   let total = 0;
+  let prReviews = 0;
+  let tests = 0;
+  let fixed = 0;
   while (cursor <= end) {
     const week: HeatDay[] = [];
     for (let d = 0; d < 7 && cursor <= end; d += 1) {
-      const key = dayKey(cursor);
-      const count = counts.get(key) ?? 0;
+      const key = cursor.toISOString().slice(0, 10);
+      const source = byDay.get(key);
+      const count = source?.activity ?? 0;
+      const dayPrReviews = source?.prReviews ?? 0;
+      const dayTests = source?.tests ?? 0;
+      const dayFixed = source?.fixed ?? 0;
       total += count;
+      prReviews += dayPrReviews;
+      tests += dayTests;
+      fixed += dayFixed;
       const level: HeatDay["level"] = count === 0 ? 0 : count === 1 ? 1 : count <= 3 ? 2 : count <= 6 ? 3 : 4;
-      week.push({ key, count, level, date: cursor.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) });
+      week.push({
+        key, count, prReviews: dayPrReviews, tests: dayTests, fixed: dayFixed, level,
+        date: cursor.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }),
+      });
       cursor = new Date(cursor);
-      cursor.setDate(cursor.getDate() + 1);
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
     }
     weeks.push(week);
   }
-  return { weeks, total };
+  return { weeks, total, prReviews, tests, fixed };
 }
 
 function Heatmap({ weeks }: { weeks: HeatDay[][] }) {
   return (
-    <div className={styles.heat} role="img" aria-label="Pentest activity over the last year">
+    <div className={styles.heat} role="img" aria-label="PR review, security test, and remediation activity over the last year">
       {weeks.map((week, wi) => (
         <div key={week[0]?.key ?? wi} className={styles.heatCol}>
           {week.map((day) => (
-            <span key={day.key} className={styles.heatCell} data-level={day.level} title={`${day.count} run${day.count === 1 ? "" : "s"} · ${day.date}`} />
+            <span
+              key={day.key}
+              className={styles.heatCell}
+              data-level={day.level}
+              aria-hidden="true"
+              title={`${day.count} verification event${day.count === 1 ? "" : "s"} · ${day.prReviews} PR review${day.prReviews === 1 ? "" : "s"} · ${day.tests} security test${day.tests === 1 ? "" : "s"} · ${day.fixed} resolved · ${day.date}`}
+            />
           ))}
         </div>
       ))}
@@ -683,38 +808,6 @@ function TypeDonut({ buckets, total }: { buckets: [string, number][]; total: num
         ))}
       </div>
     </div>
-  );
-}
-
-/** Lightweight rotating dot-globe (pure SVG/CSS, no lib, no external asset). */
-function DotGlobe() {
-  const meridians = [6, 10, 14, 18];
-  const latitudes = [
-    { cy: 22, rx: 20, ry: 5 },
-    { cy: 22, rx: 20, ry: 11 },
-    { cy: 22, rx: 20, ry: 17 },
-  ];
-  return (
-    <svg className={styles.globe} viewBox="0 0 44 44" role="img" aria-label="Rotating world of detections" aria-hidden>
-      <defs>
-        <radialGradient id="globe-fill" cx="38%" cy="34%" r="72%">
-          <stop offset="0" stopColor="var(--surface-overlay)" stopOpacity="0.9" />
-          <stop offset="1" stopColor="var(--surface-raised)" stopOpacity="0" />
-        </radialGradient>
-      </defs>
-      <circle cx="22" cy="22" r="20" fill="url(#globe-fill)" stroke="var(--border)" strokeWidth="0.5" />
-      {latitudes.map((lat) => (
-        <ellipse key={lat.ry} cx="22" cy={lat.cy} rx={lat.rx} ry={lat.ry} fill="none" stroke="var(--border-med)" strokeWidth="0.4" strokeDasharray="0.6 1.6" />
-      ))}
-      <g className={styles.globeSpin} style={{ transformOrigin: "22px 22px" }}>
-        {meridians.map((rx) => (
-          <ellipse key={rx} cx="22" cy="22" rx={rx} ry="20" fill="none" stroke="var(--text-muted)" strokeWidth="0.4" strokeDasharray="0.6 1.6" />
-        ))}
-      </g>
-      <circle className={styles.globeMarker} cx="14" cy="15" r="1.1" fill="var(--danger)" />
-      <circle className={styles.globeMarker} cx="30" cy="26" r="1" fill="var(--heat-hot)" style={{ animationDelay: "0.8s" }} />
-      <circle className={styles.globeMarker} cx="24" cy="12" r="0.9" fill="var(--warn)" style={{ animationDelay: "1.6s" }} />
-    </svg>
   );
 }
 

@@ -26,9 +26,12 @@ const SAFE_METRICS = new Set([
   "bytes", "truncated", "files", "ms", "total", "blocking", "n", "skippedAnchors",
   "conclusion", "sources", "unhealthySources", "exactExposures", "diffReferencedCves",
   "entries", "cacheState", "fetchedAt", "source",
+  // Pentest trace metrics
+  "findings", "scanMode", "tool", "success", "recorded", "childId",
 ]);
 
 const PHASES = [
+  // ── PR review lenses (security / code) ──────────────────────────────────
   { id: "authorization", label: "Authorization", kinds: new Set(["queued", "token-resolved", "token-minted"]) },
   { id: "context", label: "Pull request context", kinds: new Set(["head-resolved", "diff-fetched"]) },
   { id: "intelligence", label: "Vulnerability intelligence", kinds: new Set(["intelligence-ready", "intelligence-unavailable"]) },
@@ -36,6 +39,15 @@ const PHASES = [
   { id: "findings", label: "Finding analysis", kinds: new Set(["findings-parsed"]) },
   { id: "publishing", label: "GitHub publishing", kinds: new Set(["inline-posted", "summary-posted", "review-posted", "approved", "check-posted"]) },
   { id: "complete", label: "Complete", kinds: new Set(["done"]) },
+  // ── Pentest lens (domain scans) ─────────────────────────────────────────
+  // A pentest job emits a different kind vocabulary; it only ever matches
+  // these phases, so listing both families here is additive.
+  { id: "perimeter", label: "Perimeter setup", kinds: new Set(["perimeter"]) },
+  { id: "recon", label: "Recon & analysis", kinds: new Set(["status"]) },
+  { id: "tooling", label: "Tool execution", kinds: new Set(["tool-start", "tool-end"]) },
+  { id: "workers", label: "Sub-agents", kinds: new Set(["worker"]) },
+  { id: "memory", label: "Memory ingest", kinds: new Set(["memory"]) },
+  { id: "pentest-complete", label: "Complete", kinds: new Set(["completed"]) },
 ] as const;
 
 type ProgressEvent = NonNullable<ReviewJob["progress"]>[number];

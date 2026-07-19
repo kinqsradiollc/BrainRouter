@@ -139,6 +139,9 @@ export const meetingRequests = {
   regenerate(meetingId: unknown, orgId?: unknown): AccountRequest {
     return { path: `/api/meetings/${safeOpaqueId(meetingId, 'meeting id')}/regenerate`, method: 'POST', ...(optionalOrgId(orgId) ? { orgId: optionalOrgId(orgId) } : {}) };
   },
+  remove(meetingId: unknown, orgId?: unknown): AccountRequest {
+    return { path: `/api/meetings/${safeOpaqueId(meetingId, 'meeting id')}`, method: 'DELETE', ...(optionalOrgId(orgId) ? { orgId: optionalOrgId(orgId) } : {}) };
+  },
   setScope(meetingId: unknown, requested: unknown, opts?: unknown, orgId?: unknown): AccountRequest {
     const next = scope(requested);
     const teamId = opts && typeof opts === 'object' && typeof (opts as { teamId?: unknown }).teamId === 'string'

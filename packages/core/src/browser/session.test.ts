@@ -34,6 +34,16 @@ test('getUiTestSession is a per-root singleton', () => {
   __resetUiTestSessionsForTests();
 });
 
+test('the production session uses an unavailable backend and never auto-starts Playwright', async () => {
+  __resetUiTestSessionsForTests();
+  const session = getUiTestSession('C:/ws/no-external-browser');
+  assert.equal(session.backend.constructor.name, 'UnavailableBackend');
+  const result = await session.layer.setDevice({ name: 'test', width: 800, height: 600 });
+  assert.equal(result.ok, false);
+  assert.match(result.error ?? '', /in-app browser backend unavailable/i);
+  __resetUiTestSessionsForTests();
+});
+
 test('baseUrl and in-memory manifest are shared through the session', () => {
   __resetUiTestSessionsForTests();
   const s = getUiTestSession('C:/ws/mem');

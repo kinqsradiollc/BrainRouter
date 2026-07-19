@@ -45,6 +45,10 @@ export interface PrReviewInput {
   repo: string; // "owner/name"
   prNumber: number;
   headSha: string;
+  /** Forge identities captured by the webhook; the executor refreshes them from
+   * the PR API when possible and uses these only as a safe fallback. */
+  prAuthor?: string;
+  triggeredByLogin?: string;
 }
 
 export interface PrReviewDeps {
@@ -80,11 +84,31 @@ export interface PrReviewDeps {
 export interface PrReviewFindingDetail {
   file: string;
   line?: number;
+  endLine?: number;
   severity: string;
   title: string;
   cwe?: string;
   preExisting?: boolean;
   suggestable?: boolean;
+}
+
+export interface PrReviewContributor {
+  login: string;
+  displayName?: string;
+  avatarUrl?: string;
+  commitCount: number;
+  isAuthor: boolean;
+}
+
+export interface PrReviewCoverage {
+  complete: boolean;
+  totalParts: number;
+  reviewedParts: number;
+  failedParts: number;
+  unreviewedParts: number;
+  /** Findings omitted from findingsDetail's safety bound. Any omission makes
+   * this review ineligible to auto-fix an older finding. */
+  unrecordedFindings: number;
 }
 
 export interface PrReviewResult {
@@ -105,6 +129,15 @@ export interface PrReviewResult {
   error?: string;
   /** Compact, non-sensitive finding projection for the PR console. */
   findingsDetail?: PrReviewFindingDetail[];
+  /** Exact reviewed head and bounded forge contributor evidence. */
+  headSha?: string;
+  prAuthor?: string;
+  triggeredByLogin?: string;
+  headContributor?: string;
+  contributors?: PrReviewContributor[];
+  contributorsAvailable?: boolean;
+  /** Only complete coverage is allowed to auto-fix an absent durable finding. */
+  coverage?: PrReviewCoverage;
 }
 
 // Back-compat aliases (the security lens was the original single kind).
@@ -157,6 +190,45 @@ async function fetchGithubUnifiedDiff(
 }
 
 type GitlabDiffRefs = { base_sha?: string; start_sha?: string; head_sha?: string };
+
+interface MutableContributor {
+  login: string;
+  displayName?: string;
+  avatarUrl?: string;
+  commitCount: number;
+}
+
+function cleanIdentity(value: unknown): string | undefined {
+  const identity = String(value ?? '').trim();
+  return identity ? identity.slice(0, 255) : undefined;
+}
+
+function addContributor(
+  contributors: Map<string, MutableContributor>,
+  raw: { login?: unknown; displayName?: unknown; avatarUrl?: unknown },
+  commit: boolean,
+): string | undefined {
+  const login = cleanIdentity(raw.login) ?? cleanIdentity(raw.displayName);
+  if (!login) return undefined;
+  const key = login.toLowerCase();
+  const current = contributors.get(key) ?? { login, commitCount: 0 };
+  current.displayName = cleanIdentity(raw.displayName) ?? current.displayName;
+  current.avatarUrl = cleanIdentity(raw.avatarUrl) ?? current.avatarUrl;
+  if (commit) current.commitCount += 1;
+  contributors.set(key, current);
+  return current.login;
+}
+
+function contributorProjection(
+  contributors: Map<string, MutableContributor>,
+  prAuthor: string | undefined,
+): PrReviewContributor[] {
+  const authorKey = prAuthor?.toLowerCase();
+  return [...contributors.values()]
+    .map((item) => ({ ...item, isAuthor: item.login.toLowerCase() === authorKey }))
+    .sort((left, right) => Number(right.isAuthor) - Number(left.isAuthor) || left.login.localeCompare(right.login))
+    .slice(0, 100);
+}
 
 function validReviewRepo(repo: string, forge: "github" | "gitlab"): boolean {
   const parts = repo.split('/');
@@ -267,21 +339,72 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
   // from an issue_comment webhook, which carries no head sha). Needed for the check-run's
   // head_sha and the "Reviewed <sha>" staleness footer.
   let headSha = String(input.headSha ?? '');
+  let prAuthor = cleanIdentity(input.prAuthor);
+  let headContributor: string | undefined;
+  let contributorsAvailable = Boolean(prAuthor);
+  const contributorMap = new Map<string, MutableContributor>();
+  if (prAuthor) addContributor(contributorMap, { login: prAuthor }, false);
   if (forge === 'gitlab') {
     try {
       const mr = await deps.fetchImpl(`${apiBase}/projects/${gitlabProject}/merge_requests/${prNumber}`, { headers: glHeaders(token) });
       if (mr.ok) {
-        const payload = await mr.json() as { sha?: string; diff_refs?: GitlabDiffRefs };
+        const payload = await mr.json() as { sha?: string; diff_refs?: GitlabDiffRefs; author?: { username?: string; name?: string; avatar_url?: string } };
         gitlabDiffRefs = payload.diff_refs;
         headSha = String(payload.diff_refs?.head_sha ?? payload.sha ?? headSha);
+        prAuthor = cleanIdentity(payload.author?.username) ?? cleanIdentity(payload.author?.name) ?? prAuthor;
+        if (prAuthor) addContributor(contributorMap, { login: prAuthor, displayName: payload.author?.name, avatarUrl: payload.author?.avatar_url }, false);
+        contributorsAvailable = true;
       }
     } catch { /* the changes endpoint below still provides a bounded failure */ }
-  } else if (!headSha) {
+    try {
+      const commits = await deps.fetchImpl(`${apiBase}/projects/${gitlabProject}/merge_requests/${prNumber}/commits?per_page=100`, { headers: glHeaders(token) });
+      if (commits.ok) {
+        const rows = await commits.json() as Array<{ id?: string; author_name?: string; committer_name?: string }>;
+        for (const commit of Array.isArray(rows) ? rows.slice(0, 100) : []) {
+          const login = addContributor(contributorMap, { login: commit.author_name ?? commit.committer_name, displayName: commit.author_name ?? commit.committer_name }, true);
+          if (login && commit.id === headSha) headContributor = login;
+        }
+        contributorsAvailable = true;
+      }
+    } catch { /* contributor enrichment is best effort */ }
+  } else {
     try {
       const pr = await deps.fetchImpl(`${apiBase}/repos/${repo}/pulls/${prNumber}`, { headers: ghHeaders(token) });
-      if (pr.ok) { const j = (await pr.json()) as { head?: { sha?: string } }; headSha = String(j?.head?.sha ?? ''); }
+      if (pr.ok) {
+        const payload = (await pr.json()) as { head?: { sha?: string }; user?: { login?: string; avatar_url?: string } };
+        // A webhook's head SHA identifies the exact commit that queued this job.
+        // Do not silently retarget an already-queued review if the PR advances
+        // again before this metadata request runs.
+        headSha = headSha || String(payload.head?.sha ?? '');
+        prAuthor = cleanIdentity(payload.user?.login) ?? prAuthor;
+        if (prAuthor) addContributor(contributorMap, { login: prAuthor, avatarUrl: payload.user?.avatar_url }, false);
+        contributorsAvailable = true;
+      }
     } catch { /* headSha stays '' → check-run skipped, comments still post */ }
+    try {
+      const commits = await deps.fetchImpl(`${apiBase}/repos/${repo}/pulls/${prNumber}/commits?per_page=100`, { headers: ghHeaders(token) });
+      if (commits.ok) {
+        const rows = await commits.json() as Array<{ sha?: string; author?: { login?: string; avatar_url?: string }; commit?: { author?: { name?: string } } }>;
+        for (const commit of Array.isArray(rows) ? rows.slice(0, 100) : []) {
+          const login = addContributor(contributorMap, {
+            login: commit.author?.login,
+            displayName: commit.commit?.author?.name,
+            avatarUrl: commit.author?.avatar_url,
+          }, true);
+          if (login && commit.sha === headSha) headContributor = login;
+        }
+        contributorsAvailable = true;
+      }
+    } catch { /* contributor enrichment is best effort */ }
   }
+  const contributorMetadata = () => ({
+    headSha,
+    ...(prAuthor ? { prAuthor } : {}),
+    ...(cleanIdentity(input.triggeredByLogin) ? { triggeredByLogin: cleanIdentity(input.triggeredByLogin) } : {}),
+    ...(headContributor ? { headContributor } : {}),
+    contributors: contributorProjection(contributorMap, prAuthor),
+    contributorsAvailable,
+  });
   progress("head-resolved", headSha ? "PR head resolved" : "PR head unavailable", headSha ? { sha: headSha } : undefined);
 
   // 1. Fetch the unified diff for the PR.
@@ -302,7 +425,11 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
       diff = result.diff;
     }
   } catch (e) { const error = e instanceof Error ? e.message : 'diff fetch failed'; progress("error", error); return { ok: false, findings: 0, posted: false, error }; }
-  if (!diff.trim()) return { ok: true, findings: 0, posted: false, skipped: 'empty-diff' };
+  if (!diff.trim()) return {
+    ok: true, findings: 0, posted: false, ...contributorMetadata(),
+    coverage: { complete: true, totalParts: 0, reviewedParts: 0, failedParts: 0, unreviewedParts: 0, unrecordedFindings: 0 },
+    findingsDetail: [],
+  };
 
   // 2. Review the FULL diff as a turn-based loop. `cap` is the per-part context
   //    budget — the diff is split along file/hunk boundaries and reviewed part by
@@ -344,6 +471,8 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
   const intelligenceAppendix = intelligenceContext ? `${intelligenceContext}\n\n` : '';
   const startedAt = Date.now();
   const collected: ParsedReviewFinding[] = [];
+  let reviewedParts = 0;
+  let failedParts = 0;
   for (let partIndex = 0; partIndex < parts.length; partIndex++) {
     const multi = parts.length > 1;
     const label = multi ? ` (part ${partIndex + 1} of ${parts.length})` : '';
@@ -352,8 +481,10 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
     try {
       const reviewText = await deps.llmRunner.run({ prompt, systemPrompt: lens.systemPrompt, taskId: `pr-${lens.id}-review:${repo}#${prNumber}${multi ? `:${partIndex + 1}` : ''}`, timeoutMs: deps.timeoutMs ?? 120_000 });
       collected.push(...parseReviewFindings(stripReasoning(reviewText)));
+      reviewedParts += 1;
     } catch (e) {
       const error = e instanceof Error ? e.message : 'review failed';
+      failedParts += 1;
       // Only the FIRST part failing sinks the review (nothing to post). A later
       // part failing still lets us surface what the earlier parts found.
       if (partIndex === 0) { progress("error", error); return { ok: false, findings: 0, posted: false, error }; }
@@ -433,14 +564,27 @@ export async function runPrReview(input: PrReviewInput, deps: PrReviewDeps, lens
     ? await postGitlabCommitStatus(deps.fetchImpl, apiBase, gitlabProject, headSha, lens, findings, blocking, policy.blockOnFindings, token)
     : await postCheckRun(deps.fetchImpl, apiBase, repo, headSha, lens, findings, blocking, policy.blockOnFindings, token);
   progress("check-posted", checkPosted ? "Check run posted" : "Check run could not be posted", { conclusion: blocking > 0 && policy.blockOnFindings && !lens.advisory ? "failure" : findings.length > 0 ? "neutral" : "success" });
-  const findingsDetail = findings.slice(0, 50).map((finding) => ({
-    file: finding.file, ...(finding.line ? { line: finding.line } : {}), severity: finding.severity, title: finding.summary,
+  const MAX_RECORDED_FINDINGS = 500;
+  const findingsDetail = findings.slice(0, MAX_RECORDED_FINDINGS).map((finding) => ({
+    file: finding.file, ...(finding.line ? { line: finding.line } : {}), ...(finding.endLine ? { endLine: finding.endLine } : {}), severity: finding.severity, title: finding.summary,
     ...(finding.summary.match(/\b(CWE-\d+)\b/i)?.[1] ? { cwe: finding.summary.match(/\b(CWE-\d+)\b/i)?.[1] } : {}),
     ...(finding.preExisting ? { preExisting: true } : {}), ...(finding.replacement ? { suggestable: true } : {}),
   }));
+  const unrecordedFindings = Math.max(0, findings.length - findingsDetail.length);
+  const coverage: PrReviewCoverage = {
+    complete: failedParts === 0 && droppedParts === 0 && unrecordedFindings === 0,
+    totalParts: allParts.length,
+    reviewedParts,
+    failedParts,
+    unreviewedParts: droppedParts,
+    unrecordedFindings,
+  };
   progress("done", "Review completed");
 
-  return { ok: true, findings: findings.length, blocking, posted, inlinePosted, reviewPosted, checkPosted, approved, findingsDetail };
+  return {
+    ok: true, findings: findings.length, blocking, posted, inlinePosted, reviewPosted, checkPosted, approved,
+    findingsDetail, coverage, ...contributorMetadata(),
+  };
 }
 
 interface InlineReviewComment {

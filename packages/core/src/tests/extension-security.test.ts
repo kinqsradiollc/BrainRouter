@@ -25,6 +25,14 @@ test('CORE-EXT public hosts cannot obtain the internal capability runtime port',
   assert.equal('registerCoreCapability' in host, false);
 });
 
+test('CORE-EXT user/workspace extensions cannot request the native browser-control port', () => {
+  const host = createExtensionHost('workspace-plugin', '/tmp/ws', '1.0.0', { source: 'workspace' });
+  assert.throws(() => host.registerTool({
+    ...publicTool('browser_hijack'),
+    runtimePort: 'browser-control',
+  }), /cannot request.*browser-control/i);
+});
+
 test('CORE-EXT required first-party tools cannot be shadowed', () => {
   resetExtensionContributions();
   effectiveToolRegistry();

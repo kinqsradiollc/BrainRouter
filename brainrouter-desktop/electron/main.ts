@@ -16,6 +16,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isAgentCommand } from '@kinqs/brainrouter-agent-protocol';
+import {
+  BROWSER_CONTROL_PROTOCOL_VERSION,
+  isBrowserControlCancelMessage,
+  isBrowserControlRequestMessage,
+  type BrowserControlCancelMessage,
+  type BrowserControlCommand,
+  type BrowserControlRequestMessage,
+} from '@kinqs/brainrouter-core/browser';
 import { isWorkspaceTrusted, trustWorkspace, untrustWorkspace, listTrustedWorkspaces } from '@kinqs/brainrouter-core/workspace';
 import { listTranscripts, type TranscriptSummary } from '@kinqs/brainrouter-core/session';
 import { getStateDir } from '@kinqs/brainrouter-core/storage';
@@ -37,11 +45,16 @@ import {
 import { isAllowedNavigation, allowedOriginFor } from './windowSecurity.js';
 import { addOpened, noteActivity, reorderWorkspace, type ActivityReason } from './recents.js';
 import { createComputerUsePort } from './computerUse.js';
+import { hardenWebviewPreferences, isAllowedArtifactWebviewSrc } from './webviewPolicy.js';
 import { registerMeetingsBridge } from './meetingsBridge.js';
 import { registerChatSyncBridge } from './chatSyncBridge.js';
 import { checkComputerUsePermissions, openAccessibilitySettings, openScreenRecordingSettings } from './computerUsePermissions.js';
 import { setupTray } from './tray.js';
-import { hardenWebviewPreferences, isAllowedWebviewSrc } from './webviewPolicy.js';
+import { BrowserViewManager } from './browser/browserViewManager.js';
+import { executeAgentBrowserCommand } from './browser/browserAgentAdapter.js';
+import { isBrowserCommand } from './browser/protocol.js';
+import { concreteRendererBrowserTarget } from './browser/rendererCommandTarget.js';
+import { shouldBypassAgentVisibleQueue, shouldBypassRendererVisibleQueue } from './browser/visibleQueuePolicy.js';
 import { resolveDesktopBootstrapState } from './accountIntegration.js';
 import { initAutoUpdate } from './updater.js';
 
@@ -61,12 +74,21 @@ function reconcileWorkspaceBackground(workspaceRoot: string): void {
  */
 interface WinPool {
   win: BrowserWindow;
+  browser: BrowserViewManager;
   hosts: Map<string, UtilityProcess>; // workspaceRoot → live host process
   lastSession: Map<string, string>;   // workspaceRoot → its last-viewed sessionKey
   pool: HostPoolState;                 // pure lifecycle state (tested policy)
   retiring: Set<string>;               // roots whose host we're intentionally killing
+  /** Invalidates every accepted browser request when the active workspace changes. */
+  browserWorkspaceGeneration: number;
+  /** Serializes visible user/agent browser operations for this BrainRouter window. */
+  visibleBrowserQueue: Promise<void>;
+  browserOpenSequence: number;
+  pendingBrowserOpens: Map<number, (visible: boolean) => void>;
+  activeVisibleBrowserControllers: Set<AbortController>;
 }
 const wins = new Map<number, WinPool>(); // webContents.id → WinPool
+const pendingBrowserRequests = new WeakMap<UtilityProcess, Map<string, AbortController>>();
 
 // PERF — preload asks once, synchronously, before React renders. This is a tiny
 // local config read (no network/keychain/host dependency) so the first frame can
@@ -105,6 +127,191 @@ async function handleComputerUseRequest(wp: WinPool, host: UtilityProcess, reque
   } catch (err) {
     host.postMessage({ kind: 'computer-use-response', id: request.id, ok: false, error: err instanceof Error ? err.message : String(err) });
   }
+}
+
+function postBrowserControlError(host: UtilityProcess, id: string, code: string, message: string): void {
+  host.postMessage({
+    kind: 'browser-command-response',
+    version: BROWSER_CONTROL_PROTOCOL_VERSION,
+    id,
+    ok: false,
+    error: { code, message },
+  });
+}
+
+const BACKGROUND_BROWSER_COMMANDS = new Set([
+  'capabilities', 'tabs.list', 'page.state', 'page.snapshot', 'page.screenshot',
+  'page.console', 'page.network', 'page.downloads', 'page.wait',
+]);
+
+function browserCommandNeedsVisibleSurface(kind: string): boolean {
+  return !BACKGROUND_BROWSER_COMMANDS.has(kind);
+}
+
+function browserOwnershipMatches(wp: WinPool, host: UtilityProcess, workspaceRoot: string, generation: number): boolean {
+  return !wp.win.isDestroyed()
+    && wp.browserWorkspaceGeneration === generation
+    && wp.pool.activeRoot === workspaceRoot
+    && wp.hosts.get(workspaceRoot) === host;
+}
+
+function concreteBrowserTarget(wp: WinPool, command: BrowserControlCommand): string | undefined {
+  const explicit = typeof (command as { tabId?: unknown }).tabId === 'string'
+    ? (command as { tabId: string }).tabId
+    : undefined;
+  if (explicit) return explicit;
+  const state = wp.browser.getState();
+  if (command.kind === 'permission.respond') return state.permissionPrompt?.tabId;
+  if (command.kind === 'dialog.respond') return state.dialogPrompt?.tabId ?? state.activeTabId;
+  if (command.kind === 'download.action') return state.downloads.find((row) => row.id === command.downloadId)?.tabId ?? undefined;
+  if (command.kind === 'capabilities' || command.kind === 'tabs.list' || command.kind === 'tabs.open' || command.kind === 'tabs.reopen') return undefined;
+  return state.activeTabId || undefined;
+}
+
+function pinBrowserCommand(command: BrowserControlCommand, tabId?: string): BrowserControlCommand {
+  if (!tabId || (!command.kind.startsWith('page.') && command.kind !== 'dialog.respond')) return command;
+  return { ...command, tabId } as BrowserControlCommand;
+}
+
+function enqueueVisibleBrowserOperation<T>(wp: WinPool, operation: () => Promise<T>): Promise<T> {
+  const before = wp.visibleBrowserQueue.catch(() => undefined);
+  let release!: () => void;
+  const latch = new Promise<void>((resolve) => { release = resolve; });
+  const chain = before.then(() => latch);
+  wp.visibleBrowserQueue = chain;
+  return before.then(async () => {
+    try { return await operation(); }
+    finally {
+      release();
+      if (wp.visibleBrowserQueue === chain) wp.visibleBrowserQueue = Promise.resolve();
+    }
+  });
+}
+
+function cancelPendingBrowserPanelOpens(wp: WinPool): void {
+  for (const resolve of wp.pendingBrowserOpens.values()) resolve(false);
+  wp.pendingBrowserOpens.clear();
+}
+
+async function requestFreshBrowserSurface(wp: WinPool, command: string, signal: AbortSignal, timeoutMs = 2_500): Promise<boolean> {
+  if (signal.aborted || wp.win.isDestroyed()) return false;
+  const generation = ++wp.browserOpenSequence;
+  const freshSurface = new Promise<boolean>((resolve) => wp.pendingBrowserOpens.set(generation, resolve));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let abort: (() => void) | undefined;
+  try {
+    wp.win.webContents.send('browser:open-request', { reason: 'agent', command, generation });
+    return await Promise.race([
+      freshSurface,
+      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), timeoutMs); }),
+      new Promise<boolean>((resolve) => {
+        abort = () => resolve(false);
+        signal.addEventListener('abort', abort, { once: true });
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (abort) signal.removeEventListener('abort', abort);
+    wp.pendingBrowserOpens.delete(generation);
+  }
+}
+
+async function handleBrowserControlRequest(
+  wp: WinPool,
+  host: UtilityProcess,
+  workspaceRoot: string,
+  request: BrowserControlRequestMessage,
+): Promise<void> {
+  if (wp.win.isDestroyed()) {
+    postBrowserControlError(host, request.id, 'closed', 'The owning desktop window is closed.');
+    return;
+  }
+  // A parked/background workspace host must never drive the tab currently shown
+  // in another workspace in the same window.
+  if (wp.pool.activeRoot !== workspaceRoot || wp.hosts.get(workspaceRoot) !== host) {
+    postBrowserControlError(host, request.id, 'ownership_mismatch', 'Browser control belongs to the active workspace window only.');
+    return;
+  }
+  const workspaceGeneration = wp.browserWorkspaceGeneration;
+  const targetTabId = concreteBrowserTarget(wp, request.command);
+  const pinnedRequest: BrowserControlRequestMessage = {
+    ...request,
+    command: pinBrowserCommand(request.command, targetTabId),
+  };
+  const byId = pendingBrowserRequests.get(host) ?? new Map<string, AbortController>();
+  pendingBrowserRequests.set(host, byId);
+  if (byId.has(request.id)) {
+    postBrowserControlError(host, request.id, 'invalid_request', 'Duplicate browser request id.');
+    return;
+  }
+  const controller = new AbortController();
+  byId.set(request.id, controller);
+  const needsVisibleSurface = browserCommandNeedsVisibleSurface(pinnedRequest.command.kind);
+  if (needsVisibleSurface) wp.activeVisibleBrowserControllers.add(controller);
+  try {
+    const execute = async (recoveryLane = false): Promise<ReturnType<typeof executeAgentBrowserCommand> extends Promise<infer T> ? T : never> => {
+      if (!browserOwnershipMatches(wp, host, workspaceRoot, workspaceGeneration)) throw new Error('BROWSER_OWNERSHIP_CHANGED');
+      let releaseVisiblePin: (() => void) | undefined;
+      try {
+        if (needsVisibleSurface && !recoveryLane) {
+          if (targetTabId && !wp.browser.getState().tabs.some((tab) => tab.id === targetTabId)) throw new Error('BROWSER_TAB_NOT_FOUND');
+          if (!wp.win.isVisible()) wp.win.show();
+          wp.win.focus();
+          if (targetTabId) releaseVisiblePin = wp.browser.pinVisibleTab(targetTabId);
+          if (!await requestFreshBrowserSurface(wp, pinnedRequest.command.kind, controller.signal)) {
+            throw new Error(controller.signal.aborted ? 'BROWSER_ABORTED' : 'BROWSER_SURFACE_UNAVAILABLE');
+          }
+          if (targetTabId && !wp.browser.isTabVisible(targetTabId)) throw new Error('BROWSER_TAB_NOT_VISIBLE');
+        } else if (recoveryLane && (!targetTabId || !wp.browser.isTabVisible(targetTabId))) {
+          throw new Error('BROWSER_TAB_NOT_VISIBLE');
+        }
+        if (!browserOwnershipMatches(wp, host, workspaceRoot, workspaceGeneration)) throw new Error('BROWSER_OWNERSHIP_CHANGED');
+        return await executeAgentBrowserCommand(wp.browser, pinnedRequest, workspaceRoot, controller.signal);
+      } finally {
+        // Cancellation/timeout can return before Chromium has finished the raw
+        // operation. Keep the exact native tab pinned until that work settles so
+        // a late input event can never land on a newly selected tab.
+        await wp.browser.waitForRequestSettlement(request.id);
+        releaseVisiblePin?.();
+      }
+    };
+    const recoveryLane = shouldBypassAgentVisibleQueue(
+      pinnedRequest.command.kind,
+      Boolean(targetTabId && wp.browser.isTabVisible(targetTabId)),
+    );
+    const result = recoveryLane
+      ? await execute(true)
+      : needsVisibleSurface
+      ? await enqueueVisibleBrowserOperation(wp, execute)
+      : await execute();
+    host.postMessage({
+      kind: 'browser-command-response',
+      version: BROWSER_CONTROL_PROTOCOL_VERSION,
+      id: request.id,
+      ok: true,
+      result,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const code = controller.signal.aborted || message === 'BROWSER_ABORTED' ? 'aborted'
+      : message === 'BROWSER_OWNERSHIP_CHANGED' ? 'ownership_mismatch'
+        : message === 'BROWSER_TAB_NOT_FOUND' ? 'not_found'
+        : message === 'BROWSER_SURFACE_UNAVAILABLE' || message === 'BROWSER_TAB_NOT_VISIBLE' ? 'unavailable'
+          : 'internal';
+    const safeMessage = message === 'BROWSER_OWNERSHIP_CHANGED' ? 'Browser control no longer belongs to the active workspace.'
+      : message === 'BROWSER_TAB_NOT_FOUND' ? 'The requested browser tab no longer exists.'
+      : message === 'BROWSER_SURFACE_UNAVAILABLE' ? 'The visible Browser panel did not acknowledge fresh bounds in time.'
+        : message === 'BROWSER_TAB_NOT_VISIBLE' ? 'The requested browser tab is not the visible in-app tab.'
+          : message;
+    postBrowserControlError(host, request.id, code, safeMessage);
+  } finally {
+    byId.delete(request.id);
+    wp.activeVisibleBrowserControllers.delete(controller);
+  }
+}
+
+function handleBrowserControlCancel(host: UtilityProcess, request: BrowserControlCancelMessage): void {
+  pendingBrowserRequests.get(host)?.get(request.id)?.abort();
 }
 
 // ── Connector Phase 2: keychain secrets (host → main) ─────────────────────────
@@ -290,6 +497,14 @@ function spawnHost(wp: WinPool, workspaceRoot: string): UtilityProcess {
   });
   host.on('message', (msg) => {
     if (wp.win.isDestroyed()) return;
+    if (isBrowserControlRequestMessage(msg)) {
+      void handleBrowserControlRequest(wp, host, workspaceRoot, msg);
+      return;
+    }
+    if (isBrowserControlCancelMessage(msg)) {
+      handleBrowserControlCancel(host, msg);
+      return;
+    }
     if (isComputerUseRequest(msg)) {
       void handleComputerUseRequest(wp, host, msg);
       return;
@@ -307,13 +522,19 @@ function spawnHost(wp: WinPool, workspaceRoot: string): UtilityProcess {
       // Real background work (a child/worker produced output) is activity too.
       else if (kind === 'child-tool-end' || kind === 'child-complete') markWorkspaceActivity(workspaceRoot, 'background-task');
       // Remember each workspace's last-viewed session so we can re-announce it
-      // when the user switches back to a parked (reused) host.
-      else if (kind === 'session-changed' && typeof ev?.sessionKey === 'string') wp.lastSession.set(workspaceRoot, ev.sessionKey);
+      // when the user switches back to a parked (reused) host. Also give each
+      // session its own isolated browser (per-session cookies/history/tabs).
+      else if (kind === 'session-changed' && typeof ev?.sessionKey === 'string') {
+        wp.lastSession.set(workspaceRoot, ev.sessionKey);
+        try { wp.browser?.setSession(ev.sessionKey); } catch (err) { console.error('[browser] setSession failed', err); }
+      }
     }
     const tagged = (msg && typeof msg === 'object') ? { ...(msg as object), workspaceRoot } : msg;
     wp.win.webContents.send('agent-event', tagged);
   });
   host.on('exit', (code) => {
+    for (const controller of pendingBrowserRequests.get(host)?.values() ?? []) controller.abort();
+    pendingBrowserRequests.delete(host);
     wp.hosts.delete(workspaceRoot);
     wp.pool = removeEntry(wp.pool, workspaceRoot);
     if (wp.retiring.delete(workspaceRoot)) return; // intentional reap/shutdown — not an error
@@ -349,6 +570,15 @@ function retireHost(wp: WinPool, workspaceRoot: string): void {
  */
 function activateWorkspace(wp: WinPool, workspaceRoot: string): void {
   const now = Date.now();
+  const outgoingRoot = wp.pool.activeRoot;
+  if (outgoingRoot && outgoingRoot !== workspaceRoot) {
+    const outgoingHost = wp.hosts.get(outgoingRoot);
+    if (outgoingHost) {
+      for (const controller of pendingBrowserRequests.get(outgoingHost)?.values() ?? []) controller.abort();
+    }
+    wp.browserWorkspaceGeneration += 1;
+    cancelPendingBrowserPanelOpens(wp);
+  }
   const plan = planActivate(wp.pool, workspaceRoot, now);
   for (const root of plan.reap) retireHost(wp, root);
   const wasActive = wp.pool.activeRoot;
@@ -364,6 +594,9 @@ function activateWorkspace(wp: WinPool, workspaceRoot: string): void {
     if (host && last) { try { host.postMessage({ kind: 'resume-session', sessionKey: last }); } catch { /* gone */ } }
   }
   wp.win.setTitle(`BrainRouter — ${path.basename(workspaceRoot)}`);
+  // Browser tabs are window-owned but restored independently per workspace.
+  // Cookies/cache remain in the shared persistent browser profile.
+  wp.browser.setWorkspaceRoot(workspaceRoot);
   // Activating/switching is membership only; it must not change the user's
   // project order.
   markWorkspaceOpened(workspaceRoot);
@@ -390,44 +623,45 @@ function openWorkspaceWindow(workspaceRoot: string): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-      // §3 D3 — allow <webview>, hardened + src-gated by the will-attach-webview
-      // handler below. Used by the prototype preview AND the Browser panel, which
-      // renders the workspace's running web app (e.g. http://localhost:5173) for
-      // UI testing.
+      // Browser pages live in main-owned WebContentsViews. The only remaining
+      // renderer-owned webview is the sandboxed local Artifact/prototype preview,
+      // gated below so it cannot become a second general-purpose browser.
       webviewTag: true,
     },
   });
+  const browser = new BrowserViewManager(win, workspaceRoot);
+  const wp: WinPool = {
+    win,
+    browser,
+    hosts: new Map(),
+    lastSession: new Map(),
+    pool: emptyPool(),
+    retiring: new Set(),
+    browserWorkspaceGeneration: 0,
+    visibleBrowserQueue: Promise.resolve(),
+    browserOpenSequence: 0,
+    pendingBrowserOpens: new Map(),
+    activeVisibleBrowserControllers: new Set(),
+  };
+  browser.setAgentTakeoverHandler(() => {
+    for (const controller of wp.activeVisibleBrowserControllers) controller.abort();
+  });
+  wins.set(win.webContents.id, wp);
 
-  // §3 D3 — secure-webview gate: harden every attached webview (no preload/node,
-  // sandboxed, isolated) and restrict its src to a self-contained data:text/html
-  // doc or an authorized prototype file under THIS workspace. Anything else is
-  // refused. The policy is a pure, unit-tested helper (webviewPolicy.ts).
   win.webContents.on('will-attach-webview', (event, webPreferences, params) => {
     hardenWebviewPreferences(webPreferences as unknown as Record<string, unknown>);
-    if (!isAllowedWebviewSrc(typeof params.src === 'string' ? params.src : '', workspaceRoot)) {
-      event.preventDefault();
-    }
+    const activeRoot = wp.pool.activeRoot || workspaceRoot;
+    if (!isAllowedArtifactWebviewSrc(typeof params.src === 'string' ? params.src : '', activeRoot)) event.preventDefault();
   });
-  // The attach gate only vets the INITIAL src. A guest's own loadURL()/link
-  // click/redirect must be gated too, or the omnibox could navigate to a remote
-  // origin or file:// outside the workspace (arbitrary local-file read). Re-apply
-  // the same policy to every guest navigation, and deny guest window.open.
   win.webContents.on('did-attach-webview', (_event, guest) => {
-    const gate = (e: { preventDefault: () => void }, url: string): void => {
-      if (!isAllowedWebviewSrc(url, workspaceRoot)) e.preventDefault();
+    const gate = (event: { preventDefault(): void }, url: string): void => {
+      const activeRoot = wp.pool.activeRoot || workspaceRoot;
+      if (!isAllowedArtifactWebviewSrc(url, activeRoot)) event.preventDefault();
     };
     guest.on('will-navigate', gate);
     guest.on('will-redirect', gate);
-    // A target=_blank / window.open link opens IN the same browser view (like a
-    // real browser's "open here"), never a floating BrowserWindow — but only for
-    // an allowed URL, so the policy still holds.
-    guest.setWindowOpenHandler(({ url }) => {
-      if (isAllowedWebviewSrc(url, workspaceRoot)) void guest.loadURL(url).catch(() => undefined);
-      return { action: 'deny' };
-    });
+    guest.setWindowOpenHandler(() => ({ action: 'deny' }));
   });
-  const wp: WinPool = { win, hosts: new Map(), lastSession: new Map(), pool: emptyPool(), retiring: new Set() };
-  wins.set(win.webContents.id, wp);
 
   // SEC: deny all renderer-initiated window.open (target=_blank, window.open, etc.).
   // The renderer has no legitimate need to spawn a second BrowserWindow.
@@ -445,7 +679,9 @@ function openWorkspaceWindow(workspaceRoot: string): void {
   win.on('closed', () => {
     for (const [id, w] of wins) {
       if (w.win !== win) continue;
+      cancelPendingBrowserPanelOpens(w);
       for (const [root, host] of w.hosts) { w.retiring.add(root); try { host.postMessage({ kind: 'shutdown' }); } catch { /* gone */ } }
+      w.browser.dispose();
       wins.delete(id);
     }
   });
@@ -504,6 +740,56 @@ app.whenReady().then(() => {
     // Route to the ACTIVE workspace's host; background hosts keep running untouched.
     const host = wp.pool.activeRoot ? wp.hosts.get(wp.pool.activeRoot) : undefined;
     host?.postMessage(raw);
+  });
+
+  // First-class Browser IPC. Every call is bound to the BrowserWindow whose
+  // main renderer sent it; subframes and stale/detached renderers are refused.
+  ipcMain.handle('browser:get-state', (event) => {
+    const wp = wins.get(event.sender.id);
+    if (!wp || event.senderFrame !== wp.win.webContents.mainFrame) return null;
+    return wp.browser.getState();
+  });
+  ipcMain.handle('browser:command', (event, raw: unknown) => {
+    const wp = wins.get(event.sender.id);
+    if (!wp || event.senderFrame !== wp.win.webContents.mainFrame || !isBrowserCommand(raw)) {
+      return { ok: false, requestId: 'renderer_invalid', code: 'INVALID_REQUEST', error: 'Invalid browser command sender or payload.' };
+    }
+    // Most user browser commands share the visible-operation queue with agent
+    // actions. Recovery on the already-visible tab must remain re-entrant, and
+    // selecting another tab skips this outer FIFO so an unrelated load cannot
+    // make normal browser chrome unresponsive. The manager still defers a switch
+    // while an exact-visible agent pin is active.
+    const generation = wp.browserWorkspaceGeneration;
+    const targetTabId = concreteRendererBrowserTarget(raw, wp.browser.getState());
+    const cancelled = () => ({
+      ok: false as const,
+      requestId: 'renderer_stale_workspace',
+      code: 'CANCELLED' as const,
+      error: 'Browser command was cancelled because the active workspace changed.',
+    });
+    const execute = async () => {
+      if (generation !== wp.browserWorkspaceGeneration) return cancelled();
+      const result = await wp.browser.executeRaw(raw, targetTabId);
+      return generation === wp.browserWorkspaceGeneration ? result : cancelled();
+    };
+    const bypassVisibleQueue = shouldBypassRendererVisibleQueue(
+      raw.op,
+      Boolean(targetTabId && wp.browser.isTabVisible(targetTabId)),
+    );
+    return bypassVisibleQueue ? execute() : enqueueVisibleBrowserOperation(wp, execute);
+  });
+  ipcMain.on('browser:set-surface', (event, raw: unknown) => {
+    const wp = wins.get(event.sender.id);
+    if (!wp || event.senderFrame !== wp.win.webContents.mainFrame) return;
+    try {
+      const envelope = raw && typeof raw === 'object' && 'surface' in raw
+        ? raw as { surface: unknown; openGeneration?: unknown }
+        : { surface: raw, openGeneration: undefined };
+      const surface = wp.browser.setSurface(envelope.surface);
+      if (Number.isSafeInteger(envelope.openGeneration) && surface.visible && surface.width > 1 && surface.height > 1) {
+        wp.pendingBrowserOpens.get(Number(envelope.openGeneration))?.(true);
+      }
+    } catch { /* malformed renderer geometry */ }
   });
 
   // Workspace management — main-process concerns, separate channel from the
