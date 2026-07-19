@@ -670,12 +670,29 @@ export class BrowserViewManager {
     this.rawSettlements.clear();
   }
 
+  /** Bound the agent's background-tab churn: close the OLDEST agent-controlled
+   *  tabs so that after the next agent tab opens there are at most MAX_AGENT_TABS
+   *  of them. Never touches user-opened tabs or the tab the user is viewing. */
+  private reapAgentTabs(): void {
+    const MAX_AGENT_TABS = 4;
+    const reapable = this.tabs.filter((tab) => this.agentControlledTabs.has(tab.id) && tab.id !== this.activeTabId);
+    const excess = reapable.length - (MAX_AGENT_TABS - 1);
+    for (let i = 0; i < excess; i += 1) {
+      try { this.closeTab(reapable[i].id); } catch { /* best effort */ }
+    }
+  }
+
   private createTab(rawUrl = BROWSER_BLANK_URL, active = true, options?: {
     deferLoad?: boolean;
     title?: string;
     agentPolicy?: AgentNavigationPolicy;
     agentControlled?: boolean;
   }): BrowserTab {
+    // Agents open a tab per fetch/search/navigate and rarely close them, which
+    // floods the strip and hits MAX_BROWSER_TABS. Before opening a NEW agent tab,
+    // close the oldest agent-controlled tabs beyond a small cap. User-opened tabs
+    // and the tab the user is currently viewing are never reaped.
+    if (options?.agentControlled) this.reapAgentTabs();
     if (this.tabs.length >= MAX_BROWSER_TABS) throw new BrowserManagerError('TAB_LIMIT', `A maximum of ${MAX_BROWSER_TABS} tabs is supported.`);
     const url = this.safeUrl(rawUrl);
     const id = `tab_${this.windowPrefix}_${++this.tabSequence}`;
@@ -1011,6 +1028,7 @@ export class BrowserViewManager {
       case 'respond-dialog': return this.respondDialog(command);
       case 'open-download': case 'show-download': case 'cancel-download': case 'pause-download': case 'resume-download': return this.downloadCommand(command.op, command.downloadId);
       case 'clear-data': return this.clearData(command.dataTypes);
+      case 'reset-browser': return this.resetBrowser();
       default: throw new BrowserManagerError('INVALID_REQUEST', 'Unknown browser command.');
     }
   }
@@ -1461,6 +1479,17 @@ export class BrowserViewManager {
       const error = await shell.openPath(download.savePath);
       if (error) throw new BrowserManagerError('INTERNAL', error);
     }
+    return { ok: true };
+  }
+
+  /** Reset the browser to a brand-new state: close every tab (which destroys the
+   *  per-tab navigation history), wipe the partition's cookies/cache/storage, and
+   *  open a single fresh blank tab. This is the user-facing "reset browser". */
+  private async resetBrowser(): Promise<{ ok: true }> {
+    for (const tab of [...this.tabs]) { try { this.closeTab(tab.id); } catch { /* best effort */ } }
+    await this.clearData(['cache', 'cookies', 'storage', 'history']);
+    if (this.tabs.length === 0) this.createTab(BROWSER_BLANK_URL, true);
+    this.emitState();
     return { ok: true };
   }
 

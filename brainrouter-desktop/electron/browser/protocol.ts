@@ -159,7 +159,8 @@ export type BrowserCommand =
   | { op: 'respond-permission'; promptId: string; allow: boolean }
   | { op: 'respond-dialog'; promptId: string; accept: boolean; value?: string }
   | { op: 'open-download' | 'show-download' | 'cancel-download' | 'pause-download' | 'resume-download'; downloadId: BrowserDownloadId }
-  | { op: 'clear-data'; dataTypes?: Array<'cache' | 'cookies' | 'storage' | 'history'> };
+  | { op: 'clear-data'; dataTypes?: Array<'cache' | 'cookies' | 'storage' | 'history'> }
+  | { op: 'reset-browser' };
 
 export interface BrowserCommandRequest {
   version: typeof BROWSER_PROTOCOL_VERSION;
@@ -207,7 +208,7 @@ const COMMAND_OPS = new Set<BrowserCommand['op']>([
   'set-muted', 'snapshot', 'screenshot', 'console', 'network', 'downloads', 'click',
   'double-click', 'hover', 'assert-visible', 'highlight', 'type', 'press', 'scroll',
   'drag', 'select', 'check', 'set-files', 'set-cursor', 'set-device', 'clear-highlight', 'respond-permission',
-  'respond-dialog', 'open-download', 'show-download', 'cancel-download', 'pause-download', 'resume-download', 'clear-data',
+  'respond-dialog', 'open-download', 'show-download', 'cancel-download', 'pause-download', 'resume-download', 'clear-data', 'reset-browser',
 ]);
 
 const SECRET_KEY = /(authorization|cookie|password|passwd|secret|token|api[-_]?key|credential|sessionid)/i;

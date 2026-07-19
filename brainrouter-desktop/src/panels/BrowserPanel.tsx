@@ -681,7 +681,7 @@ export function BrowserPanel(): React.ReactElement {
           spellCheck={false} onChange={(event) => setUrlDraft(event.target.value)}
           onFocus={(event) => event.currentTarget.select()}
           onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void go(urlDraft); } }} />
-        <button className="br-go" onClick={() => void go(urlDraft)}>Go</button>
+        <button className="br-go" title="Go — navigate to the address, or search" aria-label="Go" onClick={() => void go(urlDraft)}>Go</button>
         <button className="br-nav" title="Find in page (⌘F)" aria-label="Find in page" onClick={() => { setFindOpen(true); requestAnimationFrame(() => findRef.current?.focus()); }}><Icon name="search" size={13} /></button>
         <div className="browser-zoom" aria-label="Page zoom">
           <button aria-label="Zoom out" title="Zoom out (⌘−)" onClick={() => void changeZoom(-0.1)}>−</button>
@@ -743,6 +743,12 @@ export function BrowserPanel(): React.ReactElement {
           <div className="br-rail-sep" />
           {railBtn('play', recording ? `Recording (${recorded.length})` : 'Record a flow', recording, () => setRecording((value) => !value))}
           {railBtn('clock', 'Flows', drawer === 'flows', () => setDrawer('flows'))}
+          <div className="br-rail-sep" />
+          {railBtn('trash', 'Reset browser — close every tab and clear cookies, cache & history', false, () => {
+            if (window.confirm('Reset the browser? This closes every tab and clears cookies, cache, and history.')) {
+              void runBrowser({ op: 'reset-browser' }).then(() => void refreshState()).catch((error) => setStatus(String(error)));
+            }
+          }, !browser)}
         </div>
 
         <div className="browser-stage">
