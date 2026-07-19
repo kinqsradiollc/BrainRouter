@@ -77,7 +77,14 @@ export interface ProviderConfig {
   enabled: boolean;
   isDefault: boolean;
   hasKey: boolean;
+  /** True when this row is the deployment default surfaced to an org that has
+   *  no provider of its own — display-only, not editable in this org. */
+  readOnly?: boolean;
 }
+
+/** Where a provider/model list resolved from — the caller's own org, or the
+ *  deployment/system org it inherited from when the org has none of its own. */
+export interface ScopeSource { orgId: string; isSystemOrg: boolean }
 
 export interface ProviderInput {
   kind: ProviderKind;
@@ -121,8 +128,10 @@ export interface ManagedModelRecord {
   verifiedAt?: string;
   createdAt: string;
   updatedAt: string;
+  /** True when inherited from the deployment default (org has none of its own). */
+  readOnly?: boolean;
 }
-export type ManagedModelInput = Omit<ManagedModelRecord, "id" | "orgId" | "createdAt" | "updatedAt">;
+export type ManagedModelInput = Omit<ManagedModelRecord, "id" | "orgId" | "createdAt" | "updatedAt" | "readOnly">;
 
 export type IntegrationKind = "github_app";
 
@@ -292,7 +301,7 @@ export interface PentestRun {
 
 export const adminApi = {
   listProviders: (orgId?: string) =>
-    authFetch<{ providers: ProviderConfig[]; secretStorageReady: boolean }>("/api/admin/providers", { orgId }),
+    authFetch<{ providers: ProviderConfig[]; secretStorageReady: boolean; inherited?: boolean; source?: ScopeSource }>("/api/admin/providers", { orgId }),
   createProvider: (body: ProviderInput, orgId?: string) =>
     authFetch<{ provider: ProviderConfig }>("/api/admin/providers", { method: "POST", body, orgId }),
   updateProvider: (id: string, body: Partial<ProviderInput>, orgId?: string) =>
@@ -304,7 +313,7 @@ export const adminApi = {
   modelCatalog: (orgId?: string) =>
     authFetch<ModelCatalogEnvelope>("/api/models/catalog", { orgId }),
   listManagedModels: (orgId?: string) =>
-    authFetch<{ models: ManagedModelRecord[] }>("/api/admin/models", { orgId }),
+    authFetch<{ models: ManagedModelRecord[]; inherited?: boolean; source?: ScopeSource }>("/api/admin/models", { orgId }),
   discoverManagedModels: (providerConfigId: string, orgId?: string) =>
     authFetch<{ models: string[]; selection: { mode: "explicit"; upstreamModelIds: string[] } }>(
       "/api/admin/models/discover",

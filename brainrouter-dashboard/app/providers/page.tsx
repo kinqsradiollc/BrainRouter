@@ -16,6 +16,7 @@ import { PageHeader } from "../../components/PageHeader";
 import { PremiumCard } from "../../components/PremiumCard";
 import { PremiumButton } from "../../components/PremiumButton";
 import { adminApi, type ProviderConfig, type ProviderKind } from "../../lib/adminApi";
+import { useActiveOrg } from "../../components/OrgWorkspaceProvider";
 import { ManagedModelsPanel } from "./ManagedModelsPanel";
 import { AdvancedRecallPanel } from "./AdvancedRecallPanel";
 import { InlineLoading } from "../../components/LoadingSpinner";
@@ -59,7 +60,11 @@ function ProvidersInner() {
   // No client-side isAdmin gate: /api/admin/providers is org-scoped
   // (requirePermission("providers:manage")) so org owners/managers are already
   // authorized server-side — bouncing them to /overview was the real blocker.
+  const { activeOrgId } = useActiveOrg();
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
+  // True when the providers shown are the deployment default inherited by an org
+  // with none of its own (read-only) — set from the /api/admin/providers response.
+  const [providersInherited, setProvidersInherited] = useState(false);
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [secretReady, setSecretReady] = useState(true);
   const [canManageProviders, setCanManageProviders] = useState(true);
@@ -85,11 +90,17 @@ function ProvidersInner() {
   const [savingAgents, setSavingAgents] = useState(false);
   const [agentMsg, setAgentMsg] = useState("");
 
+  // Every admin fetch/mutation is scoped to the ACTIVE org (X-BrainRouter-Org),
+  // so switching org/team in the sidebar shows that org's providers/models —
+  // not a stale mount-time or session-default org.
+  const org = activeOrgId || undefined;
+
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await adminApi.listProviders();
+      const res = await adminApi.listProviders(org);
       setProviders(res.providers ?? []);
+      setProvidersInherited(Boolean(res.inherited));
       setSecretReady(res.secretStorageReady);
       setCanManageProviders(true);
       setError("");
@@ -102,14 +113,14 @@ function ProvidersInner() {
       } else setError(message);
     }
     finally { setLoading(false); }
-  }, []);
+  }, [org]);
 
   const loadCatalog = useCallback(async (kind: string) => {
     try { const cat = await adminApi.providerCatalog(kind); setCatalog(cat.providers ?? []); } catch { /* optional */ }
   }, []);
   const loadAux = useCallback(async () => {
-    try { const res = await adminApi.getAgentModels(); setRoles(res.roles ?? []); setAssignments(res.assignments ?? {}); } catch { /* optional */ }
-  }, []);
+    try { const res = await adminApi.getAgentModels(org); setRoles(res.roles ?? []); setAssignments(res.assignments ?? {}); } catch { /* optional */ }
+  }, [org]);
 
   useEffect(() => { void load(); void loadAux(); }, [load, loadAux]);
   useEffect(() => { void loadCatalog(galleryKind); }, [galleryKind, loadCatalog]);
@@ -144,7 +155,7 @@ function ProvidersInner() {
     if (!draft.baseUrl.trim()) { setProbeError("Enter a Base URL first."); return; }
     setProbing(true); setProbeError("");
     try {
-      const res = await adminApi.probeModels(draft.baseUrl.trim(), draft.apiKey.trim(), draft.kind);
+      const res = await adminApi.probeModels(draft.baseUrl.trim(), draft.apiKey.trim(), draft.kind, org);
       if (!res.ok || !res.models?.length) {
         setProbeError(draft.kind === "llm"
           ? (res.error || "No models returned — check the key/endpoint.")
@@ -174,7 +185,7 @@ function ProvidersInner() {
       // Guard: swapping to a DIFFERENT-dimension embedder rebuilds cognitive_vec and
       // drops every existing embedding (they must be re-embedded). Confirm first.
       if (draft.kind === "embedding" && model) {
-        const dim = await adminApi.probeEmbeddingDim(draft.baseUrl.trim(), draft.apiKey.trim(), model);
+        const dim = await adminApi.probeEmbeddingDim(draft.baseUrl.trim(), draft.apiKey.trim(), model, org);
         if (dim.ok && dim.dimensions && dim.currentDimensions > 0 && dim.dimensions !== dim.currentDimensions) {
           const ok = window.confirm(
             `This embedding model produces ${dim.dimensions}-dimensional vectors, but your memory store is ${dim.currentDimensions}-dimensional.\n\n` +
@@ -190,25 +201,25 @@ function ProvidersInner() {
         ...(draft.apiVersion.trim() ? { extra: { apiVersion: draft.apiVersion.trim() } } : {}),
       };
       if (draft.apiKey.trim()) body.apiKey = draft.apiKey.trim();
-      if (editingId) await adminApi.updateProvider(editingId, body);
-      else await adminApi.createProvider(body);
+      if (editingId) await adminApi.updateProvider(editingId, body, org);
+      else await adminApi.createProvider(body, org);
       setOpen(false); await load();
     } catch (e) { setProbeError(e instanceof Error ? e.message : "Failed to save provider"); }
     finally { setSaving(false); }
   }
 
   async function removeProvider(id: string) {
-    try { await adminApi.deleteProvider(id); await load(); }
+    try { await adminApi.deleteProvider(id, org); await load(); }
     catch (e) { setError(e instanceof Error ? e.message : "Failed to delete provider"); }
   }
   async function makeDefault(id: string) {
-    try { await adminApi.setDefaultProvider(id); await load(); }
+    try { await adminApi.setDefaultProvider(id, org); await load(); }
     catch (e) { setError(e instanceof Error ? e.message : "Failed to set default"); }
   }
 
   async function saveAgentModels() {
     setSavingAgents(true); setAgentMsg("");
-    try { const res = await adminApi.setAgentModels(assignments); setAssignments(res.assignments ?? {}); setAgentMsg("Saved."); }
+    try { const res = await adminApi.setAgentModels(assignments, org); setAssignments(res.assignments ?? {}); setAgentMsg("Saved."); }
     catch (e) { setAgentMsg(e instanceof Error ? e.message : "Failed to save"); }
     finally { setSavingAgents(false); }
   }
@@ -229,12 +240,19 @@ function ProvidersInner() {
         <button type="button" role="tab" aria-selected={tab === "advanced"} disabled={!canManageProviders} title={canManageProviders ? undefined : "Organization administrators manage recall tuning"} className={`models-tab ${tab === "advanced" ? "models-tab--active" : ""}`} onClick={() => setTab("advanced")}>Advanced</button>
       </div>
 
-      {tab === "managed" && <ManagedModelsPanel providers={providers} />}
+      {tab === "managed" && <ManagedModelsPanel providers={providers} orgId={org} />}
 
       {tab === "advanced" && canManageProviders && <AdvancedRecallPanel />}
 
       {tab === "personal" && canManageProviders && (
         <>
+          {providersInherited && (
+            <div className="settings-note" style={{ marginTop: "var(--spacing-16)" }}>
+              This organization has no providers of its own yet, so it&rsquo;s showing the
+              <strong> deployment default (read-only)</strong>. Add a provider below to give this
+              organization its own custody — that replaces the inherited set for this org.
+            </div>
+          )}
           {/* Catalog gallery — pick a kind, then a provider; the dialog pre-fills the endpoint. */}
           <PremiumCard level={2} style={{ marginTop: "var(--spacing-24)" }}>
             <div className="settings-cardhead">
@@ -277,21 +295,27 @@ function ProvidersInner() {
                   </div>
                   {loading ? <InlineLoading label="Loading…" />
                     : rows.length === 0 ? <div className="settings-empty-inline">No {label} provider yet — pick one above.</div>
-                      : rows.map((p) => (
+                      : rows.map((p) => {
+                        const readOnly = Boolean(p.readOnly || providersInherited);
+                        return (
                         <div key={p.id} className="org-member">
                           <span className="prov-icon prov-icon--sm" aria-hidden>{monogram(p.label || p.providerId)}</span>
                           <div className="org-member__id" style={{ whiteSpace: "normal" }}>
                             <strong>{p.label || p.providerId}</strong>
                             {p.isDefault && <span className="settings-badge settings-badge--default" style={{ marginLeft: 6 }}>default</span>}
+                            {readOnly && <span className="settings-badge settings-badge--muted" style={{ marginLeft: 6 }} title="Deployment default — configure a provider for this organization to override">inherited</span>}
                             <div className="settings-hint">{p.model || "—"}{p.models?.length ? ` · ${p.models.length} models` : ""}</div>
                           </div>
-                          <div className="settings-actions">
-                            {!p.isDefault && <PremiumButton size="small" variant="ghost" onClick={() => makeDefault(p.id)}>Make default</PremiumButton>}
-                            <PremiumButton size="small" variant="text" onClick={() => openEdit(p)}>Configure</PremiumButton>
-                            <button className="org-iconbtn" title="Remove" aria-label={`Remove ${p.label}`} onClick={() => removeProvider(p.id)}>✕</button>
-                          </div>
+                          {!readOnly && (
+                            <div className="settings-actions">
+                              {!p.isDefault && <PremiumButton size="small" variant="ghost" onClick={() => makeDefault(p.id)}>Make default</PremiumButton>}
+                              <PremiumButton size="small" variant="text" onClick={() => openEdit(p)}>Configure</PremiumButton>
+                              <button className="org-iconbtn" title="Remove" aria-label={`Remove ${p.label}`} onClick={() => removeProvider(p.id)}>✕</button>
+                            </div>
+                          )}
                         </div>
-                      ))}
+                        );
+                      })}
                 </PremiumCard>
               );
             })}

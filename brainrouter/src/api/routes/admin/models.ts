@@ -12,6 +12,7 @@ import {
   type ProviderModelPatch,
   type ProviderModelRecord,
 } from "../../../providers/modelPolicyStore.js";
+import { isSystemProviderOrg, systemProviderOrgId } from "../../../providers/runtime.js";
 
 const effortSchema = z.enum(MODEL_REASONING_EFFORTS);
 const capabilitySourceSchema = z.enum(["verified", "discovered", "manual"]);
@@ -118,10 +119,34 @@ function writeError(res: Parameters<typeof sendError>[0], error: unknown): void 
   sendError(res, duplicate ? 409 : 400, duplicate ? "publicModelId already exists in this organization" : message);
 }
 
-/** GET /api/admin/models — admin-safe routing policy, never provider credentials. */
+/**
+ * GET /api/admin/models — admin-safe routing policy, never provider credentials.
+ *
+ * Managed models INHERIT (mirrors the member catalog + gateway
+ * resolveEffectiveModelOrg): an org with zero ENABLED models of its own shows
+ * the system/deployment org's enabled models as read-only rows instead of a
+ * blank table on org switch. The org's own set (enabled + disabled, for
+ * management) is returned whenever it has at least one enabled model. Writes
+ * still target req.orgId — inherited rows carry system-org ids, so ownedModel()
+ * 404s any attempt to mutate them.
+ */
 adminModelsRouter.get("/", async (req: AuthedRequest, res) => {
-  const models = await memoryEngine.models.listProviderModels(req.orgId!);
-  res.json({ models });
+  const orgId = req.orgId!;
+  const own = await memoryEngine.models.listProviderModels(orgId);
+  const ownEnabled = own.filter((model) => model.enabled).length;
+  if (ownEnabled === 0 && !isSystemProviderOrg(orgId)) {
+    const systemOrg = systemProviderOrgId();
+    const inheritedModels = await memoryEngine.models.listProviderModels(systemOrg, true);
+    if (inheritedModels.length > 0) {
+      res.json({
+        models: inheritedModels.map((model) => ({ ...model, readOnly: true })),
+        inherited: true,
+        source: { orgId: systemOrg, isSystemOrg: false },
+      });
+      return;
+    }
+  }
+  res.json({ models: own, inherited: false, source: { orgId, isSystemOrg: isSystemProviderOrg(orgId) } });
 });
 
 /** POST /api/admin/models/discover — probe one org-owned provider without returning its key. */

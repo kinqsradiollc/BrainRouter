@@ -13,6 +13,7 @@ import { sendError } from "../../../contracts/http.js";
 import { isProviderKind, PROVIDER_KINDS, type ProviderConfigInput } from "../../../providers/types.js";
 import { isSecretBoxConfigured } from "../../../security/secretBox.js";
 import { probeModels, deriveProviderId, probeEmbeddingDim } from "../../../providers/modelProbe.js";
+import { isSystemProviderOrg, systemProviderOrgId } from "../../../providers/runtime.js";
 import { BUILTIN_PROVIDERS, providerServesKind } from "@kinqs/brainrouter-core/provider";
 
 export const providersRouter = Router();
@@ -61,10 +62,38 @@ providersRouter.get("/catalog", (req: AuthedRequest, res) => {
   res.json({ providers });
 });
 
-/** GET /api/admin/providers — the org's configs (no keys). */
+/**
+ * GET /api/admin/providers — the org's configs (no keys).
+ *
+ * BYOK providers are intentionally per-org (ADR-010/ADR-012 — data, not env),
+ * but an org with none of its own is shown the system/deployment org's configs
+ * READ-ONLY (flagged `inherited`), so switching org/team surfaces the
+ * deployment default that backs the inherited managed models instead of a blank
+ * page. Read-only display only: mutations still resolve through ownedConfig(),
+ * which 404s the system-org ids, and never trigger applyProviderOverrides.
+ */
 providersRouter.get("/", async (req: AuthedRequest, res) => {
-  const configs = await memoryEngine.providers.listProviderConfigs(req.orgId!);
-  res.json({ providers: configs, secretStorageReady: isSecretBoxConfigured() });
+  const orgId = req.orgId!;
+  const own = await memoryEngine.providers.listProviderConfigs(orgId);
+  if (own.length === 0 && !isSystemProviderOrg(orgId)) {
+    const systemOrg = systemProviderOrgId();
+    const inherited = await memoryEngine.providers.listProviderConfigs(systemOrg);
+    if (inherited.length > 0) {
+      res.json({
+        providers: inherited.map((cfg) => ({ ...cfg, readOnly: true })),
+        secretStorageReady: isSecretBoxConfigured(),
+        inherited: true,
+        source: { orgId: systemOrg, isSystemOrg: false },
+      });
+      return;
+    }
+  }
+  res.json({
+    providers: own,
+    secretStorageReady: isSecretBoxConfigured(),
+    inherited: false,
+    source: { orgId, isSystemOrg: isSystemProviderOrg(orgId) },
+  });
 });
 
 /**
