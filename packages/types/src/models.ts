@@ -64,6 +64,9 @@ export interface ModelPolicy {
 export interface ModelCatalogEnvelope {
   revision: string;
   models: readonly ModelPolicy[];
+  /** True when these models are the deployment default inherited by an org that
+   *  has none of its own (the org's own set is empty). Optional/additive. */
+  inherited?: boolean;
 }
 
 export interface UnknownCustomModelCapabilityProfile {

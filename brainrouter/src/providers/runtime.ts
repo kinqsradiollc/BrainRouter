@@ -16,3 +16,10 @@ export function systemProviderOrgId(): string {
   const adminUser = (process.env.BRAINROUTER_DEFAULT_ADMIN_USER_ID ?? "admin").trim() || "admin";
   return `org_personal_${adminUser}`;
 }
+
+/** Is this the deployment/system org (the one whose providers/models act as the
+ *  inherited default)? Shared so the inherit guard and the "is this org the
+ *  source" flag stay one definition. */
+export function isSystemProviderOrg(orgId: string): boolean {
+  return orgId === systemProviderOrgId();
+}

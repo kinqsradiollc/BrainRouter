@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { systemProviderOrgId } from "./runtime.js";
 import {
   MODEL_REASONING_EFFORTS,
   type ManualBudgetTokensSupport,
@@ -85,6 +86,29 @@ export interface ModelPolicyStore {
   reorderProviderModels(orgId: string, ids: readonly string[]): Promise<void>;
   /** Provision the revocable, org-bound identity used by internal workers. */
   ensureModelGatewayServicePrincipal(orgId: string): Promise<string>;
+}
+
+/**
+ * Canonical managed-model inheritance — the SINGLE definition of the rule the
+ * member catalog (`/api/models/catalog`) and the gateway's
+ * `resolveScopedModelSelection` both apply: an org with ZERO enabled models of
+ * its own inherits the system/deployment org's enabled models WHOLESALE
+ * (all-or-nothing, never a per-model union). Returns which org's models
+ * actually apply and whether they were inherited, so admin reads can flag
+ * inherited rows read-only instead of showing an empty table on org switch.
+ */
+export async function resolveEffectiveModelOrg(
+  store: Pick<ModelPolicyStore, "listProviderModels">,
+  orgId: string,
+): Promise<{ effectiveOrgId: string; models: ProviderModelRecord[]; inherited: boolean }> {
+  const own = await store.listProviderModels(orgId, true);
+  if (own.length > 0) return { effectiveOrgId: orgId, models: own, inherited: false };
+  const systemOrg = systemProviderOrgId();
+  if (systemOrg && systemOrg !== orgId) {
+    const inheritedModels = await store.listProviderModels(systemOrg, true);
+    if (inheritedModels.length > 0) return { effectiveOrgId: systemOrg, models: inheritedModels, inherited: true };
+  }
+  return { effectiveOrgId: orgId, models: [], inherited: false };
 }
 
 const EFFORT_LABELS: Record<ModelReasoningEffort, string> = {

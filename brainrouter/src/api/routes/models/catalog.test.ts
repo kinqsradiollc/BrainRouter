@@ -277,4 +277,46 @@ describe("server-managed model APIs", () => {
     expect(deleteDefault.status).toBe(400);
     expect(mocks.deleteProviderModel).not.toHaveBeenCalled();
   });
+
+  it("GET /api/admin/models returns the org's own set (not inherited) when it has enabled models", async () => {
+    // default beforeEach mock returns [model()] (orgId org-a) for org-a
+    const response = await requestJson(new URL(`${baseUrl}/api/admin/models`), "GET", adminHeaders);
+    expect(response.status).toBe(200);
+    const body = response.body as { models: Array<{ readOnly?: boolean }>; inherited: boolean; source: { orgId: string } };
+    expect(body.inherited).toBe(false);
+    expect(body.source.orgId).toBe("org-a");
+    expect(body.models.every((m) => !m.readOnly)).toBe(true);
+  });
+
+  it("GET /api/admin/models inherits the deployment default read-only when the org has none of its own", async () => {
+    // org-a has no models; the system org (org_personal_admin, the default) does.
+    mocks.listProviderModels.mockImplementation(async (orgId: string) =>
+      orgId === "org_personal_admin" ? [model({ id: "sys-model", orgId: "org_personal_admin" })] : [],
+    );
+    const response = await requestJson(new URL(`${baseUrl}/api/admin/models`), "GET", adminHeaders);
+    expect(response.status).toBe(200);
+    const body = response.body as { models: Array<{ id: string; orgId: string; readOnly?: boolean }>; inherited: boolean; source: { orgId: string; isSystemOrg: boolean } };
+    expect(body.inherited).toBe(true);
+    expect(body.source.orgId).toBe("org_personal_admin");
+    expect(body.models).toHaveLength(1);
+    expect(body.models[0].readOnly).toBe(true);
+    expect(body.models[0].orgId).toBe("org_personal_admin");
+    // it looked up the system org's ENABLED models
+    expect(mocks.listProviderModels).toHaveBeenCalledWith("org_personal_admin", true);
+  });
+
+  it("GET /api/admin/models never self-inherits when the caller IS the system org", async () => {
+    process.env.BRAINROUTER_SYSTEM_ORG_ID = "org-a";
+    try {
+      mocks.listProviderModels.mockResolvedValue([]);
+      const response = await requestJson(new URL(`${baseUrl}/api/admin/models`), "GET", adminHeaders);
+      expect(response.status).toBe(200);
+      const body = response.body as { models: unknown[]; inherited: boolean; source: { isSystemOrg: boolean } };
+      expect(body.inherited).toBe(false);
+      expect(body.models).toHaveLength(0);
+      expect(body.source.isSystemOrg).toBe(true);
+    } finally {
+      delete process.env.BRAINROUTER_SYSTEM_ORG_ID;
+    }
+  });
 });
