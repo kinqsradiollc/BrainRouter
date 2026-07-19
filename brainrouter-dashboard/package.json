@@ -27,12 +27,14 @@
     "react-dom": "^19.2.6",
     "react-markdown": "^10.1.0",
     "rehype-katex": "^7.0.1",
-    "remark-math": "^6.0.0"
+    "remark-math": "^6.0.0",
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@types/three": "^0.185.1",
     "esbuild": "^0.25.12",
     "typescript": "^5.5.4",
     "wrangler": "^4.0.0"

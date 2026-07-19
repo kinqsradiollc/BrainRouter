@@ -10,7 +10,10 @@
     "build:electron": "node -e \"fs.rmSync('dist-electron',{recursive:true,force:true})\" && tsc -p tsconfig.electron.json",
     "build:deps": "npm run build -w @kinqs/brainrouter-types && npm run build -w @kinqs/brainrouter-core",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build:deps && npm run typecheck && npm run build:electron && node --test \"dist-electron/**/*.test.js\" && tsx --test \"src/**/*.test.ts\" \"scripts/**/*.test.ts\"",
+    "test": "npm run build:deps && npm run typecheck && npm run build:electron && node --test \"dist-electron/**/*.test.js\" \"scripts/**/*.test.mjs\" && tsx --test \"src/**/*.test.ts\" \"scripts/**/*.test.ts\"",
+    "test:browser:harness": "node --test \"scripts/**/*.test.mjs\"",
+    "test:browser:e2e": "npm run build:deps && npm run build && node scripts/browser-e2e.mjs",
+    "bench:browser:compare": "npm run build:deps && npm run build && node scripts/browser-benchmark.mjs",
     "dev": "vite",
     "start": "npm run build:deps && npm run build && electron .",
     "start:fast": "electron .",
@@ -24,7 +27,7 @@
   "build": {
     "appId": "com.brainrouter.desktop",
     "productName": "BrainRouter",
-    "electronVersion": "33.4.11",
+    "electronVersion": "43.1.1",
     "afterSign": "build/notarize.cjs",
     "directories": {
       "output": "release"
@@ -107,7 +110,7 @@
     "@types/react-dom": "^18.3.0",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^4.3.1",
-    "electron": "^33.0.0",
+    "electron": "43.1.1",
     "tsx": "^4.7.0",
     "typescript": "^5.5.4",
     "vite": "^5.4.6"

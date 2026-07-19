@@ -46,6 +46,23 @@ test('POLICY-1 actionKindForTool maps every mutating built-in (else read-only)',
   assert.equal(actionKindForTool('grep_search'), 'read_only');
 });
 
+test('computer control is always included in the policy audit surface', () => {
+  const policy = resolveToolPolicy('computer_use', 'shell');
+  assert.equal(policy.action, 'computer');
+  assert.equal(policy.mutating, true);
+});
+
+test('POLICY-1 synthesized delegate_<id> tools gate as child_write (CWE-280 — not registered)', () => {
+  // delegate_<id> tools are synthesized per agent definition and never live in
+  // the registry, so they must be classified by prefix — else they default to
+  // read_only and a read-only access mode would wrongly permit spawning a child.
+  for (const t of ['delegate_reviewer', 'delegate_a1b2c3', 'delegate_x']) {
+    assert.equal(actionKindForTool(t), 'child_write', t);
+    assert.equal(isChildSpawnTool(t), true, t);
+    assert.equal(decideExecutionPolicy(actionKindForTool(t), 'read').decision, 'deny', t);
+  }
+});
+
 test('POLICY-1 resolveToolPolicy unifies name → action → decision + mutating flag', () => {
   // file edits: denied in read, allowed once writing.
   assert.equal(resolveToolPolicy('write_file', 'read').decision, 'deny');

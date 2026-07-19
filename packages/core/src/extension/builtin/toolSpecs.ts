@@ -22,7 +22,7 @@ import {
   createRunWorkflowGraphTool,
 } from '../../orchestration/tools.js';
 
-export const LOCAL_TOOLS = [
+export const BUILTIN_TOOL_SPECS = [
   {
     name: 'read_file',
     description: 'Read the contents of a file from the workspace. Optional line ranges can be provided.',
@@ -171,6 +171,33 @@ export const LOCAL_TOOLS = [
         fromByte: { type: 'number', description: 'Byte offset to read from. Default 0.' }
       },
       required: ['id']
+    }
+  },
+  {
+    name: 'kill_command',
+    description: 'Terminate a background run_command by id (the counterpart to run_command({background:true}) / task_output). Sends SIGTERM by default; use SIGKILL to force-stop or SIGINT to interrupt. Returns { id, killed, signal }.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Run id returned by run_command({background:true}).' },
+        signal: { type: 'string', enum: ['SIGTERM', 'SIGKILL', 'SIGINT'], description: 'Signal to send. Default SIGTERM (graceful); SIGKILL force-stops.' }
+      },
+      required: ['id']
+    }
+  },
+  {
+    name: 'notebook_edit',
+    description: 'Edit a Jupyter notebook (.ipynb) cell by index. edit_mode="replace" (default) overwrites the cell source; "insert" adds a new cell AT cell_index (shifting the rest down); "delete" removes the cell. cell_type ("code"|"markdown") is required for insert and optional for replace. `source` is the new cell text (ignored for delete). Read the notebook first to get cell indices.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Workspace-relative path to a .ipynb notebook.' },
+        cell_index: { type: 'number', description: '0-based cell index. Required for replace/delete; for insert it is the position to insert at (default: append).' },
+        edit_mode: { type: 'string', enum: ['replace', 'insert', 'delete'], description: 'replace (default) | insert | delete.' },
+        cell_type: { type: 'string', enum: ['code', 'markdown'], description: 'Cell kind — required for insert; for replace, changes the cell type if given.' },
+        source: { type: 'string', description: 'New cell content (a plain string; newlines preserved). Ignored for delete.' }
+      },
+      required: ['path']
     }
   },
   {

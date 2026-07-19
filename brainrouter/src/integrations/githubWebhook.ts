@@ -244,7 +244,13 @@ export async function processGithubDelivery(deps: WebhookDeps, req: WebhookReque
   const orgId = integ.orgId;
   const repoFullName = req.body?.repository?.full_name;
   const repoLinked = isRepoLinkedForReview(integ.config, String(repoFullName ?? ""));
-  const fireReviews = async (prNumber: unknown, headSha: unknown, lenses: Array<"security" | "code">, opts?: { supersede?: boolean }) => {
+  const fireReviews = async (
+    prNumber: unknown,
+    headSha: unknown,
+    lenses: Array<"security" | "code">,
+    identities: { prAuthor?: unknown; triggeredByLogin?: unknown } = {},
+    opts?: { supersede?: boolean },
+  ) => {
     if (!repoLinked) return; // repo not linked to our system → do not review
     // On a push, drop any prior PENDING review for this PR so only the newest head
     // is reviewed (running reviews are left to finish). Best-effort — a failure here
@@ -254,7 +260,13 @@ export async function processGithubDelivery(deps: WebhookDeps, req: WebhookReque
       try { await deps.cancelSupersededReviews({ orgId, repo: String(repoFullName ?? ""), prNumber: prNum }); }
       catch { /* superseding is best-effort; the new review still enqueues */ }
     }
-    const reviewInput = { orgId, installationId, repo: repoFullName, prNumber, headSha };
+    const prAuthor = typeof identities.prAuthor === "string" ? identities.prAuthor.trim() : "";
+    const triggeredByLogin = typeof identities.triggeredByLogin === "string" ? identities.triggeredByLogin.trim() : "";
+    const reviewInput = {
+      orgId, installationId, repo: repoFullName, prNumber, headSha,
+      ...(prAuthor ? { prAuthor } : {}),
+      ...(triggeredByLogin ? { triggeredByLogin } : {}),
+    };
     for (const lens of lenses) {
       try {
         await deps.enqueue({ kind: lens === "security" ? "pr-security-review" : "pr-code-review", input: reviewInput });
@@ -265,13 +277,16 @@ export async function processGithubDelivery(deps: WebhookDeps, req: WebhookReque
   // Security runs on open/reopen and configured pushes. Code only joins automatic
   // events when the repo explicitly opts into `codeReviewTrigger: auto`.
   if (req.event === "pull_request" && (action === "opened" || action === "synchronize" || action === "reopened")) {
-    const pr = (req.body?.pull_request ?? {}) as { number?: number; head?: { sha?: string } };
+    const pr = (req.body?.pull_request ?? {}) as { number?: number; head?: { sha?: string }; user?: { login?: string } };
     const policy = resolveReviewPolicy(integ.config, String(repoFullName ?? ""));
     const isPush = action === "synchronize";
     const lenses: Array<"security" | "code"> = [];
     if (!isPush || policy.reReviewOnPush) lenses.push("security");
     if (policy.codeReviewTrigger === "auto" && (!isPush || policy.reReviewOnPush)) lenses.push("code");
-    if (lenses.length) await fireReviews(pr.number, pr.head?.sha, lenses, { supersede: isPush });
+    if (lenses.length) await fireReviews(pr.number, pr.head?.sha, lenses, {
+      prAuthor: pr.user?.login,
+      triggeredByLogin: req.body?.sender?.login,
+    }, { supersede: isPush });
   }
 
   // Command runs are gated by the install token's repository permission, never by
@@ -283,7 +298,12 @@ export async function processGithubDelivery(deps: WebhookDeps, req: WebhookReque
     if (command && username && String(commenter?.type ?? "").toLowerCase() !== "bot") {
       const allowed = await commentCommandAllowed(deps, integ, String(repoFullName ?? ""), username);
       if (!allowed) await postDeniedReply(deps, integ, String(repoFullName ?? ""), Number(req.body?.issue?.number), username);
-      else await fireReviews(req.body?.issue?.number, "", command === "both" ? ["security", "code"] : [command]);
+      else await fireReviews(
+        req.body?.issue?.number,
+        "",
+        command === "both" ? ["security", "code"] : [command],
+        { triggeredByLogin: username },
+      );
     }
   }
 

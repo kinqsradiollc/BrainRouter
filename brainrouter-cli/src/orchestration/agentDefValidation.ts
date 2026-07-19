@@ -35,7 +35,7 @@ export interface ValidationResult {
 /**
  * AGENTS-WIZARD — optional knowledge the wizard passes so tool-scope entries can
  * be checked against what actually exists. `knownLocalTools` is this build's
- * `LOCAL_TOOLS`; `knownMcpTools` is the currently-connected server's tool list.
+ * active extension tool registry; `knownMcpTools` is the currently-connected server's tool list.
  */
 export interface ValidationContext {
   knownLocalTools?: string[];

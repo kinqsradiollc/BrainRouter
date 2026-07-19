@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { getMemberRole, listOrgMembershipsForUser, listOrgMembers } from "./tenancyQueries.js";
+import { getMemberRole, listOrgMembershipsForUser, listOrgMembers, removeOrgMember } from "./tenancyQueries.js";
 
 function orgRow(roleField: "role" | "member_role", role: string) {
   return {
@@ -44,5 +44,22 @@ describe("tenancy query role compatibility", () => {
     } as any;
 
     await expect(getMemberRole(exec, "org-team", "user-1")).resolves.toBeNull();
+  });
+
+  it("revokes organization-team grants when removing an organization member", async () => {
+    const query = vi.fn(async (_text: string, _params?: unknown[]) => ({ rowCount: 1 }));
+    const exec = {
+      tx: vi.fn(async (fn: (client: { query: typeof query }) => Promise<void>) => fn({ query })),
+    } as any;
+
+    await removeOrgMember(exec, "org-team", "user-1");
+
+    expect(exec.tx).toHaveBeenCalledOnce();
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query.mock.calls[0]?.[0]).toContain("DELETE FROM team_members");
+    expect(query.mock.calls[0]?.[0]).toContain("kind = 'organization' AND org_id = $1");
+    expect(query.mock.calls[1]?.[0]).toContain("DELETE FROM org_members");
+    expect(query.mock.calls[0]?.[1]).toEqual(["org-team", "user-1"]);
+    expect(query.mock.calls[1]?.[1]).toEqual(["org-team", "user-1"]);
   });
 });

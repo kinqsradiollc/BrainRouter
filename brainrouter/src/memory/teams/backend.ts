@@ -1,34 +1,28 @@
-/**
- * Teams backend — the data plane behind /api/teams. A team is a group of users
- * WITHIN an org (migration 035); it is the real entity behind the `team`
- * meeting-sharing scope (ADR-018), which previously had no backing entity. Every
- * function is org-scoped, so a team can never be read/mutated across org
- * boundaries and membership is always resolved against the caller's org.
- */
+/** Team-space domain layer: organization teams and cross-org personal teams. */
 import { randomUUID } from "node:crypto";
 import { memoryEngine } from "../engine.js";
 import type {
-  CreateTeamInput, TeamMemberRole, TeamMemberRow, TeamRow,
+  CreateTeamInput, TeamKind, TeamMemberRole, TeamMemberRow, TeamRow,
 } from "../store/postgres/queries/teamsQueries.js";
 
 interface TeamsStore {
   createTeam(input: CreateTeamInput): Promise<TeamRow>;
-  listTeamsForUser(orgId: string, userId: string): Promise<TeamRow[]>;
+  listTeamsForUser(orgId: string, userId: string, includeAllOrgTeams?: boolean): Promise<TeamRow[]>;
   getTeam(orgId: string, id: string): Promise<TeamRow | null>;
   isTeamMember(orgId: string, teamId: string, userId: string): Promise<boolean>;
-  listTeamMembers(orgId: string, teamId: string): Promise<TeamMemberRow[]>;
-  addTeamMember(orgId: string, teamId: string, userId: string, role?: TeamMemberRole): Promise<boolean>;
-  removeTeamMember(orgId: string, teamId: string, userId: string): Promise<boolean>;
+  listTeamMembers(orgId: string, teamId: string, callerUserId: string, canViewAllOrgTeams?: boolean): Promise<TeamMemberRow[]>;
+  insertTeamOwner(teamId: string, userId: string): Promise<boolean>;
+  addTeamMember(orgId: string, teamId: string, userId: string, role: TeamMemberRole | undefined, callerUserId: string, canManageOrgTeams?: boolean): Promise<boolean>;
+  removeTeamMember(orgId: string, teamId: string, userId: string, callerUserId: string, canManageOrgTeams?: boolean): Promise<boolean>;
+  transferPersonalTeamOwnership(teamId: string, fromUserId: string, toUserId: string): Promise<boolean>;
   deleteTeam(orgId: string, id: string): Promise<boolean>;
 }
 const store = (): TeamsStore => memoryEngine.store as unknown as TeamsStore;
 
-export type { TeamRow, TeamMemberRow, TeamMemberRole } from "../store/postgres/queries/teamsQueries.js";
+export type { TeamKind, TeamRow, TeamMemberRow, TeamMemberRole } from "../store/postgres/queries/teamsQueries.js";
 
-/** Raised when a `team`-scoped action names a team that isn't in the org, or that
- *  the user isn't a member of. Callers surface this as a 400. */
 export class TeamMembershipError extends Error {
-  constructor(message = "You are not a member of that team, or it does not exist in this organization.") {
+  constructor(message = "You are not a member of that team, or it is not available in this context.") {
     super(message);
     this.name = "TeamMembershipError";
   }
@@ -36,50 +30,54 @@ export class TeamMembershipError extends Error {
 
 const MAX_NAME = 200;
 
-export async function listTeams(orgId: string, userId: string): Promise<TeamRow[]> {
-  return store().listTeamsForUser(orgId, userId);
+export async function listTeams(orgId: string, userId: string, includeAllOrgTeams = false): Promise<TeamRow[]> {
+  return store().listTeamsForUser(orgId, userId, includeAllOrgTeams);
+}
+export async function getTeam(orgId: string, id: string): Promise<TeamRow | null> { return store().getTeam(orgId, id); }
+export async function listMembers(orgId: string, teamId: string, callerUserId: string, canViewAllOrgTeams = false): Promise<TeamMemberRow[]> {
+  return store().listTeamMembers(orgId, teamId, callerUserId, canViewAllOrgTeams);
 }
 
-export async function getTeam(orgId: string, id: string): Promise<TeamRow | null> {
-  return store().getTeam(orgId, id);
-}
-
-export async function listMembers(orgId: string, teamId: string): Promise<TeamMemberRow[]> {
-  return store().listTeamMembers(orgId, teamId);
-}
-
-/** Create a team in the caller's org; the creator is auto-added as the `owner` member. */
-export async function createTeam(orgId: string, userId: string, name: string): Promise<TeamRow> {
+export async function createTeam(orgId: string, userId: string, name: string, kind: TeamKind = "organization"): Promise<TeamRow> {
   const clean = (name ?? "").trim().slice(0, MAX_NAME);
   if (!clean) throw new Error("Team name is required");
-  const team = await store().createTeam({ id: `team_${randomUUID()}`, orgId, name: clean, createdBy: userId });
-  await store().addTeamMember(orgId, team.id, userId, "owner");
+  const personal = kind === "personal";
+  const team = await store().createTeam({
+    id: `team_${randomUUID()}`,
+    kind,
+    orgId: personal ? null : orgId,
+    ownerUserId: personal ? userId : null,
+    name: clean,
+    createdBy: userId,
+  });
+  await store().insertTeamOwner(team.id, userId);
   return team;
 }
 
-export async function addMember(orgId: string, teamId: string, userId: string, role: TeamMemberRole = "member"): Promise<boolean> {
-  return store().addTeamMember(orgId, teamId, userId, role);
+export async function addMember(orgId: string, teamId: string, userId: string, role: TeamMemberRole = "member", callerUserId: string, canManageOrgTeams = false): Promise<boolean> {
+  return store().addTeamMember(orgId, teamId, userId, role, callerUserId, canManageOrgTeams);
 }
-
-export async function removeMember(orgId: string, teamId: string, userId: string): Promise<boolean> {
-  return store().removeTeamMember(orgId, teamId, userId);
+export async function removeMember(orgId: string, teamId: string, userId: string, callerUserId: string, canManageOrgTeams = false): Promise<boolean> {
+  return store().removeTeamMember(orgId, teamId, userId, callerUserId, canManageOrgTeams);
 }
-
-export async function deleteTeam(orgId: string, id: string): Promise<boolean> {
-  return store().deleteTeam(orgId, id);
+export async function transferPersonalTeamOwnership(teamId: string, fromUserId: string, toUserId: string): Promise<boolean> {
+  return store().transferPersonalTeamOwnership(teamId, fromUserId, toUserId);
 }
+export async function deleteTeam(orgId: string, id: string): Promise<boolean> { return store().deleteTeam(orgId, id); }
+export async function isTeamMember(orgId: string, teamId: string, userId: string): Promise<boolean> { return store().isTeamMember(orgId, teamId, userId); }
 
-export async function isTeamMember(orgId: string, teamId: string, userId: string): Promise<boolean> {
-  return store().isTeamMember(orgId, teamId, userId);
-}
-
-/**
- * Guard for `team`-scoped sharing: throws {@link TeamMembershipError} unless the
- * team exists in `orgId` AND `userId` is a member of it. Used by meeting sharing so
- * a meeting can only be team-shared to a real team the caller belongs to.
- */
+/** A share target may be a same-org organization team or any personal team the owner belongs to. */
 export async function assertUserInTeam(orgId: string, userId: string, teamId: string): Promise<void> {
-  if (!teamId || !(await store().isTeamMember(orgId, teamId, userId))) {
-    throw new TeamMembershipError();
+  if (!teamId || !(await store().isTeamMember(orgId, teamId, userId))) throw new TeamMembershipError();
+}
+
+/** Organization admins may share same-org resources to any organization team,
+ * while personal teams always require real membership. */
+export async function assertUserCanShareToTeam(orgId: string, userId: string, teamId: string, canManageOrgTeams = false): Promise<void> {
+  if (teamId && await store().isTeamMember(orgId, teamId, userId)) return;
+  if (canManageOrgTeams && teamId) {
+    const team = await store().getTeam(orgId, teamId);
+    if (team?.kind === "organization" && team.orgId === orgId) return;
   }
+  throw new TeamMembershipError();
 }

@@ -18,6 +18,15 @@ import {
   type ExtensionHookHandler,
   type PanelContribution,
 } from './registry.js';
+import { registerBuiltinCapability } from './builtin/capabilities.js';
+import type { ExtensionSource } from './manifest.js';
+import type { BrowserControlPort } from '../browser/control.js';
+
+/** Narrow runtime context available only to a packaged built-in browser extension. */
+export interface ExtensionToolRuntimeContext {
+  browserControlPort?: BrowserControlPort;
+  signal?: AbortSignal;
+}
 
 /** The ergonomic shape an extension passes to `host.registerTool`. */
 export interface ExtensionToolDef {
@@ -31,8 +40,12 @@ export interface ExtensionToolDef {
   actionKind: ActionKind;
   /** Safe to dispatch concurrently within one assistant message. Default false. */
   parallelSafe?: boolean;
+  /** Include this call in policy audit events even when its action kind is network. */
+  audited?: boolean;
+  /** Privileged per-Agent runtime port. Only packaged built-in extensions may request it. */
+  runtimePort?: 'browser-control';
   /** The runtime — receives the parsed args, returns the tool-result string. */
-  handle(args: Record<string, unknown>): Promise<string> | string;
+  handle(args: Record<string, unknown>, runtime?: ExtensionToolRuntimeContext): Promise<string> | string;
 }
 
 export interface ExtensionHost {
@@ -50,6 +63,11 @@ export interface ExtensionHost {
   readonly version: string;
 }
 
+/** Privileged host shape used only for required extensions shipped inside core. */
+export interface BuiltinExtensionHost extends ExtensionHost {
+  registerCoreCapability(name: string): void;
+}
+
 /** The single entrypoint an extension module must export. */
 export type ExtensionActivate = (host: ExtensionHost) => void | Promise<void>;
 
@@ -62,28 +80,50 @@ class ExtensionToolExecutor implements LocalToolExecutor {
   accessTier(): AccessMode { return this.def.accessTier; }
   actionKind(): ActionKind { return this.def.actionKind; }
   supportsParallelToolCalls(): boolean { return this.def.parallelSafe ?? false; }
+  isAvailable(context: import('../tool/registry/executors.js').LocalToolAvailabilityContext): boolean {
+    return this.def.runtimePort !== 'browser-control' || context.browserUseAvailable === true;
+  }
   async handle(invocation: LocalToolInvocation): Promise<string> {
-    return String(await this.def.handle(invocation.args));
+    const runtime = this.def.runtimePort === 'browser-control'
+      ? { browserControlPort: invocation.browserControlPort, signal: invocation.signal }
+      : undefined;
+    return String(await this.def.handle(invocation.args, runtime));
   }
 }
 
 /** Build a host bound to one extension; its registrations are attributed to `name`. */
-export function createExtensionHost(name: string, workspaceRoot: string, version: string): ExtensionHost {
-  return {
+export function createExtensionHost(
+  name: string,
+  workspaceRoot: string,
+  version: string,
+  options: { source?: ExtensionSource; required?: boolean } = {},
+): ExtensionHost {
+  const host: ExtensionHost & Partial<BuiltinExtensionHost> = {
     workspaceRoot,
     version,
     log: (msg, fields) => console.error(`[ext:${name}] ${msg}${fields ? ' ' + JSON.stringify(fields) : ''}`),
     registerTool: (def) => {
+      if (def.runtimePort === 'browser-control' && options.source !== 'builtin') {
+        throw new Error(`Extension "${name}" cannot request the privileged browser-control runtime port.`);
+      }
       const entry: LocalToolEntry = {
         name: def.name,
         accessTier: def.accessTier,
         actionKind: def.actionKind,
         parallelSafe: def.parallelSafe ?? false,
+        ...(def.audited ? { audited: true } : {}),
+        ...(def.runtimePort === 'browser-control' ? { runtimePort: 'browser-control', availability: 'browser-use' } : {}),
       };
-      registerExtensionTool(entry, new ExtensionToolExecutor(def), name);
+      registerExtensionTool(entry, new ExtensionToolExecutor(def), name, { required: false });
     },
     registerProvider: (def) => registerExtensionProvider(def, name),
     registerHook: (handler) => registerExtensionHook(handler, name),
     registerPanel: (descriptor) => registerExtensionPanel(descriptor, name),
   };
+  // The public host never contains this port. Arbitrary user/workspace code can
+  // register argument-only tools, but cannot obtain the Agent runtime bridge.
+  if (options.source === 'builtin' && options.required) {
+    host.registerCoreCapability = (capability) => registerBuiltinCapability(capability);
+  }
+  return host;
 }

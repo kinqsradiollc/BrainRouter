@@ -148,7 +148,10 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
   }
 
   const requested = (args.access as AccessMode | undefined) ?? role.defaultAccess;
-  const access = clampAccess(ctx.parentAccessMode ?? 'shell', requested);
+  // Fail SAFE if a caller ever omits the parent access mode: clamp against the
+  // least privilege ('read'), never the most ('shell'). Spawn is a privilege
+  // primitive — an absent parent ceiling must not silently grant a child more.
+  const access = clampAccess(ctx.parentAccessMode ?? 'read', requested);
 
   // PARITY-Q — soft delegation-prompt nudge. A terse child prompt with no
   // return-format cue tends to come back vague; rather than reject it (the
@@ -311,7 +314,7 @@ export async function handleSpawn(args: any, ctx: OrchestrationContext): Promise
   }
   // 0.4.x-5: per-child reasoning-effort override (otherwise inherits /effort).
   const effortOverride =
-    args.effort === 'low' || args.effort === 'medium' || args.effort === 'high' ? args.effort : undefined;
+    args.effort === 'low' || args.effort === 'medium' || args.effort === 'high' || args.effort === 'xhigh' ? args.effort : undefined;
 
   // 0.4.15 — route this child to its ROLE's configured provider/model
   // (config.providers + config.agentModels). Falls back to the parent's LLM

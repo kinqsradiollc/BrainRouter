@@ -10,7 +10,7 @@ import path from 'node:path';
 import chalk from 'chalk';
 import { callMcpTool, childSessionKey } from '@kinqs/brainrouter-core/mcp';
 import { validateAgentDefinition, buildAgentDefinition, previewAgentDefinition } from '../../../orchestration/agentDefValidation.js';
-import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/agent';
+import { localToolSpecsFromExecutors } from '@kinqs/brainrouter-core/tool';
 import { listRoles, listAll as listAgentDefs, formatSessionSummary, getSession, listSessions, reconcileStale, updateSession, parseChildOutput } from '@kinqs/brainrouter-core/orchestration';
 import { activeRun, formatActivePhase } from '@kinqs/brainrouter-core/workflow';
 import { buildAgentForest, formatAgentForest, formatAgentWhy } from '../../../orchestration/agentTree.js';
@@ -54,7 +54,7 @@ export async function handleAgents(ctx: CommandContext): Promise<boolean> {
       toolScope: { local: csv(flag('tools')), mcp: csv(flag('mcp')) },
       ownership: flag('ownership'),
     };
-    // Validate against the REAL tool sets: this build's LOCAL_TOOLS + the
+    // Validate against the REAL tool sets: the active extension registry + the
     // currently-connected MCP server's tools (best-effort — skip MCP names
     // when offline so an unreachable server doesn't block creation).
     let knownMcpTools: string[] | undefined;
@@ -65,7 +65,7 @@ export async function handleAgents(ctx: CommandContext): Promise<boolean> {
       }
     } catch { /* offline / list failed — skip MCP existence check */ }
     const v = validateAgentDefinition(draft, {
-      knownLocalTools: LOCAL_TOOLS.map((t) => t.name),
+      knownLocalTools: localToolSpecsFromExecutors().map((tool) => tool.name),
       knownMcpTools,
     });
     if (!v.valid) {

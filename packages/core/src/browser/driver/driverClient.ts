@@ -1,9 +1,9 @@
 /**
- * The host-side client that owns one headed Playwright driver child and exposes
- * it as a `Backend`. It spawns the driver (Node script), waits for its `ready`
+ * Explicit Playwright test adapter. Constructing this class is the only way to
+ * opt into an external browser; production UI sessions never instantiate it.
+ * It spawns the driver script, waits for its `ready`
  * handshake, then writes `{reqId, cmd}` lines and resolves each `perform` against
- * the matching `{reqId, result}` reply. One client = one browser; the Desktop
- * panel and the agent share the same instance so they drive the same browser.
+ * the matching `{reqId, result}` reply.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';

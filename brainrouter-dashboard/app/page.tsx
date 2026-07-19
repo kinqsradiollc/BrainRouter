@@ -1,64 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { motion, useReducedMotion } from "framer-motion";
+import { useRef } from "react";
+import { motion, useReducedMotion, useScroll, useSpring, useTransform } from "framer-motion";
 import { PremiumButton } from "../components/PremiumButton";
+import { ProductOrbit } from "../components/ProductOrbit";
+import { PRODUCT_CAPABILITIES, PRODUCT_LOOP, PRODUCT_SURFACES } from "../lib/homeProductStory";
 import { STATIC_PRESENTATION } from "../lib/presentation";
-
-type WorkflowTone = "plan" | "build" | "connect" | "knowledge" | "review" | "automation";
-
-const CAPABILITIES = [
-  {
-    index: "01",
-    title: "Build with an agent workbench",
-    copy: "Move between read-only chat, code execution, project tracking, plans, requirements, and visual workflows without losing the active task.",
-    label: "Chat · Code · Track",
-    tone: "build" as WorkflowTone,
-  },
-  {
-    index: "02",
-    title: "Use the right help for each task",
-    copy: "Choose the model you prefer, bring in focused helpers when work grows, and stay in control of what they can change.",
-    label: "Models · Helpers · Permissions",
-    tone: "plan" as WorkflowTone,
-  },
-  {
-    index: "03",
-    title: "Connect the systems you use",
-    copy: "Bring repositories, MCP servers, knowledge sources, hooks, and automation triggers into one governed workspace.",
-    label: "Connectors · MCP · Hooks",
-    tone: "connect" as WorkflowTone,
-  },
-  {
-    index: "04",
-    title: "Keep context that improves",
-    copy: "Recall durable knowledge, inspect evidence and contradictions, manage persona, and understand why context appeared in a turn.",
-    label: "Memory · Evidence · Recall",
-    tone: "knowledge" as WorkflowTone,
-  },
-  {
-    index: "05",
-    title: "Review before work ships",
-    copy: "Inspect diffs, requirements, plans, checks, and PR feedback from the same task surface that produced the change.",
-    label: "Review · Verify · CI",
-    tone: "review" as WorkflowTone,
-  },
-];
-
-const SURFACES = [
-  ["Desktop", "The full agent workbench for projects, sessions, tools, workflows, and reviews.", "build"],
-  ["CLI", "A fast terminal head with the same routing, policy, memory, and orchestration core.", "automation"],
-  ["Dashboard", "Workspace administration, connected sources, knowledge inspection, and team visibility.", "knowledge"],
-  ["MCP", "Composable tools that let other agents use BrainRouter capabilities through a governed protocol.", "connect"],
-] as const;
-
-const WORKFLOW = [
-  ["Plan", "plan"],
-  ["Build", "build"],
-  ["Connect", "connect"],
-  ["Remember", "knowledge"],
-  ["Verify", "review"],
-] as const;
 
 const KNOWLEDGE_STEPS = [
   {
@@ -91,61 +39,73 @@ const KNOWLEDGE_STEPS = [
 export default function HomePage() {
   const reduceMotion = useReducedMotion();
   const revealInitial = reduceMotion ? false : { opacity: 0, y: 24 };
+  // Cinematic hero staging: kicker → headline lines → copy → actions → proof,
+  // then the operations graph "powers on". Collapses to no-ops under reduced motion.
+  const stage = (delay: number) => reduceMotion ? {} : {
+    initial: { opacity: 0, y: 26, filter: "blur(6px)" },
+    animate: { opacity: 1, y: 0, filter: "blur(0px)" },
+    transition: { duration: .65, delay, ease: [0.16, 1, 0.3, 1] as const },
+  };
+
+  // Scroll choreography: a page progress beam, and a film-style exit — the
+  // foreground title card rises away while the scene behind it slowly zooms
+  // in (backgrounds move less than foregrounds). Inert under reduced motion.
+  const { scrollYProgress } = useScroll();
+  const progress = useSpring(scrollYProgress, { stiffness: 170, damping: 30, mass: 0.3 });
+  const heroRef = useRef<HTMLElement>(null);
+  const { scrollYProgress: heroProgress } = useScroll({ target: heroRef, offset: ["start start", "end start"] });
+  const heroCopyY = useTransform(heroProgress, [0, 1], [0, -80]);
+  const heroVisualY = useTransform(heroProgress, [0, 1], [0, 46]);
+  const heroVisualScale = useTransform(heroProgress, [0, 1], [1, 1.08]);
 
   return (
     <div className="platform-landing">
-      <motion.section className="platform-hero" initial={reduceMotion ? false : { opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .7, ease: [0.16, 1, 0.3, 1] }}>
-        <div className="platform-hero-atmosphere" aria-hidden>
-          <i data-tone="plan" /><i data-tone="build" /><i data-tone="knowledge" /><i data-tone="review" />
-        </div>
-        <div className="platform-hero-copy">
-          <span className="platform-kicker"><i /> Agent operations system</span>
-          <h1>Move from <em>intent</em> to verified work in one workspace.</h1>
-          <p>BrainRouter brings conversation, coding, planning, connected knowledge, automation, and review into one place. Start with a task and keep the right project context with you through the verified result.</p>
-          <div className="platform-actions">
+      <motion.div className="platform-scroll-progress" style={reduceMotion ? undefined : { scaleX: progress }} aria-hidden />
+      {/* Immersive hero — the operations graph IS the viewport; copy floats on
+          the scene like a title card. On exit the scene zooms subtly while the
+          foreground rises away (film-style pull). */}
+      <motion.section ref={heroRef} className="platform-hero-cine" initial={reduceMotion ? false : { opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: .6 }}>
+        <motion.div className="platform-hero-cine-scene" aria-hidden style={reduceMotion ? undefined : { y: heroVisualY, scale: heroVisualScale }}>
+          <ProductOrbit immersive />
+        </motion.div>
+        <div className="platform-hero-cine-grade" aria-hidden />
+        <motion.div className="platform-hero-cine-fg" style={reduceMotion ? undefined : { y: heroCopyY }}>
+          <motion.span className="platform-kicker" {...stage(0)}><i /> Open agent operations workspace</motion.span>
+          <h1>
+            <motion.span className="platform-hero-line" {...stage(.08)}>Move every agent</motion.span>
+            <motion.span className="platform-hero-line" {...stage(.2)}>task from <em>intent</em></motion.span>
+            <motion.span className="platform-hero-line" {...stage(.32)}>to verified work.</motion.span>
+          </h1>
+          <motion.div className="platform-actions" {...stage(.5)}>
             {!STATIC_PRESENTATION && (
               <Link href="/overview"><PremiumButton variant="primary">Open workspace <span aria-hidden>→</span></PremiumButton></Link>
             )}
             <a href="https://github.com/kinqsradiollc/BrainRouter" target="_blank" rel="noopener noreferrer">
               <PremiumButton variant="ghost">View source</PremiumButton>
             </a>
-          </div>
-          <div className="platform-proof" aria-label="BrainRouter product surfaces">
-            <span>Desktop</span><span>CLI</span><span>Dashboard</span><span>MCP</span>
-          </div>
-        </div>
-
-        <div className="platform-preview" aria-label="BrainRouter desktop workspace preview">
-          <div className="platform-preview-glow" aria-hidden />
-          <div className="platform-preview-bar"><span /><strong>BrainRouter</strong><small><i /> workspace live</small></div>
-          <div className="platform-preview-body">
-            <aside>
-              <b>Modes</b>
-              <span>Chat</span><span className="active" data-tone="build"><i />Code</span><span>Track</span>
-              <b>Workspace</b>
-              <span className="active" data-tone="plan"><i />BrainRouter</span><span>Recent tasks</span>
-            </aside>
-            <div className="platform-preview-main">
-              <div className="platform-preview-context"><span>Objective</span><strong>Ship the connected agent workspace</strong><small><i /> In progress</small></div>
-              <div className="platform-preview-message"><i>BR</i><p>I’ll inspect the active project, update the plan, and keep changes behind the existing verification gates.</p></div>
-              <div className="platform-preview-steps">
-                <span className="done"><i />Read workspace instructions<small>done</small></span>
-                <span className="done"><i />Map affected surfaces<small>done</small></span>
-                <span className="running"><i />Implement and verify<small>running</small></span>
-              </div>
-              <div className="platform-preview-activity" aria-label="Active workspace signals">
-                <span data-tone="plan"><i />Plan ready</span><span data-tone="knowledge"><i />8 memories</span><span data-tone="review"><i />2 checks</span>
-              </div>
-              <div className="platform-preview-composer"><span>Ask BrainRouter to build, explain, or review…</span><b>↑</b></div>
-            </div>
-          </div>
-        </div>
+          </motion.div>
+          <motion.div className="platform-proof" aria-label="BrainRouter product surfaces" {...stage(.62)}>
+            <span>Desktop</span><span>CLI</span><span>Dashboard</span><span>MCP + API</span>
+          </motion.div>
+        </motion.div>
+        <motion.aside className="platform-hero-cine-note" {...stage(.74)}>
+          <p>BrainRouter keeps the workbench, models, projects, teams, connected systems, permissions, durable knowledge, automation, and review evidence on one shared task path.</p>
+          <span><i /> task state synchronized · models · tools · sources · memory · review</span>
+        </motion.aside>
       </motion.section>
 
       <motion.section className="platform-route-strip" aria-label="BrainRouter workflow" initial={revealInitial} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true, amount: .45 }} transition={{ duration: .55, ease: [0.16, 1, 0.3, 1] }}>
         <span className="platform-route-label">One continuous task</span>
         <div>
-          {WORKFLOW.map(([label, tone], index) => <span key={label} data-tone={tone}><i />{label}{index < WORKFLOW.length - 1 && <b aria-hidden>→</b>}</span>)}
+          {PRODUCT_LOOP.map((step, index) => (
+            <motion.span key={step.label} data-tone={step.tone}
+              initial={reduceMotion ? false : { opacity: 0, y: 14 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true, amount: .6 }}
+              transition={{ duration: .45, delay: reduceMotion ? 0 : index * .09, ease: [0.16, 1, 0.3, 1] }}>
+              <i />{step.label}{index < PRODUCT_LOOP.length - 1 && <b aria-hidden>→</b>}
+            </motion.span>
+          ))}
         </div>
         <small>Shared project · permissions · context</small>
       </motion.section>
@@ -157,7 +117,7 @@ export default function HomePage() {
           <p>Use the same task context across planning, implementation, connected data, durable knowledge, and review.</p>
         </header>
         <div className="platform-capability-list">
-          {CAPABILITIES.map((capability, index) => (
+          {PRODUCT_CAPABILITIES.map((capability, index) => (
             <motion.article key={capability.index} data-tone={capability.tone} initial={reduceMotion ? false : { opacity: 0, x: 18 }} whileInView={{ opacity: 1, x: 0 }} viewport={{ once: true, amount: .55 }} transition={{ duration: .45, delay: reduceMotion ? 0 : index * .055, ease: [0.16, 1, 0.3, 1] }}>
               <span className="platform-index">{capability.index}</span>
               <div><h3>{capability.title}</h3><p>{capability.copy}</p></div>
@@ -192,8 +152,8 @@ export default function HomePage() {
           <p>Your models, permissions, connected tools, workflows, and useful context stay consistent wherever you use BrainRouter.</p>
         </div>
         <div className="platform-surface-grid">
-          {SURFACES.map(([title, copy, tone], index) => (
-            <motion.article key={title} data-tone={tone} initial={reduceMotion ? false : { opacity: 0, scale: .985 }} whileInView={{ opacity: 1, scale: 1 }} viewport={{ once: true, amount: .45 }} transition={{ duration: .4, delay: reduceMotion ? 0 : index * .06 }}><span>0{index + 1}</span><i aria-hidden /><h3>{title}</h3><p>{copy}</p></motion.article>
+          {PRODUCT_SURFACES.map((surface, index) => (
+            <motion.article key={surface.title} data-tone={surface.tone} initial={reduceMotion ? false : { opacity: 0, scale: .985 }} whileInView={{ opacity: 1, scale: 1 }} viewport={{ once: true, amount: .45 }} transition={{ duration: .4, delay: reduceMotion ? 0 : index * .06 }}><span>0{index + 1}</span><i aria-hidden /><h3>{surface.title}</h3><p>{surface.copy}</p></motion.article>
           ))}
         </div>
       </motion.section>

@@ -17,7 +17,7 @@ import {
   resolveProfileSwitch,
   switchModelToolAvailable,
 } from '../provider/llmProfiles.js';
-import { LOCAL_TOOLS } from '../tool/specs/specs.js';
+import { BUILTIN_TOOL_SPECS } from '../extension/builtin/toolSpecs.js';
 import { registryEntry, registryAllowedTools } from '../tool/registry/registry.js';
 
 const cfg = (cli: Config['cli']): Config => ({ activeServer: '', servers: {}, cli });
@@ -153,8 +153,8 @@ test('MC-D3 resolveProfileSwitch: availableModels gate applies when enforced (an
 // --- registry / spec wiring ----------------------------------------------------
 
 test('MC-D3 switch_model is spec\'d + registered read-tier/read_only/serialized', () => {
-  const spec = (LOCAL_TOOLS as Array<{ name: string }>).find((t) => t.name === 'switch_model');
-  assert.ok(spec, 'switch_model has a LOCAL_TOOLS spec');
+  const spec = (BUILTIN_TOOL_SPECS as Array<{ name: string }>).find((t) => t.name === 'switch_model');
+  assert.ok(spec, 'switch_model has a required capability-extension spec');
   const entry = registryEntry('switch_model');
   assert.ok(entry, 'switch_model has a registry entry');
   assert.equal(entry!.accessTier, 'read');

@@ -96,7 +96,18 @@ export async function addOrgMember(
 }
 
 export async function removeOrgMember(exec: Executor, orgId: string, userId: string): Promise<void> {
-  await exec.run(`DELETE FROM org_members WHERE org_id = $1 AND user_id = $2`, [orgId, userId]);
+  await exec.tx(async (client) => {
+    // Organization-team membership cannot outlive organization membership. This
+    // prevents a removed user from silently regaining old team grants if they
+    // are invited back later. Personal-team membership is intentionally kept.
+    await client.query(
+      `DELETE FROM team_members
+        WHERE user_id = $2
+          AND team_id IN (SELECT id FROM teams WHERE kind = 'organization' AND org_id = $1)`,
+      [orgId, userId],
+    );
+    await client.query(`DELETE FROM org_members WHERE org_id = $1 AND user_id = $2`, [orgId, userId]);
+  });
 }
 
 /** The caller's role in an org, or null when they are not a member. */

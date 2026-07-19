@@ -11,10 +11,12 @@ import { randomUUID, createHash, randomBytes } from "node:crypto";
 import { memoryEngine } from "../engine.js";
 import { ingestSource, type SourceIngestStore } from "../source/ingest.js";
 import { isPublicScope, isScopeDowngrade, scopeToBackendVisibility, assertScopeParams } from "./sharing.js";
-import { assertUserInTeam } from "../teams/backend.js";
+import { assertUserCanShareToTeam } from "../teams/backend.js";
 import { redactSensitiveMemoryText } from "../util/redaction.js";
 import { createTrack, untrackBySourceRef, type TrackItemRow } from "../track/backend.js";
 import type { CreateMeetingInput, MeetingListCursor, MeetingRow, MeetingScope, MeetingTranscriptSegment } from "../store/postgres/queries/meetingsQueries.js";
+import type { MeetingSummaryTemplateName } from "@kinqs/brainrouter-core/extension";
+import { generateMeetingSummary, meetingActionItemsForStorage } from "./summary.js";
 
 interface MeetingsStore {
   createMeeting(m: CreateMeetingInput): Promise<void>;
@@ -25,7 +27,7 @@ interface MeetingsStore {
   getMeetingTranscriptText(orgId: string, userId: string, id: string): Promise<string | null>;
   insertMeetingTranscriptSegments(meetingId: string, segments: MeetingTranscriptSegment[]): Promise<void>;
   listMeetingTranscriptSegments(orgId: string, userId: string, id: string, cursor?: number, limit?: number): Promise<MeetingTranscriptSegment[]>;
-  setMeetingScope(id: string, userId: string, scope: MeetingScope, teamId: string | null): Promise<boolean>;
+  setMeetingScope(id: string, orgId: string, userId: string, scope: MeetingScope, teamId: string | null): Promise<boolean>;
   createMeetingShareToken(s: { token: string; meetingId: string; orgId: string; createdBy: string; expiresAt?: string }): Promise<void>;
   revokeMeetingShareTokens(meetingId: string): Promise<number>;
   getMeetingByShareToken(token: string): Promise<MeetingRow | null>;
@@ -34,6 +36,8 @@ interface MeetingsStore {
   updateMeetingActionItems(id: string, userId: string, actionItems: MeetingRow["actionItems"]): Promise<boolean>;
   setMeetingSummaryStatus(id: string, userId: string, status: MeetingRow["summaryStatus"], error?: string | null): Promise<boolean>;
   setMeetingSummaryRecords(id: string, userId: string, summaryRecordId: string | null, transcriptSourceId: string | null): Promise<boolean>;
+  deleteMeeting(id: string, orgId: string, userId: string): Promise<{ summaryRecordId: string | null; transcriptSourceId: string | null } | null>;
+  hardDeleteMemory(userId: string, recordId: string, reason: string): Promise<void>;
 }
 const store = (): MeetingsStore => memoryEngine.store as unknown as MeetingsStore;
 
@@ -44,9 +48,10 @@ function requireAccount(userId?: string, orgId?: string): asserts userId is stri
   if (!userId || !orgId) throw new MeetingsAccountRequiredError();
 }
 
-export interface MeetingListDTO { id: string; title: string; date: string; scope: MeetingScope; attendeeCount: number; summaryStatus: MeetingRow["summaryStatus"] }
+export interface MeetingListDTO { id: string; title: string; date: string; scope: MeetingScope; attendeeCount: number; summaryStatus: MeetingRow["summaryStatus"]; originOrgId: string; canEdit: boolean }
 export interface MeetingDetailDTO {
   id: string; title: string; date: string; status: string; durationMin?: number; wordCount?: number;
+  originOrgId: string; canEdit: boolean;
   attendees: string[]; model?: { label: string; effort?: string };
   summaryMarkdown: string; actionItems: MeetingRow["actionItems"];
   transcript: Array<{ at: string; speaker: string; text: string }>;
@@ -84,47 +89,25 @@ function parseTranscript(text: string, maxLines = 500): MeetingDetailDTO["transc
   return lines;
 }
 
-function parseActionItems(md: string): MeetingRow["actionItems"] {
-  const items: MeetingRow["actionItems"] = [];
-  let inSection = false;
-  for (const raw of md.split("\n")) {
-    const line = raw.trim();
-    if (/^#{1,4}\s/.test(line)) { inSection = /action/i.test(line); continue; }
-    if (!inSection) continue;
-    const m = line.match(/^[-*]\s+(.*)$/);
-    if (!m) continue;
-    const body = m[1];
-    const who = body.match(/[—-]\s*@?([\w.-]+)\s*$/);
-    items.push({
-      id: `ai-${items.length + 1}`,
-      title: who ? body.slice(0, who.index).replace(/[—-]\s*$/, "").trim() : body.trim(),
-      assignee: who?.[1],
-      done: false,
-    });
-    if (items.length >= 50) break;
-  }
-  return items;
+/** Models sometimes emit placeholder bullets when a meeting has no actions. */
+function isMeaningfulActionTitle(title: string): boolean {
+  const normalized = title.trim();
+  return normalized.length > 0 && !/^(none|null|n\/a|undefined|no action items?)[.!?]?$/i.test(normalized);
 }
 
-type MeetingSummaryTemplate = "general" | "standup" | "one-on-one" | "retrospective";
-
-async function summarize(orgId: string, title: string, transcript: string, template: MeetingSummaryTemplate = "general"): Promise<{ markdown: string; actionItems: MeetingRow["actionItems"] }> {
+async function summarize(orgId: string, title: string, transcript: string, template: MeetingSummaryTemplateName = "general"): Promise<{ markdown: string; actionItems: MeetingRow["actionItems"] }> {
   // Internal sub-agent runner bound to the org's OWN LLM provider (BYOK / personal).
   // An admin can assign a dedicated model to the meeting-summary role via
   // agentModels["meeting-summary"], else the org's default LLM provider is used.
   // Server-managed models are NOT consulted here — those only serve the desktop.
   const runner = await memoryEngine.modelRunner("meeting-summary", orgId);
-  const templateInstruction: Record<MeetingSummaryTemplate, string> = {
-    general: "Lead with a concise overview, then decisions and action items.",
-    standup: "Organize the notes under Progress, Blockers, Next steps, and Action items.",
-    "one-on-one": "Organize the notes under Discussion, Feedback, Commitments, and Action items.",
-    retrospective: "Organize the notes under What went well, What did not, Experiments, and Action items.",
-  };
-  const systemPrompt = `You summarize meeting transcripts. ${templateInstruction[template]} Use concise markdown and format each action item as '- <task> — @<assignee>'. No preamble.`;
   // Throws on model failure (e.g. LLM_NOT_CONFIGURED) so the background job marks
   // the summary 'failed' — the caller polls status and can Regenerate.
-  const markdown = await runner.run({ systemPrompt, prompt: `Meeting: ${title}\n\nTranscript:\n${transcript.slice(0, 40_000)}`, taskId: `meeting-summary:${orgId}` });
-  return { markdown: markdown.trim(), actionItems: parseActionItems(markdown) };
+  const formatted = await generateMeetingSummary(runner, { title, transcript, template });
+  return {
+    markdown: formatted.markdown,
+    actionItems: meetingActionItemsForStorage(formatted.actionItems),
+  };
 }
 
 /**
@@ -134,7 +117,7 @@ async function summarize(orgId: string, title: string, transcript: string, templ
  */
 function generateSummaryInBackground(args: {
   id: string; userId: string; orgId: string; title: string; transcript: string;
-  date?: string; attendees?: string[]; scope?: MeetingScope; previousActionItems?: MeetingRow["actionItems"]; template?: MeetingSummaryTemplate;
+  date?: string; attendees?: string[]; scope?: MeetingScope; teamId?: string; previousActionItems?: MeetingRow["actionItems"]; template?: MeetingSummaryTemplateName;
 }): void {
   void (async () => {
     try {
@@ -161,7 +144,8 @@ function generateSummaryInBackground(args: {
           .linkRecordSources(args.userId, rec.id, src.chunks.map((c) => c.id));
         await store().setMeetingSummaryRecords(args.id, args.userId, rec.id, src.document.id);
         if (args.scope && args.scope !== "private") {
-          await memoryEngine.sharing.setMemoryVisibility(rec.id, args.userId, args.orgId, "org").catch(() => {});
+          const visibility = scopeToBackendVisibility(args.scope);
+          await memoryEngine.sharing.setMemoryVisibility(rec.id, args.userId, args.orgId, visibility, visibility === "team" ? args.teamId : undefined).catch(() => {});
         }
       } catch { /* provenance is best-effort; the summary + status are already persisted */ }
     } catch (error) {
@@ -171,7 +155,7 @@ function generateSummaryInBackground(args: {
 }
 
 export async function createMeeting(input: {
-  userId: string; orgId: string; title: string; transcript: string; scope?: MeetingScope; teamId?: string; date?: string; attendees?: string[]; template?: MeetingSummaryTemplate;
+  userId: string; orgId: string; title: string; transcript: string; scope?: MeetingScope; teamId?: string; canManageOrgTeams?: boolean; date?: string; attendees?: string[]; template?: MeetingSummaryTemplateName;
 }): Promise<{ id: string; summaryStatus: MeetingRow["summaryStatus"] }> {
   requireAccount(input.userId, input.orgId);
   if (!input.transcript.trim()) throw new Error("Cannot record a meeting with an empty transcript.");
@@ -188,15 +172,15 @@ export async function createMeeting(input: {
     transcriptText: input.transcript, summaryMarkdown: "", actionItems: [],
     scope: "private", teamId: undefined, summaryStatus: "processing",
   });
-  if (scope !== "private") await setScope({ userId: input.userId, orgId: input.orgId, id, scope, teamId: input.teamId });
-  generateSummaryInBackground({ id, userId: input.userId, orgId: input.orgId, title: input.title, transcript: input.transcript, date: input.date, attendees: input.attendees, scope, template: input.template });
+  if (scope !== "private") await setScope({ userId: input.userId, orgId: input.orgId, id, scope, teamId: input.teamId, canManageOrgTeams: input.canManageOrgTeams });
+  generateSummaryInBackground({ id, userId: input.userId, orgId: input.orgId, title: input.title, transcript: input.transcript, date: input.date, attendees: input.attendees, scope, teamId: input.teamId, template: input.template });
   return { id, summaryStatus: "processing" };
 }
 
 export async function listMeetings(userId: string, orgId: string): Promise<MeetingListDTO[]> {
   requireAccount(userId, orgId);
   const rows = await store().listMeetings(orgId, userId);
-  return rows.map((r) => ({ id: r.id, title: r.title, date: r.meetingDate ?? r.createdAt.slice(0, 10), scope: r.scope, attendeeCount: r.attendees.length, summaryStatus: r.summaryStatus }));
+  return rows.map((r) => ({ id: r.id, title: r.title, date: r.meetingDate ?? r.createdAt.slice(0, 10), scope: r.scope, attendeeCount: r.attendees.length, summaryStatus: r.summaryStatus, originOrgId: r.orgId, canEdit: r.userId === userId && r.orgId === orgId }));
 }
 
 export async function listMeetingsPage(userId: string, orgId: string, cursorValue?: string, limit = 50): Promise<{ meetings: MeetingListDTO[]; nextCursor: string | null }> {
@@ -215,7 +199,7 @@ export async function listMeetingsPage(userId: string, orgId: string, cursorValu
   const page = rows.slice(0, size);
   const last = page.at(-1);
   return {
-    meetings: page.map((r) => ({ id: r.id, title: r.title, date: r.meetingDate ?? r.createdAt.slice(0, 10), scope: r.scope, attendeeCount: r.attendees.length, summaryStatus: r.summaryStatus })),
+    meetings: page.map((r) => ({ id: r.id, title: r.title, date: r.meetingDate ?? r.createdAt.slice(0, 10), scope: r.scope, attendeeCount: r.attendees.length, summaryStatus: r.summaryStatus, originOrgId: r.orgId, canEdit: r.userId === userId && r.orgId === orgId })),
     nextCursor: hasMore && last ? Buffer.from(JSON.stringify({ createdAt: last.createdAt, id: last.id }), "utf8").toString("base64url") : null,
   };
 }
@@ -223,14 +207,14 @@ export async function listMeetingsPage(userId: string, orgId: string, cursorValu
 export async function getMeeting(userId: string, orgId: string, id: string): Promise<MeetingDetailDTO | null> {
   requireAccount(userId, orgId);
   const r = await store().getMeeting(orgId, userId, id);
-  return r ? await toDetail(r) : null;
+  return r ? await toDetail(r, userId, orgId) : null;
 }
 
 export async function getMeetingOverview(userId: string, orgId: string, id: string): Promise<Omit<MeetingDetailDTO, "transcript"> | null> {
   requireAccount(userId, orgId);
   const r = await store().getMeetingOverview(orgId, userId, id);
   if (!r) return null;
-  const detail = await toDetail(r);
+  const detail = await toDetail(r, userId, orgId);
   const { transcript: _transcript, ...overview } = detail;
   return overview;
 }
@@ -253,7 +237,7 @@ export async function getMeetingTranscriptPage(userId: string, orgId: string, id
   return { segments: page.map(({ total: _total, ...segment }) => segment), total, nextCursor: hasMore && last ? String(last.ordinal + 1) : null };
 }
 
-async function toDetail(r: MeetingRow): Promise<MeetingDetailDTO> {
+async function toDetail(r: MeetingRow, viewerUserId?: string, viewerOrgId?: string): Promise<MeetingDetailDTO> {
   const share: MeetingShareDTO = { scope: r.scope, teamId: r.teamId ?? undefined };
   if (r.scope === "public") {
     const tok = await store().getMeetingActiveShareToken(r.id);
@@ -261,6 +245,7 @@ async function toDetail(r: MeetingRow): Promise<MeetingDetailDTO> {
   }
   return {
     id: r.id, title: r.title, date: r.meetingDate ?? r.createdAt.slice(0, 10), status: r.status,
+    originOrgId: r.orgId, canEdit: viewerUserId === r.userId && viewerOrgId === r.orgId,
     durationMin: r.durationMin ?? undefined, wordCount: r.wordCount ?? undefined, attendees: r.attendees,
     model: r.modelLabel ? { label: r.modelLabel, effort: r.modelEffort ?? undefined } : undefined,
     summaryMarkdown: r.summaryMarkdown, actionItems: r.actionItems, transcript: parseTranscript(r.transcriptText),
@@ -270,24 +255,25 @@ async function toDetail(r: MeetingRow): Promise<MeetingDetailDTO> {
 }
 
 /** Owner-only scope change (D8). Downgrading out of public revokes the token first. */
-export async function setScope(params: { userId: string; orgId: string; id: string; scope: MeetingScope; teamId?: string; from?: MeetingScope }): Promise<MeetingShareDTO> {
+export async function setScope(params: { userId: string; orgId: string; id: string; scope: MeetingScope; teamId?: string; from?: MeetingScope; canManageOrgTeams?: boolean }): Promise<MeetingShareDTO> {
   requireAccount(params.userId, params.orgId);
   assertScopeParams(params.scope, params.teamId);
   // A `team` share must target a REAL team in this org that the caller belongs to
   // (migration 035). assertScopeParams already guaranteed teamId is present.
-  if (params.scope === "team") await assertUserInTeam(params.orgId, params.userId, params.teamId!);
+  if (params.scope === "team") await assertUserCanShareToTeam(params.orgId, params.userId, params.teamId!, params.canManageOrgTeams);
   if (params.from && isPublicScope(params.from) && isScopeDowngrade(params.from, params.scope)) {
     await store().revokeMeetingShareTokens(params.id);
   } else if (!isPublicScope(params.scope)) {
     await store().revokeMeetingShareTokens(params.id);
   }
-  const ok = await store().setMeetingScope(params.id, params.userId, params.scope, params.scope === "team" ? params.teamId ?? null : null);
+  const ok = await store().setMeetingScope(params.id, params.orgId, params.userId, params.scope, params.scope === "team" ? params.teamId ?? null : null);
   if (!ok) throw new Error("Not the owner of this meeting, or it no longer exists.");
 
   // Promote the recallable summary record to the matching memory visibility.
   const row = await store().getMeeting(params.orgId, params.userId, params.id);
   if (row?.summaryRecordId) {
-    await memoryEngine.sharing.setMemoryVisibility(row.summaryRecordId, params.userId, params.orgId, scopeToBackendVisibility(params.scope) === "private" ? "private" : "org");
+    const visibility = scopeToBackendVisibility(params.scope);
+    await memoryEngine.sharing.setMemoryVisibility(row.summaryRecordId, params.userId, params.orgId, visibility, visibility === "team" ? params.teamId : undefined);
   }
 
   const share: MeetingShareDTO = { scope: params.scope, teamId: params.scope === "team" ? params.teamId : undefined };
@@ -301,19 +287,40 @@ export async function setScope(params: { userId: string; orgId: string; id: stri
   return share;
 }
 
+/**
+ * Owner-only hard delete (D5 lifecycle). Removes the meeting index row, its
+ * transcript segments + share tokens (cascade), the ingested transcript source
+ * document, AND the recallable summary CognitiveRecord — a deleted meeting must
+ * not remain recallable from memory. Returns false when the meeting doesn't
+ * exist in this org or the caller isn't its owner.
+ */
+export async function deleteMeeting(userId: string, orgId: string, id: string): Promise<boolean> {
+  requireAccount(userId, orgId);
+  const refs = await store().deleteMeeting(id, orgId, userId);
+  if (!refs) return false;
+  if (refs.summaryRecordId) {
+    // Best-effort: the meeting row is already gone; a mirror-cleanup failure must
+    // not resurrect it. hardDeleteMemory also leaves a governance audit operation.
+    await store().hardDeleteMemory(userId, refs.summaryRecordId, "meeting deleted by owner").catch((err: unknown) => {
+      console.error(`[BrainRouter] meeting ${id}: summary record cleanup failed:`, err instanceof Error ? err.message : err);
+    });
+  }
+  return true;
+}
+
 /** Owner-only: re-run summarization on the stored transcript (D5 lifecycle), in
  *  the BACKGROUND. Idempotent — a second call while one is already running returns
  *  the in-progress meeting untouched (so a double-click can't double-summarize). */
 export async function regenerateSummary(userId: string, orgId: string, id: string): Promise<MeetingDetailDTO | null> {
   requireAccount(userId, orgId);
   const row = await store().getMeeting(orgId, userId, id);
-  if (!row || row.userId !== userId) return null;
+  if (!row || row.userId !== userId || row.orgId !== orgId) return null;
   // Already running (and not stuck): don't start a second pass.
-  if (row.summaryStatus === "processing" || row.summaryStatus === "queued") return await toDetail(row);
+  if (row.summaryStatus === "processing" || row.summaryStatus === "queued") return await toDetail(row, userId, orgId);
   await store().setMeetingSummaryStatus(id, userId, "processing");
-  generateSummaryInBackground({ id, userId, orgId, title: row.title, transcript: row.transcriptText, scope: row.scope, previousActionItems: row.actionItems });
+  generateSummaryInBackground({ id, userId, orgId, title: row.title, transcript: row.transcriptText, scope: row.scope, teamId: row.teamId ?? undefined, previousActionItems: row.actionItems });
   const updated = await store().getMeeting(orgId, userId, id);
-  return updated ? await toDetail(updated) : null;
+  return updated ? await toDetail(updated, userId, orgId) : null;
 }
 
 /** Owner-only manual summary edit (Notion-style). Preserves action items + their
@@ -322,12 +329,12 @@ export async function regenerateSummary(userId: string, orgId: string, id: strin
 export async function updateSummary(userId: string, orgId: string, id: string, summaryMarkdown: string): Promise<MeetingDetailDTO | null> {
   requireAccount(userId, orgId);
   const row = await store().getMeeting(orgId, userId, id);
-  if (!row || row.userId !== userId) return null;
+  if (!row || row.userId !== userId || row.orgId !== orgId) return null;
   const clean = redactSensitiveMemoryText(summaryMarkdown).slice(0, 40_000);
   const ok = await store().updateMeetingSummary(id, userId, clean, row.actionItems);
   if (!ok) return null;
   const updated = await store().getMeeting(orgId, userId, id);
-  return updated ? await toDetail(updated) : null;
+  return updated ? await toDetail(updated, userId, orgId) : null;
 }
 
 /** Owner-only: persist an action item's done state (or a Track link).
@@ -335,7 +342,7 @@ export async function updateSummary(userId: string, orgId: string, id: string, s
 export async function setActionItemState(userId: string, orgId: string, id: string, actionId: string, patch: { done?: boolean; trackItemId?: string | null }): Promise<boolean> {
   requireAccount(userId, orgId);
   const row = await store().getMeeting(orgId, userId, id);
-  if (!row || row.userId !== userId) return false;
+  if (!row || row.userId !== userId || row.orgId !== orgId) return false;
   let found = false;
   const next = row.actionItems.map((item) => {
     if (item.id !== actionId) return item;
@@ -355,9 +362,9 @@ export async function setActionItemState(userId: string, orgId: string, id: stri
 export async function trackMeetingAction(userId: string, orgId: string, meetingId: string, actionId: string): Promise<{ trackItemId: string; item: TrackItemRow } | null> {
   requireAccount(userId, orgId);
   const row = await store().getMeeting(orgId, userId, meetingId);
-  if (!row || row.userId !== userId) return null;
+  if (!row || row.userId !== userId || row.orgId !== orgId) return null;
   const action = row.actionItems.find((a) => a.id === actionId);
-  if (!action) return null;
+  if (!action || !isMeaningfulActionTitle(action.title)) return null;
   const item = await createTrack(orgId, userId, {
     title: action.title,
     assignee: action.assignee ?? null,
@@ -373,7 +380,7 @@ export async function trackMeetingAction(userId: string, orgId: string, meetingI
 export async function untrackMeetingAction(userId: string, orgId: string, meetingId: string, actionId: string): Promise<boolean> {
   requireAccount(userId, orgId);
   const row = await store().getMeeting(orgId, userId, meetingId);
-  if (!row || row.userId !== userId) return false;
+  if (!row || row.userId !== userId || row.orgId !== orgId) return false;
   if (!row.actionItems.some((a) => a.id === actionId)) return false;
   await untrackBySourceRef(orgId, `${meetingId}:${actionId}`);
   await store().updateMeetingActionItems(meetingId, userId, row.actionItems.map((a) => a.id === actionId ? { ...a, trackItemId: undefined } : a));

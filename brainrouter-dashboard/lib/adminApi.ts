@@ -77,7 +77,14 @@ export interface ProviderConfig {
   enabled: boolean;
   isDefault: boolean;
   hasKey: boolean;
+  /** True when this row is the deployment default surfaced to an org that has
+   *  no provider of its own — display-only, not editable in this org. */
+  readOnly?: boolean;
 }
+
+/** Where a provider/model list resolved from — the caller's own org, or the
+ *  deployment/system org it inherited from when the org has none of its own. */
+export interface ScopeSource { orgId: string; isSystemOrg: boolean }
 
 export interface ProviderInput {
   kind: ProviderKind;
@@ -121,8 +128,10 @@ export interface ManagedModelRecord {
   verifiedAt?: string;
   createdAt: string;
   updatedAt: string;
+  /** True when inherited from the deployment default (org has none of its own). */
+  readOnly?: boolean;
 }
-export type ManagedModelInput = Omit<ManagedModelRecord, "id" | "orgId" | "createdAt" | "updatedAt">;
+export type ManagedModelInput = Omit<ManagedModelRecord, "id" | "orgId" | "createdAt" | "updatedAt" | "readOnly">;
 
 export type IntegrationKind = "github_app";
 
@@ -171,6 +180,8 @@ export interface OrgSummary {
   entitlements?: OrgEntitlements;
   allowedDomains?: string[];
   isDefault: boolean;
+  /** The user's own solo/local-first org — surfaced as "Personal workspace". */
+  isPersonal?: boolean;
 }
 
 export interface OrgMember {
@@ -188,7 +199,11 @@ export interface ReviewJob {
   prNumber: number | null;
   findings: number | null;
   blocking: number | null;
-  findingsDetail?: { file: string; line?: number; severity: string; title?: string; summary?: string; status?: string; cwe?: string; preExisting?: boolean; suggestable?: boolean }[];
+  findingsDetail?: {
+    file: string; line?: number; endLine?: number; severity: string; title?: string; summary?: string; status?: string; cwe?: string;
+    preExisting?: boolean; suggestable?: boolean; firstSeenAt?: string; lastSeenAt?: string; fixedAt?: string;
+    firstSeenSha?: string; lastSeenSha?: string; fixedSha?: string; resolvedByLogin?: string;
+  }[];
   progress?: { ts: string; kind: string; msg: string; data?: Record<string, unknown>; traceId?: string; spanId?: string; parentSpanId?: string; role?: string; status?: "pending" | "running" | "succeeded" | "failed" | "skipped"; durationMs?: number }[];
   skipped: string | null;
   error: string | null;
@@ -230,11 +245,21 @@ export interface ReviewIssuesResponse {
 
 export interface ReviewSummary {
   periodDays: number;
-  metrics: { securityScore: number; openIssues: number; issuesFound: number; fixRate: number; prsReviewed: number; pentests: number };
+  metrics: { securityScore: number; openIssues: number; issuesFound: number; issuesFixed?: number; fixRate: number; meanTimeToRemediateDays?: number | null; prsReviewed: number; pentests: number };
   severity: { critical: number; high: number; medium: number; low: number; info: number };
   verdicts: { approved: number; commented: number; changesRequested: number };
-  history: Array<{ date: string; critical: number; high: number; medium: number; low: number }>;
+  /** Zero-filled per-day rows for the full period: discoveries by severity plus
+   * how many of that day's findings are currently open vs fixed. */
+  history: Array<{
+    date: string; critical: number; high: number; medium: number; low: number;
+    open?: number; fixed?: number; activity: number; prReviews: number; tests: number;
+  }>;
   repositories: Array<{ repository: string; prs: number; findings: number; addressed: number }>;
+  /** Absent on servers predating the finding-lifecycle rollup (rolling deploy). */
+  contributors?: Array<{
+    login: string; displayName: string | null; avatarUrl: string | null;
+    prs: number; authoredPrs: number; commits: number; findingsFixed: number; openFindings: number; lastActivityAt: string | null;
+  }>;
 }
 
 export interface ConnectorStatus {
@@ -268,12 +293,15 @@ export interface PentestTarget {
 export type PentestScanMode = "code-review" | "standard" | "full-audit";
 export const PENTEST_SCAN_MODE_LABELS: Record<PentestScanMode, string> = { "code-review": "Code Review", standard: "Standard Pentest", "full-audit": "Full Audit Pentest" };
 export interface PentestRun {
-  id: string; status: string; targetId: string; target: string; kind: string; scanMode?: PentestScanMode; findings: number; error: string | null; createdAt: string; updatedAt: string;
+  id: string; status: string; targetId: string; target: string; kind: string; scanMode?: PentestScanMode; findings: number; blocking?: number; error: string | null; createdAt: string; updatedAt: string;
+  /** Present only on the run-detail response (GET /runs/:id). */
+  progress?: ReviewJob["progress"];
+  findingsDetail?: ReviewJob["findingsDetail"];
 }
 
 export const adminApi = {
   listProviders: (orgId?: string) =>
-    authFetch<{ providers: ProviderConfig[]; secretStorageReady: boolean }>("/api/admin/providers", { orgId }),
+    authFetch<{ providers: ProviderConfig[]; secretStorageReady: boolean; inherited?: boolean; source?: ScopeSource }>("/api/admin/providers", { orgId }),
   createProvider: (body: ProviderInput, orgId?: string) =>
     authFetch<{ provider: ProviderConfig }>("/api/admin/providers", { method: "POST", body, orgId }),
   updateProvider: (id: string, body: Partial<ProviderInput>, orgId?: string) =>
@@ -285,7 +313,7 @@ export const adminApi = {
   modelCatalog: (orgId?: string) =>
     authFetch<ModelCatalogEnvelope>("/api/models/catalog", { orgId }),
   listManagedModels: (orgId?: string) =>
-    authFetch<{ models: ManagedModelRecord[] }>("/api/admin/models", { orgId }),
+    authFetch<{ models: ManagedModelRecord[]; inherited?: boolean; source?: ScopeSource }>("/api/admin/models", { orgId }),
   discoverManagedModels: (providerConfigId: string, orgId?: string) =>
     authFetch<{ models: string[]; selection: { mode: "explicit"; upstreamModelIds: string[] } }>(
       "/api/admin/models/discover",
@@ -404,6 +432,7 @@ export const adminApi = {
   createPentestTarget: (body: { kind: "domain" | "repository"; value: string; label?: string; authorized: true }, orgId?: string) => authFetch<{ target: PentestTarget }>("/api/admin/pentests/targets", { method: "POST", body, orgId }),
   deletePentestTarget: (id: string, orgId?: string) => authFetch<{ ok: boolean }>(`/api/admin/pentests/targets/${encodeURIComponent(id)}`, { method: "DELETE", orgId }),
   listPentestRuns: (orgId?: string, limit = 100) => authFetch<{ runs: PentestRun[] }>(`/api/admin/pentests/runs?limit=${limit}`, { orgId }),
+  getPentestRun: (id: string, orgId?: string) => authFetch<{ run: PentestRun }>(`/api/admin/pentests/runs/${encodeURIComponent(id)}`, { orgId }),
   startPentestRun: (targetId: string, scanMode: PentestScanMode = "standard", orgId?: string) => authFetch<{ run: PentestRun }>("/api/admin/pentests/runs", { method: "POST", body: { targetId, scanMode }, orgId }),
   listOrgs: (signal?: AbortSignal) => authFetch<{ orgs: OrgSummary[] }>("/api/orgs", { signal }),
   createOrg: (name: string, plan: OrgPlan = "team") =>
@@ -420,16 +449,16 @@ export const adminApi = {
   removeMember: (orgId: string, userId: string) =>
     authFetch(`/api/orgs/${orgId}/members/${encodeURIComponent(userId)}`, { method: "DELETE", orgId }),
   setDefaultOrg: (orgId: string) => authFetch(`/api/orgs/${orgId}/default`, { method: "POST" }),
-  // Teams — sub-groups inside the active org for scoped sharing (e.g. meeting
-  // scope==='team'). Org header defaults to the caller's active org, same as
-  // Meetings, so the team a meeting is shared to is always in the same org.
+  // Team spaces — active-organization teams plus the caller's global personal teams.
   listTeams: (orgId?: string) => authFetch<{ teams: Team[] }>("/api/teams", { orgId }),
-  createTeam: (name: string, orgId?: string) =>
-    authFetch<{ team: Team }>("/api/teams", { method: "POST", body: { name }, orgId }),
+  createTeam: (name: string, kind: TeamKind = "organization", orgId?: string) =>
+    authFetch<{ team: Team }>("/api/teams", { method: "POST", body: { name, kind }, orgId }),
   getTeam: (id: string, orgId?: string) =>
-    authFetch<{ team: Team; members: TeamMember[] }>(`/api/teams/${encodeURIComponent(id)}`, { orgId }),
-  addTeamMember: (id: string, userId: string, role?: string, orgId?: string) =>
-    authFetch<{ member: TeamMember }>(`/api/teams/${encodeURIComponent(id)}/members`, { method: "POST", body: role ? { userId, role } : { userId }, orgId }),
+    authFetch<{ team: Team; members: TeamMember[]; currentUserId: string }>(`/api/teams/${encodeURIComponent(id)}`, { orgId }),
+  addTeamMember: (id: string, account: string, role?: string, orgId?: string) =>
+    authFetch<{ ok: boolean; members: TeamMember[] }>(`/api/teams/${encodeURIComponent(id)}/members`, {
+      method: "POST", body: { ...(account.includes("@") ? { email: account } : { userId: account }), ...(role ? { role } : {}) }, orgId,
+    }),
   removeTeamMember: (id: string, userId: string, orgId?: string) =>
     authFetch(`/api/teams/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, { method: "DELETE", orgId }),
   deleteTeam: (id: string, orgId?: string) =>
@@ -522,15 +551,26 @@ export interface SharedMemory {
 
 export interface Team {
   id: string;
-  orgId: string;
+  kind: TeamKind;
+  orgId: string | null;
+  orgName: string | null;
+  ownerUserId: string | null;
   name: string;
   createdBy: string;
   createdAt: string;
+  updatedAt?: string;
+  myRole: "owner" | "admin" | "member" | null;
+  canManage: boolean;
 }
+
+export type TeamKind = "organization" | "personal";
 
 export interface TeamMember {
   userId: string;
   role: string;
+  displayName?: string;
+  email?: string;
+  createdAt?: string;
 }
 
 export interface OrgInvite {

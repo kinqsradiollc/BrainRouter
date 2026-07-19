@@ -3,6 +3,7 @@ import {
   cancelSupersededReviewJobs,
   claimNextMemoryJob,
   enqueueMemoryJob,
+  getReviewLifecycleSummaryForOrg,
   listReviewAnalyticsForOrg,
   listReviewFindingsForOrg,
   listReviewJobSummariesForOrg,
@@ -84,14 +85,26 @@ describe("review dashboard job projections", () => {
       sort: "oldest",
     });
     const [sql, params] = exec.rows.mock.calls[0]!;
-    expect(sql).toContain("jsonb_array_elements");
-    expect(sql).toContain("WITH ORDINALITY");
-    expect(sql).toContain("LOWER(finding ->> 'severity')");
+    expect(sql).toContain("FROM review_findings");
+    expect(sql).toContain("first_seen_review_id");
+    expect(sql).toContain("LOWER(severity)");
     expect(sql).toContain("ILIKE");
     expect(sql).toContain("(created_at, review_id, ordinal) >");
     expect(sql).toContain("ORDER BY created_at ASC");
     expect(params).toContain("%unsafe input%");
     expect(params.at(-1)).toBe(26);
+  });
+
+  it("aggregates durable lifecycle, repository, and contributor statistics", async () => {
+    const exec = executor();
+    await getReviewLifecycleSummaryForOrg(exec, "org-1", "2026-06-15T00:00:00.000Z");
+    expect(exec.rows).toHaveBeenCalledTimes(4);
+    const sql = exec.rows.mock.calls.map((call: unknown[]) => String(call[0])).join("\n");
+    expect(sql).toContain("FROM review_findings");
+    expect(sql).toContain("review_finding_events");
+    expect(sql).toContain("review_pr_contributors");
+    expect(sql).toContain("actor_login");
+    for (const call of exec.rows.mock.calls) expect(call[1]).toEqual(["org-1", "2026-06-15T00:00:00.000Z"]);
   });
 });
 

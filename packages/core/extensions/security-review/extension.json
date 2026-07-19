@@ -1,0 +1,8 @@
+{
+  "name": "security-review",
+  "version": "0.4.17",
+  "description": "Pentest review, proxy request, sitemap, and scope tools.",
+  "main": "index.js",
+  "required": true,
+  "contributes": ["tools"]
+}

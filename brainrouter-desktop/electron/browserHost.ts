@@ -2,14 +2,15 @@
  * BROWSER HOST (Desktop side) — the host-side glue for the "Browser" panel. It
  * owns the workspace walk + incremental `data-testid` extraction (re-parse only
  * changed files) and persists the manifest; the driver, base URL, command layer,
- * and manifest sharing all live in the package's shared SESSION, so the panel and
- * the agent's `browser_*` tools drive the SAME headed browser over the SAME command
- * layer (one browser, two consumers).
+ * and manifest sharing remain in the package's shared session. Live page control
+ * is now routed separately to the window-owned WebContentsView manager; this host
+ * never launches a production Playwright/Chrome process.
  *
  * Imports the headless engine the same way host.ts imports the CLI runtime —
  * a deep import into the built package (resolved via the workspace symlink).
  */
 import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import {
   extractFile,
@@ -55,6 +56,80 @@ function ipcError(err: unknown, what: string): string {
 const SOURCE_RE = /\.[jt]sx?$/i;
 const MAX_FILES = 5000;
 const MAX_BYTES = 512 * 1024;
+const MAX_BROWSER_SHOT_BYTES = 8 * 1024 * 1024;
+const MAX_REPORT_SCREENSHOTS = 50;
+const MAX_REPORT_RESULTS = 1_000;
+const MAX_REPORT_MARKDOWN_BYTES = 2 * 1024 * 1024;
+
+function canonicalInside(root: string, candidate: string): boolean {
+  const rel = path.relative(root, candidate);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+/**
+ * Write a bounded workspace artifact without following a pre-existing symlink
+ * in any controlled directory or at the final filename. Replacement writes use
+ * an exclusive temporary file and atomic rename so a planted final symlink is
+ * replaced as a directory entry rather than followed.
+ */
+function writeWorkspaceArtifact(
+  workspaceRoot: string,
+  relativeFile: string,
+  data: string | Buffer,
+  replace: boolean,
+): { absolute: string; relative: string } {
+  const normalized = relativeFile.replace(/\\/g, '/');
+  const parts = normalized.split('/');
+  if (parts.length < 2 || parts.some((part) => !part || part === '.' || part === '..') || path.posix.isAbsolute(normalized)) {
+    throw new Error('unsafe workspace artifact path');
+  }
+  const root = fs.realpathSync(workspaceRoot);
+  if (!fs.statSync(root).isDirectory()) throw new Error('workspace is not a directory');
+  let parent = root;
+  for (const segment of parts.slice(0, -1)) {
+    const candidate = path.join(parent, segment);
+    let stat: fs.Stats;
+    try { stat = fs.lstatSync(candidate); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      try { fs.mkdirSync(candidate, { mode: 0o700 }); }
+      catch (mkdirError) { if ((mkdirError as NodeJS.ErrnoException).code !== 'EEXIST') throw mkdirError; }
+      stat = fs.lstatSync(candidate);
+    }
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('unsafe workspace artifact directory');
+    const canonical = fs.realpathSync(candidate);
+    if (!canonicalInside(root, canonical) || path.dirname(canonical) !== parent) throw new Error('workspace artifact escaped its root');
+    parent = canonical;
+  }
+  const filename = parts.at(-1)!;
+  const target = path.join(parent, filename);
+  const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
+  const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8');
+  const writeExclusive = (file: string): void => {
+    const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | noFollow, 0o600);
+    try {
+      let offset = 0;
+      while (offset < bytes.length) offset += fs.writeSync(fd, bytes, offset, bytes.length - offset);
+      fs.fsyncSync(fd);
+    } finally { fs.closeSync(fd); }
+  };
+  if (replace) {
+    const temporary = path.join(parent, `.${filename}.${randomUUID()}.tmp`);
+    try {
+      writeExclusive(temporary);
+      try {
+        const current = fs.lstatSync(target);
+        if (current.isSymbolicLink() || !current.isFile()) throw new Error('unsafe workspace artifact target');
+      } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+      fs.renameSync(temporary, target);
+    } finally { try { fs.unlinkSync(temporary); } catch { /* renamed or absent */ } }
+  } else {
+    writeExclusive(target);
+  }
+  const final = fs.realpathSync(target);
+  if (!canonicalInside(root, final) || path.dirname(final) !== parent) throw new Error('workspace artifact escaped after write');
+  return { absolute: final, relative: path.relative(root, final).split(path.sep).join('/') };
+}
 
 /** A single panel/agent request: an element action (target = element id) or a
  *  navigate (target = screen id). Mirrors the package's FlowStep. */
@@ -148,8 +223,7 @@ export function createBrowserHost(workspaceRoot: string, devServers: DevServerRe
   function writeManifest(m: UiMap): void {
     try {
       const p = manifestPathFor(workspaceRoot);
-      fs.mkdirSync(path.dirname(p), { recursive: true });
-      fs.writeFileSync(p, JSON.stringify(m, null, 2) + '\n', 'utf8');
+      writeWorkspaceArtifact(workspaceRoot, path.relative(workspaceRoot, p), JSON.stringify(m, null, 2) + '\n', true);
     } catch {
       /* best-effort */
     }
@@ -279,8 +353,7 @@ export function createBrowserHost(workspaceRoot: string, devServers: DevServerRe
     try {
       const safe = sanitizeFlowName(name);
       const yaml = serializeFlowYaml({ name: safe, steps: steps as never });
-      fs.mkdirSync(flowsDir(), { recursive: true });
-      fs.writeFileSync(path.join(flowsDir(), `${safe}.flow.yaml`), yaml, 'utf8');
+      writeWorkspaceArtifact(workspaceRoot, `.brainrouter/ui-tests/flows/${safe}.flow.yaml`, yaml, true);
       return { ok: true, name: safe };
     } catch (err) {
       return { ok: false, name, error: ipcError(err, 'save flow') };
@@ -330,8 +403,7 @@ export function createBrowserHost(workspaceRoot: string, devServers: DevServerRe
   function saveStory(story: Story): { ok: boolean; id: string; error?: string } {
     try {
       const safe = sanitizeFlowName(story.id);
-      fs.mkdirSync(storiesDir(), { recursive: true });
-      fs.writeFileSync(path.join(storiesDir(), `${safe}.story.yaml`), serializeStoryYaml({ ...story, id: safe }), 'utf8');
+      writeWorkspaceArtifact(workspaceRoot, `.brainrouter/ui-tests/stories/${safe}.story.yaml`, serializeStoryYaml({ ...story, id: safe }), true);
       return { ok: true, id: safe };
     } catch (err) {
       return { ok: false, id: story.id, error: ipcError(err, 'save story') };
@@ -339,29 +411,26 @@ export function createBrowserHost(workspaceRoot: string, devServers: DevServerRe
   }
 
   // --- Screenshots + run reports -------------------------------------------
-  const screenshotsDir = (): string => path.join(workspaceRoot, '.brainrouter', 'ui-tests', 'screenshots');
-  const reportsDir = (): string => path.join(workspaceRoot, '.brainrouter', 'ui-tests', 'reports');
-  const relFromRoot = (abs: string): string => path.relative(workspaceRoot, abs).split(path.sep).join('/');
   const stamp = (): string => new Date().toISOString().replace('T', '_').replace(/[:.]/g, '-').replace('Z', '');
-  const mdCell = (s: string | undefined): string => String(s ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+  const mdCell = (s: string | undefined): string => String(s ?? '').slice(0, 4_096).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 
   function decodePng(data: string): Buffer | null {
-    const m = /^data:image\/\w+;base64,(.+)$/i.exec(data);
+    const m = /^data:image\/(?:png|jpeg);base64,([A-Za-z0-9+/=]+)$/i.exec(data);
     const b64 = m ? m[1] : data;
-    if (!b64) return null;
-    try { const buf = Buffer.from(b64, 'base64'); return buf.length ? buf : null; } catch { return null; }
+    if (!b64 || !/^[A-Za-z0-9+/=]+$/.test(b64)) return null;
+    try {
+      const buf = Buffer.from(b64, 'base64');
+      return buf.length > 0 && buf.length <= MAX_BROWSER_SHOT_BYTES ? buf : null;
+    } catch { return null; }
   }
 
   function saveScreenshot(opts: { dataUrl?: string; base64?: string; name?: string }): { path?: string; error?: string } {
     const buf = decodePng(String(opts.dataUrl ?? opts.base64 ?? ''));
     if (!buf) return { error: 'no image data to save' };
     try {
-      const dir = screenshotsDir();
-      fs.mkdirSync(dir, { recursive: true });
-      const file = `${sanitizeFlowName(opts.name || 'shot')}-${stamp()}.png`;
-      const abs = path.join(dir, file);
-      fs.writeFileSync(abs, buf);
-      return { path: relFromRoot(abs) };
+      const file = `${sanitizeFlowName(opts.name || 'shot')}-${stamp()}-${randomUUID().slice(0, 8)}.png`;
+      const stored = writeWorkspaceArtifact(workspaceRoot, `.brainrouter/ui-tests/screenshots/${file}`, buf, false);
+      return { path: stored.relative };
     } catch (err) {
       return { error: ipcError(err, 'save screenshot') };
     }
@@ -398,23 +467,26 @@ export function createBrowserHost(workspaceRoot: string, devServers: DevServerRe
 
   function runReport(input: BrowserRunReportInput): { reportPath?: string; markdown?: string; screenshots?: string[]; error?: string } {
     try {
-      const results = Array.isArray(input.results) ? input.results : [];
+      const results = Array.isArray(input.results) ? input.results.slice(0, MAX_REPORT_RESULTS) : [];
       const title = (String(input.story?.title ?? '').trim()) || 'UI run';
       const id = sanitizeFlowName(input.story?.id || title);
       // 1) persist screenshots alongside the report, collect relative paths.
       const shotPaths: string[] = [];
-      for (const s of input.screenshots ?? []) {
+      for (const s of (input.screenshots ?? []).slice(0, MAX_REPORT_SCREENSHOTS)) {
         const r = saveScreenshot({ dataUrl: s.dataUrl, name: `${id}-${s.name || 'shot'}` });
         if (r.path) shotPaths.push(r.path);
       }
       // 2) build + write the markdown.
       const passed = results.filter((r) => r.ok).length;
       const md = buildReportMarkdown({ title, id, baseUrl: input.baseUrl, results, shotPaths, passed });
-      const dir = reportsDir();
-      fs.mkdirSync(dir, { recursive: true });
-      const abs = path.join(dir, `${id}-${stamp()}.md`);
-      fs.writeFileSync(abs, md, 'utf8');
-      return { reportPath: relFromRoot(abs), markdown: md, screenshots: shotPaths };
+      if (Buffer.byteLength(md, 'utf8') > MAX_REPORT_MARKDOWN_BYTES) throw new Error('run report exceeded its size limit');
+      const stored = writeWorkspaceArtifact(
+        workspaceRoot,
+        `.brainrouter/ui-tests/reports/${id}-${stamp()}-${randomUUID().slice(0, 8)}.md`,
+        md,
+        false,
+      );
+      return { reportPath: stored.relative, markdown: md, screenshots: shotPaths };
     } catch (err) {
       return { error: ipcError(err, 'save run report') };
     }

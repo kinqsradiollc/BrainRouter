@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   mintInstallationToken: vi.fn(),
   listReviewJobsForOrg: vi.fn(),
   listReviewJobSummariesForOrg: vi.fn(),
+  listReviewAnalyticsForOrg: vi.fn(),
+  getReviewLifecycleSummaryForOrg: vi.fn(),
   listReviewJobsForPr: vi.fn(),
   listReviewFindingsForOrg: vi.fn(),
   listMemoryJobs: vi.fn(),
@@ -32,6 +34,8 @@ vi.mock("../memory/engine.js", () => ({
     store: {
       listReviewJobsForOrg: mocks.listReviewJobsForOrg,
       listReviewJobSummariesForOrg: mocks.listReviewJobSummariesForOrg,
+      listReviewAnalyticsForOrg: mocks.listReviewAnalyticsForOrg,
+      getReviewLifecycleSummaryForOrg: mocks.getReviewLifecycleSummaryForOrg,
       listReviewJobsForPr: mocks.listReviewJobsForPr,
       listReviewFindingsForOrg: mocks.listReviewFindingsForOrg,
       listMemoryJobs: mocks.listMemoryJobs,
@@ -111,6 +115,12 @@ describe("review route GitHub accessibility", () => {
     });
     mocks.listReviewJobsForOrg.mockResolvedValue([]);
     mocks.listReviewJobSummariesForOrg.mockResolvedValue([]);
+    mocks.listReviewAnalyticsForOrg.mockResolvedValue([]);
+    mocks.getReviewLifecycleSummaryForOrg.mockResolvedValue({
+      metrics: { issuesFound: 0, issuesFixed: 0, openIssues: 0, meanTimeToRemediateDays: null },
+      severity: { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
+      history: [], repositories: [], contributors: [],
+    });
     mocks.listReviewJobsForPr.mockResolvedValue([]);
     mocks.listReviewFindingsForOrg.mockResolvedValue([]);
     mocks.listMemoryJobs.mockResolvedValue([]);
@@ -163,6 +173,42 @@ describe("review route GitHub accessibility", () => {
       issues: [{ reviewId: "job-1", repo: "acme/widgets", prNumber: 7, finding: { title: "Unsafe input" } }],
     });
     expect(mocks.listReviewFindingsForOrg).toHaveBeenCalledWith("org-1", expect.objectContaining({ severity: "high", repo: "acme/widgets", search: "unsafe" }));
+  });
+
+  it("separates PR-review and security-test activity over a 12-month window", async () => {
+    const now = new Date().toISOString();
+    const base = {
+      status: "completed", priority: 50, attempts: 1, maxAttempts: 3,
+      runAfter: now, lockedAt: null, parentJobId: null, progress: [], error: null,
+      createdAt: now, updatedAt: now,
+    };
+    mocks.listReviewAnalyticsForOrg.mockResolvedValue([
+      {
+        ...base, id: "review-1", kind: "pr-code-review",
+        input: { orgId: "org-1", repo: "acme/widgets", prNumber: 42 },
+        output: { findings: 1, blocking: 0, findingsDetail: [] },
+      },
+      {
+        ...base, id: "test-1", kind: "domain-pentest",
+        input: { orgId: "org-1", target: "https://example.test" },
+        output: { findings: 0, blocking: 0, findingsDetail: [] },
+      },
+    ]);
+    mocks.getReviewLifecycleSummaryForOrg.mockResolvedValue({
+      metrics: { issuesFound: 2, issuesFixed: 1, openIssues: 1, meanTimeToRemediateDays: 1.5 },
+      severity: { critical: 0, high: 1, medium: 0, low: 0, info: 0 },
+      history: [{ date: now.slice(0, 10), critical: 0, high: 2, medium: 0, low: 0, open: 1, fixed: 1 }],
+      repositories: [{ repository: "acme/widgets", findings: 2, addressed: 1 }],
+      contributors: [{ login: "octocat", displayName: "Octo Cat", avatarUrl: null, prs: 1, authoredPrs: 1, commits: 2, findingsFixed: 1 }],
+    });
+
+    const response = await getJson(new URL(`${baseUrl}/api/admin/reviews/summary?days=365`), headers);
+    expect(response.status).toBe(200);
+    expect(response.body.periodDays).toBe(365);
+    expect(response.body.metrics).toMatchObject({ prsReviewed: 1, pentests: 1, issuesFound: 2, issuesFixed: 1, fixRate: 50, meanTimeToRemediateDays: 1.5 });
+    expect(response.body.history.at(-1)).toMatchObject({ activity: 2, prReviews: 1, tests: 1 });
+    expect(response.body.repositories).toEqual([{ repository: "acme/widgets", prs: 1, findings: 2, addressed: 1 }]);
+    expect(response.body.contributors[0]).toMatchObject({ login: "octocat", findingsFixed: 1 });
   });
 
   it("polls PR activity without any GitHub request", async () => {

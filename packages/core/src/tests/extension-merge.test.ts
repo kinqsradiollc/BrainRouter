@@ -34,7 +34,7 @@ test('a contributed read tool is exposed in read mode, executes, and is gated by
 
   const exec = localToolExecutor('query_warehouse')!;
   assert.equal(exec.accessTier(), 'read');
-  assert.equal(await exec.handle({ args: {}, legacyHandle: async () => 'unused' }), 'rows: 3');
+  assert.equal(await exec.handle({ args: {} }), 'rows: 3');
   resetExtensionContributions();
 });
 

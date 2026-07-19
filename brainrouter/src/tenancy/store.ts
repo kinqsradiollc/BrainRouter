@@ -61,7 +61,7 @@ export interface OrgPersonaStore {
 
 /** Artifact/memory sharing (ADR-014 Phase D), via `memoryEngine.sharing`. */
 export interface MemorySharingStore {
-  setMemoryVisibility(recordId: string, userId: string, orgId: string, visibility: "private" | "org"): Promise<boolean>;
+  setMemoryVisibility(recordId: string, userId: string, orgId: string, visibility: "private" | "team" | "org", teamId?: string | null): Promise<boolean>;
   listOrgSharedMemories(orgId: string, limit?: number): Promise<SharedMemory[]>;
 }
 

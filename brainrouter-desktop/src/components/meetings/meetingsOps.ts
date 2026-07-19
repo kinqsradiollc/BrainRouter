@@ -1,115 +1,109 @@
-/**
- * Meetings data bridge (ADR-018). Prefers the host bridge
- * (`window.brainrouter.meetings.*` → host `meetings-*` → backend `MeetingsService`);
- * falls back to an in-memory sample so the mode renders before the backend is wired.
- */
-
+/** Typed renderer adapter over the privileged Electron Meetings bridge. */
 import type {
+  CreateMeetingInput,
+  CreateTrackInput,
   MeetingDetail,
   MeetingListItem,
+  MeetingListPage,
+  MeetingOverview,
   MeetingScope,
   MeetingShare,
   MeetingsOps,
+  MeetingTranscriptPage,
   TrackItem,
+  TrackStatusCategory,
 } from "./types.js";
 
 interface MeetingsBridge {
-  list(): Promise<MeetingListItem[]>;
-  get(id: string): Promise<MeetingDetail>;
-  create(input: { title: string; transcript: string }): Promise<{ id: string }>;
-  regenerate(id: string): Promise<void>;
-  setScope(id: string, scope: MeetingScope, opts?: { teamId?: string }): Promise<MeetingShare>;
-  actionToTrack(meetingId: string, actionId: string): Promise<{ trackItemId: string }>;
-  actionUntrack(meetingId: string, actionId: string): Promise<void>;
-  toggleAction(meetingId: string, actionId: string, done: boolean): Promise<void>;
-  serverTracks(): Promise<TrackItem[]>;
-  serverTrackSetDone(id: string, done: boolean): Promise<void>;
-  serverTrackRemove(id: string): Promise<void>;
+  list(input?: { cursor?: string; limit?: number }, orgId?: string): Promise<unknown>;
+  get(id: string, orgId?: string): Promise<unknown>;
+  overview(id: string, orgId?: string): Promise<unknown>;
+  transcript(id: string, input?: { cursor?: string; limit?: number }, orgId?: string): Promise<unknown>;
+  create(input: CreateMeetingInput, orgId?: string): Promise<unknown>;
+  updateSummary(id: string, summaryMarkdown: string, orgId?: string): Promise<unknown>;
+  transcribe(input: { bytes: Uint8Array; contentType?: string; language?: string }): Promise<unknown>;
+  regenerate(id: string, orgId?: string): Promise<unknown>;
+  remove?(id: string, orgId?: string): Promise<unknown>;
+  setScope(id: string, scope: MeetingScope, opts?: { teamId?: string }, orgId?: string): Promise<unknown>;
+  actionToTrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown>;
+  actionUntrack(meetingId: string, actionId: string, orgId?: string): Promise<unknown>;
+  toggleAction(meetingId: string, actionId: string, done: boolean, orgId?: string): Promise<unknown>;
+  serverTracks(orgId?: string): Promise<unknown>;
+  serverTrackCreate(input: CreateTrackInput, orgId?: string): Promise<unknown>;
+  serverTrackTransition(id: string, statusCategory: TrackStatusCategory, orgId?: string): Promise<unknown>;
+  serverTrackSetDone(id: string, done: boolean, orgId?: string): Promise<unknown>;
+  serverTrackRemove(id: string, orgId?: string): Promise<unknown>;
+}
+
+export class MeetingsUnavailableError extends Error {
+  constructor() {
+    super("Meetings is unavailable in this build. Restart BrainRouter after updating the desktop app.");
+    this.name = "MeetingsUnavailableError";
+  }
 }
 
 function bridge(): MeetingsBridge | null {
-  const w = globalThis as unknown as { brainrouter?: { meetings?: MeetingsBridge } };
-  return w.brainrouter?.meetings ?? null;
+  const root = globalThis as unknown as { brainrouter?: { meetings?: MeetingsBridge } };
+  return root.brainrouter?.meetings ?? null;
 }
+
+function requireObject<T>(value: unknown, label: string): T {
+  if (!value || typeof value !== "object") throw new Error(`The server returned an invalid ${label}.`);
+  return value as T;
+}
+
+function listPage(value: unknown): MeetingListPage {
+  // Accept the pre-pagination bridge shape during rolling desktop upgrades.
+  if (Array.isArray(value)) return { meetings: value as MeetingListItem[], nextCursor: null };
+  const page = requireObject<Partial<MeetingListPage>>(value, "meetings page");
+  if (!Array.isArray(page.meetings)) throw new Error("The server returned an invalid meetings page.");
+  return { meetings: page.meetings, nextCursor: typeof page.nextCursor === "string" ? page.nextCursor : null };
+}
+
+function trackItem(value: unknown): TrackItem {
+  const payload = requireObject<{ item?: unknown }>(value, "Track item");
+  return requireObject<TrackItem>(payload.item, "Track item");
+}
+
+function unavailable(): never { throw new MeetingsUnavailableError(); }
 
 export function createMeetingsOps(): MeetingsOps {
-  const b = bridge();
-  if (b) {
+  const api = bridge();
+  if (!api) {
     return {
-      list: () => b.list(),
-      get: (id) => b.get(id),
-      createFromTranscript: (input) => b.create(input),
-      regenerateSummary: (id) => b.regenerate(id),
-      setScope: (id, scope, opts) => b.setScope(id, scope, opts),
-      sendActionToTrack: (meetingId, actionId) => b.actionToTrack(meetingId, actionId),
-      unsendActionFromTrack: (meetingId, actionId) => b.actionUntrack(meetingId, actionId),
-      toggleAction: (meetingId, actionId, done) => b.toggleAction(meetingId, actionId, done),
-      serverTracks: () => b.serverTracks(),
-      serverTrackSetDone: (id, done) => b.serverTrackSetDone(id, done),
-      serverTrackRemove: (id) => b.serverTrackRemove(id),
+      listPage: async () => unavailable(), list: async () => unavailable(), get: async () => unavailable(), overview: async () => unavailable(),
+      transcriptPage: async () => unavailable(), createFromTranscript: async () => unavailable(), updateSummary: async () => unavailable(),
+      transcribeAudio: async () => unavailable(), regenerateSummary: async () => unavailable(), deleteMeeting: async () => unavailable(), setScope: async () => unavailable(),
+      sendActionToTrack: async () => unavailable(), unsendActionFromTrack: async () => unavailable(), toggleAction: async () => unavailable(),
+      serverTracks: async () => unavailable(), serverTrackCreate: async () => unavailable(), serverTrackTransition: async () => unavailable(),
+      serverTrackSetDone: async () => unavailable(), serverTrackRemove: async () => unavailable(),
     };
   }
-  return sampleOps();
-}
 
-/** In-memory sample used until the host bridge is present (dev + first-run empty states). */
-function sampleOps(): MeetingsOps {
-  const list: MeetingListItem[] = [
-    { id: "m1", title: "Weekly product sync", date: "Jul 14", scope: "private", attendeeCount: 3 },
-    { id: "m2", title: "Design review — Meetings UI", date: "Jul 11", scope: "team", attendeeCount: 4 },
-    { id: "m3", title: "All-hands Q3 kickoff", date: "Jul 08", scope: "org", attendeeCount: 20 },
-    { id: "m4", title: "Customer call — Northwind", date: "Jul 03", scope: "public", attendeeCount: 2 },
-  ];
-  const details: Record<string, MeetingDetail> = {
-    m1: {
-      id: "m1",
-      title: "Weekly product sync",
-      date: "2026-07-14",
-      status: "recorded",
-      durationMin: 32,
-      wordCount: 1240,
-      attendees: ["anh", "maya", "jordan"],
-      model: { label: "Opus 4.8", effort: "high" },
-      summaryMarkdown:
-        "The team confirmed Meetings ships as a 4th desktop mode, memory-native with four-level sharing. Server-default transcription was agreed, with a local Whisper fallback for offline privacy.\n### Decisions\n- Meetings is account-gated; offline capture stays as a fallback.\n- Summaries route through the server-managed BrainRouter provider.",
-      actionItems: [
-        { id: "a1", title: "Wire the sharing scope picker into both surfaces", assignee: "maya", done: false },
-        { id: "a2", title: "Finalize the STT microservice Dockerfile", assignee: "jordan", done: false },
-      ],
-      transcript: [
-        { at: "00:12", speaker: "Anh", text: "Let's lock the Meetings placement — desktop mode, dashboard page." },
-        { at: "00:31", speaker: "Maya", text: "Sharing needs all four scopes, public with a revocable link." },
-        { at: "00:58", speaker: "Jordan", text: "Transcription server-side by default, keep the offline path." },
-      ],
-      share: { scope: "private" },
-    },
-  };
-  const scopeOf = (id: string): MeetingScope => list.find((m) => m.id === id)?.scope ?? "private";
-  const detailFor = (id: string): MeetingDetail =>
-    details[id] ?? {
-      ...details.m1, id, title: list.find((m) => m.id === id)?.title ?? "Meeting",
-      share: { scope: scopeOf(id), publicUrl: scopeOf(id) === "public" ? "brainrouter.ai/m/9fK2qX" : undefined },
-    };
-  let trackSeq = 0;
+  const getPage = async (input?: { cursor?: string; limit?: number }, orgId?: string) => listPage(await api.list(input, orgId));
   return {
-    async list() { return list; },
-    async get(id) { return detailFor(id); },
-    async createFromTranscript() { return { id: "m1" }; },
-    async regenerateSummary() { /* no-op in sample */ },
-    async setScope(_id, scope) {
-      return { scope, publicUrl: scope === "public" ? "brainrouter.ai/m/9fK2qX" : undefined, expiresAt: scope === "public" ? "in 30 days" : undefined };
+    listPage: getPage,
+    list: async (orgId) => (await getPage({ limit: 50 }, orgId)).meetings,
+    get: async (id, orgId) => requireObject<MeetingDetail>(await api.get(id, orgId), "meeting"),
+    overview: async (id, orgId) => requireObject<MeetingOverview>(await api.overview(id, orgId), "meeting overview"),
+    transcriptPage: async (id, input, orgId) => requireObject<MeetingTranscriptPage>(await api.transcript(id, input, orgId), "transcript page"),
+    createFromTranscript: async (input, orgId) => requireObject(await api.create(input, orgId), "meeting creation result"),
+    updateSummary: async (id, markdown, orgId) => requireObject<MeetingDetail>(await api.updateSummary(id, markdown, orgId), "meeting"),
+    transcribeAudio: async (input) => requireObject<{ text: string }>(await api.transcribe(input), "transcription"),
+    regenerateSummary: async (id, orgId) => requireObject<MeetingDetail>(await api.regenerate(id, orgId), "meeting"),
+    deleteMeeting: async (id, orgId) => { if (!api.remove) unavailable(); await api.remove(id, orgId); },
+    setScope: async (id, scope, opts, orgId) => requireObject<MeetingShare>(await api.setScope(id, scope, opts, orgId), "meeting share"),
+    sendActionToTrack: async (meetingId, actionId, orgId) => requireObject<{ trackItemId: string }>(await api.actionToTrack(meetingId, actionId, orgId), "Track link"),
+    unsendActionFromTrack: async (meetingId, actionId, orgId) => { await api.actionUntrack(meetingId, actionId, orgId); },
+    toggleAction: async (meetingId, actionId, done, orgId) => { await api.toggleAction(meetingId, actionId, done, orgId); },
+    serverTracks: async (orgId) => {
+      const value = await api.serverTracks(orgId);
+      if (!Array.isArray(value)) throw new Error("The server returned an invalid Track board.");
+      return value as TrackItem[];
     },
-    async sendActionToTrack() { return { trackItemId: `wi-${++trackSeq}` }; },
-    async unsendActionFromTrack() { /* no-op in sample */ },
-    async toggleAction() { /* no-op in sample */ },
-    async serverTracks() {
-      return [
-        { id: "t1", title: "Wire the sharing scope picker into both surfaces", statusCategory: "todo", source: "meeting-action", assignee: "maya", priority: "P1", createdAt: "2026-07-14" },
-        { id: "t2", title: "Finalize the STT microservice Dockerfile", statusCategory: "in_progress", source: "meeting-action", assignee: "jordan", createdAt: "2026-07-14" },
-        { id: "t3", title: "Draft the Q3 launch checklist", statusCategory: "completed", source: "manual", completedAt: "2026-07-15", createdAt: "2026-07-10" },
-      ];
-    },
-    async serverTrackSetDone() { /* no-op in sample */ },
-    async serverTrackRemove() { /* no-op in sample */ },
+    serverTrackCreate: async (input, orgId) => trackItem(await api.serverTrackCreate(input, orgId)),
+    serverTrackTransition: async (id, status, orgId) => trackItem(await api.serverTrackTransition(id, status, orgId)),
+    serverTrackSetDone: async (id, done, orgId) => { await api.serverTrackSetDone(id, done, orgId); },
+    serverTrackRemove: async (id, orgId) => { await api.serverTrackRemove(id, orgId); },
   };
 }

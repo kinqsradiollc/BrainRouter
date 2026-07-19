@@ -50,6 +50,7 @@ import { InteractionBroker, type AgentEvent, type RecordLifecycleAction } from '
 // Deep imports into the CLI's built runtime (no "exports" field = allowed).
 // Extracting a proper @kinqs/brainrouter-agent package is tracked for 0.4.16.
 import { Agent, classifyForVerification } from '@kinqs/brainrouter-core/agent';
+import { createBrowserControlBridge } from '@kinqs/brainrouter-core/browser';
 import { loadConfig, saveConfig, _resetCliKnobsCache, type LLMConfig } from '@kinqs/brainrouter-core/config';
 // 0.4.15 — named providers + per-sub-agent model routing (pure transforms).
 import {
@@ -308,6 +309,10 @@ async function main(): Promise<void> {
     : (msg: unknown) => console.log(JSON.stringify(msg));
   const computerUseBridge = createComputerUseBridge(port);
   const secretBridge = createSecretBridge(port);
+  // First-class browser control follows the same correlated parent-port pattern
+  // as computer-use, but targets the window-owned visible WebContentsView tab.
+  // Plain node/CLI hosts have no parent port and therefore advertise no tools.
+  const browserControlBridge = port ? createBrowserControlBridge(port, { idPrefix: 'desktop-browser' }) : undefined;
 
   // Identical boot recipe to `brainrouter chat` (index.ts): config → llm →
   // pool.connectAll(profiles) → Agent. Offline MCP does not block (same
@@ -445,6 +450,7 @@ async function main(): Promise<void> {
     launchCwd: workspaceRoot,
     interactionPort: createBrokerPort(broker, (e) => emitPortFor(agent.sessionKey, e)),
     computerUsePort: computerUseBridge,
+    browserControlPort: browserControlBridge,
   });
   // DESK-5v — the agent the user is currently VIEWING. hostCore keeps a pool of
   // agents (one per running/active session) and tells us which is active via
@@ -522,6 +528,7 @@ async function main(): Promise<void> {
       launchCwd: workspaceRoot,
       interactionPort: createBrokerPort(broker, (e) => emitPortFor(a.sessionKey, e)),
       computerUsePort: computerUseBridge,
+      browserControlPort: browserControlBridge,
     });
     a.sessionKey = sessionKey;
     return a as unknown as AgentLike;
@@ -1138,9 +1145,10 @@ async function main(): Promise<void> {
   // this bag. Stable bindings pass by shorthand; the few that are REASSIGNED over
   // the process lifetime (the viewed agent, the global llm, the PR caches, the
   // terminal sequence) pass as live accessors so behavior is unchanged.
-  // BROWSER — one host per workspace; the query router drives it and it owns the
-  // (lazy) Playwright driver + auto-hosted dev server, disposed on quit. The
-  // dev-server registry is shared with the Servers panel (start/stop/add).
+  // BROWSER metadata/dev-server host — live browsing is owned by the window's
+  // WebContentsView manager and injected browser-control port. This host retains
+  // UI-map extraction, stories/reports, and dev-server orchestration only; its
+  // core session has an unavailable production backend and never starts Playwright.
   const devServers = createDevServerRegistry(workspaceRoot);
   const browser = createBrowserHost(workspaceRoot, devServers);
 
@@ -1246,6 +1254,7 @@ async function main(): Promise<void> {
       hostedAgents.dispose();
       ptyRegistry.dispose();
       browser.dispose();
+      browserControlBridge?.dispose();
       devServers.disposeAll();
       void mcpClient.close?.();
       process.exit(0);
@@ -1255,6 +1264,7 @@ async function main(): Promise<void> {
   if (port) port.on('message', (e) => {
     if (computerUseBridge?.handleMessage(e.data)) return;
     if (secretBridge?.handleMessage(e.data)) return;
+    if (browserControlBridge?.handleMessage(e.data)) return;
     void core.handle(e.data);
   });
 

@@ -18,6 +18,13 @@ type Store = Partial<{
   listReviewJobsForOrg(orgId: string, limit?: number): Promise<MemoryJobRecord[]>;
   listReviewJobSummariesForOrg(orgId: string, limit?: number): Promise<MemoryJobRecord[]>;
   listReviewAnalyticsForOrg(orgId: string, since: string, limit?: number): Promise<MemoryJobRecord[]>;
+  getReviewLifecycleSummaryForOrg(orgId: string, since: string): Promise<{
+    metrics: { issuesFound: number; issuesFixed: number; openIssues: number; meanTimeToRemediateDays: number | null };
+    severity: { critical: number; high: number; medium: number; low: number; info: number };
+    history: Array<{ date: string; critical: number; high: number; medium: number; low: number; open: number; fixed: number }>;
+    repositories: Array<{ repository: string; findings: number; addressed: number }>;
+    contributors: Array<{ login: string; displayName: string | null; avatarUrl: string | null; prs: number; authoredPrs: number; commits: number; findingsFixed: number; openFindings: number; lastActivityAt: string | null }>;
+  }>;
   listReviewJobsForPr(orgId: string, repo: string, prNumber: number, limit?: number): Promise<MemoryJobRecord[]>;
   listReviewFindingsForOrg(orgId: string, query?: {
     limit?: number; severity?: string; repo?: string; status?: string; search?: string;
@@ -289,41 +296,99 @@ reviewsRouter.get("/issues", requirePermission("reviews:read"), async (req: Auth
  * remain the source of truth; this route keeps the browser from reimplementing
  * time bucketing and severity parsing on every render. */
 reviewsRouter.get("/summary", requirePermission("reviews:read"), async (req: AuthedRequest, res) => {
-  const days = Math.min(Math.max(Number(req.query.days) || 30, 7), 90);
-  const since = Date.now() - days * 86_400_000;
-  const jobs = (await (memoryEngine.store as Store).listReviewAnalyticsForOrg?.(req.orgId!, new Date(since).toISOString(), 1_000)) ?? [];
+  const days = Math.min(Math.max(Number(req.query.days) || 30, 7), 365);
+  const now = Date.now();
+  const since = now - days * 86_400_000;
+  const sinceIso = new Date(since).toISOString();
+  const [jobs, lifecycle] = await Promise.all([
+    (memoryEngine.store as Store).listReviewAnalyticsForOrg?.(req.orgId!, sinceIso, 1_000) ?? Promise.resolve([]),
+    (memoryEngine.store as Store).getReviewLifecycleSummaryForOrg?.(req.orgId!, sinceIso) ?? Promise.resolve({
+      metrics: { issuesFound: 0, issuesFixed: 0, openIssues: 0, meanTimeToRemediateDays: null },
+      severity: { critical: 0, high: 0, medium: 0, low: 0, info: 0 },
+      history: [], repositories: [], contributors: [],
+    }),
+  ]);
   const recent = jobs.map(reviewRecord).filter((job) => Date.parse(job.createdAt) >= since);
-  const severity = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
+  // Domain pentests are still immutable job findings; PR findings are sourced
+  // exclusively from the lifecycle projection to avoid one issue per commit.
+  const statusOf = (finding: { status?: unknown }): string => String(finding.status ?? "open").toLowerCase();
+  const severity = { ...lifecycle.severity }; // OPEN findings only
   const verdicts = { approved: 0, commented: 0, changesRequested: 0 };
-  const byDay = new Map<string, { critical: number; high: number; medium: number; low: number }>();
+  type DayBucket = {
+    critical: number; high: number; medium: number; low: number;
+    open: number; fixed: number; activity: number; prReviews: number; tests: number;
+  };
+  const emptyDay = (): DayBucket => ({
+    critical: 0, high: 0, medium: 0, low: 0,
+    open: 0, fixed: 0, activity: 0, prReviews: 0, tests: 0,
+  });
+  // Zero-fill every day of the window so the time axis is continuous — sparse
+  // activity previously collapsed into adjacent points and distorted the chart.
+  const byDay = new Map<string, DayBucket>();
+  for (let ts = since; ts <= now; ts += 86_400_000) byDay.set(new Date(ts).toISOString().slice(0, 10), emptyDay());
+  for (const row of lifecycle.history) {
+    const bucket = byDay.get(row.date) ?? emptyDay();
+    bucket.critical += row.critical; bucket.high += row.high; bucket.medium += row.medium; bucket.low += row.low;
+    bucket.open += row.open; bucket.fixed += row.fixed;
+    byDay.set(row.date, bucket);
+  }
+  let issuesFound = lifecycle.metrics.issuesFound;
+  let issuesFixed = lifecycle.metrics.issuesFixed;
   for (const job of recent) {
     const day = job.createdAt.slice(0, 10);
-    const bucket = byDay.get(day) ?? { critical: 0, high: 0, medium: 0, low: 0 };
-    for (const finding of job.findingsDetail ?? []) {
+    const bucket = byDay.get(day) ?? emptyDay();
+    bucket.activity += 1;
+    if (job.prNumber != null) bucket.prReviews += 1;
+    if (job.lens === "pentest") bucket.tests += 1;
+    for (const finding of job.lens === "pentest" ? (job.findingsDetail ?? []) : []) {
       const key = String(finding.severity ?? "").toLowerCase() as keyof typeof severity;
-      if (key in severity) severity[key] += 1;
-      if (key in bucket) bucket[key as keyof typeof bucket] += 1;
+      const status = statusOf(finding);
+      issuesFound += 1;
+      if (key in bucket) bucket[key as "critical" | "high" | "medium" | "low"] += 1;
+      if (status === "fixed") {
+        issuesFixed += 1;
+        bucket.fixed += 1;
+      } else if (status !== "ignored") {
+        bucket.open += 1;
+        if (key in severity) severity[key] += 1;
+      }
     }
     byDay.set(day, bucket);
-    if (job.status === "completed" && !job.blocking) verdicts.approved += 1;
-    else if ((job.blocking ?? 0) > 0) verdicts.changesRequested += 1;
-    else verdicts.commented += 1;
+    if (job.prNumber != null) {
+      if ((job.status === "done" || job.status === "completed") && !job.blocking) verdicts.approved += 1;
+      else if ((job.blocking ?? 0) > 0) verdicts.changesRequested += 1;
+      else verdicts.commented += 1;
+    }
   }
-  const repos = new Map<string, { repository: string; prs: number; findings: number; addressed: number }>();
+  const repos = new Map(lifecycle.repositories.map((row) => [row.repository, { ...row, prs: 0 }]));
+  const repoPrs = new Map<string, Set<string>>();
   for (const job of recent) {
-    if (!job.repo) continue;
+    if (!job.repo || job.prNumber == null) continue;
     const row = repos.get(job.repo) ?? { repository: job.repo, prs: 0, findings: 0, addressed: 0 };
-    row.prs += 1; row.findings += job.findings ?? 0;
-    if (job.status === "completed" && !(job.blocking ?? 0)) row.addressed += job.findings ?? 0;
+    const keys = repoPrs.get(job.repo) ?? new Set<string>();
+    keys.add(`${job.repo}#${job.prNumber}`);
+    repoPrs.set(job.repo, keys);
+    row.prs = keys.size;
     repos.set(job.repo, row);
   }
-  const totalFindings = Object.values(severity).reduce((a, b) => a + b, 0);
+  const reviewedPrs = new Set(recent.filter((job) => job.repo && job.prNumber != null).map((job) => `${job.repo}#${job.prNumber}`));
   res.json({
     periodDays: days,
-    metrics: { securityScore: Math.max(0, 100 - severity.critical * 18 - severity.high * 8 - severity.medium * 3 - severity.low), openIssues: severity.critical + severity.high + severity.medium + severity.low, issuesFound: totalFindings, fixRate: totalFindings ? Math.round(([...repos.values()].reduce((n, r) => n + r.addressed, 0) / totalFindings) * 100) : 100, prsReviewed: recent.length, pentests: recent.filter((job) => job.lens === "pentest").length },
+    metrics: {
+      // Score + open counts reflect what is STILL open, so fixing issues improves them.
+      securityScore: Math.max(0, 100 - severity.critical * 18 - severity.high * 8 - severity.medium * 3 - severity.low),
+      openIssues: severity.critical + severity.high + severity.medium + severity.low,
+      issuesFound,
+      issuesFixed,
+      fixRate: issuesFound ? Math.round((issuesFixed / issuesFound) * 100) : 100,
+      meanTimeToRemediateDays: lifecycle.metrics.meanTimeToRemediateDays,
+      prsReviewed: reviewedPrs.size,
+      pentests: recent.filter((job) => job.lens === "pentest").length,
+    },
     severity, verdicts,
     history: [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([date, values]) => ({ date, ...values })),
     repositories: [...repos.values()].sort((a, b) => b.findings - a.findings || b.prs - a.prs).slice(0, 8),
+    contributors: lifecycle.contributors,
   });
 });
 

@@ -62,6 +62,8 @@ export default function TrackPage() {
   const [busy, setBusy] = useState("");
   const [draftTitle, setDraftTitle] = useState("");
   const [createErr, setCreateErr] = useState("");
+  const [query, setQuery] = useState("");
+  const [sourceFilter, setSourceFilter] = useState<"all" | "meeting">("all");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -127,11 +129,19 @@ export default function TrackPage() {
     }
   }, [refetch]);
 
+  const visibleItems = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return items.filter((item) => {
+      if (sourceFilter === "meeting" && item.source !== "meeting-action") return false;
+      return !needle || item.title.toLowerCase().includes(needle) || item.assignee?.toLowerCase().includes(needle) || item.priority.toLowerCase().includes(needle);
+    });
+  }, [items, query, sourceFilter]);
+
   const byColumn = useMemo(() => {
     const groups: Record<StatusCategory, TrackItem[]> = { todo: [], in_progress: [], completed: [] };
-    for (const item of items) (groups[item.statusCategory] ?? groups.todo).push(item);
+    for (const item of visibleItems) (groups[item.statusCategory] ?? groups.todo).push(item);
     return groups;
-  }, [items]);
+  }, [visibleItems]);
 
   const doneCount = byColumn.completed.length;
 
@@ -143,6 +153,20 @@ export default function TrackPage() {
       </PageHeader>
       <div className={styles.page}>
         {error ? <div className={styles.errorBar} role="alert">{error}</div> : null}
+
+        <div className={styles.toolbar} aria-label="Track filters">
+          <label className={styles.search}>
+            <span aria-hidden="true">⌕</span>
+            <span className="sr-only">Search Track</span>
+            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search work items" />
+            {query ? <button type="button" onClick={() => setQuery("")} aria-label="Clear search">×</button> : null}
+          </label>
+          <div className={styles.filters} role="group" aria-label="Filter by source">
+            <button type="button" className={sourceFilter === "all" ? styles.filterOn : ""} aria-pressed={sourceFilter === "all"} onClick={() => setSourceFilter("all")}>All <span>{items.length}</span></button>
+            <button type="button" className={sourceFilter === "meeting" ? styles.filterOn : ""} aria-pressed={sourceFilter === "meeting"} onClick={() => setSourceFilter("meeting")}>From meetings <span>{items.filter((item) => item.source === "meeting-action").length}</span></button>
+          </div>
+          <span className={styles.resultCount}>{visibleItems.length === items.length ? `${items.length} items` : `${visibleItems.length} of ${items.length}`}</span>
+        </div>
 
         {loading && items.length === 0 ? (
           <div className={styles.loadWrap}><InlineLoading label="Loading board…" /></div>
@@ -177,7 +201,7 @@ export default function TrackPage() {
 
                   <div className={styles.colBody}>
                     {colItems.length === 0 ? (
-                      <div className={styles.empty}>{col.key === "todo" ? "Nothing to do yet." : col.key === "in_progress" ? "Nothing in progress." : "Nothing done yet."}</div>
+                      <div className={styles.empty}>{query || sourceFilter !== "all" ? "No matching items in this column." : col.key === "todo" ? "Nothing to do yet." : col.key === "in_progress" ? "Nothing in progress." : "Nothing done yet."}</div>
                     ) : (
                       colItems.map((item) => {
                         const idx = ORDER.indexOf(item.statusCategory);

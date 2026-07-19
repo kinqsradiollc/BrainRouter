@@ -18,6 +18,8 @@ export interface ExtensionManifest {
   main?: string;
   /** Capabilities the extension declares it will register (shown in `ext list`). */
   contributes?: Array<'tools' | 'providers' | 'hooks' | 'panels'>;
+  /** Required core capabilities ship with the package and cannot be disabled or shadowed. */
+  required?: boolean;
 }
 
 export interface ExtensionInfo {
@@ -29,6 +31,7 @@ export interface ExtensionInfo {
   /** Absolute path to the entry module (may not exist if uncompiled). */
   entry: string;
   contributes: Array<'tools' | 'providers' | 'hooks' | 'panels'>;
+  required?: boolean;
 }
 
 const SOURCE_RANK: Record<ExtensionSource, number> = { builtin: 0, user: 1, workspace: 2 };
@@ -71,6 +74,7 @@ export function readExtensionManifest(dir: string, source: ExtensionSource): Ext
       dir,
       entry: path.join(dir, main),
       contributes: Array.isArray(m.contributes) ? m.contributes : [],
+      required: source === 'builtin' && m.required === true,
     };
   } catch {
     return null;
@@ -105,7 +109,8 @@ export function resolveExtensions(found: ExtensionInfo[]): ExtensionInfo[] {
   const byName = new Map<string, ExtensionInfo>();
   for (const ext of found) {
     const existing = byName.get(ext.name);
-    if (!existing || SOURCE_RANK[ext.source] >= SOURCE_RANK[existing.source]) byName.set(ext.name, ext);
+    if (existing?.required) continue;
+    if (ext.required || !existing || SOURCE_RANK[ext.source] >= SOURCE_RANK[existing.source]) byName.set(ext.name, ext);
   }
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }

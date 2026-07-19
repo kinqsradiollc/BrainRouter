@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { LOCAL_TOOLS } from '@kinqs/brainrouter-core/agent';
+import { localToolSpecsFromExecutors } from '@kinqs/brainrouter-core/tool';
 import {
   askChoice,
   CancelledChoiceError,
@@ -243,9 +243,9 @@ test('CancelledChoiceError carries a recognizable name + default message', () =>
   assert.match(err.message, /cancelled/i);
 });
 
-test('LOCAL_TOOLS registers ask_user_choice with the expected schema shape', () => {
-  const tool = LOCAL_TOOLS.find((t) => t.name === 'ask_user_choice');
-  assert.ok(tool, 'ask_user_choice should be registered in LOCAL_TOOLS');
+test('extension registry exposes ask_user_choice with the expected schema shape', () => {
+  const tool = localToolSpecsFromExecutors().find((candidate) => candidate.name === 'ask_user_choice');
+  assert.ok(tool, 'ask_user_choice should be registered by a required extension');
   const props = (tool!.inputSchema as any).properties;
   assert.ok(props.question, 'schema is missing the `question` property');
   assert.ok(props.header, 'schema is missing the `header` property');

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildChatCompletionPayload, LOCAL_TOOLS, resolveWireEffort } from '@kinqs/brainrouter-core/agent';
+import { buildChatCompletionPayload, resolveWireEffort } from '@kinqs/brainrouter-core/agent';
+import { localToolSpecsFromExecutors } from '@kinqs/brainrouter-core/tool';
 import { _resetModelReasoningCapabilities, registerModelReasoningCapabilities } from '@kinqs/brainrouter-core/provider';
 import { buildSystemPrompt } from '@kinqs/brainrouter-core/prompt';
 import { buildRolePrompt, listRoles, resolveRole } from '@kinqs/brainrouter-core/orchestration';
@@ -19,7 +20,7 @@ test('buildChatCompletionPayload exposes local and MCP tools to the LLM', () => 
     },
     [{ role: 'user', content: 'remember this' }],
     [
-      ...LOCAL_TOOLS,
+      ...localToolSpecsFromExecutors(),
       {
         name: 'memory_recall',
         description: 'Recall relevant BrainRouter memories.',

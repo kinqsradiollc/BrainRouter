@@ -624,6 +624,17 @@ test('callOpenAIStream: retries once without reasoning effort when the stream en
 import { executeOrchestrationTool } from '../orchestration/tools.js';
 import { clearGoal, readGoal, setGoal } from '../goal/store/goalStore.js';
 import { makeAgent, withTempWorkspace, withTempWorkspaceAsync } from './_helpers.js';
+
+test('direct browser tool dispatch stays blocked for silent/non-interactive agents even if a port is present', async () => {
+  await withTempWorkspaceAsync(async (workspace) => {
+    const agent = makeAgent(workspace);
+    agent.browserControlPort = { request: async (command: any) => ({ ok: true, kind: command.kind, durationMs: 0 }) };
+    await assert.rejects(
+      () => agent.executeLocalTool('browser_list_tabs', {}),
+      /(?:unavailable outside the active top-level local Desktop browser session|Unknown local tool)/,
+    );
+  });
+});
 import { listArtifacts } from '../artifact/artifactStore.js';
 import { createConnector } from '../connectors/store/connectorStore.js';
 

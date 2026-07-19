@@ -1,46 +1,85 @@
-/**
- * Meetings desktop view (ADR-018) — view-model types.
- *
- * The renderer stays presentational: data + mutations arrive through the injected
- * {@link MeetingsOps} bridge (host `meetings-*` queries → backend `MeetingsService`),
- * mirroring how Track mode is fed. Sharing scope is the four-level ladder (D8).
- */
+/** Account-backed Meetings area view-model contracts. */
 
 export type MeetingScope = "private" | "team" | "org" | "public";
+export type MeetingSummaryStatus = "queued" | "processing" | "ready" | "failed";
+export type MeetingTemplate = "general" | "standup" | "one-on-one" | "retrospective";
 
 export interface MeetingListItem {
   id: string;
   title: string;
-  /** ISO calendar date. */
   date: string;
   scope: MeetingScope;
   attendeeCount: number;
+  summaryStatus: MeetingSummaryStatus;
+  originOrgId: string;
+  canEdit: boolean;
+}
+
+export interface MeetingListPage {
+  meetings: MeetingListItem[];
+  nextCursor: string | null;
 }
 
 export interface MeetingActionItem {
   id: string;
   title: string;
   assignee?: string;
-  done: boolean;
-  /** Set once promoted to a Track work item. */
+  done?: boolean;
   trackItemId?: string;
 }
 
 export interface MeetingTranscriptLine {
+  ordinal?: number;
   at: string;
   speaker: string;
   text: string;
 }
 
+export interface MeetingTranscriptPage {
+  segments: MeetingTranscriptLine[];
+  total: number;
+  nextCursor: string | null;
+}
+
 export interface MeetingShare {
   scope: MeetingScope;
   teamId?: string;
-  /** Present only when scope is `"public"`. */
   publicUrl?: string;
   expiresAt?: string;
 }
 
-/** Server Track board (org-scoped, `/api/track`) — distinct from the workspace GitHub Track. */
+export interface MeetingDetail {
+  id: string;
+  title: string;
+  date: string;
+  status: string;
+  originOrgId: string;
+  canEdit: boolean;
+  durationMin?: number;
+  wordCount?: number;
+  attendees: string[];
+  model?: { label: string; effort?: string };
+  summaryMarkdown: string;
+  actionItems: MeetingActionItem[];
+  transcript: MeetingTranscriptLine[];
+  share: MeetingShare;
+  summaryStatus: MeetingSummaryStatus;
+  summaryError?: string;
+}
+
+export type MeetingOverview = Omit<MeetingDetail, "transcript">;
+
+export interface CreateMeetingInput {
+  title: string;
+  transcript: string;
+  template?: MeetingTemplate;
+  scope?: MeetingScope;
+  teamId?: string;
+  date?: string;
+  attendees?: string[];
+}
+
+/** Server Track board (org-scoped, `/api/track`) — distinct from workspace Track. */
 export type TrackStatusCategory = "todo" | "in_progress" | "completed";
 
 export interface TrackItem {
@@ -51,52 +90,45 @@ export interface TrackItem {
   status?: string;
   statusCategory: TrackStatusCategory;
   priority?: string;
-  assignee?: string;
+  assignee?: string | null;
   labels?: string[];
-  /** `"meeting-action"` items were promoted from a meeting action item. */
   source: "manual" | "meeting-action";
-  sourceRef?: string;
+  sourceRef?: string | null;
   completedAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }
 
-export type MeetingStatus = "recorded" | "imported" | "live" | "summarizing";
-
-export interface MeetingDetail {
-  id: string;
+export interface CreateTrackInput {
   title: string;
-  date: string;
-  status: MeetingStatus;
-  durationMin?: number;
-  wordCount?: number;
-  attendees: string[];
-  model?: { label: string; effort?: string };
-  summaryMarkdown: string;
-  actionItems: MeetingActionItem[];
-  transcript: MeetingTranscriptLine[];
-  share: MeetingShare;
+  description?: string;
+  priority?: string;
+  assignee?: string;
+  statusCategory?: TrackStatusCategory;
 }
 
-/** Bridge to the host/backend. Every method is async; the view shows optimistic state. */
 export interface MeetingsOps {
-  list(): Promise<MeetingListItem[]>;
-  get(id: string): Promise<MeetingDetail>;
-  /** M0 text path: create a meeting from a pasted transcript. */
-  createFromTranscript(input: { title: string; transcript: string }): Promise<{ id: string }>;
-  regenerateSummary(id: string): Promise<void>;
-  setScope(id: string, scope: MeetingScope, opts?: { teamId?: string }): Promise<MeetingShare>;
-  /** Promote an action item to a Track work item; returns its id. */
-  sendActionToTrack(meetingId: string, actionId: string): Promise<{ trackItemId: string }>;
-  /** Remove an action item's Track work item and clear the link (untrack). */
-  unsendActionFromTrack(meetingId: string, actionId: string): Promise<void>;
-  toggleAction(meetingId: string, actionId: string, done: boolean): Promise<void>;
-  /** List the org's SERVER Track board items (`/api/track`), newest first. */
-  serverTracks(): Promise<TrackItem[]>;
-  /** Mark a server Track item done (→ completed) or reopen it (→ todo). */
-  serverTrackSetDone(id: string, done: boolean): Promise<void>;
-  /** Untrack — delete a server Track item outright. */
-  serverTrackRemove(id: string): Promise<void>;
+  listPage(input?: { cursor?: string; limit?: number }, orgId?: string): Promise<MeetingListPage>;
+  /** Compatibility convenience for consumers that only need the first page. */
+  list(orgId?: string): Promise<MeetingListItem[]>;
+  get(id: string, orgId?: string): Promise<MeetingDetail>;
+  overview(id: string, orgId?: string): Promise<MeetingOverview>;
+  transcriptPage(id: string, input?: { cursor?: string; limit?: number }, orgId?: string): Promise<MeetingTranscriptPage>;
+  createFromTranscript(input: CreateMeetingInput, orgId?: string): Promise<{ id: string; summaryStatus?: MeetingSummaryStatus }>;
+  updateSummary(id: string, summaryMarkdown: string, orgId?: string): Promise<MeetingDetail>;
+  transcribeAudio(input: { bytes: Uint8Array; contentType?: string; language?: string }): Promise<{ text: string }>;
+  regenerateSummary(id: string, orgId?: string): Promise<MeetingDetail>;
+  /** Owner-only hard delete — also removes the recallable summary server-side. */
+  deleteMeeting(id: string, orgId?: string): Promise<void>;
+  setScope(id: string, scope: MeetingScope, opts?: { teamId?: string }, orgId?: string): Promise<MeetingShare>;
+  sendActionToTrack(meetingId: string, actionId: string, orgId?: string): Promise<{ trackItemId: string }>;
+  unsendActionFromTrack(meetingId: string, actionId: string, orgId?: string): Promise<void>;
+  toggleAction(meetingId: string, actionId: string, done: boolean, orgId?: string): Promise<void>;
+  serverTracks(orgId?: string): Promise<TrackItem[]>;
+  serverTrackCreate(input: CreateTrackInput, orgId?: string): Promise<TrackItem>;
+  serverTrackTransition(id: string, statusCategory: TrackStatusCategory, orgId?: string): Promise<TrackItem>;
+  serverTrackSetDone(id: string, done: boolean, orgId?: string): Promise<void>;
+  serverTrackRemove(id: string, orgId?: string): Promise<void>;
 }
 
 export const MEETING_SCOPES: readonly MeetingScope[] = ["private", "team", "org", "public"];

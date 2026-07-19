@@ -44,7 +44,7 @@ function newDraft(providerConfigId = ""): ManagedModelInput {
 }
 
 function recordDraft(record: ManagedModelRecord): ManagedModelInput {
-  const { id: _id, orgId: _orgId, createdAt: _createdAt, updatedAt: _updatedAt, ...input } = record;
+  const { id: _id, orgId: _orgId, createdAt: _createdAt, updatedAt: _updatedAt, readOnly: _readOnly, ...input } = record;
   return input;
 }
 
@@ -90,10 +90,15 @@ function policyForAdminRecord(record: ManagedModelRecord): ModelPolicy {
   };
 }
 
-export function ManagedModelsPanel({ providers }: { providers: ProviderConfig[] }) {
-  const llmProviders = useMemo(() => providers.filter((provider) => provider.kind === "llm"), [providers]);
+export function ManagedModelsPanel({ providers, orgId }: { providers: ProviderConfig[]; orgId?: string }) {
+  // Only the org's OWN (non-inherited) LLM providers can back a new managed model
+  // — a model attached to an inherited/read-only system-org provider would 404.
+  const llmProviders = useMemo(() => providers.filter((provider) => provider.kind === "llm" && !provider.readOnly), [providers]);
   const [catalog, setCatalog] = useState<ModelPolicy[]>([]);
   const [adminModels, setAdminModels] = useState<ManagedModelRecord[] | null>(null);
+  // True when the managed models shown are the deployment default inherited by an
+  // org with none of its own — displayed read-only until the org adds its own.
+  const [inherited, setInherited] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [open, setOpen] = useState(false);
@@ -107,15 +112,17 @@ export function ManagedModelsPanel({ providers }: { providers: ProviderConfig[] 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const safe = await adminApi.modelCatalog();
+      const safe = await adminApi.modelCatalog(orgId);
       setCatalog([...safe.models]);
       try {
-        const managed = await adminApi.listManagedModels();
+        const managed = await adminApi.listManagedModels(orgId);
         setAdminModels(managed.models ?? []);
+        setInherited(Boolean(managed.inherited));
       } catch {
         // models:read is intentionally broader than models:manage. A member sees
         // the safe catalog and no upstream custody/configuration controls.
         setAdminModels(null);
+        setInherited(false);
       }
       setError("");
     } catch (caught) {
@@ -123,7 +130,7 @@ export function ManagedModelsPanel({ providers }: { providers: ProviderConfig[] 
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [orgId]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -174,7 +181,7 @@ export function ManagedModelsPanel({ providers }: { providers: ProviderConfig[] 
     setBusy("discover");
     setFormError("");
     try {
-      const result = await adminApi.discoverManagedModels(draft.providerConfigId);
+      const result = await adminApi.discoverManagedModels(draft.providerConfigId, orgId);
       // Defensive: older backends returned probe objects ({id,...}); coerce to id
       // strings so the <option> keys/values never render "[object Object]".
       const ids = (result.selection.upstreamModelIds as unknown[])
@@ -214,8 +221,8 @@ export function ManagedModelsPanel({ providers }: { providers: ProviderConfig[] 
     setBusy("save");
     setFormError("");
     try {
-      if (editing) await adminApi.updateManagedModel(editing.id, draft);
-      else await adminApi.createManagedModel(draft);
+      if (editing) await adminApi.updateManagedModel(editing.id, draft, orgId);
+      else await adminApi.createManagedModel(draft, orgId);
       setOpen(false);
       await load();
     } catch (caught) {
@@ -227,7 +234,7 @@ export function ManagedModelsPanel({ providers }: { providers: ProviderConfig[] 
 
   async function makeDefault(id: string) {
     setBusy(`default:${id}`);
-    try { await adminApi.setDefaultManagedModel(id); await load(); }
+    try { await adminApi.setDefaultManagedModel(id, orgId); await load(); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "Unable to change the default model."); }
     finally { setBusy(""); }
   }
@@ -235,7 +242,7 @@ export function ManagedModelsPanel({ providers }: { providers: ProviderConfig[] 
   async function remove(record: ManagedModelRecord) {
     if (record.isDefault) return;
     setBusy(`delete:${record.id}`);
-    try { await adminApi.deleteManagedModel(record.id); await load(); }
+    try { await adminApi.deleteManagedModel(record.id, orgId); await load(); }
     catch (caught) { setError(caught instanceof Error ? caught.message : "Unable to remove the model."); }
     finally { setBusy(""); }
   }
@@ -252,11 +259,18 @@ export function ManagedModelsPanel({ providers }: { providers: ProviderConfig[] 
           <h3>Managed models</h3>
           <div className="settings-hint">BrainRouter hosts these models for the active organization. Exact effort policy comes from the server.</div>
         </div>
-        {adminModels !== null && <PremiumButton size="small" variant="primary" onClick={showCreate}>Add model</PremiumButton>}
+        {adminModels !== null && !inherited && <PremiumButton size="small" variant="primary" onClick={showCreate}>Add model</PremiumButton>}
       </div>
 
       {adminModels === null && !loading && (
         <div className="settings-note">Read only. An organization administrator controls upstream routing and allowed efforts.</div>
+      )}
+      {inherited && !loading && (
+        <div className="settings-note">
+          This organization has no managed models of its own, so it&rsquo;s inheriting the
+          <strong> deployment default (read-only)</strong>. Add your own provider in
+          <strong> Personal / BYOK</strong>, then add models here to give this organization its own set.
+        </div>
       )}
       {error && <div className="settings-note settings-note--error">{error}</div>}
       {loading ? <InlineLoading label="Loading managed models…" />
@@ -269,6 +283,7 @@ export function ManagedModelsPanel({ providers }: { providers: ProviderConfig[] 
                   <strong>{model.label}</strong>
                   <div className="settings-hint">
                     {model.id} · {admin?.isDefault ? "Default · " : ""}{model.enabled ? "Enabled" : "Disabled"} · {provenanceLabel(model)}
+                    {admin?.readOnly && " · inherited"}
                   </div>
                   <div className="managed-model-efforts">
                     {model.reasoning?.allowed.length
@@ -276,13 +291,14 @@ export function ManagedModelsPanel({ providers }: { providers: ProviderConfig[] 
                       : <span className="settings-hint">No reasoning-effort selector</span>}
                   </div>
                 </div>
-                {admin && (
+                {admin && !admin.readOnly && (
                   <div className="settings-actions">
                     {!admin.isDefault && <PremiumButton size="small" variant="ghost" disabled={busy === `default:${admin.id}`} onClick={() => void makeDefault(admin.id)}>Make default</PremiumButton>}
                     <PremiumButton size="small" variant="text" onClick={() => showEdit(admin)}>Configure</PremiumButton>
                     <button type="button" className="org-iconbtn" disabled={admin.isDefault || busy === `delete:${admin.id}`} title={admin.isDefault ? "Move the default before removing" : "Remove model"} aria-label={`Remove ${model.label}`} onClick={() => void remove(admin)}>✕</button>
                   </div>
                 )}
+                {admin?.readOnly && <span className="settings-badge settings-badge--muted" title="Deployment default — add your own provider + models to override">inherited</span>}
               </div>
             );
           })}

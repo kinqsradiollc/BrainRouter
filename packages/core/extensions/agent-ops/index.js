@@ -77,12 +77,14 @@ export async function activate(host) {
   let meta;
   let transcript;
   let orchestration;
+  let extApi;
   try {
     schedule = await import('../../dist/schedule/index.js');
     inbox = await import('../../dist/session/completion/completionInbox.js');
     meta = await import('../../dist/session/state/sessionMetaStore.js');
     transcript = await import('../../dist/session/transcript/sessionStore.js');
     orchestration = await import('../../dist/orchestration/session/orchestrator.js');
+    extApi = await import('../../dist/extension/index.js');
   } catch (err) {
     host.log('core not built — agent-ops tools unavailable', { error: String((err && err.message) || err) });
     return;
@@ -93,6 +95,7 @@ export async function activate(host) {
   const { getSessionMeta } = meta;
   const { readTranscriptEntries, listTranscripts, transcriptExists } = transcript;
   const { listSessions, formatSessionSummary } = orchestration;
+  const { listExtensions, extensionToolEntries, extensionToolOwner, isExtensionEnabled } = extApi;
 
   const ws = host.workspaceRoot;
   const currentSessionKey = () => process.env[SESSION_KEY_ENV]?.trim() || '';
@@ -316,5 +319,60 @@ export async function activate(host) {
     },
   });
 
-  host.log('agent-ops: registered schedule_task, notify_user, session_info');
+  // ---------------------------------------------------------------------------
+  // list_extensions — read-only: what extensions + tools do I actually have?
+  // Reads the live contribution registry (every built-in/user/workspace
+  // extension and the tools it registered) so the agent can answer "what can you
+  // do" authoritatively instead of guessing from its flat tool list. Never
+  // gated: it must be answerable in every context, including ones where some of
+  // the tools it reports are themselves context-gated (flagged via `requires`).
+  // ---------------------------------------------------------------------------
+  host.registerTool({
+    name: 'list_extensions',
+    description:
+      'Read-only: enumerate the installed BrainRouter extensions and the tools each one contributes, so you can tell the user exactly what capabilities you have and where they come from. ' +
+      'For every extension it reports name, version, source (builtin/user/workspace), whether it is required or optionally enabled, and its tool names. ' +
+      'Some tools are context-gated — e.g. browser_* need the in-app Desktop browser and computer_use needs Desktop computer-use; those are flagged with `requires` and may be absent from your active tool list even though the extension is installed. ' +
+      'Use this whenever asked "what tools/extensions do you have" or to confirm a capability is installed.',
+    inputSchema: objSchema(
+      { name: { type: 'string', description: 'Optional: return only the extension with this exact name.' } },
+      [],
+    ),
+    accessTier: 'read',
+    actionKind: 'read_only',
+    parallelSafe: true,
+    handle: async (args) => {
+      const filter = String(args.name || '').trim();
+      // Group every registered tool under its owning extension, flagging the
+      // context-gated ones so the agent can explain why they might not be live.
+      const entries = extensionToolEntries();
+      const byExt = {};
+      for (const e of entries) {
+        const owner = extensionToolOwner(e.name);
+        const ext = (owner && owner.extension) || 'unknown';
+        const requires =
+          e.runtimePort === 'browser-control' || e.availability === 'browser-use'
+            ? 'the in-app Desktop browser'
+            : e.name === 'computer_use'
+              ? 'Desktop computer-use'
+              : undefined;
+        (byExt[ext] = byExt[ext] || []).push(requires ? { name: e.name, requires } : { name: e.name });
+      }
+      let manifests = listExtensions(ws);
+      if (filter) manifests = manifests.filter((m) => m.name === filter);
+      const extensions = manifests.map((m) => ({
+        name: m.name,
+        version: m.version,
+        description: m.description || null,
+        source: m.source,
+        required: m.required === true,
+        enabled: m.required === true || isExtensionEnabled(m.name),
+        toolCount: (byExt[m.name] || []).length,
+        tools: byExt[m.name] || [],
+      }));
+      return JSON.stringify({ ok: true, count: extensions.length, totalTools: entries.length, extensions });
+    },
+  });
+
+  host.log('agent-ops: registered schedule_task, notify_user, session_info, list_extensions');
 }

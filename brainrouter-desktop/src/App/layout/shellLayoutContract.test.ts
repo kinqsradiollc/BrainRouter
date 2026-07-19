@@ -4,15 +4,20 @@ import test from 'node:test';
 
 const theme = readFileSync(new URL('../../theme.css', import.meta.url), 'utf8');
 const sidebar = readFileSync(new URL('../../components/layout/Sidebar.tsx', import.meta.url), 'utf8');
+const activityBar = readFileSync(new URL('../../components/layout/ActivityBar.tsx', import.meta.url), 'utf8');
 
-test('the sidebar collapse control is the first coded control after the macOS traffic lights', () => {
-  const collapse = sidebar.indexOf('aria-label="Collapse sidebar"');
-  const brand = sidebar.indexOf('data-brand-mark="routed-b"');
-  assert.ok(collapse >= 0 && brand >= 0 && collapse < brand);
+test('sidebar collapse lives on the activity bar only; the rail keeps traffic-light clearance', () => {
+  // ONE collapse control (on the activity bar) — the rail's duplicate button
+  // and its brand mark were deliberately removed to cut chrome redundancy.
+  assert.ok(/Hide sidebar/.test(activityBar) && /setRailOpen/.test(activityBar));
+  assert.equal(sidebar.indexOf('aria-label="Collapse sidebar"'), -1);
+  assert.equal(sidebar.indexOf('data-brand-mark="routed-b"'), -1);
+  // macOS window-control clearance survives on both leftmost surfaces.
   assert.match(
     theme,
     /\[data-os="mac"\]\s+\.rail-top\s*\{[^}]*padding-left:\s*var\(--window-controls-inline-end\)/,
   );
+  assert.match(theme, /\[data-os="mac"\]\s+\.activity-bar\s*\{[^}]*padding-top/);
 });
 
 test('narrow layouts keep every drawer and topbar reopen control reachable', () => {
