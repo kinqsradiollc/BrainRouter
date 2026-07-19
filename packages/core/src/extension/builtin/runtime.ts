@@ -72,6 +72,8 @@ import { waitUntilCondition } from '../../util/agentloop/waitUntil.js';
 import { fetchAndExtract } from '../../websearch/crawler.js';
 import { buildSearchProvider } from '../../websearch/factory.js';
 import { parseDuckDuckGoLite, parseDuckDuckGoHtml } from '../../websearch/providers/duckduckgo.js';
+import { parseGoogleHtml, googleSearchUrl } from '../../websearch/providers/google.js';
+import type { WebSearchResult } from '../../websearch/types.js';
 import { readWorkerMeta, readWorkerSummary, closeWorker, canSpawnWorker } from '../../worker/workerStore.js';
 import { listWorkers } from '../../worker/workerStore.js';
 import { getLatestReview, saveReview } from '../../review/reviewStore.js';
@@ -655,19 +657,25 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         const maxResults = Math.max(1, Math.min(10, Number(args.maxResults ?? knobs.webSearch.maxResults)));
         // BROWSER-ONLY when available: run the search THROUGH the in-app browser
         // (real Chromium, the user's session, no raw HTTP scrape / bot-challenge).
-        // Navigate a background tab to the DuckDuckGo results page, read the
-        // rendered HTML, and parse it. The HTTP provider below is used ONLY when
-        // there is no in-app browser (CLI / server).
+        // GOOGLE first — the real browser renders its JS SERP the way a person's
+        // Chrome does — with DuckDuckGo's lite endpoint as the resilient fallback
+        // when Google answers a consent wall / CAPTCHA or shifts its layout. The
+        // HTTP provider below is used ONLY when there is no in-app browser.
         if (this.browserControlPort && !this.silent) {
-          try {
-            const serpUrl = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
-            const html = await fetchHtmlViaInAppBrowser(this.browserControlPort, serpUrl, 25_000, this.turnAbort?.signal);
-            if (html) {
-              let results = parseDuckDuckGoLite(html, maxResults);
-              if (!results.length) results = parseDuckDuckGoHtml(html, maxResults);
-              if (results.length) return JSON.stringify(results.slice(0, maxResults), null, 2);
-            }
-          } catch { /* fall through to the HTTP provider (no-browser only) */ }
+          const port = this.browserControlPort;
+          const sig = this.turnAbort?.signal;
+          const tryEngine = async (url: string, parsers: Array<(h: string, n: number) => WebSearchResult[]>): Promise<WebSearchResult[]> => {
+            try {
+              const html = await fetchHtmlViaInAppBrowser(port, url, 25_000, sig);
+              if (html) for (const parse of parsers) { const r = parse(html, maxResults); if (r.length) return r; }
+            } catch { /* try the next engine, then the HTTP provider */ }
+            return [];
+          };
+          let results = await tryEngine(googleSearchUrl(query, maxResults), [parseGoogleHtml]);
+          if (!results.length) {
+            results = await tryEngine(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`, [parseDuckDuckGoLite, parseDuckDuckGoHtml]);
+          }
+          if (results.length) return JSON.stringify(results.slice(0, maxResults), null, 2);
         }
         try {
           const provider = buildSearchProvider(knobs);
