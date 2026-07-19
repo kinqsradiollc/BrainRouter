@@ -1,9 +1,9 @@
 /**
  * The Backend seam (Layer 5) — the single boundary between the named command
- * layer and whatever actually drives the UI. The real implementation is the
- * headed Playwright driver client (P3); `StubBackend` lets the command layer be
- * unit-tested with no browser. A backend takes a `Command` and returns the RAW
- * (un-normalized) reply — `normalize.ts` validates it into a `UiCommandResult`.
+ * layer and whatever actually drives the UI. Production embedded-browser
+ * control uses BrowserControlPort instead of this legacy manifest command seam;
+ * DriverClient remains an explicit test adapter only. A backend takes a
+ * `Command` and returns the RAW reply validated by `normalize.ts`.
  */
 import type { Command } from '../types.js';
 
@@ -12,6 +12,13 @@ export interface Backend {
   perform(cmd: Command): Promise<unknown>;
   /** Release resources (close the browser / kill the driver child). */
   close?(): Promise<void>;
+}
+
+/** Safe production default: never launches Playwright or another browser. */
+export class UnavailableBackend implements Backend {
+  async perform(cmd: Command): Promise<unknown> {
+    throw new Error(`in-app browser backend unavailable for ${cmd.kind}`);
+  }
 }
 
 /** A canned backend for tests — records calls and returns a passing result. */

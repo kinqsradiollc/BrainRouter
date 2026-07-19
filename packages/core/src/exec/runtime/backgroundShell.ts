@@ -148,12 +148,36 @@ export interface BgOutputRead {
   complete: boolean;
 }
 
+/** Byte length of the largest prefix of `b[0..len)` that ends on a complete
+ *  UTF-8 character boundary. Returns `len` when the last char is whole (or the
+ *  bytes are malformed — let the decoder cope), otherwise the offset just before
+ *  the incomplete trailing lead byte so those bytes can be re-read next call. */
+function utf8CompletePrefixLen(b: Buffer, len: number): number {
+  if (len <= 0) return 0;
+  let i = len - 1;
+  while (i >= 0 && (b[i] & 0xc0) === 0x80) i--; // walk back over continuation bytes
+  if (i < 0) return len;
+  const lead = b[i];
+  let expected: number;
+  if ((lead & 0x80) === 0x00) expected = 1;
+  else if ((lead & 0xe0) === 0xc0) expected = 2;
+  else if ((lead & 0xf0) === 0xe0) expected = 3;
+  else if ((lead & 0xf8) === 0xf0) expected = 4;
+  else return len; // invalid lead byte
+  return (len - i) >= expected ? len : i;
+}
+
 /** Incremental log read from `fromByte`. Never throws on a missing log. */
 export function readBackgroundOutput(id: string, fromByte = 0): BgOutputRead | null {
   const run = runs.get(id);
   if (!run) return null;
   let buf = '';
   let size = fromByte;
+  // Advance the cursor by the EXACT number of raw bytes consumed, not by the
+  // byte length of the decoded string: a multibyte char split across the chunk
+  // boundary decodes to U+FFFD (a longer byte sequence), and the old
+  // `fromByte + Buffer.byteLength(buf)` overshot it and silently dropped output.
+  let nextOffset = fromByte;
   try {
     const st = fs.statSync(run.logPath);
     size = st.size;
@@ -163,13 +187,20 @@ export function readBackgroundOutput(id: string, fromByte = 0): BgOutputRead | n
         const len = Math.min(size - fromByte, BG_OUTPUT_CHUNK_CHARS);
         const b = Buffer.alloc(len);
         fs.readSync(fd, b, 0, len, fromByte);
-        buf = b.toString('utf-8');
+        // Hold an incomplete trailing multibyte char for the next read — UNLESS
+        // the run is finished and we're at EOF (a truncated final write must be
+        // emitted so polling completes instead of stalling forever).
+        const atEof = fromByte + len >= size;
+        const terminal = run.status !== 'running';
+        const complete = utf8CompletePrefixLen(b, len);
+        const emit = complete < len && !(atEof && terminal) ? complete : len;
+        buf = b.subarray(0, emit).toString('utf-8');
+        nextOffset = fromByte + emit;
       } finally {
         fs.closeSync(fd);
       }
     }
   } catch { /* log unreadable — return status only */ }
-  const nextOffset = fromByte + Buffer.byteLength(buf, 'utf-8');
   return {
     id,
     status: run.status,

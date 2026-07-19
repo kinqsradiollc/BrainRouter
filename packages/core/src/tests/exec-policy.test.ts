@@ -46,6 +46,12 @@ test('POLICY-1 actionKindForTool maps every mutating built-in (else read-only)',
   assert.equal(actionKindForTool('grep_search'), 'read_only');
 });
 
+test('computer control is always included in the policy audit surface', () => {
+  const policy = resolveToolPolicy('computer_use', 'shell');
+  assert.equal(policy.action, 'computer');
+  assert.equal(policy.mutating, true);
+});
+
 test('POLICY-1 synthesized delegate_<id> tools gate as child_write (CWE-280 — not registered)', () => {
   // delegate_<id> tools are synthesized per agent definition and never live in
   // the registry, so they must be classified by prefix — else they default to

@@ -1,567 +1,827 @@
 /**
- * Browser panel — an in-app web view of the workspace's running app with a tool
- * rail down the left edge. It renders the dev-server endpoint (default
- * http://localhost:5173) in an Electron <webview> and drives it live via
- * executeJavaScript (webviewBridge): extract data-testid elements, inspect/pick,
- * highlight, tap/type, screenshot, console, network, a11y, and record/replay
- * flows. No separate window — the panel IS the browser.
+ * Browser-grade chrome for the main-process BrowserTabManager. Page contents are
+ * native WebContentsViews: React owns only chrome/tooling and reports the exact
+ * surface rectangle. The user and agent therefore operate the same live tab.
  */
-import React, { useEffect, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import type { UiMap } from '@kinqs/brainrouter-core/browser';
+import type {
+  BrowserCommand,
+  BrowserConsoleEntry,
+  BrowserNetworkEntry,
+  BrowserSemanticNode,
+  BrowserState,
+  BrowserTab,
+} from '../../electron/browser/protocol.js';
 import { Icon } from '../icons.js';
 import {
-  type WebviewEl,
-  type LiveElement,
-  type NetworkEntry,
-  extractLive,
-  setHighlight,
-  startPick,
-  readPick,
-  cancelPick,
-  instrumentNetwork,
-  readNetwork,
-  a11ySnapshot,
-  tap,
-  typeText,
-  assertVisible,
-  highlightEl,
-  clearHighlight,
-  setCursorEnabled,
-  hideCursor,
-} from '../lib/browser/webviewBridge.js';
-import type { UiMap } from '@kinqs/brainrouter-core/browser';
+  browserShortcut,
+  browserTabTitle,
+  browserViewRect,
+  browserZoomLabel,
+  BROWSER_BLANK_URL,
+  nextBrowserOpenGeneration,
+  normalizeBrowserInput,
+} from '../lib/browser/browserPanelModel.js';
 import { rowSource, symbolKindIcon } from '../lib/browser/rowSource.js';
 
-type Drawer = 'elements' | 'console' | 'network' | 'a11y' | 'shot' | 'flows' | null;
+type Drawer = 'elements' | 'console' | 'network' | 'a11y' | 'shot' | 'downloads' | 'flows' | null;
 type Device = 'desktop' | 'tablet' | 'phone';
-type ConsoleMsg = { level: number; text: string };
-type FlowStep = { action: 'tap' | 'type' | 'assertVisible' | 'navigate'; target: string; text?: string };
-/** A story step handed off from the Atlas, enriched with resolver hints + route. */
-type StoryStep = { action: 'navigate' | 'tap' | 'type' | 'assertVisible'; target: string; text?: string; label?: string; type?: string; route?: string | null };
+type ElementAction = 'tap' | 'type' | 'assertVisible' | 'navigate';
+type LiveElement = BrowserSemanticNode & { target: string; action: ElementAction; label: string };
+type FlowStep = { action: ElementAction; target: string; text?: string };
+type StoryStep = { action: ElementAction; target: string; text?: string; label?: string; type?: string; route?: string | null };
+type StoryPayload = { id?: string; title?: string; steps?: StoryStep[] };
+type FindResult = { requestId?: number; activeMatchOrdinal?: number; matches?: number };
 
 const DEVICE_W: Record<Device, number | null> = { desktop: null, tablet: 820, phone: 390 };
+const DEVICE_H: Record<Device, number | null> = { desktop: null, tablet: 1_180, phone: 844 };
 const FLOWS_KEY = 'br-browser-flows';
 const URL_KEY = 'br-browser-url';
 const UIMAP_KEY = 'br-browser-uimap';
 const CURSOR_KEY = 'br-browser-cursor';
+
 function readUiMap(): UiMap | null {
   try { const raw = localStorage.getItem(UIMAP_KEY); return raw ? (JSON.parse(raw) as UiMap) : null; } catch { return null; }
 }
 
 function loadFlows(): Record<string, FlowStep[]> {
-  try { return JSON.parse(localStorage.getItem(FLOWS_KEY) || '{}'); } catch { return {}; }
-}
-function saveFlows(f: Record<string, FlowStep[]>): void {
-  try { localStorage.setItem(FLOWS_KEY, JSON.stringify(f)); } catch { /* ignore */ }
+  try { return JSON.parse(localStorage.getItem(FLOWS_KEY) || '{}') as Record<string, FlowStep[]>; } catch { return {}; }
 }
 
-/**
- * The one choke-point every omnibox entry passes through — a real browser
- * address bar. Resolves, in order: an explicit http(s) URL (any origin); a
- * data:text/html document; a bare loopback host → http; a hostname-looking token
- * → https; and anything else (words, a query) → a web search. Never returns an
- * empty/scheme-less string (Electron throws ERR_INVALID_URL for '') and never a
- * dangerous scheme (javascript:/file: fall through to search). null only for
- * empty input, where the caller uses the BROWSER_BLANK fallback.
- */
-function normalizeUrl(raw: string | null | undefined): string | null {
-  const s = (raw ?? '').trim();
-  if (!s) return null;
-  if (/^https?:\/\//i.test(s)) { try { return new URL(s).href; } catch { return null; } }
-  if (/^data:text\/html/i.test(s)) return s;
-  if (/^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:\d+)?(\/|$)/i.test(s)) return `http://${s}`;
-  // A hostname-looking token (a dot, no whitespace, URL-safe chars) → https.
-  if (!/\s/.test(s) && /\./.test(s) && /^[\w.\-~:/?#[\]@!$&'()*+,;=%]+$/.test(s)) {
-    try { return new URL(`https://${s}`).href; } catch { /* fall through to search */ }
-  }
-  return `https://www.google.com/search?q=${encodeURIComponent(s)}`;
+function saveFlows(flows: Record<string, FlowStep[]>): void {
+  try { localStorage.setItem(FLOWS_KEY, JSON.stringify(flows)); } catch { /* storage may be disabled */ }
 }
-// A self-contained blank document. NOT about:blank — the main-process attach
-// gate only permits data:text/html / loopback / workspace-prototype sources.
-const BROWSER_BLANK = 'data:text/html,%3C!doctype%20html%3E%3Cmeta%20charset%3Dutf-8%3E%3Ctitle%3ENew%20tab%3C%2Ftitle%3E';
+
+function rowsFromValue<T>(value: unknown, keys: string[]): T[] {
+  if (Array.isArray(value)) return value as T[];
+  if (!value || typeof value !== 'object') return [];
+  const record = value as Record<string, unknown>;
+  for (const key of keys) if (Array.isArray(record[key])) return record[key] as T[];
+  return [];
+}
+
+function screenshotFromValue(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (!value || typeof value !== 'object') return '';
+  const record = value as Record<string, unknown>;
+  return typeof record.dataUrl === 'string' ? record.dataUrl : typeof record.image === 'string' ? record.image : '';
+}
+
+function elementAction(node: BrowserSemanticNode): ElementAction {
+  const role = node.role.toLowerCase();
+  const tag = node.tag.toLowerCase();
+  const type = (node.type ?? '').toLowerCase();
+  if (role === 'textbox' || role === 'searchbox' || tag === 'textarea' || tag === 'input' || type === 'text') return 'type';
+  if (role === 'link' || tag === 'a') return 'navigate';
+  if (role === 'button' || role === 'menuitem' || role === 'tab' || tag === 'button') return 'tap';
+  return 'assertVisible';
+}
+
+function asLiveElements(nodes: BrowserSemanticNode[]): LiveElement[] {
+  return nodes.map((node) => ({
+    ...node,
+    target: node.testid || node.ref,
+    action: elementAction(node),
+    label: node.name || node.testid || node.role || node.tag,
+  }));
+}
 
 export function BrowserPanel(): React.ReactElement {
-  const [url, setUrl] = useState(() => localStorage.getItem(URL_KEY) || 'http://localhost:5173');
-  const [urlDraft, setUrlDraft] = useState(url);
-  const [ready, setReady] = useState(false);
+  const browser = window.brainrouter.browser;
+  const [browserState, setBrowserState] = useState<BrowserState | null>(null);
+  const [bridgeError, setBridgeError] = useState(browser ? '' : 'Native browser unavailable. Restart BrainRouter after updating the desktop app.');
+  const [openGeneration, setOpenGeneration] = useState<number | undefined>();
+  const [urlDraft, setUrlDraft] = useState(() => localStorage.getItem(URL_KEY) || 'http://localhost:5173');
   const [device, setDevice] = useState<Device>('desktop');
   const [drawer, setDrawer] = useState<Drawer>(null);
   const [elements, setElements] = useState<LiveElement[]>([]);
-  const [consoleMsgs, setConsoleMsgs] = useState<ConsoleMsg[]>([]);
-  const [network, setNetwork] = useState<NetworkEntry[]>([]);
-  const [a11y, setA11y] = useState<Array<{ role: string; name: string; testid?: string }>>([]);
-  const [shot, setShot] = useState<string>('');
+  const [consoleMsgs, setConsoleMsgs] = useState<BrowserConsoleEntry[]>([]);
+  const [network, setNetwork] = useState<BrowserNetworkEntry[]>([]);
+  const [a11y, setA11y] = useState<BrowserSemanticNode[]>([]);
+  const [shot, setShot] = useState('');
   const [highlightOn, setHighlightOn] = useState(false);
-  // Cursor indicator — visible pointer that tracks automated actions. Default ON.
   const [cursorOn, setCursorOn] = useState(() => localStorage.getItem(CURSOR_KEY) !== '0');
   const [pickMode, setPickMode] = useState(false);
-  const [picked, setPicked] = useState<string>('');
+  const [picked, setPicked] = useState('');
   const [typeVal, setTypeVal] = useState('test');
-  const [status, setStatus] = useState<string>('');
+  const [status, setStatus] = useState('');
   const [recording, setRecording] = useState(false);
   const [recorded, setRecorded] = useState<FlowStep[]>([]);
   const [flows, setFlows] = useState<Record<string, FlowStep[]>>(() => loadFlows());
   const [flowName, setFlowName] = useState('');
-  const [drive, setDrive] = useState(''); // testid handed off from the Atlas Screens map
-  const [logs, setLogs] = useState<string[]>([]); // run/action log shown in the bottom dock
+  const [drive, setDrive] = useState('');
+  const [logs, setLogs] = useState<string[]>([]);
   const [logsOpen, setLogsOpen] = useState(true);
   const [uiMap, setUiMap] = useState<UiMap | null>(() => readUiMap());
+  const [findOpen, setFindOpen] = useState(false);
+  const [findText, setFindText] = useState('');
+  const [findResult, setFindResult] = useState<FindResult>({});
+  const [dialogValue, setDialogValue] = useState('');
+  const [draggedTabId, setDraggedTabId] = useState<string | null>(null);
+  const [pausedDownloads, setPausedDownloads] = useState<Set<string>>(() => new Set());
 
   const hostRef = useRef<HTMLDivElement>(null);
-  const wvRef = useRef<WebviewEl | null>(null);
-  const urlRef = useRef(url);
-  urlRef.current = url;
-  // Latest cursor pref, read inside the (once-wired) dom-ready handler so the
-  // indicator is re-applied after every navigation wipes the page state.
-  const cursorOnRef = useRef(cursorOn);
-  cursorOnRef.current = cursorOn;
+  const omniboxRef = useRef<HTMLInputElement>(null);
+  const findRef = useRef<HTMLInputElement>(null);
+  const tabButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const pendingStateRef = useRef<BrowserState | null>(null);
+  const stateFrameRef = useRef<number | null>(null);
 
-  // Create the <webview> once and wire its lifecycle events.
-  useEffect(() => {
-    const host = hostRef.current;
-    if (!host) return;
-    const wv = document.createElement('webview') as unknown as WebviewEl;
-    // partition MUST be set before src — Electron re-attaches the guest if the
-    // partition changes after a load, which itself can fire a spurious
-    // loadURL('') and the ERR_INVALID_URL the user was seeing.
-    wv.setAttribute('partition', 'persist:browser-panel');
-    wv.setAttribute('src', normalizeUrl(urlRef.current) ?? BROWSER_BLANK);
-    wv.style.width = '100%';
-    wv.style.height = '100%';
-    wv.style.border = '0';
-    // dom-ready fires on the initial load AND every navigation/reload, which wipes
-    // the injected cursor overlay + its flag — so re-apply the current pref here.
-    const onReady = (): void => { setReady(true); void setCursorEnabled(wv, cursorOnRef.current).catch(() => undefined); };
-    const onConsole = (e: unknown): void => {
-      const ev = e as { level: number; message: string };
-      setConsoleMsgs((m) => [...m, { level: ev.level, text: ev.message }].slice(-200));
-    };
-    // getURL() is '' until a document commits (and on a failed provisional load).
-    // Never write that back into state or it re-enters the sinks as an empty load.
-    const onNav = (): void => { try { const u = wv.getURL(); if (u && u !== BROWSER_BLANK) { setUrl(u); setUrlDraft(u); } } catch { /* ignore */ } };
-    const onFail = (e: unknown): void => {
-      const ev = e as { errorDescription?: string; validatedURL?: string; errorCode?: number };
-      // errorCode -3 is ABORTED (a superseded navigation) — not a real failure.
-      if (ev.errorCode === -3) return;
-      setStatus(`load failed: ${ev.errorDescription || 'unreachable'}${ev.validatedURL ? ` (${ev.validatedURL})` : ''} — check the URL or that the server is running.`);
-    };
-    wv.addEventListener('dom-ready', onReady);
-    wv.addEventListener('console-message', onConsole as EventListener);
-    wv.addEventListener('did-navigate', onNav as EventListener);
-    wv.addEventListener('did-navigate-in-page', onNav as EventListener);
-    wv.addEventListener('did-fail-load', onFail as EventListener);
-    // did-fail-provisional-load fires for connection-refused on the INITIAL load
-    // (the most common failure) which did-fail-load misses.
-    wv.addEventListener('did-fail-provisional-load', onFail as EventListener);
-    host.appendChild(wv);
-    wvRef.current = wv;
-    return () => {
-      wv.removeEventListener('dom-ready', onReady);
-      wv.removeEventListener('console-message', onConsole as EventListener);
-      wv.removeEventListener('did-navigate', onNav as EventListener);
-      wv.removeEventListener('did-navigate-in-page', onNav as EventListener);
-      wv.removeEventListener('did-fail-load', onFail as EventListener);
-      wv.removeEventListener('did-fail-provisional-load', onFail as EventListener);
-      try { host.removeChild(wv); } catch { /* ignore */ }
-      wvRef.current = null;
-    };
+  const activeTab = useMemo<BrowserTab | null>(() => {
+    if (!browserState) return null;
+    return browserState.tabs.find((tab) => tab.id === browserState.activeTabId) ?? browserState.tabs[0] ?? null;
+  }, [browserState]);
+  const activeUrl = activeTab?.url ?? urlDraft;
+  const ready = !!activeTab && !activeTab.loading && !activeTab.crashed;
+
+  const applyStateBatched = useCallback((state: BrowserState): void => {
+    pendingStateRef.current = state;
+    if (stateFrameRef.current != null) return;
+    stateFrameRef.current = requestAnimationFrame(() => {
+      stateFrameRef.current = null;
+      const pending = pendingStateRef.current;
+      pendingStateRef.current = null;
+      if (pending) setBrowserState(pending);
+    });
   }, []);
 
-  // Navigate when the committed URL changes.
-  const go = (next: string): void => {
-    const u = normalizeUrl(next);
-    if (!u) { setStatus('Enter a URL or a search term.'); return; }
-    setStatus('');
-    setUrl(u);
-    setUrlDraft(u);
-    localStorage.setItem(URL_KEY, u);
-    wvRef.current?.loadURL(u).catch(() => setStatus('navigation failed'));
-  };
+  const refreshState = useCallback(async (): Promise<void> => {
+    if (!browser) return;
+    try {
+      applyStateBatched(await browser.getState());
+      setBridgeError('');
+    } catch (error) {
+      setBridgeError(error instanceof Error ? error.message : String(error));
+    }
+  }, [applyStateBatched, browser]);
 
-  // Poll for a picked element while in inspect mode.
+  const runBrowser = useCallback(async <T,>(command: BrowserCommand): Promise<T> => {
+    if (!browser) throw new Error('Native browser bridge is unavailable');
+    const result = await browser.command<T>(command);
+    if (!result.ok) throw new Error(`${result.code}: ${result.error}`);
+    return result.value;
+  }, [browser]);
+
+  const mutateBrowser = useCallback(async (command: BrowserCommand): Promise<void> => {
+    await runBrowser(command);
+    await refreshState();
+  }, [refreshState, runBrowser]);
+
+  const fireBrowser = useCallback((command: BrowserCommand, after?: () => void): void => {
+    void mutateBrowser(command).then(after).catch((error) => setStatus(error instanceof Error ? error.message : String(error)));
+  }, [mutateBrowser]);
+
+  // Subscribe once. State events are animation-frame batched so rapid title,
+  // loading and favicon events never rerender the complete panel individually.
   useEffect(() => {
-    if (!pickMode) return;
-    const wv = wvRef.current;
-    if (!wv) return;
-    void startPick(wv);
-    const t = setInterval(async () => {
-      const r = await readPick(wv).catch(() => null);
-      if (r) {
-        setPicked(r.testid ? `data-testid="${r.testid}"` : `${r.tag} — no testid (try ${r.suggestion})`);
-        setPickMode(false);
+    if (!browser) return;
+    void refreshState();
+    const off = browser.onEvent((event) => {
+      if (event.type === 'state') applyStateBatched(event.state);
+      else if (event.type === 'focus-location') requestAnimationFrame(() => { omniboxRef.current?.focus(); omniboxRef.current?.select(); });
+      else if (event.type === 'focus-find') { setFindOpen(true); requestAnimationFrame(() => findRef.current?.focus()); }
+      else if (event.type === 'status') setStatus(event.text);
+      else if (event.type === 'download') {
+        setBrowserState((state) => state ? { ...state, downloads: [...state.downloads.filter((row) => row.id !== event.download.id), event.download] } : state);
+      } else if (event.type === 'permission') {
+        setBrowserState((state) => state ? { ...state, permissionPrompt: event.prompt } : state);
+      } else if (event.type === 'dialog') {
+        setBrowserState((state) => state ? { ...state, dialogPrompt: event.prompt } : state);
       }
-    }, 250);
-    return () => { clearInterval(t); void cancelPick(wv); };
-  }, [pickMode]);
+    });
+    return () => {
+      off();
+      if (stateFrameRef.current != null) cancelAnimationFrame(stateFrameRef.current);
+      stateFrameRef.current = null;
+      pendingStateRef.current = null;
+    };
+  }, [applyStateBatched, browser, refreshState]);
 
-  // Persist the cursor pref and apply it live when toggled (the dom-ready handler
-  // re-applies it after navigations).
+  useEffect(() => {
+    if (!activeTab) return;
+    setUrlDraft(activeTab.url === BROWSER_BLANK_URL || activeTab.url.startsWith('data:text/html') ? '' : activeTab.url);
+    if (activeTab.url && !activeTab.url.startsWith('data:text/html')) {
+      try { localStorage.setItem(URL_KEY, activeTab.url); } catch { /* ignore */ }
+    }
+  }, [activeTab?.id, activeTab?.url]);
+
+  // Native views live above renderer pixels. Report only the true content host
+  // rectangle, and hide on unmount, occlusion, document hide, or a crashed tab.
+  useLayoutEffect(() => {
+    const host = hostRef.current;
+    if (!browser || !host) return;
+    let intersecting = true;
+    let frame: number | null = null;
+    let last = '';
+    const report = (): void => {
+      frame = null;
+      const rect = browserViewRect(host.getBoundingClientRect());
+      const surface = {
+        ...rect,
+        visible: intersecting && document.visibilityState === 'visible' && !bridgeError && !activeTab?.crashed && rect.width > 1 && rect.height > 1,
+      };
+      const serialized = JSON.stringify(surface);
+      if (serialized !== last || openGeneration !== undefined) {
+        last = serialized;
+        browser.setSurface(surface, openGeneration);
+      }
+    };
+    const schedule = (): void => {
+      if (frame == null) frame = requestAnimationFrame(report);
+    };
+    const resize = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule);
+    resize?.observe(host);
+    const intersection = typeof IntersectionObserver === 'undefined' ? null : new IntersectionObserver((entries) => {
+      intersecting = entries[0]?.isIntersecting !== false;
+      schedule();
+    });
+    intersection?.observe(host);
+    window.addEventListener('resize', schedule);
+    document.addEventListener('visibilitychange', schedule);
+    schedule();
+    return () => {
+      resize?.disconnect();
+      intersection?.disconnect();
+      window.removeEventListener('resize', schedule);
+      document.removeEventListener('visibilitychange', schedule);
+      if (frame != null) cancelAnimationFrame(frame);
+      const rect = browserViewRect(host.getBoundingClientRect());
+      browser.setSurface({ ...rect, visible: false });
+    };
+  }, [activeTab?.crashed, bridgeError, browser, openGeneration]);
+
+  useEffect(() => {
+    const onOpenGeneration = (event: Event): void => {
+      const generation = (event as CustomEvent<{ generation?: unknown }>).detail?.generation;
+      setOpenGeneration((current) => nextBrowserOpenGeneration(current, generation));
+    };
+    window.addEventListener('br-browser-open-generation', onOpenGeneration);
+    return () => window.removeEventListener('br-browser-open-generation', onOpenGeneration);
+  }, []);
+
+  const go = useCallback(async (next: string): Promise<void> => {
+    const url = normalizeBrowserInput(next);
+    if (!url) { setStatus('Enter a URL or search term.'); return; }
+    try {
+      setStatus('');
+      setUrlDraft(url);
+      await mutateBrowser({ op: 'navigate', url });
+      if (recording) setRecorded((steps) => [...steps, { action: 'navigate', target: url }]);
+    } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
+  }, [mutateBrowser, recording]);
+
+  const closeFind = useCallback((): void => {
+    setFindOpen(false);
+    setFindResult({});
+    void runBrowser({ op: 'stop-find', action: 'clearSelection' }).catch(() => undefined);
+  }, [runBrowser]);
+
+  const runFind = useCallback((forward: boolean, findNext = true): void => {
+    if (!findText) return;
+    void runBrowser<FindResult>({ op: 'find', text: findText, forward, findNext })
+      .then(setFindResult)
+      .catch((error) => setStatus(error instanceof Error ? error.message : String(error)));
+  }, [findText, runBrowser]);
+
+  const changeZoom = useCallback(async (delta: number | 'reset'): Promise<void> => {
+    const factor = delta === 'reset' ? 1 : Math.min(5, Math.max(0.25, (activeTab?.zoomFactor ?? 1) + delta));
+    try { await mutateBrowser({ op: 'set-zoom', factor: Math.round(factor * 10) / 10 }); }
+    catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
+  }, [activeTab?.zoomFactor, mutateBrowser]);
+
+  const changeDevice = useCallback((next: Device): void => setDevice(next), []);
+
+  // Device emulation belongs to the selected native tab. Reapply it when tabs
+  // change so the visual viewport and the page's CSS/touch metrics stay aligned.
+  useEffect(() => {
+    if (!activeTab) return;
+    const frame = requestAnimationFrame(() => {
+      const rect = hostRef.current?.getBoundingClientRect();
+      const width = DEVICE_W[device] ?? Math.max(240, Math.round(rect?.width ?? 1_440));
+      const height = DEVICE_H[device] ?? Math.max(240, Math.round(rect?.height ?? 900));
+      fireBrowser({ op: 'set-device', device: { name: device, width, height, deviceScaleFactor: device === 'desktop' ? 1 : 2, isMobile: device !== 'desktop' } });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeTab?.id, device, fireBrowser]);
+
+  const selectTabAt = useCallback((index: number, focusTab = true): void => {
+    const tabs = browserState?.tabs ?? [];
+    const tab = tabs[index];
+    if (tab) void mutateBrowser({ op: 'select-tab', tabId: tab.id })
+      .then(() => { if (focusTab) requestAnimationFrame(() => tabButtonRefs.current.get(tab.id)?.focus()); })
+      .catch((error) => setStatus(String(error)));
+  }, [browserState?.tabs, mutateBrowser]);
+
+  const selectShortcutTab = useCallback((index: number): void => {
+    const tabCount = browserState?.tabs.length ?? 0;
+    selectTabAt(index === 8 ? tabCount - 1 : index, false);
+  }, [browserState?.tabs.length, selectTabAt]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape' && findOpen) { event.preventDefault(); closeFind(); return; }
+      const shortcut = browserShortcut(event);
+      if (!shortcut) return;
+      event.preventDefault();
+      if (shortcut.command === 'focus-omnibox') { omniboxRef.current?.focus(); omniboxRef.current?.select(); }
+      else if (shortcut.command === 'find') { setFindOpen(true); requestAnimationFrame(() => findRef.current?.focus()); }
+      else if (shortcut.command === 'new-tab') void mutateBrowser({ op: 'create-tab', active: true }).then(() => requestAnimationFrame(() => omniboxRef.current?.focus())).catch((error) => setStatus(String(error)));
+      else if (shortcut.command === 'close-tab') void mutateBrowser({ op: 'close-tab' }).catch((error) => setStatus(String(error)));
+      else if (shortcut.command === 'reopen-tab') void mutateBrowser({ op: 'reopen-tab' }).catch((error) => setStatus(String(error)));
+      else if (shortcut.command === 'select-tab') selectShortcutTab(shortcut.index);
+      else if (shortcut.command === 'reload') void mutateBrowser({ op: 'reload', bypassCache: shortcut.bypassCache }).catch((error) => setStatus(String(error)));
+      else if (shortcut.command === 'zoom-in') void changeZoom(0.1);
+      else if (shortcut.command === 'zoom-out') void changeZoom(-0.1);
+      else if (shortcut.command === 'zoom-reset') void changeZoom('reset');
+      else void mutateBrowser({ op: shortcut.command }).catch((error) => setStatus(String(error)));
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [changeZoom, closeFind, findOpen, mutateBrowser, selectShortcutTab]);
+
+  useEffect(() => {
+    if (!findOpen || !findText) return;
+    const timer = window.setTimeout(() => {
+      void runBrowser<FindResult>({ op: 'find', text: findText }).then(setFindResult).catch((error) => setStatus(String(error)));
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [findOpen, findText, runBrowser]);
+
   useEffect(() => {
     try { localStorage.setItem(CURSOR_KEY, cursorOn ? '1' : '0'); } catch { /* ignore */ }
-    const wv = wvRef.current;
-    if (wv && ready) void setCursorEnabled(wv, cursorOn).catch(() => undefined);
-  }, [cursorOn, ready]);
+    if (activeTab) void runBrowser({ op: 'set-cursor', enabled: cursorOn }).catch(() => undefined);
+  }, [activeTab?.id, activeTab?.revision, cursorOn, runBrowser]);
 
-  const withWv = async (fn: (wv: WebviewEl) => Promise<void>): Promise<void> => {
-    const wv = wvRef.current;
-    if (!wv || !ready) { setStatus('page not ready yet'); return; }
-    try { await fn(wv); } catch (e) { setStatus(e instanceof Error ? e.message : String(e)); }
-  };
+  useEffect(() => {
+    const prompt = browserState?.dialogPrompt;
+    setDialogValue(prompt?.kind === 'prompt' ? prompt.defaultValue ?? '' : '');
+  }, [browserState?.dialogPrompt?.id]);
 
-  // The UI map is produced by the Atlas extract flow and mirrored to localStorage
-  // by App; refresh our copy whenever it changes so source links stay current.
   useEffect(() => {
     const onMap = (): void => setUiMap(readUiMap());
     window.addEventListener('br-browser-uimap', onMap);
     return () => window.removeEventListener('br-browser-uimap', onMap);
   }, []);
 
-  // §a11y-inspect — map an a11y role to the resolver's coarse type hint so the
-  // fuzzy fallback finds the right control when a row has no data-testid.
-  const roleToType = (role: string): string | undefined => {
-    if (role === 'link') return 'link';
-    if (role === 'button') return 'button';
-    if (role === 'combobox') return 'select';
-    if (role === 'textbox' || role === 'searchbox') return 'input';
-    return undefined;
-  };
-  const hoverHighlight = (n: { role: string; name: string; testid?: string }): void => {
-    const wv = wvRef.current; if (!wv || !ready) return;
-    highlightEl(wv, n.testid || n.name, { label: n.name, type: roleToType(n.role) }).catch(() => { /* ignore */ });
-  };
-  const hoverClear = (): void => {
-    const wv = wvRef.current; if (!wv || !ready) return;
-    clearHighlight(wv).catch(() => { /* ignore */ });
-  };
-
-  // Mirror every status update into the bottom Logs dock (fires only on change,
-  // so story-run steps, action results, and errors all stream in as a log).
   useEffect(() => {
-    const s = status.trim();
-    if (!s) return;
-    setLogs((l) => [...l, `${new Date().toLocaleTimeString([], { hour12: false })}  ${s}`].slice(-300));
+    const message = status.trim();
+    if (message) setLogs((rows) => [...rows, `${new Date().toLocaleTimeString([], { hour12: false })}  ${message}`].slice(-300));
   }, [status]);
 
-  // Also fold run-flow notifications from App (the "Preparing…" banner and the
-  // ensure-app result/errors, which otherwise only flash as a toast) into the
-  // same dock — so it's one trail you can scan to see exactly where a run stalled.
   useEffect(() => {
-    const onLog = (e: Event): void => {
-      const msg = (e as CustomEvent<{ message?: string }>).detail?.message?.trim();
-      if (msg) setLogs((l) => [...l, `${new Date().toLocaleTimeString([], { hour12: false })}  ${msg}`].slice(-300));
+    const onLog = (event: Event): void => {
+      const message = (event as CustomEvent<{ message?: string }>).detail?.message?.trim();
+      if (message) setLogs((rows) => [...rows, `${new Date().toLocaleTimeString([], { hour12: false })}  ${message}`].slice(-300));
     };
     window.addEventListener('br-browser-log', onLog);
     return () => window.removeEventListener('br-browser-log', onLog);
   }, []);
 
-  const doExtract = () => withWv(async (wv) => { setElements(await extractLive(wv)); setDrawer('elements'); setStatus(''); });
-  const toggleHighlight = () => withWv(async (wv) => { const on = !highlightOn; await setHighlight(wv, on); setHighlightOn(on); });
-  const doScreenshot = () => withWv(async (wv) => { await hideCursor(wv).catch(() => undefined); const img = await wv.capturePage(); setShot(img.toDataURL()); setDrawer('shot'); });
-  // Name a shot after the current URL's route so saved files are recognisable.
-  const shotName = (): string => {
-    try { const u = new URL(urlRef.current); return (u.hash || u.pathname).replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '') || 'screen'; } catch { return 'screen'; }
+  const withPage = async (action: () => Promise<void>): Promise<void> => {
+    if (!activeTab || activeTab.loading || activeTab.crashed) { setStatus(activeTab?.crashed ? 'This tab crashed. Reload it to continue.' : 'Page is not ready yet.'); return; }
+    try { await action(); } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
   };
-  // Persist the current screenshot to disk (the host writes it under
-  // .brainrouter/ui-tests/screenshots/ and toasts the path). BrowserPanel takes no
-  // props, so hand off via a window event that App forwards to the host query.
-  const saveShot = (): void => {
-    if (!shot) { setStatus('take a screenshot first'); return; }
-    window.dispatchEvent(new CustomEvent('br-browser-savescreenshot', { detail: { dataUrl: shot, name: shotName() } }));
-    setStatus('Saving screenshot…');
+
+  const doExtract = (): Promise<void> => withPage(async () => {
+    const value = await runBrowser({ op: 'snapshot', mode: 'testids' });
+    setElements(asLiveElements(rowsFromValue<BrowserSemanticNode>(value, ['nodes', 'elements'])));
+    setDrawer('elements');
+    setStatus('');
+  });
+
+  const startInspect = (): void => {
+    setPickMode(true);
+    void doExtract().then(() => setStatus('Choose an element in the snapshot to inspect it.'));
   };
-  const doConsole = () => setDrawer('console');
-  const doNetwork = () => withWv(async (wv) => { await instrumentNetwork(wv); setNetwork(await readNetwork(wv)); setDrawer('network'); });
-  const doA11y = () => withWv(async (wv) => {
-    setA11y(await a11ySnapshot(wv));
+
+  const toggleHighlight = (): Promise<void> => withPage(async () => {
+    const next = !highlightOn;
+    await runBrowser(next ? { op: 'highlight' } : { op: 'clear-highlight' });
+    setHighlightOn(next);
+  });
+
+  const doScreenshot = (): Promise<void> => withPage(async () => {
+    const value = await runBrowser({ op: 'screenshot', maxDimension: 2_560 });
+    const dataUrl = screenshotFromValue(value);
+    if (!dataUrl) throw new Error('Screenshot returned no image');
+    setShot(dataUrl);
+    setDrawer('shot');
+  });
+
+  const doConsole = (): Promise<void> => withPage(async () => {
+    const value = await runBrowser({ op: 'console' });
+    setConsoleMsgs(rowsFromValue<BrowserConsoleEntry>(value, ['entries', 'console']));
+    setDrawer('console');
+  });
+
+  const doNetwork = (): Promise<void> => withPage(async () => {
+    const value = await runBrowser({ op: 'network' });
+    setNetwork(rowsFromValue<BrowserNetworkEntry>(value, ['entries', 'network']));
+    setDrawer('network');
+  });
+
+  const doA11y = (): Promise<void> => withPage(async () => {
+    const value = await runBrowser({ op: 'snapshot', mode: 'accessibility' });
+    setA11y(rowsFromValue<BrowserSemanticNode>(value, ['nodes', 'elements']));
     setDrawer('a11y');
     if (!uiMap) window.dispatchEvent(new CustomEvent('br-browser-loaduimap'));
   });
 
-  // Receive a "drive this element" handoff from the Atlas Screens map: focus the
-  // testid, open the elements drawer, and (once the page is ready) extract so the
-  // target shows up ready to run.
+  const hoverHighlight = (node: BrowserSemanticNode): void => {
+    if (!ready) return;
+    void runBrowser({ op: 'highlight', ref: node.ref }).catch(() => undefined);
+  };
+  const hoverClear = (): void => { if (ready && !highlightOn) void runBrowser({ op: 'clear-highlight' }).catch(() => undefined); };
+
+  const shotName = (): string => {
+    try { const parsed = new URL(activeUrl); return (parsed.hash || parsed.pathname).replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '') || 'screen'; }
+    catch { return 'screen'; }
+  };
+
+  const saveShot = (): void => {
+    if (!shot) { setStatus('Take a screenshot first.'); return; }
+    window.dispatchEvent(new CustomEvent('br-browser-savescreenshot', { detail: { dataUrl: shot, name: shotName() } }));
+    setStatus('Saving screenshot…');
+  };
+
   useEffect(() => {
     const onFocus = (): void => {
       try {
         const raw = localStorage.getItem('br-browser-focus');
-        const t = raw ? (JSON.parse(raw) as { testID?: string }).testID || '' : '';
-        if (!t) return;
-        setDrive(t);
+        const target = raw ? (JSON.parse(raw) as { testID?: string }).testID || '' : '';
+        if (!target) return;
+        setDrive(target);
         setDrawer('elements');
-        setStatus(`Driving "${t}" — Extract, then run it`);
+        setStatus(`Driving "${target}" — extract, then run it.`);
       } catch { /* ignore */ }
     };
     window.addEventListener('br-browser-focus', onFocus);
     return () => window.removeEventListener('br-browser-focus', onFocus);
   }, []);
 
-  // "Open in Browser" from the Servers panel: navigate the in-app <webview> to a
-  // running dev server's loopback URL. This drives go() (normalizeUrl + loadURL),
-  // NOT action:open-external — it deliberately stays IN-APP, and the main-process
-  // attach gate already restricts navigation to loopback http(s)/data.
   useEffect(() => {
-    const onNavigate = (e: Event): void => {
-      const u = (e as CustomEvent<{ url?: string }>).detail?.url;
-      if (u) go(u);
+    const onNavigate = (event: Event): void => {
+      const url = (event as CustomEvent<{ url?: string }>).detail?.url;
+      if (url) void go(url);
     };
     window.addEventListener('br-browser-navigate', onNavigate);
     return () => window.removeEventListener('br-browser-navigate', onNavigate);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [go]);
 
-  useEffect(() => {
-    if (drive && ready) void doExtract();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drive, ready]);
+  useEffect(() => { if (drive && ready) void doExtract(); }, [drive, ready]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const record = (step: FlowStep) => { if (recording) setRecorded((s) => [...s, step]); };
+  const record = (step: FlowStep): void => { if (recording) setRecorded((steps) => [...steps, step]); };
 
-  const runElement = (el: LiveElement) => withWv(async (wv) => {
-    let r;
-    if (el.action === 'type') { r = await typeText(wv, el.testid, typeVal); record({ action: 'type', target: el.testid, text: typeVal }); }
-    else if (el.action === 'assertVisible') { r = await assertVisible(wv, el.testid); record({ action: 'assertVisible', target: el.testid }); }
-    else { r = await tap(wv, el.testid); record({ action: 'tap', target: el.testid }); }
-    setStatus(`${r.ok ? 'OK' : 'FAIL'} ${el.action} ${el.testid}${r.error ? ' — ' + r.error : ''}`);
-  });
-
-  const runFlow = (name: string) => withWv(async (wv) => {
-    const steps = flows[name] || [];
-    for (const s of steps) {
-      if (s.action === 'navigate') { const nav = normalizeUrl(s.target); if (nav) await wv.loadURL(nav).catch(() => undefined); continue; }
-      const r = s.action === 'type' ? await typeText(wv, s.target, s.text ?? '') : s.action === 'assertVisible' ? await assertVisible(wv, s.target) : await tap(wv, s.target);
-      setStatus(`flow ${name}: ${s.action} ${s.target} → ${r.ok ? 'ok' : 'fail'}`);
-      if (!r.ok) break;
-      await new Promise((res) => setTimeout(res, 200));
+  const runElement = (element: LiveElement): Promise<void> => withPage(async () => {
+    if (element.action === 'type') {
+      await runBrowser({ op: 'type', ref: element.ref, target: element.testid, text: typeVal, replace: true });
+      record({ action: 'type', target: element.target, text: typeVal });
+    } else if (element.action === 'assertVisible') {
+      await runBrowser({ op: 'assert-visible', ref: element.ref, target: element.testid });
+      record({ action: 'assertVisible', target: element.target });
+    } else {
+      await runBrowser({ op: 'click', ref: element.ref, target: element.testid });
+      record({ action: 'tap', target: element.target });
     }
+    setStatus(`OK ${element.action} ${element.target}`);
   });
 
-  const saveFlow = () => {
-    const name = (flowName || 'flow').replace(/[^a-z0-9_-]+/gi, '-');
-    const next = { ...flows, [name]: recorded };
-    setFlows(next); saveFlows(next); setRecorded([]); setRecording(false); setFlowName(''); setDrawer('flows');
+  const runStep = async (step: FlowStep, hint?: { label?: string; type?: string }): Promise<void> => {
+    if (step.action === 'navigate') { const url = normalizeBrowserInput(step.target); if (url) await runBrowser({ op: 'navigate', url }); return; }
+    if (step.action === 'type') await runBrowser({ op: 'type', target: step.target, text: step.text ?? '', replace: true });
+    else if (step.action === 'assertVisible') await runBrowser({ op: 'assert-visible', target: step.target, label: hint?.label, targetType: hint?.type });
+    else await runBrowser({ op: 'click', target: step.target, label: hint?.label, targetType: hint?.type });
   };
 
-  // Load a URL and resolve once the page is ready (or a safety timeout).
-  const loadAndWait = (raw: string): Promise<void> => new Promise((resolve) => {
-    const wv = wvRef.current;
-    const u = normalizeUrl(raw);
-    if (!wv || !u) { resolve(); return; }
-    let done = false;
-    const finish = (): void => { if (done) return; done = true; wv.removeEventListener('dom-ready', finish); resolve(); };
-    wv.addEventListener('dom-ready', finish);
-    setUrl(u); setUrlDraft(u); try { localStorage.setItem(URL_KEY, u); } catch { /* ignore */ }
-    wv.loadURL(u).catch(() => finish());
-    setTimeout(finish, 9000);
+  const runFlow = (name: string): Promise<void> => withPage(async () => {
+    for (const step of flows[name] || []) {
+      try {
+        await runStep(step);
+        setStatus(`flow ${name}: ${step.action} ${step.target} → ok`);
+      } catch (error) { setStatus(`flow ${name}: ${step.action} ${step.target} → ${String(error)}`); break; }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    await refreshState();
   });
 
-  // Replay a STORY handed off from the Atlas: open the app (the dev server is
-  // already up — the host's ensure-app waited), then run each step LIVE with a
-  // per-step [i/n] status, an element flash, and hash navigation.
+  const saveFlow = (): void => {
+    const name = (flowName || 'flow').replace(/[^a-z0-9_-]+/gi, '-');
+    const next = { ...flows, [name]: recorded };
+    setFlows(next);
+    saveFlows(next);
+    setRecorded([]);
+    setRecording(false);
+    setFlowName('');
+    setDrawer('flows');
+  };
+
   const runStory = async (baseUrl: string, title: string, steps: StoryStep[], storyId?: string): Promise<void> => {
-    const wv = wvRef.current;
-    if (!wv) return;
+    if (!activeTab) return;
     setDrawer('elements');
     setStatus(`Running "${title}"…`);
-    if (baseUrl) await loadAndWait(baseUrl);
-    await new Promise((r) => setTimeout(r, 400));
-    // Capture per-step outcomes + a screenshot (final, or at the first failure) so
-    // the run can be turned into a markdown report + Artifact by the host.
+    if (baseUrl) await go(baseUrl);
     const results: Array<{ i: number; action: string; target: string; ok: boolean; error?: string; ms?: number }> = [];
-    const shots: Array<{ name: string; dataUrl: string }> = [];
-    const grab = async (name: string): Promise<void> => { try { await hideCursor(wv).catch(() => undefined); const img = await wv.capturePage(); shots.push({ name, dataUrl: img.toDataURL() }); } catch { /* ignore */ } };
+    const screenshots: Array<{ name: string; dataUrl: string }> = [];
+    const grab = async (name: string): Promise<void> => {
+      try { const image = screenshotFromValue(await runBrowser({ op: 'screenshot', maxDimension: 2_560 })); if (image) screenshots.push({ name, dataUrl: image }); } catch { /* preserve primary result */ }
+    };
     let failed = false;
-    for (let i = 0; i < steps.length; i++) {
-      const st = steps[i];
-      const tag = `[${i + 1}/${steps.length}] ${st.action} ${st.target}`;
-      const t0 = Date.now();
-      if (st.action === 'navigate') {
-        setStatus(tag);
-        const hash = st.route ? (st.route.startsWith('#') ? st.route : '#' + st.route) : '';
-        if (hash) { try { await wv.executeJavaScript(`location.hash=${JSON.stringify(hash)}`, true); } catch { /* ignore */ } }
-        results.push({ i: i + 1, action: st.action, target: st.target, ok: true, ms: Date.now() - t0 });
-        await new Promise((r) => setTimeout(r, 500));
-        continue;
-      }
-      setDrive(st.target);
-      const hint = { label: st.label, type: st.type };
-      const r = st.action === 'type' ? await typeText(wv, st.target, st.text ?? '', hint)
-        : st.action === 'assertVisible' ? await assertVisible(wv, st.target, hint)
-        : await tap(wv, st.target, hint);
-      results.push({ i: i + 1, action: st.action, target: st.target, ok: !!r.ok, error: r.error, ms: Date.now() - t0 });
-      setStatus(`${tag} → ${r.ok ? 'ok' : 'FAIL' + (r.error ? ': ' + r.error : '')}`);
-      if (!r.ok) {
-        await grab(`step-${i + 1}-fail`);
-        setStatus(`Story "${title}" stopped at step ${i + 1} (${st.action} ${st.target})${r.error ? ' — ' + r.error : ''}`);
+    for (let index = 0; index < steps.length; index += 1) {
+      const step = steps[index];
+      const target = step.action === 'navigate' && step.route
+        ? new URL(step.route.startsWith('#') ? step.route : `#${step.route}`, activeUrl).href
+        : step.target;
+      const startedAt = Date.now();
+      try {
+        await runStep({ action: step.action, target, text: step.text }, { label: step.label, type: step.type });
+        results.push({ i: index + 1, action: step.action, target: step.target, ok: true, ms: Date.now() - startedAt });
+        setStatus(`[${index + 1}/${steps.length}] ${step.action} ${step.target} → ok`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        results.push({ i: index + 1, action: step.action, target: step.target, ok: false, error: message, ms: Date.now() - startedAt });
+        await grab(`step-${index + 1}-fail`);
+        setStatus(`Story "${title}" stopped at step ${index + 1} — ${message}`);
         failed = true;
         break;
       }
-      await new Promise((res) => setTimeout(res, 500));
+      await new Promise((resolve) => setTimeout(resolve, 350));
     }
     if (!failed) { await grab('final'); setStatus(`✓ Story "${title}" finished — ${steps.length} steps`); }
     const id = storyId || title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'run';
-    window.dispatchEvent(new CustomEvent('br-browser-runresult', { detail: { story: { id, title }, baseUrl, results, screenshots: shots } }));
+    window.dispatchEvent(new CustomEvent('br-browser-runresult', { detail: { story: { id, title }, baseUrl, results, screenshots } }));
+    await refreshState();
   };
 
-  // Receive a story handoff from the Atlas Stories overlay (the ensure-app result
-  // carries the resolved app URL); replay it live in the webview.
   useEffect(() => {
-    const onRunStory = (e: Event): void => {
-      const url = (e as CustomEvent<{ url?: string }>).detail?.url;
-      let payload: { id?: string; title?: string; steps?: StoryStep[] } | null = null;
-      try { payload = JSON.parse(localStorage.getItem('br-browser-runstory') || 'null'); } catch { payload = null; }
-      if (!payload || !Array.isArray(payload.steps) || !payload.steps.length) return;
-      void runStory(url || urlRef.current, payload.title || 'story', payload.steps, payload.id);
+    const onRunStory = (event: Event): void => {
+      const baseUrl = (event as CustomEvent<{ url?: string }>).detail?.url;
+      let payload: StoryPayload | null = null;
+      try { payload = JSON.parse(localStorage.getItem('br-browser-runstory') || 'null') as StoryPayload | null; } catch { payload = null; }
+      if (payload?.steps?.length) void runStory(baseUrl || activeUrl, payload.title || 'story', payload.steps, payload.id);
     };
     window.addEventListener('br-browser-runstory', onRunStory);
     return () => window.removeEventListener('br-browser-runstory', onRunStory);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [activeUrl, runBrowser]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const deviceW = DEVICE_W[device];
+  const respondPermission = async (allow: boolean): Promise<void> => {
+    const prompt = browserState?.permissionPrompt;
+    if (!prompt) return;
+    try { await mutateBrowser({ op: 'respond-permission', promptId: prompt.id, allow }); }
+    catch (error) { setStatus(String(error)); }
+  };
 
-  const railBtn = (icon: string, title: string, on: boolean, onClick: () => void, disabled = false) => (
-    <button className={`br-tool${on ? ' on' : ''}`} title={title} onClick={onClick} disabled={disabled || (!ready && title !== 'Reload')}>
+  const respondDialog = async (accept: boolean): Promise<void> => {
+    const prompt = browserState?.dialogPrompt;
+    if (!prompt) return;
+    try {
+      await mutateBrowser({
+        op: 'respond-dialog',
+        promptId: prompt.id,
+        accept,
+        value: prompt.kind === 'prompt' ? dialogValue : undefined,
+      });
+    }
+    catch (error) { setStatus(String(error)); }
+  };
+
+  const toggleTabMuted = async (tab: BrowserTab): Promise<void> => {
+    try {
+      if (tab.id !== activeTab?.id) await mutateBrowser({ op: 'select-tab', tabId: tab.id });
+      await mutateBrowser({ op: 'set-muted', muted: !tab.muted });
+    } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
+  };
+
+  const toggleDownloadPaused = async (downloadId: string, paused: boolean): Promise<void> => {
+    try {
+      await mutateBrowser({ op: paused ? 'resume-download' : 'pause-download', downloadId });
+      setPausedDownloads((current) => {
+        const next = new Set(current);
+        if (paused) next.delete(downloadId); else next.add(downloadId);
+        return next;
+      });
+    } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
+  };
+
+  const tabKeyDown = (event: React.KeyboardEvent, index: number, tab: BrowserTab): void => {
+    if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); fireBrowser({ op: 'select-tab', tabId: tab.id }); }
+    else if (event.key === 'Delete') { event.preventDefault(); fireBrowser({ op: 'close-tab', tabId: tab.id }); }
+    else if (event.altKey && event.shiftKey && event.key === 'ArrowLeft') { event.preventDefault(); fireBrowser({ op: 'reorder-tab', tabId: tab.id, toIndex: Math.max(0, index - 1) }); }
+    else if (event.altKey && event.shiftKey && event.key === 'ArrowRight') { event.preventDefault(); fireBrowser({ op: 'reorder-tab', tabId: tab.id, toIndex: Math.min((browserState?.tabs.length ?? 1) - 1, index + 1) }); }
+    else if (event.key === 'ArrowLeft') { event.preventDefault(); selectTabAt(Math.max(0, index - 1)); }
+    else if (event.key === 'ArrowRight') { event.preventDefault(); selectTabAt(Math.min((browserState?.tabs.length ?? 1) - 1, index + 1)); }
+  };
+
+  const railBtn = (icon: string, title: string, on: boolean, onClick: () => void, disabled = false): React.ReactElement => (
+    <button className={`br-tool${on ? ' on' : ''}`} title={title} aria-label={title} onClick={onClick} disabled={disabled}>
       <Icon name={icon} size={16} />
     </button>
   );
 
+  const deviceW = DEVICE_W[device];
+  const tabs = browserState?.tabs ?? [];
+  const permission = browserState?.permissionPrompt;
+  const dialog = browserState?.dialogPrompt;
+  const downloads = browserState?.downloads ?? [];
+
   return (
     <div className="browser-panel">
-      <div className="browser-topbar">
-        <button className="br-nav" title="Back" onClick={() => wvRef.current?.goBack()}>‹</button>
-        <button className="br-nav" title="Forward" onClick={() => wvRef.current?.goForward()}>›</button>
-        <button className="br-nav" title="Reload" onClick={() => wvRef.current?.reload()}><Icon name="refresh" size={13} /></button>
-        <input
-          className="browser-url"
-          value={urlDraft}
-          placeholder="Search or enter address"
-          onChange={(e) => setUrlDraft(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') go(urlDraft); }}
-        />
-        <button className="br-go" onClick={() => go(urlDraft)}>Go</button>
+      <div className="browser-tabs" role="tablist" aria-label="Browser tabs">
+        {tabs.map((tab, index) => (
+          <div key={tab.id} role="presentation" className={`browser-tab${tab.id === activeTab?.id ? ' active' : ''}`} title={browserTabTitle(tab.title, tab.url)} draggable
+            onDragStart={() => setDraggedTabId(tab.id)} onDragEnd={() => setDraggedTabId(null)}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => { event.preventDefault(); if (draggedTabId && draggedTabId !== tab.id) fireBrowser({ op: 'reorder-tab', tabId: draggedTabId, toIndex: index }); }}>
+            <button role="tab" aria-selected={tab.id === activeTab?.id} aria-keyshortcuts="Delete Alt+Shift+ArrowLeft Alt+Shift+ArrowRight"
+              tabIndex={tab.id === activeTab?.id ? 0 : -1} className="browser-tab-select"
+              ref={(node) => { if (node) tabButtonRefs.current.set(tab.id, node); else tabButtonRefs.current.delete(tab.id); }}
+              onClick={() => fireBrowser({ op: 'select-tab', tabId: tab.id })} onKeyDown={(event) => tabKeyDown(event, index, tab)}>
+              {tab.faviconUrl ? <img className="browser-tab-favicon" src={tab.faviconUrl} alt="" onError={(event) => { event.currentTarget.style.visibility = 'hidden'; }} />
+                : <span className="browser-tab-fallback"><Icon name="globe" size={12} /></span>}
+              <span className="browser-tab-title">{browserTabTitle(tab.title, tab.url)}</span>
+              <span className="browser-tab-state" aria-label={tab.crashed ? 'Tab crashed' : tab.loading ? 'Loading' : undefined}>
+                {tab.crashed ? <span className="browser-tab-crashed">!</span> : tab.loading ? <span className="browser-tab-spinner" /> : null}
+              </span>
+            </button>
+            {tab.audible && <button className="browser-tab-audio" aria-label={tab.muted ? 'Unmute tab' : 'Mute tab'} title={tab.muted ? 'Unmute tab' : 'Mute tab'}
+              onClick={() => void toggleTabMuted(tab)}>{tab.muted ? '×' : '♪'}</button>}
+            <button className="browser-tab-close" aria-label={`Close ${browserTabTitle(tab.title, tab.url)}`} title="Close tab (⌘W)"
+              onClick={() => fireBrowser({ op: 'close-tab', tabId: tab.id })}>
+              <Icon name="close" size={10} />
+            </button>
+          </div>
+        ))}
+        <button className="browser-tab-new" aria-label="New tab" title="New tab (⌘T)"
+          onClick={() => fireBrowser({ op: 'create-tab', active: true }, () => requestAnimationFrame(() => omniboxRef.current?.focus()))}>
+          <Icon name="plus" size={13} />
+        </button>
+        {(browserState?.closedTabCount ?? 0) > 0 && (
+          <button className="browser-tab-new" aria-label="Reopen closed tab" title="Reopen closed tab (⌘⇧T)" onClick={() => fireBrowser({ op: 'reopen-tab' })}>
+            <Icon name="refresh" size={12} />
+          </button>
+        )}
       </div>
 
+      <div className="browser-topbar" role="toolbar" aria-label="Browser navigation">
+        <button className="br-nav" title="Back (⌥←)" aria-label="Back" disabled={!activeTab?.canGoBack} onClick={() => fireBrowser({ op: 'back' })}><Icon name="arrow-left" size={14} /></button>
+        <button className="br-nav" title="Forward (⌥→)" aria-label="Forward" disabled={!activeTab?.canGoForward} onClick={() => fireBrowser({ op: 'forward' })}><Icon name="arrow-right" size={14} /></button>
+        <button className="br-nav" title={activeTab?.loading ? 'Stop loading' : 'Reload (⌘R)'} aria-label={activeTab?.loading ? 'Stop loading' : 'Reload'}
+          disabled={!activeTab} onClick={() => fireBrowser(activeTab?.loading ? { op: 'stop' } : { op: 'reload' })}>
+          <Icon name={activeTab?.loading ? 'stop' : 'refresh'} size={13} />
+        </button>
+        <span className="browser-origin-status" title={activeTab?.url.startsWith('https://') ? 'Secure connection' : 'Page information'}><Icon name={activeTab?.url.startsWith('https://') ? 'shield' : 'globe'} size={13} /></span>
+        <input ref={omniboxRef} className="browser-url" value={urlDraft} aria-label="Address and search bar" placeholder="Search or enter address"
+          spellCheck={false} onChange={(event) => setUrlDraft(event.target.value)}
+          onFocus={(event) => event.currentTarget.select()}
+          onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void go(urlDraft); } }} />
+        <button className="br-go" onClick={() => void go(urlDraft)}>Go</button>
+        <button className="br-nav" title="Find in page (⌘F)" aria-label="Find in page" onClick={() => { setFindOpen(true); requestAnimationFrame(() => findRef.current?.focus()); }}><Icon name="search" size={13} /></button>
+        <div className="browser-zoom" aria-label="Page zoom">
+          <button aria-label="Zoom out" title="Zoom out (⌘−)" onClick={() => void changeZoom(-0.1)}>−</button>
+          <span className="browser-zoom-label">{browserZoomLabel(activeTab?.zoomFactor)}</span>
+          <button aria-label="Zoom in" title="Zoom in (⌘+)" onClick={() => void changeZoom(0.1)}>+</button>
+        </div>
+      </div>
+
+      {findOpen && (
+        <div className="browser-findbar" role="search">
+          <input ref={findRef} value={findText} aria-label="Find text" placeholder="Find in page" onChange={(event) => setFindText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') closeFind();
+              else if (event.key === 'Enter' && findText) runFind(!event.shiftKey);
+            }} />
+          <span className="browser-find-result" aria-live="polite">{findResult.matches == null ? (findResult.requestId ? 'searching' : '—') : `${findResult.activeMatchOrdinal ?? 0}/${findResult.matches}`}</span>
+          <button className="br-nav" aria-label="Previous match" title="Previous match" disabled={!findText} onClick={() => runFind(false)}>↑</button>
+          <button className="br-nav" aria-label="Next match" title="Next match" disabled={!findText} onClick={() => runFind(true)}>↓</button>
+          <button className="br-nav" aria-label="Close find" title="Close find" onClick={closeFind}><Icon name="close" size={11} /></button>
+        </div>
+      )}
+
+      {permission && (
+        <div className="browser-promptbar" role="alertdialog" aria-label="Site permission request">
+          <Icon name="shield" size={14} /><span><b>{permission.origin}</b> wants permission to use <b>{permission.permission}</b>.</span>
+          <span className="browser-prompt-actions"><button className="chip" onClick={() => void respondPermission(false)}>Block</button><button className="br-go" onClick={() => void respondPermission(true)}>Allow</button></span>
+        </div>
+      )}
+      {dialog && (
+        <div className="browser-promptbar" role="alertdialog" aria-label={`${dialog.kind} dialog`}>
+          <Icon name={dialog.kind === 'certificate' ? 'warn' : 'globe'} size={14} />
+          <span>{dialog.origin ? <><b>{dialog.origin}</b> — </> : null}{dialog.message}</span>
+          {dialog.kind === 'prompt' && <input className="browser-prompt-input" value={dialogValue} aria-label="Dialog response" onChange={(event) => setDialogValue(event.target.value)} />}
+          {dialog.kind === 'certificate' && <span className="browser-prompt-note">The site’s identity cannot be verified. Proceeding can expose data to an attacker.</span>}
+          <span className="browser-prompt-actions">
+            {dialog.kind !== 'alert' && <button className="chip" onClick={() => void respondDialog(false)}>{dialog.kind === 'beforeunload' ? 'Stay' : dialog.kind === 'certificate' ? 'Go back' : 'Cancel'}</button>}
+            <button className="br-go" onClick={() => void respondDialog(true)}>{dialog.kind === 'beforeunload' ? 'Leave' : dialog.kind === 'certificate' ? 'Proceed (unsafe)' : 'OK'}</button>
+          </span>
+        </div>
+      )}
+
       <div className="browser-body">
-        <div className="browser-rail">
-          {railBtn('monitor', 'Computer use (coming soon)', false, () => setStatus('Computer use — coming soon'), true)}
-          {railBtn('bolt', 'Extract data-testid elements', drawer === 'elements', doExtract)}
-          {railBtn('eye', pickMode ? 'Inspecting… click an element' : 'Inspect / pick element', pickMode, () => setPickMode((p) => !p))}
-          {railBtn('search', highlightOn ? 'Hide test-id outlines' : 'Highlight test-ids', highlightOn, toggleHighlight)}
-          {railBtn('cursor', cursorOn ? 'Hide cursor indicator' : 'Show cursor indicator', cursorOn, () => setCursorOn((c) => !c))}
+        <div className="browser-rail" role="toolbar" aria-label="Browser developer tools">
+          {railBtn('monitor', 'Agent uses this visible tab', false, () => setStatus('Agent browser tools are connected to this visible tab.'), !browser)}
+          {railBtn('bolt', 'Extract test-id elements', drawer === 'elements', () => void doExtract(), !ready)}
+          {railBtn('eye', pickMode ? 'Choosing an element…' : 'Inspect element snapshot', pickMode, startInspect, !ready)}
+          {railBtn('search', highlightOn ? 'Clear element highlights' : 'Highlight test-id elements', highlightOn, () => void toggleHighlight(), !ready)}
+          {railBtn('cursor', cursorOn ? 'Hide agent cursor' : 'Show agent cursor', cursorOn, () => setCursorOn((value) => !value), !activeTab)}
           <div className="br-rail-sep" />
-          {railBtn('monitor', 'Desktop', device === 'desktop', () => setDevice('desktop'))}
-          {railBtn('file', 'Tablet', device === 'tablet', () => setDevice('tablet'))}
-          {railBtn('phone', 'Phone', device === 'phone', () => setDevice('phone'))}
+          {railBtn('monitor', 'Desktop viewport', device === 'desktop', () => changeDevice('desktop'))}
+          {railBtn('file', 'Tablet viewport', device === 'tablet', () => changeDevice('tablet'))}
+          {railBtn('phone', 'Phone viewport', device === 'phone', () => changeDevice('phone'))}
           <div className="br-rail-sep" />
-          {railBtn('terminal', 'Console', drawer === 'console', doConsole)}
-          {railBtn('globe', 'Network', drawer === 'network', doNetwork)}
-          {railBtn('file', 'Screenshot', drawer === 'shot', doScreenshot)}
-          {railBtn('review', 'Accessibility tree', drawer === 'a11y', doA11y)}
+          {railBtn('terminal', 'Console', drawer === 'console', () => void doConsole(), !ready)}
+          {railBtn('globe', 'Network', drawer === 'network', () => void doNetwork(), !ready)}
+          {railBtn('file', 'Screenshot', drawer === 'shot', () => void doScreenshot(), !ready)}
+          {railBtn('review', 'Accessibility tree', drawer === 'a11y', () => void doA11y(), !ready)}
+          {railBtn('folder-open', `Downloads (${downloads.length})`, drawer === 'downloads', () => setDrawer('downloads'))}
           <div className="br-rail-sep" />
-          {railBtn('play', recording ? `Recording (${recorded.length})` : 'Record a flow', recording, () => setRecording((r) => !r))}
+          {railBtn('play', recording ? `Recording (${recorded.length})` : 'Record a flow', recording, () => setRecording((value) => !value))}
           {railBtn('clock', 'Flows', drawer === 'flows', () => setDrawer('flows'))}
         </div>
 
         <div className="browser-stage">
-          <div className={`browser-view dev-${device}`} style={deviceW ? { maxWidth: deviceW } : undefined} ref={hostRef} />
-          {(status || picked) && (
-            <div className="browser-status">
-              {picked && <span className="br-picked">{picked}</span>}
-              {status && <span className="br-status-msg">{status}</span>}
-            </div>
-          )}
+          <div className={`browser-view dev-${device}`} style={deviceW ? { maxWidth: deviceW } : undefined} ref={hostRef} aria-label="Browser page surface">
+            {bridgeError && <div className="browser-native-placeholder error" role="alert">{bridgeError}</div>}
+            {!bridgeError && !activeTab && <div className="browser-native-placeholder">Starting browser…</div>}
+            {activeTab?.crashed && <div className="browser-native-placeholder error"><div className="browser-crash-card"><Icon name="warn" size={28} /><b>This tab crashed</b><span>The page process stopped unexpectedly. Your other tabs are unaffected.</span><button className="br-go" onClick={() => fireBrowser({ op: 'reload' })}>Reload tab</button></div></div>}
+          </div>
+          {(status || picked) && <div className="browser-status" role="status" aria-live="polite">{picked && <span className="br-picked">{picked}</span>}{status && <span className="br-status-msg">{status}</span>}</div>}
+
           {drawer && (
             <div className="browser-drawer">
               <div className="browser-drawer-head">
-                <b>{drawer === 'elements' ? `Elements (${elements.length})` : drawer === 'console' ? `Console (${consoleMsgs.length})` : drawer === 'network' ? `Network (${network.length})` : drawer === 'a11y' ? `Accessibility (${a11y.length})` : drawer === 'shot' ? 'Screenshot' : 'Flows'}</b>
+                <b>{drawer === 'elements' ? `Elements (${elements.length})` : drawer === 'console' ? `Console (${consoleMsgs.length})` : drawer === 'network' ? `Network (${network.length})` : drawer === 'a11y' ? `Accessibility (${a11y.length})` : drawer === 'shot' ? 'Screenshot' : drawer === 'downloads' ? `Downloads (${downloads.length})` : 'Flows'}</b>
                 <span className="br-drawer-actions">
-                  {drawer === 'network' && <button className="chip" onClick={doNetwork}>refresh</button>}
+                  {drawer === 'console' && <button className="chip" onClick={() => void doConsole()}>refresh</button>}
+                  {drawer === 'network' && <button className="chip" onClick={() => void doNetwork()}>refresh</button>}
                   {drawer === 'shot' && shot && <button className="chip" onClick={saveShot}>Save</button>}
-                  {drawer === 'elements' && <input className="br-type" value={typeVal} onChange={(e) => setTypeVal(e.target.value)} title="text used by type actions" />}
-                  <button className="icon-btn" title="Close" onClick={() => setDrawer(null)}><Icon name="close" size={11} /></button>
+                  {drawer === 'elements' && <input className="br-type" value={typeVal} onChange={(event) => setTypeVal(event.target.value)} title="Text used by type actions" />}
+                  <button className="icon-btn" title="Close" aria-label="Close drawer" onClick={() => setDrawer(null)}><Icon name="close" size={11} /></button>
                 </span>
               </div>
               <div className="browser-drawer-body">
-                {drawer === 'elements' && (elements.length ? elements.map((el) => (
-                  <div key={el.testid} className={`br-el${el.visible ? '' : ' hidden'}${el.testid === drive ? ' focus' : ''}`}>
-                    <span className="br-el-id">{el.testid}</span>
-                    <span className="br-el-type">{el.type}</span>
-                    {!el.visible && <span className="br-el-flag">hidden</span>}
-                    <button className="br-el-run" onClick={() => runElement(el)}>{el.action}</button>
+                {drawer === 'elements' && (elements.length ? elements.map((element) => (
+                  <div key={element.ref} className={`br-el${element.visible ? '' : ' hidden'}${element.target === drive ? ' focus' : ''}`}
+                    onClick={() => { if (pickMode) { setPicked(`${element.role || element.tag} — ${element.label}`); setPickMode(false); hoverHighlight(element); } }}>
+                    <span className="br-el-id">{element.target}</span><span className="br-el-type">{element.type || element.role || element.tag}</span>
+                    {!element.visible && <span className="br-el-flag">hidden</span>}
+                    <button className="br-el-run" onClick={(event) => { event.stopPropagation(); void runElement(element); }}>{element.action}</button>
                   </div>
-                )) : <div className="br-empty">No data-testid elements on this screen. Add some, then Extract again.</div>)}
+                )) : <div className="br-empty">No matching elements are visible on this page.</div>)}
 
-                {drawer === 'console' && (consoleMsgs.length ? consoleMsgs.slice().reverse().map((m, i) => (
-                  <div key={i} className={`br-log lvl-${m.level}`}>{m.text}</div>
-                )) : <div className="br-empty">No console output captured yet.</div>)}
+                {drawer === 'console' && (consoleMsgs.length ? consoleMsgs.slice().reverse().map((message, index) => (
+                  <div key={`${message.at}-${index}`} className={`br-log lvl-${message.level.toLowerCase()}`}>{message.text}<span className="br-log-source">{message.source ? ` ${message.source}:${message.line}` : ''}</span></div>
+                )) : <div className="br-empty">No console output captured.</div>)}
 
-                {drawer === 'network' && (network.length ? network.slice().reverse().map((n, i) => (
-                  <div key={i} className={`br-net${n.ok ? '' : ' fail'}`}><span className="br-net-status">{n.status || 'ERR'}</span><span className="br-net-method">{n.method}</span><span className="br-net-url" title={n.url}>{n.url}</span><span className="br-net-ms">{n.ms}ms</span></div>
-                )) : <div className="br-empty">No requests yet — interact with the page, then refresh.</div>)}
+                {drawer === 'network' && (network.length ? network.slice().reverse().map((entry, index) => (
+                  <div key={`${entry.at}-${index}`} className={`br-net${entry.status >= 400 || entry.status === 0 ? ' fail' : ''}`}><span className="br-net-status">{entry.status || 'ERR'}</span><span className="br-net-method">{entry.method}</span><span className="br-net-url" title={entry.url}>{entry.url}</span><span className="br-net-ms">{entry.durationMs}ms</span></div>
+                )) : <div className="br-empty">No requests captured.</div>)}
 
-                {drawer === 'a11y' && (a11y.length ? a11y.map((n, i) => {
-                  const src = rowSource(n, uiMap, url);
+                {drawer === 'a11y' && (a11y.length ? a11y.map((node) => {
+                  const source = rowSource(node, uiMap, activeUrl);
                   return (
-                    <div key={i} className="br-a11y" draggable
-                      title={`Drag into chat · ${src.ref}`}
-                      onMouseEnter={() => hoverHighlight(n)}
-                      onMouseLeave={hoverClear}
-                      onDragStart={(e) => {
-                        e.dataTransfer.setData('text/plain', src.ref);
-                        e.dataTransfer.setData('application/x-brainrouter-ref', src.ref);
-                        e.dataTransfer.setData('application/x-brainrouter-tag', JSON.stringify({
-                          name: n.name || n.testid || n.role, kind: src.kind, ref: src.ref, filePath: src.filePath, line: src.line,
-                        }));
-                        e.dataTransfer.effectAllowed = 'copy';
+                    <div key={node.ref} className="br-a11y" draggable title={`Drag into chat · ${source.ref}`}
+                      onMouseEnter={() => hoverHighlight(node)} onMouseLeave={hoverClear}
+                      onDragStart={(event) => {
+                        event.dataTransfer.setData('text/plain', source.ref);
+                        event.dataTransfer.setData('application/x-brainrouter-ref', source.ref);
+                        event.dataTransfer.setData('application/x-brainrouter-tag', JSON.stringify({ name: node.name || node.testid || node.role, kind: source.kind, ref: source.ref, filePath: source.filePath, line: source.line }));
+                        event.dataTransfer.effectAllowed = 'copy';
                       }}>
-                      <Icon name={symbolKindIcon(src.kind)} size={12} className={`br-a11y-kind k-${src.kind ?? 'none'}`} />
-                      <span className="br-a11y-role">{n.role}</span>
-                      <span className="br-a11y-name">{n.name || '—'}</span>
-                      {n.testid && <span className="br-a11y-tid">{n.testid}</span>}
-                      {src.filePath && (
-                        <button className="br-a11y-src"
-                          title={`Open ${src.filePath}${src.line != null ? ':' + src.line : ''}`}
-                          onClick={() => window.dispatchEvent(new CustomEvent('br-browser-openfile', { detail: { path: src.filePath, line: src.line } }))}>↪ source</button>
-                      )}
+                      <Icon name={symbolKindIcon(source.kind)} size={12} className={`br-a11y-kind k-${source.kind ?? 'none'}`} />
+                      <span className="br-a11y-role">{node.role}</span><span className="br-a11y-name">{node.name || '—'}</span>{node.testid && <span className="br-a11y-tid">{node.testid}</span>}
+                      {source.filePath && <button className="br-a11y-src" title={`Open ${source.filePath}${source.line != null ? `:${source.line}` : ''}`} onClick={() => window.dispatchEvent(new CustomEvent('br-browser-openfile', { detail: { path: source.filePath, line: source.line } }))}>↪ source</button>}
                     </div>
                   );
                 }) : <div className="br-empty">No accessibility nodes found.</div>)}
 
-                {drawer === 'shot' && (shot ? <img className="br-shot" src={shot} alt="screenshot" /> : <div className="br-empty">No screenshot yet.</div>)}
+                {drawer === 'shot' && (shot ? <img className="br-shot" src={shot} alt="Current page screenshot" /> : <div className="br-empty">No screenshot yet.</div>)}
 
-                {drawer === 'flows' && (
-                  <div className="br-flows">
-                    {recorded.length > 0 && (
-                      <div className="br-flow-save">
-                        <span>Recorded {recorded.length} step(s)</span>
-                        <input className="br-type" placeholder="flow name" value={flowName} onChange={(e) => setFlowName(e.target.value)} />
-                        <button className="chip" onClick={saveFlow}>Save</button>
-                      </div>
-                    )}
-                    {Object.keys(flows).length ? Object.keys(flows).map((name) => (
-                      <div key={name} className="br-flow"><span>{name}</span><span className="br-flow-n">{flows[name].length} step(s)</span><button className="chip" onClick={() => runFlow(name)}><Icon name="play" size={11} /> run</button></div>
-                    )) : <div className="br-empty">No saved flows. Toggle Record, run some element actions, then Save.</div>}
-                  </div>
-                )}
+                {drawer === 'downloads' && (downloads.length ? downloads.slice().reverse().map((download) => {
+                  const progress = download.totalBytes > 0 ? Math.min(100, Math.round((download.receivedBytes / download.totalBytes) * 100)) : null;
+                  const paused = download.state === 'progressing' && pausedDownloads.has(download.id);
+                  return <div className="br-download" key={download.id}><span className="br-download-name" title={download.filename}>{download.filename}</span><span className={`br-download-state s-${download.state}`}>{paused ? 'paused' : download.state}{progress != null && download.state === 'progressing' ? ` · ${progress}%` : ''}</span><span className="br-download-actions">{download.state === 'completed' && <><button className="chip" onClick={() => fireBrowser({ op: 'open-download', downloadId: download.id })}>Open</button><button className="chip" onClick={() => fireBrowser({ op: 'show-download', downloadId: download.id })}>Show</button></>}{download.state === 'progressing' && <><button className="chip" onClick={() => void toggleDownloadPaused(download.id, paused)}>{paused ? 'Resume' : 'Pause'}</button><button className="chip" onClick={() => fireBrowser({ op: 'cancel-download', downloadId: download.id })}>Cancel</button></>}</span></div>;
+                }) : <div className="br-empty">No downloads yet.</div>)}
+
+                {drawer === 'flows' && <div className="br-flows">
+                  {recorded.length > 0 && <div className="br-flow-save"><span>Recorded {recorded.length} step(s)</span><input className="br-type" placeholder="flow name" value={flowName} onChange={(event) => setFlowName(event.target.value)} /><button className="chip" onClick={saveFlow}>Save</button></div>}
+                  {Object.keys(flows).length ? Object.keys(flows).map((name) => <div key={name} className="br-flow"><span>{name}</span><span className="br-flow-n">{flows[name].length} step(s)</span><button className="chip" onClick={() => void runFlow(name)}><Icon name="play" size={11} /> run</button></div>) : <div className="br-empty">No saved flows. Record actions, then save the flow.</div>}
+                </div>}
               </div>
             </div>
           )}
         </div>
       </div>
+
       <div className="browser-logs">
-        <div className="browser-logs-head">
-          <b>Logs</b><span className="browser-logs-n">{logs.length}</span>
-          <span className="browser-logs-actions">
-            <button className="icon-btn" title={logsOpen ? 'Collapse logs' : 'Expand logs'} onClick={() => setLogsOpen((o) => !o)}>{logsOpen ? '▾' : '▴'}</button>
-            <button className="chip" onClick={() => setLogs([])}>clear</button>
-          </span>
-        </div>
-        {logsOpen && (
-          <div className="browser-logs-body">
-            {logs.length ? logs.slice().reverse().map((l, i) => (
-              <div key={logs.length - i} className={`browser-log-line${/(fail|error|stopped|refused|not found|unreachable|not ready)/i.test(l) ? ' err' : /(✓|finished|welcome|→ ok|OK )/i.test(l) ? ' ok' : ''}`}>{l}</div>
-            )) : <div className="br-empty">No activity yet — run a story or an action and it streams here.</div>}
-          </div>
-        )}
+        <div className="browser-logs-head"><b>Logs</b><span className="browser-logs-n">{logs.length}</span><span className="browser-logs-actions"><button className="icon-btn" title={logsOpen ? 'Collapse logs' : 'Expand logs'} onClick={() => setLogsOpen((open) => !open)}>{logsOpen ? '▾' : '▴'}</button><button className="chip" onClick={() => setLogs([])}>clear</button></span></div>
+        {logsOpen && <div className="browser-logs-body">{logs.length ? logs.slice().reverse().map((line, index) => <div key={logs.length - index} className={`browser-log-line${/(fail|error|stopped|refused|not found|unreachable|not ready)/i.test(line) ? ' err' : /(✓|finished|welcome|→ ok|OK )/i.test(line) ? ' ok' : ''}`}>{line}</div>) : <div className="br-empty">No activity yet.</div>}</div>}
       </div>
     </div>
   );

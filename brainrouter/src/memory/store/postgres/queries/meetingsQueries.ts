@@ -20,7 +20,7 @@ export interface MeetingRow {
   attendees: string[];
   transcriptText: string;
   summaryMarkdown: string;
-  actionItems: Array<{ id: string; title: string; assignee?: string; done?: boolean; trackItemId?: string }>;
+  actionItems: Array<{ id: string; title: string; assignee?: string; due?: string; done?: boolean; trackItemId?: string }>;
   summaryRecordId: string | null;
   transcriptSourceId: string | null;
   scope: MeetingScope;

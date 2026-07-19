@@ -1,18 +1,17 @@
 /**
- * The shared per-workspace UI-testing session — the one process-level singleton
- * that makes "one browser, two consumers" true. The Desktop panel (via the host)
- * and the agent (via the built-in extension) both call `getUiTestSession(root)`
- * and get the SAME headed Playwright driver, the SAME dev-server base URL, and a
- * `CommandLayer` over the SAME manifest. Keyed by workspace root; cached for the
- * life of the process.
+ * Per-workspace UI-map session. It intentionally has no production browser
+ * launcher: the live embedded browser port is injected per Agent invocation and
+ * cannot safely live in a process-global workspace singleton. The legacy
+ * CommandLayer remains for manifest-flow compatibility and fails deterministically
+ * until a caller explicitly replaces its backend (tests only).
  *
  * The manifest is the panel's in-memory copy when it has extracted this run, else
  * the last `ui-map.json` on disk — so the agent sees whatever the panel built.
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { DriverClient } from './driver/driverClient.js';
 import { CommandLayer } from './command/commands.js';
+import { UnavailableBackend, type Backend } from './command/backend.js';
 import { UiMapSchema } from './schema.js';
 import type { UiMap, Device, UiCommandResult } from './types.js';
 
@@ -24,7 +23,9 @@ export interface UiTestSession {
   /** Set the in-memory manifest (the panel calls this after extraction). */
   setManifest(m: UiMap | null): void;
   readonly layer: CommandLayer;
-  readonly driver: DriverClient;
+  readonly backend: Backend;
+  /** @deprecated Test-only alias retained for compatibility. */
+  readonly driver: Backend;
   setDevice(device: Device): Promise<UiCommandResult>;
   close(): Promise<void>;
 }
@@ -51,8 +52,7 @@ export function getUiTestSession(workspaceRoot: string): UiTestSession {
 
   let baseUrl = '';
   let mem: UiMap | null = null;
-  // The driver is constructed lazily-launched (it only spawns on first command).
-  const driver = new DriverClient({ cwd: workspaceRoot, headed: true, timeoutMs: 30000 });
+  const backend: Backend = new UnavailableBackend();
 
   const session: UiTestSession = {
     workspaceRoot,
@@ -66,12 +66,13 @@ export function getUiTestSession(workspaceRoot: string): UiTestSession {
     setManifest: (m) => {
       mem = m;
     },
-    layer: new CommandLayer(driver, () => session.manifest() ?? undefined, () => baseUrl),
-    driver,
+    layer: new CommandLayer(backend, () => session.manifest() ?? undefined, () => baseUrl),
+    backend,
+    driver: backend,
     setDevice: (device) => session.layer.setDevice(device),
     close: async () => {
       sessions.delete(workspaceRoot);
-      await driver.close();
+      await backend.close?.();
     },
   };
   sessions.set(workspaceRoot, session);
@@ -80,6 +81,6 @@ export function getUiTestSession(workspaceRoot: string): UiTestSession {
 
 /** Test seam: drop all cached sessions. */
 export function __resetUiTestSessionsForTests(): void {
-  for (const s of sessions.values()) void s.driver.close();
+  for (const s of sessions.values()) void s.backend.close?.();
   sessions.clear();
 }

@@ -11,8 +11,8 @@ export interface BuiltinToolRuntimePort {
 }
 
 const CAPABILITY_TOOLS = {
-  filesystem: ['read_file', 'list_dir', 'grep_search', 'glob_files', 'write_file', 'edit_file', 'apply_patch'],
-  shell: ['run_command', 'task_output', 'wait_until', 'computer_use'],
+  filesystem: ['read_file', 'list_dir', 'grep_search', 'glob_files', 'write_file', 'edit_file', 'apply_patch', 'notebook_edit'],
+  shell: ['run_command', 'task_output', 'wait_until', 'computer_use', 'kill_command'],
   'web-research': ['fetch_url', 'web_search', 'research_note', 'research_brief'],
   'mcp-lsp-connectors': ['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource', 'mcp_search', 'mcp_describe', 'mcp_call', 'mcp_refresh_catalog', 'lsp', 'connector_list', 'connector_run'],
   'planning-state': ['update_plan', 'goal_complete', 'goal_blocked', 'ask_user_choice', 'track_query', 'track_update', 'artifact_write', 'mark_chapter', 'switch_model'],
@@ -40,6 +40,7 @@ class BuiltinToolExecutor implements LocalToolExecutor {
     if (this.entry.availability === 'active-workflow') return context.workflowActive === true;
     if (this.entry.availability === 'root-agent') return context.rootAgent === true;
     if (this.entry.availability === 'computer-use') return context.computerUseAvailable === true;
+    if (this.entry.availability === 'browser-use') return context.browserUseAvailable === true;
     if (this.entry.availability === 'multi-profile') return context.multiProfile === true;
     if (this.entry.availability === 'mcp-discovery') return context.mcpDiscovery === true;
     return true;

@@ -96,7 +96,15 @@ export function reasoningProfileForModel(model: string | undefined | null, polic
     if (!policy.capabilities.reasoning || !policy.reasoning) {
       return { family, kind: 'none', options: [], min: 'medium', xhigh: false, lockedLabel: null, source: 'server' };
     }
-    const options = policy.reasoning.allowed.map(({ id, label }) => ({ level: id, label }));
+    // Order the server's allowed efforts ASCENDING (Faster → Smarter). The slider
+    // renders options left→right and derives BOTH the label and the knob position
+    // from the same stop index, and Fast mode uses options[0] as the minimum — so
+    // a server list that isn't ascending would put e.g. "Minimal" on the right and
+    // make Fast target the HIGHEST effort. Sorting here makes the control correct
+    // regardless of the order the managed-model catalog happens to send.
+    const options = policy.reasoning.allowed
+      .map(({ id, label }) => ({ level: id, label }))
+      .sort((a, b) => (EFFORT_RANK[a.level] ?? 99) - (EFFORT_RANK[b.level] ?? 99));
     if (options.length === 1) {
       return {
         family,

@@ -100,6 +100,11 @@ export const LOCAL_MODEL_CORE_TOOLS: ReadonlySet<string> = new Set<string>([
   'mcp_describe',
   'mcp_call',
   'read_mcp_resource',
+  // introspection — must survive the clamp so a pinned model (and the user) can
+  // still SEE the full installed toolset it isn't otherwise being shown, instead
+  // of being unable to even discover what capabilities exist.
+  'list_extensions',
+  'session_info',
 ]);
 
 /** True when `name` is in the local-model core allowlist (HONK-L2). */

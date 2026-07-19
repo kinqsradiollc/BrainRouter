@@ -41,10 +41,29 @@ jobs:
       # Build-only tools kept out of the committed lockfile (heavy, release-only);
       # --no-save so the deterministic install above stays the source of truth.
       - name: Install packaging tools
-        run: npm install --no-save --workspace brainrouter-desktop electron-builder@^25 @electron/notarize@^2
+        run: npm install --no-save --workspace brainrouter-desktop electron-builder@26.15.3 @electron/notarize@3.1.1
 
       - name: Build workspace deps (types + core)
         run: npm --prefix brainrouter-desktop run build:deps
+
+      - name: Desktop regression suite
+        run: npm test --workspace brainrouter-desktop
+
+      - name: First-class browser Electron E2E
+        run: npm run test:browser:e2e --workspace brainrouter-desktop -- --report "$PWD/brainrouter-desktop/.browser-benchmarks/release-e2e.json"
+
+      - name: Enforce same-hardware Chrome comparison
+        env:
+          BRAINROUTER_BROWSER_STABLE_RUNNER: '1'
+        run: npm run bench:browser:compare --workspace brainrouter-desktop -- --runs 20 --enforce-comparison --report "$PWD/brainrouter-desktop/.browser-benchmarks/release-comparison.json"
+
+      - name: Upload browser qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: brainrouter-browser-qualification
+          path: brainrouter-desktop/.browser-benchmarks/release-*.json
+          if-no-files-found: error
 
       - name: Build + sign + notarize
         working-directory: brainrouter-desktop
@@ -68,8 +87,8 @@ jobs:
         with:
           name: brainrouter-desktop-macos
           path: |
-            brainrouter-desktop/dist/*.dmg
-            brainrouter-desktop/dist/*.zip
+            brainrouter-desktop/release/*.dmg
+            brainrouter-desktop/release/*.zip
           if-no-files-found: error
 
       - name: Attach to GitHub Release (tag triggers only)
@@ -77,5 +96,43 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            brainrouter-desktop/dist/*.dmg
-            brainrouter-desktop/dist/*.zip
+            brainrouter-desktop/release/*.dmg
+            brainrouter-desktop/release/*.zip
+
+  build-win:
+    name: Build Windows x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install packaging tools
+        run: npm install --no-save --workspace brainrouter-desktop electron-builder@26.15.3
+
+      - name: Desktop regression suite
+        run: npm test --workspace brainrouter-desktop
+
+      - name: Build Windows installer
+        working-directory: brainrouter-desktop
+        run: npm run dist:win
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: brainrouter-desktop-windows-x64
+          path: brainrouter-desktop/release/*.exe
+          if-no-files-found: error
+
+      - name: Attach Windows installer to GitHub Release (tag triggers only)
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: brainrouter-desktop/release/*.exe

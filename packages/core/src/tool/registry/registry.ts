@@ -8,9 +8,11 @@ export interface LocalToolEntry {
   accessTier: AccessMode;
   actionKind: import('../../exec/policy/execPolicy.js').ActionKind;
   parallelSafe: boolean;
-  availability?: 'result-cache' | 'active-workflow' | 'root-agent' | 'computer-use' | 'multi-profile' | 'mcp-discovery';
+  availability?: 'result-cache' | 'active-workflow' | 'root-agent' | 'computer-use' | 'browser-use' | 'multi-profile' | 'mcp-discovery';
   advertised?: boolean;
-  runtimePort?: 'orchestration';
+  runtimePort?: 'orchestration' | 'browser-control';
+  /** Explicitly include an otherwise non-mutating action (for example browser navigation) in policy audit events. */
+  audited?: boolean;
   workflowLaunch?: boolean;
   afterInvoke?: 'track-automation' | 'goal-reconcile' | 'plan-update';
   childAccessPolicy?: 'single' | 'batch';

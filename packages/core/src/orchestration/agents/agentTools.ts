@@ -261,7 +261,7 @@ export function createRunWorkflowTool() {
         slug: { type: 'string', description: 'Optional run slug (defaults from the plan title).' },
         background: { type: 'boolean', description: 'Run detached so the turn is not blocked by a long fan-out; track via /workflows or the background panel. Default false.' },
         resume: { type: 'string', description: 'Resume an interrupted run by slug — skips already-completed phases (their output feeds {{input}}) and re-runs from the failed one. Provide instead of plan/template.' },
-        template: { type: 'string', enum: ['compare', 'review-wide', 'research'], description: 'Built-in workflow shape — pass this + templateArgs INSTEAD of an explicit plan. compare {targets[],criteria?,goal?} · review-wide {paths[],focus?} · research {question,angles?}.' },
+        template: { type: 'string', enum: ['compare', 'review-wide', 'research', 'build'], description: 'Built-in workflow shape — pass this + templateArgs INSTEAD of an explicit plan. compare {targets[],criteria?,goal?} · review-wide {paths[],focus?} · research {question,angles?} · build {task, slices?[]} (the plan→implement→verify→review build loop on isolated worktrees).' },
         templateArgs: { type: 'object', description: 'Arguments for the chosen template, e.g. { targets: ["optionA","optionB"] } or { paths: ["src/a","src/b"] }.' },
         plan: {
           type: 'object',

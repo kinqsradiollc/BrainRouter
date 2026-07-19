@@ -392,9 +392,15 @@ export async function getMemoryJob(exec: Executor, id: string): Promise<MemoryJo
 
 /** Append an activity event atomically; progress is observability, never control flow. */
 export async function appendJobProgress(exec: Executor, id: string, event: MemoryJobProgressEvent): Promise<void> {
+  // Heartbeat the lock while the job is running: emitting progress proves the
+  // worker is alive, so renew `locked_at` to keep the sweeper from reclaiming a
+  // long but healthy job (e.g. a multi-minute pentest). A dead process emits no
+  // progress, so its lock still ages out and gets swept as intended. Terminal
+  // rows keep their `locked_at` (the CASE guard) so we never resurrect a lease.
+  const now = new Date().toISOString();
   await exec.run(
-    "UPDATE memory_jobs SET progress_json = ((progress_json::jsonb || $1::jsonb)::text), updated_at = $2 WHERE id = $3",
-    [JSON.stringify([event]), new Date().toISOString(), id],
+    "UPDATE memory_jobs SET progress_json = ((progress_json::jsonb || $1::jsonb)::text), updated_at = $2, locked_at = CASE WHEN status = 'running' THEN $2 ELSE locked_at END WHERE id = $3",
+    [JSON.stringify([event]), now, id],
   );
 }
 

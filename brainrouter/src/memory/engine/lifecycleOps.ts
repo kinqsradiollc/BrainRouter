@@ -128,6 +128,13 @@ export function startJobRunner(engine: MemoryEngine): void {
       intervalMs: process.env.BRAINROUTER_JOB_RUNNER_INTERVAL_MS
         ? parseInt(process.env.BRAINROUTER_JOB_RUNNER_INTERVAL_MS, 10)
         : undefined,
+      // How long a `running` job may go without a lock heartbeat before the
+      // sweeper reclaims it. `appendJobProgress` renews the lock, so 5 min
+      // suits chatty jobs (reviews); long, quiet-between-turns work (pentests
+      // on a slow model) can widen this so a single long LLM turn is not swept.
+      stuckMs: process.env.BRAINROUTER_JOB_RUNNER_STUCK_MS
+        ? parseInt(process.env.BRAINROUTER_JOB_RUNNER_STUCK_MS, 10)
+        : undefined,
       // 0.4.3 — auto-schedule the maintenance depth agents (own throttle).
       onTick: async () => { await self.enqueueScheduledMaintenance(); },
     },

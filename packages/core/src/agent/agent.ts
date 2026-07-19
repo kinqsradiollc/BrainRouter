@@ -11,8 +11,9 @@ import chalk from 'chalk';
 import type { McpClientPool as McpClientWrapper } from '../mcp/mcpPool.js';
 import { NoTTYError, HEADLESS_PROMPTER, type InteractivePrompter } from './support/prompter.js';
 import type { LLMConfig } from '../config/config.js';
-import { getCliKnobs } from '../config/config.js';
+import { getCliKnobs, isRemoteBrainUrl } from '../config/config.js';
 import type { ComputerUsePort } from '@kinqs/brainrouter-agent-protocol';
+import { browserUseAvailableFor, type BrowserControlPort } from '../browser/control.js';
 import { appendTranscriptEntry, isInternalSessionKey, redactText, readTranscriptEntries } from '../session/transcript/sessionStore.js';
 import { recordFileMutation } from '../storage/fileSnapshotStore.js';
 import { isConnectivityError, isRetryableServerError } from '../storage/checkpointStore.js';
@@ -88,7 +89,7 @@ import { applyPatchEnvelope, assessPatchSafety, parsePatchEnvelope } from './fs/
 export { isPathInside, resolveWorkspacePath, matchGlob, globFiles } from './fs/workspaceFs.js';
 export { applyPatchEnvelope } from './fs/applyPatch.js';
 import { normalizeToolName } from '../tool/specs/names.js';
-import { registryAllowedTools } from '../tool/registry/registry.js';
+import { registryAllowedTools, registryEntry } from '../tool/registry/registry.js';
 import { searchMcpCatalog } from '../mcp/discovery/discovery.js';
 import { appendEvidence, setQuestion, readLedger } from '../research/researchStore.js';
 import { summarizeLedger, formatBrief } from '../research/evidenceLedger.js';
@@ -502,6 +503,8 @@ export interface AgentOptions {
   };
   /** Desktop-only native computer control capability. Omitted in CLI/headless runtimes. */
   computerUsePort?: ComputerUsePort;
+  /** Desktop-only control of this window's embedded browser. Omitted everywhere else. */
+  browserControlPort?: BrowserControlPort;
   /**
    * §ADR-003 — the interactive prompt surface (TTY yes/no + choice picker).
    * The CLI injects its readline/ink-backed prompter; headless hosts (Desktop,
@@ -834,6 +837,7 @@ export class Agent {
   public confirmToolApproval?: AgentOptions['confirmToolApproval'];
   public interactionPort?: AgentOptions['interactionPort'];
   public computerUsePort?: ComputerUsePort;
+  public browserControlPort?: BrowserControlPort;
   // §ADR-003 — injected interactive prompter (default = headless/no-TTY stub).
   public prompter: InteractivePrompter;
   // DESK-5n — parent's review stance, for the silent-child Auto-mode bypass.
@@ -879,6 +883,7 @@ export class Agent {
     this.confirmToolApproval = options.confirmToolApproval;
     this.interactionPort = options.interactionPort;
     this.computerUsePort = options.computerUsePort;
+    this.browserControlPort = options.browserControlPort;
     this.prompter = options.prompter ?? HEADLESS_PROMPTER;
     this.parentReviewPolicy = options.parentReviewPolicy;
     this.parentExecutionMode = options.parentExecutionMode;
@@ -1154,6 +1159,15 @@ export class Agent {
     if (this.flattenedToolNames.has(name)) args = nestArguments(args);
     const executor = localToolExecutor(name);
     if (!executor) throw new Error(`Unknown local tool: ${name}`);
+    if (registryEntry(name)?.runtimePort === 'browser-control' && !browserUseAvailableFor({
+      hasPort: !!this.browserControlPort,
+      silent: this.silent,
+      depth: this.agentDepth,
+      tier: this.tier,
+      remoteBrain: isRemoteBrainUrl(getCliKnobs().brainUrl),
+    })) {
+      throw new Error(`Tool "${name}" is unavailable outside the active top-level local Desktop browser session.`);
+    }
     // CWE-266 — the builtin/orchestration/lifecycle runtime ports let a tool
     // invoke ANY built-in (shell/file) and spawn child agents. Only FIRST-PARTY
     // tools owned by a required core extension are trusted with them; a
@@ -1169,6 +1183,8 @@ export class Agent {
         : undefined,
       orchestrationRuntime: trusted ? runtime?.orchestrationRuntime : undefined,
       lifecycleRuntime: trusted ? runtime?.lifecycleRuntime : undefined,
+      browserControlPort: this.browserControlPort,
+      signal: this.turnAbort?.signal,
     });
   }
 

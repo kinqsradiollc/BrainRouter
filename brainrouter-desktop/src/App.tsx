@@ -37,6 +37,7 @@ import { useGitState } from './lib/git/useGitState.js';
 import { useSessionState } from './lib/session/hooks/useSessionState.js';
 import { withExpanded } from './lib/session/workspaces/expandedProjectsStore.js';
 import { sessionRowsCacheKey } from './lib/session/list/sessionCache.js';
+import { nextBrowserOpenGeneration } from './lib/browser/browserPanelModel.js';
 import { useSessionActions } from './lib/session/hooks/useSessionActions.js';
 import { Sidebar } from './components/layout/Sidebar.js';
 import { ActivityBar } from './components/layout/ActivityBar.js';
@@ -296,6 +297,58 @@ export function App(): React.ReactElement {
     setSideTabs, setActiveSideTab, setSidePanelOpen, setSideWidth, setSideFullScreen, setSidePinned, setTermDockOpen, setTermDockHeight, setTermTabs, setActiveTerm,
     ensurePanel, closeSideTab, reorderSideTab, togglePanel, openSideView, openBottomDock, addBottomTab, closeBottomTab, resizeTerminal, resetTermDock,
   } = usePanels(q);
+
+  // Agent browser commands target a main-owned native view even when its React
+  // panel is unmounted. Expose the Browser first so it can report bounds and the
+  // user sees the exact tab the agent is about to operate.
+  const ensurePanelRef = useRef(ensurePanel);
+  ensurePanelRef.current = ensurePanel;
+  useEffect(() => {
+    let active = true;
+    let latestGeneration: number | undefined;
+    let firstFrame: number | undefined;
+    let secondFrame: number | undefined;
+    let timer: number | undefined;
+    const cancelScheduled = (): void => {
+      if (firstFrame !== undefined) cancelAnimationFrame(firstFrame);
+      if (secondFrame !== undefined) cancelAnimationFrame(secondFrame);
+      if (timer !== undefined) window.clearTimeout(timer);
+      firstFrame = undefined;
+      secondFrame = undefined;
+      timer = undefined;
+    };
+    const off = window.brainrouter.browser?.onOpenRequest?.((request) => {
+      const nextGeneration = nextBrowserOpenGeneration(latestGeneration, request.generation);
+      if (nextGeneration === undefined || nextGeneration === latestGeneration) return;
+      latestGeneration = nextGeneration;
+      cancelScheduled();
+      ensurePanelRef.current('browser');
+      // BrowserPanel owns the native-surface rectangle. Forward only the newest
+      // generation after React can mount/unhide it; delayed older callbacks must
+      // never detach a newer acknowledged native view.
+      const forward = (): void => {
+        if (!active || latestGeneration !== nextGeneration) return;
+        window.dispatchEvent(new CustomEvent('br-browser-open-generation', { detail: { ...request, generation: nextGeneration } }));
+      };
+      queueMicrotask(forward);
+      firstFrame = requestAnimationFrame(() => {
+        firstFrame = undefined;
+        secondFrame = requestAnimationFrame(() => {
+          secondFrame = undefined;
+          forward();
+        });
+      });
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        forward();
+      }, 100);
+    });
+    return () => {
+      active = false;
+      cancelScheduled();
+      off?.();
+    };
+  }, []);
 
   // T5 — in-app code editor. Self-contained (own host round-trips); on a save it
   // refreshes git status + changed files and re-checks the review gate (the

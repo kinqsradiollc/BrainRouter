@@ -69,6 +69,28 @@ export function resolveWorkspacePath(
     throw new Error(`Path escapes workspace root: ${inputPath}`);
   }
 
+  // For writes we only canonicalize the PARENT above (the file may not exist
+  // yet), so a pre-existing symlink AT the final path would be silently followed
+  // by fs.writeFileSync — letting a write escape the workspace through
+  // `workspace/evil -> /etc/anything`. Reject writing through a symlink whose
+  // ultimate target leaves the root (live links resolve via realpath; dangling
+  // links fall back to the readlink target). In-workspace symlinks are allowed.
+  if (options.forWrite) {
+    let linkStat: fs.Stats | undefined;
+    try { linkStat = fs.lstatSync(resolved); } catch { linkStat = undefined; }
+    if (linkStat?.isSymbolicLink()) {
+      let target: string;
+      try {
+        target = fs.realpathSync(resolved);
+      } catch {
+        target = path.resolve(path.dirname(resolved), fs.readlinkSync(resolved));
+      }
+      if (!isPathInside(root, target)) {
+        throw new Error(`Path escapes workspace root via symlink: ${inputPath}`);
+      }
+    }
+  }
+
   return resolved;
 }
 

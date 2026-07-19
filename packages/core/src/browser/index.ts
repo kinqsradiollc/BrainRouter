@@ -1,8 +1,8 @@
 /**
  * `@kinqs/brainrouter-core/browser` — the headless web UI-testing engine: a
- * data-testid extractor (Layer 2), a named command layer (Layer 4), a headed
- * Playwright driver (Layer 5a), and the result normalizer (Layer 6). Consumed by
- * the Desktop "UI Tests" panel and, via a built-in extension, by the agent.
+ * data-testid extractor, the legacy named command layer, the first-class
+ * embedded-browser control protocol, and result normalizers. Production agent
+ * browsing uses an injected Desktop port; Playwright is explicit test tooling.
  *
  * The barrel grows one phase at a time: P0 the data contracts, P1 the extractor.
  */
@@ -40,7 +40,8 @@ export { diffManifests, type ManifestDiff } from './extractor/diff.js';
 
 // Layer 4/6 — the command layer + result normalizer.
 export { CommandLayer, type ElementRef } from './command/commands.js';
-export { type Backend, StubBackend } from './command/backend.js';
+export { type Backend, StubBackend, UnavailableBackend } from './command/backend.js';
+export * from './control.js';
 export {
   normalizeResult,
   errorResult,
@@ -53,7 +54,7 @@ export { parseFlowYaml, serializeFlowYaml, FlowSchema, FlowStepSchema, type Pars
 export { parseStoryYaml, serializeStoryYaml, parseStoriesJson, StorySchema, type Story } from './flow/storySchema.js';
 export { buildStoryPrompt, validateStories, STORY_TOOL_SCHEMA, type StoryPrompt } from './story/generate.js';
 
-// The shared per-workspace session (one browser, two consumers).
+// Per-workspace UI-map session (no implicit browser process).
 export {
   getUiTestSession,
   readManifestFromDisk,
@@ -62,7 +63,7 @@ export {
   type UiTestSession,
 } from './session.js';
 
-// Layer 5a — the headed Playwright driver client + protocol.
+// Explicit headless/test adapter only — never selected by the production session.
 export { DriverClient, type DriverClientOptions } from './driver/driverClient.js';
 export { encodeLine, LineDecoder, type DriverRequest, type DriverReply } from './driver/protocol.js';
 export { buildSelector, cssEscapeAttr } from './driver/playwrightDriver.js';

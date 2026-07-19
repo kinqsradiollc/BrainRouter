@@ -45,6 +45,29 @@ test("running jobs mark only their last phase active", () => {
   assert.equal(trace.nodes.find((node) => node.label === "Model analysis")?.status, "running");
 });
 
+test("pentest progress events group into pentest phases with the last active while running", () => {
+  const run = review({
+    id: "pentest-1", lens: "pentest", status: "running", repo: "http://localhost:3000", prNumber: null,
+    findings: 0, blocking: 0, updatedAt: "2026-07-15T00:01:00.000Z",
+    progress: [
+      { ts: "2026-07-15T00:00:00.000Z", kind: "perimeter", msg: "Starting Standard Pentest", data: { scanMode: "standard" } },
+      { ts: "2026-07-15T00:00:05.000Z", kind: "status", msg: "Thinking (turn 1)..." },
+      { ts: "2026-07-15T00:00:06.000Z", kind: "tool-start", msg: "run_command" },
+      { ts: "2026-07-15T00:00:08.000Z", kind: "tool-end", msg: "curl -s http://localhost:3000/", data: { tool: "run_command", success: true } },
+      { ts: "2026-07-15T00:01:00.000Z", kind: "worker", msg: "recon completed", data: { childId: "w1" } },
+    ],
+  });
+  const trace = buildAgentTrace([run]);
+  assert.equal(trace.nodes[0]?.label, "Pentest reviewer");
+  const labels = trace.nodes.filter((node) => node.kind === "phase").map((node) => node.label);
+  assert.deepEqual(labels, ["Perimeter setup", "Recon & analysis", "Tool execution", "Sub-agents"]);
+  // The tool-execution phase surfaces the tool name as a safe metric.
+  assert.equal(trace.nodes.find((node) => node.label === "Tool execution")?.metrics.tool, "run_command");
+  // Only the final phase is active while the run is still going.
+  assert.equal(trace.nodes.find((node) => node.label === "Sub-agents")?.status, "running");
+  assert.equal(trace.nodes.find((node) => node.label === "Perimeter setup")?.status, "succeeded");
+});
+
 test("failures and distinct lenses remain visible as separate roots", () => {
   const failed = review({ status: "failed", error: "model timeout", progress: [
     { ts: "2026-07-15T00:00:00.000Z", kind: "queued", msg: "Security review started" },

@@ -181,7 +181,7 @@ export function egressDecision(url: string, allowlist: string[]): PolicyResult {
 
 export interface ToolPolicyResult extends PolicyResult {
   action: ActionKind;
-  /** True for actions that change state (file/child/shell) — i.e. worth auditing. */
+  /** True for state-changing or explicitly audit-worthy actions. */
   mutating: boolean;
 }
 
@@ -198,6 +198,6 @@ export interface ToolPolicyResult extends PolicyResult {
 export function resolveToolPolicy(name: string, mode: AccessMode, args?: Record<string, unknown> | null): ToolPolicyResult {
   const action = actionKindForToolCall(name, args);
   const { decision, reason } = decideExecutionPolicy(action, mode);
-  const mutating = action === 'file_edit' || action === 'child_write' || action === 'shell';
+  const mutating = action === 'file_edit' || action === 'child_write' || action === 'shell' || action === 'computer' || registryEntry(name)?.audited === true;
   return { action, decision, reason, mutating };
 }

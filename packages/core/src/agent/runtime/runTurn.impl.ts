@@ -5,7 +5,7 @@
 import chalk from 'chalk';
 import path from 'node:path';
 import type { Agent, RunTurnCallbacks } from '../agent.js';
-import { getCliKnobs, loadOrInitConfig } from '../../config/config.js';
+import { getCliKnobs, isRemoteBrainUrl, loadOrInitConfig } from '../../config/config.js';
 import { linkArtifact } from '../../artifact/artifactStore.js';
 import { contextWindowForBudget } from '../../context/contextWindow.js';
 import { resolveToolPolicy, externalDirectoryDecision } from '../../exec/policy/execPolicy.js';
@@ -24,7 +24,7 @@ import { buildFanOutHint, shouldSuggestFanOut } from '../../prompt/planning/brea
 import { buildNextActionMessages, parseNextActionPlan, nextActionDirective, planWantsFanOut, shouldSkipPlanner } from '../../prompt/planning/nextAction.js';
 import { compactToolOutput } from '../../prompt/compaction/toolCompaction.js';
 import { isModelNotFoundError, nextFallbackModel, shouldFallbackModel } from '../../provider/modelFallback.js';
-import { resolveLocalModelProfile, localModelProfileActive, isLocalModelCoreTool } from '../../provider/modelFamily.js';
+import { resolveLocalModelProfile, localModelProfileActive } from '../../provider/modelFamily.js';
 import { enforceTaskBudget } from '../../provider/budget.js';
 import { currentTier, detectNeedsHigh, nextTier, resolveTierLadder, stripNeedsHigh } from '../../provider/tierLadder.js';
 import { switchModelToolAvailable } from '../../provider/llmProfiles.js';
@@ -73,6 +73,7 @@ import { classifyForVerification, commandWritesFiles, decideVerification, buildV
 import { isTelemetryEnabled } from '../../telemetry/recorder/telemetry.js';
 import { recordDailyUsage } from '../../usage/usageHistoryStore.js';
 import { shrinkOversizedToolResults } from '../guards/turnEndShrink.js';
+import { browserUseAvailableFor } from '../../browser/control.js';
 import { getCurrentWorkflow } from '../../workflow/run/workflowArtifacts.js';
 import { getToolSummary, getToolPreview } from '../support/toolSummary.js';
 import { trackChildObservation, parseChildDrainTimeouts, formatChildDrainTimeoutAnswer, summarizeWaitedChildOutputs } from '../support/childObservation.js';
@@ -186,7 +187,7 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       !cliKnobs.computerUse.enabled ||
       !this.computerUsePort ||
       this.silent ||
-      !!cliKnobs.brainUrl;
+      isRemoteBrainUrl(cliKnobs.brainUrl);
     // MC-D3 — switch_model is offered ONLY when the install has 2+ named LLM
     // profiles (cli.llmProfiles): with 0–1 there is nothing to switch between,
     // so the surface stays hidden and default behavior is unchanged.
@@ -196,10 +197,11 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
     // points stay hidden; when ON they're exposed and the full MCP catalog is
     // collapsed below so the model searches for tools instead of carrying them all.
     const mcpDiscoveryOn = cliKnobs.mcpProgressiveDiscovery;
-    // HONK-L2 — for local/weak models, pin the built-in surface to the core
-    // allowlist and hide the long tail (a small surface is what they handle
-    // reliably). Strong/unknown models are untouched. Orchestration tools are
-    // added separately, so delegation is unaffected.
+    // Weak-model detection is retained ONLY for the non-hiding reliability aids
+    // (L3 schema flattening below; the L1 loop/storm caps). It no longer clamps
+    // the tool surface — the former HONK-L2 allowlist that hid the long tail from
+    // local/weak models was removed so every model, weak or strong, sees the full
+    // toolset. See the tool filter below.
     const localToolScope = localModelProfileActive(this.llmConfig.model, cliKnobs.localModelProfile);
     // Per-tool user overrides (cli.toolOverrides). Force-on re-enables a tool the
     // L2 allowlist / budget hid; force-off hides a non-protected tool. Hard gates
@@ -217,6 +219,13 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
       workflowActive: Boolean(getCurrentWorkflow(this.workspaceRoot, this.sessionKey)),
       rootAgent: !hideWorkerTools,
       computerUseAvailable: !hideComputerUse,
+      browserUseAvailable: browserUseAvailableFor({
+        hasPort: !!this.browserControlPort,
+        silent: this.silent,
+        depth: this.agentDepth,
+        tier: this.tier,
+        remoteBrain: isRemoteBrainUrl(cliKnobs.brainUrl),
+      }),
       multiProfile: !hideSwitchModel,
       mcpDiscovery: mcpDiscoveryOn,
     }).filter((t) => {
@@ -226,9 +235,13 @@ export async function runTurn(this: Agent, prompt: string, callbacks: RunTurnCal
         (!this.toolScope?.local.length || this.toolScope.local.includes(t.name)) &&
         !disallowedLocalSet.has(t.name);
       if (!hardVisible) return false;
-      // SOFT gate = the local-model L2 allowlist; the override flips it.
-      const softVisible = !(localToolScope && !isLocalModelCoreTool(t.name));
-      return resolveToolVisible(t.name, softVisible, toolOverrides);
+      // No model-strength tool clamp: EVERY model — weak or strong — sees the
+      // full tool surface. The old HONK-L2 profile hid the long tail from
+      // local/weak models; that is removed so a model's strength never disables
+      // tools. A user can still force-off a specific tool via cli.toolOverrides,
+      // and the non-hiding reliability aids stay (L1 loop/storm caps below; L3
+      // schema flattening, which just helps a weak model CALL those same tools).
+      return resolveToolVisible(t.name, true, toolOverrides);
     });
     // MC-D3 — when switch_model is offered, append the concrete profile names to
     // its description so the model can pick a valid target without guessing.

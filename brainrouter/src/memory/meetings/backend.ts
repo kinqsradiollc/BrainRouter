@@ -15,6 +15,8 @@ import { assertUserCanShareToTeam } from "../teams/backend.js";
 import { redactSensitiveMemoryText } from "../util/redaction.js";
 import { createTrack, untrackBySourceRef, type TrackItemRow } from "../track/backend.js";
 import type { CreateMeetingInput, MeetingListCursor, MeetingRow, MeetingScope, MeetingTranscriptSegment } from "../store/postgres/queries/meetingsQueries.js";
+import type { MeetingSummaryTemplateName } from "@kinqs/brainrouter-core/extension";
+import { generateMeetingSummary, meetingActionItemsForStorage } from "./summary.js";
 
 interface MeetingsStore {
   createMeeting(m: CreateMeetingInput): Promise<void>;
@@ -87,55 +89,25 @@ function parseTranscript(text: string, maxLines = 500): MeetingDetailDTO["transc
   return lines;
 }
 
-function parseActionItems(md: string): MeetingRow["actionItems"] {
-  const items: MeetingRow["actionItems"] = [];
-  let inSection = false;
-  for (const raw of md.split("\n")) {
-    const line = raw.trim();
-    if (/^#{1,4}\s/.test(line)) { inSection = /action/i.test(line); continue; }
-    if (!inSection) continue;
-    const m = line.match(/^[-*]\s+(.*)$/);
-    if (!m) continue;
-    const body = m[1];
-    const who = body.match(/[—-]\s*@?([\w.-]+)\s*$/);
-    const title = who ? body.slice(0, who.index).replace(/[—-]\s*$/, "").trim() : body.trim();
-    if (!isMeaningfulActionTitle(title)) continue;
-    items.push({
-      id: `ai-${items.length + 1}`,
-      title,
-      assignee: who?.[1],
-      done: false,
-    });
-    if (items.length >= 50) break;
-  }
-  return items;
-}
-
 /** Models sometimes emit placeholder bullets when a meeting has no actions. */
 function isMeaningfulActionTitle(title: string): boolean {
   const normalized = title.trim();
   return normalized.length > 0 && !/^(none|null|n\/a|undefined|no action items?)[.!?]?$/i.test(normalized);
 }
 
-type MeetingSummaryTemplate = "general" | "standup" | "one-on-one" | "retrospective";
-
-async function summarize(orgId: string, title: string, transcript: string, template: MeetingSummaryTemplate = "general"): Promise<{ markdown: string; actionItems: MeetingRow["actionItems"] }> {
+async function summarize(orgId: string, title: string, transcript: string, template: MeetingSummaryTemplateName = "general"): Promise<{ markdown: string; actionItems: MeetingRow["actionItems"] }> {
   // Internal sub-agent runner bound to the org's OWN LLM provider (BYOK / personal).
   // An admin can assign a dedicated model to the meeting-summary role via
   // agentModels["meeting-summary"], else the org's default LLM provider is used.
   // Server-managed models are NOT consulted here — those only serve the desktop.
   const runner = await memoryEngine.modelRunner("meeting-summary", orgId);
-  const templateInstruction: Record<MeetingSummaryTemplate, string> = {
-    general: "Lead with a concise overview, then decisions and action items.",
-    standup: "Organize the notes under Progress, Blockers, Next steps, and Action items.",
-    "one-on-one": "Organize the notes under Discussion, Feedback, Commitments, and Action items.",
-    retrospective: "Organize the notes under What went well, What did not, Experiments, and Action items.",
-  };
-  const systemPrompt = `You summarize meeting transcripts. ${templateInstruction[template]} Use concise markdown and format each action item as '- <task> — @<assignee>'. No preamble.`;
   // Throws on model failure (e.g. LLM_NOT_CONFIGURED) so the background job marks
   // the summary 'failed' — the caller polls status and can Regenerate.
-  const markdown = await runner.run({ systemPrompt, prompt: `Meeting: ${title}\n\nTranscript:\n${transcript.slice(0, 40_000)}`, taskId: `meeting-summary:${orgId}` });
-  return { markdown: markdown.trim(), actionItems: parseActionItems(markdown) };
+  const formatted = await generateMeetingSummary(runner, { title, transcript, template });
+  return {
+    markdown: formatted.markdown,
+    actionItems: meetingActionItemsForStorage(formatted.actionItems),
+  };
 }
 
 /**
@@ -145,7 +117,7 @@ async function summarize(orgId: string, title: string, transcript: string, templ
  */
 function generateSummaryInBackground(args: {
   id: string; userId: string; orgId: string; title: string; transcript: string;
-  date?: string; attendees?: string[]; scope?: MeetingScope; teamId?: string; previousActionItems?: MeetingRow["actionItems"]; template?: MeetingSummaryTemplate;
+  date?: string; attendees?: string[]; scope?: MeetingScope; teamId?: string; previousActionItems?: MeetingRow["actionItems"]; template?: MeetingSummaryTemplateName;
 }): void {
   void (async () => {
     try {
@@ -183,7 +155,7 @@ function generateSummaryInBackground(args: {
 }
 
 export async function createMeeting(input: {
-  userId: string; orgId: string; title: string; transcript: string; scope?: MeetingScope; teamId?: string; canManageOrgTeams?: boolean; date?: string; attendees?: string[]; template?: MeetingSummaryTemplate;
+  userId: string; orgId: string; title: string; transcript: string; scope?: MeetingScope; teamId?: string; canManageOrgTeams?: boolean; date?: string; attendees?: string[]; template?: MeetingSummaryTemplateName;
 }): Promise<{ id: string; summaryStatus: MeetingRow["summaryStatus"] }> {
   requireAccount(input.userId, input.orgId);
   if (!input.transcript.trim()) throw new Error("Cannot record a meeting with an empty transcript.");
