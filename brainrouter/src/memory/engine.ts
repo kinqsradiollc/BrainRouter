@@ -789,9 +789,22 @@ export class MemoryEngine {
     return lessonOps.findLessonConflicts(this, userId, text);
   }
 
-  /** ADR-020 D4 — promote eligible memories to the durable tier (decay-exempt). Returns count. */
-  public promoteDurableMemories(overrides?: { confidence?: number; minCorroborations?: number }): Promise<number> {
-    const { confidence, minCorroborations } = promotionThresholds(overrides);
+  /**
+   * ADR-020 D4 — promote eligible memories to the durable tier (decay-exempt).
+   * Thresholds default to the code defaults but are tunable via the recall-
+   * settings KV (dashboard → Intelligence → Advanced): an explicit `overrides`
+   * wins, else the system org's `promotionOverride` applies, else the defaults.
+   * Returns count.
+   */
+  public async promoteDurableMemories(overrides?: { confidence?: number; minCorroborations?: number }): Promise<number> {
+    let resolved = overrides;
+    if (!resolved || (resolved.confidence === undefined && resolved.minCorroborations === undefined)) {
+      try {
+        const sys = await this.resolveRecallOverrides(systemProviderOrgId());
+        if (sys.promotionOverride) resolved = sys.promotionOverride;
+      } catch { /* settings unavailable → code defaults */ }
+    }
+    const { confidence, minCorroborations } = promotionThresholds(resolved);
     return this.store.promoteDurableMemories(confidence, minCorroborations);
   }
 

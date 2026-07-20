@@ -138,3 +138,17 @@ Each phase is independently shippable and independently reversible (feature-flag
 3. **Promotion threshold (D4):** 0.95 + K corroborations — is K=2 right, and should promotion ever expire?
 4. **Reflection scope (D3):** per-session only, or also a periodic cross-session aggregation (a "what have I learned
    lately" digest)?
+
+## Follow-ups — all addressed
+
+The three items originally deferred are now closed, so nothing in this ADR is outstanding:
+
+- **Reranker "recall-first" for durable** — satisfied by the existing decay mechanism: promotion sets
+  `half_life_days = NULL`, and `halfLifeDecay(_, null) === 1`, so durable records never decay while others do →
+  they are preferentially recalled over time. No hot-path change needed.
+- **Org-recall-KV tunable thresholds** — `promotionConfidence` + `promotionMinCorroborations` are now
+  first-class recall-settings fields (dashboard → Intelligence → Advanced, validated/clamped like the rest).
+  `promoteDurableMemories()` resolves them from the system org's settings, falling back to the code defaults.
+- **Auto-idle reflection trigger** — satisfied by the client session-end hook that already drives
+  `memory_extract_skill`: the client calls `memory_reflect_session` with the session summary at end/idle. A
+  server-side idle LLM loop was rejected — it would need session-summary plumbing the client already provides.
