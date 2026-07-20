@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { getCliKnobs } from '@kinqs/brainrouter-core/config';
 import { getOrgConventionRepoRoots, loadPluginsWithKnobs } from '@kinqs/brainrouter-core/plugin';
 
@@ -137,10 +138,20 @@ export function skillSearchRoots(
       const monorepoRoot = path.dirname(mcpPkgDir);
       roots.push(path.join(monorepoRoot, 'skills'));
     }
+    // The CLI package's OWN starter skills (synced copies of the monorepo set —
+    // see scripts/sync-bundled-skills.mjs). Lowest bundled precedence: in a
+    // monorepo/mcp install the identical names above win via first-root-wins
+    // dedupe, but a CLI-only or desktop install still gets the starter set so
+    // /init and onboarding ship with their workflow skills.
+    roots.push(OWN_BUNDLED_SKILLS_DIR);
   }
 
   return [...new Set(roots.map((root) => path.resolve(root)))];
 }
+
+// dist/prompt/skillCatalog.js → ../../skills = the CLI package's skills/ dir
+// (same own-package pattern as BUILTIN_PACKS_DIR in core's pack/packs.ts).
+const OWN_BUNDLED_SKILLS_DIR = fileURLToPath(new URL('../../skills', import.meta.url));
 
 function resolveInstalledMcpPackageDir(): string | undefined {
   try {
