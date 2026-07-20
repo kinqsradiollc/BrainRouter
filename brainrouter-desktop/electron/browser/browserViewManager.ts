@@ -19,6 +19,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isAllowedWebviewSrc, isMetadataOrLinkLocalAddress, isPrivateOrLocalAddress } from '../webviewPolicy.js';
 import { browserPermissionCheckScopes, browserPermissionRequestScope } from './browserPermissionPolicy.js';
+import { agentCursorScript, removeAgentCursorScript } from './browserCursor.js';
 import { STEALTH_INIT_SCRIPT } from './browserStealth.js';
 import { promptForHttpAuth } from './httpAuthPrompt.js';
 import {
@@ -354,6 +355,11 @@ export class BrowserViewManager {
   private readonly sessionTabs = new Map<string, Array<{ url: string; title: string; active: boolean }>>();
   private readonly queues = new Map<BrowserTabId, Promise<void>>();
   private readonly emulatedTabs = new Set<BrowserTabId>();
+  // When true, agent pointer actions (click/hover/drag) glide a visible cursor
+  // overlay to the target and pulse a ripple on click, so a human watching the
+  // pane SEES the agent operate the page. Toggled by the panel's set-cursor op;
+  // defaults on so the cursor shows even before the renderer syncs the toggle.
+  private agentCursorEnabled = true;
   private permissionPrompt: BrowserState['permissionPrompt'] = null;
   private dialogPrompt: BrowserState['dialogPrompt'] = null;
   private pendingPermission: PendingPermission | null = null;
@@ -1247,6 +1253,8 @@ export class BrowserViewManager {
       return this.isolated(tab.id, `(() => { const s=window.__brainrouterAgentRefs; const el=s&&s.nodes.get(${JSON.stringify(command.ref ?? '')}); if(!el)return {ok:false}; const prev=window.__brainrouterHighlighted;if(prev){prev.style.outline=window.__brainrouterPreviousOutline||'';} window.__brainrouterHighlighted=el;window.__brainrouterPreviousOutline=el.style.outline;el.style.outline='2px solid #7c5cff';el.style.outlineOffset='2px';el.scrollIntoView({block:'center'});return {ok:true}; })()`);
     }
     const x = Math.round(target.rect.x + target.rect.width / 2), y = Math.round(target.rect.y + target.rect.height / 2);
+    // Glide the visible cursor to the target (ripple on a click) before the real input.
+    this.showAgentPointer(tab.id, x, y, command.op !== 'hover');
     this.sendAgentInput(tab.id, { type: 'mouseMove', x, y });
     if (command.op === 'hover') return { ok: true, x, y };
     const count = command.op === 'double-click' ? 2 : 1;
@@ -1283,6 +1291,7 @@ export class BrowserViewManager {
 
   private scrollCommand(tab: BrowserTab, command: Extract<BrowserCommand, { op: 'scroll' }>): { ok: true } {
     const x = Math.round(command.x ?? this.surface.width / 2), y = Math.round(command.y ?? this.surface.height / 2);
+    this.showAgentPointer(tab.id, x, y, false);
     this.sendAgentInput(tab.id, { type: 'mouseWheel', x, y, deltaX: Math.round(command.deltaX ?? 0), deltaY: Math.round(command.deltaY) });
     return { ok: true };
   }
@@ -1299,7 +1308,9 @@ export class BrowserViewManager {
     if (!from.ok || !from.rect || !to.ok || !to.rect) throw new BrowserManagerError('REF_NOT_FOUND', 'Drag source or destination was not found.');
     const sx = Math.round(from.rect.x + from.rect.width / 2), sy = Math.round(from.rect.y + from.rect.height / 2);
     const tx = Math.round(to.rect.x + to.rect.width / 2), ty = Math.round(to.rect.y + to.rect.height / 2);
+    this.showAgentPointer(tab.id, sx, sy, true);
     this.sendAgentInput(tab.id, { type: 'mouseMove', x: sx, y: sy }); this.sendAgentInput(tab.id, { type: 'mouseDown', x: sx, y: sy, button: 'left', clickCount: 1 });
+    this.showAgentPointer(tab.id, tx, ty, false);
     this.sendAgentInput(tab.id, { type: 'mouseMove', x: tx, y: ty, movementX: tx - sx, movementY: ty - sy }); this.sendAgentInput(tab.id, { type: 'mouseUp', x: tx, y: ty, button: 'left', clickCount: 1 });
     tab.revision += 1; this.emitState(); return { ok: true };
   }
@@ -1467,7 +1478,22 @@ export class BrowserViewManager {
   }
 
   private setCursor(tab: BrowserTab, enabled: boolean): Promise<unknown> {
-    return this.isolated(tab.id, `(() => { const id='__brainrouter_native_cursor__';let el=document.getElementById(id);if(!${enabled}){el?.remove();return {ok:true};}if(!el){el=document.createElement('div');el.id=id;el.setAttribute('aria-hidden','true');el.style.cssText='position:fixed;z-index:2147483647;pointer-events:none;width:14px;height:14px;border:2px solid #7c5cff;border-radius:50%;left:8px;top:8px';(document.body||document.documentElement).appendChild(el);}return {ok:true};})()`);
+    this.agentCursorEnabled = enabled;
+    if (!enabled) {
+      return this.isolated(tab.id, removeAgentCursorScript());
+    }
+    // Park the overlay near the top-left; the first agent action glides it out.
+    return this.isolated(tab.id, agentCursorScript(8, 8, false));
+  }
+
+  /**
+   * Fire-and-forget: glide the agent cursor overlay to (x, y) and, when `click`,
+   * pulse a ripple — so the user watches the agent's pointer move and click.
+   * No-op when the cursor is toggled off; never blocks the real input event.
+   */
+  private showAgentPointer(tabId: BrowserTabId, x: number, y: number, click: boolean): void {
+    if (!this.agentCursorEnabled) return;
+    void this.isolated(tabId, agentCursorScript(x, y, click)).catch(() => undefined);
   }
 
   private async setDevice(

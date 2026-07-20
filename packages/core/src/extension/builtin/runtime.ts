@@ -111,24 +111,65 @@ export function looksStructuredUrl(rawUrl: string): boolean {
 }
 
 /**
+ * How the agent's `web_search` / `fetch_url` fast-path drives the in-app browser.
+ *
+ * When `live` is set, the fetch is made WATCHABLE: it opens (or reuses via
+ * `tabRef`) a single VISIBLE research tab, activates it, and LEAVES it open so
+ * the user sees the agent navigate to the URL / search / page forward — one tab
+ * moving page→page rather than throwaway tabs flashing open and closed. Without
+ * `live` (the default) it keeps the original silent behavior: a NON-active
+ * background tab that is always closed after the read.
+ */
+export interface InAppBrowseOptions {
+  live?: boolean;
+  /** Mutable holder for the reused research tab id, shared across an agent's
+   *  web_search / fetch_url calls so the user watches ONE tab, not many. */
+  tabRef?: { id?: string };
+}
+
+/**
+ * Open a browse tab, or — in `live` mode with a known `tabRef.id` — reuse and
+ * navigate the existing research tab (and re-activate it) so the user watches a
+ * single tab move. Returns the tab id, or undefined if a fresh tab won't open.
+ */
+async function openOrReuseBrowseTab(port: BrowserFetchPort, url: string, signal: AbortSignal, opts: InAppBrowseOptions): Promise<string | undefined> {
+  const live = opts.live === true;
+  const ref = opts.tabRef;
+  if (live && ref?.id) {
+    const nav = await port.request({ kind: 'page.navigate', url, tabId: ref.id }, { signal }).catch(() => null);
+    if (nav?.ok) {
+      // Bring the reused research tab to the front so the user watches it move.
+      await port.request({ kind: 'tabs.select', tabId: ref.id }, { signal }).catch(() => undefined);
+      return ref.id;
+    }
+    ref.id = undefined; // stale/closed — fall through and open a fresh visible tab
+  }
+  const open = await port.request({ kind: 'tabs.open', url, activate: live }, { signal });
+  if (!open?.ok || !open.tabId) return undefined;
+  if (live && ref) ref.id = open.tabId;
+  return open.tabId;
+}
+
+/**
  * Fetch a URL through the in-app browser (real Chromium, JS-rendered, using the
  * user's logged-in session), returning the page's rendered text — the SAME view
- * the agent gets from the browser tools. Opens a NON-active background tab so it
- * doesn't steal focus, snapshots the rendered DOM, and always closes the tab.
+ * the agent gets from the browser tools. In `live` mode it drives a VISIBLE,
+ * reused research tab the user can watch; otherwise a NON-active background tab
+ * that is always closed after the read.
  *
  * Best-effort by design: a hard timeout bounds the whole flow and ANY failure
  * returns null so the caller falls back to the HTTP crawler — fetch_url can
  * never be made worse than the crawler baseline. SSRF is enforced by the desktop
  * browser's own onBeforeRequest destination gate, so no extra check is needed.
  */
-export async function fetchViaInAppBrowser(port: BrowserFetchPort, url: string, timeoutMs: number, outerSignal?: AbortSignal): Promise<{ title: string; url: string; text: string } | null> {
+export async function fetchViaInAppBrowser(port: BrowserFetchPort, url: string, timeoutMs: number, outerSignal?: AbortSignal, opts: InAppBrowseOptions = {}): Promise<{ title: string; url: string; text: string } | null> {
   const timeout = AbortSignal.timeout(timeoutMs);
   const signal = outerSignal ? AbortSignal.any([outerSignal, timeout]) : timeout;
+  const live = opts.live === true;
   let tabId: string | undefined;
   try {
-    const open = await port.request({ kind: 'tabs.open', url, activate: false }, { signal });
-    if (!open?.ok || !open.tabId) return null;
-    tabId = open.tabId;
+    tabId = await openOrReuseBrowseTab(port, url, signal, opts);
+    if (!tabId) return null;
     // Wait for load, but ignore its timeout — we still read whatever rendered.
     await port.request({ kind: 'page.wait', tabId, loadState: 'load', timeoutMs: Math.min(15_000, timeoutMs) }, { signal }).catch(() => undefined);
     // page.text returns the page's clean rendered innerText (article text, not the
@@ -151,7 +192,9 @@ export async function fetchViaInAppBrowser(port: BrowserFetchPort, url: string, 
   } catch {
     return null;
   } finally {
-    if (tabId) { try { await port.request({ kind: 'tabs.close', tabId }); } catch { /* best effort */ } }
+    // Live mode keeps the reused research tab open (the user is watching it;
+    // reapAgentTabs cleans it up between turns). Headless mode always closes.
+    if (tabId && !live) { try { await port.request({ kind: 'tabs.close', tabId }); } catch { /* best effort */ } }
   }
 }
 
@@ -159,17 +202,18 @@ export async function fetchViaInAppBrowser(port: BrowserFetchPort, url: string, 
  * Fetch a page's RENDERED HTML through the in-app browser (real Chromium + the
  * user's session), so structured extraction (e.g. web_search parsing a results
  * page) runs over what the browser actually rendered — the network/JS/session
- * all go through the browser, never a raw HTTP scrape. Opens a background tab,
- * reads page.html, always closes the tab. Returns null on any failure/timeout.
+ * all go through the browser, never a raw HTTP scrape. In `live` mode it drives
+ * a VISIBLE, reused research tab (so the user watches the search happen);
+ * otherwise a background tab that is always closed. Returns null on any failure.
  */
-export async function fetchHtmlViaInAppBrowser(port: BrowserFetchPort, url: string, timeoutMs: number, outerSignal?: AbortSignal): Promise<string | null> {
+export async function fetchHtmlViaInAppBrowser(port: BrowserFetchPort, url: string, timeoutMs: number, outerSignal?: AbortSignal, opts: InAppBrowseOptions = {}): Promise<string | null> {
   const timeout = AbortSignal.timeout(timeoutMs);
   const signal = outerSignal ? AbortSignal.any([outerSignal, timeout]) : timeout;
+  const live = opts.live === true;
   let tabId: string | undefined;
   try {
-    const open = await port.request({ kind: 'tabs.open', url, activate: false }, { signal });
-    if (!open?.ok || !open.tabId) return null;
-    tabId = open.tabId;
+    tabId = await openOrReuseBrowseTab(port, url, signal, opts);
+    if (!tabId) return null;
     await port.request({ kind: 'page.wait', tabId, loadState: 'load', timeoutMs: Math.min(15_000, timeoutMs) }, { signal }).catch(() => undefined);
     const res = await port.request({ kind: 'page.html', tabId, maxChars: 500_000 }, { signal }).catch(() => null);
     const data = (res?.ok ? res.data : null) as { html?: string } | null;
@@ -178,7 +222,8 @@ export async function fetchHtmlViaInAppBrowser(port: BrowserFetchPort, url: stri
   } catch {
     return null;
   } finally {
-    if (tabId) { try { await port.request({ kind: 'tabs.close', tabId }); } catch { /* best effort */ } }
+    // Live mode leaves the reused research tab open for the user to watch.
+    if (tabId && !live) { try { await port.request({ kind: 'tabs.close', tabId }); } catch { /* best effort */ } }
   }
 }
 
@@ -634,7 +679,9 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         // them into a DOM and innerText-scrape a mangled copy — send those
         // straight to the crawler, which returns the raw bytes.
         if (this.browserControlPort && !this.silent && !looksStructuredUrl(String(url))) {
-          const viaBrowser = await fetchViaInAppBrowser(this.browserControlPort, String(url), 25_000, this.turnAbort?.signal);
+          // Drive a VISIBLE, reused research tab so the user watches the agent go
+          // to the URL, rather than a throwaway background tab.
+          const viaBrowser = await fetchViaInAppBrowser(this.browserControlPort, String(url), 25_000, this.turnAbort?.signal, { live: true, tabRef: (this._browserResearchRef ??= {}) });
           if (viaBrowser?.text) {
             return JSON.stringify({ ok: true, via: 'in-app-browser', title: viaBrowser.title, url: viaBrowser.url, text: viaBrowser.text }, null, 2);
           }
@@ -664,9 +711,12 @@ export async function invokeBuiltinToolRuntime(this: any, name: string, args: Re
         if (this.browserControlPort && !this.silent) {
           const port = this.browserControlPort;
           const sig = this.turnAbort?.signal;
+          // Share ONE reused, visible research tab across engines (Google→DDG) and
+          // with fetch_url, so the user watches a single tab search and page.
+          const researchRef = (this._browserResearchRef ??= {});
           const tryEngine = async (url: string, parsers: Array<(h: string, n: number) => WebSearchResult[]>): Promise<WebSearchResult[]> => {
             try {
-              const html = await fetchHtmlViaInAppBrowser(port, url, 25_000, sig);
+              const html = await fetchHtmlViaInAppBrowser(port, url, 25_000, sig, { live: true, tabRef: researchRef });
               if (html) for (const parse of parsers) { const r = parse(html, maxResults); if (r.length) return r; }
             } catch { /* try the next engine, then the HTTP provider */ }
             return [];
