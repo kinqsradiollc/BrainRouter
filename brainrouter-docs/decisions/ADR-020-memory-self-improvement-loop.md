@@ -1,6 +1,8 @@
 # ADR-020 — Memory Self-Improvement Loop: Skill Reliability, Autonomous Consolidation, Structured Reflection & Confidence Promotion
 
-**Status:** Proposed (design; phased) · **Awaiting approval** · **Extends** ADR-007 (Postgres memory store),
+**Status:** Accepted (implemented; phased) · **All four phases P0–P3 shipped** on
+`feat/memory-self-improvement-adr020` (migrations 041–042; skill-reliability, structured
+session reflection, durable promotion tier, and the opt-in consolidation cycle). · **Extends** ADR-007 (Postgres memory store),
 ADR-012 (providers DB-only), ADR-010 (tenancy) · **Builds on** the recall pipeline (`brainrouter/src/memory/recall.ts`),
 `memoryEngine` (`brainrouter/src/memory/engine.ts`), the sweepers (`memory/engine/sweepersOps.ts`), and the
 skill-memory tools (`brainrouter/src/tools/skills/memory/*`).
