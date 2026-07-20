@@ -206,7 +206,8 @@
     "config",
     "agents",
     "packs",
-    "extensions"
+    "extensions",
+    "skills"
   ],
   "scripts": {
     "clean": "node -e \"const fs=require('fs');fs.mkdirSync('dist',{recursive:true});for(const entry of fs.readdirSync('dist'))fs.rmSync('dist/'+entry,{recursive:true,force:true})\"",
