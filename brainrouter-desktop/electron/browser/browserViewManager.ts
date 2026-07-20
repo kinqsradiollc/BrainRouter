@@ -346,6 +346,10 @@ export class BrowserViewManager {
   // per-session snapshot of its open tabs so switching sessions swaps to that
   // session's isolated browser (and restores its tabs) rather than sharing one.
   private partition = BROWSER_PARTITION_BASE;
+  // The tab whose native view is currently a child of the window. Re-adding an
+  // already-attached view flashes it, so attachActiveView only add/removes on a
+  // real change and otherwise just re-bounds (smooth).
+  private attachedViewId: BrowserTabId | null = null;
   private sessionKey: string | null = null;
   private readonly sessionTabs = new Map<string, Array<{ url: string; title: string; active: boolean }>>();
   private readonly queues = new Map<BrowserTabId, Promise<void>>();
@@ -1696,12 +1700,33 @@ export class BrowserViewManager {
   }
 
   private attachActiveView(): void {
-    for (const [id, record] of this.records) {
-      try { this.win.contentView.removeChildView(record.view); } catch { /* already detached */ }
-      if (id === this.activeTabId && this.surface.visible && this.surface.width > 0 && this.surface.height > 0 && !record.view.webContents.isDestroyed()) {
-        record.view.setBounds({ x: this.surface.x, y: this.surface.y, width: this.surface.width, height: this.surface.height });
-        this.win.contentView.addChildView(record.view);
-      }
+    const active = this.records.get(this.activeTabId);
+    const shouldAttach = Boolean(
+      active
+      && this.surface.visible
+      && this.surface.width > 0
+      && this.surface.height > 0
+      && !active.view.webContents.isDestroyed(),
+    );
+
+    // Detach the currently-attached view only if it is no longer the one we want
+    // (a real tab switch, or the surface going hidden). Never touch it otherwise
+    // — removing + re-adding the same view is exactly what produces the flash.
+    const wantId = shouldAttach ? this.activeTabId : null;
+    if (this.attachedViewId && this.attachedViewId !== wantId) {
+      const prev = this.records.get(this.attachedViewId);
+      if (prev) { try { this.win.contentView.removeChildView(prev.view); } catch { /* already detached */ } }
+      this.attachedViewId = null;
+    }
+
+    if (!shouldAttach || !active) return;
+
+    // Bounds updates are smooth (no flash), so always apply them.
+    active.view.setBounds({ x: this.surface.x, y: this.surface.y, width: this.surface.width, height: this.surface.height });
+    // Add to the window tree only when it isn't already there.
+    if (this.attachedViewId !== this.activeTabId) {
+      this.win.contentView.addChildView(active.view);
+      this.attachedViewId = this.activeTabId;
     }
   }
 
@@ -1905,6 +1930,7 @@ export class BrowserViewManager {
       pending.callback(false);
     }
     try { this.win.contentView.removeChildView(record.view); } catch { /* detached */ }
+    if (this.attachedViewId === id) this.attachedViewId = null;
     managersByWebContents.delete(record.view.webContents.id);
     this.releaseAgentControl(id);
     this.cleanupStagedUpload(id);
