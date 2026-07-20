@@ -26,6 +26,7 @@ import {
   updateSkill, updateSkillSchema,
   memoryRegisterSkillHintsToolSchema, handleMemoryRegisterSkillHints,
   memoryExtractSkillToolSchema, handleMemoryExtractSkill,
+  memorySkillOutcomeToolSchema, handleMemorySkillOutcome,
 } from '../tools/skills/index.js';
 import {
   getPersona, getPersonaSchema,
@@ -58,6 +59,7 @@ import {
   memoryMarkCitedToolSchema, handleMemoryMarkCited,
   memoryProvenanceToolSchema, handleMemoryProvenance,
   memoryReflectToolSchema, handleMemoryReflect,
+  memoryReflectSessionToolSchema, handleMemoryReflectSession,
 } from '../tools/governance/index.js';
 import {
   sessionRegisterToolSchema, handleSessionRegister,
@@ -281,8 +283,10 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       memoryCaptureArtifactToolSchema,
       memoryCaptureAnnotationToolSchema,
       memoryExtractSkillToolSchema,
+      memorySkillOutcomeToolSchema,
       memoryGraphAnalyticsToolSchema,
       memoryReflectToolSchema,
+      memoryReflectSessionToolSchema,
       memoryBlackboardReviewToolSchema,
       memoryTreeWalkToolSchema,
       memoryVaultExportToolSchema,
@@ -431,10 +435,22 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           return await handleMemoryCaptureAnnotation(request.params.arguments, { defaultUserId });
         case 'memory_extract_skill':
           return await handleMemoryExtractSkill(request.params.arguments, { defaultUserId });
+        case 'memory_skill_outcome':
+          // Skill reliability is a GLOBAL registry (no per-user scope), so
+          // recording outcomes / re-ranking it is an admin-only governance
+          // action — an arbitrary caller must not be able to demote everyone's
+          // skills or inflate a bad one (CWE-639). Automatic scoring is driven
+          // by trusted internal turn-outcome signals, not this tool.
+          if (!isAdmin) {
+            throw new McpError(ErrorCode.InvalidRequest, 'Admin access required for this tool');
+          }
+          return await handleMemorySkillOutcome(request.params.arguments);
         case 'memory_graph_analytics':
           return await handleMemoryGraphAnalytics(request.params.arguments, { defaultUserId });
         case 'memory_reflect':
           return await handleMemoryReflect(request.params.arguments, { defaultUserId });
+        case 'memory_reflect_session':
+          return await handleMemoryReflectSession(request.params.arguments, { defaultUserId });
         case 'memory_blackboard_review':
           return await handleMemoryBlackboardReview(request.params.arguments, { defaultUserId });
         case 'memory_tree_walk':

@@ -2,3 +2,4 @@
 // memories to synthesize cross-cutting insights.
 export * from './memory-explain.js';
 export * from './memory_reflect.js';
+export * from './memory_reflect_session.js';

@@ -30,6 +30,12 @@ export interface SkillHintsRecord {
   hints: string;
   sourceFile: string;
   registeredAt: string;
+  /** ADR-020 D1 — skill reliability lifecycle. Optional/additive. */
+  usageCount?: number;
+  successCount?: number;
+  successRate?: number;
+  lastUsedAt?: string;
+  demoted?: boolean;
 }
 
 export interface SkillActivationRecord {

@@ -293,6 +293,9 @@ export interface IMemoryStore {
   upsertSkillHints(skillName: string, hints: string, sourceFile?: string): Promise<void>;
   listSkillHints(): Promise<SkillHintsRecord[]>;
   getSkillHints(skillName: string): Promise<string | null>;
+  /** ADR-020 D1 — skill reliability lifecycle. */
+  recordSkillOutcome(skillName: string, success: boolean): Promise<SkillHintsRecord | null>;
+  listSkillReliability(): Promise<SkillHintsRecord[]>;
   getSkillActivations(userId: string): Promise<SkillActivationRecord[]>;
   upsertSkillActivations(userId: string, activations: SkillActivationRecord[]): Promise<void>;
   upsertContextualFocus(record: ContextualFocusRecord): Promise<void>;
@@ -325,6 +328,9 @@ export interface IMemoryStore {
   markCited(userId: string, recordIds: string[]): Promise<void>;
   incrementNeverCited(userId: string, recordIds: string[]): Promise<{ recordId: string; neverCitedCount: number }[]>;
   archiveCognitiveRecord(userId: string, recordId: string): Promise<void>;
+  /** ADR-020 D4/D2 — promote eligible records to the durable tier; enumerate memory owners. */
+  promoteDurableMemories(minConfidence: number, minCorroborations: number): Promise<number>;
+  listMemoryUserIds(): Promise<string[]>;
   getRecentSkillContextCognitives(userId: string, limit: number): Promise<{ skillTag: string; createdTime: string }[]>;
   createUser(userId: string, apiKey: string, displayName?: string, isAdmin?: boolean): Promise<UserRecord>;
   getUserByApiKey(apiKey: string): Promise<UserRecord | null>;

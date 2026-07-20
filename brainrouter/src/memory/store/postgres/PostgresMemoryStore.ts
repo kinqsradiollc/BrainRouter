@@ -921,6 +921,14 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
     return skillFocus.getSkillHints(this.exec, skillName);
   }
 
+  public recordSkillOutcome(skillName: string, success: boolean): Promise<SkillHintsRecord | null> {
+    return skillFocus.recordSkillOutcome(this.exec, skillName, success);
+  }
+
+  public listSkillReliability(): Promise<SkillHintsRecord[]> {
+    return skillFocus.listSkillReliability(this.exec);
+  }
+
   public getSkillActivations(userId: string): Promise<SkillActivationRecord[]> {
     return skillFocus.getSkillActivations(this.exec, userId);
   }
@@ -1245,6 +1253,14 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
 
   public incrementNeverCited(userId: string, recordIds: string[]): Promise<{ recordId: string; neverCitedCount: number }[]> {
     return cognitive.incrementNeverCited(this.exec, userId, recordIds);
+  }
+
+  public promoteDurableMemories(minConfidence: number, minCorroborations: number): Promise<number> {
+    return cognitive.promoteDurableMemories(this.exec, minConfidence, minCorroborations);
+  }
+
+  public listMemoryUserIds(): Promise<string[]> {
+    return cognitive.listMemoryUserIds(this.exec);
   }
 
   public archiveCognitiveRecord(userId: string, recordId: string): Promise<void> {
