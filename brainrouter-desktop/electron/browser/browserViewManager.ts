@@ -19,6 +19,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isAllowedWebviewSrc, isMetadataOrLinkLocalAddress, isPrivateOrLocalAddress } from '../webviewPolicy.js';
 import { browserPermissionCheckScopes, browserPermissionRequestScope } from './browserPermissionPolicy.js';
+import { STEALTH_INIT_SCRIPT } from './browserStealth.js';
 import { promptForHttpAuth } from './httpAuthPrompt.js';
 import {
   BROWSER_BLANK_URL,
@@ -1767,6 +1768,14 @@ export class BrowserViewManager {
     if (contents.debugger.isAttached()) return false;
     contents.debugger.attach('1.3');
     void contents.debugger.sendCommand('Page.enable').catch(() => undefined);
+    // Fingerprint hardening: attaching CDP flips navigator.webdriver on and leaves
+    // a few automation tells, so ordinary sites mis-detect our real headed Chromium
+    // as a bot and block/stall it. Normalize those tells in the page main world
+    // before page scripts run, on every navigation. Best-effort; never throws into
+    // the page. (Scope: fingerprint leaks only — NOT CAPTCHA/anti-abuse defeat.)
+    void contents.debugger
+      .sendCommand('Page.addScriptToEvaluateOnNewDocument', { source: STEALTH_INIT_SCRIPT })
+      .catch(() => undefined);
     return true;
   }
 
