@@ -23,6 +23,10 @@ export interface RecallSettings {
   diversityLambda?: number;  // relevance↔diversity      [0, 1]
   rerankBlendAlpha?: number; // reranker vs retriever    [0, 1]
   queryRouting?: boolean;    // reflective-query routing around the reranker
+  // ADR-020 D4 — durable-promotion thresholds (tunable per deployment via the
+  // recall-settings KV instead of a code default).
+  promotionConfidence?: number;      // graduate at/above this confidence [0.5, 1]
+  promotionMinCorroborations?: number; // …and at least this many citations [1, 20]
 }
 
 type FieldKind = "int" | "float" | "bool";
@@ -47,6 +51,8 @@ export const RECALL_SETTING_FIELDS: readonly RecallSettingField[] = [
   { key: "diversityLambda", label: "Diversity λ", kind: "float", min: 0, max: 1, envDefault: 0.7, help: "0 = diversity-only, 1 = relevance-only." },
   { key: "rerankBlendAlpha", label: "Reranker blend α", kind: "float", min: 0, max: 1, envDefault: 1.0, help: "1 = trust the reranker, 0 = trust retriever order." },
   { key: "queryRouting", label: "Reflective-query routing", kind: "bool", envDefault: true, help: "Skip the cross-encoder for reflective/analytical queries." },
+  { key: "promotionConfidence", label: "Durable promotion confidence", kind: "float", min: 0.5, max: 1, envDefault: 0.95, help: "ADR-020: confidence at/above which a corroborated memory becomes durable (decay-exempt)." },
+  { key: "promotionMinCorroborations", label: "Durable promotion citations", kind: "int", min: 1, max: 20, envDefault: 2, help: "ADR-020: citations required alongside high confidence before a memory is promoted." },
 ] as const;
 
 function clampNumber(v: unknown, min: number, max: number, kind: FieldKind): number | undefined {
@@ -84,6 +90,8 @@ export interface RecallOverrides {
   selectionOverride?: Partial<RecallSelection>;
   rerankBlendAlphaOverride?: number;
   queryRoutingOverride?: boolean;
+  /** ADR-020 D4 — durable-promotion thresholds tuned via the recall-settings KV. */
+  promotionOverride?: { confidence?: number; minCorroborations?: number };
 }
 
 /** Map per-org settings onto the recall pipeline's per-call override params. */
@@ -98,10 +106,15 @@ export function recallSettingsToOverrides(s: RecallSettings): RecallOverrides {
   if (s.diversity !== undefined) selection.diversity = s.diversity;
   if (s.diversityLambda !== undefined) selection.lambda = s.diversityLambda;
 
+  const promotion: { confidence?: number; minCorroborations?: number } = {};
+  if (s.promotionConfidence !== undefined) promotion.confidence = s.promotionConfidence;
+  if (s.promotionMinCorroborations !== undefined) promotion.minCorroborations = s.promotionMinCorroborations;
+
   return {
     ...(Object.keys(limits).length ? { limitsOverride: limits } : {}),
     ...(Object.keys(selection).length ? { selectionOverride: selection } : {}),
     ...(s.rerankBlendAlpha !== undefined ? { rerankBlendAlphaOverride: s.rerankBlendAlpha } : {}),
     ...(s.queryRouting !== undefined ? { queryRoutingOverride: s.queryRouting } : {}),
+    ...(Object.keys(promotion).length ? { promotionOverride: promotion } : {}),
   };
 }

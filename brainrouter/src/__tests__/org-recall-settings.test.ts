@@ -5,6 +5,29 @@ import {
   RECALL_SETTING_FIELDS,
 } from "../memory/recall/orgRecallSettings.js";
 
+describe("ADR-020 D4 — durable-promotion thresholds via recall settings", () => {
+  it("validates + clamps the promotion fields", () => {
+    expect(normalizeRecallSettings({ promotionConfidence: 0.9 }).promotionConfidence).toBe(0.9);
+    expect(normalizeRecallSettings({ promotionConfidence: 2 }).promotionConfidence).toBe(1); // clamp [0.5,1]
+    expect(normalizeRecallSettings({ promotionConfidence: 0.1 }).promotionConfidence).toBe(0.5);
+    expect(normalizeRecallSettings({ promotionMinCorroborations: "4" }).promotionMinCorroborations).toBe(4);
+    expect(normalizeRecallSettings({ promotionMinCorroborations: 99 }).promotionMinCorroborations).toBe(20); // clamp [1,20]
+  });
+
+  it("maps promotion fields onto promotionOverride", () => {
+    const ov = recallSettingsToOverrides(normalizeRecallSettings({ promotionConfidence: 0.85, promotionMinCorroborations: 3 }));
+    expect(ov.promotionOverride).toEqual({ confidence: 0.85, minCorroborations: 3 });
+    // absent when unset
+    expect(recallSettingsToOverrides({}).promotionOverride).toBeUndefined();
+  });
+
+  it("exposes the promotion fields in the dashboard-driving field list", () => {
+    const keys = RECALL_SETTING_FIELDS.map((f) => f.key);
+    expect(keys).toContain("promotionConfidence");
+    expect(keys).toContain("promotionMinCorroborations");
+  });
+});
+
 describe("normalizeRecallSettings", () => {
   it("keeps only known fields, dropping junk keys", () => {
     const out = normalizeRecallSettings({ ftsLimit: 20, nope: 999, __proto__: {} });
