@@ -26,7 +26,9 @@ export const memoryReflectSessionToolSchema = {
   inputSchema: {
     type: "object",
     properties: {
-      userId: { type: "string" },
+      // No `userId`: reflections are always written under the AUTHENTICATED
+      // caller (options.defaultUserId) so one user can't inject reflection
+      // memories into another user's namespace (CWE-639).
       sessionSummary: { type: "string", description: "What the session did — decisions, mistakes, outcomes." },
       sessionKey: { type: "string" },
     },
@@ -35,7 +37,6 @@ export const memoryReflectSessionToolSchema = {
 } as const;
 
 const schema = z.object({
-  userId: z.string().optional(),
   sessionSummary: z.string().min(20),
   sessionKey: z.string().optional(),
 });
@@ -43,7 +44,7 @@ const schema = z.object({
 export async function handleMemoryReflectSession(args: any, options?: { defaultUserId?: string }) {
   try {
     const params = schema.parse(args ?? {});
-    const userId = params.userId ?? options?.defaultUserId ?? "default";
+    const userId = options?.defaultUserId ?? "default";
     const result = await memoryEngine.reflectSession(userId, {
       sessionSummary: params.sessionSummary,
       sessionKey: params.sessionKey,

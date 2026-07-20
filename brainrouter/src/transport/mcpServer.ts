@@ -436,6 +436,14 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
         case 'memory_extract_skill':
           return await handleMemoryExtractSkill(request.params.arguments, { defaultUserId });
         case 'memory_skill_outcome':
+          // Skill reliability is a GLOBAL registry (no per-user scope), so
+          // recording outcomes / re-ranking it is an admin-only governance
+          // action — an arbitrary caller must not be able to demote everyone's
+          // skills or inflate a bad one (CWE-639). Automatic scoring is driven
+          // by trusted internal turn-outcome signals, not this tool.
+          if (!isAdmin) {
+            throw new McpError(ErrorCode.InvalidRequest, 'Admin access required for this tool');
+          }
           return await handleMemorySkillOutcome(request.params.arguments);
         case 'memory_graph_analytics':
           return await handleMemoryGraphAnalytics(request.params.arguments, { defaultUserId });
