@@ -29,9 +29,11 @@ Two structural gaps compound this:
 2. **Profiles need capabilities we don't serve.** A study profile needs
    tutoring workflows (step-by-step explanation, quiz generation, mastery
    tracking through memory). A research profile needs document-grounded
-   knowledge retrieval, not just web search. A frontend profile needs a
-   design-system-first build pipeline. None of these have first-class support
-   in the backend or the client runtimes.
+   knowledge retrieval, not just web search. Frontend work inside an
+   engineering workspace needs a design-system-first build pipeline — a
+   persona concern within the engineering profile, not a separate workspace
+   type. None of these have first-class support in the backend or the client
+   runtimes.
 
 ## Decision
 
@@ -39,7 +41,7 @@ Two structural gaps compound this:
 
 One file declares what kind of project a workspace is and which
 agents/skills/tools fit it: `profile` (`engineering | research | data-science |
-study | writing | frontend | custom`), `agents` (default + enabled), `skills`
+study | writing | custom`), `agents` (default + enabled), `skills`
 (packs/enabled/disabled), `tools` (profile groups + deny), `memory`
 (tags/capture hints), and an `onboarded` marker. `packages/core/src/workspace/`
 is the single chokepoint (schema, load/save, validation, defaults) — no other
@@ -86,7 +88,8 @@ memory engine; knowledge bases hold source documents and their derived chunks.
 
 ### 6. Profile skill packs ship as plugins; skills gain `allowed-tools`
 
-Profile packs (study, research, frontend, data, writing) are distributed
+Profile packs (study, research, data, writing, and a frontend pack for the
+frontend-builder persona inside engineering) are distributed
 through the existing plugin-marketplace conventions (a pack is a plugin
 contributing skills + personas). Skill frontmatter gains `allowed-tools` (a
 per-skill tool ALLOWLIST enforced for the turn the skill runs) alongside
@@ -102,7 +105,7 @@ today's `disallowed-tools`, keeping the regex-parseable frontmatter rules.
 - **B1–B3 (backend)** — knowledge subsystem foundation → generalized parse job
   queue → profile-aware skill/persona serving and knowledge distillation.
 - **C1–C4 (clients)** — `allowed-tools` → profile packs as plugins → knowledge
-  UI → design-artifact flow for the frontend profile.
+  UI → design-artifact flow for the frontend-builder persona.
 
 ## Consequences
 

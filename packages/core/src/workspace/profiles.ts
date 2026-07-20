@@ -18,7 +18,6 @@ export type WorkspaceProfileId =
   | 'data-science'
   | 'study'
   | 'writing'
-  | 'frontend'
   | 'custom';
 
 export interface WorkspaceProfilePreset {
@@ -40,8 +39,8 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
   {
     id: 'engineering',
     label: 'Engineering',
-    description: 'Building and maintaining software — code, tests, reviews, releases.',
-    agents: { default: 'engineer', enabled: ['engineer'] },
+    description: 'Building and maintaining software — code, tests, reviews, releases. Frontend/design work picks the frontend-builder persona within this profile.',
+    agents: { default: 'engineer', enabled: ['engineer', 'frontend-builder'] },
     skills: {
       packs: ['engineering'],
       enabled: [
@@ -58,7 +57,7 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
         'verify-loop',
       ],
     },
-    tools: { profiles: ['coding', 'terminal', 'browser'] },
+    tools: { profiles: ['coding', 'terminal', 'browser', 'design'] },
     memory: { tags: ['engineering'], captureHint: 'code' },
   },
   {
@@ -96,18 +95,6 @@ export const WORKSPACE_PROFILES: readonly WorkspaceProfilePreset[] = [
     skills: { packs: ['writing'], enabled: ['planning-skill', 'handover-skill'] },
     tools: { profiles: ['notes', 'browser'] },
     memory: { tags: ['writing'], captureHint: 'drafts' },
-  },
-  {
-    id: 'frontend',
-    label: 'Frontend / design',
-    description: 'Design-system-first interface building — design artifacts to components.',
-    agents: { default: 'frontend-builder', enabled: ['frontend-builder', 'engineer'] },
-    skills: {
-      packs: ['frontend'],
-      enabled: ['planning-skill', 'conventions-skill', 'code-review-and-quality', 'verify-loop'],
-    },
-    tools: { profiles: ['coding', 'browser', 'design'] },
-    memory: { tags: ['frontend', 'design'], captureHint: 'design' },
   },
   {
     id: 'custom',

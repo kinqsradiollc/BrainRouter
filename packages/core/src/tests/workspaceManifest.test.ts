@@ -90,8 +90,12 @@ test('loading never throws: absent → null, corrupt → null, hostile shapes no
 });
 
 test('profile presets are self-consistent (every profile usable by the wizard)', () => {
-  assert.ok(WORKSPACE_PROFILES.length >= 7);
+  assert.ok(WORKSPACE_PROFILES.length >= 6);
   assert.equal(WORKSPACE_PROFILES.at(-1)!.id, 'custom', 'custom renders last in pickers');
+  // Frontend is a PERSONA within engineering, not a top-level profile.
+  assert.ok(!WORKSPACE_PROFILES.some((preset) => (preset.id as string) === 'frontend'));
+  const engineering = WORKSPACE_PROFILES.find((preset) => preset.id === 'engineering')!;
+  assert.ok(engineering.agents.enabled.includes('frontend-builder'), 'engineering carries the frontend-builder persona');
   for (const preset of WORKSPACE_PROFILES) {
     assert.ok(preset.label.trim().length > 0, `${preset.id}: label`);
     assert.ok(preset.description.trim().length > 0, `${preset.id}: description`);
