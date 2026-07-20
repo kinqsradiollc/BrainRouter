@@ -10,8 +10,25 @@ import type {
 } from "@kinqs/brainrouter-types";
 import { asNumber, pg } from "../converters.js";
 import type { Executor } from "./executor.js";
+import { skillSuccessRate, shouldDemoteSkill } from "../../../skills/skill-reliability.js";
 
 // ── skill hints / activations ───────────────────────────────────────────
+
+function skillHintsRow(r: any): SkillHintsRecord {
+  const usageCount = asNumber(r.usage_count ?? 0);
+  const successCount = asNumber(r.success_count ?? 0);
+  return {
+    skillName: r.skill_name,
+    hints: r.hints,
+    sourceFile: r.source_file,
+    registeredAt: r.registered_at,
+    usageCount,
+    successCount,
+    successRate: skillSuccessRate({ usageCount, successCount }),
+    lastUsedAt: r.last_used_at ?? "",
+    demoted: Boolean(r.demoted),
+  };
+}
 
 export async function upsertSkillHints(exec: Executor, skillName: string, hints: string, sourceFile = ""): Promise<void> {
   await exec.run(
@@ -23,13 +40,53 @@ export async function upsertSkillHints(exec: Executor, skillName: string, hints:
 }
 
 export async function listSkillHints(exec: Executor): Promise<SkillHintsRecord[]> {
-  const rows = await exec.rows<any>("SELECT skill_name, hints, source_file, registered_at FROM skill_extraction_hints ORDER BY registered_at DESC");
-  return rows.map((r) => ({ skillName: r.skill_name, hints: r.hints, sourceFile: r.source_file, registeredAt: r.registered_at }));
+  const rows = await exec.rows<any>(
+    "SELECT skill_name, hints, source_file, registered_at, usage_count, success_count, last_used_at, demoted FROM skill_extraction_hints ORDER BY registered_at DESC",
+  );
+  return rows.map(skillHintsRow);
+}
+
+/** ADR-020 D1 — record one turn outcome for a skill: bump usage (+success),
+ *  stamp last_used_at, and recompute the demotion flag from the fresh counters. */
+export async function recordSkillOutcome(exec: Executor, skillName: string, success: boolean): Promise<SkillHintsRecord | null> {
+  const now = new Date().toISOString();
+  const updated = await exec.one<any>(
+    `UPDATE skill_extraction_hints
+       SET usage_count = usage_count + 1,
+           success_count = success_count + $2,
+           last_used_at = $3
+     WHERE skill_name = $1
+     RETURNING skill_name, hints, source_file, registered_at, usage_count, success_count, last_used_at, demoted`,
+    [skillName, success ? 1 : 0, now],
+  );
+  if (!updated) return null;
+  const demoted = shouldDemoteSkill({ usageCount: asNumber(updated.usage_count), successCount: asNumber(updated.success_count) });
+  if (demoted !== Boolean(updated.demoted)) {
+    await exec.run("UPDATE skill_extraction_hints SET demoted = $2 WHERE skill_name = $1", [skillName, demoted]);
+    updated.demoted = demoted;
+  }
+  return skillHintsRow(updated);
+}
+
+/** ADR-020 D1 — skills ranked by proven reliability (non-demoted first, then rate). */
+export async function listSkillReliability(exec: Executor): Promise<SkillHintsRecord[]> {
+  const all = await listSkillHints(exec);
+  return all.sort((a, b) =>
+    Number(a.demoted) - Number(b.demoted)
+    || (b.successRate ?? 1) - (a.successRate ?? 1)
+    || (b.usageCount ?? 0) - (a.usageCount ?? 0),
+  );
 }
 
 export async function getSkillHints(exec: Executor, skillName: string): Promise<string | null> {
-  const row = await exec.one<{ hints: string }>("SELECT hints FROM skill_extraction_hints WHERE skill_name = $1", [skillName]);
-  return row?.hints ?? null;
+  // ADR-020 D1: a demoted skill (proven flaky) is suppressed from every injection
+  // path — it stays in the registry for audit/recovery but no longer primes turns.
+  const row = await exec.one<{ hints: string; demoted: boolean }>(
+    "SELECT hints, demoted FROM skill_extraction_hints WHERE skill_name = $1",
+    [skillName],
+  );
+  if (!row || row.demoted) return null;
+  return row.hints;
 }
 
 export async function getSkillActivations(exec: Executor, userId: string): Promise<SkillActivationRecord[]> {

@@ -300,6 +300,16 @@ export class MemoryEngine {
     return this.store.listSkillHints();
   }
 
+  /** ADR-020 D1 — record a skill's turn outcome (bumps usage/success, auto-demotes flaky skills). */
+  public recordSkillOutcome(skillName: string, success: boolean) {
+    return this.store.recordSkillOutcome(skillName, success);
+  }
+
+  /** ADR-020 D1 — skills ranked by proven reliability (non-demoted first). */
+  public listSkillReliability() {
+    return this.store.listSkillReliability();
+  }
+
   public spikeSkill(userId: string, skillName: string) {
     return spikeSkillActivation({ userId, skillName, store: this.store });
   }

@@ -921,6 +921,14 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
     return skillFocus.getSkillHints(this.exec, skillName);
   }
 
+  public recordSkillOutcome(skillName: string, success: boolean): Promise<SkillHintsRecord | null> {
+    return skillFocus.recordSkillOutcome(this.exec, skillName, success);
+  }
+
+  public listSkillReliability(): Promise<SkillHintsRecord[]> {
+    return skillFocus.listSkillReliability(this.exec);
+  }
+
   public getSkillActivations(userId: string): Promise<SkillActivationRecord[]> {
     return skillFocus.getSkillActivations(this.exec, userId);
   }

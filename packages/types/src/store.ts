@@ -293,6 +293,9 @@ export interface IMemoryStore {
   upsertSkillHints(skillName: string, hints: string, sourceFile?: string): Promise<void>;
   listSkillHints(): Promise<SkillHintsRecord[]>;
   getSkillHints(skillName: string): Promise<string | null>;
+  /** ADR-020 D1 — skill reliability lifecycle. */
+  recordSkillOutcome(skillName: string, success: boolean): Promise<SkillHintsRecord | null>;
+  listSkillReliability(): Promise<SkillHintsRecord[]>;
   getSkillActivations(userId: string): Promise<SkillActivationRecord[]>;
   upsertSkillActivations(userId: string, activations: SkillActivationRecord[]): Promise<void>;
   upsertContextualFocus(record: ContextualFocusRecord): Promise<void>;

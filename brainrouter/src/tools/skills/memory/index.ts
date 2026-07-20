@@ -2,3 +2,4 @@
 // register per-skill extraction hints that steer future capture.
 export * from './memory_extract_skill.js';
 export * from './memory_register_skill_hints.js';
+export * from './memory_skill_outcome.js';

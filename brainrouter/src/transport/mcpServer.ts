@@ -26,6 +26,7 @@ import {
   updateSkill, updateSkillSchema,
   memoryRegisterSkillHintsToolSchema, handleMemoryRegisterSkillHints,
   memoryExtractSkillToolSchema, handleMemoryExtractSkill,
+  memorySkillOutcomeToolSchema, handleMemorySkillOutcome,
 } from '../tools/skills/index.js';
 import {
   getPersona, getPersonaSchema,
@@ -281,6 +282,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       memoryCaptureArtifactToolSchema,
       memoryCaptureAnnotationToolSchema,
       memoryExtractSkillToolSchema,
+      memorySkillOutcomeToolSchema,
       memoryGraphAnalyticsToolSchema,
       memoryReflectToolSchema,
       memoryBlackboardReviewToolSchema,
@@ -431,6 +433,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           return await handleMemoryCaptureAnnotation(request.params.arguments, { defaultUserId });
         case 'memory_extract_skill':
           return await handleMemoryExtractSkill(request.params.arguments, { defaultUserId });
+        case 'memory_skill_outcome':
+          return await handleMemorySkillOutcome(request.params.arguments);
         case 'memory_graph_analytics':
           return await handleMemoryGraphAnalytics(request.params.arguments, { defaultUserId });
         case 'memory_reflect':
