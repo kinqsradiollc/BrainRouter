@@ -1,8 +1,9 @@
 # {{PROJECT_NAME}} agent instructions
 
 <!--
-Copy this file to the project root as AGENT.md or AGENTS.md, replace every
-placeholder, and remove this comment.
+Copy this file to the project root as AGENT.md (and add a thin AGENTS.md pointing
+at it so Codex-style agents find it), replace every placeholder, and remove this
+comment.
 
 Required placeholders:
   {{PROJECT_NAME}}       Human-readable project name
@@ -17,6 +18,10 @@ Required placeholders:
   {{DOCS_PATH}}          Documentation directory or index
   {{API_DOC_PATH}}       API contract or route documentation
   {{DESIGN_DOC_PATH}}    Design system or interface contract
+  {{RULES_PATH}}         Engineering-conventions handbook, or "# Not applicable"
+  {{SKILLS_PATH}}        Skill/workflow library directory, or "# Not applicable"
+  {{ADR_PATH}}           Architecture-decision-record directory, or "# Not applicable"
+  {{DEFAULT_BRANCH}}     Branch feature PRs target (e.g. main or release/x.y.z)
 -->
 
 > **Stack:** {{STACK_DETAIL}}
@@ -42,9 +47,17 @@ needed.
 | Need                                  | Source of truth                              |
 | ------------------------------------- | -------------------------------------------- |
 | Product and architecture              | [`{{DOCS_PATH}}`]({{DOCS_PATH}})             |
+| Engineering conventions and gotchas   | [`{{RULES_PATH}}`]({{RULES_PATH}})           |
+| Reusable task workflows (skills)      | [`{{SKILLS_PATH}}`]({{SKILLS_PATH}})         |
+| Architecture decision records         | [`{{ADR_PATH}}`]({{ADR_PATH}})               |
 | API routes, schemas, and status codes | [`{{API_DOC_PATH}}`]({{API_DOC_PATH}})       |
 | Interface tokens and component rules  | [`{{DESIGN_DOC_PATH}}`]({{DESIGN_DOC_PATH}}) |
 | Repository-specific review policy     | `REVIEW.md`, when present                    |
+
+When a skill in [`{{SKILLS_PATH}}`]({{SKILLS_PATH}}) matches the task (planning,
+spec writing, debugging, testing, review, shipping), read its `SKILL.md` and
+follow its steps instead of improvising a workflow. When a conventions rule
+turns out stale, fix it in the same PR.
 
 ## Build, test, and run
 
@@ -58,7 +71,9 @@ needed.
 ```
 
 Run the narrowest relevant test while iterating. Before reporting completion,
-run the package or repository gate appropriate to the risk of the change.
+run the package or repository gate appropriate to the risk of the change — in a
+multi-workspace repository, run the FULL suite: adding an enumerated thing
+(tool, panel, route, theme) often breaks inventory tests in other workspaces.
 
 ## Working rules
 
@@ -74,6 +89,24 @@ run the package or repository gate appropriate to the risk of the change.
   authorizes that action.
 - Never expose secrets in output, logs, diffs, screenshots, or test fixtures.
 - Use clickable `file:line` evidence when explaining code behavior.
+
+## Commits, PRs, and decisions
+
+- Feature PRs are small and focused, target `{{DEFAULT_BRANCH}}`, and are
+  squash-merged: the PR title becomes permanent history. Write conventional
+  subjects — `type(scope): user-visible outcome` (type ∈
+  feat/fix/refactor/docs/chore; scope = the workspace or domain).
+- Follow the pull-request template when one exists (summary, why, changes, test
+  plan, docs/changelog, breaking changes). Behavior-preserving refactor PRs end
+  with an explicit verification line (what passed, how many tests).
+- Do not add AI-attribution trailers (for example `Co-Authored-By: <model>`)
+  to commits or PR bodies when repository policy forbids them — check the
+  conventions handbook before your first commit.
+- Record decisions with lasting architectural consequence (schema, routing,
+  tenancy, cross-package contracts) as an ADR under
+  [`{{ADR_PATH}}`]({{ADR_PATH}}) before or alongside the implementing PR.
+- Update the changelog/roadmap entries the repository maintains for the
+  in-flight version as part of the same PR.
 
 ## Change workflow
 

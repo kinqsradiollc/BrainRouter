@@ -1,6 +1,6 @@
 # BrainRouter agent instructions
 
-**Read [`AGENT.md`](AGENT.md) — it is the canonical contributor manual for this repository** (read order, directory map, build/test commands, git/PR conventions, ADR process, and the scenario → skill map). This file exists so Claude Code auto-loads the same instructions; it intentionally contains only the pointer and the hard rules.
+**Read [`AGENT.md`](AGENT.md) — it is the canonical contributor manual for this repository** (read order, directory map, build/test commands, git/PR conventions, ADR process, and the scenario → skill map). This file exists so agents that look for `AGENTS.md` (e.g. Codex) find the same instructions; it intentionally contains only the pointer and the hard rules.
 
 Non-negotiables (full list in [`brainrouter-rules/00-golden-rules.md`](brainrouter-rules/00-golden-rules.md)):
 
