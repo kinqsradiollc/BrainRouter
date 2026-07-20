@@ -11,7 +11,7 @@ marketplace conventions.
 
 - **`docs/`** = universal **TEMPLATES only** (contains a literal "TEMPLATE ONLY"
   marker; categories `api/design/schema/deployment/hooks/strategy` are served
-  read-only via the MCP doc tools to *downstream* projects). Do **not** put
+  read-only via the MCP doc tools to _downstream_ projects). Do **not** put
   BrainRouter's own living docs here — that leaks internal content to clients.
 - **`brainrouter-docs/`** = living deep docs (memory-engine.md, cli.md, hooks.md,
   federation.md, configuration.md, policy.md, specs/, decisions/).
@@ -78,16 +78,19 @@ commands run, one per line). Verify tests/lint green before writing the walkthro
 
 ## Skills & agent personas
 
-### 6. CLAUDE.md is the scenario→skill routing hub; develop locally, never via MCP tools
+### 6. AGENT.md is the canonical manual; CLAUDE.md/AGENTS.md mirror it; develop locally, never via MCP tools
 
-Treat `CLAUDE.md` as the primary agent instruction hub: when a dev task matches a
-scenario, read the mapped `SKILL.md` **directly from the filesystem** and follow
-it. **Never invoke `mcp_brainrouter_*` tools while developing this repo** (you're
-building BrainRouter, not a client of it). When you add a development-relevant
-skill, register it in CLAUDE.md's Scenario Mapping with a relative link
-`skills/<category>/<name>/SKILL.md`.
+`AGENT.md` is the canonical cross-agent contributor manual (read order, scenario→
+skill map, git/PR conventions). `CLAUDE.md` is its condensed mirror that Claude
+loads each session; `AGENTS.md` is the thin pointer Codex-style agents find.
+When a dev task matches a scenario, read the mapped `SKILL.md` **directly from
+the filesystem** and follow it. **Never invoke `mcp_brainrouter_*` tools while
+developing this repo** (you're building BrainRouter, not a client of it). When
+you add a development-relevant skill, register it in the Scenario Mapping of
+BOTH `AGENT.md` and `CLAUDE.md` with a relative link
+`skills/<category>/<name>/SKILL.md` — the two maps must not drift.
 
-- **Evidence:** `CLAUDE.md`
+- **Evidence:** `AGENT.md`, `CLAUDE.md`, `AGENTS.md`
 
 ### 7. Skill layout: `skills/<category>/<kebab-name>/SKILL.md`, name matches directory
 
@@ -148,8 +151,8 @@ refuses name collisions.
 Agent personas live as flat files at `agents/<kebab-name>.md` with `name` +
 `description` frontmatter and a body written as a system prompt for **one** role
 with one perspective and a defined output format. Respect the three-layer
-composition: **Skill** = the *how* (workflow steps), **Persona** = the *who*
-(viewpoint + report), **Command** = the *when* (user-facing entry composing the
+composition: **Skill** = the _how_ (workflow steps), **Persona** = the _who_
+(viewpoint + report), **Command** = the _when_ (user-facing entry composing the
 other two). The user or a slash command orchestrates — **personas must not invoke
 other personas**; skills are the only mandatory hops inside a persona's workflow.
 
@@ -173,7 +176,7 @@ plugin root (absolute and `..`-escaping paths are rejected at parse **and**
 discovery time).
 
 > Not to be confused with the repo's OWN `.claude-plugin/plugin.json` at the root,
-> which distributes *this repo* as a Claude Code plugin — a different artifact.
+> which distributes _this repo_ as a Claude Code plugin — a different artifact.
 
 - **Why:** the installer is deliberately warn-not-fail for soft fields; the path
   guards are a security boundary.
