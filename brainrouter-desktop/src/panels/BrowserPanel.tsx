@@ -101,6 +101,11 @@ export function BrowserPanel(): React.ReactElement {
   const [openGeneration, setOpenGeneration] = useState<number | undefined>();
   const [urlDraft, setUrlDraft] = useState(() => localStorage.getItem(URL_KEY) || 'http://localhost:5173');
   const [device, setDevice] = useState<Device>('desktop');
+  // User-adjustable layout: a custom viewport width (px) overrides the device
+  // preset (drag the right edge), and a custom drawer height (px). Both null =
+  // use the defaults. The native view is repositioned by the ResizeObserver.
+  const [customW, setCustomW] = useState<number | null>(null);
+  const [drawerH, setDrawerH] = useState<number>(240);
   const [drawer, setDrawer] = useState<Drawer>(null);
   const [elements, setElements] = useState<LiveElement[]>([]);
   const [consoleMsgs, setConsoleMsgs] = useState<BrowserConsoleEntry[]>([]);
@@ -129,6 +134,10 @@ export function BrowserPanel(): React.ReactElement {
   const [pausedDownloads, setPausedDownloads] = useState<Set<string>>(() => new Set());
 
   const hostRef = useRef<HTMLDivElement>(null);
+  // While a resize handle is being dragged, the native page view is hidden so it
+  // stops swallowing the pointer events the drag needs (a native WebContentsView
+  // sits above the renderer and captures the cursor over its bounds).
+  const resizingRef = useRef(false);
   const omniboxRef = useRef<HTMLInputElement>(null);
   const findRef = useRef<HTMLInputElement>(null);
   const tabButtonRefs = useRef(new Map<string, HTMLButtonElement>());
@@ -223,10 +232,16 @@ export function BrowserPanel(): React.ReactElement {
     let last = '';
     const report = (): void => {
       frame = null;
-      const rect = browserViewRect(host.getBoundingClientRect());
+      // ⌘+/⌘- zoom scales the renderer via webFrame.setZoomFactor, but the native
+      // page view is positioned in un-zoomed WINDOW pixels — so a DOM rect in the
+      // zoomed frame must be multiplied by the zoom factor or the view overflows
+      // its box (bleeding over the drawer / neighbouring panels) at any zoom ≠ 1.
+      const zoom = window.brainrouter?.getZoomFactor?.() || 1;
+      const raw = host.getBoundingClientRect();
+      const rect = browserViewRect({ left: raw.left * zoom, top: raw.top * zoom, width: raw.width * zoom, height: raw.height * zoom });
       const surface = {
         ...rect,
-        visible: intersecting && document.visibilityState === 'visible' && !bridgeError && !activeTab?.crashed && rect.width > 1 && rect.height > 1,
+        visible: intersecting && document.visibilityState === 'visible' && !bridgeError && !activeTab?.crashed && !resizingRef.current && rect.width > 1 && rect.height > 1,
       };
       const serialized = JSON.stringify(surface);
       if (serialized !== last || openGeneration !== undefined) {
@@ -297,7 +312,55 @@ export function BrowserPanel(): React.ReactElement {
     catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
   }, [activeTab?.zoomFactor, mutateBrowser]);
 
-  const changeDevice = useCallback((next: Device): void => setDevice(next), []);
+  // Choosing a device preset clears any dragged custom width.
+  const changeDevice = useCallback((next: Device): void => { setDevice(next); setCustomW(null); }, []);
+
+  // Drag the right edge of the emulated viewport to resize its WIDTH freely
+  // (Chrome responsive-mode style); double-click the handle to snap back to the
+  // device preset / full width. Window-level listeners so the drag survives the
+  // pointer leaving the thin handle.
+  const onWidthResize = useCallback((event: React.PointerEvent<HTMLDivElement>): void => {
+    event.preventDefault();
+    const stageRect = event.currentTarget.parentElement?.getBoundingClientRect();
+    if (!stageRect) return;
+    resizingRef.current = true;
+    window.dispatchEvent(new Event('resize')); // hide the native view for the drag
+    const onMove = (moveEvent: PointerEvent): void => {
+      setCustomW(Math.max(320, Math.min(Math.round(stageRect.width), Math.round(moveEvent.clientX - stageRect.left))));
+    };
+    const onUp = (): void => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      document.body.style.cursor = '';
+      resizingRef.current = false;
+      window.dispatchEvent(new Event('resize')); // re-show the native view at the new bounds
+    };
+    document.body.style.cursor = 'ew-resize';
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, []);
+
+  // Drag the top edge of the drawer to resize its HEIGHT.
+  const onDrawerResize = useCallback((event: React.PointerEvent<HTMLDivElement>): void => {
+    event.preventDefault();
+    const stageRect = event.currentTarget.closest('.browser-stage')?.getBoundingClientRect();
+    if (!stageRect) return;
+    resizingRef.current = true;
+    window.dispatchEvent(new Event('resize')); // hide the native view for the drag
+    const onMove = (moveEvent: PointerEvent): void => {
+      setDrawerH(Math.max(90, Math.min(Math.round(stageRect.height - 120), Math.round(stageRect.bottom - moveEvent.clientY))));
+    };
+    const onUp = (): void => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      document.body.style.cursor = '';
+      resizingRef.current = false;
+      window.dispatchEvent(new Event('resize')); // re-show the native view at the new bounds
+    };
+    document.body.style.cursor = 'ns-resize';
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, []);
 
   // Device emulation belongs to the selected native tab. Reapply it when tabs
   // change so the visual viewport and the page's CSS/touch metrics stay aligned.
@@ -305,12 +368,22 @@ export function BrowserPanel(): React.ReactElement {
     if (!activeTab) return;
     const frame = requestAnimationFrame(() => {
       const rect = hostRef.current?.getBoundingClientRect();
-      const width = DEVICE_W[device] ?? Math.max(240, Math.round(rect?.width ?? 1_440));
+      const width = customW ?? DEVICE_W[device] ?? Math.max(240, Math.round(rect?.width ?? 1_440));
       const height = DEVICE_H[device] ?? Math.max(240, Math.round(rect?.height ?? 900));
       fireBrowser({ op: 'set-device', device: { name: device, width, height, deviceScaleFactor: device === 'desktop' ? 1 : 2, isMobile: device !== 'desktop' } });
     });
     return () => cancelAnimationFrame(frame);
-  }, [activeTab?.id, device, fireBrowser]);
+  }, [activeTab?.id, device, customW, fireBrowser]);
+
+  // The native page view is a separate OS layer that does NOT reflow with the
+  // DOM. The surface reporter (below) only re-runs on a ResizeObserver tick, so
+  // a layout change that opens/closes/resizes the drawer or narrows the viewport
+  // must proactively re-place the view — otherwise a stale bound lets the page
+  // bleed over the drawer and adjacent panels. Fire after layout settles.
+  useEffect(() => {
+    const id = requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+    return () => cancelAnimationFrame(id);
+  }, [drawer, drawerH, device, customW]);
 
   const selectTabAt = useCallback((index: number, focusTab = true): void => {
     const tabs = browserState?.tabs ?? [];
@@ -625,7 +698,8 @@ export function BrowserPanel(): React.ReactElement {
     </button>
   );
 
-  const deviceW = DEVICE_W[device];
+  // Custom drag width overrides the device preset; null on desktop = full width.
+  const effectiveW = customW ?? DEVICE_W[device];
   const tabs = browserState?.tabs ?? [];
   const permission = browserState?.permissionPrompt;
   const dialog = browserState?.dialogPrompt;
@@ -752,15 +826,37 @@ export function BrowserPanel(): React.ReactElement {
         </div>
 
         <div className="browser-stage">
-          <div className={`browser-view dev-${device}`} style={deviceW ? { maxWidth: deviceW } : undefined} ref={hostRef} aria-label="Browser page surface">
+          <div className={`browser-view dev-${device}`} style={effectiveW != null ? { maxWidth: effectiveW, margin: 0 } : undefined} ref={hostRef} aria-label="Browser page surface">
             {bridgeError && <div className="browser-native-placeholder error" role="alert">{bridgeError}</div>}
             {!bridgeError && !activeTab && <div className="browser-native-placeholder">Starting browser…</div>}
             {activeTab?.crashed && <div className="browser-native-placeholder error"><div className="browser-crash-card"><Icon name="warn" size={28} /><b>This tab crashed</b><span>The page process stopped unexpectedly. Your other tabs are unaffected.</span><button className="br-go" onClick={() => fireBrowser({ op: 'reload' })}>Reload tab</button></div></div>}
           </div>
+          {/* Drag the right edge of a framed (device / custom-width) viewport to
+              resize its width; double-click to snap back to the preset. */}
+          {effectiveW != null && (
+            <div
+              className="browser-resize-x"
+              style={{ left: effectiveW, bottom: drawer ? drawerH : 0 }}
+              onPointerDown={onWidthResize}
+              onDoubleClick={() => setCustomW(null)}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize viewport width (double-click to reset)"
+              title="Drag to resize the viewport width · double-click to reset"
+            />
+          )}
           {(status || picked) && <div className="browser-status" role="status" aria-live="polite">{picked && <span className="br-picked">{picked}</span>}{status && <span className="br-status-msg">{status}</span>}</div>}
 
           {drawer && (
-            <div className="browser-drawer">
+            <div className="browser-drawer" style={{ height: drawerH }}>
+              <div
+                className="browser-resize-y"
+                onPointerDown={onDrawerResize}
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="Resize drawer height"
+                title="Drag to resize the panel height"
+              />
               <div className="browser-drawer-head">
                 <b>{drawer === 'elements' ? `Elements (${elements.length})` : drawer === 'console' ? `Console (${consoleMsgs.length})` : drawer === 'network' ? `Network (${network.length})` : drawer === 'a11y' ? `Accessibility (${a11y.length})` : drawer === 'shot' ? 'Screenshot' : drawer === 'downloads' ? `Downloads (${downloads.length})` : 'Flows'}</b>
                 <span className="br-drawer-actions">

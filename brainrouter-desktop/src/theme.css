@@ -4630,8 +4630,17 @@ select.ctl option { background: var(--surface); color: var(--text); }
 .browser-log-line.err { color: var(--err, #f48771); }
 .br-picked { font-family: var(--mono, monospace); color: var(--accent, #6ea8fe); }
 .br-status-msg { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.browser-drawer { max-height: 42%; display: flex; flex-direction: column; border-top: 1px solid var(--border); background: var(--bg, #1b1b1b); }
+.browser-drawer { flex: none; min-height: 90px; display: flex; flex-direction: column; border-top: 1px solid var(--border); background: var(--bg, #1b1b1b); }
 .browser-drawer-head { display: flex; align-items: center; justify-content: space-between; padding: 5px 9px; border-bottom: 1px solid var(--border); font-size: 12px; }
+/* Draggable resizers. -x: right edge of a framed viewport (width). -y: top of the drawer (height). */
+/* Handles live fully in the DOM area just past the native-view edge (no negative
+   margin) so the native page layer never occludes their hit target. */
+.browser-resize-x { position: absolute; top: 0; width: 12px; cursor: ew-resize; z-index: 6; touch-action: none; }
+.browser-resize-x::after { content: ""; position: absolute; left: 5px; top: 50%; width: 2px; height: 44px; margin-top: -22px; border-radius: 2px; background: var(--border); transition: background 0.12s; }
+.browser-resize-x:hover::after, .browser-resize-x:active::after { background: var(--accent, #6ea8fe); }
+.browser-resize-y { flex: none; height: 12px; cursor: ns-resize; position: relative; z-index: 6; touch-action: none; }
+.browser-resize-y::after { content: ""; position: absolute; top: 5px; left: 50%; width: 44px; height: 2px; margin-left: -22px; border-radius: 2px; background: var(--border); transition: background 0.12s; }
+.browser-resize-y:hover::after, .browser-resize-y:active::after { background: var(--accent, #6ea8fe); }
 .br-drawer-actions { display: inline-flex; align-items: center; gap: 6px; }
 .browser-drawer-body { overflow: auto; padding: 4px 6px; }
 .br-el { display: flex; align-items: center; gap: 8px; padding: 3px 6px; border-radius: 6px; font-size: 12px; }

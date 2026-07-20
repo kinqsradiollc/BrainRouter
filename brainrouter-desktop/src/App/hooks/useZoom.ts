@@ -86,6 +86,11 @@ export function useZoom(): ZoomControls {
     } else if (document.body) {
       document.body.style.zoom = zoomFactor.toString();
     }
+    // Native child views (the in-app browser) are positioned in un-zoomed window
+    // pixels, so a zoom change must recompute their bounds. Nudge layout listeners
+    // once the new zoom has been applied, or the page view overflows its panel.
+    const id = requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+    return () => cancelAnimationFrame(id);
   }, [zoomFactor]);
 
   return { zoomFactor, zoomIn, zoomOut, resetZoom };
