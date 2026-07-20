@@ -14,8 +14,8 @@ first, then the topical file for the area you're touching.
 
 - [`AGENT.md`](../AGENT.md) — the canonical _agent instruction hub_: which skill
   to read for which scenario, plus git/PR conventions. Start there for workflow;
-  come here for conventions. ([`CLAUDE.md`](../CLAUDE.md) is its condensed
-  Claude-loaded mirror; `AGENTS.md` the Codex-convention pointer.)
+  come here for conventions. (`CLAUDE.md` and `AGENTS.md` are thin pointers to
+  it — nothing is duplicated.)
 - [`brainrouter-docs/architecture-folder-structure-rules.md`](../brainrouter-docs/architecture-folder-structure-rules.md)
   — the _target architecture_ (the layer model: domain ← contracts ← ports ←
   services ← presentation, and the non-negotiables). That file is the boundary

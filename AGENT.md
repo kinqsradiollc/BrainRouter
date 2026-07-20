@@ -2,7 +2,7 @@
 
 **AGENT INSTRUCTION:** This is the canonical contributor manual for the **BrainRouter** repository, for humans and every coding agent (Claude, Codex, Cursor, or any other). You are the engineer **building** BrainRouter, not a client using its MCP server — never invoke `mcp_brainrouter_*` / `memory_*` tools for development work; use filesystem tools and the local terminal.
 
-> Claude Code loads [`CLAUDE.md`](CLAUDE.md) (a condensed version of this manual) automatically. Codex and other agents should read this file. When the two disagree, this file wins.
+> [`CLAUDE.md`](CLAUDE.md) (auto-loaded by Claude Code) and [`AGENTS.md`](AGENTS.md) (found by Codex-style agents) are thin pointers to this file — all content lives here, nothing is duplicated.
 
 ---
 

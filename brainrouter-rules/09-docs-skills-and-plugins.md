@@ -78,17 +78,18 @@ commands run, one per line). Verify tests/lint green before writing the walkthro
 
 ## Skills & agent personas
 
-### 6. AGENT.md is the canonical manual; CLAUDE.md/AGENTS.md mirror it; develop locally, never via MCP tools
+### 6. AGENT.md is the single canonical manual; CLAUDE.md/AGENTS.md are thin pointers; develop locally, never via MCP tools
 
 `AGENT.md` is the canonical cross-agent contributor manual (read order, scenario→
-skill map, git/PR conventions). `CLAUDE.md` is its condensed mirror that Claude
-loads each session; `AGENTS.md` is the thin pointer Codex-style agents find.
-When a dev task matches a scenario, read the mapped `SKILL.md` **directly from
-the filesystem** and follow it. **Never invoke `mcp_brainrouter_*` tools while
+skill map, git/PR conventions). `CLAUDE.md` (auto-loaded by Claude Code) and
+`AGENTS.md` (found by Codex-style agents) are **thin pointers** to it — they
+carry only the pointer plus the hard rules, never duplicated content. When a dev
+task matches a scenario, read the mapped `SKILL.md` **directly from the
+filesystem** and follow it. **Never invoke `mcp_brainrouter_*` tools while
 developing this repo** (you're building BrainRouter, not a client of it). When
-you add a development-relevant skill, register it in the Scenario Mapping of
-BOTH `AGENT.md` and `CLAUDE.md` with a relative link
-`skills/<category>/<name>/SKILL.md` — the two maps must not drift.
+you add a development-relevant skill, register it in `AGENT.md`'s Scenario
+Mapping (the only map) with a relative link
+`skills/<category>/<name>/SKILL.md`; don't grow the pointer files.
 
 - **Evidence:** `AGENT.md`, `CLAUDE.md`, `AGENTS.md`
 
