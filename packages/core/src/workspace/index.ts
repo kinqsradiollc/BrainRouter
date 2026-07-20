@@ -4,3 +4,4 @@
 // internal service layer (service.ts) stays unexported.
 export * from './workspace.js';
 export * from './workspaceTrust.js';
+export * from './manifest.js';
