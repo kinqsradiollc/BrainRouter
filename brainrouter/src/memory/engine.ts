@@ -1,5 +1,6 @@
 import { PostgresMemoryStore } from "./store/postgres/PostgresMemoryStore.js";
 import { pgUrlFromEnv } from "./store/postgres/connection.js";
+import { promotionThresholds } from "./util/promotion.js";
 import type { StalenessThresholds } from "./lessons/lessonHygiene.js";
 // REFAC-ENGINE-SPLIT (0.4.6) — lesson-domain ops live in lessons/lessonOps.ts;
 // the engine methods below are thin wrappers delegating to them.
@@ -162,6 +163,7 @@ export class MemoryEngine {
     this.startExtractionSweeper();
     this.startActiveSessionSweeper();
     this.startSessionInboxSweeper();
+    sweepersOps.startConsolidationSweeper(this);
     this.startJobRunner();
   }
 
@@ -785,6 +787,36 @@ export class MemoryEngine {
   /** LESSON-HYGIENE — deterministically find live lessons that conflict with `text`; see lessons/lessonOps.ts. */
   public findLessonConflicts(userId: string, text: string): Promise<CognitiveRecord[]> {
     return lessonOps.findLessonConflicts(this, userId, text);
+  }
+
+  /** ADR-020 D4 — promote eligible memories to the durable tier (decay-exempt). Returns count. */
+  public promoteDurableMemories(overrides?: { confidence?: number; minCorroborations?: number }): Promise<number> {
+    const { confidence, minCorroborations } = promotionThresholds(overrides);
+    return this.store.promoteDurableMemories(confidence, minCorroborations);
+  }
+
+  /**
+   * ADR-020 D2 — one autonomous consolidation pass: promote proven records into
+   * the durable tier, then archive stale ones per owner (recoverable — reuses the
+   * conservative staleness thresholds; never hard-deletes). Dedup/compression
+   * continue to run in the write-path pipeline. Safe to call on a schedule.
+   */
+  public async runConsolidationCycle(
+    overrides?: { confidence?: number; minCorroborations?: number; maxUsers?: number },
+  ): Promise<{ promoted: number; archived: number; users: number }> {
+    const promoted = await this.promoteDurableMemories(overrides);
+    let archived = 0;
+    let users = 0;
+    const userIds = await this.store.listMemoryUserIds();
+    const cap = Math.max(1, overrides?.maxUsers ?? 200);
+    for (const userId of userIds.slice(0, cap)) {
+      users += 1;
+      try {
+        const result = await this.sweepStaleLessons(userId, { apply: true });
+        archived += result.archived;
+      } catch { /* one owner's sweep failing must not abort the cycle */ }
+    }
+    return { promoted, archived, users };
   }
 
   /** LESSON-HYGIENE — conservative staleness sweep (opt-in archive); see lessons/lessonOps.ts. */

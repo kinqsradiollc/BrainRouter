@@ -1255,6 +1255,14 @@ export class PostgresMemoryStore implements IMemoryStore, TenancyStore, Provider
     return cognitive.incrementNeverCited(this.exec, userId, recordIds);
   }
 
+  public promoteDurableMemories(minConfidence: number, minCorroborations: number): Promise<number> {
+    return cognitive.promoteDurableMemories(this.exec, minConfidence, minCorroborations);
+  }
+
+  public listMemoryUserIds(): Promise<string[]> {
+    return cognitive.listMemoryUserIds(this.exec);
+  }
+
   public archiveCognitiveRecord(userId: string, recordId: string): Promise<void> {
     return cognitive.archiveCognitiveRecord(this.exec, userId, recordId);
   }

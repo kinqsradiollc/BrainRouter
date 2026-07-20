@@ -14,6 +14,8 @@ type SweeperState = {
   sweeperTimer?: NodeJS.Timeout;
   activeSessionSweeperTimer?: NodeJS.Timeout;
   sessionInboxSweeperTimer?: NodeJS.Timeout;
+  consolidationSweeperTimer?: NodeJS.Timeout;
+  consolidationInProgress?: boolean;
   sweepInProgress: boolean;
 };
 
@@ -101,6 +103,41 @@ export function startActiveSessionSweeper(engine: MemoryEngine): void {
     })();
   }, intervalMs);
   self.activeSessionSweeperTimer.unref?.();
+}
+
+/**
+ * ADR-020 D2 — the autonomous consolidation cycle ("the janitor"). On its own
+ * cadence it promotes proven memories into the durable tier and archives stale
+ * ones (recoverable), so the store tidies itself without an agent asking. OFF by
+ * default (opt-in via BRAINROUTER_CONSOLIDATION_INTERVAL_MS) and never in tests,
+ * so it adds no surprise workload; the loop is re-entrancy-guarded and unref'd.
+ */
+export function startConsolidationSweeper(engine: MemoryEngine): void {
+  const self = engine as unknown as SweeperState;
+  if (process.env.NODE_ENV === "test" || process.env.BRAINROUTER_DISABLE_CONSOLIDATION === "true") return;
+
+  const raw = parseInt(process.env.BRAINROUTER_CONSOLIDATION_INTERVAL_MS ?? "0", 10);
+  if (!Number.isFinite(raw) || raw <= 0) return; // opt-in: unset/0 → disabled
+  const MIN_INTERVAL_MS = 60 * 1000;
+  const intervalMs = Math.max(raw, MIN_INTERVAL_MS);
+
+  self.consolidationSweeperTimer = setInterval(() => {
+    if (self.consolidationInProgress) return;
+    self.consolidationInProgress = true;
+    void (async () => {
+      try {
+        const { promoted, archived, users } = await engine.runConsolidationCycle();
+        if (promoted > 0 || archived > 0) {
+          console.error(`[BrainRouter] consolidation: promoted ${promoted}, archived ${archived} across ${users} owner(s).`);
+        }
+      } catch (err) {
+        console.error("[BrainRouter] consolidation cycle failed:", err instanceof Error ? err.message : err);
+      } finally {
+        self.consolidationInProgress = false;
+      }
+    })();
+  }, intervalMs);
+  self.consolidationSweeperTimer.unref?.();
 }
 
 export function startSessionInboxSweeper(engine: MemoryEngine): void {

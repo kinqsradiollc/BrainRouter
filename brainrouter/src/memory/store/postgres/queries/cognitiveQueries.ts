@@ -249,6 +249,28 @@ export async function archiveCognitiveRecord(exec: Executor, userId: string, rec
   });
 }
 
+/** ADR-020 D4 — promote high-confidence, corroborated records into the durable
+ *  tier (decay-exempt via half_life_days=NULL). Global, additive, idempotent:
+ *  only ever protects proven memories; never archives or deletes. Returns count. */
+export async function promoteDurableMemories(exec: Executor, minConfidence: number, minCorroborations: number): Promise<number> {
+  const now = new Date().toISOString();
+  const rows = await exec.rows<{ record_id: string }>(
+    `UPDATE cognitive_records
+        SET durable = true, half_life_days = NULL, updated_time = $3
+      WHERE durable = false AND archived = 0
+        AND confidence >= $1 AND citation_count >= $2
+      RETURNING record_id`,
+    [minConfidence, minCorroborations, now],
+  );
+  return rows.length;
+}
+
+/** ADR-020 D2 — distinct owners with live memories (drives the per-tenant consolidation cycle). */
+export async function listMemoryUserIds(exec: Executor): Promise<string[]> {
+  const rows = await exec.rows<{ user_id: string }>("SELECT DISTINCT user_id FROM cognitive_records WHERE archived = 0");
+  return rows.map((r) => r.user_id);
+}
+
 export async function getRecentSkillContextCognitives(exec: Executor, userId: string, limit: number): Promise<{ skillTag: string; createdTime: string }[]> {
   const rows = await exec.rows<any>(
     `SELECT skill_tag, created_time FROM cognitive_records

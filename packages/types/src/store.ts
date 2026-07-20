@@ -328,6 +328,9 @@ export interface IMemoryStore {
   markCited(userId: string, recordIds: string[]): Promise<void>;
   incrementNeverCited(userId: string, recordIds: string[]): Promise<{ recordId: string; neverCitedCount: number }[]>;
   archiveCognitiveRecord(userId: string, recordId: string): Promise<void>;
+  /** ADR-020 D4/D2 — promote eligible records to the durable tier; enumerate memory owners. */
+  promoteDurableMemories(minConfidence: number, minCorroborations: number): Promise<number>;
+  listMemoryUserIds(): Promise<string[]>;
   getRecentSkillContextCognitives(userId: string, limit: number): Promise<{ skillTag: string; createdTime: string }[]>;
   createUser(userId: string, apiKey: string, displayName?: string, isAdmin?: boolean): Promise<UserRecord>;
   getUserByApiKey(apiKey: string): Promise<UserRecord | null>;
