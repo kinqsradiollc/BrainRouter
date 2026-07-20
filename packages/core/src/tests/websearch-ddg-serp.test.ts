@@ -90,6 +90,23 @@ test('fetchHtmlViaInAppBrowser returns null (→ HTTP fallback) when page.html f
   assert.equal(await fetchHtmlViaInAppBrowser(port as any, 'https://x.test', 5000), null);
 });
 
+test('fetchHtmlViaInAppBrowser live mode reuses one VISIBLE research tab across engines (Google→DDG)', async () => {
+  const serp = `<table><tr><td><a class="result-link" href="https://real.example/x">Real X</a></td></tr><tr><td class="result-snippet">snip x that is long enough to pass</td></tr></table>${'y'.repeat(120)}`;
+  const cmds: any[] = [];
+  const port = { request: async (cmd: any) => { cmds.push(cmd); if (cmd.kind === 'tabs.open') return { ok: true, tabId: 'srp' }; if (cmd.kind === 'page.html') return { ok: true, data: { html: serp } }; return { ok: true }; } };
+  const tabRef: { id?: string } = {};
+  // First engine opens the visible tab...
+  const h1 = await fetchHtmlViaInAppBrowser(port as any, 'https://www.google.com/search?q=x', 5000, undefined, { live: true, tabRef });
+  assert.ok(h1);
+  assert.equal(tabRef.id, 'srp');
+  // ...second engine reuses the SAME tab (navigate), so the user watches one tab.
+  const h2 = await fetchHtmlViaInAppBrowser(port as any, 'https://lite.duckduckgo.com/lite/?q=x', 5000, undefined, { live: true, tabRef });
+  assert.ok(h2);
+  assert.equal(cmds.filter((c) => c.kind === 'tabs.open').length, 1, 'only one tab ever opened');
+  assert.ok(cmds.some((c) => c.kind === 'page.navigate' && c.tabId === 'srp'), 'second engine navigates the reused tab');
+  assert.ok(!cmds.some((c) => c.kind === 'tabs.close'), 'the visible research tab is never closed in live mode');
+});
+
 test('looksStructuredUrl routes JSON/API/feed URLs away from the browser', () => {
   for (const u of [
     'https://hn.algolia.com/api/v1/search?tags=front_page',

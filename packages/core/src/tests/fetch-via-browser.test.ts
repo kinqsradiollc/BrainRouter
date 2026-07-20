@@ -76,3 +76,49 @@ test('returns null when the port throws (→ crawler fallback)', async () => {
   const out = await fetchViaInAppBrowser(port as any, 'https://x.test', 5000);
   assert.equal(out, null);
 });
+
+// Live mode: the fetch is WATCHABLE — it opens/reuses a single VISIBLE research
+// tab and leaves it open so the user sees the agent navigate.
+function recordingPort(handlers: Record<string, (cmd: any) => any>) {
+  const cmds: any[] = [];
+  return { cmds, request: async (command: any) => { cmds.push(command); const h = handlers[command?.kind]; return h ? h(command) : { ok: true }; } };
+}
+
+test('live mode opens a VISIBLE tab, keeps it open, and records the reused tab id', async () => {
+  const port = recordingPort({
+    'tabs.open': () => ({ ok: true, tabId: 'live_1' }),
+    'page.text': () => ({ ok: true, data: { text: 'Body' } }),
+  });
+  const tabRef: { id?: string } = {};
+  const out = await fetchViaInAppBrowser(port as any, 'https://x.test', 5000, undefined, { live: true, tabRef });
+  assert.equal(out!.text, 'Body');
+  assert.equal(tabRef.id, 'live_1', 'records the tab id for reuse');
+  assert.equal(port.cmds.find((c) => c.kind === 'tabs.open')!.activate, true, 'live mode activates (shows) the tab');
+  assert.ok(!port.cmds.some((c) => c.kind === 'tabs.close'), 'live mode keeps the tab open');
+});
+
+test('live mode reuses the research tab (navigate + select), no new open, no close', async () => {
+  const port = recordingPort({
+    'page.navigate': () => ({ ok: true }),
+    'page.text': () => ({ ok: true, data: { text: 'Reused' } }),
+  });
+  const tabRef: { id?: string } = { id: 'live_1' };
+  const out = await fetchViaInAppBrowser(port as any, 'https://y.test', 5000, undefined, { live: true, tabRef });
+  assert.equal(out!.text, 'Reused');
+  assert.ok(port.cmds.some((c) => c.kind === 'page.navigate' && c.tabId === 'live_1'), 'navigates the reused tab');
+  assert.ok(port.cmds.some((c) => c.kind === 'tabs.select' && c.tabId === 'live_1'), 're-activates it so the user watches');
+  assert.ok(!port.cmds.some((c) => c.kind === 'tabs.open'), 'no new tab opened');
+  assert.ok(!port.cmds.some((c) => c.kind === 'tabs.close'), 'reused tab stays open');
+});
+
+test('live mode: a stale/closed research tab falls back to opening a fresh one', async () => {
+  const port = recordingPort({
+    'page.navigate': () => ({ ok: false }), // tab is gone
+    'tabs.open': () => ({ ok: true, tabId: 'live_2' }),
+    'page.text': () => ({ ok: true, data: { text: 'Fresh' } }),
+  });
+  const tabRef: { id?: string } = { id: 'dead' };
+  const out = await fetchViaInAppBrowser(port as any, 'https://z.test', 5000, undefined, { live: true, tabRef });
+  assert.equal(out!.text, 'Fresh');
+  assert.equal(tabRef.id, 'live_2', 'stale id is replaced with the fresh tab');
+});
