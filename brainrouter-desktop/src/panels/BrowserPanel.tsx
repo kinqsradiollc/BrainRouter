@@ -232,7 +232,13 @@ export function BrowserPanel(): React.ReactElement {
     let last = '';
     const report = (): void => {
       frame = null;
-      const rect = browserViewRect(host.getBoundingClientRect());
+      // ⌘+/⌘- zoom scales the renderer via webFrame.setZoomFactor, but the native
+      // page view is positioned in un-zoomed WINDOW pixels — so a DOM rect in the
+      // zoomed frame must be multiplied by the zoom factor or the view overflows
+      // its box (bleeding over the drawer / neighbouring panels) at any zoom ≠ 1.
+      const zoom = window.brainrouter?.getZoomFactor?.() || 1;
+      const raw = host.getBoundingClientRect();
+      const rect = browserViewRect({ left: raw.left * zoom, top: raw.top * zoom, width: raw.width * zoom, height: raw.height * zoom });
       const surface = {
         ...rect,
         visible: intersecting && document.visibilityState === 'visible' && !bridgeError && !activeTab?.crashed && !resizingRef.current && rect.width > 1 && rect.height > 1,
