@@ -59,6 +59,7 @@ import {
   memoryMarkCitedToolSchema, handleMemoryMarkCited,
   memoryProvenanceToolSchema, handleMemoryProvenance,
   memoryReflectToolSchema, handleMemoryReflect,
+  memoryReflectSessionToolSchema, handleMemoryReflectSession,
 } from '../tools/governance/index.js';
 import {
   sessionRegisterToolSchema, handleSessionRegister,
@@ -285,6 +286,7 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
       memorySkillOutcomeToolSchema,
       memoryGraphAnalyticsToolSchema,
       memoryReflectToolSchema,
+      memoryReflectSessionToolSchema,
       memoryBlackboardReviewToolSchema,
       memoryTreeWalkToolSchema,
       memoryVaultExportToolSchema,
@@ -439,6 +441,8 @@ function buildMcpServer(registry: Registry, options?: { defaultUserId?: string; 
           return await handleMemoryGraphAnalytics(request.params.arguments, { defaultUserId });
         case 'memory_reflect':
           return await handleMemoryReflect(request.params.arguments, { defaultUserId });
+        case 'memory_reflect_session':
+          return await handleMemoryReflectSession(request.params.arguments, { defaultUserId });
         case 'memory_blackboard_review':
           return await handleMemoryBlackboardReview(request.params.arguments, { defaultUserId });
         case 'memory_tree_walk':

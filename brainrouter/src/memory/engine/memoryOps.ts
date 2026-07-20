@@ -18,6 +18,7 @@ import { getMemoryTypeConfig } from "../config/memory-type-config.js";
 import { redactSensitiveMemoryText } from "../util/redaction.js";
 import { buildSkillExtractionPrompt, parseSkillResponse } from "../skills/skill-extract.js";
 import { buildReflectPrompt, parseReflectResponse } from "../util/reflect.js";
+import { buildSessionReflectPrompt, parseSessionReflectResponse } from "../util/session-reflect.js";
 import { decayPotential } from "../pipeline/skill/skill-prewarm.js";
 import { NeuralSparkEngine } from "../pipeline/skill/neural-spark.js";
 import { pageRank, articulationPoints, shortestPath, namespaceOverview } from "../graph/graph-analytics.js";
@@ -308,6 +309,44 @@ export async function reflect(
     await engine.recordLesson(userId, insight, { kind: "insight", priority: 78 });
   }
   return { reflected: insights.length, insights };
+}
+
+/**
+ * ADR-020 D3 — structured session reflection. One bounded LLM pass over a single
+ * session's summary crystallizes mistakes / anti-patterns / lessons / decisions /
+ * preferences / reusable-workflows, each stored as its own memory tagged
+ * `reflection` and linked to the session. Non-blocking-friendly, chokepoint-guarded.
+ */
+export async function reflectSession(
+  engine: MemoryEngine,
+  userId: string,
+  opts: { sessionSummary: string; sessionKey?: string; llm?: (params: { prompt: string; systemPrompt?: string; timeoutMs?: number }) => Promise<string> },
+): Promise<{ reflected: number; elements: Array<{ category: string; kind: string; text: string; recordId: string }> }> {
+  const self = engine as unknown as EngineInternals;
+  const summary = (opts.sessionSummary ?? "").trim();
+  if (summary.length < 20) return { reflected: 0, elements: [] };
+
+  const { system, user } = buildSessionReflectPrompt(summary);
+  const run = opts.llm ?? ((p) => self.synthesisRunner.run(p as any));
+  let raw: string;
+  try {
+    raw = await run({ prompt: user, systemPrompt: system, timeoutMs: 60_000 });
+  } catch {
+    return { reflected: 0, elements: [] };
+  }
+
+  const parsed = parseSessionReflectResponse(raw);
+  const elements: Array<{ category: string; kind: string; text: string; recordId: string }> = [];
+  for (const element of parsed) {
+    const stored = await engine.recordLesson(userId, element.text, {
+      kind: element.kind,
+      priority: element.priority,
+      sessionKey: opts.sessionKey,
+      evidence: `reflection:${element.category}`,
+    });
+    elements.push({ category: element.category, kind: element.kind, text: element.text, recordId: stored.recordId });
+  }
+  return { reflected: elements.length, elements };
 }
 
 export async function updateMemory(engine: MemoryEngine, userId: string, recordId: string, updates: {

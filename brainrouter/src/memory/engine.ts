@@ -824,6 +824,14 @@ export class MemoryEngine {
   }
 
   /** MEM-32b `reflect` — synthesize + store cross-memory insights via the synthesis LLM; see engine/memoryOps.ts. */
+  /** ADR-020 D3 — structured session reflection (mistakes/anti-patterns/lessons/decisions/preferences/workflows). */
+  public reflectSession(
+    userId: string,
+    opts: { sessionSummary: string; sessionKey?: string },
+  ): Promise<{ reflected: number; elements: Array<{ category: string; kind: string; text: string; recordId: string }> }> {
+    return memoryOps.reflectSession(this, userId, opts);
+  }
+
   public reflect(
     userId: string,
     opts?: { limit?: number; llm?: (params: { prompt: string; systemPrompt?: string; timeoutMs?: number }) => Promise<string> },
