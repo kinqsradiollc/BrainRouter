@@ -369,6 +369,16 @@ export function BrowserPanel(): React.ReactElement {
     return () => cancelAnimationFrame(frame);
   }, [activeTab?.id, device, customW, fireBrowser]);
 
+  // The native page view is a separate OS layer that does NOT reflow with the
+  // DOM. The surface reporter (below) only re-runs on a ResizeObserver tick, so
+  // a layout change that opens/closes/resizes the drawer or narrows the viewport
+  // must proactively re-place the view — otherwise a stale bound lets the page
+  // bleed over the drawer and adjacent panels. Fire after layout settles.
+  useEffect(() => {
+    const id = requestAnimationFrame(() => window.dispatchEvent(new Event('resize')));
+    return () => cancelAnimationFrame(id);
+  }, [drawer, drawerH, device, customW]);
+
   const selectTabAt = useCallback((index: number, focusTab = true): void => {
     const tabs = browserState?.tabs ?? [];
     const tab = tabs[index];
