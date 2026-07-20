@@ -47,8 +47,16 @@ const KNOWN_KEYS = new Set([
   'version', 'name', 'profile', 'onboarded', 'agents', 'skills', 'tools', 'memory', 'instructions',
 ]);
 
+/**
+ * The manifest always lives at a FIXED relative path under the workspace root.
+ * The root itself is the trust boundary — established by the caller (CLI
+ * `findWorkspaceRoot`, desktop workspace picker), the same model as every
+ * other `.brainrouter/` path helper. `path.resolve` canonicalizes it (drops
+ * `..` segments, makes relative roots deterministic) so the joined path can
+ * never climb OUT of the resolved root via the relpath.
+ */
 export function workspaceManifestPath(workspaceRoot: string): string {
-  return path.join(workspaceRoot, WORKSPACE_MANIFEST_RELPATH);
+  return path.join(path.resolve(workspaceRoot), WORKSPACE_MANIFEST_RELPATH);
 }
 
 /** True when the workspace has a readable manifest — the "onboarded" check. */
