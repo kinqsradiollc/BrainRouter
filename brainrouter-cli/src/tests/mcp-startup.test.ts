@@ -74,6 +74,31 @@ test('MCP startup: a requested missing profile remains an actionable error', () 
   });
 });
 
+test('MCP startup: inherited profile names remain actionable missing-profile errors', () => {
+  for (const inheritedName of ['__proto__', 'constructor', 'toString']) {
+    assert.deepEqual(resolveMcpStartupSelection({
+      servers: {},
+      requestedProfile: inheritedName,
+    }), {
+      status: 'missing-profile',
+      requestedProfile: inheritedName,
+      availableIds: [],
+    });
+  }
+
+  const ownServers = JSON.parse(
+    '{"__proto__":{"type":"http","url":"https://brain.example/mcp","identity":"brainrouter"}}',
+  );
+  assert.deepEqual(resolveMcpStartupSelection({
+    servers: ownServers,
+    requestedProfile: '__proto__',
+  }), {
+    status: 'ready',
+    targetIds: ['__proto__'],
+    intentionallySkipped: false,
+  });
+});
+
 test('MCP startup: safe mode removes every third-party target, including third-party-only catalogs', () => {
   const mixed = resolveMcpStartupSelection({
     servers,

@@ -72,7 +72,10 @@ export function resolveMcpStartupSelection(
   }
 
   const availableIds = Object.keys(options.servers);
-  if (options.requestedProfile && !options.servers[options.requestedProfile]) {
+  if (
+    options.requestedProfile
+    && !Object.prototype.hasOwnProperty.call(options.servers, options.requestedProfile)
+  ) {
     return {
       status: 'missing-profile',
       requestedProfile: options.requestedProfile,

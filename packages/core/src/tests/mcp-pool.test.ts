@@ -637,6 +637,26 @@ test('resolvePreferredBrainrouterServerId separates banner highlight from memory
   );
 });
 
+test('BrainRouter profile selectors require own server properties', () => {
+  for (const inheritedName of ['__proto__', 'constructor', 'toString']) {
+    assert.deepEqual(selectMcpServerIds({}, undefined, inheritedName), []);
+    assert.equal(
+      resolvePreferredBrainrouterServerId({}, inheritedName, inheritedName),
+      undefined,
+    );
+    assert.equal(
+      applyBrainUrlOverride({}, inheritedName, 'https://brain.example/mcp').activeServer,
+      'brainrouter',
+    );
+  }
+
+  const ownProfile = JSON.parse(
+    '{"__proto__":{"type":"http","url":"https://brain.example/mcp","identity":"brainrouter"}}',
+  );
+  assert.deepEqual(selectMcpServerIds(ownProfile, undefined, '__proto__'), ['__proto__']);
+  assert.equal(resolvePreferredBrainrouterServerId(ownProfile, '__proto__'), '__proto__');
+});
+
 // --- REMOTE-BRAIN: applyBrainUrlOverride (Workstream A) -------------------
 
 test('applyBrainUrlOverride: no-op when brainUrl is unset', () => {

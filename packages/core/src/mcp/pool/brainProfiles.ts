@@ -2,6 +2,14 @@ import type { ServerConfig } from '../../config/config.js';
 import type { BrainHealth } from '../types.js';
 import { resolveIdentityFromConfig } from '../client/identity.js';
 
+function hasOwnServer(
+  servers: Record<string, ServerConfig>,
+  serverId: string | undefined,
+): serverId is string {
+  return typeof serverId === 'string'
+    && Object.prototype.hasOwnProperty.call(servers, serverId);
+}
+
 /**
  * Brain-profile selection + remote-brain (ADR-005) helpers.
  *
@@ -29,7 +37,7 @@ export function selectMcpServerIds(
   requestedProfile?: string,
 ): string[] {
   const ids = Object.keys(servers);
-  if (requestedProfile) return servers[requestedProfile] ? [requestedProfile] : [];
+  if (requestedProfile) return hasOwnServer(servers, requestedProfile) ? [requestedProfile] : [];
 
   const brainrouterIds = ids.filter((id) =>
     resolveIdentityFromConfig(servers[id], id) === 'brainrouter',
@@ -56,7 +64,7 @@ export function resolvePreferredBrainrouterServerId(
   activeBrainrouterServer?: string,
   activeServer?: string,
 ): string | undefined {
-  if (activeBrainrouterServer && servers[activeBrainrouterServer]) {
+  if (hasOwnServer(servers, activeBrainrouterServer)) {
     const identity = resolveIdentityFromConfig(
       servers[activeBrainrouterServer],
       activeBrainrouterServer,
@@ -64,8 +72,7 @@ export function resolvePreferredBrainrouterServerId(
     if (identity !== 'third-party') return activeBrainrouterServer;
   }
   if (
-    activeServer
-    && servers[activeServer]
+    hasOwnServer(servers, activeServer)
     && resolveIdentityFromConfig(servers[activeServer], activeServer) === 'brainrouter'
   ) {
     return activeServer;
@@ -105,14 +112,14 @@ export function applyBrainUrlOverride(
 
   const ids = Object.keys(servers);
   const brainrouterIds = ids.filter((id) => resolveIdentityFromConfig(servers[id], id) === 'brainrouter');
-  const activeIdentity = activeServer && servers[activeServer]
+  const activeIdentity = hasOwnServer(servers, activeServer)
     ? resolveIdentityFromConfig(servers[activeServer], activeServer)
     : undefined;
-  const targetId = (activeServer && servers[activeServer] && activeIdentity !== 'third-party')
+  const targetId = (hasOwnServer(servers, activeServer) && activeIdentity !== 'third-party')
     ? activeServer
     : brainrouterIds[0] ?? 'brainrouter';
 
-  const prev = servers[targetId];
+  const prev = hasOwnServer(servers, targetId) ? servers[targetId] : undefined;
   const next: ServerConfig = {
     ...(prev ?? {}),
     type: 'http',
