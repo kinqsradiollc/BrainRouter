@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { selfHealConfig, type Config } from '@kinqs/brainrouter-core/config';
 import { describeActiveServer } from '../cli/commands/serverStatus/index.js';
 import { editableMcpStdioCommand } from '../cli/mcpUrl.js';
+import { tryHandleUiStatusCommand } from '../cli/commands/ui/status.js';
+import type { CommandContext } from '../cli/commands/_context.js';
 
 /**
  * Regression cover for GitHub issue #59 (`/status` crash:
@@ -147,6 +149,63 @@ test('describeActiveServer redacts credentials from legacy stdio arguments', () 
   assert.match(rendered, /--token \[redacted\]/);
   assert.match(rendered, /--private-key-path \/safe\/key\.pem/);
   assert.match(rendered, /example\.test\/mcp\?\[redacted\]/);
+});
+
+test('/status redacts credentials from runtime-only MCP profiles', async () => {
+  const runtimeSecret = 'runtime-only-status-secret';
+  const diagnostic = {
+    databaseStats: {
+      userStats: {
+        total: 0,
+        byType: {},
+        sensoryTotal: 1,
+        sensoryUnextracted: 1,
+        focusSceneTotal: 0,
+        extraction: {
+          syncPaused: true,
+          extractionErrors: 5,
+          lastErrorMessage: `transport rejected opaque value ${runtimeSecret}`,
+        },
+      },
+    },
+  };
+  const context = {
+    command: '/status',
+    args: [],
+    config: {
+      activeServer: 'durable',
+      servers: { durable: { type: 'http', url: 'https://example.test/mcp' } },
+    },
+    agent: {},
+    mcpClient: {
+      callTool: async (name: string) => name === 'memory_diagnostics'
+        ? { content: [{ type: 'text', text: JSON.stringify(diagnostic) }] }
+        : { content: [] },
+    },
+    repl: {
+      launchPolicy: {},
+      runtimeMcp: {
+        servers: {
+          runtime: { type: 'http', url: 'https://runtime.example.test/mcp', apiKey: runtimeSecret },
+        },
+      },
+    },
+  } as unknown as CommandContext;
+  const lines: string[] = [];
+  const originalLog = console.log;
+  const originalWarn = console.warn;
+  console.log = (...values: unknown[]) => { lines.push(values.map(String).join(' ')); };
+  console.warn = (...values: unknown[]) => { lines.push(values.map(String).join(' ')); };
+  try {
+    assert.equal(await tryHandleUiStatusCommand(context), true);
+  } finally {
+    console.log = originalLog;
+    console.warn = originalWarn;
+  }
+
+  const output = lines.join('\n');
+  assert.doesNotMatch(output, new RegExp(runtimeSecret));
+  assert.match(output, /\[redacted\]/);
 });
 
 test('stdio command editor never prefills inline credentials', () => {

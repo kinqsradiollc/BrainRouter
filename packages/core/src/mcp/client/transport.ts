@@ -4,6 +4,13 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { LLMConfig, ServerConfig } from '../../config/config.js';
 
+const MCP_HTTP_HEADER_MAX_COUNT = 64;
+const MCP_HTTP_HEADER_MAX_BYTES = 32 * 1024;
+const MCP_HTTP_API_KEY_MAX_BYTES = 16 * 1024;
+const MCP_STDIO_ENV_MAX_COUNT = 256;
+const MCP_STDIO_ENV_MAX_BYTES = 1024 * 1024;
+const HTTP_CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/;
+
 /**
  * Transport construction for {@link McpClientWrapper}.
  *
@@ -13,6 +20,75 @@ import type { LLMConfig, ServerConfig } from '../../config/config.js';
  * returns a ready transport; the wrapper owns `client.connect` + the
  * `connected` flag.
  */
+
+/** Validate custom stdio environment entries without restricting trusted commands. */
+export function validateMcpStdioEnvironment(
+  configured: Record<string, string> | undefined,
+): Record<string, string> {
+  if (!configured) return {};
+  const entries = Object.entries(configured);
+  if (entries.length > MCP_STDIO_ENV_MAX_COUNT) {
+    throw new Error('Invalid MCP stdio environment configuration.');
+  }
+  const validated: Record<string, string> = Object.create(null) as Record<string, string>;
+  let totalBytes = 0;
+  for (const [key, rawValue] of entries) {
+    const value: unknown = rawValue;
+    if (!key || key.includes('=') || key.includes('\0') || typeof value !== 'string' || value.includes('\0')) {
+      throw new Error('Invalid MCP stdio environment configuration.');
+    }
+    totalBytes += Buffer.byteLength(key) + Buffer.byteLength(value);
+    if (totalBytes > MCP_STDIO_ENV_MAX_BYTES) {
+      throw new Error('Invalid MCP stdio environment configuration.');
+    }
+    validated[key] = value;
+  }
+  return validated;
+}
+
+/** Normalize and validate outbound HTTP headers at the final transport boundary. */
+export function buildMcpHttpHeaders(
+  serverConfig: Pick<ServerConfig, 'headers' | 'apiKey'>,
+): Record<string, string> {
+  const entries = Object.entries(serverConfig.headers ?? {});
+  if (entries.length > MCP_HTTP_HEADER_MAX_COUNT) {
+    throw new Error('Invalid MCP HTTP header configuration.');
+  }
+
+  const headers = new Headers();
+  let totalBytes = 0;
+  try {
+    for (const [name, rawValue] of entries) {
+      const value: unknown = rawValue;
+      if (
+        typeof value !== 'string'
+        || HTTP_CONTROL_CHARACTER_PATTERN.test(name)
+        || HTTP_CONTROL_CHARACTER_PATTERN.test(value)
+      ) {
+        throw new Error('invalid header');
+      }
+      totalBytes += Buffer.byteLength(name) + Buffer.byteLength(value);
+      if (totalBytes > MCP_HTTP_HEADER_MAX_BYTES) throw new Error('headers too large');
+      headers.set(name, value);
+    }
+
+    const apiKey: unknown = serverConfig.apiKey;
+    if (apiKey !== undefined) {
+      if (
+        typeof apiKey !== 'string'
+        || HTTP_CONTROL_CHARACTER_PATTERN.test(apiKey)
+        || Buffer.byteLength(apiKey) > MCP_HTTP_API_KEY_MAX_BYTES
+      ) {
+        throw new Error('invalid API key');
+      }
+      if (apiKey && !headers.has('authorization')) headers.set('authorization', `Bearer ${apiKey}`);
+    }
+  } catch {
+    throw new Error('Invalid MCP HTTP header configuration.');
+  }
+
+  return Object.fromEntries(headers.entries());
+}
 
 /**
  * Build the stdio transport for a `type: 'stdio'` server config. Merges the
@@ -61,7 +137,7 @@ export function buildStdioTransport(
     mergedEnv[k] = v;
   }
   if (serverConfig.env) {
-    for (const [k, v] of Object.entries(serverConfig.env)) {
+    for (const [k, v] of Object.entries(validateMcpStdioEnvironment(serverConfig.env))) {
       if (v !== undefined) {
         // If the shell process environment has a valid key, do not overwrite it with the default config placeholder.
         if (k === 'BRAINROUTER_API_KEY' && process.env.BRAINROUTER_API_KEY && v === 'br_admin_key_placeholder') {
@@ -169,11 +245,7 @@ export function buildHttpTransport(serverConfig: ServerConfig): StreamableHTTPCl
 
   const url = new URL(serverConfig.url);
   const transportOpts: any = {};
-  const headers: Record<string, string> = { ...(serverConfig.headers ?? {}) };
-
-  if (serverConfig.apiKey && !headers.Authorization && !headers.authorization) {
-    headers.Authorization = `Bearer ${serverConfig.apiKey}`;
-  }
+  const headers = buildMcpHttpHeaders(serverConfig);
   if (Object.keys(headers).length > 0) {
     transportOpts.requestInit = {
       headers,

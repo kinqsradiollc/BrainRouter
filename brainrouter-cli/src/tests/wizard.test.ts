@@ -331,6 +331,30 @@ test('global wizard keeps an invalid custom LLM endpoint open with an error', as
   }
 });
 
+test('global wizard rejects credentials embedded in a custom LLM endpoint', async () => {
+  let picked: ProviderEntry | undefined;
+  const view = render(React.createElement(ProviderStep, {
+    accent: 'white',
+    onPick: (provider: ProviderEntry) => { picked = provider; },
+    onAbort: () => {},
+  }));
+  try {
+    view.stdin.write('G');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    view.stdin.write('\r');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    view.stdin.write('https://user:secret@example.test/v1');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    view.stdin.write('\r');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.equal(picked, undefined);
+    assert.match(view.lastFrame() ?? '', /must not contain credentials/);
+  } finally {
+    view.unmount();
+  }
+});
+
 test('custom cloud endpoint paths containing localhost still require an API key', async () => {
   let picked: ProviderEntry | undefined;
   let customEndpoint: string | undefined;

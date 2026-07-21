@@ -160,6 +160,46 @@ test('/mcp connect uses the effective profile and launch model for future reconn
   assert.equal(supervisorStarted, true, 'manual connect re-arms recovery after launch-only MCP Skip');
 });
 
+test('/mcp connect and reconnect reject inherited profile names before reading the live pool', async () => {
+  const inheritedServers = Object.create({
+    inherited: { type: 'stdio', command: 'must-not-run', identity: 'third-party' },
+  }) as Config['servers'];
+  let poolReads = 0;
+  const context = {
+    command: '/mcp',
+    args: [],
+    config: {
+      activeServer: '',
+      servers: inheritedServers,
+      llm: { provider: 'openai', apiKey: 'key', model: 'model' },
+    },
+    agent: { workspaceRoot: '/workspace' },
+    repl: { launchPolicy: {} },
+    mcpClient: new Proxy({}, {
+      get: () => {
+        poolReads += 1;
+        throw new Error('the pool must not be read for an inherited profile');
+      },
+    }),
+  } as unknown as CommandContext;
+  const lines: string[] = [];
+  const originalLog = console.log;
+  console.log = (...values: unknown[]) => { lines.push(values.map(String).join(' ')); };
+  try {
+    for (const subcommand of ['connect', 'reconnect']) {
+      for (const profileName of ['inherited', '__proto__']) {
+        context.args = [subcommand, profileName];
+        assert.equal(await tryHandleMcpCommand(context), true);
+      }
+    }
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert.equal(poolReads, 0, 'prototype-chain entries never reach MCP lifecycle code');
+  assert.equal(lines.filter((line) => line.includes('No profile named')).length, 4);
+});
+
 test('/mcp connection failures redact credentials from legacy endpoint errors', async () => {
   const secretUrl = 'https://user:password@example.test/mcp/token%25252Fabc1234567890ABCDEF1234567890abcdef?sig=query-secret';
   const lines: string[] = [];

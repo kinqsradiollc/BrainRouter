@@ -7,7 +7,7 @@
 import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from '../../icons.js';
-import { Row, ChoiceControl, SetGroup } from '../shared/controls.js';
+import { Row, SetGroup } from '../shared/controls.js';
 import type { ConfigSnapshot } from '../shared/types.js';
 
 export function McpServersSection({ snapshot, onAction, refreshSnapshot }: {
@@ -15,7 +15,7 @@ export function McpServersSection({ snapshot, onAction, refreshSnapshot }: {
   onAction: (id: string, name: string, args?: Record<string, unknown>) => void;
   refreshSnapshot: () => void;
 }): React.ReactElement {
-  const [mcp, setMcp] = useState<{ id: string; type: 'stdio' | 'http'; command: string; url: string; apiKey: string; headers: string; env: string }>({ id: '', type: 'stdio', command: '', url: '', apiKey: '', headers: '', env: '' });
+  const [mcp, setMcp] = useState<{ id: string; url: string; apiKey: string; headers: string }>({ id: '', url: '', apiKey: '', headers: '' });
   // Add-MCP-server modal (Onyx-style, matching the Models provider modal) — the
   // form moved out of the inline panel into a dialog opened by "+ Add server".
   const [mcpModalOpen, setMcpModalOpen] = useState(false);
@@ -67,8 +67,7 @@ export function McpServersSection({ snapshot, onAction, refreshSnapshot }: {
       <button className="btn primary" style={{ marginTop: 6 }} onClick={() => setMcpModalOpen(true)}>+ Add server</button>
 
       {mcpModalOpen ? (() => {
-        const isStdio = mcp.type === 'stdio';
-        const canAdd = !!mcp.id.trim() && (isStdio ? !!mcp.command.trim() : !!mcp.url.trim());
+        const canAdd = !!mcp.id.trim() && !!mcp.url.trim();
         const closeModal = (): void => setMcpModalOpen(false);
         // Portal to <body> so the Settings modal's popIn transform can't clip it.
         return createPortal((
@@ -78,7 +77,7 @@ export function McpServersSection({ snapshot, onAction, refreshSnapshot }: {
                 <Icon name="bolt" size={24} />
                 <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0 }}>
                   <span>Add an MCP server</span>
-                  <span className="set-desc" style={{ margin: 0, fontWeight: 400 }}>Connect a stdio or HTTP MCP server — the same pool the CLI uses.</span>
+                  <span className="set-desc" style={{ margin: 0, fontWeight: 400 }}>Connect a remote HTTP MCP server — the same pool the CLI uses.</span>
                 </span>
               </div>
               <div className="mcp-add" style={{ gap: 5, flex: 1, minHeight: 0, overflowY: 'auto' }}>
@@ -86,41 +85,25 @@ export function McpServersSection({ snapshot, onAction, refreshSnapshot }: {
                 <input className="ctl" placeholder="name (e.g. my-tools)" value={mcp.id} onChange={(e) => setMcp((m) => ({ ...m, id: e.target.value }))} />
                 <div className="set-desc" style={{ margin: 0 }}>Identifies this server in the app and config.json.</div>
 
-                <div className="set-h2">Transport</div>
-                <ChoiceControl value={mcp.type} options={[{ value: 'stdio', label: 'stdio', detail: 'local command' }, { value: 'http', label: 'http', detail: 'remote URL' }]} onChange={(v) => setMcp((m) => ({ ...m, type: v as 'stdio' | 'http' }))} />
-
-                {isStdio ? (
-                  <>
-                    <div className="set-h2">Command</div>
-                    <input className="ctl" placeholder="command + args, e.g. npx -y @modelcontextprotocol/server-filesystem ." value={mcp.command} onChange={(e) => setMcp((m) => ({ ...m, command: e.target.value }))} />
-                    <div className="set-h2">Environment <span style={{ color: 'var(--text-faint)', fontWeight: 400 }}>(optional)</span></div>
-                    <textarea className="ctl" rows={2} placeholder="one KEY=value per line" value={mcp.env} onChange={(e) => setMcp((m) => ({ ...m, env: e.target.value }))} />
-                  </>
-                ) : (
-                  <>
-                    <div className="set-h2">URL</div>
-                    <input className="ctl" placeholder="https://mcp.example.com/mcp (or /sse)" value={mcp.url} onChange={(e) => setMcp((m) => ({ ...m, url: e.target.value }))} />
-                    <div className="set-h2">API key <span style={{ color: 'var(--text-faint)', fontWeight: 400 }}>(optional)</span></div>
-                    <input className="ctl" type="password" placeholder="API key / Bearer token" value={mcp.apiKey} onChange={(e) => setMcp((m) => ({ ...m, apiKey: e.target.value }))} />
-                    <div className="set-h2">Headers <span style={{ color: 'var(--text-faint)', fontWeight: 400 }}>(optional)</span></div>
-                    <textarea className="ctl" rows={2} placeholder="one Header-Name=value per line" value={mcp.headers} onChange={(e) => setMcp((m) => ({ ...m, headers: e.target.value }))} />
-                  </>
-                )}
+                <div className="set-h2">URL</div>
+                <input className="ctl" placeholder="https://mcp.example.com/mcp (or /sse)" value={mcp.url} onChange={(e) => setMcp((m) => ({ ...m, url: e.target.value }))} />
+                <div className="set-h2">API key <span style={{ color: 'var(--text-faint)', fontWeight: 400 }}>(optional)</span></div>
+                <input className="ctl" type="password" placeholder="API key / Bearer token" value={mcp.apiKey} onChange={(e) => setMcp((m) => ({ ...m, apiKey: e.target.value }))} />
+                <div className="set-h2">Headers <span style={{ color: 'var(--text-faint)', fontWeight: 400 }}>(optional)</span></div>
+                <textarea className="ctl" rows={2} placeholder="one Header-Name=value per line" value={mcp.headers} onChange={(e) => setMcp((m) => ({ ...m, headers: e.target.value }))} />
+                <div className="set-desc" style={{ margin: '2px 0 0' }}>Local stdio servers can run programs, so configure them from the trusted <code>brainrouter config</code> terminal flow.</div>
 
                 {!canAdd ? (
                   <div className="set-desc" style={{ margin: '2px 0 0', color: 'var(--warn)' }}>
-                    {!mcp.id.trim() ? 'Enter a name to add the server.' : isStdio ? 'Enter the command to run.' : 'Enter the server URL.'}
+                    {!mcp.id.trim() ? 'Enter a name to add the server.' : 'Enter the server URL.'}
                   </div>
                 ) : null}
                 <div className="set-actions" style={{ marginTop: 6 }}>
                   <button className="btn" onClick={closeModal}>Cancel</button>
                   <button className="btn primary" disabled={!canAdd}
                     onClick={() => {
-                      const parts = mcp.command.trim().split(/\s+/);
-                      onAction('a-addmcp', 'action:add-mcp', mcp.type === 'http'
-                        ? { id: mcp.id.trim(), type: 'http', url: mcp.url.trim(), apiKey: mcp.apiKey.trim(), headers: mcp.headers.trim() }
-                        : { id: mcp.id.trim(), type: 'stdio', command: parts[0] ?? '', args: parts.slice(1).join(' '), env: mcp.env.trim() });
-                      setMcp({ id: '', type: 'stdio', command: '', url: '', apiKey: '', headers: '', env: '' });
+                      onAction('a-addmcp', 'action:add-mcp', { id: mcp.id.trim(), type: 'http', url: mcp.url.trim(), apiKey: mcp.apiKey.trim(), headers: mcp.headers.trim() });
+                      setMcp({ id: '', url: '', apiKey: '', headers: '' });
                       setMcpModalOpen(false);
                       setTimeout(refreshSnapshot, 80);
                     }}>Add server</button>

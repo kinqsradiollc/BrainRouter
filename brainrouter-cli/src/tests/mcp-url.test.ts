@@ -4,7 +4,9 @@ import type { Config } from '@kinqs/brainrouter-core/config';
 import {
   configuredMcpCredentialValues,
   isLocalMcpHttpUrl,
+  MCP_ERROR_TEXT_MAX_CHARS,
   redactMcpErrorText,
+  redactMcpHttpUrlsInText,
   stripMcpStdioCredentials,
 } from '../cli/mcpUrl.js';
 
@@ -14,6 +16,39 @@ test('MCP URL locality comes from the parsed hostname only', () => {
   assert.equal(isLocalMcpHttpUrl('http://[::1]:3747/mcp'), true);
   assert.equal(isLocalMcpHttpUrl('https://evil.example/localhost'), false);
   assert.equal(isLocalMcpHttpUrl('not-a-url'), false);
+});
+
+test('MCP transport error redaction caps adversarial input before scanning', () => {
+  const oversized = [
+    '\u001b]0;hostile-title\u0007',
+    'Authorization: Bearer top-secret-bearer',
+    'fetch https://user:password@example.test/token/path-secret?sig=query-secret failed at',
+    `https://example.test/${'a'.repeat(MCP_ERROR_TEXT_MAX_CHARS * 4)}`,
+  ].join(' ');
+  const redacted = redactMcpHttpUrlsInText(oversized);
+  const sameBoundedPrefix = redactMcpHttpUrlsInText(`${oversized} ignored-untrusted-tail`);
+  const longNonMatch = redactMcpHttpUrlsInText('a'.repeat(MCP_ERROR_TEXT_MAX_CHARS * 8));
+
+  assert.equal(redacted, sameBoundedPrefix, 'bytes beyond the fixed input cap are never scanned');
+  assert.ok(redacted.length <= MCP_ERROR_TEXT_MAX_CHARS, 'terminal output stays within the same fixed cap');
+  assert.match(redacted, /\[truncated\]$/);
+  assert.doesNotMatch(redacted, /top-secret-bearer|password|path-secret|query-secret/);
+  assert.doesNotMatch(redacted, /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/);
+  assert.match(longNonMatch, /\[truncated\]$/, 'a long token-shaped non-match is still bounded');
+});
+
+test('MCP error truncation cannot turn partial URL credentials into safe-looking output', () => {
+  const retainedUrlPrefix = 'https://user:1234';
+  const truncationMarkerLength = ' … [truncated]'.length;
+  const padding = 'x'.repeat(
+    MCP_ERROR_TEXT_MAX_CHARS - truncationMarkerLength - retainedUrlPrefix.length,
+  );
+  const redacted = redactMcpHttpUrlsInText(
+    `${padding}${retainedUrlPrefix}@secret.example.test/mcp`,
+  );
+
+  assert.match(redacted, /\[redacted\] … \[truncated\]$/);
+  assert.doesNotMatch(redacted, /user|1234|secret\.example/);
 });
 
 test('MCP error redaction scrubs exact stdio credentials but preserves safe paths', () => {

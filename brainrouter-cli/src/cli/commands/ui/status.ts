@@ -15,6 +15,7 @@ import { readPlan } from '@kinqs/brainrouter-core/task';
 import { getConfigPath, getCliKnobs, setCliKnobOverride } from '@kinqs/brainrouter-core/config';
 import { aggregateCatalog, buildModelRegistry, getRouterPolicy, resolveRoutes } from '@kinqs/brainrouter-core/router';
 import { getPolicyProfile, profileNames } from '../../../runtime/exec/policyProfiles.js';
+import { configWithRuntimeMcpState } from '../../../entry/mcpStartup.js';
 import { describeActiveServer } from '../serverStatus/index.js';
 import type { CommandContext } from '../_context.js';
 import { redactMcpErrorText, redactMcpHttpUrl, redactMcpStdioCommand } from '../../mcpUrl.js';
@@ -24,6 +25,7 @@ export async function tryHandleUiStatusCommand(ctx: CommandContext): Promise<boo
   switch (command) {
     case '/status':
     {
+      const runtimeConfig = configWithRuntimeMcpState(config, ctx.repl.runtimeMcp);
       console.log(chalk.bold('\n🖥️  BrainRouter Status:'));
       for (const line of describeActiveServer(config)) console.log(line);
 
@@ -110,13 +112,13 @@ export async function tryHandleUiStatusCommand(ctx: CommandContext): Promise<boo
             if (extraction.syncPaused) {
               console.log(chalk.red(`  ⚠️  Extraction PAUSED after ${extraction.extractionErrors} consecutive failures.`));
               if (extraction.lastErrorMessage) {
-                console.log(chalk.gray(`     Last error: ${redactMcpErrorText(String(extraction.lastErrorMessage), config).slice(0, 200)}`));
+                console.log(chalk.gray(`     Last error: ${redactMcpErrorText(String(extraction.lastErrorMessage), runtimeConfig).slice(0, 200)}`));
               }
               console.log(chalk.gray(`     Fix the upstream LLM (model loaded / API key set), then run /memories consolidate to backfill.`));
             } else if (extraction.extractionErrors > 0) {
               console.log(chalk.yellow(`  ⚠️  ${extraction.extractionErrors} recent extraction failure(s). Last: ${extraction.lastErrorAt ?? '(unknown)'}.`));
               if (extraction.lastErrorMessage) {
-                console.log(chalk.gray(`     ${redactMcpErrorText(String(extraction.lastErrorMessage), config).slice(0, 200)}`));
+                console.log(chalk.gray(`     ${redactMcpErrorText(String(extraction.lastErrorMessage), runtimeConfig).slice(0, 200)}`));
               }
             } else if (cognitiveTotal === 0 && sensoryTotal > 0) {
               console.log(chalk.gray(`  (Cognitive extraction fires every 3 sensory turns — keep talking to populate.)`));
@@ -127,7 +129,7 @@ export async function tryHandleUiStatusCommand(ctx: CommandContext): Promise<boo
         }
       } catch (err: any) {
         spinner.fail(chalk.red('Failed to fetch diagnostics.'));
-        console.warn(chalk.yellow(`  Warning: ${redactMcpErrorText(String(err?.message ?? err), config)}`));
+        console.warn(chalk.yellow(`  Warning: ${redactMcpErrorText(String(err?.message ?? err), runtimeConfig)}`));
       }
       console.log();
       return true;

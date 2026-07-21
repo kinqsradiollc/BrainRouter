@@ -193,13 +193,17 @@ export async function tryHandleInitCommand(
 
   // Back-compat: explicit subcommand keeps the 0.3.6 one-shot behaviour.
   if (sub === 'agentmd') {
-    const result = dependencies.initInstructions(agent.workspaceRoot);
-    if (result.status === 'created') {
-      console.log(chalk.green(`\n✓ Created ${result.path}`));
-      console.log(chalk.gray('  Edit it to describe your project — any AGENT.md-aware agent will read it.\n'));
-    } else {
-      console.log(chalk.yellow(`\nFile already exists: ${result.path}`));
-      console.log(chalk.gray('  Existing project instructions were left unchanged.\n'));
+    try {
+      const result = dependencies.initInstructions(agent.workspaceRoot);
+      if (result.status === 'created') {
+        console.log(chalk.green(`\n✓ Created ${result.path}`));
+        console.log(chalk.gray('  Edit it to describe your project — any AGENT.md-aware agent will read it.\n'));
+      } else {
+        console.log(chalk.yellow(`\nFile already exists: ${result.path}`));
+        console.log(chalk.gray('  Existing project instructions were left unchanged.\n'));
+      }
+    } catch {
+      console.error(chalk.red('\n/init agentmd could not finish. Check workspace access and retry.\n'));
     }
     return true;
   }
@@ -207,18 +211,22 @@ export async function tryHandleInitCommand(
   if (sub === 'agent') {
     try {
       await dependencies.runAssistedSetup(ctx);
-    } catch (err: any) {
-      console.error(chalk.red(`\n/init agent failed: ${err?.message ?? err}\n`));
+    } catch {
+      console.error(chalk.red('\n/init agent could not finish. Review setup state and retry.\n'));
     }
     return true;
   }
 
   // Read-only profile detection — show what bare `/init` would suggest.
   if (sub === 'scan') {
-    const suggestion = dependencies.suggestProfile(agent.workspaceRoot);
-    console.log(`\n${chalk.bold('Detected profile')}: ${suggestion.profile}`);
-    console.log(chalk.gray(`  ${suggestion.reasons.join('; ')}`));
-    console.log(chalk.gray('  Run `/init` to onboard this workspace with it.\n'));
+    try {
+      const suggestion = dependencies.suggestProfile(agent.workspaceRoot);
+      console.log(`\n${chalk.bold('Detected profile')}: ${suggestion.profile}`);
+      console.log(chalk.gray(`  ${suggestion.reasons.join('; ')}`));
+      console.log(chalk.gray('  Run `/init` to onboard this workspace with it.\n'));
+    } catch {
+      console.error(chalk.red('\n/init scan could not finish. Check workspace access and retry.\n'));
+    }
     return true;
   }
 
@@ -270,22 +278,22 @@ export async function tryHandleInitCommand(
               `  Saved MCP setup; ${failed.map((status) => status.serverId).join(', ')} is offline and will retry in the background.\n`,
             ));
           }
-        } catch (err: any) {
+        } catch {
           console.error(chalk.yellow(
-            `  Global setup was saved, but the live MCP refresh failed (${err?.message ?? err}). `
+            '  Global setup was saved, but the live MCP refresh failed. '
             + 'The reconnect supervisor remains active; use `/mcp` to inspect status.\n',
           ));
         }
       }
       if (result.workspace === 'failed') {
         console.error(chalk.yellow(
-          `  Workspace setup could not finish (${result.workspaceError ?? 'unknown error'}). `
+          '  Workspace setup could not finish. '
           + 'Global setup is active; run `/init` to retry the project step.\n',
         ));
       }
       repl.refreshPromptForMode();
-    } catch (err: any) {
-      console.error(chalk.red(`\n/init config failed: ${err?.message ?? err}\n`));
+    } catch {
+      console.error(chalk.red('\n/init config could not finish. Review setup state and retry.\n'));
     }
     return true;
   }
@@ -293,14 +301,14 @@ export async function tryHandleInitCommand(
   if (sub === '--edit' || sub === 'edit') {
     try {
       await dependencies.runProjectSetup(agent.workspaceRoot, { edit: true });
-    } catch (err: any) {
-      console.error(chalk.red(`\n/init --edit failed: ${err?.message ?? err}\n`));
+    } catch {
+      console.error(chalk.red('\n/init --edit could not finish. Check workspace access and retry.\n'));
     }
     return true;
   }
 
   if (sub !== undefined) {
-    console.error(chalk.red(`\nUnknown /init option: ${args[0]}`));
+    console.error(chalk.red('\nUnknown /init option.'));
     console.log(chalk.gray('  Usage: /init [--edit|scan|agent|agentmd|config]\n'));
     return true;
   }
@@ -309,8 +317,8 @@ export async function tryHandleInitCommand(
   try {
     await dependencies.runProjectSetup(agent.workspaceRoot);
     console.log(chalk.gray('  Edit workspace: `/init --edit` · global setup: `/init config` · instructions only: `/init agentmd`\n'));
-  } catch (err: any) {
-    console.error(chalk.red(`\n/init failed: ${err?.message ?? err}\n`));
+  } catch {
+    console.error(chalk.red('\n/init could not finish. Check workspace access and retry.\n'));
   }
   return true;
 }

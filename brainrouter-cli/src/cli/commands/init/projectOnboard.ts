@@ -139,10 +139,27 @@ export interface ProjectOnboardingFilesystemTestEvent {
 let projectOnboardingFilesystemHookForTests:
   ((event: ProjectOnboardingFilesystemTestEvent) => void) | undefined;
 
+function assertProjectOnboardingTestHooksEnabled(): void {
+  const nodeTestContext = process.env.NODE_TEST_CONTEXT;
+  if (nodeTestContext !== 'child-v8' && nodeTestContext !== 'child-process') {
+    throw new Error('Project onboarding test hooks are unavailable outside a test runtime.');
+  }
+}
+
+function invokeProjectOnboardingTestHook<Event>(
+  hook: ((event: Event) => void) | undefined,
+  event: Event,
+): void {
+  if (!hook) return;
+  assertProjectOnboardingTestHooksEnabled();
+  hook(event);
+}
+
 /** Test seam for deterministic replacements at commit and rollback boundaries. */
 export function _setProjectOnboardingFilesystemHookForTests(
   hook?: (event: ProjectOnboardingFilesystemTestEvent) => void,
 ): void {
+  assertProjectOnboardingTestHooksEnabled();
   projectOnboardingFilesystemHookForTests = hook;
 }
 
@@ -158,6 +175,7 @@ let projectOnboardingTransactionHookForTests:
 export function _setProjectOnboardingTransactionHookForTests(
   hook?: (event: ProjectOnboardingTransactionTestEvent) => void,
 ): void {
+  assertProjectOnboardingTestHooksEnabled();
   projectOnboardingTransactionHookForTests = hook;
 }
 
@@ -574,7 +592,7 @@ function commitProjectOnboardingWithExpectedManifest(
         afterInstruction,
       );
       try {
-        projectOnboardingTransactionHookForTests?.({
+        invokeProjectOnboardingTestHook(projectOnboardingTransactionHookForTests, {
           stage: 'after-instruction-commit',
           workspaceRoot,
         });
@@ -606,7 +624,7 @@ function commitProjectOnboardingWithExpectedManifest(
       recordWorkspaceOnboardingManifestWritten(pairTransaction, manifestStage.after!);
       filesCommitted = true;
       try {
-        projectOnboardingTransactionHookForTests?.({
+        invokeProjectOnboardingTestHook(projectOnboardingTransactionHookForTests, {
           stage: 'after-manifest-commit',
           workspaceRoot,
         });
@@ -698,7 +716,7 @@ function saveManifestWithExpectedVersion(
   const accessClaim = guard ? guard.siblingPath(path.basename(claim)) : claim;
   let claimed: FileSnapshot | undefined;
   try {
-    projectOnboardingFilesystemHookForTests?.({
+    invokeProjectOnboardingTestHook(projectOnboardingFilesystemHookForTests, {
       stage: 'before-manifest-claim',
       target,
       quarantine: claim,
@@ -711,7 +729,7 @@ function saveManifestWithExpectedVersion(
       guard!.fsyncParent();
       guard!.assertStable();
       claimed = snapshotFile(accessClaim, WORKSPACE_MANIFEST_MAX_BYTES);
-      projectOnboardingFilesystemHookForTests?.({
+      invokeProjectOnboardingTestHook(projectOnboardingFilesystemHookForTests, {
         stage: 'after-manifest-claim',
         target,
         quarantine: claim,
@@ -739,7 +757,7 @@ function saveManifestWithExpectedVersion(
       if (!snapshotFile(guard?.accessTarget ?? target, WORKSPACE_MANIFEST_MAX_BYTES).existed) {
         throw new Error('Workspace manifest writer reported success without creating the manifest.');
       }
-      projectOnboardingFilesystemHookForTests?.({
+      invokeProjectOnboardingTestHook(projectOnboardingFilesystemHookForTests, {
         stage: 'after-manifest-replacement',
         target,
         quarantine: claim,
@@ -1051,7 +1069,7 @@ function removeOwnedWorkspaceFileVersion(
   }
   const accessQuarantine = guard.siblingPath(path.basename(quarantine));
   try {
-    projectOnboardingFilesystemHookForTests?.({
+    invokeProjectOnboardingTestHook(projectOnboardingFilesystemHookForTests, {
       stage: 'before-remove-quarantine',
       target,
       quarantine,

@@ -79,6 +79,20 @@ async function withoutConsole<T>(body: () => Promise<T>): Promise<T> {
   }
 }
 
+async function captureConsole<T>(body: () => Promise<T>): Promise<{ result: T; output: string }> {
+  const lines: string[] = [];
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = (...values: unknown[]) => { lines.push(values.map(String).join(' ')); };
+  console.error = (...values: unknown[]) => { lines.push(values.map(String).join(' ')); };
+  try {
+    return { result: await body(), output: lines.join('\n') };
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+}
+
 test('`/init agentmd` and `/init agent` are distinct commands', async () => {
   const events: string[] = [];
   const dependencies: Partial<InitCommandDependencies> = {
@@ -450,9 +464,10 @@ test('`/init config` applies global runtime effects even when project setup repo
   ]);
 });
 
-test('unknown `/init` options do not fall through to project setup', async () => {
+test('unknown `/init` options neither echo untrusted text nor fall through to project setup', async () => {
   const events: string[] = [];
-  const handled = await withoutConsole(() => tryHandleInitCommand(context(['mystery'], events), {
+  const hostileOption = 'mystery\u001b]0;forged-title\u0007\ninternal-secret';
+  const { result: handled, output } = await captureConsole(() => tryHandleInitCommand(context([hostileOption], events), {
     runProjectSetup: async () => {
       events.push('project');
       return { status: 'cancelled' };
@@ -461,4 +476,66 @@ test('unknown `/init` options do not fall through to project setup', async () =>
 
   assert.equal(handled, true);
   assert.deepEqual(events, []);
+  assert.match(output, /Unknown \/init option\./);
+  assert.doesNotMatch(output, /mystery|forged-title|internal-secret/);
+  assert.doesNotMatch(output, /\u001b\]|\u0007/, 'untrusted OSC/BEL controls are never replayed');
+});
+
+test('`/init` failure surfaces never disclose or control-inject raw errors', async () => {
+  const hostileError = 'internal-secret at /Users/private/config.json \u001b]0;forged-title\u0007';
+  const events: string[] = [];
+  const { output } = await captureConsole(async () => {
+    await tryHandleInitCommand(context(['agentmd'], events), {
+      initInstructions: () => { throw new Error(hostileError); },
+    });
+    await tryHandleInitCommand(context(['agent'], events), {
+      runAssistedSetup: async () => { throw new Error(hostileError); },
+    });
+    await tryHandleInitCommand(context(['scan'], events), {
+      suggestProfile: () => { throw new Error(hostileError); },
+    });
+    await tryHandleInitCommand(context(['--edit'], events), {
+      runProjectSetup: async () => { throw new Error(hostileError); },
+    });
+    await tryHandleInitCommand(context([], events), {
+      runProjectSetup: async () => { throw new Error(hostileError); },
+    });
+    await tryHandleInitCommand(context(['config'], events), {
+      runSequence: async () => { throw new Error(hostileError); },
+    });
+
+    const failingPool = {
+      setReconnectLlmConfig: () => undefined,
+      stopReconnectSupervisor: () => undefined,
+      startReconnectSupervisor: () => undefined,
+      getServerIds: () => [],
+      removeOne: async () => undefined,
+      connectAll: async () => { throw new Error(hostileError); },
+    } as unknown as CommandContext['mcpClient'];
+    await tryHandleInitCommand(context(['config'], events, failingPool), {
+      runSequence: async () => ({
+        status: 'ready',
+        global: 'committed',
+        workspace: 'failed',
+        workspaceError: hostileError,
+        skipMcpForLaunch: false,
+        config: { activeServer: '', servers: {} },
+      }),
+    });
+  });
+
+  assert.doesNotMatch(output, /internal-secret|Users\/private|forged-title/);
+  assert.doesNotMatch(output, /\u001b\]|\u0007/, 'raw error controls are never replayed');
+  for (const safeMessage of [
+    '/init agentmd could not finish',
+    '/init agent could not finish',
+    '/init scan could not finish',
+    '/init --edit could not finish',
+    '/init could not finish',
+    '/init config could not finish',
+    'live MCP refresh failed',
+    'Workspace setup could not finish',
+  ]) {
+    assert.ok(output.includes(safeMessage), `missing safe failure message: ${safeMessage}`);
+  }
 });

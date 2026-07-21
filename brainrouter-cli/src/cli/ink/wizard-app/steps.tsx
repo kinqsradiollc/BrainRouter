@@ -80,6 +80,9 @@ function parseCustomEndpoint(raw: string): ParsedCustomEndpoint {
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     return { ok: false, error: 'Endpoint URL must use http or https.' };
   }
+  if (parsed.username || parsed.password) {
+    return { ok: false, error: 'Endpoint URL must not contain credentials. Use the API key field instead.' };
+  }
   const hostname = parsed.hostname.toLowerCase();
   const local = hostname === 'localhost'
     || hostname === '127.0.0.1'

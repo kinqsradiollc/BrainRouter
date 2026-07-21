@@ -30,7 +30,24 @@ const SENSITIVE_QUERY_PARTS = [
   'cookie',
 ];
 const MCP_HTTP_URL_MAX_BYTES = 16 * 1024;
+export const MCP_ERROR_TEXT_MAX_CHARS = 16 * 1024;
 const MAX_PERCENT_DECODE_PASSES = 8;
+const MCP_ERROR_TRUNCATION_MARKER = ' … [truncated]';
+const MCP_ERROR_CREDENTIAL_ASSIGNMENTS = [
+  'authorization',
+  'api[-_ ]?key',
+  'access[-_ ]?token',
+  'refresh[-_ ]?token',
+  'client[-_ ]?secret',
+  'password',
+  'passwd',
+  'credential',
+  'signature',
+  'cookie',
+].map((label) => new RegExp(
+  `(\\b${label}[ \\t]{0,256}[:=][ \\t]{0,256})[^\\s,;]{1,65536}`,
+  'gi',
+));
 
 function normalizeParameterName(name: string): string {
   let decoded = name;
@@ -79,11 +96,50 @@ function isCredentialPathLabel(segment: string): boolean {
     || SENSITIVE_QUERY_PARTS.some((part) => normalized === part);
 }
 
+function isMcpTokenCharacter(character: string): boolean {
+  const code = character.charCodeAt(0);
+  return (code >= 0x30 && code <= 0x39)
+    || (code >= 0x41 && code <= 0x5a)
+    || (code >= 0x61 && code <= 0x7a)
+    || character === '_'
+    || character === '-';
+}
+
+interface McpTokenSpan {
+  start: number;
+  end: number;
+}
+
+/** Find one three-segment token without regex backtracking. */
+function findMcpJwtLikeToken(text: string, from = 0): McpTokenSpan | undefined {
+  let index = from;
+  while (index < text.length) {
+    if (!isMcpTokenCharacter(text[index]!)) {
+      index += 1;
+      continue;
+    }
+    const firstStart = index;
+    while (index < text.length && isMcpTokenCharacter(text[index]!)) index += 1;
+    const firstEnd = index;
+    if (firstEnd - firstStart < 8 || text[index] !== '.') continue;
+
+    const secondStart = ++index;
+    while (index < text.length && isMcpTokenCharacter(text[index]!)) index += 1;
+    const secondEnd = index;
+    if (secondEnd - secondStart < 8 || text[index] !== '.') continue;
+
+    const thirdStart = ++index;
+    while (index < text.length && isMcpTokenCharacter(text[index]!)) index += 1;
+    if (index - thirdStart >= 8) return { start: firstStart, end: index };
+  }
+  return undefined;
+}
+
 export function containsObviousCredentialValue(segment: string): boolean {
   const decoded = decodeUrlComponentTolerantly(segment);
   return /(?:sk-[A-Za-z0-9_-]{12,}|(?:gh[opusr]|github_pat)_[A-Za-z0-9_]{12,}|xox[baprs]-[^/]{8,}|AKIA[A-Z0-9]{16})/i.test(decoded)
     || /(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|credential|password|signature|token|secret)\s*[:=]\s*\S+/i.test(decoded)
-    || /[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/.test(decoded)
+    || findMcpJwtLikeToken(decoded) !== undefined
     || /\b[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^/\s@]+@/i.test(decoded);
 }
 
@@ -172,6 +228,7 @@ export function isLocalMcpHttpUrl(raw: string | undefined): boolean {
 /** Safe terminal/UI representation, including for legacy hand-edited config. */
 export function redactMcpHttpUrl(raw: string | undefined): string {
   if (!raw) return '(unset)';
+  if (Buffer.byteLength(raw) > MCP_HTTP_URL_MAX_BYTES) return '[invalid URL]';
   try {
     const parsed = new URL(raw);
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '[invalid URL]';
@@ -181,18 +238,93 @@ export function redactMcpHttpUrl(raw: string | undefined): string {
   }
 }
 
-/** Remove endpoint credentials and terminal controls from transport errors. */
+function capMcpErrorText(text: string): string {
+  if (text.length <= MCP_ERROR_TEXT_MAX_CHARS) return text;
+  return text.slice(0, MCP_ERROR_TEXT_MAX_CHARS - MCP_ERROR_TRUNCATION_MARKER.length)
+    + MCP_ERROR_TRUNCATION_MARKER;
+}
+
+function isMcpErrorUrlTerminator(character: string): boolean {
+  const code = character.charCodeAt(0);
+  return code <= 0x20 || code === 0x7f || character === '<' || character === '>'
+    || character === '"' || character === "'";
+}
+
+function redactMcpErrorUrls(text: string): string {
+  const parts: string[] = [];
+  let copiedUntil = 0;
+  let index = 0;
+  while (index < text.length) {
+    if (text.charCodeAt(index) !== 0x68 && text.charCodeAt(index) !== 0x48) {
+      index += 1;
+      continue;
+    }
+    const candidate = text.slice(index, index + 8).toLowerCase();
+    const prefixLength = candidate.startsWith('https://') ? 8
+      : candidate.startsWith('http://') ? 7
+        : 0;
+    if (prefixLength === 0) {
+      index += 1;
+      continue;
+    }
+    let end = index + prefixLength;
+    while (end < text.length && !isMcpErrorUrlTerminator(text[end]!)) end += 1;
+    const touchesTruncationBoundary = text.startsWith(MCP_ERROR_TRUNCATION_MARKER, end);
+    parts.push(
+      text.slice(copiedUntil, index),
+      touchesTruncationBoundary ? '[redacted]' : redactMcpHttpUrl(text.slice(index, end)),
+    );
+    copiedUntil = end;
+    index = end;
+  }
+  parts.push(text.slice(copiedUntil));
+  return parts.join('');
+}
+
+function redactMcpCredentialAssignments(text: string): string {
+  let redacted = text;
+  for (const pattern of MCP_ERROR_CREDENTIAL_ASSIGNMENTS) {
+    redacted = redacted.replace(pattern, '$1[redacted]');
+  }
+  return redacted;
+}
+
+/** Redact three long dot-separated token segments with one forward-only scan. */
+function redactMcpJwtLikeTokens(text: string): string {
+  const parts: string[] = [];
+  let copiedUntil = 0;
+  while (copiedUntil < text.length) {
+    const span = findMcpJwtLikeToken(text, copiedUntil);
+    if (!span) break;
+    parts.push(text.slice(copiedUntil, span.start), '[redacted]');
+    copiedUntil = span.end;
+  }
+
+  if (copiedUntil === 0) return text;
+  parts.push(text.slice(copiedUntil));
+  return parts.join('');
+}
+
+/**
+ * Remove endpoint credentials and terminal controls from transport errors.
+ * Input is capped before URL parsing and every replacement is a constant-count
+ * linear scan; the final cap also prevents short-match expansion from growing
+ * terminal output beyond the same fixed bound.
+ */
 export function redactMcpHttpUrlsInText(text: string): string {
-  return text
+  const bounded = capMcpErrorText(text);
+  let redacted = bounded
     .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ')
-    .replace(/https?:\/\/[^\s<>"']+/gi, (url) => redactMcpHttpUrl(url))
-    .replace(/\bBearer\s+[A-Za-z0-9._~+\/-]{4,}={0,2}/gi, 'Bearer [redacted]')
-    .replace(
-      /((?:authorization|api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|client[-_ ]?secret|password|passwd|credential|signature|cookie)\s*[:=]\s*)(?:Bearer\s+)?[^\s,;]+/gi,
-      '$1[redacted]',
-    )
-    .replace(/\b(?:sk-[A-Za-z0-9_-]{12,}|(?:gh[opusr]|github_pat)_[A-Za-z0-9_]{12,}|xox[baprs]-[^\s,;]{8,}|AKIA[A-Z0-9]{16})\b/gi, '[redacted]')
-    .replace(/\b[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, '[redacted]');
+    .replace(/\bBearer[ \t]{1,65536}[^\s,;]{4,65536}/gi, 'Bearer [redacted]');
+  redacted = redactMcpErrorUrls(redacted);
+  redacted = redactMcpCredentialAssignments(redacted)
+    .replace(/\bsk-[A-Za-z0-9_-]{12,65536}\b/gi, '[redacted]')
+    .replace(/\bgh[opusr]_[A-Za-z0-9_]{12,65536}\b/gi, '[redacted]')
+    .replace(/\bgithub_pat_[A-Za-z0-9_]{12,65536}\b/gi, '[redacted]')
+    .replace(/\bxox[baprs]-[^\s,;]{8,65536}\b/gi, '[redacted]')
+    .replace(/\bAKIA[A-Z0-9]{16}\b/gi, '[redacted]');
+  redacted = redactMcpJwtLikeTokens(redacted);
+  return capMcpErrorText(redacted);
 }
 
 function isStdioHeaderOption(name: string): boolean {

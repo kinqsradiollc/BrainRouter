@@ -30,6 +30,51 @@ import {
   type ProjectOnboardingPromptResponse,
 } from '../cli/commands/init/projectOnboard.js';
 
+test('project onboarding mutation hooks reject non-test runtimes', () => {
+  const previous = process.env.NODE_TEST_CONTEXT;
+  delete process.env.NODE_TEST_CONTEXT;
+  try {
+    assert.throws(
+      () => _setProjectOnboardingFilesystemHookForTests(() => undefined),
+      /unavailable outside a test runtime/,
+    );
+    assert.throws(
+      () => _setProjectOnboardingTransactionHookForTests(() => undefined),
+      /unavailable outside a test runtime/,
+    );
+  } finally {
+    if (previous === undefined) delete process.env.NODE_TEST_CONTEXT;
+    else process.env.NODE_TEST_CONTEXT = previous;
+  }
+});
+
+test('project onboarding mutation hooks re-check the test runtime when invoked', () => {
+  const ws = makeWorkspace({});
+  const manifest = createWorkspaceManifest({
+    name: 'guarded-hook',
+    profile: 'engineering',
+    by: 'wizard',
+    at: '2026-07-21T00:00:00.000Z',
+  });
+  const previous = process.env.NODE_TEST_CONTEXT;
+  let hookCalls = 0;
+  _setProjectOnboardingFilesystemHookForTests(() => { hookCalls += 1; });
+  delete process.env.NODE_TEST_CONTEXT;
+
+  try {
+    assert.throws(
+      () => commitProjectOnboarding(ws, manifest, false),
+      /unavailable outside a test runtime/,
+    );
+    assert.equal(hookCalls, 0);
+  } finally {
+    if (previous === undefined) delete process.env.NODE_TEST_CONTEXT;
+    else process.env.NODE_TEST_CONTEXT = previous;
+    _setProjectOnboardingFilesystemHookForTests(undefined);
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
 const projectOnboardingTestHome = fs.mkdtempSync(path.join(os.tmpdir(), 'br-onboard-home-'));
 const previousBrainrouterHome = process.env.BRAINROUTER_HOME;
 process.env.BRAINROUTER_HOME = projectOnboardingTestHome;

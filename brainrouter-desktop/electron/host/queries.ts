@@ -50,6 +50,10 @@ import {
   sessionRows,
   type TrackGithubConfig,
 } from './helpers.js';
+import {
+  isDesktopMcpServerIdReserved,
+  parseDesktopMcpAddInput,
+} from './desktopMcpInput.js';
 import { exec, execFileSync } from 'node:child_process';
 import { ensureBrainSession, endBrainSession, setBrainSessionRelay } from './brainSession.js';
 import fs from 'node:fs';
@@ -413,12 +417,6 @@ function cloneConfig(config: Config): Config {
 // ADR-021 (0.4.17) — renderer-controlled MCP ids resolve to OWN config entries. These
 // names are also forbidden for creates so a computed assignment can never
 // invoke Object.prototype's legacy __proto__ setter or shadow its metakeys.
-const DESKTOP_MCP_RESERVED_SERVER_IDS = new Set(['__proto__', 'constructor', 'prototype']);
-
-function isDesktopMcpServerIdReserved(serverId: string): boolean {
-  return DESKTOP_MCP_RESERVED_SERVER_IDS.has(serverId);
-}
-
 function ownDesktopMcpServer(
   servers: Record<string, ServerConfig>,
   serverId: string | undefined,
@@ -4310,47 +4308,16 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         if (!result.ok) throw new Error(result.error ?? `BrainRouter server "${id}" could not be selected.`);
         return result;
       },
-      // T6 — add an MCP server: write the profile to config.json (shared with the
-      // CLI) and connect it now. type 'stdio' needs a command; 'http' needs a url.
+      // T6 — add a remote MCP server: write the profile to config.json (shared
+      // with the CLI) and connect it now. Renderer input cannot create local
+      // stdio processes; those execution-capable profiles are configured in CLI.
       'action:add-mcp': async (args) => {
-        const id = String(args.id ?? '').trim();
-        const type = args.type === 'http' ? 'http' : 'stdio';
-        if (!/^[A-Za-z0-9._-]+$/.test(id)) return { ok: false, error: 'Server id must be letters, digits, dash, underscore or dot.' };
-        if (isDesktopMcpServerIdReserved(id)) return { ok: false, error: `MCP server id "${id}" is reserved.` };
-        // Optional auth/headers/env (a "KEY=value\nKEY2=value2" string → record).
-        const kvPairs = (raw: unknown): Record<string, string> => {
-          const out: Record<string, string> = {};
-          if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-            for (const [key, value] of Object.entries(raw)) {
-              const normalized = key.trim();
-              if (normalized && !['__proto__', 'prototype', 'constructor'].includes(normalized) && typeof value === 'string') {
-                out[normalized] = value;
-              }
-            }
-            return out;
-          }
-          if (typeof raw === 'string') for (const line of raw.split('\n')) {
-            const i = line.indexOf('=');
-            const key = i > 0 ? line.slice(0, i).trim() : '';
-            if (key && !['__proto__', 'prototype', 'constructor'].includes(key)) out[key] = line.slice(i + 1).trim();
-          }
-          return out;
-        };
-        const apiKey = String(args.apiKey ?? '').trim();
-        const headers = kvPairs(args.headers); const env = kvPairs(args.env);
-        const cfg = type === 'http'
-          ? { type: 'http' as const, url: String(args.url ?? '').trim(),
-              ...(apiKey ? { apiKey } : {}), ...(Object.keys(headers).length ? { headers } : {}) }
-          : { type: 'stdio' as const, command: String(args.command ?? '').trim(), args: typeof args.args === 'string' ? args.args.trim().split(/\s+/).filter(Boolean) : [],
-              ...(Object.keys(env).length ? { env } : {}) };
-        const required = cfg.type === 'http' ? cfg.url : cfg.command;
-        if (!required) return { ok: false, error: `A ${type} server needs a ${type === 'http' ? 'url' : 'command'}.` };
-        if (cfg.type === 'http') {
-          const urlError = validateDesktopMcpHttpUrl(cfg.url);
-          if (urlError) return { ok: false, error: urlError };
-          cfg.url = new URL(cfg.url).toString();
-        }
-        return mcpLifecycle.add(id, cfg);
+        const parsed = parseDesktopMcpAddInput(args);
+        if (!parsed.ok) return parsed;
+        const urlError = validateDesktopMcpHttpUrl(parsed.config.url);
+        if (urlError) return { ok: false, error: urlError };
+        parsed.config.url = new URL(parsed.config.url).toString();
+        return mcpLifecycle.add(parsed.id, parsed.config);
       },
       'action:remove-mcp': async (args) => {
         const id = String(args.id ?? '').trim();

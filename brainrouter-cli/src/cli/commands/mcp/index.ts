@@ -196,7 +196,10 @@ export async function tryHandleMcpCommand(ctx: CommandContext): Promise<boolean>
       console.log();
       return true;
     }
-    if (!runtimeConfig.servers[targetName]) {
+    if (
+      !Object.prototype.hasOwnProperty.call(runtimeConfig.servers, targetName)
+      || !runtimeConfig.servers[targetName]
+    ) {
       console.log(chalk.red(`\nNo profile named "${targetName}".\n`));
       return true;
     }
@@ -230,8 +233,10 @@ export async function tryHandleMcpCommand(ctx: CommandContext): Promise<boolean>
       console.log(chalk.red('\nUsage: /mcp connect <name>\n'));
       return true;
     }
-    const profile = runtimeConfig.servers[targetName];
-    if (!profile) {
+    if (
+      !Object.prototype.hasOwnProperty.call(runtimeConfig.servers, targetName)
+      || !runtimeConfig.servers[targetName]
+    ) {
       console.log(chalk.red(`\nNo profile named "${targetName}". Available: ${Object.keys(runtimeConfig.servers).join(', ') || '(none)'}.\n`));
       return true;
     }
