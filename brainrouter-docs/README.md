@@ -49,7 +49,7 @@ deep dives.
 
 ### Specs & decisions
 
-- **[specs/](specs/)** — design specs: [memory-accuracy](specs/memory-accuracy.md)
+- **[specs/](specs/)** — design specs: [workspace onboarding, dynamic capabilities, and project knowledge](specs/workspace-onboarding-and-capabilities.md), [memory-accuracy](specs/memory-accuracy.md)
   (+ the [audit](specs/memory-accuracy-audit.md)), [build-loop-workflow](specs/build-loop-workflow.md),
   [per-session-isolation](specs/per-session-isolation.md),
   [multi-agent-result-delivery](specs/multi-agent-result-delivery.md).

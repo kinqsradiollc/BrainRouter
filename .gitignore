@@ -53,9 +53,12 @@ brainrouter-cli/changelog/
 # TypeScript incremental build cache
 *.tsbuildinfo
 
-# Per-user tooling state (Claude Code, brainrouter migration leftovers)
+# Per-user tooling state (Claude Code, brainrouter migration leftovers).
+# Workspace manifests are deliberately team-shareable; every other child of
+# `.brainrouter/` remains local runtime state.
 .claude/
-.brainrouter/
+**/.brainrouter/*
+!**/.brainrouter/workspace.json
 .brainrouter.migrated/
 brainrouter/memory.db
 brainrouter/mcp_server.log
