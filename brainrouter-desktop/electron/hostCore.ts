@@ -419,8 +419,13 @@ export function createHostCore(input: {
         return;
       }
       case 'query': {
-        const handler = input.queries?.[cmd.name];
-        if (!handler) {
+        // ADR-021 (0.4.17) — query names cross the renderer IPC boundary. Never dispatch an
+        // inherited Object.prototype property as though it were a registered
+        // host capability.
+        const handler = input.queries && Object.hasOwn(input.queries, cmd.name)
+          ? input.queries[cmd.name]
+          : undefined;
+        if (typeof handler !== 'function') {
           emit({ kind: 'query-result', id: cmd.id, ok: false, error: `Unknown query "${cmd.name}".` });
           return;
         }

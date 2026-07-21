@@ -217,6 +217,38 @@ test('desktop MCP add URL validation rejects credential material without echoing
   assert.equal(validateDesktopMcpHttpUrl('https://example.test/mcp?project=alpha'), undefined);
 });
 
+test('desktop MCP mutations reject prototype-chain server ids without side effects', async () => {
+  const reservedIds = ['__proto__', 'constructor', 'prototype'] as const;
+  const operations = ['reconnect', 'setActive', 'add', 'remove'] as const;
+
+  for (const id of reservedIds) {
+    for (const operation of operations) {
+      const initial: Config = {
+        activeServer: 'safe',
+        activeBrainrouterServer: 'safe',
+        servers: {
+          safe: { type: 'stdio', command: 'brainrouter-mcp', identity: 'brainrouter' },
+        },
+        llm,
+      };
+      const harness = lifecycleHarness(initial);
+      harness.pool.identities.set(id, 'brainrouter');
+      harness.pool.statuses.set(id, { serverId: id, identity: 'brainrouter', status: 'connected' });
+
+      const result = operation === 'add'
+        ? await harness.lifecycle.add(id, { type: 'http', url: 'https://example.test/mcp' })
+        : await harness.lifecycle[operation](id);
+
+      assert.equal(result.ok, false, `${operation} must reject reserved id ${id}`);
+      assert.deepEqual(harness.disk(), initial, `${operation} must not persist reserved id ${id}`);
+      assert.equal(Object.hasOwn(harness.disk().servers, id), false);
+      assert.equal(Object.getPrototypeOf(harness.disk().servers), Object.prototype);
+      assert.deepEqual(harness.pool.connects, [], `${operation} must not connect reserved id ${id}`);
+      assert.deepEqual(harness.pool.removed, [], `${operation} must not remove reserved id ${id}`);
+    }
+  }
+});
+
 test('desktop active-brain switch is exclusive, workspace-aware, and persists both selections', async () => {
   const harness = lifecycleHarness(configWithTwoBrains());
   harness.pool.statuses.set('brain-a', { serverId: 'brain-a', identity: 'brainrouter', status: 'connected' });

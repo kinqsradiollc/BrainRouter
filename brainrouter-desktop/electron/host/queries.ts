@@ -410,6 +410,23 @@ function cloneConfig(config: Config): Config {
   return structuredClone(config);
 }
 
+// ADR-021 (0.4.17) — renderer-controlled MCP ids resolve to OWN config entries. These
+// names are also forbidden for creates so a computed assignment can never
+// invoke Object.prototype's legacy __proto__ setter or shadow its metakeys.
+const DESKTOP_MCP_RESERVED_SERVER_IDS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function isDesktopMcpServerIdReserved(serverId: string): boolean {
+  return DESKTOP_MCP_RESERVED_SERVER_IDS.has(serverId);
+}
+
+function ownDesktopMcpServer(
+  servers: Record<string, ServerConfig>,
+  serverId: string | undefined,
+): ServerConfig | undefined {
+  if (!serverId || isDesktopMcpServerIdReserved(serverId)) return undefined;
+  return Object.hasOwn(servers, serverId) ? servers[serverId] : undefined;
+}
+
 /** Put the selected memory-plane profile first for legacy account resolvers. */
 export function desktopAccountConfigForResolution(config: unknown): unknown {
   if (!config || typeof config !== 'object') return config;
@@ -420,11 +437,12 @@ export function desktopAccountConfigForResolution(config: unknown): unknown {
     candidate.activeBrainrouterServer,
     candidate.activeServer,
   );
-  if (!preferred || !candidate.servers[preferred]) return config;
+  const profile = ownDesktopMcpServer(candidate.servers, preferred);
+  if (!preferred || !profile) return config;
   return {
     ...candidate,
     servers: {
-      [preferred]: candidate.servers[preferred],
+      [preferred]: profile,
       ...candidate.servers,
     },
   };
@@ -693,7 +711,9 @@ export function desktopMcpProfileForWorkspace(
   serverId: string,
   workspaceRoot: string,
 ): ServerConfig {
-  const profile = structuredClone(config.servers[serverId]);
+  const storedProfile = ownDesktopMcpServer(config.servers, serverId);
+  if (!storedProfile) throw new Error(`No MCP server named "${serverId}".`);
+  const profile = structuredClone(storedProfile);
   const preferredBrainrouterServerId = resolvePreferredBrainrouterServerId(
     config.servers,
     config.activeBrainrouterServer,
@@ -722,7 +742,7 @@ function otherDesktopBrainrouterIds(
     config.activeBrainrouterServer,
     config.activeServer,
   );
-  if (preferred && preferred !== targetId) ids.add(preferred);
+  if (preferred && preferred !== targetId && ownDesktopMcpServer(config.servers, preferred)) ids.add(preferred);
   for (const [serverId, profile] of Object.entries(config.servers)) {
     if (serverId !== targetId && resolveIdentityFromConfig(profile, serverId) === 'brainrouter') {
       ids.add(serverId);
@@ -747,18 +767,20 @@ export function createDesktopMcpLifecycle(deps: DesktopMcpLifecycleDeps) {
     return result;
   };
 
-  const preferredBrainrouterId = (config: Config): string | undefined =>
-    resolvePreferredBrainrouterServerId(
+  const preferredBrainrouterId = (config: Config): string | undefined => {
+    const preferred = resolvePreferredBrainrouterServerId(
       config.servers,
       config.activeBrainrouterServer,
       config.activeServer,
     );
+    return ownDesktopMcpServer(config.servers, preferred) ? preferred : undefined;
+  };
 
   const connectProfile = async (
     config: Config,
     serverId: string,
   ): Promise<{ status?: McpServerStatus; identity: McpServerStatus['identity'] }> => {
-    const profile = config.servers[serverId];
+    const profile = ownDesktopMcpServer(config.servers, serverId);
     if (!profile) return { identity: 'unknown' };
     const effectiveProfile = desktopMcpProfileForWorkspace(
       config,
@@ -795,7 +817,7 @@ export function createDesktopMcpLifecycle(deps: DesktopMcpLifecycleDeps) {
     switchedId: string,
   ): Promise<void> => {
     if (previousBrainrouterId === switchedId) return;
-    if (previousBrainrouterId && previousConfig.servers[previousBrainrouterId]) {
+    if (previousBrainrouterId && ownDesktopMcpServer(previousConfig.servers, previousBrainrouterId)) {
       const restored = await connectProfile(previousConfig, previousBrainrouterId).catch(() => undefined);
       if (restored?.status?.status === 'connected') return;
     }
@@ -808,7 +830,9 @@ export function createDesktopMcpLifecycle(deps: DesktopMcpLifecycleDeps) {
     highlight: boolean,
   ): Config => {
     const next = cloneConfig(config);
-    next.servers[serverId] = { ...next.servers[serverId], identity: 'brainrouter' };
+    const profile = ownDesktopMcpServer(next.servers, serverId);
+    if (!profile) throw new Error(`No MCP server named "${serverId}".`);
+    next.servers[serverId] = { ...profile, identity: 'brainrouter' };
     next.activeBrainrouterServer = serverId;
     if (highlight) next.activeServer = serverId;
     return next;
@@ -827,7 +851,7 @@ export function createDesktopMcpLifecycle(deps: DesktopMcpLifecycleDeps) {
         && Object.prototype.hasOwnProperty.call(existingAccount, 'prevBrain');
       const prevBrain = reuseStoredPrevious
         ? structuredClone(existingAccount.prevBrain ?? null)
-        : structuredClone(current.servers[serverId] ?? null);
+        : structuredClone(ownDesktopMcpServer(current.servers, serverId) ?? null);
       const next = cloneConfig(current) as DesktopAccountConfig;
       next.servers[serverId] = {
         ...structuredClone(input.profile),
@@ -867,7 +891,7 @@ export function createDesktopMcpLifecycle(deps: DesktopMcpLifecycleDeps) {
       if (current.cli?.account?.brainId !== serverId) {
         return { ok: false, id: serverId, error: `BrainRouter account profile "${serverId}" is no longer selected.` };
       }
-      const profile = current.servers[serverId];
+      const profile = ownDesktopMcpServer(current.servers, serverId);
       if (!profile || resolveIdentityFromConfig(profile, serverId) !== 'brainrouter') {
         return { ok: false, id: serverId, error: `No committed BrainRouter account profile named "${serverId}".` };
       }
@@ -899,7 +923,7 @@ export function createDesktopMcpLifecycle(deps: DesktopMcpLifecycleDeps) {
       const existingAccount = current.cli?.account;
       const storedBrainId = existingAccount?.brainId;
       const preferred = preferredBrainrouterId(current);
-      const serverId = storedBrainId && current.servers[storedBrainId]
+      const serverId = storedBrainId && ownDesktopMcpServer(current.servers, storedBrainId)
         ? storedBrainId
         : preferred;
       const canRestorePrevious = existingAccount !== undefined
@@ -917,17 +941,13 @@ export function createDesktopMcpLifecycle(deps: DesktopMcpLifecycleDeps) {
         delete next.cli.brainUrl;
         delete next.cli.account;
       }
-      if (serverId && next.activeServer === serverId && !next.servers[serverId]) {
+      if (serverId && next.activeServer === serverId && !ownDesktopMcpServer(next.servers, serverId)) {
         next.activeServer = Object.keys(next.servers)[0] ?? '';
       }
-      if (serverId && next.servers[serverId]) {
+      if (serverId && ownDesktopMcpServer(next.servers, serverId)) {
         next.activeBrainrouterServer = serverId;
-      } else if (!next.servers[next.activeBrainrouterServer ?? '']) {
-        next.activeBrainrouterServer = resolvePreferredBrainrouterServerId(
-          next.servers,
-          undefined,
-          next.activeServer,
-        );
+      } else if (!ownDesktopMcpServer(next.servers, next.activeBrainrouterServer)) {
+        next.activeBrainrouterServer = preferredBrainrouterId(next);
       }
 
       try {
@@ -957,7 +977,7 @@ export function createDesktopMcpLifecycle(deps: DesktopMcpLifecycleDeps) {
       }
       deps.mcpClient.startReconnectSupervisor();
 
-      if (next.servers[serverId]) {
+      if (ownDesktopMcpServer(next.servers, serverId)) {
         const restored = await connectProfile(next, serverId).catch(() => undefined);
         if (restored?.status?.status !== 'connected') {
           return {
@@ -979,7 +999,7 @@ export function createDesktopMcpLifecycle(deps: DesktopMcpLifecycleDeps) {
 
     reconnect: (serverId: string): Promise<DesktopMcpMutationResult> => serialized(async () => {
       const current = deps.loadConfig();
-      if (!current.servers[serverId]) return { ok: false, error: `No MCP server named "${serverId}".` };
+      if (!ownDesktopMcpServer(current.servers, serverId)) return { ok: false, error: `No MCP server named "${serverId}".` };
       const previousBrainrouterId = preferredBrainrouterId(current);
       const connected = await connectProfile(current, serverId).catch(() => ({
         status: undefined,
@@ -1013,7 +1033,7 @@ export function createDesktopMcpLifecycle(deps: DesktopMcpLifecycleDeps) {
 
     setActive: (serverId: string): Promise<DesktopMcpMutationResult> => serialized(async () => {
       const current = deps.loadConfig();
-      const profile = current.servers[serverId];
+      const profile = ownDesktopMcpServer(current.servers, serverId);
       if (!profile) return { ok: false, error: `No MCP server named "${serverId}".` };
       const currentStatus = deps.mcpClient.getStatus(serverId);
       if (resolveDesktopMcpIdentity(serverId, profile, currentStatus) !== 'brainrouter') {
@@ -1051,11 +1071,14 @@ export function createDesktopMcpLifecycle(deps: DesktopMcpLifecycleDeps) {
 
     add: (serverId: string, profile: ServerConfig): Promise<DesktopMcpMutationResult> => serialized(async () => {
       const current = deps.loadConfig();
-      if (current.servers[serverId]) return { ok: false, error: `A server named "${serverId}" already exists.` };
+      if (isDesktopMcpServerIdReserved(serverId)) {
+        return { ok: false, error: `MCP server id "${serverId}" is reserved.` };
+      }
+      if (ownDesktopMcpServer(current.servers, serverId)) return { ok: false, error: `A server named "${serverId}" already exists.` };
       const previousBrainrouterId = preferredBrainrouterId(current);
       const next = cloneConfig(current);
       next.servers[serverId] = structuredClone(profile);
-      if (!next.activeServer || !next.servers[next.activeServer]) next.activeServer = serverId;
+      if (!next.activeServer || !ownDesktopMcpServer(next.servers, next.activeServer)) next.activeServer = serverId;
       try {
         deps.persistConfig(next);
       } catch (error) {
@@ -1110,17 +1133,14 @@ export function createDesktopMcpLifecycle(deps: DesktopMcpLifecycleDeps) {
 
     remove: (serverId: string): Promise<DesktopMcpMutationResult> => serialized(async () => {
       const current = deps.loadConfig();
-      if (!current.servers[serverId]) return { ok: false, error: `No MCP server named "${serverId}".` };
+      const profile = ownDesktopMcpServer(current.servers, serverId);
+      if (!profile) return { ok: false, error: `No MCP server named "${serverId}".` };
       const previousBrainrouterId = preferredBrainrouterId(current);
       const next = cloneConfig(current);
       delete next.servers[serverId];
       if (next.activeServer === serverId) next.activeServer = Object.keys(next.servers)[0] ?? '';
-      if (next.activeBrainrouterServer === serverId || !next.servers[next.activeBrainrouterServer ?? '']) {
-        next.activeBrainrouterServer = resolvePreferredBrainrouterServerId(
-          next.servers,
-          undefined,
-          next.activeServer,
-        );
+      if (next.activeBrainrouterServer === serverId || !ownDesktopMcpServer(next.servers, next.activeBrainrouterServer)) {
+        next.activeBrainrouterServer = preferredBrainrouterId(next);
       }
 
       try {
@@ -1138,7 +1158,7 @@ export function createDesktopMcpLifecycle(deps: DesktopMcpLifecycleDeps) {
         try { deps.persistConfig(current); } catch { /* best-effort durable rollback */ }
         const removedIdentity = resolveDesktopMcpIdentity(
           serverId,
-          current.servers[serverId],
+          profile,
           deps.mcpClient.getStatus(serverId),
         );
         if (removedIdentity !== 'brainrouter' || previousBrainrouterId === serverId) {
@@ -4296,6 +4316,7 @@ export function buildQueries(ctx: HostContext): Record<string, QueryHandler> {
         const id = String(args.id ?? '').trim();
         const type = args.type === 'http' ? 'http' : 'stdio';
         if (!/^[A-Za-z0-9._-]+$/.test(id)) return { ok: false, error: 'Server id must be letters, digits, dash, underscore or dot.' };
+        if (isDesktopMcpServerIdReserved(id)) return { ok: false, error: `MCP server id "${id}" is reserved.` };
         // Optional auth/headers/env (a "KEY=value\nKEY2=value2" string → record).
         const kvPairs = (raw: unknown): Record<string, string> => {
           const out: Record<string, string> = {};

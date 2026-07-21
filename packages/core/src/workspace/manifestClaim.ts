@@ -222,7 +222,7 @@ export function recoverInterruptedWorkspaceManifestClaim(workspaceRoot: string):
 
       if (current.existed && manifestClaimOwnsReplacement(root, receipt, claimed, current)) {
         guard.assertStable();
-        fs.unlinkSync(claim);
+        unlinkIfPresent(claim);
         guard.fsyncParent();
         guard.assertStable();
         removeReceiptPath(receiptPath);
@@ -235,7 +235,7 @@ export function recoverInterruptedWorkspaceManifestClaim(workspaceRoot: string):
           // Recovery previously linked this exact inode back to the canonical
           // path and died before retiring the extra name.
           guard.assertStable();
-          fs.unlinkSync(claim);
+          unlinkIfPresent(claim);
           guard.fsyncParent();
           guard.assertStable();
           removeReceiptPath(receiptPath);
@@ -249,16 +249,38 @@ export function recoverInterruptedWorkspaceManifestClaim(workspaceRoot: string):
       }
 
       guard.assertStable();
-      fs.linkSync(claim, guard.accessTarget);
+      try {
+        fs.linkSync(claim, guard.accessTarget);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== 'EEXIST' && code !== 'ENOENT') throw error;
+
+        // ADR-021 (0.4.17) — another recoverer may have linked the owned inode and retired its
+        // claim between our snapshots and this syscall. Accept only that exact
+        // progress; a different creator is ambiguous and must win unchanged.
+        guard.assertStable();
+        const racedTarget = snapshotRegularFile(
+          guard.accessTarget,
+          256 * 1024,
+          'workspace manifest',
+        );
+        if (!snapshotsAreSameVersion(claimed, racedTarget)) {
+          if (code === 'EEXIST') {
+            writeReceipt(receiptPath, { ...receipt, phase: 'ambiguous' });
+          }
+          continue;
+        }
+      }
       guard.fsyncParent();
       guard.assertStable();
       const claimAfterLink = snapshotRegularFile(claim, 256 * 1024, 'workspace manifest claim');
       const restored = snapshotRegularFile(guard.accessTarget, 256 * 1024, 'workspace manifest');
-      if (!snapshotsAreExact(claimAfterLink, restored)) {
+      if (!snapshotsAreSameVersion(claimed, restored) ||
+          (claimAfterLink.existed && !snapshotsAreSameVersion(claimAfterLink, restored))) {
         throw new Error(`Workspace manifest claim could not be restored safely: ${receipt.claim}`);
       }
       guard.assertStable();
-      fs.unlinkSync(claim);
+      unlinkIfPresent(claim);
       guard.fsyncParent();
       guard.assertStable();
       removeReceiptPath(receiptPath);
@@ -408,6 +430,15 @@ function snapshotsAreExact(left: RegularFileSnapshot, right: RegularFileSnapshot
   ));
 }
 
+/** ADR-021 (0.4.17) — hard-link cleanup changes ctime without changing the owned file version. */
+function snapshotsAreSameVersion(left: RegularFileSnapshot, right: RegularFileSnapshot): boolean {
+  return left.existed === right.existed && (!left.existed || (
+    left.mode === right.mode && left.dev === right.dev && left.ino === right.ino &&
+    left.size === right.size && left.mtimeMs === right.mtimeMs &&
+    left.contents!.equals(right.contents!)
+  ));
+}
+
 function transactionOwnerIsActive(token: string): boolean {
   const ownerPid = Number(token.slice(0, token.indexOf('.')));
   if (ownerPid === process.pid) return activeClaimTokens.has(token);
@@ -432,8 +463,19 @@ function receiptDirectory(workspaceRoot: string): string {
 }
 
 function removeReceiptPath(receiptPath: string): void {
-  fs.unlinkSync(receiptPath);
+  if (!unlinkIfPresent(receiptPath)) return;
   fsyncDirectory(path.dirname(receiptPath));
+}
+
+/** ADR-021 (0.4.17) — concurrent cleanup is idempotent; every other unlink failure stays fatal. */
+function unlinkIfPresent(target: string): boolean {
+  try {
+    fs.unlinkSync(target);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
 }
 
 function sha256(contents: Buffer): string {

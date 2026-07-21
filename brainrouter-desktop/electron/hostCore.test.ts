@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createBrokerPort, createHostCore, isUnsavedNewSessionKey, type AgentLike } from './hostCore.js';
+import { createBrokerPort, createHostCore, isUnsavedNewSessionKey, type AgentLike, type QueryHandler } from './hostCore.js';
 import { InteractionBroker } from '@kinqs/brainrouter-agent-protocol';
 import type { AgentEventMessage } from '@kinqs/brainrouter-agent-protocol';
 
@@ -236,22 +236,43 @@ test('interrupt dismisses pending approvals (fail-closed unwind)', async () => {
   assert.equal(core.broker.pendingCount, 0);
 });
 
-test('query: routes to handlers; unknown names error; thrown handlers error', async () => {
+test('query: routes only to own handlers; unknown, inherited, and thrown handlers error', async () => {
   const { out, send } = collect();
+  const inheritedCalls: string[] = [];
+  const queryPrototype = Object.create(null) as Record<string, QueryHandler>;
+  for (const name of ['__proto__', 'constructor', 'prototype']) {
+    Object.defineProperty(queryPrototype, name, {
+      enumerable: true,
+      value: () => { inheritedCalls.push(name); return { inherited: name }; },
+    });
+  }
+  const queries = Object.assign(Object.create(queryPrototype) as Record<string, QueryHandler>, {
+    'list-sessions': () => [{ sessionKey: 's1' }],
+    'explode': () => { throw new Error('nope'); },
+  });
   const core = createHostCore({
     agent: fakeAgent(),
     send,
-    queries: {
-      'list-sessions': () => [{ sessionKey: 's1' }],
-      'explode': () => { throw new Error('nope'); },
-    },
+    queries,
   });
   await core.handle({ kind: 'query', id: 'q1', name: 'list-sessions' });
   await core.handle({ kind: 'query', id: 'q2', name: 'missing' });
   await core.handle({ kind: 'query', id: 'q3', name: 'explode' });
+  await core.handle({ kind: 'query', id: 'q4', name: '__proto__' });
+  await core.handle({ kind: 'query', id: 'q5', name: 'constructor' });
+  await core.handle({ kind: 'query', id: 'q6', name: 'prototype' });
   const results = out.filter((m) => m.event.kind === 'query-result') as Array<AgentEventMessage & { event: Extract<AgentEventMessage['event'], { kind: 'query-result' }> }>;
-  assert.deepEqual(results.map((r) => [r.event.id, r.event.ok]), [['q1', true], ['q2', false], ['q3', false]]);
+  assert.deepEqual(results.map((r) => [r.event.id, r.event.ok]), [
+    ['q1', true],
+    ['q2', false],
+    ['q3', false],
+    ['q4', false],
+    ['q5', false],
+    ['q6', false],
+  ]);
   assert.deepEqual(results[0].event.result, [{ sessionKey: 's1' }]);
+  assert.deepEqual(inheritedCalls, []);
+  for (const result of results.slice(3)) assert.match(result.event.error ?? '', /^Unknown query /);
 });
 
 test('garbage on the wire is ignored; shutdown dismisses + calls onShutdown', async () => {
