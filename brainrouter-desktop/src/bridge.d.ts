@@ -33,6 +33,18 @@ declare global {
       /** Open a workspace in a SEPARATE window (git worktrees) — never swaps the
        *  current window's active workspace / projects / chat. */
       openWorkspaceWindow(workspaceRoot: string): Promise<{ opened: boolean; needsTrust?: boolean }>;
+      /** ADR-021 W3a — onboarding manifest bridge: renderer reads state and
+       *  submits choices; MAIN owns all `.brainrouter/workspace.json` access
+       *  through the core chokepoint. */
+      workspaceManifest?(workspaceRoot: string): Promise<{
+        ok: boolean; error?: string; onboarded?: boolean;
+        manifest?: Record<string, unknown> | null;
+        suggestion?: { profile: string; reasons: string[] };
+        profiles?: Array<{ id: string; label: string; description: string; agents: { default: string; enabled: string[] } }>;
+      }>;
+      saveWorkspaceManifest?(workspaceRoot: string, payload: { profile: string; defaultAgent?: string }): Promise<{
+        saved: boolean; error?: string; manifest?: Record<string, unknown>;
+      }>;
       /** T1 — workspace trust, backed by the shared CLI store (not localStorage). */
       isWorkspaceTrusted(workspaceRoot: string): Promise<{ trusted: boolean }>;
       trustWorkspace(workspaceRoot: string): Promise<{ trusted: boolean }>;
