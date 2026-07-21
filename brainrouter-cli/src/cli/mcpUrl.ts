@@ -39,6 +39,7 @@ const MCP_ERROR_CONFIG_ENTRY_MAX_COUNT = 256;
 const MCP_ERROR_STDIO_ARG_MAX_COUNT = 1_024;
 const MAX_PERCENT_DECODE_PASSES = 8;
 const MCP_ERROR_TRUNCATION_MARKER = ' … [truncated]';
+const SENSITIVE_STDIO_SHORT_OPTIONS = new Set(['k', 'p', 's', 't']);
 const MCP_ERROR_CREDENTIAL_ASSIGNMENTS = [
   'authorization',
   'api[-_ ]?key',
@@ -81,6 +82,12 @@ export function isSensitiveCredentialName(name: string): boolean {
     || normalized.endsWith('databaseurl')
     || normalized.endsWith('signature')
     || SENSITIVE_QUERY_PARTS.some((part) => normalized === part || normalized.endsWith(part));
+}
+
+function isSensitiveStdioCredentialOptionName(name: string): boolean {
+  const normalized = normalizeParameterName(name.replace(/^-+/, ''));
+  return SENSITIVE_STDIO_SHORT_OPTIONS.has(normalized)
+    || isSensitiveCredentialName(normalized);
 }
 
 function decodeUrlComponentTolerantly(value: string): string {
@@ -323,7 +330,10 @@ function redactMcpJwtLikeTokens(text: string): string {
  */
 export function redactMcpHttpUrlsInText(text: string): string {
   const bounded = capMcpErrorText(text);
-  let redacted = sanitizeMcpErrorControls(bounded)
+  // Decode only the already-bounded window. Percent encoding is routinely
+  // reflected by HTTP stacks and must not hide a URL scheme, Bearer separator,
+  // or an exact configured secret from the downstream redactors.
+  let redacted = sanitizeMcpErrorControls(decodeUrlComponentTolerantly(bounded))
     .replace(/\bBearer[ \t]{1,65536}[^\s,;]{4,65536}/gi, 'Bearer [redacted]');
   redacted = redactMcpErrorUrls(redacted);
   redacted = redactMcpCredentialAssignments(redacted)
@@ -441,7 +451,9 @@ function configuredMcpStdioArgCredentialValues(server: ServerConfig): string[] {
     if (equalsIndex > 0) {
       const label = argument.slice(0, equalsIndex).replace(/^-+/, '');
       const value = argument.slice(equalsIndex + 1);
-      if (isSensitiveCredentialName(label)) addExactCredentialValue(values, value, budget);
+      if (isSensitiveStdioCredentialOptionName(label)) {
+        addExactCredentialValue(values, value, budget);
+      }
       if (isStdioHeaderOption(label)) {
         collectHeaderCredentialValue(values, budget, value, following, afterFollowing, true);
       }
@@ -449,7 +461,7 @@ function configuredMcpStdioArgCredentialValues(server: ServerConfig): string[] {
     }
 
     const optionName = argument.replace(/^-+/, '');
-    if (optionName !== argument && isSensitiveCredentialName(optionName)) {
+    if (optionName !== argument && isSensitiveStdioCredentialOptionName(optionName)) {
       addExactCredentialValue(values, following, budget);
     }
     if (optionName !== argument && isStdioHeaderOption(optionName)) {
@@ -634,10 +646,13 @@ export function redactMcpErrorText(text: string, config: Config, serverId?: stri
   const exactWindow = sanitizeMcpErrorControls(inputWasTruncated
     ? text.slice(0, MCP_ERROR_TEXT_MAX_CHARS - MCP_ERROR_TRUNCATION_MARKER.length)
     : text);
+  const secrets = configuredMcpCredentialValues(config, serverId);
   let redacted = redactExactMcpCredentials(
     exactWindow,
-    configuredMcpCredentialValues(config, serverId),
+    secrets,
   );
+  redacted = sanitizeMcpErrorControls(decodeUrlComponentTolerantly(redacted));
+  redacted = redactExactMcpCredentials(redacted, secrets);
   if (inputWasTruncated) redacted += MCP_ERROR_TRUNCATION_MARKER;
   return redactMcpHttpUrlsInText(redacted);
 }
@@ -670,7 +685,7 @@ export function redactMcpStdioArgs(args: readonly string[]): string[] {
     if (equalsIndex > 0) {
       const label = argument.slice(0, equalsIndex).replace(/^-+/, '');
       const value = argument.slice(equalsIndex + 1);
-      if (isSensitiveCredentialName(label)) {
+      if (isSensitiveStdioCredentialOptionName(label)) {
         return `${argument.slice(0, equalsIndex + 1)}[redacted]`;
       }
       if (/^https?:\/\//i.test(value)) {
@@ -689,7 +704,7 @@ export function redactMcpStdioArgs(args: readonly string[]): string[] {
     }
 
     const optionName = argument.replace(/^-+/, '');
-    if (optionName !== argument && isSensitiveCredentialName(optionName)) {
+    if (optionName !== argument && isSensitiveStdioCredentialOptionName(optionName)) {
       redactNext = true;
       return argument;
     }
@@ -769,7 +784,7 @@ export function stripMcpStdioCredentials(args: readonly string[]): string[] {
       const rawLabel = argument.slice(0, equalsIndex);
       const label = rawLabel.replace(/^-+/, '');
       const value = argument.slice(equalsIndex + 1);
-      if (isSensitiveCredentialName(label)) {
+      if (isSensitiveStdioCredentialOptionName(label)) {
         if (/^Bearer$/i.test(value.trim()) && following !== undefined) index += 1;
         continue;
       }
@@ -791,7 +806,7 @@ export function stripMcpStdioCredentials(args: readonly string[]): string[] {
     }
 
     const optionName = argument.replace(/^-+/, '');
-    if (optionName !== argument && isSensitiveCredentialName(optionName)) {
+    if (optionName !== argument && isSensitiveStdioCredentialOptionName(optionName)) {
       if (following !== undefined) {
         index += /^Bearer$/i.test(following) && afterFollowing !== undefined ? 2 : 1;
       }

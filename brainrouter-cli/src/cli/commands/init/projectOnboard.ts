@@ -55,6 +55,7 @@ import {
   type InitAgentMdOptions,
   type InitResult,
 } from '../../../prompt/initAgentMd.js';
+import { sanitizeTerminalText } from '../../terminalText.js';
 
 // The suggestion logic lives in core so CLI and desktop onboarding cannot
 // drift. Re-export it to preserve the public onboarding module surface.
@@ -213,26 +214,26 @@ export function parseSelectionList(input: string): string[] {
 export function formatManifestSummary(manifest: WorkspaceManifest): string {
   const safe = normalizeWorkspaceManifest(manifest);
   const lines = [
-    `${chalk.bold('Workspace')}: ${safe.name}  ${chalk.gray(`(profile: ${safe.profile})`)}`,
-    `  default agent: ${safe.agents.default || chalk.gray('(none)')}`,
+    `${chalk.bold('Workspace')}: ${sanitizeTerminalText(safe.name)}  ${chalk.gray(`(profile: ${sanitizeTerminalText(safe.profile)})`)}`,
+    `  default agent: ${sanitizeTerminalText(safe.agents.default) || chalk.gray('(none)')}`,
     `  enabled agents: ${formatList(safe.agents.enabled)}`,
     `  capabilities: ${formatList(safe.capabilities.enabled)}${formatDisabled(safe.capabilities.disabled)}`,
     `  skill packs: ${formatList(safe.skills.packs)}`,
     `  enabled skills: ${formatList(safe.skills.enabled)}${formatDisabled(safe.skills.disabled)}`,
-    `  tool profiles: ${formatList(safe.tools.profiles)}${safe.tools.deny.length ? `; denied: ${safe.tools.deny.join(', ')}` : ''}`,
+    `  tool profiles: ${formatList(safe.tools.profiles)}${safe.tools.deny.length ? `; denied: ${safe.tools.deny.map(sanitizeTerminalText).join(', ')}` : ''}`,
     `  memory tags: ${formatList(safe.memory.tags)}`,
-    `  instructions: ${safe.instructions || chalk.gray('(none)')}`,
-    chalk.gray(`  onboarded ${safe.onboarded.at || '(unknown)'} via ${safe.onboarded.by} — edit with /init --edit`),
+    `  instructions: ${sanitizeTerminalText(safe.instructions) || chalk.gray('(none)')}`,
+    chalk.gray(`  onboarded ${sanitizeTerminalText(safe.onboarded.at) || '(unknown)'} via ${sanitizeTerminalText(safe.onboarded.by)} — edit with /init --edit`),
   ];
   return lines.join('\n');
 }
 
 function formatList(values: string[]): string {
-  return values.join(', ') || chalk.gray('(none)');
+  return values.map(sanitizeTerminalText).join(', ') || chalk.gray('(none)');
 }
 
 function formatDisabled(values: string[]): string {
-  return values.length > 0 ? `; disabled: ${values.join(', ')}` : '';
+  return values.length > 0 ? `; disabled: ${values.map(sanitizeTerminalText).join(', ')}` : '';
 }
 
 /** Production prompt adapter: ambient chat overlay or standalone Ink mount. */

@@ -1,15 +1,34 @@
 import type { Command } from 'commander';
 import inquirer from 'inquirer';
 import chalk from 'chalk';
-import { loadOrInitConfig, saveConfigOrThrow } from '@kinqs/brainrouter-core/config';
+import {
+  loadOrInitConfig,
+  saveConfigOrThrow,
+  type Config,
+} from '@kinqs/brainrouter-core/config';
 import { McpClientWrapper, resolveIdentityFromConfig } from '@kinqs/brainrouter-core/mcp';
 import {
   normalizeMcpHttpUrl,
-  redactMcpHttpUrlsInText,
+  redactMcpErrorText,
   validateMcpHttpUrl,
 } from '../cli/mcpUrl.js';
 import { persistSelectedBrainrouterProfile } from './mcpStartup.js';
 import { buildScrubbedConfigJson } from '../cli/commands/config/rawConfig.js';
+
+export function redactLoginErrorText(errorText: string, apiKey: string): string {
+  const serverId = 'login-attempt';
+  const config: Config = {
+    activeServer: serverId,
+    servers: {
+      [serverId]: {
+        type: 'http',
+        url: 'http://localhost/',
+        ...(apiKey ? { apiKey } : {}),
+      },
+    },
+  };
+  return redactMcpErrorText(errorText, config, serverId);
+}
 
 export function registerLoginCommand(program: Command): void {
   // Login Command
@@ -75,8 +94,8 @@ export function registerLoginCommand(program: Command): void {
         console.log(`Set "${profileName}" as the active connection profile.\n`);
       } catch (err: any) {
         const apiKey = String(answers.apiKey ?? '');
-        const message = redactMcpHttpUrlsInText(String(err?.message ?? err));
-        console.error(chalk.red(`\n✖ Login failed: ${apiKey ? message.split(apiKey).join('[redacted]') : message}`));
+        const message = redactLoginErrorText(String(err?.message ?? err), apiKey);
+        console.error(chalk.red(`\n✖ Login failed: ${message}`));
         console.log(chalk.yellow('No profile changes were saved. Check the URL and credentials and try again.\n'));
       }
     });

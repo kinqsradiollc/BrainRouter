@@ -7,6 +7,7 @@
  * CLI instead of crossing the renderer query boundary.
  */
 import type { ServerConfig } from '@kinqs/brainrouter-core/config';
+import { validateDesktopMcpHttpUrl } from './desktopMcpUrl.js';
 
 const RESERVED_SERVER_IDS = new Set(['__proto__', 'constructor', 'prototype']);
 const SERVER_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
@@ -121,6 +122,8 @@ export function parseDesktopMcpAddInput(args: Record<string, unknown>): DesktopM
 
   const url = typeof args.url === 'string' ? args.url.trim() : '';
   if (!url) return fail('An HTTP server needs a URL.');
+  const urlError = validateDesktopMcpHttpUrl(url);
+  if (urlError) return fail(urlError);
 
   const apiKey = args.apiKey == null ? '' : args.apiKey;
   if (typeof apiKey !== 'string') return fail('The MCP API key is invalid.');
@@ -134,7 +137,7 @@ export function parseDesktopMcpAddInput(args: Record<string, unknown>): DesktopM
 
   const config: ServerConfig & { type: 'http'; url: string } = {
     type: 'http',
-    url,
+    url: new URL(url).toString(),
     ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
     ...(Object.keys(headers).length ? { headers } : {}),
   };

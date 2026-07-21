@@ -42,6 +42,32 @@ test('desktop MCP input accepts a bounded HTTP profile', () => {
   });
 });
 
+test('desktop MCP input validates and normalizes the URL before returning config', () => {
+  const unsafeUrls = [
+    'file:///tmp/server.sock',
+    'https://user:password@example.test/mcp',
+    'https://example.test/mcp?api_key=query-secret-value',
+    'https://example.test/mcp/token/path-secret-value',
+    'https://example.test/mcp#fragment-secret-value',
+    'not a URL',
+    `https://example.test/${'a'.repeat(17 * 1024)}`,
+  ];
+
+  for (const url of unsafeUrls) {
+    const result = parseDesktopMcpAddInput({ id: 'remote-tools', type: 'http', url });
+    assert.equal(result.ok, false, `expected URL to be rejected: ${url.slice(0, 100)}`);
+  }
+
+  const safe = parseDesktopMcpAddInput({
+    id: 'local-tools',
+    type: 'http',
+    url: ' http://127.0.0.1:3000/mcp ',
+  });
+  assert.equal(safe.ok, true);
+  if (!safe.ok) return;
+  assert.equal(safe.config.url, 'http://127.0.0.1:3000/mcp');
+});
+
 test('desktop MCP input rejects header and API-key control characters', () => {
   const cases = [
     { headers: { 'X-Project': 'alpha\r\nInjected: yes' } },

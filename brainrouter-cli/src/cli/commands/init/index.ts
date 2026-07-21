@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import { sanitizeTerminalText } from '../../terminalText.js';
 import type { CommandContext } from '../_context.js';
 import { initAgentMd } from '../../../prompt/initAgentMd.js';
 import type { Config, LLMConfig } from '@kinqs/brainrouter-core/config';
@@ -196,10 +197,10 @@ export async function tryHandleInitCommand(
     try {
       const result = dependencies.initInstructions(agent.workspaceRoot);
       if (result.status === 'created') {
-        console.log(chalk.green(`\n✓ Created ${result.path}`));
+        console.log(chalk.green(`\n✓ Created ${sanitizeTerminalText(result.path)}`));
         console.log(chalk.gray('  Edit it to describe your project — any AGENT.md-aware agent will read it.\n'));
       } else {
-        console.log(chalk.yellow(`\nFile already exists: ${result.path}`));
+        console.log(chalk.yellow(`\nFile already exists: ${sanitizeTerminalText(result.path)}`));
         console.log(chalk.gray('  Existing project instructions were left unchanged.\n'));
       }
     } catch {
@@ -221,8 +222,8 @@ export async function tryHandleInitCommand(
   if (sub === 'scan') {
     try {
       const suggestion = dependencies.suggestProfile(agent.workspaceRoot);
-      console.log(`\n${chalk.bold('Detected profile')}: ${suggestion.profile}`);
-      console.log(chalk.gray(`  ${suggestion.reasons.join('; ')}`));
+      console.log(`\n${chalk.bold('Detected profile')}: ${sanitizeTerminalText(suggestion.profile)}`);
+      console.log(chalk.gray(`  ${suggestion.reasons.map(sanitizeTerminalText).join('; ')}`));
       console.log(chalk.gray('  Run `/init` to onboard this workspace with it.\n'));
     } catch {
       console.error(chalk.red('\n/init scan could not finish. Check workspace access and retry.\n'));
@@ -264,18 +265,18 @@ export async function tryHandleInitCommand(
           if (live.intentionallySkipped) {
             console.log(chalk.gray(
               live.removedIds.length > 0
-                ? `  MCP skipped for this launch; disconnected ${live.removedIds.join(', ')}. Saved profiles were kept for next launch.\n`
+                ? `  MCP skipped for this launch; disconnected ${live.removedIds.map(sanitizeTerminalText).join(', ')}. Saved profiles were kept for next launch.\n`
                 : '  MCP skipped for this launch; local tools remain available.\n',
             ));
           } else if (live.safeModeSkippedIds?.length) {
             console.log(chalk.yellow(
-              `  Safe mode kept BrainRouter only; skipped ${live.safeModeSkippedIds.join(', ')}.\n`,
+              `  Safe mode kept BrainRouter only; skipped ${live.safeModeSkippedIds.map(sanitizeTerminalText).join(', ')}.\n`,
             ));
           }
           const failed = live.statuses.filter((status) => status.status === 'failed');
           if (!live.intentionallySkipped && failed.length > 0) {
             console.log(chalk.yellow(
-              `  Saved MCP setup; ${failed.map((status) => status.serverId).join(', ')} is offline and will retry in the background.\n`,
+              `  Saved MCP setup; ${failed.map((status) => sanitizeTerminalText(status.serverId)).join(', ')} is offline and will retry in the background.\n`,
             ));
           }
         } catch {

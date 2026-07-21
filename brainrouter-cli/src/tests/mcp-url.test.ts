@@ -7,6 +7,7 @@ import {
   MCP_ERROR_TEXT_MAX_CHARS,
   redactMcpErrorText,
   redactMcpHttpUrlsInText,
+  redactMcpStdioArgs,
   stripMcpStdioCredentials,
 } from '../cli/mcpUrl.js';
 
@@ -49,6 +50,32 @@ test('MCP error truncation cannot turn partial URL credentials into safe-looking
 
   assert.match(redacted, /\[redacted\] … \[truncated\]$/);
   assert.doesNotMatch(redacted, /user|1234|secret\.example/);
+});
+
+test('MCP error redaction decodes bounded percent-encoded credential shapes before display', () => {
+  const generic = redactMcpHttpUrlsInText(
+    'request %68ttp%3A%2F%2Fuser%3Apassword%40example.test%2Fmcp%3Ftoken%3Dquery-secret failed; '
+    + 'Authorization%3A%20Bearer%20encoded-bearer-secret',
+  );
+  assert.doesNotMatch(generic, /user|password|query-secret|encoded-bearer-secret/);
+  assert.match(generic, /\[redacted\]/);
+
+  const secret = 'key with spaces';
+  const config: Config = {
+    activeServer: 'remote',
+    servers: { remote: { type: 'http', url: 'https://example.test/mcp', apiKey: secret } },
+  };
+  assert.equal(
+    redactMcpErrorText(`transport reflected ${encodeURIComponent(secret)}`, config, 'remote'),
+    'transport reflected [redacted]',
+  );
+
+  const literalPercentSecret = 'literal%20credential';
+  config.servers.remote.apiKey = literalPercentSecret;
+  assert.equal(
+    redactMcpErrorText(`transport reflected ${literalPercentSecret}`, config, 'remote'),
+    'transport reflected [redacted]',
+  );
 });
 
 test('MCP error redaction scrubs exact stdio credentials but preserves safe paths', () => {
@@ -340,4 +367,30 @@ test('MCP logout strips inline stdio credentials without deleting safe file and 
   ]);
 
   assert.deepEqual(stripped, safe);
+});
+
+test('MCP stdio credential handling covers common short secret options', () => {
+  const secrets = ['password-value', 'token-value', 'key-value', 'secret-value'];
+  const args = [
+    '-p', secrets[0],
+    '-t', secrets[1],
+    `-k=${secrets[2]}`,
+    '-s', secrets[3],
+    '-o', 'json',
+  ];
+  const config: Config = {
+    activeServer: 'local',
+    servers: { local: { type: 'stdio', command: 'connector-mcp', args } },
+  };
+
+  const configured = configuredMcpCredentialValues(config, 'local');
+  for (const secret of secrets) assert.ok(configured.includes(secret));
+  assert.equal(configured.includes('json'), false);
+  assert.deepEqual(stripMcpStdioCredentials(args), ['-o', 'json']);
+
+  const rendered = redactMcpStdioArgs(args);
+  for (const secret of secrets) assert.equal(rendered.includes(secret), false);
+  assert.deepEqual(rendered.slice(-2), ['-o', 'json']);
+  const error = redactMcpErrorText(secrets.join(' '), config, 'local');
+  for (const secret of secrets) assert.equal(error.includes(secret), false);
 });
