@@ -28,6 +28,11 @@ function expectedVersion(target: string): WorkspaceManifestClaimExpected {
   };
 }
 
+/** Linux recovery uses descriptor-anchored sibling paths, so match the stable entry name. */
+function matchesGuardedEntry(candidate: fs.PathLike, canonicalPath: string): boolean {
+  return path.basename(candidate.toString()) === path.basename(canonicalPath);
+}
+
 function withInterruptedClaim(
   run: (state: { workspace: string; target: string; claim: string; receiptPath: string }) => void,
 ): void {
@@ -72,14 +77,16 @@ test('ADR-021 manifest recovery converges when another recoverer wins link and c
     let claimRemovedBetweenSnapshots = false;
     const racedUnlinks = new Set<string>();
     fs.linkSync = ((existingPath, newPath) => {
-      if (!racedLink && existingPath === claim && newPath === target) {
+      if (!racedLink &&
+          matchesGuardedEntry(existingPath, claim) &&
+          matchesGuardedEntry(newPath, target)) {
         racedLink = true;
         originalLink(existingPath, newPath);
       }
       originalLink(existingPath, newPath);
     }) as typeof fs.linkSync;
     fs.openSync = ((candidate, flags, mode) => {
-      if (racedLink && candidate === target) {
+      if (racedLink && matchesGuardedEntry(candidate, target)) {
         targetOpensAfterRace += 1;
         if (targetOpensAfterRace === 2) {
           originalUnlink(claim);
@@ -89,9 +96,11 @@ test('ADR-021 manifest recovery converges when another recoverer wins link and c
       return originalOpen(candidate, flags, mode);
     }) as typeof fs.openSync;
     fs.unlinkSync = ((candidate) => {
-      const candidatePath = candidate.toString();
-      if ((candidatePath === claim || candidatePath === receiptPath) && !racedUnlinks.has(candidatePath)) {
-        racedUnlinks.add(candidatePath);
+      const canonicalPath = matchesGuardedEntry(candidate, claim)
+        ? claim
+        : matchesGuardedEntry(candidate, receiptPath) ? receiptPath : undefined;
+      if (canonicalPath && !racedUnlinks.has(canonicalPath)) {
+        racedUnlinks.add(canonicalPath);
         originalUnlink(candidate);
       }
       originalUnlink(candidate);
@@ -126,7 +135,9 @@ test('ADR-021 manifest recovery preserves a different creator that wins the link
     const originalLink = fs.linkSync;
     let racedLink = false;
     fs.linkSync = ((existingPath, newPath) => {
-      if (!racedLink && existingPath === claim && newPath === target) {
+      if (!racedLink &&
+          matchesGuardedEntry(existingPath, claim) &&
+          matchesGuardedEntry(newPath, target)) {
         racedLink = true;
         fs.writeFileSync(target, '{"profile":"writing"}\n');
       }
